@@ -163,25 +163,39 @@ delete-fields-from-a-copy — `EntrySummary` has an open index signature, so a
 copy-and-delete projection is not statically bounded. The rules, mapped to
 `docs/DATA-AND-LEGAL.md`:
 
-- **Never**: wiki content, raw trajectory entries, scratchpads. All three are
-  withheld by `WRATHBENCH_VIEWER_PUBLIC=1`; the publisher simply never renders
-  them.
+- **Never**: wiki content (a `search_reference` tool result is replaced whole),
+  raw trajectory lines (the unprojected record: run config, message arrays,
+  every packet), and any local path or host fact. Raw lines are withheld by
+  `WRATHBENCH_VIEWER_PUBLIC=1` and the publisher never renders them.
 - **Minimap tiles**: published to the gated site since 2026-08-30, by the
   explicit `infra/publish-tiles.ts` step above and never by a snapshot pass.
   The gate serves them only to an authenticated reader, `private,
   max-age=3600` and `X-Robots-Tag: noindex`, and no snapshot artifact names
   one (`runner/test/snapshot.test.ts` pins that).
-- **Not in v1, pending the operator's call** (issue #10's blocking item):
-  entry summaries. `ResponseEntry.text`, `SnippetEntry.code` and
-  `SnippetResultEntry.text` carry model output and verbatim game text, and
-  DATA-AND-LEGAL's publishing condition — "ids and coded names with prose
-  redacted" — has no implementation yet. Publishing any of it is Phase 2,
-  gated on that redactor and the operator's decision.
-- **Projected out of otherwise-safe shapes**: `state.items[].name` (verbatim
-  item names — a leak the current public mode does not cover), a move's
-  `target` (the name of the thing aimed at), `terminationDetail` and
-  `pauseReason` free text, model last-error message text, and every local
-  filesystem path.
+- **Entries: names and ids stay, game prose goes** (docs/DATA-AND-LEGAL.md,
+  "Trajectory logs", operator 2026-08-30). One window per run is published —
+  the last 200 entries, `entries.json` beside `detail.json`, in the shape the
+  run page's private path loads first — after `projectEntry` (an allowlist
+  per entry type: the `meta` entry sheds the run config, `driver` and
+  `claude_system` their paths, `pause`/`watchdog` their free-text detail) and
+  `redactGameProse` (`runner/viewer/redact-prose.ts`), which replaces the
+  prose fields enumerated from `sdk/src/protocol.ts` — quest details,
+  objectives, area and completion text, questgiver/trainer greetings, the
+  request-items and offer-reward text, gossip option text, item description,
+  page and letter text, mail body, chat message — wherever a decoded payload
+  appears in a tool result. Quest titles, item, NPC, zone and spell names and
+  every id remain. The run's `scratchpad.json` ships whole beside it.
+  **Residual, stated plainly**: model-authored text — turn text, snippet
+  code, the scratchpad, the episodic status, console lines, and any tool
+  result the model formatted as plain prose rather than JSON — is published
+  as written and is not filtered; it may quote game prose. No "load earlier"
+  and no live tail publicly: the window advances with the detail poll.
+- **Names now pass**: `items[].name`, a move's `target`, a position's episodic
+  `status` (text and zone name) and `terminationDetail`.
+- **Still projected out**: the operator `objective`, `apiBase`, `pauseReason`
+  free text (a fixed `"paused"` token stays), model last-error message text,
+  the fleet config-rejection error and preflight tails, wiki bundle source,
+  and every local filesystem path and pid.
 - **Character names are shown** (operator decision, 2026-08-30). The runner
   generates them at character creation, so they are not game text; the
   `characterLabel` race/class pair, resolved from ids by our own tables, is
@@ -388,8 +402,8 @@ Development URL stays disabled.
   setup (bucket, custom domain, CORS, cache rule, two least-privilege
   tokens) as an OPERATIONS.md runbook. Ships runs, ladder, episodes, models,
   campaigns, run detail without entries, fleet and map at 60s.
-- **Phase 2 — redactor and entries** (~2–4 days plus operator review of real
-  output), only after decision 2.
+- **Phase 2 — redactor and entries**: shipped 2026-08-30 (see "The content
+  boundary").
 - **Phase 3 — a queryable artifact** (sqlite-over-range or Parquet) if the
   JSON set outgrows itself; the manifest-pointed layout already has room for
   it.

@@ -52,6 +52,7 @@ import {
   projectResults,
   projectRunDetail,
   projectRuns,
+  projectEntries,
   projectTrack,
 } from "../viewer/public-projection";
 
@@ -60,11 +61,8 @@ import {
 // One distinctive value per thing the projection must withhold. Each appears
 // somewhere in the fixtures below, and none may appear in any serialized output.
 const POISON = {
-  itemName: "Poisoned Worn Shortsword",
-  targetName: "Poisonednpcname",
   objective: "poison-objective: walk to Goldshire",
   apiBase: "http://10.66.66.66:1234/v1-poison",
-  terminationDetail: "poison-termination-detail quoting an NPC",
   pauseReason: "poison-pause-free-text",
   rowError: "poison ENOENT /home/operator/data/runs",
   configPath: "/home/operator/wrathbench/infra/fleet.json",
@@ -74,8 +72,41 @@ const POISON = {
   preflightTail: "poison-smoke-tail: Fixturely says hello",
   wikiSource: "poison-wowdump-20100901.xml.bz2",
   smuggled: "poison-smuggled-value",
-  statusText: "poison-status: turned in Kobold Camp Cleanup to Marshal McBride",
-  statusZone: "Poisonedzonename",
+  // Game prose, as the entry window can carry it (docs/DATA-AND-LEGAL.md,
+  // "Trajectory logs"): every field the redactor enumerates gets one.
+  questDetails: "prose-quest-details: the kobolds have grown bold",
+  questObjectives: "prose-quest-objectives: slay ten of them",
+  questRequestText: "prose-request-items: have you brought them",
+  questOfferText: "prose-offer-reward: well done adventurer",
+  questGreeting: "prose-questgiver-greeting: welcome traveller",
+  gossipOption: "prose-gossip-option: tell me about the mine",
+  trainerGreeting: "prose-trainer-greeting: ready to learn",
+  itemDescription: "prose-item-description: a rusty blade of no renown",
+  pageText: "prose-page-text: dear reader, beware",
+  itemText: "prose-item-text: a letter written in haste",
+  mailBody: "prose-mail-body: your order is ready",
+  chatMessage: "prose-chat-message: begone from my mine",
+  objectiveText: "prose-objective-text: Kobold Vermin slain",
+  wikiText: "prose-wiki-text: Northshire Valley is the human starting area",
+  pauseDetail: "poison-pause-detail: 429 rate limited by provider",
+  driverBin: "/home/operator/.bun/bin/claude",
+  claudeCwd: "/home/operator/wrathbench/runner",
+} as const;
+
+/**
+ * Names and ids are published, not withheld (operator, 2026-08-30): each of
+ * these must SURVIVE every projection it is planted in.
+ */
+const SURVIVES = {
+  itemName: "Worn Shortsword",
+  targetName: "Marshal McBride",
+  terminationDetail: "episode limit reached near Goldshire",
+  statusText: "turned in Kobold Camp Cleanup to Marshal McBride",
+  statusZone: "Elwynn Forest",
+  questTitle: "Kobold Camp Cleanup",
+  npcName: "Marshal McBride",
+  zoneName: "Northshire Valley",
+  spellName: "Charge",
 } as const;
 
 /**
@@ -184,13 +215,13 @@ function runRowFixture(): RunRow {
     startedAt: 1000,
     endedAt: 2000,
     terminationReason: "episode-limit",
-    terminationDetail: POISON.terminationDetail,
+    terminationDetail: SURVIVES.terminationDetail,
     pauseReason: POISON.pauseReason,
     level: 4,
     xp: 500,
     money: 1234,
     questsCompleted: 2,
-    items: [{ name: POISON.itemName, count: 1, equipped: true }],
+    items: [smuggle({ name: SURVIVES.itemName, count: 1, equipped: true })],
     mtime: 3000,
     bytes: 4096,
     live: false,
@@ -333,6 +364,9 @@ const COMPARABILITY_KEYS = [
   "resolvedModel",
 ];
 const RUN_ROW_KEYS = [
+  "items[].name",
+  "items[].count",
+  "items[].equipped",
   "runId",
   "model",
   "driver",
@@ -480,9 +514,11 @@ const RESULT_RUN_KEYS = [
 /* ---------------------------------------------------------------- tests --- */
 
 describe("the attribution line", () => {
-  test("names AzerothCore and disclaims Blizzard distribution", () => {
-    expect(PUBLIC_ATTRIBUTION).toContain("AzerothCore");
-    expect(PUBLIC_ATTRIBUTION).toContain("Nothing Blizzard-owned");
+  test("is the operator's fan-made / trademark statement, verbatim", () => {
+    // The operator's wording, verbatim (2026-08-30): pinned whole.
+    expect(PUBLIC_ATTRIBUTION).toBe(
+      "WrathBench is a fan-made research project, not affiliated with or endorsed by Blizzard Entertainment. World of Warcraft is a trademark of Blizzard Entertainment, Inc.",
+    );
   });
 });
 
@@ -496,10 +532,10 @@ describe("projectRuns", () => {
 
   test("withholds by value, not by renaming: the fields read null", () => {
     const row = projectRuns({ runs: [runListRowFixture()] }).runs[0]!;
-    expect(row.items).toBeNull();
+    expect(row.items).toEqual([{ name: SURVIVES.itemName, count: 1, equipped: true }]);
     expect(row.objective).toBeNull();
     expect(row.apiBase).toBeNull();
-    expect(row.terminationDetail).toBeNull();
+    expect(row.terminationDetail).toBe(SURVIVES.terminationDetail);
     // The paused signal survives as a fixed token, never as the free text.
     expect(row.pauseReason).toBe("paused");
     // What the label layer needs survives — and so does the name itself.
@@ -610,7 +646,7 @@ describe("projectResults", () => {
 });
 
 describe("projectPositions and projectTrack", () => {
-  test("positions: exactly the allowlist; the character name survives, items and target names do not", () => {
+  test("positions: exactly the allowlist; names survive, the episodic status ships whole", () => {
     const input: PositionsResponse = smuggle<PositionsResponse>({
       positions: [
         smuggle({
@@ -625,7 +661,7 @@ describe("projectPositions and projectTrack", () => {
           xp: 400,
           money: 1234,
           questsCompleted: 2,
-          items: [{ name: POISON.itemName, count: 1, equipped: false }],
+          items: [smuggle({ name: SURVIVES.itemName, count: 1, equipped: false })],
           harnessVersion: "harness-0.5-1-gabc",
           health: 140,
           maxHealth: 220,
@@ -634,9 +670,9 @@ describe("projectPositions and projectTrack", () => {
           powerType: 3,
           nextLevelXp: 2100,
           class: 4,
-          status: smuggle({ turn: 11, level: 3, zone: POISON.statusZone, text: POISON.statusText, ts: 1300 }),
+          status: smuggle({ turn: 11, level: 3, zone: SURVIVES.statusZone, text: SURVIVES.statusText, ts: 1300 }),
           reflecting: true,
-          move: smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.targetName, status: null }),
+          move: smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: SURVIVES.targetName, status: null }),
         }),
       ],
     });
@@ -657,11 +693,13 @@ describe("projectPositions and projectTrack", () => {
           "money",
           "questsCompleted",
           "items",
+          "items[].name", "items[].count", "items[].equipped",
           "harnessVersion",
           "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
           "class",
           "move",
           "status",
+          ...under("status", ["turn", "level", "zone", "text", "ts"]),
           "reflecting",
         ]),
         ...under("positions[].move", ["ts", "map", "x", "y", "z", "target", "status"]),
@@ -669,10 +707,10 @@ describe("projectPositions and projectTrack", () => {
     );
     assertClean(JSON.stringify(out));
     expect(out.positions[0]!.character).toBe(CHARACTER_NAME);
-    expect(out.positions[0]!.items).toBeNull();
-    // The model's own prose about the world it is standing in, and the client
-    // zone NAME stamped on it, are withheld whole; the harness's own flag is not.
-    expect(out.positions[0]!.status).toBeNull();
+    expect(out.positions[0]!.items).toEqual([{ name: SURVIVES.itemName, count: 1, equipped: false }]);
+    // The model's own words and the zone name ship (names and model text are
+    // published); the smuggled key beside them does not.
+    expect(out.positions[0]!.status).toEqual({ turn: 11, level: 3, zone: SURVIVES.statusZone, text: SURVIVES.statusText, ts: 1300 });
     expect(out.positions[0]!.reflecting).toBe(true);
     // The player frame's numbers are public: what any onlooker's client shows.
     expect(out.positions[0]).toMatchObject({
@@ -684,8 +722,8 @@ describe("projectPositions and projectTrack", () => {
       nextLevelXp: 2100,
       class: 4,
     });
-    // The destination travels; the name of what it was aimed at does not.
-    expect(out.positions[0]!.move).toEqual({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: null, status: null });
+    // The destination and the unit's name both travel.
+    expect(out.positions[0]!.move).toEqual({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: SURVIVES.targetName, status: null });
   });
 
   test("track: exactly the allowlist; the character name survives", () => {
@@ -701,7 +739,7 @@ describe("projectPositions and projectTrack", () => {
         }),
       ],
       moves: [
-        smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: POISON.targetName, status: "arrived" }),
+        smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: SURVIVES.targetName, status: "arrived" }),
       ],
     });
     const out = projectTrack(input);
@@ -722,6 +760,7 @@ describe("projectPositions and projectTrack", () => {
     );
     assertClean(JSON.stringify(out));
     expect(out.character).toBe(CHARACTER_NAME);
+    expect(out.moves![0]!.target).toBe(SURVIVES.targetName);
     expect(out.points[0]).toMatchObject({ health: 140, maxHealth: 220, powerType: 3, nextLevelXp: 2100 });
   });
 });
@@ -1200,5 +1239,77 @@ describe("projectInfo", () => {
     expect(out.dashboardBuild).toBeNull();
     expect(JSON.stringify(out)).not.toContain("app-abc123.js");
     assertClean(JSON.stringify(out));
+  });
+});
+
+/* ------------------------------------------------------------- entries --- */
+
+describe("projectEntries", () => {
+  /** A raw `events_served` batch as `EntrySummary` never carries it — planted to prove the allowlist drops it. */
+  const batch = [
+    {
+      opcode: "SMSG_QUESTGIVER_QUEST_DETAILS",
+      seq: 1,
+      data: { questId: 7, title: SURVIVES.questTitle, details: POISON.questDetails, objectives: POISON.questObjectives },
+    },
+  ];
+
+  test("every listed type keeps its fields, unlisted types keep the skeleton, smuggled keys never pass", () => {
+    const input = {
+      from: 0,
+      total: 6,
+      entries: [
+        smuggle({ i: 0, t: "meta", ts: 1, start: 0, end: 10, runId: "r", harnessVersion: "h", startedAt: 1,
+          config: { apiBase: POISON.apiBase, objective: POISON.objective }, comparability: { wikiBundle: { source: POISON.wikiSource } } }),
+        smuggle({ i: 1, t: "driver", ts: 2, start: 11, end: 20, driver: "claude-code", harness: "wrathbench", bin: POISON.driverBin, cwd: POISON.claudeCwd, systemPromptChars: 12 }),
+        smuggle({ i: 2, t: "claude_system", ts: 3, start: 21, end: 30, turn: 1, type: "system", subtype: "init", cwd: POISON.claudeCwd, memory_paths: [POISON.claudeCwd], estimated_tokens: 5 }),
+        smuggle({ i: 3, t: "events_served", ts: 4, start: 31, end: 40, via: "tool", count: 1, opcodes: ["SMSG_QUESTGIVER_QUEST_DETAILS×1"], events: batch }),
+        smuggle({ i: 4, t: "pause", ts: 5, start: 41, end: 50, reason: "rate-limit", detail: POISON.pauseDetail, episodeElapsedMs: 9 }),
+        smuggle({ i: 5, t: "state", ts: 6, start: 51, end: 60, turn: 2, level: 2, zone: 12, area: 9, items: [smuggle({ name: SURVIVES.itemName, count: 2, equipped: false })] }),
+        smuggle({ i: 6, t: "termination", ts: 7, start: 61, end: 70, reason: "episode-limit", detail: SURVIVES.terminationDetail }),
+        smuggle({ i: 7, t: "some_future_type", ts: 8, start: 71, end: 80, turn: 3, payload: POISON.smuggled }),
+        smuggle({ i: 8, t: "episodic", ts: 9, start: 81, end: 90, turn: 3, level: 2, zone: SURVIVES.zoneName, text: SURVIVES.statusText }),
+        smuggle({ i: 9, t: "move", ts: 10, start: 91, end: 100, moveId: 4, map: 0, x: 1, y: 2, z: 3, target: SURVIVES.npcName, status: "arrived" }),
+      ],
+    };
+    const out = projectEntries(input as never);
+    const text = JSON.stringify(out);
+    assertClean(text);
+    // Names, the model's episodic text and the termination detail all survive.
+    for (const v of [SURVIVES.itemName, SURVIVES.terminationDetail, SURVIVES.zoneName, SURVIVES.statusText, SURVIVES.npcName]) {
+      expect(text).toContain(v);
+    }
+    expect(keyPaths(out.entries[0])).toEqual(allow(["i", "t", "ts", "start", "end", "runId", "harnessVersion", "startedAt"]));
+    expect(keyPaths(out.entries[1])).toEqual(allow(["i", "t", "ts", "start", "end", "driver", "harness", "systemPromptChars"]));
+    expect(keyPaths(out.entries[2])).toEqual(allow(["i", "t", "ts", "start", "end", "turn", "type", "subtype", "estimated_tokens"]));
+    // The batch itself never ships; the tally does.
+    expect(keyPaths(out.entries[3])).toEqual(allow(["i", "t", "ts", "start", "end", "via", "count", "opcodes"]));
+    expect(keyPaths(out.entries[4])).toEqual(allow(["i", "t", "ts", "start", "end", "reason", "episodeElapsedMs"]));
+    expect(out.entries[5]).toMatchObject({ level: 2, zone: 12, items: [{ name: SURVIVES.itemName, count: 2, equipped: false }] });
+    expect(keyPaths(out.entries[7])).toEqual(allow(["i", "t", "ts", "start", "end", "turn"]));
+    expect(out.from).toBe(0);
+    expect(out.total).toBe(6);
+  });
+
+  test("tool results cross the redactor; the reference tool's text goes whole; model text passes", () => {
+    const input = {
+      from: 3,
+      total: 9,
+      entries: [
+        { i: 3, t: "tool_result", ts: 1, start: 0, end: 1, turn: 1, call: 2, name: "recent_events",
+          text: `#5 SMSG_QUESTGIVER_QUEST_LIST {"guid":"1","greeting":"${POISON.questGreeting}","quests":[{"questId":7,"title":"${SURVIVES.questTitle}"}]}` },
+        { i: 4, t: "tool_result", ts: 2, start: 2, end: 3, turn: 1, call: 3, name: "search_reference", text: POISON.wikiText },
+        { i: 5, t: "snippet_result", ts: 3, start: 4, end: 5, turn: 1, call: 4, name: "run_snippet", isError: false,
+          text: `ok (12ms)\n=> {"mailId":1,"subject":"${SURVIVES.questTitle}","body":"${POISON.mailBody}"}` },
+        { i: 6, t: "response", ts: 4, start: 6, end: 7, turn: 1, text: `I will talk to ${SURVIVES.npcName} and cast ${SURVIVES.spellName}`, tools: ["run_snippet"] },
+        { i: 7, t: "snippet", ts: 5, start: 8, end: 9, turn: 1, call: 5, code: `await sdk.talk("${SURVIVES.npcName}")` },
+      ],
+    };
+    const out = projectEntries(input as never);
+    const text = JSON.stringify(out);
+    assertClean(text);
+    for (const v of [SURVIVES.questTitle, SURVIVES.npcName, SURVIVES.spellName]) expect(text).toContain(v);
+    expect(out.entries[1]).toMatchObject({ name: "search_reference", text: "[redacted]" });
+    expect((out.entries[2] as { text: string }).text).toContain('"body":"[redacted]"');
   });
 });

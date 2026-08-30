@@ -9,9 +9,10 @@
  *   ever listed and read, and there is no route that accepts a body.
  * - **Nothing leaks.** `/api` serves run and fleet metadata. Bearer tokens are
  *   stripped in `tail.ts` at both places a raw record can reach a client, and
- *   `WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds the three routes that
- *   carry verbatim game text or Blizzard bytes (raw entries, scratchpads,
- *   minimap tiles). See docs/ARCHITECTURE.md (viewer/dashboard section).
+ *   `WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds raw entries and
+ *   minimap tiles, and serves `/entries` through the public projection and
+ *   the game-prose redactor (`public-projection.ts`, `redact-prose.ts`). See
+ *   docs/ARCHITECTURE.md (viewer/dashboard section).
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -51,6 +52,7 @@ import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
+import { projectEntries } from "./public-projection";
 import { isValidRunId, listRuns, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { isArchiveDir } from "./archive-dir";
 import {
@@ -82,9 +84,9 @@ export interface ApiOptions {
   /** Where a built SPA lives. Absent or unbuilt is a normal state. */
   dashboardDir?: string;
   /**
-   * Withhold raw entries, scratchpads and tiles. Opt-in-to-public rather than
-   * opt-in-to-raw: the operator's own run page depends on raw bodies, so
-   * defaulting them off would break the working view.
+   * Withhold raw entries and tiles, and project + redact `/entries`.
+   * Opt-in-to-public rather than opt-in-to-raw: the operator's own run page
+   * depends on raw bodies, so defaulting them off would break the working view.
    */
   publicMode?: boolean;
   /**
@@ -1167,7 +1169,10 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       const limit = Math.min(WINDOW_MAX, Math.max(1, Number(url.searchParams.get("limit") ?? 200)));
       const fromParam = url.searchParams.get("from");
       const from = fromParam === null ? Math.max(0, total - limit) : Math.max(0, Number(fromParam));
-      return json({ from, total, entries: tail.entries.slice(from, from + limit) });
+      const page = { from, total, entries: tail.entries.slice(from, from + limit) };
+      // Public mode serves the same window the snapshot publishes: each entry
+      // through the per-type allowlist and the game-prose redactor.
+      return json(publicMode ? projectEntries(page) : page);
     }
 
     const rawMatch = /^\/raw\/(\d+)$/.exec(rest);
@@ -1181,8 +1186,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       });
     }
 
+    // The scratchpad is the model's own notes, published as written since
+    // 2026-08-30 (docs/DATA-AND-LEGAL.md, "Trajectory logs"); no public gate.
     if (rest === "/scratchpad") {
-      if (publicMode) return withheld();
       const text = readScratchpad(runsDir, runId);
       if (text === null) return notFound("no scratchpad");
       return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });

@@ -501,14 +501,30 @@ describe("routes", () => {
 });
 
 describe("public mode", () => {
-  test("withholds raw entries, scratchpads and tiles; keeps the metadata", async () => {
+  test("withholds raw entries and tiles; serves the scratchpad and the metadata", async () => {
     const runs = fixture();
     const handle = api(runs, true);
     expect((await handle(new Request(`http://x/api/run/${RUN_ID}/raw/0`))).status).toBe(403);
-    expect((await handle(new Request(`http://x/api/run/${RUN_ID}/scratchpad`))).status).toBe(403);
+    // The model's own notes: published as written since 2026-08-30.
+    expect((await handle(new Request(`http://x/api/run/${RUN_ID}/scratchpad`))).status).toBe(200);
     expect((await handle(new Request("http://x/tiles/0/43_31.png"))).status).toBe(403);
     expect((await handle(new Request("http://x/api/runs"))).status).toBe(200);
     expect((await handle(new Request(`http://x/api/run/${RUN_ID}/entries`))).status).toBe(200);
+  });
+
+  test("entries cross the public projection: the meta entry sheds its config", async () => {
+    const runs = fixture();
+    const priv = (await (await api(runs, false)(new Request(`http://x/api/run/${RUN_ID}/entries?from=0`))).json()) as {
+      entries: Record<string, unknown>[];
+    };
+    const pub = (await (await api(runs, true)(new Request(`http://x/api/run/${RUN_ID}/entries?from=0`))).json()) as {
+      entries: Record<string, unknown>[];
+    };
+    expect(priv.entries[0]!["t"]).toBe("meta");
+    expect(priv.entries[0]!["config"]).toBeDefined();
+    expect(pub.entries[0]!["t"]).toBe("meta");
+    expect(pub.entries[0]!["config"]).toBeUndefined();
+    expect(pub.entries).toHaveLength(priv.entries.length);
   });
 });
 
