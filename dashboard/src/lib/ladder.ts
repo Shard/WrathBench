@@ -435,23 +435,29 @@ export interface LadderPoint {
   /**
    * At least one of the two means is a single observation. Flagged rather
    * than hidden: a mark averaged over one run is a reading, not an estimate,
-   * and the two must not look alike. Either coordinate counts — an x mean
-   * over one priced run of three is as thin as a whole entry with one run.
+   * and the two must not look alike. Both means share the same runs, so this
+   * is simply `n === 1` — an entry of three runs with one carrying both
+   * readings is as thin as an entry with one run.
    */
   single: boolean;
   model: string;
   effort: string | null;
-  /** Mean cost per counted run, USD. */
+  /** Mean cost per run, USD, over the `n` runs carrying both readings. */
   x: number;
-  /** Mean XP earned per counted run. */
+  /** Mean XP earned per run, over the same `n` runs. */
   y: number;
-  /** Counted runs of this entry on the tier, and how many of them fed each mean. */
+  /** Counted runs of this entry on the tier, including those that fed neither mean. */
   runs: number;
-  costRuns: number;
-  xpRuns: number;
+  /** The runs both means rest on: those carrying a cost reading AND an xp reading. */
+  n: number;
   /** Whether every priced run was provider-reported, every one list-priced, or both. */
   basis: "reported" | "list-price" | "mixed";
-  /** Any list-priced run was a figure nobody paid. */
+  /**
+   * Some priced run was a figure nobody paid. Orthogonal to `basis`: a
+   * claude-code run is `reported` (the SDK's own total) AND as-if-metered
+   * (billed to a subscription); a local model's list price is list-price AND
+   * as-if-metered; a metered OpenRouter charge is reported and not.
+   */
   asIfMetered: boolean;
   /** The harness tags among the runs, sorted — what colours the point. */
   harnesses: string[];
@@ -460,7 +466,7 @@ export interface LadderPoint {
 /** An entry that could not be plotted, and the reason printed under the chart. */
 export interface LadderOmission {
   key: string;
-  why: "no cost reading" | "no xp reading";
+  why: "no cost reading" | "no xp reading" | "no run with both cost and xp";
 }
 
 export function pointKey(model: string, effort: string | null): string {
@@ -476,12 +482,15 @@ export function pointLabel(key: string, runs: number): string {
  * One point per (model, effort) over the scored runs given — the same rows
  * the ladder table draws, so the chart never shows an entry the table lacks.
  *
- * Both coordinates are means over the entry's counted runs, each over the
- * runs that carry the reading: a run with no cost figure is left out of the
- * x mean and still counts toward y, and the point records how many fed each
- * so the hover can say so. An entry with no reading on either axis is
- * omitted and named, never plotted at zero — a $0 free model is a reading,
- * a missing one is not.
+ * Both coordinates are means over the SAME runs: the entry's counted runs
+ * that carry both a cost reading and an xp reading. A run with only one of
+ * the two is left out of both means — pairing one run's price with another
+ * run's xp puts a point nowhere any run was, and a label that then prints the
+ * larger n overstates what the mark rests on. `n` is the number of runs the
+ * means share; `runs` keeps the entry's full counted total so the hover can
+ * say how many were left out. An entry with no run carrying both is omitted
+ * and named, never plotted at zero — a $0 free model is a reading, a missing
+ * one is not.
  */
 export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[]; omitted: LadderOmission[] } {
   const groups = new Map<string, { model: string; effort: string | null; runs: ResultRun[] }>();
@@ -495,28 +504,34 @@ export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[
   const points: LadderPoint[] = [];
   const omitted: LadderOmission[] = [];
   for (const [key, g] of groups) {
-    const costs = g.runs.map(runCostReading).filter((c): c is RunCostReading => c !== null);
-    const xps = g.runs.map(xpEarnedOf).filter((v): v is number => v !== null);
-    if (costs.length === 0) {
-      omitted.push({ key, why: "no cost reading" });
+    const paired: { cost: RunCostReading; xp: number }[] = [];
+    let anyCost = false;
+    let anyXp = false;
+    for (const r of g.runs) {
+      const cost = runCostReading(r);
+      const xp = xpEarnedOf(r);
+      anyCost ||= cost !== null;
+      anyXp ||= xp !== null;
+      if (cost !== null && xp !== null) paired.push({ cost, xp });
+    }
+    if (paired.length === 0) {
+      // Say which reading is missing when only one is; both present on
+      // different runs is its own case, and named as such.
+      omitted.push({ key, why: !anyCost ? "no cost reading" : !anyXp ? "no xp reading" : "no run with both cost and xp" });
       continue;
     }
-    if (xps.length === 0) {
-      omitted.push({ key, why: "no xp reading" });
-      continue;
-    }
+    const costs = paired.map((p) => p.cost);
     const bases = new Set(costs.map((c) => c.basis));
     points.push({
       key,
-      label: pointLabel(key, g.runs.length),
-      single: costs.length === 1 || xps.length === 1,
+      label: pointLabel(key, paired.length),
+      single: paired.length === 1,
       model: g.model,
       effort: g.effort,
-      x: costs.reduce((s, c) => s + c.usd, 0) / costs.length,
-      y: xps.reduce((s, v) => s + v, 0) / xps.length,
+      x: costs.reduce((s, c) => s + c.usd, 0) / paired.length,
+      y: paired.reduce((s, p) => s + p.xp, 0) / paired.length,
       runs: g.runs.length,
-      costRuns: costs.length,
-      xpRuns: xps.length,
+      n: paired.length,
       basis: bases.size > 1 ? "mixed" : bases.has("reported") ? "reported" : "list-price",
       asIfMetered: costs.some((c) => c.asIfMetered),
       harnesses: [...new Set(g.runs.map((r) => r.harness ?? "harness?"))].sort(),

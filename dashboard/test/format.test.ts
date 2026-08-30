@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness } from "../src/lib/format";
+import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness, COST_BASIS_NOTE } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -232,5 +232,13 @@ describe("fmtElapsed", () => {
     expect(fmtElapsed(null)).toBe("—");
     expect(fmtElapsed(Number.NaN)).toBe("—");
     expect(fmtElapsed(Number.POSITIVE_INFINITY)).toBe("—");
+  });
+});
+
+describe("COST_BASIS_NOTE", () => {
+  test("says a claude-code cost is reported and as-if-metered, and never calls it list price", () => {
+    expect(COST_BASIS_NOTE).toContain("as-if-metered");
+    expect(COST_BASIS_NOTE).toContain("Claude SDK reports");
+    expect(COST_BASIS_NOTE).not.toContain("list price");
   });
 });

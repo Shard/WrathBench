@@ -94,6 +94,17 @@ describe("xpToNext", () => {
     expect(xpToNext(1)).toBe(400);
     expect(xpToNext(80)).toBeNull();
     expect(xpToNext(null)).toBeNull();
-    expect(XP_FOR_LEVEL.length).toBe(81);
+    // L1–L79 from the table; L80 is the cap and has no row.
+    expect(XP_FOR_LEVEL.length).toBe(80);
+  });
+
+  test("the table is AzerothCore's 3.3.5 player_xp_for_level, not the pre-Wrath curve shifted a slot", () => {
+    // deps/azerothcore/data/sql/base/db_world/player_xp_for_level.sql
+    expect(XP_FOR_LEVEL[59]).toBe(172000);
+    expect(XP_FOR_LEVEL[60]).toBe(290000);
+    expect(XP_FOR_LEVEL[61]).toBe(317000);
+    expect(XP_FOR_LEVEL[69]).toBe(717000);
+    expect(XP_FOR_LEVEL[70]).toBe(1523800);
+    expect(XP_FOR_LEVEL[79]).toBe(1670800);
   });
 });

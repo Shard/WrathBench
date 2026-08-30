@@ -104,10 +104,13 @@ export function healthReading(cur: number | null | undefined, max: number | null
 }
 
 /**
- * XP needed to leave each level at 3.3.5a, indexed by level (index 0 unused),
- * as AzerothCore's `player_xp_for_level` ships it. A fallback for a feed that
- * carries `xp` but not `nextLevelXp`; the stream's own value wins when present.
- * Level 80 is the cap and has no next.
+ * XP needed to leave each level at 3.3.5a, indexed by level (index 0 unused).
+ * Generated from AzerothCore's `player_xp_for_level` table
+ * (`deps/azerothcore/data/sql/base/db_world/player_xp_for_level.sql`, rows
+ * L1–L79; the cap has no row): the earlier constant was a pre-Wrath curve shifted a slot, so it
+ * had L59 wanting 171,900 and L60 178,100 where the 3.3.5 table has 172,000
+ * and 290,000. A fallback for a feed that carries `xp` but not `nextLevelXp`;
+ * the stream's own value wins when present. Level 80 is the cap and has no next.
  */
 export const XP_FOR_LEVEL: readonly number[] = [
   0,
@@ -116,9 +119,9 @@ export const XP_FOR_LEVEL: readonly number[] = [
   22400, 24000, 25500, 27200, 28900, 30500, 32200, 33900, 36300, 38800,
   41600, 44600, 48000, 51400, 55000, 58700, 62400, 66200, 70200, 74300,
   78500, 82800, 87100, 91600, 96300, 101000, 105800, 110700, 115700, 120900,
-  126100, 131500, 137000, 142500, 148200, 154000, 159900, 165800, 171900, 178100,
-  494000, 574700, 614400, 650300, 682300, 710200, 734100, 753700, 768900, 779700,
-  1523800, 1539600, 1555700, 1571800, 1587900, 1604200, 1620700, 1637400, 1653900, 1670800,
+  126100, 131500, 137000, 142500, 148200, 154000, 159900, 165800, 172000, 290000,
+  317000, 349000, 386000, 428000, 475000, 527000, 585000, 648000, 717000, 1523800,
+  1539600, 1555700, 1571800, 1587900, 1604200, 1620700, 1637400, 1653900, 1670800,
 ];
 
 export function xpToNext(level: number | null | undefined, nextLevelXp?: number | null): number | null {

@@ -22,6 +22,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { PUBLIC_ATTRIBUTION } from "../src/lib/attribution";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -604,7 +605,9 @@ describe("freshness", () => {
       [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: FLEET, positions: POSITIONS },
     };
     const c = createSnapshotClient(BASE, { fetch: bucket(objects).fetch });
-    expect(c.snapshot.state()).toEqual({ generatedAt: null, attribution: null });
+    // The attribution is the build's own before any fetch: the footer must
+    // not wait on a bucket that may be mid-refresh.
+    expect(c.snapshot.state()).toEqual({ generatedAt: null, attribution: PUBLIC_ATTRIBUTION });
     await c.info();
     // The aggregates are older than the manifest that points at them; the
     // newest reading is what "data as of" means.
@@ -620,23 +623,31 @@ describe("freshness", () => {
     // Two changes: the manifest's stamp, then the attribution the artifact
     // carries. Only a change notifies — a repeat of what is already held does not.
     await c.info();
-    expect(seen).toEqual([`${GENERATED_AT}/null`, `${GENERATED_AT}/${ATTRIBUTION}`]);
+    expect(seen).toEqual([`${GENERATED_AT}/${PUBLIC_ATTRIBUTION}`, `${GENERATED_AT}/${ATTRIBUTION}`]);
     off();
     await c.fleet();
     expect(seen).toHaveLength(2);
   });
 
   test("the banner says how stale, and turns warning-coloured once a push is evidently missed", () => {
-    const at = { generatedAt: GENERATED_AT, attribution: null };
-    expect(snapshotBanner({ generatedAt: null, attribution: null }, GENERATED_AT)).toBe(null);
+    const at = { generatedAt: GENERATED_AT, attribution: PUBLIC_ATTRIBUTION };
+    // Before an artifact has answered the line still names the build's nature.
+    expect(snapshotBanner({ generatedAt: null, attribution: PUBLIC_ATTRIBUTION }, GENERATED_AT)).toEqual({
+      text: "public snapshot · data age unknown",
+      tone: "dim",
+    });
+    // Two publish cadences (5 min each): a healthy snapshot is up to one
+    // cadence old by design and must not read as stale.
+    expect(SNAPSHOT_STALE_MS).toBe(600_000);
+    expect(snapshotBanner(at, GENERATED_AT + 300_000).tone).toBe("dim");
     expect(snapshotBanner(at, GENERATED_AT + 42_000)).toEqual({
       text: "public snapshot · data as of 42s ago",
       tone: "dim",
     });
-    expect(snapshotBanner(at, GENERATED_AT + SNAPSHOT_STALE_MS - 1)!.tone).toBe("dim");
-    expect(snapshotBanner(at, GENERATED_AT + SNAPSHOT_STALE_MS)!.tone).toBe("warn");
+    expect(snapshotBanner(at, GENERATED_AT + SNAPSHOT_STALE_MS - 1).tone).toBe("dim");
+    expect(snapshotBanner(at, GENERATED_AT + SNAPSHOT_STALE_MS).tone).toBe("warn");
     // A reader whose clock is behind the publisher's reads "0s ago", never a
     // negative age.
-    expect(snapshotBanner(at, GENERATED_AT - 60_000)!.text).toBe("public snapshot · data as of 0s ago");
+    expect(snapshotBanner(at, GENERATED_AT - 60_000).text).toBe("public snapshot · data as of 0s ago");
   });
 });
