@@ -77,6 +77,7 @@ import {
   type OfferedQuest,
   type QuestGiverQuestCompleteData,
   type QuestGiverQuestListData,
+  type QuestGiverQuestDetailsData,
   type QuestGiverRequestItemsData,
   type QuestGiverStatusData,
   type QuestGiverStatusMultipleData,
@@ -104,6 +105,7 @@ import {
   pointOf,
   questGiverStatusName,
   StateCache,
+  type BagSlotItem,
   type BankContents,
   type BindPoint,
   type ChatEntry,
@@ -116,6 +118,7 @@ import {
   type CorpseLocation,
   type NearbyObject,
   type Point3,
+  type QuestGiverStatusName,
   type QuestLogEntry,
   type TalentState,
   type TalentTree,
@@ -667,7 +670,7 @@ const ERROR_CODE_HINTS: Record<string, string> = {
     "the session token is shorter than 32 characters — the module refuses guessable tokens; " +
     "the runner issues a random one per run, so this means a hand-passed token needs replacing",
   item_not_usable:
-    "the server refused CMSG_USE_ITEM for that bag/slot — the item there has no on-use effect, " +
+    "the module refused use_item for that bag/slot — the item there has no on-use spell and no quest to start, " +
     "or the slot is empty or shifted (slots move after looting/selling); check state.bag()",
   opcode_not_allowed:
     "sdk.raw() only sends the CMSG_* names on the module's allowlist (module/PROTOCOL.md, \"raw\"); " +
@@ -1439,7 +1442,50 @@ export type QuestAcceptResult =
       readonly questId: number;
       /** What the NPC did offer, so a caller can say what it saw. */
       readonly offered: readonly OfferedQuest[];
+    }
+  | {
+      readonly ok: false;
+      /** The NPC's observed questgiver marker already says it offers nothing; nothing was sent. */
+      readonly status: "nothing_on_offer";
+      readonly questId: number;
+      readonly offered: readonly OfferedQuest[];
+      readonly hint: string;
     };
+
+/**
+ * `useItem`'s answer: the module's ack, plus — for an item whose tooltip says
+ * it starts a quest — the offer the server made from it. `itemGuid` is what
+ * `acceptQuestFrom` takes in place of an NPC guid.
+ */
+export type UseItemResult = ActionResponse & {
+  readonly questOffer?: { readonly questId: number; readonly title: string; readonly itemGuid: string };
+};
+
+/** The quest an item's tooltip says it starts, when the tooltip has been observed and says so. */
+function questStartedBy(state: StateCache, item: BagSlotItem | undefined): number | undefined {
+  if (item?.itemId === undefined) return undefined;
+  const startQuest = state.items.get(item.itemId)?.value?.startQuest;
+  return startQuest === undefined || startQuest === 0 ? undefined : startQuest;
+}
+
+/** `questsAvailableFrom`'s answer; `nothing_on_offer` is the marker pre-check, with nothing sent. */
+export type QuestsAvailableResult =
+  | { readonly ok: true; readonly quests: readonly OfferedQuest[] }
+  | { readonly ok: false; readonly status: "nothing_on_offer"; readonly quests: readonly OfferedQuest[]; readonly hint: string };
+
+/** What `questOffer` learned: the list, or the marker that made asking pointless. */
+type QuestOfferOutcome = { readonly quests: readonly OfferedQuest[] } | { readonly nothing: QuestGiverMarker; readonly hint: string };
+
+/** The questgiver markers that say "nothing to offer" before a quest list is even asked for. */
+const OFFERS_NOTHING: ReadonlySet<QuestGiverStatusName> = new Set([
+  "none",
+  "unavailable",
+  "incomplete",
+  "reward_rep",
+  "low_level_reward_rep",
+  "reward2",
+  "reward",
+]);
 
 /**
  * The outcome of a turn-in. `not_complete` is the questgiver refusing while
@@ -2867,8 +2913,18 @@ export class WrathClient {
    * The item is the `bag`/`slot` pair `state.bag()` lists, or its name in
    * place of `bag` (the shared `resolveName`) — a name that names nothing
    * carried, or two things, throws with what is carried.
+   *
+   * A quest-start item with no on-use spell (a found letter, the Tome of
+   * Divinity) is not a spell cast: the module right-clicks it the way a
+   * client does (`CMSG_QUESTGIVER_QUERY_QUEST` with the item's own guid as the
+   * questgiver) and the server offers the quest with
+   * `SMSG_QUESTGIVER_QUEST_DETAILS`. When the item's tooltip says it starts a
+   * quest, this waits for that offer and reports it as `questOffer`; taking
+   * it is `acceptQuestFrom(questOffer.itemGuid, questOffer.questId)` — the
+   * item guid stands where an NPC guid would (2026-08-30, the Tome of
+   * Divinity defect).
    */
-  async useItem(bagOrName: number | string, slot?: number | GuidOrUnit, targetGuid?: GuidOrUnit): Promise<WithResolved<ActionResponse>> {
+  async useItem(bagOrName: number | string, slot?: number | GuidOrUnit, targetGuid?: GuidOrUnit, options: QuestOptions = {}): Promise<WithResolved<UseItemResult>> {
     // `useItem("Healing Potion", guid)`: with a name, the second argument
     // cannot be a slot, so the guid it holds is the target.
     if (typeof bagOrName === "string" && slot !== undefined) {
@@ -2879,25 +2935,47 @@ export class WrathClient {
     if ("refusal" in where) throw new TypeError(where.refusal);
     const { bag } = where;
     slot = where.slot;
+    const item = this.state.bag().items.find((i) => i.bag === bag && i.slot === slot);
+    const startQuest = questStartedBy(this.state, item);
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    let ack: ActionResponse;
     try {
-      return withResolved(where, await this.action({
+      ack = await this.action({
         action: "use_item",
         bag,
         slot,
         targetGuid: targetGuid === undefined ? undefined : this.targetGuid(targetGuid, "useItem(..., targetGuid)"),
-      }));
+      });
     } catch (err) {
       // A bare item_not_usable cannot be told apart from "the slot shifted
       // under me" (roster-sonnet-20260822); say what the local cache thinks is
       // at that address so the model does not have to guess.
       if (err instanceof WrathRequestError && err.code === "item_not_usable") {
-        const item = this.state.bag().items.find((i) => i.bag === bag && i.slot === slot);
-        err.message += item
-          ? ` — local state sees ${item.name ?? `item ${item.itemId ?? "?"}`}${item.count !== undefined ? ` x${item.count}` : ""} at bag ${bag} slot ${slot}: that item has no on-use effect`
-          : ` — local state sees nothing at bag ${bag} slot ${slot}; slots shift after looting/selling, re-read state.bag()`;
+        const label = item === undefined ? "" : `${item.name ?? `item ${item.itemId ?? "?"}`}${item.count !== undefined ? ` x${item.count}` : ""}`;
+        err.message += item === undefined
+          ? ` — local state sees nothing at bag ${bag} slot ${slot}; slots shift after looting/selling, re-read state.bag()`
+          : startQuest !== undefined
+            ? ` — local state sees ${label} at bag ${bag} slot ${slot}, and its tooltip says it starts quest ${startQuest}: this module build predates quest-start items (it needs the 2026-08-30 build); until then the quest cannot be started from the item`
+            : ` — local state sees ${label} at bag ${bag} slot ${slot}: that item has no on-use spell and no quest to start (per its tooltip, state.items)`;
       }
       throw err;
     }
+    if (startQuest === undefined || item === undefined) return withResolved(where, ack);
+    const offer = await this.waitEvent(
+      (e) =>
+        isEvent(e, "SMSG_QUESTGIVER_QUEST_DETAILS") &&
+        !isDecodeError(e.data) &&
+        (e.data as QuestGiverQuestDetailsData).questId === startQuest &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      {
+        timeout: options.timeout ?? 10_000,
+        description:
+          `the quest offer (SMSG_QUESTGIVER_QUEST_DETAILS for quest ${startQuest}) from ${item.name ?? `item ${item.itemId}`} — ` +
+          "the server stays silent when the quest cannot be taken (already in the log or done, level or race gate); check state.quest(id)",
+      },
+    );
+    const data = offer.data as QuestGiverQuestDetailsData;
+    return withResolved(where, { ...ack, questOffer: { questId: data.questId, title: data.title, itemGuid: item.guid } });
   }
 
   /**
@@ -4960,9 +5038,24 @@ export class WrathClient {
         return { ok: true, status: "already_in_log", questId, quest: inLog, title: undefined };
       }
 
-      const offered = await this.questOffer(npc, timeout);
-      const wanted = offered.find((q) => q.questId === questId);
-      if (!wanted) return { ok: false, status: "not_offered", questId, offered };
+      let wanted: OfferedQuest | undefined;
+      const carried = this.state.bag().items.find((i) => i.guid === npc);
+      if (carried !== undefined) {
+        // A quest-start item is its own questgiver: there is no quest list to
+        // ask it for (CMSG_QUESTGIVER_HELLO on an item guid is dropped), so the
+        // offer is the details the server sends for the query — the same
+        // packet useItem waits for.
+        const offer = await this.questDetailsFrom(npc, questId, timeout, carried);
+        wanted = { questId: offer.questId, title: offer.title, icon: 0, level: 0 };
+      } else {
+        const offered = await this.questOffer(npc, timeout);
+        if ("nothing" in offered) {
+          this.noteActionHint("acceptQuestFrom", "nothing_on_offer", offered.hint);
+          return { ok: false, status: "nothing_on_offer", questId, offered: [], hint: offered.hint };
+        }
+        wanted = offered.quests.find((q) => q.questId === questId);
+        if (!wanted) return { ok: false, status: "not_offered", questId, offered: offered.quests };
+      }
 
       await this.questAccept(npc, questId);
       const quest = await this.waitForState(
@@ -4990,10 +5083,14 @@ export class WrathClient {
   async questsAvailableFrom(
     npcGuid: GuidOrUnit,
     options: QuestOptions = {},
-  ): Promise<WithResolved<{ ok: true; quests: readonly OfferedQuest[] }>> {
+  ): Promise<WithResolved<QuestsAvailableResult>> {
     return this.byName(npcGuid, "questsAvailableFrom(npcGuid)", async (npc) => {
-      const quests = await this.questOffer(npc, options.timeout ?? 10_000);
-      return { ok: true, quests };
+      const offered = await this.questOffer(npc, options.timeout ?? 10_000);
+      if ("nothing" in offered) {
+        this.noteActionHint("questsAvailableFrom", "nothing_on_offer", offered.hint);
+        return { ok: false, status: "nothing_on_offer", quests: [], hint: offered.hint };
+      }
+      return { ok: true, quests: offered.quests };
     });
   }
 
@@ -5534,9 +5631,22 @@ export class WrathClient {
    * would change a shipped helper. Two overlapping calls against *different*
    * NPCs can therefore cross answers; one at a time is the contract.
    */
-  private async questOffer(npcGuid: GuidArg, timeout: number): Promise<readonly OfferedQuest[]> {
+  private async questOffer(npcGuid: GuidArg, timeout: number): Promise<QuestOfferOutcome> {
     const sinceSeq = this.events.recent(1)[0]?.seq;
     const distance = distanceToUnit(this.state, npcGuid);
+    const marker = questgiverMarkerOf(this.state, npcGuid, "available");
+    if (marker !== undefined && OFFERS_NOTHING.has(marker.name)) {
+      // The server already said what this NPC has for us (its questgiver
+      // marker, received before the call), and it is not a quest on offer — a
+      // turn-in-only or empty-handed NPC answers a quest_list with silence, so
+      // waiting the timeout out would only confirm what is already known.
+      return {
+        nothing: marker,
+        hint:
+          `${questgiverMarkerClause(marker)} Nothing was sent. ` +
+          'Use the search_reference tool for who offers the quest you are after; state.units({ questGiver: "available" }) lists every NPC in view with a quest on offer.',
+      };
+    }
     await this.questList(npcGuid);
     const menu = await this
       .waitEvent(
@@ -5559,7 +5669,38 @@ export class WrathClient {
       .catch((e: unknown) => {
         throw withDistance(e, distance);
       });
-    return (menu.data as QuestGiverQuestListData | GossipMessageData).quests ?? [];
+    return { quests: (menu.data as QuestGiverQuestListData | GossipMessageData).quests ?? [] };
+  }
+
+  /**
+   * Ask a quest-start item for its quest: `CMSG_QUESTGIVER_QUERY_QUEST` with
+   * the item's guid, answered by `SMSG_QUESTGIVER_QUEST_DETAILS`. The item's
+   * own tooltip (`startQuest`) is checked first so a wrong quest id is refused
+   * here rather than by the server's silence.
+   */
+  private async questDetailsFrom(itemGuid: string, questId: number, timeout: number, item: BagSlotItem): Promise<QuestGiverQuestDetailsData> {
+    const starts = questStartedBy(this.state, item);
+    if (starts !== undefined && starts !== questId) {
+      throw new TypeError(
+        `acceptQuestFrom(itemGuid, questId): ${item.name ?? `item ${item.itemId}`} starts quest ${starts}, not ${questId} (its tooltip's startQuest)`,
+      );
+    }
+    const sinceSeq = this.events.recent(1)[0]?.seq;
+    await this.questDetails(itemGuid, questId);
+    const offer = await this.waitEvent(
+      (e) =>
+        isEvent(e, "SMSG_QUESTGIVER_QUEST_DETAILS") &&
+        !isDecodeError(e.data) &&
+        (e.data as QuestGiverQuestDetailsData).questId === questId &&
+        (sinceSeq === undefined || e.seq > sinceSeq),
+      {
+        timeout,
+        description:
+          `the quest offer (SMSG_QUESTGIVER_QUEST_DETAILS for quest ${questId}) from ${item.name ?? `item ${item.itemId}`} — ` +
+          "the server stays silent when the item does not start that quest or the quest cannot be taken (already in the log or done, level or race gate)",
+      },
+    );
+    return offer.data as QuestGiverQuestDetailsData;
   }
 
 

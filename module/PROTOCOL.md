@@ -312,7 +312,7 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `gossip_select` | `guid`, `menuId`, `optionId` | `CMSG_GOSSIP_SELECT_OPTION` | ids from `SMSG_GOSSIP_MESSAGE` (`menuId`, `options[].optionId`) |
 | `quest_list` | `guid` | `CMSG_QUESTGIVER_HELLO` | `SMSG_QUESTGIVER_QUEST_LIST` or a gossip menu follows |
 | `quest_details` | `guid`, `questId` | `CMSG_QUESTGIVER_QUERY_QUEST` | quest text via `SMSG_QUESTGIVER_QUEST_DETAILS` |
-| `quest_accept` | `guid`, `questId` | `CMSG_QUESTGIVER_ACCEPT_QUEST` | |
+| `quest_accept` | `guid`, `questId` | `CMSG_QUESTGIVER_ACCEPT_QUEST` | `guid` may be a quest-start item's own guid (after `use_item` on it): the handler accepts TYPEMASK_ITEM |
 | `quest_complete` | `guid`, `questId` | `CMSG_QUESTGIVER_COMPLETE_QUEST` | server answers REQUEST_ITEMS or OFFER_REWARD |
 | `quest_choose_reward` | `guid`, `questId`, `rewardIndex` | `CMSG_QUESTGIVER_CHOOSE_REWARD` | `rewardIndex` 0-based into `choiceRewards`; 0 when there is no choice |
 | `quest_abandon` | `questId` | `CMSG_QUESTLOG_REMOVE_QUEST` | module maps quest id -> log slot (client-visible via quest-log fields); `400 quest_not_in_log` |
@@ -329,7 +329,7 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `sell_item` | `guid`, `itemGuid`, `count?` | `CMSG_SELL_ITEM` | `count` 0/omitted = whole stack |
 | `repair_all` | `guid` | `CMSG_REPAIR_ITEM` | item guid 0 = repair everything |
 | `equip_item` | `bag`, `slot` | `CMSG_AUTOEQUIP_ITEM` | `bag` 255 = backpack/equipment container, `slot` 23-38 = backpack slots |
-| `use_item` | `bag`, `slot`, `targetGuid?` | `CMSG_USE_ITEM` | module fills item guid + on-use spell id from the item (client-cache knowledge); `400 no_item_at_slot`, `400 item_not_usable` |
+| `use_item` | `bag`, `slot`, `targetGuid?` | `CMSG_USE_ITEM`, or `CMSG_QUESTGIVER_QUERY_QUEST` | module fills item guid + on-use spell id from the item (client-cache knowledge). An item with no on-use spell but a `startquest` is right-clicked the way a client does it: `CMSG_QUESTGIVER_QUERY_QUEST` with the item guid as the questgiver and the template's quest id (`HandleUseItemOpcode` drops spell id 0 as unknown, so `CMSG_USE_ITEM` is never the packet for it); the server answers `SMSG_QUESTGIVER_QUEST_DETAILS`, and `quest_accept` with the same item guid takes it. `400 no_item_at_slot`; `400 item_not_usable` only when the item has neither an on-use spell nor a quest to start. The audit row carries `spellId`, `itemGuid`, `startQuest` |
 | `destroy_item` | `bag`, `slot`, `count?` | `CMSG_DESTROYITEM` | `count` 0/omitted = whole stack |
 | `trainer_list` | `guid` | `CMSG_TRAINER_LIST` | `SMSG_TRAINER_LIST` follows — or nothing at all when the NPC is out of interaction range, is not a trainer, or trains another class (the handler returns silently) |
 | `trainer_buy_spell` | `guid`, `spellId` | `CMSG_TRAINER_BUY_SPELL` | costs the character's own money server-side; answered by `SMSG_TRAINER_BUY_SUCCEEDED` or `SMSG_TRAINER_BUY_FAILED` |

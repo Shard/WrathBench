@@ -1910,19 +1910,38 @@ namespace WrathBench
                         spellId = spell.SpellId;
                         break;
                     }
-            if (!spellId)
-                return err(400, "item_not_usable");
-            p = new WorldPacket(CMSG_USE_ITEM, 1 + 1 + 1 + 4 + 8 + 4 + 1 + 4 + 9);
-            *p << uint8(bag) << uint8(slot) << uint8(0) << uint32(spellId);
-            *p << uint64(item->GetGUID().GetRawValue()) << uint32(0) << uint8(0);
-            if (target)
+            uint32 startQuest = proto ? proto->StartQuest : 0;
+            if (spellId)
             {
-                *p << uint32(0x0002);                        // TARGET_FLAG_UNIT
-                p->appendPackGUID(target);
+                p = new WorldPacket(CMSG_USE_ITEM, 1 + 1 + 1 + 4 + 8 + 4 + 1 + 4 + 9);
+                *p << uint8(bag) << uint8(slot) << uint8(0) << uint32(spellId);
+                *p << uint64(item->GetGUID().GetRawValue()) << uint32(0) << uint8(0);
+                if (target)
+                {
+                    *p << uint32(0x0002);                        // TARGET_FLAG_UNIT
+                    p->appendPackGUID(target);
+                }
+                else
+                    *p << uint32(0);
+            }
+            else if (startQuest)
+            {
+                // A quest-start item with no on-use spell (Tome of Divinity,
+                // the starter-zone "found a letter" drops). A client never sends
+                // CMSG_USE_ITEM for one: HandleUseItemOpcode drops spell id 0
+                // as unknown before it looks at the item. Right-clicking it
+                // sends CMSG_QUESTGIVER_QUERY_QUEST with the item's own guid as
+                // the questgiver (the handler accepts TYPEMASK_ITEM), and the
+                // server answers with SMSG_QUESTGIVER_QUEST_DETAILS; the accept
+                // then names the item guid too. The quest id is the template's
+                // (client-cache knowledge, same as the spell id above).
+                p = new WorldPacket(CMSG_QUESTGIVER_QUERY_QUEST, 13);
+                *p << uint64(item->GetGUID().GetRawValue()) << uint32(startQuest) << uint8(0);
             }
             else
-                *p << uint32(0);
-            auditW.Add("bag", (uint32)bag).Add("slot", (uint32)slot).Add("spellId", spellId);
+                return err(400, "item_not_usable");
+            auditW.Add("bag", (uint32)bag).Add("slot", (uint32)slot).Add("spellId", spellId)
+                .AddGuid("itemGuid", item->GetGUID().GetRawValue()).Add("startQuest", startQuest);
         }
         else if (action == "destroy_item")
         {
