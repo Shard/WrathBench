@@ -42,31 +42,6 @@ player surface, each piece validated by a smoke test, before any 0.6 talk.**
 Items 95–101 all shipped the same day (97f4e31, dc8c9aa, 3dfd712, 5981a29;
 worklogs/2026-08-29).
 
-105. **Chest casts carry the client's target flag, and the lock type rides the
-    game object query** (2026-08-29, from the chest-loot investigation). The SDK
-    opens a chest with `cast_spell` + the object's guid, which the module sends
-    as TARGET_FLAG_UNIT; the core accepts it because it resolves the packed guid
-    by its high bits, but a client sends TARGET_FLAG_GAMEOBJECT (0x800), and the
-    packet shape should match. And the SDK guesses the Opening spell by trying
-    the four open-hand lock types in turn because it has no `Lock.dbc`; the
-    module could decode the chest's lock type (data0 → `Lock.dbc`, which a
-    client reads) into `SMSG_GAMEOBJECT_QUERY_RESPONSE` so the SDK casts the
-    right spell first time. Both are a module build; do them together with the
-    next `:next`. Gate: `infra/smoke/chest-loot.ts`.
-
-106. **Deploy `:next` — quest-start items** (2026-08-30). The module refused
-    `use_item` on any item without an on-use spell, so a quest that only an item
-    starts (Tome of Divinity 6916 → 1646, the starter-zone "found a letter"
-    drops) could never be taken: the run got `400 item_not_usable` from the
-    module's own pre-check and an SDK hint asserting the item had no effect.
-    Fixed in the working tree: `use_item` on a spell-less start-quest item now
-    sends the client's right-click — `CMSG_QUESTGIVER_QUERY_QUEST` with the
-    item guid — and `useItem` waits for the offer; `acceptQuestFrom` takes the
-    item guid. Built to `wrathbench/worldserver:next`; not deployed. Gate:
-    `infra/smoke/quest-item-start.ts` (fails on the live build by design, with
-    the SDK naming the stale build). Deploy with the next window
-    (`./infra/deploy-worldserver.sh`), then run the gate and add the shipped line.
-
 ## Navigation
 
 38. **Navigation plan — rungs 2–4** (2026-08-22; supersedes item 18). Rung 4 — a
