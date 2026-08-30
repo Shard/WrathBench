@@ -277,8 +277,10 @@ short status entry — what the model is doing and how it is going — via
 `log_status`. Entries are append-only, stamped with turn, level and zone,
 and are not the scratchpad: working memory is the model's to rewrite, the
 log is a record it cannot edit. It is read back only while reflecting:
-`reflect` opens a short reflection window in which `read_log` pages the
-whole log on demand (the tool is always listed but refuses outside that
+`reflect` opens a reflection window that lasts as long as the character
+stays rested — many turns if the model wants them, with every other tool
+still usable, since the inn's vendors and trainers are part of the point —
+in which `read_log` pages the whole log on demand (the tool is always listed but refuses outside that
 window, so the tool list stays fixed for both harness groups). Looking back
 at where things went wrong is what resting is for. The trigger is the trim
 itself, not a cadence constant; the claude-code driver has no trim, so it
