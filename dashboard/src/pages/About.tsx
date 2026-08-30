@@ -53,6 +53,27 @@ export default function About() {
         <div class="banner bad">{displayError(tiers.error)}</div>
       </Show>
 
+      {/*
+        First on the page, and deliberately not an apology: an outside reader
+        arriving from a link has no way to tell a running experiment from a
+        finished one, and the ladder looks the same either way. Phase 0 and the
+        series are `docs/PHASE-0.md` and METHODOLOGY's harness-version rule; the
+        0.6 reservation is the context-policy section's own note.
+      */}
+      <h2 class="section">project status</h2>
+      <p class="dim">
+        <span class="mono">status: pre-release · harness 0.5 · phase 0</span>
+      </p>
+      <p class="dim">
+        WrathBench is in phase 0: building the control surface and getting models to liftoff. The
+        harness is on series 0.5 — pre-1.0, moving by patches, with 0.6 reserved for the first
+        semi-public release — and it is still being finished toward the point where a capable model
+        could play a character to the level cap. The results here are exploratory: sample sizes are
+        small, the roster changes, and the ladder is a working view rather than a paper-grade
+        leaderboard. One freeplay character runs at a time, access is by invitation, and what is on
+        these pages can change day to day.
+      </p>
+
       <h2 class="section">reading a result</h2>
       <p class="dim">
         A score means "this harness series, this model, this episode" and nothing wider. The harness —
