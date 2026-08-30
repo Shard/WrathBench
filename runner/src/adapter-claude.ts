@@ -970,6 +970,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     // A turn cut short mid-message still has its newest response entry held
     // back one envelope. It goes to the trajectory, usage and all.
     flushPendingResponse();
+    // A reflection window still open when the episode ends is closed on the
+    // record rather than left dangling, exactly as `runLoop`'s finally does.
+    // Before `stopTicker`, so the record is written while the trajectory is
+    // still the live one.
+    builder.reflect.close("run_end");
+    for (const e of builder.reflect.drainEvents()) {
+      trajectory.append({ t: "reflect_window", turn: builder.currentTurn, ...e });
+    }
     await stopTicker();
     if (sigkillTimer !== undefined) clearTimeout(sigkillTimer);
     try {
