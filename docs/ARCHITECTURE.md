@@ -54,12 +54,22 @@ fixed, content-free review prompt while the character's `resting` flag is set �
 one reflection per rest visit — and opens a reflection window in which
 `read_log` pages that log; the window closes when the character leaves the rest
 area, on a 30-turn circuit breaker, or at the end of the run, and every
-transition is a `reflect_window` record. The fixed loop asks for an entry
-(`trim_pending`) on the turn the block trim is expected and says so afterwards
-(`window_trimmed`); the estimate is the previous turn's message growth, which
-is exact while the model's tool-call count is steady, so the notice says the
-trim is *about to* happen rather than naming a turn the harness cannot
-guarantee.
+transition is a `reflect_window` record. After a sandbox restart the state
+cache is rebuilt, so `resting` is unobserved until the next update block
+carries `playerFlags` and the gate holds the last reading it was fed rather
+than reading silence as "not resting" — the same latch discipline the ghost
+flag has.
+
+The fixed loop asks for an entry (`trim_pending`) on the last turn before a
+block trim and says so afterwards (`window_trimmed`). That is exact rather than
+predicted: a turn's message count is not known until the model has answered it,
+so the cut is applied one turn *after* the crossing that earns it
+(`laggedLength`), which turns an unanswerable question about the future into a
+fact already sitting in the history. Every trim is preceded by exactly one
+prompt, on the turn immediately before it, whatever the model's tool-call count
+does; the price is that the window sits at most one turn's growth above
+`MESSAGE_WINDOW_MAX` for that one turn, and the prefix stays byte-stable
+because the cut still moves only in whole blocks.
 
 The asymmetry between harness groups is deliberate and follows from the policy:
 the claude-code driver runs no message window of ours, so it never raises

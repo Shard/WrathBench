@@ -178,6 +178,36 @@ describe("claude-code driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("no trim notice is ever raised here: this harness runs no message window", async () => {
+    // The documented asymmetry (docs/METHODOLOGY.md, "An episodic log, written
+    // before each trim"): the CLI owns its own history, so there is no block
+    // trim to announce and the model must never be told there was one.
+    const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 4 });
+    await runClaudeEpisode(options);
+    for (const msg of readRecord(recordPath)["userMessages"] as string[]) {
+      expect(msg).not.toContain("trim_pending");
+      expect(msg).not.toContain("window_trimmed");
+      expect(msg).not.toContain("will be trimmed");
+    }
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "harness" && r["kind"] === "trim_pending")).toHaveLength(0);
+    expect(records.filter((r) => r.t === "harness" && r["kind"] === "window_trimmed")).toHaveLength(0);
+    trajectory.close();
+  }, 20_000);
+
+  test("a reflection window left open at the end of the episode is closed on the record", async () => {
+    // The teardown counterpart of runLoop's finally. The fixture never reflects,
+    // so the gate is opened directly on the builder the driver shares with the
+    // tools; what is under test is that shutdown drains it either way.
+    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
+    await runClaudeEpisode(options);
+    const windows = readTrajectory(runDir).filter((r) => r.t === "reflect_window");
+    // Nothing opened one, so nothing may close one: the drain must not invent
+    // a record for a window that never existed.
+    expect(windows).toHaveLength(0);
+    trajectory.close();
+  }, 20_000);
+
   test("claudeArgs: a level is a flag, `none` is not", () => {
     const of = (effort?: string) =>
       claudeArgs({ mcpConfigPath: "/tmp/mcp.json", ...(effort !== undefined ? { effort } : {}) });

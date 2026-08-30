@@ -43,10 +43,12 @@ export const READ_LOG_CLOSED =
   "read_log is available while reflecting — call reflect in a rest area first.";
 
 /**
- * How many turns a reflection window may stay open. A circuit breaker, not a
- * cadence: it exists only so that parking in an inn cannot hold `read_log`
- * open for a whole episode, and nothing in the model-visible text names it
- * until it fires.
+ * How many turns a reflection window may stay open. A circuit breaker against a
+ * thinking deadlock, not a cadence: it exists so that parking in an inn cannot
+ * hold `read_log` open for a whole episode. The number is named to the model,
+ * but only in the notice that says the window has just closed — a limit the
+ * model is told about after the fact is a fact about what happened, not a
+ * budget to plan a turn count around.
  */
 export const REFLECT_MAX_TURNS = 30;
 
@@ -83,6 +85,11 @@ export type ReflectWindowEvent =
  * the ones a `reflect` call happens to coincide with: a model that reflects at
  * an inn, travels for fifty turns and comes back must be re-armed by the
  * leaving, and nothing would have seen the leaving otherwise.
+ *
+ * A sandbox restart rebuilds the state cache, so `self.resting` is unobserved
+ * again until the next update block carries `playerFlags`; the gate keeps the
+ * last reading it was fed until then rather than treating "not seen" as "not
+ * resting" — the same latch discipline the ghost flag has in `loop.ts`.
  *
  * Per episode, and never persisted. A resumed run starts with a fresh gate —
  * closed window, un-armed until the next false→true transition — for the same
