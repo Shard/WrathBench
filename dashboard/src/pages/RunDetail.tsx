@@ -14,12 +14,12 @@
  * it. State samples and harness notices get their own compact rows rather than
  * the generic JSON dump — see `lib/feedview.ts` for both.
  *
- * The public build is this page without the feed and without the tail: the
- * summary, the charts, the states and the costs all publish, the entries do
- * not (docs/DATA-AND-LEGAL.md), and the panel says so where they would be. The
- * withheld routes are never called rather than called and refused — see the
- * three `SNAPSHOT_MODE` guards below, and why an awaited 403 would have cost
- * the rest of the page.
+ * The public build is this page without the tail and without "load earlier":
+ * the publisher renders one window per run — the same last-200 tail this page
+ * loads first, projected and prose-redacted (docs/DATA-AND-LEGAL.md,
+ * "Trajectory logs") — and a live run's window advances with the detail poll
+ * instead of over SSE. A snapshot from before the window existed answers 404
+ * for it, which the panel says plainly rather than failing the page.
  */
 
 import { A, useLocation, useParams } from "@solidjs/router";
@@ -166,6 +166,8 @@ export default function RunDetail() {
   const [entries, setEntries] = createSignal<FeedEntry[]>([]);
   const [from, setFrom] = createSignal(0);
   const [total, setTotal] = createSignal(0);
+  /** Public build only: whether this run's snapshot carries an entries window at all. */
+  const [feedPublished, setFeedPublished] = createSignal(true);
   const [tokens, setTokens] = createSignal<TokenTotals | undefined>(undefined);
   const [error, setError] = createSignal<string | undefined>(undefined);
   const [lastWrite, setLastWrite] = createSignal(Date.now());
@@ -283,23 +285,28 @@ export default function RunDetail() {
             .catch(() => undefined);
         }
         /*
-         * The feed is the one part of this page the public site does not
-         * publish: an entry carries model output and verbatim game text, which
-         * docs/DATA-AND-LEGAL.md does not let out of the lab. Not asked for
-         * rather than asked for and refused — the withheld route answers 403,
-         * and awaiting it here would reject this whole continuation, taking the
-         * summary, the charts and the live poll down with it and reporting a
-         * published boundary as a page error. The panel says so plainly
-         * instead; the count still comes off the detail, which is the same
-         * `entries.length` the feed would have reported.
+         * The public build's window is one published artifact per run, and a
+         * snapshot from before it existed answers 404. Caught here rather than
+         * awaited bare: a rejection would take the summary, the charts and the
+         * live poll down with it and report an unpublished feed as a page
+         * error. The count still comes off the detail either way.
          */
-        if (SNAPSHOT_MODE) {
-          setTotal(d.total);
-        } else {
+        setTotal(d.total);
+        const loadWindow = async (): Promise<void> => {
           const page = await api.entries(params.id, undefined, WINDOW);
           setEntries(page.entries);
           setFrom(page.from);
           setTotal(page.total);
+        };
+        if (SNAPSHOT_MODE) {
+          try {
+            await loadWindow();
+            setFeedPublished(true);
+          } catch {
+            setFeedPublished(false);
+          }
+        } else {
+          await loadWindow();
         }
         if (d.run.terminationReason !== null) return;
         // A live run's summary keeps moving; a finished one is settled.
@@ -310,14 +317,17 @@ export default function RunDetail() {
             if (next === undefined) return;
             setDetail(next);
             /*
-             * In the public build the tail that advances the token card and
-             * the entry count never opens, so the polled detail is the only
-             * thing that moves them — without this they freeze at the first
-             * load while the rest of the page keeps up.
+             * In the public build the tail that advances the token card, the
+             * entry count and the feed never opens, so the polled detail is
+             * the only thing that moves them — the window is re-read on the
+             * same tick, since a grown run publishes a new one under a new
+             * version key. Without this they freeze at the first load while
+             * the rest of the page keeps up.
              */
             if (SNAPSHOT_MODE) {
               setTokens(next.tokens);
               setTotal(next.total);
+              if (feedPublished()) void loadWindow().catch(() => undefined);
             }
           });
         });
@@ -344,10 +354,8 @@ export default function RunDetail() {
   });
 
   const loadEarlier = (): void => {
-    // No SNAPSHOT_MODE guard: the public build's window never opens (`from`
-    // never leaves 0), so the button that calls this never renders — the
-    // `Show` gate is the boundary, and a guard here would be dead code
-    // implying a route into the withheld feed that does not exist.
+    // The public build renders no button for this (one window per run is all
+    // the publisher makes), so the `Show` gate is the boundary.
     const start = Math.max(0, from() - WINDOW);
     if (start === from()) return;
     void api.entries(params.id, start, from() - start).then((page) => {
@@ -456,12 +464,15 @@ export default function RunDetail() {
                 <div class="runview-logs" ref={logEl} onScroll={onLogScroll}>
                   <h2 class="section">
                     feed
-                    <Show when={from() > 0}>
+                    <Show when={from() > 0 && !SNAPSHOT_MODE}>
                       {" "}
                       <button onClick={loadEarlier}>load earlier</button>
                     </Show>
-                    {/* No control in the public build: there is no feed under it to expand. */}
-                    <Show when={!SNAPSHOT_MODE}>
+                    <Show when={SNAPSHOT_MODE && from() > 0}>
+                      {" "}
+                      <span class="dim">last {WINDOW} of {total()}</span>
+                    </Show>
+                    <Show when={feedPublished()}>
                       <label class="filter expand-preset">
                         <span class="dim">expand</span>
                         <select
@@ -476,15 +487,14 @@ export default function RunDetail() {
                     </Show>
                   </h2>
                   {/*
-                    A statement of what this build publishes, not a failure:
-                    the public site never asks for the entries, so nothing went
-                    wrong and nothing is worth retrying. Plainly styled for the
-                    same reason — an error colour here would send readers
-                    looking for a fault that does not exist.
+                    A statement about the snapshot, not a failure: a run
+                    published before the entries window existed has none, so
+                    nothing went wrong and nothing is worth retrying. Plainly
+                    styled for the same reason.
                   */}
                   <Show
-                    when={!SNAPSHOT_MODE}
-                    fallback={<p class="dim">Trajectory entries are withheld on the public site.</p>}
+                    when={feedPublished()}
+                    fallback={<p class="dim">No trajectory window is published for this run.</p>}
                   >
                     {/*
                       The run's own clock, for every row's stamp. `startedAt`
