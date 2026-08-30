@@ -13,6 +13,7 @@
 
 import type { ResultRun } from "@viewer/api-types";
 import { niceTicks, scaleLinear } from "./chart";
+import { modelDisplay } from "./format";
 import { chainsOf } from "./lineage";
 
 export function scored(runs: readonly ResultRun[]): ResultRun[] {
@@ -466,9 +467,16 @@ export interface LadderPoint {
 /** An entry that could not be plotted, and the reason printed under the chart. */
 export interface LadderOmission {
   key: string;
+  /** The key as a reader sees it: the model's short name, provider prefix dropped. */
+  label: string;
   why: "no cost reading" | "no xp reading" | "no run with both cost and xp";
 }
 
+/**
+ * The entry's identity: the model string as recorded, never shortened. It is a
+ * lookup key (`pareto.ts` matches a Set of these), so a display form of it is
+ * built separately — see `LadderPoint.label`.
+ */
 export function pointKey(model: string, effort: string | null): string {
   return effort === null ? model : `${model} (${effort})`;
 }
@@ -517,14 +525,18 @@ export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[
     if (paired.length === 0) {
       // Say which reading is missing when only one is; both present on
       // different runs is its own case, and named as such.
-      omitted.push({ key, why: !anyCost ? "no cost reading" : !anyXp ? "no xp reading" : "no run with both cost and xp" });
+      omitted.push({
+        key,
+        label: pointKey(modelDisplay(g.model), g.effort),
+        why: !anyCost ? "no cost reading" : !anyXp ? "no xp reading" : "no run with both cost and xp",
+      });
       continue;
     }
     const costs = paired.map((p) => p.cost);
     const bases = new Set(costs.map((c) => c.basis));
     points.push({
       key,
-      label: pointLabel(key, paired.length),
+      label: pointLabel(pointKey(modelDisplay(g.model), g.effort), paired.length),
       single: paired.length === 1,
       model: g.model,
       effort: g.effort,
@@ -820,6 +832,8 @@ export interface StreamRow {
   /** The chain root's run id: the stream's identity across attempts. */
   streamId: string;
   model: string;
+  /** The effort the latest attempt ran at, when it recorded one. */
+  effort: string | null;
   /** The latest attempt — the run whose readings this row shows. */
   latest: ResultRun;
   /** Attempts in the chain, oldest first. `attempts` is its length. */
@@ -898,6 +912,7 @@ export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
     rows.push({
       streamId,
       model: run.model ?? "(unnamed)",
+      effort: run.effort ?? null,
       latest: run,
       chain,
       attempts: chain.length,
@@ -977,9 +992,11 @@ export interface StreamPoint {
 
 export interface StreamSeries {
   streamId: string;
-  /** The character, falling back to the model when a run recorded no name. */
+  /** The character, falling back to the model (short, with its effort) when a run recorded no name. */
   label: string;
   model: string;
+  /** The effort behind `model`, so two streams of one model are told apart. */
+  effort: string | null;
   status: StreamStatus;
   attempts: number;
   /** The attempt the series ends on — where a click on the line goes. */
@@ -1035,7 +1052,7 @@ export function streamSeries(rows: readonly StreamRow[], runs: readonly ResultRu
   const startedOf = new Map(rows.map((r) => [r.streamId, r.startedAt]));
 
   for (const row of rows) {
-    const label = row.character ?? row.model;
+    const label = row.character ?? pointKey(modelDisplay(row.model), row.effort);
     const attempts = row.chain.map((id) => byId.get(id)).filter((r): r is ResultRun => r !== undefined);
     if (attempts.length === 0) {
       omitted.push({ streamId: row.streamId, label, why: "no attempt served" });
@@ -1086,6 +1103,7 @@ export function streamSeries(rows: readonly StreamRow[], runs: readonly ResultRu
       streamId: row.streamId,
       label,
       model: row.model,
+      effort: row.effort,
       status: row.status,
       attempts: row.attempts,
       latestRunId: row.latest.runId,

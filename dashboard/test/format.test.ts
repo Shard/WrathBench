@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness, COST_BASIS_NOTE } from "../src/lib/format";
+import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, COST_BASIS_NOTE } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -240,5 +240,40 @@ describe("COST_BASIS_NOTE", () => {
     expect(COST_BASIS_NOTE).toContain("as-if-metered");
     expect(COST_BASIS_NOTE).toContain("Claude SDK reports");
     expect(COST_BASIS_NOTE).not.toContain("list price");
+  });
+});
+
+describe("modelDisplay", () => {
+  test("drops the provider prefix and keeps the model's own version", () => {
+    expect(modelDisplay("stealth/ox-alpha")).toBe("ox-alpha");
+    expect(modelDisplay("z-ai/glm-4.7-flash")).toBe("glm-4.7-flash");
+    expect(modelDisplay("deepseek/deepseek-v4-pro-0813")).toBe("deepseek-v4-pro-0813");
+  });
+
+  test("a :free tag reads as a billing fact, not part of the name", () => {
+    expect(modelDisplay("nvidia/nemotron-3-ultra-550b-a55b:free")).toBe("nemotron-3-ultra-550b-a55b (free)");
+    expect(modelDisplay("poolside/laguna-s-2.1:free")).toBe("laguna-s-2.1 (free)");
+  });
+
+  test("any other tag stays verbatim — we do not know what it means", () => {
+    expect(modelDisplay("some/model:beta")).toBe("model:beta");
+  });
+
+  test("a name with no prefix is already short, version stamps and all", () => {
+    expect(modelDisplay("claude-opus-4-6")).toBe("claude-opus-4-6");
+    expect(modelDisplay("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5-20251001");
+    expect(modelDisplay("sonnet")).toBe("sonnet");
+    expect(modelDisplay("hy3-free")).toBe("hy3-free");
+  });
+
+  test("never returns empty: a string that is all prefix comes back as it came", () => {
+    expect(modelDisplay("openai/")).toBe("openai/");
+    expect(modelDisplay(":free")).toBe(":free");
+    expect(modelDisplay("foo/:free")).toBe("foo/:free");
+    expect(modelDisplay("")).toBe("");
+  });
+
+  test("only the last slash counts", () => {
+    expect(modelDisplay("a/b/c-1")).toBe("c-1");
   });
 });

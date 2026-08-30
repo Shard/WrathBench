@@ -300,7 +300,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         Cost is what the provider reported; {COST_BASIS_NOTE}.
         <Show when={model().omitted.length > 0}>
           {" "}
-          Not plotted: {model().omitted.map((o) => `${o.key} (${o.why})`).join(", ")}.
+          Not plotted: {model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
         </Show>
       </p>
     </div>

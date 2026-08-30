@@ -26,7 +26,7 @@ import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { SeriesFilterNote } from "../components/SeriesSelect";
 import { useFeeds } from "../lib/feeds";
-import { fmtDuration, fmtUsd, fmtWhen, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
+import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
 import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
 import {
@@ -258,9 +258,9 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
               <ModelIcon model={r().model} />
               <A
                 href={narrow(r().effort === null ? { model: r().model! } : { model: r().model!, effort: r().effort! })}
-                title="narrow to this model"
+                title={`${r().model} — narrow to this model`}
               >
-                {r().model}
+                {modelDisplay(r().model!)}
               </A>
             </Show>
             {/* What the provider actually served, and only when it differs from
@@ -268,8 +268,8 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
                 is the one place a row says which Claude it really was. */}
             <Show when={resolvedLabel(r().model, r().resolvedModel)}>
               {(id) => (
-                <div class="dim" title="the id the provider actually served">
-                  {id()}
+                <div class="dim" title={`${id()} — the id the provider actually served`}>
+                  {modelDisplay(id())}
                 </div>
               )}
             </Show>

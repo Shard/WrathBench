@@ -152,7 +152,7 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
                 >
                   <title>
                     {[
-                      `${p.series.label} (${p.series.model})`,
+                      `${p.series.label} (${p.series.model}${p.series.effort === null ? "" : `, ${p.series.effort}`})`,
                       `${p.series.status}${p.series.attempts > 1 ? `, ${p.series.attempts} attempts` : ""}`,
                       `L${p.series.endLevel} after ${fmtDuration(p.series.endX)} of active play`,
                       p.series.truncated ? "history before the oldest attempt served is not drawn" : "",

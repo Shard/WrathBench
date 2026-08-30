@@ -202,3 +202,35 @@ export function resolvedLabel(
   if (typeof resolved !== "string" || resolved.length === 0) return null;
   return resolved === model ? null : resolved;
 }
+
+/**
+ * A model id as a reader wants to see it: the model's own name, without the
+ * provider prefix that only says where it was bought.
+ *
+ * `nvidia/nemotron-3-ultra-550b-a55b:free` is a routing address — the part
+ * before the slash names the platform, not the model, and it is the same for
+ * every row from that provider, so it costs a column's width to say nothing.
+ * The version stays: `claude-haiku-4-5-20251001` is a date-stamped version,
+ * not a prefix, and `glm-4.7-flash` is not the same model as `glm-5.3-flash`.
+ *
+ * A `:free` tag is the one suffix worth rephrasing — it is a billing fact, and
+ * ` (free)` reads as one rather than as part of the name. Any other `:tag`
+ * stays verbatim: we do not know what it means, and guessing would rename a
+ * model.
+ *
+ * Presentation only. The full slug stays the key everywhere — run rows, ladder
+ * keys, roster lookups, logo matching, and the hover text beside every one of
+ * these labels — so nothing here changes what two rows compare as. Never
+ * returns empty: a string that is all prefix (`foo/`, `:free`) is handed back
+ * as it came, because a blank cell is worse than a long one.
+ */
+export function modelDisplay(model: string): string {
+  const slash = model.lastIndexOf("/");
+  const base = slash === -1 ? model : model.slice(slash + 1);
+  if (base.length === 0) return model;
+  if (base.endsWith(":free")) {
+    const name = base.slice(0, -":free".length);
+    return name.length === 0 ? model : `${name} (free)`;
+  }
+  return base;
+}

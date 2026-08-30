@@ -389,6 +389,19 @@ describe("freeplay streams", () => {
     expect(streamRows(runs).map((r) => r.streamId)).toEqual(["a1"]);
   });
 
+  test("a stream carries its effort, so two streams of one model are told apart", () => {
+    const rows = streamRows([
+      fp({ runId: "s1", model: "z-ai/glm-4.7-flash", effort: "low", maxLevel: 3 }),
+      fp({ runId: "s2", model: "z-ai/glm-4.7-flash", effort: null, maxLevel: 4 }),
+    ]);
+    expect(rows.map((r) => [r.model, r.effort])).toEqual(
+      expect.arrayContaining([
+        ["z-ai/glm-4.7-flash", "low"],
+        ["z-ai/glm-4.7-flash", null],
+      ]),
+    );
+  });
+
   test("a chain of three collapses to one row: the latest attempt, the whole lineage", () => {
     const rows = streamRows([
       fp({ runId: "a1", maxLevel: 3, xp: 10 }),
@@ -598,9 +611,9 @@ describe("ladderPoints", () => {
     expect(points.map((p) => p.key)).toEqual(["m"]);
     expect(points[0]!.basis).toBe("mixed");
     expect(omitted).toEqual([
-      { key: "nocost", why: "no cost reading" },
-      { key: "noxp", why: "no xp reading" },
-      { key: "split", why: "no run with both cost and xp" },
+      { key: "nocost", label: "nocost", why: "no cost reading" },
+      { key: "noxp", label: "noxp", why: "no xp reading" },
+      { key: "split", label: "split", why: "no run with both cost and xp" },
     ]);
   });
 });
@@ -746,6 +759,22 @@ describe("streamSeries", () => {
     run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
   const seriesOf = (runs: readonly ResultRun[]): ReturnType<typeof streamSeries> =>
     streamSeries(streamRows(runs), runs);
+
+  test("a nameless stream is labelled by the short model and its effort, never the raw slug", () => {
+    const { series } = seriesOf([
+      fp({
+        runId: "n1",
+        model: "nvidia/nemotron-3-ultra-550b-a55b:free",
+        effort: "low",
+        character: null,
+        levels: [mark(1, null, 0), mark(2, null, 600_000)],
+        playtimeMs: 1_000_000,
+      }),
+    ]);
+    expect(series[0]!.label).toBe("nemotron-3-ultra-550b-a55b (free) (low)");
+    // The full slug stays on the series, which is what the logo keys on.
+    expect(series[0]!.model).toBe("nvidia/nemotron-3-ultra-550b-a55b:free");
+  });
 
   test("a three-attempt chain draws one line, each attempt offset by the last one's playtime", () => {
     const runs = [

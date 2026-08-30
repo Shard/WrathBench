@@ -20,7 +20,7 @@ import { Collapsible } from "../components/Collapsible";
 import { campaignLiveRuns, progressOf, type CampaignRunRow } from "../lib/campaigns";
 import { useFeeds } from "../lib/feeds";
 import { progressLabel, progressTitle, rowProgress, rowStateLabel, runHref } from "../lib/fleet";
-import { fmtDuration, fmtWhen, num } from "../lib/format";
+import { fmtDuration, fmtWhen, modelDisplay, num } from "../lib/format";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
 
@@ -220,7 +220,9 @@ export default function Campaigns() {
                           </td>
                           <td class={`right mono ${c.runs === 0 ? "dim" : ""}`}>{c.runs}</td>
                           <td class="right mono dim">{c.bestLevel ?? "—"}</td>
-                          <td class="dim">{c.models.length > 0 ? c.models.join(", ") : "—"}</td>
+                          <td class="dim" title={c.models.join(", ")}>
+                            {c.models.length > 0 ? c.models.map(modelDisplay).join(", ") : "—"}
+                          </td>
                         </tr>
                       )}
                     </For>
@@ -282,8 +284,11 @@ function LiveRunRow(props: { row: CampaignRunRow }) {
       <td class="dim">{r().cell ?? "—"}</td>
       <td>{r().character ?? "—"}</td>
       {/* The attempt only: the account name is operator detail, and this page is public. */}
-      <td class="dim" title={r().attempt === null ? "" : `attempt #${r().attempt}`}>
-        {r().model ?? "—"}
+      <td
+        class="dim"
+        title={[r().model ?? "", r().attempt === null ? "" : `attempt #${r().attempt}`].filter((t) => t.length > 0).join(" — ")}
+      >
+        {r().model === null ? "—" : modelDisplay(r().model!)}
       </td>
       <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
