@@ -40,7 +40,20 @@ export interface SnippetResult {
 
 export interface HarnessNotice {
   ts: number;
-  kind: "sandbox_restarted" | "sandbox_started" | "session_note" | "provider_truncated";
+  kind:
+    | "sandbox_restarted"
+    | "sandbox_started"
+    | "session_note"
+    | "provider_truncated"
+    // The fixed loop's message window dropped a block of older messages
+    // (context.ts, `messageWindowCut`). Never raised by the claude-code
+    // driver, which runs no window of ours.
+    | "window_trimmed"
+    // The turn before the block trim is expected: the harness asks for an
+    // episodic status entry (METHODOLOGY, "An episodic log"). Fixed-loop only.
+    | "trim_pending"
+    // A reflection window closed on its circuit breaker (`reflect.ts`).
+    | "reflect_ended";
   text: string;
 }
 

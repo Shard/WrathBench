@@ -16,6 +16,8 @@
 
 import { join } from "node:path";
 import { openWikiBundle } from "./wiki";
+import { EpisodicLog } from "./episodic";
+import { ReflectGate } from "./reflect";
 import { callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
@@ -160,6 +162,15 @@ async function main(): Promise<void> {
     wiki,
     wikiCoords: config.wikiCoords,
     sessionLive: () => true, // MCP mode has no loop-side session tracking
+    // Standalone MCP has no context builder, so nothing samples the world on a
+    // clock: this gate is fed only by the snapshot each `reflect` call takes
+    // for itself, which sees a rest area being entered but not one being left.
+    // The operator drives this mode by hand; a scored episode always runs under
+    // a driver whose builder feeds the gate.
+    reflect: new ReflectGate(),
+    episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
+    turn: () => 0, // MCP mode has no driver turn to stamp
+    onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({
         t: "events_served",
@@ -172,7 +183,13 @@ async function main(): Promise<void> {
     serverVersion: harnessVersion(),
     onToolCall: (name, args, result) => {
       trajectory.append({ t: "tool_call", name, args });
-      trajectory.append({ t: "tool_result", name, isError: result.isError ?? false, text: result.text });
+      trajectory.append({
+        t: "tool_result",
+        name,
+        isError: result.isError ?? false,
+        text: result.text,
+        ...(name === "reflect" ? { reflect: true } : {}),
+      });
     },
   });
 

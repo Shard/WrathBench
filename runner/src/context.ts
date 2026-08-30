@@ -159,6 +159,8 @@ export interface SnapshotLike {
     achievements?: { entries?: AchievementLike[]; points?: unknown; loginSeen?: unknown };
     /** `value` is a bool: `UNIT_FLAG_TAXI_FLIGHT` on self — the character is being flown. */
     taxiFlight?: ObservedLike;
+    /** `value` is a bool: `PLAYER_FLAGS_RESTING` on self — the character is in a rest area. */
+    resting?: ObservedLike;
     /** `value` is `{ reply, ok }` — the last `SMSG_ACTIVATETAXIREPLY`. */
     taxiReply?: ObservedLike;
     /** `value` is `{ map, x, y, z, area: { id, name } }` — where the Hearthstone goes (`SMSG_BINDPOINTUPDATE`). */
@@ -500,6 +502,11 @@ export function formatStateSummary(
   const playerFlags = s.fields?.["playerFlags"]?.value;
   const isGhost = typeof playerFlags === "number" && (playerFlags & PLAYER_FLAGS_GHOST) !== 0;
   if (isGhost) uiParts.push("ghost");
+  // The client's own resting icon, as the SDK decoded it off `playerFlags`.
+  // Printed only when it is true: "not resting" is the ordinary case and
+  // costs a token every turn to say, and an unobserved flag would have to be
+  // distinguished from a false one for the negative to be honest at all.
+  if (s.resting?.value === true) uiParts.push("resting");
   if (uiParts.length > 0) lines.push(`ui: ${uiParts.join(" | ")}`);
   if (isGhost) lines.push(ghostLine(s, pos, o.now ?? Date.now()));
 
@@ -622,11 +629,50 @@ export interface ChatMessage {
  * incrementally trimmed window and a rebuilt one would disagree.
  */
 export function messageWindowCut(history: ChatMessage[]): number {
-  const { MESSAGE_WINDOW_MAX, MESSAGE_WINDOW_TRIM } = CONTEXT_POLICY;
-  let cut = 0;
-  while (history.length - cut > MESSAGE_WINDOW_MAX) cut += MESSAGE_WINDOW_TRIM;
+  let cut = messageWindowRawCut(history.length);
   while (cut < history.length && history[cut]!.role !== "assistant") cut++;
   return cut;
+}
+
+/**
+ * The raw block cut for a history of `len` messages, before the snap forward to
+ * an assistant boundary. A pure function of the length alone, which is what
+ * makes the *next* trim predictable at all.
+ */
+export function messageWindowRawCut(len: number): number {
+  const { MESSAGE_WINDOW_MAX, MESSAGE_WINDOW_TRIM } = CONTEXT_POLICY;
+  let cut = 0;
+  while (len - cut > MESSAGE_WINDOW_MAX) cut += MESSAGE_WINDOW_TRIM;
+  return cut;
+}
+
+/**
+ * How many messages the previous turn appended: the assistant message plus its
+ * tool results, counted back from the end. One when there is no assistant
+ * message yet — the floor a turn can possibly add.
+ *
+ * A pure function of the history, so a rebuilt history predicts identically.
+ */
+export function lastTurnGrowth(history: ChatMessage[]): number {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i]!.role === "assistant") return history.length - i;
+  }
+  return 1;
+}
+
+/**
+ * Whether the block trim is expected to land at the end of this turn.
+ *
+ * The trim itself is exact in the message *count*, but the count this turn will
+ * add is not known until the model has answered, so the estimate is the
+ * previous turn's growth — exact whenever the model's tool-call count is steady
+ * across the boundary, and off by one turn when it is not. That is why the
+ * notice text says the trim is about to happen and not that it happens after
+ * this turn: the harness must not state a turn it cannot guarantee.
+ */
+export function trimExpected(history: ChatMessage[]): boolean {
+  const len = history.length;
+  return messageWindowRawCut(len + lastTurnGrowth(history)) > messageWindowRawCut(len);
 }
 
 /**
