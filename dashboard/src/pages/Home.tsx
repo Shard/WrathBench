@@ -15,22 +15,33 @@
 import { A } from "@solidjs/router";
 import { For, Show, createSignal } from "solid-js";
 import { api } from "../api/client";
+import { LadderChart } from "../components/LadderChart";
 import { ModelIcon } from "../components/ModelIcon";
+import { HOME_EPISODE, homeLadderRuns } from "../lib/homeladder";
 import { poll } from "../lib/poll";
+import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;
 const LIVE_POLL_MS = 15_000;
+/** The ladder's own cadence; the same key as the ladder page, so the one toggle is one preference. */
+const LADDER_POLL_MS = 30_000;
+const FREE_KEY = "wb.ladder.excludeFree";
 
 export default function Home() {
   const tools = poll(() => api.tools().then((r) => r.tools), TOOLS_POLL_MS);
   const live = poll(() => api.positions().then((r) => r.positions), LIVE_POLL_MS);
   const [picked, setPicked] = createSignal<string | undefined>(undefined);
   const current = () => selectedTool(tools.latest ?? [], picked());
+  // The e90 ladder, fixed: latest series present, free runs out unless toggled in (`lib/homeladder.ts`).
+  const ladder = poll(() => api.ladder(HOME_EPISODE).then((r) => r.runs), LADDER_POLL_MS);
+  const [excludeFree, setExcludeFree] = createSignal(readBoolPref(FREE_KEY, true));
+  const ladderRuns = () => homeLadderRuns(ladder.latest ?? [], excludeFree());
 
   return (
     <div class="page home">
+      <div class="home-col">
       <section class="home-intro">
         <h2 class="home-title">A benchmark played in a live world</h2>
         <p>
@@ -63,7 +74,38 @@ export default function Home() {
           </p>
         </Show>
       </section>
+      </div>
 
+      {/* Full-bleed: the one thing on the page that wants the whole width. */}
+      <section class="home-bleed">
+        <div class="home-bleed-inner">
+          <div class="ladder-controls">
+            <span class="dim">
+              <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> latest harness series ·{" "}
+              <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
+            </span>
+            <label class="filter check" title="Keep only the runs that cost money. A claude-code run counts as paid: a subscription is a bill (runner/src/billing.ts).">
+              <input
+                type="checkbox"
+                checked={excludeFree()}
+                onChange={(e) => {
+                  setExcludeFree(e.currentTarget.checked);
+                  writeBoolPref(FREE_KEY, e.currentTarget.checked);
+                }}
+              />
+              <span>exclude free</span>
+            </label>
+          </div>
+          <Show when={ladder.error !== undefined}>
+            <div class="banner bad">{String(ladder.error)}</div>
+          </Show>
+          <Show when={ladder.latest !== undefined} fallback={<p class="dim">loading…</p>}>
+            <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} />
+          </Show>
+        </div>
+      </section>
+
+      <div class="home-col">
       <h2 class="section">the loop</h2>
       <LoopDiagram />
       <p class="dim home-caption">
@@ -151,6 +193,7 @@ export default function Home() {
         How runs are grouped and scored is on the <A href="/about">about</A> page; what is running now is the{" "}
         <A href="/fleet">fleet</A>.
       </p>
+      </div>
     </div>
   );
 }
