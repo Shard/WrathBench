@@ -252,18 +252,9 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         </svg>
       </Show>
 
+      {/* One line, the axes only (operator, 2026-08-30): what a mark is and why one is missing is the hover text. */}
       <p class="dim ladderchart-caption">
-        avg cost per {props.episode} run (USD, log scale from 1¢; free runs sit in their own gutter) · avg xp
-        earned, means over each entry's counted runs on {props.episode}. Cost is what the provider charged, else the list price applied to the run's own
-        tokens ($0 for a free tier or local hardware, as-if-metered for a subscription); xp earned is the run
-        page's lower bound. Each mark is the model's logo; ring:{" "}
-        <span style={{ color: "var(--accent)" }}>●</span> wrathbench{" "}
-        <span style={{ color: "var(--claude)" }}>●</span> claude-code{" "}
-        <span style={{ color: "var(--dim)" }}>●</span> both.
-        <Show when={model().omitted.length > 0}>
-          {" "}
-          Not plotted: {model().omitted.map((o) => `${o.key} (${o.why})`).join(", ")}.
-        </Show>
+        avg cost per {props.episode} run (USD, log) against avg xp earned, one mark per model.
       </p>
     </div>
   );

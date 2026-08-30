@@ -116,9 +116,9 @@ export default function Home() {
       <p class="dim home-caption">
         Each turn the model sees a fixed state summary, the newest server events, any harness notices and its
         own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the
-        next turn's state. Old turns are trimmed, so the scratchpad is the only memory — and just before a
-        trim, the harness asks for a one-line status entry in an append-only log. At an inn the model may
-        spend a turn reflecting over that log instead of acting.
+        next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back
+        every turn; the episodic log is a one-line status the harness asks for before it trims older
+        conversation, which the model can page through while reflecting at an inn.
       </p>
 
       <h2 class="section">the tools</h2>
@@ -167,8 +167,22 @@ export default function Home() {
                   )
                 </div>
                 <p class="tool-desc">{t().description}</p>
-                <div class="k">example</div>
-                <pre class="block tool-example">{t().example}</pre>
+                <Show when={t().example}>
+                  {(ex) => (
+                    <>
+                      <div class="k">example</div>
+                      <pre class="block tool-example">{ex()}</pre>
+                    </>
+                  )}
+                </Show>
+                <Show when={t().returns}>
+                  {(r) => (
+                    <>
+                      <div class="k">returns</div>
+                      <p class="tool-desc dim">{r()}</p>
+                    </>
+                  )}
+                </Show>
               </div>
             )}
           </Show>
@@ -206,8 +220,8 @@ export default function Home() {
 /**
  * The execution loop, as inline SVG so it follows the theme through the same
  * custom properties as everything else. Boxes are the loop; the scratchpad
- * and the log sit beside it as the two memories, with the beat that writes
- * each drawn as a dashed edge.
+ * and the log sit under it as the two memories, each edge a tool the model
+ * calls (or, for the scratchpad, the context injection).
  */
 function LoopDiagram() {
   const box = (x: number, y: number, w: number, label: string, sub?: string) => (
@@ -227,7 +241,7 @@ function LoopDiagram() {
     <line x1={x1} y1={y1} x2={x2} y2={y2} class={dashed ? "loop-edge dashed" : "loop-edge"} marker-end="url(#loop-head)" />
   );
   return (
-    <svg class="loop" viewBox="0 0 760 236" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; scratchpad and episodic log beside it.">
+    <svg class="loop" viewBox="0 0 760 222" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; scratchpad and episodic log beside it.">
       <defs>
         <marker id="loop-head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L8,4 L0,8 z" class="loop-head" />
@@ -246,17 +260,23 @@ function LoopDiagram() {
       {/* Events fold back into the next turn's context. */}
       <path d="M700,44 L700,24 L70,24 L70,44" class="loop-edge" fill="none" marker-end="url(#loop-head)" />
       <text x="385" y="19" text-anchor="middle" class="loop-sub">next turn: the packets fold into cached state</text>
-      {/* The two memories under the loop. */}
-      {box(170, 166, 120, "scratchpad", "rewritten by the model")}
+      {/*
+        The two memories, as the harness actually uses them (runner/src/context.ts,
+        tools.ts, reflect.ts): the scratchpad is read and rewritten by the model and
+        is in every turn's context; the log is appended by the model before a trim
+        and paged back by the model while reflecting. No edge joins the two.
+      */}
+      {box(170, 166, 120, "scratchpad", "notes, markdown")}
       {box(490, 166, 120, "episodic log", "append-only")}
-      {arrow(230, 90, 230, 164, true)}
-      <text x="240" y="132" class="loop-sub">write_scratchpad</text>
-      {arrow(550, 90, 550, 164, true)}
-      <text x="560" y="132" class="loop-sub">log_status, before each trim</text>
-      {/* Reflect: at rest, the log is read back into the turn. */}
-      <path d="M490,188 L300,188" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
-      <text x="395" y="182" text-anchor="middle" class="loop-sub">reflect · read_log, at an inn</text>
-      <text x="395" y="228" text-anchor="middle" class="loop-sub">old turns are trimmed; the two boxes below are what survives</text>
+      <line x1="230" y1="92" x2="230" y2="162" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
+      <text x="238" y="132" class="loop-sub">read_scratchpad / write_scratchpad</text>
+      <path d="M168,188 L70,188 L70,92" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
+      <text x="76" y="180" class="loop-sub">in every</text>
+      <text x="76" y="191" class="loop-sub">turn's context</text>
+      <path d="M262,90 L262,126 L530,126 L530,164" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
+      <text x="396" y="122" text-anchor="middle" class="loop-sub">log_status — before a trim</text>
+      <path d="M570,164 L570,146 L282,146 L282,92" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
+      <text x="426" y="158" text-anchor="middle" class="loop-sub">read_log — while reflecting, at an inn</text>
     </svg>
   );
 }
