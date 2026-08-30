@@ -19,6 +19,7 @@ import { LadderChart } from "../components/LadderChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { HOME_EPISODE, homeLadderRuns } from "../lib/homeladder";
 import { poll } from "../lib/poll";
+import { STALE_MS, positionAgeMs, type FeedClock } from "../lib/mapview";
 import { paretoRuns } from "../lib/pareto";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
@@ -33,7 +34,30 @@ const PARETO_KEY = "wb.home.pareto";
 
 export default function Home() {
   const tools = poll(() => api.tools().then((r) => r.tools), TOOLS_POLL_MS);
-  const live = poll(() => api.positions().then((r) => r.positions), LIVE_POLL_MS);
+  /*
+   * The envelope's clock rides along with the positions, exactly as the map
+   * carries it (`MapPage.tsx`): on the public build a reading is up to a
+   * publish cadence old through nobody's fault, and a pulsing green dot over a
+   * two-minute-old feed claims a liveness the page cannot see. Private builds
+   * carry no envelope and a null clock, where the arithmetic is the plain one.
+   */
+  const live = poll(
+    () =>
+      api.positions().then((r) => ({
+        positions: r.positions,
+        clock: r.generatedAt === undefined ? null : { generatedAt: r.generatedAt, fetchedAt: Date.now() },
+      })),
+    LIVE_POLL_MS,
+  );
+  const positions = () => live.latest?.positions ?? [];
+  /** True once the freshest reading on the strip is older than one publish cadence. */
+  const positionsStale = (): boolean => {
+    const list = positions();
+    if (list.length === 0) return false;
+    const clock: FeedClock | null = live.latest?.clock ?? null;
+    const now = Date.now();
+    return Math.min(...list.map((p) => positionAgeMs(p.ts, now, clock))) > STALE_MS;
+  };
   const [picked, setPicked] = createSignal<string | undefined>(undefined);
   const current = () => selectedTool(tools.latest ?? [], picked());
   // The e90 ladder, fixed: latest series present, free runs always out (`lib/homeladder.ts`);
@@ -57,12 +81,13 @@ export default function Home() {
           play, leveling and questing its way out into the world, gives a direct read on its long-horizon
           planning, memory and problem solving.
         </p>
-        <Show when={live.latest !== undefined && live.latest.length > 0}>
+        <Show when={positions().length > 0}>
           <p class="home-live">
-            <span class="dot live" />
-            {live.latest!.length} character{live.latest!.length === 1 ? "" : "s"} in the world now
+            <span class={positionsStale() ? "dot" : "dot live"} />
+            {positions().length} character{positions().length === 1 ? "" : "s"} in the world
+            {positionsStale() ? " (last seen a while ago)" : " now"}
             {" — "}
-            <For each={live.latest!.slice(0, 6)}>
+            <For each={positions().slice(0, 6)}>
               {(p, i) => (
                 <>
                   <Show when={i() > 0}>, </Show>
@@ -74,7 +99,7 @@ export default function Home() {
                 </>
               )}
             </For>
-            <Show when={live.latest!.length > 6}> and {live.latest!.length - 6} more</Show>
+            <Show when={positions().length > 6}> and {positions().length - 6} more</Show>
             {" · "}
             <A href="/map">map</A>
           </p>
@@ -99,8 +124,8 @@ export default function Home() {
                 hardware, not free tiers alone.
               */}
               <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> 90 minutes of play
-              from a fresh level-1 character · latest harness series · free endpoints and locally hosted
-              models excluded ·{" "}
+              from a fresh level-1 character · newest harness version only (older versions are not
+              comparable) · free endpoints and locally hosted models excluded ·{" "}
               <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
             </span>
             <label class="filter check" title="Keep only the entries no other entry beats on both axes: cheaper per run and more XP earned.">
@@ -118,15 +143,22 @@ export default function Home() {
           <Show when={ladder.error !== undefined}>
             <div class="banner bad">{displayError(ladder.error)}</div>
           </Show>
-          <Show when={ladder.latest !== undefined} fallback={<p class="dim">loading…</p>}>
-            <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} />
+          {/* Below ~720px the scatter's labels shrink to the point of being
+              texture; `.wide-scroll` gives it a floor width and its own
+              horizontal scroller rather than letting the page shrink it. */}
+          <Show when={ladder.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
+            <div class="wide-scroll">
+              <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} />
+            </div>
           </Show>
         </div>
       </section>
 
       <div class="home-col">
       <h2 class="section">the loop</h2>
-      <LoopDiagram />
+      <div class="wide-scroll">
+        <LoopDiagram />
+      </div>
       <p class="dim home-caption">
         Each turn the model sees a fixed state summary, the newest server events, any harness notices and its
         own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the
@@ -143,6 +175,15 @@ export default function Home() {
         what makes the first one mean anything.
       */}
       <h2 class="section">the surface</h2>
+      {/*
+        The surface is versioned and the chart above is not: a run plotted last
+        month ran against whatever the harness offered then. Said once, here,
+        rather than caveating each bullet.
+      */}
+      <p class="dim">
+        As the harness stands today. The surface moves with the harness version, so runs plotted
+        above may predate parts of it — the reflect turn and the episodic log are recent additions.
+      </p>
       <div class="home-surface">
         <div>
           <h3 class="home-surface-head">what the agent can do</h3>
@@ -160,7 +201,11 @@ export default function Home() {
           <ul class="dim">
             <li>See what the server knows and a player cannot: loot tables, spawns, respawn timers.</li>
             <li>Teleport, run a GM command, or read the database — only client opcodes are sent.</li>
-            <li>Get a prompt or a retry of its own: one loop, one prompt, one surface, every model.</li>
+            <li>
+                Get a prompt or a retry of its own: within a harness group, one loop, one prompt, one
+                surface for every model. The two groups differ in how context is trimmed; see{" "}
+                <A href="/about">about</A>.
+              </li>
             <li>Be told a strategy. The harness explains a failure; it never says what to do next.</li>
             <li>Pause the world. The game is real time and ninety minutes is ninety minutes.</li>
             <li>Use another character, another account, or anything outside the game.</li>
@@ -179,6 +224,11 @@ export default function Home() {
       <Show when={tools.latest !== undefined} fallback={<p class="dim">loading…</p>}>
         <div class="tool-inspector">
           <ul class="tool-list" role="tablist">
+            {/* An empty tool list is a harness that served none, not a page that
+                failed to draw one: say so where the tabs would have been. */}
+            <Show when={tools.latest!.length === 0}>
+              <li class="dim">the harness served no tools</li>
+            </Show>
             <For each={tools.latest!}>
               {(t) => (
                 <li>

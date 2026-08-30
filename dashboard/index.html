@@ -4,6 +4,26 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>WrathBench</title>
+    <!--
+      One SVG icon rather than a set of rasters: every browser this dashboard is
+      read in takes it, and it is the one asset that has to be original — see
+      dashboard/public/favicon.svg.
+    -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta
+      name="description"
+      content="An agent workbench for World of Warcraft: AI models play WotLK through a TypeScript SDK on a private AzerothCore server."
+    />
+    <!-- The shell paints its own ground in both schemes; the browser chrome should match it. -->
+    <meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14161a" media="(prefers-color-scheme: dark)" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="WrathBench" />
+    <meta property="og:title" content="WrathBench — an agent workbench for World of Warcraft" />
+    <meta
+      property="og:description"
+      content="An agent workbench for World of Warcraft: AI models play WotLK through a TypeScript SDK on a private AzerothCore server."
+    />
   </head>
   <body>
     <div id="root"></div>

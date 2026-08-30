@@ -132,9 +132,9 @@ export function isPromoted(row: Pick<ModelRowView, "tier" | "declaredTier">): bo
  * the climb itself moved to the hover, and the ↑ beside the name still marks a
  * row that moved.
  *
- * The `*` stays: a held witness (`t0*`) is a trial model that has earned a rung
- * its tier will not let it spend, which is exactly the row an operator scans for
- * when deciding what to promote. It is a rung, not a second tier. A model that
+ * The `*` stays: a held witness (`t0*`) is a trial model that has earned a
+ * promotion its tier will not let it spend, which is exactly the row an operator
+ * scans for when deciding what to promote. It is a promotion, not a second tier. A model that
  * is both promoted and holding an unspent witness (declared t2, scheduled back
  * to t1, `earnedRung1`) shows the star: the witness is still true of it.
  */
@@ -146,7 +146,9 @@ export function tierOf(row: ModelRowView): string {
 /** The tier cell's hover: what the model was admitted to, and what it earned. */
 export function tierTitle(row: ModelRowView): string {
   const budget = (t: string): string => `tier ${t}`;
-  const earned = row.earnedRung1 ? "earned rung 1 (a counted e90 reached the promotion level)" : "has not earned rung 1";
+  const earned = row.earnedRung1
+    ? "earned promotion (a counted e90 reached the promotion level)"
+    : "has not earned promotion";
   if (isPromoted(row)) return `${budget(row.declaredTier)} in the config, climbed to ${row.tier} — ${earned}`;
   // The mirror case: a config edit lowered the declared tier below where the
   // model is scheduled. The `*` still reads the highest tier reached, so the

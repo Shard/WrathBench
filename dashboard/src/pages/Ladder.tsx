@@ -217,13 +217,13 @@ export default function Ladder() {
       </div>
       <Show when={billingUnknown()}>
         <p class="dim">
-          Nothing excluded: this viewer predates <span class="mono">billing</span> and reports it on
-          no run, so "exclude free" has nothing to go on. It starts filtering after the viewer
-          restarts — a filter that silently keeps everything would be worse than one that says so.
+          Nothing excluded: these runs predate the <span class="mono">billing</span> record, so
+          "exclude free" has nothing to go on. Runs recorded from here on carry it — a filter that
+          silently kept everything would be worse than one that says so.
         </p>
       </Show>
 
-      <Show when={feed.latest !== undefined} fallback={<p class="dim">loading…</p>}>
+      <Show when={feed.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
         <Show when={freeplay()}>
           {/* The same rows and the same runs the table reads, so the chart and
               the table can never disagree about which streams are on screen. */}
@@ -231,7 +231,11 @@ export default function Ladder() {
           <StreamTable rows={streams()} />
         </Show>
         <Show when={!freeplay()}>
+        {/* Below ~720px the scatter's labels are texture, not text: it keeps a
+            floor width and scrolls inside itself rather than being squeezed. */}
+        <div class="wide-scroll">
         <LadderChart runs={runs()} episode={episode()} />
+        </div>
 
         <div class="scroller">
           <table>

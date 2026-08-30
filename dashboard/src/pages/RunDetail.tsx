@@ -308,7 +308,18 @@ export default function RunDetail() {
             setFeedPublished(false);
           }
         } else {
-          await loadWindow();
+          /*
+           * Privately a failure here is an error and NOT an unpublished feed,
+           * so it gets the banner rather than `feedPublished(false)`. Caught
+           * all the same: awaited bare it would reject the whole load and take
+           * the summary, the charts and the live poll down with the log.
+           */
+          try {
+            await loadWindow();
+          } catch (e: unknown) {
+            logError("run entries", e);
+            setError(displayError(e));
+          }
         }
         if (d.run.terminationReason !== null) return;
         // A live run's summary keeps moving; a finished one is settled.
@@ -363,10 +374,17 @@ export default function RunDetail() {
     // the publisher makes), so the `Show` gate is the boundary.
     const start = Math.max(0, from() - WINDOW);
     if (start === from()) return;
-    void api.entries(params.id, start, from() - start).then((page) => {
-      setEntries((prev) => [...page.entries, ...prev]);
-      setFrom(page.from);
-    });
+    void api
+      .entries(params.id, start, from() - start)
+      .then((page) => {
+        setEntries((prev) => [...page.entries, ...prev]);
+        setFrom(page.from);
+      })
+      // A button press that fails silently reads as a button that does nothing.
+      .catch((e: unknown) => {
+        logError("run entries", e);
+        setError(displayError(e));
+      });
   };
 
   /*
@@ -409,7 +427,7 @@ export default function RunDetail() {
       <Show when={error()}>
         <div class="banner bad">{error()}</div>
       </Show>
-      <Show when={detail()} fallback={<p class="dim">loading…</p>}>
+      <Show when={detail()} fallback={<p class="dim loading-page">loading…</p>}>
         {(d) => {
           const run = (): RunDetailResponse["run"] => d().run;
           /* Playtime is the API's: cumulative active time, paused stretches out. */
@@ -417,11 +435,13 @@ export default function RunDetail() {
           return (
             <>
               <h2 class="section">
-                <A href="/fleet">fleet</A> / {run().runId}
-                {/* Back to the runs table, with the sort and filters the reader came from. */}
-                <A class="dim" style={{ "margin-left": "12px", "font-size": "13px", "font-weight": "normal" }} href={`/runs${location.search}`}>
-                  ← runs
-                </A>
+                {/*
+                  The runs table is where a reader of this page came from — the
+                  fleet is the ops view and is not even a nav item any more. The
+                  crumb carries the sort and filters they arrived with, so it is
+                  also the "back" the second link used to be.
+                */}
+                <A href={`/runs${location.search}`}>runs</A> / {run().runId}
               </h2>
 
               {/* The freeplay stream this run is one attempt of. Both directions
@@ -512,6 +532,11 @@ export default function RunDetail() {
                     */}
                     <RunStart.Provider value={() => run().startedAt}>
                     <div class="feed">
+                      {/* A run with no loaded entries — the window is empty, or
+                          the fetch failed — says so where the feed would be. */}
+                      <Show when={groups().length === 0}>
+                        <p class="dim">Nothing in this window of the trajectory.</p>
+                      </Show>
                       <For each={groups()}>
                         {(g) => {
                           /*
@@ -566,7 +591,9 @@ export default function RunDetail() {
                       </button>
                       <Show when={run().terminationReason === null}>
                         <span class={now() - lastWrite() > SILENT_MS ? "warn" : "dim"}>
-                          <span class="dot live" />
+                          {/* Stops pulsing once the run has gone quiet: a live dot
+                              over "no activity for a while" contradicts itself. */}
+                          <span class={now() - lastWrite() > SILENT_MS ? "dot" : "dot live"} />
                           {now() - lastWrite() > SILENT_MS
                             ? "no activity for a while — the run may have stopped"
                             : activity()}{" "}
@@ -763,7 +790,7 @@ function ServerFooter(props: { info: ApiInfoResponse | undefined; run: RunDetail
         fallback={
           <Show
             when={props.info?.worldserver}
-            fallback={<>worldserver: unreachable from the viewer</>}
+            fallback={<>the game server this run drove was not recorded</>}
           >
             {(w) => (
               <>
@@ -830,7 +857,7 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
           <dt>wiki reference</dt>
           <dd>
             {t().wikiCoords === undefined
-              ? "not recorded (predates the coordinates tier)"
+              ? "not recorded for older runs"
               : t().wikiCoords
                 ? "coordinates served"
                 : "names-first, coordinates withheld"}
@@ -846,7 +873,7 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
             {props.run.shakeout !== null
               ? props.run.shakeout
               : t().objective
-                ? "unscored (operator objective)"
+                ? "unscored (human-set objective)"
                 : "scorable"}
           </dd>
         </dl>

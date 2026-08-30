@@ -97,14 +97,14 @@ describe("statusRows", () => {
   const labels = (rows: { label: string }[]): string[] => rows.map((r) => r.label);
   const value = (rows: { label: string; value: string }[], label: string): string => rows.find((r) => r.label === label)!.value;
 
-  test("at rest: heartbeat, jobs, exhaust, uptime, harness, accounts — and nothing else", () => {
+  test("at rest: heartbeat, jobs, queue drains in, uptime, harness, accounts — and nothing else", () => {
     const rows = statusRows({ fleet: fleet(), error: undefined, stalled: false }, undefined);
-    expect(labels(rows)).toEqual(["heartbeat", "jobs", "exhaust", "uptime", "harness", "accounts"]);
+    expect(labels(rows)).toEqual(["heartbeat", "jobs", "queue drains in", "uptime", "harness", "accounts"]);
     expect(value(rows, "heartbeat")).toBe("5s ago");
     expect(rows[0]!.title).toBe(new Date(NOW - 5_000).toLocaleString());
     expect(value(rows, "jobs")).toBe("1 / 11–23");
     expect(rows[1]!.labelTitle).toContain("outstanding scheduled runs");
-    expect(value(rows, "exhaust")).toBe("4h–9h");
+    expect(value(rows, "queue drains in")).toBe("4h–9h");
     expect(value(rows, "uptime")).toBe("1h00m");
     expect(value(rows, "harness")).toBe("harness-0.4-73");
     expect(rows.find((r) => r.label === "accounts")!.lines).toEqual(["pool 2/3", "paid 0/1", "local 0/1"]);
@@ -115,7 +115,7 @@ describe("statusRows", () => {
     const rows = statusRows({ fleet: bare, error: undefined, stalled: false }, undefined);
     expect(value(rows, "heartbeat")).toBe("3m00s ago (stale)");
     expect(value(rows, "jobs")).toBe("1 / unknown");
-    expect(value(rows, "exhaust")).toBe("unknown");
+    expect(value(rows, "queue drains in")).toBe("unknown");
     expect(value(rows, "uptime")).toBe("unknown");
     expect(value(statusRows({ fleet: fleet({ outstanding: { lower: 0, upper: 0, etaLowerMs: 0, etaUpperMs: 0, breakdown: [] } }), error: undefined, stalled: false }, undefined), "jobs")).toBe("1 / exhausted");
   });
@@ -125,7 +125,7 @@ describe("statusRows", () => {
     expect(labels(statusRows({ fleet: fleet(), error: undefined, stalled: false }, info))).not.toContain("worldserver");
     const other = { ...info, worldserver: { build: "harness-0.4-70", startedAtMs: 1 } };
     const rows = statusRows({ fleet: fleet({ server: server({ phase: "verifying", detail: "smoke 1 of 2" }) }), error: undefined, stalled: false }, other);
-    expect(labels(rows)).toEqual(["heartbeat", "jobs", "exhaust", "uptime", "harness", "worldserver", "verifying", "accounts"]);
+    expect(labels(rows)).toEqual(["heartbeat", "jobs", "queue drains in", "uptime", "harness", "worldserver", "verifying", "accounts"]);
     expect(value(rows, "verifying")).toBe("smoke 1 of 2");
     expect(value(rows, "worldserver")).toBe("harness-0.4-70");
   });

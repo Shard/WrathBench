@@ -46,6 +46,25 @@ export function positionAgeMs(ts: number, now: number, clock: FeedClock | null):
   return clock.generatedAt - ts + (now - clock.fetchedAt);
 }
 
+/**
+ * The four continents by id. A map id is what the server sends and what a
+ * `/map?map=1` link carries, so it stays the title and the URL; the label is
+ * what a reader can act on — "map 571" names a place only to someone who has
+ * read the DBCs. Anything not listed keeps its number rather than being
+ * guessed at: an instance or a battleground id is a real answer and a wrong
+ * name for it would not be.
+ */
+const MAP_NAMES: Readonly<Record<number, string>> = {
+  0: "Eastern Kingdoms",
+  1: "Kalimdor",
+  530: "Outland",
+  571: "Northrend",
+};
+
+export function mapName(map: number): string {
+  return MAP_NAMES[map] ?? `map ${map}`;
+}
+
 /** Below this on-screen tile size a 256px tile carries no information. */
 export const TILE_MIN_PX = 96;
 

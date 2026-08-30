@@ -59,6 +59,24 @@ describe("the wall", () => {
     expect(body).not.toContain("SPA");
   });
 
+  test("the form carries the deep link's query across the password step", async () => {
+    const res = await call("/runs?episode=e90&series=0.5");
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    // A GET form posts only its own fields, so without these the reader lands
+    // on a bare /runs after typing the password.
+    expect(body).toContain('<input type="hidden" name="episode" value="e90">');
+    expect(body).toContain('<input type="hidden" name="series" value="0.5">');
+  });
+
+  test("the form never carries `k`, and escapes what it does carry", async () => {
+    const res = await call(`/runs?k=nope&model=${encodeURIComponent('a"><script>')}`);
+    const body = await res.text();
+    expect(body).not.toContain('type="hidden" name="k"');
+    expect(body).not.toContain("<script>");
+    expect(body).toContain('name="model" value="a&quot;&gt;&lt;script&gt;"');
+  });
+
   test("an unauthenticated artifact fetch gets JSON, not the manifest and not the SPA", async () => {
     const res = await call("/v1/manifest.json");
     expect(res.status).toBe(401);
