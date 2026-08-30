@@ -135,6 +135,39 @@ export default function Home() {
         conversation, which the model can page through while reflecting at an inn.
       </p>
 
+      {/*
+        What the surface is and is not, before the tool list makes it look
+        larger than it is. Both columns are `docs/CONTRACTS.md` and
+        `docs/METHODOLOGY.md` ("the model surface", "client fidelity") in one
+        line each, and they are facts rather than caveats: the second column is
+        what makes the first one mean anything.
+      */}
+      <h2 class="section">the surface</h2>
+      <div class="home-surface">
+        <div>
+          <h3 class="home-surface-head">what the agent can do</h3>
+          <ul class="dim">
+            <li>See exactly what a game client could: units and players in range, its own quests, bags and spells, chat, the map position it is on.</li>
+            <li>Act through the same server handlers a client hits — move, fight, talk, loot, trade, train, fly, mail.</li>
+            <li>Write and run TypeScript against a fixed SDK, and leave routines running between turns.</li>
+            <li>Keep its own notes: a scratchpad it rewrites, and an episodic log it can page through.</li>
+            <li>Stop and think — a reflect turn, only while resting at an inn or in a city.</li>
+            <li>Search a frozen 3.3.5a reference wiki; on scored episodes it gets names, never coordinates.</li>
+          </ul>
+        </div>
+        <div>
+          <h3 class="home-surface-head">what it can't</h3>
+          <ul class="dim">
+            <li>See what the server knows and a player does not: loot tables, spawn points, respawn timers, quest objective coordinates.</li>
+            <li>Teleport, run a GM command, or read the database — every action is the opcode a client would send.</li>
+            <li>Get a prompt, a retry or a hint of its own: one loop, one prompt, one surface, for every model.</li>
+            <li>Be told a strategy. The harness explains a failure; it never says what to do next.</li>
+            <li>Pause the world. The game is real time and ninety minutes is ninety minutes.</li>
+            <li>Use another character, another account, or anything outside the game.</li>
+          </ul>
+        </div>
+      </div>
+
       <h2 class="section">the tools</h2>
       <p class="dim">
         Nine tools, identical for every model. Pick one to see the description the model is given, as served
