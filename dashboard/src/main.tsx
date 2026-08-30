@@ -5,6 +5,20 @@ import { lazy } from "solid-js";
 import { render } from "solid-js/web";
 import { Layout } from "./components/Layout";
 import "./styles.css";
+import { SNAPSHOT_MODE } from "./api/client";
+
+/**
+ * Cloudflare Web Analytics, public site only. The beacon is cookieless and the
+ * token is per-hostname, so it is injected here rather than in index.html: the
+ * same dist is served by the private viewer, which should report nothing.
+ */
+if (SNAPSHOT_MODE) {
+  const beacon = document.createElement("script");
+  beacon.type = "module";
+  beacon.src = "https://static.cloudflareinsights.com/beacon.min.js";
+  beacon.dataset["cfBeacon"] = JSON.stringify({ token: "75492948b1e04489a2808cec401da6cb" });
+  document.head.append(beacon);
+}
 
 const Home = lazy(() => import("./pages/Home"));
 const Fleet = lazy(() => import("./pages/Fleet"));
