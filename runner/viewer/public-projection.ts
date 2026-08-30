@@ -482,6 +482,7 @@ export function projectTools(t: ToolsResponse): ToolsResponse {
       description: x.description,
       inputSchema: x.inputSchema,
       example: x.example,
+      returns: x.returns,
     })),
   };
 }
