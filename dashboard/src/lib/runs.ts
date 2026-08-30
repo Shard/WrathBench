@@ -15,6 +15,7 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
+import { OPAQUE_PAUSE_REASON } from "./ladder";
 
 /**
  * The table, left to right, as the header prints it. Keys, not labels — the
@@ -48,7 +49,7 @@ export const COLUMN_TITLES: Partial<Record<RunColumn, string>> = {
   started: "when the run was launched; the default order, newest first",
   harness: "which loop owned the run, and the harness series it ran on",
   kind: "what the run was for: a scored tier attempt, a probe cell, freeplay, or a steered objective",
-  episode: "the tier the run was launched under; (labeled) is the reader's guess at an older run, never membership",
+  episode: "the episode this run was launched under; (labeled) is the reader's guess at an older run, never membership",
   status: "live, paused (with why), or how it ended",
   level: "the highest level any state sample observed",
   turns: "driver turns the provider reported usage for; model responses where nothing reported",
@@ -79,7 +80,9 @@ export function statusOf(r: Pick<ResultRun, "live" | "pauseReason" | "terminatio
 /** The status cell's text: the state, and the reason when there is one. */
 export function statusText(r: Pick<ResultRun, "live" | "pauseReason" | "terminationReason">): string {
   const s = statusOf(r);
-  if (s === "paused") return `paused: ${r.pauseReason}`;
+  // The public projection replaces the reason with the fixed `paused` token;
+  // printing it would read "paused: paused", a defect rather than a withheld field.
+  if (s === "paused") return r.pauseReason === OPAQUE_PAUSE_REASON ? "paused" : `paused: ${r.pauseReason}`;
   if (s === "ended") return r.terminationReason ?? "ended";
   return "live";
 }

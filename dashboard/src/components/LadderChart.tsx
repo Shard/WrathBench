@@ -23,7 +23,7 @@ import {
   ladderPoints,
 } from "../lib/ladder";
 import { logoHrefOf } from "./ModelIcon";
-import { fmtUsd } from "../lib/format";
+import { COST_BASIS_NOTE, fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
 
 const VB_W = 1000;
@@ -46,17 +46,30 @@ function harnessColour(harnesses: readonly string[]): string {
 /** The dash pattern that marks a mean resting on one run. Nothing else on the chart is dashed but the gridlines. */
 const SINGLE_DASH = "2 2";
 
-function hoverText(p: LadderPoint, episode: string): string {
-  const priced =
-    p.basis === "reported"
-      ? "reported"
-      : p.basis === "list-price"
-        ? `list-price est.${p.asIfMetered ? ", as-if-metered" : ""}`
-        : `reported and list-price est. mixed${p.asIfMetered ? ", some as-if-metered" : ""}`;
+/**
+ * The hover's reading of the price. Basis (who produced the figure) and
+ * as-if-metered (whether anyone paid it) are two facts, not one: a claude-code
+ * run is reported AND as-if-metered, so the qualifier attaches to whichever
+ * basis the runs had rather than only to list-price.
+ */
+export function pricedText(p: Pick<LadderPoint, "basis" | "asIfMetered">): string {
+  const basis =
+    p.basis === "reported" ? "reported" : p.basis === "list-price" ? "list-price est." : "reported and list-price est. mixed";
+  if (!p.asIfMetered) return basis;
+  return p.basis === "mixed" ? `${basis}, some as-if-metered` : `as-if-metered (${basis})`;
+}
+
+/** The hover text of one mark: what both means rest on, and what was left out. */
+export function hoverText(p: LadderPoint, episode: string): string {
+  const left = p.runs - p.n;
+  const over =
+    left === 0
+      ? `over ${p.n === 1 ? "one run" : `${p.n} runs`}`
+      : `over ${p.n} of ${p.runs} counted runs — ${left} lack${left === 1 ? "s" : ""} a cost or an xp reading and feed${left === 1 ? "s" : ""} neither mean`;
   return [
-    `${p.key} — mean of ${p.runs} counted run${p.runs === 1 ? "" : "s"}`,
-    `avg cost per ${episode} run: ${fmtUsd(p.x)} (${priced}, over ${p.costRuns} of ${p.runs} runs)`,
-    `avg xp earned: ${Math.round(p.y).toLocaleString()} (over ${p.xpRuns} of ${p.runs} runs)`,
+    `${p.key} — ${over}`,
+    `avg cost per ${episode} run: ${fmtUsd(p.x)} (${pricedText(p)})`,
+    `avg xp earned (lower bound): ${Math.round(p.y).toLocaleString()}`,
   ].join("\n");
 }
 
@@ -148,10 +161,14 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           </For>
 
           {/*
-           * The free gutter. A $0 entry is a reading and not a small price, so
+           * The $0 gutter. A $0 entry is a reading and not a small price, so
            * it sits left of the axis with its own label, divided off, and is
            * never interpolated against the decades. It is drawn only when
-           * something in view actually cost nothing.
+           * something in view reported costing nothing. Labelled "$0
+           * reported" and not "free": the page's free filter is the billing
+           * verdict, and a paid endpoint that reports $0 (a stealth preview)
+           * lands here with free excluded — the coordinate is the honest test,
+           * the word "free" would contradict the caption.
            */}
           <Show when={layout().hasFree}>
             <line
@@ -170,7 +187,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
               font-size="11"
               fill="var(--dim)"
             >
-              free
+              $0 reported
             </text>
           </Show>
 
@@ -188,7 +205,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
             font-size="11"
             fill="var(--dim)"
           >
-            avg xp earned
+            avg xp earned (lower bound)
           </text>
 
           {/* Points, each a link to that entry's runs on this tier. */}
@@ -270,16 +287,21 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         reading that the hover text carries the rest. Widened the same day, for
         a reader arriving from outside who has no reason to hover: the sample
         size behind a mark and the basis of its price are what a stranger would
-        otherwise assume, and assume wrongly. Why a mark is *missing* is still
-        the hover's job.
+        otherwise assume, and assume wrongly. A mark that is *missing* has no
+        hover to explain it, so the omissions are printed below, the way the
+        freeplay StreamChart prints its own.
       */}
       <p class="dim ladderchart-caption">
-        avg cost per {props.episode} run (USD, log) against avg xp earned. Each mark is one model at
-        one effort — effort variants sit apart, labelled <span class="mono">sonnet (low)</span> — and
-        both coordinates are means over that entry's counted runs, with <span class="mono">n</span> on
-        the label. A dashed ring means at least one of the two means rests on a single run. Cost is
-        what the provider reported; a claude-code subscription run carries no metered bill and is
-        priced as-if-metered at list price.
+        avg cost per {props.episode} run (USD, log) against avg xp earned — a lower bound, rebuilt from
+        the run's 60-second samples. Each mark is one model at one effort — effort variants sit apart,
+        labelled <span class="mono">sonnet (low)</span> — and both coordinates are means over the same
+        runs: that entry's counted runs carrying both a cost and an xp reading, with that count as{" "}
+        <span class="mono">n</span> on the label. A dashed ring means the means rest on a single run.
+        Cost is what the provider reported; {COST_BASIS_NOTE}.
+        <Show when={model().omitted.length > 0}>
+          {" "}
+          Not plotted: {model().omitted.map((o) => `${o.key} (${o.why})`).join(", ")}.
+        </Show>
       </p>
     </div>
   );

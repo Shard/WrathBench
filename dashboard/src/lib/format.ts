@@ -116,6 +116,17 @@ export function fmtCost(
   return `${fmtUsd(c.usd)} ${c.asIfMetered ? "as-if-metered " : ""}(list price, ${when})`;
 }
 
+/**
+ * The one sentence every page uses for where a claude-code run's cost comes
+ * from. A subscription run has no metered bill; the figure the runner stores
+ * is the Claude Agent SDK's own `total_cost_usd` for the session — provider
+ * *reported*, and as-if-metered at the same time (`runner/viewer/pricing.ts`,
+ * `reported`). It is not a list-price reconstruction, and the wording must not
+ * say it is.
+ */
+export const COST_BASIS_NOTE =
+  "claude-code subscription runs carry no bill; their cost is the as-if-metered figure the Claude SDK reports";
+
 export function fmtTokens(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
   if (n < 1000) return String(n);

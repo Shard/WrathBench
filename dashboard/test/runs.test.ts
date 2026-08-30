@@ -99,6 +99,8 @@ describe("readings", () => {
     expect(statusOf(old)).toBe("live");
     expect(statusOf({ ...old, terminationReason: "quest-cap" })).toBe("ended");
     expect(statusText(run({ pauseReason: "quota-exhausted", terminationReason: null }))).toBe("paused: quota-exhausted");
+    // The public projection's fixed token is a withheld reason, not one that reads "paused".
+    expect(statusText(run({ pauseReason: "paused", terminationReason: null }))).toBe("paused");
     expect(statusText(run())).toBe("episode-elapsed");
   });
 

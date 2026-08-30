@@ -225,6 +225,34 @@ describe("/api/campaigns", () => {
     expect(body.campaigns[0]).toMatchObject({ runs: 1, live: 1 });
   });
 
+  test("`runs` is the progress numerator: counted runs on declared cells by swept models, capped per cell", async () => {
+    // Two models the sweep does not name and a re-swept cell: every one of
+    // these is an ended run, and the page's `runs/want` read 73/8 on the live
+    // class-probe until the numerator used the scheduler's own reading.
+    const body = await campaigns(
+      [
+        { runId: "r1", campaign: "class-probe", cell: "human-warrior" },
+        { runId: "r2", campaign: "class-probe", cell: "human-warrior" },
+        { runId: "r3", campaign: "class-probe", cell: "human-warrior", model: "other/model" },
+        { runId: "r4", campaign: "class-probe", cell: "gone-cell" },
+        { runId: "r5", campaign: "class-probe", cell: "dwarf-rogue", ended: false },
+      ],
+      CONFIG,
+    );
+    const row = body.campaigns[0]!;
+    // human-warrior is swept once (runsPerCell 1), whatever else landed on it.
+    expect(row.runs).toBe(1);
+    expect(row.live).toBe(1);
+    expect(row.config!.complete).toBe(false);
+    // What actually ran is still all there, per cell.
+    expect(row.cells.map((c) => [c.cell, c.runs])).toEqual([
+      ["human-warrior", 3],
+      ["dwarf-rogue", 1],
+      ["gone-cell", 1],
+    ]);
+    expect(row.models).toEqual(["other/model", "test/model"]);
+  });
+
   test("a probing run naming no campaign is an orphan, counted and not invented into a row", async () => {
     // It should not be possible — probe runs are always launched stamped — so it
     // is reported as a number rather than given a row that implies a campaign.

@@ -846,7 +846,7 @@ describe("projectCampaigns", () => {
         ...under("campaigns[]", [
           "campaign",
           "config",
-          ...under("config", ["enabled", "runsPerCell", "cells", "models", "complete", "account"]),
+          ...under("config", ["enabled", "runsPerCell", "cells", "models", "complete"]),
           "runs",
           "live",
           "models",
@@ -862,6 +862,8 @@ describe("projectCampaigns", () => {
     );
     assertClean(JSON.stringify(out));
     expect(out.configPath).toBeNull();
+    // The pinned account's name is the lab's naming scheme; gone, not blanked.
+    expect(JSON.stringify(out)).not.toContain("PROBE");
   });
 });
 
