@@ -74,6 +74,7 @@ import {
 } from "../lib/feedview";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom } from "../lib/runview";
+import { displayError, logError } from "../lib/errors";
 
 const WINDOW = 200;
 
@@ -350,7 +351,10 @@ export default function RunDetail() {
           onError: () => setDisconnected(true),
         });
       })
-      .catch((e: unknown) => setError(String(e)));
+      .catch((e: unknown) => {
+        logError("run detail", e);
+        setError(displayError(e));
+      });
   });
 
   const loadEarlier = (): void => {
@@ -718,7 +722,15 @@ export default function RunDetail() {
                     </div>
                   </Show>
                   <Show when={run().terminationReason === null && run().pauseReason !== null}>
-                    <div class="banner warn">paused: {run().pauseReason}</div>
+                    {/*
+                      The public projection replaces a pause reason's free text
+                      with the fixed `paused` token, and "paused: paused" reads
+                      as a bug rather than a withheld field.
+                    */}
+                    <div class="banner warn">
+                      paused
+                      <Show when={run().pauseReason !== "paused"}>: {run().pauseReason}</Show>
+                    </div>
                   </Show>
 
                   <ServerFooter info={info()} run={run()} />
@@ -916,8 +928,15 @@ function FoldBlock(props: { text: string; defaultOpen?: boolean }) {
   );
 }
 
-/** The raw-line link for one constituent of a composite row. */
+/**
+ * The raw-line link for one constituent of a composite row.
+ *
+ * Nothing in the public build: raw trajectory lines are never published, so
+ * the link would be a 404 into the bucket. One guard here rather than at the
+ * ten call sites, which is also why they can stay written as they are.
+ */
 function RawLink(props: { runId: string; i: number; label?: string }) {
+  if (SNAPSHOT_MODE) return null;
   return (
     <a href={rawPath(props.runId, props.i)} target="_blank" rel="noreferrer">
       {props.label ?? "raw"}

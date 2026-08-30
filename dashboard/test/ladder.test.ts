@@ -22,6 +22,7 @@ import {
   costScale,
   fmtCostTick,
   ladderChartLayout,
+  OPAQUE_PAUSE_REASON,
   ladderPoints,
   ladderRows,
   raceOptions,
@@ -565,11 +566,21 @@ describe("ladderPoints", () => {
     expect(low.costRuns).toBe(2);
     expect(low.xpRuns).toBe(1);
     expect(low.basis).toBe("reported");
+    // The label carries the sample size the means rest on, and `single` flags
+    // the thin ones — here the x mean is over two runs but the y mean is over
+    // one, which is exactly the case a "runs === 1" test would miss.
+    expect(low.label).toBe("sonnet (low) · n=2");
+    expect(low.single).toBe(true);
+    const solo = points.find((p) => p.key === "sonnet")!;
+    expect(solo.label).toBe("sonnet · n=1");
+    expect(solo.single).toBe(true);
     const free = points.find((p) => p.key === "hy3-free")!;
     expect(free.x).toBe(0);
     expect(free.y).toBe(20);
     expect(free.basis).toBe("list-price");
     expect(free.asIfMetered).toBe(true);
+    expect(free.label).toBe("hy3-free · n=2");
+    expect(free.single).toBe(false);
   });
 
   test("a mixed basis is named, an unpriced or unmeasured entry is omitted and said, unscored runs never enter", () => {
@@ -592,7 +603,7 @@ describe("ladderPoints", () => {
 describe("ladderChartLayout", () => {
   const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
   const pt = (key: string, x: number, y: number) => ({
-    key, model: key, effort: null, x, y, runs: 1, costRuns: 1, xpRuns: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
+    key, label: `${key} · n=1`, single: true, model: key, effort: null, x, y, runs: 1, costRuns: 1, xpRuns: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
   });
 
   test("a free entry sits in the gutter, the dearest point at the ceiling on the right edge", () => {
@@ -952,5 +963,24 @@ describe("streamSeries", () => {
       }),
     ]).series;
     expect(chained.map((x) => familyOf(x.model)?.id)).toEqual(["openai"]);
+  });
+});
+
+describe("a withheld pause reason is not printed back as a detail", () => {
+  /*
+   * The public projection replaces the free text with the fixed `paused`
+   * token, and the row would otherwise read `paused (paused)`.
+   */
+  const fp = (p: Partial<ResultRun>): ResultRun =>
+    run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...p });
+
+  test("the opaque token leaves no detail; a real reason still shows", () => {
+    const opaque = streamRows([fp({ runId: "a", pauseReason: OPAQUE_PAUSE_REASON })])[0]!;
+    expect(opaque.status).toBe("paused");
+    expect(opaque.statusDetail).toBeNull();
+
+    const real = streamRows([fp({ runId: "b", pauseReason: "operator-pause" })])[0]!;
+    expect(real.status).toBe("paused");
+    expect(real.statusDetail).toBe("operator-pause");
   });
 });

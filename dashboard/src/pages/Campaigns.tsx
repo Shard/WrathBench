@@ -22,6 +22,7 @@ import { useFeeds } from "../lib/feeds";
 import { progressLabel, progressTitle, rowProgress, rowStateLabel, runHref } from "../lib/fleet";
 import { fmtDuration, fmtWhen, num } from "../lib/format";
 import { poll } from "../lib/poll";
+import { displayError } from "../lib/errors";
 
 /** Campaign progress moves when a probe ends, which is a ~90-minute event. */
 const POLL_MS = 60_000;
@@ -66,10 +67,10 @@ export default function Campaigns() {
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
-        <div class="banner bad">{String(feed.error)}</div>
+        <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
       <Show when={runs.error !== undefined}>
-        <div class="banner bad">{String(runs.error)}</div>
+        <div class="banner bad">{displayError(runs.error)}</div>
       </Show>
 
       <h2 class="section">campaigns</h2>

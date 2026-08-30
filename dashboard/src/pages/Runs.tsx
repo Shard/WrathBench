@@ -50,6 +50,7 @@ import {
   type RunSort,
 } from "../lib/runs";
 import { poll } from "../lib/poll";
+import { displayError } from "../lib/errors";
 
 /** A live run's level and duration move; the roster of runs moves when one starts or ends. */
 const POLL_MS = 15_000;
@@ -95,7 +96,7 @@ export default function Runs() {
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
-        <div class="banner bad">{String(feed.error)}</div>
+        <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
 
       <h2 class="section">runs</h2>

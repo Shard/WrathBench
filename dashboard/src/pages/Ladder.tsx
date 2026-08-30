@@ -65,6 +65,7 @@ import { resolvedSummary } from "../lib/models";
 import { fmtMoney, fmtWhen } from "../lib/format";
 import { poll } from "../lib/poll";
 import { readBoolPref, readChoicePref, writeBoolPref, writeChoicePref } from "../lib/prefs";
+import { displayError } from "../lib/errors";
 
 const POLL_MS = 30_000;
 
@@ -167,7 +168,7 @@ export default function Ladder() {
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
-        <div class="banner bad">{String(feed.error)}</div>
+        <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
 
       <h2 class="section">ladder</h2>

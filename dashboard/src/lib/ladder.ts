@@ -430,6 +430,15 @@ export function xpEarnedOf(r: Pick<ResultRun, "xpEarned" | "maxLevel" | "xp">): 
 export interface LadderPoint {
   /** The label: `sonnet`, or `sonnet (low)` when effort is a roster dimension. */
   key: string;
+  /** What the chart draws: the key with the sample size the means rest on. */
+  label: string;
+  /**
+   * At least one of the two means is a single observation. Flagged rather
+   * than hidden: a mark averaged over one run is a reading, not an estimate,
+   * and the two must not look alike. Either coordinate counts — an x mean
+   * over one priced run of three is as thin as a whole entry with one run.
+   */
+  single: boolean;
   model: string;
   effort: string | null;
   /** Mean cost per counted run, USD. */
@@ -456,6 +465,11 @@ export interface LadderOmission {
 
 export function pointKey(model: string, effort: string | null): string {
   return effort === null ? model : `${model} (${effort})`;
+}
+
+/** The drawn label: the key and how many runs the mark is the mean of. */
+export function pointLabel(key: string, runs: number): string {
+  return `${key} · n=${runs}`;
 }
 
 /**
@@ -494,6 +508,8 @@ export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[
     const bases = new Set(costs.map((c) => c.basis));
     points.push({
       key,
+      label: pointLabel(key, g.runs.length),
+      single: costs.length === 1 || xps.length === 1,
       model: g.model,
       effort: g.effort,
       x: costs.reduce((s, c) => s + c.usd, 0) / costs.length,
@@ -712,7 +728,7 @@ export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox)
   for (const p of ordered) {
     const cx = px(p.x);
     const cy = py(p.y);
-    const w = p.key.length * CHAR_W;
+    const w = p.label.length * CHAR_W;
     const above = cy - LABEL_GAP;
     const below = cy + LABEL_GAP + LABEL_H * 0.75;
     // Four slots around the point, then the same four one label-row further out.
@@ -812,8 +828,17 @@ export interface StreamRow {
   startedAt: number | null;
 }
 
+/**
+ * The public projection replaces a pause reason's free text with the fixed
+ * `paused` token, so the detail there restates the status. Dropped rather
+ * than printed: `paused (paused)` reads as a defect, not as a withheld field.
+ */
+export const OPAQUE_PAUSE_REASON = "paused";
+
 function statusOf(r: ResultRun): { status: StreamStatus; detail: string | null } {
-  if (r.pauseReason !== null) return { status: "paused", detail: r.pauseReason };
+  if (r.pauseReason !== null) {
+    return { status: "paused", detail: r.pauseReason === OPAQUE_PAUSE_REASON ? null : r.pauseReason };
+  }
   if (r.live === true) return { status: "live", detail: null };
   return { status: "ended", detail: r.terminationReason };
 }
