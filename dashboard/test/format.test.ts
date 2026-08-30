@@ -263,7 +263,7 @@ describe("modelDisplay", () => {
     expect(modelDisplay("claude-opus-4-6")).toBe("claude-opus-4-6");
     expect(modelDisplay("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5-20251001");
     expect(modelDisplay("sonnet")).toBe("sonnet");
-    expect(modelDisplay("hy3-free")).toBe("hy3-free");
+    expect(modelDisplay("hy3-free")).toBe("hy3 (free)");
   });
 
   test("never returns empty: a string that is all prefix comes back as it came", () => {
