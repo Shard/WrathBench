@@ -59,6 +59,7 @@ import {
 import { runLoop, type StopRequest } from "./loop";
 import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./prompt";
 import { SandboxHost } from "./sandbox/host";
+import { EpisodicLog } from "./episodic";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory, readMeta, type PauseMark, type RunMeta } from "./trajectory";
 import { harnessVersion } from "./version";
@@ -424,6 +425,9 @@ async function main(): Promise<void> {
   const runDir = join(config.runsDir, config.runId);
   const trajectory = new Trajectory(runDir);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
+  // The episodic log lives beside the scratchpad and survives a pause the same
+  // way: it is append-only, so a resumed run reads its own past back.
+  const episodic = new EpisodicLog(join(runDir, "episodic.jsonl"));
   // The predecessor's notes come along: the scratchpad is the durable memory,
   // and a continuation that started with an empty one would be a stranger to
   // its own character. Only into an empty run directory — a re-launch of a
@@ -849,6 +853,7 @@ async function main(): Promise<void> {
           runDir,
           sandbox,
           scratchpad,
+          episodic,
           wiki,
           trajectory,
           watchdogs,
@@ -861,6 +866,7 @@ async function main(): Promise<void> {
           adapter: adapter!,
           sandbox,
           scratchpad,
+          episodic,
           wiki,
           trajectory,
           watchdogs,

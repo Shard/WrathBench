@@ -1,5 +1,5 @@
 /**
- * The six Phase-0 tools, defined once and dispatched from two places: the MCP
+ * The nine Phase-0 tools, defined once and dispatched from two places: the MCP
  * server (external model drives them over stdio) and the agent loop (the
  * OpenAI-compatible adapter drives them in-process). Schemas are deliberately
  * tight — few parameters, all described — because a confused tool call costs a
@@ -11,6 +11,8 @@ import type { Database } from "bun:sqlite";
 import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
+import { EPISODIC_PAGE_DEFAULT, EPISODIC_PAGE_MAX, type EpisodicEntry, type EpisodicLog } from "./episodic";
+import { READ_LOG_CLOSED, restingOf, type ReflectGate } from "./reflect";
 import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -139,6 +141,48 @@ export const TOOLS: ToolDef[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "reflect",
+    description:
+      "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; " +
+      "nothing is summarised for you and nothing is remembered unless you write it to the scratchpad. " +
+      "Available only while your character is resting — the state summary shows `resting` when it applies — and once per rest visit.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "log_status",
+    description:
+      "Append one short status entry — what you are doing and how it is going — to your episodic log. " +
+      "The log is append-only: each entry is stamped with the turn, your level and your zone, and nothing can edit or remove it afterwards. " +
+      "It is not the scratchpad. Entries are read back with read_log while reflecting.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "The entry text." },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "read_log",
+    description:
+      "Page your episodic log, oldest first. Usable only while reflecting — see the reflect tool. " +
+      `Returns "showing a-b of N" and one line per entry.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        offset: { type: "integer", minimum: 0, description: "Entries to skip from the oldest. Default 0." },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: EPISODIC_PAGE_MAX,
+          description: `How many entries to return. Default ${EPISODIC_PAGE_DEFAULT}.`,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Strict on purpose: the advertised inputSchema says `additionalProperties:
@@ -183,6 +227,22 @@ const argSchemas = {
   }),
   read_scratchpad: z.strictObject({}).default({}),
   write_scratchpad: z.strictObject({ content: z.string() }),
+  reflect: z.strictObject({}).default({}),
+  log_status: z.strictObject({ text: z.string().min(1) }),
+  // Lenient by declaration, like `recent_events`: a clamped page is an answer,
+  // and a validation error inside a reflection window costs a turn of it.
+  read_log: z
+    .strictObject({
+      offset: z.coerce
+        .number()
+        .transform((n) => Math.max(0, Math.round(n)))
+        .default(0),
+      limit: z.coerce
+        .number()
+        .transform((n) => Math.min(EPISODIC_PAGE_MAX, Math.max(1, Math.round(n))))
+        .default(EPISODIC_PAGE_DEFAULT),
+    })
+    .prefault({}),
 } as const;
 
 /** Prose restatement of each tool's parameters, for validation error replies. */
@@ -198,6 +258,11 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
     "search_reference expects { query: string, limit?: number } — title or keywords, and max results 1-20 (default 8).",
   read_scratchpad: "read_scratchpad takes no parameters ({}).",
   write_scratchpad: "write_scratchpad expects { content: string } — the full new scratchpad markdown.",
+  reflect: "reflect takes no parameters ({}).",
+  log_status: "log_status expects { text: string } — one short status entry.",
+  read_log:
+    `read_log expects { offset?: number, limit?: number } — entries to skip from the oldest (default 0) ` +
+    `and how many to return (1-${EPISODIC_PAGE_MAX}, default ${EPISODIC_PAGE_DEFAULT}).`,
 };
 
 /**
@@ -207,6 +272,8 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
 const ARG_ALIASES: Record<string, Record<string, string>> = {
   run_snippet: { cmd: "code", snippet: "code", source: "code", script: "code", ts: "code" },
   write_scratchpad: { text: "content", markdown: "content" },
+  log_status: { content: "text", status: "text", entry: "text", note: "text" },
+  read_log: { start: "offset", count: "limit", n: "limit" },
   recent_events: { include_movement: "includeMovement", includemovement: "includeMovement" },
   search_reference: { q: "query" },
 };
@@ -466,10 +533,22 @@ export interface ToolContext {
   /** Whether a game session has been established (for the summary header). */
   sessionLive: () => boolean;
   /**
+   * The episode's reflection gate. Required, not optional: every dispatcher
+   * builds one context per episode, and a missing gate would leave `reflect`
+   * with a silent no-gate branch that behaves differently per driver.
+   */
+  reflect: ReflectGate;
+  /** The run's append-only episodic log (`log_status` / `read_log`). */
+  episodic: EpisodicLog;
+  /** The driver turn in flight, stamped onto every episodic entry. */
+  turn: () => number;
+  /**
    * Called with every event batch actually served to the model (the visible
    * ones), plus how many ambient movement events were folded out of that span.
    */
   onEventsServed?: (events: unknown[], folded?: number) => void;
+  /** Called with every episodic entry written, so the driver can log it. */
+  onEpisodicEntry?: (entry: EpisodicEntry) => void;
 }
 
 export interface ToolResult {
@@ -658,6 +737,50 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
             })
             .join("\n\n"),
         };
+      }
+      case "reflect": {
+        // Sample the world first, exactly as `state_summary` does: the gate is
+        // also fed by the context builder's own samples, but a model that walks
+        // into an inn and reflects in the same turn should not have to wait for
+        // the next tick to be believed.
+        try {
+          const snapshot = (await ctx.sandbox.stateSnapshot()) as SnapshotLike;
+          ctx.reflect.note(restingOf(snapshot));
+        } catch {
+          // A sandbox mid-restart tells us nothing new; the gate keeps the last
+          // reading it was fed, which is the honest state of the observation.
+        }
+        const answer = ctx.reflect.request();
+        if (answer.isError === true) return answer;
+        // The count only; the entries themselves come from `read_log`. Omitted
+        // when the log is empty so it never advertises a page that is not there.
+        const n = ctx.episodic.count;
+        return n === 0
+          ? answer
+          : {
+              text: `${answer.text}\n\n${n} status ${n === 1 ? "entry" : "entries"} in your episodic log; read them with read_log.`,
+            };
+      }
+      case "log_status": {
+        const { text } = parsed.data as { text: string };
+        const snapshot = (await ctx.sandbox.stateSnapshot().catch(() => null)) as SnapshotLike | null;
+        const level = snapshot?.self?.level?.value;
+        const zone = (snapshot?.self?.zone?.value as { name?: unknown } | undefined)?.name;
+        // The stamps are the harness's observation, never the model's claim:
+        // it supplies the text and nothing else.
+        const entry = ctx.episodic.append({
+          turn: ctx.turn(),
+          ...(typeof level === "number" ? { level } : {}),
+          ...(typeof zone === "string" ? { zone } : {}),
+          text,
+        });
+        ctx.onEpisodicEntry?.(entry);
+        return { text: `logged (entry ${ctx.episodic.count}, ${entry.text.length} chars)` };
+      }
+      case "read_log": {
+        if (!ctx.reflect.isOpen) return { text: READ_LOG_CLOSED, isError: true };
+        const { offset, limit } = parsed.data as { offset: number; limit: number };
+        return { text: ctx.episodic.page(offset, limit) };
       }
       case "read_scratchpad": {
         const content = ctx.scratchpad.read();

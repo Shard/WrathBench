@@ -16,7 +16,7 @@
  * one long-lived `claude` process and feeds it the harness's context message
  * once per driver turn, while every other piece of the harness — sandbox,
  * watchdogs, trajectory, scratchpad, named termination/pause reasons, the
- * fixed system prompt, the six tools, the fixed context assembly — is the
+ * fixed system prompt, the nine tools, the fixed context assembly — is the
  * same machinery the fixed loop uses.
  *
  * ## How it is wired
@@ -106,6 +106,7 @@ import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } fro
 import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import { TOOLS, type ToolContext } from "./tools";
+import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
 import type { Trajectory } from "./trajectory";
@@ -114,7 +115,7 @@ import type { Watchdogs } from "./watchdogs";
 /** MCP server name in the generated config; also the tool-name prefix. */
 export const MCP_SERVER_NAME = "wrathbench";
 
-/** The six tools as `claude` names them once they arrive over MCP. */
+/** The nine tools as `claude` names them once they arrive over MCP. */
 export function mcpToolNames(): string[] {
   return TOOLS.map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
 }
@@ -452,6 +453,8 @@ export interface ClaudeEpisodeOptions {
   runDir: string;
   sandbox: SandboxHost;
   scratchpad: Scratchpad;
+  /** The run's append-only episodic log (`log_status` / `read_log`). */
+  episodic: EpisodicLog;
   wiki?: Database | undefined;
   trajectory: Trajectory;
   watchdogs: Watchdogs;
@@ -621,6 +624,10 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,
     sessionLive: () => builder.sessionLive,
+    reflect: builder.reflect,
+    episodic: o.episodic,
+    turn: () => builder.currentTurn,
+    onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({
         t: "events_served",
@@ -680,6 +687,9 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         name: short,
         isError: result.isError ?? false,
         text: result.text,
+        // Same marker the fixed loop writes; see loop.ts. The trim notice has
+        // no counterpart here on purpose — this driver runs no message window.
+        ...(short === "reflect" ? { reflect: true } : {}),
       });
       if (short === "run_snippet") {
         if (o.sandbox.totalRestarts > restartsBefore) watchdogs.noteSandboxRestart();

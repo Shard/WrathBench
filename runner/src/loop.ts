@@ -13,9 +13,14 @@ import {
   assembleContext,
   formatStateSummary,
   messageWindow,
+  messageWindowCut,
+  messageWindowRawCut,
+  trimExpected,
   type ChatMessage,
   type SnapshotLike,
 } from "./context";
+import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf } from "./reflect";
+import type { EpisodicLog } from "./episodic";
 import { buildSystemPrompt } from "./prompt";
 import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
 import { harnessOf } from "./config";
@@ -31,6 +36,8 @@ export interface LoopOptions {
   adapter: ChatAdapter;
   sandbox: SandboxHost;
   scratchpad: Scratchpad;
+  /** The run's append-only episodic log (`log_status` / `read_log`). */
+  episodic: EpisodicLog;
   wiki?: Database | undefined;
   trajectory: Trajectory;
   watchdogs: Watchdogs;
@@ -170,6 +177,13 @@ export class ContextBuilder {
    * "before the first turn", which is recorded as no turn at all.
    */
   private turn = 0;
+  /**
+   * The episode's reflection gate, fed by every state sample this builder
+   * takes. It lives here because this is the one place both drivers sample the
+   * world on the clock: the `reflect` tool needs to see the character *leave*
+   * a rest area to re-arm, and no reflect call is made while that happens.
+   */
+  readonly reflect = new ReflectGate();
   /** The sample in flight, if any; concurrent callers share it. */
   private sampling: Promise<SnapshotLike | null> | null = null;
   private readonly now: () => number;
@@ -190,6 +204,11 @@ export class ContextBuilder {
   /** Whether the last snapshot showed a character in the world. */
   get sessionLive(): boolean {
     return this.live;
+  }
+
+  /** The turn currently in flight, as the record counts it (offset included). */
+  get currentTurn(): number {
+    return this.turn;
   }
 
   async snapshot(): Promise<SnapshotLike | null> {
@@ -359,6 +378,10 @@ export class ContextBuilder {
     // row, so an intention only recorded at row cadence would be one nobody
     // could ever see in flight.
     this.noteMove(snap);
+    // Ungated for the same reason `noteMove` is: the gate re-arms on a rest
+    // area being left, and a rest visit can begin and end well inside one
+    // state row.
+    this.reflect.note(restingOf(snap));
     if (this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
     this.lastStateAt = this.now();
     const pos = snap.self?.position?.value as
@@ -610,6 +633,17 @@ export class ContextBuilder {
   async build(turn: number, pendingNotices: HarnessNotice[]): Promise<string> {
     this.noteTurn(turn);
     const snap = await this.sampleState();
+    // The reflection window's per-turn bookkeeping, in the one hook both
+    // drivers share: count this turn against an open window (the breaker), then
+    // write whatever transitions the gate has accumulated — the sample above
+    // may have closed one by observing the character leave the rest area.
+    this.reflect.noteTurn();
+    for (const e of this.reflect.drainEvents()) {
+      this.o.trajectory.append({ t: "reflect_window", turn: this.turn, ...e });
+      if (e.event === "close" && e.reason === "breaker") {
+        pendingNotices.push({ ts: this.now(), kind: "reflect_ended", text: REFLECT_BREAKER_NOTICE });
+      }
+    }
     pendingNotices.push(...this.o.sandbox.drainNotices());
     let events: Parameters<typeof assembleContext>[0]["events"] = [];
     try {
@@ -707,12 +741,17 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     ...(o.now !== undefined ? { now: o.now } : {}),
   });
 
+  let turn = 0;
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
     scratchpad: o.scratchpad,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,
     sessionLive: () => builder.sessionLive,
+    reflect: builder.reflect,
+    episodic: o.episodic,
+    turn: () => builder.currentTurn,
+    onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({
         t: "events_served",
@@ -738,9 +777,20 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     return terminate("manual", s.detail);
   };
 
-  let turn = 0;
   /** Whether the provider's served-model id has already been promoted (first wins). */
   let promotedResolved = false;
+  /**
+   * Where the model-visible window started last turn. The block trim is silent
+   * by construction — the model simply stops seeing the oldest messages — and a
+   * model cannot plan around memory it does not know it lost, so the turn whose
+   * window shrank says so in its own `[harness notices]`.
+   */
+  let lastCut = 0;
+  /**
+   * The raw cut the pre-trim prompt has already been raised for, so an estimate
+   * that lands a turn early is not repeated every turn until the trim arrives.
+   */
+  let announcedForCut: number | null = null;
   // The mid-turn state clock (FOLLOW-UPS 77): `build` samples once per turn, and
   // that used to be this loop's only sampling — one 485s request left an
   // 8.1-minute blackout with no state row and no XP signal. Live for the whole
@@ -772,6 +822,37 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
 
       // 2. state line + 3. the fixed context (context.ts)
       turn++;
+      // Before `build`, which is what drains the notices: history only grows at
+      // the end of a turn, so this turn's cut is already decided here, and the
+      // notice belongs in the very request whose window was trimmed rather than
+      // one turn after the model went blind. Purely a read of `messageWindow`'s
+      // own pure cut function — the notice is an input to `assembleContext`
+      // like every other, and assembly stays pure.
+      const cut = messageWindowCut(history);
+      // The pre-trim prompt (METHODOLOGY, "An episodic log, written before each
+      // trim"): the trigger is the trim itself, not a cadence. `trimExpected`
+      // is exact whenever the model's per-turn tool-call count is steady, and
+      // the once-per-block guard keeps an early estimate from repeating.
+      const rawCut = messageWindowRawCut(history.length);
+      if (announcedForCut !== rawCut && trimExpected(history)) {
+        announcedForCut = rawCut;
+        pendingNotices.push({
+          ts: o.now?.() ?? Date.now(),
+          kind: "trim_pending",
+          text:
+            "Older conversation is about to be trimmed. Record a short status entry — " +
+            "what you are doing and how it is going — with log_status.",
+        });
+      }
+      if (cut > lastCut) {
+        const dropped = cut - lastCut;
+        pendingNotices.push({
+          ts: o.now?.() ?? Date.now(),
+          kind: "window_trimmed",
+          text: `Older conversation was trimmed (${dropped} message${dropped === 1 ? "" : "s"} dropped); your scratchpad is your memory.`,
+        });
+        lastCut = cut;
+      }
       const contextText = await builder.build(turn, pendingNotices);
       // The sample above may have been the first sight of the character; a
       // stale one ends the run here, not after a whole turn on it.
@@ -887,6 +968,12 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           name: tc.name,
           isError: result.isError ?? false,
           text: result.text,
+          // The reflect marker (METHODOLOGY, "Reflection is the model's to take"):
+          // a granted reflection is `reflect: true` with `isError: false`, a
+          // refused one `reflect: true` with `isError: true`, so a reader counts
+          // reflect turns without parsing the fixed text. The turn itself still
+          // counts as a turn — nothing here exempts it.
+          ...(tc.name === "reflect" ? { reflect: true } : {}),
         });
         if (tc.name === "run_snippet") {
           if (o.sandbox.totalRestarts > restartsBefore) watchdogs.noteSandboxRestart();
@@ -911,6 +998,12 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
   } finally {
     finished = true;
+    // A window still open when the episode ends is closed on the record rather
+    // than left dangling; the gate is per-episode, so nothing outlives this.
+    builder.reflect.close("run_end");
+    for (const e of builder.reflect.drainEvents()) {
+      trajectory.append({ t: "reflect_window", turn: builder.currentTurn, ...e });
+    }
     await stopTicker();
   }
 }
