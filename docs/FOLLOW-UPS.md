@@ -54,6 +54,19 @@ worklogs/2026-08-29).
     right spell first time. Both are a module build; do them together with the
     next `:next`. Gate: `infra/smoke/chest-loot.ts`.
 
+106. **Deploy `:next` — quest-start items** (2026-08-30). The module refused
+    `use_item` on any item without an on-use spell, so a quest that only an item
+    starts (Tome of Divinity 6916 → 1646, the starter-zone "found a letter"
+    drops) could never be taken: the run got `400 item_not_usable` from the
+    module's own pre-check and an SDK hint asserting the item had no effect.
+    Fixed in the working tree: `use_item` on a spell-less start-quest item now
+    sends the client's right-click — `CMSG_QUESTGIVER_QUERY_QUEST` with the
+    item guid — and `useItem` waits for the offer; `acceptQuestFrom` takes the
+    item guid. Built to `wrathbench/worldserver:next`; not deployed. Gate:
+    `infra/smoke/quest-item-start.ts` (fails on the live build by design, with
+    the SDK naming the stale build). Deploy with the next window
+    (`./infra/deploy-worldserver.sh`), then run the gate and add the shipped line.
+
 ## Navigation
 
 38. **Navigation plan — rungs 2–4** (2026-08-22; supersedes item 18). Rung 4 — a
