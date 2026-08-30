@@ -1633,3 +1633,19 @@ export interface ModelsResponse extends SnapshotEnvelope {
   harness: HarnessView | "all";
   now: number;
 }
+
+/** One model-facing tool as `/api/tools` presents it: the runner's own text, plus one example call. */
+export interface ToolView {
+  name: string;
+  /** The description the model is given, verbatim from `runner/src/tools.ts` (names-first rendering). */
+  description: string;
+  /** The tool's parameters, in JSON Schema, as the model is given them. */
+  inputSchema: Record<string, unknown>;
+  /** One illustrative call, as the arguments would be sent. Harness text, not game text. */
+  example: string;
+}
+
+/** `/api/tools`: the model-facing tool list, in the order the model sees it. */
+export interface ToolsResponse extends SnapshotEnvelope {
+  tools: ToolView[];
+}

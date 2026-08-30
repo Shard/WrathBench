@@ -30,6 +30,7 @@ import { EPISODE_IDS } from "../src/episodes";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
+  ToolsResponse,
   EpisodesResponse,
   FleetResponse,
   ModelsResponse,
@@ -42,6 +43,7 @@ import type {
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
+  projectTools,
   projectEpisodes,
   projectFleet,
   projectInfo,
@@ -198,6 +200,7 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
     const episodes = projectEpisodes(await get<EpisodesResponse>("/api/episodes"));
     const models = projectModels(await get<ModelsResponse>("/api/models"));
     const campaigns = projectCampaigns(await get<CampaignsResponse>("/api/campaigns"));
+    const tools = projectTools(await get<ToolsResponse>("/api/tools"));
     const fleet = projectFleet(await get<FleetResponse>("/api/fleet"));
     const positions = projectPositions(await get<PositionsResponse>("/api/positions"));
 
@@ -260,6 +263,7 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
       ["episodes.json", episodes],
       ["models.json", models],
       ["campaigns.json", campaigns],
+      ["tools.json", tools],
     ];
     const gen = hash12(snap.map(([, payload]) => addressable(payload)).join("\n"));
 
