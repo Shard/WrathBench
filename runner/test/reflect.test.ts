@@ -18,12 +18,13 @@ import {
   assembleContext,
   formatStateSummary,
   lastTurnGrowth,
+  messageWindowCut,
   messageWindowRawCut,
   trimExpected,
   type ChatMessage,
 } from "../src/context";
 import { EpisodicLog, EPISODIC_TEXT_CHARS, capEntryText, formatEntry } from "../src/episodic";
-import { runLoop } from "../src/loop";
+import { ContextBuilder, runLoop } from "../src/loop";
 import {
   READ_LOG_CLOSED,
   REFLECT_ALREADY_USED,
@@ -261,17 +262,32 @@ describe("the window-trim notices", () => {
     expect(lastTurnGrowth([assistant(), tool(), tool()])).toBe(3);
   });
 
-  test("trimExpected fires on the turn whose growth crosses the block boundary", () => {
-    const { MESSAGE_WINDOW_MAX, MESSAGE_WINDOW_TRIM } = CONTEXT_POLICY;
-    // Two messages a turn: at 48 the next turn takes the history past the cap.
+  test("under variable per-turn growth, every trim is preceded by exactly one prompt", () => {
+    // The case the previous, predictive formulation got wrong: a turn that
+    // adds more messages than the one before it crossed the boundary without
+    // ever raising the prompt. Growth is driven by the model's tool-call count,
+    // so it varies turn to turn — here 1, 3, 2, 4 and around again.
     const history: ChatMessage[] = [];
-    const fired: number[] = [];
-    for (let i = 0; i < 40; i++) {
-      if (trimExpected(history)) fired.push(history.length);
-      history.push(assistant(), tool());
+    const announced: number[] = [];
+    const trimmed: number[] = [];
+    let lastCut = 0;
+    for (let turn = 0; turn < 120; turn++) {
+      if (trimExpected(history)) announced.push(turn);
+      const cut = messageWindowCut(history);
+      if (cut > lastCut) {
+        trimmed.push(turn);
+        lastCut = cut;
+      }
+      history.push(assistant());
+      for (let k = 0; k < [0, 2, 1, 3][turn % 4]!; k++) history.push(tool());
     }
-    expect(fired).toContain(MESSAGE_WINDOW_MAX);
-    expect(messageWindowRawCut(MESSAGE_WINDOW_MAX + 2)).toBe(MESSAGE_WINDOW_TRIM);
+    expect(announced.length).toBeGreaterThan(3);
+    // Exactly one prompt per trim, on the immediately preceding turn: never
+    // two, never zero, whatever the growth did across the boundary.
+    expect(trimmed).toEqual(announced.map((t) => t + 1));
+    expect(messageWindowRawCut(CONTEXT_POLICY.MESSAGE_WINDOW_MAX + 1)).toBe(
+      CONTEXT_POLICY.MESSAGE_WINDOW_TRIM,
+    );
   });
 
   test("the loop raises trim_pending before the trim and window_trimmed at it", async () => {
@@ -283,12 +299,15 @@ describe("the window-trim notices", () => {
     };
     const trajectory = new Trajectory(dir);
     trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
-    // One tool call a turn: growth is a steady 2, so the estimate is exact.
-    // Long enough to cross two block boundaries, which is the only way an
-    // arming guard that never re-arms would show up.
-    const script = Array.from({ length: 60 }, () => ({
+    // Variable tool-call count per turn, so the message growth varies with it:
+    // the crossing turn is routinely bigger or smaller than the one before,
+    // which is exactly what a predictive trigger got wrong.
+    const script = Array.from({ length: 60 }, (_, i) => ({
       content: "acting",
-      toolCalls: [{ name: "run_snippet", arguments: { code: "1" } }],
+      toolCalls: Array.from({ length: [1, 3, 2, 1][i % 4]! }, () => ({
+        name: "run_snippet",
+        arguments: { code: "1" },
+      })),
     }));
     await runLoop({
       config,
@@ -307,14 +326,14 @@ describe("the window-trim notices", () => {
       requests.flatMap((r, i) => (lastContent(r).includes(`- ${kind}:`) ? [i] : []));
     const pending = noticeTurns("trim_pending");
     const trimmed = noticeTurns("window_trimmed");
-    // 60 turns at a steady growth of two is 120 messages, which crosses the
-    // block boundary at 48 and again every 24 after it. Every crossing must
-    // raise its own pair — a guard that armed once and never re-armed would
-    // leave the later blocks silent.
-    expect(pending.length).toBeGreaterThanOrEqual(2);
+    // Several block boundaries over the run, each announced on the turn before
+    // it and on no other turn.
+    expect(pending.length).toBeGreaterThanOrEqual(3);
     // The last prompt of the run has no following turn to carry its trim.
     expect(trimmed).toEqual(pending.filter((t) => t + 1 < requests.length).map((t) => t + 1));
-    expect(lastContent(requests[pending[0]!]!)).toContain("Record a short status entry");
+    expect(lastContent(requests[pending[0]!]!)).toContain(
+      "Older conversation will be trimmed after this turn. Record a short status entry",
+    );
     expect(lastContent(requests[trimmed[0]!]!)).toContain("your scratchpad is your memory");
     trajectory.close();
   });
@@ -329,6 +348,111 @@ describe("the window-trim notices", () => {
     };
     expect(assembleContext(inputs)).toBe(assembleContext(inputs));
     expect(assembleContext(inputs)).toContain("- trim_pending: t");
+  });
+});
+
+describe("the reflection window on the record", () => {
+  /** A loop run with a mutable resting state and a scripted tool sequence. */
+  async function run(
+    state: { resting?: boolean },
+    script: { content: string | null; toolCalls: { name: string; arguments: Record<string, unknown> }[] }[],
+  ): Promise<{ dir: string; records: ReturnType<typeof readTrajectory> }> {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-run-"));
+    const config = {
+      ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1 }),
+      runId: "run-reflect",
+      token: "run-reflect",
+    };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
+    await runLoop({
+      config,
+      adapter: new StubAdapter(script),
+      sandbox: fakeSandbox(state),
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+      sleep: () => Promise.resolve(),
+    });
+    trajectory.close();
+    return { dir, records: readTrajectory(dir) };
+  }
+
+  const reflectCall = { name: "reflect", arguments: {} };
+  const noop = { name: "state_summary", arguments: {} };
+
+  test("a granted reflection writes an open record, and the run's end closes it", async () => {
+    const { records } = await run({ resting: true }, [
+      { content: null, toolCalls: [reflectCall] },
+      { content: null, toolCalls: [noop] },
+    ]);
+    const windows = records.filter((r) => r.t === "reflect_window");
+    expect(windows.map((r) => [r["event"], r["reason"]])).toEqual([
+      ["open", undefined],
+      ["close", "run_end"],
+    ]);
+    // The reflect turn is marked and still counted as an ordinary turn.
+    const marked = records.filter((r) => r.t === "tool_result" && r["reflect"] === true);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]!["isError"]).toBe(false);
+    expect(records.filter((r) => r.t === "request").length).toBeGreaterThan(2);
+  });
+
+  test("leaving the rest area closes the window through the state sample alone", async () => {
+    const state = { resting: true };
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-builder-"));
+    const config = {
+      ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1 }),
+      runId: "run-builder",
+      token: "run-builder",
+    };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
+    const builder = new ContextBuilder({
+      config,
+      sandbox: fakeSandbox(state),
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+    });
+    await builder.sampleState();
+    expect(builder.reflect.request().text).toBe(REFLECTION_PROMPT);
+    expect(builder.reflect.isOpen).toBe(true);
+    // Nothing calls note() by hand: the world changes and the sample sees it.
+    state.resting = false;
+    await builder.sampleState();
+    expect(builder.reflect.isOpen).toBe(false);
+    expect(builder.reflect.drainEvents()).toEqual([
+      { event: "open" },
+      { event: "close", reason: "left_rest" },
+    ]);
+    // ...and coming back re-arms, again through the sample alone.
+    state.resting = true;
+    await builder.sampleState();
+    expect(builder.reflect.request().text).toBe(REFLECTION_PROMPT);
+    trajectory.close();
+  });
+
+  test("the breaker closes the window and its notice reaches the next context", async () => {
+    const script = [
+      { content: null, toolCalls: [reflectCall] },
+      ...Array.from({ length: REFLECT_MAX_TURNS + 2 }, () => ({ content: null, toolCalls: [noop] })),
+    ];
+    const { records } = await run({ resting: true }, script);
+    const windows = records.filter((r) => r.t === "reflect_window");
+    expect(windows.map((r) => r["event"])).toEqual(["open", "close"]);
+    expect(windows[1]!["reason"]).toBe("breaker");
+    // The model is told, in the assembled context of the turn after it fired.
+    const told = records.filter(
+      (r) =>
+        r.t === "request" &&
+        (r["messages"] as { content: string }[]).slice(-1)[0]!.content.includes("- reflect_ended:"),
+    );
+    expect(told).toHaveLength(1);
+    expect((told[0]!["messages"] as { content: string }[]).slice(-1)[0]!.content).toContain(
+      REFLECT_BREAKER_NOTICE,
+    );
   });
 });
 
