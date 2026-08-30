@@ -404,7 +404,7 @@ export default function RunDetail() {
           return (
             <>
               <h2 class="section">
-                <A href="/">fleet</A> / {run().runId}
+                <A href="/fleet">fleet</A> / {run().runId}
                 {/* Back to the runs table, with the sort and filters the reader came from. */}
                 <A class="dim" style={{ "margin-left": "12px", "font-size": "13px", "font-weight": "normal" }} href={`/runs${location.search}`}>
                   ← runs

@@ -6,12 +6,13 @@ import { render } from "solid-js/web";
 import { Layout } from "./components/Layout";
 import "./styles.css";
 
+const Home = lazy(() => import("./pages/Home"));
 const Fleet = lazy(() => import("./pages/Fleet"));
 const RunDetail = lazy(() => import("./pages/RunDetail"));
 const MapPage = lazy(() => import("./pages/MapPage"));
 const Runs = lazy(() => import("./pages/Runs"));
 const Ladder = lazy(() => import("./pages/Ladder"));
-const Episodes = lazy(() => import("./pages/Episodes"));
+const About = lazy(() => import("./pages/About"));
 const Models = lazy(() => import("./pages/Models"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
 const NotFound = lazy(() => import("./pages/NotFound"));
@@ -28,14 +29,17 @@ if (root === null) throw new Error("no #root");
 render(
   () => (
     <Router root={Layout}>
-      <Route path="/" component={Fleet} />
+      <Route path="/" component={Home} />
+      <Route path="/fleet" component={Fleet} />
       <Route path="/run/:id" component={RunDetail} />
       <Route path="/map" component={MapPage} />
       <Route path="/runs" component={Runs} />
       {/* The results page became the runs page; old links keep their query. */}
       <Route path="/results" component={ResultsRedirect} />
       <Route path="/ladder" component={Ladder} />
-      <Route path="/episodes" component={Episodes} />
+      <Route path="/about" component={About} />
+      {/* The episodes page became the about page; old links still land. */}
+      <Route path="/episodes" component={() => <Navigate href="/about" />} />
       <Route path="/models" component={Models} />
       <Route path="/campaigns" component={Campaigns} />
       <Route path="*" component={NotFound} />

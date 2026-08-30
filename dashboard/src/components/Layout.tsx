@@ -10,10 +10,11 @@
  */
 
 import { A, useLocation, useSearchParams } from "@solidjs/router";
-import { Show, createSignal, onCleanup, type ParentProps } from "solid-js";
+import { For, Show, createSignal, onCleanup, type ParentProps } from "solid-js";
 import { snapshotSource } from "../api/client";
 import { snapshotBanner, type SnapshotBanner, type SnapshotSource } from "../api/snapshot-client";
 import { useClock } from "../lib/clock";
+import { NAV } from "../lib/nav";
 import { FeedsContext, createFeeds } from "../lib/feeds";
 import { SeriesSelect } from "./SeriesSelect";
 import { StatusBadge } from "./StatusBadge";
@@ -55,27 +56,7 @@ export function Layout(props: ParentProps) {
           <A href="/">WrathBench</A>
         </h1>
         <nav>
-          <A href="/" end={true} activeClass="on">
-            fleet
-          </A>
-          <A href="/map" activeClass="on">
-            map
-          </A>
-          <A href="/runs" activeClass="on">
-            runs
-          </A>
-          <A href="/ladder" activeClass="on">
-            ladder
-          </A>
-          <A href="/episodes" activeClass="on">
-            episodes
-          </A>
-          <A href="/models" activeClass="on">
-            models
-          </A>
-          <A href="/campaigns" activeClass="on">
-            campaigns
-          </A>
+          <For each={NAV}>{(n) => <A href={n.href} activeClass="on">{n.label}</A>}</For>
         </nav>
         <span class="spacer" />
         {/*
