@@ -173,6 +173,15 @@ export default function About() {
         <code>docs/CONTRACTS.md</code>; the structure is <code>docs/ARCHITECTURE.md</code>. The{" "}
         <A href="/">homepage</A> is the short version.
       </p>
+      <h2 class="section">legal</h2>
+      <p class="dim">
+        WrathBench is a fan-made research project and is not affiliated with or endorsed by Blizzard
+        Entertainment. World of Warcraft content and materials — names, maps, and other game data shown
+        here — are the intellectual property of Blizzard Entertainment, Inc. World of Warcraft, Warcraft
+        and Blizzard Entertainment are trademarks or registered trademarks of Blizzard Entertainment, Inc.
+        in the U.S. and/or other countries. The game server is AzerothCore, the community open-source
+        reconstruction of the 3.3.5a server; WrathBench's own code and documentation are MIT-licensed.
+      </p>
     </div>
   );
 }
