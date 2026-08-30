@@ -145,7 +145,7 @@ describe("claude-code driver", () => {
     expect(record["systemPrompt"]).not.toBe(SYSTEM_PROMPT);
     expect(record["systemPrompt"]).toContain(contextSentence("claude-code"));
     expect(record["systemPrompt"]).not.toContain("trimmed aggressively");
-    // built-ins disabled; only our nine tools granted
+    // built-ins disabled; only our eight tools granted
     expect(record["toolsFlag"]).toBe("");
     expect(record["allowedTools"]).toEqual(mcpToolNames());
     expect(record["strictMcpConfig"]).toBe(true);

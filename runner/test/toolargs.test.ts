@@ -372,7 +372,7 @@ describe("recent_events movement fold", () => {
 });
 
 describe("unknown tool suggestions", () => {
-  test("the reply lists all six valid tools", async () => {
+  test("the reply lists the valid tools", async () => {
     const res = await callTool(makeCtx(), "does_not_exist_at_all", {});
     expect(res.isError).toBe(true);
     for (const name of [
@@ -380,7 +380,6 @@ describe("unknown tool suggestions", () => {
       "recent_events",
       "state_summary",
       "search_reference",
-      "read_scratchpad",
       "write_scratchpad",
     ]) {
       expect(res.text).toContain(name);

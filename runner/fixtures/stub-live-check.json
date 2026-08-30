@@ -32,7 +32,6 @@
         "name": "write_scratchpad",
         "arguments": { "content": "# stub live check\n- session up as Stubby\n- say echo observed" }
       },
-      { "name": "read_scratchpad", "arguments": {} },
       { "name": "state_summary", "arguments": {} }
     ]
   }

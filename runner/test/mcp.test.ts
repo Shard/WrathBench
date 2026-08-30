@@ -76,7 +76,7 @@ describe("McpServer", () => {
     expect(await call(server, { jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
   });
 
-  test("tools/list exposes exactly the nine phase-0 tools", async () => {
+  test("tools/list exposes exactly the eight phase-0 tools", async () => {
     const { server } = makeServer();
     await initialized(server);
     const res = await call(server, { jsonrpc: "2.0", id: 2, method: "tools/list" });
@@ -86,7 +86,6 @@ describe("McpServer", () => {
       "recent_events",
       "state_summary",
       "search_reference",
-      "read_scratchpad",
       "write_scratchpad",
       "reflect",
       "log_status",
@@ -133,7 +132,10 @@ describe("McpServer", () => {
     expect(eventText).toContain("#2 SMSG_MESSAGECHAT");
   });
 
-  test("scratchpad write/read round-trips through tools", async () => {
+  // The write is a tool; the read is not. `read_scratchpad` was removed
+  // (operator, 2026-08-30) because the scratchpad is injected verbatim into
+  // every turn's context, so the tool re-served text the model already had.
+  test("write_scratchpad reaches the scratchpad, and read_scratchpad is gone", async () => {
     const { server, scratchpad } = makeServer();
     await initialized(server);
     await call(server, {
@@ -149,7 +151,9 @@ describe("McpServer", () => {
       method: "tools/call",
       params: { name: "read_scratchpad", arguments: {} },
     });
-    expect((read?.["result"] as { content: { text: string }[] }).content[0]!.text).toBe("# remembered");
+    const result = read?.["result"] as { content: { text: string }[]; isError: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("unknown tool: read_scratchpad");
   });
 
   test("bad tool name and bad arguments come back as isError, not protocol errors", async () => {

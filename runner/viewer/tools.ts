@@ -1,5 +1,5 @@
 /**
- * `/api/tools`: the nine model-facing tools, read off `TOOLS` at request time
+ * `/api/tools`: the eight model-facing tools, read off `TOOLS` at request time
  * so the homepage's tool inspector cannot drift from what a run is given.
  *
  * The description text is the runner's (names-first rendering — the
@@ -30,7 +30,6 @@ export const TOOL_EXAMPLES: Readonly<Record<string, string>> = {
 /** What an argument-less call gives back, one line each (see `callTool` in runner/src/tools.ts). */
 export const TOOL_RETURNS: Readonly<Record<string, string>> = {
   state_summary: "the fixed-format client-HUD summary of the cached state: character, level, position, health, xp, money, bag, quests, target, nearby, open windows, stream continuity",
-  read_scratchpad: "the scratchpad's markdown as last written, or a note that it is empty",
   reflect: "the fixed set of review questions, plus how many entries the episodic log holds (read with read_log) — or a refusal with why, when the character is not resting",
 };
 
