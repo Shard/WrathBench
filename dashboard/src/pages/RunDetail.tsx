@@ -75,6 +75,7 @@ import {
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
+import { OPAQUE_PAUSE_REASON } from "../lib/ladder";
 
 const WINDOW = 200;
 
@@ -729,7 +730,7 @@ export default function RunDetail() {
                     */}
                     <div class="banner warn">
                       paused
-                      <Show when={run().pauseReason !== "paused"}>: {run().pauseReason}</Show>
+                      <Show when={run().pauseReason !== OPAQUE_PAUSE_REASON}>: {run().pauseReason}</Show>
                     </div>
                   </Show>
 
