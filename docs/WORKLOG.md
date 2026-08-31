@@ -65,6 +65,7 @@ Convention:
 - [2026-08-30](worklogs/2026-08-30.md) — reflect and the episodic log ship; quest-start items (build 310); the gated public site opens up (tiles, names, redacted feed, legal) and passes three review sweeps
   run (reputation, item-stats) were smoke bugs: a fold race and a chest piece the fixture
   never wears; both pass live, no module change owed.
+- [2026-08-31](worklogs/2026-08-31.md) — lane-2 freeplay swap: fable paused at ~90% weekly quota, sonnet-low resumed; item 107 filed (`idle: "none"` alone does not stop a live session)
 
 ## Resolving a cited item number
 
