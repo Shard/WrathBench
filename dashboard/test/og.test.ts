@@ -77,9 +77,15 @@ describe("ogSvgOf", () => {
 
   test("no text but the wordmark, and none at all when it is off", () => {
     const svg = ogSvgOf(RUNS);
-    expect(count(svg, /<text/g)).toBe(1);
+    // The wordmark and the cue's word; the cue's arrow is a path, not a glyph.
+    expect(count(svg, /<text/g)).toBe(2);
     expect(svg).toContain(">WrathBench</text>");
-    expect(count(ogSvgOf(RUNS, { wordmark: false }), /<text/g)).toBe(0);
+    expect(count(ogSvgOf(RUNS, { wordmark: false, cue: false }), /<text/g)).toBe(0);
+    // The reading cue is the one other text, in the better corner (top-left for cost × xp).
+    const withCue = ogSvgOf(RUNS, { wordmark: false });
+    expect(count(withCue, /<text/g)).toBe(1);
+    expect(withCue).toContain("better");
+    expect(withCue).toContain('text-anchor="start"');
   });
 
   test("colours are literal — resvg has no cascade, so a var() would paint nothing", () => {
