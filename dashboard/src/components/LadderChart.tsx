@@ -15,6 +15,7 @@ import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
 import {
+  LABEL_FONT,
   MARK_R,
   MARK_RING_R,
   type LadderPoint,
@@ -221,6 +222,26 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                 }}
               >
                 <title>{hoverText(d.point, props.episode)}</title>
+                {/*
+                 * A displaced label's leader: first in the group, so it sits
+                 * under the puck and the label and over the gridlines drawn
+                 * before the points. Dim and thin — it is a pointer, not data —
+                 * and it brightens with the rest of the point on hover.
+                 */}
+                <Show when={d.leader}>
+                  {(l) => (
+                    <line
+                      class="chart-leader"
+                      x1={l().x1}
+                      y1={l().y1}
+                      x2={l().x2}
+                      y2={l().y2}
+                      stroke="var(--dim)"
+                      stroke-width="1"
+                      opacity="0.6"
+                    />
+                  )}
+                </Show>
                 {/* A hit target wider than the mark. */}
                 <circle cx={d.cx} cy={d.cy} r={HIT_R} fill="transparent" />
                 {/*
@@ -272,7 +293,17 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                     </>
                   )}
                 </Show>
-                <text x={d.labelX} y={d.labelY} text-anchor={d.anchor} font-size="11" fill="var(--fg)">
+                {/* `crowded` is a label every slot failed, drawn over something
+                    anyway (a hidden label is worse than an ugly one); the class
+                    is a hook for the eye and for a scripted check, not a hide. */}
+                <text
+                  class={d.crowded ? "crowded" : undefined}
+                  x={d.labelX}
+                  y={d.labelY}
+                  text-anchor={d.anchor}
+                  font-size={String(LABEL_FONT)}
+                  fill="var(--fg)"
+                >
                   {d.point.label}
                 </text>
               </a>
