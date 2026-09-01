@@ -18,7 +18,9 @@
  * Above the table, one scatter for the tier: average cost per run against
  * average XP earned, one point per roster entry (`components/LadderChart`),
  * with a row of curated views that swap the axes (`lib/axes.ts`; the view is
- * `?view=` so a reading is linkable, and the default is the cost/xp chart).
+ * `?view=` so a reading is linkable, and the default is the cost/xp chart)
+ * and a toggle that draws the Pareto front over the field (`lib/pareto.ts`;
+ * `?pareto=1`, for the same reason).
  * Freeplay gets its own graph in that place instead — `components/StreamChart`,
  * one stepped series per stream, level against cumulative active playtime; the
  * axis argument is in `lib/ladder.ts`.
@@ -93,6 +95,9 @@ export default function Ladder() {
   const [params, setParams] = useSearchParams();
   const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
   const view = (): LadderView => viewParam(params.view);
+  // The front, like the view, is a way of reading the tier and rides in the
+  // URL beside it: `?pareto=1` is the one truthy form, anything else is off.
+  const pareto = (): boolean => (Array.isArray(params.pareto) ? params.pareto[0] : params.pareto) === "1";
   // `/api/ladder` is the same projection as `/api/results`; the rung rules stay
   // client-side, in `lib/ladder.ts`, where their tests are.
   const feed = poll(() => api.ladder(episode()), POLL_MS);
@@ -237,6 +242,19 @@ export default function Ladder() {
           />
           <span>exclude free</span>
         </label>
+        <Show when={!freeplay()}>
+          <label
+            class="filter check"
+            title="Draw the Pareto front: the entries no other entry beats on both of the axes in view. Every point stays; the dominated ones are dimmed."
+          >
+            <input
+              type="checkbox"
+              checked={pareto()}
+              onChange={(e) => setParams({ pareto: e.currentTarget.checked ? "1" : undefined }, { replace: true })}
+            />
+            <span>pareto front</span>
+          </label>
+        </Show>
         </div>
       </div>
       <Show when={billingUnknown()}>
@@ -258,7 +276,7 @@ export default function Ladder() {
         {/* Below ~720px the scatter's labels are texture, not text: it keeps a
             floor width and scrolls inside itself rather than being squeezed. */}
         <div class="wide-scroll">
-        <LadderChart runs={runs()} episode={episode()} view={view()} />
+        <LadderChart runs={runs()} episode={episode()} view={view()} pareto={pareto()} />
         </div>
 
         <div class="scroller">

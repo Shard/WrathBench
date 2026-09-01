@@ -18,6 +18,7 @@ import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
 import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS } from "../lib/axes";
 import { LABEL_FONT, TICK_FONT, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
+import { paretoSteps } from "../lib/pareto";
 import { AxisFrame, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { COST_BASIS_NOTE, fmtTokens, fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
@@ -103,10 +104,25 @@ export function hoverText(p: LadderPoint, episode: string, view: LadderView = DE
   ].join("\n");
 }
 
-export function LadderChart(props: { runs: readonly ResultRun[]; episode: string; view?: LadderView }) {
+/**
+ * `pareto` draws the front over the field rather than filtering to it: the
+ * step line through the undominated entries (`paretoSteps`, which reads
+ * `better` off the view's specs), and every other point — label included —
+ * dimmed, so a reader sees who is on the front without losing the field.
+ */
+export function LadderChart(props: { runs: readonly ResultRun[]; episode: string; view?: LadderView; pareto?: boolean }) {
   const view = (): LadderView => props.view ?? DEFAULT_VIEW;
   const model = createMemo(() => ladderPoints(props.runs, view().x, view().y));
   const layout = createMemo(() => ladderChartLayout(model().points, BOX, view().x, view().y));
+  const front = createMemo(() =>
+    props.pareto ? paretoSteps(model().points, { x: view().x.better, y: view().y.better }) : null,
+  );
+  const onFront = (key: string): boolean => front()?.front.some((p) => p.key === key) ?? true;
+  /** The staircase, in viewBox units: the same `px`/`py` the points were placed with. */
+  const frontPath = (): string =>
+    (front()?.steps ?? [])
+      .map((s) => `M${layout().px(s.x1).toFixed(1)},${layout().py(s.y1).toFixed(1)} L${layout().px(s.x2).toFixed(1)},${layout().py(s.y2).toFixed(1)}`)
+      .join(" ");
   const xpKnown = (): boolean => props.runs.some((r) => r.xpEarned !== undefined);
   const xCaption = (): string => view().x.caption(props.episode);
   const yCaption = (): string => view().y.caption(props.episode);
@@ -201,10 +217,17 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
 
           <AxisFrame box={BOX} xCaption={xCaption()} yCaption={yCaption()} />
 
+          {/* The front's staircase, under the points: a run along x to the
+              next member, then a rise along y to it. Dim and thin, like a
+              leader — it is a reading of the points, not data of its own. */}
+          <Show when={front() !== null && front()!.steps.length > 0}>
+            <path class="chart-front" d={frontPath()} fill="none" stroke="var(--dim)" stroke-width="1" opacity="0.7" />
+          </Show>
+
           {/* Points, each a link to that entry's runs on this tier. */}
           <For each={layout().placed}>
             {(d) => (
-              <g class="ladderchart-pt">
+              <g class="ladderchart-pt" classList={{ dominated: !onFront(d.point.key) }}>
               <a
                 href={runsHref({ model: d.point.model, effort: d.point.effort, episode: props.episode })}
                 onClick={(e) => {
@@ -294,6 +317,12 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         on a single run. {view().x.note}
         {view().x.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}. {view().y.note}
         {view().y.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}.
+        <Show when={front() !== null}>
+          {" "}
+          The step line is the Pareto front: the entries no other entry beats on both axes (
+          {view().x.better === "lower" ? "less" : "more"} {view().x.label} and{" "}
+          {view().y.better === "higher" ? "more" : "less"} {view().y.label}); the rest are dimmed.
+        </Show>
         <Show when={model().omitted.length > 0}>
           {" "}
           Not plotted: {model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
