@@ -339,6 +339,63 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("the spellbook: the first book seen is the baseline, later ids are learns (item 35)", async () => {
+    const { dir, options } = walk([
+      // An empty book is the cache before `SMSG_INITIAL_SPELLS`, not a baseline:
+      // taking it as one would make the whole book arrive as fresh learns.
+      { self: {}, spells: [] },
+      { self: {}, spells: [{ spellId: 78 }, { spellId: 6603 }] },
+      { self: {}, spells: [{ spellId: 78 }, { spellId: 6603 }] },
+      { self: {}, spells: [{ spellId: 78 }, { spellId: 6603 }, { spellId: 772 }] },
+    ]);
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter(
+      (r) => r.t === "milestone" && (r["kind"] === "spells_at_login" || r["kind"] === "spell"),
+    );
+    expect(ms.map((r) => [r["kind"], r["ids"] ?? r["id"]])).toEqual([
+      ["spells_at_login", [78, 6603]],
+      ["spell", 772],
+    ]);
+    options.trajectory.close();
+  });
+
+  test("talents: the first frame seeds silently, a climbing rank is a spend, a respec is not", async () => {
+    const frame = (rows: { talentId: number; rank: number }[]) => ({
+      self: {},
+      talents: { unspentPoints: 0, activeSpec: 0, talents: rows },
+    });
+    const { dir, options } = walk([
+      // Already holding a point: a resumed character's spend, not this run's.
+      frame([{ talentId: 1683, rank: 0 }]),
+      frame([{ talentId: 1683, rank: 1 }]),
+      // The respec takes it back — silently, so the relearn below reads as a
+      // spend again rather than being swallowed by a remembered rank.
+      frame([]),
+      frame([{ talentId: 1683, rank: 0 }]),
+    ]);
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "talent");
+    expect(ms.map((r) => [r["id"], r["rank"], r["points"]])).toEqual([
+      [1683, 1, 2],
+      [1683, 0, 1],
+    ]);
+    options.trajectory.close();
+  });
+
+  test("trades: one record per completion, deduped on the cache's own stamp", async () => {
+    const { dir, options } = walk([
+      { self: {}, trade: { status: 2, ts: 100 } },
+      { self: {}, trade: { status: 8, ts: 500 } },
+      // The completion latches: the same stamp seen again is the same trade.
+      { self: {}, trade: { status: 8, ts: 500 } },
+      { self: {}, trade: { status: 8, ts: 900 } },
+    ]);
+    await runLoop(options);
+    const ms = readTrajectory(dir).filter((r) => r.t === "milestone" && r["kind"] === "trade");
+    expect(ms.map((r) => r["observedTs"])).toEqual([500, 900]);
+    options.trajectory.close();
+  });
+
   test("quest-completion high-water mark resets after a sandbox restart (shorter list)", async () => {
     // Three samples: the completion list grows [7,9], stays, then SHRINKS to
     // [11] — the sandbox-restart/cache-rebuild case. Without the reset at

@@ -21,9 +21,9 @@ status.
    harnesses first); the player surface itself is complete as of 2026-08-30.
 2. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
    (`SMSG_SHOWTAXINODES`, the destination-choice surface, still untapped).
-3. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
-   grouping and instance records exist, and death/level-up/spell/talent are still
-   unwritten.
+3. **110** — the viewer's last two wiring lines for the spell/talent/trade
+   milestones (item 35 shipped the producers, the facts and the render;
+   `runner/viewer/api.ts` was owned by another agent that day).
 
 ## Player surface
 
@@ -124,60 +124,6 @@ worklogs/2026-08-29).
    the latter, what a $/level or $/turn chart may say across the two harnesses. Both are
    methodology, not implementation — nothing here is an agent's to decide.
 
-35. **Milestone records alongside the state samples** (2026-08-22 strategy session).
-    The signal vector lists deaths, zones, spells learned and talents spent
-    (docs/METHODOLOGY.md, "Scoring") and none is recorded (the `state` table has level, xp, map+xyz, money,
-    quests_completed, turn; `quest_complete` is the only event-shaped record). Add a
-    `milestone` trajectory record `{ t: "milestone", kind, ... }` emitted from the loop
-    the way `quest_complete` is: death (and spirit-healer/corpse recovery), zone and
-    area change (ids from the state cache, not names), level-up, spell learned, talent
-    spent, first capital, first instance, first group join, first trade. Kinds are
-    additive; derivations come later. Why it matters: the ladder page shows rungs 2, 4
-    and 6 as "not instrumented" for exactly these (zone change, capital entry, taxi
-    use, group join), map replay cannot show death sites or zone coverage (item 22),
-    and the freeplay firsts ladder is a derivation over these records plus the model
-    label. **First producer exists (2026-08-23):** the loop writes
-    `{ t: "milestone", kind: "zone" | "area", from: { id } | undefined, to: { id }, turn, ts }`
-    from the state cache's `self.zone` / `self.area` on every change, including the
-    first observation (`from` undefined), alongside `quest_complete`
-    (`runner/src/loop.ts`, `Trajectory.recordMilestone`). Death, level-up, spell,
-    talent and the firsts are still unwritten. **First consumer (2026-08-25):**
-    `scanRunTotals` reads the zone/area marks in its existing streaming pass and
-    `ResultRun.areas` carries `{ startArea, distinctAreas, leftStartArea,
-    capitalZone, zoneMarks, areaMarks }` (`runner/viewer/tail.ts`
-    `areaFactsFrom`), from which ladder rungs 2 and 4 now derive
-    (`dashboard/src/lib/ladder.ts`); a run with no marks reads `null`, never
-    `false`. **Achievements and flights (2026-08-25, issue #8):** the
-    loop also writes `{ kind: "achievement", id, name?, points?, categoryId? }`
-    per own earn, `{ kind: "achievements_at_login", ids, points }` once per
-    process (written even when the backlog is empty — it is what says the taps
-    were live for the run), and `{ kind: "taxi", from: { areaId } }` /
-    `{ kind: "taxi_landed", to: { areaId } }` from `self.taxiFlight` flipping
-    after an accepted reply. `ResultRun.achievements` / `.taxi` and
-    `RunDetailResponse` carry them (`achievementFactsFrom`, `taxiFactsFrom`),
-    rung 4 now derives fully (capital **and** a flight), and achievement points
-    are displayed only — no ordering reads them. **Deaths and levels
-    (2026-08-29):** the loop writes `{ kind: "level", from: number | undefined,
-    to, xp?, turn }` on every change of `self.level` (the first observation of a
-    process carries no `from`, exactly as the first zone does, so a level-up is
-    a mark that carries one and climbs), and `{ kind: "death", observedTs?,
-    position?: { map, x, y, z, source }, zone?, area?, released? }` plus
-    `{ kind: "release", graveyard? }` / `{ kind: "resurrect" }` from the ghost
-    flag. The death is read as a *window* — the cache latches the corpse and the
-    reclaim delay until the resurrect, so a sample landing anywhere inside it
-    recovers the death and stamps it with the cache's own time rather than the
-    sample's; a window that opened and closed between two samples still leaves
-    nothing, the usual lower bound. `RunTotals.leveling` / `.deaths`
-    (`levelUpFactsFrom`, `deathFactsFrom`), `ResultRun` and
-    `RunDetailResponse` carry them; the level mark is the liveness witness that
-    lets "never died" read as `0` where "not recorded" reads `null`, the job
-    `achievements_at_login` does for flights. Nothing renders them yet.
-    **What remains:** spell learned, talent spent, the "firsts" (first trade,
-    first instance, first group join) and grouping/instance records. Rung 6 is
-    still nobody's — it needs a party record and an instance record, and the
-    harness runs one character per session; its framing is issue #9.
-
-
 ## Docs and release
 
 85. **Retire the gate Worker before launch** (2026-08-25; operator's explicit
@@ -228,3 +174,18 @@ worklogs/2026-08-29).
     (d) the copy review's voice rewrites and cuts not yet taken (Home intro, About
     "reading a result", the StreamChart caption, Models/Campaigns intros — see the
     2026-09-01 day file). Trigger: the day before the repo flips public.
+
+110. **Wire the spell/talent/trade facts through `runner/viewer/api.ts`**
+    (2026-09-01, item 35's leftover). The producers, the derivations, the public
+    projection, the types and the run page all shipped; two lines in the viewer's
+    request handlers did not, because `api.ts` was being edited by another agent
+    that day and was off limits. Until they land, `RunDetailResponse.spells` /
+    `.talents` / `.trades` are `undefined` and the run page's milestones section
+    reads "not recorded" for those three rows however much the trajectory holds.
+    Exactly two edits, both mechanical: in the `/api/runs/:id` body (beside
+    `deaths: tail.deaths`) add `spells: tail.spells`, `talents: tail.talents`,
+    `trades: tail.trades`; and in `resultRuns()` pass `resultRunOf`'s new
+    trailing `learning` argument after `totals?.deaths ?? null`:
+    `totals === null ? undefined : { spells: totals.spells, talents: totals.talents, trades: totals.trades }`
+    (omitted, never nulls, so an unwired viewer says "does not answer" rather
+    than "the run recorded none"). Trigger: next time `api.ts` is free.
