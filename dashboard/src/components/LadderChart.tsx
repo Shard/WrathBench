@@ -293,15 +293,8 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
       */}
       <p class="dim ladderchart-caption">
         avg cost per {props.episode} run (USD, log) against avg xp earned — a lower bound, rebuilt from
-        the run's 60-second samples. Each mark is one model at one effort — effort variants sit apart,
-        labelled <span class="mono">sonnet (low)</span> — and both coordinates are means over the same
-        runs: that entry's counted runs carrying both a cost and an xp reading, with that count as{" "}
-        <span class="mono">n</span> on the label. A dashed ring means the means rest on a single run.
-        Cost is what the provider reported; {COST_BASIS_NOTE}.
-        <Show when={model().omitted.length > 0}>
-          {" "}
-          Not plotted: {model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
-        </Show>
+        the run's 60-second samples. A dashed ring means the means rest on a single run.
+        Cost is what the provider reported; {COST_BASIS_NOTE}. 
       </p>
     </div>
   );
