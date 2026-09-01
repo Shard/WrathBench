@@ -74,12 +74,12 @@ export const EPISODES = {
     objectiveAllowed: false,
     scored: true,
     summary:
-      "The default tier, and the one every model starts on. Ninety minutes of wall clock, a " +
+      "The default episode, and the one every model starts on. Ninety minutes of wall clock, a " +
       "fresh level-1 character, no operator objective, idle and no-XP watchdogs at " +
       "twenty minutes each, and a 3000-call runaway ceiling — 1000 calls per thirty minutes, " +
       "a guard against a loop rather than a task budget. Short " +
       "enough that a full roster gets several episodes a night, which is what makes it the " +
-      "sampling tier. Scored — and if ninety minutes turns out to be the wrong default it is " +
+      "sampling episode. Scored — and if ninety minutes turns out to be the wrong default it is " +
       "replaced by a new id, never widened in place.",
   },
   e360: {
@@ -95,7 +95,7 @@ export const EPISODES = {
     objectiveAllowed: false,
     scored: true,
     summary:
-      "The long scored tier: six hours of wall clock, otherwise identical to e90 — same fresh " +
+      "The long scored episode: six hours of wall clock, otherwise identical to e90 — same fresh " +
       "start, same fixed prompt, same tools, no objective. Idle watchdog only; the no-XP " +
       "watchdog is deliberately off, because walking across a continent earns nothing for " +
       "hours and that is the behaviour this tier exists to permit. Scored in its own group: an " +
@@ -112,11 +112,11 @@ export const EPISODES = {
     objectiveAllowed: true,
     scored: false,
     summary:
-      "The probe-campaign tier: a commissioned run under a campaign's own objective, " +
+      "The probe-campaign episode: a commissioned run under a campaign's own objective, " +
       "cell and clock. Unscored, and never a target — a campaign is run once to completion and a " +
       "harness bump does not re-arm it, which is exactly what separates a probe from an eval. The " +
       "ninety minutes here is the default a campaign inherits when it names no clock of its own, " +
-      "not a rule the tier enforces; the no-XP watchdog is off because a probe may spend its whole " +
+      "not a rule the episode enforces; the no-XP watchdog is off because a probe may spend its whole " +
       "budget walking somewhere in order to find out what happens there. Exploration, not evidence.",
   },
   freeplay: {

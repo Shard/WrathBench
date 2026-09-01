@@ -77,13 +77,14 @@ export default function About() {
         <span class="mono">status: pre-release · harness {series()}</span>
       </p>
       <p class="dim">
-        WrathBench is currently still in early development. The basics are in and on paper agents should be capable
-        of progressing through most single player content but there is probably still many harness issues and
-        improvements to make including proper party and communication tools for freeplay.
+        WrathBench is still in early development. The basics are in, and on paper agents should be capable
+        of progressing through most single-player content, but there are still many harness issues and
+        improvements to make, including proper party and communication tools for freeplay.
       </p>
       <p class="dim">
-        The data for some charts will also probably be bit off as I work through more test runs and validate the numbers
-        against other sources. I will be looking to open-source the repo soon once things have been sufficently cleaned up for release.
+        The data for some charts will also probably be a bit off as I work through more test runs and validate the
+        numbers against other sources. I will be looking to open-source the repo soon, once things have been
+        sufficiently cleaned up for release.
       </p>
 
       <h2 class="section">reading a result</h2>
@@ -117,8 +118,8 @@ export default function About() {
       <p class="dim">
         <strong>Effort is a run dimension</strong>, not tuning: <code>opus (low)</code> and{" "}
         <code>opus (high)</code> are two comparable rows, stamped at launch and never recomputed.{" "}
-        <strong>Cost has two bases.</strong> Where a provider reported a figure, that is the
-        figure. {COST_BASIS_NOTE}, shown as an estimate.
+        <strong>Cost</strong> is what the provider charged. Where it reported nothing, the run page
+        shows a list-price estimate from the token counts. {COST_BASIS_NOTE}.
       </p>
       <p class="dim">
         <strong>n is small on purpose.</strong> A tier buys a handful of runs, so a mark on the
@@ -171,7 +172,7 @@ export default function About() {
                   an empty <tbody> reads as a page that failed to render. */}
               <Show when={table().length === 0}>
                 <tr>
-                  <td colSpan={11} class="dim">
+                  <td colSpan={10} class="dim">
                     No episodes defined.
                   </td>
                 </tr>
@@ -228,10 +229,6 @@ export default function About() {
                 <Show when={t.lapsed > 0}>
                   {" · "}
                   {t.lapsed} spent attempt{t.lapsed === 1 ? "" : "s"} that never became episodes
-                </Show>
-                <Show when={t.derived > 0}>
-                  {" · "}
-                  {t.derived} older run{t.derived === 1 ? "" : "s"} labeled, never enrolled
                 </Show>
                 {" · "}
                 <A href={runsHref({ episode: t.id })}>runs</A> ·{" "}
