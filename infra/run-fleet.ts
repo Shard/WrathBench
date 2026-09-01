@@ -2567,6 +2567,39 @@ export function pausesOnDrain(job: Pick<FleetJob, "source" | "episode"> | undefi
 }
 
 /**
+ * Why the config no longer keeps a LIVE POLICY job running — the drain reason —
+ * or undefined while it does. Pure.
+ *
+ * A policy job is made up each tick, so it is never in the file and cannot be
+ * `enabled: false`; before this, a live one whose ref simply stopped generating
+ * work was left enabled forever and ran until its idle watchdog, which an
+ * active model never trips (item 107: flipping a stream's `idle` to `"none"`
+ * did nothing until someone SIGTERMed the roster by hand). This is what makes
+ * the ROSTER_ENTRY_KEYS hint — "to pause a stream set `idle: \"none\"`" — true.
+ *
+ * The question is asked of the LOADED CONFIG, never of the plan. The caller
+ * walks the accounts that are assigned, so a live policy job is reached every
+ * tick whether or not the policy would pick it again, and the reasons the
+ * policy would not (account busy, a lane or paid cap, cooling on the defer
+ * ladder, tier not eligible) are transient: none of them belongs on a stream
+ * the operator has not turned off, and none of them is visible here. The ref's
+ * presence in the roster and its idle mode are the whole answer.
+ *
+ * Only the freeplay stream is idle-keyed. A scored (`e90`/`e360`) policy job
+ * keeps exactly the handling it had — it drains when its ref leaves the roster
+ * and not otherwise — because `idle` says nothing about what a tier bought.
+ */
+export function policyJobDropped(
+  job: Pick<FleetJob, "source" | "episode"> | undefined,
+  entry: Pick<FleetRosterEntry, "idle"> | undefined,
+): string | undefined {
+  if (job === undefined || job.source !== "policy") return undefined;
+  if (entry === undefined) return "removed from the roster";
+  if (job.episode === "freeplay" && entry.idle === "none") return 'idle: "none"';
+  return undefined;
+}
+
+/**
  * Whether this job's run comes back WHERE IT LEFT OFF after a supervisor
  * restart — same run id, account and character — rather than spending its
  * attempt. Two kinds do: the freeplay stream (`pausesOnDrain`, resumed in
@@ -4760,6 +4793,8 @@ async function main(): Promise<void> {
    * the record (`liveSubscriptions`).
    */
   const laneMemo = new Map<string, string>();
+  /** Why the newest projection dropped a live job, by job name; what the drain says. */
+  const drainReasons = new Map<string, string>();
   let policyIdle: string | undefined;
   const session = { finished: 0, ok: 0, retried: 0 };
   const spawnedNames = new Set<string>();
@@ -4794,6 +4829,9 @@ async function main(): Promise<void> {
   let campaignJobs: FleetJob[] = [];
   const effectiveJobs = (cfg: FleetConfig): JobSpawn[] => {
     const out: JobSpawn[] = [];
+    // Rebuilt, not appended to: this runs twice a tick, and a reason must
+    // describe the projection the drain is acting on.
+    drainReasons.clear();
     // The run facts once a tick, shared by the projection and the resume
     // planner. Eligibility for the queue's gate and the policy's picks read
     // the same answer; resumes read the same facts.
@@ -4902,7 +4940,13 @@ async function main(): Promise<void> {
       const running = liveJobs.get(name);
       const fromFile = byName.get(name);
       if (running?.source === "policy") {
-        if (cfg.roster[running.ref] === undefined) {
+        const dropped = policyJobDropped(running, cfg.roster[running.ref]);
+        if (dropped !== undefined) {
+          // A disabled stand-in makes diffJobs drain it, and for a freeplay
+          // stream a drain is an immediate SIGTERM (`pausesOnDrain`): the run
+          // pauses as `operator-pause` and `planResumes` leaves it listed while
+          // the ref stays out of the unlimited lane, so nothing respawns it.
+          drainReasons.set(name, dropped);
           out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
         } else {
           const placed = assignLane(running);
@@ -5519,7 +5563,7 @@ async function main(): Promise<void> {
     }
     for (const name of actions.drain) {
       sets.draining.add(name);
-      const why = pauseSwitch !== undefined ? "the fleet is paused" : "disabled";
+      const why = pauseSwitch !== undefined ? "the fleet is paused" : (drainReasons.get(name) ?? "disabled");
       const how = pausesOnDrain(liveJobs.get(name)) ? "pausing now (no episode boundary on an unlimited session)" : "draining (SIGTERM at the next episode boundary)";
       say(`job ${name}: ${why} — ${how}`);
       record({ job: name, event: "draining", detail: why });
