@@ -16,7 +16,9 @@
  * ladders below are untouched by it.
  *
  * Above the table, one scatter for the tier: average cost per run against
- * average XP earned, one point per roster entry (`components/LadderChart`).
+ * average XP earned, one point per roster entry (`components/LadderChart`),
+ * with a row of curated views that swap the axes (`lib/axes.ts`; the view is
+ * `?view=` so a reading is linkable, and the default is the cost/xp chart).
  * Freeplay gets its own graph in that place instead — `components/StreamChart`,
  * one stepped series per stream, level against cumulative active playtime; the
  * axis argument is in `lib/ladder.ts`.
@@ -45,6 +47,7 @@ import { LadderChart } from "../components/LadderChart";
 import { StreamChart } from "../components/StreamChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
+import { LADDER_VIEWS, type LadderView, viewParam } from "../lib/axes";
 import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import {
   RUNGS,
@@ -89,6 +92,7 @@ const FREE_KEY = "wb.ladder.excludeFree";
 export default function Ladder() {
   const [params, setParams] = useSearchParams();
   const episode = (): ReturnType<typeof episodeParam> => episodeParam(params.episode);
+  const view = (): LadderView => viewParam(params.view);
   // `/api/ladder` is the same projection as `/api/results`; the rung rules stay
   // client-side, in `lib/ladder.ts`, where their tests are.
   const feed = poll(() => api.ladder(episode()), POLL_MS);
@@ -231,10 +235,27 @@ export default function Ladder() {
           <StreamTable rows={streams()} />
         </Show>
         <Show when={!freeplay()}>
+        {/* The axes, as a row of the same chips the tier uses, a size down: a
+            view is a way of reading the tier, not the address of the page, but
+            it is in the URL so a reading can be linked. */}
+        <div class="chips views">
+          <span class="dim">axes</span>
+          <For each={LADDER_VIEWS}>
+            {(v) => (
+              <button
+                class={v.id === view().id ? "on" : ""}
+                title={`${v.x.caption(episode())} against ${v.y.caption(episode())}`}
+                onClick={() => setParams({ view: v.id === LADDER_VIEWS[0]!.id ? undefined : v.id }, { replace: true })}
+              >
+                {v.title}
+              </button>
+            )}
+          </For>
+        </div>
         {/* Below ~720px the scatter's labels are texture, not text: it keeps a
             floor width and scrolls inside itself rather than being squeezed. */}
         <div class="wide-scroll">
-        <LadderChart runs={runs()} episode={episode()} />
+        <LadderChart runs={runs()} episode={episode()} view={view()} />
         </div>
 
         <div class="scroller">

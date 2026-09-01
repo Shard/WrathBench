@@ -12,6 +12,7 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
+import { type AxisSpec, COST, METRIC_KEYS, type Metrics, type RunCostReading, XP, runCostReading, runMetrics } from "./axes";
 import { niceTicks, scaleLinear } from "./chart";
 import { modelDisplay } from "./format";
 import { chainsOf } from "./lineage";
@@ -390,46 +391,12 @@ function richestOf(runs: readonly ResultRun[]): { runId: string; money: number }
  * they build on is the shared `lib/chart.ts`.
  */
 
-/** What one run cost, and on what basis; null when nothing prices it. */
-export interface RunCostReading {
-  usd: number;
-  basis: "reported" | "list-price";
-  /** A figure nobody paid: a free tier, local hardware, a subscription. */
-  asIfMetered: boolean;
-}
-
-/**
- * The cost of one run for the chart: what the provider charged when it said,
- * else the price table applied to the run's own tokens.
- *
- * The runs table shows only the provider's figure, because a listing of what
- * runs cost may not show a guess. The chart's x-axis is an average, and a
- * free or local model has no provider figure ever — its honest cost is the
- * $0 the price table says. So the fallback is taken here, and the point
- * carries its basis so the caption can say which runs were priced how.
+/*
+ * The readings themselves — `runCostReading`, `xpEarnedOf`, and the rest of
+ * the metric bag — live in `lib/axes.ts` with the axis specs that name them.
+ * Re-exported here because this is where callers learned to find them.
  */
-export function runCostReading(r: Pick<ResultRun, "actualCost" | "expectedCost">): RunCostReading | null {
-  const a = r.actualCost;
-  if (a !== null && a.basis !== "none" && a.usd !== null) return { usd: a.usd, basis: "reported", asIfMetered: a.asIfMetered };
-  const e = r.expectedCost;
-  if (e !== null && e !== undefined && e.basis !== "none" && e.usd !== null) {
-    return { usd: e.usd, basis: "list-price", asIfMetered: e.asIfMetered };
-  }
-  return null;
-}
-
-/**
- * XP earned over a run, for the chart's y-axis.
- *
- * `xpEarned` is the viewer's lower-bound reconstruction. Against a viewer that
- * predates the field, a run still on its starting level has earned exactly
- * its within-level xp, and any other run has earned an amount nothing on the
- * wire states — null, never a guess.
- */
-export function xpEarnedOf(r: Pick<ResultRun, "xpEarned" | "maxLevel" | "xp">): number | null {
-  if (r.xpEarned !== undefined) return r.xpEarned;
-  return r.maxLevel === 1 ? r.xp : null;
-}
+export { runCostReading, xpEarnedOf, type RunCostReading } from "./axes";
 
 /** One entry of the roster on the chart: a model, at one effort if it has one. */
 export interface LadderPoint {
@@ -447,16 +414,27 @@ export interface LadderPoint {
   single: boolean;
   model: string;
   effort: string | null;
-  /** Mean cost per run, USD, over the `n` runs carrying both readings. */
+  /** The mean of the x axis's metric, over the `n` runs carrying both axes' readings. */
   x: number;
-  /** Mean XP earned per run, over the same `n` runs. */
+  /** The mean of the y axis's metric, over the same `n` runs. */
   y: number;
+  /**
+   * The mean of every metric over those same `n` runs — null where none of
+   * them carries it. `x` and `y` are two of these; the rest are what the hover
+   * can add without a run being counted twice or a mean resting on a
+   * different set than the mark does.
+   */
+  metrics: Metrics;
   /** Counted runs of this entry on the tier, including those that fed neither mean. */
   runs: number;
-  /** The runs both means rest on: those carrying a cost reading AND an xp reading. */
+  /** The runs both means rest on: those carrying a reading for the x axis AND for the y axis. */
   n: number;
-  /** Whether every priced run was provider-reported, every one list-priced, or both. */
-  basis: "reported" | "list-price" | "mixed";
+  /**
+   * Whether every priced run among the `n` was provider-reported, every one
+   * list-priced, or both; null when none of them carries a price, which
+   * cannot happen while cost is an axis.
+   */
+  basis: "reported" | "list-price" | "mixed" | null;
   /**
    * Some priced run was a figure nobody paid. Orthogonal to `basis`: a
    * claude-code run is `reported` (the SDK's own total) AND as-if-metered
@@ -473,7 +451,8 @@ export interface LadderOmission {
   key: string;
   /** The key as a reader sees it: the model's short name, provider prefix dropped. */
   label: string;
-  why: "no cost reading" | "no xp reading" | "no run with both cost and xp";
+  /** `no cost reading`, `no xp reading`, `no run with both cost and xp` — worded from the axes in view. */
+  why: string;
 }
 
 /**
@@ -495,16 +474,21 @@ export function pointLabel(key: string, _runs: number): string {
  * the ladder table draws, so the chart never shows an entry the table lacks.
  *
  * Both coordinates are means over the SAME runs: the entry's counted runs
- * that carry both a cost reading and an xp reading. A run with only one of
- * the two is left out of both means — pairing one run's price with another
- * run's xp puts a point nowhere any run was, and a label that then prints the
- * larger n overstates what the mark rests on. `n` is the number of runs the
- * means share; `runs` keeps the entry's full counted total so the hover can
- * say how many were left out. An entry with no run carrying both is omitted
- * and named, never plotted at zero — a $0 free model is a reading, a missing
- * one is not.
+ * that carry a reading for both axes. A run with only one of the two is left
+ * out of both means — pairing one run's price with another run's xp puts a
+ * point nowhere any run was, and a label that then prints the larger n
+ * overstates what the mark rests on. `n` is the number of runs the means
+ * share; `runs` keeps the entry's full counted total so the hover can say how
+ * many were left out. An entry with no run carrying both is omitted and
+ * named, never plotted at zero — a $0 free model is a reading, a missing one
+ * is not. The axes default to cost and xp; any pair of `AxisSpec`s applies
+ * the same rule to its own two readings.
  */
-export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[]; omitted: LadderOmission[] } {
+export function ladderPoints(
+  runs: readonly ResultRun[],
+  x: AxisSpec = COST,
+  y: AxisSpec = XP,
+): { points: LadderPoint[]; omitted: LadderOmission[] } {
   const groups = new Map<string, { model: string; effort: string | null; runs: ResultRun[] }>();
   for (const r of scored(runs)) {
     const model = r.model ?? "(unnamed)";
@@ -516,15 +500,16 @@ export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[
   const points: LadderPoint[] = [];
   const omitted: LadderOmission[] = [];
   for (const [key, g] of groups) {
-    const paired: { cost: RunCostReading; xp: number }[] = [];
-    let anyCost = false;
-    let anyXp = false;
-    for (const r of g.runs) {
-      const cost = runCostReading(r);
-      const xp = xpEarnedOf(r);
-      anyCost ||= cost !== null;
-      anyXp ||= xp !== null;
-      if (cost !== null && xp !== null) paired.push({ cost, xp });
+    const paired: { run: ResultRun; m: Metrics; xv: number; yv: number }[] = [];
+    let anyX = false;
+    let anyY = false;
+    for (const run of g.runs) {
+      const m = runMetrics(run);
+      const xv = x.accessor(m);
+      const yv = y.accessor(m);
+      anyX ||= xv !== null;
+      anyY ||= yv !== null;
+      if (xv !== null && yv !== null) paired.push({ run, m, xv, yv });
     }
     if (paired.length === 0) {
       // Say which reading is missing when only one is; both present on
@@ -532,23 +517,32 @@ export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[
       omitted.push({
         key,
         label: pointKey(modelDisplay(g.model), g.effort),
-        why: !anyCost ? "no cost reading" : !anyXp ? "no xp reading" : "no run with both cost and xp",
+        why: !anyX ? `no ${x.label} reading` : !anyY ? `no ${y.label} reading` : `no run with both ${x.label} and ${y.label}`,
       });
       continue;
     }
-    const costs = paired.map((p) => p.cost);
+    const n = paired.length;
+    const mean = (vs: readonly number[]): number => vs.reduce((s, v) => s + v, 0) / vs.length;
+    const metrics = Object.fromEntries(
+      METRIC_KEYS.map((k) => {
+        const vs = paired.map((p) => p.m[k]).filter((v): v is number => v !== null);
+        return [k, vs.length === 0 ? null : mean(vs)];
+      }),
+    ) as Metrics;
+    const costs = paired.map((p) => runCostReading(p.run)).filter((c): c is RunCostReading => c !== null);
     const bases = new Set(costs.map((c) => c.basis));
     points.push({
       key,
-      label: pointLabel(pointKey(modelDisplay(g.model), g.effort), paired.length),
-      single: paired.length === 1,
+      label: pointLabel(pointKey(modelDisplay(g.model), g.effort), n),
+      single: n === 1,
       model: g.model,
       effort: g.effort,
-      x: costs.reduce((s, c) => s + c.usd, 0) / paired.length,
-      y: paired.reduce((s, p) => s + p.xp, 0) / paired.length,
+      x: mean(paired.map((p) => p.xv)),
+      y: mean(paired.map((p) => p.yv)),
+      metrics,
       runs: g.runs.length,
-      n: paired.length,
-      basis: bases.size > 1 ? "mixed" : bases.has("reported") ? "reported" : "list-price",
+      n,
+      basis: bases.size === 0 ? null : bases.size > 1 ? "mixed" : bases.has("reported") ? "reported" : "list-price",
       asIfMetered: costs.some((c) => c.asIfMetered),
       harnesses: [...new Set(g.runs.map((r) => r.harness ?? "—"))].sort(),
     });
@@ -608,21 +602,23 @@ export interface PlacedPoint {
 }
 
 export interface LadderChartLayout {
-  /** Decade ticks on the log cost axis: 0.01, 0.1, 1, … up to the ceiling. */
+  /** The x axis's scale, as its spec chose: the rest of the x fields read differently under each. */
+  xScale: AxisSpec["scale"];
+  /** Decade ticks on a log axis (0.01, 0.1, 1, … up to the ceiling); `niceTicks` from zero on a linear one. */
   xTicks: number[];
-  /** The 2× and 5× lines inside each decade — gridlines only, never labelled. */
+  /** The 2× and 5× lines inside each decade — gridlines only, never labelled. Empty on a linear axis. */
   xMinorTicks: number[];
   yTicks: number[];
-  /** The cost axis ceiling. */
+  /** The x axis ceiling: the top decade, or the top linear tick. */
   xMax: number;
   yMax: number;
-  /** Where the log axis begins: the plot's left edge, or past the free gutter. */
+  /** Where the log axis begins: the plot's left edge, or past the free gutter. The plot's left edge on a linear axis. */
   axisX0: number;
   /** The centre of the free gutter, where a $0 entry is drawn. */
   freeX: number;
   /** Where the divider between the gutter and the log axis is drawn. */
   dividerX: number;
-  /** Whether any entry cost nothing, and so whether the gutter is there at all. */
+  /** Whether any entry cost nothing, and so whether the gutter is there at all. Never on a linear axis. */
   hasFree: boolean;
   placed: PlacedPoint[];
   /** The same value→pixel maps the points were placed with, for the chart's own tick gridlines. */
@@ -697,7 +693,7 @@ export const MARK_RING_R = MARK_R + 1.5;
  */
 export const LABEL_GAP = MARK_RING_R + 1.5;
 
-/* ------------------------------------------------------- the cost axis */
+/* -------------------------------------------------------- the log axis */
 
 /**
  * The cost axis is logarithmic, and these are the three numbers that make it
@@ -726,6 +722,19 @@ export const FREE_GUTTER_W = 54;
 /** The narrowest the axis is allowed to be, so an all-cheap view is not a sliver. */
 export const COST_CEILING_MIN = 10;
 
+/**
+ * What a log axis is parameterised by. Cost's values are the constants above;
+ * `logScale` takes them as an argument so that a second log axis, should a
+ * metric ever earn one, states its own floor rather than borrowing a cent's.
+ */
+export interface LogAxisOptions {
+  floor: number;
+  ceilingMin: number;
+  gutterW: number;
+}
+
+export const COST_LOG: LogAxisOptions = { floor: COST_FLOOR, ceilingMin: COST_CEILING_MIN, gutterW: FREE_GUTTER_W };
+
 export interface CostScale {
   floor: number;
   ceiling: number;
@@ -750,8 +759,8 @@ export interface CostScale {
  * power of ten can land a hair either side of the integer, so the exponent is
  * corrected downward rather than trusted.
  */
-function decadeCeiling(max: number): number {
-  if (!(max > COST_CEILING_MIN)) return COST_CEILING_MIN;
+function decadeCeiling(max: number, ceilingMin: number): number {
+  if (!(max > ceilingMin)) return ceilingMin;
   let e = Math.ceil(Math.log10(max));
   if (10 ** (e - 1) >= max) e -= 1;
   while (10 ** e < max) e += 1;
@@ -759,25 +768,26 @@ function decadeCeiling(max: number): number {
 }
 
 /**
- * The log cost scale for a set of costs, mapped across `[x0, x1]`.
+ * A log scale with a floor and a zero gutter for a set of values, mapped
+ * across `[x0, x1]`.
  *
  * Data-independent: the floor, the gutter width and the minimum ceiling are
  * fixed, and the only thing the data decides is how many decades the axis
- * spans and whether the gutter is drawn. The gutter is keyed on a $0
+ * spans and whether the gutter is drawn. The gutter is keyed on a zero
  * coordinate and not on the page's "exclude free" filter — a local model's
  * list price is $0 whether or not its billing said `free`, and the coordinate
  * is the honest test.
  */
-export function costScale(costs: readonly number[], x0: number, x1: number): CostScale {
-  const positive = costs.filter((c) => c > 0);
-  const ceiling = decadeCeiling(positive.length === 0 ? 0 : Math.max(...positive));
-  const hasFree = costs.some((c) => c <= 0);
-  const axisX0 = hasFree ? x0 + FREE_GUTTER_W : x0;
-  const freeX = x0 + FREE_GUTTER_W / 3;
-  const dividerX = x0 + (FREE_GUTTER_W * 2) / 3;
+export function logScale(values: readonly number[], x0: number, x1: number, opts: LogAxisOptions): CostScale {
+  const positive = values.filter((c) => c > 0);
+  const ceiling = decadeCeiling(positive.length === 0 ? 0 : Math.max(...positive), opts.ceilingMin);
+  const hasFree = values.some((c) => c <= 0);
+  const axisX0 = hasFree ? x0 + opts.gutterW : x0;
+  const freeX = x0 + opts.gutterW / 3;
+  const dividerX = x0 + (opts.gutterW * 2) / 3;
 
   const ticks: number[] = [];
-  for (let v = COST_FLOOR; v <= ceiling * 1.0000001; v *= 10) ticks.push(Number(v.toPrecision(12)));
+  for (let v = opts.floor; v <= ceiling * 1.0000001; v *= 10) ticks.push(Number(v.toPrecision(12)));
   const minorTicks: number[] = [];
   for (const t of ticks) {
     for (const m of [2, 5]) {
@@ -786,19 +796,24 @@ export function costScale(costs: readonly number[], x0: number, x1: number): Cos
     }
   }
 
-  const lo = Math.log10(COST_FLOOR);
+  const lo = Math.log10(opts.floor);
   const hi = Math.log10(ceiling);
-  const px = (usd: number): number => {
-    if (!(usd > 0)) return hasFree ? freeX : axisX0;
-    const v = Math.min(Math.max(usd, COST_FLOOR), ceiling);
-    return axisX0 + ((Math.log10(v) - lo) / (hi - lo)) * (x1 - axisX0);
+  const px = (v: number): number => {
+    if (!(v > 0)) return hasFree ? freeX : axisX0;
+    const c = Math.min(Math.max(v, opts.floor), ceiling);
+    return axisX0 + ((Math.log10(c) - lo) / (hi - lo)) * (x1 - axisX0);
   };
-  return { floor: COST_FLOOR, ceiling, ticks, minorTicks, hasFree, axisX0, freeX, dividerX, px };
+  return { floor: opts.floor, ceiling, ticks, minorTicks, hasFree, axisX0, freeX, dividerX, px };
 }
 
-/** A decade tick's label: cents below a dollar, dollars at and above one. */
+/** The cost axis: `logScale` at cost's floor, ceiling and gutter. */
+export function costScale(costs: readonly number[], x0: number, x1: number): CostScale {
+  return logScale(costs, x0, x1, COST_LOG);
+}
+
+/** A decade tick's label: cents below a dollar, dollars at and above one. `COST.format`, kept under the name callers know. */
 export function fmtCostTick(usd: number): string {
-  return usd < 1 ? `${Math.round(usd * 100)}\u00a2` : `$${Math.round(usd)}`;
+  return COST.format(usd);
 }
 
 /* ------------------------------------------------------- label placement */
@@ -924,8 +939,9 @@ function leaderTo(cx: number, cy: number, rect: Rect): Leader {
 }
 
 /**
- * Where everything goes. Cost maps onto the log axis above (or into its free
- * gutter) and xp maps linearly; then the labels.
+ * Where everything goes. The x axis is whichever scale its spec names — the
+ * log axis above with its free gutter for cost, `niceTicks` from zero for
+ * anything else — and y is always linear from zero; then the labels.
  *
  * Labels are placed greedily in importance order — highest xp first, then
  * cheapest, then by label and key so the result is a function of the set and
@@ -941,11 +957,47 @@ function leaderTo(cx: number, cy: number, rect: Rect): Leader {
  * collapsed: the operator's rule is that a hidden label is worse than an ugly
  * one, and the flag is what lets the chart say so.
  */
-export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox): LadderChartLayout {
-  const cost = costScale(points.map((p) => p.x), box.x0, box.x1);
+export function ladderChartLayout(
+  points: readonly LadderPoint[],
+  box: ChartBox,
+  xSpec: AxisSpec = COST,
+  _ySpec: AxisSpec = XP,
+): LadderChartLayout {
+  const xs = points.map((p) => p.x);
+  let xAxis: Pick<LadderChartLayout, "xTicks" | "xMinorTicks" | "xMax" | "axisX0" | "freeX" | "dividerX" | "hasFree" | "px">;
+  if (xSpec.scale === "log-cost") {
+    const cost = costScale(xs, box.x0, box.x1);
+    xAxis = {
+      xTicks: cost.ticks,
+      xMinorTicks: cost.minorTicks,
+      xMax: cost.ceiling,
+      axisX0: cost.axisX0,
+      freeX: cost.freeX,
+      dividerX: cost.dividerX,
+      hasFree: cost.hasFree,
+      px: cost.px,
+    };
+  } else {
+    // Linear, from zero, like y: a count of turns or tokens has a real origin
+    // and no gutter to keep — zero is on the axis.
+    const xTicks = niceTicks(Math.max(0, ...xs));
+    const xMax = xTicks[xTicks.length - 1]!;
+    xAxis = {
+      xTicks,
+      xMinorTicks: [],
+      xMax,
+      axisX0: box.x0,
+      freeX: box.x0,
+      dividerX: box.x0,
+      hasFree: false,
+      px: scaleLinear([0, xMax], [box.x0, box.x1]),
+    };
+  }
+  const px = xAxis.px;
+  // y is linear from zero whatever the metric; the spec's part is the format
+  // and the caption, which the component reads from it directly.
   const yTicks = niceTicks(Math.max(0, ...points.map((p) => p.y)));
   const yMax = yTicks[yTicks.length - 1]!;
-  const px = cost.px;
   const py = scaleLinear([0, yMax], [box.y0, box.y1]);
 
   const ordered = [...points].sort(
@@ -1001,20 +1053,7 @@ export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox)
       crowded,
     });
   }
-  return {
-    xTicks: cost.ticks,
-    xMinorTicks: cost.minorTicks,
-    yTicks,
-    xMax: cost.ceiling,
-    yMax,
-    axisX0: cost.axisX0,
-    freeX: cost.freeX,
-    dividerX: cost.dividerX,
-    hasFree: cost.hasFree,
-    placed,
-    px,
-    py,
-  };
+  return { xScale: xSpec.scale, ...xAxis, yTicks, yMax, placed, py };
 }
 
 /* ------------------------------------------------------- freeplay streams */
