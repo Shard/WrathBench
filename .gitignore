@@ -1,6 +1,11 @@
 data/
 node_modules/
 *.log
+
+# The social card, rendered from run data at ship time by infra/render-og.ts.
+# A build product, and one that changes every time a run lands.
+dashboard/public/og.png
+
 .env
 .env.*
 !.env.example

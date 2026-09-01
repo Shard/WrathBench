@@ -235,6 +235,57 @@ with poisoned fields (including keys smuggled through open signatures),
 asserted against the exact allowlisted key set, fixture-based and green from
 a bare clone like everything else.
 
+## The social card
+
+A link to the site pasted into Discord, Slack or anywhere else reading Open
+Graph tags should unfurl with a title, a sentence, and a picture. Two facts
+about crawlers decide the whole shape of it: they fetch the HTML with **no
+JavaScript**, and they reject SVG. So the tags are in the static
+`dashboard/index.html` and the picture is a PNG rendered at ship time — the
+live chart cannot be either.
+
+- **The picture** is `dashboard/src/lib/og.ts`, a pure string builder over the
+  same derivation the homepage's scatter uses (`homeLadderRuns`,
+  `ladderPoints`, `ladderChartLayout`, `paretoFront`), so it cannot show a
+  shape the page does not. 1200×630, an explicit dark ground because a card is
+  composited on someone else's chrome, the Pareto frontier as a step line, one
+  logo puck per entry with the frontier's ringed and the rest dimmed. No axis
+  labels, no point labels, no tick text: Discord renders the card about 400 px
+  wide inline and a wall of 4 px glyphs reads as a broken image. The wordmark
+  is the one text element. Colours are literal hex — resvg has no cascade, so
+  a `var()` would paint nothing.
+- **The render** is `infra/render-og.ts`, run by `infra/deploy-dashboard.sh`
+  before the snapshot-mode build. It takes its runs from a snapshot pass's own
+  `ladder-e90.json` rather than a live poll, so the picture and the published
+  numbers agree; rasterises with `@resvg/resvg-js` (MPL-2.0), Bun having no
+  rasteriser and the host's Chromium not being a pinned build dependency; and
+  writes `dashboard/public/og.png`, which is gitignored as the build product it
+  is. It prints the PNG's content hash, and the ship fails outright if the
+  render does — tags pointing at an image that is not there are worse than no
+  card.
+- **The tags** are injected into `index.html` by a Vite `transformIndexHtml`
+  hook over `dashboard/src/lib/og-tags.ts`. `og:image` must be absolute, so
+  they exist only in a build told its origin: `WRATHBENCH_PUBLIC_ORIGIN` (in
+  `.env`) becomes `VITE_WRATHBENCH_PUBLIC_ORIGIN`, and the render's hash
+  becomes `VITE_WRATHBENCH_OG_STAMP`, appended as `?v=` — a crawler caches a
+  card by URL and offers no purge, so the URL has to change exactly when the
+  picture does. The private viewer build names no origin and therefore carries
+  no image tags at all, rather than a relative URL no crawler could resolve.
+
+**The gated preview cannot unfurl.** With `run_worker_first: true` the gate
+answers every credential-less request with the 401 password form, `/` and
+`/og.png` included, so a crawler sees the form and not the tags. Nothing about
+the card is wrong; the gate is in front of it. It starts working the moment
+item 85's Open shape lands (an assets-only Worker, no gate), or sooner if the
+operator chooses to exempt those two paths — which is a decision about who may
+see the homepage, and so the operator's, not the build's. And the password is not the only blocker: the
+gate's Worker answers `/robots.txt` ahead of it disallowing everything, so an
+exemption of those two paths would unfurl in Discord — whose crawler does not
+consult robots.txt — and still not in Slack or on Twitter, which do. The Open
+shape has no fetch handler and so serves no `robots.txt` at all unless someone
+puts one in `dashboard/public/`, which is the point at which that question
+comes back.
+
 ## The gated interim shape (no domain on the account)
 
 **This shape is scaffolding, and it is not what launches.** It exists so a
