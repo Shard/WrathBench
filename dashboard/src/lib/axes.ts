@@ -248,13 +248,19 @@ const view = (id: string, x: AxisSpec, y: AxisSpec): LadderView => ({ id, title:
  * mostly sort runs by whether they stopped early (the tool-call ceiling, an
  * early end), and less of it is not better — the one x here that would break
  * the front's reading. It stays in the bag for the hover.
+ *
+ * Nor level on y (operator, 2026-09-01): a cost × level view was offered and
+ * withdrawn as redundant against cost × xp — level is xp with the steps
+ * quantised, so the two charts ranked the same points in the same order with
+ * less resolution on one. `LEVEL` stays a spec because the hover's "also"
+ * line reads it; a stale `?view=cost-level` link falls back to the default
+ * through `viewParam`.
  */
 export const LADDER_VIEWS: readonly LadderView[] = [
   view("cost-xp", COST, XP),
   view("tokens-xp", TOKENS, XP),
   view("turns-xp", TURNS, XP),
   view("calls-xp", TOOL_CALLS, XP),
-  view("cost-level", COST, LEVEL),
 ];
 
 export const DEFAULT_VIEW: LadderView = LADDER_VIEWS[0]!;

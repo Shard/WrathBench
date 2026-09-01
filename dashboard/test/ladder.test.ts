@@ -730,18 +730,21 @@ describe("ladderPoints over another pair of axes", () => {
 
   test("the views: default first, each x a resource and each y a distance, and `?view=` resolves or falls back", () => {
     expect(DEFAULT_VIEW.id).toBe("cost-xp");
-    expect(LADDER_VIEWS.map((v) => v.id)).toEqual(["cost-xp", "tokens-xp", "turns-xp", "calls-xp", "cost-level"]);
+    expect(LADDER_VIEWS.map((v) => v.id)).toEqual(["cost-xp", "tokens-xp", "turns-xp", "calls-xp"]);
     for (const v of LADDER_VIEWS) {
       expect(v.x.better).toBe("lower");
       expect(v.y.better).toBe("higher");
       expect(v.title).toBe(`${v.x.label} × ${v.y.label}`);
     }
     expect(viewParam("turns-xp").id).toBe("turns-xp");
-    expect(viewParam(["cost-level", "turns-xp"]).id).toBe("cost-level");
+    expect(viewParam(["calls-xp", "turns-xp"]).id).toBe("calls-xp");
     expect(viewParam("playtime-level")).toBe(DEFAULT_VIEW);
+    // The withdrawn cost × level view: an old link lands on the default, not a blank chart.
+    expect(viewParam("cost-level")).toBe(DEFAULT_VIEW);
     expect(viewParam(undefined)).toBe(DEFAULT_VIEW);
     // Cost is the one log axis; the format that used to be `fmtCostTick` is its own.
-    expect(LADDER_VIEWS.filter((v) => v.x.scale === "log-cost").map((v) => v.id)).toEqual(["cost-xp", "cost-level"]);
+    expect(LADDER_VIEWS.filter((v) => v.x.scale === "log-cost").map((v) => v.id)).toEqual(["cost-xp"]);
+    // Level is no view's axis but is still a spec: the hover's "also" line reads it.
     expect(LEVEL.format(0)).toBe("0");
     expect(LEVEL.format(5)).toBe("L5");
     expect(XP.format(2000)).toBe("2k");
