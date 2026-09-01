@@ -16,7 +16,7 @@
  * one long-lived `claude` process and feeds it the harness's context message
  * once per driver turn, while every other piece of the harness — sandbox,
  * watchdogs, trajectory, scratchpad, named termination/pause reasons, the
- * fixed system prompt, the eight tools, the fixed context assembly — is the
+ * fixed system prompt, the nine tools, the fixed context assembly — is the
  * same machinery the fixed loop uses.
  *
  * ## How it is wired
@@ -115,7 +115,7 @@ import type { Watchdogs } from "./watchdogs";
 /** MCP server name in the generated config; also the tool-name prefix. */
 export const MCP_SERVER_NAME = "wrathbench";
 
-/** The eight tools as `claude` names them once they arrive over MCP. */
+/** The nine tools as `claude` names them once they arrive over MCP. */
 export function mcpToolNames(): string[] {
   return TOOLS.map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
 }

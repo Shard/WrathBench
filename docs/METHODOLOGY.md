@@ -153,6 +153,19 @@ the same stability guarantees. There is no convenience middle tier
 (`killNearest`, `grindUntilLevel`): a composition every model writes
 graduates to the primary tier; until then it lives in snippets.
 
+**The scratchpad is edited, not only rewritten** (operator decision
+2026-09-01). `edit_scratchpad({ old, new, replaceAll? })` replaces an exact
+substring of the pad, taking its shape from the string-replace edit tool models
+are trained on (Claude Code's): `old` must match byte for byte and be unique
+unless `replaceAll` is set, and a miss or an ambiguity is refused with what to
+fix rather than guessed at — the same refusal discipline referent resolution
+uses. `write_scratchpad` stays, because full replacement is a different
+operation and not a convenience wrapper over the edit. Observed need (#41,
+2026-09-01): about 28% of a high-frequency writer's rewrites (sonnet-low, 26
+writes in one run) changed under 20% of the pad, which is a rewrite tax on the
+models least able to afford the output tokens; the sample does not show it
+fleet-wide, so this is the profile the evidence covers.
+
 **The raw tier is an allowlist of ordinary client opcodes.** `raw` queues an
 allowlisted opcode with a caller-built body verbatim into the stock handler.
 The membership rule: a stock client sends it in ordinary play, its handler
@@ -283,7 +296,7 @@ log is a record it cannot edit. It is read back only while reflecting:
 stays rested — many turns if the model wants them, with every other tool
 still usable, since the inn's vendors and trainers are part of the point —
 in which `read_log` pages the whole log on demand (the tool is always listed but refuses outside that
-window, so the tool list stays fixed for both harness groups — eight tools since `read_scratchpad`
+window, so the tool list stays fixed for both harness groups — nine tools since `read_scratchpad`
 was removed, the scratchpad being injected verbatim into every turn's context already; operator,
 2026-08-30). Looking back
 at where things went wrong is what resting is for. The trigger is the trim
