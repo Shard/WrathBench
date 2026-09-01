@@ -151,17 +151,15 @@ worklogs/2026-08-29).
     shared first and the repo opens after; hide or open on the day it flips. The rest
     of the pre-open checklist was decided 2026-09-01: the operator's first name stays
     in the worklogs, `docs:api` drift was fixed in place, the copy rewrites are done.
-111. **Social previews for the public build: Open Graph metadata and a Pareto
-    thumbnail** (operator, 2026-09-01; after the chart rework). A link to the
-    public site pasted into Discord (or anywhere reading OG/Twitter cards) should
-    unfurl with a title, a description and an image — the Pareto-front version of
-    the episode scatter rendered as a raster thumbnail, tuned for the small size
-    (no text, larger logo pips). Two constraints found up front: crawlers fetch
-    the HTML and the image without JavaScript, so the tags go in the static
-    `index.html` and the image is rendered at ship time (the SVG rasterised to
-    PNG, not served as SVG); and the preview sits behind the gate Worker's shared
-    password, so those two resources must be reachable ungated or previews only
-    start working once item 85 (the Open shape) lands. Next action: research
-    report (Discord/OG requirements, the current `index.html`/Worker path, a
-    dependency-light SVG→PNG option in Bun), then build it in
-    `infra/deploy-dashboard.sh` + `dashboard/`.
+111. **Social previews: let the crawler through** (operator, 2026-09-01). The
+    tags and the ship-time Pareto card shipped the same day (`dashboard/src/lib/og.ts`,
+    `infra/render-og.ts`, `docs/PUBLIC-DASHBOARD.md` "The social card") and the
+    public build carries `og:image` → `/og.png`. Nothing unfurls yet: the gate
+    Worker answers every credential-less request — Discord's crawler included —
+    with the 401 password form, and serves a `robots.txt` that disallows
+    everything ahead of the gate (Slack and Twitter honour it; Discord does not).
+    Two ways out, the operator's call: exempt `/`, `/og.png` and a permissive
+    `robots.txt` for crawler user agents in `dashboard/worker/index.ts` (a
+    spoofable UA gets the landing page's HTML — marketing copy, not run data —
+    and the card), or wait for item 85, where the Open shape has no gate and the
+    problem disappears. Verify with Discord's unfurl after either.
