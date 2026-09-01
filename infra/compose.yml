@@ -208,6 +208,14 @@ services:
       # ERROR/WARN history survives restarts and container recreation on the
       # data/logs volume. Default mode "w" truncated every boot.
       AC_APPENDER_SERVER: "2,5,16,Server.log,w"
+      # The port secret (module/PROTOCOL.md "Authentication"; FOLLOW-UPS 19).
+      # Every route needs it. It lives in the repo-root .env as
+      # WRATHBENCH_MODULE_SECRET; compose does not read that file (its project
+      # directory is infra/), so infra/deploy-worldserver.sh exports it before
+      # recreating this container, and a bare `compose up` without it in the
+      # shell leaves the module refusing to listen (fail closed, logged). The
+      # runner and fleet services read the same .env through Bun's autoload.
+      AC_WRATH_BENCH_SECRET: "${WRATHBENCH_MODULE_SECRET:-}"
       AC_WRATH_BENCH_ACCOUNT: "${WRATHBENCH_ACCOUNT_USER:-RUNNER}"
       # Account allowlist: every surface taking an "account" param serves only
       # these (module refuses others with 403 account_not_permitted).
