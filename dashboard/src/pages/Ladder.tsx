@@ -193,8 +193,30 @@ export default function Ladder() {
 
       {/* One row of controls, immediately above the chart they narrow — the
           chart and the table read the same filtered set, so the two can never
-          disagree about which runs are on screen. */}
+          disagree about which runs are on screen. Two groups: the axes on the
+          left, the filters on the right, on one line while the viewport has
+          room and one above the other when it does not (`.ladder-controls`). */}
       <div class="ladder-controls">
+        <Show when={!freeplay()}>
+          {/* The axes, as a row of the same chips the tier uses, a size down: a
+              view is a way of reading the tier, not the address of the page,
+              but it is in the URL so a reading can be linked. */}
+          <div class="chips views">
+            <span class="dim">axes</span>
+            <For each={LADDER_VIEWS}>
+              {(v) => (
+                <button
+                  class={v.id === view().id ? "on" : ""}
+                  title={`${v.x.caption(episode())} against ${v.y.caption(episode())}`}
+                  onClick={() => setParams({ view: v.id === LADDER_VIEWS[0]!.id ? undefined : v.id }, { replace: true })}
+                >
+                  {v.title}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+        <div class="ladder-filters">
         <FilterSelect label="race" options={races()} value={resolveChoice(races(), race())} onPick={pick(setRace, RACE_KEY)} />
         <FilterSelect label="class" options={classes()} value={resolveChoice(classes(), klass())} onPick={pick(setKlass, CLASS_KEY)} />
         <FilterSelect
@@ -215,6 +237,7 @@ export default function Ladder() {
           />
           <span>exclude free</span>
         </label>
+        </div>
       </div>
       <Show when={billingUnknown()}>
         <p class="dim">
@@ -232,23 +255,6 @@ export default function Ladder() {
           <StreamTable rows={streams()} />
         </Show>
         <Show when={!freeplay()}>
-        {/* The axes, as a row of the same chips the tier uses, a size down: a
-            view is a way of reading the tier, not the address of the page, but
-            it is in the URL so a reading can be linked. */}
-        <div class="chips views">
-          <span class="dim">axes</span>
-          <For each={LADDER_VIEWS}>
-            {(v) => (
-              <button
-                class={v.id === view().id ? "on" : ""}
-                title={`${v.x.caption(episode())} against ${v.y.caption(episode())}`}
-                onClick={() => setParams({ view: v.id === LADDER_VIEWS[0]!.id ? undefined : v.id }, { replace: true })}
-              >
-                {v.title}
-              </button>
-            )}
-          </For>
-        </div>
         {/* Below ~720px the scatter's labels are texture, not text: it keeps a
             floor width and scrolls inside itself rather than being squeezed. */}
         <div class="wide-scroll">
