@@ -21,7 +21,6 @@ import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
 import {
   LABEL_FONT,
-  MARK_R,
   type ChartBox,
   type StreamRow,
   type StreamStatus,
@@ -29,26 +28,20 @@ import {
   streamIconCx,
   streamSeries,
 } from "../lib/ladder";
-import { logoHrefOf } from "./ModelIcon";
-import { monogramOf } from "../lib/lineup";
+import { AxisFrame, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { fmtDuration } from "../lib/format";
 
-const VB_W = 1000;
-const VB_H = 380;
 const M = { top: 16, right: 178, bottom: 40, left: 52 };
 const BOX: ChartBox = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
 
 /*
  * The model's logo at the end of its line (operator, 2026-08-29): a reader
  * looking at the field wants to know which character is which model, and the
- * character label alone does not say. Exactly `LadderChart`'s mark — the same
- * `logoHrefOf` over the same committed assets, the same puck radius, the same
- * art size, the same white puck (a mono icon's `currentColor` resolves to black
- * inside an image document, so it needs a light ground in both themes) — and
- * the same `lib/lineup` monogram for an id no family claims, so a stream is
- * never left with a hole where every other one has a badge. It sits between the
- * status marker and the character label: the marker still carries status,
- * the badge carries identity, and the label is untouched.
+ * character label alone does not say. Exactly `LadderChart`'s mark — the shared
+ * `Puck`, with the `lib/lineup` monogram it falls back to for an id no family
+ * claims, so a stream is never left with a hole where every other one has a
+ * badge. It sits between the status marker and the character label: the marker
+ * still carries status, the badge carries identity, and the label is untouched.
  *
  * It is anchored to the *marker*'s y, not the label's. `labelY` slides down to
  * clear a label already placed, so a badge drawn against it would float free of
@@ -58,7 +51,6 @@ const BOX: ChartBox = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1:
  * (`streamChartLayout`). The offsets are the layout's (`streamIconCx`,
  * `streamLabelX`), because the leader has to end where the label begins.
  */
-const LOGO_S = 7.5;
 const iconCx = streamIconCx;
 
 /** The colour of a stream's line: exactly the class the table's status cell takes. */
@@ -101,50 +93,13 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
         >
           <title>level against cumulative active playtime, one series per freeplay character</title>
 
-          {/* Level gridlines. */}
-          <For each={layout().yTicks}>
-            {(t) => {
-              const y = layout().py(t);
-              return (
-                <>
-                  <line x1={BOX.x0} y1={y} x2={BOX.x1} y2={y} stroke="var(--gridline)" stroke-dasharray="3 3" />
-                  {/* The axis is anchored at zero so a two-level gain is not the
-                      whole chart, but nothing is ever level 0 — that gridline
-                      goes unlabelled rather than naming a level no one has. */}
-                  <Show when={t > 0}>
-                    <text x={BOX.x0 - 8} y={y + 4} text-anchor="end" font-size="11" fill="var(--dim)">
-                      L{t}
-                    </text>
-                  </Show>
-                </>
-              );
-            }}
-          </For>
-
+          {/* Level gridlines. The axis is anchored at zero so a two-level gain
+              is not the whole chart, but nothing is ever level 0 — that
+              gridline goes unlabelled rather than naming a level no one has. */}
+          <YAxis ticks={layout().yTicks} py={layout().py} box={BOX} format={(t) => (t > 0 ? `L${t}` : null)} />
           {/* Playtime ticks along the bottom. */}
-          <For each={layout().xTicks}>
-            {(t) => {
-              const x = layout().px(t);
-              return (
-                <>
-                  <line x1={x} y1={BOX.y0} x2={x} y2={BOX.y0 + 4} stroke="var(--line)" />
-                  <text x={x} y={BOX.y0 + 17} text-anchor="middle" font-size="11" fill="var(--dim)">
-                    {fmtPlaytimeTick(t)}
-                  </text>
-                </>
-              );
-            }}
-          </For>
-
-          {/* Axes and their units. */}
-          <line x1={BOX.x0} y1={BOX.y0} x2={BOX.x1} y2={BOX.y0} stroke="var(--line)" />
-          <line x1={BOX.x0} y1={BOX.y1} x2={BOX.x0} y2={BOX.y0} stroke="var(--line)" />
-          <text x={BOX.x1} y={BOX.y0 + 33} text-anchor="end" font-size="11" fill="var(--dim)">
-            active playtime, stitched across attempts
-          </text>
-          <text x={-(BOX.y1 + 4)} y={14} transform="rotate(-90)" text-anchor="end" font-size="11" fill="var(--dim)">
-            level
-          </text>
+          <XAxis ticks={layout().xTicks} px={layout().px} box={BOX} format={fmtPlaytimeTick} />
+          <AxisFrame box={BOX} xCaption="active playtime, stitched across attempts" yCaption="level" />
 
           {/* One stepped line per stream, labelled at its end with the character. */}
           <For each={layout().placed}>
@@ -194,51 +149,7 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
                       words; the anchor's own <title> above already reads
                       "<character> (<model>)" for a pointer. */}
                   <g class="streamchart-logo" role="img" aria-label={`model: ${p.series.model}`}>
-                    <Show
-                      when={logoHrefOf(p.series.model)}
-                      fallback={
-                        <>
-                          <circle
-                            cx={iconCx(p.endCx)}
-                            cy={p.endCy}
-                            r={MARK_R}
-                            fill="var(--panel)"
-                            stroke="var(--line)"
-                            stroke-width="1"
-                          />
-                          <text
-                            x={iconCx(p.endCx)}
-                            y={p.endCy + 3}
-                            text-anchor="middle"
-                            font-size="7"
-                            fill="var(--fg)"
-                          >
-                            {monogramOf(p.series.model)}
-                          </text>
-                        </>
-                      }
-                    >
-                      {(href) => (
-                        <>
-                          <circle
-                            cx={iconCx(p.endCx)}
-                            cy={p.endCy}
-                            r={MARK_R}
-                            fill="#ffffff"
-                            stroke={statusColour(p.series.status)}
-                            stroke-width="1"
-                          />
-                          <image
-                            href={href()}
-                            x={iconCx(p.endCx) - LOGO_S / 2}
-                            y={p.endCy - LOGO_S / 2}
-                            width={LOGO_S}
-                            height={LOGO_S}
-                            preserveAspectRatio="xMidYMid meet"
-                          />
-                        </>
-                      )}
-                    </Show>
+                    <Puck cx={iconCx(p.endCx)} cy={p.endCy} model={p.series.model} stroke={statusColour(p.series.status)} strokeWidth={1} />
                   </g>
                   <Show when={p.leader}>
                     {(l) => (
