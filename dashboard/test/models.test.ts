@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, noteOf, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayLabel, freeplayOf, noteOf, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -66,7 +66,7 @@ describe("the --status columns", () => {
   test("billing, extras and the scheduler's verdict are the CLI's, phrased once", () => {
     // The header is rendered from this array, so its length is the body's
     // column count — the page's colSpan reads it rather than counting by hand.
-    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "note", "newest run"]);
+    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "tier", "platform", "harness", "e90", "e360", "freeplay", "extras", "note", "newest run"]);
     expect(MODEL_COLUMNS).not.toContain("billing");
     expect(MODEL_COLUMNS.indexOf("tier")).toBe(MODEL_COLUMNS.indexOf("model") + 1);
     expect(schedulableOf(row())).toBe("yes: schedulable on e90");
@@ -187,5 +187,19 @@ describe("rosterNameFor", () => {
     expect(modelsHref("alpha-low")).toBe("/models#alpha-low");
     expect(modelsHref("a b")).toBe("/models#a%20b");
     expect(modelsHref(null)).toBe("/models");
+  });
+});
+
+describe("freeplay column", () => {
+  const stream = (over: Record<string, unknown> = {}) =>
+    ({ streamId: "s", model: "sonnet", effort: "low", status: "paused", statusDetail: "operator-pause", level: 15, attempts: 3, latest: { runId: "s-a3" }, ...over }) as never;
+  test("matches the model's stream on model and effort", () => {
+    expect(freeplayOf({ model: "sonnet", effort: "low" }, [stream()])).not.toBeNull();
+    expect(freeplayOf({ model: "sonnet", effort: null }, [stream()])).toBeNull();
+    expect(freeplayOf({ model: "opus", effort: "low" }, [stream()])).toBeNull();
+  });
+  test("the label is status and level", () => {
+    expect(freeplayLabel(stream())).toBe("paused · L15");
+    expect(freeplayLabel(stream({ status: "live", level: null }))).toBe("live");
   });
 });
