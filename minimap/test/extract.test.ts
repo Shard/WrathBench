@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { MpqArchive, MpqChain, bufferSource } from "../src/mpq";
-import { parseTrs } from "../src/trs";
-import { extractMap } from "../src/extract";
+import { parseTrs, parseWmoTrs } from "../src/trs";
+import { compositeWmoMap, extractMap } from "../src/extract";
 import { buildDxtBlp, buildMpq, dxt1Block, rgb565of } from "./fixtures";
 
 const scratch = mkdtempSync(join(tmpdir(), "wrathbench-minimap-"));
@@ -38,6 +38,26 @@ const archive = buildMpq([
 
 function chain(): MpqChain {
   return new MpqChain([MpqArchive.fromSource("fixture", bufferSource(archive))]);
+}
+
+function pixelAt(pngPath: string, x: number, y: number, width = 256): number[] {
+  const png = new Uint8Array(readFileSync(pngPath));
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  let at = 8;
+  const parts: Uint8Array[] = [];
+  while (at < png.byteLength) {
+    const len = view.getUint32(at, false);
+    const type = new TextDecoder().decode(png.subarray(at + 4, at + 8));
+    if (type === "IDAT") parts.push(png.subarray(at + 8, at + 8 + len));
+    at += 12 + len;
+  }
+  const joined = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
+  parts.reduce((to, p) => (joined.set(p, to), to + p.byteLength), 0);
+  const raw = new Uint8Array(inflateSync(joined));
+  // The encoder writes filter 0 on every row, which keeps this a plain index.
+  const stride = width * 4 + 1;
+  const off = y * stride + 1 + x * 4;
+  return [raw[off], raw[off + 1], raw[off + 2], raw[off + 3]] as number[];
 }
 
 function firstPixel(pngPath: string): number[] {
@@ -93,6 +113,77 @@ describe("extractMap", () => {
   test("--limit caps the number of tiles considered", () => {
     const limited = join(scratch, "limited");
     const stats = extractMap(c, tiles, limited, { force: false, limit: 1 });
+    expect(stats.written).toBe(1);
+  });
+});
+
+describe("compositeWmoMap", () => {
+  /*
+   * Two one-tile groups, placed so each lands in a different world tile: the
+   * origin of a group tile is (-min.x, -max.y + 128), so a group at min.x = 0
+   * sits on row 32 and one at min.x = -533.33325 (a whole ADT north) on row 31.
+   * Both are at max.y = 128, which puts their east edge on the col 32 boundary.
+   */
+  const trsText = [
+    "dir: WMO\\Dungeon\\Fixture",
+    "WMO\\Dungeon\\Fixture\\Fixture_000_00_00.blp\tred.blp",
+    "WMO\\Dungeon\\Fixture\\Fixture_001_00_00.blp\tblue.blp",
+    "",
+  ].join("\n");
+  const wmoArchive = buildMpq([
+    { name: "textures\\Minimap\\md5translate.trs", data: new TextEncoder().encode(trsText) },
+    { name: "textures\\Minimap\\red.blp", data: solidTile(255, 0, 0) },
+    { name: "textures\\Minimap\\blue.blp", data: solidTile(0, 0, 255) },
+  ]);
+  const boxes = [
+    { min: [0, 0, 0], max: [0, 128, 0] },
+    { min: [-533.33325, 0, 0], max: [0, 128, 0] },
+  ] as const;
+
+  const c = new MpqChain([MpqArchive.fromSource("fixture", bufferSource(wmoArchive))]);
+  const tiles = parseWmoTrs(new TextDecoder().decode(c.read("textures\\Minimap\\md5translate.trs")!)).get(
+    "wmo\\dungeon\\fixture",
+  )!;
+  const outDir = join(scratch, "369");
+
+  test("writes one world tile per group, named the way the viewer asks", () => {
+    const stats = compositeWmoMap(c, tiles, [...boxes], outDir, { force: false, limit: Infinity });
+    expect(stats).toMatchObject({ written: 2, skipped: 0, missing: 0, failed: 0 });
+    expect(statSync(join(outDir, "32_32.png")).size).toBeGreaterThan(0);
+    expect(statSync(join(outDir, "31_32.png")).size).toBeGreaterThan(0);
+  });
+
+  test("the colour survives the 4:1 resample", () => {
+    const red = pixelAt(join(outDir, "32_32.png"), 0, 0);
+    expect(red[0]).toBeGreaterThan(240);
+    expect(red[2]).toBeLessThan(16);
+    expect(red[3]).toBe(255);
+    expect(pixelAt(join(outDir, "31_32.png"), 0, 0)[2]).toBeGreaterThan(240);
+  });
+
+  test("what no source pixel covered stays transparent", () => {
+    // The group is 128 yards across; a world tile is 533, so most of it is
+    // untouched and must stay see-through for the lattice underneath.
+    expect(pixelAt(join(outDir, "32_32.png"), 200, 200)[3]).toBe(0);
+  });
+
+  test("is idempotent, and --force rewrites", () => {
+    expect(compositeWmoMap(c, tiles, [...boxes], outDir, { force: false, limit: Infinity })).toMatchObject({
+      written: 0,
+      skipped: 2,
+    });
+    expect(compositeWmoMap(c, tiles, [...boxes], outDir, { force: true, limit: Infinity })).toMatchObject({
+      written: 2,
+      skipped: 0,
+    });
+  });
+
+  test("counts a group the model does not have rather than throwing", () => {
+    const stats = compositeWmoMap(c, tiles, [boxes[0]], join(scratch, "369-partial"), {
+      force: false,
+      limit: Infinity,
+    });
+    expect(stats.failed).toBe(1);
     expect(stats.written).toBe(1);
   });
 });

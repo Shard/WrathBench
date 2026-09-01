@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseTrs } from "../src/trs";
+import { parseTrs, parseWmoTrs } from "../src/trs";
 import { mapDirectories, parseWdbc } from "../src/dbc";
 import { buildWdbc, stringOffset } from "./fixtures";
 
@@ -49,6 +49,33 @@ describe("parseTrs", () => {
 
   test("tolerates an empty file", () => {
     expect(parseTrs("").size).toBe(0);
+  });
+});
+
+describe("parseWmoTrs", () => {
+  const text = [
+    "dir: WMO\\Dungeon\\AZ_Subway",
+    "WMO\\Dungeon\\AZ_Subway\\Subway_000_00_00.blp\taaaa.blp",
+    "WMO\\Dungeon\\AZ_Subway\\Subway_018_01_04.blp\tbbbb.blp",
+    "",
+    "dir: Azeroth",
+    "Azeroth\\map31_43.blp\tcccc.blp",
+    "",
+  ].join("\n");
+
+  test("reads the group and the two tile indices", () => {
+    const subway = parseWmoTrs(text).get("wmo\\dungeon\\az_subway")!;
+    expect(subway).toEqual([
+      { group: 0, a: 0, b: 0, hash: "aaaa.blp" },
+      { group: 18, a: 1, b: 4, hash: "bbbb.blp" },
+    ]);
+  });
+
+  test("an ADT tile is never read as a group tile", () => {
+    // `map31_43.blp` has two trailing numbers, not three: the anchored pattern
+    // is what keeps the two halves of one file from claiming each other's rows.
+    expect(parseWmoTrs(text).has("azeroth")).toBe(false);
+    expect(parseTrs(text).has("wmo\\dungeon\\az_subway")).toBe(false);
   });
 });
 

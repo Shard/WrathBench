@@ -330,3 +330,60 @@ export function stringOffset(strings: string[], want: string): number {
   }
   throw new Error(`no such string ${want}`);
 }
+
+/** Concatenate byte runs; `Bun.concat` does not exist and `Buffer` is not in play here. */
+/** One chunk of a WDT/WMO file: four-byte magic (stored reversed) and a body. */
+export function chunk(magic: string, body: Uint8Array): Uint8Array {
+  const out = new Uint8Array(8 + body.byteLength);
+  for (let i = 0; i < 4; i++) out[i] = magic.charCodeAt(3 - i);
+  new DataView(out.buffer).setUint32(4, body.byteLength, true);
+  out.set(body, 8);
+  return out;
+}
+
+function joinBytes(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.byteLength;
+  }
+  return out;
+}
+
+function floats(values: number[]): Uint8Array {
+  const out = new Uint8Array(values.length * 4);
+  const view = new DataView(out.buffer);
+  values.forEach((v, i) => view.setFloat32(i * 4, v, true));
+  return out;
+}
+
+/** A WDT with one global WMO: `MWMO` naming it and `MODF` placing it. */
+export function buildGlobalWmoWdt(
+  name: string,
+  opts: { position?: number[]; rotation?: number[]; min?: number[]; max?: number[] } = {},
+): Uint8Array {
+  const nameBytes = new TextEncoder().encode(`${name}\0`);
+  const modf = new Uint8Array(64);
+  modf.set(
+    floats([
+      ...(opts.position ?? [0, 0, 0]),
+      ...(opts.rotation ?? [0, 0, 0]),
+      ...(opts.min ?? [-10, -20, -30]),
+      ...(opts.max ?? [10, 20, 30]),
+    ]),
+    8,
+  );
+  return joinBytes([chunk("MVER", floats([0])), chunk("MWMO", nameBytes), chunk("MODF", modf)]);
+}
+
+/** A WMO root file carrying nothing but the group bounding boxes. */
+export function buildWmoRoot(boxes: { min: number[]; max: number[] }[]): Uint8Array {
+  const mogi = new Uint8Array(boxes.length * 32);
+  boxes.forEach((box, i) => {
+    mogi.set(floats([...box.min, ...box.max]), i * 32 + 4);
+  });
+  const mohd = new Uint8Array(64);
+  new DataView(mohd.buffer).setUint32(4, boxes.length, true);
+  return joinBytes([chunk("MVER", floats([17])), chunk("MOHD", mohd), chunk("MOGI", mogi)]);
+}
