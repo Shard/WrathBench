@@ -19,7 +19,16 @@
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
-import { MARK_R, type ChartBox, type StreamRow, type StreamStatus, streamChartLayout, streamSeries } from "../lib/ladder";
+import {
+  LABEL_FONT,
+  MARK_R,
+  type ChartBox,
+  type StreamRow,
+  type StreamStatus,
+  streamChartLayout,
+  streamIconCx,
+  streamSeries,
+} from "../lib/ladder";
 import { logoHrefOf } from "./ModelIcon";
 import { monogramOf } from "../lib/lineup";
 import { fmtDuration } from "../lib/format";
@@ -44,14 +53,13 @@ const BOX: ChartBox = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1:
  * It is anchored to the *marker*'s y, not the label's. `labelY` slides down to
  * clear a label already placed, so a badge drawn against it would float free of
  * its own line and sit between two of them, naming neither; on the line's end it
- * always names the line it is on, and the label finds its own row as before.
+ * always names the line it is on, and the label finds its own row as before —
+ * with a leader from the badge once it is more than a row away
+ * (`streamChartLayout`). The offsets are the layout's (`streamIconCx`,
+ * `streamLabelX`), because the leader has to end where the label begins.
  */
 const LOGO_S = 7.5;
-/** Marker → badge, and badge → label. */
-const ICON_GAP = 8;
-const LABEL_GAP = 4;
-const iconCx = (endCx: number): number => endCx + ICON_GAP + MARK_R;
-const labelX = (endCx: number): number => endCx + ICON_GAP + MARK_R * 2 + LABEL_GAP;
+const iconCx = streamIconCx;
 
 /** The colour of a stream's line: exactly the class the table's status cell takes. */
 function statusColour(status: StreamStatus): string {
@@ -232,7 +240,21 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
                       )}
                     </Show>
                   </g>
-                  <text x={labelX(p.endCx)} y={p.labelY} text-anchor="start" font-size="11" fill="var(--fg)">
+                  <Show when={p.leader}>
+                    {(l) => (
+                      <line
+                        class="chart-leader"
+                        x1={l().x1}
+                        y1={l().y1}
+                        x2={l().x2}
+                        y2={l().y2}
+                        stroke="var(--dim)"
+                        stroke-width="1"
+                        opacity="0.6"
+                      />
+                    )}
+                  </Show>
+                  <text x={p.labelX} y={p.labelY} text-anchor="start" font-size={String(LABEL_FONT)} fill="var(--fg)">
                     <Show when={p.series.truncated}>
                       <tspan fill="var(--dim)">…</tspan>
                     </Show>
