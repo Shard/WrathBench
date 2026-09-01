@@ -227,3 +227,23 @@ worklogs/2026-08-29).
     `sdk/generate-api-docs.ts` has pre-existing drift (`nameMailSenders`, `petCommand`,
     `questDetailsFrom`) that fails `docs:api`. Close with the shipped line once the
     deploy-window smokes pass.
+108. **Split the three oversized files along their existing seams** (consolidation scan
+    2026-09-01). `infra/run-fleet.ts` (~5.6k lines) has banner-delimited sections that
+    touch no scheduler state: the config parsing/validation block (~695–1336) →
+    `run-fleet-config.ts`, the `--status` printing block (~3922–4410) →
+    `run-fleet-status.ts`; stop at two, the streams/resumes sections are entangled.
+    `sdk/src/client.ts` (5.9k), `protocol.ts` (2.2k) and `state.ts` (4.5k) share the
+    same pets/group/mail/bank/trade/loot/item-text seam, already bannered in the first
+    two — split all three identically (`*-social.ts`) so they stay paired, adding the
+    banners to `state.ts` first. Mechanical, no behaviour change, its own session; the
+    SDK surface the model sees does not move.
+
+109. **Pre-open-source checklist** (2026-09-01). Mark's calls, each small: (a) the
+    operator's first name appears in ~38 worklog lines — keep, or `the operator`;
+    (b) the footer and BibTeX link to `github.com/Shard/WrathBench` 404 while the repo
+    is private (`dashboard/src/components/Layout.tsx`, `pages/About.tsx`) — hide until
+    it opens, or open first; (c) `sdk/generate-api-docs.ts` fails `docs:api` on three
+    undocumented exports (`nameMailSenders`, `petCommand`, `questDetailsFrom`);
+    (d) the copy review's voice rewrites and cuts not yet taken (Home intro, About
+    "reading a result", the StreamChart caption, Models/Campaigns intros — see the
+    2026-09-01 day file). Trigger: the day before the repo flips public.
