@@ -191,6 +191,24 @@ export interface SnapshotLike {
   bag?: BagLike;
   /** `state.inventory` as the sandbox serialises it; equipment is `slot < 19`. */
   inventory?: { slot?: unknown; itemId?: unknown; name?: unknown; stackCount?: unknown }[];
+  /**
+   * `state.spells`: the spellbook as `SMSG_INITIAL_SPELLS` /
+   * `SMSG_LEARNED_SPELL` left it. The HUD never prints it — it is tens of rows
+   * for a fact a snippet can read — and the ids ride the trajectory instead
+   * (`spells_at_login` / `spell`, item 35).
+   */
+  spells?: { spellId?: unknown }[];
+  /** `state.talents`: the last `SMSG_TALENTS_INFO`. Ranks are 0-based on the wire. */
+  talents?: {
+    unspentPoints?: unknown;
+    activeSpec?: unknown;
+    talents?: { talentId?: unknown; rank?: unknown }[];
+  };
+  /**
+   * `state.trade`: the trade window. Read for `status` alone — 8 is
+   * `TRADE_STATUS_TRADE_COMPLETE`, and `ts` is the cache's stamp for it.
+   */
+  trade?: { status?: unknown; ts?: unknown };
   /** The open-window fold the sandbox computes from the event stream. */
   ui?: UiOpenWindows;
   chat?: { senderGuid?: unknown; message?: unknown }[];

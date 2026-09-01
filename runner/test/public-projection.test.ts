@@ -622,6 +622,53 @@ describe("projectRunDetail", () => {
       { fromTurn: 12, toTurn: null },
     ]);
   });
+
+  test("spells, talents and trades project whole: ids, counts and turns, nothing nameable", () => {
+    const input: RunDetailResponse = smuggle<RunDetailResponse>({
+      run: runRowFixture(),
+      states: [],
+      total: 0,
+      tokens: tokensFixture(),
+      cost: costViewFixture(),
+      playtimeMs: 1000,
+      spells: smuggle({ learned: 1, atLogin: 3, ids: [772], marks: [smuggle({ id: 772, ts: 1200, turn: 5 })] }),
+      talents: smuggle({ spends: 1, talents: 1, marks: [smuggle({ id: 1683, points: 1, ts: 1300, turn: 7 })] }),
+      trades: smuggle({
+        trades: 1,
+        first: smuggle({ ts: 4444, turn: 9 }),
+        last: smuggle({ ts: 4444, turn: 9 }),
+        marks: [smuggle({ ts: 4444, turn: 9 })],
+      }),
+    });
+    const out = projectRunDetail(input);
+    expect(out.spells).toEqual({ learned: 1, atLogin: 3, ids: [772], marks: [{ id: 772, ts: 1200, turn: 5 }] });
+    expect(out.talents).toEqual({ spends: 1, talents: 1, marks: [{ id: 1683, points: 1, ts: 1300, turn: 7 }] });
+    expect(out.trades).toEqual({
+      trades: 1,
+      first: { ts: 4444, turn: 9 },
+      last: { ts: 4444, turn: 9 },
+      marks: [{ ts: 4444, turn: 9 }],
+    });
+    assertClean(JSON.stringify(out));
+  });
+
+  test("a run that recorded none keeps the null: the public reader must not read it as zero", () => {
+    const input: RunDetailResponse = smuggle<RunDetailResponse>({
+      run: runRowFixture(),
+      states: [],
+      total: 0,
+      tokens: tokensFixture(),
+      cost: costViewFixture(),
+      playtimeMs: 1000,
+      spells: null,
+      talents: null,
+      trades: null,
+    });
+    const out = projectRunDetail(input);
+    expect(out.spells).toBeNull();
+    expect(out.talents).toBeNull();
+    expect(out.trades).toBeNull();
+  });
 });
 
 describe("projectResults", () => {

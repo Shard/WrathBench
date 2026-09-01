@@ -753,6 +753,9 @@ export default function RunDetail() {
                     </div>
                   </div>
 
+                  <h2 class="section">milestones</h2>
+                  <Milestones detail={detail()} />
+
                   <h2 class="section">comparability</h2>
                   <Tuple run={run()} />
 
@@ -822,6 +825,87 @@ function ServerFooter(props: { info: ApiInfoResponse | undefined; run: RunDetail
         )}
       </Show>
     </footer>
+  );
+}
+
+/**
+ * What the run's milestone records account for (FOLLOW-UPS 35): deaths, level
+ * marks, spells learned, talent points spent, trades completed.
+ *
+ * Counts and turn numbers, nothing else. Every one of these is a *lower bound*
+ * — the producers sample the world on a timer — and every one distinguishes
+ * "not recorded" (null, or a viewer that does not answer the field) from zero,
+ * so a run from before a producer shipped says so instead of claiming the
+ * character never died, never learned and never traded.
+ */
+function Milestones(props: { detail: RunDetailResponse | undefined }) {
+  const d = (): RunDetailResponse | undefined => props.detail;
+  /** Up to six turn indices off a list of marks; "" when none carried one. */
+  const turns = (marks: readonly { turn: number | null }[]): string => {
+    const ts = marks.map((m) => m.turn).filter((t): t is number => t !== null);
+    if (ts.length === 0) return "";
+    const head = ts.slice(0, 6).join(", ");
+    return ` · turn ${head}${ts.length > 6 ? ` +${ts.length - 6}` : ""}`;
+  };
+  const NOT_RECORDED = "not recorded";
+  return (
+    <dl class="tuple">
+      <dt>deaths</dt>
+      <dd class="mono">
+        <Show when={d()?.deaths} fallback={NOT_RECORDED}>
+          {(f) => (
+            <>
+              {f().deaths} · releases {f().releases} · resurrects {f().resurrects}
+              {turns(f().sites)}
+            </>
+          )}
+        </Show>
+      </dd>
+      <dt>levels</dt>
+      <dd class="mono">
+        <Show when={d()?.leveling} fallback={NOT_RECORDED}>
+          {(f) => (
+            <>
+              {f().levelUps} up · {f().startLevel} → {f().maxLevel}
+              {turns(f().marks.filter((m) => m.from !== null))}
+            </>
+          )}
+        </Show>
+      </dd>
+      <dt>spells learned</dt>
+      <dd class="mono">
+        <Show when={d()?.spells} fallback={NOT_RECORDED}>
+          {(f) => (
+            <>
+              {f().learned} · {f().atLogin} at login{turns(f().marks)}
+            </>
+          )}
+        </Show>
+      </dd>
+      <dt>talents spent</dt>
+      <dd class="mono">
+        <Show when={d()?.talents} fallback={NOT_RECORDED}>
+          {(f) => (
+            <>
+              {f().spends} point{f().spends === 1 ? "" : "s"} · {f().talents} talent
+              {f().talents === 1 ? "" : "s"}
+              {turns(f().marks)}
+            </>
+          )}
+        </Show>
+      </dd>
+      <dt>trades</dt>
+      <dd class="mono">
+        <Show when={d()?.trades} fallback={NOT_RECORDED}>
+          {(f) => (
+            <>
+              {f().trades}
+              {turns(f().marks)}
+            </>
+          )}
+        </Show>
+      </dd>
+    </dl>
   );
 }
 

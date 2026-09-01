@@ -14,6 +14,9 @@ import {
   reflectMarkOf,
   reflectionWindowsFrom,
   taxiFactsFrom,
+  spellFactsFrom,
+  talentFactsFrom,
+  tradeFactsFrom,
   scanRunTotals,
   segmentsFrom,
   splitLines,
@@ -1310,6 +1313,88 @@ describe("level and death milestones (FOLLOW-UPS 35)", () => {
     // A second scan of an unchanged file adds nothing.
     await tail.scan();
     expect(tail.deaths).toEqual(totals.deaths);
+  });
+});
+
+describe("spell, talent and trade milestones (FOLLOW-UPS 35)", () => {
+  function fileWith(lines: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-learning-"));
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(path, [...lines, ""].join("\n"));
+    return path;
+  }
+  const meta = JSON.stringify({ t: "meta", ts: 1000 });
+  const login = (ids: number[]) => JSON.stringify({ t: "milestone", ts: 1100, kind: "spells_at_login", ids, turn: 1 });
+  const spell = (id: number, turn = 2) => JSON.stringify({ t: "milestone", ts: 1200, kind: "spell", id, turn });
+  const talent = (id: number, rank: number, turn = 3) =>
+    JSON.stringify({ t: "milestone", ts: 1300, kind: "talent", id, rank, points: rank + 1, turn });
+  const trade = (observedTs: number, turn = 4) =>
+    JSON.stringify({ t: "milestone", ts: 9999, kind: "trade", observedTs, turn });
+
+  test("a run from before the producers reads null for all three — never zero", async () => {
+    const totals = await scanRunTotals(
+      fileWith([meta, JSON.stringify({ t: "milestone", ts: 1100, kind: "area", to: { id: 9 } })]),
+    );
+    expect(totals.spells).toBeNull();
+    expect(totals.talents).toBeNull();
+    expect(totals.trades).toBeNull();
+  });
+
+  test("the login baseline is the witness: a run that learned nothing reads zero, not null", async () => {
+    const totals = await scanRunTotals(fileWith([meta, login([78, 6603])]));
+    expect(totals.spells).toEqual({ learned: 0, atLogin: 2, ids: [], marks: [] });
+    expect(totals.talents!.spends).toBe(0);
+    expect(totals.trades!.trades).toBe(0);
+  });
+
+  test("learns, spends and completions are counted with the turns they landed on", async () => {
+    const totals = await scanRunTotals(
+      fileWith([meta, login([78]), spell(772, 5), spell(1160, 9), talent(1683, 0, 11), trade(4444, 12), trade(8888, 20)]),
+    );
+    expect(totals.spells!.learned).toBe(2);
+    expect(totals.spells!.ids).toEqual([772, 1160]);
+    expect(totals.spells!.marks.map((m) => m.turn)).toEqual([5, 9]);
+    expect(totals.talents).toEqual({
+      spends: 1,
+      talents: 1,
+      marks: [{ id: 1683, points: 1, ts: 1300, turn: 11 }],
+    });
+    // `observedTs` beats the record's own `ts` (9999, when the sample landed).
+    expect(totals.trades!.trades).toBe(2);
+    expect(totals.trades!.first).toEqual({ ts: 4444, turn: 12 });
+    expect(totals.trades!.last).toEqual({ ts: 8888, turn: 20 });
+  });
+
+  test("a resumed run takes the later baseline, and the same id learned twice counts once", () => {
+    const facts = spellFactsFrom([
+      { kind: "login", ids: [78] },
+      { kind: "learned", id: 772, ts: 1, turn: 2 },
+      // The second process re-reads the book: its baseline is the superset.
+      { kind: "login", ids: [78, 772] },
+      { kind: "learned", id: 772, ts: 3, turn: 4 },
+    ])!;
+    expect(facts.atLogin).toBe(2);
+    expect(facts.learned).toBe(1);
+  });
+
+  test("no mark and no witness is null; the witness alone opens the reading", () => {
+    expect(spellFactsFrom([])).toBeNull();
+    expect(talentFactsFrom([], false)).toBeNull();
+    expect(talentFactsFrom([], true)!.spends).toBe(0);
+    expect(tradeFactsFrom([], false)).toBeNull();
+    expect(tradeFactsFrom([], true)!.trades).toBe(0);
+  });
+
+  test("the tail's incremental index derives the same facts as the whole-file scan", async () => {
+    const path = fileWith([meta, login([78]), spell(772), talent(1683, 1), trade(4444)]);
+    const tail = new TrajectoryTail(path);
+    await tail.scan();
+    const totals = await scanRunTotals(path);
+    expect(tail.spells).toEqual(totals.spells);
+    expect(tail.talents).toEqual(totals.talents);
+    expect(tail.trades).toEqual(totals.trades);
+    await tail.scan();
+    expect(tail.trades).toEqual(totals.trades);
   });
 });
 

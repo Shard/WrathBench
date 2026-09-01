@@ -748,6 +748,13 @@ export interface RunDetailResponse extends SnapshotEnvelope {
   leveling?: LevelUpFacts | null;
   deaths?: DeathFacts | null;
   /**
+   * Spells learned, talent points spent and trades completed this run; null is
+   * "not recorded", never zero. Optional for the reason `achievements` is.
+   */
+  spells?: SpellFacts | null;
+  talents?: TalentFacts | null;
+  trades?: TradeFacts | null;
+  /**
    * Output tokens per second (`TpsFacts`), off the same incremental tail as the
    * tokens above, so a live run's rate advances with its trajectory. Null when
    * no turn has completed; optional for the reason `achievements` is.
@@ -1200,6 +1207,66 @@ export interface DeathSite {
   released: boolean | null;
 }
 
+/**
+ * What a run learned, spent and traded, from the `spells_at_login` / `spell` /
+ * `talent` / `trade` milestones (item 35, 2026-09-01).
+ *
+ * `spells_at_login` is the liveness witness all three share: it is written once
+ * per process by the same producer, so a run that has it and no learns really
+ * learned nothing, while a run from before the producer has none of the four
+ * records and reads null — "not recorded" — throughout.
+ */
+export interface SpellFacts {
+  /** Ids that entered the book after the login baseline. */
+  learned: number;
+  /** How many the book already carried when the run first read it. */
+  atLogin: number;
+  /** The learned ids, ascending. Ids only: names are the client's DBC text. */
+  ids: number[];
+  /** Each learn in observation order, so a page can show when. */
+  marks: SpellLearnMark[];
+}
+
+export interface SpellLearnMark {
+  id: number;
+  ts: number;
+  turn: number | null;
+}
+
+/** Talent points this run spent. Nothing about the ranks it started holding. */
+export interface TalentFacts {
+  /** Records written: one per rank the run watched climb. */
+  spends: number;
+  /** Distinct talents any of those spends touched. */
+  talents: number;
+  marks: TalentSpendMark[];
+}
+
+export interface TalentSpendMark {
+  id: number;
+  /** Points now in that talent (the wire rank plus one). */
+  points: number;
+  ts: number;
+  turn: number | null;
+}
+
+/**
+ * Completed trades. What was traded is not recorded — the SDK clears both
+ * sides of the window when the trade stops being open — so this is the count
+ * and the moments, which is what "first trade" needs.
+ */
+export interface TradeFacts {
+  trades: number;
+  first: TradeMarkView | null;
+  last: TradeMarkView | null;
+  marks: TradeMarkView[];
+}
+
+export interface TradeMarkView {
+  ts: number;
+  turn: number | null;
+}
+
 /** One run as the results charts read it: identity, comparability, level marks. */
 export interface ResultRun {
   runId: string;
@@ -1375,6 +1442,14 @@ export interface ResultRun {
    * are different facts.
    */
   taxi?: TaxiFacts | null;
+  /**
+   * Spells learned, talent points spent and trades completed (item 35). Null is
+   * "not recorded" for the reason `deaths` is — the witness is
+   * `spells_at_login`, see `SpellFacts` — and `undefined` an older viewer.
+   */
+  spells?: SpellFacts | null;
+  talents?: TalentFacts | null;
+  trades?: TradeFacts | null;
   /** Why a run is suspended, when it ended for no other reason. */
   pauseReason: string | null;
   /**

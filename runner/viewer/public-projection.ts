@@ -70,13 +70,16 @@ import type {
   RunListRow,
   RunRow,
   RunsResponse,
+  SpellFacts,
   StatePoint,
+  TalentFacts,
   TaxiFacts,
   TierView,
   TokenTotals,
   ToolsResponse,
   TpsFacts,
   TrackPoint,
+  TradeFacts,
   MoveIntentView,
   TrackResponse,
 } from "./api-types";
@@ -217,6 +220,43 @@ function projectTaxi(t: TaxiFacts): TaxiFacts {
   return { flights: t.flights };
 }
 
+/**
+ * Spells, talents and trades (item 35). Numbers only — spell and talent ids,
+ * counts, turn indices and the timestamps the run's own rows already carry.
+ * Nothing here can name anything: the record never held a spell name, a talent
+ * name or a trading partner, which is why these can be projected whole while
+ * `deaths` (corpse positions) is not projected at all.
+ */
+function projectSpells(f: SpellFacts): SpellFacts {
+  return {
+    learned: f.learned,
+    atLogin: f.atLogin,
+    ids: [...f.ids],
+    marks: f.marks.map((m) => ({ id: m.id, ts: m.ts, turn: m.turn })),
+  };
+}
+
+function projectTalents(f: TalentFacts): TalentFacts {
+  return {
+    spends: f.spends,
+    talents: f.talents,
+    marks: f.marks.map((m) => ({ id: m.id, points: m.points, ts: m.ts, turn: m.turn })),
+  };
+}
+
+function projectTrades(f: TradeFacts): TradeFacts {
+  const mark = (m: { ts: number; turn: number | null }): { ts: number; turn: number | null } => ({
+    ts: m.ts,
+    turn: m.turn,
+  });
+  return {
+    trades: f.trades,
+    first: f.first === null ? null : mark(f.first),
+    last: f.last === null ? null : mark(f.last),
+    marks: f.marks.map(mark),
+  };
+}
+
 function projectAreas(a: AreaFacts): AreaFacts {
   return {
     startArea: a.startArea,
@@ -354,6 +394,9 @@ function projectResultRun(r: ResultRun): ResultRun {
       ? { achievements: r.achievements === null ? null : projectAchievements(r.achievements) }
       : {}),
     ...(r.taxi !== undefined ? { taxi: r.taxi === null ? null : projectTaxi(r.taxi) } : {}),
+    ...(r.spells !== undefined ? { spells: r.spells === null ? null : projectSpells(r.spells) } : {}),
+    ...(r.talents !== undefined ? { talents: r.talents === null ? null : projectTalents(r.talents) } : {}),
+    ...(r.trades !== undefined ? { trades: r.trades === null ? null : projectTrades(r.trades) } : {}),
     // The token, never the prose; same rule as the run row's.
     pauseReason: pausedToken(r.pauseReason),
     continuedFrom: r.continuedFrom,
@@ -800,6 +843,9 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       ? { achievements: d.achievements === null ? null : projectAchievements(d.achievements) }
       : {}),
     ...(d.taxi !== undefined ? { taxi: d.taxi === null ? null : projectTaxi(d.taxi) } : {}),
+    ...(d.spells !== undefined ? { spells: d.spells === null ? null : projectSpells(d.spells) } : {}),
+    ...(d.talents !== undefined ? { talents: d.talents === null ? null : projectTalents(d.talents) } : {}),
+    ...(d.trades !== undefined ? { trades: d.trades === null ? null : projectTrades(d.trades) } : {}),
     ...(d.tps !== undefined ? { tps: d.tps === null ? null : projectTps(d.tps) } : {}),
     // Turn indices about this harness's own loop.
     ...(d.reflections !== undefined

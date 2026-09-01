@@ -30,6 +30,13 @@ import type { Scratchpad } from "./scratchpad";
 import type { ItemSample, Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
+/**
+ * `TRADE_STATUS_TRADE_COMPLETE` on 3.3.5a: what `SMSG_TRADE_STATUS` carries
+ * when a trade actually went through. The SDK names it in `tradeStatusText`
+ * but exports no constant, and a bare `8` in the producer would be a riddle.
+ */
+const TRADE_STATUS_COMPLETE = 8;
+
 export interface LoopOptions {
   config: RunConfig & { runId: string; token: string };
   adapter: ChatAdapter;
@@ -143,6 +150,25 @@ export class ContextBuilder {
    * sample names one, which is written as a mark from `undefined`.
    */
   private lastLevel: number | undefined;
+  /**
+   * Spell ids already accounted for, and whether the login baseline record has
+   * been written. By id rather than by count, for the reason
+   * `recordedAchievements` is: a sandbox restart re-reads `SMSG_INITIAL_SPELLS`
+   * and the second pass must write nothing rather than report a run's own book
+   * as fresh learns.
+   */
+  private readonly recordedSpells = new Set<number>();
+  private loginSpellsRecorded = false;
+  /**
+   * talentId -> the highest rank seen. Seeded silently by the first talent
+   * frame — a resumed character's already-spent points are not spends this run
+   * made — and lowered silently when a respec takes ranks back, so a relearn
+   * afterwards reads as a spend again.
+   */
+  private readonly talentRanks = new Map<number, number>();
+  private talentsSeeded = false;
+  /** The `ts` of the last completed trade written; the dedup key. */
+  private lastTradeTs: number | undefined;
   /**
    * The dead window and the ghost flag as the last sample read them. Both are
    * seeded silently by the first observation, for the reason `lastTaxiFlight`
@@ -505,6 +531,79 @@ export class ContextBuilder {
         ...turn,
       });
       this.lastLevel = level;
+    }
+    // Spells, talents and trades (FOLLOW-UPS 35). All three are reads over
+    // what the state cache already holds — the spellbook, the last
+    // `SMSG_TALENTS_INFO`, the trade window — so nothing here observes the
+    // world beyond what the sample already took.
+    //
+    // The spellbook is written the way the achievement backlog is: the first
+    // sample that sees a book at all is the baseline (`spells_at_login`), and
+    // everything appearing afterwards is a learn. A book seen empty is not a
+    // baseline — the cache has simply not had `SMSG_INITIAL_SPELLS` yet, and
+    // taking it as one would make the whole book arrive as fresh learns a
+    // moment later.
+    const book = snap.spells ?? [];
+    if (book.length > 0) {
+      const ids = book.map((s) => s?.spellId).filter((id): id is number => typeof id === "number");
+      if (!this.loginSpellsRecorded) {
+        this.loginSpellsRecorded = true;
+        for (const id of ids) this.recordedSpells.add(id);
+        trajectory.recordMilestone({ kind: "spells_at_login", ids: [...ids].sort((a, b) => a - b), ...turn });
+      } else {
+        for (const id of ids) {
+          if (this.recordedSpells.has(id)) continue;
+          this.recordedSpells.add(id);
+          trajectory.recordMilestone({ kind: "spell", id, ...turn });
+        }
+      }
+    }
+    // Talents: a rank that climbed is a spend. The wire rank is 0-based, so
+    // the record carries both it and the points it means, and a talent the
+    // frame stops listing (a respec) is forgotten rather than remembered at
+    // its old rank, which would swallow the relearn.
+    const talents = snap.talents;
+    if (talents !== undefined && talents !== null) {
+      const rows = (talents.talents ?? []).filter(
+        (t): t is { talentId: number; rank: number } =>
+          typeof t?.talentId === "number" && typeof t?.rank === "number",
+      );
+      const spec = typeof talents.activeSpec === "number" ? talents.activeSpec : undefined;
+      const seen = new Set<number>();
+      for (const t of rows) {
+        seen.add(t.talentId);
+        const prev = this.talentRanks.get(t.talentId);
+        if (prev !== undefined && t.rank <= prev) {
+          if (t.rank < prev) this.talentRanks.set(t.talentId, t.rank);
+          continue;
+        }
+        this.talentRanks.set(t.talentId, t.rank);
+        if (!this.talentsSeeded) continue;
+        trajectory.recordMilestone({
+          kind: "talent",
+          id: t.talentId,
+          points: t.rank + 1,
+          rank: t.rank,
+          ...(spec === undefined ? {} : { spec }),
+          ...turn,
+        });
+      }
+      for (const id of [...this.talentRanks.keys()]) if (!seen.has(id)) this.talentRanks.delete(id);
+      this.talentsSeeded = true;
+    }
+    // Trades: `TRADE_STATUS_TRADE_COMPLETE` (8) latches on the trade window and
+    // nothing clears it until the next trade packet, so a sample landing any
+    // time after the completion still sees it. Keyed on the cache's own stamp
+    // rather than its `seq`, which restarts when a session is recreated.
+    const trade = snap.trade;
+    if (trade !== undefined && trade !== null && trade.status === TRADE_STATUS_COMPLETE) {
+      // A completion with no stamp has no dedup key, and re-writing it on
+      // every sample for the rest of the run would be worse than missing it.
+      const tradeTs = typeof trade.ts === "number" ? trade.ts : undefined;
+      if (tradeTs !== undefined && tradeTs !== this.lastTradeTs) {
+        this.lastTradeTs = tradeTs;
+        trajectory.recordMilestone({ kind: "trade", observedTs: tradeTs, ...turn });
+      }
     }
     // Death (FOLLOW-UPS 35): the transitions the sandbox child latched off the
     // events themselves, drained here and written as they happened. The child
