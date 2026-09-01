@@ -24,8 +24,6 @@ status.
 3. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
    grouping and instance records exist, and death/level-up/spell/talent are still
    unwritten.
-4. **19** — built; deploy the authenticated module (`:next`) in the next window and
-   run the two auth smokes.
 
 ## Player surface
 
@@ -207,37 +205,6 @@ worklogs/2026-08-29).
     CORS entry for the prefix), and whatever replaces the gate has to keep them
     behind it. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
-
-19. **Pre-public / MCP blockers on the control surface** — built 2026-09-01, the module
-    half awaits its deploy window. All three parts are in git (0b7622f, 950f421,
-    738cff0; design in `module/PROTOCOL.md` "Authentication", ops in
-    `docs/OPERATIONS.md` "Secrets"): a port secret on every route, a per-run leased
-    session secret bound token→account→character (issued at lease time so the SDK can
-    still subscribe to `/events` before `POST /session`), and Landlock confinement of
-    the snippet child (verified on the host and inside the runner container). Every
-    client degrades against the running pre-auth module, so the live fleet is
-    unaffected until the deploy. Owed, in order: `openssl rand -hex 32` into
-    `WRATHBENCH_MODULE_SECRET` in the repo-root `.env`; `./infra/deploy-worldserver.sh
-    --dry-run` then the real thing in a window with zero live runs (image
-    `wrathbench/worldserver:next` is built); the gate smokes run with the header, then
-    `infra/smoke/module-accounts.ts` and `module-slice.ts` by hand for the 401/403
-    paths; operator `/health` curls need `-H "Authorization: Bearer $AC_WRATH_BENCH_SECRET"`.
-    Left open by design: leases live in module memory with no expiry beyond
-    `DELETE /lease`; `character-delete` is operator-only (hygiene is the host's);
-    `sdk/generate-api-docs.ts` has pre-existing drift (`nameMailSenders`, `petCommand`,
-    `questDetailsFrom`) that fails `docs:api`. Close with the shipped line once the
-    deploy-window smokes pass.
-108. **Split the three oversized files along their existing seams** (consolidation scan
-    2026-09-01). `infra/run-fleet.ts` (~5.6k lines) has banner-delimited sections that
-    touch no scheduler state: the config parsing/validation block (~695–1336) →
-    `run-fleet-config.ts`, the `--status` printing block (~3922–4410) →
-    `run-fleet-status.ts`; stop at two, the streams/resumes sections are entangled.
-    `sdk/src/client.ts` (5.9k), `protocol.ts` (2.2k) and `state.ts` (4.5k) share the
-    same pets/group/mail/bank/trade/loot/item-text seam, already bannered in the first
-    two — split all three identically (`*-social.ts`) so they stay paired, adding the
-    banners to `state.ts` first. Mechanical, no behaviour change, its own session; the
-    SDK surface the model sees does not move.
-
 109. **Pre-open-source checklist** (2026-09-01). Mark's calls, each small: (a) the
     operator's first name appears in ~38 worklog lines — keep, or `the operator`;
     (b) the footer and BibTeX link to `github.com/Shard/WrathBench` 404 while the repo
