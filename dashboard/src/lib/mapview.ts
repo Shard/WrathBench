@@ -48,16 +48,23 @@ export function positionAgeMs(ts: number, now: number, clock: FeedClock | null):
 }
 
 /**
- * The four continents by id. A map id is what the server sends and what a
+ * The maps we can name by id. A map id is what the server sends and what a
  * `/map?map=1` link carries, so it stays the title and the URL; the label is
  * what a reader can act on — "map 571" names a place only to someone who has
  * read the DBCs. Anything not listed keeps its number rather than being
  * guessed at: an instance or a battleground id is a real answer and a wrong
  * name for it would not be.
+ *
+ * An instance earns a name when it stops being a number a reader has to look
+ * up — when it has tiles of its own to draw and agents actually ride it. The
+ * Deeprun Tram is the first one to qualify on both counts; the rest of the
+ * hundreds of instance ids stay numbers, which is the honest answer for a
+ * place nothing has been to.
  */
 const MAP_NAMES: Readonly<Record<number, string>> = {
   0: "Eastern Kingdoms",
   1: "Kalimdor",
+  369: "Deeprun Tram",
   530: "Outland",
   571: "Northrend",
 };

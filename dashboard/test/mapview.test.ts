@@ -738,6 +738,10 @@ describe("mapName", () => {
     expect(mapName(571)).toBe("Northrend");
   });
 
+  test("an instance with tiles and traffic of its own is named too", () => {
+    expect(mapName(369)).toBe("Deeprun Tram");
+  });
+
   test("anything else keeps its number rather than being guessed at", () => {
     // An instance, a battleground, a map the tooling has never seen: a wrong
     // name would be worse than the id, which is at least the server's answer.
