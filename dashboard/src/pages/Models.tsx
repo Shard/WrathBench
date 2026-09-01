@@ -184,9 +184,8 @@ export default function Models() {
                           );
                         }}
                       </For>
-                      <td class="right mono dim">{extrasOf(row)}</td>
-                      <td class={row.schedulable.ok ? "ok" : "dim"} title={row.schedulable.why}>
-                        {schedulableOf(row)}
+                      <td class="right mono dim" title={schedulableOf(row)}>
+                        {extrasOf(row)}
                       </td>
                       <td class={row.retired !== undefined ? "err" : row.cooling !== undefined ? "warn" : "dim"}>
                         {noteOf(row) ?? "—"}
