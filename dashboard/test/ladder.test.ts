@@ -8,9 +8,12 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
+import { DEFAULT_VIEW, LADDER_VIEWS, LEVEL, type Metrics, TOKENS, TURNS, XP, runMetrics, viewParam } from "../src/lib/axes";
+import { paretoRuns } from "../src/lib/pareto";
 import {
   EXPANSION_MAPS,
   LABEL_DESC,
+  type LadderPoint,
   LABEL_ROW,
   MARK_RING_R,
   RUNGS,
@@ -44,6 +47,11 @@ import { OPAQUE_PAUSE_REASON } from "../src/lib/runs";
 import { familyOf, monogramOf } from "../src/lib/lineup";
 import { resolvedSummary } from "../src/lib/models";
 import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
+
+/** A metric bag with the named readings and null everywhere else. */
+function bag(p: Partial<Record<keyof Metrics, number | null>>): Metrics {
+  return { cost: null, xp: null, tokens: null, tokensOut: null, turns: null, toolCalls: null, playtimeMs: null, level: null, quests: null, ...p };
+}
 
 function mark(level: number, turn: number | null, ms: number | null): LevelMark {
   return { level, ts: level * 1000, turn, playtimeMs: ms };
@@ -624,11 +632,130 @@ describe("ladderPoints", () => {
   });
 });
 
+describe("ladderPoints over another pair of axes", () => {
+  const priced = (p: Partial<ResultRun>): ResultRun =>
+    run({ actualCost: fig(null, "none"), expectedCost: fig(0, "list-price", true), xpEarned: 100, ...p });
+  const tokens = (total: number, source: "reported" | "estimated" | "snapshot" = "reported"): ResultRun["tokens"] => ({
+    source,
+    contextTokens: 0,
+    promptTokens: total - 10,
+    completionTokens: 10,
+    totalTokens: total,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    turns: 1,
+  });
+
+  test("the same pairing rule, the omission reasons worded from the axes, and an entry present on one view and omitted on another", () => {
+    const runs = [
+      // Counted tokens and xp: on both views.
+      priced({ runId: "a", model: "counted", tokens: tokens(1000), xpEarned: 200 }),
+      priced({ runId: "b", model: "counted", tokens: tokens(3000), xpEarned: 400 }),
+      // Priced, with xp, but its tokens are a chars÷4 estimate: plotted on
+      // cost × xp, omitted on tokens × xp — an estimate is not a reading.
+      priced({ runId: "c", model: "guessed", tokens: tokens(5000, "estimated"), actualCost: fig(2, "reported") }),
+      // Counted tokens on one run and xp on another: the pairing rule is the
+      // same one cost × xp applies, and the reason names the axes in view.
+      priced({ runId: "d", model: "split", tokens: tokens(700), xpEarned: null }),
+      priced({ runId: "e", model: "split", tokens: null, xpEarned: 300 }),
+      // Tokens, no xp at all.
+      priced({ runId: "f", model: "noxp", tokens: tokens(700), xpEarned: null }),
+    ];
+    const byTokens = ladderPoints(runs, TOKENS, XP);
+    expect(byTokens.points.map((p) => p.key)).toEqual(["counted"]);
+    const counted = byTokens.points[0]!;
+    expect(counted.x).toBe(2000);
+    expect(counted.y).toBe(300);
+    expect(counted.n).toBe(2);
+    // The bag: means over the same two runs, cost included (both list-priced $0).
+    expect(counted.metrics.tokens).toBe(2000);
+    expect(counted.metrics.cost).toBe(0);
+    expect(counted.metrics.turns).toBe(1);
+    expect(counted.basis).toBe("list-price");
+    expect(byTokens.omitted).toEqual([
+      { key: "guessed", label: "guessed", why: "no tokens reading" },
+      { key: "noxp", label: "noxp", why: "no xp reading" },
+      { key: "split", label: "split", why: "no run with both tokens and xp" },
+    ]);
+    // The default view still plots the estimated-token entry, priced as reported.
+    const byCost = ladderPoints(runs);
+    expect(byCost.points.map((p) => p.key)).toEqual(["counted", "guessed", "split"]);
+    expect(byCost.points.find((p) => p.key === "guessed")!.basis).toBe("reported");
+    expect(byCost.omitted.map((o) => o.why)).toEqual(["no xp reading"]);
+  });
+
+  test("a snapshot-read token total is not a reading either; turns and level are", () => {
+    const m = runMetrics(priced({ tokens: tokens(9000, "snapshot"), modelResponses: 42, levels: [mark(3, 1, 1000)] }));
+    expect(m.tokens).toBeNull();
+    expect(m.tokensOut).toBeNull();
+    expect(m.turns).toBe(42);
+    expect(m.level).toBe(3);
+    expect(m.cost).toBe(0);
+    expect(m.xp).toBe(100);
+  });
+
+  test("basis is null only when no counted run carries a price, which a cost axis never plots", () => {
+    const runs = [priced({ runId: "a", model: "m", actualCost: null, expectedCost: null, modelResponses: 10, xpEarned: 50 })];
+    expect(ladderPoints(runs, TURNS, XP).points[0]!.basis).toBeNull();
+    expect(ladderPoints(runs).omitted[0]!.why).toBe("no cost reading");
+  });
+
+  test("the layout takes the x spec's scale: linear ticks from zero, no gutter, no minor lines", () => {
+    const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
+    const point = (key: string, turns: number, level: number): LadderPoint => ({
+      key, label: key, single: false, model: key, effort: null, x: turns, y: level, metrics: bag({ turns, level }), runs: 2, n: 2, basis: null, asIfMetered: false, harnesses: ["wrathbench"],
+    });
+    const l = ladderChartLayout([point("a", 120, 4), point("b", 430, 6)], box, TURNS, LEVEL);
+    expect(l.xScale).toBe("linear");
+    expect(l.xTicks).toEqual([0, 100, 200, 300, 400, 500]);
+    expect(l.xMinorTicks).toEqual([]);
+    expect(l.hasFree).toBe(false);
+    expect(l.axisX0).toBe(box.x0);
+    expect(l.px(0)).toBe(box.x0);
+    expect(l.px(500)).toBe(box.x1);
+    expect(l.yTicks).toEqual([0, 2, 4, 6]);
+    // The default is the log cost axis, exactly as before.
+    expect(ladderChartLayout([point("a", 1, 4)], box).xScale).toBe("log-cost");
+  });
+
+  test("the pareto front follows the axes, and the default still reads lower cost, higher xp", () => {
+    const runs = [
+      priced({ runId: "a", model: "cheap-slow", actualCost: fig(1, "reported"), modelResponses: 400, xpEarned: 300 }),
+      priced({ runId: "b", model: "dear-quick", actualCost: fig(5, "reported"), modelResponses: 50, xpEarned: 300 }),
+      priced({ runId: "c", model: "worst", actualCost: fig(6, "reported"), modelResponses: 500, xpEarned: 100 }),
+    ];
+    expect(paretoRuns(runs).map((r) => r.model)).toEqual(["cheap-slow"]);
+    expect(paretoRuns(runs, TURNS, XP).map((r) => r.model)).toEqual(["dear-quick"]);
+  });
+
+  test("the views: default first, each x a resource and each y a distance, and `?view=` resolves or falls back", () => {
+    expect(DEFAULT_VIEW.id).toBe("cost-xp");
+    expect(LADDER_VIEWS.map((v) => v.id)).toEqual(["cost-xp", "tokens-xp", "turns-xp", "calls-xp", "cost-level"]);
+    for (const v of LADDER_VIEWS) {
+      expect(v.x.better).toBe("lower");
+      expect(v.y.better).toBe("higher");
+      expect(v.title).toBe(`${v.x.label} × ${v.y.label}`);
+    }
+    expect(viewParam("turns-xp").id).toBe("turns-xp");
+    expect(viewParam(["cost-level", "turns-xp"]).id).toBe("cost-level");
+    expect(viewParam("playtime-level")).toBe(DEFAULT_VIEW);
+    expect(viewParam(undefined)).toBe(DEFAULT_VIEW);
+    // Cost is the one log axis; the format that used to be `fmtCostTick` is its own.
+    expect(LADDER_VIEWS.filter((v) => v.x.scale === "log-cost").map((v) => v.id)).toEqual(["cost-xp", "cost-level"]);
+    expect(LEVEL.format(0)).toBe("0");
+    expect(LEVEL.format(5)).toBe("L5");
+    expect(XP.format(2000)).toBe("2k");
+    expect(TOKENS.format(1_500_000)).toBe("1.5M");
+    expect(TOKENS.format(20_000_000)).toBe("20M");
+    expect(TOKENS.format(800_000)).toBe("800k");
+  });
+});
+
 describe("ladderChartLayout", () => {
   const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
   // The drawn label is the key alone (`pointLabel`), so the fixture's is too.
-  const pt = (key: string, x: number, y: number) => ({
-    key, label: key, single: true, model: key, effort: null, x, y, runs: 1, n: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
+  const pt = (key: string, x: number, y: number): LadderPoint => ({
+    key, label: key, single: true, model: key, effort: null, x, y, metrics: bag({ cost: x, xp: y }), runs: 1, n: 1, basis: "reported", asIfMetered: false, harnesses: ["wrathbench"],
   });
 
   test("a free entry sits in the gutter, the dearest point at the ceiling on the right edge", () => {
