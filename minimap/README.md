@@ -15,7 +15,7 @@ Runs on the host, against the one-time client extraction. It does not talk to
 any container and does not need the server running.
 
 ```
-bun run --cwd minimap extract              # maps 0, 1, 530, 571
+bun run --cwd minimap extract              # maps 0, 1, 369, 530, 571
 bun minimap/src/extract.ts --map 0,571     # specific maps
 bun minimap/src/extract.ts --force         # rewrite existing tiles
 bun minimap/src/extract.ts --limit 20      # first N tiles per map (smoke test)
@@ -26,8 +26,8 @@ Flags: `--map <ids>`, `--force`, `--limit <n>`, `--out <dir>` (default
 `data/client-source/Data`).
 
 Idempotent: a tile that already exists is skipped unless `--force`. A full
-extraction of all four default maps takes about 17 s and produces 3636 tiles /
-~104 MiB.
+extraction of the four continents takes about 17 s and produces 3636 tiles /
+~104 MiB; map 369 adds 12 tiles / 214 KiB on top.
 
 Tests: `bun test minimap/`. Typecheck: `bun run --cwd minimap typecheck`.
 
@@ -40,7 +40,10 @@ Tests: `bun test minimap/`. Typecheck: `bun run --cwd minimap typecheck`.
 - `textures\Minimap\md5translate.trs`, the client's table from readable tile
   names to the hashed files that actually exist in the archives.
 - `data/client/dbc/Map.dbc` for the internal directory name → map id mapping
-  (`Azeroth` → 0, `Kalimdor` → 1, `Expansion01` → 530, `Northrend` → 571).
+  (`Azeroth` → 0, `Kalimdor` → 1, `DeeprunTram` → 369, `Expansion01` → 530,
+  `Northrend` → 571).
+- For a map with no terrain, `World\Maps\<Dir>\<Dir>.wdt` and the WMO root it
+  names. See "Maps that are one building" below.
 
 ## Output and the tile convention
 
@@ -117,6 +120,43 @@ The transposed reading fails all three checks.
   been reached.
 - **Coverage.** Every tile named in the trs for maps 0, 1, 530 and 571 was
   found in the archives — 0 missing, 0 failed.
+
+## Maps that are one building
+
+Map 369, the Deeprun Tram, has no ADTs and no `deepruntram` section in the trs.
+It is a single WMO — `World\wmo\Dungeon\AZ_Subway\Subway.wmo`, placed at the
+origin unrotated by the one `MODF` in its WDT — and its minimap lives under the
+*model's* directory as `Subway_<group>_<a>_<b>.blp`: a group index and a grid
+local to that group, with no world coordinate in the name. The extractor falls
+through to this path whenever a map has no ADT tiles, so it is not a special
+case for 369; it is what a terrain-less map does.
+
+`src/wmo.ts` carries the placement rule and, more usefully, the evidence for
+each part of it — nothing there came from a spec, all of it was read off the
+archive. The short version: 2 pixels to the yard (128 yards a tile, four times
+the ADT density), tile `a` counting up from the group's `min.x` and tile `b`
+counting *down* from its `max.y`, and world = the model turned 180° about the
+vertical. The extractor then resamples 4:1 into the ordinary
+`<row>_<col>.png` grid, so the viewer, the dashboard and the tile publisher
+cannot tell this path from the other one.
+
+What was verified, and how — the same standard the ADT orientation was held to:
+
+1. **The scale and the x anchor**, from the art alone. All 20 groups paint from
+   image x = 0 to exactly `(max.x − min.x) × 2` with a transparent remainder.
+2. **The `b` direction**, from where the remainder goes. It sits at the low rows
+   of the *highest*-numbered tile, not at the start of the strip — g000 paints
+   all of `b0` and only rows 201-255 of `b1`, and 256 − 201 is its 55px
+   remainder exactly. Number the strip the other way and the paint comes apart
+   at a seam. Composited correctly, the tunnel has no coverage hole anywhere
+   between its two stations, and every group's painted span matches its own
+   bounding box to within half a yard.
+3. **The mirror sign**, against our own trajectories. The two Fable freeplay
+   runs that rode the tram (`…-20260829-a2`, `…-20260830-a3`, 34 state samples
+   between them) sit at world x −45.4 and 4.5 — symmetric to a quarter yard
+   about the tunnel's centre line under `worldX = −x`, and outside the tunnel
+   entirely under the other sign. Overlaying all 34 on the finished composite
+   puts every one of them on a track or a station platform.
 
 ## Relationship to the viewer
 
