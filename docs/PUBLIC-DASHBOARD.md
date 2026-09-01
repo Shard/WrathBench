@@ -28,6 +28,27 @@ only makes outbound S3 PUTs exposes nothing inbound, so the public dashboard
 does not wait on item 19. The private viewer keeps its loopback/LAN posture
 unchanged.
 
+## The live viewer is not a public service
+
+Public delivery is **static snapshots only**. `runner/viewer` — the live
+viewer, on loopback or an explicitly opted-in LAN — is private and
+operator-only, and running it Internet-facing is unsupported: it reads the runs
+directory, tails live trajectories, holds an SSE connection open per watcher,
+and answers `/api/info` about the operator's own machine. Nothing about it is
+designed to survive a public request rate, and no gate in this repo fronts it.
+
+`WRATHBENCH_VIEWER_PUBLIC=1` is not a way to publish it. What that flag means
+since GitHub issue #30 (2026-09-01) is: every JSON body the handle emits
+crosses the same projection the snapshot publishes through, and the routes with
+no projected form — raw lines, minimap tiles, and the SSE tail — answer `403
+withheld in public mode`. That makes the flag a *boundary* rather than a set of
+routes an operator has to remember, which is what the snapshot renderer needs
+from it, since the renderer calls the same handle in-process. It is not a
+hardening measure, and it does not make the viewer safe to expose. The same
+applies to any future Helm/[removed] deployment: the public surface is the
+static artifact bucket and the SPA in front of it, never a viewer, module or
+MCP Service or Ingress.
+
 ## Recommended architecture
 
 Three pieces: a publisher on the lab, an R2 bucket as the data plane, and the
