@@ -28,7 +28,7 @@ import {
   streamIconCx,
   streamSeries,
 } from "../lib/ladder";
-import { AxisFrame, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
+import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { fmtDuration } from "../lib/format";
 
 const M = { top: 16, right: 178, bottom: 40, left: 52 };
@@ -100,6 +100,8 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
           {/* Playtime ticks along the bottom. */}
           <XAxis ticks={layout().xTicks} px={layout().px} box={BOX} format={fmtPlaytimeTick} />
           <AxisFrame box={BOX} xCaption="active playtime, stitched across attempts" yCaption="level" />
+          {/* More level for less playtime: top-left, the layout's default `better`. */}
+          <Cue cue={layout().cue} />
 
           {/* One stepped line per stream, labelled at its end with the character. */}
           <For each={layout().placed}>

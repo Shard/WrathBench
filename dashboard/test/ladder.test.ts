@@ -8,18 +8,22 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
-import { DEFAULT_VIEW, LADDER_VIEWS, LEVEL, type Metrics, TOKENS, TURNS, XP, runMetrics, viewParam } from "../src/lib/axes";
+import { DEFAULT_VIEW, LADDER_VIEWS, LEVEL, type Metrics, TOKENS, TURNS, XP, betterCorner, runMetrics, viewParam } from "../src/lib/axes";
 import { paretoSteps } from "../src/lib/pareto";
 import {
+  CUE_PAD,
   EXPANSION_MAPS,
   LABEL_DESC,
+  LABEL_H,
   type LadderPoint,
   LABEL_ROW,
   MARK_RING_R,
   RUNGS,
+  chartCue,
   puckRect,
   rectsOverlap,
   segmentsCross,
+  streamIconCx,
   streamLabelX,
   billingKnown,
   classOptions,
@@ -925,6 +929,41 @@ describe("ladderChartLayout", () => {
     const l = ladderChartLayout([pt("a-fairly-long-model-name", 8, 2500), pt("other", 0, 0)], box);
     expect(l.placed.find((d) => d.point.key.startsWith("a-fairly"))!.anchor).toBe("end");
   });
+
+  test("the corner cue: top-left on every offered view, read off the specs, and it would move with them", () => {
+    for (const v of LADDER_VIEWS) {
+      expect(betterCorner({ x: v.x.better, y: v.y.better })).toEqual({ h: "left", v: "top", arrow: "↖" });
+      const l = ladderChartLayout([pt("a", 1, 100)], box, v.x, v.y);
+      expect(l.cue.text).toBe("↖ better");
+      expect(l.cue.anchor).toBe("start");
+      expect(l.cue.rect.l).toBe(box.x0 + CUE_PAD);
+      expect(l.cue.rect.t).toBe(box.y1 + CUE_PAD);
+    }
+    expect(betterCorner({ x: "higher", y: "lower" })).toEqual({ h: "right", v: "bottom", arrow: "↘" });
+    expect(betterCorner({ x: "higher", y: "higher" }).arrow).toBe("↗");
+    expect(betterCorner({ x: "lower", y: "lower" }).arrow).toBe("↙");
+    const flipped = chartCue(box, { x: "higher", y: "lower" }, []);
+    expect(flipped.text).toBe("↘ better");
+    expect(flipped.anchor).toBe("end");
+    expect(flipped.rect.r).toBe(box.x1 - CUE_PAD);
+    expect(flipped.rect.b).toBe(box.y0 - CUE_PAD);
+  });
+
+  test("the cue is an obstacle to labels and gives way to marks", () => {
+    // The cheapest, furthest entry sits exactly in the better corner, with a
+    // neighbour whose above-centre label would land on the cue's row.
+    const l = ladderChartLayout([pt("corner", 0.01, 2500), pt("near", 0.02, 2300), pt("far", 5, 100)], box);
+    const corner = l.placed.find((d) => d.point.key === "corner")!;
+    expect(corner.cx).toBe(box.x0);
+    expect(corner.cy).toBe(box.y1);
+    // The cue slid right past the mark rather than sitting under it…
+    expect(rectsOverlap(l.cue.rect, puckRect(corner.cx, corner.cy))).toBe(false);
+    expect(l.cue.rect.l).toBeGreaterThan(box.x0 + CUE_PAD);
+    for (const d of l.placed) {
+      // …and no label prints over the cue.
+      expect(rectsOverlap(d.rect, l.cue.rect)).toBe(false);
+    }
+  });
 });
 
 describe("costScale", () => {
@@ -1240,6 +1279,46 @@ describe("streamSeries", () => {
     // The stack is a function of the set: a reversed input places identically.
     const again = streamChartLayout([...series].reverse(), box);
     expect(again.placed.map((p) => [p.series.streamId, p.labelY])).toEqual(layout.placed.map((p) => [p.series.streamId, p.labelY]));
+  });
+
+  test("the field's cue is top-left, gives way to a badge, and a label that would reach it is pushed a row down", () => {
+    // A stream at the top tick with next to no playtime: its badge sits in
+    // the corner and its label starts a badge past the axis.
+    const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
+    const early = seriesOf([
+      fp({ runId: "e1", character: "Early", levels: [mark(8, null, 0)], playtimeMs: 1 }),
+      fp({ runId: "l1", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 }),
+    ]).series;
+    const l = streamChartLayout(early, box);
+    expect(l.cue.text).toBe("↖ better");
+    expect(l.cue.anchor).toBe("start");
+    expect(l.cue.rect.t).toBe(box.y1 + CUE_PAD);
+    const top = l.placed.find((p) => p.series.label === "Early")!;
+    expect(top.endCy).toBe(box.y1);
+    // The cue stepped right past the badge on the line's end rather than sitting under it.
+    expect(l.cue.rect.l).toBeGreaterThan(box.x0 + CUE_PAD);
+    expect(rectsOverlap(l.cue.rect, puckRect(streamIconCx(top.endCx), top.endCy))).toBe(false);
+    // The top stream's label sits on its line — its box ends where the cue's begins, and touching is not overlapping.
+    expect(top.labelY).toBeCloseTo(top.endCy + 3.5, 9);
+    for (const p of l.placed) expect(rectsOverlap({ l: p.labelX, t: p.labelY - 10, r: p.labelX + 60, b: p.labelY + LABEL_DESC }, l.cue.rect)).toBe(false);
+    // A line just under the top tick, on a short plot, puts its label's row
+    // across the cue: the label is pushed down a row, as it would be for a
+    // label already there. Level 9 alone ticks to 10, so it is a tenth down.
+    // (The long stream is what puts the short one in the corner: alone, its
+    // own end would be the axis's ceiling. Its label sits rows away.)
+    const short = { x0: 50, x1: 900, y0: 116, y1: 16 };
+    const late = fp({ runId: "l1", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 });
+    const under = streamChartLayout(seriesOf([fp({ runId: "e1", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 1 }), late]).series, short);
+    const u = under.placed.find((p) => p.series.label === "Early")!;
+    expect(u.endCy).toBe(26);
+    // Two rows here, not one: a row down its box still reached into the cue's.
+    expect(u.labelY).toBeCloseTo(u.endCy + 3.5 + 2 * LABEL_ROW, 9);
+    expect(u.labelY - LABEL_H).toBeGreaterThanOrEqual(under.cue.rect.b);
+    expect(rectsOverlap({ l: u.labelX, t: u.labelY - LABEL_H, r: u.labelX + 60, b: u.labelY + LABEL_DESC }, under.cue.rect)).toBe(false);
+    // The same stream further along the axis is nowhere near the cue and keeps its natural row.
+    const far = streamChartLayout(seriesOf([fp({ runId: "e1", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 150_000 }), late]).series, short);
+    const f = far.placed.find((p) => p.series.label === "Early")!;
+    expect(f.labelY).toBeCloseTo(f.endCy + 3.5, 9);
   });
 
   /*

@@ -12,7 +12,19 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
-import { type AxisSpec, COST, METRIC_KEYS, type Metrics, type RunCostReading, XP, runCostReading, runMetrics } from "./axes";
+import {
+  type AxisSpec,
+  type Better,
+  COST,
+  DEFAULT_BETTER,
+  METRIC_KEYS,
+  type Metrics,
+  type RunCostReading,
+  XP,
+  betterCorner,
+  runCostReading,
+  runMetrics,
+} from "./axes";
 import { niceTicks, scaleLinear } from "./chart";
 import { modelDisplay } from "./format";
 import { chainsOf } from "./lineage";
@@ -621,6 +633,8 @@ export interface LadderChartLayout {
   /** Whether any entry cost nothing, and so whether the gutter is there at all. Never on a linear axis. */
   hasFree: boolean;
   placed: PlacedPoint[];
+  /** The reading-direction cue in the better corner, placed before any label and kept clear of every mark. */
+  cue: ChartCue;
   /** The same value→pixel maps the points were placed with, for the chart's own tick gridlines. */
   px: (x: number) => number;
   py: (y: number) => number;
@@ -863,6 +877,62 @@ export function puckRect(cx: number, cy: number): Rect {
   return { l: cx - MARK_RING_R, t: cy - MARK_RING_R, r: cx + MARK_RING_R, b: cy + MARK_RING_R };
 }
 
+/* ------------------------------------------------------ the direction cue */
+
+/** The small "↖ better" in the corner of a comparison chart: where it is drawn, and the box it keeps. */
+export interface ChartCue {
+  text: string;
+  /** The text's anchor point and baseline. */
+  x: number;
+  y: number;
+  anchor: "start" | "end";
+  /** The box the label placers treat as taken. */
+  rect: Rect;
+}
+
+/** The cue's inset from the plot's edges. */
+export const CUE_PAD = 6;
+
+/**
+ * Where a chart's reading-direction cue goes: the corner `better` points at,
+ * read off the axes (`betterCorner`), so a view whose axes ran the other way
+ * would move the cue and its arrow with them rather than leave a lie in the
+ * corner. Set in the tick font, since it is axis furniture and not a label.
+ *
+ * It is an obstacle before it is a mark: the caller seeds its label placer
+ * with `rect`, so no point label is ever printed over it. A mark itself can
+ * land in the corner — the cheapest, furthest entry sits exactly there — and
+ * the cue is the one that gives way, sliding inward along the top or bottom
+ * edge past every mark it overlaps; the marks are data and the cue is not.
+ *
+ * The width is estimated the way labels are (`CHAR_W` scaled to the tick
+ * font), with one advance spare for the arrow glyph, which the monospace
+ * stack's fallbacks do not all set at one advance.
+ */
+export function chartCue(box: ChartBox, better: Better, marks: readonly Rect[]): ChartCue {
+  const corner = betterCorner(better);
+  const text = `${corner.arrow} better`;
+  const wide = (text.length + 1) * 0.6 * TICK_FONT + 2 * LABEL_PAD;
+  const tall = 1.25 * TICK_FONT;
+  const t = corner.v === "top" ? box.y1 + CUE_PAD : box.y0 - CUE_PAD - tall;
+  let l = corner.h === "left" ? box.x0 + CUE_PAD : box.x1 - CUE_PAD - wide;
+  let rect: Rect = { l, t, r: l + wide, b: t + tall };
+  // Slide inward past any mark under it; bounded by the number of marks.
+  for (let i = 0; i <= marks.length; i++) {
+    const hit = marks.find((m) => rectsOverlap(rect, m));
+    if (hit === undefined) break;
+    l = corner.h === "left" ? hit.r + LABEL_PAD : hit.l - LABEL_PAD - wide;
+    rect = { l, t, r: l + wide, b: t + tall };
+  }
+  return {
+    text,
+    x: corner.h === "left" ? rect.l + LABEL_PAD : rect.r - LABEL_PAD,
+    y: rect.b - 0.25 * TICK_FONT,
+    anchor: corner.h === "left" ? "start" : "end",
+    rect,
+  };
+}
+
 /**
  * The directions a label may sit in, in preference order. Directly above
  * first: a 2024 perceptual study (arXiv:2407.11996) found readers prefer a
@@ -961,7 +1031,7 @@ export function ladderChartLayout(
   points: readonly LadderPoint[],
   box: ChartBox,
   xSpec: AxisSpec = COST,
-  _ySpec: AxisSpec = XP,
+  ySpec: AxisSpec = XP,
 ): LadderChartLayout {
   const xs = points.map((p) => p.x);
   let xAxis: Pick<LadderChartLayout, "xTicks" | "xMinorTicks" | "xMax" | "axisX0" | "freeX" | "dividerX" | "hasFree" | "px">;
@@ -1004,8 +1074,12 @@ export function ladderChartLayout(
     (a, b) => b.y - a.y || a.x - b.x || a.label.localeCompare(b.label) || a.key.localeCompare(b.key),
   );
   const marks = ordered.map((p) => ({ p, cx: px(p.x), cy: py(p.y) }));
-  // Every mark is in the way before any label is.
-  const taken: Rect[] = marks.map((m) => puckRect(m.cx, m.cy));
+  // Every mark is in the way before any label is — and so is the corner cue,
+  // which has already stepped aside from the marks itself. It is appended,
+  // not prepended: `taken[i]` is mark i's own box below.
+  const markRects = marks.map((m) => puckRect(m.cx, m.cy));
+  const cue = chartCue(box, { x: xSpec.better, y: ySpec.better }, markRects);
+  const taken: Rect[] = [...markRects, cue.rect];
   const leaders: Leader[] = [];
   const overlaps = (a: Rect): boolean => taken.some((b) => rectsOverlap(a, b));
   // A label may rise into the top margin by its own height (the axis label
@@ -1053,7 +1127,7 @@ export function ladderChartLayout(
       crowded,
     });
   }
-  return { xScale: xSpec.scale, ...xAxis, yTicks, yMax, placed, py };
+  return { xScale: xSpec.scale, ...xAxis, yTicks, yMax, placed, cue, py };
 }
 
 /* ------------------------------------------------------- freeplay streams */
@@ -1448,6 +1522,8 @@ export interface StreamChartLayout {
   xMax: number;
   yMax: number;
   placed: PlacedStream[];
+  /** The reading-direction cue: more level for less playtime is top-left, and a label never prints over it. */
+  cue: ChartCue;
   px: (x: number) => number;
   py: (y: number) => number;
 }
@@ -1466,7 +1542,7 @@ export interface StreamChartLayout {
  * a function of the set and not of the array's order, the same rule
  * `ladderChartLayout` follows.
  */
-export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox): StreamChartLayout {
+export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox, better: Better = DEFAULT_BETTER): StreamChartLayout {
   const xMax = Math.max(1, ...series.map((s) => s.endX));
   const yTicks = niceTicks(Math.max(1, ...series.map((s) => s.endLevel)));
   const yMax = yTicks[yTicks.length - 1]!;
@@ -1476,6 +1552,11 @@ export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox
   const ordered = [...series].sort(
     (a, b) => b.endLevel - a.endLevel || b.endX - a.endX || a.label.localeCompare(b.label) || a.streamId.localeCompare(b.streamId),
   );
+  // The cue gives way to the badges, as it does to the scatter's pucks; then
+  // it is in every label's way. A label reaches the corner only when a stream
+  // at the top level has next to no playtime, but the placer does not get to
+  // assume that.
+  const cue = chartCue(box, better, ordered.map((s) => puckRect(streamIconCx(px(s.endX)), py(s.endLevel))));
   const placed: PlacedStream[] = [];
   const takenY: number[] = [];
   for (const s of ordered) {
@@ -1499,10 +1580,14 @@ export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox
     // that pushing down would take the descenders past the axis, the label
     // stays where it is and overlaps rather than walking out of the viewBox,
     // which is the same call `ladderChartLayout`'s `inside()` guard makes.
-    const collides = (y: number): boolean => takenY.some((t) => Math.abs(t - y) < LABEL_ROW);
+    const labelX = streamLabelX(endCx);
+    // The label's box at a candidate baseline, generously: the name plus the
+    // "…" and " ×N" it may carry, which is a bound and not a measure.
+    const labelRect = (y: number): Rect => ({ l: labelX, t: y - LABEL_H, r: labelX + (s.label.length + 4) * CHAR_W, b: y + LABEL_DESC });
+    const collides = (y: number): boolean =>
+      takenY.some((t) => Math.abs(t - y) < LABEL_ROW) || rectsOverlap(labelRect(y), cue.rect);
     while (collides(labelY) && labelY + LABEL_ROW + LABEL_DESC <= box.y0) labelY += LABEL_ROW;
     takenY.push(labelY);
-    const labelX = streamLabelX(endCx);
     // One row down still reads as the line's own label; two or more needs the
     // line drawn, from the badge's edge to the label's leading mid-height.
     const leader: Leader | null =
@@ -1511,5 +1596,5 @@ export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox
         : null;
     placed.push({ series: s, d: steps.join(" "), endCx, endCy, labelX, labelY, leader });
   }
-  return { xTicks: timeTicks(xMax), yTicks, xMax, yMax, placed, px, py };
+  return { xTicks: timeTicks(xMax), yTicks, xMax, yMax, placed, cue, px, py };
 }

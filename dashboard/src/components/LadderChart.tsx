@@ -19,7 +19,7 @@ import type { ResultRun } from "@viewer/api-types";
 import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS } from "../lib/axes";
 import { LABEL_FONT, TICK_FONT, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
 import { paretoSteps } from "../lib/pareto";
-import { AxisFrame, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
+import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { COST_BASIS_NOTE, fmtTokens, fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
 
@@ -216,6 +216,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           </Show>
 
           <AxisFrame box={BOX} xCaption={xCaption()} yCaption={yCaption()} />
+          <Cue cue={layout().cue} />
 
           {/* The front's staircase, under the points: a run along x to the
               next member, then a rise along y to it. Dim and thin, like a
