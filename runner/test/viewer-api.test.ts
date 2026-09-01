@@ -287,6 +287,117 @@ describe("the resolved model id", () => {
   });
 });
 
+/**
+ * A claude-code run whose CLI forwarded its running thinking-token estimate:
+ * one `init`, several `thinking_tokens`, and the records around them.
+ */
+function thinkingFixture(): string {
+  const runs = mkdtempSync(join(tmpdir(), "viewer-thinking-"));
+  const dir = join(runs, "claude-run");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "meta.json"), JSON.stringify({ runId: "claude-run", startedAt: 1000, config: { driver: "claude-code" } }));
+  const lines: object[] = [
+    { ts: 1000, t: "meta", runId: "claude-run" },
+    { ts: 1100, t: "claude_system", turn: 1, type: "system", subtype: "init", session_id: "s-1", model: "claude-opus-5", claude_code_version: "2.1.239" },
+    { ts: 1150, t: "claude_system", turn: 1, type: "system", subtype: "thinking_tokens", session_id: "s-1", estimated_tokens: 50, estimated_tokens_delta: 50 },
+    { ts: 1160, t: "claude_system", turn: 1, type: "system", subtype: "thinking_tokens", session_id: "s-1", estimated_tokens: 120, estimated_tokens_delta: 70 },
+    { ts: 1170, t: "claude_system", turn: 1, type: "system", subtype: "thinking_tokens", session_id: "s-1", estimated_tokens: 300, estimated_tokens_delta: 180 },
+    { ts: 1200, t: "response", turn: 1, message: { role: "assistant", content: "hello from the CLI" } },
+    // No `sessionId` of its own (the shape written before 2026-08-25): the
+    // tally has to have taken the session from the `init` envelope.
+    { ts: 1300, t: "claude_result", turn: 1, costUsd: 0.25, usageRaw: { output_tokens: 400 } },
+  ];
+  writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  return runs;
+}
+
+describe("the thinking-token envelopes", () => {
+  test("never reach the feed, while the init envelope and the raw lines behind it do", async () => {
+    const runs = thinkingFixture();
+    const handle = api(runs);
+    const page = (await (await handle(new Request("http://x/api/run/claude-run/entries?from=0&limit=200"))).json()) as {
+      from: number;
+      total: number;
+      entries: { i: number; t: string; subtype?: string }[];
+    };
+    // Three of seven records are dropped; `total` counts what is served.
+    expect(page.entries.map((e) => e.t)).toEqual(["meta", "claude_system", "response", "claude_result"]);
+    expect(page.entries.filter((e) => e.subtype === "thinking_tokens")).toEqual([]);
+    expect(page.entries.find((e) => e.t === "claude_system")!.subtype).toBe("init");
+    expect(page.total).toBe(4);
+    expect(page.entries.length).toBe(page.total);
+    // The index each entry carries is the one the raw link uses, and it still
+    // reads the right line for an entry sitting after three dropped ones.
+    expect(page.entries.map((e) => e.i)).toEqual([0, 1, 2, 3]);
+    const raw = (await (await handle(new Request("http://x/api/run/claude-run/raw/2"))).json()) as { t: string; message: { content: string } };
+    expect(raw.t).toBe("response");
+    expect(raw.message.content).toBe("hello from the CLI");
+    const rawInit = (await (await handle(new Request("http://x/api/run/claude-run/raw/1"))).json()) as { subtype: string };
+    expect(rawInit.subtype).toBe("init");
+
+    // Nothing derived from the feed leans on the dropped envelopes: the cost
+    // tally still finds its session, and the run page's totals still land.
+    const detail = (await (await handle(new Request("http://x/api/run/claude-run"))).json()) as {
+      total: number;
+      cost: { actual: { usd: number | null } };
+      tokens: { completionTokens: number };
+      run: { resolvedModel: string | null; cliVersion: string | null };
+    };
+    expect(detail.total).toBe(4);
+    expect(detail.cost.actual.usd).toBe(0.25);
+    expect(detail.tokens.completionTokens).toBe(400);
+    expect(detail.run).toMatchObject({ resolvedModel: "claude-opus-5", cliVersion: "2.1.239" });
+    rmSync(runs, { recursive: true, force: true });
+  });
+
+  test("a run whose last record is a dropped envelope keeps its playtime", async () => {
+    const runs = thinkingFixture();
+    // The common claude ending: the watchdog cuts the run mid-thinking, so the
+    // file's last line is one the feed does not serve.
+    appendFileSync(
+      join(runs, "claude-run", "trajectory.jsonl"),
+      JSON.stringify({ ts: 9000, t: "claude_system", turn: 2, type: "system", subtype: "thinking_tokens", session_id: "s-1", estimated_tokens: 7 }) + "\n",
+    );
+    // Old enough that the run reads as finished: a live run's segment closes
+    // on `now` and the two figures would agree for the wrong reason.
+    const old = new Date(Date.now() - 3_600_000);
+    utimesSync(join(runs, "claude-run", "trajectory.jsonl"), old, old);
+    const handle = api(runs);
+    const listed = (await (await handle(new Request("http://x/api/runs"))).json()) as {
+      runs: { runId: string; playtimeMs: number | null }[];
+    };
+    const detail = (await (await handle(new Request("http://x/api/run/claude-run"))).json()) as { playtimeMs: number | null };
+    // The listing reads every line; the run page must not close the segment on
+    // the last SERVED one and report a shorter run than the listing does.
+    expect(detail.playtimeMs).toBe(new Map(listed.runs.map((r) => [r.runId, r.playtimeMs])).get("claude-run")!);
+    expect(detail.playtimeMs).toBe(8000);
+    rmSync(runs, { recursive: true, force: true });
+  });
+
+  test("the live tail forwards the same filtered batches", async () => {
+    const runs = thinkingFixture();
+    const handle = api(runs);
+    // Prime the tail, then append the shape a live claude run appends.
+    await handle(new Request("http://x/api/run/claude-run/entries?from=0"));
+    appendFileSync(
+      join(runs, "claude-run", "trajectory.jsonl"),
+      [
+        { ts: 1400, t: "claude_system", turn: 2, type: "system", subtype: "thinking_tokens", session_id: "s-1", estimated_tokens: 9 },
+        { ts: 1500, t: "response", turn: 2, message: { role: "assistant", content: "second" } },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n",
+    );
+    const res = await handle(new Request("http://x/api/run/claude-run/stream"));
+    const reader = res.body!.getReader();
+    const hello = new TextDecoder().decode((await reader.read()).value!);
+    await reader.cancel();
+    // The SSE hello carries the served count, which the new envelope did not grow.
+    expect(JSON.parse(hello.replace(/^data: /, "").trim())).toMatchObject({ hello: "claude-run", total: 5 });
+    rmSync(runs, { recursive: true, force: true });
+  });
+});
+
 describe("playtime", () => {
   test("the listing reports active time, not the span the trajectory covers", async () => {
     const now = Date.now();
