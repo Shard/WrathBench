@@ -30,7 +30,7 @@
 import type { ResultRun } from "@viewer/api-types";
 import { COST, XP } from "./axes";
 import { homeLadderRuns } from "./homeladder";
-import { ladderChartLayout, ladderPoints } from "./ladder";
+import { CUE_PAD, ladderChartLayout, ladderPoints } from "./ladder";
 import { paretoFront } from "./pareto";
 
 /** The card's canvas: the size every crawler documents wanting, and the one the tags declare. */
@@ -83,8 +83,10 @@ export interface OgOptions {
    * module is built by a Bun script. Same assets, resolved by the caller.
    */
   logoHref?: (model: string) => string | null;
-  /** The wordmark, on by default — the single text element the card carries. */
+  /** The wordmark, on by default. */
   wordmark?: boolean;
+  /** The "↖ better" reading cue in the plot's top-left, on by default (operator, 2026-09-01: try it, drop it if it does not read). */
+  cue?: boolean;
 }
 
 const round = (n: number): string => String(Math.round(n * 100) / 100);
@@ -181,6 +183,36 @@ export function ogSvgOf(runs: readonly ResultRun[], opts: OgOptions = {}): strin
     body.push(puck(p.cx, p.cy, false, href(p.point.model)));
   }
   for (const p of frontPlaced) body.push(puck(p.cx, p.cy, true, href(p.point.model)));
+
+  if (opts.cue !== false) {
+    // The live chart's corner cue, scaled for the card: the layout computed
+    // `cue` for the tick font in this box, so its corner and anchor are right
+    // but its size is not — 26 units is ~9 px at the 400 px render, the floor
+    // for a word to stay a word. Set from the box edges rather than the cue's
+    // own baseline so the larger glyphs keep the same inset.
+    const cue = layout.cue;
+    const size = 26;
+    const top = cue.y <= (BOX.y0 + BOX.y1) / 2;
+    const left = cue.anchor === "start";
+    const x = left ? BOX.x0 + CUE_PAD * 2 : BOX.x1 - CUE_PAD * 2;
+    const y = top ? BOX.y1 + CUE_PAD * 2 + size : BOX.y0 - CUE_PAD * 2;
+    // The arrow is drawn, not typed: the generic families resvg resolves on a
+    // build host carry no arrow glyph, and a missing glyph renders as nothing.
+    // A diagonal with a chevron head, pointing into the corner the word names.
+    const a = size * 0.7;
+    const ax = left ? x : x - a;
+    const ay = y - size * 0.75;
+    const dx = left ? 1 : -1;
+    const dy = top ? 1 : -1;
+    const hx = left ? ax : ax + a;
+    const hy = top ? ay - a / 2 : ay + a / 2;
+    const word = cue.text.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "");
+    const wx = left ? x + a + 8 : x - a - 8;
+    body.push(
+      `<path d="M ${round(hx + dx * a)} ${round(hy + dy * a)} L ${round(hx)} ${round(hy)} M ${round(hx)} ${round(hy + dy * (a / 2))} L ${round(hx)} ${round(hy)} L ${round(hx + dx * (a / 2))} ${round(hy)}" fill="none" stroke="${DIM}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`,
+      `<text x="${round(wx)}" y="${round(y)}" text-anchor="${cue.anchor}" font-family="Helvetica, Arial, sans-serif" font-size="${size}" fill="${DIM}">${word}</text>`,
+    );
+  }
 
   if (opts.wordmark !== false) {
     // 52 units is ~17 px at the 400 px inline render: comfortably above the
