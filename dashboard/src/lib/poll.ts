@@ -9,6 +9,14 @@
  *
  * Polling rate is a public-hosting constraint, so the intervals
  * are stated at each call site rather than hidden in here.
+ *
+ * A poll that answers with the same content is not a change. `latest` is only
+ * reassigned when the body differs from the one it holds (`contentKey`), so a
+ * page's memos over it — the ladder's aggregation and label layout, the runs
+ * table's sort, every `<For>` keyed on the array's objects — stay put across
+ * the many ticks that bring nothing new, and only re-run when something did.
+ * Before this every tick handed the graph a fresh array, and identical data
+ * re-laid-out and rebuilt the DOM under the reader every 15–30 seconds.
  */
 
 import { createSignal, onCleanup } from "solid-js";
@@ -33,6 +41,23 @@ export function isStalled(lastSettledAt: number, now: number, intervalMs: number
   return now - lastSettledAt >= intervalMs * STALL_INTERVALS;
 }
 
+/**
+ * A value's identity for the change test: its JSON form. Two bodies that
+ * serialise alike would render alike — every feed is API JSON, and a field
+ * that is `undefined` in one and absent in the other draws the same page —
+ * so string equality on the serialisation is the whole test. A value that
+ * cannot be serialised (nothing the API returns, but the poller is generic)
+ * gets no key and is always taken as new, which is the old behaviour.
+ */
+export function contentKey(v: unknown): string | null {
+  try {
+    const key = JSON.stringify(v);
+    return typeof key === "string" ? key : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface Poll<T> {
   /** The most recent successful value, kept across a failed poll. */
   readonly latest: T | undefined;
@@ -54,6 +79,8 @@ export function poll<T>(fetcher: () => Promise<T>, intervalMs: number): Poll<T> 
   const [stalled, setStalled] = createSignal(false);
   let disposed = false;
   let lastSettledAt = Date.now();
+  /** The key of the value `latest` holds; the next tick's body is compared against it. */
+  let latestKey: string | null = null;
 
   const tick = (): void => {
     // Judged at each tick rather than on a clock of its own: the stall bound
@@ -64,7 +91,14 @@ export function poll<T>(fetcher: () => Promise<T>, intervalMs: number): Poll<T> 
         if (disposed) return;
         lastSettledAt = Date.now();
         setStalled(false);
-        setLatest(() => v);
+        // Same content, same value: the graph downstream is left alone. The
+        // settlement above still counts — the feed answered — and an error
+        // from the tick before is still cleared below.
+        const key = contentKey(v);
+        if (key === null || key !== latestKey) {
+          latestKey = key;
+          setLatest(() => v);
+        }
         setError(undefined);
       },
       (e: unknown) => {
