@@ -7,7 +7,7 @@
  *  - A timeout does NOT kill the runtime. The evaluation is abandoned (its
  *    late result is discarded), its abort signal is fired in the child (so the
  *    SDK waits it left behind settle and an in-flight move is stopped —
- *    FOLLOW-UPS 44), and the child is pinged; only if the ping also goes
+ *    item 44), and the child is pinged; only if the ping also goes
  *    unanswered (the event loop is blocked) is the child killed and respawned.
  *    The loss is recorded as a harness notice the model will see.
  *  - Consecutive restarts are counted for the `snippet-runaway` watchdog; a

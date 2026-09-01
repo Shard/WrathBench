@@ -6,7 +6,7 @@
  * entry points used to do — bypasses `openBundle`'s guard: a bundle built
  * before the coordinate channel has no `page_coords` table, `searchReference`
  * treats that as "no coords", and every episode silently searches without the
- * channel while nothing anywhere says so (FOLLOW-UPS 30).
+ * channel while nothing anywhere says so (item 30).
  *
  * Two outcomes, deliberately different:
  *   - bundle file absent  -> `undefined`. `search_reference` reports itself

@@ -1,5 +1,5 @@
 /**
- * Probe for the one-bag inventory view (FOLLOW-UPS 50): `state.bag()` spans
+ * Probe for the one-bag inventory view (item 50): `state.bag()` spans
  * the backpack and every worn bag, and equipment is readable off
  * `state.inventory` by slot.
  *

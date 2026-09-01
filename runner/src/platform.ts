@@ -2,7 +2,7 @@
  * Which platform served a model, from the api base the run actually used.
  *
  * One spelling, because three readers ask the question: the run writer stamps
- * it into `run.platform` at writeMeta (FOLLOW-UPS 36), the viewer's listing
+ * it into `run.platform` at writeMeta (item 36), the viewer's listing
  * reads that column, and the scheduler's projection labels a roster entry with
  * it. The api base is the honest source — the driver only says how we talked
  * to a model, not who served the weights — so the driver is a fallback each

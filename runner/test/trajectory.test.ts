@@ -58,7 +58,7 @@ describe("Trajectory", () => {
     traj.close();
   });
 
-  // FOLLOW-UPS 36: both were derivable from config_json; a column means the
+  // item 36: both were derivable from config_json; a column means the
   // listing reads a fact rather than re-deriving a rule that could drift.
   test("writes the character and the platform as run columns", () => {
     const dir = tempRunDir();

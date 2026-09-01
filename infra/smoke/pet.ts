@@ -1,5 +1,5 @@
 /**
- * Probe for the pet surface (FOLLOW-UPS 98): `SMSG_PET_SPELLS` folded into
+ * Probe for the pet surface (item 98): `SMSG_PET_SPELLS` folded into
  * `state.pet()` (guid, given name from the pet name query, creature name,
  * level/health from the pet's own unit, named spells), the pet commands
  * built as `CMSG_PET_ACTION` (`petAttack`, `petFollow`, `petDismiss`), and

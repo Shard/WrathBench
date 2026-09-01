@@ -448,7 +448,7 @@ const RUN_LIST_ROW_KEYS = [
   // no `snapshot`: only the renderer stamps it, after projection
 ];
 const STATE_KEYS = ["ts", "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "turn",
-  // The player frame's numbers (FOLLOW-UPS 104): public on every surface that
+  // The player frame's numbers (item 104): public on every surface that
   // carries a state sample, as they are on the positions feed.
   "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp"];
 const RESULT_RUN_KEYS = [

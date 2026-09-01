@@ -1,5 +1,5 @@
 /**
- * Probe for the mail surface (FOLLOW-UPS 100, mail): the mailbox frame
+ * Probe for the mail surface (item 100, mail): the mailbox frame
  * (`openMailbox` -> `SMSG_SHOW_MAILBOX`), `sendMail` with money answered by
  * `SMSG_SEND_MAIL_RESULT`, the recipient's `mailList` (`SMSG_MAIL_LIST_RESULT`
  * with the sender joined by name), `takeMailMoney` and `deleteMail`.

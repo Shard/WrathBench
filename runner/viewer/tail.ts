@@ -462,7 +462,7 @@ export interface ReplySpan {
  * driver splits one reply across several `response` records where only the
  * last carries usage, and that last figure is the running total for the whole
  * message (`adapter-claude.ts`), so adding an estimate for the earlier
- * envelopes counts their text twice (FOLLOW-UPS 82). That is true of the
+ * envelopes counts their text twice (item 82). That is true of the
  * message's INPUT side only: its `completion` is the API's opening snapshot,
  * so where the turn has a `claude_result` the spans are resolved against it —
  * `perReplyTokens` where the turn's `iterations` really describe its replies,
@@ -659,7 +659,7 @@ function collapseClaudeTurns(
  * per-turn truth is in the spans for anyone who needs it.
  *
  * Completion tokens come from `replySpans`, so a reply split across several
- * `response` records counts once (FOLLOW-UPS 82), and a claude-code turn counts
+ * `response` records counts once (item 82), and a claude-code turn counts
  * its `claude_result` output total instead of its responses' opening snapshots
  * (`ClaudeTurnUsage`) — never both. Prompt tokens carry the same
  * rule: a request's `chars / 4` estimate is held until something reports a

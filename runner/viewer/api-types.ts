@@ -280,7 +280,7 @@ export interface RunRow {
   questsCompleted: number | null;
   /**
    * What the character wears and carries, from the newest state sample that
-   * recorded it (FOLLOW-UPS 50). Null on runs that predate the `items` column.
+   * recorded it (item 50). Null on runs that predate the `items` column.
    */
   items: ItemSample[] | null;
   mtime: number | null;
@@ -315,7 +315,7 @@ export interface StatePoint {
   turn: number | null;
   /**
    * The player frame's numbers, from the newest state sample that carried a
-   * position (FOLLOW-UPS 104). Optional for the reason `move` is: a run
+   * position (item 104). Optional for the reason `move` is: a run
    * recorded before the columns existed, and a snapshot published before this
    * shipped, carry none, and every reader must draw those as unobserved rather
    * than as zero. A health/maxHealth pair is whole or absent — the SDK
@@ -626,7 +626,7 @@ export interface AgentPosition {
   move?: MoveIntentView | null;
   /**
    * The player frame's numbers, from the newest state sample that carried a
-   * position (FOLLOW-UPS 104). Optional for the reason `move` is: a run
+   * position (item 104). Optional for the reason `move` is: a run
    * recorded before the columns existed, and a snapshot published before this
    * shipped, carry none, and every reader must draw those as unobserved rather
    * than as zero. A health/maxHealth pair is whole or absent — the SDK
@@ -1410,7 +1410,7 @@ export interface ResultsResponse extends SnapshotEnvelope {
   now: number;
 }
 
-/** A run's whole recorded track, for map replay (FOLLOW-UPS 22). */
+/** A run's whole recorded track, for map replay (item 22). */
 export interface TrackPoint {
   ts: number;
   map: number;
@@ -1423,7 +1423,7 @@ export interface TrackPoint {
   turn: number | null;
   /**
    * The player frame's numbers, from the newest state sample that carried a
-   * position (FOLLOW-UPS 104). Optional for the reason `move` is: a run
+   * position (item 104). Optional for the reason `move` is: a run
    * recorded before the columns existed, and a snapshot published before this
    * shipped, carry none, and every reader must draw those as unobserved rather
    * than as zero. A health/maxHealth pair is whole or absent — the SDK
@@ -1624,7 +1624,7 @@ export interface ModelsResponse extends SnapshotEnvelope {
     /**
      * Entries the policy does not schedule and this response does not row:
      * a name a pinned job holds (a probe on its own account) or one carrying
-     * an objective. Same predicate as `run-fleet --status` (FOLLOW-UPS 52).
+     * an objective. Same predicate as `run-fleet --status` (item 52).
      */
     excluded: { name: string; reason: string }[];
   };

@@ -130,7 +130,7 @@ alive_jobs() {
 #                     stream, and a probe campaign with `resume: true`. The
 #                     recreate costs it nothing (2026-08-29: the sonnet stream
 #                     came back on the same run id and character), so waiting
-#                     on one is waiting for nothing. FOLLOW-UPS 93.
+#                     on one is waiting for nothing. item 93.
 #
 # A row is parked only when the supervisor has already put it in `draining`:
 # that is the proof the switch reached it. It is also what makes the observed
@@ -288,7 +288,7 @@ if [[ "${MODE}" == "force" ]]; then
   say "  with it) and reattempted with a full clock, no strike against the model."
   say "  Freeplay and campaigns with resume:true come back where they left off."
   # A switch left set by an aborted `graceful` is the normal way to arrive here
-  # (2026-08-29, FOLLOW-UPS 93): force STARTS the container, so leaving the
+  # (2026-08-29, item 93): force STARTS the container, so leaving the
   # switch set would hand back a fleet that runs and schedules nothing — a
   # state with no use. `drain` is the mode whose job is leaving it set, and it
   # stops the container instead.
@@ -356,7 +356,7 @@ fi
 set_switch "${WHY}"
 # From here the switch is on disk, so every way out of this script has to say so
 # — an aborted window that looks like nothing happened is a fleet that quietly
-# schedules nothing until somebody notices (2026-08-29, FOLLOW-UPS 93).
+# schedules nothing until somebody notices (2026-08-29, item 93).
 on_abort() {
   trap - INT TERM
   echo

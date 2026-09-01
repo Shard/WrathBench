@@ -79,7 +79,7 @@ interface MetaShape {
 /**
  * Name the platform a run's model came from, for a run that did not record
  * one. The rule lives in `runner/src/platform.ts` — the same one the writer
- * stamps into the `platform` column (FOLLOW-UPS 36) — so a historical run and
+ * stamps into the `platform` column (item 36) — so a historical run and
  * a stamped one are labelled alike, and a LAN box reads `local` here exactly
  * where `billingOf` calls it free.
  */
@@ -123,7 +123,7 @@ function str(v: unknown): string | null {
 }
 
 /**
- * The newest `items` sample (FOLLOW-UPS 50), parsed and shape-checked: a run
+ * The newest `items` sample (item 50), parsed and shape-checked: a run
  * written before the column existed, or a sample that carried none, is null.
  */
 function latestItems(db: Database, runId: string, cols: Set<string>): ItemSample[] | null {
@@ -359,7 +359,7 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
       // `SELECT *` on a database that predates the column simply has no key
       // here, which `num` turns into null — no schema guard needed.
       turn: num(r["turn"]),
-      // The player frame's numbers (FOLLOW-UPS 104), same rule.
+      // The player frame's numbers (item 104), same rule.
       health: num(r["health"]),
       maxHealth: num(r["max_health"]),
       power: num(r["power"]),
