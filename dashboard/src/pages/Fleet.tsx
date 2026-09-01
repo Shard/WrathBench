@@ -45,7 +45,7 @@ import {
   type FleetRow,
 } from "../lib/fleet";
 import { useFeeds } from "../lib/feeds";
-import { fmtDuration, fmtTokens, fmtUsd, modelDisplay, num, stamp } from "../lib/format";
+import { fmtDuration, fmtTokens, fmtUsd, modelDisplay, num, shortRunId, stamp } from "../lib/format";
 import { iconModels } from "../lib/lineup";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
@@ -169,7 +169,7 @@ export default function Fleet() {
                     <For each={f().paused}>
                       {(p) => (
                         <li>
-                          <A href={`/run/${encodeURIComponent(p.runId)}`}>{p.runId}</A> —{" "}
+                          <A href={`/run/${encodeURIComponent(p.runId)}`} title={p.runId}>{shortRunId(p.runId)}</A> —{" "}
                           <ModelIcon model={p.model} />
                           <span title={p.model}>{modelDisplay(p.model)}</span>
                           <Show when={p.account !== null}> on {p.account}</Show>: {pausedLabel(p)},{" "}
@@ -191,7 +191,7 @@ export default function Fleet() {
                     <For each={f().ended}>
                       {(e) => (
                         <li>
-                          <A href={`/run/${encodeURIComponent(e.runId)}`}>{e.runId}</A> — {e.detail}
+                          <A href={`/run/${encodeURIComponent(e.runId)}`} title={e.runId}>{shortRunId(e.runId)}</A> — {e.detail}
                         </li>
                       )}
                     </For>
@@ -268,7 +268,11 @@ function FleetRowView(props: { row: FleetRow }) {
       <td class="dim">{r().attempt === null ? "—" : `#${r().attempt}`}</td>
       <td class="dim" title={r().note ?? ""}>
         <Show when={href()} fallback={r().note ?? "—"}>
-          {(to) => <A href={to()}>{r().runId}</A>}
+          {(to) => (
+            <A href={to()} title={r().runId!}>
+              {shortRunId(r().runId!)}
+            </A>
+          )}
         </Show>
       </td>
       <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>

@@ -20,7 +20,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
-import { fmtCost, fmtDuration, fmtWhen, modelDisplay } from "../lib/format";
+import { fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
@@ -294,8 +294,8 @@ function Detail(props: { row: ModelRowView }) {
       <Show when={props.row.lastError !== null}>
         <p class="err">
           last error ({props.row.lastError!.reason}) in{" "}
-          <A href={`/run/${encodeURIComponent(props.row.lastError!.runId)}`}>
-            {props.row.lastError!.runId}
+          <A href={`/run/${encodeURIComponent(props.row.lastError!.runId)}`} title={props.row.lastError!.runId}>
+            {shortRunId(props.row.lastError!.runId)}
           </A>
           {/* The message is projected out publicly; without one there is nothing to introduce. */}
           <Show when={props.row.lastError!.message !== ""}>
