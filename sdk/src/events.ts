@@ -70,6 +70,13 @@ export interface EventStreamOptions {
   /** Full websocket URL, e.g. `ws://worldserver:8086/events`. */
   url: string;
   token: string;
+  /**
+   * The credential for the upgrade's `Authorization: Bearer` header
+   * (PROTOCOL.md, "Authentication"): the lease secret issued for `token`, or
+   * the operator's port secret. Undefined sends no header, which the module
+   * refuses with 401 — only a stub or a pre-auth module accepts that.
+   */
+  secret?: string;
   /** How many events to retain for `waitFor`/`recent`. Default 500. */
   bufferSize?: number;
   /** First seq expected on a fresh session. Default 0 (the module starts there). */
@@ -194,6 +201,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   readonly token: string;
 
   private readonly url: string;
+  private readonly secret: string | undefined;
   private readonly bufferSize: number;
   private readonly reconnectEnabled: boolean;
   private readonly minDelay: number;
@@ -224,6 +232,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   constructor(options: EventStreamOptions) {
     this.token = options.token;
     this.url = `${options.url}?token=${encodeURIComponent(options.token)}`;
+    this.secret = options.secret;
     this.bufferSize = options.bufferSize ?? 500;
     this.expectedSeq = options.expectFromSeq ?? 0;
     this.reconnectEnabled = options.reconnect ?? true;
@@ -295,7 +304,16 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   private openSocket(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let settled = false;
-      const ws = new this.WS(this.url);
+      // Bun's WebSocket takes request headers as a second-argument option (the
+      // WHATWG signature has only protocols there, hence the cast). Custom
+      // implementations receive the same object and may ignore it.
+      const ws =
+        this.secret === undefined
+          ? new this.WS(this.url)
+          : new (this.WS as unknown as new (url: string, init: { headers: Record<string, string> }) => WebSocket)(
+              this.url,
+              { headers: { authorization: `Bearer ${this.secret}` } },
+            );
       this.socket = ws;
 
       ws.addEventListener("open", () => {

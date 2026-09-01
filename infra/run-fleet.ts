@@ -77,6 +77,7 @@ import {
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { accountHeldBy, backoffMs, deferSidecarPath, isTainted, parseDefers, releaseRunSession, slug, type DeferEntry, type RosterSpec } from "./run-roster";
+import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { Trajectory } from "../runner/src/trajectory";
 import { harnessSeries } from "../runner/src/comparability";
 import {
@@ -2687,7 +2688,9 @@ export async function sweepNames(
     try {
       const r = await f(url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        // Operator class (module/PROTOCOL.md "Authentication"): character
+        // deletes are the port secret's alone.
+        headers: { "content-type": "application/json", ...moduleAuthHeaders() },
         body: JSON.stringify({ token, account: sw.account, character: sw.character }),
       });
       const j = (await r.json()) as { deleted?: boolean; error?: string };
@@ -3169,7 +3172,7 @@ export function serverIdentity(body: unknown, bootMarker: () => string): ServerI
 async function readServerIdentity(): Promise<ServerIdentity | undefined> {
   let body: unknown;
   try {
-    const res = await fetch(`${MODULE_URL}/health`, { signal: AbortSignal.timeout(5_000) });
+    const res = await fetch(`${MODULE_URL}/health`, { headers: moduleAuthHeaders(), signal: AbortSignal.timeout(5_000) });
     if (!res.ok) return undefined;
     body = await res.json();
   } catch {

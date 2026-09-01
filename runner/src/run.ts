@@ -36,6 +36,7 @@ import { Database } from "bun:sqlite";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { clearAccountCharacters } from "./hygiene";
+import { leaseSessionSecret, releaseSessionSecret } from "./module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
@@ -599,9 +600,20 @@ async function main(): Promise<void> {
    */
   const turnOffset = resumed ? trajectory.maxTurn(config.runId) : 0;
 
+  /*
+   * Lease this token on the module before the child exists: binds it to the
+   * run's account and yields the session secret the child authenticates with
+   * (module/PROTOCOL.md, "Authentication"). The host keeps the port secret;
+   * the child gets only this. A resume re-leases the stored token, which
+   * rotates the secret and keeps the character binding.
+   */
+  const lease = await leaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account });
+  if (lease.secret === undefined) console.error(`[wrathbench] ${lease.note}`);
+
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token,
+    secret: lease.secret,
     account: config.account,
     scratchpad,
     snippetTimeoutMs: config.snippetTimeoutMs,
@@ -904,6 +916,9 @@ async function main(): Promise<void> {
   if (outcome.kind === "paused") {
     console.error(`[wrathbench] paused: ${outcome.reason} — resume with --resume ${config.runId}`);
   } else {
+    // The token's lease goes with the run; a resume never follows a
+    // termination, so nothing will present that secret again.
+    await releaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token });
     console.error(`[wrathbench] terminated: ${outcome.reason}${outcome.detail !== undefined ? ` (${outcome.detail})` : ""}`);
   }
   trajectory.close();

@@ -20,6 +20,7 @@
 import { connect, type WrathClient } from "../../sdk/src/index";
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
+import { authHeaders, MODULE_SECRET } from "./lib/auth";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -37,7 +38,7 @@ function fail(m: string): never {
   throw new Error(m);
 }
 
-const health = await fetch(`${BASE}/health`).then((r) => r.json() as Promise<any>);
+const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}; ${SENDER} -> ${RECEIVER} on ${ACCOUNT}`);
 
@@ -52,7 +53,7 @@ function ctxFor(character: string, token: string): FixtureContext {
     contendedDeadlineMs: 10_000,
     contendedRetryMs: 5_000,
     createAndLogout: async () => {
-      const c = await connect({ baseUrl: BASE, token: `${token}-create` });
+      const c = await connect({ baseUrl: BASE, token: `${token}-create`, secret: MODULE_SECRET });
       try {
         await c.createSession({ account: ACCOUNT, character, race: 1, class: 1 });
         await c.logout();
@@ -91,7 +92,7 @@ try {
   }
 
   // 1. The sender mails money to the receiver.
-  sender = await connect({ baseUrl: BASE, token: tokenS });
+  sender = await connect({ baseUrl: BASE, token: tokenS, secret: MODULE_SECRET });
   await atMailbox(sender, SENDER);
   const moneyBefore = sender.state.money?.value ?? fail("sender money unobserved");
   const sent = await sender.sendMail(RECEIVER, SUBJECT, "sent by the mail smoke", { money: MONEY, timeout: 10_000 });
@@ -106,7 +107,7 @@ try {
   sender = undefined;
 
   // 2. The receiver lists, takes the money, deletes the mail.
-  receiver = await connect({ baseUrl: BASE, token: tokenR });
+  receiver = await connect({ baseUrl: BASE, token: tokenR, secret: MODULE_SECRET });
   await atMailbox(receiver, RECEIVER);
   const box = await receiver.mailList({ timeout: 10_000 });
   log(`inbox: ${JSON.stringify(box.mails.map((m) => [m.mailId, m.senderName, m.subject, m.money]))}`);

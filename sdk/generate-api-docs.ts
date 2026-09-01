@@ -160,6 +160,10 @@ const CLIENT_RAW: readonly Row[] = [
 /** WrathClient prototype members that are internal plumbing, deliberately undocumented. */
 const CLIENT_INTERNAL = new Set([
   "action",
+  // Operator-only (module/PROTOCOL.md "Authentication"): a snippet's own
+  // credential is refused on these, so the model is not shown them.
+  "lease",
+  "releaseLease",
   "noteActionHint",
   "drainActionHints",
   "request",

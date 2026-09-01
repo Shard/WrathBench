@@ -18,6 +18,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../src/comparability";
+import { moduleAuthHeaders } from "../src/module-auth";
 import { EPISODES, EPISODE_IDS, EPISODE_LIST } from "../src/episodes";
 import { HARNESSES } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
@@ -126,7 +127,7 @@ function worldserverIdentity(moduleUrl: string): () => Promise<ApiInfoResponse["
   let inflight: Promise<ApiInfoResponse["worldserver"]> | undefined;
   const read = async (): Promise<ApiInfoResponse["worldserver"]> => {
     try {
-      const res = await fetch(`${moduleUrl}/health`, { signal: AbortSignal.timeout(2_000) });
+      const res = await fetch(`${moduleUrl}/health`, { headers: moduleAuthHeaders(), signal: AbortSignal.timeout(2_000) });
       if (!res.ok) return null;
       const o = (await res.json()) as { build?: unknown; startedAtMs?: unknown };
       if (typeof o.build !== "string" || typeof o.startedAtMs !== "number") return null;

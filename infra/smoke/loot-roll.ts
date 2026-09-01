@@ -42,6 +42,7 @@
 import { connect, isDecodeError, isEvent, type WrathClient } from "../../sdk/src/index";
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
+import { authHeaders, MODULE_SECRET } from "./lib/auth";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 const ACCOUNT_A = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -58,7 +59,7 @@ function fail(m: string): never {
   throw new Error(m);
 }
 
-const health = await fetch(`${BASE}/health`).then((r) => r.json() as Promise<any>);
+const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}; ${NAME_A} on ${ACCOUNT_A}, ${NAME_B} on ${ACCOUNT_B}`);
 
@@ -73,7 +74,7 @@ function fixtureFor(account: string, character: string, token: string): FixtureC
     contendedDeadlineMs: 10_000,
     contendedRetryMs: 5_000,
     createAndLogout: async () => {
-      const c = await connect({ baseUrl: BASE, token: `${token}-create` });
+      const c = await connect({ baseUrl: BASE, token: `${token}-create`, secret: MODULE_SECRET });
       try {
         await c.createSession({ account, character, race: 1, class: 1 });
         await c.logout();
@@ -97,8 +98,8 @@ try {
     await ensureFixtureCharacter(ctx);
     await applyScenario(ctx, SCENARIO);
   }
-  a = await connect({ baseUrl: BASE, token: TOKEN_A });
-  b = await connect({ baseUrl: BASE, token: TOKEN_B });
+  a = await connect({ baseUrl: BASE, token: TOKEN_A, secret: MODULE_SECRET });
+  b = await connect({ baseUrl: BASE, token: TOKEN_B, secret: MODULE_SECRET });
   await a.createSession({ account: ACCOUNT_A, character: NAME_A, race: 1, class: 1 });
   await b.createSession({ account: ACCOUNT_B, character: NAME_B, race: 1, class: 1 });
   log(`both in world: ${NAME_A} ${a.state.self.guid}, ${NAME_B} ${b.state.self.guid}`);

@@ -1005,6 +1005,36 @@ job needs the token of the lane it was scheduled on there (`claude setup-token`)
 subscription; without it the roster refuses the episode with a `launch-failed`
 row naming that variable, rather than burning a session.
 
+`WRATHBENCH_MODULE_SECRET` — the module's **port secret** (module/PROTOCOL.md,
+"Authentication"; FOLLOW-UPS 19). Every request to the worldserver's control
+port, `GET /health` included, must carry it (or a session secret leased with
+it) as `Authorization: Bearer`, and a module started without one — or with one
+shorter than 32 characters — refuses to listen at all and says so at ERROR in
+`Server.log`. Generate it once with `openssl rand -hex 32` and put it in
+`.env`; it is the only place it lives. Who reads it from there:
+
+- the **runner and fleet** services, through Bun's `.env` autoload: the run
+  host presents it for hygiene, `/health` and `POST /lease`, then hands the
+  snippet child only the per-run session secret the lease returned. The
+  child's environment never carries the port secret (`sandboxChildEnv` drops
+  it) — a snippet that could read it could list and delete on any account;
+- the **smokes** (`infra/smoke/lib/auth.ts`), exec'd in the runner container,
+  and the deploy script's `/health` probes, which run there too;
+- the **worldserver**, as `AC_WRATH_BENCH_SECRET`. Compose interpolates that
+  from the *shell*, not from the repo-root `.env` (its project directory is
+  `infra/`), so `./infra/deploy-worldserver.sh` exports the value from `.env`
+  before it recreates the container and refuses to open the window when it is
+  missing; `--dry-run` prints its length. A bare `docker compose up -d
+  worldserver` from a shell without it ships an empty secret and the module
+  refuses to listen — the loud failure, by design. An operator's loopback
+  probe inside the container needs the header too:
+  `docker compose -f infra/compose.yml exec worldserver sh -c 'curl -s -H "Authorization: Bearer $AC_WRATH_BENCH_SECRET" localhost:8086/health'`.
+
+Rotating it is a deploy window: change `.env`, then `deploy-worldserver.sh`
+(the fleet is recreated on the way out and re-reads `.env`; a live `runner`
+container keeps the old value in already-running processes only, and every
+`docker compose exec` reads the file fresh).
+
 ### Harness version stamping
 
 Every episode is stamped with `git describe --tags --always --dirty`, computed

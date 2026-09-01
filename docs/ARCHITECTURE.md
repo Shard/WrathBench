@@ -36,7 +36,7 @@ The SDK is versioned. Its surface is part of the harness version.
 ### runner/ (Bun/TypeScript, MIT)
 
 - MCP server exposing tools to the model: run snippet, read recent events, query state summary, search reference bundle, read and write scratchpad, reflect, log status, read log.
-- Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with network access only to the module. Hard per-snippet timeout.
+- Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with network access only to the module, an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), and a Linux Landlock filesystem ruleset applied before exec (`runner/src/sandbox/confine.ts`) so it can read the interpreter, `runner/`, `sdk/` and `node_modules/` and nothing else — not `.env`, not the home directory. Hard per-snippet timeout.
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
 - Trajectory log: JSONL per run containing every snippet, its result, every event batch the model saw, and a periodic state line (level, zone, XP, position).

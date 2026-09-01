@@ -18,6 +18,8 @@
  * imports this file.
  */
 
+import { authHeaders } from "./auth";
+
 /** Repo root as a smoke sees it: the fixtures tool is spawned from there. */
 export const REPO_ROOT = `${import.meta.dir}/../../..`;
 
@@ -74,7 +76,7 @@ export async function characterNames(ctx: FixtureContext): Promise<string[]> {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(`${ctx.base}/characters`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...authHeaders() },
       // A fresh token per attempt: a reused one can still be held by the
       // parked session the previous attempt timed out on.
       body: JSON.stringify({ token: `${ctx.token}-list${attempt}`, account: ctx.account }),
@@ -143,7 +145,7 @@ export async function deleteFixtureCharacters(ctx: Pick<FixtureContext, "base" |
       if (attempt > 0) await Bun.sleep(3000);
       const res = await fetch(`${ctx.base}/character-delete`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify({ token: `${ctx.token}-del${i}-${attempt}`, account: ctx.account, character }),
       }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: String(e) }) }));
       const json = (await res.json().catch(() => undefined)) as { ok?: boolean; error?: string; result?: number } | undefined;
