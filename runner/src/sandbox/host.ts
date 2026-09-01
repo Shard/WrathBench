@@ -152,6 +152,11 @@ export class SandboxHost {
   get entryPath(): string {
     return this.opts.entryPath ?? join(import.meta.dir, "entry.ts");
   }
+  /** The Landlock wrapper the child is exec'd through (see start()). */
+  get confinePath(): string {
+    return join(import.meta.dir, "confine.ts");
+  }
+
 
   private notice(kind: HarnessNotice["kind"], text: string): void {
     const n: HarnessNotice = { ts: (this.opts.now ?? Date.now)(), kind, text };
@@ -180,7 +185,14 @@ export class SandboxHost {
     // `.env` (where provider keys live) would re-enter the child right past the
     // allowlist. Pointing the flag at /dev/null disables that load (verified on
     // Bun 1.4.0), making the child's env exactly `sandboxChildEnv`.
-    this.proc = Bun.spawn(["bun", "--env-file=/dev/null", this.entryPath], {
+    //
+    // The child is exec'd through confine.ts, which applies a Landlock
+    // filesystem ruleset first (FOLLOW-UPS 19): the snippet process can then
+    // read the interpreter, runner/, sdk/ and node_modules/ and nothing else —
+    // not `.env` by any path, not $HOME, not /tmp — and the wrapper exits
+    // instead of exec'ing when the kernel or container refuses the ruleset.
+    // The IPC channel and stdio are inherited descriptors and survive the exec.
+    this.proc = Bun.spawn(["bun", this.confinePath, "bun", "--env-file=/dev/null", this.entryPath], {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,
