@@ -53,7 +53,7 @@ import {
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
@@ -451,15 +451,19 @@ export default function RunDetail() {
                 {(l) => (
                   <p class="dim" title="a durable freeplay stream: one character, continued across attempts">
                     freeplay stream{" "}
-                    <Show when={l().streamId !== run().runId} fallback={l().streamId}>
-                      <A href={`/run/${encodeURIComponent(l().streamId)}`}>{l().streamId}</A>
+                    <Show when={l().streamId !== run().runId} fallback={shortRunId(l().streamId)}>
+                      <A href={`/run/${encodeURIComponent(l().streamId)}`} title={l().streamId}>
+                        {shortRunId(l().streamId)}
+                      </A>
                     </Show>{" "}
                     · attempt {l().attempt} of {l().attempts}
                     <Show when={l().previous}>
                       {(p) => (
                         <>
                           {" · continues "}
-                          <A href={`/run/${encodeURIComponent(p())}`}>{p()}</A>
+                          <A href={`/run/${encodeURIComponent(p())}`} title={p()}>
+                            {shortRunId(p())}
+                          </A>
                         </>
                       )}
                     </Show>
@@ -467,7 +471,9 @@ export default function RunDetail() {
                       {(n) => (
                         <>
                           {" · continued by "}
-                          <A href={`/run/${encodeURIComponent(n())}`}>{n()}</A>
+                          <A href={`/run/${encodeURIComponent(n())}`} title={n()}>
+                            {shortRunId(n())}
+                          </A>
                         </>
                       )}
                     </Show>

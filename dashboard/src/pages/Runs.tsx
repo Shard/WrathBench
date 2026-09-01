@@ -26,7 +26,7 @@ import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { SeriesFilterNote } from "../components/SeriesSelect";
 import { useFeeds } from "../lib/feeds";
-import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, stamp } from "../lib/format";
+import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
 import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
 import {
@@ -223,7 +223,12 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
       case "run":
         return (
           <td>
-            <A href={href()}>{r().runId}</A>
+            {/* The id's tail only: model, episode and date have their own
+                columns, so the long prefix is repetition. The full id is the
+                hover and the run page. */}
+            <A href={href()} title={r().runId}>
+              {shortRunId(r().runId)}
+            </A>
             {/* A durable freeplay stream is one character across attempts, and
                 this line is the whole of the link between them: the table sorts
                 thirteen ways, so a11 is often nowhere near a12 and the text has
@@ -236,13 +241,17 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
                     {(p) => (
                       <>
                         {" · continues "}
-                        <A href={runHref(p())}>{p()}</A>
+                        <A href={runHref(p())} title={p()}>
+                          {shortRunId(p())}
+                        </A>
                       </>
                     )}
                   </Show>
                   <Show when={l().previous !== l().streamId && l().attempt > 2}>
                     {" · from "}
-                    <A href={runHref(l().streamId)}>{l().streamId}</A>
+                    <A href={runHref(l().streamId)} title={l().streamId}>
+                      {shortRunId(l().streamId)}
+                    </A>
                   </Show>
                 </div>
               )}

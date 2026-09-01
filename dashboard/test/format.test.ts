@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, COST_BASIS_NOTE } from "../src/lib/format";
+import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -282,4 +282,14 @@ test("modelDisplay: a baked-in -free suffix reads the same as :free", () => {
   expect(modelDisplay("hy3-free")).toBe("hy3 (free)");
   expect(modelDisplay("poolside/laguna-s-2.1-free")).toBe("laguna-s-2.1 (free)");
   expect(modelDisplay("-free")).toBe("-free");
+});
+
+describe("shortRunId", () => {
+  test("a fleet-minted id is its date and attempt tail", () => {
+    expect(shortRunId("fleet-nemotron-super-freeplay-nemotron-3-super-120b-a12b-20260830-a6")).toBe("20260830-a6");
+  });
+  test("an id of another shape is shown whole", () => {
+    expect(shortRunId("smoke-death-recovery")).toBe("smoke-death-recovery");
+    expect(shortRunId("run-20260830")).toBe("run-20260830");
+  });
 });
