@@ -24,6 +24,15 @@
       property="og:description"
       content="An agent workbench for World of Warcraft: AI models play WotLK through a TypeScript SDK on a private AzerothCore server."
     />
+    <!--
+      The origin-dependent card tags — og:url, og:image and the Twitter set —
+      are injected here by the Vite hook in vite.config.ts, because og:image
+      has to be an absolute URL and only the build knows the origin. A build
+      that names none (the private viewer's) leaves this comment alone and
+      ships no image tag rather than an unresolvable relative one. The picture
+      itself is rendered before the build by infra/render-og.ts.
+    -->
+    <!-- wrathbench:og -->
   </head>
   <body>
     <div id="root"></div>
