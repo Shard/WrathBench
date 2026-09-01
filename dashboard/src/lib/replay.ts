@@ -1,5 +1,5 @@
 /**
- * Map replay as a position feed (FOLLOW-UPS 22).
+ * Map replay as a position feed (item 22).
  *
  * The live map draws `AgentPosition[]` and asks nothing about where they came
  * from. Replay is therefore not a second renderer: it is the same feed, filled
@@ -54,7 +54,7 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       questsCompleted: p.questsCompleted,
       // Track points carry no inventory; the replay popout shows none.
       items: null,
-      // The player frame as that sample recorded it (FOLLOW-UPS 104); a track
+      // The player frame as that sample recorded it (item 104); a track
       // from before the columns existed carries nulls and draws unobserved.
       health: p.health ?? null,
       maxHealth: p.maxHealth ?? null,

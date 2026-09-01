@@ -98,9 +98,9 @@ export const EPISODES = {
       "The long scored episode: six hours of wall clock, otherwise identical to e90 — same fresh " +
       "start, same fixed prompt, same tools, no objective. Idle watchdog only; the no-XP " +
       "watchdog is deliberately off, because walking across a continent earns nothing for " +
-      "hours and that is the behaviour this tier exists to permit. Scored in its own group: an " +
+      "hours and that is the behaviour this episode exists to permit. Scored in its own group: an " +
       "e360 row never shares a chart with an e90 row, since four times the budget is four " +
-      "times the opportunity. Entry is two qualifying e90 episodes on the current harness " +
+      "times the opportunity. Entry is one counted e90 reaching level 5 on the current harness " +
       "version, and the 12000-call ceiling holds e90's rate of 1000 calls per thirty minutes.",
   },
   probing: {

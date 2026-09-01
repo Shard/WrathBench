@@ -16,8 +16,8 @@ import type { StatePoint } from "@viewer/api-types";
 import { scaleLinear } from "../lib/chart";
 import { xpChartModel } from "../lib/runview";
 
-/** Elapsed wall-clock label for an x tick: "mm:ss", or "Hh Mm" past an hour. */
-function fmtElapsed(ms: number): string {
+/** Elapsed wall-clock label for an x tick: "mm:ss", or "Hh Mm" past an hour — shorter than `fmtElapsed`, which is a reading, not a tick. */
+function tickLabel(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 3600) return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   const h = Math.floor(s / 3600);
@@ -61,7 +61,7 @@ export function XpChart(props: {
     const n = 5;
     return Array.from({ length: n + 1 }, (_, i) => {
       const ts = m.t0 + ((m.t1 - m.t0) * i) / n;
-      return { ts, label: fmtElapsed(ts - m.t0) };
+      return { ts, label: tickLabel(ts - m.t0) };
     });
   });
 

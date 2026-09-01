@@ -75,7 +75,7 @@ import {
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
-import { OPAQUE_PAUSE_REASON } from "../lib/ladder";
+import { OPAQUE_PAUSE_REASON } from "../lib/runs";
 
 const WINDOW = 200;
 
@@ -162,7 +162,7 @@ export default function RunDetail() {
   const params = useParams<{ id: string }>();
   const location = useLocation();
 
-  /* Which worldserver the viewer can see, for the footer (FOLLOW-UPS 42). */
+  /* Which worldserver the viewer can see, for the footer (item 42). */
   const [info, setInfo] = createSignal<ApiInfoResponse | undefined>(undefined);
   const [detail, setDetail] = createSignal<RunDetailResponse | undefined>(undefined);
   const [entries, setEntries] = createSignal<FeedEntry[]>([]);
@@ -670,7 +670,7 @@ export default function RunDetail() {
                         level {num(run().level)} · {num(run().xp)} xp in level · {fmtMoney(run().money)} ·{" "}
                         {num(run().questsCompleted)} quests
                       </div>
-                      {/* Newest recorded inventory (FOLLOW-UPS 50): plain lists, no icons. */}
+                      {/* Newest recorded inventory (item 50): plain lists, no icons. */}
                       <div class="sub">carrying: {fmtItems(run().items, false)}</div>
                       <div class="sub">equipped: {fmtItems(run().items, true)}</div>
                       {/*
@@ -786,7 +786,7 @@ export default function RunDetail() {
 }
 
 /**
- * The worldserver this run actually drove against, when known (FOLLOW-UPS 42).
+ * The worldserver this run actually drove against, when known (item 42).
  *
  * A run stamped with its own `comparability.serverBuild` states that as fact —
  * it is what `/health` reported at this run's own launch or resume, not a

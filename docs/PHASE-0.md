@@ -4,8 +4,9 @@
 build-list box is checked. Work since then has followed this document's own
 rule — a capability enters when an organic run makes it the next obstacle — so
 several items in "Deferred" have returned on that basis: the results pipeline
-and dashboard, episode ids and the evidence ladder, the probe lane, and a
-harness version series (tags now run to `harness-0.5`). The record of what
+and dashboard, episode ids and the evidence ladder, the probe lane, a harness
+version series (tags now run to `harness-0.5`), and the gated public site
+(2026-08-30, an operator decision; `docs/PUBLIC-DASHBOARD.md`). The record of what
 shipped when is `docs/WORKLOG.md`; what a run means is `docs/METHODOLOGY.md`.
 This page is kept as the statement of the gate that was met, not as the current
 task list — that is `docs/FOLLOW-UPS.md`.

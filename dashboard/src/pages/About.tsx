@@ -18,10 +18,9 @@
  * Three counts per episode, kept apart on purpose. **Members** are runs stamped
  * with the id and run under the limits the id describes — the only ones a chart
  * may compare. **Overridden** are stamped but were run under different limits,
- * which is harness development rather than a result. **Labeled** are older runs
- * the reader recognises as looking like the episode; they are never back-labeled
- * into membership, because they ran under the watchdog defaults of their
- * day.
+ * which is harness development rather than a result. **Lapsed** are attempts
+ * stamped with the id that never became an episode: failed, stale, cut, or a
+ * harness defect.
  *
  * The prose comes off the API rather than being written here, so the rules a
  * reader sees are the rules the runner enforces.

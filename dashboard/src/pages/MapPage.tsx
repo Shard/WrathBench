@@ -11,7 +11,7 @@
  *
  * Replay (`/map?run=<id>`) is a *feed swap*, not a second renderer: the same
  * `AgentPosition[]` the live poll produces is produced instead by a time cursor
- * over one run's recorded track (FOLLOW-UPS 22). Nothing in the draw path asks
+ * over one run's recorded track (item 22). Nothing in the draw path asks
  * which mode it is in — the two differences are that a scrubbed pip is placed
  * rather than walked (the lerp would trail the cursor and read as a bug), and
  * that the route walked so far is drawn behind it.
@@ -309,7 +309,7 @@ export default function MapPage() {
        * Below the threshold nothing is drawn into a cell, so nothing can be
        * covered and the lattice is one path rather than one rect per cell: the
        * whole world on screen was up to 4096 `strokeRect` calls, and a pan made
-       * that per frame (FOLLOW-UPS 60). Shared boundaries now carry one line
+       * that per frame (item 60). Shared boundaries now carry one line
        * where the inset rects carried two, which reads thinner and is the only
        * visible change.
        */
