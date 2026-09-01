@@ -1843,6 +1843,25 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   };
 }
 
+/**
+ * Whether a record belongs in the feed the API serves.
+ *
+ * The trajectory on disk stays complete — this decides only what the run page
+ * is handed. The claude-code driver forwards every CLI system message, and its
+ * `thinking_tokens` envelopes are a running estimate the page has no reading
+ * for: it renders them as raw JSON, hundreds of them on a long run, on a page
+ * that is already heavy. Dropped from the served list on the operator's call,
+ * 2026-09-01. The `init` envelope stays: it is the session and driver marker
+ * the cost tally, the resolved model and the claude mark all read, and it is
+ * the one carrying `session_id` for every session a run opens.
+ *
+ * Records that will not parse are not reachable here; they surface as
+ * `unparseable-line` and must, since a line nobody can read is a defect.
+ */
+function isServedEntry(rec: Record<string, unknown>): boolean {
+  return !(rec["t"] === "claude_system" && rec["subtype"] === "thinking_tokens");
+}
+
 /** A complete line that is not JSON must surface, never vanish. */
 function unparseable(text: string, i: number, start: number, end: number): EntrySummary {
   return { i, t: "unparseable-line", ts: 0, start, end, line: clip(text, 400).text, clipped: true };
@@ -1867,6 +1886,14 @@ export class TrajectoryTail {
   private readonly tradeMarks: TradeMarkView[] = [];
   /** `reflect_window` transitions, for the run page's per-turn accent. */
   private readonly reflectMarks: ReflectMark[] = [];
+  /**
+   * The last timestamp the FILE carries, served or not: the run page closes a
+   * finished run's last segment on it, and `scanRunTotals` reads it off every
+   * line. Folding it out of the served list instead would let a run whose last
+   * record is one of the envelopes `isServedEntry` drops report a shorter
+   * playtime on the run page than in the listing.
+   */
+  private lastTsSeen: number | null = null;
   /** Bytes consumed as complete lines. */
   private consumed = 0;
   /** Bytes after the last newline: an entry still being written. */
@@ -1907,6 +1934,7 @@ export class TrajectoryTail {
       this.talentMarks.length = 0;
       this.tradeMarks.length = 0;
       this.reflectMarks.length = 0;
+      this.lastTsSeen = null;
     }
     if (size === this.size) return [];
 
@@ -1945,6 +1973,12 @@ export class TrajectoryTail {
         // Not a milestone: its own record kind, written by the loop's builder.
         const reflect = reflectMarkOf(rec);
         if (reflect !== null) this.reflectMarks.push(reflect);
+        const ts = rec["ts"];
+        if (typeof ts === "number" && ts > 0) this.lastTsSeen = ts;
+        // After the accumulators, so a record that is not served still counts
+        // toward everything derived from the file, and after the offset above,
+        // so the byte range of every later entry — what `raw` reads — stands.
+        if (!isServedEntry(rec)) continue;
         summary = summarize(rec, i, start, end);
       } catch {
         summary = unparseable(text, i, start, end);
@@ -1955,6 +1989,11 @@ export class TrajectoryTail {
     this.consumed = offset;
     this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
     return added;
+  }
+
+  /** The last timestamp in the file, from records served and dropped alike. */
+  get lastTs(): number | null {
+    return this.lastTsSeen;
   }
 
   /** Achievements this run's records account for; null when it wrote none. */
