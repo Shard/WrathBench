@@ -15,6 +15,7 @@ import { For, Show, createMemo } from "solid-js";
 import type { StatePoint } from "@viewer/api-types";
 import { scaleLinear } from "../lib/chart";
 import { xpChartModel } from "../lib/runview";
+import { VB_W } from "./ChartParts";
 
 /** Elapsed wall-clock label for an x tick: "mm:ss", or "Hh Mm" past an hour — shorter than `fmtElapsed`, which is a reading, not a tick. */
 function tickLabel(ms: number): string {
@@ -25,7 +26,7 @@ function tickLabel(ms: number): string {
   return `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
-const VB_W = 1000;
+/** The shared width, and a height of its own: this is a strip under a run's log, not a plot of its own. */
 const VB_H = 200;
 const M = { top: 12, right: 14, bottom: 24, left: 48 };
 
