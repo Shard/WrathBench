@@ -28,11 +28,60 @@ Two error channels, deliberately separated (docs/CONTRACTS.md):
   `SMSG_CHARACTER_LOGIN_FAILED` or `SMSG_NOTIFICATION` event), because that is how
   a real client would learn of them.
 
+## Authentication
+
+Every HTTP request and every `/events` upgrade carries
+`Authorization: Bearer <credential>` (FOLLOW-UPS 19; the accepted-risk statement
+in docs/CONTRACTS.md). A request without a valid one is `401 unauthorized`
+before any route runs, including `GET /health`. There is no unauthenticated
+path and no backward compatibility with callers that send none.
+
+Two credential classes:
+
+- **Operator** — the bearer is the *port secret*, `WrathBench.Secret`
+  (`AC_WRATH_BENCH_SECRET` in infra/compose.yml, from `WRATHBENCH_MODULE_SECRET`
+  in the operator's `.env`; docs/OPERATIONS.md "Secrets"). May use every route
+  with any token. Held by the runner host process, the fleet supervisor and the
+  smoke scripts; never by the snippet child (the sandbox strips it from the
+  child's environment).
+- **Session** — the bearer is a *lease secret*, a 64-hex-character random value
+  the module issued on `POST /lease` for exactly one token. It authenticates
+  `POST /session`, `POST /action`, `DELETE /session` and the `/events` upgrade
+  for that token alone (`403 token_mismatch` for any other), plus `GET /health`.
+  Everything else — leasing, `/characters`, `/character-delete` — is
+  `403 operator_only`. This is what the runner hands the snippet child, so a
+  snippet in run A holds no credential that reaches run B.
+
+The lease is what binds a token to an account and a character:
+
+- `POST /lease { token, account }` (operator) records `token → account` and
+  returns the secret. Re-leasing a token rotates its secret (a resumed run
+  re-leases the token it stored) and keeps its character binding unless the
+  account changed.
+- A session-class `POST /session` lands on the lease's account whatever the body
+  says (`403 account_not_leased` if the body names another). The first create
+  that succeeds binds the token to that character; a later same-token create
+  naming a different one is `409 character_bound` with `bound: <name>`. A create
+  the core refused (name taken, bad race/class) binds nothing.
+- The secret exists before the session does, which is why a subscriber can open
+  `/events` first — as the SDK does, to catch the login burst — and still be
+  validated: the upgrade is checked against the lease, not against a live
+  session. (The alternative, requiring an existing session to subscribe, would
+  have flipped the connect-before-create order the whole state cache depends on
+  and lost every `SMSG_UPDATE_OBJECT` of the login.)
+- `DELETE /lease { token }` (operator) revokes the credential; it does not touch
+  a live session under the token.
+
+The module never logs a secret; `POST /lease` is the only response that carries
+one. Secrets are compared in constant time. With `WrathBench.Secret` unset or
+shorter than 32 characters the module does not listen at all (logged at ERROR),
+so a mis-deployed worldserver is unreachable rather than open.
+
 ## Endpoints
 
 ### GET /health
 
-Module and world status. No auth, no body.
+Module and world status. Either credential class, no body.
 
 Two views (2026-08). Callers on the compose network — the runner and, through
 it, the snippet sandbox — get liveness plus build identity: `ok`, `module`,
@@ -42,8 +91,8 @@ with `sessions` / `droppedPackets` / `droppedPacketsLive` present but zeroed
 session count and the drop census describe module internals and other runs'
 sessions, which the observation contract never serves to a snippet. The full
 view below is served only to loopback callers — an operator inside the
-worldserver container, e.g.
-`docker compose -f infra/compose.yml exec worldserver curl -s localhost:8086/health`.
+worldserver container, with the port secret the container already holds, e.g.
+`docker compose -f infra/compose.yml exec worldserver sh -c 'curl -s -H "Authorization: Bearer $AC_WRATH_BENCH_SECRET" localhost:8086/health'`.
 
 Operator (loopback) response `200`:
 ```json
@@ -134,13 +183,20 @@ Errors:
 - `400 {"ok":false,"error":"missing_token"}`
 - `400 {"ok":false,"error":"missing_character"}`
 - `400 {"ok":false,"error":"weak_token","received":<len>,"minimum":32,"hint":...}` —
-  the token is shorter than 32 characters. The session token is a bearer
-  capability over `/action`, `/events` and `DELETE /session`, so a guessable one
-  (the old run-id default was a second-granularity timestamp) lets one run drive
-  another; length is a proxy for entropy until the module issues the secret
-  itself (FOLLOW-UPS item 19, open). Checked before the session is registered. The
-  `/characters` and `/character-delete` utility surfaces are deliberately not
-  gated: they park at character-select, never enter world, and take no actions.
+  the token is shorter than 32 characters. The token is no longer the credential
+  (the lease secret is; "Authentication" above) but it still keys every session,
+  audit file and event stream, so a guessable one lets an operator-class caller
+  collide with another run by accident. Checked before the session is
+  registered. `POST /lease` applies the same floor; the `/characters` and
+  `/character-delete` utility surfaces do not (they park at character-select and
+  are operator-only anyway).
+- `401 {"ok":false,"error":"unauthorized"}` — no valid credential ("Authentication").
+- `403 {"ok":false,"error":"token_mismatch"}` — a session-class caller named a
+  token other than its lease's.
+- `403 {"ok":false,"error":"account_not_leased"}` — a session-class body named an
+  account other than the lease's.
+- `409 {"ok":false,"error":"character_bound","bound":"<name>"}` — a session-class
+  create for a different character than the one this token already played.
 - `400 {"ok":false,"error":"invalid_race_class","token":...}` — the character
   does not exist and race/class are not both in [1,11] (see above; decided at
   char-enum time, before any char-create packet is synthesized).
@@ -463,15 +519,34 @@ only through the event whitelist: the pet, party, mail, bank and trade
 replies are whitelisted (2026-08-29); the rest have none yet, which is
 exactly the evidence the hatch exists to produce.
 
+### POST /lease
+
+Operator only. `{ "token": <str>, "account"?: <str> }` →
+`200 { "ok": true, "token", "account", "secret", "character"? }`. Binds the
+token to the account (default `WrathBench.Account`) and issues — or, for a
+token already leased, rotates — its session secret; `character` is present when
+an earlier create under this token already bound one. Errors: `400
+missing_token`, `400 weak_token`, `403 account_not_permitted`, `403
+operator_only`. See "Authentication".
+
+### DELETE /lease
+
+Operator only. `{ "token": <str> }` → `200 { "ok": true, "token", "released": <bool> }`.
+Revokes the token's lease secret; a live session under the token is untouched.
+
 ### POST /characters
 
+Operator only (`403 operator_only` for a session-class caller).
 `{ "token": <str>, "account"?: <str> }` → `200 { "ok": true, "token", "enum": { "count": <number>, "characters": [ { "guid", "name", "race", "class", "gender", "level" }, ... ] } }`.
 A parked utility session (never enters world) answers with the decoded `SMSG_CHAR_ENUM` for the account — the same data a client's character-select screen shows. Exists for the runner's episode hygiene (list-then-delete leftover characters); errors mirror `/character-delete` (`missing_token`, `token_in_use`, `account_not_permitted`, `unknown_account`, `account_in_use` when a live session holds the account, `504 timeout`).
 
 ### POST /character-delete
 
-Delete a character by name through the real `CMSG_CHAR_DELETE` path (added in
-the quest/combat extension, 2026-08). Needed because per-episode fresh
+Operator only (`403 operator_only` for a session-class caller; the snippet
+child therefore cannot delete any character, its own included — a fresh start
+is the operator's episode reset, not the model's). Delete a character by name
+through the real `CMSG_CHAR_DELETE` path (added in the quest/combat extension,
+2026-08). Needed because per-episode fresh
 characters accumulate against the realm's 10-characters-per-account
 cap. The module stands up a short-lived parked session, authenticates, walks
 the character list, sends `CMSG_CHAR_DELETE` for the matching name, and tears
@@ -523,11 +598,14 @@ Request:
 ```
 
 Success `200`: `{ "ok": true, "token": "run-abc123" }`
-Errors: `400 missing_token`, `404 no_session`.
+Errors: `400 missing_token`, `404 no_session`, `401 unauthorized`, `403 token_mismatch`.
 
 ## WebSocket /events?token=...
 
-Upgrade request to `/events` with the session token in the query string. The
+Upgrade request to `/events` with the session token in the query string and
+the credential in the `Authorization` header ("Authentication": the port
+secret, or the lease secret issued for this token; anything else is refused
+with a plain `401` before the handshake and no subscriber is registered). The
 server streams that session's whitelisted outbound packets as JSON text frames,
 one object per frame. The channel is send-only (server→client); frames the client
 sends are ignored. Multiple sockets may subscribe to the same token; each gets

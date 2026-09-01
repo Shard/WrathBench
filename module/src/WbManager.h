@@ -234,6 +234,22 @@ namespace WrathBench
         std::mutex auditMutex;
     };
 
+    // A lease binds a session token to one account and — once the first
+    // POST /session under it succeeds — one character, and carries the random
+    // secret the module issued for it (FOLLOW-UPS 19). Issued to the operator
+    // (port-secret) caller, handed by the runner to the snippet child, and the
+    // only credential the child ever holds: it authenticates /session, /action,
+    // DELETE /session and /events for exactly this token, and nothing else.
+    struct Lease
+    {
+        std::string account;
+        std::string character;      // empty until the first successful create
+        std::string secret;         // 64 hex chars
+    };
+
+    // Which credential a request presented (PROTOCOL.md, "Authentication").
+    enum class Cred { None, Operator, Session };
+
     class Manager : public IHttpSink
     {
     public:
@@ -255,7 +271,9 @@ namespace WrathBench
         bool OnPacketSend(WorldSession* ws, WorldPacket const& packet);
 
         // IHttpSink (io_context threads).
-        HttpReply HandleHttp(std::string const& method, std::string const& target, std::string const& body, bool loopbackPeer) override;
+        HttpReply HandleHttp(std::string const& method, std::string const& target, std::string const& body,
+            std::string const& authorization, bool loopbackPeer) override;
+        bool AuthorizeWs(std::string const& token, std::string const& authorization) override;
         void OnWsOpen(std::string const& token, std::shared_ptr<IWsConn> conn) override;
         void OnWsClose(std::string const& token, IWsConn* conn) override;
 
@@ -267,7 +285,19 @@ namespace WrathBench
 
         // Request handlers. The HandleHttp* run on io threads and marshal onto the
         // world thread via PushTask; the Do* run on the world thread.
-        HttpReply HttpCreateSession(std::string const& body);
+        // Resolve the Authorization header to a credential class. Operator:
+        // the bearer is the port secret (WrathBench.Secret). Session: it is a
+        // lease's secret, and *leaseToken/*lease name that lease. None
+        // otherwise. Constant-time compares; io threads.
+        Cred Authenticate(std::string const& authorization, std::string* leaseToken, Lease* lease) const;
+        // POST /lease and DELETE /lease (operator only).
+        HttpReply HttpLease(std::string const& body);
+        HttpReply HttpReleaseLease(std::string const& body);
+        std::string PortSecret() const;
+
+        // forcedAccount: non-empty for a session-class create — the lease's
+        // account, which overrides whatever the body says.
+        HttpReply HttpCreateSession(std::string const& body, std::string const& forcedAccount = "");
         HttpReply HttpAction(std::string const& body);
         HttpReply HttpDeleteSession(std::string const& body);
         HttpReply HttpCharacterDelete(std::string const& body);
@@ -456,7 +486,16 @@ namespace WrathBench
         mutable std::mutex _accountMutex;
         std::string _account{"RUNNER"};
         std::vector<std::string> _accounts; // allowlist; defaults to {_account}
+        // The port secret (WrathBench.Secret / AC_WRATH_BENCH_SECRET). Read on
+        // io threads under _accountMutex like the allowlist. Start() refuses to
+        // listen when it is shorter than 32 characters.
+        std::string _secret;
         std::string _auditDir;
+
+        // Leases by token (PROTOCOL.md, "Authentication"). Their own mutex:
+        // touched on io threads per request and never on the world thread.
+        mutable std::mutex _leaseMutex;
+        std::unordered_map<std::string, Lease> _leases;
 
         std::unique_ptr<HttpServer> _http;
 
