@@ -226,16 +226,3 @@ worklogs/2026-08-29).
     folded in here: the account pool delivered run parallelism, and what remained of 10
     — nothing binds a caller to an account or a token to a character — is exactly (1)
     and (2).
-
-107. **`idle: "none"` does not pause a live unlimited session** (2026-08-31, pausing
-    Thorgrima for fable quota). The supervisor's drain/SIGTERM path (`pausesOnDrain`)
-    fires only on the fleet pause switch or a disabled queue job; a policy freeplay job
-    that stops being generated is simply absent from the next plan — the live roster
-    process is never signalled and the session runs until its idle watchdog, which an
-    active model never trips. The 2026-08-30 stream pauses actually landed via the
-    deploy restart, not the config flip. Recipe that works today: flip `idle` to
-    `"none"`, then SIGTERM the `run-roster` pid — the runner pauses as
-    `operator-pause` and the supervisor releases the account cleanly (done by hand
-    2026-08-31, roster exited 0). Fix: on config re-read, a vanished policy freeplay
-    job whose ref flipped to `idle: "none"` should take the pausesOnDrain path.
-    Unblocked; next action is a run-fleet.ts change plus a fleet.test.ts case.
