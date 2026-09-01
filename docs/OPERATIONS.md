@@ -1060,6 +1060,16 @@ the operator's content decision (GitHub issue #10) about entry summaries and
 verbatim game text. A password-gated preview shared with named people is not
 that deploy, and does not wait on it. What follows is the mechanism.
 
+The corollary, stated plainly (GitHub issue #30): **the live viewer is private
+and operator-only, and is unsupported as an Internet-facing service.** It stays
+on loopback, or on a LAN the operator has explicitly opted in with
+`WRATHBENCH_VIEWER_LAN=1`. Public delivery is the static snapshot path in this
+section and nothing else — never a port on the viewer, the module or the MCP
+bridge, and never a tunnel to one. `WRATHBENCH_VIEWER_PUBLIC=1` projects every
+body it serves and withholds raw lines, tiles and the SSE tail, but it exists so
+the snapshot renderer can call the handle in-process; it is not an exposure
+plan.
+
 ### Two shapes, and which one you are standing up
 
 The design doc's shape needs a **domain on the Cloudflare account**: R2 behind a

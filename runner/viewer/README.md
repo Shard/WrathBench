@@ -18,9 +18,13 @@ is created empty, and every page serves its labelled empty state.
 - `WRATHBENCH_MINIMAP_DIR` overrides the tile root (default `data/minimap`).
 - `WRATHBENCH_DASHBOARD_DIR` overrides where the built SPA is looked for
   (default `dashboard/dist`).
-- `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries and tiles, and serves
-  `/entries` through the public projection and the game-prose redactor
-  (`public-projection.ts`, `redact-prose.ts`).
+- `WRATHBENCH_VIEWER_PUBLIC=1` serves every JSON body through the public
+  projection (`public-projection.ts`, and the game-prose redactor
+  `redact-prose.ts` on `/entries`), and withholds the routes with no projected
+  form: raw entries, minimap tiles and the SSE tail. It is what the snapshot
+  renderer runs its in-process handle as; it is **not** a way to expose the
+  viewer publicly (`docs/PUBLIC-DASHBOARD.md`, "The live viewer is not a public
+  service").
 - `WRATHBENCH_VIEWER_TILES_PUBLIC=1` serves minimap tiles in public mode
   anyway. Off by default, and a no-op on its own.
 
@@ -264,7 +268,7 @@ opened readonly, and the runs directory is only ever listed and read.
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200); in public mode each entry crosses `projectEntry` and `redactGameProse` |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry (withheld in public mode) |
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md — the model's own notes, served in public mode too |
-| `/api/run/<id>/stream` | SSE: new entries as they are appended |
+| `/api/run/<id>/stream` | SSE: new entries as they are appended (withheld in public mode) |
 | `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted; withheld in public mode unless `WRATHBENCH_VIEWER_TILES_PUBLIC=1`) |
 | anything else | the built SPA, or the not-built notice when there is none |
 
@@ -277,11 +281,19 @@ at the two places a raw record can reach a client (`summarize` and
 `TrajectoryTail.raw`). `apiKeyEnv` is deliberately kept: it names an environment
 variable, and the value of that variable is never written to the trajectory.
 
-`WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds the two routes that carry
-the unprojected record or Blizzard-derived bytes — raw entries and minimap
-tiles — and serves `/entries` the way the public snapshot does. It is
-opt-in-to-public, not opt-in-to-raw: the run page depends on raw bodies, so a
-public deployment sets the flag rather than the developer clearing it.
+`WRATHBENCH_VIEWER_PUBLIC=1` makes the whole handle a boundary rather than a
+set of routes an operator has to remember (GitHub issue #30, 2026-09-01): every
+`/api` body is emitted through `pub`, which projects it in public mode with the
+same projector the snapshot uses, so a route added without one fails
+`runner/test/viewer-public-mode.test.ts` rather than shipping unprojected. The
+three routes with no projected form are withheld outright — raw entries and
+minimap tiles (the unprojected record, and Blizzard-derived bytes) and the SSE
+tail, whose whole point is unprojected entries as they are appended; a public
+reader's window is the snapshot's one published tail instead. `/scratchpad` is
+the deliberate exception, served in public mode because the model's own notes
+are published as written. It is opt-in-to-public, not opt-in-to-raw: the run
+page depends on raw bodies, so a public deployment sets the flag rather than
+the developer clearing it.
 
 What a public entry carries (docs/DATA-AND-LEGAL.md, "Trajectory logs", operator
 2026-08-30): names and ids stay, game prose goes. `projectEntry`
