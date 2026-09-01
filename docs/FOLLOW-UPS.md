@@ -188,4 +188,8 @@ worklogs/2026-08-29).
     trailing `learning` argument after `totals?.deaths ?? null`:
     `totals === null ? undefined : { spells: totals.spells, talents: totals.talents, trades: totals.trades }`
     (omitted, never nulls, so an unwired viewer says "does not answer" rather
-    than "the run recorded none"). Trigger: next time `api.ts` is free.
+    than "the run recorded none"). One trap: `RESULT_RUN_KEYS` in
+    `runner/test/public-projection.test.ts` is an exact allowlist and does not
+    list `spells` / `talents` / `trades` — it passes today only because
+    `resultRunOf` omits them; add the three keys (and their sub-paths) when the
+    results fixture starts carrying them. Trigger: next time `api.ts` is free.
