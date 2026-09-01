@@ -545,8 +545,8 @@ describe("the tok/s cell", () => {
     const row = fleetRows(fleet(), [run()])[0]!;
     expect(row.tps).toEqual({ overall: 41.5, recent: 128.4, replies: 60, recentReplies: 10 });
     expect(tpsLabel(row.tps)).toBe("128");
-    expect(tpsTitle(row.tps)).toContain("128 tok/s over the last 10 repl(ies)");
-    expect(tpsTitle(row.tps)).toContain("41.5 tok/s over the run's 60");
+    expect(tpsTitle(row.tps)).toContain("128 tok/s over the last 10 replies");
+    expect(tpsTitle(row.tps)).toContain("41.5 tok/s over all 60");
     expect(tpsTitle(row.tps)).toContain("output tokens ÷ wall time of model replies");
   });
 

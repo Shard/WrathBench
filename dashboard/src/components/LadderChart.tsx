@@ -282,19 +282,12 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         </svg>
       </Show>
 
-      {/*
-        The caption was one line, the axes only (operator, 2026-08-30), on the
-        reading that the hover text carries the rest. Widened the same day, for
-        a reader arriving from outside who has no reason to hover: the sample
-        size behind a mark and the basis of its price are what a stranger would
-        otherwise assume, and assume wrongly. A mark that is *missing* has no
-        hover to explain it, so the omissions are printed below, the way the
-        freeplay StreamChart prints its own.
-      */}
+      {/* Axes, sample basis, price basis — the three things a stranger would
+          otherwise assume, and assume wrongly. The hover carries the rest. */}
       <p class="dim ladderchart-caption">
         avg cost per {props.episode} run (USD, log) against avg xp earned — a lower bound, rebuilt from
-        the run's 60-second samples. A dashed ring means the means rest on a single run.
-        Cost is what the provider reported; {COST_BASIS_NOTE}. 
+        the run's 60-second samples. A dashed ring means the means rest on a single run. Cost is
+        what the provider charged, otherwise a list-price estimate; {COST_BASIS_NOTE}.
       </p>
     </div>
   );

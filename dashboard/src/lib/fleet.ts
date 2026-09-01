@@ -318,7 +318,7 @@ export function tpsLabel(tps: TpsFacts | null): string {
  */
 export function tpsTitle(tps: TpsFacts | null): string {
   if (tps === null || tps.recent === null) return "";
-  return `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} repl(ies) · ${fmtTps(tps.overall)} tok/s over the run's ${tps.replies} — output tokens ÷ wall time of model replies`;
+  return `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} ${tps.recentReplies === 1 ? "reply" : "replies"} · ${fmtTps(tps.overall)} tok/s over all ${tps.replies} — output tokens ÷ wall time of model replies`;
 }
 
 /** How many models a job names before the rest become a count. */
