@@ -106,6 +106,7 @@ export default function Home() {
               <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> 90 minutes of play from a fresh level-1 character ·{" "}
               <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
             </span>
+            <div class="ladder-filters">
             <label class="filter check" title="Keep only the entries no other entry beats on both axes: cheaper per run and more XP earned.">
               <input
                 type="checkbox"
@@ -117,6 +118,7 @@ export default function Home() {
               />
               <span>Pareto front</span>
             </label>
+            </div>
           </div>
           <Show when={ladder.error !== undefined}>
             <div class="banner bad">{displayError(ladder.error)}</div>
