@@ -1027,8 +1027,10 @@ shorter than 32 characters — refuses to listen at all and says so at ERROR in
   missing; `--dry-run` prints its length. A bare `docker compose up -d
   worldserver` from a shell without it ships an empty secret and the module
   refuses to listen — the loud failure, by design. An operator's loopback
-  probe inside the container needs the header too:
-  `docker compose -f infra/compose.yml exec worldserver sh -c 'curl -s -H "Authorization: Bearer $AC_WRATH_BENCH_SECRET" localhost:8086/health'`.
+  probe inside the container needs the header too, and the image has neither
+  curl nor wget: `./infra/module-health.sh` does it with perl and prints the
+  full census (`sessions`, drops by opcode). A probe from anywhere else — the
+  runner container included — gets liveness with the counters zeroed.
 
 Rotating it is a deploy window: change `.env`, then `deploy-worldserver.sh`
 (the fleet is recreated on the way out and re-reads `.env`; a live `runner`
