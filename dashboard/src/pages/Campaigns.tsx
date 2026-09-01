@@ -20,7 +20,7 @@ import { Collapsible } from "../components/Collapsible";
 import { campaignLiveRuns, progressOf, type CampaignRunRow } from "../lib/campaigns";
 import { useFeeds } from "../lib/feeds";
 import { progressLabel, progressTitle, rowProgress, rowStateLabel, runHref } from "../lib/fleet";
-import { fmtDuration, fmtWhen, modelDisplay, num } from "../lib/format";
+import { fmtDuration, fmtWhen, modelDisplay, num, shortRunId } from "../lib/format";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
 
@@ -293,8 +293,12 @@ function LiveRunRow(props: { row: CampaignRunRow }) {
       <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
       <td>
-        <Show when={runHref(r().runId)} fallback={r().runId}>
-          {(to) => <A href={to()}>{r().runId}</A>}
+        <Show when={runHref(r().runId)} fallback={<span title={r().runId}>{shortRunId(r().runId)}</span>}>
+          {(to) => (
+            <A href={to()} title={r().runId}>
+              {shortRunId(r().runId)}
+            </A>
+          )}
         </Show>
       </td>
     </tr>
