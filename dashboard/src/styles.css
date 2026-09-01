@@ -627,3 +627,8 @@ button.update:hover { background: var(--panel); }
  */
 .loading-chart { min-height: 260px; }
 .loading-page { min-height: 320px; }
+
+/* Text-heavy pages read as a column, not a liquid full-width block. */
+.page.prose { max-width: 860px; margin: 0 auto; padding: 16px 20px 32px; }
+.page.prose p { line-height: 1.6; }
+.page.prose .scroller { margin: 0 -20px; padding: 0 20px; }
