@@ -138,8 +138,8 @@ worklogs/2026-08-29).
     removing the gate is what makes the deploy genuinely public.
 
 108. **Split `sdk/src/client.ts` / `protocol.ts` / `state.ts` along their shared seam**
-    (consolidation scan 2026-09-01; the `infra/run-fleet.ts` half shipped, see the
-    2026-09-01 day file). `client.ts` (5.9k), `protocol.ts` (2.2k) and `state.ts`
+    (consolidation scan 2026-09-01; only this SDK half is left — `infra/run-fleet.ts`
+    is done, split into config/plan/state/status, see the 2026-09-01 day file). `client.ts` (5.9k), `protocol.ts` (2.2k) and `state.ts`
     (4.5k) share the same pets/group/mail/bank/trade/loot/item-text seam, already
     bannered in the first two — split all three identically (`*-social.ts`) so they
     stay paired, adding the banners to `state.ts` first. Mechanical, no behaviour
