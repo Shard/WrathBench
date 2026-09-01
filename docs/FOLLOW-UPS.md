@@ -156,12 +156,7 @@ worklogs/2026-08-29).
     (4.5k) share the same pets/group/mail/bank/trade/loot/item-text seam, already
     bannered in the first two — split all three identically (`*-social.ts`) so they
     stay paired, adding the banners to `state.ts` first. Mechanical, no behaviour
-    change, its own session; the SDK surface the model sees does not move. The
-    `--status` half of `run-fleet.ts` is back to Mark: `printStatus` reads ~20
-    scheduler-side values (the eleven `format*` helpers, `planResumes`,
-    `planStaleRuns`, `streamsFrom`, `loadConfigForRead`, `pausesOnDrain`, …) while
-    `main` and `--dry-run` call back into it, so the plain move is an import cycle,
-    not a seam. Leave it, or move the planners and formatters with it — his call.
+    change, its own session; the SDK surface the model sees does not move.
 
 109. **Pre-open-source checklist** (2026-09-01). Mark's calls, each small: (a) the
     operator's first name appears in ~38 worklog lines — keep, or `the operator`;

@@ -6,11 +6,6 @@
  * and what is left. There are no numbers to rank and none are offered; the
  * question a probe answers is "what happens when", and the answer is in the
  * runs.
- *
- * A row whose campaign is no longer in the config is not an error and is not
- * hidden. Retiring a sweep means switching it off and eventually deleting its
- * entry, and its results have to survive that or the lifecycle would be a way
- * of losing them.
  */
 
 import { A } from "@solidjs/router";
@@ -79,12 +74,10 @@ export default function Campaigns() {
       </Show>
 
       <h2 class="section">campaigns</h2>
-      <p class="dim">
-        Commissioned exploration: an objective swept over <em>cells</em> by a set of models, run once
-        to completion and then switched off. Every run is an unscored probe episode (see{" "}
-        <A href="/about">about</A>), so nothing here reaches a chart or a target — a harness bump
-        never re-arms a campaign, which is exactly what separates a probe from an eval. Coverage is
-        what this page reports; there is no ranking to make.
+      <p>
+        Commissioned exploration: objective-driven runs that probe ad-hoc scenarios. Every run is an
+        unscored probe episode (see <A href="/about">about</A>), so nothing here reaches a chart or a
+        target.
       </p>
 
       <Show when={body() !== undefined} fallback={<p class="dim">loading…</p>}>
@@ -283,7 +276,6 @@ function LiveRunRow(props: { row: CampaignRunRow }) {
       </td>
       <td class="dim">{r().cell ?? "—"}</td>
       <td>{r().character ?? "—"}</td>
-      {/* The attempt only: the account name is operator detail, and this page is public. */}
       <td
         class="dim"
         title={[r().model ?? "", r().attempt === null ? "" : `attempt #${r().attempt}`].filter((t) => t.length > 0).join(" — ")}

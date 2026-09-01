@@ -58,7 +58,7 @@ Roughly in order. Each item is small enough to be a day or two; the module is th
 
 ### Runner
 - [x] Sandbox: separate process, persistent per session, network limited to the module, per-snippet timeout, stdout and errors captured.
-- [x] MCP server: `run_snippet`, `recent_events`, `state_summary`, `search_reference`, `write_scratchpad`.
+- [x] MCP server: `run_snippet`, `recent_events`, `state_summary`, `search_reference`, `write_scratchpad`, `edit_scratchpad`.
 - [x] Agent loop: fixed prompt, fixed context policy, one OpenAI-compatible adapter, resumable from persisted scratchpad and summary.
 - [x] Watchdogs with named termination reasons.
 - [x] Trajectory JSONL and run sqlite under `data/runs/<id>/`.

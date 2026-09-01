@@ -59,8 +59,11 @@ export default function Models() {
       </Show>
 
       <h2 class="section">models</h2>
-      <p class="dim">
-        The fleet roster and what the scheduler makes of it. A model is eligible for{" "}
+      <p>
+        The roster of models available and what the scheduler currently makes of it.
+      </p>
+      <p>
+        A model is eligible for{" "}
         <A href="/about">e90</A> from the moment it is listed, and a <code>t1</code> model earns{" "}
         <code>e360</code> by reaching level 5 in an un-overridden e90 run. Counts are <em>counted</em> runs —
         launches that produced at least one model response; a launch that produced none is archived

@@ -72,22 +72,22 @@ export default function About() {
         0.6 reservation is the context-policy section's own note.
       */}
       <h2 class="section">project status</h2>
-      <p class="dim">
+      <p>
         <span class="mono">status: pre-release · harness {series()}</span>
       </p>
-      <p class="dim">
+      <p>
         WrathBench is still in early development. The basics are in, and on paper agents should be capable
         of progressing through most single-player content, but there are still many harness issues and
         improvements to make, including proper party and communication tools for freeplay and possible future ladder episodes.
       </p>
-      <p class="dim">
+      <p>
         The data for some charts will also probably be a bit off as I work through more test runs and validate the
         numbers against other sources. I will be looking to open-source the repo soon, once things have been
         sufficiently cleaned up for release.
       </p>
 
       <h2 class="section">reading a result</h2>
-      <p class="dim">
+      <p>
         Scored means "this specific harness series, this model, this episode". The harness —
         SDK, loop, prompt, context policy, reference bundle — is frozen per version and identical for every
         model; a minor series bump restarts the evidence. Every scored episode starts from a freshly created
@@ -98,7 +98,7 @@ export default function About() {
         is a documented asymmetry made out of practical needs, but could also be extended to compare other harnesses.
         The Wrathbench harness is provided as a reference harness to provide a stable baseline when comparing models.
       </p>
-      <p class="dim">
+      <p>
         <strong>An episode is one run under one ruleset.</strong> The scored default is{" "}
         <code>e90</code>: ninety minutes of play, no objective, the same prompt for every
         model. Nothing carries over between episodes, and a run that pauses is a spent attempt
@@ -107,19 +107,19 @@ export default function About() {
         one six-hour <code>e360</code>. A probe campaign is steered by a human running the benchmark
         (the operator), which is what makes it unscored — it has no ladder.
       </p>
-      <p class="dim">
+      <p>
         <strong>Effort is a run dimension</strong>, not tuning: <code>opus (low)</code> and{" "}
         <code>opus (high)</code> are two comparable rows, stamped at launch and never recomputed.{" "}
         <strong>Cost</strong> is what the provider charged. Where it reported nothing, the run page
         shows a list-price estimate from the token counts. {COST_BASIS_NOTE}.
       </p>
-      <p class="dim">
+      <p>
         <strong>n is small on purpose.</strong> A tier buys a handful of runs, so a mark on the
         ladder is the mean of one to three episodes. The harness records signals and never a score;
         every number here is a derivation over them, recomputable over past runs. Differences inside
         that much noise are not results.
       </p>
-      <p class="dim">
+      <p>
         <strong>The reference bundle</strong> is the agent's only out-of-game knowledge: a search
         tool over a 2020 wiki dump, stripped at build time of everything that is not patch 3.3.5,
         and frozen per harness version. Exact coordinates are withheld on scored episodes, so a
@@ -127,7 +127,7 @@ export default function About() {
       </p>
 
       <h2 class="section">episodes</h2>
-      <p class="dim">
+      <p>
         The rulesets a run can be launched under, with <code>--episode &lt;id&gt;</code>. An id is a
         comparability group: two runs may only be compared if they share an id <em>and</em> a
         harness version. The id fixes the shape of the run — how long, which
@@ -229,19 +229,10 @@ export default function About() {
             </>
           )}
         </For>
-
-        <h2 class="section">runs that belong to no episode</h2>
-        <p class="dim">
-          {tiers.latest!.untiered} run{tiers.latest!.untiered === 1 ? "" : "s"} carry no episode id
-          and cannot be given one. They ran before the ids existed, under the watchdog defaults of
-          their day, and a tuple field is never recomputed after the fact: saying nothing is more
-          honest than asserting a comparability that was never established. They are in the{" "}
-          <A href="/runs">runs</A> table with a blank episode.
-        </p>
       </Show>
 
       <h2 class="section">legal</h2>
-      <p class="dim">
+      <p>
         WrathBench is a fan-made research project and is not affiliated with or endorsed by Blizzard
         Entertainment. World of Warcraft content and materials — names, maps, and other game data shown
         here — are the intellectual property of Blizzard Entertainment, Inc. World of Warcraft, Warcraft
