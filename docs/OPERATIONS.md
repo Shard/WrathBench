@@ -218,7 +218,7 @@ ways, and the first question is always **which**:
 | `runner/src/**`, `sdk/**`, the wiki bundle | the **next episode spawn**. The repo is a bind mount and every episode is a fresh `bun runner/src/run.ts`: nothing to restart, and a run in flight keeps the code it started with. |
 | `infra/fleet.json` | the **next tick** (60s). Hot-reloaded; a malformed edit is complained about and ignored. |
 | `dashboard/**` | `bun run build` in `dashboard/`, then restart the viewer service. No fleet involvement. |
-| `infra/run-fleet.ts`, `infra/run-roster.ts`, the runner **image**, compose env | only when the **`fleet` container's process restarts**. That is what the two recipes below are for. |
+| `infra/run-fleet*.ts`, `infra/run-roster.ts`, the runner **image**, compose env | only when the **`fleet` container's process restarts**. That is what the two recipes below are for. |
 
 The supervisor's date stamp (`fleet-<job>-<model>-<YYYYMMDD>`) is taken once at
 start and fixed for the life of the process — an *epoch*, not a calendar date,
