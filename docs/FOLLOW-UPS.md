@@ -205,6 +205,19 @@ worklogs/2026-08-29).
     CORS entry for the prefix), and whatever replaces the gate has to keep them
     behind it. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
+
+108. **Split `sdk/src/client.ts` / `protocol.ts` / `state.ts` along their shared seam**
+    (consolidation scan 2026-09-01; the `infra/run-fleet.ts` half shipped, see the
+    2026-09-01 day file). `client.ts` (5.9k), `protocol.ts` (2.2k) and `state.ts`
+    (4.5k) share the same pets/group/mail/bank/trade/loot/item-text seam, already
+    bannered in the first two — split all three identically (`*-social.ts`) so they
+    stay paired, adding the banners to `state.ts` first. Mechanical, no behaviour
+    change, its own session; the SDK surface the model sees does not move. The
+    `--status` half of `run-fleet.ts` is deliberately NOT owed: `printStatus` reads
+    ~20 scheduler-side values (the eleven `format*` helpers, `planResumes`,
+    `planStaleRuns`, `streamsFrom`, `loadConfigForRead`, `pausesOnDrain`, …) while
+    `main` and `--dry-run` call back into it — that is an import cycle, not a seam.
+
 109. **Pre-open-source checklist** (2026-09-01). Mark's calls, each small: (a) the
     operator's first name appears in ~38 worklog lines — keep, or `the operator`;
     (b) the footer and BibTeX link to `github.com/Shard/WrathBench` 404 while the repo
