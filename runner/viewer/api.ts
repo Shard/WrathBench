@@ -9,10 +9,16 @@
  *   ever listed and read, and there is no route that accepts a body.
  * - **Nothing leaks.** `/api` serves run and fleet metadata. Bearer tokens are
  *   stripped in `tail.ts` at both places a raw record can reach a client, and
- *   `WRATHBENCH_VIEWER_PUBLIC=1` additionally withholds raw entries and
- *   minimap tiles, and serves `/entries` through the public projection and
- *   the game-prose redactor (`public-projection.ts`, `redact-prose.ts`). See
- *   docs/ARCHITECTURE.md (viewer/dashboard section).
+ *   `WRATHBENCH_VIEWER_PUBLIC=1` emits every JSON body through the public
+ *   projection (`public-projection.ts`, plus the game-prose redactor
+ *   `redact-prose.ts` on `/entries`) and withholds the routes with no
+ *   projected form: raw entries, minimap tiles and the SSE tail. See
+ *   `pub` below, and docs/ARCHITECTURE.md (viewer/dashboard section).
+ *
+ * Public mode is what the snapshot renderer runs its in-process handle as. It
+ * is not a way to expose this service: the live viewer is private and
+ * operator-only, and public delivery is static snapshots only
+ * (docs/PUBLIC-DASHBOARD.md, "The live viewer is not a public service").
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -45,6 +51,7 @@ import type {
   RunRow,
   RunsResponse,
   TokenTotals,
+  TrackResponse,
 } from "./api-types";
 import { resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
@@ -53,7 +60,20 @@ import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
-import { projectEntries } from "./public-projection";
+import {
+  projectCampaigns,
+  projectEntries,
+  projectEpisodes,
+  projectFleet,
+  projectInfo,
+  projectModels,
+  projectPositions,
+  projectResults,
+  projectRunDetail,
+  projectRuns,
+  projectTools,
+  projectTrack,
+} from "./public-projection";
 import { isValidRunId, listRuns, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
 import { isArchiveDir } from "./archive-dir";
 import {
@@ -498,6 +518,25 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   const { runsDir, tilesDir } = opts;
   const publicMode = opts.publicMode === true;
   const tilesPublic = opts.tilesPublic === true;
+  /**
+   * Serve a body, through the public projection when this handle is public.
+   *
+   * Public mode is not a set of routes an operator has to remember (GitHub
+   * issue #30): every JSON body this handle emits in public mode crosses the
+   * same allowlist the static snapshot publishes through, so the live viewer
+   * in public mode is at most as revealing as the snapshot. The snapshot
+   * renderer projects each parsed body again on its own side — the invariant
+   * there is "every body crosses the projection HERE", not "the handle was
+   * public" — so every projector is idempotent by construction and pinned as
+   * such by `runner/test/viewer-public-mode.test.ts`.
+   *
+   * Routes with no projector are not served in public mode at all: raw lines,
+   * tiles and `/stream` answer `withheld()`. The one deliberate exception is
+   * `/scratchpad`, the model's own notes, published as written
+   * (docs/DATA-AND-LEGAL.md, "Trajectory logs", operator 2026-08-30).
+   */
+  const pub = <T>(body: T, project: (b: T) => unknown): Response =>
+    json(publicMode ? project(body) : body);
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
@@ -761,7 +800,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
             ).length,
       now: Date.now(),
     };
-    return json(body);
+    return pub(body, projectResults);
   }
 
   async function episodesResponse(): Promise<Response> {
@@ -791,7 +830,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       untiered: all.filter((r) => r.episode === null).length,
       now: Date.now(),
     };
-    return json(body);
+    return pub(body, projectEpisodes);
   }
 
   /**
@@ -894,7 +933,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
       configPath: roster.path,
       now: Date.now(),
     };
-    return json(body);
+    return pub(body, projectCampaigns);
   }
 
   /**
@@ -985,16 +1024,16 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         harnessSeries: seriesCensus(),
         now: Date.now(),
       };
-      return json(body);
+      return pub(body, projectInfo);
     }
     if (path === "/api/runs") {
       const body: RunsResponse = { runs: await listWithTotals() };
-      return json(body);
+      return pub(body, projectRuns);
     }
-    if (path === "/api/positions") return json({ positions: readPositions(runsDir) });
+    if (path === "/api/positions") return pub({ positions: readPositions(runsDir) }, projectPositions);
     if (path === "/api/episodes") return await episodesResponse();
     /* The model-facing tool list, off `TOOLS` at request time (`tools.ts`); harness text only. */
-    if (path === "/api/tools") return json(toolsResponse());
+    if (path === "/api/tools") return pub(toolsResponse(), projectTools);
     if (path === "/api/campaigns") return await campaignsResponse();
     /*
      * `/api/ladder` serves the same projection as `/api/results`. The ladder's own
@@ -1031,7 +1070,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           maxConcurrent: roster.maxConcurrent,
         });
       }
-      return json(body);
+      return pub(body, projectFleet);
     }
     /*
      * `/api/models` is the scheduler's own verdict, served rather than
@@ -1099,7 +1138,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           ...new Set(row.runs.map((r) => r.resolvedModel).filter((m): m is string => typeof m === "string")),
         ].sort();
       }
-      return json(body);
+      return pub(body, projectModels);
     }
 
     const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
@@ -1170,14 +1209,14 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         // slice of entries the page happens to have loaded.
         reflections: tail.reflections,
       };
-      return json(body);
+      return pub(body, projectRunDetail);
     }
 
     if (rest === "/track") {
       // The replay feed (item 22): the same position shape the live map
       // consumes, read from one finished run instead of every live one.
       const run = readRun(runsDir, runId);
-      return json({
+      const body: TrackResponse = {
         runId,
         character: run.character,
         model: run.model,
@@ -1185,7 +1224,8 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         points: trackFrom(readStates(runsDir, runId)),
         // The intentions beside the track: same run, different cadence.
         moves: readMoves(runsDir, runId),
-      });
+      };
+      return pub(body, projectTrack);
     }
 
     if (rest === "/entries") {
@@ -1220,6 +1260,14 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     }
 
     if (rest === "/stream") {
+      /*
+       * The live tail has no projected form: it pushes entry batches as they
+       * are written, and a public reader's window is the static snapshot's
+       * one published tail instead (the SPA guards SSE off in snapshot mode).
+       * Withheld rather than projected so public mode is not a set of routes
+       * an operator has to remember — GitHub issue #30.
+       */
+      if (publicMode) return withheld();
       await scan(runId, tail);
       let timer: ReturnType<typeof setInterval> | undefined;
       const stream = new ReadableStream({
