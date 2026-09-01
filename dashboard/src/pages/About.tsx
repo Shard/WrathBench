@@ -59,7 +59,7 @@ export default function About() {
   const series = (): string => latestSeries(feeds.seriesAvailable()) ?? "—";
 
   return (
-    <div class="page">
+    <div class="page prose">
       <Show when={tiers.error !== undefined}>
         <div class="banner bad">{displayError(tiers.error)}</div>
       </Show>
@@ -78,7 +78,7 @@ export default function About() {
       <p class="dim">
         WrathBench is still in early development. The basics are in, and on paper agents should be capable
         of progressing through most single-player content, but there are still many harness issues and
-        improvements to make, including proper party and communication tools for freeplay.
+        improvements to make, including proper party and communication tools for freeplay and possible future ladder episodes.
       </p>
       <p class="dim">
         The data for some charts will also probably be a bit off as I work through more test runs and validate the
@@ -88,23 +88,16 @@ export default function About() {
 
       <h2 class="section">reading a result</h2>
       <p class="dim">
-        A score means "this harness series, this model, this episode" and nothing wider. The harness —
+        Scored means "this specific harness series, this model, this episode". The harness —
         SDK, loop, prompt, context policy, reference bundle — is frozen per version and identical for every
         model; a minor series bump restarts the evidence. Every scored episode starts from a freshly created
         level-1 character. Two harness groups exist: <code>wrathbench</code>, the fixed loop that rebuilds
         the model's context every turn and trims old conversation, and <code>claude-code</code>, where the
-        Claude Code CLI owns the conversation and its compaction. The group is a tag on every row, never a
-        partition; claude-code rows sit in the same charts, visibly tagged. The claude-code group has no trim,
-        so it gets neither the pre-trim status prompt nor the episodic log entries — a documented asymmetry.
+        Claude Code CLI owns the conversation and its compaction.  claude-code rows sit in the same charts, visibly tagged.
+        The claude-code group has no trim, so it gets neither the pre-trim status prompt nor the episodic log entries which
+        is a documented asymmetry made out of practical needs, but could also be extended to compare other harnesses.
+        The Wrathbench harness is provided as a reference harness to provide a stable baseline when comparing models.
       </p>
-      {/*
-        Below was a list of repository filenames under "further reading",
-        moved here and rewritten on 2026-08-30: a reader who has the checkout
-        does not need the pointer and a reader who does not cannot follow it.
-        Every claim is `docs/METHODOLOGY.md` and `docs/EPISODES.md` in plainer
-        words — nothing here that those do not say, and a change to what a
-        result means is made there first.
-      */}
       <p class="dim">
         <strong>An episode is one run under one ruleset.</strong> The scored default is{" "}
         <code>e90</code>: ninety minutes of play, no objective, the same prompt for every
