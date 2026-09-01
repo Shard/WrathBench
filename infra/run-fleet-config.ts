@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
 import { isTokenEnvName, watchdogOverrideSchema } from "../runner/src/config";
-import { isAllowlistedFree, isLocalBase, type Billing } from "../runner/src/model-cost";
+import { isAllowlistedFree, type Billing } from "../runner/src/model-cost";
 import { campaignWork, parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
 import {
   ACCOUNT_CLASSES,
