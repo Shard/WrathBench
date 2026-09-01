@@ -10,6 +10,7 @@
  */
 
 import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
+import type { StreamRow } from "./ladder";
 
 /**
  * The table, left to right, as the header prints it — these are labels, not
@@ -25,7 +26,7 @@ import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "
  * On the word "tier": it means a rung of the EVIDENCE ladder (t0/t1/t2),
  * never an episode. The episode columns are named by their ids.
  */
-export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "note", "newest run"] as const;
+export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "freeplay", "extras", "note", "newest run"] as const;
 
 /** The episodes the page shows a counted/target cell for, in policy order. */
 export const EPISODE_COLUMNS = ["e90", "e360"] as const;
@@ -209,4 +210,25 @@ export function resolvedSummary(
   if (seen.length === 0) return null;
   if (seen.length === 1 && seen[0] === model) return null;
   return { ids: seen, mixed: seen.length > 1 };
+}
+
+/**
+ * The model's freeplay stream, for the column beside its scored episodes.
+ *
+ * Freeplay is one character per model and effort (docs/OPERATIONS.md, "Freeplay
+ * streams are durable"), so the match is on those two fields and the row is the
+ * ladder's own `StreamRow` — the same status and level the freeplay ladder
+ * prints, so the two pages cannot disagree about whether a character is live.
+ * Null when the model has never had one.
+ */
+export function freeplayOf(
+  row: Pick<ModelRowView, "model" | "effort">,
+  streams: readonly StreamRow[],
+): StreamRow | null {
+  return streams.find((s) => s.model === row.model && s.effort === row.effort) ?? null;
+}
+
+/** `live · L15` as the cell reads it; the hover carries the reason. */
+export function freeplayLabel(s: StreamRow): string {
+  return s.level === null ? s.status : `${s.status} · L${s.level}`;
 }

@@ -16,12 +16,13 @@
  */
 
 import { A } from "@solidjs/router";
-import { For, Show, createSignal, onMount } from "solid-js";
+import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
-import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayLabel, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
+import { streamRows } from "../lib/ladder";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
 import { displayError } from "../lib/errors";
@@ -34,6 +35,11 @@ export default function Models() {
   const body = (): ModelsResponse | undefined => feed.latest;
   // Copied before sorting: the array is the poll signal's own payload.
   const rows = (): ModelRowView[] => [...(body()?.models ?? [])].sort(compareModelRows);
+  // The freeplay column reads the ladder's own stream rows, unfiltered by
+  // series: a paused character from an older harness version is still the
+  // model's freeplay state.
+  const freeplay = poll(() => api.ladder("freeplay"), POLL_MS);
+  const streams = createMemo(() => streamRows(freeplay.latest?.runs ?? []));
   const [open, setOpen] = createSignal<string | null>(null);
 
   // A link from a run page arrives as `/models#<name>`: open that row.
@@ -184,6 +190,21 @@ export default function Models() {
                           );
                         }}
                       </For>
+                      <td title={`idle: ${row.idle}`}>
+                        <Show when={freeplayOf(row, streams())} fallback={<span class="dim">—</span>}>
+                          {(s) => (
+                            <A
+                              href={`/run/${encodeURIComponent(s().latest.runId)}`}
+                              class={s().status === "live" ? "ok" : s().status === "paused" ? "warn" : "dim"}
+                              title={[s().statusDetail, `idle: ${row.idle}`, `${s().attempts} attempt${s().attempts === 1 ? "" : "s"}`]
+                                .filter((t): t is string => t !== null)
+                                .join(" · ")}
+                            >
+                              {freeplayLabel(s())}
+                            </A>
+                          )}
+                        </Show>
+                      </td>
                       <td class="right mono dim" title={schedulableOf(row)}>
                         {extrasOf(row)}
                       </td>
