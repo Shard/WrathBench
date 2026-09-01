@@ -195,9 +195,6 @@ export default function Ladder() {
           chart and the table read the same filtered set, so the two can never
           disagree about which runs are on screen. */}
       <div class="ladder-controls">
-        <span class="dim">
-          <A href="/about">what these mean</A>
-        </span>
         <FilterSelect label="race" options={races()} value={resolveChoice(races(), race())} onPick={pick(setRace, RACE_KEY)} />
         <FilterSelect label="class" options={classes()} value={resolveChoice(classes(), klass())} onPick={pick(setKlass, CLASS_KEY)} />
         <FilterSelect
