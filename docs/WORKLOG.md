@@ -66,6 +66,7 @@ Convention:
   run (reputation, item-stats) were smoke bugs: a fold race and a chest piece the fixture
   never wears; both pass live, no module change owed.
 - [2026-08-31](worklogs/2026-08-31.md) — lane-2 freeplay swap: fable paused at ~90% weekly quota, sonnet-low resumed; item 107 filed (`idle: "none"` alone does not stop a live session)
+- [2026-09-01](worklogs/2026-09-01.md) — pre-share copy review: blockers shipped, run ids out of the UI, models freeplay column; items 107 and 19 in flight
 
 ## Resolving a cited item number
 
