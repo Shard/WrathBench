@@ -1,15 +1,5 @@
 /**
  * The homepage: what WrathBench is, for someone who has never seen it.
- *
- * Three things and nothing more (operator, 2026-08-30): one paragraph, the
- * execution loop as a diagram, and the model-facing tools as an inspector.
- * The tool text is served by `/api/tools` off the runner's own list, so what
- * this page shows is what a run is given — the page holds no tool strings of
- * its own. The SDK families under it are a shape, not a reference; the
- * generated SDK reference and the prompt stay the authority.
- *
- * The "live now" strip reads the positions feed the map already polls: how
- * many characters are in the world and who is driving them, nothing else.
  */
 
 import { A } from "@solidjs/router";
@@ -113,20 +103,7 @@ export default function Home() {
         <div class="home-bleed-inner">
           <div class="ladder-controls">
             <span class="dim">
-              {/*
-                This is where a newcomer lands, so the episode is spelled out
-                rather than named: `e90` means nothing to a first-time reader,
-                and the two facts that make the chart legible are how long a
-                run is and what it starts from (`docs/EPISODES.md`). "latest
-                harness series" stays — without it the chart would claim a
-                comparability across series it does not have — and the
-                exclusion is stated as the runner's own billing verdict
-                (`lib/homeladder.ts`), which is free endpoints *and* local
-                hardware, not free tiers alone.
-              */}
-              <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> 90 minutes of play
-              from a fresh level-1 character · newest harness version only (older versions are not
-              comparable) · free endpoints and locally hosted models excluded ·{" "}
+              <h2 class="section home-ladder-title">the {HOME_EPISODE} ladder</h2> 90 minutes of play from a fresh level-1 character ·{" "}
               <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
             </span>
             <label class="filter check" title="Keep only the entries no other entry beats on both axes: cheaper per run and more XP earned.">
@@ -144,9 +121,6 @@ export default function Home() {
           <Show when={ladder.error !== undefined}>
             <div class="banner bad">{displayError(ladder.error)}</div>
           </Show>
-          {/* Below ~720px the scatter's labels shrink to the point of being
-              texture; `.wide-scroll` gives it a floor width and its own
-              horizontal scroller rather than letting the page shrink it. */}
           <Show when={ladder.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
             <div class="wide-scroll">
               <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} />
@@ -168,22 +142,9 @@ export default function Home() {
         conversation, which the model can page through while reflecting at an inn.
       </p>
 
-      {/*
-        What the surface is and is not, before the tool list makes it look
-        larger than it is. Both columns are `docs/CONTRACTS.md` and
-        `docs/METHODOLOGY.md` ("the model surface", "client fidelity") in one
-        line each, and they are facts rather than caveats: the second column is
-        what makes the first one mean anything.
-      */}
-      <h2 class="section">the surface</h2>
-      {/*
-        The surface is versioned and the chart above is not: a run plotted last
-        month ran against whatever the harness offered then. Said once, here,
-        rather than caveating each bullet.
-      */}
+      <h2 class="section">What an agent can see and do</h2>
       <p class="dim">
-        As the harness stands today. The surface moves with the harness version, so runs plotted
-        above may predate parts of it — the reflect turn and the episodic log are recent additions.
+         The wrathbench harness attempts to give agents a set of tools similar to what a player would expect
       </p>
       <div class="home-surface">
         <div>
@@ -191,25 +152,19 @@ export default function Home() {
           <ul class="dim">
             <li>See what a game client sees: units in range, its quests, bags, spells, chat, position.</li>
             <li>Act through the handlers a client hits: move, fight, talk, loot, trade, train, fly, mail.</li>
-            <li>Write and run TypeScript against a fixed SDK, leaving routines running between turns.</li>
-            <li>Keep its own notes: a scratchpad it rewrites, and an episodic log it can page through.</li>
-            <li>Stop and think — a reflect turn, only while resting at an inn or in a city.</li>
-            <li>Search a frozen 3.3.5a reference wiki; on scored episodes it gets names, never coordinates.</li>
+            <li>Keep its own notes: a scratchpad it rewrites, and an episodic log it can read.</li>
+            <li>Reflection mode, allowing agents resting at an inn or in a city to consider their next steps.</li>
+            <li>Search a frozen 3.3.5a reference wiki; on scored episodes it gets names, never actual coordinates.</li>
           </ul>
         </div>
         <div>
           <h3 class="home-surface-head">what it can't</h3>
           <ul class="dim">
             <li>See what the server knows and a player cannot: loot tables, spawns, respawn timers.</li>
-            <li>Teleport, run a GM command, or read the database — only client opcodes are sent.</li>
-            <li>
-                Get a prompt or a retry of its own: within a harness group, one loop, one prompt, one
-                surface for every model. The two groups differ in how context is trimmed; see{" "}
-                <A href="/about">about</A>.
-              </li>
-            <li>Be told a strategy. The harness explains a failure; it never says what to do next.</li>
-            <li>Pause the world. The game is real time and ninety minutes is ninety minutes.</li>
-            <li>Use another character, another account, or anything outside the game.</li>
+            <li>Teleport, run a GM command, or read the database. Only valid client opcodes are allowed.</li>
+            <li>Be told or suggested a strategy. The MCP tools explains a failure, it should say what they should do next.</li>
+            <li>Pause the world. The game is real time and ninety minutes is ninety realtime minutes.</li>
+            <li>Use another character, another account, or any kind of networking outside the game.</li>
           </ul>
         </div>
       </div>

@@ -74,16 +74,16 @@ export default function About() {
       */}
       <h2 class="section">project status</h2>
       <p class="dim">
-        <span class="mono">status: pre-release · harness {series()} · phase 0</span>
+        <span class="mono">status: pre-release · harness {series()}</span>
       </p>
       <p class="dim">
-        WrathBench is in phase 0: building the control surface and getting models to liftoff. The
-        harness is on series 0.5 — pre-1.0, moving by patches, with 0.6 reserved for the first
-        semi-public release — and it is still being finished toward the point where a capable model
-        could play a character to the level cap. The results here are exploratory: sample sizes are
-        small, the roster changes, and the ladder is a working view rather than a paper-grade
-        leaderboard. One freeplay character runs per model, results here change day to day, and the
-        world is not open to the public.
+        WrathBench is currently still in early development. The basics are in and on paper agents should be capable
+        of progressing through most single player content but there is probably still many harness issues and
+        improvements to make including proper party and communication tools for freeplay.
+      </p>
+      <p class="dim">
+        The data for some charts will also probably be bit off as I work through more test runs and validate the numbers
+        against other sources. I will be looking to open-source the repo soon once things have been sufficently cleaned up for release.
       </p>
 
       <h2 class="section">reading a result</h2>
@@ -164,7 +164,6 @@ export default function About() {
                 <th class="right" title="stamped with the id but never a recorded episode: ended as a failed attempt, stale, cut or a harness defect">
                   lapsed
                 </th>
-                <th class="right">labeled</th>
               </tr>
             </thead>
             <tbody>
@@ -208,7 +207,6 @@ export default function About() {
                         </A>
                       </Show>
                     </td>
-                    <td class="right mono dim">{t.derived}</td>
                   </tr>
                 )}
               </For>
