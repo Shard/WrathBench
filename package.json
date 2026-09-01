@@ -22,7 +22,6 @@
     "sync-prices": "bun infra/sync-prices.ts",
     "model-logos": "bun infra/fetch-model-logos.ts",
     "docs:api:check": "bun run sdk/generate-api-docs.ts && git diff --exit-code -- sdk/API.md",
-    "deploy": "./infra/deploy-dashboard.sh",
     "deploy:worldserver": "./infra/deploy-worldserver.sh",
     "publisher:restart": "docker compose -f infra/compose.yml --profile publish restart publisher",
     "viewer:restart": "./infra/viewer-restart.sh",

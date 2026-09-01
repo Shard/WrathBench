@@ -364,7 +364,7 @@ export default function Ladder() {
  * Everything not deleted and not stillborn is here, in progress included — a
  * live stream is the point of the page, not an exclusion. The lineage column
  * is why a stream that has been through twelve attempts appears once
- * (FOLLOW-UPS 92): the row is the character, and `attempts` is how many run
+ * (item 92): the row is the character, and `attempts` is how many run
  * ids are behind it.
  */
 function StreamTable(props: { rows: readonly StreamRow[] }) {

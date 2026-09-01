@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Ship the dashboard to the gated public site.
 #
-#   bun deploy                 tests, snapshot-mode build, wrangler deploy, restore the private build
-#   bun deploy --publisher     … and restart the snapshot publisher (needed after runner/viewer changes)
-#   bun deploy --tiles         … and upload changed minimap tiles first
-#   bun deploy --skip-tests
+#   bun ship                   tests, snapshot-mode build, wrangler deploy, restore the private build
+#   bun ship --publisher     … and restart the snapshot publisher (needed after runner/viewer changes)
+#   bun ship --tiles         … and upload changed minimap tiles first
+#   bun ship --skip-tests
 #
 # The private viewer serves dashboard/dist too, so the last step rebuilds it in
 # normal mode. Bun reads .env for the S3_* keys the tile publisher needs.

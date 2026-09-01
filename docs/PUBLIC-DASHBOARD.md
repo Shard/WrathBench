@@ -1,16 +1,16 @@
-# Public dashboard hosting — research and recommendation
+# Public dashboard hosting
 
-A proposal for hosting the dashboard publicly, researched 2026-08-25. Nothing
-in here is decided: the architecture below details the "published JSON
-snapshots" stage that `docs/ARCHITECTURE.md` ("Persistence") already names as
-proposed, and every choice that shapes what the public site means is listed
-under "Operator decisions" at the end. GitHub issue #10 is the standing
-public-hosting checklist this document feeds; `docs/DATA-AND-LEGAL.md` remains
-the binding constraint set.
+How the public site is hosted, and why. Researched 2026-08-25, decided the same
+week, shipped 2026-08-30 in the gated shape described below; the open launch
+shape is item 85 in `docs/FOLLOW-UPS.md`. The architecture is the "published
+JSON snapshots" stage `docs/ARCHITECTURE.md` ("Persistence") names, and the
+choices that shape what the public site means are under "Operator decisions"
+at the end. GitHub issue #10 is the standing public-hosting checklist;
+`docs/DATA-AND-LEGAL.md` remains the binding constraint set.
 
 ## Goal and constraints
 
-The runs stay on the operator's hardware (the nusphere k8s lab). The public
+The runs stay on the operator's hardware. The public
 site is **push-based**: the lab pushes derived data outward on a timer, and no
 public request ever reaches it — so a traffic spike, however large, is
 Cloudflare's problem and not the lab's. Freshness of a few minutes is
@@ -276,7 +276,7 @@ to anyone who asks would be that deploy in all but name.
 
 - **Cloudflare Tunnel / pull-through cache to the viewer** — the origin is
   the lab, so a cache-miss storm or one wrong header is inbound public load
-  on nusphere; it also drags item 19 into scope. Fails the premise.
+  on the operator's lab; it also drags item 19 into scope. Fails the premise.
 - **D1 as the public store** — free tier hard-fails (errors, not throttling)
   at 5M rows read/day, exactly the hug-of-death moment; on paid, every read
   still invokes a billed Worker; read replication is still beta and its
@@ -349,8 +349,8 @@ not clock artifacts, so normalizing timestamps does not remove them.
 
 An **idle** fleet costs one `live.json` PUT per pass at any cadence (~9k/month
 at 300s): the entire write cost is live runs. That is why the cadence, not a
-timestamp fix, was the lever pulled — see item 86 in `docs/FOLLOW-UPS.md` for
-what is still worth doing.
+timestamp fix, was the lever pulled — see GitHub issue #38 for what is
+still worth doing.
 
 Unverified at research time (primary pages blocked from the research
 environment; confirm before relying on them): the exact Pro-plan feature

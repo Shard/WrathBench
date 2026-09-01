@@ -15,7 +15,6 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
-import { OPAQUE_PAUSE_REASON } from "./ladder";
 
 /**
  * The table, left to right, as the header prints it. Keys, not labels — the
@@ -58,6 +57,13 @@ export const COLUMN_TITLES: Partial<Record<RunColumn, string>> = {
 };
 
 /* -------------------------------------------------------------- readings */
+
+/**
+ * The public projection replaces a pause reason's free text with the fixed
+ * `paused` token, so the detail there restates the status. Dropped rather
+ * than printed: `paused (paused)` reads as a defect, not as a withheld field.
+ */
+export const OPAQUE_PAUSE_REASON = "paused";
 
 export type RunStatus = "live" | "paused" | "ended";
 
