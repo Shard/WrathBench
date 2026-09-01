@@ -1,5 +1,5 @@
 /**
- * Probe for the bank surface (FOLLOW-UPS 100, bank): the bank frame
+ * Probe for the bank surface (item 100, bank): the bank frame
  * (`openBank` -> `SMSG_SHOW_BANK`), a deposit landing in a bank slot
  * (`PLAYER_FIELD_BANK_SLOT_1` served as `invSlot39-66`, read by
  * `state.bank()`), and the withdrawal landing back in the backpack.

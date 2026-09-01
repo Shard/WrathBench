@@ -52,7 +52,7 @@ export interface StateLine {
   /** Area (subzone) id from the state cache (`self.area`). */
   area?: number | undefined;
   /**
-   * The player frame's own numbers (FOLLOW-UPS 104), off the same snapshot
+   * The player frame's own numbers (item 104), off the same snapshot
    * every other field here comes from — no extra RPC. `health`/`maxHealth` and
    * `power`/`maxPower` arrive as the state cache's derived gauges, which it
    * withholds until both halves have actually been observed, so a pair is
@@ -67,7 +67,7 @@ export interface StateLine {
   powerType?: number | undefined;
   nextLevelXp?: number | undefined;
   /**
-   * What the character carries and wears (FOLLOW-UPS 50): names and counts
+   * What the character carries and wears (item 50): names and counts
    * from the state cache's item queries, `equipped` for inventory slots 0-18,
    * carried rows from `state.bag()` across every bag. Omitted when the
    * snapshot had no inventory at all.
@@ -285,7 +285,7 @@ CREATE TABLE IF NOT EXISTS run (
   -- be able to exclude steered runs without parsing config_json.
   objective TEXT,
   -- The character this run played and the platform that served the model
-  -- (FOLLOW-UPS 36). Both were derivable from config_json and from the api
+  -- (item 36). Both were derivable from config_json and from the api
   -- base; a column means a cross-run SELECT — and the viewer's listing — does
   -- not have to parse a blob or re-derive a rule that could drift.
   character TEXT,
@@ -351,7 +351,7 @@ CREATE TABLE IF NOT EXISTS move (
 `;
 
 /**
- * Columns added to `run` inside the 0.4 series (FOLLOW-UPS 36, at 0.4-6).
+ * Columns added to `run` inside the 0.4 series (item 36, at 0.4-6).
  * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing run.sqlite, so a
  * resumed 0.4-1..0.4-5 run would otherwise write into a table that lacks
  * them. The only migration the runner carries: every run below the 0.4
@@ -378,9 +378,9 @@ const RUN_ADDED_COLUMNS: Record<string, string> = {
 const STATE_ADDED_COLUMNS: Record<string, string> = {
   zone: "INTEGER",
   area: "INTEGER",
-  // JSON `ItemSample[]` (FOLLOW-UPS 50); NULL when the sample carried none.
+  // JSON `ItemSample[]` (item 50); NULL when the sample carried none.
   items: "TEXT",
-  // Added 2026-08-30 (FOLLOW-UPS 104): the player frame's numbers. Additive and
+  // Added 2026-08-30 (item 104): the player frame's numbers. Additive and
   // nullable — nothing scored reads them, and a sample written before they
   // existed has NULL, which every reader renders as unobserved.
   health: "INTEGER",

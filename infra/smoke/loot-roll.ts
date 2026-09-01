@@ -1,5 +1,5 @@
 /**
- * Probe for group loot rolls (FOLLOW-UPS 102): `SMSG_LOOT_START_ROLL` folded
+ * Probe for group loot rolls (item 102): `SMSG_LOOT_START_ROLL` folded
  * into `state.pendingRolls()` on every member, `lootRoll` (by name or roll
  * guid) sending `CMSG_LOOT_ROLL`, `SMSG_LOOT_ROLL` / `SMSG_LOOT_ROLL_WON`
  * echoing the votes and the verdict, need beating greed, the won item

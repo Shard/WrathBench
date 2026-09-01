@@ -1,5 +1,5 @@
 /**
- * Probe for the reputation pane (FOLLOW-UPS 99): `SMSG_INITIALIZE_FACTIONS`
+ * Probe for the reputation pane (item 99): `SMSG_INITIALIZE_FACTIONS`
  * tapped at login and folded into `state.reputation()` with Faction.dbc
  * names and the client's race/class base, plus `SMSG_SET_FACTION_VISIBLE`
  * / `SMSG_SET_FACTION_STANDING` as they come.

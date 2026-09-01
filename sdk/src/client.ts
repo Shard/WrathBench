@@ -4537,7 +4537,7 @@ export class WrathClient {
     if (status === "teleported") {
       // A same-map port: no SMSG_NEW_WORLD is coming, so waiting for one
       // (what `transferred` does) would be a full-timeout hang ending in a
-      // false "still pending" (FOLLOW-UPS 46). The arrival point is the
+      // false "still pending" (item 46). The arrival point is the
       // server's own MSG_MOVE_TELEPORT_ACK, sent before the result — so this
       // is a buffer lookup from before the move, and the short timeout only
       // covers a module that did not serve it.
@@ -5136,7 +5136,7 @@ export class WrathClient {
    * with `SMSG_GOSSIP_MESSAGE` carrying the quests instead of
    * `SMSG_QUESTGIVER_QUEST_LIST` — with none of the accepting. Models kept
    * rebuilding exactly this by hand over `questList` plus event scraping and
-   * getting confused by their own nulls (FOLLOW-UPS 9a).
+   * getting confused by their own nulls (item 9a).
    *
    * An empty `quests` is an answer: the NPC has nothing for this character
    * right now. Silence is not, so it still throws `EventTimeoutError`.

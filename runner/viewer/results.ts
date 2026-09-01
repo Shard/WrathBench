@@ -116,7 +116,7 @@ export function mapsOf(states: readonly StatePoint[]): number[] {
 }
 
 /**
- * A run's recorded track, for map replay (FOLLOW-UPS 22).
+ * A run's recorded track, for map replay (item 22).
  *
  * Only samples that actually carried a position: a sample may record level and
  * xp with no coordinates, and interpolating through it would draw a line the

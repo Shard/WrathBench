@@ -1,5 +1,5 @@
 /**
- * Probe for the item tooltip (FOLLOW-UPS 97): the extended
+ * Probe for the item tooltip (item 97): the extended
  * `SMSG_ITEM_QUERY_SINGLE_RESPONSE` decode (stats, damage, armor, speed,
  * spells, bonding, durability, requirements) on `state.items`.
  *

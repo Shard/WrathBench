@@ -16,7 +16,7 @@
  * reclaim_corpse within the 39y radius -> assert resurrection via health
  * (a rejected reclaim is silent) -> logout + character delete.
  *
- * FOLLOW-UPS 53 additions (module built 2026-08-23, needs that build): after
+ * item 53 additions (module built 2026-08-23, needs that build): after
  * repop the module asks MSG_CORPSE_QUERY once on the client's behalf and the
  * answer is served — assert found:1 within 5y of the recorded death spot; then
  * a reclaim sent from the graveyard is the too_far case — assert the corpse
@@ -295,7 +295,7 @@ async function main() {
   self.pos = ghostPos;
   log(`PASS[repop]: graveyard teleport applied (moved ${fromDeath.toFixed(1)}y off the death spot)`);
 
-  // 3b. The same-map teleport is OBSERVABLE (FOLLOW-UPS 46 part 1): the
+  // 3b. The same-map teleport is OBSERVABLE (item 46 part 1): the
   //     server's MSG_MOVE_TELEPORT_ACK reaches the stream under our own guid
   //     carrying the arrival point, the way a client is told where it landed.
   //     Before this tap the only positional fact between repop and the next
@@ -305,13 +305,13 @@ async function main() {
   const tpAck = events
     .slice(mark)
     .find((e) => e.opcode === "MSG_MOVE_TELEPORT_ACK" && e.data?.guid === self.guid);
-  if (!tpAck) fail("no own-guid MSG_MOVE_TELEPORT_ACK on the stream after repop (same-map teleport invisible; module predates FOLLOW-UPS 46?)");
+  if (!tpAck) fail("no own-guid MSG_MOVE_TELEPORT_ACK on the stream after repop (same-map teleport invisible; module predates item 46?)");
   const ackFromGrave = dist2d(tpAck.data.pos, grave);
   if (ackFromGrave > 30) fail(`MSG_MOVE_TELEPORT_ACK pos (${tpAck.data.pos.x.toFixed(1)}, ${tpAck.data.pos.y.toFixed(1)}) is ${ackFromGrave.toFixed(1)}y from the release loc, want <= 30y`);
   if (dist2d(tpAck.data.pos, ghostPos) > 5) fail(`MSG_MOVE_TELEPORT_ACK pos disagrees with the server-truth position by ${dist2d(tpAck.data.pos, ghostPos).toFixed(1)}y`);
   log(`PASS[teleport-ack]: MSG_MOVE_TELEPORT_ACK served for self at (${tpAck.data.pos.x.toFixed(1)}, ${tpAck.data.pos.y.toFixed(1)}), ${ackFromGrave.toFixed(1)}y from the release loc`);
 
-  // 3c. A ghost knows where its corpse is (FOLLOW-UPS 53): the module sends
+  // 3c. A ghost knows where its corpse is (item 53): the module sends
   //     MSG_CORPSE_QUERY once after the graveyard port is acked, and the
   //     server's answer reaches the stream. The corpse is where we died.
   step = "corpse-query";

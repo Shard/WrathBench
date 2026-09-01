@@ -312,7 +312,7 @@ export function foldUiOpenWindows(
 /**
  * One sentence for a released ghost: where it stands, where its corpse is, and
  * the two ways back with their prices — the facts a client shows on its map
- * and in its tooltips, no more (FOLLOW-UPS 53). Distances are straight-line
+ * and in its tooltips, no more (item 53). Distances are straight-line
  * and rounded; "after Ns" is the server's own reclaim delay. The healer's
  * price is a paraphrased rule, not client text.
  */

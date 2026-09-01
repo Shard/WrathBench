@@ -3024,7 +3024,7 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
 
   test("resumesInPlace: the freeplay stream and a resume:true campaign come back; a scored run does not", () => {
     // What `infra/fleet-update.sh graceful` reads off each job row to decide
-    // whether waiting on it buys anything (FOLLOW-UPS 93). The campaign's
+    // whether waiting on it buys anything (item 93). The campaign's
     // opt-in is the supervisor's to answer: the script must not re-derive it
     // from a fleet.json the supervisor may not be running.
     const campaigns = [
