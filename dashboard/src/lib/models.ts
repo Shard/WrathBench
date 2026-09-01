@@ -25,7 +25,7 @@ import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "
  * On the word "tier": it means a rung of the EVIDENCE ladder (t0/t1/t2),
  * never an episode. The episode columns are named by their ids.
  */
-export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest run"] as const;
+export const MODEL_COLUMNS = ["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "note", "newest run"] as const;
 
 /** The episodes the page shows a counted/target cell for, in policy order. */
 export const EPISODE_COLUMNS = ["e90", "e360"] as const;
@@ -111,7 +111,11 @@ export function extrasOf(row: ModelRowView): number {
   return Object.values(row.perEpisode).reduce((n, st) => n + (st?.extras ?? 0), 0);
 }
 
-/** `yes: schedulable on e90` / `no: running (one stream per model)` — the verdict as --status prints it. */
+/**
+ * `yes: schedulable on e90` / `no: running (one stream per model)` — the verdict
+ * as --status prints it. The extras cell's hover, not a column: it is scheduler
+ * state, and a reader who wants it is already looking at what has been spent.
+ */
 export function schedulableOf(row: ModelRowView): string {
   return `${row.schedulable.ok ? "yes" : "no"}: ${row.schedulable.why}`;
 }
