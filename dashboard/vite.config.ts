@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import solid from "vite-plugin-solid";
+import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags";
 
 /*
  * The dashboard is served two ways and must work identically in both: by Vite
@@ -14,8 +15,26 @@ import solid from "vite-plugin-solid";
  */
 const viewerOrigin = process.env["WRATHBENCH_VIEWER_ORIGIN"] ?? "http://127.0.0.1:8090";
 
+/**
+ * The social card's origin-dependent `<meta>` tags, injected into the static
+ * `index.html` at build time.
+ *
+ * A crawler reads the HTML with no JavaScript, so the tags cannot come from
+ * the app; and `og:image` must be absolute, so they cannot be static either —
+ * only the build knows whether it is the public site or the private viewer.
+ * `ogTagsFromEnv` answers null for the private build and the placeholder
+ * comment is simply dropped. See `src/lib/og-tags.ts`; the picture the tags
+ * point at is rendered before the build by `infra/render-og.ts`.
+ */
+function ogMeta(): Plugin {
+  return {
+    name: "wrathbench-og-meta",
+    transformIndexHtml: (html) => html.replace("<!-- wrathbench:og -->", ogTags(ogTagsFromEnv(process.env))),
+  };
+}
+
 export default defineConfig({
-  plugins: [solid()],
+  plugins: [solid(), ogMeta()],
   resolve: {
     alias: { "@viewer": resolve(import.meta.dirname, "../runner/viewer") },
   },

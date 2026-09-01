@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260825.1",
+    "@resvg/resvg-js": "2.6.2",
     "@types/bun": "1.4.0",
     "typescript": "7.0.2",
     "wrangler": "4.125.0"
