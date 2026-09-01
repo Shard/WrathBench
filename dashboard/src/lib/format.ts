@@ -165,6 +165,17 @@ export function stamp(ts: number | null): string {
   return ts === null ? "" : new Date(ts).toLocaleString();
 }
 
+/**
+ * A run id's tail: `20260830-a6` for a fleet-minted id, whose long prefix
+ * (`fleet-<entry>-<episode>-<model>-`) repeats what the row's other columns
+ * already say. An id of another shape is shown whole; the full id always
+ * sits in the title and on the run page.
+ */
+export function shortRunId(id: string): string {
+  const m = /-(\d{8}-a\d+)$/.exec(id);
+  return m === null ? id : m[1]!;
+}
+
 /** The harness stamp is identical on every row; only the suffix distinguishes. */
 export function shortHarness(v: string | null | undefined): string {
   return v === null || v === undefined || v === "" ? "—" : v.replace(/^harness-/, "");
