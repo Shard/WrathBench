@@ -98,7 +98,9 @@ async function launch(runsDir: string, moduleUrl: string, extra: string[]): Prom
       ...extra,
     ],
     cwd: runsDir,
-    env: { ...process.env, WRATHBENCH_MODULE_URL: moduleUrl },
+    // Root `bun test` auto-loads the repo's .env, which carries the real module
+    // secret; the fake module here issues no leases, so the child must not see it.
+    env: { ...process.env, WRATHBENCH_MODULE_URL: moduleUrl, WRATHBENCH_MODULE_SECRET: undefined },
     stdout: "pipe",
     stderr: "pipe",
   });
