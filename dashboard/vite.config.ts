@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import solid from "vite-plugin-solid";
-import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags";
+import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
 
 /*
  * The dashboard is served two ways and must work identically in both: by Vite
