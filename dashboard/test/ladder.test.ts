@@ -22,7 +22,6 @@ import {
   costScale,
   fmtCostTick,
   ladderChartLayout,
-  OPAQUE_PAUSE_REASON,
   ladderPoints,
   ladderRows,
   raceOptions,
@@ -35,6 +34,7 @@ import {
   timeTicks,
   xpEarnedOf,
 } from "../src/lib/ladder";
+import { OPAQUE_PAUSE_REASON } from "../src/lib/runs";
 import { familyOf, monogramOf } from "../src/lib/lineup";
 import { resolvedSummary } from "../src/lib/models";
 import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";

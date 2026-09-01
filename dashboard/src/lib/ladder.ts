@@ -15,6 +15,7 @@ import type { ResultRun } from "@viewer/api-types";
 import { niceTicks, scaleLinear } from "./chart";
 import { modelDisplay } from "./format";
 import { chainsOf } from "./lineage";
+import { OPAQUE_PAUSE_REASON, type RunStatus, statusOf as runStatusOf } from "./runs";
 
 export function scored(runs: readonly ResultRun[]): ResultRun[] {
   return runs.filter((r) => r.unscored === null);
@@ -826,7 +827,8 @@ export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox)
  */
 
 /** What a stream is doing now. */
-export type StreamStatus = "live" | "paused" | "ended";
+/** The same three states `lib/runs.ts` reads; one verdict, two pages. */
+export type StreamStatus = RunStatus;
 
 export interface StreamRow {
   /** The chain root's run id: the stream's identity across attempts. */
@@ -857,19 +859,12 @@ export interface StreamRow {
   startedAt: number | null;
 }
 
-/**
- * The public projection replaces a pause reason's free text with the fixed
- * `paused` token, so the detail there restates the status. Dropped rather
- * than printed: `paused (paused)` reads as a defect, not as a withheld field.
- */
-export const OPAQUE_PAUSE_REASON = "paused";
 
 function statusOf(r: ResultRun): { status: StreamStatus; detail: string | null } {
-  if (r.pauseReason !== null) {
-    return { status: "paused", detail: r.pauseReason === OPAQUE_PAUSE_REASON ? null : r.pauseReason };
-  }
-  if (r.live === true) return { status: "live", detail: null };
-  return { status: "ended", detail: r.terminationReason };
+  const status = runStatusOf(r);
+  if (status === "paused") return { status, detail: r.pauseReason === OPAQUE_PAUSE_REASON ? null : r.pauseReason };
+  if (status === "ended") return { status, detail: r.terminationReason };
+  return { status, detail: null };
 }
 
 /**
