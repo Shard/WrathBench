@@ -174,22 +174,3 @@ worklogs/2026-08-29).
     (d) the copy review's voice rewrites and cuts not yet taken (Home intro, About
     "reading a result", the StreamChart caption, Models/Campaigns intros — see the
     2026-09-01 day file). Trigger: the day before the repo flips public.
-
-110. **Wire the spell/talent/trade facts through `runner/viewer/api.ts`**
-    (2026-09-01, item 35's leftover). The producers, the derivations, the public
-    projection, the types and the run page all shipped; two lines in the viewer's
-    request handlers did not, because `api.ts` was being edited by another agent
-    that day and was off limits. Until they land, `RunDetailResponse.spells` /
-    `.talents` / `.trades` are `undefined` and the run page's milestones section
-    reads "not recorded" for those three rows however much the trajectory holds.
-    Exactly two edits, both mechanical: in the `/api/runs/:id` body (beside
-    `deaths: tail.deaths`) add `spells: tail.spells`, `talents: tail.talents`,
-    `trades: tail.trades`; and in `resultRuns()` pass `resultRunOf`'s new
-    trailing `learning` argument after `totals?.deaths ?? null`:
-    `totals === null ? undefined : { spells: totals.spells, talents: totals.talents, trades: totals.trades }`
-    (omitted, never nulls, so an unwired viewer says "does not answer" rather
-    than "the run recorded none"). One trap: `RESULT_RUN_KEYS` in
-    `runner/test/public-projection.test.ts` is an exact allowlist and does not
-    list `spells` / `talents` / `trades` — it passes today only because
-    `resultRunOf` omits them; add the three keys (and their sub-paths) when the
-    results fixture starts carrying them. Trigger: next time `api.ts` is free.
