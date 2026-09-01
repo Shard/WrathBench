@@ -17,18 +17,14 @@ import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
 import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS } from "../lib/axes";
-import { LABEL_FONT, MARK_R, MARK_RING_R, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
-import { logoHrefOf } from "./ModelIcon";
+import { LABEL_FONT, TICK_FONT, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
+import { AxisFrame, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { COST_BASIS_NOTE, fmtTokens, fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
 
-const VB_W = 1000;
-const VB_H = 380;
 const M = { top: 16, right: 24, bottom: 40, left: 64 };
 const BOX = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
 
-/** The logo inside a puck. Square, a little inside the ring, so a wide mark's art still fits. */
-const LOGO_S = 7.5;
 /** The transparent hit target: comfortably wider than the mark, which is small. */
 const HIT_R = 12;
 
@@ -147,19 +143,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           </title>
 
           {/* Gridlines and ticks: the same px/py the points were placed with. */}
-          <For each={layout().yTicks}>
-            {(t) => {
-              const y = layout().py(t);
-              return (
-                <>
-                  <line x1={BOX.x0} y1={y} x2={BOX.x1} y2={y} stroke="var(--gridline)" stroke-dasharray="3 3" />
-                  <text x={BOX.x0 - 8} y={y + 4} text-anchor="end" font-size="11" fill="var(--dim)">
-                    {view().y.format(t)}
-                  </text>
-                </>
-              );
-            }}
-          </For>
+          <YAxis ticks={layout().yTicks} py={layout().py} box={BOX} format={view().y.format} />
           {/*
            * The cost axis is logarithmic, so it gets the faint vertical lines
            * the linear one did not need: the 2× and 5× inside each decade,
@@ -181,19 +165,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
               />
             )}
           </For>
-          <For each={layout().xTicks}>
-            {(t) => {
-              const x = layout().px(t);
-              return (
-                <>
-                  <line x1={x} y1={BOX.y0} x2={x} y2={BOX.y0 + 4} stroke="var(--line)" />
-                  <text x={x} y={BOX.y0 + 17} text-anchor="middle" font-size="11" fill="var(--dim)">
-                    {view().x.format(t)}
-                  </text>
-                </>
-              );
-            }}
-          </For>
+          <XAxis ticks={layout().xTicks} px={layout().px} box={BOX} format={view().x.format} />
 
           {/*
            * The $0 gutter. A $0 entry is a reading and not a small price, so
@@ -203,7 +175,9 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
            * reported" and not "free": the page's free filter is the billing
            * verdict, and a paid endpoint that reports $0 (a stealth preview)
            * lands here with free excluded — the coordinate is the honest test,
-           * the word "free" would contradict the caption.
+           * the word "free" would contradict the caption. Two lines, because
+           * the gutter is 54 units wide and "$0 reported" on one line ran
+           * into the 1¢ tick beside it.
            */}
           <Show when={layout().hasFree}>
             <line
@@ -215,33 +189,17 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
               stroke-dasharray="2 4"
               opacity="0.7"
             />
-            <text
-              x={layout().freeX}
-              y={BOX.y0 + 17}
-              text-anchor="middle"
-              font-size="11"
-              fill="var(--dim)"
-            >
-              $0 reported
+            <text text-anchor="middle" font-size={String(TICK_FONT)} fill="var(--dim)">
+              <tspan x={layout().freeX} y={BOX.y0 + 17}>
+                $0
+              </tspan>
+              <tspan x={layout().freeX} y={BOX.y0 + 29}>
+                reported
+              </tspan>
             </text>
           </Show>
 
-          {/* Axes and their units. */}
-          <line x1={BOX.x0} y1={BOX.y0} x2={BOX.x1} y2={BOX.y0} stroke="var(--line)" />
-          <line x1={BOX.x0} y1={BOX.y1} x2={BOX.x0} y2={BOX.y0} stroke="var(--line)" />
-          <text x={BOX.x1} y={BOX.y0 + 33} text-anchor="end" font-size="11" fill="var(--dim)">
-            {xCaption()}
-          </text>
-          <text
-            x={-(BOX.y1 + 4)}
-            y={14}
-            transform="rotate(-90)"
-            text-anchor="end"
-            font-size="11"
-            fill="var(--dim)"
-          >
-            {yCaption()}
-          </text>
+          <AxisFrame box={BOX} xCaption={xCaption()} yCaption={yCaption()} />
 
           {/* Points, each a link to that entry's runs on this tier. */}
           <For each={layout().placed}>
@@ -279,19 +237,21 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                 {/* A hit target wider than the mark. */}
                 <circle cx={d.cx} cy={d.cy} r={HIT_R} fill="transparent" />
                 {/*
-                 * The mark is the model's logo on a puck, and the
+                 * The mark is the model's logo on a puck (`Puck`), and the
                  * harness keeps the point's colour as the puck's ring, so the
-                 * legend below still says what it always said. Three circles
-                 * and not one: the outer page-coloured ring is what separates
-                 * two pucks that land on top of each other, which is the job
-                 * the old dot's `var(--bg)` stroke was doing. The puck itself
-                 * is light in both themes on purpose — these SVGs paint
-                 * `currentColor`, which an image document resolves to black.
-                 * A model no family claims has no logo and keeps the coloured
-                 * dot, the same fallback every other render site takes.
+                 * legend below still says what it always said; the
+                 * page-coloured separation ring is what tells two pucks apart
+                 * when they land on top of each other. A model no family
+                 * claims has no logo and keeps the coloured dot, the same
+                 * fallback every other render site takes for it.
                  */}
-                <Show
-                  when={logoHrefOf(d.point.model)}
+                <Puck
+                  cx={d.cx}
+                  cy={d.cy}
+                  model={d.point.model}
+                  stroke={harnessColour(d.point.harnesses)}
+                  dash={d.point.single ? SINGLE_DASH : undefined}
+                  ring
                   fallback={
                     <circle
                       cx={d.cx}
@@ -303,30 +263,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                       stroke-dasharray={d.point.single ? SINGLE_DASH : undefined}
                     />
                   }
-                >
-                  {(href) => (
-                    <>
-                      <circle cx={d.cx} cy={d.cy} r={MARK_RING_R} fill="none" stroke="var(--bg)" stroke-width="1.5" />
-                      <circle
-                        cx={d.cx}
-                        cy={d.cy}
-                        r={MARK_R}
-                        fill="#ffffff"
-                        stroke={harnessColour(d.point.harnesses)}
-                        stroke-width="1.5"
-                        stroke-dasharray={d.point.single ? SINGLE_DASH : undefined}
-                      />
-                      <image
-                        href={href()}
-                        x={d.cx - LOGO_S / 2}
-                        y={d.cy - LOGO_S / 2}
-                        width={LOGO_S}
-                        height={LOGO_S}
-                        preserveAspectRatio="xMidYMid meet"
-                      />
-                    </>
-                  )}
-                </Show>
+                />
                 {/* `crowded` is a label every slot failed, drawn over something
                     anyway (a hidden label is worse than an ugly one); the class
                     is a hook for the eye and for a scripted check, not a hide. */}
