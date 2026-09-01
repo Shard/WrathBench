@@ -64,7 +64,7 @@ export class Scratchpad {
     return {
       ok: true,
       chars: res.chars,
-      lines: res.chars === 0 ? 0 : this.read().split("\n").length,
+      lines: res.chars === 0 ? 0 : this.read().replace(/\n$/, "").split("\n").length,
       replaced: replaceAll ? matches : 1,
       truncated: res.truncated,
     };

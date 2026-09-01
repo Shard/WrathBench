@@ -41,7 +41,7 @@ describe("Scratchpad.edit", () => {
     if (res.ok) {
       expect(res.replaced).toBe(1);
       expect(res.chars).toBe(pad.read().length);
-      expect(res.lines).toBe(4);
+      expect(res.lines).toBe(3); // the trailing newline terminates line 3, it is not a fourth line
       expect(res.truncated).toBe(false);
     }
   });
@@ -128,7 +128,7 @@ describe("edit_scratchpad, the tool", () => {
     const ctx = makeCtx(pad);
     const res = await callTool(ctx, "edit_scratchpad", { old: "- [ ] train", new: "- [x] trained" });
     expect(res.isError).toBeUndefined();
-    expect(res.text).toBe("edited (1 replacement; 21 chars, 3 lines)");
+    expect(res.text).toBe("edited (1 replacement; 21 chars, 2 lines)");
     expect(res.text).not.toContain("# Plan");
     expect(pad.read()).toBe("# Plan\n- [x] trained\n");
   });
