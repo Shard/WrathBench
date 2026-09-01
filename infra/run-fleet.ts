@@ -4948,6 +4948,15 @@ async function main(): Promise<void> {
           // the ref stays out of the unlimited lane, so nothing respawns it.
           drainReasons.set(name, dropped);
           out.push({ name, enabled: false, account, loop: false, entries: [{ model: "gone" }] });
+          // A session under SIGTERM still holds its driver slot until the
+          // process exits (runner backstop 60s, roster SIGKILL grace 90s), and
+          // this tick's picks are planned below: without this the flip frees a
+          // claude lane a live stream is still on and the policy spills a spawn
+          // onto it, which is the 2026-08-24 incident the backstop block below
+          // was written for — and that block skips anything in `assigned`.
+          runningRefs.add(running.ref);
+          countKey(running.refs, laneOf(running));
+          if (billingOf.get(running.ref) === "paid") paidRunning++;
         } else {
           const placed = assignLane(running);
           out.push(jobSpawn(placed, cfg.roster, account, stampToday, undefined, cfg.campaigns));
