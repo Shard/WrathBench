@@ -138,6 +138,9 @@ function runDeploy(c: Case = {}): Result {
         // The drain timeout is 60s in production; the stuck-supervisor case
         // must fail in seconds here.
         WRATHBENCH_DEPLOY_DRAIN_WAIT_S: "3",
+        // The script refuses the window without the module's port secret
+        // (module/PROTOCOL.md "Authentication"); the fixture stack has one.
+        WRATHBENCH_MODULE_SECRET: "deploy-test-secret-".padEnd(48, "0"),
       },
       stdout: "pipe",
       stderr: "pipe",

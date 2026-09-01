@@ -52,6 +52,7 @@ import { Database } from "bun:sqlite";
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { DEFAULT_CLAUDE_TOKEN_ENV, isTokenEnvName, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -1194,7 +1195,8 @@ export async function releaseRunSession(runId: string): Promise<string> {
     try {
       const r = await fetch(url, {
         method: "DELETE",
-        headers: { "content-type": "application/json" },
+        // Operator class: the roster holds the port secret, not the run's lease.
+        headers: { "content-type": "application/json", ...moduleAuthHeaders() },
         body: JSON.stringify({ token: tokenOfRun(runId) }),
       });
       return `delete-session ${r.status} ${(await r.text()).trim()}`;
@@ -1203,8 +1205,11 @@ export async function releaseRunSession(runId: string): Promise<string> {
     }
   }
 
+  // The exec'd bun autoloads /wrathbench/.env, which is where the port secret
+  // lives (module/PROTOCOL.md "Authentication").
   const code = `const url=(process.env.WRATHBENCH_MODULE_URL??"http://worldserver:8086")+"/session";
-const r=await fetch(url,{method:"DELETE",headers:{"content-type":"application/json"},body:JSON.stringify({token:process.env.WB_TOKEN})});
+const s=process.env.WRATHBENCH_MODULE_SECRET;const h={"content-type":"application/json",...(s?{authorization:"Bearer "+s}:{})};
+const r=await fetch(url,{method:"DELETE",headers:h,body:JSON.stringify({token:process.env.WB_TOKEN})});
 console.log("delete-session",r.status,await r.text());`;
   try {
     const p = Bun.spawn(

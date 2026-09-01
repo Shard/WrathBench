@@ -72,6 +72,12 @@ const TOKEN = process.env["WRATHBENCH_TOKEN"] ?? randomBytes(16).toString("hex")
 // account behavior.
 const ACCOUNT_ENV = process.env["WRATHBENCH_ACCOUNT"];
 const ACCOUNT = ACCOUNT_ENV !== undefined && ACCOUNT_ENV.length > 0 ? ACCOUNT_ENV : undefined;
+// The session secret the host leased for TOKEN (module/PROTOCOL.md,
+// "Authentication"): the one credential this process holds, good for this
+// token's session and nothing else. Empty means none was leased (a pre-auth
+// module, or running this file by hand), and the client sends no header.
+const SECRET_ENV = process.env["WRATHBENCH_SECRET"];
+const SECRET = SECRET_ENV !== undefined && SECRET_ENV.length > 0 ? SECRET_ENV : undefined;
 const VALUE_MAX_CHARS = 4_000;
 const LOG_MAX_CHARS = 4_000;
 
@@ -109,12 +115,14 @@ globalThis.fetch = guardedFetch;
 
 const RealWebSocket = globalThis.WebSocket;
 class GuardedWebSocket extends RealWebSocket {
-  constructor(url: string | URL, protocols?: string | string[]) {
+  // The second argument is passed through untouched: the SDK's event stream
+  // hands Bun its `Authorization` header there.
+  constructor(url: string | URL, init?: string | string[] | object) {
     const host = new URL(String(url)).host;
     if (!allowedHosts.has(host)) {
       throw new Error(`sandbox: WebSocket to ${host} is not permitted (module only)`);
     }
-    super(url, protocols);
+    super(url, init as string[] | undefined);
   }
 }
 globalThis.WebSocket = GuardedWebSocket as unknown as typeof WebSocket;
@@ -321,6 +329,7 @@ const evalControllers = new Map<number, AbortController>();
 const client = new WrathClient({
   baseUrl: MODULE_URL,
   token: TOKEN,
+  secret: SECRET,
   account: ACCOUNT,
   subscribeEvents: false,
   signal: currentSignal,

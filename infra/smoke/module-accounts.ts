@@ -23,6 +23,8 @@
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-accounts.ts
  */
 
+import { authHeaders } from "./lib/auth";
+
 const HOST = process.env.MODULE_HOST ?? "worldserver";
 const PORT = process.env.MODULE_PORT ?? "8086";
 const BASE = `http://${HOST}:${PORT}`;
@@ -56,7 +58,7 @@ function fail(msg: string): never {
 async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
+    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   let json: any = undefined;

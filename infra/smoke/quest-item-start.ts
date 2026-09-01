@@ -37,6 +37,7 @@
 import { connect, WrathRequestError, type WrathClient } from "../../sdk/src/index";
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
+import { authHeaders, MODULE_SECRET } from "./lib/auth";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -54,7 +55,7 @@ function fail(m: string): never {
   throw new Error(m);
 }
 
-const health = await fetch(`${BASE}/health`).then((r) => r.json() as Promise<any>);
+const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}, character=${CHARACTER} on ${ACCOUNT}`);
 
@@ -68,7 +69,7 @@ const fixtureCtx: FixtureContext = {
   contendedDeadlineMs: 10_000,
   contendedRetryMs: 5_000,
   createAndLogout: async () => {
-    const c = await connect({ baseUrl: BASE, token: `${TOKEN}-create` });
+    const c = await connect({ baseUrl: BASE, token: `${TOKEN}-create`, secret: MODULE_SECRET });
     try {
       await c.createSession({ account: ACCOUNT, character: CHARACTER, race: 1, class: 1 });
       await c.logout();
@@ -81,7 +82,7 @@ let session: WrathClient | undefined;
 try {
   await ensureFixtureCharacter(fixtureCtx);
   await applyScenario(fixtureCtx, SCENARIO);
-  const client = await connect({ baseUrl: BASE, token: TOKEN });
+  const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
   session = client;
   const seen: string[] = [];
   client.events.onAny((e) => {

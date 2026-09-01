@@ -112,6 +112,18 @@ require_num() {
 }
 
 command -v bun >/dev/null 2>&1 || die "bun is not on PATH (this script reads fleet.json/fleet-state.json with it)"
+
+# The module's port secret (module/PROTOCOL.md "Authentication"; FOLLOW-UPS
+# 19). Compose interpolates AC_WRATH_BENCH_SECRET from the shell, and it does
+# not read the repo-root .env (its project directory is infra/), so the
+# recreate below would ship an empty secret and the new module would refuse
+# to listen — a rollback, every time. Load it from .env when the shell does
+# not carry it, and refuse the window outright when neither does.
+if [[ -z "${WRATHBENCH_MODULE_SECRET:-}" && -f "${REPO_ROOT}/.env" ]]; then
+  WRATHBENCH_MODULE_SECRET="$(sed -n 's/^WRATHBENCH_MODULE_SECRET=//p' "${REPO_ROOT}/.env" | head -1 | tr -d "\"'" )"
+fi
+export WRATHBENCH_MODULE_SECRET="${WRATHBENCH_MODULE_SECRET:-}"
+[[ "${#WRATHBENCH_MODULE_SECRET}" -ge 32 ]] || die "WRATHBENCH_MODULE_SECRET is unset or shorter than 32 characters (in the shell or ${REPO_ROOT}/.env) — the module would refuse to listen; see docs/OPERATIONS.md, Secrets"
 command -v flock >/dev/null 2>&1 || die "flock is not on PATH (util-linux); the deploy lock needs it"
 
 cd "${REPO_ROOT}"
@@ -196,10 +208,13 @@ image_build() {
   [[ -n "${b}" ]] && echo "${b}" || image_id "${tag}"
 }
 # The build the LIVE module reports on /health; empty when it does not answer.
+# Both /health probes present the port secret: the exec'd bun autoloads
+# /wrathbench/.env inside the runner, which is where it lives.
 health_build() {
   "${COMPOSE[@]}" exec -T runner bun -e '
     const url=(process.env.WRATHBENCH_MODULE_URL??"http://worldserver:8086")+"/health";
-    try{const j=await (await fetch(url,{signal:AbortSignal.timeout(4000)})).json();
+    const s=process.env.WRATHBENCH_MODULE_SECRET;const headers=s?{authorization:"Bearer "+s}:{};
+    try{const j=await (await fetch(url,{headers,signal:AbortSignal.timeout(4000)})).json();
       if(typeof j.build==="string"&&j.build!=="")process.stdout.write(j.build);}catch{}
   ' 2>/dev/null | strip_ansi || true
 }
@@ -235,6 +250,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "  server state       ${SERVER_STATE_JSON} (lock ${SERVER_STATE_LOCK})"
   say "  next tag           ${NEXT_TAG} $(docker image inspect "${NEXT_TAG}" >/dev/null 2>&1 && echo "(build $(image_build "${NEXT_TAG}"))" || echo "— MISSING, the deploy would refuse")"
   say "  rollback target    $(docker image inspect "${IMAGE}:latest" >/dev/null 2>&1 && echo "${IMAGE}:prev (from the running :latest, build $(b="$(health_build)"; [[ -n "${b}" ]] && echo "${b}" || image_build "${IMAGE}:latest"))" || echo "NONE — no ${IMAGE}:latest")"
+  say "  port secret        ${#WRATHBENCH_MODULE_SECRET} chars (AC_WRATH_BENCH_SECRET on the recreate)"
   say "  health wait        ${HEALTH_WAIT_S}s"
   say "  drain wait         ${DRAIN_WAIT_S}s after compose stop returns"
   say "  preflight enabled  ${PREFLIGHT_ENABLED}"
@@ -381,7 +397,8 @@ trap 'fail_closed "unexpected error at line ${LINENO} (exit $?)"' ERR
 health_ok() {
   "${COMPOSE[@]}" exec -T runner bun -e '
     const url=(process.env.WRATHBENCH_MODULE_URL??"http://worldserver:8086")+"/health";
-    try{const r=await fetch(url,{signal:AbortSignal.timeout(4000)});const j=await r.json();
+    const s=process.env.WRATHBENCH_MODULE_SECRET;const headers=s?{authorization:"Bearer "+s}:{};
+    try{const r=await fetch(url,{headers,signal:AbortSignal.timeout(4000)});const j=await r.json();
       process.exit(j?.ok===true&&j?.worldStopped!==true?0:1);}catch{process.exit(1);}
   ' >/dev/null 2>&1
 }

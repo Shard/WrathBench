@@ -24,9 +24,11 @@
  * character it tried to remove should it ever come back in the world.
  */
 
+import { moduleAuthHeaders } from "./module-auth";
+
 export interface HygieneOptions {
   moduleUrl: string;
-  /** The run's session secret; per-call throwaway tokens derive from it. */
+  /** The run's session token; per-call throwaway tokens derive from it. */
   token: string;
   account: string;
   fetch?: typeof fetch;
@@ -83,7 +85,9 @@ export async function clearAccountCharacters(o: HygieneOptions): Promise<Hygiene
     try {
       const res = await f(`${o.moduleUrl}/characters`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        // Operator class: /characters is one of the routes only the port
+        // secret opens (module/PROTOCOL.md, "Authentication").
+        headers: { "content-type": "application/json", ...moduleAuthHeaders() },
         body: JSON.stringify({ token: `${o.token}-hygiene-${i}`, account: o.account }),
       });
       const j = (await res.json()) as {
@@ -106,7 +110,7 @@ export async function clearAccountCharacters(o: HygieneOptions): Promise<Hygiene
     try {
       const res = await f(`${o.moduleUrl}/character-delete`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...moduleAuthHeaders() },
         body: JSON.stringify({
           token: `${o.token}-hygiene-del-${attempt}-${name}`,
           account: o.account,

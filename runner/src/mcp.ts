@@ -19,6 +19,7 @@ import { openWikiBundle } from "./wiki";
 import { EpisodicLog } from "./episodic";
 import { ClosedWindowReflectGate } from "./reflect";
 import { callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
+import { leaseSessionSecret } from "./module-auth";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory } from "./trajectory";
@@ -144,9 +145,15 @@ async function main(): Promise<void> {
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
   trajectory.writeMeta({ runId, harnessVersion: harnessVersion(), startedAt: Date.now(), config });
 
+  // The session secret for this token (module/PROTOCOL.md, "Authentication");
+  // the operator's port secret stays in this process.
+  const lease = await leaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token ?? token, account: config.account });
+  if (lease.secret === undefined) console.error(`[wrathbench-mcp] ${lease.note}`);
+
   const sandbox = new SandboxHost({
     moduleUrl: config.moduleUrl,
     token: config.token ?? token,
+    secret: lease.secret,
     account: config.account,
     scratchpad,
     snippetTimeoutMs: config.snippetTimeoutMs,

@@ -187,6 +187,28 @@ export const deleteSessionResponseSchema = z.looseObject({
 });
 export type DeleteSessionResponse = z.infer<typeof deleteSessionResponseSchema>;
 
+/**
+ * POST /lease (PROTOCOL.md, "Authentication"). Operator only: binds the token
+ * to an account and issues the session secret the runner hands the snippet
+ * child. `character` is present once a create under this token has bound one.
+ */
+export const leaseResponseSchema = z.looseObject({
+  ok: z.literal(true),
+  token: z.string(),
+  account: z.string(),
+  secret: z.string().min(32),
+  character: z.string().optional(),
+});
+export type LeaseResponse = z.infer<typeof leaseResponseSchema>;
+
+/** DELETE /lease */
+export const releaseLeaseResponseSchema = z.looseObject({
+  ok: z.literal(true),
+  token: z.string(),
+  released: z.boolean(),
+});
+export type ReleaseLeaseResponse = z.infer<typeof releaseLeaseResponseSchema>;
+
 // ------------------------------------------------------------ HTTP requests
 
 /** POST /session body. */

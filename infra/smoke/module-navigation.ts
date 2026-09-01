@@ -48,6 +48,8 @@
  * and the login account with MODULE_ACCOUNT (default PROBE).
  */
 
+import { authHeaders } from "./lib/auth";
+
 const HOST = process.env.MODULE_HOST ?? "worldserver";
 const PORT = process.env.MODULE_PORT ?? "8086";
 const BASE = `http://${HOST}:${PORT}`;
@@ -69,14 +71,14 @@ function fail(msg: string): never {
   console.error(`[nav] FAIL: ${msg}`);
   const bail = () => process.exit(1);
   setTimeout(bail, 3000);
-  fetch(`${BASE}/session`, { method: "DELETE", body: JSON.stringify({ token: TOKEN }) }).then(bail, bail);
+  fetch(`${BASE}/session`, { method: "DELETE", headers: authHeaders(), body: JSON.stringify({ token: TOKEN }) }).then(bail, bail);
   throw new Error("unreachable");
 }
 
 async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
+    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   let json: any = undefined;
@@ -92,7 +94,7 @@ const events: any[] = [];
 
 function openEvents(): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`);
+    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
     ws.addEventListener("open", () => resolve(ws));
     ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
     ws.addEventListener("message", (ev) => {

@@ -61,6 +61,14 @@ export interface SandboxHostOptions {
   moduleUrl: string;
   token: string;
   /**
+   * The session secret leased for `token` (module/PROTOCOL.md,
+   * "Authentication"), forwarded to the child as `WRATHBENCH_SECRET` and
+   * bound onto its SDK client. The only credential the child holds: it
+   * reaches this token's session and nothing else. Undefined (tests, a
+   * pre-auth module) sends the child in with no credential.
+   */
+  secret?: string;
+  /**
    * The game account this run occupies, forwarded to the child as
    * `WRATHBENCH_ACCOUNT` and bound onto the SDK client. Operator
    * infra like `token`: it makes `sdk.createSession`/`deleteCharacter` land on
@@ -97,13 +105,17 @@ interface Pending {
  * SDK reads no env. WRATHBENCH_* is forwarded as a prefix so operators (and
  * the storm-control tests) can tune the fault knobs from the parent.
  *
- * The one hole the prefix forwarding would otherwise open is WRATHBENCH_DB_*:
- * the `fleet` and `runner` services carry the database host/user/password so
- * the preflight gate's smokes can stage a fixture, and an episode is a child of
- * one of those. Root on acore_characters is exactly the server-side shortcut
- * docs/CONTRACTS.md forbids — a snippet holding it could write its own level
- * and money — so those four are dropped here, at the one place every snippet
- * child is spawned, rather than by keeping the credentials off a service.
+ * Two holes the prefix forwarding would otherwise open are closed here, at the
+ * one place every snippet child is spawned, rather than by keeping the values
+ * off a service. WRATHBENCH_DB_*: the `fleet` and `runner` services carry the
+ * database host/user/password so the preflight gate's smokes can stage a
+ * fixture, and an episode is a child of one of those; root on acore_characters
+ * is exactly the server-side shortcut docs/CONTRACTS.md forbids — a snippet
+ * holding it could write its own level and money. WRATHBENCH_MODULE_SECRET:
+ * the module's port secret (module/PROTOCOL.md "Authentication"), which the
+ * host process holds from `.env`; a snippet holding it could lease, list and
+ * delete on any allowlisted account. The child gets its own per-token session
+ * secret instead (`WRATHBENCH_SECRET`, passed explicitly below).
  */
 export function sandboxChildEnv(
   parent: Record<string, string | undefined>,
@@ -115,7 +127,9 @@ export function sandboxChildEnv(
     if (v !== undefined) out[key] = v;
   }
   for (const [k, v] of Object.entries(parent)) {
-    if (v !== undefined && k.startsWith("WRATHBENCH_") && !k.startsWith("WRATHBENCH_DB_")) out[k] = v;
+    if (v === undefined || !k.startsWith("WRATHBENCH_")) continue;
+    if (k.startsWith("WRATHBENCH_DB_") || k === "WRATHBENCH_MODULE_SECRET") continue;
+    out[k] = v;
   }
   return { ...out, ...explicit };
 }
@@ -152,11 +166,11 @@ export class SandboxHost {
   get entryPath(): string {
     return this.opts.entryPath ?? join(import.meta.dir, "entry.ts");
   }
+
   /** The Landlock wrapper the child is exec'd through (see start()). */
   get confinePath(): string {
     return join(import.meta.dir, "confine.ts");
   }
-
 
   private notice(kind: HarnessNotice["kind"], text: string): void {
     const n: HarnessNotice = { ts: (this.opts.now ?? Date.now)(), kind, text };
@@ -196,6 +210,9 @@ export class SandboxHost {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,
+        // Explicit and possibly empty, for the same reason as WRATHBENCH_ACCOUNT
+        // below: nothing leaked from the operator's shell may stand in for it.
+        WRATHBENCH_SECRET: this.opts.secret ?? "",
         // Always set explicitly (empty when unbound) so it wins over any
         // WRATHBENCH_ACCOUNT that leaked in from the operator's own shell via
         // sandboxChildEnv's WRATHBENCH_* forwarding — the child must bind only

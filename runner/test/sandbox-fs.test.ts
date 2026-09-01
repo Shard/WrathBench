@@ -88,4 +88,25 @@ describe("sandbox filesystem confinement", () => {
     expect(cat.ok).toBe(true);
     expect(cat.value).not.toBe("0");
   });
+
+  test("the child's environment carries the leased session secret and never the port secret", async () => {
+    const prev = process.env["WRATHBENCH_MODULE_SECRET"];
+    process.env["WRATHBENCH_MODULE_SECRET"] = "port-secret-must-not-cross";
+    try {
+      // The allowlist itself, on the parent side.
+      const env = sandboxChildEnv(process.env, { WRATHBENCH_SECRET: "leased" });
+      expect(env["WRATHBENCH_MODULE_SECRET"]).toBeUndefined();
+      expect(env["WRATHBENCH_SECRET"]).toBe("leased");
+      // And the child as actually spawned.
+      const host = makeHost({ secret: "leased-session-secret" });
+      const res = await host.evalSnippet(
+        'JSON.stringify({ s: process.env.WRATHBENCH_SECRET, m: process.env.WRATHBENCH_MODULE_SECRET ?? null })',
+      );
+      expect(res.ok).toBe(true);
+      expect(JSON.parse(JSON.parse(res.value ?? '""') as string)).toEqual({ s: "leased-session-secret", m: null });
+    } finally {
+      if (prev === undefined) delete process.env["WRATHBENCH_MODULE_SECRET"];
+      else process.env["WRATHBENCH_MODULE_SECRET"] = prev;
+    }
+  });
 });
