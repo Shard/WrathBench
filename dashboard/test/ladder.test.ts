@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
 import { DEFAULT_VIEW, LADDER_VIEWS, LEVEL, type Metrics, TOKENS, TURNS, XP, runMetrics, viewParam } from "../src/lib/axes";
-import { paretoRuns } from "../src/lib/pareto";
+import { paretoSteps } from "../src/lib/pareto";
 import {
   EXPANSION_MAPS,
   LABEL_DESC,
@@ -724,8 +724,10 @@ describe("ladderPoints over another pair of axes", () => {
       priced({ runId: "b", model: "dear-quick", actualCost: fig(5, "reported"), modelResponses: 50, xpEarned: 300 }),
       priced({ runId: "c", model: "worst", actualCost: fig(6, "reported"), modelResponses: 500, xpEarned: 100 }),
     ];
-    expect(paretoRuns(runs).map((r) => r.model)).toEqual(["cheap-slow"]);
-    expect(paretoRuns(runs, TURNS, XP).map((r) => r.model)).toEqual(["dear-quick"]);
+    const frontOn = (x = DEFAULT_VIEW.x, y = DEFAULT_VIEW.y) =>
+      paretoSteps(ladderPoints(runs, x, y).points, { x: x.better, y: y.better }).front.map((p) => p.model);
+    expect(frontOn()).toEqual(["cheap-slow"]);
+    expect(frontOn(TURNS, XP)).toEqual(["dear-quick"]);
   });
 
   test("the views: default first, each x a resource and each y a distance, and `?view=` resolves or falls back", () => {
