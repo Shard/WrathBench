@@ -106,21 +106,6 @@ worklogs/2026-08-29).
 
 ## Episodes and results
 
-8. **Cross-driver cost is not comparable, because the two harnesses do not
-   spend context the same way** (recorded, not penalised: the harness is a tag on every
-   row, docs/METHODOLOGY.md, "What WrathBench measures"). The fixed loop trims and its
-   requests plateau; the claude-code harness applies no policy at all, so one CLI
-   conversation grows linearly (~200k tokens by the end of a 90-minute episode,
-   roster-sonnet-20260822, COSTS.md), the lane's spend is mostly cache-read replays of a
-   growing prefix, and a `quota-exhausted` pause loses the context on resume. Read
-   first: `fleet-nav-probe-sonnet-20260822-c2`, a 6h e360 completed naturally at $43.90.
-   The prompt half is closed — since 2026-08-29 each harness's prompt states its own
-   context regime and the two hash differently in the comparability tuple, so a
-   cross-driver comparison is visibly over two prompts rather than looking like one.
-   What remains is the operator's: whether the claude-code harness should have a
-   context policy at all, or stay the deliberate "the CLI owns its history" arm, and if
-   the latter, what a $/level or $/turn chart may say across the two harnesses. Both are
-   methodology, not implementation — nothing here is an agent's to decide.
 
 ## Docs and release
 
@@ -134,6 +119,8 @@ worklogs/2026-08-29).
     rules, an assets-only Worker with no `main`, and therefore no Worker
     invocation anywhere in the read path — so a traffic spike is absorbed by the
     edge cache at ~$0 and never reaches the lab or a per-request compute bill.
+    No domain yet (operator, 2026-09-01): this is one of the last steps before the
+    public launch, after the preview has been shared.
     Unblocked by a zone on the account (a nameserver move for an existing domain
     or a new registration; `shard.page` was considered and declined 2026-08-25
     because it points elsewhere). Then: attach the data custom domain, add the
@@ -158,12 +145,9 @@ worklogs/2026-08-29).
     stay paired, adding the banners to `state.ts` first. Mechanical, no behaviour
     change, its own session; the SDK surface the model sees does not move.
 
-109. **Pre-open-source checklist** (2026-09-01). Mark's calls, each small: (a) the
-    operator's first name appears in ~38 worklog lines — keep, or `the operator`;
-    (b) the footer and BibTeX link to `github.com/Shard/WrathBench` 404 while the repo
-    is private (`dashboard/src/components/Layout.tsx`, `pages/About.tsx`) — hide until
-    it opens, or open first; (c) `sdk/generate-api-docs.ts` fails `docs:api` on three
-    undocumented exports (`nameMailSenders`, `petCommand`, `questDetailsFrom`);
-    (d) the copy review's voice rewrites and cuts not yet taken (Home intro, About
-    "reading a result", the StreamChart caption, Models/Campaigns intros — see the
-    2026-09-01 day file). Trigger: the day before the repo flips public.
+109. **Hide the GitHub link until the repo opens** (2026-09-01). The footer and the
+    BibTeX entry link to `github.com/Shard/WrathBench`, which 404s while the repo is
+    private (`dashboard/src/components/Layout.tsx`, `pages/About.tsx`). The preview is
+    shared first and the repo opens after; hide or open on the day it flips. The rest
+    of the pre-open checklist was decided 2026-09-01: the operator's first name stays
+    in the worklogs, `docs:api` drift was fixed in place, the copy rewrites are done.

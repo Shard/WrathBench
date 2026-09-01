@@ -173,6 +173,9 @@ const CLIENT_INTERNAL = new Set([
   "latestReclaimDelay",
   "resolveGossipOption",
   "petGuidOrRefuse",
+  "petCommand",
+  "nameMailSenders",
+  "questDetailsFrom",
   "petRefusal",
   "lootRollRefusal",
   "targetGuid",
@@ -271,6 +274,9 @@ const STATE_ROWS: readonly Row[] = [
  */
 const STATE_INTERNAL = new Set([
   "addAchievement",
+  "closeRoll",
+  "mailboxOpened",
+  "petCommanded",
   "apply",
   "applyQuestGiverStatus",
   "questObjectives",
