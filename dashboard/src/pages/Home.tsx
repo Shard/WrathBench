@@ -262,10 +262,6 @@ export default function Home() {
           )}
         </For>
       </dl>
-      <p class="dim">
-        How runs are grouped and scored is on the <A href="/about">about</A> page; what is running now is the{" "}
-        <A href="/fleet">fleet</A>.
-      </p>
       </div>
     </div>
   );
@@ -331,7 +327,8 @@ function LoopDiagram() {
       {box(240, 166, 120, "episodic log", "append-only")}
       {/* Two parallel verticals off the model turn, one per memory — the scratchpad's is a write only; the read is the context edge hugging the left. */}
       <line x1="200" y1="92" x2="200" y2="164" class="loop-edge dashed" marker-end="url(#loop-head)" />
-      <text x="194" y="132" text-anchor="end" class="loop-sub">write_scratchpad</text>
+      <text x="194" y="126" text-anchor="end" class="loop-sub">write_scratchpad</text>
+      <text x="194" y="137" text-anchor="end" class="loop-sub">edit_scratchpad</text>
       <line x1="270" y1="92" x2="270" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
       <text x="278" y="126" class="loop-sub">log_status before a trim</text>
       <text x="278" y="137" class="loop-sub">read_log while reflecting, at an inn</text>
