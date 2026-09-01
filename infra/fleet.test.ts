@@ -72,6 +72,7 @@ import {
   describeStanding,
   formatStreams,
   pausesOnDrain,
+  policyJobDropped,
   resumesInPlace,
   policyJob,
   rosterModels,
@@ -2984,6 +2985,41 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
     expect(pausesOnDrain({ source: "policy", episode: "e90" })).toBe(false);
     expect(pausesOnDrain({ source: "queue", episode: "freeplay" })).toBe(false);
     expect(pausesOnDrain(undefined)).toBe(false);
+  });
+
+  test("item 107: flipping a live stream's ref to idle:\"none\" drops it from the projection", () => {
+    // The gap: the supervisor hot-reloads fleet.json, the policy stops
+    // generating the job, and before this the live roster process was never
+    // signalled — it ran until an idle watchdog an active model never trips.
+    const stopped: Record<string, FleetRosterEntry> = { ...roster, opuslo: { ...roster["opuslo"]!, idle: "none" } };
+    expect(policyJobDropped(policyFreeplay("opuslo", 12), stopped["opuslo"])).toBe('idle: "none"');
+    // The whole entry gone is the same drain, with its own reason.
+    expect(policyJobDropped(policyFreeplay("opuslo", 12), undefined)).toBe("removed from the roster");
+  });
+
+  test("item 107: a stream still in the unlimited lane is never dropped, whatever the plan did this tick", () => {
+    // The distinction is the LOADED CONFIG, not the plan: the reasons a policy
+    // pick is absent from a tick (account busy, a lane or paid cap, cooling,
+    // eligibility) are transient and none of them reaches this predicate, so a
+    // ref whose idle lane is still open keeps its live session.
+    expect(policyJobDropped(policyFreeplay("opuslo", 12), roster["opuslo"])).toBeUndefined();
+    // Scored policy jobs keep exactly the handling they had: `idle` says
+    // nothing about what a tier bought, so idle:"none" does not drain an e90.
+    expect(policyJobDropped({ source: "policy", episode: "e90" }, roster["glm"])).toBeUndefined();
+    expect(policyJobDropped({ source: "policy", episode: "e90" }, undefined)).toBe("removed from the roster");
+    // Not the policy's job, not this predicate's business.
+    expect(policyJobDropped({ source: "queue", episode: "freeplay" }, undefined)).toBeUndefined();
+    expect(policyJobDropped(undefined, roster["opuslo"])).toBeUndefined();
+  });
+
+  test("item 107: the dropped stream's disabled stand-in reaches diffJobs as a drain", () => {
+    // What the supervisor pushes for a dropped live policy job, and what
+    // `diffJobs` does with it: the drain, and then `pausesOnDrain` makes it an
+    // immediate SIGTERM rather than a wait for an episode boundary.
+    const standIn = { name: "opuslo-freeplay", enabled: false, account: "RUNNER2", loop: false, entries: [{ model: "gone" }] };
+    const sets: JobSets = { running: new Set(["opuslo-freeplay"]), draining: new Set(), finished: new Set() };
+    expect(diffJobs([standIn], sets).drain).toEqual(["opuslo-freeplay"]);
+    expect(pausesOnDrain(policyFreeplay("opuslo", 12))).toBe(true);
   });
 
   test("resumesInPlace: the freeplay stream and a resume:true campaign come back; a scored run does not", () => {
