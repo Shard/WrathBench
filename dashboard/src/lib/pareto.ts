@@ -18,15 +18,7 @@
  * than assumed, so a view that broke it could not silently invert the front.
  */
 
-import type { AxisSpec } from "./axes";
-
-/** Which way each axis improves — the two `better` fields of a view's specs. */
-export interface Better {
-  x: AxisSpec["better"];
-  y: AxisSpec["better"];
-}
-
-export const DEFAULT_BETTER: Better = { x: "lower", y: "higher" };
+import { type Better, DEFAULT_BETTER } from "./axes";
 
 export function paretoFront<P extends { x: number; y: number }>(rows: readonly P[], better: Better = DEFAULT_BETTER): P[] {
   // Fold each axis onto "higher is better", so dominance is one comparison.
