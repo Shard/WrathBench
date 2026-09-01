@@ -153,6 +153,17 @@ the same stability guarantees. There is no convenience middle tier
 (`killNearest`, `grindUntilLevel`): a composition every model writes
 graduates to the primary tier; until then it lives in snippets.
 
+**The raw tier is an allowlist of ordinary client opcodes.** `raw` queues an
+allowlisted opcode with a caller-built body verbatim into the stock handler.
+The membership rule: a stock client sends it in ordinary play, its handler
+does nothing a non-GM client could not do, and no dedicated action already
+covers it. Replies reach the agent only through the existing event whitelist
+— "I sent it and saw nothing" is precisely the evidence that earns a tap or a
+helper. A raw opcode recurring in trajectories is the signal to give it an
+action; widening the allowlist is additive, narrowing it is a harness change.
+The allowlist is the agent's action surface, never a place to spend for
+operator convenience.
+
 **The scratchpad is edited, not only rewritten** (operator decision
 2026-09-01). `edit_scratchpad({ old, new, replaceAll? })` replaces an exact
 substring of the pad, taking its shape from the string-replace edit tool models
@@ -165,17 +176,6 @@ operation and not a convenience wrapper over the edit. Observed need (#41,
 writes in one run) changed under 20% of the pad, which is a rewrite tax on the
 models least able to afford the output tokens; the sample does not show it
 fleet-wide, so this is the profile the evidence covers.
-
-**The raw tier is an allowlist of ordinary client opcodes.** `raw` queues an
-allowlisted opcode with a caller-built body verbatim into the stock handler.
-The membership rule: a stock client sends it in ordinary play, its handler
-does nothing a non-GM client could not do, and no dedicated action already
-covers it. Replies reach the agent only through the existing event whitelist
-— "I sent it and saw nothing" is precisely the evidence that earns a tap or a
-helper. A raw opcode recurring in trajectories is the signal to give it an
-action; widening the allowlist is additive, narrowing it is a harness change.
-The allowlist is the agent's action surface, never a place to spend for
-operator convenience.
 
 **Game outcomes are return values.** Helpers that wait for a game verdict
 return a discriminated union (`ok: true | false` with the module's own status
