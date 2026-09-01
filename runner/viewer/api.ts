@@ -1170,10 +1170,12 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
        * construction.
        */
       const entries = tail.entries;
-      let lastTs: number | null = null;
+      // Off the tail rather than the served list: the tail sees every line,
+      // and the listing's figure is read off every line too — a run whose last
+      // record the feed does not serve must not close its segment early here.
+      const lastTs = tail.lastTs;
       const marks: { t: string; ts: number }[] = [];
       for (const e of entries) {
-        if (e.ts > 0) lastTs = e.ts;
         // `ts > 0` keeps an unparseable first line (which `scanRunTotals` drops
         // outright) from spending the no-meta bootstrap on a zero timestamp.
         if (e.ts > 0 && (SEGMENT_MARKS.has(e.t) || marks.length === 0)) {
