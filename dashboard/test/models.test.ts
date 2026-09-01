@@ -66,7 +66,7 @@ describe("the --status columns", () => {
   test("billing, extras and the scheduler's verdict are the CLI's, phrased once", () => {
     // The header is rendered from this array, so its length is the body's
     // column count — the page's colSpan reads it rather than counting by hand.
-    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "schedulable", "note", "newest run"]);
+    expect([...MODEL_COLUMNS]).toEqual(["status", "model", "tier", "platform", "harness", "e90", "e360", "extras", "note", "newest run"]);
     expect(MODEL_COLUMNS).not.toContain("billing");
     expect(MODEL_COLUMNS.indexOf("tier")).toBe(MODEL_COLUMNS.indexOf("model") + 1);
     expect(schedulableOf(row())).toBe("yes: schedulable on e90");
