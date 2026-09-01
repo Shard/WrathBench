@@ -1,5 +1,5 @@
 /**
- * The eight Phase-0 tools, defined once and dispatched from two places: the MCP
+ * The nine Phase-0 tools, defined once and dispatched from two places: the MCP
  * server (external model drives them over stdio) and the agent loop (the
  * OpenAI-compatible adapter drives them in-process). Schemas are deliberately
  * tight — few parameters, all described — because a confused tool call costs a
@@ -137,6 +137,24 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "edit_scratchpad",
+    description:
+      "Change part of the scratchpad in place: replace the exact text `old` with `new`. " +
+      "Use this for ordinary upkeep — striking a done item, correcting a coordinate, adding a line under a heading — " +
+      "and write_scratchpad only to start the pad or rewrite it wholesale. " +
+      "`old` must match the pad byte for byte, whitespace included, and must appear exactly once unless replaceAll is set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        old: { type: "string", description: "The exact existing text to replace, copied from the scratchpad." },
+        new: { type: "string", description: "What to put in its place. Empty string deletes the text." },
+        replaceAll: { type: "boolean", description: "Replace every occurrence instead of requiring a unique one. Default false." },
+      },
+      required: ["old", "new"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "reflect",
     description:
       "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; " +
@@ -221,6 +239,14 @@ const argSchemas = {
       .default(8),
   }),
   write_scratchpad: z.strictObject({ content: z.string() }),
+  // `old` is deliberately not `.min(1)`: an empty `old` is a semantic refusal
+  // with its own hint ("use write_scratchpad to start a pad"), and a schema
+  // error would replace that with the generic parameter restatement.
+  edit_scratchpad: z.strictObject({
+    old: z.string(),
+    new: z.string(),
+    replaceAll: booleanish.default(false),
+  }),
   reflect: z.strictObject({}).default({}),
   log_status: z.strictObject({ text: z.string().min(1) }),
   // Lenient by declaration, like `recent_events`: a clamped page is an answer,
@@ -251,6 +277,10 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
   search_reference:
     "search_reference expects { query: string, limit?: number } — title or keywords, and max results 1-20 (default 8).",
   write_scratchpad: "write_scratchpad expects { content: string } — the full new scratchpad markdown.",
+  edit_scratchpad:
+    "edit_scratchpad expects { old: string, new: string, replaceAll?: boolean } — the exact existing text to " +
+    "replace, what to put there, and whether to replace every occurrence (default false, which requires old to " +
+    "appear exactly once).",
   reflect: "reflect takes no parameters ({}).",
   log_status: "log_status expects { text: string } — one short status entry.",
   read_log:
@@ -265,6 +295,18 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
 const ARG_ALIASES: Record<string, Record<string, string>> = {
   run_snippet: { cmd: "code", snippet: "code", source: "code", script: "code", ts: "code" },
   write_scratchpad: { text: "content", markdown: "content" },
+  edit_scratchpad: {
+    old_string: "old",
+    oldString: "old",
+    old_text: "old",
+    search: "old",
+    new_string: "new",
+    newString: "new",
+    new_text: "new",
+    replace: "new",
+    replace_all: "replaceAll",
+    replaceall: "replaceAll",
+  },
   log_status: { content: "text", status: "text", entry: "text", note: "text" },
   read_log: { start: "offset", count: "limit", n: "limit" },
   recent_events: { include_movement: "includeMovement", includemovement: "includeMovement" },
@@ -512,6 +554,23 @@ function searchRepeatNote(ctx: ToolContext, query: string, titles: string[]): st
     ? `${head} Same top results: ${list(top)}.`
     : `${head} The results changed — then: ${list(previous.titles)}; now: ${list(top)}.`;
 }
+
+/**
+ * Why an `edit_scratchpad` refusal happened, said as a per-failed-call hint in
+ * the house style: what was expected and how to fix the call, never strategy
+ * (docs/METHODOLOGY.md, "Softening: repair the deterministic, explain the
+ * rest"). Two matches have two readings, so the harness refuses rather than
+ * picking one.
+ */
+const EDIT_SCRATCHPAD_HINTS: Record<"empty_old" | "identical" | "not_found" | "ambiguous", (matches: number) => string> = {
+  empty_old: () =>
+    "edit_scratchpad: old was empty. There is nothing to match — use write_scratchpad to start a pad, then edit it.",
+  identical: () => "edit_scratchpad: old and new are the same text, so this edit would change nothing.",
+  not_found: () =>
+    "edit_scratchpad: old was not found in the scratchpad; copy the text exactly, whitespace included. The scratchpad as last written is in this turn's context.",
+  ambiguous: (matches) =>
+    `edit_scratchpad: old matches ${matches} places; include more surrounding text or set replaceAll.`,
+};
 
 export interface ToolContext {
   sandbox: SandboxHost;
@@ -776,6 +835,23 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         if (!ctx.reflect.isOpen) return { text: READ_LOG_CLOSED, isError: true };
         const { offset, limit } = parsed.data as { offset: number; limit: number };
         return { text: ctx.episodic.page(offset, limit) };
+      }
+      case "edit_scratchpad": {
+        const { old, new: replacement, replaceAll } = parsed.data as {
+          old: string;
+          new: string;
+          replaceAll: boolean;
+        };
+        const res = ctx.scratchpad.edit(old, replacement, replaceAll);
+        if (!res.ok) {
+          return { text: EDIT_SCRATCHPAD_HINTS[res.reason](res.matches), isError: true };
+        }
+        const where = res.replaced === 1 ? "1 replacement" : `${res.replaced} replacements`;
+        return {
+          text: res.truncated
+            ? `edited (${where}; ${res.chars} chars, ${res.lines} lines, TRUNCATED at cap — keep it shorter)`
+            : `edited (${where}; ${res.chars} chars, ${res.lines} lines)`,
+        };
       }
       case "write_scratchpad": {
         const { content } = parsed.data as { content: string };

@@ -87,6 +87,7 @@ describe("McpServer", () => {
       "state_summary",
       "search_reference",
       "write_scratchpad",
+      "edit_scratchpad",
       "reflect",
       "log_status",
       "read_log",

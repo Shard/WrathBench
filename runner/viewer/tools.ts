@@ -1,5 +1,5 @@
 /**
- * `/api/tools`: the eight model-facing tools, read off `TOOLS` at request time
+ * `/api/tools`: the nine model-facing tools, read off `TOOLS` at request time
  * so the homepage's tool inspector cannot drift from what a run is given.
  *
  * The description text is the runner's (names-first rendering — the
@@ -23,6 +23,7 @@ export const TOOL_EXAMPLES: Readonly<Record<string, string>> = {
   recent_events: `{ "limit": 20 }`,
   search_reference: `{ "query": "Northshire quests" }`,
   write_scratchpad: `{ "content": "# Plan\\n- turn in the two finished quests\\n- train at level 4" }`,
+  edit_scratchpad: `{ "old": "- [ ] train at level 4", "new": "- [x] trained at level 4", "replaceAll": false }`,
   log_status: `{ "text": "L3, clearing the field south of the abbey; two quests ready to turn in" }`,
   read_log: `{ "offset": 0, "limit": 20 }`,
 };
