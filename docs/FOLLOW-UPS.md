@@ -17,11 +17,9 @@ status.
 
 ## Next up
 
-1. **Issue #41** — the scratchpad edit op (research edit-vs-rewrite across
-   harnesses first); the player surface itself is complete as of 2026-08-30.
-2. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
+1. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
    (`SMSG_SHOWTAXINODES`, the destination-choice surface, still untapped).
-3. **110** — the viewer's last two wiring lines for the spell/talent/trade
+2. **110** — the viewer's last two wiring lines for the spell/talent/trade
    milestones (item 35 shipped the producers, the facts and the render;
    `runner/viewer/api.ts` was owned by another agent that day).
 

@@ -44,7 +44,7 @@ The SDK is versioned. Its surface is part of the harness version.
 
 **Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: run a11 (2026-08-29) took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip; the sandbox drains it once per snippet, and `tools.ts` renders it as a short `--- harness ---` block at the foot of that snippet's result — one line per status with a count, the hint text unchanged and nothing added to it. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` records it as part of what the model saw.
 
-**Reflection, the episodic log, and the trim notices.** Three of the eight tools
+**Reflection, the episodic log, and the trim notices.** Three of the nine tools
 exist because of the message window rather than the world (docs/METHODOLOGY.md,
 "Reflection is the model's to take, and only at rest" and "An episodic log,
 written before each trim, read back at rest"). `log_status` appends one
