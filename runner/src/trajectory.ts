@@ -146,6 +146,28 @@ export interface ItemSample {
  *   normally is not, and the `release` record a moment later is what says when
  *   the spirit went; the field is absent when `playerFlags` had not been
  *   observed at all, which is ordinary.
+ * - `spells_at_login`: the spellbook as the first sample that saw one read it
+ *   (`SMSG_INITIAL_SPELLS`), written once per process. It does the job
+ *   `achievements_at_login` does for flights — it is the record that says the
+ *   spellbook, talent and trade producers were live for this run, which is what
+ *   lets a reader tell "learned nothing" from "learning was not recorded" — and
+ *   it is also what keeps a resumed character's whole book from landing as
+ *   twenty fresh learns.
+ * - `spell`: one id appearing in the book after that baseline. Ids only: the
+ *   rank and the name are the client's own Spell.dbc reading of the id.
+ * - `talent`: a talent whose rank climbed. `points` is the rank normalised to
+ *   points spent (the wire rank is 0-based: rank 0 is one point), `rank` is the
+ *   wire value as it arrived. The first observation of a talent frame seeds
+ *   silently — a resumed character's already-spent points are not spends this
+ *   run made — and a respec lowers the remembered rank without a record, so a
+ *   relearn afterwards reads as a spend again.
+ * - `trade`: one completed trade, read from `state.trade` latching
+ *   `TRADE_STATUS_TRADE_COMPLETE` (8). `observedTs` is the cache's stamp for
+ *   that packet, which is both the trade's own moment and what dedupes it
+ *   across samples. What was traded is not on the record: the SDK clears both
+ *   sides of the window as soon as the trade stops being open, so by the time a
+ *   sample lands only the completion itself survives. Two completions inside
+ *   one sampling gap record one — the usual lower bound.
  */
 export type MilestoneLine =
   | {
@@ -191,7 +213,26 @@ export type MilestoneLine =
       graveyard?: { map: number; x: number; y: number; z: number } | undefined;
       turn?: number | undefined;
     }
-  | { kind: "resurrect"; turn?: number | undefined };
+  | { kind: "resurrect"; turn?: number | undefined }
+  | { kind: "spells_at_login"; ids: number[]; turn?: number | undefined }
+  | { kind: "spell"; id: number; turn?: number | undefined }
+  | {
+      kind: "talent";
+      id: number;
+      /** Points now spent in that talent: the wire rank plus one. */
+      points: number;
+      /** The wire rank, 0-based, exactly as `SMSG_TALENTS_INFO` carried it. */
+      rank: number;
+      /** The spec the points went into, when the packet named one. */
+      spec?: number | undefined;
+      turn?: number | undefined;
+    }
+  | {
+      kind: "trade";
+      /** The cache's stamp for the completion packet; the dedup key. */
+      observedTs?: number | undefined;
+      turn?: number | undefined;
+    };
 
 export interface RunMeta {
   runId: string;

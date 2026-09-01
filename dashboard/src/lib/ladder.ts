@@ -164,7 +164,8 @@ export const EXPANSION_MAPS = [530, 571];
  * state samples is not one, since it cannot tell a dungeon from a boat ride).
  * Even with both, the harness runs one character per session, so the rung's
  * "party of agents" clause needs multi-session work that does not exist
- * either. The framing of that rung is issue #9.
+ * either. The framing of that rung is issue #9, and what it would take is
+ * written up in docs/proposals/GROUP-PLAY.md.
  */
 export const RUNGS: Rung[] = [
   {
@@ -202,7 +203,9 @@ export const RUNGS: Rung[] = [
   {
     n: 6,
     title: "A 5-man dungeon cleared by a party of agents",
-    rule: "needs grouping and instance records; the harness runs one character per session",
+    rule:
+      "needs grouping and instance records; the harness runs one character per " +
+      "session (docs/proposals/GROUP-PLAY.md)",
     test: null,
   },
   {

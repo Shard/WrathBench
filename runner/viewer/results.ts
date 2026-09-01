@@ -32,10 +32,13 @@ import type {
   LevelMark,
   ResultRun,
   RunRow,
+  SpellFacts,
   StatePoint,
+  TalentFacts,
   TaxiFacts,
   TokenTotals,
   TrackPoint,
+  TradeFacts,
 } from "./api-types";
 import type { ActiveSegment } from "./tail";
 
@@ -342,6 +345,14 @@ export function resultRunOf(
    */
   leveling: LevelUpFacts | null = null,
   deaths: DeathFacts | null = null,
+  /**
+   * Spells learned, talent points spent and trades completed (item 35). One
+   * parameter rather than three because the positional list is already long,
+   * and **omitted** rather than defaulted to nulls: a caller that does not pass
+   * it leaves the three fields `undefined` — "this viewer does not answer" —
+   * which is not the same claim as `null`, "the run recorded none".
+   */
+  learning?: { spells: SpellFacts | null; talents: TalentFacts | null; trades: TradeFacts | null },
 ): ResultRun {
   const levels = levelMarks(states, segments);
   const ep = episodeOf(run);
@@ -418,6 +429,9 @@ export function resultRunOf(
     taxi,
     leveling,
     deaths,
+    ...(learning === undefined
+      ? {}
+      : { spells: learning.spells, talents: learning.talents, trades: learning.trades }),
     pauseReason: run.pauseReason,
     continuedFrom: run.continuedFrom,
     /*

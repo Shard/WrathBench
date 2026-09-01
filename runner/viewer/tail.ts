@@ -22,9 +22,15 @@ import type {
   LevelUpMark,
   ReflectionWindowView,
   ReportedUsage,
+  SpellFacts,
+  SpellLearnMark,
+  TalentFacts,
+  TalentSpendMark,
   TaxiFacts,
   TokenTotals,
   TpsFacts,
+  TradeFacts,
+  TradeMarkView,
 } from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
@@ -51,9 +57,15 @@ export type {
   LevelUpMark,
   ReflectionWindowView,
   ReportedUsage,
+  SpellFacts,
+  SpellLearnMark,
+  TalentFacts,
+  TalentSpendMark,
   TaxiFacts,
   TokenTotals,
   TpsFacts,
+  TradeFacts,
+  TradeMarkView,
 } from "./api-types";
 
 /** Split a byte buffer into newline-terminated lines plus the trailing remainder. */
@@ -1386,6 +1398,126 @@ export function deathFactsFrom(marks: readonly DeathMark[], sawLevelUpMark: bool
   };
 }
 
+/* ------------------------------ spell, talent and trade milestones (item 35) */
+
+/**
+ * A spellbook milestone: the login baseline the run opened with
+ * (`spells_at_login`), or one id that entered the book afterwards (`spell`).
+ */
+export type SpellMark =
+  | { kind: "login"; ids: number[] }
+  | ({ kind: "learned" } & SpellLearnMark);
+
+/** Read one trajectory record as a `SpellMark`, or null when it is not one. */
+export function spellMarkOf(rec: Record<string, unknown>): SpellMark | null {
+  const kind = rec["kind"];
+  if (kind === "spells_at_login") {
+    const ids = rec["ids"];
+    if (!Array.isArray(ids)) return null;
+    return { kind: "login", ids: ids.filter((v): v is number => typeof v === "number") };
+  }
+  if (kind !== "spell") return null;
+  const id = rec["id"];
+  if (typeof id !== "number") return null;
+  const ts = rec["ts"];
+  return {
+    kind: "learned",
+    id,
+    ts: typeof ts === "number" ? ts : 0,
+    turn: typeof rec["turn"] === "number" ? (rec["turn"] as number) : null,
+  };
+}
+
+/** Read one trajectory record as a talent spend, or null when it is not one. */
+export function talentMarkOf(rec: Record<string, unknown>): TalentSpendMark | null {
+  if (rec["kind"] !== "talent") return null;
+  const id = rec["id"];
+  if (typeof id !== "number") return null;
+  const points = rec["points"];
+  const rank = rec["rank"];
+  // `points` is the record's own normalisation; a record that carries only the
+  // 0-based wire rank is still readable, and one with neither is not a spend.
+  const spent =
+    typeof points === "number" ? points : typeof rank === "number" ? rank + 1 : null;
+  if (spent === null) return null;
+  const ts = rec["ts"];
+  return {
+    id,
+    points: spent,
+    ts: typeof ts === "number" ? ts : 0,
+    turn: typeof rec["turn"] === "number" ? (rec["turn"] as number) : null,
+  };
+}
+
+/** Read one trajectory record as a completed trade, or null when it is not one. */
+export function tradeMarkOf(rec: Record<string, unknown>): TradeMarkView | null {
+  if (rec["kind"] !== "trade") return null;
+  // The cache's stamp for the completion beats the record's, for the reason
+  // `deathMarkOf` prefers `observedTs`: the producer samples on a timer.
+  const observed = rec["observedTs"];
+  const ts = rec["ts"];
+  return {
+    ts: typeof observed === "number" ? observed : typeof ts === "number" ? ts : 0,
+    turn: typeof rec["turn"] === "number" ? (rec["turn"] as number) : null,
+  };
+}
+
+/**
+ * Derive a run's spellbook facts, or null when it wrote no spell record at all
+ * — a run from before the producer shipped (2026-09-01), which reads as "not
+ * recorded" and never as "learned nothing".
+ *
+ * `atLogin` comes from the **last** baseline record for the reason
+ * `achievementFactsFrom` takes the last backlog: a resumed run writes one per
+ * process and the later one is the superset.
+ */
+export function spellFactsFrom(marks: readonly SpellMark[]): SpellFacts | null {
+  if (marks.length === 0) return null;
+  const logins = marks.filter((m): m is Extract<SpellMark, { kind: "login" }> => m.kind === "login");
+  const learned = marks.filter((m): m is { kind: "learned" } & SpellLearnMark => m.kind === "learned");
+  const ids = new Set(learned.map((m) => m.id));
+  return {
+    learned: ids.size,
+    atLogin: logins.length === 0 ? 0 : logins[logins.length - 1]!.ids.length,
+    ids: [...ids].sort((a, b) => a - b),
+    marks: learned.map(({ id, ts, turn }) => ({ id, ts, turn })),
+  };
+}
+
+/**
+ * Derive a run's talent spends.
+ *
+ * `sawSpellRecord` is the liveness witness, the job `achievements_at_login`
+ * does for flights: every run under this producer writes a `spells_at_login`
+ * record, and the three producers shipped together, so a run with one and no
+ * talent mark genuinely spent nothing while a run from before them reads null.
+ */
+export function talentFactsFrom(
+  marks: readonly TalentSpendMark[],
+  sawSpellRecord: boolean,
+): TalentFacts | null {
+  if (marks.length === 0 && !sawSpellRecord) return null;
+  return {
+    spends: marks.length,
+    talents: new Set(marks.map((m) => m.id)).size,
+    marks: [...marks],
+  };
+}
+
+/** Derive a run's completed trades. `sawSpellRecord` is the witness, as above. */
+export function tradeFactsFrom(
+  marks: readonly TradeMarkView[],
+  sawSpellRecord: boolean,
+): TradeFacts | null {
+  if (marks.length === 0 && !sawSpellRecord) return null;
+  return {
+    trades: marks.length,
+    first: marks[0] ?? null,
+    last: marks[marks.length - 1] ?? null,
+    marks: [...marks],
+  };
+}
+
 /**
  * One `reflect_window` record (`runner/src/loop.ts`), projected to what a turn
  * range needs: which turn it was written on, whether it opened or closed a
@@ -1499,6 +1631,14 @@ export interface RunTotals {
   leveling: LevelUpFacts | null;
   deaths: DeathFacts | null;
   /**
+   * Spells learned, talent points spent and trades completed, from the same
+   * pass; null when the run wrote no such record — "not recorded", never zero.
+   * See `SpellFacts` for the witness the three share.
+   */
+  spells: SpellFacts | null;
+  talents: TalentFacts | null;
+  trades: TradeFacts | null;
+  /**
    * The model the provider actually served and the CLI version that drove it,
    * from the first record that named either (`resolvedMarkOf`). Null on a run
    * whose trajectory names neither — "not recorded", never the config string.
@@ -1551,6 +1691,9 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
   const deathMarks: DeathMark[] = [];
   const achievementMarks: AchievementMark[] = [];
   const taxiMarks: ("taxi" | "taxi_landed")[] = [];
+  const spellMarks: SpellMark[] = [];
+  const talentMarks: TalentSpendMark[] = [];
+  const tradeMarks: TradeMarkView[] = [];
 
   const decoder = new TextDecoder();
   let carry = new Uint8Array(0);
@@ -1608,6 +1751,12 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
       if (lvl !== null) levelUpMarks.push(lvl);
       const death = deathMarkOf(rec);
       if (death !== null) deathMarks.push(death);
+      const spell = spellMarkOf(rec);
+      if (spell !== null) spellMarks.push(spell);
+      const talent = talentMarkOf(rec);
+      if (talent !== null) talentMarks.push(talent);
+      const trade = tradeMarkOf(rec);
+      if (trade !== null) tradeMarks.push(trade);
     }
     if (t !== "request" && t !== "response") {
       // `claude_result` rides along with the span openers: it is what tells the
@@ -1684,6 +1833,9 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
     taxi: taxiFactsFrom(taxiMarks, achievementMarks.length > 0),
     leveling: levelUpFactsFrom(levelUpMarks),
     deaths: deathFactsFrom(deathMarks, levelUpMarks.length > 0),
+    spells: spellFactsFrom(spellMarks),
+    talents: talentFactsFrom(talentMarks, spellMarks.length > 0),
+    trades: tradeFactsFrom(tradeMarks, spellMarks.length > 0),
     resolved:
       resolvedModel === null && resolvedCli === null
         ? null
@@ -1710,6 +1862,9 @@ export class TrajectoryTail {
   private readonly taxiMarks: ("taxi" | "taxi_landed")[] = [];
   private readonly levelUpMarks: LevelUpMark[] = [];
   private readonly deathMarks: DeathMark[] = [];
+  private readonly spellMarks: SpellMark[] = [];
+  private readonly talentMarks: TalentSpendMark[] = [];
+  private readonly tradeMarks: TradeMarkView[] = [];
   /** `reflect_window` transitions, for the run page's per-turn accent. */
   private readonly reflectMarks: ReflectMark[] = [];
   /** Bytes consumed as complete lines. */
@@ -1748,6 +1903,9 @@ export class TrajectoryTail {
       this.taxiMarks.length = 0;
       this.levelUpMarks.length = 0;
       this.deathMarks.length = 0;
+      this.spellMarks.length = 0;
+      this.talentMarks.length = 0;
+      this.tradeMarks.length = 0;
       this.reflectMarks.length = 0;
     }
     if (size === this.size) return [];
@@ -1777,6 +1935,12 @@ export class TrajectoryTail {
           if (lvl !== null) this.levelUpMarks.push(lvl);
           const death = deathMarkOf(rec);
           if (death !== null) this.deathMarks.push(death);
+          const spell = spellMarkOf(rec);
+          if (spell !== null) this.spellMarks.push(spell);
+          const talent = talentMarkOf(rec);
+          if (talent !== null) this.talentMarks.push(talent);
+          const trade = tradeMarkOf(rec);
+          if (trade !== null) this.tradeMarks.push(trade);
         }
         // Not a milestone: its own record kind, written by the loop's builder.
         const reflect = reflectMarkOf(rec);
@@ -1811,6 +1975,21 @@ export class TrajectoryTail {
   /** Deaths, releases and resurrects; null when none of it was recorded. */
   get deaths(): DeathFacts | null {
     return deathFactsFrom(this.deathMarks, this.levelUpMarks.length > 0);
+  }
+
+  /** Spells learned; null when the run recorded no spellbook milestone. */
+  get spells(): SpellFacts | null {
+    return spellFactsFrom(this.spellMarks);
+  }
+
+  /** Talent points spent; null when learning was not recorded for this run. */
+  get talents(): TalentFacts | null {
+    return talentFactsFrom(this.talentMarks, this.spellMarks.length > 0);
+  }
+
+  /** Completed trades; null when they were not recorded for this run. */
+  get trades(): TradeFacts | null {
+    return tradeFactsFrom(this.tradeMarks, this.spellMarks.length > 0);
   }
 
   /**
