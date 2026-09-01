@@ -1,12 +1,14 @@
 /**
- * The ladder's scatter: one point per roster entry on the selected tier,
- * average cost per run against average XP earned.
+ * The ladder's scatter: one point per roster entry on the selected tier, a
+ * resource spent per run against a distance reached — by default average
+ * cost against average XP earned, and any other pair `lib/axes.ts` offers.
  *
  * Hand-drawn inline SVG, like `XpChart` — a roster is a few dozen points at
  * most, and a chart library is a dependency this dashboard has not earned.
  * The aggregation and label placement are `lib/ladder.ts`, where its tests
- * are; the scale and tick maths are the shared `lib/chart.ts`. This file only
- * draws what those return. Colours come from
+ * are; the scale and tick maths are the shared `lib/chart.ts`; what each axis
+ * is called, how it is ticked and what caveat travels with it is the view's
+ * two `AxisSpec`s. This file only draws what those return. Colours come from
  * the palette tokens so both themes work; the only data-driven colour is the
  * harness tag, which follows the same semantics as the table's `HarnessTag`.
  */
@@ -14,17 +16,10 @@
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
-import {
-  LABEL_FONT,
-  MARK_R,
-  MARK_RING_R,
-  type LadderPoint,
-  fmtCostTick,
-  ladderChartLayout,
-  ladderPoints,
-} from "../lib/ladder";
+import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS } from "../lib/axes";
+import { LABEL_FONT, MARK_R, MARK_RING_R, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
 import { logoHrefOf } from "./ModelIcon";
-import { COST_BASIS_NOTE, fmtUsd } from "../lib/format";
+import { COST_BASIS_NOTE, fmtTokens, fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
 
 const VB_W = 1000;
@@ -51,37 +46,74 @@ const SINGLE_DASH = "2 2";
  * The hover's reading of the price. Basis (who produced the figure) and
  * as-if-metered (whether anyone paid it) are two facts, not one: a claude-code
  * run is reported AND as-if-metered, so the qualifier attaches to whichever
- * basis the runs had rather than only to list-price.
+ * basis the runs had rather than only to list-price. A null basis is an entry
+ * none of whose counted runs carries a price, which a cost axis never plots.
  */
 export function pricedText(p: Pick<LadderPoint, "basis" | "asIfMetered">): string {
+  if (p.basis === null) return "unpriced";
   const basis =
     p.basis === "reported" ? "reported" : p.basis === "list-price" ? "list-price est." : "reported and list-price est. mixed";
   if (!p.asIfMetered) return basis;
   return p.basis === "mixed" ? `${basis}, some as-if-metered` : `as-if-metered (${basis})`;
 }
 
-/** The hover text of one mark: what both means rest on, and what was left out. */
-export function hoverText(p: LadderPoint, episode: string): string {
+/**
+ * A mean in the hover. The tick format is built for round ticks, so an
+ * unrounded mean gets a little more: dollars through `fmtUsd`, a level to one
+ * decimal, a count rounded and grouped, and the rest as the tick prints them.
+ */
+function fmtHover(spec: AxisSpec, v: number): string {
+  if (spec.key === "cost") return fmtUsd(v);
+  if (spec.key === "level") return `L${v.toFixed(1)}`;
+  if (spec.key === "xp" || spec.key === "turns" || spec.key === "toolCalls") return Math.round(v).toLocaleString();
+  if (spec.key === "tokens") return fmtTokens(v);
+  return spec.format(v);
+}
+
+/** One axis's line in the hover: the caption, then the mean — with the basis qualifier when the axis is cost. */
+function axisLine(p: LadderPoint, v: number, spec: AxisSpec, episode: string): string {
+  const reading = spec.key === "cost" ? `${fmtHover(spec, v)} (${pricedText(p)})` : fmtHover(spec, v);
+  return `${spec.caption(episode)}: ${reading}`;
+}
+
+/** "a cost", "an xp": the article a label takes in the omission sentences. */
+const article = (label: string): string => (/^[aeiou]/i.test(label) || label === "xp" ? "an" : "a");
+
+/**
+ * The hover text of one mark: what both means rest on, what was left out,
+ * the two axes' readings, and the other means the same runs carry.
+ */
+export function hoverText(p: LadderPoint, episode: string, view: LadderView = DEFAULT_VIEW): string {
   const left = p.runs - p.n;
   const over =
     left === 0
       ? `over ${p.n === 1 ? "one run" : `${p.n} runs`}`
-      : `over ${p.n} of ${p.runs} counted runs — ${left} lack${left === 1 ? "s" : ""} a cost or an xp reading and feed${left === 1 ? "s" : ""} neither mean`;
+      : `over ${p.n} of ${p.runs} counted runs — ${left} lack${left === 1 ? "s" : ""} ${article(view.x.label)} ${
+          view.x.label
+        } or ${article(view.y.label)} ${view.y.label} reading and feed${left === 1 ? "s" : ""} neither mean`;
+  // The rest of the bag, for the metrics that have a spec: means over the same
+  // `n` runs, so nothing here rests on a different set than the mark does.
+  const also = METRIC_KEYS.flatMap((k) => {
+    const spec = AXES[k];
+    const v = p.metrics[k];
+    if (spec === null || v === null || k === view.x.key || k === view.y.key) return [];
+    return [`${spec.label} ${fmtHover(spec, v)}`];
+  });
   return [
     `${p.key} — ${over}`,
-    `avg cost per ${episode} run: ${fmtUsd(p.x)} (${pricedText(p)})`,
-    `avg xp earned (lower bound): ${Math.round(p.y).toLocaleString()}`,
+    axisLine(p, p.x, view.x, episode),
+    axisLine(p, p.y, view.y, episode),
+    ...(also.length > 0 ? [`also: ${also.join(", ")}`] : []),
   ].join("\n");
 }
 
-function fmtXpTick(v: number): string {
-  return v >= 1000 ? `${v / 1000}k` : String(v);
-}
-
-export function LadderChart(props: { runs: readonly ResultRun[]; episode: string }) {
-  const model = createMemo(() => ladderPoints(props.runs));
-  const layout = createMemo(() => ladderChartLayout(model().points, BOX));
+export function LadderChart(props: { runs: readonly ResultRun[]; episode: string; view?: LadderView }) {
+  const view = (): LadderView => props.view ?? DEFAULT_VIEW;
+  const model = createMemo(() => ladderPoints(props.runs, view().x, view().y));
+  const layout = createMemo(() => ladderChartLayout(model().points, BOX, view().x, view().y));
   const xpKnown = (): boolean => props.runs.some((r) => r.xpEarned !== undefined);
+  const xCaption = (): string => view().x.caption(props.episode);
+  const yCaption = (): string => view().y.caption(props.episode);
   // A plain `<a>` under a `<g>` rather than the router's `<A>`: the router's
   // renders an HTML anchor, and a template rooted at `<a>` is created in the
   // HTML namespace too (Solid decides by the root tag); a `<g>` root puts the
@@ -94,8 +126,9 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         when={model().points.length > 0}
         fallback={
           <div class="xpchart empty dim">
-            nothing to plot for {props.episode}: no counted run carries both a cost reading and an xp reading
-            <Show when={props.runs.length > 0 && !xpKnown()}>
+            nothing to plot for {props.episode}: no counted run carries both {article(view().x.label)}{" "}
+            {view().x.label} reading and {article(view().y.label)} {view().y.label} reading
+            <Show when={props.runs.length > 0 && view().y.key === "xp" && !xpKnown()}>
               {" "}
               — the viewer predates <span class="mono">xpEarned</span> and needs a restart
             </Show>
@@ -106,11 +139,11 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           class="ladderchart"
           viewBox={`0 0 ${VB_W} ${VB_H}`}
           role="img"
-          aria-label={`average cost per ${props.episode} run, on a log scale, against average xp earned, one point per model and effort, each the mean of that entry's counted runs`}
+          aria-label={`${xCaption()} against ${yCaption()}, one point per model and effort, each the mean of that entry's counted runs`}
         >
           <title>
-            average cost per {props.episode} run (USD, log scale) against average xp earned, one point per
-            model and effort, each the mean of that entry's counted runs
+            {xCaption()} against {yCaption()}, one point per model and effort, each the mean of that entry's
+            counted runs
           </title>
 
           {/* Gridlines and ticks: the same px/py the points were placed with. */}
@@ -121,7 +154,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                 <>
                   <line x1={BOX.x0} y1={y} x2={BOX.x1} y2={y} stroke="var(--gridline)" stroke-dasharray="3 3" />
                   <text x={BOX.x0 - 8} y={y + 4} text-anchor="end" font-size="11" fill="var(--dim)">
-                    {fmtXpTick(t)}
+                    {view().y.format(t)}
                   </text>
                 </>
               );
@@ -133,7 +166,8 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
            * without which the eye has no way to read a distance between two
            * decade labels. The decades themselves keep the tick mark below
            * the axis they always had — a full-height line at every decade on
-           * top of these would be more chrome than data.
+           * top of these would be more chrome than data. A linear x axis has
+           * no minor ticks; its ticks are the same marks and labels.
            */}
           <For each={layout().xMinorTicks}>
             {(t) => (
@@ -154,7 +188,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                 <>
                   <line x1={x} y1={BOX.y0} x2={x} y2={BOX.y0 + 4} stroke="var(--line)" />
                   <text x={x} y={BOX.y0 + 17} text-anchor="middle" font-size="11" fill="var(--dim)">
-                    {fmtCostTick(t)}
+                    {view().x.format(t)}
                   </text>
                 </>
               );
@@ -196,7 +230,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           <line x1={BOX.x0} y1={BOX.y0} x2={BOX.x1} y2={BOX.y0} stroke="var(--line)" />
           <line x1={BOX.x0} y1={BOX.y1} x2={BOX.x0} y2={BOX.y0} stroke="var(--line)" />
           <text x={BOX.x1} y={BOX.y0 + 33} text-anchor="end" font-size="11" fill="var(--dim)">
-            avg cost per {props.episode} run (USD, log)
+            {xCaption()}
           </text>
           <text
             x={-(BOX.y1 + 4)}
@@ -206,7 +240,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
             font-size="11"
             fill="var(--dim)"
           >
-            avg xp earned (lower bound)
+            {yCaption()}
           </text>
 
           {/* Points, each a link to that entry's runs on this tier. */}
@@ -221,7 +255,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
                   navigate(e.currentTarget.getAttribute("href") ?? "/runs");
                 }}
               >
-                <title>{hoverText(d.point, props.episode)}</title>
+                <title>{hoverText(d.point, props.episode, view())}</title>
                 {/*
                  * A displaced label's leader: first in the group, so it sits
                  * under the puck and the label and over the gridlines drawn
@@ -313,12 +347,20 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
         </svg>
       </Show>
 
-      {/* Axes, sample basis, price basis — the three things a stranger would
-          otherwise assume, and assume wrongly. The hover carries the rest. */}
+      {/* Axes, sample basis, each axis's caveat — the things a stranger would
+          otherwise assume, and assume wrongly. The hover carries the rest. The
+          caveats are the specs' own, so a view that swaps an axis swaps its
+          sentence; cost's basis note is the one every page uses and rides with
+          cost wherever it is drawn. */}
       <p class="dim ladderchart-caption">
-        avg cost per {props.episode} run (USD, log) against avg xp earned — a lower bound, rebuilt from
-        the run's 60-second samples. A dashed ring means the means rest on a single run. Cost is
-        what the provider charged, otherwise a list-price estimate; {COST_BASIS_NOTE}.
+        {xCaption()} against {yCaption()}, one point per model and effort. A dashed ring means the means rest
+        on a single run. {view().x.note}
+        {view().x.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}. {view().y.note}
+        {view().y.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}.
+        <Show when={model().omitted.length > 0}>
+          {" "}
+          Not plotted: {model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
+        </Show>
       </p>
     </div>
   );
