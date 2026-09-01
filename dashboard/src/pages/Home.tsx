@@ -10,7 +10,6 @@ import { ModelIcon } from "../components/ModelIcon";
 import { HOME_EPISODE, homeLadderRuns } from "../lib/homeladder";
 import { poll } from "../lib/poll";
 import { STALE_MS, positionAgeMs, type FeedClock } from "../lib/mapview";
-import { paretoRuns } from "../lib/pareto";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
 import { displayError } from "../lib/errors";
@@ -52,13 +51,13 @@ export default function Home() {
   const [picked, setPicked] = createSignal<string | undefined>(undefined);
   const current = () => selectedTool(tools.latest ?? [], picked());
   // The e90 ladder, fixed: latest series present, free runs always out (`lib/homeladder.ts`);
-  // the one control narrows to the Pareto front of cost against XP (`lib/pareto.ts`).
+  // the one control draws the Pareto front of cost against XP over the field
+  // (`lib/pareto.ts`) — the same treatment as the ladder page's toggle, so the
+  // words mean one thing on both. It used to filter to the front; the field
+  // is the context that makes the front a claim, so it stays.
   const ladder = poll(() => api.ladder(HOME_EPISODE).then((r) => r.runs), LADDER_POLL_MS);
   const [pareto, setPareto] = createSignal(readBoolPref(PARETO_KEY, false));
-  const ladderRuns = () => {
-    const runs = homeLadderRuns(ladder.latest ?? [], true);
-    return pareto() ? paretoRuns(runs) : runs;
-  };
+  const ladderRuns = () => homeLadderRuns(ladder.latest ?? [], true);
 
   return (
     <div class="page home">
@@ -107,7 +106,7 @@ export default function Home() {
               <A href={`/ladder?episode=${HOME_EPISODE}`}>full ladder</A>
             </span>
             <div class="ladder-filters">
-            <label class="filter check" title="Keep only the entries no other entry beats on both axes: cheaper per run and more XP earned.">
+            <label class="filter check" title="Draw the Pareto front: the entries no other entry beats on both axes, cheaper per run and more XP earned. Every point stays; the dominated ones are dimmed.">
               <input
                 type="checkbox"
                 checked={pareto()}
@@ -116,7 +115,7 @@ export default function Home() {
                   writeBoolPref(PARETO_KEY, e.currentTarget.checked);
                 }}
               />
-              <span>Pareto front</span>
+              <span>pareto front</span>
             </label>
             </div>
           </div>
@@ -125,7 +124,7 @@ export default function Home() {
           </Show>
           <Show when={ladder.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
             <div class="wide-scroll">
-              <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} />
+              <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} pareto={pareto()} />
             </div>
           </Show>
         </div>
