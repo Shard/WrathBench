@@ -225,6 +225,32 @@ export const AXES: Readonly<Record<MetricKey, AxisSpec | null>> = {
   quests: null,
 };
 
+/* --------------------------------------------------------------- direction */
+
+/** Which way each axis improves — the two `better` fields of a view's specs. */
+export interface Better {
+  x: AxisSpec["better"];
+  y: AxisSpec["better"];
+}
+
+/** Less x, more y: every offered view, and the freeplay field (level against playtime). */
+export const DEFAULT_BETTER: Better = { x: "lower", y: "higher" };
+
+/** The corner of a plot that "better" points at: a reading of the specs, so a chart's cue is right by construction. */
+export interface Corner {
+  h: "left" | "right";
+  v: "top" | "bottom";
+  /** The arrow that points there, for the cue: ↖ ↗ ↙ ↘. */
+  arrow: "↖" | "↗" | "↙" | "↘";
+}
+
+export function betterCorner(better: Better): Corner {
+  const h = better.x === "lower" ? "left" : "right";
+  const v = better.y === "higher" ? "top" : "bottom";
+  const arrow = v === "top" ? (h === "left" ? "↖" : "↗") : h === "left" ? "↙" : "↘";
+  return { h, v, arrow };
+}
+
 /* ------------------------------------------------------------------- views */
 
 export interface LadderView {

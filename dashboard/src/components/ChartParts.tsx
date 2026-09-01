@@ -12,7 +12,7 @@
  */
 
 import { For, Show, type JSX } from "solid-js";
-import { type ChartBox, MARK_R, MARK_RING_R, TICK_FONT } from "../lib/ladder";
+import { type ChartBox, type ChartCue, MARK_R, MARK_RING_R, TICK_FONT } from "../lib/ladder";
 import { monogramOf } from "../lib/lineup";
 import { logoHrefOf } from "./ModelIcon";
 
@@ -112,6 +112,22 @@ export function AxisFrame(props: { box: ChartBox; xCaption: string; yCaption: st
         {props.yCaption}
       </text>
     </>
+  );
+}
+
+/**
+ * The reading-direction cue: "↖ better" in the corner the axes point at,
+ * quiet — tick font, dim — because it is furniture for a stranger's first
+ * second with the chart, not a label. Where it goes and what it says is the
+ * layout's (`chartCue`), derived from the specs; this only draws it. It is
+ * for the comparison charts — the scatter and the freeplay field — and not
+ * for `XpChart`, which is a time series and has no better corner.
+ */
+export function Cue(props: { cue: ChartCue }) {
+  return (
+    <text class="chart-cue" x={props.cue.x} y={props.cue.y} text-anchor={props.cue.anchor} font-size={String(TICK_FONT)} fill="var(--dim)">
+      {props.cue.text}
+    </text>
   );
 }
 
