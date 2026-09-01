@@ -30,6 +30,7 @@
  */
 
 import { z } from "zod";
+import { moduleAuthHeaders } from "./module-auth";
 import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt } from "./prompt";
@@ -177,7 +178,7 @@ export type Comparability = z.infer<typeof comparabilitySchema>;
  */
 export async function fetchServerBuild(moduleUrl: string, timeoutMs = 2_000): Promise<ServerBuild> {
   try {
-    const res = await fetch(`${moduleUrl}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetch(`${moduleUrl}/health`, { headers: moduleAuthHeaders(), signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return null;
     const o = (await res.json()) as { build?: unknown; startedAtMs?: unknown };
     if (typeof o.build !== "string" || typeof o.startedAtMs !== "number") return null;

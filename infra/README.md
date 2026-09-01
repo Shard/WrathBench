@@ -153,7 +153,9 @@ as `fixtures` — and so does `runner`, where the smokes are exec'd by hand, so
 
 needs no `-e` flags at all. A benchmark episode cannot pass those credentials
 on: `sandboxChildEnv` in `runner/src/sandbox/host.ts` drops every
-`WRATHBENCH_DB_*` var from the snippet child's environment, on both services.
+`WRATHBENCH_DB_*` var — and `WRATHBENCH_MODULE_SECRET`, the module's port
+secret the smokes present (`infra/smoke/lib/auth.ts`) — from the snippet
+child's environment, on both services.
 
 This is **operator tooling**. Nothing in `runner/` or `sdk/` imports it, so the
 agent-facing contract in `docs/CONTRACTS.md` is untouched: the agent still only

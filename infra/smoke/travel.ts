@@ -79,6 +79,7 @@
 import { probeName } from "./lib/name";
 import { connect, type MovePoint, type MoveResult, type UnitView } from "../../sdk/src/index";
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { MODULE_SECRET } from "./lib/auth";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
@@ -273,7 +274,7 @@ const triggerHits = new Map<number, number>();
 const dockedAt = new Map<string, { docked: boolean; y: number; ts: number }>();
 let transportReports = 0;
 
-const client = await connect({ baseUrl: BASE, token: TOKEN });
+const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
 client.events.onAny((e: any) => {
   const op = e?.opcode ?? "?";
   opcodesSeen.set(op, (opcodesSeen.get(op) ?? 0) + 1);

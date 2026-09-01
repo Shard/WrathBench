@@ -34,6 +34,7 @@
 
 import { connect } from "../../sdk/src/index";
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { authHeaders, MODULE_SECRET } from "./lib/auth";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -53,7 +54,7 @@ function fail(m: string): never {
   throw new Error(m);
 }
 
-const health = await fetch(`${BASE}/health`).then((r) => r.json() as Promise<any>);
+const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}, character=${CHARACTER} on ${ACCOUNT}`);
 
@@ -68,7 +69,7 @@ const fixtureCtx: FixtureContext = {
   contendedRetryMs: 5_000,
   createAndLogout: async () => {
     // Dwarf Warrior: the fixture stands in Ironforge, so a same-faction race.
-    const c = await connect({ baseUrl: BASE, token: `${TOKEN}-create` });
+    const c = await connect({ baseUrl: BASE, token: `${TOKEN}-create`, secret: MODULE_SECRET });
     try {
       await c.createSession({ account: ACCOUNT, character: CHARACTER, race: 3, class: 1 });
       await c.logout();
@@ -80,7 +81,7 @@ const fixtureCtx: FixtureContext = {
 await ensureFixtureCharacter(fixtureCtx);
 await applyScenario(fixtureCtx, SCENARIO);
 
-const client = await connect({ baseUrl: BASE, token: TOKEN });
+const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
 const waitTaxiFlight = async (want: boolean, timeoutMs: number, what: string) => {
   const deadline = Date.now() + timeoutMs;
   while (client.state.self.taxiFlight?.value !== want) {

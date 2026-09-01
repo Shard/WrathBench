@@ -14,6 +14,8 @@
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086).
  */
 
+import { authHeaders } from "./lib/auth";
+
 const HOST = process.env.MODULE_HOST ?? "worldserver";
 const PORT = process.env.MODULE_PORT ?? "8086";
 const BASE = `http://${HOST}:${PORT}`;
@@ -37,7 +39,7 @@ function fail(msg: string): never {
 async function req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
+    headers: { ...authHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   let json: any = undefined;
@@ -54,7 +56,7 @@ const startedAt = Date.now();
 
 function openEvents(): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`);
+    const ws = new WebSocket(`${WS}/events?token=${encodeURIComponent(TOKEN)}`, { headers: authHeaders() });
     ws.addEventListener("open", () => resolve(ws));
     ws.addEventListener("error", (e) => reject(new Error(`ws error: ${String(e)}`)));
     ws.addEventListener("message", (ev) => {

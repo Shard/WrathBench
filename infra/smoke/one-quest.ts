@@ -14,6 +14,7 @@
 
 import { probeName } from "./lib/name";
 import { connect, pointOf, type NearbyObject } from "../../sdk/src/index";
+import { MODULE_SECRET } from "./lib/auth";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
@@ -41,7 +42,7 @@ function fail(m: string): never {
   throw new Error(m);
 }
 
-const client = await connect({ baseUrl: BASE, token: TOKEN });
+const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
 const alive = (entry: number) => (o: NearbyObject) =>
   o.entry?.value === entry && o.health?.value.current !== 0 && pointOf(o) !== undefined;
 const nearest = async (entry: number, what: string, timeout = 30_000) => {

@@ -36,6 +36,7 @@
  */
 
 import { connect } from "../../sdk/src/index";
+import { authHeaders, MODULE_SECRET } from "./lib/auth";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -67,7 +68,7 @@ async function deletePreviousCharacter(): Promise<void> {
   for (let attempt = 0; attempt < 4; ++attempt) {
     const res = await fetch(`${BASE}/character-delete`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...authHeaders() },
       body: JSON.stringify({ token: `${TOKEN}-del${attempt}`, account: ACCOUNT, character: CHARACTER }),
     });
     const json: any = await res.json().catch(() => undefined);
@@ -80,12 +81,12 @@ async function deletePreviousCharacter(): Promise<void> {
   fail(`could not delete last run's ${CHARACTER}`);
 }
 
-const health = await fetch(`${BASE}/health`).then((r) => r.json() as Promise<any>);
+const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}, character=${CHARACTER}`);
 await deletePreviousCharacter();
 
-const client = await connect({ baseUrl: BASE, token: TOKEN });
+const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
 const areas: { mapId: number; zoneId: number; zoneName: string; areaId: number; areaName: string }[] = [];
 client.events.on("WB_AREA", (e) => {
   areas.push(e.data as (typeof areas)[number]);

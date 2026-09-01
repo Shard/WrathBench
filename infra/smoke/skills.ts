@@ -17,6 +17,7 @@
 
 import { connect } from "../../sdk/src/index";
 import { probeName } from "./lib/name";
+import { authHeaders, MODULE_SECRET } from "./lib/auth";
 
 const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
@@ -31,11 +32,11 @@ function fail(m: string): never {
   throw new Error(m);
 }
 
-const health = await fetch(`${BASE}/health`).then((r) => r.json() as Promise<any>);
+const health = await fetch(`${BASE}/health`, { headers: authHeaders() }).then((r) => r.json() as Promise<any>);
 if (!health?.ok) fail(`health not ok: ${JSON.stringify(health)}`);
 log(`health ok: build=${health.build ?? "?"}`);
 
-const client = await connect({ baseUrl: BASE, token: TOKEN });
+const client = await connect({ baseUrl: BASE, token: TOKEN, secret: MODULE_SECRET });
 try {
   await client.createSession({ account: ACCOUNT, character: CHARACTER, race: 1, class: 2 });
   log(`in world as ${CHARACTER}, level ${client.state.self.level?.value}`);
