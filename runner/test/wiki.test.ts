@@ -1,6 +1,6 @@
 /**
  * How the runner opens the reference bundle: absent is a configuration, stale
- * is a deploy mistake and fails closed (FOLLOW-UPS 30). Fixtures are synthetic
+ * is a deploy mistake and fails closed (item 30). Fixtures are synthetic
  * sqlite files; no dump, no bundle, no game text.
  */
 import { afterAll, describe, expect, test } from "bun:test";

@@ -597,7 +597,7 @@ export function poolJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
 /**
  * Roster names a pinned job references: never the policy's to schedule.
  * The predicate itself lives in `runner/src/models.ts`, beside the projection
- * it gates, so the viewer answers it the same way (FOLLOW-UPS 52).
+ * it gates, so the viewer answers it the same way (item 52).
  */
 export function pinnedRefs(config: Pick<FleetConfig, "jobs">): Set<string> {
   return pinnedRefsOf(config.jobs);
@@ -1910,7 +1910,7 @@ export function withResume(spawn: JobSpawn, resume: NonNullable<FleetJob["resume
 // clock stopped, session released) and a fleet start resumes them before the
 // queue or the policy launches anything fresh. The same planner runs every
 // tick, so a run its provider paused (rate-limited, quota-exhausted) is also
-// picked back up once its cooling is over — that is FOLLOW-UPS 43.
+// picked back up once its cooling is over — that is item 43.
 
 export interface ResumePlan {
   job: FleetJob;
@@ -4047,7 +4047,7 @@ function jobDefers(jsonl: string): { spec: string; entry: DeferEntry }[] {
  *
  * This is a DIFFERENT source than the --status accounts table, which reports
  * the supervisor's own `jobs` record — and saying the two were "the same
- * signal" is how a stale row there went unnoticed (FOLLOW-UPS 68). They should
+ * signal" is how a stale row there went unnoticed (item 68). They should
  * now agree on every fleet-managed account; where they cannot, this one is the
  * truth about the world and that one is the truth about the supervisor.
  *
@@ -4091,7 +4091,7 @@ export function liveJobsFromState(state: Pick<FleetState, "jobs"> | undefined): 
  * by account and letting the last write win therefore reads the object's
  * insertion order, which is FIRST-spawn order, and a job that finished at noon
  * can mask the run holding the account now. That is what made the accounts
- * table disagree with --live-runs (FOLLOW-UPS 68).
+ * table disagree with --live-runs (item 68).
  *
  * So rank rather than overwrite: a live job beats a dead one, and among live
  * ones the most recently spawned wins. `alive` is passed in so the selection

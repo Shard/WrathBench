@@ -1,5 +1,5 @@
 /**
- * Probe for item text (FOLLOW-UPS 103): a readable letter obtained the way a
+ * Probe for item text (item 103): a readable letter obtained the way a
  * player gets one, read back through the client's own path.
  *
  * Arc: throwaway Human Warrior placed by `mcbride-report` (in front of

@@ -2000,7 +2000,7 @@ export class StateCache {
    * invSlot regexes over raw updates, and a full relog to force a resend; the
    * worn-bag span came from `inventory_full` turn-ins (quests 33, 183) and a
    * model hand-rolling destroyItem loops against a 16-slot ceiling while a
-   * worn bag had room (FOLLOW-UPS 50).
+   * worn bag had room (item 50).
    *
    * One honest caveat. Empty slots are zero-valued update fields and the wire
    * compresses zeros out of create blocks, so "no field observed" reads as

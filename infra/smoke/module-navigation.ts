@@ -6,14 +6,14 @@
  * the ground arrives and reports `meshZ` (the mesh owns z) -> a `move_to`
  * whose z is 100y above the ground (far outside the navmesh's vertical poly
  * search) still arrives, with `meshZ` at the ground: the module's ground-z
- * fallback (FOLLOW-UPS 46 part 3) -> a `move_to` to a nearby NPC's position
+ * fallback (item 46 part 3) -> a `move_to` to a nearby NPC's position
  * with its `guid` arrives -> a candidate point with no walkable ground is
  * `target_off_mesh`, nothing moved -> a 300y request is `too_far` -> a
  * zero-length `move_to` (still at HOME) arrives -> a plain walk still arrives
  * with no `meshZ` -> (optional leg) a route off a ledge is `drop`, nothing
  * moved -> logout. No dependencies; Bun built-ins only.
  *
- * Steps 3–3b are new with the harness-0.4 module (FOLLOW-UPS 46) and FAIL
+ * Steps 3–3b are new with the harness-0.4 module (item 46) and FAIL
  * against an older one: a pre-46 module answers z+100 with `target_off_mesh`.
  *
  * The `drop` leg (5b) is OPTIONAL and labelled as such: it needs a ledge the
@@ -204,7 +204,7 @@ async function main() {
   // 3. Far outside the poly search box (±50y vertically): no polygon under the
   //    request's z. Until harness-0.4 this was target_off_mesh; the module now
   //    resolves the ground height at x,y after that verdict (the z-ladder in
-  //    front of the cause ladder, FOLLOW-UPS 46 part 3: terrain a client has
+  //    front of the cause ladder, item 46 part 3: terrain a client has
   //    too) and walks there, reporting meshZ relative to the z asked for.
   const sky = await move({ x: HOME.x, y: HOME.y, z: HOME.z + 100 });
   if (sky.status !== "arrived") fail(`z+100 request should arrive on the ground-z fallback, got ${JSON.stringify(sky)}`);

@@ -352,7 +352,7 @@ export interface RosterModel {
  * of fields and lives beside the process path; the viewer parses a narrow
  * slice of the same file at its own boundary. Both can satisfy this, so the
  * question "is this roster name the policy's to schedule" has one answer
- * rather than one per reader (FOLLOW-UPS 52).
+ * rather than one per reader (item 52).
  */
 export interface PolicyJob {
   refs: readonly string[];

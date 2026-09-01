@@ -1,5 +1,5 @@
 /**
- * Probe for the skill pane (FOLLOW-UPS 95): the `PLAYER_SKILL_INFO` update
+ * Probe for the skill pane (item 95): the `PLAYER_SKILL_INFO` update
  * fields served on the self create block (`skill<n>Id/Step/Value/Max/
  * TempBonus/PermBonus`) with the SkillLine.dbc name beside each id, folded
  * into `state.skills()`.

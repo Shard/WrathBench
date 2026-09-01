@@ -1,5 +1,5 @@
 /**
- * Probe for the party surface (FOLLOW-UPS 100, group): two sessions on two
+ * Probe for the party surface (item 100, group): two sessions on two
  * accounts, one invites the other by name (`inviteToGroup`), the invitee sees
  * `state.group().pendingInvite` and accepts (`acceptGroupInvite`), both see
  * the party in `SMSG_GROUP_LIST` with the right leader, the leader leaves

@@ -1174,7 +1174,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     }
 
     if (rest === "/track") {
-      // The replay feed (FOLLOW-UPS 22): the same position shape the live map
+      // The replay feed (item 22): the same position shape the live map
       // consumes, read from one finished run instead of every live one.
       const run = readRun(runsDir, runId);
       return json({

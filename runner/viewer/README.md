@@ -32,7 +32,7 @@ the API it reads plus the static host that serves it. Build it with
 with no further configuration.
 
 The hand-written pages this directory used to serve were deleted on 2026-08-22
-(FOLLOW-UPS 31). There is no fallback UI: with no build on disk every page route
+(item 31). There is no fallback UI: with no build on disk every page route
 answers with a plain-text notice naming the build command, and `/api` keeps
 serving throughout. What the dashboard renders is documented in
 `dashboard/README.md`; what follows is what the server decides before the UI
