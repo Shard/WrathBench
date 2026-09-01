@@ -10,8 +10,14 @@ import { describe, expect, test } from "bun:test";
 import type { AreaFacts, ResultRun, LevelMark } from "../../runner/viewer/api-types";
 import {
   EXPANSION_MAPS,
+  LABEL_DESC,
+  LABEL_ROW,
   MARK_RING_R,
   RUNGS,
+  puckRect,
+  rectsOverlap,
+  segmentsCross,
+  streamLabelX,
   billingKnown,
   classOptions,
   filterRuns,
@@ -620,8 +626,9 @@ describe("ladderPoints", () => {
 
 describe("ladderChartLayout", () => {
   const box = { x0: 60, x1: 960, y0: 340, y1: 20 };
+  // The drawn label is the key alone (`pointLabel`), so the fixture's is too.
   const pt = (key: string, x: number, y: number) => ({
-    key, label: `${key} · n=1`, single: true, model: key, effort: null, x, y, runs: 1, n: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
+    key, label: key, single: true, model: key, effort: null, x, y, runs: 1, n: 1, basis: "reported" as const, asIfMetered: false, harnesses: ["wrathbench"],
   });
 
   test("a free entry sits in the gutter, the dearest point at the ceiling on the right edge", () => {
@@ -651,13 +658,134 @@ describe("ladderChartLayout", () => {
     expect(slots.size).toBe(4);
   });
 
-  test("every label clears the mark it belongs to, both ways", () => {
+  test("every label clears every mark, its own included, and its box covers its descenders", () => {
     const l = ladderChartLayout([pt("one", 1, 100), pt("two", 4, 1200), pt("three", 6, 2000)], box);
     for (const d of l.placed) {
-      // Against the mark's outer edge, not the puck: a thicker separation ring
-      // has to move the labels too, and this is the test that says so.
-      expect(Math.abs(d.labelX - d.cx)).toBeGreaterThan(MARK_RING_R);
-      expect(Math.abs(d.labelY - d.cy)).toBeGreaterThan(MARK_RING_R);
+      // Against the mark's outer ring, bounding-boxed, not the puck: a thicker
+      // separation ring has to move the labels too, and this is the test that says so.
+      for (const other of l.placed) expect(rectsOverlap(d.rect, puckRect(other.cx, other.cy))).toBe(false);
+      // The baseline sits a descender above the box's bottom edge.
+      expect(d.rect.b - d.labelY).toBeCloseTo(LABEL_DESC, 9);
+      expect(d.rect.t).toBeLessThan(d.labelY);
+    }
+  });
+
+  /*
+   * The placement's contract, on the fixture that used to break it: a dozen
+   * entries inside a small cost/xp box — the crowded cheap-and-low corner every
+   * roster has — plus outliers. Before the rings and the leaders the losers of
+   * such a cluster all fell back to the same slot and printed over each other.
+   */
+  const cluster = (): ReturnType<typeof pt>[] => {
+    const dense: ReturnType<typeof pt>[] = [];
+    // Twelve names of realistic length on a 4×3 grid over a sixth of a decade
+    // of cost and an eighth of the xp axis — about 40 by 40 viewBox units for
+    // labels 40–80 wide. Dense enough that half of them need a ring past the
+    // first and some reach the fifth; sparse enough that the greedy pass finds
+    // a clean answer, which is what makes the strict assertions below fair.
+    // A tighter grid is solvable only with crossing leaders or `crowded`
+    // labels, both of which are tolerated on purpose and pinned separately.
+    for (let i = 0; i < 12; i++) {
+      dense.push(pt(`model-${String.fromCharCode(97 + i)}${i % 3 === 0 ? " (low)" : ""}`, 1 + (i % 4) * 0.15, 100 + Math.floor(i / 4) * 120 + (i % 4) * 12));
+    }
+    return [...dense, pt("dear-and-far", 40, 2400), pt("mid-outlier", 6, 1300), pt("cheap-outlier", 0.05, 700), pt("free-corner", 0, 0)];
+  };
+
+  test("a dense cluster: no label over a label or a mark, leaders only past ring 1, none crossing, all inside", () => {
+    const l = ladderChartLayout(cluster(), box);
+    const clear = l.placed.filter((d) => !d.crowded);
+    // Every entry got a label, and the fixture is solvable without a crowded one.
+    expect(l.placed).toHaveLength(16);
+    expect(clear).toHaveLength(16);
+    for (const d of clear) {
+      for (const o of l.placed) {
+        expect(rectsOverlap(d.rect, puckRect(o.cx, o.cy))).toBe(false);
+        if (o !== d) expect(rectsOverlap(d.rect, o.rect)).toBe(false);
+      }
+      // Inside the plot: the top margin may hold a label, the axis line may not.
+      expect(d.rect.l).toBeGreaterThanOrEqual(box.x0 - 2);
+      expect(d.rect.r).toBeLessThanOrEqual(box.x1 + 2);
+      expect(d.rect.b).toBeLessThanOrEqual(box.y0);
+      expect(d.rect.t).toBeGreaterThanOrEqual(box.y1 - LABEL_ROW);
+      // A leader exactly when the label is not adjacent.
+      expect(d.leader !== null).toBe(d.ring > 1);
+      if (d.leader !== null) {
+        // From the ring's edge…
+        expect(Math.hypot(d.leader.x1 - d.cx, d.leader.y1 - d.cy)).toBeCloseTo(MARK_RING_R, 6);
+        // …to just outside the label's box.
+        expect(rectsOverlap({ l: d.leader.x2, t: d.leader.y2, r: d.leader.x2, b: d.leader.y2 }, d.rect)).toBe(false);
+        expect(Math.hypot(d.leader.x2 - d.cx, d.leader.y2 - d.cy)).toBeGreaterThan(MARK_RING_R);
+      }
+    }
+    // The cluster actually exercised the rings, the outermost included.
+    expect(l.placed.filter((d) => d.ring > 1).length).toBeGreaterThanOrEqual(5);
+    expect(Math.max(...l.placed.map((d) => d.ring))).toBe(5);
+    const leaders = clear.flatMap((d) => (d.leader === null ? [] : [d.leader]));
+    for (let i = 0; i < leaders.length; i++) {
+      for (let j = i + 1; j < leaders.length; j++) expect(segmentsCross(leaders[i]!, leaders[j]!)).toBe(false);
+    }
+  });
+
+  test("the placement is a function of the set, not of the order the entries arrived in", () => {
+    const base = cluster();
+    const strip = (l: ReturnType<typeof ladderChartLayout>) =>
+      l.placed.map((d) => ({ key: d.point.key, x: d.labelX, y: d.labelY, a: d.anchor, ring: d.ring, leader: d.leader, crowded: d.crowded }));
+    const reference = strip(ladderChartLayout(base, box));
+    const permutations = [
+      [...base].reverse(),
+      [...base].sort((a, b) => a.key.localeCompare(b.key)),
+      [...base.slice(7), ...base.slice(0, 7)],
+    ];
+    for (const perm of permutations) expect(strip(ladderChartLayout(perm, box))).toEqual(reference);
+    // Two entries with identical coordinates and labels of equal length are
+    // still ordered — by label, then key — so even they cannot swap slots.
+    const twins = [pt("twin-b", 2, 500), pt("twin-a", 2, 500)];
+    expect(strip(ladderChartLayout(twins, box))).toEqual(strip(ladderChartLayout([...twins].reverse(), box)));
+    expect(strip(ladderChartLayout(twins, box))[0]!.key).toBe("twin-a");
+  });
+
+  test("golden: an outlier's label sits centred above its mark, adjacent, with no leader", () => {
+    const l = ladderChartLayout(cluster(), box);
+    for (const key of ["mid-outlier", "cheap-outlier"]) {
+      const d = l.placed.find((p) => p.point.key === key)!;
+      expect(d.anchor).toBe("middle");
+      expect(d.labelX).toBe(d.cx);
+      expect(d.labelY).toBeLessThan(d.cy - MARK_RING_R);
+      expect(d.ring).toBe(1);
+      expect(d.leader).toBeNull();
+      expect(d.crowded).toBe(false);
+    }
+    // The dearest, highest point is near the plot's top-right corner: a label
+    // may rise into the top margin by its own height, so above still fits.
+    const corner = l.placed.find((p) => p.point.key === "dear-and-far")!;
+    expect(corner.ring).toBe(1);
+    expect(corner.anchor).toBe("middle");
+    expect(corner.rect.t).toBeLessThan(box.y1);
+    expect(corner.leader).toBeNull();
+  });
+
+  test("when every slot collides the least-overlapping one is taken and flagged, never dropped", () => {
+    // Forty entries on one spot: no arrangement of twenty-four slots holds them.
+    const pile = Array.from({ length: 40 }, (_, i) => pt(`pile-${String(i).padStart(2, "0")}`, 1, 100));
+    const l = ladderChartLayout(pile, box);
+    expect(l.placed).toHaveLength(40);
+    const crowded = l.placed.filter((d) => d.crowded);
+    expect(crowded.length).toBeGreaterThan(0);
+    for (const d of crowded) {
+      // Honest flag: a crowded label really does overlap something…
+      const hits = l.placed.filter((o) => o !== d && (rectsOverlap(d.rect, o.rect) || rectsOverlap(d.rect, puckRect(o.cx, o.cy))));
+      expect(hits.length).toBeGreaterThan(0);
+      // …carries a leader whatever its ring, and stayed in the box.
+      expect(d.leader).not.toBeNull();
+      expect(d.rect.b).toBeLessThanOrEqual(box.y0);
+    }
+    // …and a label that was not flagged overlaps no mark and no other clean
+    // label — a crowded one placed after it may land on it, which is what the
+    // flag on that one records.
+    const clean = l.placed.filter((p) => !p.crowded);
+    for (const d of clean) {
+      for (const o of l.placed) expect(rectsOverlap(d.rect, puckRect(o.cx, o.cy))).toBe(false);
+      for (const o of clean) if (o !== d) expect(rectsOverlap(d.rect, o.rect)).toBe(false);
     }
   });
 
@@ -955,6 +1083,31 @@ describe("streamSeries", () => {
     expect(layout.placed[0]!.d).toMatch(/^M[\d.]+,[\d.]+ (H[\d.]+ V[\d.]+ )*H[\d.]+$/);
     // The y axis is anchored at zero, so a two-level gain is not the whole chart.
     expect(layout.py(0)).toBe(box.y0);
+  });
+
+  test("a stream label pushed more than one row off its line gets a leader from the badge; one row does not", () => {
+    // Five streams holding the same level at the same time: the stack is five rows deep.
+    const runs = ["Ann", "Bob", "Cyd", "Dee", "Eve"].map((c, i) =>
+      fp({ runId: `${c}1`, character: c, levels: [mark(4, null, 0)], playtimeMs: 100_000 + i }),
+    );
+    const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
+    const { series } = seriesOf(runs);
+    const layout = streamChartLayout(series, box);
+    const rows = layout.placed.map((p) => Math.round((p.labelY - layout.placed[0]!.labelY) / LABEL_ROW));
+    expect(rows).toEqual([0, 1, 2, 3, 4]);
+    expect(layout.placed.map((p) => p.leader === null)).toEqual([true, true, false, false, false]);
+    for (const p of layout.placed) {
+      expect(p.labelX).toBe(streamLabelX(p.endCx));
+      expect(p.labelY + LABEL_DESC).toBeLessThanOrEqual(box.y0);
+      if (p.leader !== null) {
+        expect(p.leader.y1).toBe(p.endCy);
+        expect(p.leader.x2).toBeLessThan(p.labelX);
+        expect(p.leader.y2).toBeGreaterThan(p.endCy);
+      }
+    }
+    // The stack is a function of the set: a reversed input places identically.
+    const again = streamChartLayout([...series].reverse(), box);
+    expect(again.placed.map((p) => [p.series.streamId, p.labelY])).toEqual(layout.placed.map((p) => [p.series.streamId, p.labelY]));
   });
 
   /*

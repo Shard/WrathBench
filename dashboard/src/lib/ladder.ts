@@ -566,14 +566,45 @@ export interface ChartBox {
   y1: number;
 }
 
+/** One straight segment in viewBox units, from a mark towards its label. */
+export interface Leader {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** An axis-aligned box in viewBox units: `l < r`, `t < b` (SVG y grows downward). */
+export interface Rect {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+
 export interface PlacedPoint {
   point: LadderPoint;
   cx: number;
   cy: number;
-  /** The label's anchor and start corner, in viewBox units. */
+  /** The label's anchor point and baseline, in viewBox units. */
   labelX: number;
   labelY: number;
-  anchor: "start" | "end";
+  anchor: "start" | "middle" | "end";
+  /** The label's box — descenders and `LABEL_PAD` included — as the collision pass saw it. */
+  rect: Rect;
+  /** Which ring the slot came from: 1 adjacent to the mark, 2 and 3 one and two rows further out. */
+  ring: 1 | 2 | 3 | 4 | 5;
+  /**
+   * From the mark's edge to the label's nearest edge, when the label is not
+   * adjacent (ring 2 or 3) or is `crowded` — the line that says which mark a
+   * displaced label belongs to. Null for an adjacent label, which needs none.
+   */
+  leader: Leader | null;
+  /**
+   * Every candidate collided with something. This is the in-box slot with the
+   * least overlap, drawn anyway: a hidden label is worse than an ugly one.
+   */
+  crowded: boolean;
 }
 
 export interface LadderChartLayout {
@@ -599,9 +630,47 @@ export interface LadderChartLayout {
   py: (y: number) => number;
 }
 
-/** Label width estimate at the chart's 11px font: enough to avoid collisions, not a text measure. */
-const CHAR_W = 6.3;
-const LABEL_H = 12;
+/* ----------------------------------------------------------- label metrics */
+
+/**
+ * Point labels and the stream chart's end labels are set at 10 viewBox units;
+ * axis tick labels stay at 11. The viewBox is 1000 wide, so at a 600px render
+ * a 10-unit label is 6 CSS px and an 11-unit one 6.6 — both already at the
+ * floor of legibility, which is why the page scrolls the chart inside a 640px
+ * floor below 720px rather than shrinking it further (`.wide-scroll`). The
+ * unit down on the labels buys about a tenth more room for the placement in
+ * exactly the crowded corner that needs it; the ticks keep the extra unit
+ * because there are few of them and they are the axis a reader anchors to.
+ */
+export const LABEL_FONT = 10;
+export const TICK_FONT = 11;
+
+/**
+ * Label width estimate: `CHAR_W` per character.
+ *
+ * The label font is the body's monospace stack (`ui-monospace, SFMono-Regular,
+ * Menlo, monospace`), so a label's width really is its length times one
+ * advance. The advance of those faces is 0.6 em: Menlo and its parent DejaVu
+ * Sans Mono (the usual Linux fallback) set it at 1233/2048 = 0.602 em, and SF
+ * Mono at 1229/2048 = 0.600 em. At 10 units that is 6.0. A bound the
+ * placement can trust rather than a text measure, which a DOM-free layout
+ * cannot take.
+ */
+export const CHAR_W = 0.6 * LABEL_FONT;
+/** The label box above its baseline: one em covers ascenders and the internal leading. */
+export const LABEL_H = LABEL_FONT;
+/**
+ * …and below it: a quarter em, the descender depth of g, p, q and y. The
+ * previous box stopped at the baseline, so a label's descenders were free to
+ * sit on the row beneath.
+ */
+export const LABEL_DESC = 0.25 * LABEL_FONT;
+/** One label row — the box's full height, the pitch the outer rings and the stream chart's stack step by. */
+export const LABEL_ROW = LABEL_H + LABEL_DESC;
+/** Breathing room either side of the letters, so two labels on one row never touch. */
+export const LABEL_PAD = 2;
+/** Cap height, 0.7 em: what a label centred on a mark is centred by. */
+const CAP_H = 0.7 * LABEL_FONT;
 
 /**
  * The radius of a plotted mark, in viewBox units — the one place that knows it.
@@ -732,15 +801,145 @@ export function fmtCostTick(usd: number): string {
   return usd < 1 ? `${Math.round(usd * 100)}\u00a2` : `$${Math.round(usd)}`;
 }
 
+/* ------------------------------------------------------- label placement */
+
+/** Whether two boxes share any area. Touching edges do not count. */
+export function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+}
+
+/** The area two boxes share; zero when they do not. */
+function overlapArea(a: Rect, b: Rect): number {
+  const w = Math.min(a.r, b.r) - Math.max(a.l, b.l);
+  const h = Math.min(a.b, b.b) - Math.max(a.t, b.t);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
 /**
- * Where everything goes. Cost maps onto the log axis above (or into its
- * free gutter) and xp maps linearly; labels are placed
- * greedily, each trying right-above, right-below, left-above, left-below of
- * its point (then the same four a row further out) and taking the first slot that overlaps no label already placed
- * and stays inside the plot. Points are visited highest-y first so the
- * crowded bottom-left corner yields to the entries the reader is looking for.
- * Two labels that cannot both fit overlap rather than vanish: a hidden
- * label is worse than an ugly one.
+ * Whether two segments properly cross — meet at one interior point of each.
+ * The standard orientation test; collinear or end-touching pairs do not count,
+ * which for two leaders is the right call: only a genuine X misleads the eye.
+ */
+export function segmentsCross(a: Leader, b: Leader): boolean {
+  const orient = (px: number, py: number, qx: number, qy: number, rx: number, ry: number): number =>
+    Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
+  const o1 = orient(a.x1, a.y1, a.x2, a.y2, b.x1, b.y1);
+  const o2 = orient(a.x1, a.y1, a.x2, a.y2, b.x2, b.y2);
+  const o3 = orient(b.x1, b.y1, b.x2, b.y2, a.x1, a.y1);
+  const o4 = orient(b.x1, b.y1, b.x2, b.y2, a.x2, a.y2);
+  return o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4;
+}
+
+/** Whether a segment passes through a box: an endpoint inside it, or a crossing of one of its edges. */
+function segmentHitsRect(s: Leader, r: Rect): boolean {
+  const inside = (x: number, y: number): boolean => x > r.l && x < r.r && y > r.t && y < r.b;
+  if (inside(s.x1, s.y1) || inside(s.x2, s.y2)) return true;
+  const edges: Leader[] = [
+    { x1: r.l, y1: r.t, x2: r.r, y2: r.t },
+    { x1: r.r, y1: r.t, x2: r.r, y2: r.b },
+    { x1: r.r, y1: r.b, x2: r.l, y2: r.b },
+    { x1: r.l, y1: r.b, x2: r.l, y2: r.t },
+  ];
+  return edges.some((e) => segmentsCross(s, e));
+}
+
+/** The square a mark occupies for collision purposes: its outer ring, bounding-boxed. */
+export function puckRect(cx: number, cy: number): Rect {
+  return { l: cx - MARK_RING_R, t: cy - MARK_RING_R, r: cx + MARK_RING_R, b: cy + MARK_RING_R };
+}
+
+/**
+ * The directions a label may sit in, in preference order. Directly above
+ * first: a 2024 perceptual study (arXiv:2407.11996) found readers prefer a
+ * label centred above its mark to Imhof's classic top-right; then the four
+ * diagonals, right before left as Imhof ranks them; then the two horizontal
+ * neighbours, whose labels sit on the mark's own row and so cost the most
+ * room in a crowded band; then directly below, last because it is the slot
+ * the mark's own descent into the next row makes hardest to read.
+ */
+const SLOT_DIRS: readonly { dx: -1 | 0 | 1; dy: -1 | 0 | 1 }[] = [
+  { dx: 0, dy: -1 },
+  { dx: 1, dy: -1 },
+  { dx: -1, dy: -1 },
+  { dx: 1, dy: 1 },
+  { dx: -1, dy: 1 },
+  { dx: 1, dy: 0 },
+  { dx: -1, dy: 0 },
+  { dx: 0, dy: 1 },
+];
+
+const RINGS = [1, 2, 3, 4, 5] as const;
+
+interface Slot {
+  ring: 1 | 2 | 3 | 4 | 5;
+  rect: Rect;
+  anchor: "start" | "middle" | "end";
+  labelX: number;
+  labelY: number;
+}
+
+/**
+ * The candidate boxes for one label of width `w` around a mark at (`cx`,
+ * `cy`): the eight directions at each ring's distance. Ring 1 sits
+ * `LABEL_GAP` from the centre — clear of the ring around the puck — and each
+ * ring after it one label row further out along the same ray, so a diagonal
+ * slot steps out diagonally and its leader, if it needs one, is the ray
+ * itself. A horizontal slot is centred on the mark by cap height rather than
+ * by box, so the letters and not the descender room line up with the puck.
+ */
+function slotsAround(cx: number, cy: number, w: number): Slot[] {
+  const slots: Slot[] = [];
+  for (const ring of RINGS) {
+    const off = LABEL_GAP + (ring - 1) * LABEL_ROW;
+    const wide = w + 2 * LABEL_PAD;
+    for (const { dx, dy } of SLOT_DIRS) {
+      const l = dx > 0 ? cx + off : dx < 0 ? cx - off - wide : cx - wide / 2;
+      const t = dy < 0 ? cy - off - LABEL_ROW : dy > 0 ? cy + off : cy - LABEL_H + CAP_H / 2;
+      const rect = { l, t, r: l + wide, b: t + LABEL_ROW };
+      slots.push({
+        ring,
+        rect,
+        anchor: dx > 0 ? "start" : dx < 0 ? "end" : "middle",
+        labelX: dx > 0 ? rect.l + LABEL_PAD : dx < 0 ? rect.r - LABEL_PAD : cx,
+        labelY: rect.b - LABEL_DESC,
+      });
+    }
+  }
+  return slots;
+}
+
+/**
+ * The leader from a mark to a label box: from the ring's edge, along the ray
+ * to the box's nearest point, stopping a unit short of the letters.
+ */
+function leaderTo(cx: number, cy: number, rect: Rect): Leader {
+  const qx = Math.min(Math.max(cx, rect.l), rect.r);
+  const qy = Math.min(Math.max(cy, rect.t), rect.b);
+  const dx = qx - cx;
+  const dy = qy - cy;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  return { x1: cx + ux * MARK_RING_R, y1: cy + uy * MARK_RING_R, x2: qx - ux, y2: qy - uy };
+}
+
+/**
+ * Where everything goes. Cost maps onto the log axis above (or into its free
+ * gutter) and xp maps linearly; then the labels.
+ *
+ * Labels are placed greedily in importance order — highest xp first, then
+ * cheapest, then by label and key so the result is a function of the set and
+ * not of the order the runs arrived in — against a collision set that starts
+ * out holding every mark (`puckRect`), because a label over a neighbour's
+ * puck hides a point, which is worse than hiding a name. Each label tries the
+ * candidates of `slotsAround` in order and takes the first that is inside the
+ * plot, overlaps nothing placed, and — past ring 1 — whose leader crosses no
+ * leader already drawn and passes through no label or mark. Failing that, a
+ * leader that crosses is tolerated before a label is; failing that too, the
+ * in-box candidate overlapping the least area is taken and flagged `crowded`,
+ * with its leader, rather than the label being dropped or the cluster
+ * collapsed: the operator's rule is that a hidden label is worse than an ugly
+ * one, and the flag is what lets the chart say so.
  */
 export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox): LadderChartLayout {
   const cost = costScale(points.map((p) => p.x), box.x0, box.x1);
@@ -749,42 +948,58 @@ export function ladderChartLayout(points: readonly LadderPoint[], box: ChartBox)
   const px = cost.px;
   const py = scaleLinear([0, yMax], [box.y0, box.y1]);
 
-  type Rect = { l: number; t: number; r: number; b: number };
-  const taken: Rect[] = [];
-  const overlaps = (a: Rect): boolean => taken.some((b) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t);
-  const inside = (a: Rect): boolean => a.l >= box.x0 - 2 && a.r <= box.x1 + 2 && a.t >= box.y1 - LABEL_H && a.b <= box.y0;
+  const ordered = [...points].sort(
+    (a, b) => b.y - a.y || a.x - b.x || a.label.localeCompare(b.label) || a.key.localeCompare(b.key),
+  );
+  const marks = ordered.map((p) => ({ p, cx: px(p.x), cy: py(p.y) }));
+  // Every mark is in the way before any label is.
+  const taken: Rect[] = marks.map((m) => puckRect(m.cx, m.cy));
+  const leaders: Leader[] = [];
+  const overlaps = (a: Rect): boolean => taken.some((b) => rectsOverlap(a, b));
+  // A label may rise into the top margin by its own height (the axis label
+  // is not there) but never below the baseline, where the tick labels live.
+  const inside = (a: Rect): boolean =>
+    a.l >= box.x0 - 2 && a.r <= box.x1 + 2 && a.t >= box.y1 - LABEL_H && a.b <= box.y0;
 
-  const ordered = [...points].sort((a, b) => b.y - a.y || a.x - b.x);
   const placed: PlacedPoint[] = [];
-  for (const p of ordered) {
-    const cx = px(p.x);
-    const cy = py(p.y);
-    const w = p.label.length * CHAR_W;
-    const above = cy - LABEL_GAP;
-    const below = cy + LABEL_GAP + LABEL_H * 0.75;
-    // Four slots around the point, then the same four one label-row further out.
-    const slots: { anchor: "start" | "end"; labelX: number; labelY: number }[] = [
-      { anchor: "start", labelX: cx + LABEL_GAP, labelY: above },
-      { anchor: "start", labelX: cx + LABEL_GAP, labelY: below },
-      { anchor: "end", labelX: cx - LABEL_GAP, labelY: above },
-      { anchor: "end", labelX: cx - LABEL_GAP, labelY: below },
-      { anchor: "start", labelX: cx + LABEL_GAP, labelY: above - LABEL_H },
-      { anchor: "start", labelX: cx + LABEL_GAP, labelY: below + LABEL_H },
-      { anchor: "end", labelX: cx - LABEL_GAP, labelY: above - LABEL_H },
-      { anchor: "end", labelX: cx - LABEL_GAP, labelY: below + LABEL_H },
-    ];
-    const rectOf = (s: (typeof slots)[number]): Rect => ({
-      l: s.anchor === "start" ? s.labelX : s.labelX - w,
-      r: s.anchor === "start" ? s.labelX + w : s.labelX,
-      t: s.labelY - LABEL_H,
-      b: s.labelY,
+  for (const [i, { p, cx, cy }] of marks.entries()) {
+    const own = taken[i]!;
+    const slots = slotsAround(cx, cy, p.label.length * CHAR_W);
+    const leaderOf = (s: Slot): Leader | null => (s.ring === 1 ? null : leaderTo(cx, cy, s.rect));
+    const leaderClean = (l: Leader | null): boolean =>
+      l === null || (!leaders.some((o) => segmentsCross(l, o)) && !taken.some((r) => r !== own && segmentHitsRect(l, r)));
+    const free = slots.filter((s) => inside(s.rect) && !overlaps(s.rect));
+    let pick = free.find((s) => leaderClean(leaderOf(s))) ?? free[0];
+    let crowded = false;
+    if (pick === undefined) {
+      crowded = true;
+      const inBox = slots.filter((s) => inside(s.rect));
+      const pool = inBox.length > 0 ? inBox : slots;
+      let least = Infinity;
+      for (const s of pool) {
+        const area = taken.reduce((sum, r) => sum + overlapArea(s.rect, r), 0);
+        if (area < least) {
+          least = area;
+          pick = s;
+        }
+      }
+    }
+    const slot = pick!;
+    const leader = crowded ? leaderTo(cx, cy, slot.rect) : leaderOf(slot);
+    taken.push(slot.rect);
+    if (leader !== null) leaders.push(leader);
+    placed.push({
+      point: p,
+      cx,
+      cy,
+      labelX: slot.labelX,
+      labelY: slot.labelY,
+      anchor: slot.anchor,
+      rect: slot.rect,
+      ring: slot.ring,
+      leader,
+      crowded,
     });
-    const pick = slots.find((s) => {
-      const r = rectOf(s);
-      return inside(r) && !overlaps(r);
-    }) ?? slots.find((s) => inside(rectOf(s))) ?? slots[0]!;
-    taken.push(rectOf(pick));
-    placed.push({ point: p, cx, cy, ...pick });
   }
   return {
     xTicks: cost.ticks,
@@ -1163,13 +1378,29 @@ export function timeTicks(maxMs: number, want = 6): number[] {
   return ticks;
 }
 
+/*
+ * The end-of-line furniture, left to right: the status marker at `endCx`, the
+ * model's badge (a puck of `MARK_R`), then the character label. The offsets
+ * live here rather than in the component because the label's leader has to
+ * know where the label starts, and the layout is what emits the leader.
+ */
+/** Marker → badge, and badge → label. */
+export const STREAM_ICON_GAP = 8;
+export const STREAM_LABEL_GAP = 4;
+export const streamIconCx = (endCx: number): number => endCx + STREAM_ICON_GAP + MARK_R;
+export const streamLabelX = (endCx: number): number => endCx + STREAM_ICON_GAP + MARK_R * 2 + STREAM_LABEL_GAP;
+
 export interface PlacedStream {
   series: StreamSeries;
   /** The step path, in viewBox units, ending flat at the stream's own `endX`. */
   d: string;
   endCx: number;
   endCy: number;
+  /** The label's start and baseline. `labelX` is `streamLabelX(endCx)`, carried so the drawing and the leader agree. */
+  labelX: number;
   labelY: number;
+  /** From the badge to the label, when the label was pushed more than one row off its line. */
+  leader: Leader | null;
 }
 
 export interface StreamChartLayout {
@@ -1190,6 +1421,11 @@ export interface StreamChartLayout {
  * axis with a floating base would make a character that gained two levels look
  * like the whole chart, and level 1 is a real origin — it is where every
  * character starts.
+ *
+ * The series are re-sorted here by the order `streamSeries` already gives them
+ * — furthest first, then longest, then label, then stream id — so the stack is
+ * a function of the set and not of the array's order, the same rule
+ * `ladderChartLayout` follows.
  */
 export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox): StreamChartLayout {
   const xMax = Math.max(1, ...series.map((s) => s.endX));
@@ -1198,9 +1434,12 @@ export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox
   const px = scaleLinear([0, xMax], [box.x0, box.x1]);
   const py = scaleLinear([0, yMax], [box.y0, box.y1]);
 
+  const ordered = [...series].sort(
+    (a, b) => b.endLevel - a.endLevel || b.endX - a.endX || a.label.localeCompare(b.label) || a.streamId.localeCompare(b.streamId),
+  );
   const placed: PlacedStream[] = [];
   const takenY: number[] = [];
-  for (const s of series) {
+  for (const s of ordered) {
     const steps: string[] = [];
     for (const [i, p] of s.points.entries()) {
       const x = px(p.x);
@@ -1211,17 +1450,27 @@ export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox
     const endCx = px(s.endX);
     const endCy = py(s.endLevel);
     steps.push(`H${endCx.toFixed(1)}`);
-    // The label sits at the end of the line, pushed down in whole label rows
-    // until it clears every label already placed. Down, not up: the series are
-    // placed furthest-first, so the leader keeps its natural position.
-    let labelY = endCy + LABEL_H * 0.3;
+    // The label sits at the end of the line, its cap height centred on it, and
+    // is pushed down in whole label rows until it clears every label already
+    // placed. Down, not up: the series are placed furthest-first, so the
+    // leader keeps its natural position.
+    const natural = endCy + CAP_H / 2;
+    let labelY = natural;
     // …but never off the bottom of the plot. Once the field is crowded enough
-    // that pushing down would leave the box, the label stays where it is and
-    // overlaps rather than walking out of the viewBox, which is the same call
-    // `ladderChartLayout`'s `inside()` guard makes.
-    while (labelY + LABEL_H <= box.y0 && takenY.some((t) => Math.abs(t - labelY) < LABEL_H)) labelY += LABEL_H;
+    // that pushing down would take the descenders past the axis, the label
+    // stays where it is and overlaps rather than walking out of the viewBox,
+    // which is the same call `ladderChartLayout`'s `inside()` guard makes.
+    const collides = (y: number): boolean => takenY.some((t) => Math.abs(t - y) < LABEL_ROW);
+    while (collides(labelY) && labelY + LABEL_ROW + LABEL_DESC <= box.y0) labelY += LABEL_ROW;
     takenY.push(labelY);
-    placed.push({ series: s, d: steps.join(" "), endCx, endCy, labelY });
+    const labelX = streamLabelX(endCx);
+    // One row down still reads as the line's own label; two or more needs the
+    // line drawn, from the badge's edge to the label's leading mid-height.
+    const leader: Leader | null =
+      labelY - natural > LABEL_ROW
+        ? { x1: streamIconCx(endCx) + MARK_R + 1, y1: endCy, x2: labelX - 1.5, y2: labelY - CAP_H / 2 }
+        : null;
+    placed.push({ series: s, d: steps.join(" "), endCx, endCy, labelX, labelY, leader });
   }
   return { xTicks: timeTicks(xMax), yTicks, xMax, yMax, placed, px, py };
 }
