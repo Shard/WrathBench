@@ -142,13 +142,14 @@ export default function Home() {
         conversation, which the model can page through while reflecting at an inn.
       </p>
 
-      <h2 class="section">What an agent can see and do</h2>
+      <h2 class="section">what the agent can see and do</h2>
       <p class="dim">
-         The wrathbench harness attempts to give agents a set of tools similar to what a player would expect
+        The harness gives the agent roughly what a player has: a client's view of the world, a
+        client's actions, and its own notes.
       </p>
       <div class="home-surface">
         <div>
-          <h3 class="home-surface-head">what the agent can do</h3>
+          <h3 class="home-surface-head">can</h3>
           <ul class="dim">
             <li>See what a game client sees: units in range, its quests, bags, spells, chat, position.</li>
             <li>Act through the handlers a client hits: move, fight, talk, loot, trade, train, fly, mail.</li>
@@ -158,11 +159,11 @@ export default function Home() {
           </ul>
         </div>
         <div>
-          <h3 class="home-surface-head">what it can't</h3>
+          <h3 class="home-surface-head">can't</h3>
           <ul class="dim">
             <li>See what the server knows and a player cannot: loot tables, spawns, respawn timers.</li>
             <li>Teleport, run a GM command, or read the database. Only valid client opcodes are allowed.</li>
-            <li>Be told or suggested a strategy. The MCP tools explains a failure, it should say what they should do next.</li>
+            <li>Be told a strategy. A failed call says what was expected and how to fix the call, never what to play next.</li>
             <li>Pause the world. The game is real time and ninety minutes is ninety realtime minutes.</li>
             <li>Use another character, another account, or any kind of networking outside the game.</li>
           </ul>

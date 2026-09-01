@@ -175,7 +175,7 @@ export const RUNGS: Rung[] = [
   {
     n: 2,
     title: "Leave the starting subzone on its own initiative",
-    rule: "left the first-observed area (milestone records); runs before 2026-08-23 have none",
+    rule: "left the first-observed area; older runs have no record of this",
     test: (r) => r.areas?.leftStartArea === true,
   },
   {
@@ -318,7 +318,7 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
       bestRunId: furthest?.runId ?? null,
       bestMoney: richest?.money ?? null,
       bestMoneyRunId: richest?.runId ?? null,
-      harnesses: [...new Set(list.map((r) => r.harness ?? "harness?"))].sort(),
+      harnesses: [...new Set(list.map((r) => r.harness ?? "—"))].sort(),
       characters: charactersOf(list),
       resolvedModels: [
         ...new Set(
@@ -546,7 +546,7 @@ export function ladderPoints(runs: readonly ResultRun[]): { points: LadderPoint[
       n: paired.length,
       basis: bases.size > 1 ? "mixed" : bases.has("reported") ? "reported" : "list-price",
       asIfMetered: costs.some((c) => c.asIfMetered),
-      harnesses: [...new Set(g.runs.map((r) => r.harness ?? "harness?"))].sort(),
+      harnesses: [...new Set(g.runs.map((r) => r.harness ?? "—"))].sort(),
     });
   }
   points.sort((a, b) => a.key.localeCompare(b.key));

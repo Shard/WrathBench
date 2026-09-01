@@ -130,7 +130,7 @@ function achievementLine(d: RunDetailResponse | undefined): string {
 function tpsLine(d: RunDetailResponse | undefined, source?: string): string {
   const tps = d?.tps ?? null;
   if (tps === null || tps.recent === null) return "tok/s: no reply measured yet";
-  const line = `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} repl(ies) · ${fmtTps(tps.overall)} over ${tps.replies}`;
+  const line = `${fmtTps(tps.recent)} tok/s over the last ${tps.recentReplies} ${tps.recentReplies === 1 ? "reply" : "replies"} · ${fmtTps(tps.overall)} tok/s over all ${tps.replies}`;
   // The rate is the token total's per-reply arithmetic, so a total that
   // under-reads makes a rate that under-reads by the same factor.
   return source === "snapshot" ? `${line} · under-read` : line;
