@@ -24,8 +24,8 @@ status.
 3. **35** — milestone records; rung 6 of the ladder reads "not instrumented" until
    grouping and instance records exist, and death/level-up/spell/talent are still
    unwritten.
-4. **19** — before anything is public or MCP-exposed: shared secret on the port,
-   token-to-character binding, filesystem sandboxing.
+4. **19** — built; deploy the authenticated module (`:next`) in the next window and
+   run the two auth smokes.
 
 ## Player surface
 
@@ -208,21 +208,22 @@ worklogs/2026-08-29).
     behind it. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
 
-19. **Pre-public / MCP blockers on the control surface** (fan-out review 2026-08;
-    accepted-risk statement in docs/CONTRACTS.md). Shipped so far: the module refuses
-    tokens under 32 characters (`400 weak_token`) and the runner issues random tokens
-    (2026-08-22), the accounts allowlist on the utility routes, and the sandbox child's
-    env allowlist. Still open, and required before any public or MCP-exposed deployment
-    or before trusting an adversarial multi-run result: (1) the module issues a random
-    secret at session create, returns it only to the creator, and requires it on
-    `/action`, `DELETE /session` and `/events` (which today is token-scoped but cannot
-    validate against a live session because subscribers connect before it exists);
-    module and runner change together, backward compat off. (2) Nothing binds a token to
-    a character and the HTTP surface has no authentication, so any caller reaching the
-    port can delete any character on an allowlisted account that is not logged in — a
-    token-to-character binding plus a shared secret on the port is the floor. (3) A
-    snippet can still fs-read `.env` by absolute path; needs filesystem sandboxing (a
-    trajectory audit found no run ever did). Item 10 (per-character credentials) is
-    folded in here: the account pool delivered run parallelism, and what remained of 10
-    — nothing binds a caller to an account or a token to a character — is exactly (1)
-    and (2).
+19. **Pre-public / MCP blockers on the control surface** — built 2026-09-01, the module
+    half awaits its deploy window. All three parts are in git (0b7622f, 950f421,
+    738cff0; design in `module/PROTOCOL.md` "Authentication", ops in
+    `docs/OPERATIONS.md` "Secrets"): a port secret on every route, a per-run leased
+    session secret bound token→account→character (issued at lease time so the SDK can
+    still subscribe to `/events` before `POST /session`), and Landlock confinement of
+    the snippet child (verified on the host and inside the runner container). Every
+    client degrades against the running pre-auth module, so the live fleet is
+    unaffected until the deploy. Owed, in order: `openssl rand -hex 32` into
+    `WRATHBENCH_MODULE_SECRET` in the repo-root `.env`; `./infra/deploy-worldserver.sh
+    --dry-run` then the real thing in a window with zero live runs (image
+    `wrathbench/worldserver:next` is built); the gate smokes run with the header, then
+    `infra/smoke/module-accounts.ts` and `module-slice.ts` by hand for the 401/403
+    paths; operator `/health` curls need `-H "Authorization: Bearer $AC_WRATH_BENCH_SECRET"`.
+    Left open by design: leases live in module memory with no expiry beyond
+    `DELETE /lease`; `character-delete` is operator-only (hygiene is the host's);
+    `sdk/generate-api-docs.ts` has pre-existing drift (`nameMailSenders`, `petCommand`,
+    `questDetailsFrom`) that fails `docs:api`. Close with the shipped line once the
+    deploy-window smokes pass.
