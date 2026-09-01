@@ -423,7 +423,7 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
    when the left group is absent (freeplay has no axis views). */
 .ladder-controls { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap;
                    justify-content: space-between; margin: 0 0 6px; font-size: 12px; }
-.ladder-filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.ladder-filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .filter { display: inline-flex; align-items: center; gap: 6px; }
 .filter select {
   font: inherit; color: var(--fg); background: var(--panel);
