@@ -697,6 +697,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
           totals?.taxi ?? null,
           totals?.leveling ?? null,
           totals?.deaths ?? null,
+          totals === null
+            ? undefined
+            : { spells: totals.spells, talents: totals.talents, trades: totals.trades },
         ),
       );
     }
@@ -1201,6 +1204,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         taxi: tail.taxi,
         leveling: tail.leveling,
         deaths: tail.deaths,
+        spells: tail.spells,
+        talents: tail.talents,
+        trades: tail.trades,
         // Same incremental path again: a live run's rate advances with the tail
         // rather than waiting on the (size, mtime) totals cache to miss.
         tps: tokensPerSecond(entries),
