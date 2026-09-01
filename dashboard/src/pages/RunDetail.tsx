@@ -441,7 +441,8 @@ export default function RunDetail() {
                   crumb carries the sort and filters they arrived with, so it is
                   also the "back" the second link used to be.
                 */}
-                <A href={`/runs${location.search}`}>runs</A> / {run().runId}
+                <A href={`/runs${location.search}`}>runs</A> /{" "}
+                <span title={run().runId}>{shortRunId(run().runId)}</span>
               </h2>
 
               {/* The freeplay stream this run is one attempt of. Both directions
@@ -848,6 +849,8 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
     >
       {(t) => (
         <dl class="tuple">
+          <dt>run id</dt>
+          <dd class="mono">{props.run.runId}</dd>
           <dt>harness version</dt>
           <dd class="mono">{t().harnessVersion}</dd>
           <dt>prompt</dt>

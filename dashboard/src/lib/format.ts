@@ -166,14 +166,16 @@ export function stamp(ts: number | null): string {
 }
 
 /**
- * A run id's tail: `20260830-a6` for a fleet-minted id, whose long prefix
- * (`fleet-<entry>-<episode>-<model>-`) repeats what the row's other columns
- * already say. An id of another shape is shown whole; the full id always
- * sits in the title and on the run page.
+ * A run id's tail: `20260827`, `20260830-a6`, `20260830-a6-r2` for a
+ * fleet-minted id, whose long prefix (`fleet-<entry>-<episode>-<model>-`)
+ * repeats what the row's other columns already say. The `fleet-` prefix is
+ * the supervisor's ownership mark and is never a reader's business, so an
+ * id of another shape loses that and is otherwise shown whole. The full id
+ * always sits in the hover and in the run page's tuple.
  */
 export function shortRunId(id: string): string {
-  const m = /-(\d{8}-a\d+)$/.exec(id);
-  return m === null ? id : m[1]!;
+  const m = /-(\d{8}(?:-a\d+)?(?:-r\d+)?)$/.exec(id);
+  return m === null ? id.replace(/^fleet-/, "") : m[1]!;
 }
 
 /** The harness stamp is identical on every row; only the suffix distinguishes. */

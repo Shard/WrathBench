@@ -289,7 +289,10 @@ describe("shortRunId", () => {
     expect(shortRunId("fleet-nemotron-super-freeplay-nemotron-3-super-120b-a12b-20260830-a6")).toBe("20260830-a6");
   });
   test("an id of another shape is shown whole", () => {
+    expect(shortRunId("fleet-nemotron-super-class-probe-human-warrior-nemotron-3-super-120b-a12b-20260827")).toBe("20260827");
+    expect(shortRunId("fleet-sonnet-e90-sonnet-20260822-a3-r2")).toBe("20260822-a3-r2");
     expect(shortRunId("smoke-death-recovery")).toBe("smoke-death-recovery");
-    expect(shortRunId("run-20260830")).toBe("run-20260830");
+    expect(shortRunId("fleet-odd-shape")).toBe("odd-shape");
+    expect(shortRunId("run-20260830")).toBe("20260830");
   });
 });
