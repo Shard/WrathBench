@@ -408,13 +408,18 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 .chips.episodes button { font-size: 15px; padding: 5px 16px; }
 
 /* The scatter's axis views: the tier's chips a size down, left, with a label. */
-.chips.views { gap: 6px; margin: 0 0 4px; font-size: 12px; }
+.chips.views { gap: 6px; margin: 0; font-size: 12px; }
 .chips.views button { font-size: 12px; padding: 2px 10px; }
 
-/* Its filters: one line, hard right, directly above the chart they narrow. */
-.ladder-controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
-                   justify-content: flex-end; margin: 0 0 6px; font-size: 12px; }
-.ladder-controls > .dim:first-child { margin-right: auto; }
+/* The row above the chart: two groups — what is on the left (the axis views
+   here, the title on the homepage) and the filters on the right — on one line
+   while the viewport has room for both, and one above the other when it has
+   not. No breakpoint: the wrap is the content's own width. The filters keep
+   `margin-left: auto` so they sit hard right on a row of their own too, and
+   when the left group is absent (freeplay has no axis views). */
+.ladder-controls { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap;
+                   justify-content: space-between; margin: 0 0 6px; font-size: 12px; }
+.ladder-filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-left: auto; }
 .filter { display: inline-flex; align-items: center; gap: 6px; }
 .filter select {
   font: inherit; color: var(--fg); background: var(--panel);
