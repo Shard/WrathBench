@@ -246,9 +246,11 @@ describe("a sync that re-reads the catalogue", () => {
       const now = breakdownTotal(costOf(fixture, { ...priced, id, asOf: today, source: "list", asIfMetered: false, note: "" }));
       expect(now).toBe(before);
       // A rate that really moved gained a window rather than replacing one; a
-      // zero-rate free row doubles to zero and is left alone.
+      // zero-rate free row doubles to zero and is left alone. Counted against
+      // the windows the id already had: the real file grows one per rate
+      // change the sync has seen, so "exactly two" would break on the first.
       const free = catalogue[id]!.input === 0 && catalogue[id]!.output === 0;
-      expect(windows.length).toBe(free ? 1 : 2);
+      expect(windows.length).toBe(current[id]!.length + (free ? 0 : 1));
       if (!free) expect(windowAt(windows, Date.parse("2026-09-10"))!.input).toBe(catalogue[id]!.input * 2);
     }
   });
