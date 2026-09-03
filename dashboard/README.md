@@ -146,8 +146,9 @@ Two modules are imported from the viewer rather than copied, under the
 
 `bun test` from the repo root runs them with everything else. They cover the
 pure layer — view maths and pip placement, the API client's paths, encoding and
-error mapping — and not the components: a DOM harness for a handful of `<For>`
-loops would cost more than it pins.
+error mapping — plus a focused shared-axis component regression. That regression
+uses the small `happy-dom` harness to mount the Solid `<For>` loops and update
+retained SVG ticks in place; the rest of the suite does not need a DOM.
 
 ## Conventions
 

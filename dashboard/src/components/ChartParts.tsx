@@ -49,21 +49,21 @@ export function YAxis(props: {
   return (
     <For each={props.ticks}>
       {(t) => {
-        const y = props.py(t);
-        const text = props.format(t);
+        const y = (): number => props.py(t);
+        const text = (): string | null => props.format(t);
         return (
           <>
-            <line x1={props.box.x0} y1={y} x2={props.box.x1} y2={y} stroke="var(--gridline)" stroke-dasharray="3 3" />
-            <Show when={text !== null}>
+            <line x1={props.box.x0} y1={y()} x2={props.box.x1} y2={y()} stroke="var(--gridline)" stroke-dasharray="3 3" />
+            <Show when={text() !== null}>
               <text
                 x={props.box.x0 - 8}
-                y={y}
+                y={y()}
                 dominant-baseline="central"
                 text-anchor="end"
                 font-size={String(TICK_FONT)}
                 fill="var(--dim)"
               >
-                {text}
+                {text()}
               </text>
             </Show>
           </>
@@ -78,12 +78,13 @@ export function XAxis(props: { ticks: readonly number[]; px: (v: number) => numb
   return (
     <For each={props.ticks}>
       {(t) => {
-        const x = props.px(t);
+        const x = (): number => props.px(t);
+        const text = (): string => props.format(t);
         return (
           <>
-            <line x1={x} y1={props.box.y0} x2={x} y2={props.box.y0 + 4} stroke="var(--line)" />
-            <text x={x} y={props.box.y0 + 17} text-anchor="middle" font-size={String(TICK_FONT)} fill="var(--dim)">
-              {props.format(t)}
+            <line x1={x()} y1={props.box.y0} x2={x()} y2={props.box.y0 + 4} stroke="var(--line)" />
+            <text x={x()} y={props.box.y0 + 17} text-anchor="middle" font-size={String(TICK_FONT)} fill="var(--dim)">
+              {text()}
             </text>
           </>
         );
