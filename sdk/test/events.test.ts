@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { EventStream, EventTimeoutError, STREAM_ERROR, STREAM_GAP } from "../src/events";
+import { EventStream, EventStreamClosedError, EventTimeoutError, STREAM_ERROR, STREAM_GAP } from "../src/events";
 import type { StreamEvent } from "../src/events";
 import { chatEcho, frames, fullStream, loginSequence } from "./fixtures";
 import { startStub } from "./server";
@@ -377,8 +377,10 @@ describe("event stream: per-attempt connect deadline (issue #34)", () => {
     });
 
     // Without the deadline this promise never settles: the stalled socket fires
-    // neither close nor error, so nothing reschedules.
-    await expect(stream.connect()).rejects.toThrow(/did not open within 20ms/);
+    // neither close nor error, so nothing reschedules. With it, the stalled
+    // attempt fails, the ladder retries, and the caller sees that retry open
+    // (FOLLOW-UPS 113: one attempt's failure is not the caller's verdict).
+    await stream.connect();
     // The stalled socket is closed, not leaked half-open.
     expect(StallingSocket.instances[0]?.closeCalls).toBe(1);
 
@@ -393,6 +395,146 @@ describe("event stream: per-attempt connect deadline (issue #34)", () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(StallingSocket.instances.length).toBe(2);
 
+    stream.close();
+  });
+});
+
+describe("event stream: connect() rides the ladder (FOLLOW-UPS 113)", () => {
+  type Plan = "open" | "stall" | "refuse";
+
+  /**
+   * A socket whose fate is scripted per instance: `open` completes the
+   * handshake, `stall` never does (only the open deadline escapes it), `refuse`
+   * fires error then close, the way a refused TCP connect or a 401 upgrade
+   * arrives. Everything dispatches on a timer so the stream's handlers are
+   * attached first.
+   */
+  class ScriptedSocket {
+    static instances: ScriptedSocket[] = [];
+    static plan: (index: number) => Plan = () => "open";
+    readonly index: number;
+    readyState = 0;
+    private readonly handlers = new Map<string, ((ev: unknown) => void)[]>();
+
+    constructor(readonly url: string) {
+      this.index = ScriptedSocket.instances.length;
+      ScriptedSocket.instances.push(this);
+      const plan = ScriptedSocket.plan(this.index);
+      if (plan === "open")
+        setTimeout(() => {
+          this.readyState = 1;
+          this.dispatch("open");
+        }, 0);
+      if (plan === "refuse")
+        setTimeout(() => {
+          this.readyState = 3;
+          this.dispatch("error");
+          this.dispatch("close");
+        }, 0);
+    }
+
+    addEventListener(type: string, handler: (ev: unknown) => void): void {
+      const list = this.handlers.get(type) ?? [];
+      list.push(handler);
+      this.handlers.set(type, list);
+    }
+
+    close(): void {
+      this.readyState = 3;
+    }
+
+    private dispatch(type: string): void {
+      for (const h of this.handlers.get(type) ?? []) h({ type });
+    }
+  }
+
+  function scripted(plan: (index: number) => Plan): EventStream {
+    ScriptedSocket.instances = [];
+    ScriptedSocket.plan = plan;
+    // min 5 / max 20: the ladder climbs 5, 10, then caps — a connect() caller
+    // sits through three failures before giving up.
+    return new EventStream({
+      url: "ws://scripted",
+      token: "t",
+      connectTimeoutMs: 20,
+      reconnectMinDelayMs: 5,
+      reconnectMaxDelayMs: 20,
+      webSocketImpl: ScriptedSocket as unknown as typeof WebSocket,
+    });
+  }
+
+  const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  test("a caller awaiting connect() across a refused first attempt sees the ladder's success", async () => {
+    const stream = scripted((i) => (i === 0 ? "refuse" : "open"));
+    await stream.connect();
+    expect(stream.connected).toBe(true);
+    expect(ScriptedSocket.instances.length).toBe(2);
+    stream.close();
+  });
+
+  test("concurrent and retried connect() calls share one attempt — never two sockets", async () => {
+    const stream = scripted((i) => (i === 0 ? "refuse" : "open"));
+    // Two calls while the first attempt is in flight share it.
+    const first = stream.connect();
+    const second = stream.connect();
+    expect(ScriptedSocket.instances.length).toBe(1);
+    // Let the refusal land; the ladder's retry is now pending, not yet started.
+    await settle(1);
+    expect(stream.connected).toBe(false);
+    expect(ScriptedSocket.instances.length).toBe(1);
+    // A retry from the caller joins the pending attempt rather than opening
+    // its own socket alongside the ladder's.
+    const third = stream.connect();
+    expect(ScriptedSocket.instances.length).toBe(1);
+    await Promise.all([first, second, third]);
+    expect(stream.connected).toBe(true);
+    expect(ScriptedSocket.instances.length).toBe(2);
+    // Already open: resolves at once without touching the socket.
+    await stream.connect();
+    expect(ScriptedSocket.instances.length).toBe(2);
+    stream.close();
+  });
+
+  test("close() mid-connect rejects the pending connect() as a user close", async () => {
+    const stream = scripted(() => "stall");
+    const pending = stream.connect();
+    stream.close();
+    await expect(pending).rejects.toThrow(/^event stream closed$/);
+    // No ladder after a user close, and nothing to connect to afterwards.
+    await settle(40);
+    expect(ScriptedSocket.instances.length).toBe(1);
+    await expect(stream.connect()).rejects.toBeInstanceOf(EventStreamClosedError);
+  });
+
+  test("an unreachable server rejects after a whole climb of the ladder while the stream keeps trying", async () => {
+    const stream = scripted((i) => (i < 5 ? "refuse" : "open"));
+    await expect(stream.connect()).rejects.toThrow(/failed to connect to ws:\/\/scripted.*\(3 attempts/);
+    // The caller gave up; the stream did not, and a later caller rides the
+    // recovery in.
+    await stream.connect();
+    expect(stream.connected).toBe(true);
+    expect(ScriptedSocket.instances.length).toBe(6);
+    stream.close();
+  });
+
+  test("with reconnect off, connect() rejects on the attempt and a retry opens a fresh one", async () => {
+    ScriptedSocket.instances = [];
+    ScriptedSocket.plan = (i) => (i === 0 ? "refuse" : "open");
+    const stream = new EventStream({
+      url: "ws://scripted",
+      token: "t",
+      reconnect: false,
+      connectTimeoutMs: 20,
+      webSocketImpl: ScriptedSocket as unknown as typeof WebSocket,
+    });
+    await expect(stream.connect()).rejects.toThrow(/^failed to connect to ws:\/\/scripted/);
+    await settle(10);
+    expect(ScriptedSocket.instances.length).toBe(1);
+    // Not the same rejected promise forever: a retry is a real attempt.
+    await stream.connect();
+    expect(stream.connected).toBe(true);
+    expect(ScriptedSocket.instances.length).toBe(2);
     stream.close();
   });
 });
