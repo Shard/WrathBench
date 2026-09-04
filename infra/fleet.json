@@ -42,6 +42,13 @@
     "",
     "policy: only where runs execute and how many at once. maxConcurrent { <rate-limit key>: n } (concurrencyKeyOf);",
     "  paid { maxConcurrent } is the paid throttle. runsPerEpisode and extras are NOT 0.5 keys and are refused by name.",
+    "  paid.maxConcurrent is 2 since 2026-09-04 (was 1, raised on the operator's explicit call so the OpenCode Go",
+    "  surface can run alongside another paid model): TWO paid models fleet-wide at once, and — because the",
+    "  per-key cap below still applies — at most ONE of them on `opencode-go`. It is a spend posture, not a",
+    "  per-surface exemption: any two paid models may hold the two slots. Money: omen-alpha on zen/go reports",
+    "  usage.cost 0 today (free alpha) while being LISTED at $0.20/$0.66 per Mtok, so what this cap costs can",
+    "  change with no edit to this file, the day the alpha starts billing. NOTE accounts.paid has ONE entry, so",
+    "  a second paid pick is still held on the account, not the cap, until a second paid account is listed.",
     "  subscriptions — the Claude subscriptions the fleet may schedule on, as the NAMES of the env vars",
     "  holding their OAuth tokens; the tokens live in .env and never here. A subscription is a LANE, not a",
     "  model dimension: one roster entry per model however many accounts are behind it, because which",
@@ -148,7 +155,7 @@
   "policy": {
     "maxConcurrent": {"claude-code": 3, "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3, "openrouter": 1, "opencode": 1, "opencode-go": 1},
     "subscriptions": ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"],
-    "paid": {"maxConcurrent": 1}
+    "paid": {"maxConcurrent": 2}
   },
   "campaigns": {
     "nav-probe": {
