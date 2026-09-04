@@ -7,10 +7,11 @@
  * So everything here is a GET of a static object, and the only cleverness is
  * where the live API had a query string:
  *
- * - **A generation, resolved once.** `manifest.json` names the current
- *   generation; every aggregate is addressed by it and is immutable. Upload
- *   order is per-run → aggregates → manifest last, so an old manifest points
- *   at a complete old set and a reader can never observe a torn generation.
+ * - **A manifest, resolved once.** `manifest.json` names a bucket key per
+ *   aggregate; each is addressed by its own content and is immutable, so a
+ *   pass rewrites only the aggregates that moved. Upload order is per-run →
+ *   aggregates → manifest last, so an old manifest points at a complete old
+ *   set and a reader can never observe a torn generation.
  * - **Filters move to the client.** `/api/results?episode=…&harness=…` is one
  *   published artifact — the `episode=all&includeOverrides=1` projection —
  *   filtered here by `projectResults`, which reproduces the server's rules
@@ -88,9 +89,21 @@ export interface SnapshotClientOptions {
   ttlMs?: number;
 }
 
-/** `v1/manifest.json`: which generation the immutable artifacts are under. */
+/**
+ * `v1/manifest.json`: where each immutable aggregate is.
+ *
+ * `artifacts` maps an aggregate name to its bucket key, the way a run row's
+ * `snapshot` pointers already do — so the reader follows keys and never
+ * reconstructs one, and the publisher can move the layout without a reader
+ * change. `gen` is the manifest's own identity; nothing is addressed by it.
+ *
+ * `artifacts` is optional for the manifests written before 2026-09-04, where
+ * one `gen` prefixed every aggregate. A reader that meets one falls back to
+ * that layout, which is what lets the dashboard deploy ahead of the publisher.
+ */
 interface Manifest {
   gen: string;
+  artifacts?: Record<string, string>;
   generatedAt: number;
 }
 
@@ -298,10 +311,19 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
   const manifest = (): Promise<Manifest> => memo<Manifest>(`${root}/v1/manifest.json`);
   const live = (): Promise<LiveArtifact> => memo<LiveArtifact>(`${root}/v1/live.json`);
 
-  /** One generation-addressed aggregate. Immutable once the manifest names it. */
+  /** One content-addressed aggregate, at the key the manifest names for it. */
   async function snap<T>(name: string): Promise<T> {
     const m = await manifest();
-    return await memo<T>(`${root}/v1/snap/${encodeURIComponent(m.gen)}/${name}`);
+    const pointed = m.artifacts?.[name];
+    if (m.artifacts !== undefined && (pointed === undefined || pointed === "")) {
+      // A manifest of the current shape is the whole index: a name it does not
+      // carry has no object, and guessing a key would turn that into a
+      // confusing 404 from the bucket instead of a clear one from here.
+      throw new ApiError(404, `no published ${name} in this snapshot`);
+    }
+    // Pre-2026-09-04 manifests name no keys; every aggregate sat under the one
+    // generation prefix.
+    return await memo<T>(pointed !== undefined ? artifactUrl(pointed) : `${root}/v1/snap/${encodeURIComponent(m.gen)}/${name}`);
   }
 
   /*
