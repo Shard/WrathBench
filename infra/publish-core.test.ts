@@ -400,15 +400,20 @@ describe("diffing", () => {
     expect(state.snapVersions).toEqual({ "runs.json": ["r2"], "ladder.json": ["l2"] });
   });
 
-  test("the real fleet's steady pass: 24 PUTs became 18, and the aggregate half is what shrank", async () => {
+  test("the recorded fleet shape: a steady pass writes only the aggregates that moved", async () => {
     /*
      * The shape measured against a real fleet on 2026-08-25 and recorded in
      * `docs/PUBLIC-DASHBOARD.md`: ten aggregates, six live runs each with a
-     * detail and a track, plus `live.json` and `manifest.json` — 24 PUTs a
-     * pass, every pass, because one hash over the set moved all ten aggregates
-     * whenever any run took a turn. The four that genuinely carry a turn are
-     * `runs.json`, `results.json`, the run's ladder and `models.json`; the
-     * other six are byte-identical and now cost nothing.
+     * detail and a track, plus `live.json` and `manifest.json`. That is the 24
+     * PUTs the first pass below costs, and it was the cost of EVERY pass,
+     * because one hash over the set moved all ten aggregates whenever any run
+     * took a turn.
+     *
+     * Which aggregates a turn moves is the fixture's own choice, not a
+     * measurement: four of ten here, where the issue's sample found four of
+     * seven compared differing. So the 18 below is what this shape costs, not
+     * a figure off a live fleet — what the test pins is that the aggregates
+     * that did not move are not written, and that the flip is still last.
      */
     const NAMES = [
       "info.json",
