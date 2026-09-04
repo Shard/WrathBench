@@ -53,7 +53,7 @@
  *   attempt, reported apart, never counted toward a target.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
@@ -639,40 +639,205 @@ export function countModelResponses(path: string): number | null {
   return countRecords(path, [MODEL_RESPONSE_RECORD])?.get(MODEL_RESPONSE_RECORD) ?? null;
 }
 
+const NEWLINE = 0x0a;
+const EMPTY = Buffer.alloc(0);
+/** How much of a trajectory is held in memory at once while counting. */
+const READ_CHUNK = 1 << 22;
+
+/**
+ * Record counts for a trajectory without holding the file in memory, resumably.
+ *
+ * A count is monotone, so folding only the bytes appended since the last pass
+ * gives the same answer as re-reading the file whole. That is the whole reason
+ * this is an object: `readRunFact` is memoised on (size, mtime), which hits for
+ * every finished run and structurally MISSES for a live one, whose trajectory
+ * grows every second. The live runs reach hundreds of megabytes and
+ * `/api/models` and `/api/fleet` are polled every five seconds, so re-reading
+ * from byte zero on each poll blocked the viewer's event loop for one to three
+ * seconds at a time (measured: 844ms and 895ms for the two live trajectories on
+ * 2026-09-04, against ~0ms for everything else `readRunFact` does).
+ *
+ * A trailing half-written line is held in `pending` and re-read with the next
+ * chunk rather than counted, so nothing is counted twice across a resume. A
+ * file that SHRANK is not resumable at all — that is truncation or replacement
+ * — and the check for it belongs to whoever holds the scanner
+ * (`countRecordsCached`), which throws the scanner away and starts fresh.
+ *
+ * `countRecords` below is the one-shot form, with the contract it always had.
+ *
+ * Reading is `readSync` over a fixed buffer rather than the whole-file string
+ * `readFileSync` built: the same discipline `RunTotalsScanner` follows in
+ * `runner/viewer/tail.ts`, but not the same code — that one reads
+ * asynchronously through `Bun.file`, and this path is sync all the way up
+ * through the fleet supervisor. Splitting happens on bytes, which is safe
+ * because 0x0A cannot occur inside a UTF-8 multi-byte sequence.
+ */
+export class RecordCountScanner {
+  readonly path: string;
+  readonly kinds: readonly string[];
+  /** The prefilter, as bytes: the kind names are ASCII, so this is the same test. */
+  private readonly needles: Buffer[];
+  private readonly counts: Map<string, number>;
+  /** Bytes folded as complete lines; where the next scan resumes. */
+  private consumed = 0;
+  /** Bytes after the last newline: a record still being written, never counted. */
+  private pending: Buffer = EMPTY;
+
+  constructor(path: string, kinds: readonly string[]) {
+    this.path = path;
+    this.kinds = [...kinds];
+    this.needles = this.kinds.map((k) => Buffer.from(`"${k}"`, "utf8"));
+    this.counts = new Map<string, number>(this.kinds.map((k) => [k, 0]));
+  }
+
+  /** How far this scanner has read, complete lines and the partial one. */
+  get size(): number {
+    return this.consumed + this.pending.length;
+  }
+
+  private take(line: Buffer): void {
+    if (line.length === 0) return;
+    let text: string | null = null;
+    let rec: { t?: unknown } | null = null;
+    let torn = false;
+    for (let i = 0; i < this.kinds.length; i++) {
+      // Cheap prefilter, then the honest parse: the `t` key can sit anywhere.
+      if (!line.includes(this.needles[i]!)) continue;
+      if (rec === null && !torn) {
+        text ??= line.toString("utf8");
+        try {
+          rec = JSON.parse(text) as { t?: unknown };
+        } catch {
+          torn = true; // a torn line is not a record
+        }
+      }
+      const k = this.kinds[i]!;
+      if (rec !== null && rec.t === k) {
+        this.counts.set(k, (this.counts.get(k) ?? 0) + 1);
+        return; // one line counts toward at most one kind
+      }
+    }
+  }
+
+  /** Fold a buffer of appended bytes, answering the trailing partial line. */
+  private fold(buf: Buffer): Buffer {
+    let from = 0;
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] !== NEWLINE) continue;
+      this.take(buf.subarray(from, i));
+      this.consumed += i - from + 1; // the newline
+      from = i + 1;
+    }
+    return buf.subarray(from);
+  }
+
+  /**
+   * Read whatever has been appended since the last call and answer the counts
+   * so far. Null when the file cannot be read — the contract `countRecords`
+   * has always had — with whatever was already folded left intact, so a later
+   * call resumes rather than starting over.
+   */
+  scan(): Map<string, number> | null {
+    let size: number;
+    try {
+      size = statSync(this.path).size;
+    } catch {
+      return null;
+    }
+    if (size <= this.size) return this.snapshot();
+    let fd: number | null = null;
+    try {
+      fd = openSync(this.path, "r");
+      const chunk = Buffer.allocUnsafe(READ_CHUNK);
+      let carry = this.pending;
+      this.pending = EMPTY;
+      let pos = this.consumed + carry.length;
+      while (pos < size) {
+        const n = readSync(fd, chunk, 0, Math.min(READ_CHUNK, size - pos), pos);
+        if (n <= 0) break;
+        pos += n;
+        const fresh = chunk.subarray(0, n);
+        const rest = this.fold(carry.length === 0 ? fresh : Buffer.concat([carry, fresh]));
+        // The read buffer is reused, so anything held past this iteration is copied.
+        carry = rest.length === 0 ? EMPTY : Buffer.from(rest);
+      }
+      this.pending = carry;
+    } catch {
+      return null;
+    } finally {
+      if (fd !== null) {
+        try {
+          closeSync(fd);
+        } catch {
+          /* a file that will not close still counted */
+        }
+      }
+    }
+    return this.snapshot();
+  }
+
+  /**
+   * Fold the trailing bytes that carry no newline as a line of their own, then
+   * answer. Only the one-shot form does this: a file whose last record was
+   * written without a terminating newline still has that record counted,
+   * exactly as the whole-file read always did. A resumable scanner must not,
+   * because the next append would count those bytes twice.
+   */
+  countOnce(): Map<string, number> | null {
+    const counts = this.scan();
+    if (counts === null) return null;
+    if (this.pending.length > 0) {
+      this.take(this.pending);
+      this.consumed += this.pending.length;
+      this.pending = EMPTY;
+    }
+    return this.snapshot();
+  }
+
+  /** A copy: the caller must never hold a reference to resumable state. */
+  private snapshot(): Map<string, number> {
+    return new Map(this.counts);
+  }
+}
+
 /** One pass over a trajectory, counting the records of each kind named. Null when unreadable. */
 export function countRecords(path: string, kinds: readonly string[]): Map<string, number> | null {
   if (!existsSync(path)) return null;
-  const n = new Map<string, number>(kinds.map((k) => [k, 0]));
+  return new RecordCountScanner(path, kinds).countOnce();
+}
+
+/** Scanners a caller keeps between polls, keyed by trajectory path. */
+export type CountCache = Map<string, RecordCountScanner>;
+
+/**
+ * The resumable form: the same counts, folding only what has been appended
+ * since this cache last saw the file.
+ *
+ * The truncation check lives here rather than inside `scan`, because a scanner
+ * that has read past the end of its own file cannot answer for it at all: the
+ * only safe response is a new scanner, and only the holder of the cache can
+ * make one. Same for a caller that changes which kinds it asks about — the
+ * counts a scanner carries are the counts of the kinds it was built with.
+ */
+export function countRecordsCached(cache: CountCache, path: string, kinds: readonly string[]): Map<string, number> | null {
+  let size: number;
   try {
-    const text = readFileSync(path, "utf8");
-    let from = 0;
-    for (;;) {
-      const nl = text.indexOf("\n", from);
-      const line = nl === -1 ? text.slice(from) : text.slice(from, nl);
-      if (line.length > 0) {
-        // Cheap prefilter, then the honest parse: the `t` key can sit anywhere.
-        for (const k of kinds) {
-          if (!line.includes(`"${k}"`)) continue;
-          let hit = false;
-          try {
-            const rec = JSON.parse(line) as { t?: unknown };
-            hit = rec.t === k;
-          } catch {
-            /* a torn line is not a record */
-          }
-          if (hit) {
-            n.set(k, (n.get(k) ?? 0) + 1);
-            break;
-          }
-        }
-      }
-      if (nl === -1) break;
-      from = nl + 1;
-    }
+    size = statSync(path).size;
   } catch {
+    cache.delete(path);
     return null;
   }
-  return n;
+  let scanner = cache.get(path);
+  const usable =
+    scanner !== undefined &&
+    size >= scanner.size &&
+    scanner.kinds.length === kinds.length &&
+    scanner.kinds.every((k, i) => k === kinds[i]);
+  if (!usable) {
+    scanner = new RecordCountScanner(path, kinds);
+    cache.set(path, scanner);
+  }
+  return scanner!.scan();
 }
 
 /**
@@ -680,7 +845,12 @@ export function countRecords(path: string, kinds: readonly string[]): Map<string
  * Tolerant everywhere: a run mid-write or an unreadable database degrades to
  * "no data", never to an exception that costs the whole projection.
  */
-export function readRunFact(runsDir: string, runId: string, now = Date.now()): RunFact | null {
+export function readRunFact(
+  runsDir: string,
+  runId: string,
+  now = Date.now(),
+  opts: { counts?: CountCache } = {},
+): RunFact | null {
   const dir = join(runsDir, runId);
   const metaPath = join(dir, "meta.json");
   if (!existsSync(metaPath)) return null;
@@ -744,7 +914,10 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
       /* unreadable stat: treat as no trajectory */
     }
   }
-  const counts = countRecords(jsonl, [MODEL_RESPONSE_RECORD, PAUSE_RECORD]);
+  const kinds = [MODEL_RESPONSE_RECORD, PAUSE_RECORD];
+  // A caller that polls the same live run passes a scanner cache, which folds
+  // only the bytes appended since its last read; everyone else reads once.
+  const counts = opts.counts === undefined ? countRecords(jsonl, kinds) : countRecordsCached(opts.counts, jsonl, kinds);
   fact.modelResponses = counts?.get(MODEL_RESPONSE_RECORD) ?? null;
   let pauseReason: string | null = null;
 
