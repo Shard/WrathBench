@@ -896,7 +896,10 @@ describe("the shipped fleet files", () => {
     const policyAny = (raw as { policy: Record<string, unknown> }).policy;
     expect(policyAny["runsPerEpisode"]).toBeUndefined();
     expect(policyAny["extras"]).toBeUndefined();
-    expect(config.policy.paid).toEqual({ maxConcurrent: 1 });
+    // Two paid models fleet-wide at once (raised from 1 on 2026-09-04 so the
+    // OpenCode Go surface can run beside another paid model); `opencode-go: 1`
+    // below still holds that surface to one of the two.
+    expect(config.policy.paid).toEqual({ maxConcurrent: 2 });
     // Three Claude sessions at most, one on the operator's own subscription and
     // up to three on the partner's (67169fd): a run spends both its lane's key
     // and the total, so the total still caps the fleet at three.
@@ -2074,6 +2077,48 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(() => parseFleet({ ...raw, policy: { paid: { maxConcurrent: -1 } } })).toThrow(/paid.maxConcurrent/);
     expect(() => parseFleet({ ...raw, policy: { extras: { characters: [{ race: 0, class: 1 }] } } })).toThrow(/policy.extras is not a 0.5 key/);
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, glm: { tier: "t1", model: "z-ai/glm-5.2:free", billing: "cheap" } } })).toThrow(/billing/);
+  });
+
+  test("paid cap 2: two paid models run at once and a third is held; the go surface still takes only one of them", () => {
+    // The cap the shipped file carries since 2026-09-04. It is a global spend
+    // posture, not a per-surface exemption: any two paid models may hold the
+    // two slots, and `opencode-go: 1` is what keeps the OpenCode Go endpoint to
+    // one of them. Two paid accounts, because the cap can only be the gate
+    // under test when the account class is not the narrower one.
+    const raw = {
+      // THREE paid accounts and two slots: with only two, the third pick is
+      // held on the account (that check is the more actionable one and comes
+      // first), and the cap would never be the thing under test.
+      accounts: { pool: ["RUNNER"], paid: ["PAID1", "PAID2", "PAID3"], local: [] },
+      roster: {
+        go: { tier: "t1", model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1", apiKeyEnv: "OPENCODE_KEY", billing: "paid" },
+        p1: { tier: "t1", model: "vendor/one", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
+        p2: { tier: "t1", model: "vendor/two", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
+      },
+      policy: { maxConcurrent: { "opencode-go": 1 }, paid: { maxConcurrent: 2 } },
+    };
+    const config = parseFleet(raw);
+    expect(config.policy.paid).toEqual({ maxConcurrent: 2 });
+    const states = modelStatesOf(rosterModels(config.roster), [], NOW, config.policy);
+    for (const st of states) expect(st.billing).toBe("paid");
+    const plan = planTick(config, states, () => undefined, "20260101");
+    // The go entry runs BESIDE another paid model — the thing the cap of 1
+    // made impossible — and the third paid pick is refused by the cap, which
+    // is what says this is a cap of 2 and not a cap removed.
+    expect(plan.policy.map((p) => [p.job.name, p.account])).toEqual([
+      ["go-e90", "PAID1"],
+      ["p1-e90", "PAID2"],
+    ]);
+    expect(plan.heldPicks.find((h) => h.name === "p2")!.why).toBe("paid cap: 2/2 paid model(s) already in flight");
+    // A second go stream is still refused, by its own key and not the cap:
+    // the budget is fleet-wide, the surface is bounded on its own.
+    const twoGo = parseFleet({
+      ...raw,
+      roster: { go: raw.roster.go, go2: { ...raw.roster.go, model: "omen-beta" } },
+    });
+    const goPlan = planTick(twoGo, modelStatesOf(rosterModels(twoGo.roster), [], NOW, twoGo.policy), () => undefined, "20260101");
+    expect(goPlan.policy.map((p) => p.job.name)).toEqual(["go-e90"]);
+    expect(goPlan.heldPicks.find((h) => h.name === "go2")!.why).toMatch(/cap: opencode-go <= 1, 1 in flight/);
   });
 
   test("idle: unlimited — the box past its tier gets one continuous freeplay session at a time", () => {
