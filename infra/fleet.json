@@ -142,10 +142,11 @@
     "ling-flash": {"model": "ling-3.0-flash-fin-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t0", "idle": "none"},
     "laguna-oc": {"model": "laguna-s-2.1-free", "apiBase": "https://opencode.ai/zen/v1", "apiKeyEnv": "OPENCODE_KEY", "tier": "t0", "idle": "none"},
     "qwen3-8-27b": {"model": "qwen/qwen3.8-27b", "driver": "openai", "apiBase": "http://192.168.1.20:1234/v1", "apiKeyEnv": "LMSTUDIO_KEY", "race": 1, "class": 2, "tier": "t1", "idle": "unlimited"},
-    "qwen3-8-27b-cerebras": {"model": "qwen-3.8-27b", "driver": "openai", "apiBase": "https://api.cerebras.ai/v1", "apiKeyEnv": "CEREBRAS_KEY", "billing": "paid", "race": 1, "class": 2, "tier": "t0", "idle": "none"}
+    "qwen3-8-27b-cerebras": {"model": "qwen-3.8-27b", "driver": "openai", "apiBase": "https://api.cerebras.ai/v1", "apiKeyEnv": "CEREBRAS_KEY", "billing": "paid", "race": 1, "class": 2, "tier": "t0", "idle": "none"},
+    "omen-alpha": {"model": "omen-alpha", "apiBase": "https://opencode.ai/zen/go/v1", "apiKeyEnv": "OPENCODE_KEY", "billing": "paid", "tier": "t0", "idle": "none"}
   },
   "policy": {
-    "maxConcurrent": {"claude-code": 3, "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3, "openrouter": 1, "opencode": 1},
+    "maxConcurrent": {"claude-code": 3, "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3, "openrouter": 1, "opencode": 1, "opencode-go": 1},
     "subscriptions": ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"],
     "paid": {"maxConcurrent": 1}
   },

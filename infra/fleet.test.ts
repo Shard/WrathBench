@@ -20,6 +20,7 @@ import {
   isAllowlistedFree,
   isClaudeFamily,
   isSharedFreePool,
+  concurrencyKeyOfRef,
   jobArgv,
   fleetComplete,
   resolveStatePath,
@@ -105,8 +106,8 @@ import {
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
 } from "./run-fleet";
-import { FREE_SUFFIXLESS_ALLOWLIST } from "../runner/src/model-cost";
-import { DEFAULT_POLICY, IDLE_MODES, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { billingOf, FREE_SUFFIXLESS_ALLOWLIST } from "../runner/src/model-cost";
+import { DEFAULT_POLICY, IDLE_MODES, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -843,6 +844,30 @@ describe("the shipped fleet files", () => {
     expect(config.refusals).toEqual([]);
   });
 
+  test("fleet.json: a zen/go entry loads, keys apart from the free zen/v1 stream, and is capped", async () => {
+    // The shipped file is edited daily, so this asserts the SHAPE the go
+    // surface needs, over whatever entries happen to sit on it today.
+    const config = parseFleet((await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown);
+    const goNames = Object.entries(config.roster)
+      .filter(([, e]) => (e.driver ?? "openai") === "openai" && isOpenCodeGoBase(e.apiBase))
+      .map(([n]) => n);
+    for (const n of goNames) {
+      // Paid by the RULE (no `-free`/`:free` suffix on a metered surface), and
+      // that verdict is what puts it under policy.paid.
+      const e = config.roster[n]!;
+      expect(billingOf({ model: e.model, apiBase: e.apiBase, ...(e.driver !== undefined ? { driver: e.driver } : {}) })).toBe("paid");
+      expect(concurrencyKeyOfRef(config.roster, n, "paid")).toBe("opencode-go");
+      // Capped, and NOT sharing the free tier's key on the same host.
+      expect(config.maxConcurrent["opencode-go"]).toBeGreaterThan(0);
+    }
+    // The free zen/v1 entries still key on `opencode`.
+    for (const [n, e] of Object.entries(config.roster)) {
+      if ((e.apiBase ?? "").startsWith("https://opencode.ai/zen/v1")) {
+        expect(concurrencyKeyOfRef(config.roster, n, "free")).toBe("opencode");
+      }
+    }
+  });
+
   test("fleet.json: every model's evidence budget is its tier and its idle axis, and nothing else sets a run count", async () => {
     const NOW = Date.parse("2027-01-15T08:00:00.000Z");
     const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
@@ -881,6 +906,9 @@ describe("the shipped fleet files", () => {
       "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3,
       openrouter: 1,
       opencode: 1,
+      // OpenCode Zen's pay-as-you-go zen/go surface, capped apart from the
+      // free zen/v1 tier on the same host.
+      "opencode-go": 1,
     });
     expect(config.policy.subscriptions).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"]);
 
@@ -1193,7 +1221,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     expect(() => parseFleet(pin({ policy: { maxConcurrent: { warp: 1 } } }))).toThrow(/unknown concurrency key warp/);
     expect(() => parseFleet(pin({ policy: { maxConcurrent: { openai: 0 } } }))).toThrow(/positive integer/);
     // The free-pool lanes are accepted alongside the drivers (the per-key cap).
-    expect(parseFleet(pin({ policy: { maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1 } } })).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1 });
+    expect(parseFleet(pin({ policy: { maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 } } })).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 });
   });
 
   test("guards: pool/pinned overlap, bad refs, bad tiers, name collisions", () => {
