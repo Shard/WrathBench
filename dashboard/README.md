@@ -132,15 +132,19 @@ src/pages/    one file per route
 src/components/  the shell and the pieces shared between pages
 ```
 
-Two modules are imported from the viewer rather than copied, under the
+Three modules are imported from the viewer rather than copied, under the
 `@viewer/*` alias:
 
 - `runner/viewer/api-types.ts` — the wire shapes. The viewer imports the same
   file, so a drift between what it serves and what this expects is a compile
   error rather than a runtime surprise.
-- `runner/viewer/worldmap.ts` — the world→tile transform. Both are
-  import-free by construction, so nothing server-side follows them into the
-  browser bundle.
+- `runner/viewer/worldmap.ts` — the world→tile transform.
+- `runner/viewer/lineage.ts` — the freeplay chain walk. The server aggregates a
+  whole stream on it (`runner/viewer/stream.ts`) and this side draws the attempt
+  strip on it, so one walk answers both.
+
+All three are import-free by construction, so nothing server-side follows them
+into the browser bundle.
 
 ## Tests
 

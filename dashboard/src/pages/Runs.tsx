@@ -28,7 +28,7 @@ import { SeriesFilterNote } from "../components/SeriesSelect";
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
-import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
+import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import {
   COLUMN_TITLES,
   RUN_COLUMNS,
@@ -69,7 +69,7 @@ export default function Runs() {
   const inSeries = (): ResultRun[] => filterBySeries(served(), series());
   const rows = createMemo(() => sortRuns(filterRuns(inSeries(), filter()), sort()));
   /*
-   * Freeplay lineage (`lib/lineage.ts`), so a12 does not read as an unrelated
+   * Freeplay lineage (`runner/viewer/lineage.ts`), so a12 does not read as an unrelated
    * row beside a11. Indexed over everything the server served rather than over
    * the rows on screen: a stream that crossed a minor bump has its predecessor
    * outside the shell's series filter, and that is exactly where the reader
