@@ -23,3 +23,7 @@ import { mock } from "bun:test";
 
 const reactive = await import("solid-js/dist/solid.js");
 mock.module("solid-js", () => reactive);
+
+const webModule = "solid-js/web/dist/web.js";
+const web = await import(webModule);
+mock.module("solid-js/web", () => web);
