@@ -1654,10 +1654,24 @@ export interface RunTotals {
  * entry of every run — the shape `TrajectoryTail` keeps for the feed — would
  * cost far more than the answer is worth. This streams the file, projects each
  * line down to the handful of fields token accounting reads, and drops the
- * rest. Callers are expected to memoise on (size, mtime): the work is linear in
- * bytes and a finished run never changes.
+ * rest.
+ *
+ * A scanner is resumable, which is the whole reason it is an object rather
+ * than a function: callers memoise on (size, mtime), and that cache hits for
+ * every finished run and structurally MISSES for a live one, whose file grows
+ * every second. A live trajectory runs to hundreds of megabytes and every
+ * listing route funnels through here, so re-reading it from byte zero on each
+ * poll is what makes the whole API slow. `scan()` reads only what has been
+ * appended since the last call and folds it into the accumulators, which are
+ * all monotone — counters, first/last timestamps, first-wins resolved marks
+ * and append-only mark lists — so resuming is the same answer as re-reading.
+ *
+ * `scanRunTotals` below is the one-shot form, unchanged for every caller that
+ * reads a file once.
  */
-export async function scanRunTotals(path: string): Promise<RunTotals> {
+export class RunTotalsScanner {
+  readonly path: string;
+
   /*
    * What `replySpans` reads, and through it both `tokenTotals` and
    * `tokensPerSecond`: the request/response projections plus the records that
@@ -1665,182 +1679,246 @@ export async function scanRunTotals(path: string): Promise<RunTotals> {
    * pause marks. Everything else is ambient and the derivation ignores it, so
    * it is never collected.
    */
-  const spanMarks: EntrySummary[] = [];
-  const marks: SegmentMark[] = [];
-  let firstTs: number | null = null;
-  let lastTs: number | null = null;
-  let entries = 0;
-  let toolCalls = 0;
-  let snippets = 0;
-  let modelResponses = 0;
-  let costUsd: number | null = null;
+  private readonly spanMarks: EntrySummary[] = [];
+  private readonly marks: SegmentMark[] = [];
+  private firstTs: number | null = null;
+  private lastTs: number | null = null;
+  private entries = 0;
+  private toolCalls = 0;
+  private snippets = 0;
+  private modelResponses = 0;
+  private costUsd: number | null = null;
   /** Cumulative-per-session, summed across sessions; see `ClaudeCostTally`. */
-  const claudeCost = new ClaudeCostTally();
-  let sawClaudeMark = false;
-  let costed = 0;
-  let uncosted = 0;
+  private readonly claudeCost = new ClaudeCostTally();
+  private sawClaudeMark = false;
+  private costed = 0;
+  private uncosted = 0;
   /*
    * First-wins, and read before the request/response filter below: a
    * `claude_system` is neither, and the run's answer is settled by its first
-   * turn. Two `let`s rather than a mark list — there is one answer per run.
+   * turn. Two fields rather than a mark list — there is one answer per run.
    */
-  let resolvedModel: string | null = null;
-  let resolvedCli: string | null = null;
-  const areaMarks: AreaMark[] = [];
-  const levelUpMarks: LevelUpMark[] = [];
-  const deathMarks: DeathMark[] = [];
-  const achievementMarks: AchievementMark[] = [];
-  const taxiMarks: ("taxi" | "taxi_landed")[] = [];
-  const spellMarks: SpellMark[] = [];
-  const talentMarks: TalentSpendMark[] = [];
-  const tradeMarks: TradeMarkView[] = [];
+  private resolvedModel: string | null = null;
+  private resolvedCli: string | null = null;
+  private readonly areaMarks: AreaMark[] = [];
+  private readonly levelUpMarks: LevelUpMark[] = [];
+  private readonly deathMarks: DeathMark[] = [];
+  private readonly achievementMarks: AchievementMark[] = [];
+  private readonly taxiMarks: ("taxi" | "taxi_landed")[] = [];
+  private readonly spellMarks: SpellMark[] = [];
+  private readonly talentMarks: TalentSpendMark[] = [];
+  private readonly tradeMarks: TradeMarkView[] = [];
 
-  const decoder = new TextDecoder();
-  let carry = new Uint8Array(0);
-  const take = (line: Uint8Array): void => {
-    if (line.length === 0) return;
-    let rec: Record<string, unknown>;
-    try {
-      rec = JSON.parse(decoder.decode(line)) as Record<string, unknown>;
-    } catch {
-      return; // a half-written or corrupt line costs its own tokens, nothing else
-    }
-    entries++;
-    const t = typeof rec["t"] === "string" ? (rec["t"] as string) : "unknown";
-    const ts = typeof rec["ts"] === "number" ? (rec["ts"] as number) : 0;
-    if (ts > 0) {
-      if (firstTs === null) firstTs = ts;
-      lastTs = ts;
-    }
-    // Segment marks are read before the token projection filters everything
-    // else out: `meta`, `pause`, `resume` and `termination` are none of them
-    // requests or responses.
-    if (SEGMENT_MARKS.has(t) || marks.length === 0) marks.push({ t, ts });
-    if (t === "tool_call") toolCalls++;
-    else if (t === "snippet") snippets++;
-    else if (t === MODEL_RESPONSE_RECORD) modelResponses++;
-    // Read before the token projection drops everything that is not a turn:
-    // the driver's own cost lives on a `claude_result`, which is neither, and
-    // the session it belongs to on a `claude_system`, which is neither either.
-    claudeCost.note(rec);
-    // One marker per run is all the derivation needs to know which driver wrote
-    // these responses — see `isClaudeCode`. Pushing every `claude_system` would
-    // put thousands of entries in a list kept small on purpose.
-    if (!sawClaudeMark && (t === "claude_system" || (t === "driver" && rec["driver"] === "claude-code"))) {
-      sawClaudeMark = true;
-      spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: "claude-code" });
-    }
-    // Same reason, one record kind further: a `milestone` is neither a request
-    // nor a response, so it has to be read before the early return below. Only
-    // the ids are kept — tens of marks per run, not one per line.
-    if (resolvedModel === null || resolvedCli === null) {
-      const mark = resolvedMarkOf(rec);
-      if (mark !== null) {
-        resolvedModel ??= mark.model;
-        resolvedCli ??= mark.cliVersion;
-      }
-    }
-    if (t === "milestone") {
-      const mark = areaMarkOf(rec);
-      if (mark !== null) areaMarks.push(mark);
-      const ach = achievementMarkOf(rec);
-      if (ach !== null) achievementMarks.push(ach);
-      const taxi = taxiMarkOf(rec);
-      if (taxi !== null) taxiMarks.push(taxi);
-      const lvl = levelUpMarkOf(rec);
-      if (lvl !== null) levelUpMarks.push(lvl);
-      const death = deathMarkOf(rec);
-      if (death !== null) deathMarks.push(death);
-      const spell = spellMarkOf(rec);
-      if (spell !== null) spellMarks.push(spell);
-      const talent = talentMarkOf(rec);
-      if (talent !== null) talentMarks.push(talent);
-      const trade = tradeMarkOf(rec);
-      if (trade !== null) tradeMarks.push(trade);
-    }
-    if (t !== "request" && t !== "response") {
-      // `claude_result` rides along with the span openers: it is what tells the
-      // derivation how many output tokens the turn actually produced, and a
-      // listing figure computed without it would not match the run page.
-      const carried = t === "claude_result" || TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t);
-      if (!carried) return;
-      const mark: EntrySummary = { i: 0, t, ts, start: 0, end: 0 };
-      if (typeof rec["turn"] === "number") mark["turn"] = rec["turn"];
-      if (t === "claude_result") {
-        const ct = claudeTurnUsage(rec);
-        if (ct !== null) mark["claudeTurn"] = ct;
-      }
-      spanMarks.push(mark);
-      return;
-    }
-    const p: EntrySummary = { i: spanMarks.length, t, ts, start: 0, end: 0 };
-    if (typeof rec["turn"] === "number") p["turn"] = rec["turn"];
-    if (t === "request") {
-      const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
-      p["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
-    } else {
-      p["outChars"] = messageChars(rec["message"]);
-    }
-    const usage = reportedUsage(rec);
-    if (t === MODEL_RESPONSE_RECORD) {
-      if (typeof usage?.cost === "number" && Number.isFinite(usage.cost)) costed++;
-      else uncosted++;
-    }
-    if (usage !== null) {
-      p["usage"] = usage;
-      // The other half of `reportedCostUsd`: OpenRouter charges per response,
-      // so the run's actual cost accumulates here alongside the claude_result
-      // total above. The two never both appear on one run.
-      if (t === MODEL_RESPONSE_RECORD && typeof usage.cost === "number") {
-        costUsd = (costUsd ?? 0) + usage.cost;
-      }
-    }
-    spanMarks.push(p);
-  };
+  private readonly decoder = new TextDecoder();
 
-  try {
-    for await (const chunk of Bun.file(path).stream()) {
-      const buf = carry.length === 0 ? chunk : concat(carry, chunk);
-      const { lines, rest } = splitLines(buf);
-      for (const line of lines) take(line);
-      carry = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
-    }
-  } catch {
-    /* an unreadable trajectory degrades one row, never the listing */
+  /** Bytes consumed as complete lines; where the next scan resumes. */
+  private consumed = 0;
+  /**
+   * Bytes after the last newline. A live trajectory's last line is routinely
+   * half-written, so it is held here and re-read with the next chunk rather
+   * than counted — the same discipline `TrajectoryTail.scan` follows.
+   */
+  private pending: Uint8Array = new Uint8Array(0);
+
+  constructor(path: string) {
+    this.path = path;
   }
-  take(carry);
 
-  const cli = claudeCost.total();
-  if (cli !== null) costUsd = (costUsd ?? 0) + cli;
+  /** How far this scanner has read, complete lines and the partial one. */
+  get size(): number {
+    return this.consumed + this.pending.length;
+  }
 
-  return {
-    // Over `spanMarks` rather than requests and responses alone: the span
-    // openers are what tell one reply from the next, and a completion figure
-    // derived without them is not the one the run page shows.
-    tokens: tokenTotals(spanMarks),
-    firstTs,
-    lastTs,
-    entries,
-    toolCalls,
-    snippets,
-    modelResponses,
-    segments: segmentsFrom(marks),
-    reportedCostUsd: costUsd,
-    responseCost: { costed, uncosted },
-    tps: tokensPerSecond(spanMarks),
-    areas: areaFactsFrom(areaMarks),
-    achievements: achievementFactsFrom(achievementMarks),
-    taxi: taxiFactsFrom(taxiMarks, achievementMarks.length > 0),
-    leveling: levelUpFactsFrom(levelUpMarks),
-    deaths: deathFactsFrom(deathMarks, levelUpMarks.length > 0),
-    spells: spellFactsFrom(spellMarks),
-    talents: talentFactsFrom(talentMarks, spellMarks.length > 0),
-    trades: tradeFactsFrom(tradeMarks, spellMarks.length > 0),
-    resolved:
-      resolvedModel === null && resolvedCli === null
-        ? null
-        : { model: resolvedModel, cliVersion: resolvedCli },
-  };
+    private take(line: Uint8Array): void {
+      if (line.length === 0) return;
+      let rec: Record<string, unknown>;
+      try {
+        rec = JSON.parse(this.decoder.decode(line)) as Record<string, unknown>;
+      } catch {
+        return; // a half-written or corrupt line costs its own tokens, nothing else
+      }
+      this.entries++;
+      const t = typeof rec["t"] === "string" ? (rec["t"] as string) : "unknown";
+      const ts = typeof rec["ts"] === "number" ? (rec["ts"] as number) : 0;
+      if (ts > 0) {
+        if (this.firstTs === null) this.firstTs = ts;
+        this.lastTs = ts;
+      }
+      // Segment this.marks are read before the token projection filters everything
+      // else out: `meta`, `pause`, `resume` and `termination` are none of them
+      // requests or responses.
+      if (SEGMENT_MARKS.has(t) || this.marks.length === 0) this.marks.push({ t, ts });
+      if (t === "tool_call") this.toolCalls++;
+      else if (t === "snippet") this.snippets++;
+      else if (t === MODEL_RESPONSE_RECORD) this.modelResponses++;
+      // Read before the token projection drops everything that is not a turn:
+      // the driver's own cost lives on a `claude_result`, which is neither, and
+      // the session it belongs to on a `claude_system`, which is neither either.
+      this.claudeCost.note(rec);
+      // One marker per run is all the derivation needs to know which driver wrote
+      // these responses — see `isClaudeCode`. Pushing every `claude_system` would
+      // put thousands of this.entries in a list kept small on purpose.
+      if (!this.sawClaudeMark && (t === "claude_system" || (t === "driver" && rec["driver"] === "claude-code"))) {
+        this.sawClaudeMark = true;
+        this.spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: "claude-code" });
+      }
+      // Same reason, one record kind further: a `milestone` is neither a request
+      // nor a response, so it has to be read before the early return below. Only
+      // the ids are kept — tens of this.marks per run, not one per line.
+      if (this.resolvedModel === null || this.resolvedCli === null) {
+        const mark = resolvedMarkOf(rec);
+        if (mark !== null) {
+          this.resolvedModel ??= mark.model;
+          this.resolvedCli ??= mark.cliVersion;
+        }
+      }
+      if (t === "milestone") {
+        const mark = areaMarkOf(rec);
+        if (mark !== null) this.areaMarks.push(mark);
+        const ach = achievementMarkOf(rec);
+        if (ach !== null) this.achievementMarks.push(ach);
+        const taxi = taxiMarkOf(rec);
+        if (taxi !== null) this.taxiMarks.push(taxi);
+        const lvl = levelUpMarkOf(rec);
+        if (lvl !== null) this.levelUpMarks.push(lvl);
+        const death = deathMarkOf(rec);
+        if (death !== null) this.deathMarks.push(death);
+        const spell = spellMarkOf(rec);
+        if (spell !== null) this.spellMarks.push(spell);
+        const talent = talentMarkOf(rec);
+        if (talent !== null) this.talentMarks.push(talent);
+        const trade = tradeMarkOf(rec);
+        if (trade !== null) this.tradeMarks.push(trade);
+      }
+      if (t !== "request" && t !== "response") {
+        // `claude_result` rides along with the span openers: it is what tells the
+        // derivation how many output tokens the turn actually produced, and a
+        // listing figure computed without it would not match the run page.
+        const carried = t === "claude_result" || TPS_SPAN_OPENERS.has(t) || SEGMENT_MARKS.has(t);
+        if (!carried) return;
+        const mark: EntrySummary = { i: 0, t, ts, start: 0, end: 0 };
+        if (typeof rec["turn"] === "number") mark["turn"] = rec["turn"];
+        if (t === "claude_result") {
+          const ct = claudeTurnUsage(rec);
+          if (ct !== null) mark["claudeTurn"] = ct;
+        }
+        this.spanMarks.push(mark);
+        return;
+      }
+      const p: EntrySummary = { i: this.spanMarks.length, t, ts, start: 0, end: 0 };
+      if (typeof rec["turn"] === "number") p["turn"] = rec["turn"];
+      if (t === "request") {
+        const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
+        p["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
+      } else {
+        p["outChars"] = messageChars(rec["message"]);
+      }
+      const usage = reportedUsage(rec);
+      if (t === MODEL_RESPONSE_RECORD) {
+        if (typeof usage?.cost === "number" && Number.isFinite(usage.cost)) this.costed++;
+        else this.uncosted++;
+      }
+      if (usage !== null) {
+        p["usage"] = usage;
+        // The other half of `reportedCostUsd`: OpenRouter charges per response,
+        // so the run's actual cost accumulates here alongside the claude_result
+        // total above. The two never both appear on one run.
+        if (t === MODEL_RESPONSE_RECORD && typeof usage.cost === "number") {
+          this.costUsd = (this.costUsd ?? 0) + usage.cost;
+        }
+      }
+    this.spanMarks.push(p);
+  }
+
+  /**
+   * Read whatever has been appended since the last call and answer the totals
+   * for everything read so far.
+   *
+   * A file that shrank is not resumable — that is truncation or replacement,
+   * and folding new bytes into old accumulators would double-count — so the
+   * caller is told to start a fresh scanner by `size` running ahead of the
+   * file. Here it simply reads nothing rather than lying; `runTotals` in
+   * `api.ts` makes that check before it calls.
+   */
+  async scan(): Promise<RunTotals> {
+    let size: number;
+    try {
+      size = statSync(this.path).size;
+    } catch {
+      return this.totals();
+    }
+    if (size > this.size) {
+      try {
+        const fresh = new Uint8Array(await Bun.file(this.path).slice(this.size, size).arrayBuffer());
+        const buf = this.pending.length === 0 ? fresh : concat(this.pending, fresh);
+        const { lines, rest } = splitLines(buf);
+        for (const line of lines) {
+          this.consumed += line.length + 1; // the newline
+          this.take(line);
+        }
+        this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
+      } catch {
+        /* an unreadable trajectory degrades one row, never the listing */
+      }
+    }
+    return this.totals();
+  }
+
+  /**
+   * Count the trailing bytes that carry no newline as a line of their own and
+   * answer the totals. Only the one-shot path does this: a file whose last
+   * record was written without a terminating newline still has that record
+   * counted, exactly as the whole-file scan always did. A resumable scanner
+   * must not, because the next append would count those bytes twice.
+   */
+  async scanOnce(): Promise<RunTotals> {
+    await this.scan();
+    if (this.pending.length > 0) {
+      this.take(this.pending);
+      this.consumed += this.pending.length;
+      this.pending = new Uint8Array(0);
+    }
+    return this.totals();
+  }
+
+  private totals(): RunTotals {
+    let costUsd = this.costUsd;
+    const cli = this.claudeCost.total();
+    if (cli !== null) costUsd = (costUsd ?? 0) + cli;
+    return {
+      // Over `spanMarks` rather than requests and responses alone: the span
+      // openers are what tell one reply from the next, and a completion figure
+      // derived without them is not the one the run page shows.
+      tokens: tokenTotals(this.spanMarks),
+      firstTs: this.firstTs,
+      lastTs: this.lastTs,
+      entries: this.entries,
+      toolCalls: this.toolCalls,
+      snippets: this.snippets,
+      modelResponses: this.modelResponses,
+      segments: segmentsFrom(this.marks),
+      reportedCostUsd: costUsd,
+      responseCost: { costed: this.costed, uncosted: this.uncosted },
+      tps: tokensPerSecond(this.spanMarks),
+      areas: areaFactsFrom(this.areaMarks),
+      achievements: achievementFactsFrom(this.achievementMarks),
+      taxi: taxiFactsFrom(this.taxiMarks, this.achievementMarks.length > 0),
+      leveling: levelUpFactsFrom(this.levelUpMarks),
+      deaths: deathFactsFrom(this.deathMarks, this.levelUpMarks.length > 0),
+      spells: spellFactsFrom(this.spellMarks),
+      talents: talentFactsFrom(this.talentMarks, this.spellMarks.length > 0),
+      trades: tradeFactsFrom(this.tradeMarks, this.spellMarks.length > 0),
+      resolved:
+        this.resolvedModel === null && this.resolvedCli === null
+          ? null
+          : { model: this.resolvedModel, cliVersion: this.resolvedCli },
+    };
+  }
+}
+
+/** The whole-file form: one scanner, one pass, nothing retained. */
+export async function scanRunTotals(path: string): Promise<RunTotals> {
+  return await new RunTotalsScanner(path).scanOnce();
 }
 
 /**

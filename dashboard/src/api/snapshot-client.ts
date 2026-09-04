@@ -49,7 +49,7 @@ import type {
   TrackResponse,
 } from "@viewer/api-types";
 import type { PublicFleetResponse } from "@viewer/public-projection";
-import { ApiError, getJson, type Client } from "./client";
+import { ApiError, getJson, sweepExpired, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 
 /**
@@ -225,18 +225,13 @@ interface CacheEntry {
   value: Promise<unknown>;
 }
 
-/**
- * Drop every entry whose window has passed. Run on each memo lookup — the only
- * moment the map is touched — because expiry alone does not bound the cache:
- * generation- and version-addressed URLs are never asked for again once the
- * manifest moves on, so an overwrite-on-reuse map would keep every generation
- * a long-lived tab ever saw. Exported for its test.
+/*
+ * `sweepExpired` moved to `client.ts` when the live path grew the same memo:
+ * one sweep rule, not two. Re-exported here because this module's own test
+ * imports it from here, and because a reader of this memo should find it
+ * beside the memo it belongs to.
  */
-export function sweepExpired(cache: Map<string, { at: number }>, now: number, ttlMs: number): void {
-  for (const [url, entry] of cache) {
-    if (now - entry.at >= ttlMs) cache.delete(url);
-  }
-}
+export { sweepExpired };
 
 export function createSnapshotClient(base: string, opts: SnapshotClientOptions = {}): SnapshotClient {
   const f = opts.fetch ?? globalThis.fetch;
