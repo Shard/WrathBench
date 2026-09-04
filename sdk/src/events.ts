@@ -86,6 +86,17 @@ export interface EventStreamOptions {
   /** Backoff bounds in ms. Defaults 250 / 5000. */
   reconnectMinDelayMs?: number;
   reconnectMaxDelayMs?: number;
+  /**
+   * Per-attempt bound on the WebSocket handshake, in ms. Default 5000.
+   *
+   * The reconnect ladder only reschedules on close or error, so without this a
+   * handshake that stalls in `CONNECTING` never fails and never retries — one
+   * stuck TCP/WS connect silently consumes the caller's whole wait budget. At
+   * expiry the pending socket is closed and the attempt counts as failed, which
+   * advances the backoff ladder. Kept well under `waitFor`'s 10000ms default so
+   * a stall inside a wait still gets a retry before the wait gives up.
+   */
+  connectTimeoutMs?: number;
   /** Injectable for tests; defaults to the global. */
   webSocketImpl?: typeof WebSocket;
   now?: () => number;
@@ -206,6 +217,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   private readonly reconnectEnabled: boolean;
   private readonly minDelay: number;
   private readonly maxDelay: number;
+  private readonly connectTimeout: number;
   private readonly WS: typeof WebSocket;
   private readonly now: () => number;
 
@@ -213,6 +225,8 @@ export class EventStream implements AsyncIterable<StreamEvent> {
   private closedByUser = false;
   private openPromise: Promise<void> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Deadline on the attempt currently in `CONNECTING`, if any. */
+  private openTimer: ReturnType<typeof setTimeout> | undefined;
   private attempt = 0;
 
   private readonly buffer: StreamEvent[] = [];
@@ -238,6 +252,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
     this.reconnectEnabled = options.reconnect ?? true;
     this.minDelay = options.reconnectMinDelayMs ?? 250;
     this.maxDelay = options.reconnectMaxDelayMs ?? 5000;
+    this.connectTimeout = options.connectTimeoutMs ?? 5000;
     this.WS = options.webSocketImpl ?? WebSocket;
     this.now = options.now ?? Date.now;
   }
@@ -286,6 +301,7 @@ export class EventStream implements AsyncIterable<StreamEvent> {
     this.closedByUser = true;
     if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    this.clearOpenTimer();
     this.socket?.close();
     this.socket = undefined;
     for (const w of this.waiters) {
@@ -301,9 +317,18 @@ export class EventStream implements AsyncIterable<StreamEvent> {
     }
   }
 
+  private clearOpenTimer(): void {
+    if (this.openTimer !== undefined) clearTimeout(this.openTimer);
+    this.openTimer = undefined;
+  }
+
   private openSocket(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      // Set by the open deadline below. The deadline already closed this socket
+      // and advanced the ladder, so the `close` it provokes must not do either
+      // again — otherwise one stalled attempt burns two rungs.
+      let timedOut = false;
       // Bun's WebSocket takes request headers as a second-argument option (the
       // WHATWG signature has only protocols there, hence the cast). Custom
       // implementations receive the same object and may ignore it.
@@ -316,7 +341,30 @@ export class EventStream implements AsyncIterable<StreamEvent> {
             );
       this.socket = ws;
 
+      // A handshake still pending at the deadline is a failed attempt: close the
+      // half-open socket, reject, and let the ladder move on.
+      this.clearOpenTimer();
+      this.openTimer = setTimeout(() => {
+        this.openTimer = undefined;
+        if (settled) return;
+        settled = true;
+        timedOut = true;
+        if (this.socket === ws) this.socket = undefined;
+        try {
+          ws.close();
+        } catch {
+          /* a half-open socket that refuses to close is still abandoned here */
+        }
+        reject(
+          new EventStreamClosedError(
+            `connection to ${this.url} did not open within ${this.connectTimeout}ms`,
+          ),
+        );
+        this.scheduleReconnect();
+      }, this.connectTimeout);
+
       ws.addEventListener("open", () => {
+        this.clearOpenTimer();
         this.attempt = 0;
         if (!settled) {
           settled = true;
@@ -327,12 +375,16 @@ export class EventStream implements AsyncIterable<StreamEvent> {
         this.ingest(typeof ev.data === "string" ? ev.data : String(ev.data));
       });
       ws.addEventListener("error", () => {
+        if (timedOut) return;
+        this.clearOpenTimer();
         if (!settled) {
           settled = true;
           reject(new EventStreamClosedError(`failed to connect to ${this.url}`));
         }
       });
       ws.addEventListener("close", () => {
+        if (timedOut) return;
+        this.clearOpenTimer();
         if (!settled) {
           settled = true;
           reject(new EventStreamClosedError(`connection to ${this.url} closed before open`));
