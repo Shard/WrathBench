@@ -321,6 +321,7 @@ const EVENT_INTERNAL = new Set([
   "ingest",
   "openSocket",
   "scheduleReconnect",
+  "clearOpenTimer",
   "advanceEpoch",
   "epoch",
   "gaps",
