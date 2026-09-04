@@ -4,7 +4,8 @@
  * never gains a schema it did not have.
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openRunDb } from "../src/rundb";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StatePoint } from "./api-types";
@@ -48,7 +49,7 @@ function openReadonly(dir: string): Database | null {
   const path = join(dir, "run.sqlite");
   if (!existsSync(path)) return null;
   try {
-    return new Database(path, { readonly: true });
+    return openRunDb(path, { readonly: true });
   } catch {
     return null;
   }

@@ -16,7 +16,8 @@
  * message body.
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openRunDb } from "./rundb";
 import { appendFileSync, mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { jsonLine, toJsonSafe } from "./jsonsafe";
@@ -453,7 +454,7 @@ export class Trajectory {
     this.now = opts.now ?? Date.now;
     mkdirSync(dir, { recursive: true });
     this.jsonlPath = join(dir, "trajectory.jsonl");
-    this.db = new Database(join(dir, "run.sqlite"));
+    this.db = openRunDb(join(dir, "run.sqlite"));
     this.db.exec(SCHEMA);
     this.migrateTable("run", RUN_ADDED_COLUMNS);
     this.migrateTable("state", STATE_ADDED_COLUMNS);
