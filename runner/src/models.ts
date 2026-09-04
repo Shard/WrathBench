@@ -55,7 +55,8 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openRunDb } from "./rundb";
 import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
@@ -751,7 +752,7 @@ export function readRunFact(runsDir: string, runId: string, now = Date.now()): R
   if (existsSync(dbPath)) {
     let db: Database | null = null;
     try {
-      db = new Database(dbPath, { readonly: true });
+      db = openRunDb(dbPath, { readonly: true });
       const r = db.query(`SELECT started_at, ended_at, termination_reason FROM run WHERE run_id = ?`).get(runId) as Record<
         string,
         unknown

@@ -13,7 +13,8 @@
  * run directory never gains a column it did not record.
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openRunDb } from "../src/rundb";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView } from "./api-types";
@@ -81,7 +82,7 @@ export function readLatestPosition(
   if (!existsSync(path)) return null;
   let db: Database;
   try {
-    db = new Database(path, { readonly: true });
+    db = openRunDb(path, { readonly: true });
   } catch {
     return null;
   }
@@ -176,7 +177,7 @@ export function readReflecting(runsDir: string, runId: string): boolean {
   if (!existsSync(path)) return false;
   let db: Database;
   try {
-    db = new Database(path, { readonly: true });
+    db = openRunDb(path, { readonly: true });
   } catch {
     return false;
   }

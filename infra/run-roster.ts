@@ -46,7 +46,7 @@
  *    retried in place *before* being deferred.
  */
 
-import { Database } from "bun:sqlite";
+import { openRunDb } from "../runner/src/rundb";
 // The one zod schema for a watchdog override lives with the run config it
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
@@ -840,7 +840,7 @@ function readRunRow(runId: string): RunRow | undefined {
   const path = join(runDir(runId), "run.sqlite");
   if (!existsSync(path)) return undefined;
   try {
-    const db = new Database(path, { readonly: true });
+    const db = openRunDb(path, { readonly: true });
     try {
       const row = db
         .query("SELECT termination_reason, termination_detail, pause_reason FROM run WHERE run_id = ?")
@@ -888,7 +888,7 @@ function readLevel(runId: string): number | undefined {
   const path = join(runDir(runId), "run.sqlite");
   if (!existsSync(path)) return undefined;
   try {
-    const db = new Database(path, { readonly: true });
+    const db = openRunDb(path, { readonly: true });
     try {
       const row = db.query("SELECT MAX(level) AS lvl FROM state WHERE run_id = ?").get(runId) as
         | { lvl: number | null }

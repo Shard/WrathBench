@@ -9,7 +9,7 @@
  * why they are here and not beside the status renderer.
  */
 
-import { Database } from "bun:sqlite";
+import { openRunDb } from "../runner/src/rundb";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -408,7 +408,7 @@ export function runProgress(runId: string): { level: number; xp: number; started
   const path = join(RUNS_DIR, runId, "run.sqlite");
   if (!existsSync(path)) return undefined;
   try {
-    const db = new Database(path, { readonly: true });
+    const db = openRunDb(path, { readonly: true });
     try {
       const row = db
         .query("SELECT level, xp FROM state WHERE run_id = ? ORDER BY ts DESC LIMIT 1")

@@ -32,7 +32,8 @@
 
 import { copyFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openRunDb } from "./rundb";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { clearAccountCharacters } from "./hygiene";
@@ -272,7 +273,7 @@ function lastStateIn(dir: string, runId: string): { level?: number; xp?: number 
   if (!existsSync(path)) return null;
   let db: Database | null = null;
   try {
-    db = new Database(path, { readonly: true });
+    db = openRunDb(path, { readonly: true });
     const r = db.query(`SELECT level, xp FROM state WHERE run_id = ? ORDER BY ts DESC LIMIT 1`).get(runId) as
       | { level?: unknown; xp?: unknown }
       | null;
