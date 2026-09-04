@@ -1144,9 +1144,8 @@ Two rules on the zone, first match wins:
    **30s**. These are the two mutable files; worst-case staleness is the push
    cadence plus this TTL, about 90–120s.
 2. `Hostname equals data.<zone>` — eligible for cache, edge TTL **1 year**,
-   browser TTL **1 year**. Everything else is generation- or
-   content-addressed and never rewritten, so a long TTL is safe by
-   construction.
+   browser TTL **1 year**. Everything else is content-addressed and never
+   rewritten, so a long TTL is safe by construction.
 
 **A missing cache rule is the only way the Open shape costs money.** Without it
 every public request is a billed read against the bucket — roughly $7/month at
@@ -1240,9 +1239,11 @@ Then read the bucket back before trusting the loop with it. In the Gated shape
 the bucket has no public hostname to `curl`, so read it with
 `bunx wrangler r2 object get` or the dashboard's object browser:
 
-- `v1/manifest.json` exists, and the `gen` it names has a complete
-  `v1/snap/<gen>/` set beside it. The manifest is uploaded last precisely so
-  this is never half true.
+- `v1/manifest.json` exists, and every key its `artifacts` map names is in the
+  bucket. The manifest is uploaded last precisely so this is never half true.
+  (Each aggregate sits under its own content version since 2026-09-04, so the
+  keys do not share a prefix; a manifest with no `artifacts` map is pre-#38 and
+  its `gen` prefixes the whole set.)
 - `v1/live.json` exists, and per-run objects are under `v1/run/<id>/<ver>/`.
   (Objects carry no `Cache-Control` metadata — Bun's S3 writer cannot send
   it — which is why the TTLs are set at the edge or by the Worker instead.)
@@ -1284,7 +1285,7 @@ worldserver is out of date and recreate it under live episodes. The service
 sits behind the `publish` profile so a bare `up -d` cannot start a second
 publisher against the same bucket. `stop publisher` needs no drain — an
 interrupted pass leaves the last manifest pointing at the last complete
-generation.
+set.
 
 The app is a separate deploy. In the **Gated** shape the data is same-origin, so
 the snapshot base is a bare `/` — non-empty, which is what selects the snapshot
@@ -1336,7 +1337,7 @@ curl -sI  https://pub-<bucket-id>.r2.dev/v1/manifest.json                  | hea
 
 **Open shape.** As before: the second `curl -sI https://data.<zone>/v1/manifest.json`
 says `cf-cache-status: HIT`, and the headers show the rule's TTLs (30s on the
-manifest, a year on a `v1/snap/<gen>/` object). A `MISS`, `DYNAMIC` or `BYPASS`
+manifest, a year on a `v1/snap/<ver>/` object). A `MISS`, `DYNAMIC` or `BYPASS`
 on the repeat means the cache rule from step 3 is not in effect; fix that before
 anything else, because it is the one misconfiguration that bills. `cf-cache-status`
 does not apply to the Gated shape and its absence there is not a fault.

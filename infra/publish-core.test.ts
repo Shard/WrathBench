@@ -95,28 +95,42 @@ interface RunSpec {
   payload?: unknown;
 }
 
+/** Per-aggregate content versions. Defaulting both to `gen` is the pre-#38 layout. */
+interface AggVersions {
+  "runs.json"?: string;
+  "ladder.json"?: string;
+}
+
 /**
- * A full artifact set: two aggregates under the generation, a detail and a
- * track per run, plus the two mutable files. Shaped like the layout in
- * `docs/PUBLIC-DASHBOARD.md`.
+ * A full artifact set: two aggregates, a detail and a track per run, plus the
+ * two mutable files. Shaped like the layout in `docs/PUBLIC-DASHBOARD.md`.
+ *
+ * Each aggregate sits at `v1/snap/<its own version>/<name>` and the manifest
+ * indexes them (`result.snap`). `vers` defaults both to `gen`, which is exactly
+ * the pre-2026-09-04 shape where one stamp prefixed the whole set — so a test
+ * that does not care about per-artifact addressing reads the same as before.
  *
  * Every body carries a `generatedAt` envelope, exactly as the renderer's do —
  * which is the whole reason key-addressed diffing exists. Pass `stamp` to
- * re-render the same logical snapshot a minute later: same generation, same run
+ * re-render the same logical snapshot a minute later: same versions, same run
  * versions, every body different.
  */
-function snapshot(gen: string, runs: RunSpec[], aggregate: unknown = "aggregate", stamp: string = gen): SnapshotResult {
+function snapshot(gen: string, runs: RunSpec[], aggregate: unknown = "aggregate", stamp: string = gen, vers: AggVersions = {}): SnapshotResult {
   const env = { generatedAt: stamp };
   const artifacts: SnapshotArtifact[] = [];
   for (const r of runs) {
     artifacts.push(json(`v1/run/${r.id}/${r.ver}/detail.json`, { ...env, body: r.payload ?? r.ver }));
     artifacts.push(json(`v1/run/${r.id}/${r.ver}/track.json`, { ...env, body: r.payload ?? r.ver }));
   }
-  artifacts.push(json(`v1/snap/${gen}/runs.json`, { ...env, gen, aggregate, runs: runs.map((r) => r.id) }));
-  artifacts.push(json(`v1/snap/${gen}/ladder.json`, { ...env, gen, aggregate }));
+  const snap: Record<string, string> = {
+    "runs.json": `v1/snap/${vers["runs.json"] ?? gen}/runs.json`,
+    "ladder.json": `v1/snap/${vers["ladder.json"] ?? gen}/ladder.json`,
+  };
+  artifacts.push(json(snap["runs.json"]!, { ...env, gen, aggregate, runs: runs.map((r) => r.id) }));
+  artifacts.push(json(snap["ladder.json"]!, { ...env, gen, aggregate }));
   artifacts.push(json(LIVE_PATH, { ...env, gen }, MUTABLE));
-  artifacts.push(json(MANIFEST_PATH, { ...env, gen }, MUTABLE));
-  return { gen, artifacts };
+  artifacts.push(json(MANIFEST_PATH, { ...env, gen, artifacts: snap }, MUTABLE));
+  return { gen, snap, artifacts };
 }
 
 /** Index of a key in a call transcript; -1 when it never happened. */
@@ -148,7 +162,7 @@ function countingBodies(result: SnapshotResult): { result: SnapshotResult; reads
     });
     return wrapped;
   });
-  return { result: { gen: result.gen, artifacts }, reads: (path) => reads.get(path) ?? 0 };
+  return { result: { gen: result.gen, snap: result.snap, artifacts }, reads: (path) => reads.get(path) ?? 0 };
 }
 
 // ---------------------------------------------------------------------- layout
@@ -158,8 +172,11 @@ describe("classifyPath", () => {
     expect(classifyPath("v1/run/roster-abc-20260825/7f3a/detail.json")).toEqual({ kind: "run", runId: "roster-abc-20260825", version: "7f3a" });
   });
 
-  test("reads the generation stamp out of an aggregate key", () => {
-    expect(classifyPath("v1/snap/20260825T120000Z/runs.json")).toEqual({ kind: "gen", gen: "20260825T120000Z" });
+  test("reads the content version and the name out of an aggregate key", () => {
+    expect(classifyPath("v1/snap/7f3a/runs.json")).toEqual({ kind: "snap", name: "runs.json", version: "7f3a" });
+    // A pre-#38 key classifies the same way: the stamp reads as that name's
+    // version, which is what lets the pruner sweep the old layout as surplus.
+    expect(classifyPath("v1/snap/20260825T120000Z/runs.json")).toEqual({ kind: "snap", name: "runs.json", version: "20260825T120000Z" });
   });
 
   test("the two mutable files are their own kind", () => {
@@ -237,11 +254,21 @@ describe("upload ordering", () => {
 });
 
 describe("rendered results are validated before anything is written", () => {
-  test("an aggregate stamped with another generation is refused", async () => {
+  test("an aggregate the manifest does not name is refused", async () => {
     const store = new FakeStore();
     const result = snapshot("gen2", []);
     result.artifacts.push(json("v1/snap/gen1/stale.json", {}));
-    await expect(publish(result, store, emptyState())).rejects.toThrow(/belongs to generation gen1 but the pass renders gen2/);
+    await expect(publish(result, store, emptyState())).rejects.toThrow(/v1\/snap\/gen1\/stale\.json is an aggregate the manifest does not name/);
+    expect(store.calls).toEqual([]);
+  });
+
+  test("a manifest entry no artifact backs is refused — the flip would point at nothing", async () => {
+    const store = new FakeStore();
+    const result = snapshot("gen2", []);
+    result.snap["models.json"] = "v1/snap/deadbeef/models.json";
+    await expect(publish(result, store, emptyState())).rejects.toThrow(
+      /the manifest names v1\/snap\/deadbeef\/models\.json for models\.json but the pass renders no such artifact/,
+    );
     expect(store.calls).toEqual([]);
   });
 
@@ -297,6 +324,145 @@ describe("diffing", () => {
     expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
     expect(state.lastGen).toBe("gen2");
     expect(store.objects.get(MANIFEST_PATH)).toContain("gen2");
+  });
+
+  test("only the aggregate that moved is rewritten — the rest keep their keys and cost nothing", async () => {
+    // The whole of GitHub issue #38. One hash over the set meant a live run
+    // taking a turn rewrote every aggregate under a fresh prefix; per-artifact
+    // versions make the pass cost the artifacts that actually changed.
+    const store = new FakeStore();
+    const state = emptyState();
+    const before = snapshot("gen1", [{ id: "runA", ver: "v1" }], "aggregate", "gen1", { "runs.json": "r1", "ladder.json": "l1" });
+    await publish(before, store, state);
+    const first = store.puts().length;
+
+    store.reset();
+    // A live run took a turn: `runs.json` moved, the ladder did not.
+    const after = snapshot("gen2", [{ id: "runA", ver: "v2" }], "aggregate", "gen2", { "runs.json": "r2", "ladder.json": "l1" });
+    await publish(after, store, state);
+
+    const puts = store.puts();
+    expect(puts).toEqual([
+      "v1/run/runA/v2/detail.json",
+      "v1/run/runA/v2/track.json",
+      "v1/snap/r2/runs.json",
+      LIVE_PATH,
+      MANIFEST_PATH,
+    ]);
+    // Named by the manifest, still in the bucket, and not paid for again.
+    expect(puts).not.toContain("v1/snap/l1/ladder.json");
+    expect(store.objects.has("v1/snap/l1/ladder.json")).toBe(true);
+    expect(first).toBeGreaterThan(puts.length);
+    // The flip is still last, and the previous aggregate is still there for a
+    // reader holding the previous manifest.
+    expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
+    expect(store.objects.has("v1/snap/r1/runs.json")).toBe(true);
+  });
+
+  test("an aggregate wave with nothing to do does not move the manifest off last", async () => {
+    // The flip's safety property is an ordering, not a count: once a pass can
+    // write no aggregate at all, "manifest last" has to be asserted against a
+    // wave that was empty.
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "aggregate", "gen1", { "runs.json": "r1", "ladder.json": "l1" }), store, state);
+
+    store.reset();
+    // Every aggregate unchanged; only the run moved, so the manifest moves too.
+    await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }], "aggregate", "gen2", { "runs.json": "r1", "ladder.json": "l1" }), store, state);
+
+    const puts = store.puts();
+    expect(puts.filter((p) => p.startsWith("v1/snap/"))).toEqual([]);
+    expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
+    expect(at(puts, LIVE_PATH)).toBeLessThan(at(puts, MANIFEST_PATH));
+    for (const p of puts.filter((k) => k.startsWith("v1/run/"))) expect(at(puts, p)).toBeLessThan(at(puts, LIVE_PATH));
+  });
+
+  test("the pre-#38 layout's leftovers are swept as ordinary surplus versions", async () => {
+    // A state file written by the old publisher: one generation stamp prefixed
+    // every aggregate. No migration and no special case — the old keys classify
+    // as versions of the names they carry, fall outside the keep window on the
+    // first flip, and are deleted.
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("legacy", [{ id: "runA", ver: "v1" }]), store, state);
+    expect(store.objects.has("v1/snap/legacy/runs.json")).toBe(true);
+
+    store.reset();
+    await publish(
+      snapshot("gen2", [{ id: "runA", ver: "v1" }], "aggregate", "gen2", { "runs.json": "r2", "ladder.json": "l2" }),
+      store,
+      state,
+      { keepGens: 1 },
+    );
+    expect(store.deletes().sort()).toEqual(["v1/snap/legacy/ladder.json", "v1/snap/legacy/runs.json"]);
+    // History is trimmed to the same window it prunes by, so the legacy stamps go with the objects.
+    expect(state.snapVersions).toEqual({ "runs.json": ["r2"], "ladder.json": ["l2"] });
+  });
+
+  test("the real fleet's steady pass: 24 PUTs became 18, and the aggregate half is what shrank", async () => {
+    /*
+     * The shape measured against a real fleet on 2026-08-25 and recorded in
+     * `docs/PUBLIC-DASHBOARD.md`: ten aggregates, six live runs each with a
+     * detail and a track, plus `live.json` and `manifest.json` — 24 PUTs a
+     * pass, every pass, because one hash over the set moved all ten aggregates
+     * whenever any run took a turn. The four that genuinely carry a turn are
+     * `runs.json`, `results.json`, the run's ladder and `models.json`; the
+     * other six are byte-identical and now cost nothing.
+     */
+    const NAMES = [
+      "info.json",
+      "runs.json",
+      "results.json",
+      "ladder-e90.json",
+      "ladder-e360.json",
+      "ladder-freeplay.json",
+      "episodes.json",
+      "models.json",
+      "campaigns.json",
+      "tools.json",
+    ];
+    const MOVED = ["runs.json", "results.json", "ladder-e90.json", "models.json"];
+    const LIVE = ["r1", "r2", "r3", "r4", "r5", "r6"];
+
+    /** A whole pass in the fleet's shape, at run version `ver` and aggregate version `aggVer` for the movers. */
+    const pass = (ver: string, aggVer: string, stamp: string = ver): SnapshotResult => {
+      const artifacts: SnapshotArtifact[] = [];
+      for (const id of LIVE) {
+        artifacts.push(json(`v1/run/${id}/${ver}/detail.json`, { generatedAt: ver, id }));
+        artifacts.push(json(`v1/run/${id}/${ver}/track.json`, { generatedAt: ver, id }));
+      }
+      const snap: Record<string, string> = {};
+      for (const name of NAMES) {
+        snap[name] = `v1/snap/${MOVED.includes(name) ? aggVer : "steady"}/${name}`;
+        artifacts.push(json(snap[name]!, { generatedAt: ver, name }));
+      }
+      // `live.json` carries the fleet clock, so its body genuinely differs
+      // every pass — it is the one PUT an idle fleet cannot avoid.
+      artifacts.push(json(LIVE_PATH, { generatedAt: stamp }, MUTABLE));
+      artifacts.push(json(MANIFEST_PATH, { generatedAt: stamp, gen: aggVer, artifacts: snap }, MUTABLE));
+      return { gen: aggVer, snap, artifacts };
+    };
+
+    const store = new FakeStore();
+    const state = emptyState();
+    // The first pass is the whole corpus, which is the 24 the issue measured.
+    await publish(pass("v1", "a1"), store, state);
+    expect(store.puts()).toHaveLength(24);
+
+    store.reset();
+    // A steady pass: every live run took a turn, four aggregates moved with them.
+    await publish(pass("v2", "a2"), store, state);
+    const puts = store.puts();
+    expect(puts).toHaveLength(18);
+    expect(puts.filter((p) => p.startsWith("v1/snap/"))).toEqual(MOVED.map((n) => `v1/snap/a2/${n}`).sort());
+    expect(puts.filter((p) => p.startsWith("v1/run/"))).toHaveLength(12);
+    expect(at(puts, MANIFEST_PATH)).toBe(puts.length - 1);
+
+    store.reset();
+    // And a genuinely idle pass — nothing moved at all — is one PUT.
+    await publish(pass("v2", "a2", "later"), store, state);
+    expect(store.puts()).toEqual([LIVE_PATH]);
   });
 
   test("a run whose content version advances writes the new version only", async () => {
@@ -568,18 +734,20 @@ describe("a failed wave aborts before the flip", () => {
 // ----------------------------------------------------------------------- pruning
 
 describe("planPrune", () => {
-  function stateWith(gens: string[], runVersions: Record<string, string[]>): PublishState {
+  /** `versions` are the versions of the one aggregate `runs.json`, oldest first. */
+  function stateWith(versions: string[], runVersions: Record<string, string[]>): PublishState {
     const state = emptyState();
-    state.gens = gens;
+    state.gens = versions;
+    if (versions.length > 0) state.snapVersions["runs.json"] = versions;
     state.runVersions = runVersions;
-    for (const g of gens) state.uploaded[`v1/snap/${g}/runs.json`] = "h";
+    for (const g of versions) state.uploaded[`v1/snap/${g}/runs.json`] = "h";
     for (const [id, versions] of Object.entries(runVersions)) for (const v of versions) state.uploaded[`v1/run/${id}/${v}/detail.json`] = "h";
     state.uploaded[MANIFEST_PATH] = "h";
     state.uploaded[LIVE_PATH] = "h";
     return state;
   }
 
-  test("the newest five generations survive, everything older goes", () => {
+  test("the newest five versions of each aggregate survive, everything older goes", () => {
     const state = stateWith(["g1", "g2", "g3", "g4", "g5", "g6", "g7"], {});
     expect(planPrune(state)).toEqual(["v1/snap/g1/runs.json", "v1/snap/g2/runs.json"]);
     expect(DEFAULT_KEEP_GENS).toBe(5);
@@ -600,10 +768,10 @@ describe("planPrune", () => {
     expect(plan).not.toContain("v1/attribution.json");
   });
 
-  test("nothing from the current or previous generation is ever planned", () => {
-    // A pass renders at most one version per run, so the version live in the
-    // previous generation is at most one behind the current one — which is
-    // exactly what keep-last-two protects.
+  test("nothing the current or previous manifest names is ever planned", () => {
+    // A pass renders at most one version per name, so the version the previous
+    // manifest named is at most one behind the current one — which is exactly
+    // what a keep count above one protects.
     const state = stateWith(["g1", "g2", "g3", "g4", "g5", "g6"], { runA: ["v1", "v2", "v3"] });
     const plan = planPrune(state);
     expect(plan).not.toContain("v1/snap/g6/runs.json");
@@ -612,7 +780,7 @@ describe("planPrune", () => {
     expect(plan).not.toContain("v1/run/runA/v2/detail.json");
   });
 
-  test("limits below one are clamped rather than pruning the live generation", () => {
+  test("limits below one are clamped rather than pruning what the manifest names", () => {
     const state = stateWith(["g1", "g2"], { runA: ["v1", "v2"] });
     expect(planPrune(state, { keepGens: 0, keepRunVersions: 0 })).toEqual(["v1/run/runA/v1/detail.json", "v1/snap/g1/runs.json"]);
   });

@@ -83,7 +83,29 @@ function bucket(objects: Record<string, unknown>): Bucket {
   return { fetch: f, urls };
 }
 
-const snapUrl = (name: string): string => `${BASE}/v1/snap/${GEN}/${name}`;
+/**
+ * Every aggregate at its own content-addressed key, the way the publisher has
+ * written them since 2026-09-04 (GitHub issue #38) — so the manifest is an
+ * index the reader follows, and no test reconstructs a key from `gen`.
+ */
+const SNAP_NAMES = [
+  "info.json",
+  "runs.json",
+  "results.json",
+  "episodes.json",
+  "campaigns.json",
+  "models.json",
+  "tools.json",
+  "ladder-e90.json",
+  "ladder-e360.json",
+  "ladder-freeplay.json",
+];
+const snapKey = (name: string): string => `v1/snap/v-${name.replace(/\.json$/, "")}/${name}`;
+const snapUrl = (name: string): string => `${BASE}/${snapKey(name)}`;
+const MANIFEST_ARTIFACTS: Record<string, string> = Object.fromEntries(SNAP_NAMES.map((n) => [n, snapKey(n)]));
+
+/** A pre-#38 manifest: one generation stamp, every aggregate under it. */
+const legacySnapUrl = (name: string): string => `${BASE}/v1/snap/${GEN}/${name}`;
 
 function run(over: Partial<ResultRun> = {}): ResultRun {
   return {
@@ -177,7 +199,7 @@ const TRACK: TrackResponse = { runId: "r1", character: null, model: "m", harness
 /** The whole bucket a happy-path test reads, with the runs listing's pointers. */
 function fullBucket(runs: ResultRun[] = [run()]): Bucket {
   return bucket({
-    [`${BASE}/v1/manifest.json`]: { gen: GEN, generatedAt: GENERATED_AT },
+    [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
     [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, attribution: ATTRIBUTION, fleet: FLEET, positions: POSITIONS },
     [snapUrl("info.json")]: { ...INFO, generatedAt: GENERATED_AT, attribution: ATTRIBUTION },
     [snapUrl("runs.json")]: {
@@ -213,7 +235,7 @@ function fullBucket(runs: ResultRun[] = [run()]): Bucket {
 /* --- addressing ------------------------------------------------------- */
 
 describe("addressing", () => {
-  test("every method resolves the manifest once and reads its generation's artifact", async () => {
+  test("every method resolves the manifest once and reads the key it names for that artifact", async () => {
     const b = fullBucket();
     const c = createSnapshotClient(BASE, { fetch: b.fetch });
     await c.info();
@@ -237,6 +259,41 @@ describe("addressing", () => {
       // Both halves of the fast lane ride in one object, fetched once.
       `${BASE}/v1/live.json`,
     ]);
+  });
+
+  test("two aggregates that did not move together are read from their own keys", async () => {
+    // Per-artifact addressing: `runs.json` and `models.json` sit under
+    // different versions, and the reader never derives a key from `gen`.
+    const b = fullBucket();
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    await c.runs();
+    await c.models();
+    const snapUrls = b.urls.filter((u) => u.includes("/v1/snap/"));
+    expect(snapUrls).toEqual([snapUrl("runs.json"), snapUrl("models.json")]);
+    const versions = snapUrls.map((u) => u.split("/v1/snap/")[1]!.split("/")[0]!);
+    expect(new Set(versions).size).toBe(2);
+  });
+
+  test("a manifest written before per-artifact keys still resolves, under its one generation", async () => {
+    // The transition: the dashboard deploys ahead of the publisher, so a build
+    // that knows `artifacts` has to keep reading a manifest that does not.
+    const b = bucket({
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, generatedAt: GENERATED_AT },
+      [legacySnapUrl("info.json")]: { ...INFO, generatedAt: GENERATED_AT, attribution: ATTRIBUTION },
+    });
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    await c.info();
+    expect(b.urls).toEqual([`${BASE}/v1/manifest.json`, legacySnapUrl("info.json")]);
+  });
+
+  test("a name the manifest's index does not carry is a 404 from here, not a guessed key", async () => {
+    const b = bucket({
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: { "runs.json": snapKey("runs.json") }, generatedAt: GENERATED_AT },
+    });
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    await expect(c.info()).rejects.toThrow(/no published info\.json in this snapshot/);
+    // Nothing was fetched on a hunch.
+    expect(b.urls).toEqual([`${BASE}/v1/manifest.json`]);
   });
 
   test("a trailing slash on the base does not double up", async () => {
@@ -460,7 +517,7 @@ describe("models, filtered client-side", () => {
 
   test("the harness filter is the row predicate the server applies, and is echoed", async () => {
     const objects = {
-      [`${BASE}/v1/manifest.json`]: { gen: GEN, generatedAt: GENERATED_AT },
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
       [snapUrl("models.json")]: { ...MODELS, models: [row("x", "wrathbench"), row("y", "claude-code")] },
     };
     const c = createSnapshotClient(BASE, { fetch: bucket(objects).fetch });
@@ -600,7 +657,7 @@ describe("the public build's call sites", () => {
 describe("freshness", () => {
   test("the freshest stamp any artifact carried is what the shell reports", async () => {
     const objects = {
-      [`${BASE}/v1/manifest.json`]: { gen: GEN, generatedAt: GENERATED_AT - 60_000 },
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT - 60_000 },
       [snapUrl("info.json")]: { ...INFO, generatedAt: GENERATED_AT - 120_000, attribution: ATTRIBUTION },
       [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: FLEET, positions: POSITIONS },
     };

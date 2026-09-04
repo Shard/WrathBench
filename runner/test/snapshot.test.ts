@@ -267,7 +267,12 @@ describe("renderSnapshot", () => {
 
     expect(paths).toContain("v1/manifest.json");
     expect(paths).toContain("v1/live.json");
-    for (const name of SNAP_NAMES) expect(paths).toContain(`v1/snap/${out.gen}/${name}`);
+    // Each aggregate at its own content-addressed key, exactly as the manifest names it.
+    expect(Object.keys(out.snap).sort()).toEqual([...SNAP_NAMES].sort());
+    for (const name of SNAP_NAMES) {
+      expect(out.snap[name]).toMatch(new RegExp(`^v1/snap/[0-9a-f]{12}/${name.replace(".", "\\.")}$`));
+      expect(paths).toContain(out.snap[name]!);
+    }
     // Detail, track, the entries window and the scratchpad per run on disk, and nothing else.
     const runPaths = paths.filter((p) => p.startsWith("v1/run/"));
     expect(runPaths).toHaveLength(8);
@@ -378,11 +383,11 @@ describe("renderSnapshot", () => {
     expect(live.positions.positions[0]!.items).toEqual([{ name: SURVIVES.itemName, count: 1, equipped: true }]);
   });
 
-  test("runs.json rows point at the run artifacts; manifest gen addresses the snap set", async () => {
+  test("runs.json rows point at the run artifacts; the manifest names a key per aggregate", async () => {
     const runs = fixture();
     const out = await render(runs, 111);
     const paths = new Set(out.artifacts.map((a) => a.path));
-    const listed = JSON.parse(out.artifacts.find((a) => a.path === `v1/snap/${out.gen}/runs.json`)!.body) as {
+    const listed = JSON.parse(out.artifacts.find((a) => a.path === out.snap["runs.json"])!.body) as {
       runs: {
         runId: string;
         character: string | null;
@@ -404,6 +409,16 @@ describe("renderSnapshot", () => {
       }
     }
     expect(out.gen).toMatch(/^[0-9a-f]{12}$/);
+
+    // The manifest is the index the reader follows: every name, every key, and
+    // nothing it cannot fetch.
+    const manifest = JSON.parse(out.artifacts.find((a) => a.path === "v1/manifest.json")!.body) as {
+      gen: string;
+      artifacts: Record<string, string>;
+    };
+    expect(manifest.gen).toBe(out.gen);
+    expect(manifest.artifacts).toEqual(out.snap);
+    for (const key of Object.values(manifest.artifacts)) expect(paths.has(key)).toBe(true);
   });
 
   test("gen is stable across re-renders of unchanged input, and moves when the data does", async () => {
@@ -423,6 +438,43 @@ describe("renderSnapshot", () => {
     utimesSync(join(runs, DEAD_RUN, "trajectory.jsonl"), past, past);
     const third = await render(runs, 333);
     expect(third.gen).not.toBe(first.gen);
+  });
+
+  test("a live run's clock alone moves no address: playtimeMs is normalized out", async () => {
+    // The fleet's steady state. `playtimeMs` advances with the wall clock on
+    // every pass of a live run, and hashing it made the run's detail — and
+    // every aggregate carrying the figure — claim a new key on passes where
+    // nothing had happened (GitHub issue #38, operator 2026-09-04).
+    const runs = fixture();
+    const first = await render(runs, 111);
+    await Bun.sleep(15);
+    const second = await render(runs, 222);
+    expect(second.gen).toBe(first.gen);
+    expect(second.snap).toEqual(first.snap);
+    expect(second.artifacts.map((a) => a.path).sort()).toEqual(first.artifacts.map((a) => a.path).sort());
+  });
+
+  test("a data change moves the aggregates that carry it and leaves the rest on their keys", async () => {
+    // The point of per-artifact addressing: one live run taking a turn used to
+    // rewrite all ten aggregates under a fresh prefix.
+    const runs = fixture();
+    const before = await render(runs, 111);
+    appendFileSync(join(runs, DEAD_RUN, "trajectory.jsonl"), JSON.stringify({ ts: 2100, t: "state", level: 4 }) + "\n");
+    const past = new Date(Date.now() - 60 * 60_000);
+    utimesSync(join(runs, DEAD_RUN, "trajectory.jsonl"), past, past);
+    const after = await render(runs, 222);
+
+    const moved = SNAP_NAMES.filter((name) => after.snap[name] !== before.snap[name]);
+    expect(moved).toContain("runs.json");
+    expect(moved.length).toBeGreaterThan(0);
+    expect(moved.length).toBeLessThan(SNAP_NAMES.length);
+    // The set-shaped aggregates say nothing about a run's level, so they must
+    // still be sitting on the key the last manifest named.
+    for (const name of ["info.json", "episodes.json", "tools.json", "campaigns.json"]) {
+      expect(`${name}: ${after.snap[name]}`).toBe(`${name}: ${before.snap[name]}`);
+    }
+    // The manifest itself is what changed, so `gen` moves either way.
+    expect(after.gen).not.toBe(before.gen);
   });
 
   test("a re-render of unchanged input reuses a finished run's version key", async () => {
@@ -513,7 +565,7 @@ describe("createRenderer", () => {
     const paths = out.artifacts.map((a) => a.path);
     expect(paths).toContain("v1/manifest.json");
     expect(paths).toContain("v1/live.json");
-    for (const name of SNAP_NAMES) expect(paths).toContain(`v1/snap/${out.gen}/${name}`);
+    for (const name of SNAP_NAMES) expect(paths).toContain(out.snap[name]!);
     // The archived run's artifacts are gone; the surviving run's are not.
     expect(paths.filter((p) => p.startsWith(`v1/run/${DEAD_RUN}/`))).toEqual([]);
     expect(paths.filter((p) => p.startsWith(`v1/run/${LIVE_RUN}/`))).toHaveLength(4);
@@ -523,7 +575,7 @@ describe("createRenderer", () => {
      * be inventing a listing nobody served — but pointerless, which is the
      * degrade the snapshot client already answers with its own 404.
      */
-    const listed = JSON.parse(out.artifacts.find((a) => a.path === `v1/snap/${out.gen}/runs.json`)!.body) as {
+    const listed = JSON.parse(out.artifacts.find((a) => a.path === out.snap["runs.json"])!.body) as {
       runs: { runId: string; snapshot?: { detail: string; track: string } }[];
     };
     expect(listed.runs.map((r) => r.runId).sort()).toEqual([DEAD_RUN, LIVE_RUN].sort());
