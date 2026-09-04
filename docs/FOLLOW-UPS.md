@@ -17,11 +17,9 @@ status.
 
 ## Next up
 
-1. **38** — N1 passed 2026-08-23; next is N2 (innkeeper bind) and N3
-   (`SMSG_SHOWTAXINODES`, the destination-choice surface, still untapped).
-2. **110** — the viewer's last two wiring lines for the spell/talent/trade
-   milestones (item 35 shipped the producers, the facts and the render;
-   `runner/viewer/api.ts` was owned by another agent that day).
+1. **38** — N1, N2 and N3 all shipped and deployed; what is left is N4, the
+   rung-4 attempts, plus the "unaided" half of the N3 gate (a model discovers
+   and uses a flight master on its own).
 
 ## Player surface
 
@@ -156,14 +154,6 @@ worklogs/2026-08-29).
     behind it. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
 
-108. **Split `sdk/src/client.ts` / `protocol.ts` / `state.ts` along their shared seam**
-    (consolidation scan 2026-09-01; only this SDK half is left — `infra/run-fleet.ts`
-    is done, split into config/plan/state/status, see the 2026-09-01 day file). `client.ts` (5.9k), `protocol.ts` (2.2k) and `state.ts`
-    (4.5k) share the same pets/group/mail/bank/trade/loot/item-text seam, already
-    bannered in the first two — split all three identically (`*-social.ts`) so they
-    stay paired, adding the banners to `state.ts` first. Mechanical, no behaviour
-    change, its own session; the SDK surface the model sees does not move.
-
 109. **Hide the GitHub link until the repo opens** (2026-09-01). The footer and the
     BibTeX entry link to `github.com/Shard/WrathBench`, which 404s while the repo is
     private (`dashboard/src/components/Layout.tsx`, `pages/About.tsx`). The preview is
@@ -182,3 +172,23 @@ worklogs/2026-08-29).
     spoofable UA gets the landing page's HTML — marketing copy, not run data —
     and the card), or wait for item 85, where the Open shape has no gate and the
     problem disappears. Verify with Discord's unfurl after either.
+
+113. **A rejected `connect()` is sticky, and issue #34 made stalls reach it**
+    (2026-09-04, found while verifying 3971143). `EventStream.connect()` caches
+    `openPromise` and never clears it (`sdk/src/events.ts:264`), so once
+    `openSocket()` rejects, every later `connect()` returns that same rejected
+    promise for the life of the stream. That path already existed for a socket
+    *error*; what changed today is that a stalled handshake now rejects at
+    `connectTimeoutMs` (5000ms) instead of hanging, so a slow-but-legitimate
+    first handshake in a loaded container — the exact 2026-08-24 condition that
+    filed #34 — now fails its first attempt and pins the caller's promise
+    rejected. The stream itself still self-heals: the timeout advances the
+    backoff ladder and `connected` goes true again. Only a caller holding the
+    `connect()` promise is stranded, and it cannot observe the recovery.
+    Not fixed inline because the obvious repair is wrong: clearing `openPromise`
+    on rejection lets a retried `connect()` call `openSocket()` while the
+    internal ladder already has an attempt in flight, racing two sockets onto
+    one stream. Wants a deliberate answer — most likely `connect()` resolving
+    against the ladder's next success rather than one attempt. Trigger: a
+    caller that actually awaits `connect()` failing in a loaded container, or
+    the next time anyone touches the reconnect ladder.
