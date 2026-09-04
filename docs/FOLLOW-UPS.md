@@ -167,3 +167,20 @@ worklogs/2026-08-29).
     `WrathClient` should own that cleanup generally, since the same shape will
     recur for anything else the constructor starts. Trigger: any run whose
     process shows repeated reconnect logs for a client nothing holds.
+
+115. **The viewer re-counts the whole corpus on every process start** (2026-09-04,
+    disclosed by the agent that fixed the live-run half in fe3dec4). The first
+    `/api/models` after a viewer restart takes ~18.5s: the process fills its fact
+    cache across all 329 trajectories — 4.4 GB, ~9.3s of counting plus ~330
+    sqlite opens. **Not a regression**: the old whole-file `readFileSync` path
+    cost 10.4s for the same fill, and the steady state it replaced was 1–4s
+    spikes every 5s forever, which is strictly worse. But it is now the largest
+    single cost left in the viewer, and it is paid again on every restart —
+    which `bun ship --publisher` and every deploy trigger.
+    The fix is a persisted cache: the per-run counts are a pure function of
+    `(size, mtime)` and a finished run's never change, so ~327 of the 329 could
+    be read from disk rather than recomputed. Wants a cache file the viewer
+    writes on shutdown or incrementally, invalidated by the same signature the
+    in-memory cache already uses. Trigger: viewer restarts becoming frequent
+    enough to notice, or the corpus growing enough that 18.5s becomes minutes —
+    it scales with total trajectory bytes, which only ever grows.
