@@ -652,6 +652,8 @@ export interface ReputationEntry {
 }
 
 
+// ------------------------------------------------------------------ pets (item 98)
+
 /** The pet's react state, as the pet frame labels it. */
 export type PetReaction = "passive" | "defensive" | "aggressive";
 /** The pet's standing order, as the pet frame labels it. */
@@ -706,6 +708,9 @@ export interface PetState {
   readonly ts: number;
 }
 
+
+// ---------------------------------------------------------------- group (item 100)
+
 /** One other member of the party, as `SMSG_GROUP_LIST` lists them (self is never in the list). */
 export interface GroupMember {
   readonly guid: GuidKey;
@@ -742,6 +747,9 @@ export interface GroupState {
   readonly seq: number;
   readonly ts: number;
 }
+
+
+// ----------------------------------------------------------------- mail (item 100)
 
 /** One attached item of a mail, with the template name joined when the item query has answered. */
 export interface MailItem {
@@ -794,6 +802,9 @@ export interface MailboxState {
   readonly ts: number;
 }
 
+
+// ----------------------------------------------------------------- bank (item 100)
+
 /**
  * The bank (item 100): the banker the frame was last opened at
  * (`SMSG_SHOW_BANK`) and the bank slots, addressed the way the bank opcodes
@@ -811,6 +822,9 @@ export interface BankContents {
   readonly freeSlots: number;
   readonly totalSlots: number;
 }
+
+
+// ---------------------------------------------------------------- trade (item 100)
 
 /**
  * The trade window (item 100): the last `SMSG_TRADE_STATUS`
@@ -834,6 +848,9 @@ export interface TradeSide {
   readonly items: readonly { readonly slot: number; readonly itemId: number; readonly name: string | undefined; readonly count: number }[];
   readonly seq: number;
 }
+
+
+// ---------------------------- pets, group, mail, trade result text (items 98, 100)
 
 const PET_REACTIONS: readonly PetReaction[] = ["passive", "defensive", "aggressive"];
 const PET_COMMANDS: readonly PetCommand[] = ["stay", "follow", "attack", "abandon"];
@@ -924,7 +941,8 @@ const PET_FEEDBACK_TEXT: Readonly<Record<number, string>> = {
   3: "your pet cannot attack that target",
 };
 
-/** The client's text for a `SMSG_PARTY_COMMAND_RESULT` code; the code itself when the SDK does not name it. */
+// ----------------------------------------------------- group loot rolls (item 102)
+
 /** A vote on a group loot roll, as the roll frame's buttons name them. */
 export type RollChoice = "need" | "greed" | "pass" | "disenchant";
 
@@ -957,6 +975,9 @@ export interface PendingRoll {
   readonly ts: number;
 }
 
+
+// ------------------------------------------------------------ item text (item 103)
+
 /**
  * The text of a carried item the character has read (item 103): a book's or
  * letter's pages (`SMSG_PAGE_TEXT_QUERY_RESPONSE`, in chain order) or the
@@ -971,6 +992,10 @@ export interface ItemText {
   readonly complete: boolean;
 }
 
+
+// ---------------------------- pets, group, mail, trade result text (items 98, 100)
+
+/** The client's text for a `SMSG_PARTY_COMMAND_RESULT` code; the code itself when the SDK does not name it. */
 export function partyResultText(result: number): string {
   return PARTY_RESULT_TEXT[result] ?? `party result ${result}`;
 }
@@ -990,6 +1015,9 @@ export function petTameFailureText(result: number): string {
 export function petFeedbackText(feedback: number): string {
   return PET_FEEDBACK_TEXT[feedback] ?? `pet feedback ${feedback}`;
 }
+
+
+// ------------------------------------------------------------------------- talents
 
 /** One talent of the class tree, with the ranks this character has taken merged in from the last `SMSG_TALENTS_INFO`. */
 export interface TalentTreeTalent {
@@ -1708,6 +1736,8 @@ export class StateCache {
   /** The last `WB_TALENT_TREE`, before the learned ranks are merged in. */
   private talentTreeData: (TalentTreeData & { readonly seq: number; readonly ts: number }) | undefined;
 
+  // -------------------------------- pets, group, mail, bank, trade, rolls, item text
+
   /** The last `SMSG_PET_SPELLS` with a pet in it; cleared by the guid-0 removal (item 98). */
   private petBar: (PetSpellsData & { readonly seq: number; readonly ts: number }) | undefined;
 
@@ -1731,6 +1761,8 @@ export class StateCache {
   private bankGuid: { readonly value: GuidKey; readonly seq: number; readonly ts: number } | undefined;
 
   private tradeState: TradeState | undefined;
+
+  // ----------------------------------------------------------------------- spellbook
 
   /**
    * spellId -> spellbook row. Replaced wholesale by `SMSG_INITIAL_SPELLS`
@@ -2235,6 +2267,8 @@ export class StateCache {
     return only(resolveName(key, all, (r) => r.name));
   }
 
+  // ------------------------------------------------------------------ pets (item 98)
+
   /**
    * The pet frame (item 98): the control bar the server last sent
    * (`SMSG_PET_SPELLS`) joined to the pet's unit in view and its given name.
@@ -2293,6 +2327,8 @@ export class StateCache {
     return only(resolveName(key, all, (s) => s.name));
   }
 
+  // ----------------------------------------------------- group loot rolls (item 102)
+
   /**
    * The roll frames open right now (item 102), oldest first, named from the
    * item query where it has answered. A frame whose deadline has passed is
@@ -2311,6 +2347,8 @@ export class StateCache {
     }
     return out;
   }
+
+  // ------------------------------------------------------------ item text (item 103)
 
   /**
    * The text of every carried item this character has read (item 103): a
@@ -2344,10 +2382,14 @@ export class StateCache {
     return out;
   }
 
+  // ---------------------------------------------------------------- group (item 100)
+
   /** The party (item 100), or `undefined` until any group packet has been observed. */
   group(): GroupState | undefined {
     return this.groupState;
   }
+
+  // ----------------------------------------------------------------- mail (item 100)
 
   /**
    * The mailbox (item 100): the inbox as last listed, with item names and
@@ -2363,6 +2405,8 @@ export class StateCache {
     }));
     return { ...m, mails };
   }
+
+  // ----------------------------------------------------------------- bank (item 100)
 
   /**
    * The bank (item 100): the main bank slots (bag 255, slots 39-66) and each
@@ -2406,6 +2450,8 @@ export class StateCache {
     return { guid: this.bankGuid?.value, items, bags, freeSlots: totalSlots - items.length, totalSlots };
   }
 
+  // ---------------------------------------------------------------- trade (item 100)
+
   /** The trade window (item 100), or `undefined` until any trade packet. */
   trade(): TradeState | undefined {
     const t = this.tradeState;
@@ -2414,6 +2460,8 @@ export class StateCache {
       s === undefined ? undefined : { ...s, items: s.items.map((it) => ({ ...it, name: this.items.get(it.itemId)?.value.name })) };
     return { ...t, mine: side(t.mine), theirs: side(t.theirs) };
   }
+
+  // ---------------------- group, mail, pets, loot rolls folders (items 98, 100, 102)
 
   private foldGroupList(d: GroupListData, seq: number, ts: number): void {
     const prev = this.groupState;
@@ -2512,6 +2560,8 @@ export class StateCache {
     const prev: MailboxState = this.mailState ?? { guid: undefined, mails: [], total: 0, newMail: false, lastResult: undefined, seq, ts };
     this.mailState = { ...prev, ...patch, seq, ts };
   }
+
+  // ---------------------------------------------------------------------- reputation
 
   private foldFactionRow(row: FactionRowLike, seq: number, ts: number): void {
     const prev = this.reputationMap.get(row.repListId);
