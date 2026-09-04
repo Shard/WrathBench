@@ -941,7 +941,8 @@ export function capFor(max: Record<string, number>, key: string): number | undef
  * host is normalized to `opencode`/`opencode-go` here and nowhere else:
  * `platformOfBase` keeps its host spelling so `run.platform` and the viewer's
  * listing stay stable against runs already on disk; the key is the one seam
- * that renames it, and the only place the base's PATH is read at all.
+ * that renames it, and the only place in this module that reads the base's
+ * PATH rather than its host.
  *
  * OpenCode Zen's `zen/go` is a second, separately billed surface on the same
  * host (pay-as-you-go, not the shared free tier), so it takes its own key —
