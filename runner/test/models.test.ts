@@ -40,8 +40,9 @@ import {
   isConcurrencyKey,
   CONCURRENCY_KEYS,
   parsePolicyBlock,
+  isOpenCodeGoBase,
 } from "../src/models";
-import { FREE_SUFFIXLESS_ALLOWLIST } from "../src/model-cost";
+import { billingOf, FREE_SUFFIXLESS_ALLOWLIST } from "../src/model-cost";
 import type { EpisodeId } from "../src/episodes";
 
 const NOW = 1_800_000_000_000;
@@ -828,14 +829,42 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
     expect(key({ driver: "stub" }, "free")).toBe("stub");
   });
 
+  test("OpenCode Zen's zen/go is a separate billing surface and takes a separate key", () => {
+    // omen-alpha: paid, so it never reaches the free branch — the go key has to
+    // be decided outside it or it would apply to nothing on that surface.
+    expect(key({ name: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).toBe("opencode-go");
+    expect(key({ apiBase: "https://opencode.ai/zen/go/v1" }, "free")).toBe("opencode-go");
+    // The five free zen/v1 entries are untouched: same host, different key.
+    expect(key({ apiBase: "https://opencode.ai/zen/v1" }, "free")).toBe("opencode");
+    expect(key({ apiBase: "https://opencode.ai/zen/v1" }, "paid")).toBe("openai");
+    expect(key({ apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).not.toBe(
+      key({ apiBase: "https://opencode.ai/zen/v1" }, "free"),
+    );
+    // The PATH is what distinguishes them, and only on that host.
+    expect(isOpenCodeGoBase("https://opencode.ai/zen/go/v1")).toBe(true);
+    expect(isOpenCodeGoBase("https://opencode.ai/zen/v1")).toBe(false);
+    expect(isOpenCodeGoBase("https://openrouter.ai/zen/go/v1")).toBe(false);
+    expect(isOpenCodeGoBase(undefined)).toBe(false);
+    // A go slug on the claude-code or stub driver keeps its driver key.
+    expect(key({ driver: "stub", apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).toBe("stub");
+  });
+
+  test("the go surface classifies paid by the RULE, with no billing override in play", () => {
+    // cost: 0 on the wire today (free alpha preview); the entry is still paid —
+    // no `-free`/`:free` suffix, not a contributor slug, not local.
+    expect(billingOf({ model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1" })).toBe("paid");
+    expect(billingOf({ model: "hy3-free", apiBase: "https://opencode.ai/zen/v1" })).toBe("free");
+  });
+
   test("parsePolicyBlock accepts the keys and rejects an unknown concurrency key", () => {
     expect(isConcurrencyKey("openrouter")).toBe(true);
     expect(isConcurrencyKey("opencode")).toBe(true);
     expect(isConcurrencyKey("claude-code")).toBe(true);
     expect(isConcurrencyKey("warp")).toBe(false);
-    expect(CONCURRENCY_KEYS).toEqual(["openai", "claude-code", "stub", "openrouter", "opencode"]);
-    expect(parsePolicyBlock({ maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1 } }).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1 });
-    expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, stub, openrouter, opencode/);
+    expect(isConcurrencyKey("opencode-go")).toBe(true);
+    expect(CONCURRENCY_KEYS).toEqual(["openai", "claude-code", "stub", "openrouter", "opencode", "opencode-go"]);
+    expect(parsePolicyBlock({ maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 } }).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 });
+    expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, stub, openrouter, opencode, opencode-go/);
     expect(() => parsePolicyBlock({ maxConcurrent: { openrouter: 0 } })).toThrow(/positive integer/);
   });
 });

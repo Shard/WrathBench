@@ -839,12 +839,40 @@ export function platformOf(apiBase: string | undefined, driver: string | undefin
 }
 
 /**
+ * OpenCode Zen's pay-as-you-go surface, which is metered apart from the free
+ * `zen/v1` tier on the same host and so is capped apart from it.
+ */
+export const OPENCODE_GO_KEY = "opencode-go";
+
+/**
+ * Whether an api base points at that surface. The path is what distinguishes
+ * it — `https://opencode.ai/zen/go/v1` against `https://opencode.ai/zen/v1` —
+ * so this reads the base itself rather than `platformOfBase`, which answers
+ * with a hostname. A base that does not parse as a URL is still matched as a
+ * raw string, as `platformOfBase` does.
+ */
+export function isOpenCodeGoBase(apiBase: string | null | undefined): boolean {
+  if (apiBase === null || apiBase === undefined || apiBase === "") return false;
+  let host = apiBase;
+  let path = apiBase;
+  try {
+    const u = new URL(apiBase);
+    host = u.hostname;
+    path = u.pathname;
+  } catch {
+    /* a malformed base still tells us something; fall through with the raw string */
+  }
+  return host.includes("opencode.ai") && /(^|\/)zen\/go(\/|$)/.test(path);
+}
+
+/**
  * The rate-limit keys `policy.maxConcurrent` may cap: every driver, plus the
  * two shared free-cloud platforms whose free tiers are metered separately by
- * their upstream provider (`concurrencyKeyOf`). Widening validation from
- * drivers to these keys is purely additive — an old per-driver cap still parses.
+ * their upstream provider, plus OpenCode Zen's separately billed `zen/go`
+ * surface (`concurrencyKeyOf`). Widening validation from drivers to these keys
+ * is purely additive — an old per-driver cap still parses.
  */
-export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS, "openrouter", "opencode"];
+export const CONCURRENCY_KEYS: readonly string[] = [...DRIVERS, "openrouter", "opencode", OPENCODE_GO_KEY];
 
 /**
  * A claude-code run counts against TWO keys, and needs a free slot in both.
@@ -910,9 +938,16 @@ export function capFor(max: Record<string, number>, key: string): number | undef
  * being the OpenRouter default, mirroring `isSharedFreePool` — never from the
  * driver, so a `:free` slug pinned to `driver: "openai"` with no base still
  * lands in the openrouter key rather than escaping the cap. The `opencode.ai`
- * host is normalized to `opencode` here and only here: `platformOfBase` keeps
- * its host spelling so `run.platform` and the viewer's listing stay stable
- * against runs already on disk; the key is the one seam that renames it.
+ * host is normalized to `opencode`/`opencode-go` here and nowhere else:
+ * `platformOfBase` keeps its host spelling so `run.platform` and the viewer's
+ * listing stay stable against runs already on disk; the key is the one seam
+ * that renames it, and the only place the base's PATH is read at all.
+ *
+ * OpenCode Zen's `zen/go` is a second, separately billed surface on the same
+ * host (pay-as-you-go, not the shared free tier), so it takes its own key —
+ * outside the free gate, because every model there is paid and a key reached
+ * only by free models would never apply to one. `platformOfBase` cannot make
+ * this distinction: it returns a hostname and discards the path.
  *
  * `claude-code` is the only key that is refined further, and not here: which
  * SUBSCRIPTION a claude run bills is decided when it is scheduled, not by the
@@ -922,6 +957,7 @@ export function capFor(max: Record<string, number>, key: string): number | undef
  */
 export function concurrencyKeyOf(r: Pick<RosterModel, "name" | "driver" | "apiBase">, billing: Billing): string {
   const driver = driverOf(r);
+  if (driver === "openai" && isOpenCodeGoBase(r.apiBase)) return OPENCODE_GO_KEY;
   if (driver === "openai" && billing === "free") {
     const platform = platformOfBase(r.apiBase) ?? "openrouter";
     if (platform === "openrouter") return "openrouter";
