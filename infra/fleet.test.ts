@@ -1009,8 +1009,8 @@ describe("the shipped fleet files", () => {
 
     // Account classes, which billing still governs — and only these.
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER5", "RUNNER6"]);
-    expect(config.accounts.paid).toEqual(["SHAKEOUT2"]);
-    expect(classPoolsOf(config).paid).toEqual(["SHAKEOUT2"]);
+    expect(config.accounts.paid).toEqual(["SHAKEOUT2", "RUNNER7"]);
+    expect(classPoolsOf(config).paid).toEqual(["SHAKEOUT2", "RUNNER7"]);
     expect(config.accounts.local).toEqual(["RUNNER4"]);
     expect(rosterModels(config.roster).filter((r) => rosterClass(r) === "local").map((r) => r.name)).toEqual(["qwen3-8-27b"]);
     // Nothing parks on the paid account any more: a pin there — even a disabled
