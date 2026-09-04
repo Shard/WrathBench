@@ -21,16 +21,25 @@
  *
  * Layout (a publisher pushes these to a bucket; a static dashboard reads them):
  * - `v1/manifest.json` and `v1/live.json` are the two mutable keys, cached
- *   briefly — the manifest names the current generation, live is the
+ *   briefly — the manifest names the key of every aggregate, live is the
  *   fleet/positions poll.
- * - `v1/snap/<gen>/…` and `v1/run/<id>/<ver>/…` are content-addressed and
+ * - `v1/snap/<ver>/<name>` and `v1/run/<id>/<ver>/…` are content-addressed and
  *   immutable: a re-render of unchanged input lands on the same keys, so a
  *   client may cache them forever.
  *
- * `gen` and each run's `<ver>` are hashed over the PROJECTED payloads before
- * the envelope goes on: the envelope carries `generatedAt`, and a timestamp in
- * the hashed content would make every render a new generation even when
- * nothing changed.
+ * Each aggregate carries its OWN `<ver>` (operator, 2026-09-04, GitHub issue
+ * #38). One hash over the whole set meant a single live run taking a turn
+ * moved `runs.json`, `results.json`, every `ladder-*.json` and `models.json`,
+ * and the pass then rewrote all ten aggregates under a fresh prefix — three of
+ * seven compared were byte-identical. Per-artifact versions make a pass rewrite
+ * only what changed, and the manifest names a key per artifact rather than one
+ * generation. `gen` survives as the manifest's own identity — the hash of the
+ * name/version pairs — which is what tells the publisher whether the flip is
+ * worth a PUT, and the wave ordering still writes the manifest last.
+ *
+ * Every `<ver>` is hashed over the PROJECTED payloads before the envelope goes
+ * on: the envelope carries `generatedAt`, and a timestamp in the hashed content
+ * would make every render a new version even when nothing changed.
  */
 
 import { join } from "node:path";
@@ -71,7 +80,7 @@ export const MUTABLE_CACHE = "public, max-age=30";
 export const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
 
 export interface SnapshotArtifact {
-  /** Bucket key, no leading slash, e.g. `v1/snap/<gen>/runs.json`. */
+  /** Bucket key, no leading slash, e.g. `v1/snap/<ver>/runs.json`. */
   path: string;
   /** Serialized JSON. */
   body: string;
@@ -80,7 +89,20 @@ export interface SnapshotArtifact {
 }
 
 export interface SnapshotResult {
+  /**
+   * The manifest's identity: the hash of the aggregate name/version pairs. It
+   * moves when the manifest's content moves and not otherwise, which is
+   * exactly the question the publisher asks before spending a PUT on the flip.
+   * It is no longer a key prefix — nothing is addressed by it.
+   */
   gen: string;
+  /**
+   * Aggregate name (`runs.json`, `ladder-e90.json`, …) -> its bucket key this
+   * pass. The manifest's `artifacts` map, handed to the publisher as data so
+   * the engine can check that the pass uploads exactly what the manifest names
+   * without parsing anyone's JSON.
+   */
+  snap: Record<string, string>;
   artifacts: SnapshotArtifact[];
 }
 
@@ -96,28 +118,42 @@ export function hash12(body: string): string {
 }
 
 /**
- * Serialize a projected payload for ADDRESSING (`gen`, per-run `<ver>`), with
- * the volatile clock zeroed.
+ * Serialize a projected payload for ADDRESSING (each artifact's `<ver>`), with
+ * the two wall-clock-driven fields zeroed.
  *
  * Several responses stamp a top-level `now` (results, ladder, episodes,
  * campaigns, models, info) that moves with wall clock, not with data; hashed
- * as-is it would make every render a new generation, and the publisher would
+ * as-is it would make every render a new version, and the publisher would
  * re-upload the whole aggregate set every pass of an idle fleet. So the hash
  * sees a copy with `now: 0` while the EMITTED body keeps the real value.
- * Nothing else is normalized on purpose: a live run's growing playtime,
- * `lastTs` or `live` flag are data, and a changed generation is then correct.
- * The same holds for the scheduler's clock-crossings in models.json — a
- * cooldown expiring or a pause going stale flips a status the models page
- * shows, so the gen moving on those (rare, boundary) events is deliberate.
- * The invariant is "no data change and no state-visible clock crossing ⇒
- * same gen", not "idle wall clock ⇒ same gen".
+ *
+ * `playtimeMs` is zeroed for the same reason, wherever it appears (operator,
+ * 2026-09-04, GitHub issue #38 — this reverses the earlier "nothing else is
+ * normalized" rule). A live run's active time advances with the clock on every
+ * pass, so hashing it made a run's detail — and every row of `runs.json` and
+ * `results.json` that carries the figure — churn on passes where nothing had
+ * happened. What that gives up is the two cases where the field moves without
+ * anything beside it moving: a `LevelMark.playtimeMs` revised by a pause
+ * recorded after the fact, and the live figure itself between turns. Both then
+ * publish on the next real change rather than immediately, which is the trade
+ * the issue asked for.
+ *
+ * Nothing else is normalized: `lastTs` and the `live` flag are data, and a
+ * changed version is then correct. The same holds for the scheduler's
+ * clock-crossings in models.json — a cooldown expiring or a pause going stale
+ * flips a status the models page shows, so the version moving on those (rare,
+ * boundary) events is deliberate. The invariant is "no data change and no
+ * state-visible clock crossing ⇒ same version", not "idle wall clock ⇒ same
+ * version".
  * (The spread below builds a hash-only local copy of an already-projected
  * payload, never anything emitted — the projection's no-spread rule is about
- * what ships.)
+ * what ships; the replacer likewise touches only what is hashed.)
  */
 function addressable(payload: object): string {
   const o = payload as Record<string, unknown>;
-  return JSON.stringify(typeof o["now"] === "number" ? { ...o, now: 0 } : o);
+  return JSON.stringify(typeof o["now"] === "number" ? { ...o, now: 0 } : o, (key, value) =>
+    key === "playtimeMs" && typeof value === "number" ? 0 : (value as unknown),
+  );
 }
 
 export interface RendererOptions {
@@ -297,9 +333,13 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
     const artifacts: SnapshotArtifact[] = perRun.flatMap((a) => a ?? []);
 
     /*
-     * The snap set, in a fixed order: `gen` is the hash of these payloads
-     * concatenated, so the order is part of the address and must not depend on
-     * iteration luck.
+     * The snap set, in a fixed order. Each aggregate is addressed by its own
+     * payload, so an unchanged one lands on the key it already had and costs
+     * the publisher nothing; `gen` is then the hash of the name/version pairs,
+     * which is the manifest's content and nothing else. The order is part of
+     * `gen`, so it must not depend on iteration luck — and the name is part of
+     * each key, so two aggregates that happen to serialize identically (two
+     * empty ladders) still get their own object.
      */
     const snap: [string, object][] = [
       ["info.json", info],
@@ -311,13 +351,19 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
       ["campaigns.json", campaigns],
       ["tools.json", tools],
     ];
-    const gen = hash12(snap.map(([, payload]) => addressable(payload)).join("\n"));
+    const versions = snap.map(([name, payload]): [string, object, string] => [name, payload, hash12(addressable(payload))]);
+    const paths: Record<string, string> = {};
+    for (const [name, , ver] of versions) paths[name] = `v1/snap/${ver}/${name}`;
+    const gen = hash12(versions.map(([name, , ver]) => `${name} ${ver}`).join("\n"));
 
     const out: SnapshotArtifact[] = [
       {
         path: "v1/manifest.json",
-        // The envelope's fields plus the one fact the manifest exists for.
-        body: JSON.stringify({ gen, generatedAt: now, attribution: PUBLIC_ATTRIBUTION }),
+        // The envelope's fields plus the one fact the manifest exists for:
+        // where each aggregate is this pass. `gen` rides along as the set's
+        // identity — a reader may use it to tell two manifests apart, but it
+        // addresses nothing.
+        body: JSON.stringify({ gen, artifacts: paths, generatedAt: now, attribution: PUBLIC_ATTRIBUTION }),
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,
       },
@@ -327,9 +373,9 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,
       },
-      ...snap.map(
+      ...versions.map(
         ([name, payload]): SnapshotArtifact => ({
-          path: `v1/snap/${gen}/${name}`,
+          path: paths[name]!,
           body: envelope(payload),
           contentType: "application/json",
           cacheControl: IMMUTABLE_CACHE,
@@ -338,7 +384,7 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
       ...artifacts,
     ];
 
-    return { gen, artifacts: out };
+    return { gen, snap: paths, artifacts: out };
   };
 }
 

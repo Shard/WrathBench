@@ -91,19 +91,50 @@ Tiles are served only behind the gate, `private, max-age=3600` and
 ### Bucket layout, atomicity, freshness
 
 ```
-/v1/manifest.json                    mutable   max-age=30   { gen, generatedAt }
+/v1/manifest.json                    mutable   max-age=30   { gen, artifacts: {name: key}, generatedAt }
 /v1/live.json                        mutable   max-age=30   fleet + positions fast lane
-/v1/snap/<gen>/runs.json …           immutable max-age=1y   the aggregate set
+/v1/snap/<ver>/runs.json …           immutable max-age=1y   one aggregate, at its own content version
 /v1/run/<id>/<ver>/detail.json …     immutable max-age=1y   per-run detail and track
 ```
 
-Everything except the two mutable files is immutable and addressed by a
-generation stamp (aggregates) or a content version (per-run). Upload order is
-per-run → aggregates → manifest last, so a reader can never observe a torn
-generation: an old manifest points at a complete old set, the new one at a
-complete new set. `live.json` sits deliberately outside the generation chain
-— for the fleet pips, freshness beats consistency. Old generations are pruned
-after a few cycles; deletes are free.
+Everything except the two mutable files is immutable and addressed by its own
+content version. The manifest is the index: `artifacts` maps an aggregate name
+to its bucket key, the way a run row's `snapshot` pointers do, so a reader
+follows keys and never reconstructs one. `gen` rides along as the manifest's
+own identity — the hash of the name/version pairs — and addresses nothing; it
+is what tells the publisher whether the flip is worth a PUT.
+
+Upload order is per-run → aggregates → manifest last, so a reader can never
+observe a torn generation: an old manifest points at a complete old set, the
+new one at a complete new set. `live.json` sits deliberately outside the
+generation chain — for the fleet pips, freshness beats consistency. Superseded
+versions are pruned after a few cycles (the last five of each aggregate, the
+last two of each run); deletes are free.
+
+Per-aggregate versions replaced one hash over the whole set on 2026-09-04
+(operator, GitHub issue #38). Under the old scheme a single live run taking a
+turn moved `runs.json`, `results.json`, every `ladder-*.json` and
+`models.json`, and the pass rewrote all ten aggregates under a fresh prefix —
+three of seven compared were byte-identical. The same pass now rewrites only
+what moved. `playtimeMs` is zeroed alongside `now` when a payload is hashed for
+addressing, for the same reason: it advances with the wall clock on every pass
+of a live run, so hashing it made a run's detail and every aggregate carrying
+the figure churn on passes where nothing had happened. The cost is that a
+change to `playtimeMs` alone — the live figure between turns, or a level mark
+revised by a pause recorded after the fact — publishes on the next real change
+rather than immediately.
+
+**Publisher and reader move together.** The manifest is a contract, and the
+transition has one asymmetry: a reader that knows `artifacts` falls back to the
+old one-prefix layout when it meets a manifest without it, but a reader too old
+to know `artifacts` reads `gen` and derives a key that no longer exists. So the
+dashboard deploys first and the publisher second; between the two the site is
+correct on both shapes. A tab still running pre-#38 JavaScript across the
+publisher deploy sees 404s on the aggregates until it is reloaded — bounded by
+the manifest's 30s TTL plus a reload, and not worth a compatibility write of
+the whole set under one prefix, which is the cost the change exists to remove.
+The pre-#38 objects need no migration: their keys classify as ordinary versions
+of the names they carry, so the first flip after the change prunes them.
 
 Worst-case staleness is push cadence + edge TTL ≈ 90–120s. If that ever
 matters, a cache-purge API call on the two mutable URLs after each push
@@ -405,24 +436,30 @@ The table above prices **reads** — the spike this design exists to survive. Th
 **writes** went unpriced until the loop actually ran, and they are the side that
 has a live-fleet-shaped cost.
 
-Measured 2026-08-25 against a real fleet: a steady pass is **24 PUTs + ~4
+Measured 2026-08-25 against a real fleet: a steady pass was **24 PUTs + ~4
 DELETEs**, made of the ten snapshot aggregates, `manifest.json`, `live.json`,
-and a detail/track pair per live run (six, at the time). The count is
-near-constant whatever the cadence, because `gen` is a single hash over every
-aggregate: one live run taking a turn changes `runs.json`, `results.json`,
-`ladder-*.json` and `models.json`, and that rewrites all ten under a fresh
+and a detail/track pair per live run (six, at the time). The count was
+near-constant whatever the cadence, because `gen` was a single hash over every
+aggregate: one live run taking a turn changed `runs.json`, `results.json`,
+`ladder-*.json` and `models.json`, and that rewrote all ten under a fresh
 prefix. Those are real data changes — token counts, turns, levels, cost basis —
-not clock artifacts, so normalizing timestamps does not remove them.
+not clock artifacts, so normalizing timestamps alone would not have removed
+them.
+
+Per-aggregate versions (2026-09-04) take the aggregate half of that from ten to
+the ones that actually moved — three of seven compared on that pass were
+byte-identical — and zeroing `playtimeMs` when hashing removes the passes where
+a live run's clock alone had advanced. The floor is unchanged and was always
+the point: an **idle** fleet costs one `live.json` PUT per pass at any cadence
+(~9k/month at 300s).
 
 | cadence | class-A ops/month | against the 1M free tier |
 |---|---|---|
 | 60s | ~1.21M | over, about $0.94/month |
 | 300s (current) | ~242k | ~24% |
 
-An **idle** fleet costs one `live.json` PUT per pass at any cadence (~9k/month
-at 300s): the entire write cost is live runs. That is why the cadence, not a
-timestamp fix, was the lever pulled — see GitHub issue #38 for what is
-still worth doing.
+The entire write cost is live runs. The cadence was the first lever pulled, in
+2026-08-25; per-aggregate addressing is the second.
 
 Unverified at research time (primary pages blocked from the research
 environment; confirm before relying on them): the exact Pro-plan feature

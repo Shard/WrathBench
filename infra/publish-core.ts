@@ -2,7 +2,7 @@
  * The publish engine behind the public dashboard's push loop.
  *
  * A renderer produces a full artifact set per pass (every object the public
- * bucket should hold for one generation); this file decides what to actually
+ * bucket should hold right now); this file decides what to actually
  * PUT, in what order, and what to delete afterwards. It holds no CLI, no
  * credentials and no S3 SDK: the store is an interface and the state is a plain
  * object, so everything here is exercised against a fake bucket in memory.
@@ -10,15 +10,18 @@
  * Three ideas carry the whole design.
  *
  * **Ordering is the point.** Readers resolve `manifest.json` and then follow it
- * to generation-addressed objects. So the manifest is written LAST, after every
- * object the new manifest can name is already in the bucket, and a failure
- * anywhere earlier aborts before the flip. A reader then sees either the whole
- * old generation or the whole new one — never a torn mix. Waves are barriers:
- * per-run objects, then aggregates, then the two mutable files.
+ * to the content-addressed objects it names. So the manifest is written LAST,
+ * after every object the new manifest can name is already in the bucket, and a
+ * failure anywhere earlier aborts before the flip. A reader then sees either
+ * the whole old set or the whole new one — never a torn mix. Waves are
+ * barriers: per-run objects, then aggregates, then the two mutable files. That
+ * ordering did not change when aggregates gained their own content versions
+ * (2026-09-04): a pass now rewrites only the aggregates that moved, but it
+ * still writes every one of them before the manifest that names them.
  *
  * **Diffing is by key first, body hash second.** The renderer is free to
  * re-render everything every minute; almost none of it should cost a PUT. A
- * `v1/run/<id>/<ver>/` or `v1/snap/<gen>/` key is immutable by construction —
+ * `v1/run/<id>/<ver>/` or `v1/snap/<ver>/` key is immutable by construction —
  * the key embeds the content version — so a key the bucket already holds is
  * skipped outright, whatever its body hashes to. That distinction is not
  * pedantry: every artifact carries a fresh `generatedAt` envelope, so bodies
@@ -30,8 +33,8 @@
  * never be re-uploaded after the object behind it was removed.
  *
  * **Pruning is bounded and best-effort.** Immutable objects accumulate forever
- * otherwise. We keep the last few generations and the last couple of versions
- * per run; a delete that fails is retried next pass and never fails a publish,
+ * otherwise. We keep the last few versions of each aggregate and the last
+ * couple of versions per run; a delete that fails is retried next pass and never fails a publish,
  * because a leaked object costs a fraction of a cent and a failed publish costs
  * a minute of staleness.
  *
@@ -50,7 +53,7 @@ import { dirname } from "node:path";
  * `satisfies`-check that they still agree.
  */
 export interface SnapshotArtifact {
-  /** Bucket key, e.g. `v1/snap/<gen>/runs.json`. No leading slash. */
+  /** Bucket key, e.g. `v1/snap/<ver>/runs.json`. No leading slash. */
   path: string;
   /** Serialized JSON. */
   body: string;
@@ -58,9 +61,16 @@ export interface SnapshotArtifact {
   cacheControl: string;
 }
 
-/** One rendered pass: the generation stamp and every object it consists of. */
+/** One rendered pass: the manifest's identity, the aggregate index, and every object it consists of. */
 export interface SnapshotResult {
+  /**
+   * The manifest's own identity — the hash of the aggregate name/version pairs
+   * (`runner/viewer/snapshot.ts`). Since 2026-09-04 it addresses nothing: it is
+   * only what decides whether the flip is worth a PUT.
+   */
   gen: string;
+  /** Aggregate name -> its bucket key this pass. Exactly what the manifest names. */
+  snap: Record<string, string>;
   artifacts: SnapshotArtifact[];
 }
 
@@ -82,7 +92,15 @@ export const LIVE_PATH = "v1/live.json";
 export const RUN_PREFIX = "v1/run/";
 export const SNAP_PREFIX = "v1/snap/";
 
-/** Generations kept in the bucket, newest first. Older ones are pruned. */
+/**
+ * Versions kept per aggregate, newest first. Older ones are pruned.
+ *
+ * Named for what it used to keep — whole generations — because it is still the
+ * same grace window measured the same way: five passes' worth of superseded
+ * aggregates, so a reader that resolved a manifest five cadences ago can still
+ * follow it. Five rather than the runs' two because the aggregates are what a
+ * stale manifest points at, and they are small.
+ */
 export const DEFAULT_KEEP_GENS = 5;
 /** Content versions kept per run. See `planPrune` for why two is enough. */
 export const DEFAULT_KEEP_RUN_VERSIONS = 2;
@@ -99,12 +117,12 @@ export const PENDING_DELETE_CAP = 1000;
 /** What a bucket key is, which decides both its wave and its prunability. */
 export type PathKind =
   | { kind: "run"; runId: string; version: string }
-  | { kind: "gen"; gen: string }
+  | { kind: "snap"; name: string; version: string }
   | { kind: "mutable" }
   | { kind: "other" };
 
 /**
- * Classify a bucket key. Only `run` and `gen` keys are ever prunable — anything
+ * Classify a bucket key. Only `run` and `snap` keys are ever prunable — anything
  * unrecognized is left alone rather than guessed at, so a layout change cannot
  * cause the engine to delete objects it does not understand.
  */
@@ -118,8 +136,16 @@ export function classifyPath(path: string): PathKind {
     return { kind: "other" };
   }
   if (path.startsWith(SNAP_PREFIX)) {
-    const [gen, ...rest] = path.slice(SNAP_PREFIX.length).split("/");
-    if (gen !== undefined && gen !== "" && rest.length > 0) return { kind: "gen", gen };
+    // `v1/snap/<version>/<name>`. Before 2026-09-04 the segment was one
+    // generation stamp shared by every aggregate; it is now that aggregate's
+    // own content version, and the classification is the same either way —
+    // which is what lets the pruner treat the leftovers of the old layout as
+    // ordinary surplus versions of the names they carry.
+    const [version, ...rest] = path.slice(SNAP_PREFIX.length).split("/");
+    const name = rest.length === 1 ? rest[0] : undefined;
+    if (version !== undefined && version !== "" && name !== undefined && name !== "") {
+      return { kind: "snap", name, version };
+    }
     return { kind: "other" };
   }
   return { kind: "other" };
@@ -162,9 +188,11 @@ export interface PublishState {
   version: 1;
   /** Bucket key -> sha256 of the body we believe is behind it. */
   uploaded: Record<string, string>;
-  /** Generation stamps whose manifest flip completed, oldest first. */
+  /** Manifest identities whose flip completed, oldest first. Operational history only. */
   gens: string[];
-  /** Run id -> content versions in first-seen order, oldest first. */
+  /** Aggregate name -> content versions, most recently current last. */
+  snapVersions: Record<string, string[]>;
+  /** Run id -> content versions, most recently current last. */
   runVersions: Record<string, string[]>;
   /** Prune deletes that failed, retried best-effort on later passes. */
   pendingDeletes: string[];
@@ -175,7 +203,7 @@ export interface PublishState {
 }
 
 export function emptyState(): PublishState {
-  return { version: 1, uploaded: {}, gens: [], runVersions: {}, pendingDeletes: [] };
+  return { version: 1, uploaded: {}, gens: [], snapVersions: {}, runVersions: {}, pendingDeletes: [] };
 }
 
 /** sha256 of a body, hex. The only thing diffing compares. */
@@ -199,11 +227,12 @@ export function parseState(json: string): PublishState {
     for (const [k, v] of Object.entries(uploaded as Record<string, unknown>)) if (typeof v === "string") state.uploaded[k] = v;
   }
   state.gens = asStringArray(raw["gens"]);
-  const runVersions = raw["runVersions"];
-  if (runVersions !== null && typeof runVersions === "object") {
-    for (const [k, v] of Object.entries(runVersions as Record<string, unknown>)) {
+  for (const field of ["snapVersions", "runVersions"] as const) {
+    const raws = raw[field];
+    if (raws === null || typeof raws !== "object") continue;
+    for (const [k, v] of Object.entries(raws as Record<string, unknown>)) {
       const versions = asStringArray(v);
-      if (versions.length > 0) state.runVersions[k] = versions;
+      if (versions.length > 0) state[field][k] = versions;
     }
   }
   state.pendingDeletes = asStringArray(raw["pendingDeletes"]);
@@ -243,13 +272,23 @@ export function saveState(path: string, state: PublishState): void {
   renameSync(tmp, path);
 }
 
-/** Record a run's content version the first time we see it, preserving order. */
-function registerRunVersion(state: PublishState, runId: string, version: string): void {
-  const versions = (state.runVersions[runId] ??= []);
-  if (!versions.includes(version)) versions.push(version);
+/**
+ * Record a content version as the current one, newest last.
+ *
+ * A version already in the list is moved to the end rather than left where it
+ * was: the keep window is "the last N that were current", and an artifact that
+ * reverts to an earlier body (a ladder losing a row and regaining it) would
+ * otherwise sit at a stale position and could be pruned while the live manifest
+ * still names it.
+ */
+function registerVersion(index: Record<string, string[]>, key: string, version: string): void {
+  const versions = (index[key] ??= []);
+  const at = versions.indexOf(version);
+  if (at !== -1) versions.splice(at, 1);
+  versions.push(version);
 }
 
-/** Record a completed flip. Re-publishing the same generation is not history. */
+/** Record a completed flip. Re-publishing the same manifest is not history. */
 function recordGen(state: PublishState, gen: string, at: number): void {
   const without = state.gens.filter((g) => g !== gen);
   without.push(gen);
@@ -322,6 +361,7 @@ async function pooled<T>(
 // ---------------------------------------------------------------------- prune
 
 export interface PruneLimits {
+  /** Versions kept per aggregate. Still spelled `keepGens`: same window, per artifact now. */
   keepGens?: number;
   keepRunVersions?: number;
 }
@@ -330,27 +370,34 @@ export interface PruneLimits {
  * Which remembered objects are now surplus. Pure over the state, so the policy
  * is testable without a bucket.
  *
- * Two rules, and the second subsumes the "never touch the current or previous
- * generation" guarantee: a pass produces at most one version per run, so the
- * version a run had in the previous generation is at most one behind its
- * current one — keeping the last two per run keeps both by construction.
- * Generations are kept by stamp, newest `keepGens` of them.
+ * One rule, applied to two indexes: keep the newest `keep` versions of each
+ * name, drop the rest. It subsumes the "never touch what the live manifest
+ * points at" guarantee, because a pass produces at most one version per name —
+ * so the version the previous manifest named is at most one behind the current
+ * one, and any keep count above one keeps both by construction.
+ *
+ * The leftovers of the pre-2026-09-04 layout need no special case. Their keys
+ * are `v1/snap/<oldgen>/<name>`, which classify as ordinary versions of those
+ * names; the first flip after the change finds them outside every keep window
+ * and deletes them. That is a one-off burst of deletes (`keepGens` × the
+ * aggregate count at most), and deletes are free.
  */
 export function planPrune(state: PublishState, limits: PruneLimits = {}): string[] {
-  const keepGens = Math.max(1, limits.keepGens ?? DEFAULT_KEEP_GENS);
+  const keepSnapVersions = Math.max(1, limits.keepGens ?? DEFAULT_KEEP_GENS);
   const keepRunVersions = Math.max(1, limits.keepRunVersions ?? DEFAULT_KEEP_RUN_VERSIONS);
 
-  const liveGens = new Set(state.gens.slice(-keepGens));
-  const liveVersions = new Map<string, Set<string>>();
-  for (const [runId, versions] of Object.entries(state.runVersions)) liveVersions.set(runId, new Set(versions.slice(-keepRunVersions)));
+  const live = (index: Record<string, string[]>, keep: number): Map<string, Set<string>> =>
+    new Map(Object.entries(index).map(([key, versions]) => [key, new Set(versions.slice(-keep))]));
+  const liveSnap = live(state.snapVersions, keepSnapVersions);
+  const liveRuns = live(state.runVersions, keepRunVersions);
 
   const surplus: string[] = [];
   for (const path of Object.keys(state.uploaded)) {
     const c = classifyPath(path);
-    if (c.kind === "gen") {
-      if (!liveGens.has(c.gen)) surplus.push(path);
+    if (c.kind === "snap") {
+      if (liveSnap.get(c.name)?.has(c.version) !== true) surplus.push(path);
     } else if (c.kind === "run") {
-      if (liveVersions.get(c.runId)?.has(c.version) !== true) surplus.push(path);
+      if (liveRuns.get(c.runId)?.has(c.version) !== true) surplus.push(path);
     }
     // `mutable` and `other` are never prunable — see classifyPath.
   }
@@ -359,12 +406,14 @@ export function planPrune(state: PublishState, limits: PruneLimits = {}): string
 
 /** Drop the history the prune just acted on, so the lists stay bounded too. */
 function trimHistory(state: PublishState, limits: PruneLimits): void {
-  const keepGens = Math.max(1, limits.keepGens ?? DEFAULT_KEEP_GENS);
+  const keepSnapVersions = Math.max(1, limits.keepGens ?? DEFAULT_KEEP_GENS);
   const keepRunVersions = Math.max(1, limits.keepRunVersions ?? DEFAULT_KEEP_RUN_VERSIONS);
-  if (state.gens.length > keepGens) state.gens = state.gens.slice(-keepGens);
-  for (const [runId, versions] of Object.entries(state.runVersions)) {
-    if (versions.length > keepRunVersions) state.runVersions[runId] = versions.slice(-keepRunVersions);
-  }
+  if (state.gens.length > keepSnapVersions) state.gens = state.gens.slice(-keepSnapVersions);
+  const trim = (index: Record<string, string[]>, keep: number): void => {
+    for (const [key, versions] of Object.entries(index)) if (versions.length > keep) index[key] = versions.slice(-keep);
+  };
+  trim(state.snapVersions, keepSnapVersions);
+  trim(state.runVersions, keepRunVersions);
 }
 
 // -------------------------------------------------------------------- publish
@@ -401,18 +450,20 @@ export interface PublishReport {
  *
  * Three regimes, and which one a key falls into is decided by `classifyPath`:
  *
- * - **Immutable keys** (`v1/run/<id>/<ver>/…`, `v1/snap/<gen>/…`) are
+ * - **Immutable keys** (`v1/run/<id>/<ver>/…`, `v1/snap/<ver>/…`) are
  *   *path-addressed*: the key names the content version, so the same key means
  *   the same logical content and first write wins. Present in the bucket ⇒
  *   never rewritten. This is what makes an idle fleet cost nothing: the bodies
  *   still differ every pass, because each carries a fresh `generatedAt`
  *   envelope, and honouring that difference would re-PUT the whole corpus every
  *   minute for a timestamp nobody reads off an immutable object.
- * - **The manifest** is the flip, and the flip is a generation. Re-writing it
- *   for a generation the bucket already advertises buys nothing and costs a PUT
- *   every pass forever, so an unchanged `gen` skips it. (Guarded on the key
- *   actually being in state: if we have no record of ever writing the manifest,
- *   write it.)
+ * - **The manifest** is the flip, and `gen` is the manifest's own content.
+ *   Re-writing it for a manifest the bucket already advertises buys nothing and
+ *   costs a PUT every pass forever, so an unchanged `gen` skips it — which is
+ *   what makes a genuinely idle pass cost exactly one PUT (`live.json`) now
+ *   that an idle pass also re-addresses every aggregate to the key it already
+ *   had. (Guarded on the key actually being in state: if we have no record of
+ *   ever writing the manifest, write it.)
  * - **Everything else** — `live.json`, and any key the layout does not
  *   recognize — is diffed by body hash. `live.json` genuinely changes every
  *   pass: it carries the fleet clock the client reads staleness from, and it is
@@ -433,7 +484,7 @@ export interface PublishReport {
  */
 export function needsPut(path: string, bodyHash: () => string, state: PublishState, gen: string): boolean {
   const kind = classifyPath(path).kind;
-  if (kind === "run" || kind === "gen") return state.uploaded[path] === undefined;
+  if (kind === "run" || kind === "snap") return state.uploaded[path] === undefined;
   if (path === MANIFEST_PATH && gen === state.lastGen && state.uploaded[path] !== undefined) return false;
   return state.uploaded[path] !== bodyHash();
 }
@@ -441,8 +492,12 @@ export function needsPut(path: string, bodyHash: () => string, state: PublishSta
 /**
  * Validate the renderer's output before a single byte moves. Each of these
  * would corrupt the bucket quietly rather than loudly: two artifacts on one key
- * make the winner arbitrary, and a `v1/snap/<other>/` key would attribute this
- * pass's objects to a generation the pruner is free to delete.
+ * make the winner arbitrary, and an aggregate key the manifest does not name —
+ * or a manifest entry no artifact backs — is a torn generation waiting for the
+ * flip. That second check is what the old "every `v1/snap/` key belongs to this
+ * pass's generation" rule became when the generation stopped being a key
+ * prefix: `result.snap` is the manifest's index as data, so the engine can hold
+ * the pass to it without parsing anyone's JSON.
  */
 function assertResult(result: SnapshotResult): void {
   if (result.gen === "") throw new Error("publish: the rendered result has no generation stamp");
@@ -451,9 +506,14 @@ function assertResult(result: SnapshotResult): void {
     if (a.path === "" || a.path.startsWith("/")) throw new Error(`publish: ${JSON.stringify(a.path)} is not a bucket key (non-empty, no leading slash)`);
     if (seen.has(a.path)) throw new Error(`publish: two artifacts claim the key ${a.path}`);
     seen.add(a.path);
-    const c = classifyPath(a.path);
-    if (c.kind === "gen" && c.gen !== result.gen) {
-      throw new Error(`publish: ${a.path} belongs to generation ${c.gen} but the pass renders ${result.gen}`);
+  }
+  const named = new Set(Object.values(result.snap));
+  for (const [name, path] of Object.entries(result.snap)) {
+    if (!seen.has(path)) throw new Error(`publish: the manifest names ${path} for ${name} but the pass renders no such artifact`);
+  }
+  for (const a of result.artifacts) {
+    if (classifyPath(a.path).kind === "snap" && !named.has(a.path)) {
+      throw new Error(`publish: ${a.path} is an aggregate the manifest does not name`);
     }
   }
 }
@@ -529,7 +589,7 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
   }
   report.flipped = true;
   recordGen(state, result.gen, now());
-  // Registered here, with the generation, and for the same reason: history is
+  // Registered here, with the flip, and for the same reason: history is
   // what flipped, not what was attempted. A pass that died before the flip must
   // not spend one of the `keepRunVersions` slots, or a run of failures would
   // push the version the live manifest still names out of the keep window and
@@ -541,7 +601,8 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
   // second history to keep correct for no gain.
   for (const a of result.artifacts) {
     const c = classifyPath(a.path);
-    if (c.kind === "run") registerRunVersion(state, c.runId, c.version);
+    if (c.kind === "run") registerVersion(state.runVersions, c.runId, c.version);
+    else if (c.kind === "snap") registerVersion(state.snapVersions, c.name, c.version);
   }
 
   if (opts.prune !== false) await runPrune(store, state, report, { keepGens: opts.keepGens, keepRunVersions: opts.keepRunVersions }, concurrency, log);
