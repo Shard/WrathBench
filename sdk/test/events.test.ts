@@ -312,3 +312,87 @@ test('on("*") and off("*") route to the any-handler set', () => {
   stream.ingest(all[1]!);
   expect(seen).toHaveLength(1);
 });
+
+describe("event stream: per-attempt connect deadline (issue #34)", () => {
+  /**
+   * A socket that never completes its handshake, so the stream only escapes it
+   * via the open deadline. Instance 0 stalls in CONNECTING; instance 1 opens.
+   * `close()` dispatches its `close` event *late* — after the backoff delay has
+   * already fired the next attempt — which is the case that would double-advance
+   * the ladder if the timeout path did not claim the socket for itself.
+   */
+  class StallingSocket {
+    static instances: StallingSocket[] = [];
+    readonly index: number;
+    closeCalls = 0;
+    /** 0 CONNECTING, 1 OPEN, 3 CLOSED — what `EventStream.connected` reads. */
+    readyState = 0;
+    private readonly handlers = new Map<string, ((ev: unknown) => void)[]>();
+
+    constructor(readonly url: string) {
+      this.index = StallingSocket.instances.length;
+      StallingSocket.instances.push(this);
+      if (this.index > 0)
+        setTimeout(() => {
+          this.readyState = 1;
+          this.dispatch("open");
+        }, 0);
+    }
+
+    addEventListener(type: string, handler: (ev: unknown) => void): void {
+      const list = this.handlers.get(type) ?? [];
+      list.push(handler);
+      this.handlers.set(type, list);
+    }
+
+    close(): void {
+      this.closeCalls++;
+      this.readyState = 3;
+      if (this.index === 0) setTimeout(() => this.dispatch("close"), 30);
+    }
+
+    private dispatch(type: string): void {
+      for (const h of this.handlers.get(type) ?? []) h({ type });
+    }
+  }
+
+  test("a handshake that never completes fails the attempt and advances the ladder", async () => {
+    StallingSocket.instances = [];
+    const opened = Promise.withResolvers<void>();
+    const lateClose = Promise.withResolvers<void>();
+    class Watched extends StallingSocket {
+      constructor(url: string) {
+        super(url);
+        if (this.index === 0) this.addEventListener("close", () => lateClose.resolve());
+        if (this.index === 1) this.addEventListener("open", () => opened.resolve());
+      }
+    }
+    const stream = new EventStream({
+      url: "ws://stalled",
+      token: "t",
+      connectTimeoutMs: 20,
+      reconnectMinDelayMs: 5,
+      reconnectMaxDelayMs: 20,
+      webSocketImpl: Watched as unknown as typeof WebSocket,
+    });
+
+    // Without the deadline this promise never settles: the stalled socket fires
+    // neither close nor error, so nothing reschedules.
+    await expect(stream.connect()).rejects.toThrow(/did not open within 20ms/);
+    // The stalled socket is closed, not leaked half-open.
+    expect(StallingSocket.instances[0]?.closeCalls).toBe(1);
+
+    // The ladder advanced on its own and the next attempt connected.
+    await opened.promise;
+    expect(StallingSocket.instances.length).toBe(2);
+    expect(stream.connected).toBe(true);
+
+    // The stalled socket's late `close` must not open a third attempt. Awaiting
+    // it keeps the assertion from passing merely because it never arrived.
+    await lateClose.promise;
+    await new Promise((r) => setTimeout(r, 40));
+    expect(StallingSocket.instances.length).toBe(2);
+
+    stream.close();
+  });
+});
