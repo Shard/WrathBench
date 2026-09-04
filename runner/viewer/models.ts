@@ -36,6 +36,7 @@ import {
   schedulability,
   schedulableView,
   readRunFact,
+  type CountCache,
   type ModelState,
   type PolicyJob,
   type RosterModel,
@@ -287,6 +288,27 @@ export const LIVE_WINDOW_MS = 120_000;
  * `api.ts`. Liveness is the one field that cannot be cached, because it is a
  * claim about *now*, so it is re-decided from the cached mtime on every call.
  */
+/**
+ * The record-count scanners behind the fact cache, one map per fact cache.
+ *
+ * A live run's signature moves between every poll, so its fact is re-read every
+ * time — and reading it used to mean reading a 400MB trajectory from byte zero.
+ * The scanners fold only what has been appended since the last poll
+ * (`countRecordsCached`). They hang off the fact cache rather than off the
+ * module so that a caller's cache is the whole lifetime of the memory, and they
+ * are swept by the same loop that drops a vanished run below.
+ */
+const COUNT_CACHES = new WeakMap<Map<string, FactCacheEntry>, CountCache>();
+
+function countCacheFor(cache: Map<string, FactCacheEntry>): CountCache {
+  let counts = COUNT_CACHES.get(cache);
+  if (counts === undefined) {
+    counts = new Map();
+    COUNT_CACHES.set(cache, counts);
+  }
+  return counts;
+}
+
 export function readRunFactsCached(
   runsDir: string,
   cache: Map<string, FactCacheEntry>,
@@ -302,20 +324,25 @@ export function readRunFactsCached(
   }
   const out: RunFact[] = [];
   const seen = new Set<string>();
+  const counts = countCacheFor(cache);
   for (const id of names) {
     seen.add(id);
     const dir = join(runsDir, id);
     const { sig, mtime } = signature(dir);
     let hit = cache.get(id);
     if (hit === undefined || hit.sig !== sig) {
-      hit = { sig, fact: readRunFact(runsDir, id, now), mtime };
+      hit = { sig, fact: readRunFact(runsDir, id, now, { counts }), mtime };
       cache.set(id, hit);
     }
     if (hit.fact === null) continue;
     const live = hit.fact.terminationReason === null && hit.mtime !== null && now - hit.mtime < LIVE_WINDOW_MS;
     out.push(live === hit.fact.live ? hit.fact : { ...hit.fact, live });
   }
-  for (const id of [...cache.keys()]) if (!seen.has(id)) cache.delete(id);
+  for (const id of [...cache.keys()]) {
+    if (seen.has(id)) continue;
+    cache.delete(id);
+    counts.delete(join(runsDir, id, "trajectory.jsonl"));
+  }
   out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   return out;
 }
