@@ -9,9 +9,10 @@ import { ogTags, ogTagsFromEnv } from "./src/lib/og-tags.ts";
  * static bundle the Bun viewer hosts itself. Same-origin in production is why
  * there is no CORS anywhere.
  *
- * `@viewer/*` reaches into `runner/viewer` for the two modules that are shared
- * rather than duplicated: the API wire types and the world→tile transform.
- * Both are import-free by construction, so nothing server-side follows them in.
+ * `@viewer/*` reaches into `runner/viewer` for the three modules that are
+ * shared rather than duplicated: the API wire types, the world→tile transform
+ * and the freeplay lineage walk. All three are import-free by construction, so
+ * nothing server-side follows them in.
  */
 const viewerOrigin = process.env["WRATHBENCH_VIEWER_ORIGIN"] ?? "http://127.0.0.1:8090";
 

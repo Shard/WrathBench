@@ -27,7 +27,7 @@ import {
 } from "./axes";
 import { niceTicks, scaleLinear } from "./chart";
 import { modelDisplay } from "./format";
-import { chainsOf } from "./lineage";
+import { chainsOf } from "@viewer/lineage";
 import { OPAQUE_PAUSE_REASON, type RunStatus, statusOf as runStatusOf } from "./runs";
 
 export function scored(runs: readonly ResultRun[]): ResultRun[] {
@@ -1201,7 +1201,7 @@ function statusOf(r: ResultRun): { status: StreamStatus; detail: string | null }
 /**
  * Collapse a set of freeplay runs into one row per stream.
  *
- * The chain walk itself is `lib/lineage.ts` — shared with the runs table and
+ * The chain walk itself is `runner/viewer/lineage.ts` — shared with the runs table and
  * the run page, so the field and the inventory cannot disagree about which
  * attempts belong to one stream, and written there for the cases production
  * produces (a predecessor the set does not hold, a fork, a malformed cycle).
