@@ -106,6 +106,25 @@ worklogs/2026-08-29).
 
 ## Episodes and results
 
+112. **A Cerebras run shows no cost anywhere in the viewer** (2026-09-04, when
+     `qwen3-8-27b-cerebras` went in at t0). Both cost paths miss it: Cerebras
+     reports no `usage.cost` (that is an OpenRouter field), so there is no
+     *actual*, and `priceFor` returns `null` for it, so there is no *expected*
+     either — verified directly, against the local qwen entry returning its
+     `local` row in the same call. The run page therefore reads unpriced while
+     real money is being spent, which is the one case the "an unknown model gets
+     no cost at all" rule was not written for: it protects against a *guessed*
+     price, and here the price is published and known ($0.99/$1.49 per Mtok, no
+     cache discount).
+     Not fixable by hand-editing `prices.openrouter.json` — `sync-prices.ts`
+     writes only ids the OpenRouter catalogue carries and deletes the rest, so
+     the row would vanish on the next sync. Wants a second, hand-maintained
+     price table for non-OpenRouter providers, dated and sourced the way
+     `CLAUDE_PRICES` is, and a `priceFor` that consults it. Until then the
+     figures live in `docs/worklogs/2026-09-04.md` and are hand-computed from
+     the trajectory's token totals.
+     Trigger: a second non-OpenRouter paid provider, or Cerebras outliving the
+     $15 trial. Both make the gap permanent rather than a one-run footnote.
 
 ## Docs and release
 
