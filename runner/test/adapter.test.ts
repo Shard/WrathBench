@@ -77,6 +77,12 @@ describe("OpenAiChatAdapter attribution headers", () => {
     expect(headers.get("x-title")).toBe(APP_TITLE);
     expect(headers.get("http-referer")).toBe(APP_URL);
     expect(headers.get("user-agent")).toBe(USER_AGENT);
+    // The identity we send carries NO version. A hand-maintained one drifted
+    // for three series ("wrathbench/0.2" against a 0.5 harness) and nothing
+    // noticed, so the rule is stated as a test rather than a comment: any
+    // digit in the outbound user-agent is a version literal coming back.
+    expect(headers.get("user-agent")).toBe("WrathBench");
+    expect(headers.get("user-agent")).not.toMatch(/\d/);
     // and the key still goes where it always did
     expect(headers.get("authorization")).toBe("Bearer k");
   });

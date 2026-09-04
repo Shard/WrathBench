@@ -227,11 +227,18 @@ export interface OpenAiAdapterOptions {
 export const APP_URL = "https://github.com/Shard/WrathBench";
 export const APP_TITLE = "WrathBench";
 /**
- * Deliberately a constant and not `harnessVersion()`: that shells out to `git
- * describe` (version.ts), and a subprocess per model call to decorate a header
- * is not a trade worth making. The trajectory carries the exact version.
+ * The outbound identity, and deliberately no version with it. A hand-written
+ * `wrathbench/0.2` sat here while the harness moved to the 0.5 series, so what
+ * we told every provider was simply false and nothing caught it; the fix that
+ * cannot go stale is to say only who we are. A bare product token is a
+ * well-formed User-Agent (RFC 9110 makes the `/version` half optional), and it
+ * is the same name `X-Title` already carries, so it reuses that constant
+ * rather than repeating the string. The exact harness version belongs in the
+ * trajectory (`harnessVersion()`), which is where it is recorded — a provider
+ * has no use for it, and a per-request `git describe` was never a trade worth
+ * making anyway.
  */
-export const USER_AGENT = "wrathbench/0.2";
+export const USER_AGENT = APP_TITLE;
 
 /** `Retry-After`: integer seconds or an HTTP-date. Anything else is ignored. */
 export function parseRetryAfter(value: string | null, nowMs: number): number | null {
