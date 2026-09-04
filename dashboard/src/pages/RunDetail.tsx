@@ -56,7 +56,7 @@ import { XpChart } from "../components/XpChart";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
-import { hasLineage, lineageIndex, type Lineage } from "../lib/lineage";
+import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import { modelsHref, rosterNameFor } from "../lib/models";
 import { poll } from "../lib/poll";
 import {

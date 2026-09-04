@@ -13,7 +13,7 @@
  *
  * Everything here is pure so it can be tested without a DOM (dashboard/README.md).
  * `harnessSeries` is re-derived rather than imported: `runner/src/comparability.ts`
- * is not one of the two import-free modules the `@viewer/*` alias may cross.
+ * is not one of the import-free modules the `@viewer/*` alias may cross.
  */
 
 /**
