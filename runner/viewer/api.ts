@@ -74,7 +74,18 @@ import {
   projectTools,
   projectTrack,
 } from "./public-projection";
-import { isValidRunId, listRuns, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
+import {
+  isValidRunId,
+  LIVE_WINDOW_MS,
+  listRunsCached,
+  readMoves,
+  readRun,
+  readScratchpad,
+  readStates,
+  readStatesCached,
+  type RunReadCacheEntry,
+  runDir,
+} from "./runs";
 import { isArchiveDir } from "./archive-dir";
 import {
   TILE_CACHE_CONTROL,
@@ -88,7 +99,7 @@ import {
   playtimeMs,
   reportedCostUsd,
   responseCostCoverage,
-  scanRunTotals,
+  RunTotalsScanner,
   segmentsFrom,
   tokenTotals,
   tokensPerSecond,
@@ -546,7 +557,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
   const seriesCensus = (): { series: string; runs: number }[] => {
     const now = Date.now();
     if (seriesCache === undefined || now - seriesCache.at >= SERIES_CACHE_MS) {
-      seriesCache = { at: now, value: harnessSeriesCensus(listRuns(runsDir, now)) };
+      seriesCache = { at: now, value: harnessSeriesCensus(listRunsCached(runsDir, runReadCache, now)) };
     }
     return seriesCache.value;
   };
@@ -583,7 +594,24 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
    * every trajectory. A finished run's file never changes, so it is read once per
    * process; a live run is re-read only as it grows.
    */
-  const totalsCache = new Map<string, { size: number; mtime: number; totals: RunTotals }>();
+  const totalsCache = new Map<
+    string,
+    {
+      size: number;
+      mtime: number;
+      totals: RunTotals;
+      /**
+       * The resumable scan behind those totals, kept only while the file is
+       * still being written. A live run's trajectory runs to hundreds of
+       * megabytes and misses the (size, mtime) key on every poll, so without
+       * this every listing route re-read it from byte zero — the whole reason
+       * the API was slow. A scanner retains one mark per reply, which is the
+       * one thing here proportional to the file, so a run whose trajectory has
+       * gone quiet drops it and keeps the totals alone.
+       */
+      scanner?: RunTotalsScanner;
+    }
+  >();
 
   /**
    * Run facts for `/api/models`, memoised per run the same way.
@@ -593,6 +621,14 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
    * forever. A finished run's fact is read once per process.
    */
   const factCache = new Map<string, FactCacheEntry>();
+
+  /**
+   * Run rows and their state series for the listing routes, memoised per run
+   * the same way (`readRunCached` in `runs.ts` carries the rule, including why
+   * a live run is never served from it). Every listing route reads all 330 of
+   * them, which is 330 database opens per request without this.
+   */
+  const runReadCache = new Map<string, RunReadCacheEntry>();
 
   async function runTotals(runId: string, dir: string): Promise<RunTotals | null> {
     const path = join(dir, "trajectory.jsonl");
@@ -604,8 +640,27 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     }
     const hit = totalsCache.get(runId);
     if (hit !== undefined && hit.size === st.size && hit.mtime === st.mtimeMs) return hit.totals;
-    const totals = await scanRunTotals(path);
-    totalsCache.set(runId, { size: st.size, mtime: st.mtimeMs, totals });
+    /*
+     * Resume where the last scan stopped, unless the file cannot be resumed:
+     * a scanner that has already read past the current size means the file was
+     * truncated or replaced, and folding new bytes into old accumulators would
+     * double-count. Then it is read whole, once.
+     */
+    let scanner = hit?.scanner;
+    if (scanner === undefined || scanner.size > st.size) scanner = new RunTotalsScanner(path);
+    const totals = await scanner.scan();
+    /*
+     * Keep the scanner only while the trajectory is still growing. `LIVE_WINDOW_MS`
+     * is the same window the run rows call liveness on, so exactly the runs that
+     * miss this cache every poll are the ones that keep their resumable state.
+     */
+    const growing = Date.now() - st.mtimeMs < LIVE_WINDOW_MS;
+    totalsCache.set(
+      runId,
+      growing
+        ? { size: st.size, mtime: st.mtimeMs, totals, scanner }
+        : { size: st.size, mtime: st.mtimeMs, totals },
+    );
     return totals;
   }
 
@@ -673,14 +728,14 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     // One clock for the pass: a live run's playtime is charged up to *now*, and
     // two rows of one response must not be measured against different nows.
     const now = Date.now();
-    for (const raw of listRuns(runsDir)) {
+    for (const raw of listRunsCached(runsDir, runReadCache, now)) {
       const dir = runDir(runsDir, raw.runId);
       const totals = dir === null ? null : await runTotals(raw.runId, dir);
       const row = withResolved(raw, totals);
       out.push(
         resultRunOf(
           row,
-          readStates(runsDir, row.runId),
+          readStatesCached(runsDir, row.runId, runReadCache, now),
           totals?.segments ?? [],
           totals === null
             ? null
@@ -976,7 +1031,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
 
   async function listWithTotals(): Promise<RunListRow[]> {
     const out: RunListRow[] = [];
-    for (const raw of listRuns(runsDir)) {
+    for (const raw of listRunsCached(runsDir, runReadCache)) {
       const dir = runDir(runsDir, raw.runId);
       const totals = dir === null ? null : await runTotals(raw.runId, dir);
       const row = withResolved(raw, totals);
@@ -1101,7 +1156,7 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
        * the figure must be the listing's own — same memoised totals, same
        * `runCost` — or the two pages would quote different dollars for one run.
        */
-      const rows = new Map(listRuns(runsDir).map((r) => [r.runId, r]));
+      const rows = new Map(listRunsCached(runsDir, runReadCache, now).map((r) => [r.runId, r]));
       for (const row of body.models) {
         for (const r of row.runs) {
           const dir = runDir(runsDir, r.runId);

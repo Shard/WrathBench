@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { FleetResponse, RunsResponse } from "../../runner/viewer/api-types";
-import { ApiError, createClient } from "../src/api/client";
+import { ApiError, createClient, LIVE_TTL_MS, sweepExpired } from "../src/api/client";
 
 interface Call {
   url: string;
@@ -143,5 +143,72 @@ describe("shapes", () => {
     const got = await createClient({ fetch: stub(payload).fetch }).fleet();
     expect(got.present).toBe(false);
     expect(got.jobs).toHaveLength(0);
+  });
+});
+
+/**
+ * The memo. Same shape as the snapshot client's (`snapshot-client.test.ts`
+ * pins that one), because it is the same memo — page flips on the live path
+ * were refetching a megabyte of listing on every mount, and the several feeds
+ * a page mounts all fire their first request in the same tick.
+ */
+describe("the memo", () => {
+  test("a repeated read inside the window is served from memory", async () => {
+    const s = stub({ runs: [] } satisfies RunsResponse);
+    let clock = 0;
+    const c = createClient({ fetch: s.fetch, now: () => clock, ttlMs: 4_000 });
+    await c.runs();
+    clock = 3_999;
+    await c.runs();
+    expect(s.calls).toHaveLength(1);
+    // On the window's edge the entry has expired, so the poll gets a fresh body.
+    clock = 4_000;
+    await c.runs();
+    expect(s.calls).toHaveLength(2);
+  });
+
+  test("the window is shorter than the shortest poll a page runs", () => {
+    // The whole safety argument for memoising the live path: a 5s feed's tick
+    // always finds its entry expired, so no page's cadence is reduced.
+    expect(LIVE_TTL_MS).toBeLessThan(5_000);
+  });
+
+  test("different URLs are different entries", async () => {
+    const s = stub({ runs: [] });
+    const c = createClient({ fetch: s.fetch, now: () => 0 });
+    await c.ladder("e90");
+    await c.ladder("freeplay");
+    await c.ladder("e90");
+    expect(s.calls.map((x) => x.url)).toEqual(["/api/ladder?episode=e90", "/api/ladder?episode=freeplay"]);
+  });
+
+  test("concurrent callers share one request rather than racing", async () => {
+    const s = stub({ runs: [] });
+    const c = createClient({ fetch: s.fetch, now: () => 0 });
+    await Promise.all([c.runs(), c.runs(), c.results("all")]);
+    expect(s.calls).toHaveLength(2);
+  });
+
+  test("a failed fetch is not remembered: the next poll is the retry", async () => {
+    const s = stub({ error: "boom" }, 500);
+    const c = createClient({ fetch: s.fetch, now: () => 0 });
+    await expect(c.runs()).rejects.toThrow(ApiError);
+    await expect(c.runs()).rejects.toThrow(ApiError);
+    // Two attempts, not one attempt and a remembered failure holding the
+    // window: a blip must not outlive the request that hit it.
+    expect(s.calls).toHaveLength(2);
+  });
+
+  test("expired entries are swept, not only overwritten", () => {
+    // Expiry alone does not bound the map: a session's navigation mints URLs
+    // per episode, harness and run id that are never asked for again.
+    const cache = new Map([
+      ["/api/ladder?episode=e90", { at: 0 }],
+      ["/api/ladder?episode=freeplay", { at: 4_000 }],
+    ]);
+    sweepExpired(cache, 4_000, 4_000);
+    expect([...cache.keys()]).toEqual(["/api/ladder?episode=freeplay"]);
+    sweepExpired(cache, 7_999, 4_000);
+    expect(cache.size).toBe(1);
   });
 });
