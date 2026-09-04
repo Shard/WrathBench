@@ -338,6 +338,117 @@ export function listRuns(runsDir: string, now = Date.now()): RunRow[] {
   return rows;
 }
 
+
+// --------------------------------------------------------------- caching
+
+/**
+ * What makes a cached read of a run directory stale: either artefact changing
+ * size or mtime. The same rule `runner/viewer/models.ts` states for its fact
+ * cache, over the three files a row and a state series are read from.
+ *
+ * `run.sqlite` is a rollback-journal database, never WAL (`runner/src/rundb.ts`
+ * says why), so a committed row moves the file's own mtime — there is no
+ * sidecar a signature would have to watch.
+ */
+function signature(dir: string): { sig: string; mtime: number | null } {
+  let sig = "";
+  let mtime: number | null = null;
+  for (const name of ["meta.json", "run.sqlite", "trajectory.jsonl"]) {
+    try {
+      const st = statSync(join(dir, name));
+      sig += `${name}:${st.size}:${st.mtimeMs}|`;
+      if (name === "trajectory.jsonl") mtime = st.mtimeMs;
+    } catch {
+      sig += `${name}:-|`;
+    }
+  }
+  return { sig, mtime };
+}
+
+/** Liveness, from a trajectory mtime and a termination reason; see `readRun`. */
+function liveAt(terminationReason: string | null, mtime: number | null, now: number): boolean {
+  return terminationReason === null && mtime !== null && now - mtime < LIVE_WINDOW_MS;
+}
+
+export interface RunReadCacheEntry {
+  sig: string;
+  row: RunRow;
+  /** Filled the first time someone asks for this run's state series. */
+  states?: StatePoint[];
+}
+
+/**
+ * One run's row, memoised on (size, mtime) of its artefacts.
+ *
+ * Opening 330 databases costs ~170ms of blocked event loop on every listing
+ * route, which is small beside a live run's trajectory scan and large beside
+ * everything else once that is fixed.
+ *
+ * A live run is never served from the cache. Its signature moves on every
+ * record so the memo would miss anyway, but "would miss anyway" is not a
+ * guarantee: the row a live run reports is a claim about a process that is
+ * writing *now*, and the one case a stale row would be actually wrong is the
+ * one case this must not get wrong. So a cached row that would still read as
+ * live is dropped and re-read, and only a row that has gone quiet is reused —
+ * with its liveness re-decided against the caller's `now`, never replayed.
+ */
+export function readRunCached(
+  runsDir: string,
+  runId: string,
+  cache: Map<string, RunReadCacheEntry>,
+  now = Date.now(),
+): RunRow {
+  const { sig } = signature(join(runsDir, runId));
+  const hit = cache.get(runId);
+  if (hit !== undefined && hit.sig === sig && !liveAt(hit.row.terminationReason, hit.row.mtime, now)) {
+    // The branch above settles it: this row is not live against this `now`.
+    return hit.row.live ? { ...hit.row, live: false } : hit.row;
+  }
+  const row = readRun(runsDir, runId, now);
+  cache.set(runId, { sig, row });
+  return row;
+}
+
+/** `listRuns`, over the same memo. Entries for runs that went away are dropped. */
+export function listRunsCached(
+  runsDir: string,
+  cache: Map<string, RunReadCacheEntry>,
+  now = Date.now(),
+): RunRow[] {
+  if (!existsSync(runsDir)) return [];
+  const ids = readdirSync(runsDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && isValidRunId(d.name) && !isArchiveDir(d.name))
+    .map((d) => d.name);
+  const rows = ids.map((id) => readRunCached(runsDir, id, cache, now));
+  const seen = new Set(ids);
+  for (const id of [...cache.keys()]) if (!seen.has(id)) cache.delete(id);
+  rows.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));
+  return rows;
+}
+
+/**
+ * `readStates`, over the same memo and the same live rule: a live run's samples
+ * are re-read every time, and a quiet run's are kept until one of its files
+ * moves. The series is what the results projection reads per run, so the
+ * listing pays for 330 more database opens without this.
+ */
+export function readStatesCached(
+  runsDir: string,
+  runId: string,
+  cache: Map<string, RunReadCacheEntry>,
+  now = Date.now(),
+): StatePoint[] {
+  const { sig, mtime } = signature(join(runsDir, runId));
+  const hit = cache.get(runId);
+  const live = hit === undefined ? true : liveAt(hit.row.terminationReason, mtime, now);
+  if (hit !== undefined && hit.sig === sig && hit.states !== undefined && !live) return hit.states;
+  const states = readStates(runsDir, runId);
+  // Only ever attached to an entry whose row was read from the same signature;
+  // a row this cache has not seen is left for `readRunCached` to fill.
+  if (hit !== undefined && hit.sig === sig) hit.states = states;
+  return states;
+}
+
 export function readStates(runsDir: string, runId: string): StatePoint[] {
   const dir = join(runsDir, runId);
   const db = openReadonly(dir);
