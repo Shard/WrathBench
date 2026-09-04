@@ -449,9 +449,16 @@ them.
 Per-aggregate versions (2026-09-04) take the aggregate half of that from ten to
 the ones that actually moved — three of seven compared on that pass were
 byte-identical — and zeroing `playtimeMs` when hashing removes the passes where
-a live run's clock alone had advanced. The floor is unchanged and was always
-the point: an **idle** fleet costs one `live.json` PUT per pass at any cadence
-(~9k/month at 300s).
+a live run's clock alone had advanced. The post-change figure has not been
+measured against a fleet; on the issue's own ratio a steady pass should land
+around twenty. The floor is unchanged and was always the point: an **idle**
+fleet costs one `live.json` PUT per pass at any cadence (~9k/month at 300s).
+
+Rolling the publisher *back* across this change wants the state file deleted.
+An old binary reads `state.gens` as generation stamps, finds hashes that were
+never path segments, and plans every aggregate as surplus — self-healing, but
+it churns a pass. The state file is a cache the operator may throw away, which
+is the documented repair for exactly this.
 
 | cadence | class-A ops/month | against the 1M free tier |
 |---|---|---|
