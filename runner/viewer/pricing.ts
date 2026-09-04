@@ -18,13 +18,21 @@
  * cannot be checked. Prices are data, each row dated and sourced, so a stale
  * one is visible rather than buried in an expression.
  *
- * Rates are asked for *as of the run*, never as of today. Both tables answer
- * that question: `standardAfter` on the hand-written Claude rows, and rate
- * windows in the synced OpenRouter file, where each id maps to a list of
- * `{ input, output, cacheRead, cacheWrite, from? }` in date order and the
- * first window carries no `from` (see `SYNCED_PRICES` below for the format and
- * `infra/sync-prices.ts` for who appends to it). Re-pricing yesterday's runs
- * at today's catalogue is the failure both avoid.
+ * Rates are asked for *as of the run*, never as of today. All three tables
+ * answer that question: `standardAfter` on the hand-written Claude rows, and
+ * rate windows in the synced OpenRouter file and the hand-held provider table,
+ * where each id maps to a list of `{ input, output, cacheRead, cacheWrite,
+ * from? }` in date order and the first window carries no `from` (see
+ * `SYNCED_PRICES` below for the format and `infra/sync-prices.ts` for who
+ * appends to it). Re-pricing yesterday's runs at today's catalogue is the
+ * failure all three avoid.
+ *
+ * Three tables, by where the figure can come from:
+ * - `CLAUDE_PRICES` — Anthropic list prices, by hand, matched on the harness.
+ * - `SYNCED_PRICES` — OpenRouter's catalogue, by script, matched on the id.
+ * - `PROVIDER_PRICES` — paid providers that are not OpenRouter, by hand,
+ *   matched on the run's `apiBase` *and* id (operator's decision, 2026-09-04,
+ *   closing FOLLOW-UPS item 112 on its trigger: a second such provider).
  *
  * Figures come from the 2026-08-23 COSTS.md cross-check (§3 of `git show d752ef7:docs/COSTS.md`; the snapshot sections left the live doc on 2026-08-24), which checked the Sonnet row
  * against a real `costUsd` ($43.23 computed vs $43.90 reported, within 1.5%).
@@ -45,8 +53,12 @@ export interface PriceRow {
   cacheWrite: number;
   /** When these figures were taken. A row is stale, never silently current. */
   asOf: string;
-  /** Where they came from. `"list"` is the vendor's published list price. */
-  source: "list";
+  /**
+   * Where they came from. `"list"` is the vendor's own published list price;
+   * `"catalogue"` is a third-party catalogue's listing of it (models.dev), one
+   * step removed from the vendor and said so.
+   */
+  source: "list" | "catalogue";
   /**
    * True when the operator does not actually pay this per token — a flat
    * subscription, a free tier, or hardware they already own. The figure is then
@@ -234,6 +246,128 @@ export function syncedPrice(model: string, at: number | null = null): PriceRow |
 }
 
 /**
+ * Paid providers that are not OpenRouter, priced by hand.
+ *
+ * The OpenRouter sync cannot help here: `infra/sync-prices.ts` writes only ids
+ * its catalogue carries and deletes the rest, so a Cerebras row typed into
+ * `prices.openrouter.json` would vanish on the next run of the script — and
+ * OpenRouter's `qwen/qwen3.8-27b` is neither the same id string nor the same
+ * rate as Cerebras's `qwen-3.8-27b`. So these rows live in source, dated and
+ * sourced the way `CLAUDE_PRICES` is, and a stale one is visible rather than
+ * silent. Operator's decision, 2026-09-04 (FOLLOW-UPS item 112, on its stated
+ * trigger: `omen-alpha` on OpenCode's pay-as-you-go endpoint was the second
+ * non-OpenRouter paid provider to enter the fleet). This is the narrow case
+ * "an unknown model gets no cost at all" was not written for — the price is
+ * published and known, not guessed — and a row goes in only with a source a
+ * reader can check.
+ *
+ * A row is matched on the run's `apiBase` **and** its model id, never the id
+ * alone: the same id string means different money on different hosts, and a
+ * bare `omen-alpha` says nothing about which endpoint served it. The base is
+ * compared exactly (origin plus path, trailing slash ignored), so a row for
+ * `opencode.ai/zen/go/v1` does not reach the free `/zen/v1` slugs and a row
+ * for one provider can never fire for a run on another.
+ *
+ * Rates are windowed exactly as the synced table's are (`SyncedWindow[]`,
+ * first window undated, `windowAt` picks the one in force at the run's start),
+ * so a provider that moves its price gets a new window appended by hand with
+ * its `from` date and the runs that billed at the old rate keep reading it.
+ * That is the same answer `standardAfter` gives the Claude rows; the windows
+ * shape is reused because it already carries an arbitrary number of moves.
+ * A promotional rate whose end is *known* gets its successor window appended
+ * on day one; one whose end is not known (`omen-alpha`, below) carries the
+ * fact in its note and gets the window the day the bill changes.
+ *
+ * `asIfMetered` is false throughout: these endpoints meter the operator's own
+ * balance, so the figure is a list-price estimate of a real bill, not a
+ * comparison. A row here does not touch the scheduler's free/paid verdict —
+ * that stays `runner/src/model-cost.ts`'s.
+ */
+export interface ProviderPriceRow {
+  /** What the row is called on screen. */
+  id: string;
+  /** The exact `apiBase` the roster entry names, compared by `sameBase`. */
+  apiBase: string;
+  /** The model id as the provider names it — exact, case-sensitive. */
+  model: string;
+  /** Rate windows in date order; the first carries no `from`. */
+  windows: readonly SyncedWindow[];
+  /** When the figures were taken (the first window's date; later ones carry their own `from`). */
+  asOf: string;
+  source: PriceRow["source"];
+  note: string;
+}
+
+export const PROVIDER_PRICES: readonly ProviderPriceRow[] = [
+  {
+    id: "cerebras/qwen-3.8-27b",
+    apiBase: "https://api.cerebras.ai/v1",
+    model: "qwen-3.8-27b",
+    // No cache discount: Cerebras caches the prefix and bills every input
+    // token at the input rate whether it was served from cache or not
+    // (docs/worklogs/2026-09-04.md, "What Cerebras costs"), so cacheRead and
+    // cacheWrite are the input rate rather than a tier below it.
+    windows: [{ input: 0.99, output: 1.49, cacheRead: 0.99, cacheWrite: 0.99 }],
+    asOf: "2026-09-04",
+    source: "list",
+    note: "Cerebras published price, verified 2026-09-04 (docs/worklogs/2026-09-04.md); no cache discount, so every prompt token bills at the input rate; metered against the operator's Cerebras balance",
+  },
+  {
+    id: "opencode-go/omen-alpha",
+    apiBase: "https://opencode.ai/zen/go/v1",
+    model: "omen-alpha",
+    // models.dev lists no cache-write tier; a write is billed as ordinary
+    // input, the same fallback the OpenRouter sync uses.
+    windows: [{ input: 0.2, output: 0.66, cacheRead: 0.04, cacheWrite: 0.2 }],
+    asOf: "2026-09-04",
+    source: "catalogue",
+    note: "models.dev registry listing for the opencode-go provider, read 2026-09-04 (model released the same day). The endpoint reported usage.cost 0 on every live response that day, so the published rate and the observed charge disagree: the actual figure beside this one is the provider's own word, and this is what the listing says it would cost if billed — a free alpha preview is the likely reading, but neither a free nor a billed alpha is asserted here. Append a dated window the day the bill changes",
+  },
+];
+
+/** Two api bases name the same endpoint: same origin, same path, trailing slash ignored. */
+function sameBase(a: string | null | undefined, b: string): boolean {
+  if (a === null || a === undefined || a === "") return false;
+  const norm = (u: string): string | null => {
+    try {
+      const url = new URL(u);
+      return `${url.origin.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
+    } catch {
+      return null;
+    }
+  };
+  const x = norm(a);
+  return x !== null && x === norm(b);
+}
+
+/** The hand-held provider row for a run at a date, or null when no row names its base and id. */
+export function providerPrice(run: Pick<PriceableRun, "model" | "apiBase">, at: number | null = null): PriceRow | null {
+  const model = run.model ?? "";
+  for (const p of PROVIDER_PRICES) {
+    if (p.model !== model || !sameBase(run.apiBase, p.apiBase)) continue;
+    const w = windowAt(p.windows, at);
+    if (w === null) return null;
+    return {
+      id: p.id,
+      input: w.input,
+      output: w.output,
+      cacheRead: w.cacheRead,
+      cacheWrite: w.cacheWrite,
+      asOf: w.from ?? p.asOf,
+      source: p.source,
+      asIfMetered: false,
+      note: w.from === undefined ? p.note : `in force from ${w.from} — ${p.note}`,
+    };
+  }
+  return null;
+}
+
+/** Whether a run's base is one the hand-held provider table knows at all, whatever the model. */
+function isProviderBase(apiBase: string | null | undefined): boolean {
+  return PROVIDER_PRICES.some((p) => sameBase(apiBase, p.apiBase));
+}
+
+/**
  * Ids the provider's catalogue no longer carries, and why.
  *
  * A delisted model is unpriced in a way running the sync cannot fix — the
@@ -260,14 +394,25 @@ export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driv
  *
  * Matched on the whole run rather than the model string, because the string
  * alone does not say enough: `qwen/qwen3.8-27b` is free only because its
- * `apiBase` is an address on the operator's LAN, and a bare `sonnet` is a
- * Claude model only because the harness that ran it was `claude-code`.
+ * `apiBase` is an address on the operator's LAN, a bare `sonnet` is a Claude
+ * model only because the harness that ran it was `claude-code`, and
+ * `qwen-3.8-27b` costs $0.99/Mtok only because its `apiBase` is Cerebras.
+ *
+ * The order is most-specific evidence first. Local base, then the free
+ * spellings (a `-free` slug is free on any host, so it precedes the provider
+ * table), then the provider table — keyed on base *and* id, so it can never
+ * fire for an OpenRouter run and cannot shadow a synced answer, while the
+ * reverse order would let an id that happens to collide with an OpenRouter id
+ * read as OpenRouter-metered on a host that is not OpenRouter — then the synced
+ * table by id, then the Claude rows by harness.
  */
 export function priceFor(run: PriceableRun, at: number | null = null): PriceRow | null {
   const model = run.model ?? "";
   if (isLocalBase(run.apiBase)) return LOCAL_PRICE;
   if (isContributorSlug(model)) return CONTRIBUTOR_PRICE;
   if (isFreeSlug(model) || isAllowlistedFree(model)) return FREE_PRICE;
+  const provider = providerPrice(run, at);
+  if (provider !== null) return provider;
   const open = syncedPrice(model, at);
   if (open !== null) return open;
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(model);
@@ -324,26 +469,32 @@ function none(note: string): CostFigure {
 /**
  * Why a run has no price row, in the words the reader can act on.
  *
- * Three different problems wear the same blank: a Claude model we do not
+ * Four different problems wear the same blank: a Claude model we do not
  * carry, an OpenRouter model the sync has not seen (fixed by running the
- * script), and one the catalogue has dropped (which the script cannot fix, and
- * `DELISTED_MODELS` says so in its own words).
+ * script), one the catalogue has dropped (which the script cannot fix, and
+ * `DELISTED_MODELS` says so in its own words), and a model on a paid provider
+ * the hand-held table knows but has no row for (which the script cannot price
+ * either — the row is typed into `PROVIDER_PRICES`, with a source).
  */
 function unpricedNote(run: PriceableRun): string {
   const delisted = DELISTED_MODELS[run.model ?? ""];
   if (delisted !== undefined) return delisted;
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(run.model ?? "");
   if (claude) return "no price on file for this model — tokens only, never a guess";
+  if (isProviderBase(run.apiBase)) {
+    return "no hand-held price for this model on this provider — add a dated, sourced row to PROVIDER_PRICES (runner/viewer/pricing.ts); the OpenRouter sync cannot price it";
+  }
   return "no synced price — run `bun infra/sync-prices.ts`";
 }
 
 /**
  * The provider's own figure for a run, or a blank saying it reported none.
  *
- * Two providers, one meaning: OpenRouter bills per response (`usage.cost`, in
- * credits, which are dollars) and the Claude Agent SDK bills per session
- * (`total_cost_usd`). `tail.ts` sums whichever the run carries; this only has
- * to say what the number is.
+ * Two shapes, one meaning: a per-response `usage.cost` (OpenRouter's, in
+ * credits, which are dollars; OpenCode's pay-as-you-go endpoint reports the
+ * same field) and the Claude Agent SDK's per-session `total_cost_usd`.
+ * `tail.ts` sums whichever the run carries; this only has to say what the
+ * number is, and whose.
  */
 function actualCost(
   run: PriceableRun,
@@ -375,7 +526,9 @@ function actualCost(
     asOf: null,
     note: claudeCode
       ? "the Claude Agent SDK's own total_cost_usd for this session — billed against a subscription, so not an invoice"
-      : `the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)${partial}`,
+      : isProviderBase(run.apiBase)
+        ? `the provider's own charge, summed over the run's responses (usage.cost, as the endpoint reports it)${partial}`
+        : `the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)${partial}`,
   };
 }
 

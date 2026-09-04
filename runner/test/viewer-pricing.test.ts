@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
-import { CLAUDE_PRICES, DELISTED_MODELS, SYNCED_PRICES, breakdownTotal, costOf, priceFor, runCost, syncedPrice, windowAt } from "../viewer/pricing";
+import { CLAUDE_PRICES, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, costOf, priceFor, providerPrice, runCost, syncedPrice, windowAt } from "../viewer/pricing";
 import { FREE_SUFFIXLESS_ALLOWLIST, isFreeSlug } from "../src/model-cost";
 import { mergeWindows, sameRates } from "../../infra/sync-prices";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
@@ -188,6 +188,157 @@ describe("priceFor", () => {
       expect(p.source).toBe("list");
       expect(p.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
+  });
+});
+
+describe("the hand-held provider table (FOLLOW-UPS 112)", () => {
+  /*
+   * Paid providers that are not OpenRouter: the sync cannot price them, so
+   * their rows are typed in, keyed on the run's apiBase *and* id. Two rows
+   * seeded 2026-09-04, both verified by the operator that day.
+   */
+  const cerebras: PriceableRun = { model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1", platform: "api.cerebras.ai", driver: "openai", harness: "wrathbench" };
+  const omen: PriceableRun = { model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1", platform: "opencode.ai", driver: "openai", harness: "wrathbench" };
+
+  test("a Cerebras run is priced at $0.99/$1.49 with no cache discount, metered for real", () => {
+    const p = priceFor(cerebras)!;
+    expect(p.id).toBe("cerebras/qwen-3.8-27b");
+    expect(p.input).toBe(0.99);
+    expect(p.output).toBe(1.49);
+    // No cache tier: a cached prompt token bills at the input rate.
+    expect(p.cacheRead).toBe(0.99);
+    expect(p.cacheWrite).toBe(0.99);
+    expect(p.asIfMetered).toBe(false);
+    expect(p.asOf).toBe("2026-09-04");
+    expect(p.source).toBe("list");
+    // The worklog's measured call — 18.7k prompt, 3.2k completion — comes to
+    // the $0.0233 it recorded, whatever share of the prompt was cached.
+    const call = tokens({ promptTokens: 18_700, completionTokens: 3_200, cacheReadTokens: 18_000 });
+    expect(breakdownTotal(costOf(call, p))).toBeCloseTo(0.0233, 3);
+  });
+
+  test("an omen-alpha run on the go endpoint is priced at the models.dev listing, and the row says the live charge disagrees", () => {
+    const p = priceFor(omen)!;
+    expect(p.id).toBe("opencode-go/omen-alpha");
+    expect(p.input).toBe(0.2);
+    expect(p.output).toBe(0.66);
+    expect(p.cacheRead).toBe(0.04);
+    expect(p.cacheWrite).toBe(0.2);
+    expect(p.asIfMetered).toBe(false);
+    expect(p.asOf).toBe("2026-09-04");
+    // A third-party catalogue, one step removed from the vendor, and labelled so.
+    expect(p.source).toBe("catalogue");
+    expect(p.note).toContain("models.dev");
+    expect(p.note).toContain("usage.cost 0");
+    // The two figures are both shown: the endpoint's own zero as the actual,
+    // the listing as the expected. Neither "free" nor "billed" is asserted.
+    const c = runCost({ run: omen, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 100_000 }), reportedUsd: 0, coverage: { costed: 50, uncosted: 0 } });
+    expect(c.actual.basis).toBe("reported");
+    expect(c.actual.usd).toBe(0);
+    expect(c.actual.note).not.toContain("OpenRouter");
+    expect(c.expected.basis).toBe("list-price");
+    expect(c.expected.usd).toBeCloseTo(0.2 + 0.066, 6);
+    expect(c.expected.note).toContain("disagree");
+  });
+
+  test("the two OpenCode surfaces share a host and are told apart by path, never by platform", () => {
+    // `platformOfBase` discards the path, so both `/zen/v1` (free tier) and
+    // `/zen/go/v1` (pay-as-you-go) report platform `opencode.ai`. The table
+    // reads the base itself, path included, and never the platform string;
+    // keying on the host would price omen-alpha as the free tier.
+    const free = { apiBase: "https://opencode.ai/zen/v1", platform: "opencode.ai", driver: "openai", harness: "wrathbench" } as const;
+    const go = { apiBase: "https://opencode.ai/zen/go/v1", platform: "opencode.ai", driver: "openai", harness: "wrathbench" } as const;
+    // Go surface: the metered row, at its published rates.
+    const paid = priceFor({ ...go, model: "omen-alpha" })!;
+    expect(paid.id).toBe("opencode-go/omen-alpha");
+    expect(paid.input).toBe(0.2);
+    expect(paid.output).toBe(0.66);
+    expect(paid.asIfMetered).toBe(false);
+    // Free surface: its free and contributor slugs, exactly as before.
+    expect(priceFor({ ...free, model: "hy3-free" })?.id).toBe("free-tier");
+    expect(priceFor({ ...free, model: "muse-spark-1.2-contributor-free" })?.id).toBe("contributor-free");
+    // And the row does not leak across the path in either direction: the same
+    // id on the free surface is unpriced, and a free slug on the go surface
+    // is still free.
+    expect(priceFor({ ...free, model: "omen-alpha" })).toBeNull();
+    expect(priceFor({ ...go, model: "hy3-free" })?.id).toBe("free-tier");
+    // A platform string alone, with the base missing, names no row.
+    expect(priceFor({ model: "omen-alpha", apiBase: null, platform: "opencode.ai", driver: "openai", harness: "wrathbench" })).toBeNull();
+  });
+
+  test("a row is keyed on the base and the id together, never the id alone", () => {
+    // Same id, no base or another base: no row.
+    expect(providerPrice({ model: "qwen-3.8-27b", apiBase: null })).toBeNull();
+    expect(providerPrice({ model: "qwen-3.8-27b", apiBase: "https://openrouter.ai/api/v1" })).toBeNull();
+    expect(providerPrice({ model: "omen-alpha", apiBase: "https://opencode.ai/zen/v1" })).toBeNull();
+    // Same base, another id: no row, and the blank says where a row goes.
+    expect(priceFor({ ...cerebras, model: "llama-4.2-8b" })).toBeNull();
+    const c = runCost({ run: { ...cerebras, model: "llama-4.2-8b" }, tokens: tokens({ promptTokens: 1_000 }), reportedUsd: null });
+    expect(c.expected.basis).toBe("none");
+    expect(c.expected.note).toContain("PROVIDER_PRICES");
+    expect(c.expected.note).not.toContain("sync-prices");
+    // A trailing slash or upper-case host is the same endpoint.
+    expect(providerPrice({ model: "qwen-3.8-27b", apiBase: "https://API.cerebras.ai/v1/" })?.id).toBe("cerebras/qwen-3.8-27b");
+  });
+
+  test("the table does not shadow the answers that come before or after it", () => {
+    // Local base wins even for an id the table names.
+    expect(priceFor({ ...cerebras, apiBase: "http://192.168.1.20:1234/v1" })?.id).toBe("local");
+    // A free or contributor slug on a provider base stays free.
+    expect(priceFor({ ...omen, model: "hy3-free" })?.id).toBe("free-tier");
+    expect(priceFor({ ...omen, model: "muse-spark-1.2-contributor-free" })?.id).toBe("contributor-free");
+    // An existing free slug and an existing synced model resolve exactly as before.
+    expect(priceFor({ model: "hy3-free", apiBase: "https://opencode.ai/zen/v1", platform: "opencode.ai", driver: "openai", harness: "wrathbench" })?.id).toBe("free-tier");
+    const or: PriceableRun = { model: "deepseek/deepseek-v4-flash-0731", apiBase: "https://openrouter.ai/api/v1", platform: "openrouter", driver: "openai", harness: "wrathbench" };
+    expect(priceFor(or)).toEqual(syncedPrice(or.model!));
+    // And the Claude rows still answer through the harness.
+    expect(priceFor(sonnetRun)?.id).toBe("claude-sonnet-5");
+    // No provider row names an OpenRouter base, so none can ever meet a synced id.
+    for (const p of PROVIDER_PRICES) expect(new URL(p.apiBase).hostname).not.toBe("openrouter.ai");
+  });
+
+  test("every provider row is dated, sourced, windowed like the synced table, and never 0/0", () => {
+    for (const p of PROVIDER_PRICES) {
+      expect(p.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(["list", "catalogue"]).toContain(p.source);
+      expect(p.note.length).toBeGreaterThan(0);
+      expect(p.windows.length).toBeGreaterThan(0);
+      expect(p.windows[0]!.from).toBeUndefined();
+      let prev = "";
+      for (const w of p.windows) {
+        // A paid provider quoted at 0/0 is a paid model reading as free.
+        expect(w.input > 0 || w.output > 0).toBe(true);
+        if (w.from === undefined) continue;
+        expect(w.from > prev).toBe(true);
+        prev = w.from;
+      }
+    }
+  });
+
+  test("a hand-held row moves by window: the runs that billed at the old rate keep it", () => {
+    const row = { ...PROVIDER_PRICES[0]!, windows: [{ input: 1, output: 2, cacheRead: 1, cacheWrite: 1 }, { from: "2026-10-01", input: 2, output: 4, cacheRead: 2, cacheWrite: 2 }] };
+    // Exercised through the same picker the synced table uses.
+    expect(windowAt(row.windows, Date.parse("2026-09-04"))!.input).toBe(1);
+    expect(windowAt(row.windows, Date.parse("2026-10-01"))!.input).toBe(2);
+    // And a real dated window carries its own date and says so.
+    const asOfDated = providerPrice(cerebras, Date.parse("2026-09-04"))!;
+    expect(asOfDated.asOf).toBe("2026-09-04");
+    expect(asOfDated.note).not.toContain("in force from");
+  });
+
+  test("the rows live outside prices.openrouter.json, where a sync would delete them", () => {
+    for (const p of PROVIDER_PRICES) {
+      expect(SYNCED_PRICES.models[p.model]).toBeUndefined();
+      expect(SYNCED_PRICES.models[p.id]).toBeUndefined();
+    }
+    // The failure the table exists to avoid, on the sync's own merge step: a
+    // hand-typed Cerebras row in the synced file does not survive a catalogue
+    // that does not carry the id.
+    const catalogue = Object.fromEntries(Object.entries(SYNCED_PRICES.models).map(([id, ws]) => { const { from: _f, ...r } = ws[ws.length - 1]!; return [id, r]; }));
+    const smuggled = { ...SYNCED_PRICES.models, "qwen-3.8-27b": [{ input: 0.99, output: 1.49, cacheRead: 0.99, cacheWrite: 0.99 }] };
+    expect(mergeWindows(smuggled, catalogue, "2026-09-09")["qwen-3.8-27b"]).toBeUndefined();
+    // While the hand table still answers the same run after that sync.
+    expect(priceFor(cerebras)?.input).toBe(0.99);
   });
 });
 
