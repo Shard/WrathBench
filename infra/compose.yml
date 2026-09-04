@@ -232,10 +232,11 @@ services:
       # exist in auth first: `docker compose -f infra/compose.yml run --rm
       # --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE2
       # -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap` (done for all four).
-      # RUNNER7 is the intended PAID account (fleet.json accounts.paid; paid
-      # class split out 2026-08-23) once the next worldserver deploy window lands: env
-      # only, the running worldserver does not pick it up, so until that recreate
-      # the paid class stays on SHAKEOUT2. Bootstrap it in auth before the swap.
+      # RUNNER7 is the second PAID account (fleet.json accounts.paid; paid class
+      # split out 2026-08-23). The recreate it was waiting on landed 2026-09-01,
+      # so the running worldserver does carry it; bootstrapped in auth and added
+      # to accounts.paid on 2026-09-04, when policy.paid.maxConcurrent went to 2
+      # and the account — checked before the cap — was the real constraint.
       AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:

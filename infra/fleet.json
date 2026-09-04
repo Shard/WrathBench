@@ -99,7 +99,7 @@
   },
   "accounts": {
     "pool": ["RUNNER", "RUNNER2", "RUNNER3", "RUNNER5", "RUNNER6"],
-    "paid": ["SHAKEOUT2"],
+    "paid": ["SHAKEOUT2", "RUNNER7"],
     "local": ["RUNNER4"]
   },
   "roster": {
