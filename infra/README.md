@@ -3,6 +3,25 @@
 Everything runs in containers from `infra/compose.yml`. The only host-side
 prerequisite is an AzerothCore server data directory at `data/client`.
 
+The same stack on Kubernetes is `infra/chart/wrathbench` (Helm) plus
+`infra/k8s/kustomization.yaml` (the `fleet.json` ConfigMap), built by
+`infra/build-images.sh` and operated by `infra/k8s-deploy.sh`. The runbook is
+`docs/DEPLOY-NUSPHERE.md`; nothing here changes because of it.
+
+| path | what |
+|---|---|
+| `compose.yml` | the stack on this box |
+| `docker/server.Dockerfile` | worldserver / authserver / db-import |
+| `docker/runner.Dockerfile` | runner, fleet, viewer, publisher — repo baked in |
+| `build-worldserver.sh` | the worldserver alone, to `:next`, for the compose deploy |
+| `build-images.sh` | all four images at one immutable `git describe` tag |
+| `deploy-worldserver.sh` | the compose deploy window |
+| `k8s-deploy.sh` | the same window on Kubernetes (Flux owns the tag) |
+| `run-episode.sh` | one episode: compose, `--local`, or `--k8s` |
+| `run-fleet.ts`, `fleet.json` | the supervisor and the config it re-reads |
+| `chart/wrathbench` | the Helm chart |
+| `k8s/kustomization.yaml` | `fleet.json` as a ConfigMap, one source of truth |
+
 ## Bringing the stack up
 
 From the repository root, on a fresh machine:

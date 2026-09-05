@@ -10,8 +10,11 @@ The fleet supervisor (`infra/run-fleet.ts`) is a compose service. It is up
 while the dev machine is up, it has no deadline, and it is steered entirely by
 editing `infra/fleet.json` — which it re-reads every 60 seconds. It lives
 inside the runner image rather than on the host so it survives the operator's
-shell and reboots, never crosses the container boundary to spawn a runner,
-and is one step from the intended Helm shape.
+shell and reboots, and never crosses the container boundary to spawn a runner.
+That shape is what the Helm chart at `infra/chart/wrathbench` deploys
+unchanged — the same image, the same `fleet.json` re-read every 60 seconds,
+the same drain on SIGTERM — with the Deployment scaled 0/1 where compose stops
+and starts a service. See `docs/DEPLOY-NUSPHERE.md`.
 
 ### Start it
 
