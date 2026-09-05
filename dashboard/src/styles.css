@@ -229,8 +229,8 @@ button, .btn {
   border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer;
 }
 button:hover, .btn:hover { border-color: var(--accent); text-decoration: none; }
-/* An anchor sitting in a row of buttons — the map's "live" control is a real
-   link, and has to read as a control next to play. */
+/* An anchor sitting in a row of buttons — the run page's "replay" and "open
+   run" links — has to read as a control beside them. */
 .btn { display: inline-block; color: var(--accent); line-height: 1.4; }
 button.on { border-color: var(--accent); font-weight: 700; }
 
@@ -303,7 +303,82 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .map-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .map-stage canvas.drag { cursor: grabbing; }
 .map-chips { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
-.map-hint { position: absolute; bottom: 10px; left: 10px; color: var(--dim); font-size: 12px; }
+
+/*
+ * The control strip, bottom centre of the stage, in both modes. One element
+ * whose contents change with the route, so live→replay→live is the same bar
+ * saying something different and the way back sits where it was. Sized to
+ * leave the bottom-left corner to the canvas legend on any reasonable stage.
+ */
+.playbar {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  width: min(720px, calc(100% - 24px));
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 12px; border-radius: 8px; font-size: 12px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line); backdrop-filter: blur(6px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .25);
+}
+.playbar:not(.replay) { width: auto; min-width: 260px; max-width: calc(100% - 24px); }
+.playbar-row { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.playbar .grow { flex: 1; }
+.playbar .center { text-align: center; }
+.playbar-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.playbar-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.playbar-stamp { font-size: 11px; }
+.playbar-btn {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font: inherit; color: var(--accent); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; line-height: 1.4;
+}
+.playbar-btn:hover { border-color: var(--accent); text-decoration: none; }
+.live-pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
+             text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
+            box-shadow: 0 0 0 0 var(--ok); animation: live-pulse 2s ease-out infinite; }
+.live-link .live-dot { animation: none; }
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+
+/* The transport row: step, play, step, clock, scrubber, clock, speed. */
+.transport { gap: 6px; }
+.tbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; border-radius: 50%;
+  background: transparent; border: 1px solid transparent; color: var(--fg);
+}
+.tbtn svg { width: 14px; height: 14px; fill: currentColor; }
+.tbtn:hover:not(:disabled) { background: var(--line); border-color: var(--line); }
+.tbtn:disabled { color: var(--dim); opacity: .5; cursor: default; }
+.tbtn.play { width: 30px; height: 30px; background: var(--accent); color: var(--bg); }
+.tbtn.play:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
+.tbtn.play:disabled { background: var(--line); }
+.tbtn.speed { width: auto; min-width: 30px; padding: 0 6px; border-radius: 4px; font-size: 11px;
+              border-color: var(--line); }
+.tclock { color: var(--dim); font-size: 11px; min-width: 3.2em; text-align: center; }
+
+.scrubber {
+  -webkit-appearance: none; appearance: none; flex: 1; min-width: 80px;
+  height: 20px; margin: 0; background: transparent; cursor: pointer;
+}
+.scrubber:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.scrubber::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) 0 calc(var(--p) * 100%),
+                              var(--line) calc(var(--p) * 100%) 100%);
+}
+.scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border-radius: 50%;
+  background: var(--fg); border: 2px solid var(--accent);
+}
+.scrubber::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line); }
+.scrubber::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
+.scrubber::-moz-range-thumb { width: 8px; height: 8px; border-radius: 50%;
+                              background: var(--fg); border: 2px solid var(--accent); }
 .side { width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel);
         padding: 12px 14px; overflow-y: auto; }
 .side h3 { font-size: 14px; margin: 0 0 8px; font-weight: 700; }
@@ -318,8 +393,6 @@ svg text { fill: var(--fg); }
          padding: 10px 12px; margin: 10px 0; }
 .tuple dt { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
 .tuple dd { margin: 0; word-break: break-word; }
-.scrub { display: flex; gap: 8px; align-items: center; }
-.scrub input[type="range"] { flex: 1; min-width: 120px; }
 footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 
 /* The models page's row-detail panel: a table inside a table cell. */
