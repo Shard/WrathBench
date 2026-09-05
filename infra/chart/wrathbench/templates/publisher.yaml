@@ -1,0 +1,89 @@
+{{- if .Values.publisher.enabled }}
+{{/*
+The public dashboard's publisher (infra/publish-dashboard.ts): renders the
+viewer's own API to JSON in-process, applies the public projection, and PUTs
+what changed to the R2 bucket.
+
+Only OUTBOUND traffic exists here. Nothing listens, no Service, no Ingress, and
+no public request ever reaches the lab — which is what lets the public
+dashboard ship ahead of any inbound hardening (docs/PUBLIC-DASHBOARD.md).
+
+The runner image, not oven/bun as under compose: compose bind-mounts the repo
+and there is no repo to mount here, so the image that carries it is the only
+option. It does mean a runner-image bump recreates the publisher; the state
+file on the PVC makes that re-upload nothing.
+
+No depends_on equivalent and none wanted: it reads data/runs off the PVC, so it
+is useful and correct while the worldserver is down. A deploy window should not
+stop the public site updating.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-publisher
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: publisher
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: publisher
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: publisher
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      # An interrupted pass is safe by construction — the manifest is uploaded
+      # last, so a torn generation is never pointed at — but 30s lets a pass in
+      # flight finish rather than be killed mid-upload.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: publisher
+          image: {{ include "wrathbench.image.runner" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          workingDir: /wrathbench
+          command: ["bun", "infra/publish-dashboard.ts", "--loop"]
+          env:
+            {{- include "wrathbench.harnessEnv" . | nindent 12 }}
+            # What was uploaded last, so a pass PUTs only what changed. On the
+            # PVC so a restart re-uploads nothing.
+            - name: WRATHBENCH_PUBLISH_STATE
+              value: /wrathbench/data/publish/state.json
+            - name: WRATHBENCH_PUBLISH_INTERVAL_MS
+              value: {{ .Values.publisher.intervalMs | quote }}
+          # S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY / S3_BUCKET / S3_ENDPOINT
+          # are Bun.S3Client's own variable names and arrive from the Secret.
+          envFrom: {{- include "wrathbench.secretEnvFrom" . | nindent 12 }}
+          resources: {{ toYaml .Values.publisher.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /wrathbench/data/runs
+              subPath: runs
+              readOnly: true
+            # The only writable path, and the only thing this service owns.
+            - name: data
+              mountPath: /wrathbench/data/publish
+              subPath: publish
+            - name: fleet-config
+              mountPath: /wrathbench/config
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-data
+        - name: fleet-config
+          configMap:
+            name: {{ .Values.fleetConfigMapName }}
+{{- end }}

@@ -1,0 +1,16 @@
+apiVersion: v2
+name: wrathbench
+description: >-
+  WrathBench: an AzerothCore realm, the fleet supervisor that drives models
+  against it, the operator viewer, and the public-snapshot publisher.
+type: application
+# Chart version and appVersion are both set by the release: appVersion is the
+# image tag (`git describe` of the source SHA) and the deployment's only pin.
+# The chart is consumed from a pinned git tag of the WrathBench repo by a Flux
+# HelmRelease, so the chart revision and the source revision are the same
+# object — see docs/[removed].
+version: 0.1.0
+appVersion: "0.0.0"
+home: https://github.com/wrathbench/wrathbench
+maintainers:
+  - name: Mark Beukers

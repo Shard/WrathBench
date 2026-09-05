@@ -1,0 +1,172 @@
+{{/*
+The realm, with mod-wrathbench compiled in.
+
+ClusterIP ONLY, and the Service is named `worldserver` with no prefix — see the
+note in _helpers.tpl. No NodePort, no LoadBalancer, no Ingress, ever: the module
+port (8086) and the world port (8085) are reachable from inside the namespace
+and from an operator's `kubectl port-forward`, and nothing else (operator
+decision 2026-09-05; docs/PUBLIC-DASHBOARD.md).
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: worldserver
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worldserver
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: worldserver
+  ports:
+    - name: world
+      port: 8085
+      targetPort: 8085
+    - name: module
+      port: 8086
+      targetPort: 8086
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-worldserver
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worldserver
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worldserver
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worldserver
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      # The world takes minutes to load and holds live sessions; give it room
+      # to write its final state.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worldserver
+          image: {{ include "wrathbench.image.worldserver" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          # As compose: the core's console reads stdin, and without a tty it
+          # spins on EOF.
+          stdin: true
+          tty: true
+          env:
+            {{- include "wrathbench.acDbEnv" . | nindent 12 }}
+            - name: AC_DATA_DIR
+              value: /azerothcore/env/dist/data
+            - name: AC_LOGS_DIR
+              value: /azerothcore/env/dist/logs
+            - name: AC_TEMP_DIR
+              value: /azerothcore/env/dist/temp
+            - name: AC_BIND_IP
+              value: "0.0.0.0"
+            - name: AC_WORLD_SERVER_PORT
+              value: "8085"
+            - name: AC_REALM_ID
+              value: {{ .Values.realm.id | quote }}
+            - name: AC_RATE_XP_KILL
+              value: {{ .Values.worldserver.rateXp.kill | quote }}
+            - name: AC_RATE_XP_QUEST
+              value: {{ .Values.worldserver.rateXp.quest | quote }}
+            # SOAP stays off. The harness has no privileged control path into
+            # the world by design (docs/CONTRACTS.md); actions go through the
+            # module, over the same opcode handlers a client would hit.
+            - name: AC_SOAP_ENABLED
+              value: "0"
+            # Server.log to the CONSOLE. The compose value was a File appender
+            # with per-boot timestamped backups (flag 16) and that tree reached
+            # 22 GB; here `kubectl logs` is the history and the runtime rotates
+            # it. Errors.log and the module's audit dir are still files, on the
+            # data PVC, because they are evidence (CLAUDE.md: log at the module
+            # boundary).
+            - name: AC_APPENDER_SERVER
+              value: {{ .Values.worldserver.appenderServer | quote }}
+            # mod-wrathbench (module/). Pinned here rather than in the module
+            # .conf: the stock entrypoint only materialises the main component
+            # .conf from its .dist, never module confs, so a fresh boot would
+            # otherwise leave the module disabled.
+            - name: AC_WRATH_BENCH_ENABLE
+              value: "1"
+            - name: AC_WRATH_BENCH_BIND_ADDRESS
+              value: "0.0.0.0"
+            - name: AC_WRATH_BENCH_PORT
+              value: "8086"
+            - name: AC_WRATH_BENCH_AUDIT_DIR
+              value: /azerothcore/env/dist/logs/wrathbench
+            - name: AC_WRATH_BENCH_THREADS
+              value: {{ .Values.worldserver.threads | quote }}
+            # The port secret (module/PROTOCOL.md "Authentication"). Every
+            # route needs it; without it the module refuses to listen, loudly.
+            - name: AC_WRATH_BENCH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: WRATHBENCH_MODULE_SECRET
+            - name: AC_WRATH_BENCH_ACCOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: WRATHBENCH_ACCOUNT_USER
+            # Account allowlist: every surface taking an "account" param serves
+            # only these (403 account_not_permitted otherwise). Changing it
+            # takes effect on the next pod, i.e. the next deploy window, and
+            # each name must exist in auth first.
+            - name: AC_WRATH_BENCH_ACCOUNTS
+              value: {{ join "," .Values.worldserver.accounts | quote }}
+          ports:
+            - name: world
+              containerPort: 8085
+            - name: module
+              containerPort: 8086
+          # tcpSocket, not httpGet: the module refuses every request without
+          # the bearer, so an HTTP probe would report a healthy server as sick.
+          # The real readiness check is the deploy's /health call, which does
+          # present the secret (infra/k8s-deploy.sh).
+          startupProbe:
+            tcpSocket:
+              port: 8085
+            periodSeconds: {{ .Values.worldserver.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.worldserver.startupProbe.failureThreshold }}
+          readinessProbe:
+            tcpSocket:
+              port: 8085
+            periodSeconds: 10
+            failureThreshold: 6
+          resources: {{ toYaml .Values.worldserver.resources | nindent 12 }}
+          volumeMounts:
+            # The AzerothCore server data directory (dbc/ maps/ vmaps/ mmaps/).
+            # Operator-supplied, read-only, never in git.
+            - name: data
+              mountPath: /azerothcore/env/dist/data
+              subPath: client
+              readOnly: true
+            - name: data
+              mountPath: /azerothcore/env/dist/etc
+              subPath: etc
+            - name: data
+              mountPath: /azerothcore/env/dist/logs
+              subPath: logs
+            - name: temp
+              mountPath: /azerothcore/env/dist/temp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-data
+        - name: temp
+          emptyDir: {}
