@@ -218,15 +218,13 @@ worklogs/2026-08-29).
     it scales with total trajectory bytes, which only ever grows.
 
 118. **The codex driver's next steps** (2026-09-05; shipped in 3d8666e,
-    7eb44c8, d2b46a1 — see the day file). Four things, in the order they bite:
-    (a) **Rebuild the runner image** — `infra/docker/runner.Dockerfile` now
-    installs `@openai/codex@0.153.4` with `bun add -g`; unverified in the image,
-    and until it is built every codex run is `--local`. The lane directory must
-    also be visible inside the container/pod (a mount), which nothing arranges
-    yet. (b) **Per-lane fleet accounting** — a codex run counts only against the
-    `codex` key; `codex:<ENV NAME>` keys and a place in `policy.subscriptions`
-    (which validates Claude lanes only) are not built, so a second ChatGPT
-    subscription can only be pinned by hand. (c) **`codex app-server` as the
+    7eb44c8, d2b46a1, 3e4a130, b27fd02 — see the day file). Three things left,
+    in the order they bite:
+    (b) **Per-lane fleet accounting** — a codex run counts only against the
+    `codex` key. A lane NAME is in `policy.subscriptions` and pins an entry
+    (CODEX_HOME does, since b27fd02), but there are no `codex:<ENV NAME>`
+    concurrency keys, so a second ChatGPT subscription gets no cap of its own
+    and the two would share the single `codex` slot. (c) **`codex app-server` as the
     transport** once it is no longer marked experimental: a long-lived process
     (no per-turn startup + MCP handshake), `thread/tokenUsage/updated` and
     `account/rateLimits/updated` (exec mode never reports the usage window,
@@ -238,4 +236,5 @@ worklogs/2026-08-29).
     1.05M/922k is not what this lane sees) and efforts
     low|medium|high|xhigh|max|ultra; the subscription is ChatGPT Pro ("proX5"),
     5-hour windows plus weekly caps, shared with the operator's own Codex use,
-    no per-turn cost. Next action: (a) at the next runner-image build.
+    no per-turn cost. Next action: (b) when a second ChatGPT subscription
+    exists; (c) when `codex app-server` leaves "experimental".
