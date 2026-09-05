@@ -68,7 +68,7 @@ published artifact carries.
 | `/models` | the roster with the scheduler's verdict on each entry |
 | `/campaigns` | probe campaign coverage: cells swept, by how many models |
 | `/run/:id` | one run, turn by turn, following the file live |
-| `/map` | every live agent on the world map |
+| `/map` | every live agent on the world map; `/map?run=<id>` replays one run's recorded track, with the transport bottom centre |
 
 `/run/:id` has one remembered preference of its own beside the autoscroll
 toggle: the expand preset over the feed (`minimal`, `responses`, `snippets`,
