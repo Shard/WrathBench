@@ -220,9 +220,11 @@ if [ "${DRIVER}" = "codex" ]; then
 run-episode.sh: ${TOKEN_ENV} does not name a logged-in Codex home for the runner.
   1. run:  codex login          (a ChatGPT subscription; the login lands in ~/.codex/auth.json)
   2. put the directory in .env as ${TOKEN_ENV}=/home/<you>/.codex (.env is gitignored)
-     — for --local today that is CODEX_HOME=/home/mark/.codex; inside the
-     container Bun loads /wrathbench/.env, which is how the path reaches the
-     runner at all, and the directory must be visible there too.
+     — that value is the HOST path, which is what --local uses. Inside the
+     container the directory is BIND-MOUNTED at /home/bun/.codex and the
+     compose service sets CODEX_HOME to it (infra/compose.yml, x-codex-lane);
+     Bun's autoload does not overwrite a variable already set, so .env keeps
+     naming the host path. On Kubernetes the Secret names a mounted path.
   (${TOKEN_ENV} is this run's subscription LANE. Never copy auth.json per run:
    its refresh token is spent by whichever process refreshes first, and the
    other side then fails with "refresh token was already used".)
