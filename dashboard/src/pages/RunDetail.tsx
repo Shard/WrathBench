@@ -48,6 +48,7 @@ import {
   type FeedEntry,
   type ModelRowView,
   type RunDetailResponse,
+  type StreamAttempt,
   type StreamView,
   type TokenTotals,
 } from "../api/client";
@@ -746,7 +747,7 @@ export default function RunDetail() {
                     {(st) => (
                       <>
                         <h2 class="section">the stream · {st().attempts} attempts</h2>
-                        <StreamTotals stream={st()} detail={d()} />
+                        <StreamTotals stream={st()} />
                         <h2 class="section">this attempt</h2>
                       </>
                     )}
@@ -942,9 +943,17 @@ export default function RunDetail() {
  * stream whose older attempts predate a producer has not been observed doing
  * none of it.
  */
-function StreamTotals(props: { stream: StreamView; detail: RunDetailResponse }) {
+function StreamTotals(props: { stream: StreamView }) {
   const t = (): StreamView["totals"] => props.stream.totals;
   const cost = (): StreamView["totals"]["cost"] => t().cost;
+  /*
+   * This attempt's own row from the STREAM, not from the run row beside it.
+   * The two are read at different moments on a live run — the stream's
+   * attempts come off the listing's memoised rows, the run row is re-read per
+   * request — and the footnote under a total must be the same figure the strip
+   * above it lists, or the page quietly disagrees with itself.
+   */
+  const here = (): StreamAttempt | undefined => props.stream.runs[props.stream.attempt - 1];
   /** "this attempt: …" — the run's own reading, beside the character's. */
   const mine = (v: string): string => `this attempt: ${v}`;
   return (
@@ -952,7 +961,7 @@ function StreamTotals(props: { stream: StreamView; detail: RunDetailResponse }) 
       <div class="card">
         <div class="k">quests completed</div>
         <div class="v mono">{num(t().questsCompleted)}</div>
-        <div class="sub">{mine(num(props.detail.run.questsCompleted))}</div>
+        <div class="sub">{mine(num(here()?.questsCompleted))}</div>
       </div>
       <div class="card">
         <div class="k">xp earned</div>
@@ -964,7 +973,7 @@ function StreamTotals(props: { stream: StreamView; detail: RunDetailResponse }) 
       <div class="card">
         <div class="k">playtime</div>
         <div class="v mono">{fmtDuration(t().playtimeMs)}</div>
-        <div class="sub">{mine(fmtDuration(props.detail.playtimeMs ?? null))}</div>
+        <div class="sub">{mine(fmtDuration(here()?.playtimeMs ?? null))}</div>
       </div>
       <div class="card">
         <div class="k">tokens in / out</div>
