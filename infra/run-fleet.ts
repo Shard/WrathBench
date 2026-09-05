@@ -41,7 +41,7 @@
  *    account; the second job would spend the night in account_in_use).
  *  - roster policy: claude-family models (opus/sonnet/haiku/claude-*) run only
  *    via the claude-code driver, and that driver runs only claude
- *    models. Shared free-cloud pools (OpenRouter/OpenCode) carry free models
+ *    models; the codex driver (a ChatGPT subscription) carries no claude id. Shared free-cloud pools (OpenRouter/OpenCode) carry free models
  *    only; keeping a single stream per provider pool is the whole point of
  *    one job per account. A local/self-hosted openai apiBase is a distinct
  *    category: exempt from the free-suffix rule (no shared pool to meter),

@@ -231,7 +231,7 @@ export default function Ladder() {
           onPick={pick(setHarness, HARNESS_KEY)}
           title="The harness tag. A tag on the row, not a partition — filtering by it is the reader's choice, not a comparability rule."
         />
-        <label class="filter check" title="Keep only the runs that cost money. A claude-code run counts as paid: a subscription is a bill (runner/src/billing.ts).">
+        <label class="filter check" title="Keep only the runs that cost money. A claude-code or codex run counts as paid: a subscription is a bill (runner/src/billing.ts).">
           <input
             type="checkbox"
             checked={excludeFree()}

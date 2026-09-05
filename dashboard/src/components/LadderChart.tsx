@@ -32,6 +32,7 @@ const HIT_R = 12;
 /** The colour of a point's ring: the harness that owned its runs, or neither when mixed. */
 function harnessColour(harnesses: readonly string[]): string {
   if (harnesses.length === 1 && harnesses[0] === "claude-code") return "var(--claude)";
+  if (harnesses.length === 1 && harnesses[0] === "codex") return "var(--codex)";
   if (harnesses.length === 1 && harnesses[0] === "wrathbench") return "var(--accent)";
   return "var(--dim)";
 }

@@ -862,9 +862,9 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
     expect(isConcurrencyKey("claude-code")).toBe(true);
     expect(isConcurrencyKey("warp")).toBe(false);
     expect(isConcurrencyKey("opencode-go")).toBe(true);
-    expect(CONCURRENCY_KEYS).toEqual(["openai", "claude-code", "stub", "openrouter", "opencode", "opencode-go"]);
+    expect(CONCURRENCY_KEYS).toEqual(["openai", "claude-code", "codex", "stub", "openrouter", "opencode", "opencode-go"]);
     expect(parsePolicyBlock({ maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 } }).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 });
-    expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, stub, openrouter, opencode, opencode-go/);
+    expect(() => parsePolicyBlock({ maxConcurrent: { warp: 1 } })).toThrow(/unknown concurrency key warp — allowed: openai, claude-code, codex, stub, openrouter, opencode, opencode-go/);
     expect(() => parsePolicyBlock({ maxConcurrent: { openrouter: 0 } })).toThrow(/positive integer/);
   });
 });
