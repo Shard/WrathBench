@@ -106,21 +106,22 @@ worklogs/2026-08-29).
 
 ## Deployment
 
-116. **The NuSphere cutover has not been performed** (2026-09-05). The chart
-    (`infra/chart/wrathbench`), the ConfigMap kustomization (`infra/k8s`), the
-    image build (`infra/build-images.sh`), the deploy window
-    (`infra/k8s-deploy.sh`) and the runbook (`docs/DEPLOY-NUSPHERE.md`) all
-    exist and are lint/render/kubeconform clean, but **nothing has run**: no PVC
-    has been bound, no pod has started, and the fleet is still on compose. The
-    runbook is a plan, not a report. Unblocked by the nusphere-side PR
-    (Shard/nusphere#149) merging; the cutover itself is a watched window, not a
-    background task, because step 1 pauses live runs. Two things to confirm
-    first with real workloads rather than argument: that `mysql:8.4` starts with
-    `runAsUser: 1000` on the `iscsi-nvme` datadir (the documented fallback is
-    999, db only), and that Flux's kustomize-controller builds `infra/k8s` with
-    `LoadRestrictionsNone` — without it the ConfigMap silently stops generating
-    and fleet steering stops with it, which is the one wrong guess here that
-    breaks operation rather than a deploy.
+116. **The NuSphere cutover has not been performed** (2026-09-05). Everything
+    before it is done: the chart (`infra/chart/wrathbench`), the ConfigMap
+    kustomization (`infra/k8s`), the image build (`infra/build-images.sh`), the
+    deploy window (`infra/k8s-deploy.sh`) and the runbook
+    (`docs/DEPLOY-NUSPHERE.md`) are lint/render/kubeconform clean; the four
+    images are in Harbor at `harness-0.5-488-g82b62d3`; and the nusphere-side
+    draft PR (Shard/nusphere#149) is pinned to commit `82b62d3` with that image
+    tag, validate-clean. **Nothing has run**: no PVC bound, no pod started, the
+    fleet is still on compose, and the runbook is a plan, not a report. The
+    cutover is a watched window Mark schedules, because its first step pauses
+    the live runs; merging #149 is the start of that window and not before.
+    One thing left to confirm with a real workload rather than argument: that
+    `mysql:8.4` starts with `runAsUser: 1000` on the `iscsi-nvme` datadir (the
+    documented fallback is 999, db only). The other open guess is closed: Flux
+    already builds `apps/chungusjr` with parent-path (`../base/`) references, so
+    `infra/k8s`'s `../fleet.json` builds the same way.
 
 117. **CI for the release contract** (2026-09-05; GitHub issue 7's addendum).
     None of it is built: PR checks on the pinned Bun with a frozen install, the
