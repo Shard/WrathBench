@@ -294,12 +294,21 @@ export function streamViewOf(runId: string, all: readonly ResultRun[]): StreamVi
   const runs = chain.map((id) => byId.get(id)).filter((r): r is ResultRun => r !== undefined);
   if (runs.length === 0) return null;
   const root = runs[0]!;
+  /*
+   * The neighbours come off the SERVED chain, not off `lineageIndex` — so
+   * `previous`, `next` and `attempt` cannot disagree with the strip. They are
+   * the same answer on a linear chain; on a fork they are not, because the
+   * walk's `next` is the later-started child and the chain served is the
+   * deeper branch, and a feed seam that linked one while the strip listed the
+   * other would be a page contradicting itself.
+   */
+  const at = chain.indexOf(runId);
   return {
     streamId: lineage.streamId,
-    attempt: chain.indexOf(runId) + 1,
+    attempt: at + 1,
     attempts: chain.length,
-    previous: lineage.previous,
-    next: lineage.next,
+    previous: at > 0 ? chain[at - 1]! : null,
+    next: chain[at + 1] ?? null,
     /*
      * The `typeof` is not paranoia: a row served by a viewer that predates the
      * field has no `continuedFrom` at all, and `undefined !== null` would mark

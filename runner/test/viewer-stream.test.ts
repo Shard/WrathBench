@@ -332,6 +332,24 @@ describe("streamViewOf", () => {
     const off = streamViewOf("c3", runs);
     expect(off?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "c3"]);
     expect(off?.attempt).toBe(3);
+    expect(off?.next).toBeNull();
+  });
+
+  test("previous and next name the served chain, never a branch it does not list", () => {
+    const runs = [
+      ...chain({}, {}),
+      run({ runId: "b3", startedAt: 3000, continuedFrom: "a2" }),
+      run({ runId: "b4", startedAt: 4000, continuedFrom: "b3" }),
+      // Later-started than b3, so the bare lineage walk would call it a2's
+      // successor — while the chain served is the deeper branch through b3.
+      run({ runId: "c3", startedAt: 3500, continuedFrom: "a2" }),
+    ];
+    const view = streamViewOf("a2", runs);
+    expect(view?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "b3", "b4"]);
+    // The seam the feed links must be the attempt the strip lists next to it.
+    expect(view?.next).toBe(view?.runs[view.attempt]?.runId);
+    expect(view?.next).toBe("b3");
+    expect(view?.previous).toBe("a1");
   });
 
   test("call counts sum over the attempts that recorded them", () => {
