@@ -42,7 +42,15 @@ USER bun
 ENV HOME=/home/bun
 RUN curl -fsSL https://claude.ai/install.sh | bash \
     && /home/bun/.local/bin/claude --version
-ENV PATH="/home/bun/.local/bin:${PATH}"
+# The OpenAI Codex CLI for the `codex` driver (runner/README.md, Drivers),
+# PINNED: the driver's flag set, feature names and event JSONL were verified
+# against exactly this version (2026-09-05), and an unknown `--disable` name is
+# a launch error. There is no npm in this image, so bun's global install does
+# the job; it lands in /home/bun/.bun/bin. Not yet rebuilt or verified in the
+# image as of the commit that added it — see docs/FOLLOW-UPS.md.
+RUN bun add -g @openai/codex@0.153.4 \
+    && /home/bun/.bun/bin/codex --version
+ENV PATH="/home/bun/.local/bin:/home/bun/.bun/bin:${PATH}"
 
 WORKDIR /wrathbench
 
