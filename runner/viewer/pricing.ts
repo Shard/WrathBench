@@ -539,6 +539,9 @@ function expectedCost(args: {
 }): CostFigure {
   const { run, tokens } = args;
   const claudeCode = run.harness === "claude-code" || run.driver === "claude-code";
+  // A codex run bills a ChatGPT subscription and reports no cost at all, so a
+  // list-price figure over its tokens is as-if-metered whatever the row says.
+  const codex = run.harness === "codex" || run.driver === "codex";
   const price = priceFor(run, run.startedAt ?? null);
   if (price === null) return none(unpricedNote(run));
   if (tokens === null) return none("no token totals for this run");
@@ -562,7 +565,7 @@ function expectedCost(args: {
   return {
     usd: breakdownTotal(breakdown),
     basis: "list-price",
-    asIfMetered: price.asIfMetered,
+    asIfMetered: price.asIfMetered || codex,
     breakdown,
     priceId: price.id,
     asOf: price.asOf,

@@ -148,13 +148,14 @@ export interface EpisodesResponse extends SnapshotEnvelope {
 
 /**
  * The harness a run ran under: `wrathbench` is the fixed loop,
- * `claude-code` the Claude Code CLI scaffold. Literal union rather than an
- * import, because this module is import-free by construction.
+ * `claude-code` the Claude Code CLI scaffold, `codex` the OpenAI Codex CLI
+ * scaffold. Literal union rather than an import, because this module is
+ * import-free by construction.
  */
-export type HarnessView = "wrathbench" | "claude-code";
+export type HarnessView = "wrathbench" | "claude-code" | "codex";
 
 export interface ComparabilityView {
-  /** `git describe` of this repo's build — the same for either harness. */
+  /** `git describe` of this repo's build — the same for every harness. */
   harnessVersion: string;
   promptHash: string;
   promptChars: number;

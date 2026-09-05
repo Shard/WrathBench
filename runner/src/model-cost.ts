@@ -93,7 +93,8 @@ export interface BillableModel {
 export function billingOf(m: BillableModel): Billing {
   if (m.billing !== undefined) return m.billing;
   if (isLocalBase(m.apiBase)) return "free";
-  if (m.driver === "claude-code" || m.harness === "claude-code") return "free";
+  // The subscription scaffolds (claude-code, codex): a flat bill, no per-token charge.
+  if (m.driver === "claude-code" || m.harness === "claude-code" || m.driver === "codex" || m.harness === "codex") return "free";
   if (isContributorSlug(m.model) || isFreeSlug(m.model) || isAllowlistedFree(m.model)) return "free";
   return "paid";
 }

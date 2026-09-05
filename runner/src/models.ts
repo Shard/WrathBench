@@ -1143,7 +1143,7 @@ export function concurrencyKeyOf(r: Pick<RosterModel, "name" | "driver" | "apiBa
 /** A roster entry's driver; `openai` when it names none. A name outside the vocabulary is a config error. */
 export function driverOf(r: { name: string; driver?: string }): Driver {
   const d = r.driver ?? "openai";
-  if (!isDriver(d)) throw new Error(`roster.${r.name}: driver "${d}" is not one of openai|claude-code|stub`);
+  if (!isDriver(d)) throw new Error(`roster.${r.name}: driver "${d}" is not one of openai|claude-code|codex|stub`);
   return d;
 }
 
@@ -1935,13 +1935,13 @@ export interface OutstandingInput {
   excluded?: Iterable<string>;
   /** How many accounts each class has. */
   accounts?: ClassAccountCounts;
-  /** `policy.maxConcurrent`: per-driver stream caps; `claude-code` is the one read. */
+  /** `policy.maxConcurrent`: per-driver stream caps; `claude-code` and `codex` are the ones read. */
   maxConcurrent?: Record<string, number>;
 }
 
-/** The group a model's runs queue in: its account class, claude-code apart. */
+/** The group a model's runs queue in: its account class, the subscription scaffolds (claude-code, codex) apart. */
 function outstandingGroupOf(s: ModelState): string {
-  return s.harness === "claude-code" ? "claude-code" : accountClassOf(s);
+  return s.harness === "claude-code" || s.harness === "codex" ? s.harness : accountClassOf(s);
 }
 
 /** The whole metric, pure over the same inputs the projection was built from. */
@@ -1949,11 +1949,11 @@ export function outstandingWork(input: OutstandingInput): Outstanding {
   const excluded = new Set(input.excluded ?? []);
   const accounts = input.accounts ?? {};
   const paidCap = input.policy?.paid?.maxConcurrent;
-  const ccCap = input.maxConcurrent?.["claude-code"];
   const concurrencyOf = (group: string): number => {
-    if (group === "claude-code") {
+    if (group === "claude-code" || group === "codex") {
+      const cap = input.maxConcurrent?.[group];
       const pool = accounts.pool ?? 0;
-      return ccCap === undefined ? pool : Math.min(pool, ccCap);
+      return cap === undefined ? pool : Math.min(pool, cap);
     }
     const n = accounts[group as AccountClass] ?? 0;
     return group === "paid" && paidCap !== undefined ? Math.min(n, paidCap) : n;

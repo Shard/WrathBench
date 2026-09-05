@@ -587,7 +587,7 @@ export function jobSpawn(
       ...(uncappedLane && job.continueDropped !== undefined ? { continueDropped: { ...job.continueDropped } } : {}),
       // The subscription lane, for the one driver that has one. Omitted on the
       // default lane, so a spawn is byte-identical to a pre-lane one.
-      ...(job.subscription !== undefined && entry.driver === "claude-code" ? { tokenEnv: job.subscription } : {}),
+      ...(job.subscription !== undefined && (entry.driver === "claude-code" || entry.driver === "codex") ? { tokenEnv: job.subscription } : {}),
     };
     const runId =
       `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}-${stamp}` +
