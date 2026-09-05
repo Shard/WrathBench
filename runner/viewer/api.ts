@@ -53,13 +53,14 @@ import type {
   TokenTotals,
   TrackResponse,
 } from "./api-types";
-import { resultRunOf, trackFrom } from "./results";
+import { episodeOf, resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
 import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
 import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
+import { streamViewOf } from "./stream";
 import {
   projectCampaigns,
   projectEntries,
@@ -1243,6 +1244,24 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
        * instead of waiting for the (size, mtime) totals cache to miss.
        */
       const tokens = tokenTotals(entries);
+      /*
+       * The freeplay stream this run is one attempt of, aggregated across the
+       * whole chain (`stream.ts`). Every figure the runner records is per
+       * attempt, so without this the run page shows a twelfth session's quests
+       * under a character that has been playing for a fortnight.
+       *
+       * Gated on the run being freeplay at all — the stamped tier, or a
+       * `continuedFrom` for a run whose metadata predates the stamp — so a
+       * scored run's page pays nothing for it. Behind the gate it is the
+       * listing's own rows: `resultRuns` memoises each attempt's trajectory
+       * totals on (size, mtime), so the ended attempts of a chain are read once
+       * per process and this page and `/api/ladder` cannot disagree about what
+       * a stream is.
+       */
+      const stream =
+        run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
+          ? streamViewOf(runId, await resultRuns())
+          : null;
       const body: RunDetailResponse = {
         run,
         states: readStates(runsDir, runId),
@@ -1271,6 +1290,9 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
         // by turn, and the window that opens one can sit far above whatever
         // slice of entries the page happens to have loaded.
         reflections: tail.reflections,
+        // Absent, not null, on a run with no stream: an optional field the page
+        // falls back from, the same shape the facts above take.
+        ...(stream === null ? {} : { stream }),
       };
       return pub(body, projectRunDetail);
     }

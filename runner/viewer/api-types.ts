@@ -724,6 +724,148 @@ export interface PositionsResponse extends SnapshotEnvelope {
   positions: AgentPosition[];
 }
 
+/**
+ * One attempt of a freeplay stream, with its own figures.
+ *
+ * A durable stream is one character across attempts (docs/OPERATIONS.md,
+ * "Freeplay streams are durable"), and every figure the runner records is per
+ * *attempt*: the quest counter, the tokens, the cost, the playtime all start
+ * again at each continuation. That is not changed here — the record is the
+ * record — so the strip on the run page shows each attempt as it was recorded
+ * and `StreamTotals` says what the character has done altogether.
+ *
+ * Null is "this attempt recorded none of that kind", never zero, exactly as on
+ * `ResultRun`, which is where every field below is read from.
+ */
+export interface StreamAttempt {
+  runId: string;
+  startedAt: number | null;
+  endedAt: number | null;
+  terminationReason: string | null;
+  pauseReason: string | null;
+  live: boolean;
+  /** The highest level observed on this attempt (`ResultRun.maxLevel`). */
+  level: number | null;
+  xpEarned: number | null;
+  questsCompleted: number | null;
+  playtimeMs: number | null;
+  tokens: TokenTotals | null;
+  /** As on `ResultRun`: what the provider charged, and this repo's price table. */
+  actualCost: CostFigure | null;
+  expectedCost: CostFigure | null;
+  /**
+   * Deaths on this attempt. **Optional, and absent from the public
+   * projection**: `RunDetailResponse.deaths` is withheld there whole (corpse
+   * positions), so the stream withholds the count with it rather than opening
+   * a second door onto the same fact. Absent is "this viewer does not answer",
+   * which is not the claim `null` makes.
+   */
+  deaths?: number | null;
+  flights: number | null;
+  /**
+   * The level marks with their per-mark active playtime, so the run page can
+   * draw the stream's stitched level series without fetching every attempt.
+   */
+  levels: LevelMark[];
+}
+
+/**
+ * What a stream cost, kept as two sums and never one.
+ *
+ * A `CostFigure` carries a `basis`, a `priceId` and an `asOf`, and a chain
+ * whose attempts were one reported, one priced from the table and one neither
+ * has no honest single basis — so the attempts' figures are summed as numbers
+ * and the coverage is stated beside them rather than a synthesised figure
+ * claiming a basis it does not have. Actual and expected are never added
+ * together: they are two answers to two questions (`CostView`).
+ */
+export interface StreamCost {
+  /** Sum over the attempts that reported an actual charge; null when none did. */
+  actualUsd: number | null;
+  /** How many attempts that sum covers, out of `attempts`. */
+  actualAttempts: number;
+  expectedUsd: number | null;
+  expectedAttempts: number;
+  /** Attempts in the stream — the denominator both coverages are read against. */
+  attempts: number;
+  /**
+   * Any attempt whose actual figure is a subscription driver's own
+   * `total_cost_usd` (`CostFigure.asIfMetered`): money that was never billed.
+   * Carried so a stream on a subscription does not read as a bill.
+   */
+  asIfMetered: boolean;
+}
+
+/**
+ * A stream's figures, summed or unioned across its attempts.
+ *
+ * The rule everywhere: a sum over attempts where NONE recorded a kind is null;
+ * where some did, those are summed and the rest contribute nothing — the same
+ * null-vs-zero discipline the per-run facts keep, so a stream with one attempt
+ * from before a producer shipped is not reported as having done less.
+ *
+ * What is summed and what is taken from the furthest attempt is the difference
+ * between a tally and a state. Quests, xp, playtime, tokens, deaths and flights
+ * are things that happened and add up. Level, money and achievements are what
+ * the CHARACTER holds now — achievements included, since the tap reports the
+ * whole backlog — so the latest attempt that recorded one answers.
+ */
+export interface StreamTotals {
+  attempts: number;
+  /** The first attempt's start, and the last attempt's end — null while it is live. */
+  startedAt: number | null;
+  endedAt: number | null;
+  playtimeMs: number | null;
+  questsCompleted: number | null;
+  xpEarned: number | null;
+  tokens: TokenTotals | null;
+  cost: StreamCost;
+  /** The character's current standing, from the furthest attempt that recorded it. */
+  level: number | null;
+  money: number | null;
+  achievements: AchievementFacts | null;
+  /** Tallies: counts summed, marks concatenated in attempt order. */
+  /** Withheld in public mode, as `RunDetailResponse.deaths` is; see `StreamAttempt.deaths`. */
+  deaths?: DeathFacts | null;
+  taxi: TaxiFacts | null;
+  spells: SpellFacts | null;
+  talents: TalentFacts | null;
+  trades: TradeFacts | null;
+  toolCalls: number | null;
+  snippets: number | null;
+  modelResponses: number | null;
+}
+
+/**
+ * The freeplay stream a run is one attempt of — the whole run, where the run
+ * row is one session of it.
+ *
+ * Served only for a run whose chain holds more than one attempt (`hasLineage`),
+ * because "attempt 1 of 1" is noise standing where a fact should be. The
+ * aggregation happens HERE, at read time, and nothing is written back: the
+ * runner records per attempt and that surface is the model's, not the
+ * reader's (docs/METHODOLOGY.md — an old run is read differently, not
+ * relabelled).
+ */
+export interface StreamView {
+  /** The chain root's run id: the stream's identity across attempts. */
+  streamId: string;
+  /** This run's 1-based place in `runs`. */
+  attempt: number;
+  attempts: number;
+  previous: string | null;
+  next: string | null;
+  /**
+   * The root still names a predecessor this viewer did not serve (archived, or
+   * gone), so the stream begins mid-history and every total below is a lower
+   * bound over the attempts on screen.
+   */
+  truncated: boolean;
+  /** Every attempt, oldest first, each with its own figures. */
+  runs: StreamAttempt[];
+  totals: StreamTotals;
+}
+
 export interface RunDetailResponse extends SnapshotEnvelope {
   run: RunRow;
   states: StatePoint[];
@@ -768,6 +910,13 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    * simply accents nothing.
    */
   reflections?: ReflectionWindowView[];
+  /**
+   * The freeplay stream this run is one attempt of, aggregated across the whole
+   * chain. Present only when the run has lineage worth printing; optional for
+   * the reason `achievements` is — an older viewer does not answer it, and the
+   * page falls back to the run's own figures.
+   */
+  stream?: StreamView;
 }
 
 /**
