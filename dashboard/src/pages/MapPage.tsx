@@ -16,6 +16,13 @@
  * rather than walked (the lerp would trail the cursor and read as a bug), and
  * that the route walked so far is drawn behind it.
  *
+ * The two modes share one control strip, bottom centre of the stage: a live
+ * pill on `/map`, the transport on `/map?run=<id>`, and a loading state in
+ * between. The move between live and replay is therefore a change of what that
+ * one strip says, with the way back — the live link — always in the same place,
+ * rather than a second cluster of controls appearing in a corner. Its
+ * arithmetic is `lib/playback.ts`; this file only wires it.
+ *
  * Canvas drawing sits outside Solid's reactivity on purpose. Pips interpolate
  * toward their newest reading every frame, so the draw loop is a
  * requestAnimationFrame with its own mutable state; Solid owns the sidebar, the
@@ -39,7 +46,17 @@ import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
-import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness, stamp } from "../lib/format";
+import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
+import {
+  type Speed,
+  keyBelongsToTarget,
+  nextSpeed,
+  playbackClock,
+  playbackKey,
+  prevSampleBefore,
+  progressOf,
+  tickMs,
+} from "../lib/playback";
 import {
   clearReplayState,
   createLeftReplay,
@@ -74,7 +91,6 @@ import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "..
 import { displayError, logError } from "../lib/errors";
 
 const POLL_MS = 5000;
-const PLAY_MS = 250;
 const TILE_CACHE_MAX = 512;
 
 /*
@@ -141,6 +157,9 @@ export default function MapPage() {
   const [track, setTrack] = createSignal<TrackResponse | undefined>(undefined);
   const [cursor, setCursor] = createSignal(0);
   const [playing, setPlaying] = createSignal(false);
+  // Playback speed is a viewer preference, not replay state: it survives the
+  // swap on purpose, so it is not among the writables `clearReplayState` resets.
+  const [speed, setSpeed] = createSignal<Speed>(1);
   const [replayError, setReplayError] = createSignal<string | undefined>(undefined);
   const [feedList, setFeedList] = createSignal<readonly AgentPosition[]>([]);
   const [pinnedMap, setPinnedMap] = createSignal<number | null>(null);
@@ -530,12 +549,16 @@ export default function MapPage() {
 
   function drawPips(ctx: CanvasRenderingContext2D, list: Pip[], sel: AgentPosition | null): void {
     const now = Date.now();
+    // Staleness is against the feed's own clock: the cursor in a replay, where
+    // every sample is hours or months old on the wall and none of them is
+    // "stale" — the character was exactly there, then. Live, the two agree.
+    const ageRef = replayId() === undefined ? now : cursor();
     ctx.textBaseline = "middle";
     ctx.font = "12px ui-monospace, monospace";
     for (const pip of list) {
       const p = project(view, pip.x, pip.y);
       if (p.sx < -60 || p.sy < -30 || p.sx > W + 60 || p.sy > H + 30) continue;
-      const stale = positionAgeMs(pip.data.ts, now, feedClock) > STALE_MS;
+      const stale = positionAgeMs(pip.data.ts, ageRef, feedClock) > STALE_MS;
       const on = sel !== null && pip.runId === sel.runId;
       ctx.globalAlpha = stale ? 0.4 : 1;
       /*
@@ -651,12 +674,44 @@ export default function MapPage() {
     };
     raf = requestAnimationFrame(frame);
 
+    /*
+     * The transport's keyboard, on the document so it works with the canvas
+     * focused or nothing focused at all. A key that belongs to a focused
+     * control — space on a button, typing in the series select — is left to it.
+     */
+    const onKey = (e: KeyboardEvent): void => {
+      if (track() === undefined || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (keyBelongsToTarget((e.target as HTMLElement | null)?.tagName)) return;
+      const action = playbackKey(e.key);
+      if (action === null) return;
+      e.preventDefault();
+      switch (action) {
+        case "toggle":
+          togglePlay();
+          break;
+        case "back":
+          stepBack();
+          break;
+        case "forward":
+          stepForward();
+          break;
+        case "start":
+          jumpTo("start");
+          break;
+        case "end":
+          jumpTo("end");
+          break;
+      }
+    };
+    document.addEventListener("keydown", onKey);
+
     onCleanup(() => {
       cancelAnimationFrame(raf);
       ro.disconnect();
       mq?.removeEventListener("change", readTheme);
       motionMq?.removeEventListener("change", readMotion);
       offLogo();
+      document.removeEventListener("keydown", onKey);
     });
   });
 
@@ -785,9 +840,58 @@ export default function MapPage() {
   });
 
   /*
-   * Playback: one recorded sample per tick, so a 6h run scrubs in ~30s. The
-   * successor is a binary search rather than a scan — at four ticks a second
-   * over a long track the scan was the page's largest repeated cost.
+   * The transport's deliberate moves. Every one of them goes through `seek`,
+   * which is the only place besides the track load that the cursor is set —
+   * and the only place it is remembered (`cursormemory.ts`: remembered at the
+   * deliberate moves, never from an effect, because the route swap zeroes the
+   * cursor on the way out and an effect would record that).
+   */
+  const seek = (ts: number): void => {
+    const t = track();
+    if (t === undefined) return;
+    setCursor(ts);
+    cursorMemory.remember(t.runId, ts);
+  };
+  const stepBack = (): void => {
+    const t = track();
+    if (t === undefined) return;
+    setPlaying(false);
+    const prev = prevSampleBefore(t.points, cursor());
+    if (prev !== undefined) seek(prev.ts);
+  };
+  const stepForward = (): void => {
+    const t = track();
+    if (t === undefined) return;
+    setPlaying(false);
+    const next = nextSampleAfter(t.points, cursor());
+    if (next !== undefined) seek(next.ts);
+  };
+  const jumpTo = (edge: "start" | "end"): void => {
+    const sp = span();
+    if (sp === null) return;
+    setPlaying(false);
+    seek(edge === "start" ? sp.from : sp.to);
+  };
+  /**
+   * Play from the end starts over: a transport whose play button does nothing
+   * because the cursor happens to be on the last sample reads as broken.
+   */
+  const togglePlay = (): void => {
+    const t = track();
+    if (t === undefined || !scrubbable()) return;
+    if (playing()) {
+      setPlaying(false);
+      return;
+    }
+    if (nextSampleAfter(t.points, cursor()) === undefined) seek(span()!.from);
+    setPlaying(true);
+  };
+
+  /*
+   * Playback: one recorded sample per tick, so a 6h run scrubs in ~30s at 1×.
+   * The successor is a binary search rather than a scan — at four ticks a
+   * second over a long track the scan was the page's largest repeated cost.
+   * The speed is read here so a change mid-play restarts the interval.
    */
   createEffect(() => {
     if (!playing()) return;
@@ -796,11 +900,8 @@ export default function MapPage() {
     const timer = setInterval(() => {
       const next = nextSampleAfter(t.points, cursor());
       if (next === undefined) setPlaying(false);
-      else {
-        setCursor(next.ts);
-        cursorMemory.remember(t.runId, next.ts);
-      }
-    }, PLAY_MS);
+      else seek(next.ts);
+    }, tickMs(speed()));
     onCleanup(() => clearInterval(timer));
   });
 
@@ -873,69 +974,168 @@ export default function MapPage() {
             </For>
           </Show>
         </div>
-        <Show when={track()}>
-          {(t) => (
-            <div class="map-chips" style={{ top: "auto", bottom: "34px", right: "10px" }}>
-              <div class="scrub">
-                <button onClick={() => setPlaying(!playing())}>{playing() ? "pause" : "play"}</button>
-                {/*
-                  A link rather than a button with a handler: the swap is owned
-                  by the route effect above, so this control needs no logic of
-                  its own and an anchor keeps what an anchor gives — a real
-                  history entry, middle-click, and the focus ring.
-                */}
-                <A class="btn" href="/map" title="back to the live map">
+        {/*
+          The one control strip, in both modes. The live link is an anchor
+          rather than a button with a handler: the swap is owned by the route
+          effect above, so the control needs no logic of its own, and an anchor
+          keeps what an anchor gives — a real history entry, middle-click, and
+          the focus ring.
+        */}
+        <div class="playbar" classList={{ replay: replayId() !== undefined }}>
+          <Show
+            when={replayId() !== undefined}
+            fallback={
+              <div class="playbar-row">
+                <span class="live-pill">
+                  <span class="live-dot" />
                   live
-                </A>
-                {/*
-                  A track with one sample has nothing to scrub: min === max
-                  leaves a slider pinned at one end that answers no drag, which
-                  reads as broken rather than as "there is only one reading".
-                */}
-                <Show when={scrubbable()}>
-                  <input
-                    type="range"
-                    min={span()?.from ?? 0}
-                    max={span()?.to ?? 0}
-                    value={cursor()}
-                    onInput={(e) => {
-                      setPlaying(false);
-                      const ts = Number(e.currentTarget.value);
-                      setCursor(ts);
-                      // Remembered at the two places the cursor is deliberately
-                      // moved, never from a signal effect: the route swap sets it
-                      // to 0 on the way out, and an effect would record that.
-                      cursorMemory.remember(t().runId, ts);
-                    }}
-                  />
-                </Show>
-                <span class="dim mono">{stamp(cursor())}</span>
-                <Show when={!scrubbable() && t().points.length > 0}>
-                  <span class="dim">one reading</span>
+                </span>
+                <span class="playbar-text">
+                  {feed.error !== undefined ? (
+                    <span class="err">{displayError(feed.error)}</span>
+                  ) : (
+                    <>
+                      {count()} {count() === 1 ? "character" : "characters"}
+                      <Show when={seriesHidden() > 0}>
+                        {" "}
+                        · {seriesHidden()} hidden by series {liveSeries()}
+                      </Show>
+                    </>
+                  )}
+                </span>
+                <span class="grow" />
+                <Show when={replayHrefFor(track(), selected())}>
+                  {(href) => (
+                    <A class="playbar-btn" href={href()} title="replay this run's recorded track">
+                      replay {pipName(selected()!)} →
+                    </A>
+                  )}
                 </Show>
               </div>
-              <Show when={t().points.length === 0}>
-                <span class="dim">no recorded positions</span>
+            }
+          >
+            <div class="playbar-row">
+              <Show
+                when={track()}
+                fallback={
+                  <span class="playbar-text">
+                    {replayError() !== undefined ? (
+                      <span class="err">{replayError()}</span>
+                    ) : (
+                      <span class="dim">loading replay of {shortRunId(replayId()!)}…</span>
+                    )}
+                  </span>
+                }
+              >
+                {(t) => (
+                  <>
+                    <span class="swatch" style={{ background: colorOf(t().runId) }} />
+                    <span class="playbar-title" title={t().runId}>
+                      {t().character ?? shortRunId(t().runId)}
+                    </span>
+                    <span class="dim mono">{shortRunId(t().runId)}</span>
+                    <span class="dim">
+                      · {t().points.length} {t().points.length === 1 ? "position" : "positions"}
+                    </span>
+                    <span class="grow" />
+                    <Show when={t().points.length > 0}>
+                      <span class="dim mono playbar-stamp" title="the cursor's wall-clock time">
+                        {stamp(cursor())}
+                      </span>
+                    </Show>
+                  </>
+                )}
               </Show>
+              <A class="playbar-btn live-link" href="/map" title="back to the live map">
+                <span class="live-dot" />
+                live
+              </A>
             </div>
-          )}
-        </Show>
-        <div class="map-hint">
-          {replayError() !== undefined ? (
-            <span class="err">{replayError()}</span>
-          ) : track() !== undefined ? (
-            <>
-              replay of {track()!.runId} · {track()!.points.length} recorded positions · drag to pan
-            </>
-          ) : feed.error !== undefined ? (
-            <span class="err">{displayError(feed.error)}</span>
-          ) : (
-            <>
-              {count()} {count() === 1 ? "character" : "characters"}
-              <Show when={seriesHidden() > 0}> · {seriesHidden()} hidden by series {liveSeries()}</Show>
-              {" "}· drag to pan · scroll to zoom · click a pip
-            </>
-          )}
+            <Show when={track()}>
+              {(t) => (
+                <div class="playbar-row transport">
+                  <Show
+                    when={t().points.length > 0}
+                    fallback={<span class="dim">no recorded positions</span>}
+                  >
+                    <button
+                      class="tbtn"
+                      title="previous sample (←)"
+                      aria-label="previous sample"
+                      disabled={!scrubbable() || prevSampleBefore(t().points, cursor()) === undefined}
+                      onClick={stepBack}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M3 3h2v10H3zM13 3v10L6 8z" />
+                      </svg>
+                    </button>
+                    <button
+                      class="tbtn play"
+                      title={playing() ? "pause (space)" : "play (space)"}
+                      aria-label={playing() ? "pause" : "play"}
+                      disabled={!scrubbable()}
+                      onClick={togglePlay}
+                    >
+                      <Show
+                        when={playing()}
+                        fallback={
+                          <svg viewBox="0 0 16 16" aria-hidden="true">
+                            <path d="M4 2.5v11L13 8z" />
+                          </svg>
+                        }
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z" />
+                        </svg>
+                      </Show>
+                    </button>
+                    <button
+                      class="tbtn"
+                      title="next sample (→)"
+                      aria-label="next sample"
+                      disabled={!scrubbable() || nextSampleAfter(t().points, cursor()) === undefined}
+                      onClick={stepForward}
+                    >
+                      <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M11 3h2v10h-2zM3 3v10l7-5z" />
+                      </svg>
+                    </button>
+                    <span class="tclock mono">{playbackClock(span(), cursor()).elapsed}</span>
+                    {/*
+                      A track with one sample has nothing to scrub: min === max
+                      leaves a slider pinned at one end that answers no drag,
+                      which reads as broken rather than as "there is only one
+                      reading".
+                    */}
+                    <Show when={scrubbable()} fallback={<span class="dim grow center">one reading</span>}>
+                      <input
+                        type="range"
+                        class="scrubber"
+                        aria-label="replay position"
+                        min={span()?.from ?? 0}
+                        max={span()?.to ?? 0}
+                        value={cursor()}
+                        style={{ "--p": String(progressOf(span(), cursor())) }}
+                        onInput={(e) => {
+                          setPlaying(false);
+                          seek(Number(e.currentTarget.value));
+                        }}
+                      />
+                    </Show>
+                    <span class="tclock mono">{playbackClock(span(), cursor()).total}</span>
+                    <button
+                      class="tbtn speed mono"
+                      title="playback speed: samples per tick"
+                      disabled={!scrubbable()}
+                      onClick={() => setSpeed(nextSpeed(speed()))}
+                    >
+                      {speed()}×
+                    </button>
+                  </Show>
+                </div>
+              )}
+            </Show>
+          </Show>
         </div>
       </div>
       <div class="side">
@@ -990,9 +1190,19 @@ export default function MapPage() {
                 on the public build a reading is already up to a publish cadence
                 old when it arrives, and the sidebar was reporting that delay as
                 the character standing still. Null clock in a replay and on the
-                private API, where the plain subtraction is right.
+                private API, where the plain subtraction is right. In a replay
+                the reference is the cursor, not this browser's clock: the
+                sample's age is how far behind the cursor it is.
               */}
-              <div class="v">{fmtAge(positionAgeMs(p().ts, ageTick(), feed.latest?.clock ?? null))}</div>
+              <div class="v">
+                {fmtAge(
+                  positionAgeMs(
+                    p().ts,
+                    track() === undefined ? ageTick() : cursor(),
+                    feed.latest?.clock ?? null,
+                  ),
+                )}
+              </div>
               <div class="k">harness</div>
               <div class="v">{shortHarness(p().harnessVersion)}</div>
               {/*
