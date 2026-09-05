@@ -112,7 +112,7 @@ rides in `?series=` and in `localStorage`; the URL wins, so a shared link means
 what its sender saw.
 
 It is not the `?harness=` filter, which selects which *loop* owned a
-run (`wrathbench` or `claude-code`). Different dimension, same word. `/runs`
+run (`wrathbench`, `claude-code` or `codex`). Different dimension, same word. `/runs`
 still filters on it by clicking a cell; the ladder no longer offers it as a
 control (the harness is a tag on each row and a colour on each point, not a
 partition), and offers neither `all` nor overridden runs as an episode choice —
