@@ -72,6 +72,9 @@ import type {
   RunsResponse,
   SpellFacts,
   StatePoint,
+  StreamAttempt,
+  StreamTotals,
+  StreamView,
   TalentFacts,
   TaxiFacts,
   TierView,
@@ -831,6 +834,80 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
   };
 }
 
+/**
+ * A freeplay stream, field by field.
+ *
+ * Everything here is already public elsewhere: run ids and the lineage between
+ * them ride on every listing (`projectRunRow.continuedFrom`), and the figures
+ * are the same levels, playtime, tokens and cost `projectResultRun` ships per
+ * attempt. Two things are withheld, and both for a reason this file already
+ * states: a pause reason becomes the fixed token, and the death figures are
+ * dropped whole — `RunDetailResponse.deaths` is not projected at all (corpse
+ * positions), so the stream does not open a second door onto the same fact.
+ */
+function projectStreamAttempt(a: StreamAttempt): StreamAttempt {
+  return {
+    runId: a.runId,
+    startedAt: a.startedAt,
+    endedAt: a.endedAt,
+    terminationReason: a.terminationReason,
+    pauseReason: pausedToken(a.pauseReason),
+    live: a.live,
+    level: a.level,
+    xpEarned: a.xpEarned,
+    questsCompleted: a.questsCompleted,
+    playtimeMs: a.playtimeMs,
+    tokens: a.tokens === null ? null : projectTokenTotals(a.tokens),
+    actualCost: a.actualCost === null ? null : projectCostFigure(a.actualCost),
+    expectedCost: a.expectedCost === null ? null : projectCostFigure(a.expectedCost),
+    flights: a.flights,
+    levels: a.levels.map(projectLevelMark),
+  };
+}
+
+function projectStreamTotals(t: StreamTotals): StreamTotals {
+  return {
+    attempts: t.attempts,
+    startedAt: t.startedAt,
+    endedAt: t.endedAt,
+    playtimeMs: t.playtimeMs,
+    questsCompleted: t.questsCompleted,
+    xpEarned: t.xpEarned,
+    tokens: t.tokens === null ? null : projectTokenTotals(t.tokens),
+    cost: {
+      actualUsd: t.cost.actualUsd,
+      actualAttempts: t.cost.actualAttempts,
+      expectedUsd: t.cost.expectedUsd,
+      expectedAttempts: t.cost.expectedAttempts,
+      attempts: t.cost.attempts,
+      asIfMetered: t.cost.asIfMetered,
+    },
+    level: t.level,
+    money: t.money,
+    achievements: t.achievements === null ? null : projectAchievements(t.achievements),
+    taxi: t.taxi === null ? null : projectTaxi(t.taxi),
+    spells: t.spells === null || t.spells === undefined ? null : projectSpells(t.spells),
+    talents: t.talents === null || t.talents === undefined ? null : projectTalents(t.talents),
+    trades: t.trades === null || t.trades === undefined ? null : projectTrades(t.trades),
+    toolCalls: t.toolCalls,
+    snippets: t.snippets,
+    modelResponses: t.modelResponses,
+  };
+}
+
+function projectStream(s: StreamView): StreamView {
+  return {
+    streamId: s.streamId,
+    attempt: s.attempt,
+    attempts: s.attempts,
+    previous: s.previous,
+    next: s.next,
+    truncated: s.truncated,
+    runs: s.runs.map(projectStreamAttempt),
+    totals: projectStreamTotals(s.totals),
+  };
+}
+
 export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
   return {
     run: projectRunRow(d.run),
@@ -851,6 +928,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
     ...(d.reflections !== undefined
       ? { reflections: d.reflections.map((w) => ({ fromTurn: w.fromTurn, toTurn: w.toTurn })) }
       : {}),
+    ...(d.stream !== undefined ? { stream: projectStream(d.stream) } : {}),
   };
 }
 
