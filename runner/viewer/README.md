@@ -10,6 +10,17 @@ JSONL by hand.
 bun runner/viewer/serve.ts        # from the repo root, on the host
 ```
 
+On the operator's host the viewer is a systemd **user** unit,
+`infra/wrathbench-viewer.service`, so it comes back after a reboot instead of
+dying with the shell that launched it (2026-09-05: a reboot took it down with
+the docker stack, and nothing brought it back). Install once from the repo root
+with `systemctl --user link "$PWD/infra/wrathbench-viewer.service" && systemctl
+--user enable --now wrathbench-viewer`; `bun run viewer:restart` restarts
+through the unit when it is installed and falls back to a detached launch when
+it is not. The docker stack is a separate matter: `docker.service` has to be
+enabled at boot (`sudo systemctl enable docker`) for `restart: unless-stopped`
+to mean anything after a reboot.
+
 Then open http://127.0.0.1:8090. A bare clone works: an absent runs directory
 is created empty, and every page serves its labelled empty state.
 
