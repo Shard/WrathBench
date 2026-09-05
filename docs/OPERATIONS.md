@@ -72,8 +72,8 @@ otherwise on whichever pool account is free.
 
 Two enabled jobs must not share an account, a pinned account may not be in the
 pool, and the roster policy (claude models on the claude-code driver only —
-the claude-code harness; shared free pools carry free ids only) is
-enforced on every roster entry at every re-read.
+the claude-code harness; no claude id on the codex driver; shared free pools
+carry free ids only) is enforced on every roster entry at every re-read.
 
 #### Config reference (`infra/fleet.json`)
 
@@ -898,7 +898,7 @@ as well). How many runs a model gets is its `tier` and nothing else.
 Nothing about the host path changed. One episode:
 
 ```
-./infra/run-episode.sh --model <id> [--driver openai|claude-code]
+./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex]
 ```
 
 One roster, or a whole fleet, from the host:
@@ -997,6 +997,17 @@ Two ways to override, both normally absent:
 
 Changing `policy.subscriptions` or the lane plumbing needs a fleet **recreate**,
 not just the 60s config re-read: the token-to-lane path is code.
+
+**The Codex lane** (2026-09-05) is the same idea with a directory for a
+credential: `CODEX_HOME` names a logged-in Codex home (`codex login`; the
+login is its `auth.json`), a second subscription is `CODEX_HOME_2` pointing at
+a second directory, and a directory is never copied per run — its refresh
+token is spent by whichever process refreshes first. A codex run counts
+against the `codex` concurrency key (`"codex": 1` is one live session, the
+rule the Claude lanes follow); per-lane `codex:<ENV NAME>` keys and a place in
+`policy.subscriptions` are not built yet (docs/FOLLOW-UPS.md), so a codex
+entry rides the default lane unless its `subscription` pins another
+directory's variable by hand.
 
 ### Secrets
 

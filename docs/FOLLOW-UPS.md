@@ -216,3 +216,26 @@ worklogs/2026-08-29).
     in-memory cache already uses. Trigger: viewer restarts becoming frequent
     enough to notice, or the corpus growing enough that 18.5s becomes minutes —
     it scales with total trajectory bytes, which only ever grows.
+
+118. **The codex driver's next steps** (2026-09-05; shipped in 3d8666e,
+    7eb44c8, d2b46a1 — see the day file). Four things, in the order they bite:
+    (a) **Rebuild the runner image** — `infra/docker/runner.Dockerfile` now
+    installs `@openai/codex@0.153.4` with `bun add -g`; unverified in the image,
+    and until it is built every codex run is `--local`. The lane directory must
+    also be visible inside the container/pod (a mount), which nothing arranges
+    yet. (b) **Per-lane fleet accounting** — a codex run counts only against the
+    `codex` key; `codex:<ENV NAME>` keys and a place in `policy.subscriptions`
+    (which validates Claude lanes only) are not built, so a second ChatGPT
+    subscription can only be pinned by hand. (c) **`codex app-server` as the
+    transport** once it is no longer marked experimental: a long-lived process
+    (no per-turn startup + MCP handshake), `thread/tokenUsage/updated` and
+    `account/rateLimits/updated` (exec mode never reports the usage window,
+    codex issue #14728), and the typed misalignment steer for a
+    `provider-policy` stop — which stays the operator's decision, never
+    automatic. (d) **Astra facts to keep with the lane**: model id
+    `gpt-6-astra`, released 2026-09-03, needs codex >= 0.153.0 (0.153.4 makes
+    it the default); the ChatGPT catalogue reports a 272k context (the API's
+    1.05M/922k is not what this lane sees) and efforts
+    low|medium|high|xhigh|max|ultra; the subscription is ChatGPT Pro ("proX5"),
+    5-hour windows plus weekly caps, shared with the operator's own Codex use,
+    no per-turn cost. Next action: (a) at the next runner-image build.

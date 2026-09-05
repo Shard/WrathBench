@@ -13,7 +13,7 @@ computes the harness version on the host (the container has no git) and execs
 the runner inside the compose `runner` service:
 
 ```bash
-./infra/run-episode.sh --model <id> [--driver openai|claude-code|stub] [flags...]
+./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex|stub] [flags...]
 ./infra/run-episode.sh --resume <run-id>
 ./infra/run-episode.sh --model <id> --local     # run on the host instead
 ```
@@ -31,6 +31,9 @@ bun runner/src/run.ts --driver stub --stub runner/fixtures/stub-live-check.json
 # for the whole episode (default 500; the meaningful bound for an external
 # scaffold that owns its own tool loop). `0` disables the ceiling outright.
 bun runner/src/run.ts --driver claude-code --model opus --max-tool-calls 200
+
+# the same shape on the OpenAI Codex CLI (a ChatGPT subscription; lane $CODEX_HOME)
+bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high
 
 # resume a killed or paused run (same token, same scratchpad, same trajectory)
 bun runner/src/run.ts --resume <run-id>
@@ -62,13 +65,16 @@ one, rather than silently translated.
 | `openai` (default) | `wrathbench` | the fixed loop in `src/loop.ts` over an OpenAI-compatible endpoint | yes |
 | `stub` | `wrathbench` | the fixed loop over a scripted response file | no |
 | `claude-code` | `claude-code` | the `claude` CLI, driven per turn by `src/adapter-claude.ts` | yes, tagged |
+| `codex` | `codex` | the `codex` CLI (OpenAI, ChatGPT subscription), one `codex exec` / `exec resume` process per turn, `src/adapter-codex.ts` | yes, tagged |
 
 The harness is stamped into the comparability tuple and shown on every run,
-results, ladder and models row. It is a tag, not a partition: claude-code rows sit
-in the same charts as wrathbench rows (the operator's choice for now),
-and `?harness=` on the API narrows to one when wanted. `harnessVersion` is a
-different word — the `git describe` of this repo, which applies to both
-harnesses, since the SDK, tools, prompt and sandbox Claude Code drives are ours.
+results, ladder and models row. It is a tag, not a partition: claude-code and
+codex rows sit in the same charts as wrathbench rows (the operator's choice for
+now), and `?harness=` on the API narrows to one when wanted. `harnessVersion`
+is a different word — the `git describe` of this repo, which applies to every
+harness, since the SDK, tools, prompt and sandbox each CLI drives are ours.
+Each CLI scaffold is its own group because each is a different unversioned
+summarizer (docs/METHODOLOGY.md, operator decision 2026-09-05).
 
 ### Why claude-code is its own harness
 
@@ -208,6 +214,108 @@ into that service, or use `--local` with a module URL the host can reach
 (`WRATHBENCH_MODULE_URL`) — the module's port is not published to the host by
 default.
 
+## The codex driver
+
+The same shape as claude-code on the OpenAI Codex CLI (`codex-cli` 0.153.4,
+pinned in `infra/docker/runner.Dockerfile`), logged in with a ChatGPT
+subscription. `src/adapter-codex.ts` mirrors `adapter-claude.ts` invariant for
+invariant — one `SandboxHost`, tools over the loopback MCP bridge, the tool-call
+ceiling and the watchdogs enforced at every dispatch, a wind-down instead of a
+kill mid-turn, a process-group kill on stop, a constructed child environment —
+and differs only where the CLI does:
+
+- **One process per turn.** `codex exec --json` runs one turn and exits; the
+  next turn is `codex exec resume <thread_id>` on the thread the CLI persisted
+  under `$CODEX_HOME/sessions`. The trajectory's `driver` record carries the
+  first turn's argv, a `codex_thread` record names the thread, every `request`
+  after the first names it too, and one `codex_result` per turn carries the
+  turn's status and usage. `codex app-server` (JSON-RPC over stdio, a
+  long-lived process, rate-limit and token-usage notifications, typed
+  misalignment steers) is the upgrade path once it is no longer marked
+  experimental — docs/FOLLOW-UPS.md.
+- **The prompt goes in on stdin, and stdin is closed.** The positional is `-`;
+  the context message is written and stdin ended. argv has a per-argument
+  ceiling a turn's context can approach, and an *open* pipe is what hung the
+  CLI for 180 s on 2026-09-05 (it reads a piped stdin to EOF as a `<stdin>`
+  block).
+- **The fixed prompt replaces the CLI's base instructions** via
+  `-c model_instructions_file=<run-dir>/codex-instructions.md` — verified to
+  replace, not supplement (1.9k input tokens against 14.7k with the default
+  preamble). `developer_instructions` would have added a message on top, so it
+  is not used. The bytes are `CODEX_SYSTEM_PROMPT`, identical to the
+  claude-code render: the one per-harness sentence names "the CLI", never
+  which.
+- **Exact flags** (`codexArgs`): `exec [resume <id>] --json
+  --ignore-user-config --skip-git-repo-check -m <model> --disable shell_tool
+  --disable unified_exec --disable image_generation --disable tool_suggest
+  --disable multi_agent --disable request_permissions_tool --disable apps
+  --disable plugins --disable browser_use --disable computer_use --disable
+  sleep_tool -c web_search="disabled" -c approval_policy="never"
+  -c sandbox_mode="read-only" -c model_instructions_file="…"
+  [-c model_reasoning_effort="<level>"] -c mcp_servers.wrathbench.command="<bun>"
+  -c mcp_servers.wrathbench.args=["<repo>/runner/src/mcp-bridge.ts","<port>"]
+  -c mcp_servers.wrathbench.default_tools_approval_mode="approve"
+  -c mcp_servers.wrathbench.tool_timeout_sec=300
+  -c mcp_servers.wrathbench.startup_timeout_sec=30 -`. `-s`/`-C` are exec-only
+  in this version, so the sandbox rides on `sandbox_mode` and the cwd (a temp
+  dir, so no AGENTS.md is found) on the process; that keeps the first turn and
+  a resumed one identical apart from the `resume <id>` words.
+  `--ignore-user-config` keeps the operator's `~/.codex/config.toml` out of the
+  run; auth still comes from `CODEX_HOME`. What stays built in —
+  `request_user_input`, `view_image`, `apply_patch` — has no config switch in
+  0.153.4 and is inert under read-only in an empty cwd.
+- **MCP approval.** With `approval_policy="never"` an MCP call that needs
+  approval *fails* ("MCP tool call requires approval, but approval policy is
+  never" — observed); `default_tools_approval_mode="approve"` on the server is
+  what lets our nine through (`"auto"` still gates on the tool's readOnlyHint
+  and refused). Codex presents the tools to the model as
+  `mcp__wrathbench.<tool>` and calls our server with the plain name. The CLI
+  runs MCP servers inside its sandbox with a private `/tmp`, which is why the
+  bridge is addressed by its repository path.
+- **Effort** is `-c model_reasoning_effort=<low|medium|high|xhigh|max|ultra>`;
+  `none` and `minimal` are not Codex levels and the driver refuses them by
+  name rather than mapping them.
+- **Failure vocabulary.** `turn.completed` carries usage only — no cost (a
+  subscription; cost stays absent as on the Claude lanes) and, in exec mode,
+  no rate-limit window. Exhaustion is a failed turn: `detectCodexFailure`
+  maps a usage limit to the `quota-exhausted` pause, a rate limit to
+  `rate-limited`, a dead login ("Your access token could not be refreshed",
+  401) to `auth-failed`, a blown context window to the `context-limit`
+  termination, and the provider's own policy monitor stopping the task (GPT-6
+  Astra's misalignment monitor; nobody is there to approve in exec mode) to
+  `provider-policy`, with the CLI's message recorded verbatim and no automatic
+  steer — the operator's call. An unclassified failed turn is a session note
+  and the thread resumes; three in a row end the run as `adapter-error`.
+
+### Billing: the lane's CODEX_HOME or nothing
+
+The CLI's auth precedence is `CODEX_API_KEY`, then `CODEX_ACCESS_TOKEN`, then
+the ChatGPT login persisted in `$CODEX_HOME/auth.json`; `OPENAI_API_KEY` is
+not read for auth but is the `openai` driver's credential. So the child
+environment drops every `OPENAI_*` and `CODEX_*` variable and the whole
+Anthropic/Bedrock/Vertex set the claude driver drops, then sets one thing back:
+`CODEX_HOME`, to the directory named by the run's lane (`config.subscription`,
+an env var whose VALUE is a Codex home; default `CODEX_HOME`). The directory
+is never copied per run and `auth.json` is never read or logged: a copied
+refresh token is spent by whichever process refreshes first and the other side
+then fails with "refresh token was already used" (seen on this host). One
+directory per lane, shared by that lane's runs, one live session per lane —
+the rule the fleet applies to the Claude lanes.
+
+### Setup, once
+
+```bash
+codex login                                   # a ChatGPT subscription; lands in ~/.codex/auth.json
+echo 'CODEX_HOME=/home/<you>/.codex' >> .env  # the lane; .env is gitignored
+WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --driver codex --model gpt-6-astra --effort high --local
+```
+
+A second subscription is a second directory under a second variable
+(`CODEX_HOME_2=/path/to/other-home`) and `--token-env CODEX_HOME_2` names it.
+The runner refuses to start without the chosen lane's `auth.json`, naming the
+variable. The compose `runner` image installs the CLI since 2026-09-05 (a
+rebuild is owed); until then `--local` with a reachable module URL is the path.
+
 ## The sandbox
 
 One long-lived Bun child process per session (`src/sandbox/entry.ts`), holding
@@ -242,9 +350,9 @@ does. So is any HTTP 429 that survives the retries (`rate-limited`), whatever
 the response body says.
 
 Where they are checked depends on who owns the tool loop. The fixed loop checks
-them once per turn, which is once per tool batch. The claude-code
-driver checks them at every tool dispatch and on a 5s timer, because one of its
-turns can run for tens of minutes (see Drivers above).
+them once per turn, which is once per tool batch. The claude-code and codex
+drivers check them at every tool dispatch and on a 5s timer, because one of
+their turns can run for tens of minutes (see Drivers above).
 
 ### Winding a claude-code episode down, rather than killing it
 
@@ -277,5 +385,8 @@ dispatch with fixture JSON-RPC, byte-identical context assembly, watchdogs on a
 fake clock, trajectory writer, and the claude-code driver against a
 scripted fake `claude` on PATH (`test/fixtures/fake-claude.ts`, which really
 speaks MCP back through the bridge). No live stack, no real CLI, no
-subscription quota. The live check is the stub run above, executed inside the
+subscription quota. The codex driver has the same arrangement
+(`test/fixtures/fake-codex.ts`, which exits per turn and honours `exec resume`,
+plus `test/fixtures/codex-exec-sample.jsonl`, real event lines captured from
+codex-cli 0.153.4). The live check is the stub run above, executed inside the
 compose runner service.

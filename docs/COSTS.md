@@ -113,6 +113,15 @@ it explains these numbers rather than unscoring the rows. Nothing compacts the c
 compaction gate wasn't tripped by the fixed-context lanes, but "the subscription-lane amendment of
 2026-08-22 arguably trips them already").
 
+**codex harness (OpenAI models via the Codex CLI on a ChatGPT subscription, 2026-09-05):** the same
+regime with a different scaffold — one persisted thread, resumed per turn, compacted by the CLI on
+its own schedule. Its `turn.completed` usage is a finished count per turn (`input_tokens` with the
+cached part as a subset, `output_tokens`, `reasoning_output_tokens`), landed once on the turn's last
+`response` entry, so the sum over responses is the run's real prompt and output — no snapshot
+caveat as under claude-code. There is no cost figure at all: the CLI reports none on a
+subscription, so a codex cost is only ever the list-price estimate over its tokens, marked
+as-if-metered.
+
 **Why Sonnet-on-subscription is the cost outlier, in numbers:** it is not that the tokens are
 cheap per-unit — a fresh 200k-token context at list price would be expensive — it's that almost
 all of that 200k is a cache **read**, not a cache write. In the same `roster-sonnet-20260822`
