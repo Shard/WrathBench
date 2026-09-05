@@ -76,10 +76,14 @@ fi
 SHA="$(git rev-parse HEAD)"
 say "tag ${TAG} (source ${SHA}) -> ${REGISTRY}/<name>:${TAG}"
 
+# --only takes either spelling: `worldserver` or `wrathbench-worldserver`.
+# The short one is what an operator types; the long one is the image name.
 wants() {
   [[ "${#ONLY[@]}" -eq 0 ]] && return 0
-  local w
-  for w in "${ONLY[@]}"; do [[ "${w}" == "$1" ]] && return 0; done
+  local w short="${1#wrathbench-}"
+  for w in "${ONLY[@]}"; do
+    [[ "${w}" == "$1" || "${w#wrathbench-}" == "${short}" ]] && return 0
+  done
   return 1
 }
 
@@ -103,7 +107,7 @@ build_server_target() {
 
 build_runner() {
   local ref="${REGISTRY}/wrathbench-runner:${TAG}"
-  wants "runner" || return 0
+  wants "wrathbench-runner" || return 0
   say "building ${ref} (runner.Dockerfile, repo baked in)"
   docker build \
     --build-arg "WRATHBENCH_BUILD_VERSION=${TAG}" \
@@ -115,6 +119,8 @@ build_server_target worldserver wrathbench-worldserver
 build_server_target authserver  wrathbench-authserver
 build_server_target db-import   wrathbench-db-import
 build_runner
+
+[[ "${#BUILT[@]}" -gt 0 ]] || die "--only ${ONLY[*]} matched no image; names are worldserver, authserver, db-import, runner"
 
 say "built:"
 for ref in "${BUILT[@]}"; do
