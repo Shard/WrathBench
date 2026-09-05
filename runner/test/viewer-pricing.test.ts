@@ -376,9 +376,10 @@ describe("a codex run, priced under the vendor prefix", () => {
     // No suffixless id in the file today; the precedence is asserted on the
     // function that decides it rather than on a row that may never exist.
     expect(id).toBeUndefined();
-    const bare = priceFor({ ...astra, model: "z-ai/glm-5.3" });
-    expect(bare?.id).toBe("z-ai/glm-5.3");
-    expect(bare?.asIfMetered).toBe(false);
+    // The row a bare hit returns is the OpenRouter one, note and all; only
+    // `expectedCost`'s own codex check keeps such a figure marked as-if-metered,
+    // and no run reaches it today because a Codex slug is always unprefixed.
+    expect(priceFor({ ...astra, model: "z-ai/glm-5.3" })?.id).toBe("z-ai/glm-5.3");
     // A prefixed model id is never prefixed twice.
     expect(codexPrice("openai/gpt-6-astra")).toBeNull();
   });
