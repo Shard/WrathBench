@@ -41,6 +41,7 @@ import {
   resolveChoice,
   runCostReading,
   scored,
+  stitchStream,
   streamChartLayout,
   streamRows,
   streamSeries,
@@ -433,6 +434,34 @@ describe("freeplay streams", () => {
     // The latest attempt carries the character's current state.
     expect(rows[0]!.latest.runId).toBe("a3");
     expect(rows[0]!.level).toBe(9);
+  });
+
+  test("quests are the character's, summed over the chain — not the last session's", () => {
+    // The runner's counter restarts at every continuation, so the latest
+    // attempt's 2 is the tally of one session and the character has done 13.
+    const rows = streamRows([
+      fp({ runId: "q1", questsCompleted: 4, maxLevel: 3 }),
+      fp({ runId: "q2", continuedFrom: "q1", startedAt: 200, questsCompleted: 7, maxLevel: 6 }),
+      fp({ runId: "q3", continuedFrom: "q2", startedAt: 300, questsCompleted: 2, maxLevel: 9 }),
+    ]);
+    expect(rows[0]!.questsCompleted).toBe(13);
+    // Level, xp and money are what the character HOLDS: still the furthest attempt's.
+    expect(rows[0]!.level).toBe(9);
+  });
+
+  test("an attempt that recorded no quest count contributes nothing, and none at all is null", () => {
+    const some = streamRows([
+      fp({ runId: "n1", questsCompleted: null }),
+      fp({ runId: "n2", continuedFrom: "n1", startedAt: 200, questsCompleted: 5 }),
+    ]);
+    expect(some[0]!.questsCompleted).toBe(5);
+    const none = streamRows([
+      fp({ runId: "p1", questsCompleted: null }),
+      fp({ runId: "p2", continuedFrom: "p1", startedAt: 200, questsCompleted: null }),
+    ]);
+    // Never 0: a stream whose attempts all predate the column has not been
+    // observed completing nothing.
+    expect(none[0]!.questsCompleted).toBeNull();
   });
 
   test("a lineage pointing outside the set is a root, not a dropped row", () => {
@@ -1050,6 +1079,39 @@ describe("timeTicks", () => {
     // Past the last named step, whole days.
     const day = 24 * hour;
     expect(timeTicks(5 * day)).toEqual([0, day, 2 * day, 3 * day, 4 * day, 5 * day]);
+  });
+});
+
+describe("stitchStream", () => {
+  const at = (runId: string, playtimeMs: number | null, marks: LevelMark[]) => ({ runId, playtimeMs, levels: marks });
+
+  test("attempts lie end to end on one cumulative active-time axis", () => {
+    const st = stitchStream([
+      at("a1", 1000, [mark(2, null, 400)]),
+      at("a2", 500, [mark(3, null, 100)]),
+    ]);
+    expect(st.broke).toBeNull();
+    expect(st.points.map((p) => [p.level, p.x])).toEqual([
+      [2, 400],
+      [3, 1100],
+    ]);
+    expect(st.endX).toBe(1500);
+  });
+
+  test("a seam is not a ding: the level the character already held draws nothing", () => {
+    const st = stitchStream([at("a1", 1000, [mark(5, null, 300)]), at("a2", 400, [mark(5, null, 10), mark(6, null, 200)])]);
+    expect(st.points.map((p) => p.level)).toEqual([5, 6]);
+  });
+
+  test("a prior attempt with no active time breaks the stitch rather than compressing the axis", () => {
+    const st = stitchStream([at("a1", null, []), at("a2", 400, [mark(3, null, 100)])]);
+    expect(st.broke).toBe("attempt 1 of 2 recorded no active time");
+  });
+
+  test("the LAST attempt with no span just ends the line at what its marks prove", () => {
+    const st = stitchStream([at("a1", 1000, []), at("a2", null, [mark(4, null, 250)])]);
+    expect(st.broke).toBeNull();
+    expect(st.endX).toBe(1250);
   });
 });
 
