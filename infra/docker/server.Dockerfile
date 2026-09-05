@@ -65,10 +65,6 @@ ARG CMODULES="static"
 ARG CSCRIPTS_DEFAULT_LINKAGE="static"
 ARG CWITH_WARNINGS="ON"
 ARG CMAKE_EXTRA_OPTIONS=""
-# Build identity served on /health (`build` field): the repo's
-# `git describe --tags --always --dirty`, supplied by the caller because the
-# build context carries no .git. See module/mod-wrathbench.cmake.
-ARG WRATHBENCH_BUILD=""
 
 ARG CCACHE_DIR="/ccache"
 ARG CCACHE_MAXSIZE="10G"
@@ -100,6 +96,18 @@ COPY deps/azerothcore/modules       /azerothcore/modules
 COPY module /azerothcore/modules/mod-wrathbench
 
 WORKDIR /azerothcore/build
+
+# Build identity served on /health (`build` field): the repo's
+# `git describe --tags --always --dirty`, supplied by the caller because the
+# build context carries no .git. See module/mod-wrathbench.cmake.
+#
+# Declared HERE, immediately above the only step that reads it, and not up with
+# the other build ARGs. Its value changes on every release, and BuildKit
+# invalidates every layer below a changed ARG — so from the top of the stage it
+# was re-running the toolchain apt install (~20 minutes of downloads) for each
+# new tag, before ccache ever got a chance to make the compile fast. Below the
+# COPYs it costs nothing: the cmake step is what the stamp belongs to anyway.
+ARG WRATHBENCH_BUILD=""
 
 # -DWITHOUT_GIT=1: the submodule's .git is a gitlink into the parent repo, so
 # the tree carries no usable git metadata; the pin lives in our history and
