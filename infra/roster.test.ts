@@ -43,7 +43,7 @@ describe("resolve", () => {
   });
 
   test("a codex entry resolves like a claude one: no api flags, a lane by NAME, effort in the id", () => {
-    const [s] = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high", tokenEnv: "CODEX_HOME_2", account: "SHAKEOUT" }], "20260905");
+    const s = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high", tokenEnv: "CODEX_HOME_2", account: "SHAKEOUT" }], "20260905")[0]!;
     expect(s).toMatchObject({ driver: "codex", tokenEnv: "CODEX_HOME_2", effort: "high", account: "SHAKEOUT" });
     expect(s.runId).toBe("roster-gpt-6-astra-high-20260905");
     const argv = episodeArgv(s, false);
@@ -52,11 +52,11 @@ describe("resolve", () => {
     expect(argv).not.toContain("--api-key-env");
     expect(argv[argv.indexOf("--token-env") + 1]).toBe("CODEX_HOME_2");
     // The default lane is not restated, exactly as for claude-code.
-    const [plain] = resolve([{ model: "gpt-5.5", driver: "codex" }], "20260905");
+    const plain = resolve([{ model: "gpt-5.5", driver: "codex" }], "20260905")[0]!;
     expect(plain.tokenEnv).toBeUndefined();
     expect(episodeArgv(plain, false)).not.toContain("--token-env");
     // A lane name on an openai entry is dropped: nothing there bills a subscription.
-    const [oa] = resolve([{ model: "x:free", tokenEnv: "CODEX_HOME" }], "20260905");
+    const oa = resolve([{ model: "x:free", tokenEnv: "CODEX_HOME" }], "20260905")[0]!;
     expect(oa.tokenEnv).toBeUndefined();
   });
 
