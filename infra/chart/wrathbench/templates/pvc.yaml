@@ -1,0 +1,45 @@
+{{/*
+Two volumes, both RWO on storage.className (iscsi-nvme: Retain, expandable,
+honest fsync — operator decision 2026-09-05).
+
+`data` is the whole of `data/` in today's layout: client/ (the AzerothCore
+server data directory, read-only and never in git), runs/ (every trajectory,
+fleet-state.json, the pause switch, the lane logs), wiki/, minimap/, etc/,
+logs/ and publish/. Five pods mount it at once, which RWO permits only because
+every one of them is nodeSelector'd to the same node.
+
+`db` is the MySQL datadir and nothing else.
+
+Retain means deleting the release does not delete a run. That is the point.
+*/}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-data
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: data
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.storage.className }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.data.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-db
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.storage.className }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.db.size }}

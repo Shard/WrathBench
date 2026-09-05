@@ -1,0 +1,98 @@
+{{/*
+MySQL 8.4 — the version AzerothCore's own docker-compose.yml pins at our
+commit. Recreate, not RollingUpdate: one RWO volume, one writer, ever.
+
+The Service is `wrathbench-db` and the data PVC `wrathbench-data`: the cluster
+repo's restic CronJob mysqldumps against that Service name and mounts that PVC
+by name, so both are interface, not local naming. Every consumer of the
+hostname takes it from WRATHBENCH_DB_HOST (see _helpers.tpl), which is why this
+one CAN carry the house prefix while `worldserver` and `authserver` cannot.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-db
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: db
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-db
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: db
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: db
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        # Not the shared helper: the mysql image's datadir belongs to whatever
+        # uid first wrote it. 1000 matches everything else here; 999 (the
+        # image's own `mysql` user) is the documented fallback if the datadir
+        # ever comes from an upstream image default. See db.runAsUser.
+        runAsUser: {{ .Values.db.runAsUser }}
+        runAsGroup: {{ .Values.db.runAsUser }}
+        fsGroup: {{ .Values.db.runAsUser }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: db
+          image: {{ .Values.db.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: WRATHBENCH_DB_ROOT_PASSWORD
+          ports:
+            - name: mysql
+              containerPort: 3306
+          readinessProbe:
+            # AzerothCore's own compose healthcheck, verbatim.
+            exec:
+              command:
+                - sh
+                - -c
+                - '/usr/bin/mysql --user=root --password="$MYSQL_ROOT_PASSWORD" --execute "SHOW DATABASES;"'
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 10
+            failureThreshold: 40
+          resources: {{ toYaml .Values.db.resources | nindent 12 }}
+          volumeMounts:
+            - name: db
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: db
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-db

@@ -1,0 +1,160 @@
+{{/*
+The two one-shots compose runs as `depends_on` gates, as Helm hooks.
+
+Both are idempotent against an existing database and are therefore safe on
+every upgrade, not just the install:
+
+  db-import  AzerothCore's `dbimport`. Creates acore_auth / acore_characters /
+             acore_world if missing, imports the base dumps, and applies the
+             updates that have not been applied. That is what the tool is for.
+
+  bootstrap  infra/bootstrap/bootstrap.ts. Every write is an upsert: the
+             realmlist row is `INSERT ... ON DUPLICATE KEY UPDATE` keyed on id,
+             and the account is only rewritten when the stored SRP6 verifier
+             does not match the configured password. Its own header says "safe
+             to re-run"; no guard is needed and none is added, because a guard
+             around it would also skip the converge it exists to do.
+
+Weights order them: db-import (0) then bootstrap (10). before-hook-creation
+deletion is what keeps the second upgrade from colliding with the first Job.
+*/}}
+{{- $ctx := . -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-db-import
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-import
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: db-import
+    spec:
+      restartPolicy: Never
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      initContainers:
+        # The hooks run as soon as Helm creates them; the db Deployment may
+        # still be starting. `dbimport` fails fast on a refused connection, so
+        # wait here rather than lean on backoffLimit.
+        - name: wait-for-db
+          image: {{ include "wrathbench.image.dbImport" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - 'for i in $(seq 1 120); do mysqladmin ping -h "$WRATHBENCH_DB_HOST" -u root -p"$WRATHBENCH_DB_PASSWORD" --silent && exit 0; sleep 5; done; echo "db never answered"; exit 1'
+          env:
+            {{- include "wrathbench.dbEnv" . | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { memory: 256Mi }
+      containers:
+        - name: db-import
+          image: {{ include "wrathbench.image.dbImport" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          env:
+            {{- include "wrathbench.acDbEnv" . | nindent 12 }}
+            - name: AC_DATA_DIR
+              value: /azerothcore/env/dist/data
+            - name: AC_LOGS_DIR
+              value: /azerothcore/env/dist/logs
+          resources: {{ toYaml .Values.jobs.dbImport.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /azerothcore/env/dist/etc
+              subPath: etc
+            - name: logs
+              mountPath: /azerothcore/env/dist/logs
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-data
+        - name: logs
+          emptyDir: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-bootstrap
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bootstrap
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: bootstrap
+    spec:
+      restartPolicy: Never
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      initContainers:
+        # The hooks run as soon as Helm creates them; the db Deployment may
+        # still be starting. `dbimport` fails fast on a refused connection, so
+        # wait here rather than lean on backoffLimit.
+        - name: wait-for-db
+          image: {{ include "wrathbench.image.dbImport" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - 'for i in $(seq 1 120); do mysqladmin ping -h "$WRATHBENCH_DB_HOST" -u root -p"$WRATHBENCH_DB_PASSWORD" --silent && exit 0; sleep 5; done; echo "db never answered"; exit 1'
+          env:
+            {{- include "wrathbench.dbEnv" . | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { memory: 256Mi }
+      containers:
+        - name: bootstrap
+          image: {{ include "wrathbench.image.runner" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          workingDir: /wrathbench
+          command: ["bun", "run", "infra/bootstrap/bootstrap.ts"]
+          env:
+            {{- include "wrathbench.dbEnv" . | nindent 12 }}
+            - name: WRATHBENCH_AUTH_DB
+              value: acore_auth
+            - name: WRATHBENCH_REALM_ID
+              value: {{ .Values.realm.id | quote }}
+            - name: WRATHBENCH_REALM_NAME
+              value: {{ .Values.realm.name | quote }}
+            # The realm address the auth handshake advertises. The module is
+            # in-process and never reads this row, so it stays at loopback: a
+            # spectator port-forwards 3724 and 8085 and their client connects to
+            # 127.0.0.1. Never a routable address (docs/DEPLOY-NUSPHERE.md).
+            - name: WRATHBENCH_REALM_ADDRESS
+              value: {{ .Values.realm.address | quote }}
+            - name: WRATHBENCH_REALM_PORT
+              value: {{ .Values.realm.port | quote }}
+            # Uppercased by bootstrap.ts; AzerothCore uppercases both before
+            # deriving the SRP6 verifier.
+            - name: WRATHBENCH_ACCOUNT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: WRATHBENCH_ACCOUNT_USER
+            - name: WRATHBENCH_ACCOUNT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: WRATHBENCH_ACCOUNT_PASSWORD
+          resources: {{ toYaml .Values.jobs.bootstrap.resources | nindent 12 }}
