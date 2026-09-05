@@ -11,7 +11,7 @@
  * went with it.
  */
 
-import type { ResultRun } from "@viewer/api-types";
+import type { LevelMark, ResultRun } from "@viewer/api-types";
 import {
   type AxisSpec,
   type Better,
@@ -1150,8 +1150,8 @@ export function ladderChartLayout(
  * model: attempt 12 continues attempt 11 on the same character, so listing
  * both would show the same character twice with the older one looking behind.
  * The lineage is `continuedFrom`; the latest attempt carries the character's
- * current level and state, and the chain rides along so a reader can see how
- * many attempts are behind it.
+ * current level and state, the tallies are summed over the chain, and the chain
+ * rides along so a reader can see how many attempts are behind it.
  *
  * The scored ladders are untouched — `ladderRows` is still keyed by model and
  * still reads scored runs only.
@@ -1186,6 +1186,19 @@ export interface StreamRow {
   level: number | null;
   xp: number | null;
   money: number | null;
+  /**
+   * Quests completed by the CHARACTER, summed over the chain.
+   *
+   * The runner's counter is per attempt (`completions.length`, which starts
+   * again at every continuation), so the latest attempt's reading is the last
+   * session's tally and not the stream's. Summed here for the same reason the
+   * run page's `stream.totals` sums it server-side, with the same rule: an
+   * attempt that recorded none contributes nothing, and a stream where NONE
+   * did stays null rather than claiming zero.
+   *
+   * Level, xp and money above are deliberately not summed: they are what the
+   * character holds now, and the furthest attempt is the one that knows.
+   */
   questsCompleted: number | null;
   startedAt: number | null;
 }
@@ -1232,6 +1245,20 @@ export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
       best.set(root, { chain, run: r });
     }
   }
+  const byId = new Map(kept.map((r) => [r.runId, r]));
+  /** A tally over the chain's attempts: null only when none of them recorded one. */
+  const overChain = (chain: readonly string[], of: (r: ResultRun) => number | null): number | null => {
+    let total = 0;
+    let any = false;
+    for (const id of chain) {
+      const v = byId.get(id);
+      const n = v === undefined ? null : of(v);
+      if (n === null) continue;
+      total += n;
+      any = true;
+    }
+    return any ? total : null;
+  };
   const rows: StreamRow[] = [];
   for (const [streamId, { chain, run }] of best) {
     const { status, detail } = statusOf(run);
@@ -1250,7 +1277,7 @@ export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
       level: run.maxLevel,
       xp: run.xp,
       money: run.money,
-      questsCompleted: run.questsCompleted,
+      questsCompleted: overChain(chain, (r) => r.questsCompleted),
       startedAt: run.startedAt,
     });
   }
@@ -1346,14 +1373,78 @@ export interface StreamChartModel {
   omitted: { streamId: string; label: string; why: string }[];
 }
 
+/**
+ * What the stitching needs of an attempt: its id, its level marks and the
+ * active time it contributed. `ResultRun` has these and so does
+ * `StreamAttempt` (the run page's own view of a stream), so one function draws
+ * the field's twelve lines and the run page's one.
+ */
+export interface StreamAttemptLike {
+  runId: string;
+  levels: readonly LevelMark[];
+  playtimeMs: number | null;
+}
+
 /** The total active time an attempt contributes, or null when it recorded none. */
-function attemptSpan(run: ResultRun): number | null {
+function attemptSpan(run: StreamAttemptLike): number | null {
   if (run.playtimeMs !== null) return run.playtimeMs;
   // The run's own total is the right figure — it advances with a live run. A
   // run that never got one still contributes what its marks prove it played,
   // which is a lower bound and is documented as one at the call site.
   const marked = run.levels.map((l) => l.playtimeMs).filter((p): p is number => p !== null);
   return marked.length > 0 ? Math.max(...marked) : null;
+}
+
+/** One stream's stitched line, or the reason it cannot be drawn. */
+export interface StitchedStream {
+  points: StreamPoint[];
+  /** Where the line stops: the stream's total active time. */
+  endX: number;
+  /**
+   * Why the stream is not drawable, or null. A prior attempt with no
+   * active-time reading is the one case that cannot be stitched: its
+   * successors' offsets would be short by an unknown amount, and folding the
+   * null to zero would silently compress the axis. The LAST attempt is
+   * different — with no span the line simply ends at its last mark.
+   */
+  broke: string | null;
+}
+
+/**
+ * Lay a stream's attempts end to end on one cumulative-active-time axis.
+ *
+ * The step rule and the seam rule are `StreamPoint`'s: a mark at or below the
+ * level already drawn is not a gain (attempt k opens holding what k-1 ended
+ * with), and a mark above it is a ding that happened in the unobserved gap and
+ * draws its step at the seam.
+ */
+export function stitchStream(attempts: readonly StreamAttemptLike[]): StitchedStream {
+  const points: StreamPoint[] = [];
+  let offset = 0;
+  let endX = 0;
+  let highest = 0;
+  for (let i = 0; i < attempts.length; i++) {
+    const run = attempts[i]!;
+    for (const mark of run.levels) {
+      if (mark.playtimeMs === null || mark.level <= highest) continue;
+      highest = mark.level;
+      points.push({ x: offset + mark.playtimeMs, level: mark.level, runId: run.runId, ts: mark.ts });
+    }
+    const span = attemptSpan(run);
+    if (span === null) {
+      if (i < attempts.length - 1) {
+        return { points, endX, broke: `attempt ${i + 1} of ${attempts.length} recorded no active time` };
+      }
+      // The line stops at the furthest time anything proves: the attempts
+      // already counted, or a mark on this one past them. Never *behind* the
+      // offset — the earlier attempts' active time is evidence we hold.
+      endX = Math.max(offset, points.length > 0 ? points[points.length - 1]!.x : 0);
+      break;
+    }
+    offset += span;
+    endX = offset;
+  }
+  return { points, endX, broke: null };
 }
 
 /**
@@ -1363,12 +1454,9 @@ function attemptSpan(run: ResultRun): number | null {
  * malformed cases) and `runs` is the set those ids index into, so the chart and
  * the table can never disagree about which runs are on screen.
  *
- * A prior attempt with no active-time reading at all is the one case that
- * cannot be stitched: its successors' offsets would be short by an unknown
- * amount, and folding a null to zero would silently compress the axis — the
- * distinction `AreaFacts` and `TaxiFacts` are emphatic about. Such a stream is
- * omitted with its reason rather than drawn wrong. The *last* attempt is
- * different: with no span the line simply ends at its last mark.
+ * The stitching itself is `stitchStream`, shared with the run page's own
+ * single-stream chart; a stream it cannot lay out is omitted here with the
+ * reason it gave, rather than drawn wrong.
  */
 export function streamSeries(rows: readonly StreamRow[], runs: readonly ResultRun[]): StreamChartModel {
   const byId = new Map(runs.map((r) => [r.runId, r]));
@@ -1384,33 +1472,7 @@ export function streamSeries(rows: readonly StreamRow[], runs: readonly ResultRu
       omitted.push({ streamId: row.streamId, label, why: "no attempt served" });
       continue;
     }
-    const points: StreamPoint[] = [];
-    let offset = 0;
-    let endX = 0;
-    let highest = 0;
-    let broke: string | null = null;
-    for (let i = 0; i < attempts.length; i++) {
-      const run = attempts[i]!;
-      for (const mark of run.levels) {
-        if (mark.playtimeMs === null || mark.level <= highest) continue;
-        highest = mark.level;
-        points.push({ x: offset + mark.playtimeMs, level: mark.level, runId: run.runId, ts: mark.ts });
-      }
-      const span = attemptSpan(run);
-      if (span === null) {
-        if (i < attempts.length - 1) {
-          broke = `attempt ${i + 1} of ${attempts.length} recorded no active time`;
-          break;
-        }
-        // The line stops at the furthest time anything proves: the attempts
-        // already counted, or a mark on this one past them. Never *behind* the
-        // offset — the earlier attempts' active time is evidence we hold.
-        endX = Math.max(offset, points.length > 0 ? points[points.length - 1]!.x : 0);
-        break;
-      }
-      offset += span;
-      endX = offset;
-    }
+    const { points, endX, broke } = stitchStream(attempts);
     if (broke !== null) {
       omitted.push({ streamId: row.streamId, label, why: broke });
       continue;

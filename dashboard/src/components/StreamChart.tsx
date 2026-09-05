@@ -1,6 +1,8 @@
 /**
- * The freeplay field as a graph: one stepped series per stream, level against
- * cumulative active playtime.
+ * A freeplay stream as a graph: a stepped line per stream, level against
+ * cumulative active playtime. `StreamChart` draws the whole field (the ladder);
+ * `StreamPlot` draws whatever series it is handed, which is how the run page
+ * draws the one stream its run belongs to.
  *
  * Same family as `XpChart` and `LadderChart` — inline SVG laid out by hand, no
  * plotting dependency, palette tokens so both themes work. The derivation, the
@@ -22,7 +24,9 @@ import type { ResultRun } from "@viewer/api-types";
 import {
   LABEL_FONT,
   type ChartBox,
+  type StreamChartModel,
   type StreamRow,
+  type StreamSeries,
   type StreamStatus,
   streamChartLayout,
   streamIconCx,
@@ -66,22 +70,47 @@ function fmtPlaytimeTick(ms: number): string {
   return `${Number.isInteger(h) ? h : h.toFixed(1)}h`;
 }
 
+/**
+ * The field: every freeplay stream on one pair of axes.
+ *
+ * A thin wrapper over `StreamPlot`, which the run page draws its own single
+ * stream with — same stitching, same axes, so a character's line is the same
+ * line on both pages.
+ */
 export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly ResultRun[] }) {
   const model = createMemo(() => streamSeries(props.rows, props.runs));
+  return <StreamPlot series={model().series} omitted={model().omitted} />;
+}
+
+/**
+ * The plot itself: one stepped series per stream, whatever built them.
+ *
+ * `single` is the caption's only fork — one stream reads "this character's
+ * line", the field reads "one series per stream" — because the axis argument,
+ * the step rule and the colour key are the same claim in both places and must
+ * not drift into two wordings.
+ */
+export function StreamPlot(props: {
+  series: readonly StreamSeries[];
+  omitted: StreamChartModel["omitted"];
+  /** One stream (the run page) rather than the whole field (the ladder). */
+  single?: boolean;
+}) {
   // A plain `<a>` under a `<g>`, and the click routed by hand: the router's
   // `<A>` roots its template in the HTML namespace, which breaks inside an SVG.
   // Same reason, same shape, as `LadderChart`.
   const navigate = useNavigate();
-  const layout = createMemo(() => streamChartLayout(model().series, BOX));
-  const anyTruncated = (): boolean => model().series.some((s) => s.truncated);
+  const layout = createMemo(() => streamChartLayout(props.series, BOX));
+  const anyTruncated = (): boolean => props.series.some((s) => s.truncated);
 
   return (
     <div class="ladderchart-wrap">
       <Show
-        when={model().series.length > 0}
+        when={props.series.length > 0}
         fallback={
           <div class="xpchart empty dim">
-            nothing to plot: no stream carries a level mark with an active-time reading
+            nothing to plot: no {props.single ? "attempt" : "stream"} carries a level mark with an
+            active-time reading
           </div>
         }
       >
@@ -184,8 +213,9 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
       </Show>
 
       <p class="dim ladderchart-caption">
-        level against cumulative <strong>active playtime</strong>, one series per stream, stitched across its
-        attempts. Wall clock would draw the days a stream spends paused rather than the character's progress,
+        level against cumulative <strong>active playtime</strong>,{" "}
+        {props.single ? "this character's line" : "one series per stream"}, stitched across{" "}
+        {props.single ? "its attempts" : "each stream's attempts"}. Wall clock would draw the days a stream spends paused rather than the character's progress,
         and turn indices restart on a resume, so the axis is the pause-corrected active time each level mark
         already carries. A line is a step, never a slope: a mark is the first sample that showed a level, so
         the level is held flat until the next one — a lower bound on when the ding happened. Colour:{" "}
@@ -199,9 +229,9 @@ export function StreamChart(props: { rows: readonly StreamRow[]; runs: readonly 
           A label with a leading … begins mid-history: that stream's oldest served attempt still names a
           predecessor this viewer did not serve, so its axis starts from the oldest attempt on screen.
         </Show>
-        <Show when={model().omitted.length > 0}>
+        <Show when={props.omitted.length > 0}>
           {" "}
-          Not plotted: {model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
+          Not plotted: {props.omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
         </Show>
       </p>
     </div>
