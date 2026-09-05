@@ -106,22 +106,26 @@ worklogs/2026-08-29).
 
 ## Deployment
 
-116. **The NuSphere cutover has not been performed** (2026-09-05). Everything
-    before it is done: the chart (`infra/chart/wrathbench`), the ConfigMap
-    kustomization (`infra/k8s`), the image build (`infra/build-images.sh`), the
-    deploy window (`infra/k8s-deploy.sh`) and the runbook
-    (`docs/DEPLOY-NUSPHERE.md`) are lint/render/kubeconform clean; the four
-    images are in Harbor at `harness-0.5-488-g82b62d3`; and the nusphere-side
-    draft PR (Shard/nusphere#149) is pinned to commit `82b62d3` with that image
-    tag, validate-clean. **Nothing has run**: no PVC bound, no pod started, the
-    fleet is still on compose, and the runbook is a plan, not a report. The
-    cutover is a watched window Mark schedules, because its first step pauses
-    the live runs; merging #149 is the start of that window and not before.
-    One thing left to confirm with a real workload rather than argument: that
-    `mysql:8.4` starts with `runAsUser: 1000` on the `iscsi-nvme` datadir (the
-    documented fallback is 999, db only). The other open guess is closed: Flux
-    already builds `apps/chungusjr` with parent-path (`../base/`) references, so
-    `infra/k8s`'s `../fleet.json` builds the same way.
+116. **The NuSphere cutover has not been performed; the staged bring-up is
+    validated** (2026-09-05). The release is live on the cluster (nusphere
+    PRs 149, 151, 152; HelmRelease `wrathbench`, pinned to commit `82b62d3`,
+    images `harness-0.5-488-g82b62d3`) with `fleet.enabled: false` and
+    `publisher.enabled: false`. Seeded and checked against the desktop: the
+    data tree (client, wiki, minimap, etc, publish, runs — 11 GB, sizes
+    identical), the three AzerothCore databases from a `--single-transaction`
+    dump (15 characters, identical names; 442 tables), the world and auth
+    servers Ready, the viewer at `https://wrathbench.local` reporting the
+    same 219 runs and series counts as the desktop, and both preflight gate
+    smokes passing through the runner pod. MySQL as uid 1000 on `iscsi-nvme`
+    works. Two HelmRelease facts learned on the first install and now in the
+    manifest: Flux names the release `<targetNamespace>-<name>` unless
+    `releaseName` is set, and `disableWait` + a 30 m deadline are required
+    because db-import is a post-install hook the worldserver needs. The
+    seeding pod `wb-seed` is left running for the delta copy.
+    **The cutover itself remains** (`docs/DEPLOY-NUSPHERE.md`): stop the
+    compose fleet, delta-copy `data/runs`, fresh dump and restore, flip the
+    two flags, retire the desktop viewer unit, and move the Cloudflare
+    publishing last. A watched window Mark schedules.
 
 117. **CI for the release contract** (2026-09-05; GitHub issue 7's addendum).
     None of it is built: PR checks on the pinned Bun with a frozen install, the
