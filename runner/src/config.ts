@@ -85,6 +85,17 @@ export const TERMINATION_REASONS = [
   "attempt-failed", // a scored run paused and was not resumed; the model's attempt, spent
   "stale", // nothing came back for it: the fleet was down or the host slept past its budget
   "environment-defect", // manually assigned after reading the trajectory
+  // The provider's own policy layer stopped the model — GPT-6 Astra's
+  // misalignment monitor can pause or end a long-running agentic task, and in
+  // `codex exec` nobody is there to approve a continuation (adapter-codex.ts).
+  // Named apart from adapter-error because it is a verdict about the run, not a
+  // transport fault; the provider's message is recorded verbatim. Never
+  // auto-overridden: what to do about it is the operator's call.
+  "provider-policy",
+  // The scaffold's own context window overflowed and it could not compact its
+  // way out (codex `contextWindowExceeded`). The fixed loop cannot hit this —
+  // its window is rebuilt every turn — so it only ever names a CLI harness.
+  "context-limit",
 ] as const;
 export type TerminationReason = (typeof TERMINATION_REASONS)[number];
 
@@ -94,8 +105,12 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * or a subscription's usage window. `rate-limited` covers post-retry HTTP 429
  * without quota wording (free pools). Neither has anything to do with context
  * size — which is what the old name, `window-exhausted`, kept implying.
+ * `auth-failed` is a subscription lane whose credential stopped working
+ * (codex: "Your access token could not be refreshed" — a refresh token spent
+ * by another process on the same CODEX_HOME, or a 401). Nothing about the
+ * model; the run resumes once the operator has logged the lane back in.
  */
-export const PAUSE_REASONS = ["quota-exhausted", "rate-limited", "operator-pause"] as const;
+export const PAUSE_REASONS = ["quota-exhausted", "rate-limited", "operator-pause", "auth-failed"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 // --------------------------------------------------------------- run config
@@ -117,7 +132,7 @@ export function isValidCharacterName(name: string): boolean {
 }
 
 /** Every driver a run can be started with. `stub` never scores. */
-export const DRIVERS = ["openai", "claude-code", "stub"] as const;
+export const DRIVERS = ["openai", "claude-code", "codex", "stub"] as const;
 export type Driver = (typeof DRIVERS)[number];
 
 export function isDriver(raw: string): raw is Driver {
@@ -131,6 +146,18 @@ export function isDriver(raw: string): raw is Driver {
  * second spelling of this one — see `RunConfig.subscription`.
  */
 export const DEFAULT_CLAUDE_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
+
+/**
+ * The `codex` driver's default lane: the env var the Codex CLI itself reads
+ * for its home directory, whose `auth.json` is the ChatGPT login. The lane
+ * variable names a DIRECTORY, not a token — one directory per subscription,
+ * shared by every run on that lane and never copied per run: a copied
+ * `auth.json` carries a refresh token that whichever process refreshes first
+ * consumes, and the other side then fails with "refresh token was already
+ * used" (observed on this host, 2026-09-05). A second subscription is a second
+ * variable (`CODEX_HOME_2`) pointing at a second directory.
+ */
+export const DEFAULT_CODEX_HOME_ENV = "CODEX_HOME";
 
 /**
  * Whether a string is usable as a subscription lane name. An env var name and
@@ -151,7 +178,7 @@ const driverSchema = z.string().superRefine((v, ctx) => {
   if (!isDriver(v)) {
     ctx.addIssue({
       code: "custom",
-      message: `driver "${v}" is not one of ${DRIVERS.join("|")} — the 0.4 shape writes driver: "claude-code" for the Claude Code CLI`,
+      message: `driver "${v}" is not one of ${DRIVERS.join("|")} — the 0.4 shape writes driver: "claude-code" for the Claude Code CLI and driver: "codex" for the Codex CLI`,
     });
   }
 }).transform((v) => v as Driver);
@@ -165,19 +192,25 @@ const driverSchema = z.string().superRefine((v, ctx) => {
  *  - `claude-code`: the Claude Code CLI scaffold, with its own history and
  *    compaction. There is no separate driver under it — the CLI is the
  *    transport.
+ *  - `codex`: the OpenAI Codex CLI scaffold (operator, 2026-09-05), likewise
+ *    its own history and its own compaction. A separate group from
+ *    `claude-code` rather than one "CLI" group, because each scaffold is a
+ *    different unversioned summarizer sitting inside the harness.
  *
- * A comparability dimension, not a scoring penalty: `claude-code` runs score
- * within their own group and never share a chart with `wrathbench` rows.
- * Distinct from `harnessVersion`, which is the git describe of *this* repo
- * and applies to both (the SDK and MCP surface Claude Code drives is ours).
+ * A comparability dimension, not a scoring penalty: `claude-code` and `codex`
+ * runs score within their own group and never share a chart with `wrathbench`
+ * rows. Distinct from `harnessVersion`, which is the git describe of *this*
+ * repo and applies to all three (the SDK and MCP surface each CLI drives is
+ * ours).
  */
-export const HARNESSES = ["wrathbench", "claude-code"] as const;
+export const HARNESSES = ["wrathbench", "claude-code", "codex"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
 export const HARNESS_OF_DRIVER: Readonly<Record<Driver, Harness>> = {
   openai: "wrathbench",
   stub: "wrathbench",
   "claude-code": "claude-code",
+  codex: "codex",
 };
 
 export function harnessOf(driver: Driver): Harness {
@@ -237,6 +270,8 @@ export const runConfigSchema = z.object({
    *  - `claude-code`: the Claude Code CLI is both transport and harness — it
    *    owns its own history, compaction and preamble, so the run belongs to the
    *    `claude-code` harness group and is scored only against its own kind.
+   *  - `codex`: the OpenAI Codex CLI, the same shape on a ChatGPT
+   *    subscription: transport and harness at once, its own group.
    */
   driver: driverSchema.default("openai"),
   /** Model id passed through verbatim to the OpenAI-compatible endpoint. */
@@ -246,9 +281,11 @@ export const runConfigSchema = z.object({
   /** Name of the env var holding the API key. The key itself is never stored. */
   apiKeyEnv: z.string().default("OPENROUTER_KEY"),
   /**
-   * `claude-code` only: the SUBSCRIPTION LANE this run bills, named by the env
-   * var holding its OAuth token — never the token itself, which is a secret and
-   * is redacted out of everything this run writes.
+   * `claude-code` and `codex` only: the SUBSCRIPTION LANE this run bills,
+   * named by the env var holding its credential — never the credential itself.
+   * For claude-code that is the OAuth token (a secret, redacted out of
+   * everything this run writes); for codex it is the CODEX_HOME directory
+   * whose auth.json holds the ChatGPT login (`DEFAULT_CODEX_HOME_ENV`).
    *
    * A subscription is a lane, not a model dimension: the same roster entry may
    * run on either account, so this says nothing about what was measured. It is
@@ -258,9 +295,9 @@ export const runConfigSchema = z.object({
    * memory. And a resumed run must go back to the subscription it started on —
    * `--resume` rebuilds the config from meta.json, so this field is how.
    *
-   * Absent means the default lane (`CLAUDE_CODE_OAUTH_TOKEN`); `run.ts` fills
-   * it in for every claude-code run, so a run launched by this build always
-   * names its lane.
+   * Absent means the driver's default lane (`CLAUDE_CODE_OAUTH_TOKEN`,
+   * `CODEX_HOME`); `run.ts` fills it in for every run on those drivers, so a
+   * run launched by this build always names its lane.
    */
   subscription: z.string().min(1).max(128).optional(),
   /**
@@ -335,8 +372,12 @@ export const runConfigSchema = z.object({
    * that does not know the level is the operator's problem, which is why the
    * field is opt-in and never sent by default. `claude-code` passes it
    * as the CLI's `--effort`, which accepts low|medium|high|xhigh|max (verified
-   * against the 2.1.238 binary in the runner image). `xhigh`/`max` are
-   * claude-only; `minimal` is OpenAI-only.
+   * against the 2.1.238 binary in the runner image). `codex` passes it as
+   * `-c model_reasoning_effort="<level>"`, whose levels are
+   * low|medium|high|xhigh|max|ultra (`ultra` is what the ChatGPT catalogue
+   * advertises for gpt-6-astra, 2026-09-05) — `none` and `minimal` are not
+   * Codex levels and that driver refuses them by name rather than mapping
+   * them. `xhigh`/`max` are claude-and-codex; `minimal` is OpenAI-API-only.
    *
    * `none` means extended thinking OFF, which is a level like any other and
    * not the same as absent: absent is the provider's default, which for these
@@ -345,7 +386,7 @@ export const runConfigSchema = z.object({
    * level; `openai` sends `reasoning_effort: "none"`, which some OpenRouter
    * models accept and others reject, as with every level here.
    */
-  effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
+  effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
   /** Path to a JSON file of scripted stub turns (driver: "stub"). */
   stubScript: z.string().optional(),
 
@@ -355,10 +396,10 @@ export const runConfigSchema = z.object({
    * Hard ceiling on tool calls for the whole episode => `tool-call-limit`.
    *
    * `maxTurns` counts *driver* turns, which is a real bound only when the
-   * driver owns the tool loop. The claude-code harness does not: one
-   * driver turn observed 168 tool calls over 40 minutes, and there is no
-   * `--max-turns` in that CLI. So the count that matters under that harness
-   * is this one, enforced at the MCP boundary where the calls
+   * driver owns the tool loop. The claude-code and codex harnesses do not: one
+   * claude-code driver turn observed 168 tool calls over 40 minutes, and
+   * neither CLI has a `--max-turns`. So the count that matters under those
+   * harnesses is this one, enforced at the MCP boundary where the calls
    * actually arrive. Generous by default — it is a runaway guard, not a task
    * budget. Ignored by the fixed loop, whose bound is `maxTurns`.
    *
@@ -513,7 +554,7 @@ export function loadRunConfig(raw: unknown): RunConfig {
   const o = (raw ?? {}) as Record<string, unknown>;
   if (o["driver"] === undefined && o["adapter"] !== undefined) {
     throw new Error(
-      `config names the driver as "adapter" (${JSON.stringify(o["adapter"])}); the 0.4 shape is driver: "openai" | "claude-code" | "stub"`,
+      `config names the driver as "adapter" (${JSON.stringify(o["adapter"])}); the 0.4 shape is driver: "openai" | "claude-code" | "codex" | "stub"`,
     );
   }
   return runConfigSchema.parse(withEpisodeDefaults(raw));
@@ -531,7 +572,7 @@ export function isUnscoredDriver(driver: Driver): boolean {
  * driver is the scripted stub, and/or the operator steered the run with an
  * objective. The driver's stamp stays the *prefix* so anything
  * matching on it keeps matching. The harness is *not* a reason: a
- * `claude-code` run scores within its own group.
+ * `claude-code` or `codex` run scores within its own group.
  */
 export function unscoredStamp(driver: Driver, objective?: string | undefined): string | undefined {
   const byDriver = driver === "stub" ? STUB_STAMP : undefined;

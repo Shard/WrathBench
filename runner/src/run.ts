@@ -6,6 +6,8 @@
  *   bun runner/src/run.ts --driver stub --stub <script.json> [flags]
  *   bun runner/src/run.ts --driver claude-code --model opus  [claude-code harness]
  *   bun runner/src/run.ts --driver claude-code --model opus --token-env CLAUDE_CODE_OAUTH_TOKEN_2
+ *   bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high  [codex harness; lane $CODEX_HOME]
+ *   bun runner/src/run.ts --driver codex --model gpt-5.5 --token-env CODEX_HOME_2
  *   bun runner/src/run.ts --resume <run-id>
  *
  * Two run dimensions are recorded and never model-specific:
@@ -43,8 +45,10 @@ import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { runClaudeEpisode } from "./adapter-claude";
+import { codexEffortRefusal, laneLooksLoggedIn, runCodexEpisode } from "./adapter-codex";
 import {
   DEFAULT_CLAUDE_TOKEN_ENV,
+  DEFAULT_CODEX_HOME_ENV,
   DRIVERS,
   episodeOverrideOf,
   isTokenEnvName,
@@ -172,7 +176,7 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
         ? args["api-base"]
         : process.env["OPENAI_BASE_URL"] ?? undefined,
     apiKeyEnv: typeof args["api-key-env"] === "string" ? args["api-key-env"] : undefined,
-    // The subscription lane, by env var NAME (claude-code only). Identity, like
+    // The subscription lane, by env var NAME (claude-code and codex). Identity, like
     // the account: a resumed run bills the subscription it started on, so
     // --token-env is not an override on --resume.
     subscription: typeof args["token-env"] === "string" ? args["token-env"] : undefined,
@@ -469,6 +473,41 @@ async function main(): Promise<void> {
     // Recorded, so the run names its lane rather than leaving a reader (or the
     // fleet's per-lane count) to infer the default. The NAME, never the value.
     config = { ...config, subscription: tokenEnv };
+  } else if (config.driver === "codex") {
+    // The subscription lane, by var NAME: its VALUE is a CODEX_HOME directory
+    // whose auth.json holds the ChatGPT login (config.ts, DEFAULT_CODEX_HOME_ENV).
+    // Checked here for the same reason the claude token is: a missing lane
+    // must fail in a second, naming the variable, not after the sandbox and the
+    // game session are up. The directory is never copied and auth.json never read.
+    const laneEnv = config.subscription ?? DEFAULT_CODEX_HOME_ENV;
+    if (!isTokenEnvName(laneEnv)) {
+      console.error(`--token-env ${laneEnv} is not an environment variable name (for codex it names the var holding a CODEX_HOME path)`);
+      process.exit(2);
+    }
+    const home = process.env[laneEnv];
+    if (!laneLooksLoggedIn(home)) {
+      console.error(
+        `--driver codex needs $${laneEnv} to name a Codex home directory containing auth.json` +
+          (home === undefined || home.trim().length === 0 ? " (it is unset)." : ` (${home} has none).`) +
+          "\n  log in once with:  codex login   (a ChatGPT subscription; the login lands in ~/.codex/auth.json)\n" +
+          `  then put the directory in .env as ${laneEnv}=/home/<you>/.codex (.env is gitignored)\n` +
+          "  and start the run through infra/run-episode.sh, which exports it for you.\n" +
+          "  One directory per lane, shared by that lane's runs — never a per-run copy: a copied\n" +
+          "  refresh token is spent by whichever process refreshes first.",
+      );
+      process.exit(2);
+    }
+    // `none`/`minimal` are not Codex levels; refused by name, never mapped.
+    const refusal = codexEffortRefusal(config.effort);
+    if (refusal !== null) {
+      console.error(refusal);
+      process.exit(2);
+    }
+    if (config.model === undefined) {
+      console.error("--driver codex needs --model (e.g. gpt-6-astra, gpt-5.5 — the ChatGPT catalogue's ids)");
+      process.exit(2);
+    }
+    config = { ...config, subscription: laneEnv };
   } else {
     const apiKey = process.env[config.apiKeyEnv];
     const apiBase = config.apiBase ?? process.env["OPENAI_BASE_URL"];
@@ -542,7 +581,10 @@ async function main(): Promise<void> {
       const { pause: _pause, ...rest } = resumedMeta;
       resumedMeta = {
         ...rest,
-        ...(config.driver === "claude-code" ? { resumedFresh: true } : {}),
+        // Codex could resume its own thread, but the runner starts a fresh one
+        // on purpose: the thread id is not run identity and a resumed run's
+        // conversation should be exactly what the scratchpad note says it is.
+        ...(config.driver === "claude-code" || config.driver === "codex" ? { resumedFresh: true } : {}),
       };
       trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
     }
@@ -874,7 +916,21 @@ async function main(): Promise<void> {
           turnOffset,
           signal: abort.signal,
         })
-      : await runLoop({
+      : config.driver === "codex"
+        ? await runCodexEpisode({
+            config,
+            runDir,
+            sandbox,
+            scratchpad,
+            episodic,
+            wiki,
+            trajectory,
+            watchdogs,
+            initialNotices,
+            turnOffset,
+            signal: abort.signal,
+          })
+        : await runLoop({
           config,
           adapter: adapter!,
           sandbox,

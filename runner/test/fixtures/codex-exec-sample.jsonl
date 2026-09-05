@@ -1,0 +1,11 @@
+{"type":"thread.started","thread_id":"01a06f87-aa52-7a53-8057-ce41ff444cab"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"wrathbench","tool":"ping","arguments":{"word":"zebra"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"wrathbench","tool":"ping","arguments":{"word":"zebra"},"result":{"content":[{"type":"text","text":"pong zebra"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"mcp__wrathbench.ping: pong zebra"}}
+{"type":"turn.completed","usage":{"input_tokens":8886,"cached_input_tokens":7680,"cache_write_input_tokens":0,"output_tokens":83,"reasoning_output_tokens":17}}
+{"type":"thread.started","thread_id":"01a06f7f-f26d-75e3-ae53-87a78f4502e6"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"functions.request_user_input\nfunctions.view_image\nfunctions.apply_patch\nmulti_tool_use.parallel\nBRAVO ALPHA"}}
+{"type":"turn.completed","usage":{"input_tokens":1916,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":157,"reasoning_output_tokens":128}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"wrathbench","tool":"ping","arguments":{"word":"zebra"},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}
