@@ -1,0 +1,71 @@
+{{- if .Values.runner.enabled }}
+{{/*
+The `sleep infinity` dev pod — compose's `runner` service, unchanged in
+purpose. It is the exec target for infra/run-episode.sh --k8s, for the deploy
+script's preflight smokes, and for anything an operator wants to run against
+the live realm by hand. Same image, mounts and env as the fleet.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-runner
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: runner
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: runner
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: runner
+          image: {{ include "wrathbench.image.runner" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          workingDir: /wrathbench
+          command: ["sleep", "infinity"]
+          env:
+            - name: WRATHBENCH_IN_CONTAINER
+              value: "1"
+            {{- include "wrathbench.harnessEnv" . | nindent 12 }}
+            {{- include "wrathbench.dbEnv" . | nindent 12 }}
+          envFrom: {{- include "wrathbench.secretEnvFrom" . | nindent 12 }}
+          resources: {{ toYaml .Values.runner.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /wrathbench/data/runs
+              subPath: runs
+            - name: data
+              mountPath: /wrathbench/data/wiki
+              subPath: wiki
+            - name: fleet-config
+              mountPath: /wrathbench/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-data
+        - name: fleet-config
+          configMap:
+            name: {{ .Values.fleetConfigMapName }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

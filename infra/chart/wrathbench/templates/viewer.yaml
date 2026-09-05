@@ -1,0 +1,176 @@
+{{- if .Values.viewer.enabled }}
+{{/*
+The operator viewer (runner/viewer/serve.ts).
+
+This is the ONE Ingress in the chart, and it is LAN-only, on wrathbench.local
+with a certificate from the private ClusterIssuer. The viewer is operator-only
+and running it Internet-facing is unsupported: it reads the runs directory,
+tails live trajectories, holds an SSE connection per watcher and answers
+/api/info about the lab. docs/PUBLIC-DASHBOARD.md is explicit that the public
+surface is the static artifact bucket and the SPA in front of it, never a
+viewer, module or MCP Service or Ingress — and that WRATHBENCH_VIEWER_PUBLIC is
+a projection boundary, not a hardening measure. So: not public mode here, and
+no second Ingress anywhere in this chart.
+
+WRATHBENCH_VIEWER_LAN=1 is required, and is an explicit opt-in by design: the
+viewer refuses a non-loopback bind without it (docs/DATA-AND-LEGAL.md). Inside
+a pod the "LAN" is the pod network, fronted by the Ingress above.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-viewer
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: viewer
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: viewer
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-viewer
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: viewer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: viewer
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: viewer
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: viewer
+          image: {{ include "wrathbench.image.runner" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          workingDir: /wrathbench
+          command: ["bun", "runner/viewer/serve.ts"]
+          env:
+            {{- include "wrathbench.harnessEnv" . | nindent 12 }}
+            - name: WRATHBENCH_VIEWER_LAN
+              value: "1"
+            - name: WRATHBENCH_VIEWER_PORT
+              value: "8090"
+            - name: WRATHBENCH_MINIMAP_DIR
+              value: /wrathbench/data/minimap
+            # The SPA is built into the runner image (dashboard/dist is
+            # gitignored, so it exists nowhere else).
+            - name: WRATHBENCH_DASHBOARD_DIR
+              value: /wrathbench/dashboard/dist
+            # The module secret only, so /api/info can name the worldserver
+            # build off /health. Deliberately NOT envFrom the whole Secret: the
+            # viewer has no business holding a model key or an S3 credential.
+            - name: WRATHBENCH_MODULE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: WRATHBENCH_MODULE_SECRET
+          ports:
+            - name: http
+              containerPort: 8090
+          readinessProbe:
+            httpGet:
+              path: /api/info
+              port: 8090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{ toYaml .Values.viewer.resources | nindent 12 }}
+          volumeMounts:
+            # Read-only, and the viewer is written to be: "Everything here
+            # reads. The runs directory is never written to, and each
+            # run.sqlite is opened readonly so a live writer is untouched."
+            # The stream/run totals it caches are in memory.
+            - name: data
+              mountPath: /wrathbench/data/runs
+              subPath: runs
+              readOnly: true
+            - name: data
+              mountPath: /wrathbench/data/minimap
+              subPath: minimap
+              readOnly: true
+            - name: fleet-config
+              mountPath: /wrathbench/config
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-data
+        - name: fleet-config
+          configMap:
+            name: {{ .Values.fleetConfigMapName }}
+{{- if .Values.viewer.ingress.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-viewer
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: viewer
+spec:
+  secretName: {{ include "wrathbench.fullname" . }}-viewer-tls
+  dnsNames:
+    - {{ .Values.viewer.ingress.host | quote }}
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ .Values.viewer.ingress.issuer }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-viewer
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: viewer
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ .Values.viewer.ingress.entrypoint }}
+    # Dashboard discovery is OFF unless someone asks for it: the viewer is
+    # operator-only and is not a thing to advertise on a tile wall. The chart
+    # knows one such annotation by name because "off" has to be asserted, not
+    # merely omitted; anything else the cluster repo wants goes through
+    # `annotations` below, which is applied last and wins.
+    hajimari.io/enable: {{ .Values.viewer.ingress.hajimari.enabled | quote }}
+    {{- with .Values.viewer.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.viewer.ingress.className }}
+  tls:
+    - hosts:
+        - {{ .Values.viewer.ingress.host | quote }}
+      secretName: {{ include "wrathbench.fullname" . }}-viewer-tls
+  rules:
+    - host: {{ .Values.viewer.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "wrathbench.fullname" . }}-viewer
+                port:
+                  number: 8090
+{{- end }}
+{{- end }}

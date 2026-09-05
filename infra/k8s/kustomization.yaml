@@ -1,0 +1,35 @@
+# The fleet config as a ConfigMap, and nothing else.
+#
+# infra/fleet.json is the single source of truth for what the fleet runs, on
+# compose and on Kubernetes alike. The Helm chart deliberately ships no copy of
+# it: the cluster repo applies THIS path (`path: ./infra/k8s`) with a Flux
+# Kustomization from the same GitRepository the HelmRelease reads, so a commit
+# that edits fleet.json steers the running supervisor exactly as editing the
+# file does under compose — the kubelet swaps the projected directory and
+# run-fleet.ts's 60-second re-read picks it up. (The chart mounts the ConfigMap
+# as a DIRECTORY, not a subPath file: a subPath mount is copied once at start
+# and never updated, which would turn hot steering into a silent no-op.)
+#
+# `../fleet.json` needs LoadRestrictionsNone, which is what Flux's
+# kustomize-controller builds with; plain `kustomize build` refuses it ("not in
+# or below"). To check this file by hand, and in CI:
+#
+#     kustomize build --load-restrictor LoadRestrictionsNone infra/k8s
+#
+# The alternative — a copy of fleet.json under infra/k8s/ — was rejected: two
+# files that must agree is exactly the failure mode this repo keeps avoiding.
+# Do not grow this into the place cluster manifests live; those are the cluster
+# repo's, and this holds one ConfigMap.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: wrathbench
+configMapGenerator:
+  - name: wrathbench-fleet-config
+    files:
+      - fleet.json=../fleet.json
+# The chart names this ConfigMap by a fixed name (values.fleetConfigMapName), so
+# the generated name must be stable rather than content-hashed. Deliberate: a
+# hash suffix would give rollout-on-change, which is what we do NOT want — the
+# supervisor re-reads the file itself, and a restart would drop live episodes.
+generatorOptions:
+  disableNameSuffixHash: true

@@ -1,0 +1,92 @@
+{{/*
+The auth handshake. ClusterIP only, un-prefixed Service name (`authserver`), no
+Ingress — a spectator port-forwards 3724.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: authserver
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: authserver
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: authserver
+  ports:
+    - name: auth
+      port: 3724
+      targetPort: 3724
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-authserver
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: authserver
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: authserver
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: authserver
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: authserver
+          image: {{ include "wrathbench.image.authserver" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          tty: true
+          env:
+            {{- include "wrathbench.dbEnv" . | nindent 12 }}
+            - name: AC_LOGIN_DATABASE_INFO
+              value: "$(WRATHBENCH_DB_HOST);3306;root;$(WRATHBENCH_DB_PASSWORD);acore_auth"
+            - name: AC_LOGS_DIR
+              value: /azerothcore/env/dist/logs
+            - name: AC_TEMP_DIR
+              value: /azerothcore/env/dist/temp
+            - name: AC_BIND_IP
+              value: "0.0.0.0"
+            - name: AC_REALM_SERVER_PORT
+              value: "3724"
+          ports:
+            - name: auth
+              containerPort: 3724
+          readinessProbe:
+            tcpSocket:
+              port: 3724
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{ toYaml .Values.authserver.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /azerothcore/env/dist/etc
+              subPath: etc
+            - name: logs
+              mountPath: /azerothcore/env/dist/logs
+            - name: temp
+              mountPath: /azerothcore/env/dist/temp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-data
+        # Not on the PVC: the authserver's log is chatter, not evidence.
+        - name: logs
+          emptyDir: {}
+        - name: temp
+          emptyDir: {}

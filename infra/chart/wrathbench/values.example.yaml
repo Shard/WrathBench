@@ -1,0 +1,31 @@
+# A values file matching the interface the nusphere HelmRelease supplies.
+# Used by `helm lint` / `helm template` in this repo; the cluster repo is the
+# real one.
+image:
+  registry: harbor.local/library
+  tag: "harness-0.5-477-g47fddc0"
+nodeSelector:
+  kubernetes.io/hostname: chungusjr
+storage:
+  className: iscsi-nvme
+  data:
+    size: 60Gi
+  db:
+    size: 20Gi
+envSecretName: wrathbench-env
+fleetConfigMapName: wrathbench-fleet-config
+fleet:
+  enabled: true
+runner:
+  enabled: true
+viewer:
+  enabled: true
+  ingress:
+    enabled: true
+    host: wrathbench.local
+    className: traefik
+    issuer: nusphere-ca
+    entrypoint: websecure
+publisher:
+  enabled: true
+  intervalMs: 300000
