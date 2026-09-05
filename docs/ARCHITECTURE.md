@@ -112,9 +112,9 @@ the SPA owns everything that is UI.
   tiles decoded from the client's own MPQs into `data/minimap/` (gitignored),
   drawn on plain canvas behind a position-feed interface so replay can later
   plug a trajectory reader into the renderer that serves live runs.
-  It imports two modules from the viewer rather than copying them — the API wire
-  types and the world→tile transform — so drift between the two sides is a
-  compile error. It is the only place in the repository with a dependency graph;
+  It imports three modules from the viewer rather than copying them — the API
+  wire types, the world→tile transform and the freeplay lineage walk — so drift
+  between the two sides is a compile error. It is the only place in the repository with a dependency graph;
   the harness itself still runs with no build step. Without a build on disk the
   viewer serves the API as usual and answers page routes with a plain-text
   notice naming `bun run --cwd dashboard build`; there is no fallback UI.
@@ -131,6 +131,19 @@ the SPA owns everything that is UI.
   and the cost-per-level chart was deleted rather than moved: the ladder's own
   columns already say how far each model got, and a cost view worth having is a
   page with its own reason, not a chart smuggled onto another one.
+- **A freeplay run page is the stream, not the session.** A durable freeplay
+  stream is one character across attempts, and everything the runner records is
+  per attempt — so a reader could see only the session in front of them and the
+  quest count was the last session's. The viewer aggregates the chain at read
+  time (`stream` on `/api/run/<id>`, `runner/viewer/stream.ts`) and the page
+  leads with it: an attempts strip listing every attempt with its status, level
+  and playtime, each a link; the stream's level-against-cumulative-playtime line
+  above this attempt's XP chart, drawn by the same `StreamPlot` the freeplay
+  field uses; and the character's totals as the sidebar's headline with this
+  attempt's figures named underneath. The feed stays per attempt because a
+  trajectory is one run's, with a link at each seam. Nothing is written back:
+  the record is per attempt and stays that way, which is also why an attempt
+  predating a column contributes nothing rather than a zero.
 - **The harness series is one shell-wide filter, not a per-page control.** The
   series — `major.minor` of a version stamp — is already the comparability
   group every page of runs is a view of, so the selector lives once, in the top
