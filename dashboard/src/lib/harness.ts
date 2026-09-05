@@ -7,8 +7,8 @@
  * that shows runs is therefore a view of one series, and the operator decided
  * that choice belongs once in the shell rather than on each page.
  *
- * Not to be confused with the `?harness=` filter (`wrathbench` vs
- * `claude-code`), which selects which *loop* owned a run. Different dimension,
+ * Not to be confused with the `?harness=` filter (`wrathbench`, `claude-code`
+ * or `codex`), which selects which *loop* owned a run. Different dimension,
  * unfortunate shared word; both filters coexist.
  *
  * Everything here is pure so it can be tested without a DOM (dashboard/README.md).

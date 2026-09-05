@@ -51,7 +51,7 @@ import { openRunDb } from "../runner/src/rundb";
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
-import { DEFAULT_CLAUDE_TOKEN_ENV, isTokenEnvName, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
@@ -60,15 +60,16 @@ import { dirname, join } from "node:path";
 
 // ------------------------------------------------------------------ types
 
-type Driver = "openai" | "claude-code";
+type Driver = "openai" | "claude-code" | "codex";
 
 export interface RosterSpec {
   model: string;
   /** Operator override of the free/paid verdict (`runner/src/model-cost.ts`); normally absent. */
   billing?: "free" | "paid";
   /**
-   * Defaults to "openai". `claude-code` runs go through the Claude Code CLI,
-   * which is their harness — a tag on the run, not a separate benchmark.
+   * Defaults to "openai". `claude-code` runs go through the Claude Code CLI
+   * and `codex` runs through the OpenAI Codex CLI, each of which is its own
+   * harness — a tag on the run, not a separate benchmark.
    */
   driver?: Driver;
   /** Game account for the entry's session. Omitted -> the runner's default. */
@@ -78,11 +79,13 @@ export interface RosterSpec {
   apiBase?: string;
   apiKeyEnv?: string;
   /**
-   * `claude-code` only: the subscription LANE this entry runs on, named by the
-   * env var holding its OAuth token — never the token. Absent means the default
-   * lane (`CLAUDE_CODE_OAUTH_TOKEN`), which is every roster written before there
-   * was a second subscription. The fleet assigns it; a hand-written roster may
-   * set it to pin an entry to one account's usage window.
+   * `claude-code` and `codex` only: the subscription LANE this entry runs on,
+   * named by the env var holding its credential — the OAuth token for
+   * claude-code, the CODEX_HOME directory for codex — never the credential.
+   * Absent means the driver's default lane (`CLAUDE_CODE_OAUTH_TOKEN`,
+   * `CODEX_HOME`), which is every roster written before there was a second
+   * subscription. The fleet assigns it; a hand-written roster may set it to
+   * pin an entry to one account's usage window.
    */
   tokenEnv?: string;
   runId?: string;
@@ -426,8 +429,8 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       throw new Error(`roster entry without a model: ${JSON.stringify(s)}`);
     }
     const driver = s.driver ?? "openai";
-    if (driver !== "openai" && driver !== "claude-code") {
-      throw new Error(`roster entry ${s.model}: unknown driver ${String(s.driver)} (openai | claude-code)`);
+    if (driver !== "openai" && driver !== "claude-code" && driver !== "codex") {
+      throw new Error(`roster entry ${s.model}: unknown driver ${String(s.driver)} (openai | claude-code | codex)`);
     }
     const parsedWatchdogs = watchdogOverrideSchema.safeParse(s.watchdogs ?? {});
     if (!parsedWatchdogs.success) {
@@ -452,8 +455,8 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       effort: s.effort,
       apiBase: s.apiBase ?? DEFAULT_API_BASE,
       apiKeyEnv: s.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
-      // Only the claude-code driver has a subscription to bill.
-      tokenEnv: driver === "claude-code" ? s.tokenEnv : undefined,
+      // Only the subscription drivers (claude-code, codex) have a lane to bill.
+      tokenEnv: driver === "claude-code" || driver === "codex" ? s.tokenEnv : undefined,
       // Effort is part of the run's identity, so it is part of the derived id:
       // opus at low and opus at high are two rows in the matrix, and a shared
       // run id would make them one run appended to twice.
@@ -486,9 +489,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
 }
 
 /**
- * The api-base/api-key-env pair is meaningless to the claude-code
- * driver (it authenticates through the `claude` CLI's own OAuth token), so a
- * claude entry gets neither flag. Everything else is driver-independent.
+ * The api-base/api-key-env pair is meaningless to the claude-code and codex
+ * drivers (each authenticates through its CLI's own login), so those entries
+ * get neither flag. Everything else is driver-independent.
  */
 /**
  * The watchdog overrides that cannot ride their own flag: everything but
@@ -1279,6 +1282,20 @@ async function attemptSpec(
   // run-episode.sh's driver preflight does not run on the in-container path, and
   // its one load-bearing check is this: without the token every claude episode
   // burns a session setup to fail at the first turn.
+  if (CONTAINER && spec.driver === "codex" && !opts.dryRun) {
+    // Same shape for the Codex lane: the variable names a CODEX_HOME directory,
+    // and without it the CLI has no login to bill.
+    const laneEnv = spec.tokenEnv ?? DEFAULT_CODEX_HOME_ENV;
+    const home = process.env[laneEnv];
+    if (home === undefined || home.trim().length === 0) {
+      const detail =
+        `${laneEnv} is not visible to the fleet container — put it in /wrathbench/.env as the path of a ` +
+        "logged-in Codex home (`codex login`); it is loaded by Bun there and never passed via argv";
+      say(`launch-failed ${spec.runId}: ${detail}`);
+      record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail });
+      return "done";
+    }
+  }
   if (CONTAINER && spec.driver === "claude-code" && !opts.dryRun) {
     // The CHOSEN lane's variable, and the message names it: with two
     // subscriptions the useful sentence is which one is missing.
@@ -1412,14 +1429,14 @@ async function attemptSpec(
     // tool-call limit, and a pause that does happen will not be cleared by
     // running a different model first. So a claude entry never defers: it is
     // recorded and the roster advances.
-    if (spec.driver === "claude-code") {
-      say(`paused ${spec.runId}: ${verdict.reason} (claude-code — no defer queue), advancing`);
+    if (spec.driver === "claude-code" || spec.driver === "codex") {
+      say(`paused ${spec.runId}: ${verdict.reason} (${spec.driver} — no defer queue), advancing`);
       record({
         runId: spec.runId,
         model: spec.model,
         outcome: "paused-operator",
         ...(level !== undefined ? { level } : {}),
-        detail: `${verdict.reason}; claude-code entries are not deferred; turns ${turns}`,
+        detail: `${verdict.reason}; ${spec.driver} entries are not deferred; turns ${turns}`,
       });
       await freeSession(spec, `paused ${verdict.reason}`, opts.dryRun);
       return "done";
@@ -1587,7 +1604,9 @@ async function main(): Promise<void> {
       const endpoint =
         s.driver === "openai"
           ? `   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n`
-          : `   endpoint  claude CLI subscription (no api-base/api-key-env)\n`;
+          : s.driver === "codex"
+            ? `   endpoint  codex CLI subscription, lane ${s.tokenEnv ?? DEFAULT_CODEX_HOME_ENV} (no api-base/api-key-env)\n`
+            : `   endpoint  claude CLI subscription (no api-base/api-key-env)\n`;
       const cycle1 = a.doneCycle1 === true ? " [cycle 1 already terminated — launches fresh from cycle 2 under --loop]" : "";
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
@@ -1625,7 +1644,7 @@ async function main(): Promise<void> {
     );
     console.log(
       `\npolicy: terminated -> done | paused rate-limited/quota-exhausted with <${EARLY_TURN_THRESHOLD} turns -> defer` +
-        `\n        claude-code entries never defer (no per-provider pools to wait on)` +
+        `\n        claude-code and codex entries never defer (no per-provider pools to wait on)` +
         `\n        mid-episode pause -> --resume with backoff ${RESUME_LADDER}, then defer` +
         `\n        deferred spec -> per-spec backoff (${DEFER_LADDER}, escalating): skipped while cooling,` +
         `\n        then RESUMED in place on its own run id (never relaunched fresh at L1); TAINTED` +

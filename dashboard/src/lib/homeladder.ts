@@ -8,7 +8,7 @@
  * resolves the same token the same way), and "free" is `ResultRun.billing ===
  * "free"` through `filterRuns` — the runner's own billing verdict
  * (`runner/src/billing.ts`: a `:free` endpoint or local hardware is free, a
- * claude-code subscription counts as paid). No model slug is inspected here.
+ * claude-code or codex subscription counts as paid). No model slug is inspected here.
  */
 
 import type { ResultRun } from "../api/client";

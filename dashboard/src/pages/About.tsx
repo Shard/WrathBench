@@ -91,10 +91,12 @@ export default function About() {
         Scored means "this specific harness series, this model, this episode". The harness —
         SDK, loop, prompt, context policy, reference bundle — is frozen per version and identical for every
         model; a minor series bump restarts the evidence. Every scored episode starts from a freshly created
-        level-1 character. Two harness groups exist: <code>wrathbench</code>, the fixed loop that rebuilds
-        the model's context every turn and trims old conversation, and <code>claude-code</code>, where the
-        Claude Code CLI owns the conversation and its compaction.  claude-code rows sit in the same charts, visibly tagged.
-        The claude-code group has no trim, so it gets neither the pre-trim status prompt nor the episodic log entries which
+        level-1 character. Three harness groups exist: <code>wrathbench</code>, the fixed loop that rebuilds
+        the model's context every turn and trims old conversation; <code>claude-code</code>, where the
+        Claude Code CLI owns the conversation and its compaction; and <code>codex</code>, where the OpenAI Codex CLI
+        does the same on a ChatGPT subscription. Each CLI scaffold is its own group because each is a different
+        unversioned summarizer. Their rows sit in the same charts, visibly tagged.
+        The CLI groups have no trim, so they get neither the pre-trim status prompt nor the episodic log entries which
         is a documented asymmetry made out of practical needs, but could also be extended to compare other harnesses.
         The Wrathbench harness is provided as a reference harness to provide a stable baseline when comparing models.
       </p>

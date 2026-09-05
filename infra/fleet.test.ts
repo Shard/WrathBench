@@ -230,7 +230,7 @@ describe("parseFleet", () => {
     expect(() => parseFleet([])).toThrow(/must be a JSON object/);
     expect(() => parseFleet(fleetJson([], { lanes: [] }))).toThrow(/`lanes` is not a 0.4 key — a job goes in `queue`/);
     expect(() => parseFleet(fleetJson([], { accounts: { pinned: { S: "x" }, pool: [] } }))).toThrow(/accounts.pinned is not a 0.4 key/);
-    expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code\)/);
+    expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code \| codex\)/);
   });
 
   test("a roster entry carrying a key the harness does not read is refused BY NAME, not ignored", () => {
@@ -486,6 +486,20 @@ describe("roster policy", () => {
   test("a driver outside the vocabulary is refused by name — the pre-0.4 spelling included", () => {
     expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-subscription" as never }])).toThrow(/unknown driver claude-subscription/);
     expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "claude-thing" as never }])).toThrow(/unknown driver/);
+  });
+
+  test("codex entries validate: OpenAI's catalogue only, never a claude id, and a lane may pin them", () => {
+    expect(validateEntries("roster:x", [{ model: "gpt-6-astra", driver: "codex", effort: "high" }])).toHaveLength(1);
+    expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "codex" }])).toThrow(/codex driver carries no claude models/);
+    // Not a shared free pool: no `:free` suffix demanded of a subscription lane.
+    expect(validateEntries("roster:x", [{ model: "gpt-5.5", driver: "codex" }])).toHaveLength(1);
+    const config = parseFleet({
+      accounts: { pool: ["R"] },
+      roster: { astra: { tier: "t1", model: "gpt-6-astra", driver: "codex", subscription: "CODEX_HOME" } },
+      policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME"] },
+    });
+    expect(config.roster["astra"]).toMatchObject({ driver: "codex", subscription: "CODEX_HOME" });
+    expect(config.refusals).toHaveLength(0);
   });
 
   test("the respawn breaker trips on repeated short-lived exits inside the window, and only then", () => {
@@ -1731,7 +1745,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     ).toThrow(/never the token/);
     expect(() =>
       parseFleet({ accounts: { pool: ["R"] }, roster: { a: { tier: "t1", model: "x:free", subscription: "CLAUDE_CODE_OAUTH_TOKEN_2" } } }),
-    ).toThrow(/only an entry on that driver bills a subscription/);
+    ).toThrow(/only an entry on those drivers bills a subscription/);
   });
 
   test("the concurrency line names the lanes only when there is more than one", () => {

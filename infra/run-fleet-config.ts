@@ -575,7 +575,7 @@ export function fail(msg: string): never {
   throw new Error(msg);
 }
 
-/** True for models that must ride the claude-code driver (the claude-code harness). */
+/** True for models that must ride the claude-code driver (the claude-code harness), and that the codex driver refuses. */
 export function isClaudeFamily(model: string): boolean {
   return /(^|\/)(claude|opus|sonnet|haiku)/i.test(model);
 }
@@ -611,8 +611,8 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
       fail(`${where}: entry without a model: ${JSON.stringify(e)}`);
     }
     const driver: string = e.driver ?? "openai";
-    if (driver !== "openai" && driver !== "claude-code") {
-      fail(`${where}: entry ${e.model}: unknown driver ${String(e.driver)} (openai | claude-code)`);
+    if (driver !== "openai" && driver !== "claude-code" && driver !== "codex") {
+      fail(`${where}: entry ${e.model}: unknown driver ${String(e.driver)} (openai | claude-code | codex)`);
     }
     if (driver === "openai" && isClaudeFamily(e.model)) {
       fail(
@@ -625,6 +625,11 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
         `${where}: entry ${e.model}: roster policy — the claude-code driver ` +
           `carries claude models only`,
       );
+    }
+    // The Codex CLI is a ChatGPT-subscription lane: OpenAI's catalogue only,
+    // and never a claude id (which the claude bar above already refuses).
+    if (driver === "codex" && isClaudeFamily(e.model)) {
+      fail(`${where}: entry ${e.model}: roster policy — the codex driver carries no claude models`);
     }
     // Shared free-cloud pools (OpenRouter, OpenCode Zen) carry free models
     // only; the suffix is how we keep an entry off a paid tier, and an explicit
@@ -960,8 +965,8 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     if (rawSub !== undefined && (typeof rawSub !== "string" || !isTokenEnvName(rawSub))) {
       fail(`roster ${name}: subscription must be the NAME of the env var holding the token (e.g. CLAUDE_CODE_OAUTH_TOKEN_2), never the token`);
     }
-    if (rawSub !== undefined && (e as { driver?: unknown }).driver !== "claude-code") {
-      fail(`roster ${name}: subscription is a claude-code lane — only an entry on that driver bills a subscription`);
+    if (rawSub !== undefined && (e as { driver?: unknown }).driver !== "claude-code" && (e as { driver?: unknown }).driver !== "codex") {
+      fail(`roster ${name}: subscription is a claude-code or codex lane — only an entry on those drivers bills a subscription`);
     }
     if (rawBilling !== undefined && rawBilling !== "free" && rawBilling !== "paid") fail(`roster ${name}: billing must be "free" or "paid" (normally absent: it is derived)`);
     // The retired 0.4 spellings, refused by name. Both said how much a model

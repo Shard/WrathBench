@@ -46,9 +46,14 @@ export interface BillableRun {
   driver?: string | null;
 }
 
+/** The harnesses (and the drivers of the same name) that bill a flat subscription: Claude Code, Codex. */
+export function isSubscriptionHarness(name: string | null | undefined): boolean {
+  return name === "claude-code" || name === "codex";
+}
+
 /** Did this run cost money? See the module comment for why it is not `billingOf`. */
 export function runBilling(run: BillableRun): Billing {
-  if (run.harness === "claude-code" || run.driver === "claude-code") return "paid";
+  if (isSubscriptionHarness(run.harness) || isSubscriptionHarness(run.driver)) return "paid";
   if (run.platform === "local" || isLocalBase(run.apiBase)) return "free";
   const model = run.model;
   if (model !== null && (isContributorSlug(model) || isFreeSlug(model) || isAllowlistedFree(model))) {
