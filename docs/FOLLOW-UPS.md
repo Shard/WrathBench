@@ -104,6 +104,33 @@ worklogs/2026-08-29).
 
 ## Episodes and results
 
+## Deployment
+
+116. **The NuSphere cutover has not been performed** (2026-09-05). The chart
+    (`infra/chart/wrathbench`), the ConfigMap kustomization (`infra/k8s`), the
+    image build (`infra/build-images.sh`), the deploy window
+    (`infra/k8s-deploy.sh`) and the runbook (`docs/DEPLOY-NUSPHERE.md`) all
+    exist and are lint/render/kubeconform clean, but **nothing has run**: no PVC
+    has been bound, no pod has started, and the fleet is still on compose. The
+    runbook is a plan, not a report. Unblocked by the nusphere-side PR
+    (Shard/nusphere#149) merging; the cutover itself is a watched window, not a
+    background task, because step 1 pauses live runs. Two things to confirm
+    first with real workloads rather than argument: that `mysql:8.4` starts with
+    `runAsUser: 1000` on the `iscsi-nvme` datadir (the documented fallback is
+    999, db only), and that Flux's kustomize-controller builds `infra/k8s` with
+    `LoadRestrictionsNone` — without it the ConfigMap silently stops generating
+    and fleet steering stops with it, which is the one wrong guess here that
+    breaks operation rather than a deploy.
+
+117. **CI for the release contract** (2026-09-05; GitHub issue 7's addendum).
+    None of it is built: PR checks on the pinned Bun with a frozen install, the
+    full suite, typecheck, generated-API drift and the dashboard build; a tag
+    workflow that produces a traceable image digest tied to one source SHA;
+    chart lint/render in CI; and a check that refuses a mutable image reference.
+    The chart's own guard — `image.tag` empty or `latest` refuses to render — is
+    the only piece enforced today, and it fires at render time rather than at
+    review time. Trigger: the first deploy that is not driven by hand.
+
 ## Docs and release
 
 85. **Retire the gate Worker before launch** (2026-08-25; operator's explicit
