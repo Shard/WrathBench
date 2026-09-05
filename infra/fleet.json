@@ -69,6 +69,11 @@
     "  to pick, and pinning costs the entry the other subscription's free slots. A name that is not in",
     "  policy.subscriptions refuses THAT ENTRY (named in --status, scheduled by nothing) and leaves the rest",
     "  of the file in effect.",
+    "  The codex lane (2026-09-05): a ChatGPT subscription is a lane too, and its variable names a logged-in",
+    "  CODEX_HOME DIRECTORY rather than a token — CODEX_HOME is in subscriptions so codex-astra-high is not",
+    "  refused, and `codex` is capped at 1: one live Codex session per subscription. It carries no",
+    "  `claude-code:` key of its own, so a claude pick can only reach the CODEX_HOME lane once BOTH claude",
+    "  lanes are full — which, with 1 + 3 against an overall 3, cannot happen. Keep it LAST in the list.",
     "",
     "campaigns: probe campaigns, the third lane (see docs/EPISODES.md). { <name>: { enabled, models \"all\"|[refs],",
     "  runsPerCell, maxAttemptsPerCell?, cells [{ id, race?, class?, objective?, ... }], account?, objective?,",
@@ -120,6 +125,7 @@
     "sonnet-none": {"model": "sonnet", "driver": "claude-code", "effort": "none", "race": 3, "class": 2, "tier": "t0", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2"},
     "sonnet": {"model": "sonnet", "driver": "claude-code", "race": 3, "class": 2, "tier": "t1"},
     "sonnet-low": {"model": "sonnet", "driver": "claude-code", "effort": "low", "race": 3, "class": 2, "tier": "t1", "subscription": "CLAUDE_CODE_OAUTH_TOKEN_2", "idle": "none"},
+    "codex-astra-high": {"model": "gpt-6-astra", "driver": "codex", "effort": "high", "race": 3, "class": 2, "tier": "t0", "subscription": "CODEX_HOME"},
     "nemotron-ultra": {"model": "nvidia/nemotron-3-ultra-550b-a55b:free", "tier": "t1", "idle": "none"},
     "north-mini-code": {"model": "cohere/north-mini-code:free", "tier": "t1", "idle": "none"},
     "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free", "tier": "t1", "idle": "unlimited"},
@@ -153,8 +159,8 @@
     "omen-alpha": {"model": "omen-alpha", "apiBase": "https://opencode.ai/zen/go/v1", "apiKeyEnv": "OPENCODE_KEY", "billing": "paid", "tier": "t0", "idle": "none"}
   },
   "policy": {
-    "maxConcurrent": {"claude-code": 3, "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3, "openrouter": 1, "opencode": 1, "opencode-go": 1},
-    "subscriptions": ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"],
+    "maxConcurrent": {"claude-code": 3, "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1, "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3, "codex": 1, "openrouter": 1, "opencode": 1, "opencode-go": 1},
+    "subscriptions": ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2", "CODEX_HOME"],
     "paid": {"maxConcurrent": 2}
   },
   "campaigns": {
