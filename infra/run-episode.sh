@@ -5,6 +5,7 @@
 #   ./infra/run-episode.sh --model <id> [--driver openai|claude-code|stub]
 #   ./infra/run-episode.sh --resume <run-id>
 #   ./infra/run-episode.sh --model <id> --local           # outside the container
+#   ./infra/run-episode.sh --model <id> --k8s             # into the runner pod
 #
 # Anything else is passed through to `bun runner/src/run.ts` verbatim, e.g.
 # --max-turns <n> (driver turns) or --max-tool-calls <n> (tool calls/episode).
@@ -27,6 +28,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/compose.yml"
 SERVICE="runner"
+# --k8s: the same exec, into the Kubernetes runner Deployment instead of the
+# compose service. Same image, same repo (baked in rather than bind-mounted),
+# same .env-free secret handling — the pod carries the keys as env from the
+# wrathbench-env Secret, so nothing travels through argv there either.
+K8S=0
+K8S_NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"
+K8S_RELEASE="${WRATHBENCH_K8S_RELEASE:-wrathbench}"
 
 usage() {
   sed -n '3,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -69,6 +77,18 @@ while [ $# -gt 0 ]; do
     --local)
       LOCAL=1
       shift
+      ;;
+    --k8s)
+      K8S=1
+      shift
+      ;;
+    --namespace)
+      K8S_NAMESPACE="${2:-}"
+      shift 2
+      ;;
+    --release)
+      K8S_RELEASE="${2:-}"
+      shift 2
       ;;
     -h | --help)
       usage
@@ -144,6 +164,24 @@ EOF
       echo "run-episode.sh: the claude CLI is not on PATH; install it or drop --local" >&2
       exit 2
     }
+  elif [ "${K8S}" -eq 1 ]; then
+    if ! kubectl -n "${K8S_NAMESPACE}" exec -i "deployment/${K8S_RELEASE}-runner" -- sh -c 'command -v claude' >/dev/null 2>&1; then
+      echo "run-episode.sh: the runner pod has no \`claude\` CLI — check the image tag" >&2
+      exit 2
+    fi
+    # The token must be visible *there*, not here. On Kubernetes it arrives as
+    # env from the Secret, not from a .env file, so this is an env check only.
+    if ! kubectl -n "${K8S_NAMESPACE}" exec -i "deployment/${K8S_RELEASE}-runner" \
+      -- sh -c "[ -n \"\${${TOKEN_ENV}:-}\" ]" >/dev/null 2>&1; then
+      cat >&2 <<EOF
+run-episode.sh: ${TOKEN_ENV} is not set in the runner pod.
+  It comes from the ${K8S_NAMESPACE}/wrathbench-env Secret, whose keys are the
+  .env names. Add the key there (the cluster repo owns it) and let the
+  Deployment roll; ${TOKEN_ENV} is this run's subscription LANE and another
+  subscription's token in another variable does not stand in for it.
+EOF
+      exit 2
+    fi
   else
     if ! docker compose -f "${COMPOSE_FILE}" exec -T "${SERVICE}" sh -c 'command -v claude' >/dev/null 2>&1; then
       cat >&2 <<'EOF'
@@ -173,6 +211,15 @@ fi
 if [ "${LOCAL}" -eq 1 ]; then
   cd "${REPO_ROOT}"
   exec bun runner/src/run.ts "${PASSTHROUGH[@]}"
+fi
+
+if [ "${K8S}" -eq 1 ]; then
+  # The pod has no .git, so the stamp cannot be recomputed there; the chart
+  # already sets WRATHBENCH_HARNESS_VERSION from the image tag, which is the
+  # honest marker for a baked-in repo. Passing the workstation's `git describe`
+  # would claim a revision the pod is not running.
+  exec kubectl -n "${K8S_NAMESPACE}" exec -i "deployment/${K8S_RELEASE}-runner" \
+    -- bun runner/src/run.ts "${PASSTHROUGH[@]}"
 fi
 
 exec docker compose -f "${COMPOSE_FILE}" exec -T \
