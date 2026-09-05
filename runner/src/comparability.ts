@@ -40,9 +40,9 @@ import type { WikiBundleMeta } from "./wiki";
  * Harness as the tuple records it: which machinery decided what the model saw
  * each turn. `wrathbench` applies its own context policy (docs/METHODOLOGY.md,
  * "Context policy": event window, hysteretic message window, regenerated
- * per-turn context); `claude-code` is the Claude Code CLI, which owns its own
- * history and compaction. Two harnesses are two comparability groups; neither
- * is a scoring penalty.
+ * per-turn context); `claude-code` is the Claude Code CLI and `codex` the
+ * OpenAI Codex CLI, each of which owns its own history and compaction. Three
+ * harnesses are three comparability groups; none is a scoring penalty.
  */
 export const harnessSchema = z.enum(HARNESSES);
 
@@ -281,6 +281,7 @@ export function harnessOfRun(meta: {
   if (stamped !== undefined && (HARNESSES as readonly string[]).includes(stamped)) return stamped as Harness;
   const d = meta.driver;
   if (d === "claude-code") return "claude-code";
+  if (d === "codex") return "codex";
   if (d === "openai" || d === "stub") return "wrathbench";
   return null;
 }

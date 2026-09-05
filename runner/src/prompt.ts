@@ -5,9 +5,11 @@
  * else. No strategy hints beyond what the tools themselves imply.
  *
  * One sentence varies, and only by *harness*, never by model: what happens to
- * older conversation is a different fact on the fixed loop than on the
- * claude-code CLI, and a prompt that states the wrong one is simply false
- * (`contextSentence`).
+ * older conversation is a different fact on the fixed loop than on a CLI
+ * scaffold (claude-code, codex), and a prompt that states the wrong one is
+ * simply false (`contextSentence`). Nothing in the prompt names a vendor: the
+ * CLI-scaffold sentence is the same bytes for both scaffolds, because the
+ * loop is model-agnostic and the regime it describes is the same.
  */
 
 import type { Harness } from "./config";
@@ -83,14 +85,18 @@ const BODY_TAIL = `Act through tools every turn; text without a tool call does n
  * them, which is a worse fault than the two prompts differing: a model cannot
  * plan around a rule that is not being applied to it.
  *
- * The claude-code sentence is deliberately a statement of the regime and
+ * The CLI-scaffold sentence is deliberately a statement of the regime and
  * nothing more — no advice about how to use it. The scratchpad clause survives
  * there only because it is still true and has a reason it is worth saying: a
  * pause and resume replays no conversation but does restore the scratchpad
  * (`resumeSessionNote`), so the notes are the only thing that crosses that gap.
+ * It names "the CLI", never which one: claude-code and codex are the same
+ * regime (one continuous session the scaffold owns and compacts), so they get
+ * the same bytes, and the prompt hash in the comparability tuple stays equal
+ * across the two CLI groups — the harness tag is what tells them apart.
  *
  * Exhaustive over `Harness` on purpose, exactly as `episodeSection` is over
- * `EpisodeId`: a third harness must not silently inherit a sentence that
+ * `EpisodeId`: a fourth harness must not silently inherit a sentence that
  * describes machinery it does not run.
  */
 export function contextSentence(harness: Harness): string {
@@ -98,9 +104,14 @@ export function contextSentence(harness: Harness): string {
     case "wrathbench":
       return "Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history.";
     case "claude-code":
-      return "This harness does not trim your conversation: the session runs as one continuous conversation and the CLI owns its history. Your scratchpad outlasts that history — a run that is paused and resumed comes back with the scratchpad and no conversation at all — so facts you want to keep belong there.";
+    case "codex":
+      return CLI_SCAFFOLD_CONTEXT_SENTENCE;
   }
 }
+
+/** What both CLI scaffolds are told about their conversation; see `contextSentence`. */
+const CLI_SCAFFOLD_CONTEXT_SENTENCE =
+  "This harness does not trim your conversation: the session runs as one continuous conversation and the CLI owns its history. Your scratchpad outlasts that history — a run that is paused and resumed comes back with the scratchpad and no conversation at all — so facts you want to keep belong there.";
 
 /** The body for one harness: the fixed text with that harness's context sentence in it. */
 function bodyFor(harness: Harness): string {
@@ -121,6 +132,14 @@ export const SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("wrathbench")}`;
  * record that the two harnesses do not share a prompt.
  */
 export const CLAUDE_CODE_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("claude-code")}`;
+
+/**
+ * The same prompt as the codex harness renders it. Byte-identical to
+ * `CLAUDE_CODE_SYSTEM_PROMPT` by construction (`contextSentence`): the two CLI
+ * scaffolds run the same conversation regime, so the prompt says the same
+ * thing, and the harness tag — not the prompt hash — is what separates them.
+ */
+export const CODEX_SYSTEM_PROMPT = `${GOAL_SECTION}\n\n${bodyFor("codex")}`;
 
 /**
  * The delimited block an operator objective is rendered into. One shape, one
@@ -168,8 +187,8 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
  * harness this returns `SYSTEM_PROMPT` unchanged; the episode sentence, then
  * the delimited objective block, sit between the standing goal and the runtime
  * description. `harness` picks the context sentence and nothing else, so the
- * two harnesses' prompts differ by exactly the one sentence that describes
- * what each of them actually does with older conversation.
+ * fixed loop's prompt and a CLI scaffold's differ by exactly the one sentence
+ * that describes what each of them actually does with older conversation.
  */
 export function buildSystemPrompt(
   objective?: string | undefined,
