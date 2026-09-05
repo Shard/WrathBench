@@ -63,6 +63,10 @@ export type {
   RunRow,
   RunsResponse,
   StatePoint,
+  StreamAttempt,
+  StreamCost,
+  StreamTotals,
+  StreamView,
   TokenTotals,
   TpsFacts,
 } from "@viewer/api-types";

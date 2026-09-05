@@ -48,12 +48,15 @@ import {
   type FeedEntry,
   type ModelRowView,
   type RunDetailResponse,
+  type StreamView,
   type TokenTotals,
 } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
-import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { StreamPlot } from "../components/StreamChart";
+import { stitchStream, type StreamSeries } from "../lib/ladder";
+import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, fmtUsd, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
@@ -75,7 +78,7 @@ import {
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
-import { OPAQUE_PAUSE_REASON } from "../lib/runs";
+import { OPAQUE_PAUSE_REASON, statusOf, statusText } from "../lib/runs";
 
 const WINDOW = 200;
 
@@ -231,6 +234,53 @@ export default function RunDetail() {
 
   const live = (): boolean => detail()?.run.terminationReason === null;
 
+  /**
+   * This run's stream as one series for `StreamPlot` — the same shape, the same
+   * stitching (`stitchStream`) and the same axes the freeplay field is drawn
+   * on, so a character's line does not change meaning between the two pages.
+   *
+   * Null when the run is not part of a stream. A stream that cannot be laid out
+   * — a prior attempt with no active-time reading, or no level mark carrying
+   * one — comes back with an empty series and the reason, which the plot prints
+   * rather than drawing something wrong.
+   */
+  const streamPlot = createMemo(
+    (): { series: StreamSeries[]; omitted: { streamId: string; label: string; why: string }[] } | null => {
+      const d = detail();
+      const st = d?.stream;
+      if (d === undefined || st === undefined) return null;
+      const model = d.run.model ?? "(unnamed)";
+      const label = d.run.character ?? modelDisplay(model);
+      const last = st.runs[st.runs.length - 1];
+      if (last === undefined) {
+        return { series: [], omitted: [{ streamId: st.streamId, label, why: "no attempt served" }] };
+      }
+      const { points, endX, broke } = stitchStream(st.runs);
+      const why = broke ?? (points.length === 0 ? "no level mark carries an active-time reading" : null);
+      if (why !== null) return { series: [], omitted: [{ streamId: st.streamId, label, why }] };
+      const end = points[points.length - 1]!;
+      return {
+        series: [
+          {
+            streamId: st.streamId,
+            label,
+            model,
+            effort: d.run.comparability?.effort ?? null,
+            // The stream is doing whatever its newest attempt is doing.
+            status: statusOf(last),
+            attempts: st.attempts,
+            latestRunId: last.runId,
+            points,
+            endX: Math.max(endX, end.x),
+            endLevel: end.level,
+            truncated: st.truncated,
+          },
+        ],
+        omitted: [],
+      };
+    },
+  );
+
   onMount(() => {
     const clock = setInterval(() => setNow(Date.now()), 1000);
     onCleanup(() => clearInterval(clock));
@@ -262,15 +312,21 @@ export default function RunDetail() {
         setDetail(d);
         setTokens(d.tokens);
         /*
-         * The stream this run belongs to. Fetched once and never polled: a
-         * continuation is only ever launched after its predecessor has ended,
-         * so a run being watched cannot gain a successor while it is on screen.
-         * Only freeplay has lineage, and the tier is read off the stamped
-         * comparability tuple — the run row carries no episode of its own.
-         * `continuedFrom` is checked as well, because a run whose metadata
-         * predates the stamp has no tuple and would otherwise lose its line.
+         * The stream this run belongs to, when the server did not answer with
+         * one. It does since 2026-09-05 (`stream` on `/api/run/<id>`, which also
+         * carries the whole chain's totals), and this fetch is the fallback for
+         * a snapshot or a viewer built before that field existed: it recovers
+         * the lineage LINE, not the totals, which cannot be derived here.
+         *
+         * Fetched once and never polled: a continuation is only ever launched
+         * after its predecessor has ended, so a run being watched cannot gain a
+         * successor while it is on screen. Only freeplay has lineage, and the
+         * tier is read off the stamped comparability tuple — the run row carries
+         * no episode of its own. `continuedFrom` is checked as well, because a
+         * run whose metadata predates the stamp has no tuple and would
+         * otherwise lose its line.
          */
-        if (d.run.continuedFrom !== null || d.run.comparability?.episode === "freeplay") {
+        if (d.stream === undefined && (d.run.continuedFrom !== null || d.run.comparability?.episode === "freeplay")) {
           void api
             .results("all", true, "all")
             .then((res) => {
@@ -445,10 +501,16 @@ export default function RunDetail() {
                 <span title={run().runId}>{shortRunId(run().runId)}</span>
               </h2>
 
-              {/* The freeplay stream this run is one attempt of. Both directions
-                  link, because a reader landing on a12 wants a11 and a reader
-                  landing on a11 wants to know it was not the end of the line. */}
-              <Show when={hasLineage(lineage()) ? lineage() : undefined}>
+              {/*
+                The freeplay stream this run is one attempt of, as the whole
+                stream: every attempt in order, this one marked, each a link.
+                A reader landing on a12 wants a11 — and, landing on a11, wants
+                to see that the character kept playing without having to guess
+                a run id. The one-line version below is the fallback for a
+                viewer or snapshot that answers no `stream`.
+              */}
+              <Show when={d().stream}>{(st) => <AttemptStrip stream={st()} runId={run().runId} />}</Show>
+              <Show when={d().stream === undefined && hasLineage(lineage()) ? lineage() : undefined}>
                 {(l) => (
                   <p class="dim" title="a durable freeplay stream: one character, continued across attempts">
                     freeplay stream{" "}
@@ -479,6 +541,23 @@ export default function RunDetail() {
                       )}
                     </Show>
                   </p>
+                )}
+              </Show>
+
+              {/*
+                For a stream, the character's whole climb comes first: level
+                against cumulative active playtime, stitched across the
+                attempts, the same line the freeplay field draws. The per-attempt
+                XP chart stays below it — this session's shape is still worth
+                seeing, it is just not the run.
+              */}
+              <Show when={streamPlot()}>
+                {(plot) => (
+                  <>
+                    <h2 class="section">the stream, across {d().stream?.attempts} attempts</h2>
+                    <StreamPlot series={plot().series} omitted={plot().omitted} single />
+                    <h2 class="section">this attempt</h2>
+                  </>
                 )}
               </Show>
 
@@ -539,6 +618,30 @@ export default function RunDetail() {
                     */}
                     <RunStart.Provider value={() => run().startedAt}>
                     <div class="feed">
+                      {/*
+                        A trajectory is one attempt's, so the feed cannot be
+                        stitched — but the reader can walk. At the top of the
+                        earliest window this attempt has (`from() === 0`, so the
+                        link stands where the log actually begins, not above a
+                        window with more of this run above it) the previous
+                        attempt is one click away, and the next one is at the
+                        bottom.
+                      */}
+                      <Show when={from() === 0 ? d().stream : undefined}>
+                        {(st) => (
+                          <Show when={st().previous}>
+                            {(prev) => (
+                              <p class="dim feed-seam">
+                                ← earlier:{" "}
+                                <A href={`/run/${encodeURIComponent(prev())}`} title={prev()}>
+                                  attempt {st().attempt - 1} of {st().attempts}
+                                </A>{" "}
+                                — this attempt's log begins here.
+                              </p>
+                            )}
+                          </Show>
+                        )}
+                      </Show>
                       {/* A run with no loaded entries — the window is empty, or
                           the fetch failed — says so where the feed would be. */}
                       <Show when={groups().length === 0}>
@@ -573,6 +676,27 @@ export default function RunDetail() {
                           }
                         }}
                       </For>
+                      {/*
+                        The other end of the seam: this attempt stopped, and the
+                        character kept playing somewhere else. Only for an
+                        attempt that has ENDED — a live one's feed has more
+                        coming, and a "continues in" under it would be wrong.
+                      */}
+                      <Show when={run().terminationReason !== null ? d().stream : undefined}>
+                        {(st) => (
+                          <Show when={st().next}>
+                            {(next) => (
+                              <p class="dim feed-seam">
+                                this attempt ends here — continues in{" "}
+                                <A href={`/run/${encodeURIComponent(next())}`} title={next()}>
+                                  attempt {st().attempt + 1} of {st().attempts}
+                                </A>{" "}
+                                →
+                              </p>
+                            )}
+                          </Show>
+                        )}
+                      </Show>
                     </div>
                     </RunStart.Provider>
                   </Show>
@@ -610,6 +734,23 @@ export default function RunDetail() {
                       </Show>
                     </Show>
                   </div>
+
+                  {/*
+                    For a stream, the character's totals are the headline and
+                    this session's are the footnote — the whole complaint was a
+                    page that answered "how many quests" with one attempt's
+                    tally. The cards below keep the run's own figures, under a
+                    heading that says which they are.
+                  */}
+                  <Show when={d().stream}>
+                    {(st) => (
+                      <>
+                        <h2 class="section">the stream · {st().attempts} attempts</h2>
+                        <StreamTotals stream={st()} detail={d()} />
+                        <h2 class="section">this attempt</h2>
+                      </>
+                    )}
+                  </Show>
 
                   <div class="cards">
                     <div class="card">
@@ -784,6 +925,168 @@ export default function RunDetail() {
           );
         }}
       </Show>
+    </div>
+  );
+}
+
+/**
+ * What the character has done, across every attempt of its stream.
+ *
+ * The figures are the server's (`stream.totals`, aggregated at read time in
+ * `runner/viewer/stream.ts`), never re-derived here, so this card and the
+ * freeplay ladder cannot quote different numbers for one character. Each card
+ * names this attempt's own figure underneath, because the reader is on one
+ * attempt's page and the two must never be confusable.
+ *
+ * Null is not zero anywhere below: "not recorded" is printed as such, since a
+ * stream whose older attempts predate a producer has not been observed doing
+ * none of it.
+ */
+function StreamTotals(props: { stream: StreamView; detail: RunDetailResponse }) {
+  const t = (): StreamView["totals"] => props.stream.totals;
+  const cost = (): StreamView["totals"]["cost"] => t().cost;
+  /** "this attempt: …" — the run's own reading, beside the character's. */
+  const mine = (v: string): string => `this attempt: ${v}`;
+  return (
+    <div class="cards">
+      <div class="card">
+        <div class="k">quests completed</div>
+        <div class="v mono">{num(t().questsCompleted)}</div>
+        <div class="sub">{mine(num(props.detail.run.questsCompleted))}</div>
+      </div>
+      <div class="card">
+        <div class="k">xp earned</div>
+        <div class="v mono">{t().xpEarned === null ? "—" : t().xpEarned!.toLocaleString()}</div>
+        <div class="sub">
+          level {num(t().level)} · {fmtMoney(t().money)}
+        </div>
+      </div>
+      <div class="card">
+        <div class="k">playtime</div>
+        <div class="v mono">{fmtDuration(t().playtimeMs)}</div>
+        <div class="sub">{mine(fmtDuration(props.detail.playtimeMs ?? null))}</div>
+      </div>
+      <div class="card">
+        <div class="k">tokens in / out</div>
+        <div class="v mono">
+          {fmtTokens(t().tokens?.promptTokens ?? null)} / {fmtTokens(t().tokens?.completionTokens ?? null)}
+        </div>
+        <div class="sub" title={sourceHint(t().tokens?.source)}>
+          {sourceLabel(t().tokens?.source)} · {t().tokens?.turns ?? 0} turns · cache r/w{" "}
+          {fmtTokens(t().tokens?.cacheReadTokens ?? null)} / {fmtTokens(t().tokens?.cacheWriteTokens ?? null)}
+        </div>
+      </div>
+      {/*
+        Two sums, never one. `CostFigure` carries a basis and a price date, and
+        a chain of attempts priced three different ways has no single one — so
+        the dollars are added and the COVERAGE is printed beside them, which is
+        what says how much of the stream the figure actually accounts for.
+      */}
+      <div class="card">
+        <div class="k">cost — actual</div>
+        <div class="v mono">{fmtUsd(cost().actualUsd)}</div>
+        <div class="sub">
+          <Show
+            when={cost().actualAttempts > 0}
+            fallback={<>no attempt reports a provider charge</>}
+          >
+            {cost().actualAttempts} of {cost().attempts} attempts report one
+            <Show when={cost().asIfMetered}> · as-if-metered (a subscription was billed, not this)</Show>
+          </Show>
+        </div>
+      </div>
+      <div class="card">
+        <div class="k">cost — expected</div>
+        <div class="v mono">{fmtUsd(cost().expectedUsd)}</div>
+        <div class="sub">
+          <Show
+            when={cost().expectedAttempts > 0}
+            fallback={<>no attempt could be priced</>}
+          >
+            list prices over {cost().expectedAttempts} of {cost().attempts} attempts
+          </Show>
+        </div>
+      </div>
+      <div class="card">
+        <div class="k">deaths · flights</div>
+        <div class="v mono">
+          {t().deaths === null || t().deaths === undefined ? "—" : t().deaths!.deaths} ·{" "}
+          {t().taxi === null ? "—" : t().taxi!.flights}
+        </div>
+        <div class="sub">
+          {t().achievements === null
+            ? "achievements: not recorded"
+            : `achievements: ${t().achievements!.earned} (${t().achievements!.points} pts)`}
+        </div>
+      </div>
+      <div class="card">
+        <div class="k">spells · talents · trades</div>
+        <div class="v mono">
+          {t().spells === null || t().spells === undefined ? "—" : t().spells!.learned} ·{" "}
+          {t().talents === null || t().talents === undefined ? "—" : t().talents!.spends} ·{" "}
+          {t().trades === null || t().trades === undefined ? "—" : t().trades!.trades}
+        </div>
+        <div class="sub">
+          {num(t().toolCalls)} tool calls · {num(t().snippets)} snippets · {num(t().modelResponses)} replies
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The whole stream, attempt by attempt.
+ *
+ * This is the thing a durable freeplay run did not have: a reader landing on
+ * one attempt could see the run id either side of it and nothing else, so
+ * "the run" was only ever visible one session at a time. Each attempt is a
+ * link, the one being read is marked, and each carries the three facts that
+ * say what happened in it — what state it ended in, how far the character got,
+ * and how long it played. The figures are the attempt's own; the totals are in
+ * the sidebar, which is where the character's numbers live.
+ */
+function AttemptStrip(props: { stream: StreamView; runId: string }) {
+  return (
+    <div class="attempts">
+      <div class="attempts-head dim" title="a durable freeplay stream: one character, continued across attempts">
+        freeplay stream{" "}
+        <Show when={props.stream.streamId !== props.runId} fallback={shortRunId(props.stream.streamId)}>
+          <A href={`/run/${encodeURIComponent(props.stream.streamId)}`} title={props.stream.streamId}>
+            {shortRunId(props.stream.streamId)}
+          </A>
+        </Show>{" "}
+        · attempt {props.stream.attempt} of {props.stream.attempts}
+        {/* The chain begins mid-history: the oldest attempt on screen still
+            names a predecessor this viewer does not serve, so every total is a
+            lower bound over what is shown. */}
+        <Show when={props.stream.truncated}>
+          {" "}
+          · <span title="the oldest attempt served still names a predecessor this viewer does not hold">
+            earlier attempts not served
+          </span>
+        </Show>
+      </div>
+      <ol class="attempts-strip">
+        <For each={props.stream.runs}>
+          {(a, i) => {
+            const here = (): boolean => a.runId === props.runId;
+            const status = (): string => statusOf(a);
+            return (
+              <li class={here() ? "attempt here" : "attempt"}>
+                <A href={`/run/${encodeURIComponent(a.runId)}`} title={a.runId}>
+                  <span class="n">#{i() + 1}</span>
+                  <span class={status() === "live" ? "ok" : status() === "paused" ? "warn" : "dim"}>
+                    {statusText(a)}
+                  </span>
+                </A>
+                <div class="dim">
+                  {a.level === null ? "no level" : `L${a.level}`} · {fmtDuration(a.playtimeMs)}
+                </div>
+              </li>
+            );
+          }}
+        </For>
+      </ol>
     </div>
   );
 }
