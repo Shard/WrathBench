@@ -114,6 +114,17 @@ command line — `ps` is a broadcast channel — and env from a Secret does that
 least as well: it never appears in a manifest, in `helm get manifest`, or in
 Flux's diff.
 
+The keys are named individually rather than pulled in with `envFrom` on the
+whole Secret, and that is not tidiness. `sandboxChildEnv` forwards every
+`WRATHBENCH_*` variable to the snippet child except `WRATHBENCH_DB_*` and the
+module secret — an allowlist written against what the compose fleet actually
+holds. `envFrom` would put `WRATHBENCH_ACCOUNT_PASSWORD` in the pod (the
+compose fleet never has it; it is not in `.env`, only on the bootstrap service)
+and the allowlist would forward it into a model's sandbox. Enumerating keeps
+the pod's environment the shape the allowlist was designed for. The publisher
+holds the four `S3_*` names and no model key; the viewer holds the module
+secret and nothing else.
+
 What the file also bought was keeping keys away from the snippet sandbox, and
 that does not depend on it. Three independent things do:
 

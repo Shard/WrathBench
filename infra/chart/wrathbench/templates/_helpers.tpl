@@ -131,16 +131,52 @@ appears in the rendered chart, in `helm get manifest`, or in Flux's diff.
 {{- end -}}
 
 {{/*
-Everything the harness reads out of `.env` under compose, as env from the
+The credentials the harness reads out of `.env` under compose, as env from the
 Secret. See docs/DEPLOY-NUSPHERE.md for why this is env and not a mounted
 `.env` file: Bun's autoload existed to keep secrets off argv, and env from a
 Secret does that at least as well, while the snippet child is protected by
 three independent things that do not depend on the file — sandboxChildEnv's
 allowlist, `bun --env-file=/dev/null`, and the Landlock ruleset.
+
+NAMED KEYS, NOT `envFrom` ON THE WHOLE SECRET, and the difference matters.
+sandboxChildEnv forwards every `WRATHBENCH_*` variable to the snippet child
+except `WRATHBENCH_DB_*` and the module secret — that allowlist is written
+against what the fleet process actually holds. `envFrom` would hand the pod
+`WRATHBENCH_ACCOUNT_PASSWORD` (which the compose fleet never has: it is not in
+`.env`, only on the bootstrap service), and the allowlist would forward it
+straight into a model's sandbox. Enumerating is what keeps the pod's
+environment the same shape the allowlist was designed for.
+
+The model keys themselves are not `WRATHBENCH_*`, so the child never sees them.
 */}}
-{{- define "wrathbench.secretEnvFrom" -}}
-- secretRef:
-    name: {{ .Values.envSecretName }}
+{{- define "wrathbench.harnessSecretEnv" -}}
+- name: WRATHBENCH_MODULE_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.envSecretName }}
+      key: WRATHBENCH_MODULE_SECRET
+{{- /* optional: a lane whose key is absent fails its own preflight with a
+       clear message rather than wedging the pod in CreateContainerConfigError. */}}
+{{- range .Values.modelKeys }}
+- name: {{ . }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $.Values.envSecretName }}
+      key: {{ . }}
+      optional: true
+{{- end }}
+{{- end -}}
+
+{{/* The publisher holds one credential pair, scoped to one bucket, and no
+model key at all. */}}
+{{- define "wrathbench.publisherSecretEnv" -}}
+{{- range (list "S3_ACCESS_KEY_ID" "S3_SECRET_ACCESS_KEY" "S3_BUCKET" "S3_ENDPOINT") }}
+- name: {{ . }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $.Values.envSecretName }}
+      key: {{ . }}
+{{- end }}
 {{- end -}}
 
 {{/* The harness stamp on every trajectory. One string with the image tag and
