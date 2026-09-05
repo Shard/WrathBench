@@ -228,7 +228,7 @@ config and everything but `model` has a default, so an old bare
 | `account` | runner default (`RUNNER`) | one live session per account |
 | `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-code` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`); `codex` as `model_reasoning_effort` (`low\|medium\|high\|xhigh\|max\|ultra`; `none`/`minimal` refused). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
 | `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude-code or codex entry gets neither flag |
-| `tokenEnv` | driver default | the subscription lane by env var NAME: `CLAUDE_CODE_OAUTH_TOKEN[_2]` (a token) for claude-code, `CODEX_HOME[_2]` (a logged-in Codex home directory) for codex |
+| `tokenEnv` | driver default | the subscription lane by env var NAME: `CLAUDE_CODE_OAUTH_TOKEN[_2]` (a token) for claude-code, `CODEX_HOME[_2]` (a logged-in Codex home directory) for codex. The codex lane is a directory, so under compose it is BIND-MOUNTED — `${CODEX_HOME:-/home/mark/.codex}` on the host to `/home/bun/.codex` in `runner` and `fleet`, which is what those services set `CODEX_HOME` to (`x-codex-lane` in compose.yml). Never copied: a second copy of `auth.json` spends the other side's refresh token |
 | `race`, `class` | Human Paladin | no name: the model names its own character at `createSession` and the run records what it chose |
 | `episodeMs` | 5400000 (90m) | |
 | `runId` | `roster-<model-slug>-<date>` | |
