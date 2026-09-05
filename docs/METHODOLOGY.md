@@ -73,14 +73,27 @@ not. A change to what gets *scheduled* is not a bump: targets are stopping
 rules, not measurements.
 
 **Harness and driver are separate words.** The *harness* is what owns the
-agent loop and context management: `wrathbench` (our fixed loop) or
+agent loop and context management: `wrathbench` (our fixed loop),
 `claude-code` (the Claude Code CLI scaffold, which owns its own history and
-compaction). The *driver* is how the runner reaches the model (`openai`,
-`claude-code`, `stub`). The harness is recorded as a tag on every run and
-chart row, not used as a partition: claude-code rows sit in the same charts,
-visibly tagged. Nothing about the claude-code harness unscores a run; `stub`
+compaction) or `codex` (the OpenAI Codex CLI scaffold, likewise). The
+*driver* is how the runner reaches the model (`openai`, `claude-code`,
+`codex`, `stub`). The harness is recorded as a tag on every run and chart
+row, not used as a partition: claude-code and codex rows sit in the same
+charts, visibly tagged. Nothing about a CLI harness unscores a run; `stub`
 never scores (it is not a model). `harnessVersion` is a different word again —
-the build of this repository, which applies to both harnesses.
+the build of this repository, which applies to every harness.
+
+**Each CLI scaffold is its own comparability group** (operator, 2026-09-05,
+asking for a ChatGPT-subscription lane). `codex` is not folded into
+`claude-code` as one "CLI" group even though both run the same regime — one
+continuous session the scaffold owns and compacts — because what sits inside
+each is a *different* unversioned summarizer, and the whole reason a scaffold
+is tagged apart from `wrathbench` is that its summarizer is not ours. The two
+scaffolds get the same prompt bytes (the one per-harness sentence says "the
+CLI", never which), so their prompt hashes match and the harness tag is what
+separates them. A ChatGPT subscription is a lane exactly as a Claude
+subscription is: one logged-in `CODEX_HOME` per lane, one live session per
+lane, never copied per run.
 
 ## Client fidelity
 
@@ -300,9 +313,9 @@ window, so the tool list stays fixed for both harness groups — nine tools sinc
 was removed, the scratchpad being injected verbatim into every turn's context already; operator,
 2026-08-30). Looking back
 at where things went wrong is what resting is for. The trigger is the trim
-itself, not a cadence constant; the claude-code driver has no trim, so it
-gets neither the prompt nor the entries, a documented asymmetry between
-harness groups.
+itself, not a cadence constant; the CLI-scaffold drivers (claude-code, codex)
+have no trim, so they get neither the prompt nor the entries, a documented
+asymmetry between harness groups.
 
 ## Episodes, lanes, and evidence
 

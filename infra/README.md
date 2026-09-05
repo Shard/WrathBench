@@ -224,10 +224,11 @@ config and everything but `model` has a default, so an old bare
 | key | default | notes |
 | --- | --- | --- |
 | `model` | — | required, passed through verbatim |
-| `driver` | `openai` | or `claude-code` (the claude-code harness; the former spelling `claude-subscription` is refused, not translated) |
+| `driver` | `openai` | or `claude-code` (the claude-code harness; the former spelling `claude-subscription` is refused, not translated) or `codex` (the OpenAI Codex CLI on a ChatGPT subscription; the codex harness) |
 | `account` | runner default (`RUNNER`) | one live session per account |
-| `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-code` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
-| `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude entry gets neither flag |
+| `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-code` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`); `codex` as `model_reasoning_effort` (`low\|medium\|high\|xhigh\|max\|ultra`; `none`/`minimal` refused). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
+| `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude-code or codex entry gets neither flag |
+| `tokenEnv` | driver default | the subscription lane by env var NAME: `CLAUDE_CODE_OAUTH_TOKEN[_2]` (a token) for claude-code, `CODEX_HOME[_2]` (a logged-in Codex home directory) for codex |
 | `race`, `class` | Human Paladin | no name: the model names its own character at `createSession` and the run records what it chose |
 | `episodeMs` | 5400000 (90m) | |
 | `runId` | `roster-<model-slug>-<date>` | |
@@ -316,7 +317,8 @@ supervises them. There is no other shape: a file that still says `lanes` or
 Guards, at startup and on every re-read: two enabled jobs must not share an
 account (one live session per account), and the **roster policy** — claude
 models (`opus`/`sonnet`/`haiku`/`claude-*`) run only via the
-`claude-code` driver, and that driver runs claude models only. The
+`claude-code` driver, that driver runs claude models only, and the `codex`
+driver carries no claude id. The
 free entries exist because OpenRouter's and OpenCode Zen's free tiers are
 pooled per upstream provider: a single sequential stream per pool is both the
 polite and the effective shape — two streams on one pool just trip the same
