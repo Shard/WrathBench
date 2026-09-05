@@ -120,7 +120,15 @@ cached part as a subset, `output_tokens`, `reasoning_output_tokens`), landed onc
 `response` entry, so the sum over responses is the run's real prompt and output — no snapshot
 caveat as under claude-code. There is no cost figure at all: the CLI reports none on a
 subscription, so a codex cost is only ever the list-price estimate over its tokens, marked
-as-if-metered.
+as-if-metered. The rate for that estimate comes from the OpenRouter sync, under the vendor
+prefix the Codex CLI's own slug omits: the lane records `gpt-6-astra` and the catalogue carries
+OpenAI's published list price as `openai/gpt-6-astra` ($10/$50/$1 per million in/out/cache-read,
+verified 2026-09-05 against OpenAI's own API price list). It is the same synced row an OpenRouter
+run would read; only what it means differs, and `codexPrice` in `runner/viewer/pricing.ts` says
+so — an OpenRouter run meters the operator's balance, a codex run bills a flat ChatGPT
+subscription, so the figure there is a comparison and not a bill. Operator's decision, 2026-09-05,
+on the first codex run: without it a codex run had no cost reading at all and was absent from
+every ladder chart, whose x-axis is cost.
 
 **Why Sonnet-on-subscription is the cost outlier, in numbers:** it is not that the tokens are
 cheap per-unit — a fresh 200k-token context at list price would be expensive — it's that almost

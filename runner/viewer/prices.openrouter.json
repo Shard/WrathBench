@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-09-02",
+  "asOf": "2026-09-05",
   "models": {
     "cohere/north-mini-code:free": [
       {
@@ -22,6 +22,13 @@
         "cacheRead": 0.015876,
         "cacheWrite": 0.07938,
         "from": "2026-09-02"
+      },
+      {
+        "input": 0.08638,
+        "output": 0.17276,
+        "cacheRead": 0.017276,
+        "cacheWrite": 0.08638,
+        "from": "2026-09-05"
       }
     ],
     "deepseek/deepseek-v4-flash-0731": [
@@ -52,6 +59,13 @@
         "cacheRead": 0.022,
         "cacheWrite": 0.66,
         "from": "2026-09-02"
+      },
+      {
+        "input": 1.12068,
+        "output": 3.36204,
+        "cacheRead": 0.037356,
+        "cacheWrite": 1.12068,
+        "from": "2026-09-05"
       }
     ],
     "dots-studio/dots-3-note-preview:free": [
@@ -165,6 +179,14 @@
         "cacheWrite": 2.5
       }
     ],
+    "openai/gpt-6-astra": [
+      {
+        "input": 10,
+        "output": 50,
+        "cacheRead": 1,
+        "cacheWrite": 12.5
+      }
+    ],
     "openai/gpt-oss-120b": [
       {
         "input": 0.037,
@@ -194,6 +216,13 @@
         "cacheRead": 0.085,
         "cacheWrite": 0.53125,
         "from": "2026-09-02"
+      },
+      {
+        "input": 0.42,
+        "output": 3,
+        "cacheRead": 0.085,
+        "cacheWrite": 0.42,
+        "from": "2026-09-05"
       }
     ],
     "thinkingmachines/inkling-small:free": [
@@ -226,6 +255,13 @@
         "output": 4.4,
         "cacheRead": 0.26,
         "cacheWrite": 1.4
+      },
+      {
+        "input": 1.4,
+        "output": 4.4,
+        "cacheRead": 0.14,
+        "cacheWrite": 1.4,
+        "from": "2026-09-05"
       }
     ],
     "z-ai/glm-5.3-flash": [

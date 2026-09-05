@@ -29,7 +29,9 @@
  *
  * Three tables, by where the figure can come from:
  * - `CLAUDE_PRICES` — Anthropic list prices, by hand, matched on the harness.
- * - `SYNCED_PRICES` — OpenRouter's catalogue, by script, matched on the id.
+ * - `SYNCED_PRICES` — OpenRouter's catalogue, by script, matched on the id; a
+ *   codex run matches under `openai/<slug>`, since the Codex CLI's own slug
+ *   carries no vendor prefix (`codexPrice`).
  * - `PROVIDER_PRICES` — paid providers that are not OpenRouter, by hand,
  *   matched on the run's `apiBase` *and* id (operator's decision, 2026-09-04,
  *   closing FOLLOW-UPS item 112 on its trigger: a second such provider).
@@ -186,7 +188,9 @@ export { isFreeSlug, isLocalBase } from "../src/model-cost";
  *
  * These models are genuinely metered against the operator's OpenRouter
  * balance, so `asIfMetered` is false: the figure is a list-price estimate of a
- * real bill. OpenRouter has no cache-write tier for most models — the sync
+ * real bill. The one exception is a codex run reading an `openai/` row: the
+ * rates are the same, but that lane bills a ChatGPT subscription, so the same
+ * figure is a comparison and `codexPrice` says so. OpenRouter has no cache-write tier for most models — the sync
  * falls back to the input rate, per its own quoting.
  *
  * A free slug never reaches here: `priceFor` answers it with `FREE_PRICE`
@@ -222,27 +226,83 @@ export function windowAt(windows: readonly SyncedWindow[], at: number | null): S
   return chosen ?? windows[0]!;
 }
 
-/** The synced row for an OpenRouter id at a date, or null when the sync does not carry it. */
-export function syncedPrice(model: string, at: number | null = null): PriceRow | null {
+/**
+ * Whose bill a synced row describes.
+ *
+ * The rates are the same figure read twice. An OpenRouter run meters the
+ * operator's balance, so the row is a list-price estimate of a real charge; the
+ * *same* row read for a codex run is a comparison, because the Codex CLI bills
+ * a flat ChatGPT subscription and reports no dollar figure at all. Only the
+ * billing sentence and `asIfMetered` differ, so they are decided here and the
+ * window provenance (undated first window against a dated one) is written once.
+ */
+type SyncedFlavor = "openrouter" | "codex";
+
+const SYNCED_BILLING: Record<SyncedFlavor, { asIfMetered: boolean; list: string; whose: string }> = {
+  openrouter: {
+    asIfMetered: false,
+    list: "OpenRouter list price",
+    whose: "metered against the operator's OpenRouter balance",
+  },
+  codex: {
+    asIfMetered: true,
+    list: "OpenAI API list price via the OpenRouter catalogue",
+    whose: "the codex harness bills a ChatGPT subscription, so this is as-if-metered",
+  },
+};
+
+function syncedRow(model: string, at: number | null, flavor: SyncedFlavor): PriceRow | null {
   const windows = SYNCED_PRICES.models[model];
   if (windows === undefined) return null;
   const row = windowAt(windows, at);
   if (row === null) return null;
-  const asOf = row.from ?? SYNCED_PRICES.asOf;
+  const { asIfMetered, list, whose } = SYNCED_BILLING[flavor];
+  const when =
+    row.from === undefined
+      ? `${list}, synced ${SYNCED_PRICES.asOf} (infra/sync-prices.ts)`
+      : `${list} in force from ${row.from} (catalogue read ${SYNCED_PRICES.asOf}, infra/sync-prices.ts)`;
   return {
     id: model,
     input: row.input,
     output: row.output,
     cacheRead: row.cacheRead,
     cacheWrite: row.cacheWrite,
-    asOf,
+    asOf: row.from ?? SYNCED_PRICES.asOf,
     source: "list",
-    asIfMetered: false,
-    note:
-      row.from === undefined
-        ? `OpenRouter list price, synced ${SYNCED_PRICES.asOf} (infra/sync-prices.ts); metered against the operator's OpenRouter balance`
-        : `OpenRouter list price in force from ${row.from} (catalogue read ${SYNCED_PRICES.asOf}, infra/sync-prices.ts); metered against the operator's OpenRouter balance`,
+    asIfMetered,
+    note: `${when}; ${whose}`,
   };
+}
+
+/** The synced row for an OpenRouter id at a date, or null when the sync does not carry it. */
+export function syncedPrice(model: string, at: number | null = null): PriceRow | null {
+  return syncedRow(model, at, "openrouter");
+}
+
+/**
+ * The synced row for a codex model, looked up under the vendor prefix.
+ *
+ * A Codex catalogue slug never carries one — the CLI calls the model
+ * `gpt-6-astra` where OpenRouter calls it `openai/gpt-6-astra` — and nothing in
+ * the fleet maps the two, so a codex run read as unpriced and fell off the
+ * ladder's cost axis entirely. The prefix is the mapping: the catalogue carries
+ * OpenAI's own published list price under it, which is the only sourced figure
+ * available for a lane whose CLI reports no cost. Operator's decision,
+ * 2026-09-05, on the first codex run (`gpt-6-astra`, verified that day against
+ * OpenAI's published API list price: $10/$50/$1 per million).
+ *
+ * The bare id is still tried first by `priceFor`, so a codex model that one day
+ * *is* in the catalogue unprefixed keeps reading its own row and nothing that
+ * prices today changes.
+ */
+export function codexPrice(model: string, at: number | null = null): PriceRow | null {
+  if (model.includes("/")) return null;
+  return syncedRow(`openai/${model}`, at, "codex");
+}
+
+/** A run driven by the Codex CLI, whichever field of the pair carries it. */
+function isCodex(run: Pick<PriceableRun, "driver" | "harness">): boolean {
+  return run.harness === "codex" || run.driver === "codex";
 }
 
 /**
@@ -415,6 +475,10 @@ export function priceFor(run: PriceableRun, at: number | null = null): PriceRow 
   if (provider !== null) return provider;
   const open = syncedPrice(model, at);
   if (open !== null) return open;
+  if (isCodex(run)) {
+    const codex = codexPrice(model, at);
+    if (codex !== null) return codex;
+  }
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(model);
   if (!claude) return null;
   for (const p of CLAUDE_PRICES) {
@@ -479,6 +543,12 @@ function none(note: string): CostFigure {
 function unpricedNote(run: PriceableRun): string {
   const delisted = DELISTED_MODELS[run.model ?? ""];
   if (delisted !== undefined) return delisted;
+  // Before the Claude branch: a codex slug is a bare model id with no vendor in
+  // it, so the harness is the only thing that says which table can answer, and
+  // the answer is the sync's — under `openai/<slug>` rather than the bare id.
+  if (isCodex(run)) {
+    return "no synced price — run `bun infra/sync-prices.ts` (a codex model is priced from the catalogue's `openai/` id)";
+  }
   const claude = run.harness === "claude-code" || run.driver === "claude-code" || /claude/i.test(run.model ?? "");
   if (claude) return "no price on file for this model — tokens only, never a guess";
   if (isProviderBase(run.apiBase)) {

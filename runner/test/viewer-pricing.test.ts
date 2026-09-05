@@ -15,9 +15,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
-import { CLAUDE_PRICES, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, costOf, priceFor, providerPrice, runCost, syncedPrice, windowAt } from "../viewer/pricing";
+import { CLAUDE_PRICES, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, codexPrice, costOf, priceFor, providerPrice, runCost, syncedPrice, windowAt } from "../viewer/pricing";
 import { FREE_SUFFIXLESS_ALLOWLIST, isFreeSlug } from "../src/model-cost";
-import { mergeWindows, sameRates } from "../../infra/sync-prices";
+import { catalogueIds, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 
@@ -339,6 +339,74 @@ describe("the hand-held provider table (FOLLOW-UPS 112)", () => {
     expect(mergeWindows(smuggled, catalogue, "2026-09-09")["qwen-3.8-27b"]).toBeUndefined();
     // While the hand table still answers the same run after that sync.
     expect(priceFor(cerebras)?.input).toBe(0.99);
+  });
+});
+
+describe("a codex run, priced under the vendor prefix", () => {
+  /*
+   * The Codex CLI names the model the way its own catalogue does
+   * (`gpt-6-astra`); OpenRouter carries OpenAI's list price under
+   * `openai/gpt-6-astra`. Nothing mapped the two, so the first codex run had no
+   * cost at all and fell off the ladder's cost axis. Operator's decision,
+   * 2026-09-05: read the prefixed row, and say it is as-if-metered because the
+   * lane bills a ChatGPT subscription.
+   */
+  const astra: PriceableRun = { model: "gpt-6-astra", apiBase: null, platform: "codex", driver: null, harness: "codex" };
+
+  test("the synced openai/ row prices it, marked as-if-metered", () => {
+    const p = priceFor(astra)!;
+    expect(p.id).toBe("openai/gpt-6-astra");
+    expect(p.asIfMetered).toBe(true);
+    expect(p.input).toBeGreaterThan(0);
+    expect(p.note).toContain("as-if-metered");
+    // The same row read for an OpenRouter run is a real bill, not a comparison.
+    expect(syncedPrice("openai/gpt-6-astra")?.asIfMetered).toBe(false);
+    expect(syncedPrice("openai/gpt-6-astra")?.input).toBe(p.input);
+  });
+
+  test("the driver field alone is enough — the harness is not always the one that carries it", () => {
+    expect(priceFor({ ...astra, harness: "wrathbench", driver: "codex" })?.id).toBe("openai/gpt-6-astra");
+    // And no other lane gets the prefix: a bare slug on some other harness is
+    // still an unknown model, never OpenAI's price by coincidence of name.
+    expect(priceFor({ ...astra, harness: "wrathbench", driver: "openai" })).toBeNull();
+  });
+
+  test("the bare id wins where the catalogue has one, so nothing already priced moves", () => {
+    const id = Object.keys(SYNCED_PRICES.models).find((k) => !k.includes("/"));
+    // No suffixless id in the file today; the precedence is asserted on the
+    // function that decides it rather than on a row that may never exist.
+    expect(id).toBeUndefined();
+    const bare = priceFor({ ...astra, model: "z-ai/glm-5.3" });
+    expect(bare?.id).toBe("z-ai/glm-5.3");
+    expect(bare?.asIfMetered).toBe(false);
+    // A prefixed model id is never prefixed twice.
+    expect(codexPrice("openai/gpt-6-astra")).toBeNull();
+  });
+
+  test("a codex model the sync has not seen is told to run the sync, not read as a Claude model", () => {
+    const run = { ...astra, model: "gpt-7-unreleased" };
+    const c = runCost({ run, tokens: tokens({ promptTokens: 1_000_000 }), reportedUsd: null });
+    expect(c.expected.basis).toBe("none");
+    expect(c.expected.note).toContain("sync-prices");
+    expect(c.expected.note).toContain("openai/");
+    expect(c.expected.note).not.toContain("never a guess");
+  });
+
+  test("expected cost is computed and the run carries no actual, which is the whole point", () => {
+    const c = runCost({ run: astra, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 100_000, cacheReadTokens: 900_000 }), reportedUsd: null });
+    expect(c.expected.basis).toBe("list-price");
+    expect(c.expected.usd).toBeGreaterThan(0);
+    expect(c.expected.asIfMetered).toBe(true);
+    expect(c.expected.priceId).toBe("openai/gpt-6-astra");
+    expect(c.actual.basis).toBe("none");
+  });
+
+  test("the sync asks the catalogue for the prefixed id and not the bare one", () => {
+    expect(catalogueIds("gpt-6-astra", "codex")).toEqual(["openai/gpt-6-astra"]);
+    expect(catalogueIds("gpt-6-astra", "openai")).toEqual(["gpt-6-astra"]);
+    expect(catalogueIds("openai/gpt-6-astra", "codex")).toEqual(["openai/gpt-6-astra"]);
+    const roster = JSON.stringify({ roster: { a: { model: "gpt-6-astra", driver: "codex" }, b: { model: "z-ai/glm-5.3", driver: "openai" } } });
+    expect(rosterModels(roster).sort()).toEqual(["openai/gpt-6-astra", "z-ai/glm-5.3"]);
   });
 });
 
