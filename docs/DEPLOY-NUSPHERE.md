@@ -26,9 +26,15 @@ These are the operator's, made 2026-09-05.
 repository of its own. Nothing in it is reusable outside WrathBench — it is one
 realm, one supervisor, one viewer — and it has to version with the images it
 deploys, which are built from this tree. A Flux `HelmRelease` in the cluster
-repo consumes it from a pinned git tag of this repo with
-`chart.spec.chart: infra/chart/wrathbench` and `reconcileStrategy: Revision`, so
-a new source tag deploys even though `Chart.yaml`'s version has not moved.
+repo consumes it from a pinned **commit** of this repo (`ref.commit`, never a
+branch) with `chart.spec.chart: infra/chart/wrathbench` and
+`reconcileStrategy: Revision`, so a new source revision deploys even though
+`Chart.yaml`'s version has not moved. Not a git tag, deliberately: the harness
+version every run is stamped with is `git describe --tags`, so a deployment tag
+on this repo would become the nearest tag and relabel every run launched after
+it, and its series with it. The commit that is pinned is the commit the images
+were built from, so `image.tag` (`harness-0.5-N-g<sha>`) names the same
+revision — issue 7's "one source SHA".
 
 **Storage is `iscsi-nvme`, Retain, for both volumes.** RWO, expandable, and an
 honest fsync — which matters because every run's evidence is a SQLite file and
