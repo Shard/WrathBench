@@ -41,22 +41,14 @@ import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
+import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "../components/UnitFrame";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
-import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
-import {
-  type Speed,
-  keyBelongsToTarget,
-  nextSpeed,
-  playbackClock,
-  playbackKey,
-  prevSampleBefore,
-  progressOf,
-  tickMs,
-} from "../lib/playback";
+import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
+import { type Speed, keyBelongsToTarget, nextSpeed, playbackKey, prevSampleBefore, tickMs } from "../lib/playback";
 import {
   clearReplayState,
   createLeftReplay,
@@ -974,169 +966,27 @@ export default function MapPage() {
             </For>
           </Show>
         </div>
-        {/*
-          The one control strip, in both modes. The live link is an anchor
-          rather than a button with a handler: the swap is owned by the route
-          effect above, so the control needs no logic of its own, and an anchor
-          keeps what an anchor gives — a real history entry, middle-click, and
-          the focus ring.
-        */}
-        <div class="playbar" classList={{ replay: replayId() !== undefined }}>
-          <Show
-            when={replayId() !== undefined}
-            fallback={
-              <div class="playbar-row">
-                <span class="live-pill">
-                  <span class="live-dot" />
-                  live
-                </span>
-                <span class="playbar-text">
-                  {feed.error !== undefined ? (
-                    <span class="err">{displayError(feed.error)}</span>
-                  ) : (
-                    <>
-                      {count()} {count() === 1 ? "character" : "characters"}
-                      <Show when={seriesHidden() > 0}>
-                        {" "}
-                        · {seriesHidden()} hidden by series {liveSeries()}
-                      </Show>
-                    </>
-                  )}
-                </span>
-                <span class="grow" />
-                <Show when={replayHrefFor(track(), selected())}>
-                  {(href) => (
-                    <A class="playbar-btn" href={href()} title="replay this run's recorded track">
-                      replay {pipName(selected()!)} →
-                    </A>
-                  )}
-                </Show>
-              </div>
-            }
-          >
-            <div class="playbar-row">
-              <Show
-                when={track()}
-                fallback={
-                  <span class="playbar-text">
-                    {replayError() !== undefined ? (
-                      <span class="err">{replayError()}</span>
-                    ) : (
-                      <span class="dim">loading replay of {shortRunId(replayId()!)}…</span>
-                    )}
-                  </span>
-                }
-              >
-                {(t) => (
-                  <>
-                    <span class="swatch" style={{ background: colorOf(t().runId) }} />
-                    <span class="playbar-title" title={t().runId}>
-                      {t().character ?? shortRunId(t().runId)}
-                    </span>
-                    <span class="dim mono">{shortRunId(t().runId)}</span>
-                    <span class="dim">
-                      · {t().points.length} {t().points.length === 1 ? "position" : "positions"}
-                    </span>
-                    <span class="grow" />
-                    <Show when={t().points.length > 0}>
-                      <span class="dim mono playbar-stamp" title="the cursor's wall-clock time">
-                        {stamp(cursor())}
-                      </span>
-                    </Show>
-                  </>
-                )}
-              </Show>
-              <A class="playbar-btn live-link" href="/map" title="back to the live map">
-                <span class="live-dot" />
-                live
-              </A>
-            </div>
-            <Show when={track()}>
-              {(t) => (
-                <div class="playbar-row transport">
-                  <Show
-                    when={t().points.length > 0}
-                    fallback={<span class="dim">no recorded positions</span>}
-                  >
-                    <button
-                      class="tbtn"
-                      title="previous sample (←)"
-                      aria-label="previous sample"
-                      disabled={!scrubbable() || prevSampleBefore(t().points, cursor()) === undefined}
-                      onClick={stepBack}
-                    >
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M3 3h2v10H3zM13 3v10L6 8z" />
-                      </svg>
-                    </button>
-                    <button
-                      class="tbtn play"
-                      title={playing() ? "pause (space)" : "play (space)"}
-                      aria-label={playing() ? "pause" : "play"}
-                      disabled={!scrubbable()}
-                      onClick={togglePlay}
-                    >
-                      <Show
-                        when={playing()}
-                        fallback={
-                          <svg viewBox="0 0 16 16" aria-hidden="true">
-                            <path d="M4 2.5v11L13 8z" />
-                          </svg>
-                        }
-                      >
-                        <svg viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z" />
-                        </svg>
-                      </Show>
-                    </button>
-                    <button
-                      class="tbtn"
-                      title="next sample (→)"
-                      aria-label="next sample"
-                      disabled={!scrubbable() || nextSampleAfter(t().points, cursor()) === undefined}
-                      onClick={stepForward}
-                    >
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M11 3h2v10h-2zM3 3v10l7-5z" />
-                      </svg>
-                    </button>
-                    <span class="tclock mono">{playbackClock(span(), cursor()).elapsed}</span>
-                    {/*
-                      A track with one sample has nothing to scrub: min === max
-                      leaves a slider pinned at one end that answers no drag,
-                      which reads as broken rather than as "there is only one
-                      reading".
-                    */}
-                    <Show when={scrubbable()} fallback={<span class="dim grow center">one reading</span>}>
-                      <input
-                        type="range"
-                        class="scrubber"
-                        aria-label="replay position"
-                        min={span()?.from ?? 0}
-                        max={span()?.to ?? 0}
-                        value={cursor()}
-                        style={{ "--p": String(progressOf(span(), cursor())) }}
-                        onInput={(e) => {
-                          setPlaying(false);
-                          seek(Number(e.currentTarget.value));
-                        }}
-                      />
-                    </Show>
-                    <span class="tclock mono">{playbackClock(span(), cursor()).total}</span>
-                    <button
-                      class="tbtn speed mono"
-                      title="playback speed: samples per tick"
-                      disabled={!scrubbable()}
-                      onClick={() => setSpeed(nextSpeed(speed()))}
-                    >
-                      {speed()}×
-                    </button>
-                  </Show>
-                </div>
-              )}
-            </Show>
-          </Show>
-        </div>
+        <PlayBar
+          replayId={replayId()}
+          track={track()}
+          replayError={replayError()}
+          feedError={feed.error === undefined ? undefined : displayError(feed.error)}
+          cursor={cursor()}
+          playing={playing()}
+          speed={speed()}
+          count={count()}
+          seriesHidden={seriesHidden()}
+          liveSeries={liveSeries()}
+          selected={selected()}
+          onSeek={(ts) => {
+            setPlaying(false);
+            seek(ts);
+          }}
+          onTogglePlay={togglePlay}
+          onStepBack={stepBack}
+          onStepForward={stepForward}
+          onCycleSpeed={() => setSpeed(nextSpeed(speed()))}
+        />
       </div>
       <div class="side">
         <Show
