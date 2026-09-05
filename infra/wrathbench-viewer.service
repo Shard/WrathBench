@@ -1,0 +1,29 @@
+# The private LAN viewer (bun runner/viewer/serve.ts on :8090) as a systemd
+# USER unit, so it survives a reboot instead of dying with the nohup shell that
+# launched it. Install once from the repo root:
+#
+#   systemctl --user link "$PWD/infra/wrathbench-viewer.service"
+#   systemctl --user enable --now wrathbench-viewer
+#
+# `loginctl enable-linger $USER` makes user units start at boot without a
+# login. Restart after an /api change with `systemctl --user restart
+# wrathbench-viewer` (what `bun run viewer:restart` does once the unit exists);
+# static dashboard changes only need `bun run --cwd dashboard build`.
+#
+# WorkingDirectory is the repo checkout; edit it if the clone lives elsewhere.
+# Bun autoloads .env from there, which is where the module bearer secret is.
+[Unit]
+Description=WrathBench LAN viewer
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/git/wrathbench
+Environment=WRATHBENCH_MODULE_URL=http://192.168.192.3:8086
+Environment=WRATHBENCH_VIEWER_LAN=1
+Environment=WRATHBENCH_FLEET_CONFIG=infra/fleet.json
+ExecStart=%h/.bun/bin/bun runner/viewer/serve.ts
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
