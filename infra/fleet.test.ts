@@ -835,15 +835,22 @@ describe("the shipped fleet files", () => {
   // hot-reloads it, the operator prunes and adds roster models daily, and
   // `enabled` is a steering knob — none of that may turn the suite red. What
   // is durable: the shape, the pinned accounts, the probe's leash, and the
-  // roster policy (claude models only through the claude-code harness;
+  // roster policy (claude models only through the claude-code harness, the
+  // codex harness on OpenAI ids and a configured lane;
   // shared free pools carry free ids only unless an entry declares
   // `billing: "paid"` on purpose, under the paid policy).
   const rosterPolicy = (config: FleetConfig): void => {
     for (const e of Object.values(config.roster)) {
       const driver = e.driver ?? "openai";
-      expect(["openai", "claude-code"]).toContain(driver);
+      expect(["openai", "claude-code", "codex"]).toContain(driver);
       if (isClaudeFamily(e.model)) expect(driver).toBe("claude-code");
       if (driver === "claude-code") expect(isClaudeFamily(e.model)).toBe(true);
+      // The codex harness is the Codex CLI on a ChatGPT subscription: OpenAI's
+      // catalogue only, and a lane it can actually bill.
+      if (driver === "codex") {
+        expect(isClaudeFamily(e.model)).toBe(false);
+        expect(e.subscription === undefined || config.policy.subscriptions.includes(e.subscription)).toBe(true);
+      }
       if (driver === "openai" && isSharedFreePool(e.apiBase)) {
         expect(/(-free$|:free$)/.test(e.model) || isAllowlistedFree(e.model) || e.billing === "paid").toBe(true);
       }
@@ -921,13 +928,17 @@ describe("the shipped fleet files", () => {
       "claude-code": 3,
       "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1,
       "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3,
+      // One live Codex session per ChatGPT subscription (2026-09-05).
+      codex: 1,
       openrouter: 1,
       opencode: 1,
       // OpenCode Zen's pay-as-you-go zen/go surface, capped apart from the
       // free zen/v1 tier on the same host.
       "opencode-go": 1,
     });
-    expect(config.policy.subscriptions).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"]);
+    // CODEX_HOME is a lane too — and LAST, so a claude pick reaches it only
+    // once both claude lanes are full, which the caps above forbid.
+    expect(config.policy.subscriptions).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2", "CODEX_HOME"]);
 
     // A trial is one line and one line only: tier t0, and nothing else in the
     // file arranges it — no queue job, no account pin, no billing flip. This is
@@ -1118,8 +1129,12 @@ describe("the shipped fleet files", () => {
     expect(claudeStreams.length).toBeGreaterThan(0);
     expect(claudeStreams.length).toBeLessThanOrEqual(config.maxConcurrent["claude-code"]!);
     for (const lane of config.policy.subscriptions) {
+      // A lane the file gives no `claude-code:` cap is uncapped, as every key
+      // is — the codex lane has no claude sessions to limit.
+      const cap = config.maxConcurrent[`claude-code:${lane}`];
+      if (cap === undefined) continue;
       const on = byLaneAll.filter((l) => l === lane).length;
-      expect(on).toBeLessThanOrEqual(config.maxConcurrent[`claude-code:${lane}`]!);
+      expect(on).toBeLessThanOrEqual(cap);
     }
 
     /*
@@ -1129,11 +1144,20 @@ describe("the shipped fleet files", () => {
      * the rest go idle for want of an uncapped free model — that is the cap
      * working. A paid model lands on SHAKEOUT2 and the local one on RUNNER4;
      * neither ever takes a pool account.
+     *
+     * The subscription drivers are counted apart: a claude-code stream by its
+     * lane keys above, and a codex stream by `codex` (1 — one live Codex
+     * session per ChatGPT subscription), which is the same shape and not a
+     * free pool at all.
      */
-    const freeOnPool = [...plan.queue.assign, ...plan.policy].filter(
-      (p) => config.accounts.pool.includes(p.account) && config.roster[p.job.ref]!.driver !== "claude-code",
-    );
+    const isSub = (ref: string): boolean => {
+      const d = config.roster[ref]!.driver;
+      return d === "claude-code" || d === "codex";
+    };
+    const freeOnPool = [...plan.queue.assign, ...plan.policy].filter((p) => config.accounts.pool.includes(p.account) && !isSub(p.job.ref));
     expect(freeOnPool).toHaveLength(2);
+    const codexStreams = [...plan.pinned, ...plan.queue.assign, ...plan.policy].filter((p) => config.roster[p.job.ref]?.driver === "codex");
+    expect(codexStreams.length).toBeLessThanOrEqual(config.maxConcurrent["codex"]!);
     const onPool = plan.policy.filter((p) => config.accounts.pool.includes(p.account)).map((p) => p.job.ref);
     expect(onPool).not.toContain("qwen3-8-27b");
     for (const p of plan.policy) {
