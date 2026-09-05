@@ -45,12 +45,26 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # The OpenAI Codex CLI for the `codex` driver (runner/README.md, Drivers),
 # PINNED: the driver's flag set, feature names and event JSONL were verified
 # against exactly this version (2026-09-05), and an unknown `--disable` name is
-# a launch error. There is no npm in this image, so bun's global install does
-# the job; it lands in /home/bun/.bun/bin. Not yet rebuilt or verified in the
-# image as of the commit that added it — see docs/FOLLOW-UPS.md.
-RUN bun add -g @openai/codex@0.153.4 \
-    && /home/bun/.bun/bin/codex --version
-ENV PATH="/home/bun/.local/bin:/home/bun/.bun/bin:${PATH}"
+# a launch error.
+#
+# Why the platform package and not `@openai/codex`: the wrapper package ships
+# nothing but `bin/codex.js`, a shim with a `node` shebang that re-execs the
+# native binary out of an optional platform dependency — and there is no node in
+# this image. `bun add -g` does not help either: bun's global bin directory here
+# is /usr/local/bin, which uid 1000 cannot write, so the link fails EACCES
+# (verified 2026-09-05). `@openai/codex@<version>-linux-x64` IS the vendor
+# payload — a statically linked musl binary plus the codex-resources it locates
+# relative to itself — so installing that one package and symlinking its binary
+# onto PATH is the smallest thing that produces a working `codex`, with no node,
+# no npm and no shim in the path. The whole vendor tree is kept: the binary
+# resolves its own path, so the symlink is transparent.
+RUN mkdir -p /home/bun/codex-cli \
+    && cd /home/bun/codex-cli \
+    && bun add @openai/codex@0.153.4-linux-x64 \
+    && ln -s /home/bun/codex-cli/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex \
+             /home/bun/.local/bin/codex \
+    && /home/bun/.local/bin/codex --version
+ENV PATH="/home/bun/.local/bin:${PATH}"
 
 WORKDIR /wrathbench
 

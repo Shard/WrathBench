@@ -31,6 +31,25 @@ x-wb-db: &wb-db
   WRATHBENCH_DB_USER: root
   WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
 
+# The `codex` driver's subscription LANE (runner/README.md, Drivers): a
+# logged-in Codex home — a DIRECTORY holding auth.json and the persisted
+# threads, never a token. It is mounted, never copied: the CLI refreshes the
+# ChatGPT token in place and a second copy invalidates the first ("refresh
+# token was already used", seen on this host 2026-09-05).
+#
+# The host side is the operator's own `codex login` home, and it is the same
+# directory the host `--local` path uses. `docker compose -f infra/compose.yml`
+# takes infra/ as the project directory, so it reads infra/.env (absent) and
+# NOT the repository .env — the default below is what applies unless the
+# invoking shell exports CODEX_HOME.
+#
+# The container side is a fixed path, and the services set CODEX_HOME to it:
+# the repository .env carries the HOST path (so `--local` works) and Bun's
+# autoload does not overwrite a variable the environment already set, so the
+# compose value wins inside the container. uid 1000 on both sides, so the
+# refresh writes through.
+x-codex-lane: &codex-lane "${CODEX_HOME:-/home/mark/.codex}:/home/bun/.codex"
+
 x-ac-build: &ac-build
   context: ..
   dockerfile: infra/docker/server.Dockerfile
@@ -283,12 +302,15 @@ services:
     # child's env, the same protection the `fleet` service relies on.
     environment:
       <<: *wb-db
+      # The codex lane inside the container (see x-codex-lane above).
+      CODEX_HOME: /home/bun/.codex
     volumes:
       - ..:/wrathbench
       # The repo mount above already carries data/wiki and data/runs. These are
       # named explicitly so the contract survives the repo mount going away.
       - ../data/wiki:/wrathbench/data/wiki
       - ../data/runs:/wrathbench/data/runs
+      - *codex-lane
     networks: [wrathbench]
     restart: unless-stopped
     depends_on:
@@ -337,10 +359,15 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /wrathbench
+      # The codex lane inside the container (see x-codex-lane above). The
+      # supervisor's own preflight only checks the variable is set; the mount
+      # below is what makes it name a logged-in home.
+      CODEX_HOME: /home/bun/.codex
     volumes:
       - ..:/wrathbench
       - ../data/wiki:/wrathbench/data/wiki
       - ../data/runs:/wrathbench/data/runs
+      - *codex-lane
     networks: [wrathbench]
     # Reaps the orphaned grandchildren an episode can leave behind; bun as pid 1
     # would not.
