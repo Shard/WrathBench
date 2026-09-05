@@ -77,6 +77,12 @@ spec:
             - name: fleet-config
               mountPath: /wrathbench/config
               readOnly: true
+            # data/logs is deliberately NOT mounted here. The supervisor reads
+            # it only as a FALLBACK server identity, for a /health body that
+            # carries no build or startedAtMs; the chart guarantees both (the
+            # image is stamped WRATHBENCH_BUILD from the same tag), so the
+            # fallback is dead code on this deployment — and with Server.log on
+            # the console it would be a worse marker than the one it replaces.
             - name: tmp
               mountPath: /tmp
       volumes:
