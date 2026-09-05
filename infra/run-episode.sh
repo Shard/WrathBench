@@ -2,7 +2,7 @@
 #
 # Operator entry point for one episode.
 #
-#   ./infra/run-episode.sh --model <id> [--driver openai|claude-code|stub]
+#   ./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex|stub]
 #   ./infra/run-episode.sh --resume <run-id>
 #   ./infra/run-episode.sh --model <id> --local           # outside the container
 #   ./infra/run-episode.sh --model <id> --k8s             # into the runner pod
@@ -48,8 +48,9 @@ MODEL=""
 LOCAL=0
 # The subscription lane, by env var NAME. The runner defaults to the same one;
 # it is read here only so the preflight below checks the var this run will
-# actually use, and names it when it is missing.
-TOKEN_ENV="CLAUDE_CODE_OAUTH_TOKEN"
+# actually use, and names it when it is missing. Empty means "the driver's
+# default": CLAUDE_CODE_OAUTH_TOKEN for claude-code, CODEX_HOME for codex.
+TOKEN_ENV=""
 PASSTHROUGH=()
 
 while [ $# -gt 0 ]; do
@@ -118,7 +119,7 @@ load_env() {
   local line key value
   while IFS= read -r line || [ -n "${line}" ]; do
     case "${line}" in
-      WRATHBENCH_*=* | OPENROUTER_*=* | OPENCODE_*=* | CLAUDE_*=* | OPENAI_*=*) ;;
+      WRATHBENCH_*=* | OPENROUTER_*=* | OPENCODE_*=* | CLAUDE_*=* | OPENAI_*=* | CODEX_*=*) ;;
       *) continue ;;
     esac
     key="${line%%=*}"
@@ -143,6 +144,7 @@ export WRATHBENCH_HARNESS_VERSION
 
 # `claude-subscription` is the old spelling of `claude-code`; the runner reads both.
 if [ "${DRIVER}" = "claude-code" ] || [ "${DRIVER}" = "claude-subscription" ]; then
+  [ -n "${TOKEN_ENV}" ] || TOKEN_ENV="CLAUDE_CODE_OAUTH_TOKEN"
   echo "run-episode.sh: driver claude-code — the Claude Code CLI is the harness for this run; it is tagged, not excluded (see docs/METHODOLOGY.md)." >&2
   token_help() {
     cat >&2 <<EOF
@@ -201,6 +203,74 @@ EOF
       '[ -n "$(eval echo "\${${WRATHBENCH_TOKEN_ENV}:-}")" ] || grep -q "^${WRATHBENCH_TOKEN_ENV}=." /wrathbench/.env' \
       >/dev/null 2>&1; then
       token_help
+      exit 2
+    fi
+  fi
+fi
+
+# The codex driver: the OpenAI Codex CLI on a ChatGPT subscription. Its lane
+# variable names a DIRECTORY (a logged-in Codex home holding auth.json), not a
+# token, and it is never copied per run — one directory per lane, shared by
+# that lane's runs, one live session per lane (runner/README.md, Drivers).
+if [ "${DRIVER}" = "codex" ]; then
+  [ -n "${TOKEN_ENV}" ] || TOKEN_ENV="CODEX_HOME"
+  echo "run-episode.sh: driver codex — the Codex CLI is the harness for this run; it is tagged, not excluded (see docs/METHODOLOGY.md)." >&2
+  codex_help() {
+    cat >&2 <<EOF
+run-episode.sh: ${TOKEN_ENV} does not name a logged-in Codex home for the runner.
+  1. run:  codex login          (a ChatGPT subscription; the login lands in ~/.codex/auth.json)
+  2. put the directory in .env as ${TOKEN_ENV}=/home/<you>/.codex (.env is gitignored)
+     — for --local today that is CODEX_HOME=/home/mark/.codex; inside the
+     container Bun loads /wrathbench/.env, which is how the path reaches the
+     runner at all, and the directory must be visible there too.
+  (${TOKEN_ENV} is this run's subscription LANE. Never copy auth.json per run:
+   its refresh token is spent by whichever process refreshes first, and the
+   other side then fails with "refresh token was already used".)
+EOF
+  }
+  if [ "${LOCAL}" -eq 1 ]; then
+    command -v codex >/dev/null 2>&1 || {
+      echo "run-episode.sh: the codex CLI is not on PATH; install @openai/codex@0.153.4 or drop --local" >&2
+      exit 2
+    }
+    if [ -z "${!TOKEN_ENV:-}" ] || [ ! -f "${!TOKEN_ENV}/auth.json" ]; then
+      codex_help
+      exit 2
+    fi
+  elif [ "${K8S}" -eq 1 ]; then
+    if ! kubectl -n "${K8S_NAMESPACE}" exec -i "deployment/${K8S_RELEASE}-runner" -- sh -c 'command -v codex' >/dev/null 2>&1; then
+      echo "run-episode.sh: the runner pod has no \`codex\` CLI — check the image tag" >&2
+      exit 2
+    fi
+    # The lane must be visible *there*: a directory the pod can read, named by
+    # env from the Secret. A logged-in home has to be mounted into the pod;
+    # the path alone proves nothing, so the check is for auth.json in it.
+    if ! kubectl -n "${K8S_NAMESPACE}" exec -i "deployment/${K8S_RELEASE}-runner" \
+      -- sh -c "[ -f \"\${${TOKEN_ENV}:-}/auth.json\" ]" >/dev/null 2>&1; then
+      cat >&2 <<EOF
+run-episode.sh: ${TOKEN_ENV} does not name a logged-in Codex home in the runner pod.
+  It comes from the ${K8S_NAMESPACE}/wrathbench-env Secret (the .env names) and
+  must point at a directory mounted into the pod that holds auth.json.
+EOF
+      exit 2
+    fi
+  else
+    if ! docker compose -f "${COMPOSE_FILE}" exec -T "${SERVICE}" sh -c 'command -v codex' >/dev/null 2>&1; then
+      cat >&2 <<'EOF'
+run-episode.sh: the runner container has no `codex` CLI.
+  either rebuild the runner image (infra/docker/runner.Dockerfile installs
+  @openai/codex@0.153.4 since 2026-09-05; the running container predates it),
+  or run on the host with --local and point the runner at a reachable module:
+      WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --model gpt-6-astra \
+        --driver codex --local
+  (the module port is not published to the host by default)
+EOF
+      exit 2
+    fi
+    if ! docker compose -f "${COMPOSE_FILE}" exec -T -e "WRATHBENCH_TOKEN_ENV=${TOKEN_ENV}" "${SERVICE}" sh -c \
+      '[ -f "$(eval echo "\${${WRATHBENCH_TOKEN_ENV}:-}")/auth.json" ]' \
+      >/dev/null 2>&1; then
+      codex_help
       exit 2
     fi
   fi
