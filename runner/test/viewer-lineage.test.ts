@@ -4,11 +4,11 @@
  * The cases here are the ones production makes — a predecessor outside the set,
  * a fork, a malformed cycle — because those are exactly the ones a page must
  * not hang or lie about. The ladder's own `streamRows` tests
- * (`ladder.test.ts`) cover the row it builds on top of this.
+ * (`dashboard/test/ladder.test.ts`) cover the row it builds on top of this.
  */
 
 import { describe, expect, test } from "bun:test";
-import { chainsOf, hasLineage, lineageIndex, type LineageRun } from "../src/lib/lineage";
+import { chainsOf, hasLineage, lineageIndex, type LineageRun } from "../viewer/lineage";
 
 function r(runId: string, continuedFrom: string | null = null, startedAt: number | null = null): LineageRun {
   return { runId, continuedFrom, startedAt };

@@ -4,9 +4,16 @@
  * A durable freeplay stream is one character across attempts (docs/OPERATIONS.md,
  * "Freeplay streams are durable"), and `continuedFrom` is the only link between
  * them. Two pages read that link — the ladder collapses a chain to one row
- * (`lib/ladder.ts`, `streamRows`), the runs table and the run page show a run's
- * place in its chain — so the walk lives here once rather than twice. A second
- * spelling of it is a way for the two pages to disagree about what a stream is.
+ * (`dashboard/src/lib/ladder.ts`, `streamRows`), the runs table and the run page
+ * show a run's place in its chain — so the walk lives here once rather than
+ * twice. A second spelling of it is a way for the two pages to disagree about
+ * what a stream is.
+ *
+ * It lives in the viewer rather than the dashboard because the server needs it
+ * too: `/api/run/<id>` aggregates a whole stream (`stream.ts`, `StreamView`),
+ * and the aggregation and the page's attempt strip must count the same
+ * attempts. The dashboard reaches it over the `@viewer/*` alias, which is why
+ * this module imports nothing — the same rule `worldmap.ts` keeps.
  *
  * The walk is written for production, not for the happy path:
  *
