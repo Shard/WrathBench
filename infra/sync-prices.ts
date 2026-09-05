@@ -17,6 +17,13 @@
  * invented — an unpriced model stays unpriced (`pricing.ts` says so on the run
  * page).
  *
+ * One id is not asked for as written: a `codex` entry or run names the model
+ * the way the Codex CLI does (`gpt-6-astra`), and the catalogue carries it
+ * under the vendor prefix (`openai/gpt-6-astra`). `catalogueIds` asks for the
+ * prefixed id and *not* the bare one — the catalogue has no bare row, so
+ * wanting it would report a miss every sync — and `codexPrice` in
+ * `runner/viewer/pricing.ts` reads it back the same way.
+ *
  * Units: the catalogue quotes dollars per token as strings; the file holds
  * dollars per million, rounded to six significant figures so a re-sync that
  * changed nothing produces no diff. OpenRouter has no cache-*write* tier for
@@ -162,17 +169,31 @@ export function priceOf(entry: CatalogueRow): SyncedPrice | null {
   };
 }
 
-/** Model ids named by the fleet roster. */
+/**
+ * The catalogue ids to ask for, given how a roster entry or a run names its
+ * model and which driver ran it.
+ *
+ * One in, one out, except that a `codex` model is asked for under the vendor
+ * prefix its own slug omits. Only the prefixed id goes into the wanted set: the
+ * catalogue has no bare `gpt-6-astra` row, so asking for both would report a
+ * miss on every sync for a model that is in fact priced.
+ */
+export function catalogueIds(model: string, driver: unknown): string[] {
+  if (driver !== "codex" || model.includes("/")) return [model];
+  return [`openai/${model}`];
+}
+
+/** Model ids named by the fleet roster, as the catalogue spells them. */
 export function rosterModels(fleetJson: string): string[] {
-  const parsed = JSON.parse(fleetJson) as { roster?: Record<string, { model?: unknown }> };
+  const parsed = JSON.parse(fleetJson) as { roster?: Record<string, { model?: unknown; driver?: unknown }> };
   const out: string[] = [];
   for (const entry of Object.values(parsed.roster ?? {})) {
-    if (typeof entry.model === "string" && entry.model.length > 0) out.push(entry.model);
+    if (typeof entry.model === "string" && entry.model.length > 0) out.push(...catalogueIds(entry.model, entry.driver));
   }
   return out;
 }
 
-/** Model ids any run in the corpus was launched on. */
+/** Model ids any run in the corpus was launched on, as the catalogue spells them. */
 async function corpusModels(runsDir: string): Promise<string[]> {
   const out: string[] = [];
   let names: string[];
@@ -185,9 +206,9 @@ async function corpusModels(runsDir: string): Promise<string[]> {
     const meta = join(runsDir, name, "meta.json");
     try {
       if (!statSync(meta).isFile()) continue;
-      const m = (await Bun.file(meta).json()) as { config?: { model?: unknown } };
+      const m = (await Bun.file(meta).json()) as { config?: { model?: unknown; driver?: unknown } };
       const model = m.config?.model;
-      if (typeof model === "string" && model.length > 0) out.push(model);
+      if (typeof model === "string" && model.length > 0) out.push(...catalogueIds(model, m.config?.driver));
     } catch {
       /* a run without a readable meta.json prices nothing; it is not a failure */
     }
