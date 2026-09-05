@@ -45,7 +45,7 @@ spec:
               value: "1"
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
-          envFrom: {{- include "wrathbench.secretEnvFrom" . | nindent 12 }}
+            {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
           resources: {{ toYaml .Values.runner.resources | nindent 12 }}
           volumeMounts:
             - name: data

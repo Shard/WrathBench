@@ -65,7 +65,7 @@ spec:
             # reach these: sandboxChildEnv drops every WRATHBENCH_DB_* var
             # before spawning the snippet child.
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
-          envFrom: {{- include "wrathbench.secretEnvFrom" . | nindent 12 }}
+            {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
           resources: {{ toYaml .Values.fleet.resources | nindent 12 }}
           volumeMounts:
             - name: data
