@@ -1,5 +1,5 @@
 {{/*
-Two volumes, both RWO on storage.className (iscsi-nvme: Retain, expandable,
+Three volumes, all RWO on storage.className (iscsi-nvme: Retain, expandable,
 honest fsync — operator decision 2026-09-05).
 
 `data` is the whole of `data/` in today's layout: client/ (the AzerothCore
@@ -9,6 +9,11 @@ logs/ and publish/. Five pods mount it at once, which RWO permits only because
 every one of them is nodeSelector'd to the same node.
 
 `db` is the MySQL datadir and nothing else.
+
+`codex-home` is the `codex` driver's subscription lane: a logged-in Codex home
+directory that the CLI writes its token refresh back into. It is a volume
+rather than a Secret key because it is a directory with mutable state, and it
+is mounted rather than copied because a second live copy invalidates the first.
 
 Retain means deleting the release does not delete a run. That is the point.
 */}}
@@ -43,3 +48,21 @@ spec:
   resources:
     requests:
       storage: {{ .Values.storage.db.size }}
+{{- if .Values.codex.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-codex-home
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: codex-home
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.storage.className }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.codexHome.size }}
+{{- end }}
