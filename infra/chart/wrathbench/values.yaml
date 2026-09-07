@@ -30,6 +30,11 @@ storage:
     size: 60Gi
   db:
     size: 20Gi
+  # The `codex` driver's subscription lane: a logged-in Codex HOME directory
+  # (auth.json plus the persisted threads), not a token — which is why it is a
+  # volume and not a Secret key. Tiny; the size is a floor, not a budget.
+  codexHome:
+    size: 1Gi
 
 # Existing Secret, created by the cluster repo. Keys are the `.env` names.
 # The chart never templates a secret value and never puts one on a command
@@ -155,6 +160,16 @@ fleet:
     limits:
       # It spawns every run-roster and every snippet sandbox as children.
       memory: 6Gi
+
+# The `codex` driver's ChatGPT-subscription lane (runner/README.md, Drivers).
+# The CLI refreshes the token in place, so the lane is MOUNTED, never copied: a
+# second live copy invalidates the first ("refresh token was already used").
+# The PVC is seeded once from the operator's logged-in ~/.codex and is the
+# canonical lane thereafter — docs/[removed], "The codex lane".
+# Turning this off drops the PVC, both mounts and CODEX_HOME; the codex roster
+# entries in infra/fleet.json then fail their own preflight.
+codex:
+  enabled: true
 
 # The `sleep infinity` dev pod. infra/run-episode.sh --k8s and the preflight
 # smokes exec into it; it is the compose `runner` service, unchanged.
