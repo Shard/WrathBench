@@ -36,12 +36,13 @@ it, and its series with it. The commit that is pinned is the commit the images
 were built from, so `image.tag` (`harness-0.5-N-g<sha>`) names the same
 revision — issue 7's "one source SHA".
 
-**Storage is `iscsi-nvme`, Retain, for both volumes.** RWO, expandable, and an
+**Storage is `iscsi-nvme`, Retain, for every volume.** RWO, expandable, and an
 honest fsync — which matters because every run's evidence is a SQLite file and
 a JSONL stream. Retain means deleting the release does not delete a run; the
 PVCs also carry `helm.sh/resource-policy: keep`. One PVC (`wrathbench-data`,
 60Gi) holds `client/ runs/ wiki/ minimap/ etc/ logs/ publish/` in exactly
-today's layout; a second (`wrathbench-db`, 20Gi) is the MySQL datadir.
+today's layout; a second (`wrathbench-db`, 20Gi) is the MySQL datadir; a third
+(`wrathbench-codex-home`, 1Gi) is the codex lane below.
 
 That one RWO volume is mounted by five pods at once. That is sound only because
 every pod carries `nodeSelector: kubernetes.io/hostname: chungusjr` — they are
@@ -197,6 +198,34 @@ Flux's kustomize-controller builds with. To check it by hand:
 kustomize build --load-restrictor LoadRestrictionsNone infra/k8s
 ```
 
+## The codex lane
+
+The `codex` driver's subscription lane is not a key. It is a logged-in Codex
+home *directory* — `auth.json` plus the persisted threads — and the CLI writes
+its ChatGPT token refresh back into it as it runs. That is why nothing
+codex-related is in the Secret, and why `codex.enabled` gives the fleet and
+runner pods a PVC (`wrathbench-codex-home`) mounted at `/home/bun/.codex` — a
+directory, not a `subPath` file — with `CODEX_HOME` pointing at it.
+
+**It is seeded once and never copied again.** A second live copy of a logged-in
+home does not give you two lanes: the first refresh from either side invalidates
+the other and the next call fails with "refresh token was already used" (seen on
+this host 2026-09-05). So the seed in the cutover below runs exactly once, after
+the compose fleet is stopped so nothing is refreshing concurrently, and from
+that point the cluster copy is the canonical lane. Do not point host fleet work
+at `~/.codex` afterwards — a `--local` episode on the workstation is a second
+live copy and will log the cluster out.
+
+If the lane ever does lapse, re-authenticate it in place rather than re-seeding:
+
+```
+kubectl -n wrathbench exec -it deploy/wrathbench-runner -- codex login --device-auth
+```
+
+The device flow prints a code to enter in a browser anywhere, so it needs no
+loopback redirect and no display in the pod. The fleet pod shares the volume, so
+it picks up the refreshed home with no restart.
+
 ## The cutover
 
 Runs pause and resume; nothing is lost. Do it in a window you are watching.
@@ -220,7 +249,7 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
 
 3. **Install the chart** (Flux reconciles the HelmRelease). The hook Jobs run
    `dbimport` and then `bootstrap`; both are idempotent, so the restore in step
-   5 can happen before or after them. Let the db Deployment become ready.
+   6 can happen before or after them. Let the db Deployment become ready.
 
 4. **Seed the data volume.** Start a throwaway pod that mounts
    `wrathbench-data` as uid 1000, then rsync into it. `data/client` is the big
@@ -244,14 +273,33 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
    (`rsync` is nicer if you install it into the pod; `tar` over `exec` needs
    nothing and is idempotent enough for a one-shot seed. Re-running it is safe.)
 
-5. **Restore the dump** into the cluster db.
+5. **Seed the codex lane, once.** The compose fleet is already stopped (step
+   1), which is the precondition: two live copies of a logged-in Codex home
+   invalidate each other. Same throwaway pod, this time on the lane volume.
+
+   ```
+   kubectl -n wrathbench run wb-seed --restart=Never --image=oven/bun:1.4.0 \
+     --overrides='{"spec":{"nodeSelector":{"kubernetes.io/hostname":"chungusjr"},
+       "securityContext":{"runAsUser":1000,"runAsGroup":1000,"fsGroup":1000},
+       "containers":[{"name":"seed","image":"oven/bun:1.4.0","command":["sleep","infinity"],
+         "volumeMounts":[{"name":"codex","mountPath":"/codex"}]}],
+       "volumes":[{"name":"codex","persistentVolumeClaim":{"claimName":"wrathbench-codex-home"}}]}}'
+
+   tar -C ~/.codex -cf - . | kubectl -n wrathbench exec -i wb-seed -- tar -C /codex -xf -
+   kubectl -n wrathbench delete pod wb-seed
+   ```
+
+   Unlike the data seed this is not re-runnable: see "The codex lane" above for
+   why there is no second copy, and how to re-authenticate it in place instead.
+
+6. **Restore the dump** into the cluster db.
 
    ```
    kubectl -n wrathbench exec -i deploy/wrathbench-db -- \
      mysql -u root -p"$WRATHBENCH_DB_ROOT_PASSWORD" < /tmp/wrathbench.sql
    ```
 
-6. **Preflight, then let the fleet run.**
+7. **Preflight, then let the fleet run.**
 
    ```
    ./infra/k8s-deploy.sh --dry-run     # read the resolved values first
@@ -264,7 +312,7 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
    `preflight.deploySmokes` through `kubectl exec deploy/wrathbench-runner`, and
    scales the fleet back. Paused runs resume before the pool refills.
 
-7. **Confirm** on the viewer at `https://wrathbench.local` that the runs you
+8. **Confirm** on the viewer at `https://wrathbench.local` that the runs you
    paused in step 1 are live again on the new server build.
 
 Leave the compose stack down but installed until you are satisfied.
@@ -299,7 +347,16 @@ The compose stack is not modified by any of this and can be brought back:
 1. `kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=0` and wait
    for the drain (runs pause).
 2. `mysqldump` out of `deploy/wrathbench-db`, restore into the compose `db`.
-3. `tar`/`rsync` `runs/` and `publish/` back out of the data PVC into `data/`.
+3. `tar`/`rsync` `runs/` and `publish/` back out of the data PVC into `data/`,
+   and the codex lane out of `wrathbench-codex-home` into `~/.codex`. The
+   one-live-copy rule runs in this direction too: the host copy went stale the
+   moment the cluster first refreshed it, and compose's `x-codex-lane` mounts
+   `~/.codex` unconditionally while the supervisor's preflight only checks that
+   `CODEX_HOME` is set — so without this the fleet comes up green and every
+   codex episode fails at its first call. The fleet must already be scaled to 0
+   (step 1). Re-authenticating on the host with `codex login --device-auth` is
+   the alternative, and it invalidates the cluster copy, which is what you want
+   when the rollback is for good.
 4. `docker compose -f infra/compose.yml up -d` then
    `docker compose -f infra/compose.yml up -d --no-deps fleet`.
 

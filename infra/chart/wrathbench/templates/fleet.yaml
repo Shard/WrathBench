@@ -66,6 +66,13 @@ spec:
             # before spawning the snippet child.
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
             {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
+            {{- if .Values.codex.enabled }}
+            # The `codex` driver's subscription lane, mounted below. The CLI
+            # writes its token refresh back into this directory, so it is one
+            # live copy on a PVC and never a copy of the operator's ~/.codex.
+            - name: CODEX_HOME
+              value: /home/bun/.codex
+            {{- end }}
           resources: {{ toYaml .Values.fleet.resources | nindent 12 }}
           volumeMounts:
             - name: data
@@ -77,6 +84,12 @@ spec:
             - name: fleet-config
               mountPath: /wrathbench/config
               readOnly: true
+            {{- if .Values.codex.enabled }}
+            # NOT a subPath: the CLI rewrites auth.json in place and expects a
+            # real directory it owns (uid 1000, via the pod's fsGroup).
+            - name: codex-home
+              mountPath: /home/bun/.codex
+            {{- end }}
             # data/logs is deliberately NOT mounted here. The supervisor reads
             # it only as a FALLBACK server identity, for a /health body that
             # carries no build or startedAtMs; the chart guarantees both (the
@@ -92,6 +105,11 @@ spec:
         - name: fleet-config
           configMap:
             name: {{ .Values.fleetConfigMapName }}
+        {{- if .Values.codex.enabled }}
+        - name: codex-home
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-codex-home
+        {{- end }}
         - name: tmp
           emptyDir: {}
 {{- end }}
