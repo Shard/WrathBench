@@ -106,27 +106,6 @@ worklogs/2026-08-29).
 
 ## Deployment
 
-116. **The NuSphere cutover has not been performed; the staged bring-up is
-    validated** (2026-09-05). The release is live on the cluster (nusphere
-    PRs 149, 151, 152; HelmRelease `wrathbench`, pinned to commit `82b62d3`,
-    images `harness-0.5-488-g82b62d3`) with `fleet.enabled: false` and
-    `publisher.enabled: false`. Seeded and checked against the desktop: the
-    data tree (client, wiki, minimap, etc, publish, runs — 11 GB, sizes
-    identical), the three AzerothCore databases from a `--single-transaction`
-    dump (15 characters, identical names; 442 tables), the world and auth
-    servers Ready, the viewer at `https://wrathbench.local` reporting the
-    same 219 runs and series counts as the desktop, and both preflight gate
-    smokes passing through the runner pod. MySQL as uid 1000 on `iscsi-nvme`
-    works. Two HelmRelease facts learned on the first install and now in the
-    manifest: Flux names the release `<targetNamespace>-<name>` unless
-    `releaseName` is set, and `disableWait` + a 30 m deadline are required
-    because db-import is a post-install hook the worldserver needs. The
-    seeding pod `wb-seed` is left running for the delta copy.
-    **The cutover itself remains** (`docs/DEPLOY-NUSPHERE.md`): stop the
-    compose fleet, delta-copy `data/runs`, fresh dump and restore, flip the
-    two flags, retire the desktop viewer unit, and move the Cloudflare
-    publishing last. A watched window Mark schedules.
-
 117. **CI for the release contract** (2026-09-05; GitHub issue 7's addendum).
     None of it is built: PR checks on the pinned Bun with a frozen install, the
     full suite, typecheck, generated-API drift and the dashboard build; a tag
@@ -135,6 +114,17 @@ worklogs/2026-08-29).
     The chart's own guard — `image.tag` empty or `latest` refuses to render — is
     the only piece enforced today, and it fires at render time rather than at
     review time. Trigger: the first deploy that is not driven by hand.
+
+120. **Watch `iscsi-nvme` under a live fleet** (2026-09-08, out of the cutover).
+    The data volume is `iscsi-nvme` because every run's evidence is a SQLite
+    file and that class gives an honest fsync (`docs/DEPLOY-NUSPHERE.md`,
+    "Decisions behind the shape"). Nothing before the cutover exercised it with
+    the supervisor writing `run.sqlite` for two concurrent episodes over iSCSI;
+    the staged bring-up only read. If it disappoints, the data volume moves to
+    `local-path` — the node is pinned to `chungusjr` anyway, so the only thing
+    given up is the honest fsync, which is the whole reason it is not there
+    already. Trigger: the fleet's episode logs show module timeouts or
+    `run.sqlite` write stalls.
 
 ## Docs and release
 

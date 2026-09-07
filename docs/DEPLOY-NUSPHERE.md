@@ -241,11 +241,17 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
 2. **Dump the three databases** from the compose db.
 
    ```
-   docker compose -f infra/compose.yml exec -T db \
-     mysqldump -u root -p"$WRATHBENCH_DB_ROOT_PASSWORD" \
-     --single-transaction --routines --events \
-     --databases acore_auth acore_characters acore_world > /tmp/wrathbench.sql
+   docker compose -f infra/compose.yml exec -T db sh -c \
+     'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" \
+      --single-transaction --routines --events \
+      --databases acore_auth acore_characters acore_world' > /tmp/wrathbench.sql
    ```
+
+   The password comes from the container's own environment, not the shell's:
+   the repository `.env` does not set `WRATHBENCH_DB_ROOT_PASSWORD` (compose
+   defaults it), so a host-side expansion sends an empty password and mysqldump
+   fails with access denied. The single quotes are load-bearing for the same
+   reason, and the redirect stays outside them.
 
 3. **Install the chart** (Flux reconciles the HelmRelease). The hook Jobs run
    `dbimport` and then `bootstrap`; both are idempotent, so the restore in step
@@ -267,11 +273,25 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
      kubectl -n wrathbench exec wb-seed -- mkdir -p "/data/$d"
      tar -C data -cf - "$d" | kubectl -n wrathbench exec -i wb-seed -- tar -C /data -xf -
    done
-   kubectl -n wrathbench delete pod wb-seed
    ```
 
    (`rsync` is nicer if you install it into the pod; `tar` over `exec` needs
    nothing and is idempotent enough for a one-shot seed. Re-running it is safe.)
+
+   Leave `wb-seed` running: the seed copies everything, and if the seed and the
+   cutover are separate windows — which is the point of staging the bring-up —
+   the runs written in between still have to follow. Delta-copy them with the
+   same pod, naming the seed's own timestamp:
+
+   ```
+   cd data && find runs publish -newermt '<seed time>' -type f -print0 \
+     | tar --null -T - -cf - \
+     | kubectl -n wrathbench exec -i wb-seed -- tar -C /data -xf -
+   ```
+
+   Then check the two sides agree before you trust it: the run-directory count,
+   and the `md5sum` of `run.sqlite` for each live stream head, then delete the
+   pod — step 5 starts its own, on the lane volume.
 
 5. **Seed the codex lane, once.** The compose fleet is already stopped (step
    1), which is the precondition: two live copies of a logged-in Codex home
@@ -289,6 +309,13 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
    kubectl -n wrathbench delete pod wb-seed
    ```
 
+   The extract ends with exit status 2 and `Cannot change mode ... Operation
+   not permitted` for `.` — the mount root's mode is the volume's, not the
+   tarball's. The files land; that one line is expected and nothing else in the
+   output should be. Confirm the lane rather than the exit code:
+   `kubectl -n wrathbench exec deploy/wrathbench-runner -- codex login status`
+   reports "Logged in using ChatGPT".
+
    Unlike the data seed this is not re-runnable: see "The codex lane" above for
    why there is no second copy, and how to re-authenticate it in place instead.
 
@@ -296,10 +323,14 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
 
    ```
    kubectl -n wrathbench exec -i deploy/wrathbench-db -- \
-     mysql -u root -p"$WRATHBENCH_DB_ROOT_PASSWORD" < /tmp/wrathbench.sql
+     sh -c 'mysql -u root -p"$MYSQL_ROOT_PASSWORD"' < /tmp/wrathbench.sql
    ```
 
-7. **Preflight, then let the fleet run.**
+   Same reason as step 2, and scale `worldserver` and `authserver` to 0 first so
+   nothing holds a connection while the databases are replaced. Count characters
+   and accounts against the source before scaling them back.
+
+7. **Preflight, with the fleet still off.**
 
    ```
    ./infra/k8s-deploy.sh --dry-run     # read the resolved values first
@@ -310,10 +341,25 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
    runner pod), waits for the worldserver rollout and for the module to answer
    `/health` ready **with the bearer**, runs `preflight.smokes` and then
    `preflight.deploySmokes` through `kubectl exec deploy/wrathbench-runner`, and
-   scales the fleet back. Paused runs resume before the pool refills.
+   scales the fleet back.
 
-8. **Confirm** on the viewer at `https://wrathbench.local` that the runs you
-   paused in step 1 are live again on the new server build.
+   Run it here, before the flags, so the gate smokes prove the restored world on
+   the new build without an episode racing them. That ordering has one cosmetic
+   cost: with `fleet.enabled: false` there is no fleet Deployment to scale back,
+   so the script's EXIT trap reports **"phase failed: the fleet did not scale
+   back up"** and writes `phase=failed` into `server-state.json` even though
+   every smoke passed. Read the smoke results, not the trap; the supervisor
+   clears the flag on its next start ("phase failed -> running"). The script is
+   correct for the day-2 case and is deliberately left alone.
+
+8. **Flip the flags.** In the cluster repo, set `fleet.enabled` and
+   `publisher.enabled` to `true` and let Flux reconcile. The supervisor gates
+   itself on start — the same smokes again — and then resumes the runs that
+   paused in step 1.
+
+9. **Confirm** on the viewer at `https://wrathbench.local` that the runs you
+   paused in step 1 are live again on the new server build, and that
+   `/api/info` reports the image tag you pinned.
 
 Leave the compose stack down but installed until you are satisfied.
 
@@ -391,6 +437,10 @@ Then point a 3.3.5a client's `realmlist.wtf` at `127.0.0.1`.
   history; the compose value was a File appender with per-boot timestamped
   backups and that tree reached 22 GB. `Errors.log` and the module's audit
   directory stay on the PVC, because they are evidence.
+- **A compose rollback path, and nothing else.** The LAN viewer runs on the
+  cluster behind the Ingress now; `infra/wrathbench-viewer.service` and
+  `infra/viewer-restart.sh` still exist and the systemd user unit is disabled,
+  kept only for the rollback below.
 - **The LM Studio box at 192.168.1.20.** Local models are reached over the LAN
   from wherever the fleet runs; the cluster reaches it the same way the
   workstation did. Nothing about it moves.

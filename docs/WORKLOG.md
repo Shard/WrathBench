@@ -70,7 +70,7 @@ Convention:
 - [2026-09-03](worklogs/2026-09-03.md) — gemini-38-flash and muse-spark-13 added at t0 (OpenRouter; OpenCode Spark endpoint down), price sync + windowed-test fix
 - [2026-09-04](worklogs/2026-09-04.md) — Cerebras added at t0 (qwen-3.8-27b, first non-OpenRouter paid provider); no cache discount, so an e90 is ~$5–8; muse-spark stream paused to free the paid lane
 - [2026-09-05](worklogs/2026-09-05.md) — freeplay stream stats aggregated at read time (`stream` on `/api/run/<id>`); the run page is the stream, not the session
-- [2026-09-08](worklogs/2026-09-08.md) — the codex subscription lane in the Helm chart: a third PVC mounted at `/home/bun/.codex` on fleet and runner, seeded once and never copied
+- [2026-09-08](worklogs/2026-09-08.md) — the codex subscription lane in the Helm chart; then the NuSphere cutover: runs, world and lane moved onto the cluster, both streams resumed there
 
 ## Resolving a cited item number
 
