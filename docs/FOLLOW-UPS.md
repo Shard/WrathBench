@@ -126,6 +126,17 @@ worklogs/2026-08-29).
     already. Trigger: the fleet's episode logs show module timeouts or
     `run.sqlite` write stalls.
 
+121. **The publisher holds every run's projection in memory** (2026-09-08, out
+    of the cutover). `infra/publish-dashboard.ts` builds the whole public
+    projection of the runs tree before it uploads anything: 4.8 GB peak RSS on
+    the 1016-run tree (measured on the workstation by `VmHWM`), which the
+    chart's 1 GiB default OOM-killed nine seconds into every pass. The cluster
+    repo overrides the limit to 8 GiB (nusphere PR 157), which buys time, not a
+    fix: the tree only grows. The fix is a pass that projects and uploads one
+    run at a time and holds only the manifest, and then the chart default comes
+    back down. Trigger: the publisher pod restarts with `OOMKilled` again, or
+    the runs tree passes ~2000 runs.
+
 ## Docs and release
 
 85. **Retire the gate Worker before launch** (2026-08-25; operator's explicit
