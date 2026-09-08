@@ -17,6 +17,7 @@
  *   WRATHBENCH_FLEET_CONFIG         default infra/fleet.json when it exists
  *   WRATHBENCH_PUBLISH_STATE        default data/publish/state.json
  *   WRATHBENCH_PUBLISH_INTERVAL_MS  default 60000
+ *   WRATHBENCH_PUBLISH_BATCH        default 25; runs projected per upload flush
  *   WRATHBENCH_MODULE_URL           optional; names the worldserver build on info.json
  *   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT
  *                                   Bun.S3Client's own names, autoloaded from .env
@@ -32,13 +33,23 @@
 import { existsSync } from "node:fs";
 import { S3Client } from "bun";
 import { createRenderer } from "../runner/viewer/snapshot";
-import { publishLoop, type ObjectStore, type SnapshotResult } from "./publish-core";
+import { publishLoop, type ObjectStore, type PassRenderer } from "./publish-core";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
 const FLEET_CONFIG =
   Bun.env.WRATHBENCH_FLEET_CONFIG ?? (existsSync("infra/fleet.json") ? "infra/fleet.json" : undefined);
 const STATE_PATH = Bun.env.WRATHBENCH_PUBLISH_STATE ?? "data/publish/state.json";
 const INTERVAL_MS = Number(Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS ?? "60000");
+/**
+ * Runs projected before the pass flushes them to the bucket and lets the bodies
+ * go. The whole tree used to be projected first, so what a pass held grew with
+ * it (~55 MB of artifacts at 1,016 runs); 25 bounds that at a megabyte or two
+ * while still keeping the per-run read pool (8 wide) full. It does not bring
+ * the pass's peak RSS down — ~4.4 GB on the same tree either way, and that is
+ * the aggregate phase and the viewer handle's per-run caches (item 121). 1 is
+ * legal and serializes the reads.
+ */
+const BATCH = Number(Bun.env.WRATHBENCH_PUBLISH_BATCH ?? "25");
 const MODULE_URL = Bun.env.WRATHBENCH_MODULE_URL;
 
 function fail(message: string): never {
@@ -56,6 +67,9 @@ const mode = ((): "once" | "loop" => {
 if (!existsSync(RUNS_DIR)) fail(`runs directory ${RUNS_DIR} does not exist`);
 if (!Number.isFinite(INTERVAL_MS) || INTERVAL_MS < 1000) {
   fail(`WRATHBENCH_PUBLISH_INTERVAL_MS=${Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS} is not a sane interval`);
+}
+if (!Number.isInteger(BATCH) || BATCH < 1) {
+  fail(`WRATHBENCH_PUBLISH_BATCH=${Bun.env.WRATHBENCH_PUBLISH_BATCH} is not a whole number of runs (1 or more)`);
 }
 // S3Client also honours AWS_*-style names; this check covers the documented
 // contract, so a half-filled .env fails here with the runbook's names rather
@@ -79,11 +93,16 @@ const store: ObjectStore = {
 // One renderer for the process, not one per pass: the viewer handle inside it
 // holds the trajectory mtime caches, so a finished run is read once and a live
 // one only as it grows.
-const render: () => Promise<SnapshotResult> = createRenderer({
+const renderer = createRenderer({
   runsDir: RUNS_DIR,
   ...(FLEET_CONFIG !== undefined ? { fleetConfigPath: FLEET_CONFIG } : {}),
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
 });
+
+// The streaming shape: every `BATCH` runs, the artifacts just projected go
+// straight to the engine's run wave and are dropped. Same objects, same order,
+// same manifest — the pass simply never holds the whole tree at once.
+const render: PassRenderer = (sink) => renderer(undefined, { sink, batch: BATCH });
 
 const abort = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -94,7 +113,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 const log = (line: string): void => console.log(`${new Date().toISOString()} ${line}`);
-log(`publishing ${RUNS_DIR} -> ${Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET} (${mode}, every ${INTERVAL_MS}ms)`);
+log(`publishing ${RUNS_DIR} -> ${Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET} (${mode}, every ${INTERVAL_MS}ms, ${BATCH} runs per flush)`);
 
 const summary = await publishLoop(render, store, STATE_PATH, {
   intervalMs: INTERVAL_MS,

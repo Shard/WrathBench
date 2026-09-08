@@ -25,6 +25,7 @@ import {
   IMMUTABLE_CACHE,
   MUTABLE_CACHE,
   renderSnapshot,
+  type SnapshotArtifact,
   type SnapshotResult,
 } from "../viewer/snapshot";
 import { createApi } from "../viewer/api";
@@ -600,5 +601,46 @@ describe("createRenderer", () => {
       return await api(req);
     };
     await expect(createRenderer({ runsDir: runs, api: handle })(111)).rejects.toThrow(/answered 500/);
+  });
+
+  test("streaming the per-run artifacts changes nothing but when they are let go of", async () => {
+    /*
+     * The publisher renders with a `RunStream` so it never holds the whole
+     * tree (docs/FOLLOW-UPS.md item 121). What it publishes must be byte for
+     * byte what the unstreamed render produces — same keys, same bodies, same
+     * generation, same `runs.json` pointers — whatever the batch size is.
+     */
+    const runs = fixture();
+    const whole = await createRenderer({ runsDir: runs })(111);
+    // Key and body, with the two wall-clock fields zeroed — `now` and a live
+    // run's `playtimeMs`, which move between any two renders and are outside
+    // every content version for exactly that reason (see `addressable`).
+    const key = (a: { path: string; body: string }): string =>
+      `${a.path}\n${a.body.replace(/"now":\d+/g, '"now":0').replace(/"playtimeMs":\d+/g, '"playtimeMs":0')}`;
+
+    for (const batch of [1, 2, 1000]) {
+      const batches: number[] = [];
+      const streamed: SnapshotArtifact[] = [];
+      const out = await createRenderer({ runsDir: runs })(111, {
+        batch,
+        sink: async (artifacts) => {
+          batches.push(artifacts.length);
+          streamed.push(...artifacts);
+        },
+      });
+      // The streamed halves and the returned half, together, are the whole set.
+      expect(out.artifacts.some((a) => a.path.startsWith("v1/run/"))).toBe(false);
+      const compare = (artifacts: SnapshotArtifact[]): string[] =>
+        // `live.json` is the one key deliberately outside the generation chain:
+        // it carries the fleet clock, which moves between any two renders. Its
+        // presence is checked, its body is not comparable.
+        artifacts.filter((a) => a.path !== "v1/live.json").map(key).sort();
+      expect(compare([...out.artifacts, ...streamed])).toEqual(compare(whole.artifacts));
+      expect(out.artifacts.map((a) => a.path)).toContain("v1/live.json");
+      expect(out.gen).toBe(whole.gen);
+      expect(out.snap).toEqual(whole.snap);
+      // A batch of one really is one run at a time, not the whole tree at once.
+      if (batch === 1) expect(batches.length).toBeGreaterThan(1);
+    }
   });
 });

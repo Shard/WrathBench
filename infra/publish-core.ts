@@ -490,23 +490,38 @@ export function needsPut(path: string, bodyHash: () => string, state: PublishSta
 }
 
 /**
- * Validate the renderer's output before a single byte moves. Each of these
- * would corrupt the bucket quietly rather than loudly: two artifacts on one key
- * make the winner arbitrary, and an aggregate key the manifest does not name —
- * or a manifest entry no artifact backs — is a torn generation waiting for the
- * flip. That second check is what the old "every `v1/snap/` key belongs to this
- * pass's generation" rule became when the generation stopped being a key
- * prefix: `result.snap` is the manifest's index as data, so the engine can hold
- * the pass to it without parsing anyone's JSON.
+ * Validate a batch of artifacts before a byte of it moves: a key must be a key,
+ * and no two artifacts may claim one — two on a key make the winner arbitrary.
+ * `seen` spans the whole pass, streamed batches included, so the second check
+ * holds across a stream as it did across one array.
  */
-function assertResult(result: SnapshotResult): void {
-  if (result.gen === "") throw new Error("publish: the rendered result has no generation stamp");
-  const seen = new Set<string>();
-  for (const a of result.artifacts) {
+function assertArtifacts(artifacts: readonly SnapshotArtifact[], seen: Set<string>): void {
+  for (const a of artifacts) {
     if (a.path === "" || a.path.startsWith("/")) throw new Error(`publish: ${JSON.stringify(a.path)} is not a bucket key (non-empty, no leading slash)`);
     if (seen.has(a.path)) throw new Error(`publish: two artifacts claim the key ${a.path}`);
     seen.add(a.path);
   }
+}
+
+/**
+ * Validate the rendered result before the aggregate wave moves. Beyond the
+ * per-batch checks: an aggregate key the manifest does not name — or a manifest
+ * entry no artifact backs — is a torn generation waiting for the flip. That is
+ * what the old "every `v1/snap/` key belongs to this pass's generation" rule
+ * became when the generation stopped being a key prefix: `result.snap` is the
+ * manifest's index as data, so the engine can hold the pass to it without
+ * parsing anyone's JSON.
+ *
+ * A streaming pass has already uploaded its per-run objects by the time this
+ * runs, so "before a single byte moves" is no longer literally true of the
+ * whole set. Nothing rests on it: those objects are immutable, content-
+ * addressed and named only by rows the manifest carries, so a pass that dies
+ * here leaves orphans for the pruner rather than a torn generation. The flip is
+ * still last and still gated on every check below.
+ */
+function assertResult(result: SnapshotResult, seen: Set<string>): void {
+  if (result.gen === "") throw new Error("publish: the rendered result has no generation stamp");
+  assertArtifacts(result.artifacts, seen);
   const named = new Set(Object.values(result.snap));
   for (const [name, path] of Object.entries(result.snap)) {
     if (!seen.has(path)) throw new Error(`publish: the manifest names ${path} for ${name} but the pass renders no such artifact`);
@@ -519,6 +534,25 @@ function assertResult(result: SnapshotResult): void {
 }
 
 /**
+ * Where a streaming renderer hands the engine its per-run artifacts.
+ *
+ * The engine uploads the batch and keeps nothing of it but keys and hashes, so
+ * the renderer may drop the bodies the moment this resolves. It rejects only on
+ * a programming error (a key that is not a run key, a duplicate); an upload
+ * failure is remembered and raised once the stream is closed, so a pass against
+ * a broken bucket still attempts everything it would have, exactly as one array
+ * of artifacts always did.
+ */
+export type RunSink = (artifacts: readonly SnapshotArtifact[]) => Promise<void>;
+
+/**
+ * A pass, rendered. Given a sink it may stream its per-run artifacts out as it
+ * makes them and leave them out of the result; a renderer that ignores the sink
+ * simply returns everything, which is what `publish` and every test do.
+ */
+export type PassRenderer = (sink: RunSink) => Promise<SnapshotResult>;
+
+/**
  * Publish one rendered pass.
  *
  * `state` is updated **in place** as objects land, including on the failure
@@ -527,16 +561,32 @@ function assertResult(result: SnapshotResult): void {
  * still missing. Callers that want the old state back should copy it first.
  */
 export async function publish(result: SnapshotResult, store: ObjectStore, state: PublishState, opts: PublishOptions = {}): Promise<PublishReport> {
+  return await publishPass(async () => result, store, state, opts);
+}
+
+/**
+ * Publish one pass, letting the renderer stream its per-run artifacts.
+ *
+ * Same engine, same order, same state: the run wave simply happens in pieces as
+ * the renderer produces them rather than in one array at the end. What the pass
+ * retains then stops growing with the runs tree (docs/FOLLOW-UPS.md item 121),
+ * which is the only thing this shape buys — the pass's peak is the aggregate
+ * phase and the viewer handle's per-run caches, not the artifacts.
+ * Streamed batches are uploaded before the result exists, which is safe for the
+ * reason `assertResult` explains, and the two things the flip needs from them —
+ * the keys' hashes for `uploaded`, the `(run, version)` pairs for the keep
+ * window — are strings, so nothing of a batch outlives it.
+ */
+export async function publishPass(render: PassRenderer, store: ObjectStore, state: PublishState, opts: PublishOptions = {}): Promise<PublishReport> {
   const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
   const log = opts.log ?? ((): void => {});
   const now = opts.now ?? Date.now;
 
-  assertResult(result);
-
   // Bodies are hashed on demand and at most once each: most keys are immutable
   // and decided by presence alone, so hashing the corpus up front would spend
   // the pass's real work on answers nobody asks for. The one hash a key does
-  // need is shared between its diff and its `uploaded` record.
+  // need is shared between its diff and its `uploaded` record. Keyed by path
+  // rather than by artifact, so a streamed batch's bodies are not held open.
   const hashes = new Map<string, string>();
   const hashOf = (a: SnapshotArtifact): string => {
     let hash = hashes.get(a.path);
@@ -547,15 +597,24 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
     return hash;
   };
 
-  const report: PublishReport = { gen: result.gen, put: [], unchanged: 0, bytes: 0, deleted: [], deleteFailures: [], flipped: false };
+  const report: PublishReport = { gen: "", put: [], unchanged: 0, bytes: 0, deleted: [], deleteFailures: [], flipped: false };
 
-  for (const wave of WAVES) {
-    const inWave = result.artifacts.filter((a) => waveOf(a.path) === wave);
+  /**
+   * Upload what of `inWave` the bucket does not already hold, counting the
+   * rest. `gen` is only consulted for the manifest, which never reaches here
+   * through a stream, so a streamed batch can be uploaded before the pass's
+   * generation is known.
+   */
+  const uploadWave = async (
+    inWave: SnapshotArtifact[],
+    wave: WaveName,
+    gen: string,
+  ): Promise<{ path: string; error: unknown }[]> => {
     // Stable start order: by path, except the mutable wave whose order is the
     // whole safety property (live.json, then manifest.json).
     inWave.sort((x, y) => (wave === "mutable" ? mutableRank(x.path) - mutableRank(y.path) : x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
 
-    const todo = inWave.filter((a) => needsPut(a.path, () => hashOf(a), state, result.gen));
+    const todo = inWave.filter((a) => needsPut(a.path, () => hashOf(a), state, gen));
     report.unchanged += inWave.length - todo.length;
 
     const { failed } = await pooled(
@@ -575,7 +634,49 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
       },
       wave === "mutable",
     );
-    if (failed.length > 0) throw new PublishError(wave, failed.map(({ item, error }) => ({ path: item.path, error })));
+    return failed.map(({ item, error }) => ({ path: item.path, error }));
+  };
+
+  // Every key the pass has claimed, streamed or returned: the duplicate check
+  // spans both halves. Keys only — the bodies behind them are long gone.
+  const seen = new Set<string>();
+  // `(runId, version)` pairs seen in the stream, in order and deduplicated;
+  // registered with the flip alongside the result's own, if it flips.
+  const streamedRuns: [string, string][] = [];
+  const streamedRunKeys = new Set<string>();
+  // Failures are collected rather than thrown, so a batch that could not be
+  // uploaded does not stop the rest of the tree from being attempted — which is
+  // what the single-array run wave has always done.
+  const streamedFailures: { path: string; error: unknown }[] = [];
+
+  const sink: RunSink = async (batch) => {
+    const artifacts = [...batch];
+    for (const a of artifacts) {
+      const c = classifyPath(a.path);
+      // Anything else in the stream would be written before the flip decided it
+      // should be — an aggregate out of its wave, or the manifest itself.
+      if (c.kind !== "run") throw new Error(`publish: ${a.path} was streamed as a per-run artifact but is not one`);
+      const pair = `${c.runId} ${c.version}`;
+      if (streamedRunKeys.has(pair)) continue;
+      streamedRunKeys.add(pair);
+      streamedRuns.push([c.runId, c.version]);
+    }
+    assertArtifacts(artifacts, seen);
+    streamedFailures.push(...(await uploadWave(artifacts, "run", "")));
+  };
+
+  const result = await render(sink);
+  report.gen = result.gen;
+  assertResult(result, seen);
+  if (streamedFailures.length > 0) throw new PublishError("run", streamedFailures);
+
+  for (const wave of WAVES) {
+    const failed = await uploadWave(
+      result.artifacts.filter((a) => waveOf(a.path) === wave),
+      wave,
+      result.gen,
+    );
+    if (failed.length > 0) throw new PublishError(wave, failed);
   }
 
   // The flip happened if the bucket's manifest now advertises this generation —
@@ -599,6 +700,7 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
   // treats them as surplus unless that flip names them. Bounded either way, and
   // deliberately not indexed: an inventory of unflipped uploads would be a
   // second history to keep correct for no gain.
+  for (const [runId, version] of streamedRuns) registerVersion(state.runVersions, runId, version);
   for (const a of result.artifacts) {
     const c = classifyPath(a.path);
     if (c.kind === "run") registerVersion(state.runVersions, c.runId, c.version);
@@ -730,7 +832,7 @@ export function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
  * cheap. Only an abort ends the loop.
  */
 export async function publishLoop(
-  render: () => Promise<SnapshotResult>,
+  render: PassRenderer,
   store: ObjectStore,
   statePath: string,
   opts: PublishLoopOptions = {},
@@ -744,7 +846,7 @@ export async function publishLoop(
   while (signal?.aborted !== true) {
     summary.passes++;
     try {
-      const report = await publish(await render(), store, state, { ...publishOpts, log });
+      const report = await publishPass(render, store, state, { ...publishOpts, log });
       summary.published++;
       summary.lastGen = report.gen;
       log(describeReport(report));
