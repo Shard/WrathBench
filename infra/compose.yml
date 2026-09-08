@@ -373,9 +373,10 @@ services:
     # would not.
     init: true
     # `docker compose stop fleet` must be a DRAIN, not a kill: SIGTERM to the
-    # supervisor SIGTERMs each lane, run-roster gives its episode 30s of grace,
-    # and the supervisor only notices the exits on its next 60s tick. 180s is
-    # that floor plus margin — a shorter grace means SIGKILL mid-episode.
+    # supervisor SIGTERMs each lane, run-roster gives its episode 90s of grace
+    # (CHILD_TERM_GRACE_MS) to write its pause record and release its session,
+    # and the supervisor only notices the exits on its next poll. 180s is that
+    # floor plus margin — a shorter grace means SIGKILL mid-pause.
     stop_grace_period: 180s
     restart: unless-stopped
     depends_on:

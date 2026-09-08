@@ -474,10 +474,14 @@ every ended session (idle watchdog, a hand kill, the stale sweep) was followed
 by a fresh attempt whose hygiene wiped the account and whose model named a new
 level-1 character — `sub-opus-low` went through ten names in eleven attempts.
 
-The stream's identity is nothing new on disk: the ref's latest **ended**
-freeplay run that recorded an account and a character (`streamsFrom`; matched
-on model + effort like account affinity, so a renamed ref keeps its stream).
-What the supervisor does with it, per tick:
+The stream's identity is nothing new on disk: the ref's latest freeplay run
+that is not live and recorded an account and a character — ended **or paused**
+(`streamsFrom`; matched on model + effort like account affinity, so a renamed
+ref keeps its stream). A paused head is normally resumed rather than continued
+from, and the resume reserves its account and job name before the policy picks;
+it is a head so that a paused run the resume planner declines still holds the
+lineage, instead of the next attempt continuing from the ended run before it
+(2026-09-08). What the supervisor does with it, per tick:
 
 - **Disable** (`idle: "unlimited"` → `"none"`, or the fleet pause switch): the
   policy job is drained, and for this lane a drain is an immediate SIGTERM —

@@ -104,6 +104,25 @@ worklogs/2026-08-29).
 
 ## Episodes and results
 
+122. **Two paused stream heads stranded by the unversioned stamp** (2026-09-08;
+    operator's call, data only — the code defect is fixed in this commit).
+    `fleet-nemotron-super-freeplay-nemotron-3-super-120b-a12b-20260905-a12`
+    (RUNNER, Aric, `operator-pause`) and
+    `fleet-minimax-m3-free-freeplay-minimax-m3-20260905-a14` (RUNNER2,
+    Thalorin, `rate-limited`, pause 7) sit paused with no termination and a
+    `0.0.0-phase0` stamp, so the supervisor that wrote them cannot resume them
+    even now: `meta.json` is what carries the series and the fix only changes
+    what the NEXT launch stamps. a13 is live on the same character (Aric) with
+    `continuedFrom` pointing at a11. Three options, all operator's: rewrite the
+    two `meta.json` stamps to the image tag they actually ran under (they are
+    resumable again the moment the supervisor sees a series — verified against
+    the live tree), or end them by hand with a reason, or leave them and accept
+    the two orphans. Whatever is chosen, a13's lineage is the second question:
+    the character is the same server-side, so pointing it at a12 is defensible,
+    and leaving it at a11 is the record of what the fleet actually did.
+    Trigger: the next operator window on the cluster.
+
+
 ## Deployment
 
 117. **CI for the release contract** (2026-09-05; GitHub issue 7's addendum).

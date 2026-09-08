@@ -236,7 +236,7 @@ const EARLY_TURN_THRESHOLD = 2;
  * This must outlast that, and stay inside the fleet container's 180s
  * `stop_grace_period` with room for the supervisor's own reap.
  */
-const CHILD_TERM_GRACE_MS = 90_000;
+export const CHILD_TERM_GRACE_MS = 90_000;
 const RUNS_DIR = "data/runs";
 /** A trajectory touched more recently than this belongs to a live process. */
 const LIVE_TRAJECTORY_MS = 3 * 60_000;
@@ -276,8 +276,21 @@ const CONTAINER = inContainer();
  * a supervisor that has been up for a week must still stamp `-dirty` the moment
  * someone edits a tracked file. `--no-optional-locks` keeps `git describe` from
  * refreshing (and writing) the index under the operator's feet.
+ *
+ * `WRATHBENCH_HARNESS_VERSION` wins when it is set, exactly as
+ * `runner/src/version.ts` reads it. On the k8s fleet the supervisor runs from
+ * a baked-in checkout with no `.git` and no git binary, so `git describe`
+ * fails and the fallback claimed `0.0.0-phase0` — a stamp that names no
+ * SERIES. Every run the pod launched or resumed was then out of the policy's
+ * series, which made it invisible to the projection AND to `planResumes`
+ * (`infra/run-fleet-plan.ts`): on 2026-09-08 a paused freeplay stream head
+ * (`...-20260905-a12`) was neither resumed nor listed, and the policy started
+ * a fresh attempt off the older ENDED run instead. The image tag the chart
+ * passes is the honest marker for a checkout that cannot describe itself.
  */
-function harnessVersion(): string {
+export function harnessVersion(env: Record<string, string | undefined> = process.env): string {
+  const fromEnv = env["WRATHBENCH_HARNESS_VERSION"];
+  if (fromEnv !== undefined && fromEnv.trim().length > 0) return fromEnv.trim();
   try {
     const p = Bun.spawnSync(
       ["git", "--no-optional-locks", "-C", REPO_ROOT, "describe", "--tags", "--always", "--dirty"],
