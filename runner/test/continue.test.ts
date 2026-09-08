@@ -122,6 +122,17 @@ describe("loadContinuation", () => {
     expect(loadContinuation(cfg(runsDir, { account: "runner2" }))?.character).toBe("Bromdir");
   });
 
+  test("a PAUSED predecessor is a predecessor: the lineage is the newest attempt", () => {
+    // `streamsFrom` takes a paused run as a stream head since 2026-09-08, so a
+    // continuation can now name one. Nothing here reads a termination — the
+    // account and the character are the whole question — and this pins that.
+    const { runsDir, runId, dir } = endedFreeplayRun();
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as Record<string, unknown>;
+    meta["pause"] = { reason: "operator-pause", at: 2, episodeElapsedMs: 1000 };
+    writeFileSync(join(dir, "meta.json"), JSON.stringify(meta));
+    expect(loadContinuation(cfg(runsDir))).toEqual({ from: runId, character: "Bromdir", race: 3, class: 2, dir });
+  });
+
   test("refuses everything that would make the lineage a lie", () => {
     const { runsDir } = endedFreeplayRun();
     // A scored launch is a fresh character by definition.

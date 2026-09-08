@@ -820,13 +820,29 @@ export function planResumes(opts: {
   // Any scheduled class may carry a resume: a paid or local run comes back on
   // its own account, exactly as a pool run comes back on its pool account.
   const poolSet = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
-  const paused = opts.runs.filter((f) => f.pause !== null && inSeries(f, config.policy)).sort((a, b) => b.pause!.at - a.pause!.at);
+  const paused = opts.runs.filter((f) => f.pause !== null).sort((a, b) => b.pause!.at - a.pause!.at);
   const seenModel = new Set<string>();
   for (const f of paused) {
     const pause = f.pause!;
     const list = (why: string, resumeAfter: number | null = null): void => {
       listed.push({ runId: f.runId, model: f.model, account: f.account, reason: pause.reason, since: pause.at, pauseCount: pause.count, resumeAfter, elapsedMs: pause.episodeElapsedMs, budgetMs: f.episodeMs, why });
     };
+    // Another series' paused run is not this supervisor's to resume — the
+    // harness it ran under is not the one running now — and just as
+    // importantly it is not this supervisor's to END: the sweep below would
+    // write a termination on every paused run left over from every older
+    // series (42 of them on 2026-09-08). It used to be filtered out before the
+    // loop, which made it invisible everywhere, including in `--status`. A
+    // FRESH one is listed instead, because that is a run somebody is waiting
+    // on; a cold one stays out of the listing, as it always was.
+    if (!inSeries(f, config.policy)) {
+      if (staleForMs(f, now) === null) {
+        list(
+          `paused under harness series ${f.harnessSeries ?? "unversioned"}, this supervisor runs ${config.policy.series ?? "no series"} — resume by hand (--resume ${f.runId}) or archive`,
+        );
+      }
+      continue;
+    }
     const modelKey = `${f.model}@${f.effort ?? ""}`;
     const launchedUnder = refOfRunId(f.runId, f.episode, Object.keys(config.roster));
     const current = launchedUnder === undefined ? undefined : config.roster[launchedUnder];
@@ -1032,9 +1048,22 @@ export function streamKey(account: string, character: string): string {
 /**
  * The stream of every `idle: "unlimited"` ref, from the run facts. Pure.
  * Matching is the projection's own (model + effort), as `affinityFrom`;
- * only freeplay runs count, only ended ones (a live or paused run is in
- * flight, not a predecessor), and only those that recorded both an account
- * and a character. Latest start wins.
+ * only freeplay runs count, only those that recorded both an account and a
+ * character, and only ones that are not LIVE — a live run is the stream, not
+ * its predecessor. Latest start wins.
+ *
+ * A PAUSED run is a head too. It used to be excluded on the argument that
+ * `planResumes` owns it, and that is true while the supervisor can see it —
+ * but the runs directory is the only thing that survives a supervisor, and a
+ * paused head the resume planner declines (another series, a spent ladder, a
+ * job the operator disabled) then vanished from the stream entirely: on
+ * 2026-09-08 the newest attempt of the nemotron-super stream sat paused while
+ * the policy started a fresh one `--continue-from` the ENDED attempt before
+ * it, orphaning the paused one off the chain. The character is the same one
+ * either way, so the honest lineage is the newest attempt, resumed or
+ * continued from. Nothing here launches anything: a head that IS resumable is
+ * resumed by `planResumes`, which reserves its account and job name before the
+ * policy picks.
  */
 export function streamsFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Stream> {
   const out = new Map<string, Stream>();
@@ -1042,7 +1071,8 @@ export function streamsFrom(runs: readonly RunFact[], roster: Record<string, Fle
   for (const [name, e] of Object.entries(roster)) {
     if (e.idle !== "unlimited") continue;
     for (const f of runs) {
-      if (f.episode !== "freeplay" || f.terminationReason === null || f.account === null || f.character === null) continue;
+      if (f.episode !== "freeplay" || f.account === null || f.character === null) continue;
+      if (f.live || (f.terminationReason === null && f.pause === null)) continue;
       if (f.model !== e.model || (f.effort ?? null) !== (e.effort ?? null)) continue;
       if ((at.get(name) ?? -1) >= f.startedAt) continue;
       at.set(name, f.startedAt);

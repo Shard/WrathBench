@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { episodeArgv, forCycle, inContainer, resolve, type RosterSpec } from "./run-roster";
+import { CHILD_TERM_GRACE_MS, episodeArgv, forCycle, harnessVersion, inContainer, resolve, type RosterSpec } from "./run-roster";
+import { harnessSeries } from "../runner/src/comparability";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * The roster is config, and the config's whole job is to become an argv for
@@ -322,5 +325,31 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
       "--watchdogs-json",
       JSON.stringify({ noXpMs: null }),
     ]);
+  });
+});
+
+describe("the version stamp a spawned episode inherits", () => {
+  // 2026-09-08: the k8s fleet pod has the repo baked in and no git, so
+  // `git describe` failed here and every run it launched or RESUMED was
+  // stamped "0.0.0-phase0" — a stamp that names no series. Out of the policy's
+  // series, a paused freeplay head was invisible to planResumes and to the
+  // projection, and the policy started a fresh attempt off the ended run
+  // before it. The chart passes the image tag; it is the honest marker for a
+  // checkout that cannot describe itself, and it must win.
+  test("WRATHBENCH_HARNESS_VERSION wins, and it carries a series", () => {
+    expect(harnessVersion({ WRATHBENCH_HARNESS_VERSION: "harness-0.5-513-g803bd42" })).toBe("harness-0.5-513-g803bd42");
+    expect(harnessSeries(harnessVersion({ WRATHBENCH_HARNESS_VERSION: "harness-0.5-513-g803bd42" }))).toBe("0.5");
+    // Blank is not a stamp: fall through to git (or the fallback), as before.
+    expect(harnessVersion({ WRATHBENCH_HARNESS_VERSION: "   " })).not.toBe("   ");
+  });
+
+  test("the pod's drain grace covers the pause the roster owes its child", () => {
+    // SIGKILL before run-roster's child has written its pause record loses the
+    // record the next supervisor resumes from, so the chart's number is not
+    // free to drift below the code's own grace.
+    const chart = readFileSync(join(import.meta.dir, "chart", "wrathbench", "templates", "fleet.yaml"), "utf8");
+    const m = /terminationGracePeriodSeconds:\s*(\d+)/.exec(chart);
+    expect(m).not.toBeNull();
+    expect(Number(m![1]) * 1000).toBeGreaterThan(CHILD_TERM_GRACE_MS);
   });
 });
