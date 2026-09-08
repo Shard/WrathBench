@@ -182,6 +182,42 @@ const RUN_CONCURRENCY = 8;
 export const ENTRIES_WINDOW = 200;
 
 /**
+ * Where a streaming pass hands off each batch of per-run artifacts.
+ *
+ * The batch is the caller's the moment it arrives: the renderer drops its own
+ * reference to those bodies as soon as the sink resolves, which is the whole
+ * point of the shape.
+ */
+export type RunSink = (artifacts: SnapshotArtifact[]) => Promise<void>;
+
+/**
+ * Render the per-run artifacts in bounded groups and hand each to `sink`,
+ * instead of returning them all at once.
+ *
+ * A pass over the whole runs tree otherwise holds every projected detail,
+ * track, entries window and scratchpad until the last one is made, so what it
+ * retains grows with the tree: ~55 MB of serialized artifacts at 1,016 runs
+ * (2026-09-08). Streaming bounds that at `batch` runs' worth. It is NOT what
+ * dominates the pass's peak RSS — measured at ~4.4 GB on the same tree with and
+ * without this, in the aggregate phase and in the viewer handle's per-run
+ * caches — so it is a bound on the part that scales with the tree, not a fix
+ * for the pod's memory limit (docs/FOLLOW-UPS.md item 121).
+ *
+ * Nothing about WHAT is rendered changes: the same runs, in the same listing
+ * order, on the same keys, with the same bodies. Only the moment the bodies
+ * are let go of does.
+ *
+ * `batch` is runs per group, not artifacts. The groups are barriers, so the
+ * read pool is `min(RUN_CONCURRENCY, batch)` wide — a batch of 1 serializes
+ * the pass, which is a legitimate (slow) setting and the sharpest test of the
+ * invariant that batching changes nothing but memory.
+ */
+export interface RunStream {
+  sink: RunSink;
+  batch: number;
+}
+
+/**
  * Build a renderer that can run pass after pass over one viewer handle.
  *
  * The handle is the reason this exists. `createApi` keeps its trajectory
@@ -193,8 +229,11 @@ export const ENTRIES_WINDOW = 200;
  *
  * `render(now)` is otherwise self-contained: nothing but the handle survives a
  * pass, so two renders of unchanged input still land on the same addresses.
+ * `render(now, stream)` additionally streams the per-run artifacts out as they
+ * are made — see `RunStream` — and then leaves them out of the result it
+ * returns, which is otherwise identical.
  */
-export function createRenderer(opts: RendererOptions): (now?: number) => Promise<SnapshotResult> {
+export function createRenderer(opts: RendererOptions): (now?: number, stream?: RunStream) => Promise<SnapshotResult> {
   const handle =
     opts.api ??
     createApi({
@@ -243,7 +282,7 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
     return await res.text();
   };
 
-  return async function render(nowArg?: number): Promise<SnapshotResult> {
+  return async function render(nowArg?: number, stream?: RunStream): Promise<SnapshotResult> {
     const now = nowArg ?? Date.now();
 
     // Everything below is projected the moment it is parsed, so no unprojected
@@ -280,57 +319,70 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
      * happened to finish in. A run whose two artifacts are missing leaves its
      * slot empty and its row pointerless, which is what the snapshot client
      * already reads as "no published detail for this run".
+     *
+     * A group at a time when the caller streams: the rows (small, and needed
+     * for `runs.json` either way) survive the pass, the bodies do not.
      */
     const rows = runs.runs;
-    const perRun: (SnapshotArtifact[] | undefined)[] = new Array(rows.length);
-    let next = 0;
-    const worker = async (): Promise<void> => {
-      for (let i = next++; i < rows.length; i = next++) {
-        const row = rows[i]!;
-        const id = encodeURIComponent(row.runId);
-        const [detail, track, entries, scratchpad] = await Promise.all([
-          getIfPresent<RunDetailResponse>(`/api/run/${id}`).then((b) => (b === null ? null : projectRunDetail(b))),
-          getIfPresent<TrackResponse>(`/api/run/${id}/track`).then((b) => (b === null ? null : projectTrack(b))),
-          getIfPresent<EntriesResponse>(`/api/run/${id}/entries?limit=${ENTRIES_WINDOW}`).then((b) =>
-            b === null ? null : projectEntries(b),
-          ),
-          // A run with no scratchpad.md is a 404 here and simply has no artifact.
-          getTextIfPresent(`/api/run/${id}/scratchpad`),
-        ]);
-        // Any of the three JSON halves missing means the run went away
-        // mid-pass; a row must never point at part of a set, so all are
-        // dropped together.
-        if (detail === null || track === null || entries === null) continue;
-        // The version covers everything the row points at, so a window that
-        // grew or a scratchpad rewritten between two identical details still
-        // lands on a new key rather than mutating an immutable one.
-        const ver = hash12([addressable(detail), addressable(entries), scratchpad ?? ""].join("\n"));
-        // Run ids are `isValidRunId`-safe (`[A-Za-z0-9._-]+`), so they are bucket
-        // keys as-is; anything else never got a run directory to be listed from.
-        const base = `v1/run/${row.runId}/${ver}`;
-        const paths: NonNullable<typeof row.snapshot> = {
-          detail: `${base}/detail.json`,
-          track: `${base}/track.json`,
-          entries: `${base}/entries.json`,
-          ...(scratchpad === null ? {} : { scratchpad: `${base}/scratchpad.json` }),
-        };
-        const immutable = (path: string, body: string): SnapshotArtifact => ({
-          path,
-          body,
-          contentType: "application/json",
-          cacheControl: IMMUTABLE_CACHE,
-        });
-        perRun[i] = [
-          immutable(paths.detail, envelope(detail)),
-          immutable(paths.track, envelope(track)),
-          immutable(paths.entries!, envelope(entries)),
-          ...(paths.scratchpad === undefined ? [] : [immutable(paths.scratchpad, envelope({ text: scratchpad }))]),
-        ];
-        row.snapshot = paths;
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(RUN_CONCURRENCY, rows.length) }, worker));
-    const artifacts: SnapshotArtifact[] = perRun.flatMap((a) => a ?? []);
+    // Clamped, and finite: a `NaN` batch would slice one empty group and leave
+    // every row without its snapshot pointers on a manifest that still flipped.
+    const groupSize =
+      stream === undefined || !Number.isFinite(stream.batch) ? Math.max(1, rows.length) : Math.max(1, Math.floor(stream.batch));
+    const artifacts: SnapshotArtifact[] = [];
+    for (let start = 0; start < rows.length; start += groupSize) {
+      const group = rows.slice(start, start + groupSize);
+      const perRun: (SnapshotArtifact[] | undefined)[] = new Array(group.length);
+      let next = 0;
+      const worker = async (): Promise<void> => {
+        for (let i = next++; i < group.length; i = next++) {
+          const row = group[i]!;
+          const id = encodeURIComponent(row.runId);
+          const [detail, track, entries, scratchpad] = await Promise.all([
+            getIfPresent<RunDetailResponse>(`/api/run/${id}`).then((b) => (b === null ? null : projectRunDetail(b))),
+            getIfPresent<TrackResponse>(`/api/run/${id}/track`).then((b) => (b === null ? null : projectTrack(b))),
+            getIfPresent<EntriesResponse>(`/api/run/${id}/entries?limit=${ENTRIES_WINDOW}`).then((b) =>
+              b === null ? null : projectEntries(b),
+            ),
+            // A run with no scratchpad.md is a 404 here and simply has no artifact.
+            getTextIfPresent(`/api/run/${id}/scratchpad`),
+          ]);
+          // Any of the three JSON halves missing means the run went away
+          // mid-pass; a row must never point at part of a set, so all are
+          // dropped together.
+          if (detail === null || track === null || entries === null) continue;
+          // The version covers everything the row points at, so a window that
+          // grew or a scratchpad rewritten between two identical details still
+          // lands on a new key rather than mutating an immutable one.
+          const ver = hash12([addressable(detail), addressable(entries), scratchpad ?? ""].join("\n"));
+          // Run ids are `isValidRunId`-safe (`[A-Za-z0-9._-]+`), so they are bucket
+          // keys as-is; anything else never got a run directory to be listed from.
+          const base = `v1/run/${row.runId}/${ver}`;
+          const paths: NonNullable<typeof row.snapshot> = {
+            detail: `${base}/detail.json`,
+            track: `${base}/track.json`,
+            entries: `${base}/entries.json`,
+            ...(scratchpad === null ? {} : { scratchpad: `${base}/scratchpad.json` }),
+          };
+          const immutable = (path: string, body: string): SnapshotArtifact => ({
+            path,
+            body,
+            contentType: "application/json",
+            cacheControl: IMMUTABLE_CACHE,
+          });
+          perRun[i] = [
+            immutable(paths.detail, envelope(detail)),
+            immutable(paths.track, envelope(track)),
+            immutable(paths.entries!, envelope(entries)),
+            ...(paths.scratchpad === undefined ? [] : [immutable(paths.scratchpad, envelope({ text: scratchpad }))]),
+          ];
+          row.snapshot = paths;
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(RUN_CONCURRENCY, group.length) }, worker));
+      const made = perRun.flatMap((a) => a ?? []);
+      if (stream === undefined) artifacts.push(...made);
+      else await stream.sink(made);
+    }
 
     /*
      * The snap set, in a fixed order. Each aggregate is addressed by its own
@@ -381,6 +433,8 @@ export function createRenderer(opts: RendererOptions): (now?: number) => Promise
           cacheControl: IMMUTABLE_CACHE,
         }),
       ),
+      // Empty when the caller took the per-run artifacts through a `RunStream`:
+      // they are already gone, and holding them here is what item 121 was.
       ...artifacts,
     ];
 
