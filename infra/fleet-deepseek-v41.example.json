@@ -1,0 +1,49 @@
+{
+  "_notes": [
+    "Opt-in example only. The live compose and Kubernetes supervisors read infra/fleet.json, not this file.",
+    "Default is a disabled pinned job: one t0 e90, repeat 1, idle none, with no policy or idle promotion path.",
+    "To opt in, copy this file to an untracked local path, set queue[0].enabled to true for the dry run, and add the token only if the operator approves the single e90.",
+    "The exact beta identifier is preserved verbatim: deepseek-v4.1-flash-expires-on-0910.",
+    "The direct base URL is intentional: DeepSeek documents OpenAI-compatible POST /chat/completions at https://api.deepseek.com. The beta expiry time and live availability are unverified here."
+  ],
+  "preflight": {
+    "enabled": false,
+    "account": "SMOKE",
+    "smokes": [],
+    "timeoutMs": 900000,
+    "deploySmokes": [],
+    "deployTimeoutMs": 900000
+  },
+  "accounts": {
+    "pool": [],
+    "paid": [],
+    "local": []
+  },
+  "roster": {
+    "deepseek-v41-beta": {
+      "model": "deepseek-v4.1-flash-expires-on-0910",
+      "driver": "openai",
+      "apiBase": "https://api.deepseek.com",
+      "apiKeyEnv": "DEEPSEEK_KEY",
+      "billing": "paid",
+      "race": 1,
+      "class": 2,
+      "tier": "t0",
+      "idle": "none"
+    }
+  },
+  "policy": {
+    "maxConcurrent": { "openai": 1 },
+    "paid": { "maxConcurrent": 1 }
+  },
+  "campaigns": {},
+  "queue": [
+    {
+      "ref": "deepseek-v41-beta",
+      "episode": "e90",
+      "repeat": 1,
+      "enabled": false,
+      "account": "RUNNER7"
+    }
+  ]
+}

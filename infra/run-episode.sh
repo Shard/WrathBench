@@ -119,7 +119,7 @@ load_env() {
   local line key value
   while IFS= read -r line || [ -n "${line}" ]; do
     case "${line}" in
-      WRATHBENCH_*=* | OPENROUTER_*=* | OPENCODE_*=* | CLAUDE_*=* | OPENAI_*=* | CODEX_*=*) ;;
+      WRATHBENCH_*=* | OPENROUTER_*=* | DEEPSEEK_*=* | OPENCODE_*=* | CLAUDE_*=* | OPENAI_*=* | CODEX_*=*) ;;
       *) continue ;;
     esac
     key="${line%%=*}"

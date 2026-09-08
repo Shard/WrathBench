@@ -12,3 +12,6 @@ dashboard/public/og.png
 
 # Claude Code session worktrees (never part of the repo)
 .claude/worktrees/
+
+# Local opt-in copy of the held beta fleet config; the disabled example is tracked.
+infra/fleet-deepseek-v41.local.json
