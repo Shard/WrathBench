@@ -73,10 +73,13 @@ Runs as one long-lived loop (a k8s Deployment or a compose service beside the
 fleet) rather than a CronJob, because change detection wants the same
 persistent mtime/size memoisation the viewer already uses; a `--once` mode
 covers backfill and smoke tests. The per-run half of a pass is rendered and
-uploaded in batches of `WRATHBENCH_PUBLISH_BATCH` runs (default 25) rather than
-built whole and then pushed, so what a pass holds does not grow with the runs
-tree; the ordering below is unaffected, because those batches are the run wave
-and the manifest is still written after all of them. Credentials are one R2 key
+uploaded in batches of `WRATHBENCH_PUBLISH_BATCH` runs (default 8) rather than
+built whole and then pushed, and each batch's runs are then released from the
+viewer handle, so what a pass holds does not grow with the runs tree; the
+ordering below is unaffected, because those batches are the run wave and the
+manifest is still written after all of them. That, with the trajectory scanners
+reading in windows rather than whole files, is what puts a pass over a
+1,016-run tree at 0.78 GB peak RSS rather than 4.4 GB (2026-09-08). Credentials are one R2 key
 pair scoped to the one bucket, held only by the publisher.
 
 Minimap tiles are published to the gated site by a second, separate script

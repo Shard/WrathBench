@@ -17,7 +17,7 @@
  *   WRATHBENCH_FLEET_CONFIG         default infra/fleet.json when it exists
  *   WRATHBENCH_PUBLISH_STATE        default data/publish/state.json
  *   WRATHBENCH_PUBLISH_INTERVAL_MS  default 60000
- *   WRATHBENCH_PUBLISH_BATCH        default 25; runs projected per upload flush
+ *   WRATHBENCH_PUBLISH_BATCH        default 8; runs projected per upload flush
  *   WRATHBENCH_MODULE_URL           optional; names the worldserver build on info.json
  *   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT
  *                                   Bun.S3Client's own names, autoloaded from .env
@@ -41,15 +41,19 @@ const FLEET_CONFIG =
 const STATE_PATH = Bun.env.WRATHBENCH_PUBLISH_STATE ?? "data/publish/state.json";
 const INTERVAL_MS = Number(Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS ?? "60000");
 /**
- * Runs projected before the pass flushes them to the bucket and lets the bodies
- * go. The whole tree used to be projected first, so what a pass held grew with
- * it (~55 MB of artifacts at 1,016 runs); 25 bounds that at a megabyte or two
- * while still keeping the per-run read pool (8 wide) full. It does not bring
- * the pass's peak RSS down — ~4.4 GB on the same tree either way, and that is
- * the aggregate phase and the viewer handle's per-run caches (item 121). 1 is
- * legal and serializes the reads.
+ * Runs projected before the pass flushes them to the bucket, drops the bodies
+ * and releases the runs' entry indexes from the viewer handle.
+ *
+ * This is the pass's memory dial, and it is a real one now that the two things
+ * that used to swamp it are gone (whole-file scanner reads, and an entry index
+ * per run held to the end). Measured on the 1,016-run tree, peak RSS of a
+ * `--once` pass: 25 runs 1.08 GB, 8 runs 0.78 GB, 1 run 0.59 GB, for 60–67s
+ * either way — the batch buys memory at almost no time, because the per-run
+ * work is dominated by reads the pool overlaps within a batch. Eight is the
+ * default because it matches that pool's width: a batch smaller than the pool
+ * leaves readers idle, and a larger one only holds more at once.
  */
-const BATCH = Number(Bun.env.WRATHBENCH_PUBLISH_BATCH ?? "25");
+const BATCH = Number(Bun.env.WRATHBENCH_PUBLISH_BATCH ?? "8");
 const MODULE_URL = Bun.env.WRATHBENCH_MODULE_URL;
 
 function fail(message: string): never {
@@ -91,8 +95,10 @@ const store: ObjectStore = {
 };
 
 // One renderer for the process, not one per pass: the viewer handle inside it
-// holds the trajectory mtime caches, so a finished run is read once and a live
-// one only as it grows.
+// holds the listing's (size, mtime) memos, so a finished run's row and totals
+// are read once and a live one only as it grows. The one memo a streaming pass
+// does NOT keep is the per-run entry index, which it releases as each batch
+// flushes — see `ApiHandle.release`.
 const renderer = createRenderer({
   runsDir: RUNS_DIR,
   ...(FLEET_CONFIG !== undefined ? { fleetConfigPath: FLEET_CONFIG } : {}),
