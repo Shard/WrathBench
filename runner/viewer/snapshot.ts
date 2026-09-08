@@ -43,7 +43,7 @@
  */
 
 import { join } from "node:path";
-import { createApi } from "./api";
+import { createApi, type ApiHandle } from "./api";
 import { EPISODE_IDS } from "../src/episodes";
 import type {
   ApiInfoResponse,
@@ -163,9 +163,10 @@ export interface RendererOptions {
   /**
    * The viewer handle to render from. Built from the options above when
    * omitted; injected by the tests that need to disturb the runs directory
-   * partway through a pass.
+   * partway through a pass. A handle without `release` simply keeps its memos,
+   * which is what a plain function injected by a test is.
    */
-  api?: (req: Request) => Promise<Response>;
+  api?: ((req: Request) => Promise<Response>) | ApiHandle;
 }
 
 /**
@@ -196,12 +197,11 @@ export type RunSink = (artifacts: SnapshotArtifact[]) => Promise<void>;
  *
  * A pass over the whole runs tree otherwise holds every projected detail,
  * track, entries window and scratchpad until the last one is made, so what it
- * retains grows with the tree: ~55 MB of serialized artifacts at 1,016 runs
- * (2026-09-08). Streaming bounds that at `batch` runs' worth. It is NOT what
- * dominates the pass's peak RSS — measured at ~4.4 GB on the same tree with and
- * without this, in the aggregate phase and in the viewer handle's per-run
- * caches — so it is a bound on the part that scales with the tree, not a fix
- * for the pod's memory limit (docs/FOLLOW-UPS.md item 121).
+ * retains grows with the tree: the artifacts themselves, and — through the
+ * handle — one entry index per run, which is far the larger of the two.
+ * Streaming bounds both at `batch` runs' worth, which with the scanners reading
+ * in windows is what took a pass over the 1,016-run tree from 4.4 GB peak RSS
+ * to 0.78 GB (2026-09-08, docs/FOLLOW-UPS.md item 121).
  *
  * Nothing about WHAT is rendered changes: the same runs, in the same listing
  * order, on the same keys, with the same bodies. Only the moment the bodies
@@ -215,6 +215,16 @@ export type RunSink = (artifacts: SnapshotArtifact[]) => Promise<void>;
 export interface RunStream {
   sink: RunSink;
   batch: number;
+  /**
+   * Whether to forget each run's viewer memos once its batch has flushed
+   * (`ApiHandle.release`). Default true, because a streaming caller is by
+   * definition walking the tree once and the memos are otherwise a live set
+   * that grows with it — the largest single piece of a pass's memory
+   * (docs/FOLLOW-UPS.md item 121). The cost is that the next pass reads those
+   * runs from disk again. Set false to keep a `--loop` publisher's passes cheap
+   * on a tree small enough that its memos fit.
+   */
+  release?: boolean;
 }
 
 /**
@@ -249,6 +259,15 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
       moduleUrl: opts.moduleUrl ?? "http://127.0.0.1:1",
       ...(opts.fleetConfigPath !== undefined ? { fleetConfigPath: opts.fleetConfigPath } : {}),
     });
+
+  /**
+   * The handle's own eviction, when it has one. A test may inject a bare
+   * function; then a streamed pass simply keeps what it read, as before.
+   */
+  const releaseRun: ((runId: string) => void) | undefined =
+    typeof (handle as Partial<ApiHandle>).release === "function"
+      ? (runId): void => (handle as ApiHandle).release(runId)
+      : undefined;
 
   /** A route that must answer, or the pass is not a snapshot. */
   const get = async <T>(path: string): Promise<T> => {
@@ -381,7 +400,14 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
       await Promise.all(Array.from({ length: Math.min(RUN_CONCURRENCY, group.length) }, worker));
       const made = perRun.flatMap((a) => a ?? []);
       if (stream === undefined) artifacts.push(...made);
-      else await stream.sink(made);
+      else {
+        await stream.sink(made);
+        // Only after the sink has taken them: until it returns, this pass may
+        // still need the run it is holding.
+        if (stream.release !== false && releaseRun !== undefined) {
+          for (const row of group) releaseRun(row.runId);
+        }
+      }
     }
 
     /*

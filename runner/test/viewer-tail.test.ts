@@ -17,6 +17,7 @@ import {
   spellFactsFrom,
   talentFactsFrom,
   tradeFactsFrom,
+  RunTotalsScanner,
   scanRunTotals,
   segmentsFrom,
   splitLines,
@@ -43,6 +44,74 @@ describe("splitLines", () => {
     const { lines, rest } = splitLines(enc.encode("a\nb\n"));
     expect(lines).toHaveLength(2);
     expect(rest.length).toBe(0);
+  });
+});
+
+describe("reading in windows", () => {
+  /*
+   * Both scanners pull `SCAN_CHUNK_BYTES` at a time rather than the whole
+   * unread region, so a record routinely straddles two windows on the real
+   * tree (p90 trajectory is 30 MB, the largest 638 MB) and never does in a
+   * fixture. A tiny window reproduces it: the answers must be the ones the
+   * single-window read gives, byte offsets included, because `raw(i)` reads
+   * those offsets back off disk.
+   */
+  const RECORDS = [
+    '{"t":"state","ts":1,"level":1}',
+    '{"t":"snippet","ts":2,"code":"x".repeat(3)}',
+    '{"t":"milestone","ts":3,"kind":"level","to":2,"from":1,"turn":1}',
+    '{"t":"response","ts":4,"message":{"content":"hello"},"usage":{"input_tokens":5,"output_tokens":7}}',
+    '{"t":"state","ts":5,"level":2}',
+  ];
+
+  function fixture(): string {
+    const path = tempFile();
+    writeFileSync(path, `${RECORDS.join("\n")}\n`);
+    return path;
+  }
+
+  test("an entry index split across windows is the index of one whole read", async () => {
+    const whole = new TrajectoryTail(fixture());
+    const chopped = new TrajectoryTail(fixture(), 17);
+    const a = await whole.scan();
+    const b = await chopped.scan();
+    // The fixture is several windows wide at 17 bytes, so this is the split case.
+    expect(a.length).toBeGreaterThan(1);
+    expect(b.map((e) => [e.i, e.t, e.ts, e.start, e.end])).toEqual(a.map((e) => [e.i, e.t, e.ts, e.start, e.end]));
+    expect(chopped.entries).toEqual(whole.entries);
+    expect(chopped.lastTs).toBe(whole.lastTs);
+    expect(chopped.leveling).toEqual(whole.leveling);
+    expect(chopped.leveling).not.toBeNull();
+    // And the byte ranges still name the records: what `raw(i)` reads back.
+    for (let i = 0; i < chopped.entries.length; i++) {
+      expect(await chopped.raw(i)).toBe(await whole.raw(i));
+    }
+    // A second scan of an unchanged file adds nothing, windowed or not.
+    expect(await chopped.scan()).toHaveLength(0);
+  });
+
+  test("totals split across windows are the totals of one whole read", async () => {
+    const whole = await new RunTotalsScanner(fixture()).scanOnce();
+    const chopped = await new RunTotalsScanner(fixture(), 13).scanOnce();
+    expect(chopped).toEqual(whole);
+  });
+
+  test("a window narrower than a single record still reads it whole", async () => {
+    // The remainder is carried into the next window, so a record longer than
+    // the window is assembled rather than truncated.
+    const whole = await new RunTotalsScanner(fixture()).scanOnce();
+    expect(await new RunTotalsScanner(fixture(), 1).scanOnce()).toEqual(whole);
+  });
+
+  test("windows survive an append, exactly as one read does", async () => {
+    const path = fixture();
+    const tail = new TrajectoryTail(path, 11);
+    await tail.scan();
+    appendFileSync(path, '{"t":"state","ts":6,"level":3}\n');
+    const added = await tail.scan();
+    expect(added).toHaveLength(1);
+    expect(added[0]!["level"]).toBe(3);
+    expect(await tail.raw(added[0]!.i)).toContain('"ts":6');
   });
 });
 

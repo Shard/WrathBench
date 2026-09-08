@@ -68,6 +68,22 @@ export type {
   TradeMarkView,
 } from "./api-types";
 
+/**
+ * How many bytes a scanner pulls off disk at a time.
+ *
+ * Both scanners below used to read the whole unread region in one slice, which
+ * on the runs tree means a 638 MB `ArrayBuffer` for the largest trajectory (and
+ * a line view per record over all of it) before a single record is parsed. That
+ * is transient, but transient at that size is what a memory limit sees: the
+ * publisher's pass peaked at 4.4 GB reading a tree whose live set is well under
+ * one (docs/FOLLOW-UPS.md item 121). Reading in windows changes nothing about
+ * what is parsed — the partial line at a window's edge is carried in `pending`
+ * exactly as the partial line at the end of a live file always was — and bounds
+ * the buffer instead. Four mebibytes is comfortably above the largest single
+ * record and small enough that eight concurrent readers cost tens of megabytes.
+ */
+export const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
+
 /** Split a byte buffer into newline-terminated lines plus the trailing remainder. */
 export function splitLines(buf: Uint8Array): { lines: Uint8Array[]; rest: Uint8Array } {
   const lines: Uint8Array[] = [];
@@ -1719,8 +1735,11 @@ export class RunTotalsScanner {
    * than counted — the same discipline `TrajectoryTail.scan` follows.
    */
   private pending: Uint8Array = new Uint8Array(0);
+  /** Read window; only a test narrows it, to exercise a record split across two. */
+  private readonly chunkBytes: number;
 
-  constructor(path: string) {
+  constructor(path: string, chunkBytes: number = SCAN_CHUNK_BYTES) {
+    this.chunkBytes = Math.max(1, chunkBytes);
     this.path = path;
   }
 
@@ -1847,9 +1866,12 @@ export class RunTotalsScanner {
     } catch {
       return this.totals();
     }
-    if (size > this.size) {
+    // A window at a time (`SCAN_CHUNK_BYTES`), resuming from `this.size`, which
+    // the loop advances as lines are consumed and the remainder is held.
+    while (this.size < size) {
       try {
-        const fresh = new Uint8Array(await Bun.file(this.path).slice(this.size, size).arrayBuffer());
+        const end = Math.min(size, this.size + this.chunkBytes);
+        const fresh = new Uint8Array(await Bun.file(this.path).slice(this.size, end).arrayBuffer());
         const buf = this.pending.length === 0 ? fresh : concat(this.pending, fresh);
         const { lines, rest } = splitLines(buf);
         for (const line of lines) {
@@ -1859,6 +1881,7 @@ export class RunTotalsScanner {
         this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
       } catch {
         /* an unreadable trajectory degrades one row, never the listing */
+        break;
       }
     }
     return this.totals();
@@ -1977,9 +2000,12 @@ export class TrajectoryTail {
   /** Bytes after the last newline: an entry still being written. */
   private pending: Uint8Array = new Uint8Array(0);
   private readonly decoder = new TextDecoder();
+  /** Read window; only a test narrows it, to exercise a record split across two. */
+  private readonly chunkBytes: number;
 
-  constructor(path: string) {
+  constructor(path: string, chunkBytes: number = SCAN_CHUNK_BYTES) {
     this.path = path;
+    this.chunkBytes = Math.max(1, chunkBytes);
   }
 
   get size(): number {
@@ -2016,56 +2042,61 @@ export class TrajectoryTail {
     }
     if (size === this.size) return [];
 
-    const fresh = new Uint8Array(await Bun.file(this.path).slice(this.size, size).arrayBuffer());
-    const buf = this.pending.length === 0 ? fresh : concat(this.pending, fresh);
-    const { lines, rest } = splitLines(buf);
-
     const added: EntrySummary[] = [];
-    let offset = this.consumed;
-    for (const line of lines) {
-      const start = offset;
-      const end = start + line.length;
-      offset = end + 1; // the newline
-      if (line.length === 0) continue;
-      const text = this.decoder.decode(line);
-      const i = this.entries.length;
-      let summary: EntrySummary;
-      try {
-        const rec = JSON.parse(text) as Record<string, unknown>;
-        if (rec["t"] === "milestone") {
-          const ach = achievementMarkOf(rec);
-          if (ach !== null) this.achievementMarks.push(ach);
-          const taxi = taxiMarkOf(rec);
-          if (taxi !== null) this.taxiMarks.push(taxi);
-          const lvl = levelUpMarkOf(rec);
-          if (lvl !== null) this.levelUpMarks.push(lvl);
-          const death = deathMarkOf(rec);
-          if (death !== null) this.deathMarks.push(death);
-          const spell = spellMarkOf(rec);
-          if (spell !== null) this.spellMarks.push(spell);
-          const talent = talentMarkOf(rec);
-          if (talent !== null) this.talentMarks.push(talent);
-          const trade = tradeMarkOf(rec);
-          if (trade !== null) this.tradeMarks.push(trade);
+    // A window at a time; see `SCAN_CHUNK_BYTES`. Byte offsets are the file's
+    // throughout, because `this.consumed` is where the previous window stopped.
+    while (this.size < size) {
+      const windowEnd = Math.min(size, this.size + this.chunkBytes);
+      const fresh = new Uint8Array(await Bun.file(this.path).slice(this.size, windowEnd).arrayBuffer());
+      const buf = this.pending.length === 0 ? fresh : concat(this.pending, fresh);
+      const { lines, rest } = splitLines(buf);
+
+      let offset = this.consumed;
+      for (const line of lines) {
+        const start = offset;
+        const end = start + line.length;
+        offset = end + 1; // the newline
+        if (line.length === 0) continue;
+        const text = this.decoder.decode(line);
+        const i = this.entries.length;
+        let summary: EntrySummary;
+        try {
+          const rec = JSON.parse(text) as Record<string, unknown>;
+          if (rec["t"] === "milestone") {
+            const ach = achievementMarkOf(rec);
+            if (ach !== null) this.achievementMarks.push(ach);
+            const taxi = taxiMarkOf(rec);
+            if (taxi !== null) this.taxiMarks.push(taxi);
+            const lvl = levelUpMarkOf(rec);
+            if (lvl !== null) this.levelUpMarks.push(lvl);
+            const death = deathMarkOf(rec);
+            if (death !== null) this.deathMarks.push(death);
+            const spell = spellMarkOf(rec);
+            if (spell !== null) this.spellMarks.push(spell);
+            const talent = talentMarkOf(rec);
+            if (talent !== null) this.talentMarks.push(talent);
+            const trade = tradeMarkOf(rec);
+            if (trade !== null) this.tradeMarks.push(trade);
+          }
+          // Not a milestone: its own record kind, written by the loop's builder.
+          const reflect = reflectMarkOf(rec);
+          if (reflect !== null) this.reflectMarks.push(reflect);
+          const ts = rec["ts"];
+          if (typeof ts === "number" && ts > 0) this.lastTsSeen = ts;
+          // After the accumulators, so a record that is not served still counts
+          // toward everything derived from the file, and after the offset above,
+          // so the byte range of every later entry — what `raw` reads — stands.
+          if (!isServedEntry(rec)) continue;
+          summary = summarize(rec, i, start, end);
+        } catch {
+          summary = unparseable(text, i, start, end);
         }
-        // Not a milestone: its own record kind, written by the loop's builder.
-        const reflect = reflectMarkOf(rec);
-        if (reflect !== null) this.reflectMarks.push(reflect);
-        const ts = rec["ts"];
-        if (typeof ts === "number" && ts > 0) this.lastTsSeen = ts;
-        // After the accumulators, so a record that is not served still counts
-        // toward everything derived from the file, and after the offset above,
-        // so the byte range of every later entry — what `raw` reads — stands.
-        if (!isServedEntry(rec)) continue;
-        summary = summarize(rec, i, start, end);
-      } catch {
-        summary = unparseable(text, i, start, end);
+        this.entries.push(summary);
+        added.push(summary);
       }
-      this.entries.push(summary);
-      added.push(summary);
+      this.consumed = offset;
+      this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
     }
-    this.consumed = offset;
-    this.pending = rest.length === 0 ? new Uint8Array(0) : new Uint8Array(rest);
     return added;
   }
 

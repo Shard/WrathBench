@@ -526,7 +526,34 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
  * Per-run tails, scan serialisation and the totals memo live in the closure:
  * one viewer process, one reader per run, however many browsers are watching.
  */
-export function createApi(opts: ApiOptions): (req: Request) => Promise<Response> {
+/**
+ * A handler, plus the one thing a one-shot walk over the whole runs tree needs
+ * that a viewer does not: the ability to forget a run.
+ *
+ * Every per-run memo in this closure exists because a viewer is polled — a
+ * finished run is read once per process and answered from memory forever after.
+ * The snapshot publisher is the opposite shape: it visits every run once per
+ * pass, in order, and nothing it has already published will be asked for again
+ * this pass, so those memos are a live set that grows with the tree. `release`
+ * lets that caller drop one run's share of it (docs/FOLLOW-UPS.md item 121).
+ *
+ * It is opt-in and nothing in the viewer calls it: a process that keeps serving
+ * requests wants exactly the memos it has. The cost is symmetric and worth
+ * stating — a released run is read from disk again the next time it is asked
+ * for, which for the publisher means every pass rather than once per process.
+ */
+export type ApiHandle = ((req: Request) => Promise<Response>) & {
+  /** Forget every per-run memo for `runId`. A run that is not cached is a no-op. */
+  release(runId: string): void;
+  /**
+   * How many runs each per-run memo is holding. Introspection only — what a
+   * streaming pass asserts about itself, and what an operator would want if the
+   * publisher ever grows again.
+   */
+  cachedRuns(): { entries: number; totals: number; facts: number; rows: number };
+};
+
+export function createApi(opts: ApiOptions): ApiHandle {
   const { runsDir, tilesDir } = opts;
   const publicMode = opts.publicMode === true;
   const tilesPublic = opts.tilesPublic === true;
@@ -1391,7 +1418,38 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     return notFound("no such path");
   }
 
-  return async function handle(req: Request): Promise<Response> {
+  /**
+   * See `ApiHandle.release`. The entry index and its scan lock, and nothing
+   * else — because the entry index is both the heavy memo and the only one a
+   * pass is genuinely finished with when it has published a run.
+   *
+   * A `TrajectoryTail` keeps one `EntrySummary` per record for the whole file:
+   * on the 1,016-run tree that was ~570 MB of live objects at the end of a
+   * pass, against ~8 MB for the run rows and rather less for the totals. It is
+   * also per-run in the strict sense — only `/api/run/<id>` and its feed touch
+   * one — so dropping it costs nothing else this pass.
+   *
+   * The two set-shaped memos are deliberately kept, and the reason is
+   * measured. `runReadCache` holds run rows and state series that the listing
+   * routes read as a whole, and `totalsCache` is consulted per run by
+   * `resultRuns()`, which a freeplay run's detail route calls to build its
+   * stream view. Dropping either mid-pass makes those set reads re-open and
+   * re-scan every run already released — quadratic, and a pass went from 64s to
+   * 158s when they were included. Small, shared, set-shaped: they stay.
+   */
+  const release = (runId: string): void => {
+    tails.delete(runId);
+    scans.delete(runId);
+  };
+
+  const cachedRuns = (): { entries: number; totals: number; facts: number; rows: number } => ({
+    entries: tails.size,
+    totals: totalsCache.size,
+    facts: factCache.size,
+    rows: runReadCache.size,
+  });
+
+  return Object.assign(async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
 
@@ -1433,5 +1491,5 @@ export function createApi(opts: ApiOptions): (req: Request) => Promise<Response>
     // is the only UI, so every non-API path gets the notice telling the
     // operator how to build it.
     return unbuilt();
-  };
+  }, { release, cachedRuns });
 }
