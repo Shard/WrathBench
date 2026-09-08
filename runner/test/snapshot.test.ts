@@ -603,6 +603,48 @@ describe("createRenderer", () => {
     await expect(createRenderer({ runsDir: runs, api: handle })(111)).rejects.toThrow(/answered 500/);
   });
 
+  test("a streamed pass holds no more entry indexes than one batch", async () => {
+    /*
+     * The point of `RunStream.release`: the viewer handle keeps one
+     * `EntrySummary` per record per run, which over a thousand-run tree is the
+     * largest live thing a publish pass builds (docs/FOLLOW-UPS.md item 121).
+     * A streaming caller is walking the tree once, so a run it has published is
+     * one it can forget — and the proof is that the count never climbs past the
+     * batch size, whatever the tree's size.
+     */
+    const runs = fixture();
+    const api = createApi({
+      runsDir: runs,
+      tilesDir: join(runs, "tiles-unused"),
+      publicMode: true,
+      moduleUrl: "http://127.0.0.1:1",
+    });
+    const seen: number[] = [];
+    await createRenderer({ runsDir: runs, api })(111, {
+      batch: 1,
+      sink: async () => void seen.push(api.cachedRuns().entries),
+    });
+    expect(seen.length).toBeGreaterThan(1);
+    for (const held of seen) expect(held).toBeLessThanOrEqual(1);
+    // And the last run is released too, so nothing is left holding the tree.
+    expect(api.cachedRuns().entries).toBe(0);
+    // The set-shaped memos are deliberately NOT released — see `release` in
+    // api.ts for the quadratic re-read that dropping them causes.
+    expect(api.cachedRuns().rows).toBeGreaterThan(0);
+  });
+
+  test("release: false keeps the memos, which is what a small tree wants", async () => {
+    const runs = fixture();
+    const api = createApi({
+      runsDir: runs,
+      tilesDir: join(runs, "tiles-unused"),
+      publicMode: true,
+      moduleUrl: "http://127.0.0.1:1",
+    });
+    await createRenderer({ runsDir: runs, api })(111, { batch: 1, release: false, sink: async () => {} });
+    expect(api.cachedRuns().entries).toBeGreaterThan(0);
+  });
+
   test("streaming the per-run artifacts changes nothing but when they are let go of", async () => {
     /*
      * The publisher renders with a `RunStream` so it never holds the whole

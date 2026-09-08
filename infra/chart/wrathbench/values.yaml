@@ -212,22 +212,19 @@ viewer:
 publisher:
   enabled: true
   intervalMs: 300000
-  # Runs projected before a pass uploads them and drops the bodies, so what it
-  # holds stops growing with the runs tree. See WRATHBENCH_PUBLISH_BATCH in
-  # docs/OPERATIONS.md.
-  batch: 25
+  # Runs projected before a pass uploads them, drops the bodies and releases
+  # their entry indexes — the pass's memory dial. See WRATHBENCH_PUBLISH_BATCH
+  # in docs/OPERATIONS.md for the measured peaks per value.
+  batch: 8
   resources:
     requests:
       cpu: 100m
       memory: 256Mi
     limits:
-      # Known too small, and deliberately left: a --once pass over 1,016 runs
-      # peaked at 4.4 GB RSS on 2026-09-08, batched or not, and that peak is the
-      # aggregate phase plus the viewer handle's per-run caches rather than
-      # anything the pass holds (docs/FOLLOW-UPS.md item 121). The cluster
-      # overrides this to 8Gi; where the default belongs is the operator's call
-      # once the peak itself is dealt with.
-      memory: 1Gi
+      # 2x the measured peak, rounded up: a --once pass over the 1,016-run tree
+      # peaks at 0.78 GB at the default batch (2026-09-08, was 4.4 GB before the
+      # scanners read in windows and the pass released each run's entry index).
+      memory: 2Gi
 
 # Extra pod annotations/labels, if the cluster repo wants them.
 podAnnotations: {}
