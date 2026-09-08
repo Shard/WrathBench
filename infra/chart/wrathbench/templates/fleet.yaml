@@ -13,9 +13,11 @@ which would turn hot steering into a silent no-op.
 Draining is `kubectl scale --replicas=0` plus the wait on fleet-state.json that
 infra/k8s-deploy.sh does. terminationGracePeriodSeconds is the compose
 stop_grace_period: SIGTERM reaches the supervisor, it SIGTERMs each lane,
-run-roster gives its episode 30s of grace, and the supervisor notices the exits
-on its next 60s tick. 180s is that floor plus margin; shorter is a SIGKILL
-mid-episode.
+run-roster gives its episode CHILD_TERM_GRACE_MS (90s) to write its pause
+record and release its session, and the supervisor notices the exits on its
+next poll. 180s is that floor plus margin; shorter is a SIGKILL mid-pause,
+which loses the pause record the next supervisor resumes from. roster.test.ts
+pins this file's number against the code's own grace.
 */}}
 apiVersion: apps/v1
 kind: Deployment

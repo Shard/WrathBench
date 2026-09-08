@@ -2928,6 +2928,110 @@ describe("account affinity and cross-account name hygiene", () => {
   });
 });
 
+describe("a paused stream head is not orphaned by a supervisor restart (2026-09-08)", () => {
+  // The live shape. The k8s fleet pod stamped its runs "0.0.0-phase0" (no
+  // git in the image; the fix is in run-roster's harnessVersion), so
+  // nemotron-super's a12 — paused `operator-pause` by the drain three minutes
+  // earlier — was out of the policy's series. planResumes dropped it before
+  // the loop, so it was neither resumed nor listed, and the policy then
+  // continued the stream from a11, the ENDED attempt before it, leaving a12
+  // orphaned off the chain on the same character.
+  const NOW = 1_800_000_000_000;
+  const H = 3_600_000;
+  const REF = "nemotron-super";
+  /** The synthetic policy job's name, which is also what the run ids hang off. */
+  const JOB = `${REF}-freeplay`;
+  const roster: Record<string, FleetRosterEntry> = {
+    [REF]: { model: "nvidia/nemotron-3-super-120b-a12b:free", tier: "t1", idle: "unlimited" },
+  };
+  const config = (): Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> => ({
+    jobs: [],
+    roster,
+    policy: { ...DEFAULT_POLICY, series: "0.5" },
+    accounts: { pinned: {}, pool: ["RUNNER"], paid: [], local: [] },
+  });
+  const run = (over: Partial<RunFact> & { runId: string }): RunFact => ({
+    model: "nvidia/nemotron-3-super-120b-a12b:free",
+    effort: null,
+    episode: "freeplay",
+    episodeOverride: false,
+    harnessVersion: "harness-0.5-506-gcee3e079",
+    harnessSeries: "0.5",
+    extra: true,
+    startedAt: NOW - 6 * H,
+    endedAt: NOW - 2 * H,
+    terminationReason: "idle",
+    modelResponses: 200,
+    bestLevel: 5,
+    live: false,
+    pause: null,
+    account: "RUNNER",
+    character: "Aric",
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    subscription: null,
+    ...over,
+  });
+  const a11 = run({ runId: `fleet-${JOB}-nemotron-3-super-120b-a12b-20260905-a11` });
+  const a12 = run({
+    runId: `fleet-${JOB}-nemotron-3-super-120b-a12b-20260905-a12`,
+    harnessVersion: "0.0.0-phase0",
+    harnessSeries: null,
+    startedAt: NOW - 2 * H,
+    endedAt: null,
+    terminationReason: null,
+    pause: { reason: "operator-pause", at: NOW - 3 * 60_000, count: 2, episodeElapsedMs: 93 * 60_000 },
+  });
+  const held = (): string | undefined => undefined;
+
+  test("the newest paused attempt is the stream head, so a fresh attempt continues from IT, not from the ended one", () => {
+    expect(streamsFrom([a11, a12], roster).get(REF)).toEqual({ runId: a12.runId, account: "RUNNER", character: "Aric" });
+    const picks = planContinuations(
+      [{ job: { refs: [REF], ref: REF, episode: "freeplay", repeat: 1, name: JOB, enabled: true, source: "policy", attempt: 13 }, account: "RUNNER", why: "extra" }],
+      streamsFrom([a11, a12], roster),
+      roster,
+    );
+    expect(picks.picks[0]!.job.continueFrom).toBe(a12.runId);
+  });
+
+  test("a run from another series is listed, never resumed and never ENDED", () => {
+    const plan = planResumes({ runs: [a11, a12], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    // The sweep must not reach it: on the live fleet 42 paused runs from older
+    // series were sitting in data/runs, and ending them would have written a
+    // termination on every one.
+    expect(plan.end).toEqual([]);
+    expect(plan.listed).toHaveLength(1);
+    expect(plan.listed[0]!.runId).toBe(a12.runId);
+    expect(plan.listed[0]!.why).toContain("paused under harness series unversioned, this supervisor runs 0.5");
+    // A COLD one stays out of the listing, exactly as it was before: nobody is
+    // waiting on a run that has shown no life for longer than its own budget.
+    const cold = planResumes({
+      runs: [{ ...a12, pause: { ...a12.pause!, at: NOW - 20 * H }, endedAt: NOW - 20 * H }],
+      config: config(),
+      running: new Map(),
+      held,
+      now: NOW,
+    });
+    expect(cold.listed).toEqual([]);
+    expect(cold.end).toEqual([]);
+  });
+
+  test("with the stamp fixed, the same restart resumes it in place", () => {
+    // What the harnessVersion fix restores: the pod's runs carry the image
+    // tag's series again, so the paused head is the supervisor's to resume.
+    const stamped = { ...a12, harnessVersion: "harness-0.5-513-g803bd42", harnessSeries: "0.5" };
+    const plan = planResumes({ runs: [a11, stamped], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.listed).toEqual([]);
+    expect(plan.end).toEqual([]);
+    expect(plan.resume.map((r) => [r.job.name, r.job.source, r.job.attempt, r.account, r.runId])).toEqual([
+      [JOB, "policy", 12, "RUNNER", stamped.runId],
+    ]);
+    expect(jobSpawn(plan.resume[0]!.job, roster, "RUNNER", "20260908").resumeRunId).toBe(stamped.runId);
+  });
+});
+
 describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
   const NOW = 1_800_000_000_000;
   const roster: Record<string, FleetRosterEntry> = {
@@ -2977,15 +3081,31 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
       fact("fleet-sub-opus-low-freeplay-opus-low-20260827-a10", { startedAt: NOW - 90_000_000, character: "Bromdal", terminationReason: "idle" }),
       fact("fleet-sub-opus-low-freeplay-opus-low-20260827-a11", {}),
       // A live one (no termination) is in flight, not a predecessor.
-      fact("fleet-sonnet-low-freeplay-sonnet-low-20260827-a2", { model: "sonnet", account: "RUNNER3", character: "Ironvowen", terminationReason: null, live: true }),
-      // A paused one is planResumes' business, on its own run id.
-      fact("fleet-sonnet-low-freeplay-sonnet-low-20260827", { model: "sonnet", account: "RUNNER3", character: "Bronwyra", terminationReason: null, pause: { reason: "operator-pause", at: NOW, count: 1, episodeElapsedMs: null } }),
+      fact("fleet-sonnet-low-freeplay-sonnet-low-20260827-a2", { model: "sonnet", startedAt: NOW - 1_000, account: "RUNNER3", character: "Ironvowen", terminationReason: null, live: true }),
       // A scored run of the same model is not the stream, whatever it played.
       fact("fleet-sub-opus-low-e90-opus-low-20260829", { episode: "e90", extra: false, startedAt: NOW - 1000, account: "RUNNER5", character: "Brintor", terminationReason: "episode-limit" }),
     ];
     const streams = streamsFrom(runs, roster);
     expect(streams.get("opuslo")).toEqual({ runId: "fleet-sub-opus-low-freeplay-opus-low-20260827-a11", account: "RUNNER2", character: "Bromdir" });
     expect(streams.has("sonlo")).toBe(false);
+    // …and a PAUSED attempt is a head, even though it has no termination: it is
+    // the newest thing the stream did, and the runs directory is all a fresh
+    // supervisor has (2026-09-08). The live one above still is not.
+    const withPause = streamsFrom(
+      [
+        ...runs,
+        fact("fleet-sonnet-low-freeplay-sonnet-low-20260827", {
+          model: "sonnet",
+          startedAt: NOW - 2_000,
+          account: "RUNNER3",
+          character: "Bronwyra",
+          terminationReason: null,
+          pause: { reason: "operator-pause", at: NOW, count: 1, episodeElapsedMs: null },
+        }),
+      ],
+      roster,
+    );
+    expect(withPause.get("sonlo")).toEqual({ runId: "fleet-sonnet-low-freeplay-sonnet-low-20260827", account: "RUNNER3", character: "Bronwyra" });
     // A ref that is not in the unlimited lane owes no stream, even with runs.
     expect(streamsFrom([fact("x", { model: "z-ai/glm-5.2:free", effort: null })], roster).has("glm")).toBe(false);
   });
