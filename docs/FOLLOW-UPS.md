@@ -126,16 +126,30 @@ worklogs/2026-08-29).
     already. Trigger: the fleet's episode logs show module timeouts or
     `run.sqlite` write stalls.
 
-121. **The publisher holds every run's projection in memory** (2026-09-08, out
-    of the cutover). `infra/publish-dashboard.ts` builds the whole public
-    projection of the runs tree before it uploads anything: 4.8 GB peak RSS on
-    the 1016-run tree (measured on the workstation by `VmHWM`), which the
-    chart's 1 GiB default OOM-killed nine seconds into every pass. The cluster
-    repo overrides the limit to 8 GiB (nusphere PR 157), which buys time, not a
-    fix: the tree only grows. The fix is a pass that projects and uploads one
-    run at a time and holds only the manifest, and then the chart default comes
-    back down. Trigger: the publisher pod restarts with `OOMKilled` again, or
-    the runs tree passes ~2000 runs.
+121. **A publisher pass peaks at ~4.5 GB, and it is not the artifacts**
+    (2026-09-08, out of the cutover; amended the same day). The chart's 1 GiB
+    default OOM-killed the pod nine seconds into every pass and the cluster repo
+    overrides the limit to 8 GiB (nusphere PR 157). The pass now projects and
+    uploads the per-run half in batches of `WRATHBENCH_PUBLISH_BATCH` (default
+    25) and holds only keys and hashes, so what it *retains* no longer grows
+    with the tree — but that was never the memory. Measured over the 1,016-run
+    tree against a local fake S3: all 1,294 artifacts are 55 MB in total, and
+    peak RSS is 4.46/4.44 GB unbatched against 3.67/4.93 GB at batch 25 and
+    3.10 GB at batch 1 — run-to-run spread, not an effect. Forcing a full
+    collection at every batch boundary moved the peak by 0.02 GB, so it is not
+    uncollected garbage. Second-by-second RSS puts it in two places batching
+    cannot reach: ~2.2 GB of spikes in the aggregate phase, which runs over
+    every run before the per-run loop starts, and a climb to 3–4 GB as the
+    viewer handle's per-run caches (`factCache`, `totalsCache`,
+    `runReadCache` in `runner/viewer/api.ts`) fill — one live entry per run, in
+    the handle the publisher keeps for the life of the process. The fix is
+    therefore about those caches (bounded, or an LRU, with the viewer's own
+    polling in mind), not about the pass's shape. **Operator call owed:** the
+    chart default is left at 1 GiB with the measurement in a comment; 2× the
+    measured peak would mean *raising* it to the cluster's 8 GiB rather than
+    bringing it down, which is the opposite of what this item wanted. Trigger:
+    the publisher pod restarts with `OOMKilled` again, or the runs tree passes
+    ~2000 runs.
 
 ## Docs and release
 

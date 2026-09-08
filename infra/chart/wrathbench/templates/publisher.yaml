@@ -63,6 +63,10 @@ spec:
               value: /wrathbench/data/publish/state.json
             - name: WRATHBENCH_PUBLISH_INTERVAL_MS
               value: {{ .Values.publisher.intervalMs | quote }}
+            # Runs projected before the pass uploads them and drops the bodies,
+            # so what a pass holds does not track the size of the runs tree.
+            - name: WRATHBENCH_PUBLISH_BATCH
+              value: {{ .Values.publisher.batch | quote }}
             # S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY / S3_BUCKET / S3_ENDPOINT
             # are Bun.S3Client's own variable names. This pod holds those four
             # and no model key at all.

@@ -17,11 +17,14 @@ import {
   planPrune,
   publish,
   publishLoop,
+  publishPass,
   PublishError,
   saveState,
   sleepMs,
   waveOf,
   type ObjectStore,
+  type PassRenderer,
+  type PublishReport,
   type PublishState,
   type SnapshotArtifact,
   type SnapshotResult,
@@ -1199,5 +1202,183 @@ describe("describeReport", () => {
     expect(line).toContain("gen gen1");
     expect(line).toContain("6 put");
     expect(line).toContain("manifest flipped");
+  });
+});
+
+// ------------------------------------------------------- streaming the run wave
+
+/**
+ * A renderer that hands its per-run artifacts to the sink `batch` runs at a
+ * time and returns the rest — what `createRenderer(…)(now, stream)` does over a
+ * real runs tree, reduced to the fixture. `trace` records projections and PUTs
+ * on one timeline, which is the only way to see that a batch is uploaded before
+ * the next one is projected rather than after all of them are.
+ */
+function streamingRenderer(result: SnapshotResult, batch: number, trace: string[] = []): PassRenderer {
+  const byRun = new Map<string, SnapshotArtifact[]>();
+  const rest: SnapshotArtifact[] = [];
+  for (const a of result.artifacts) {
+    const c = classifyPath(a.path);
+    if (c.kind === "run") byRun.set(c.runId, [...(byRun.get(c.runId) ?? []), a]);
+    else rest.push(a);
+  }
+  const ids = [...byRun.keys()];
+  return async (sink) => {
+    for (let i = 0; i < ids.length; i += batch) {
+      const group = ids.slice(i, i + batch);
+      for (const id of group) trace.push(`project ${id}`);
+      await sink(group.flatMap((id) => byRun.get(id) ?? []));
+    }
+    return { gen: result.gen, snap: result.snap, artifacts: rest };
+  };
+}
+
+/** The fake bucket, with every PUT and DELETE also landing on a shared timeline. */
+function tracing(store: FakeStore, trace: string[]): ObjectStore {
+  return {
+    put: async (path, body, opts) => {
+      trace.push(`put ${path}`);
+      await store.put(path, body, opts);
+    },
+    delete: async (path) => {
+      trace.push(`delete ${path}`);
+      await store.delete(path);
+    },
+  };
+}
+
+const RUNS: RunSpec[] = [
+  { id: "runA", ver: "v1" },
+  { id: "runB", ver: "v1" },
+  { id: "runC", ver: "v1" },
+  { id: "runD", ver: "v1" },
+  { id: "runE", ver: "v1" },
+];
+
+describe("a streamed run wave", () => {
+  test("uploads each batch before the next one is projected", async () => {
+    // The whole memory fix: a pass must not hold the tree. If every `put` came
+    // after every `project`, the bodies were all alive at once and item 121 is
+    // still there.
+    const store = new FakeStore();
+    const trace: string[] = [];
+    await publishPass(streamingRenderer(snapshot("gen1", RUNS), 2, trace), tracing(store, trace), emptyState());
+
+    expect(trace.indexOf("put v1/run/runA/v1/detail.json")).toBeLessThan(trace.indexOf("project runC"));
+    expect(trace.indexOf("put v1/run/runC/v1/detail.json")).toBeLessThan(trace.indexOf("project runE"));
+    // And the wave barrier survives: every run object still precedes every
+    // aggregate, and the manifest is still strictly last.
+    const puts = store.puts();
+    const firstAggregate = puts.findIndex((p) => p.startsWith("v1/snap/"));
+    expect(puts.filter((p) => p.startsWith("v1/run/")).every((p) => at(puts, p) < firstAggregate)).toBe(true);
+    expect(puts[puts.length - 1]).toBe(MANIFEST_PATH);
+  });
+
+  test("batch size changes nothing: same keys, same bytes, same manifest, same state", async () => {
+    const rendered = snapshot("gen1", RUNS);
+    const run = async (batch: number): Promise<{ store: FakeStore; state: PublishState; report: PublishReport }> => {
+      const store = new FakeStore();
+      const state = emptyState();
+      const report = await publishPass(streamingRenderer(rendered, batch), store, state, { now: () => 5 });
+      return { store, state, report };
+    };
+    const one = await run(1);
+    const wide = await run(1000);
+    // ...and the unbatched engine, which is the code every other test exercises.
+    const whole = { store: new FakeStore(), state: emptyState() };
+    const wholeReport = await publish(rendered, whole.store, whole.state, { now: () => 5 });
+
+    for (const other of [wide, { store: whole.store, state: whole.state, report: wholeReport }]) {
+      expect([...one.store.objects.entries()].sort()).toEqual([...other.store.objects.entries()].sort());
+      expect(one.store.puts().sort()).toEqual(other.store.puts().sort());
+      expect(one.report.bytes).toBe(other.report.bytes);
+      expect(one.report.unchanged).toBe(other.report.unchanged);
+      expect(one.report.flipped).toBe(other.report.flipped);
+      expect(one.state).toEqual(other.state);
+    }
+    expect(one.store.objects.get(MANIFEST_PATH)).toBe(whole.store.objects.get(MANIFEST_PATH));
+  });
+
+  test("the run versions it streamed are what the next pass diffs and the pruner keeps", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publishPass(streamingRenderer(snapshot("gen1", RUNS), 2), store, state);
+    expect(state.runVersions).toEqual({ runA: ["v1"], runB: ["v1"], runC: ["v1"], runD: ["v1"], runE: ["v1"] });
+
+    // A second pass at a fresh stamp re-renders every body and must still cost
+    // nothing under `v1/run/` — the streamed keys are remembered like any other.
+    store.reset();
+    await publishPass(streamingRenderer(snapshot("gen1", RUNS, "aggregate", "later"), 2), store, state);
+    expect(store.puts().filter((p) => p.startsWith("v1/run/"))).toEqual([]);
+  });
+
+  test("a failed upload does not stop the tree from being attempted, and stops the flip", async () => {
+    // Today's run wave attempts every object and raises one error carrying all
+    // the failures; batching must not turn that into "abort on the first bad
+    // batch", or a bucket that is briefly unreachable costs the whole pass's
+    // progress instead of one object's.
+    const store = new FakeStore();
+    store.failPuts.add("v1/run/runA/v1/detail.json");
+    store.failPuts.add("v1/run/runE/v1/track.json");
+    const state = emptyState();
+    const trace: string[] = [];
+
+    await expect(publishPass(streamingRenderer(snapshot("gen1", RUNS), 1, trace), tracing(store, trace), state)).rejects.toThrow(
+      PublishError,
+    );
+
+    expect(trace.filter((t) => t.startsWith("project "))).toHaveLength(RUNS.length);
+    expect(store.objects.has(MANIFEST_PATH)).toBe(false);
+    expect(store.objects.has(LIVE_PATH)).toBe(false);
+    // The successes are recorded, so the retry is cheap; the two failures are not.
+    expect(state.uploaded["v1/run/runA/v1/track.json"]).toBeDefined();
+    expect(state.uploaded["v1/run/runA/v1/detail.json"]).toBeUndefined();
+    expect(state.uploaded["v1/run/runE/v1/track.json"]).toBeUndefined();
+    // Nothing was registered as live, because nothing flipped.
+    expect(state.runVersions).toEqual({});
+
+    store.failPuts.clear();
+    store.reset();
+    await publishPass(streamingRenderer(snapshot("gen1", RUNS), 1), store, state);
+    expect(store.puts().filter((p) => p.startsWith("v1/run/"))).toEqual([
+      "v1/run/runA/v1/detail.json",
+      "v1/run/runE/v1/track.json",
+    ]);
+    expect(store.objects.has(MANIFEST_PATH)).toBe(true);
+  });
+
+  test("refuses a streamed key that is not a per-run one — that would outrun the flip", async () => {
+    const store = new FakeStore();
+    const bad: PassRenderer = async (sink) => {
+      await sink([json(MANIFEST_PATH, { gen: "gen1" }, MUTABLE)]);
+      return snapshot("gen1", []);
+    };
+    await expect(publishPass(bad, store, emptyState())).rejects.toThrow(/streamed as a per-run artifact but is not one/);
+    expect(store.puts()).toEqual([]);
+  });
+
+  test("refuses a key claimed twice across batches", async () => {
+    const store = new FakeStore();
+    const twice: PassRenderer = async (sink) => {
+      await sink([json("v1/run/runA/v1/detail.json", { a: 1 })]);
+      await sink([json("v1/run/runA/v1/detail.json", { a: 2 })]);
+      return snapshot("gen1", []);
+    };
+    await expect(publishPass(twice, store, emptyState())).rejects.toThrow(/two artifacts claim the key/);
+  });
+
+  test("the loop drives a streaming renderer, and its sink is optional", async () => {
+    // `publishLoop`'s renderer is handed a sink; the tests above (and any
+    // caller with nothing to stream) ignore it, which must stay legal.
+    const store = new FakeStore();
+    const io = memoryIo();
+    const summary = await publishLoop(streamingRenderer(snapshot("gen1", RUNS), 2), store, "state.json", {
+      once: true,
+      io,
+      log: () => {},
+    });
+    expect(summary).toEqual({ passes: 1, published: 1, failed: 0, lastGen: "gen1" });
+    expect(store.puts()).toContain("v1/run/runC/v1/detail.json");
+    expect(store.puts()[store.puts().length - 1]).toBe(MANIFEST_PATH);
   });
 });
