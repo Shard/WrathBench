@@ -1,12 +1,19 @@
 /**
  * Bash-level tests for infra/fleet-update.sh, in the shape
- * infra/deploy-worldserver.test.ts established: the real script, `docker`
- * replaced by a PATH shim, no daemon and no containers.
+ * infra/deploy-worldserver.test.ts established: the real script, `kubectl`
+ * replaced by a PATH shim, no cluster and no pods.
+ *
+ * The shim answers `get` from a fixture, records `rollout`/`scale`, and — the
+ * part that makes this worth doing — implements `exec ... -- <cmd>` by running
+ * `<cmd>` locally. The script passes the state and pause paths as ARGV rather
+ * than baking `/wrathbench/data/runs` into its bun snippets, so pointing
+ * WRATHBENCH_FLEET_RUNS_DIR at a tmpdir makes the pod-side reads and writes
+ * real reads and writes of real files.
  *
  * The properties worth pinning are the ones that cost money when they are
- * wrong: the graceful path must not touch compose until the supervisor's own
- * state file says no job is alive, it must never drop `--no-deps` (which is how
- * a fleet update recreates the worldserver under live episodes), and a timeout
+ * wrong: the graceful path must not touch the Deployment until the supervisor's
+ * own state file says no job is alive, `drain` must scale to 0 and never
+ * restart, `graceful`/`force` must restart and never scale to 0, and a timeout
  * must leave the switch set rather than fall through to a kill.
  *
  * FORCE_COLOR=3 throughout: that is what colourised a number into a pipe and
@@ -21,20 +28,58 @@ const REPO_ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(REPO_ROOT, "infra", "fleet-update.sh");
 
 /**
- * A `docker` that logs every argv and answers `ps`. `up -d ... fleet` refreshes
+ * A `kubectl` that logs every argv, answers `get`, records `scale`/`rollout`,
+ * and runs `exec ... -- cmd` locally. A restart or a scale back up refreshes
  * the state file's heartbeat, which is how the script knows the new supervisor
- * came back.
+ * came back (FAKE_BOOT=0 is the one that never does).
  */
-const DOCKER_SHIM = `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "\${FAKE_DOCKER_LOG}"
-args="$*"
-if [[ "\${args}" == *" ps "* ]]; then
-  if [[ "\${FAKE_FLEET_RUNNING:-1}" == "1" ]]; then echo "wrathbench-fleet-1"; fi
-  exit 0
-fi
-if [[ "\${args}" == *" up "* && -n "\${FAKE_STATE_JSON:-}" && "\${FAKE_BOOT:-1}" == "1" ]]; then
-  bun -e 'const p=process.argv[1];const s=await Bun.file(p).json();s.heartbeatAt=Date.now();delete s.pausedSwitch;await Bun.write(p,JSON.stringify(s,null,2));' "\${FAKE_STATE_JSON}"
-fi
+const KUBECTL_SHIM = `#!/usr/bin/env bash
+log() { printf '%s\\n' "$1" >> "\${FAKE_KUBECTL_LOG}"; }
+beat() {
+  [[ "\${FAKE_BOOT:-1}" == "1" ]] || return 0
+  bun -e 'const p=process.argv[1];const s=await Bun.file(p).json();s.heartbeatAt=Date.now();delete s.pausedSwitch;await Bun.write(p,JSON.stringify(s,null,2));' "\${FAKE_STATE_JSON}" 2>/dev/null || true
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in -n|--namespace) shift 2 ;; *) break ;; esac
+done
+raw="$*"
+cmd="\${1:-}"; shift || true
+case "\${cmd}" in
+  exec)
+    target=""
+    while [[ $# -gt 0 && "$1" != "--" ]]; do [[ "$1" == -* ]] || target="$1"; shift; done
+    shift || true
+    log "exec \${target} -- \${1:-}"
+    exec "$@"
+    ;;
+  get)
+    log "\${raw}"
+    [[ "\${FAKE_DEPLOY_MISSING:-0}" == "1" ]] && exit 1
+    replicas="$(cat "\${FAKE_REPLICAS_FILE}")"
+    if [[ "\${raw}" == *"pods"* ]]; then
+      [[ "\${replicas}" == "0" ]] || printf 'wrathbench-fleet-abc123 Running\\n'
+    elif [[ "\${raw}" == *"readyReplicas"* ]]; then
+      printf '%s' "\${replicas}"
+    else
+      printf '%s' "\${replicas}"
+    fi
+    exit 0
+    ;;
+  scale)
+    log "\${raw}"
+    n="\${raw##*--replicas=}"
+    printf '%s' "\${n}" > "\${FAKE_REPLICAS_FILE}"
+    [[ "\${n}" == "0" ]] || beat
+    exit 0
+    ;;
+  rollout)
+    log "\${raw}"
+    [[ "\${1:-}" == "restart" ]] && beat
+    [[ "\${1:-}" == "status" && "\${FAKE_ROLLOUT_FAIL:-0}" == "1" ]] && exit 1
+    exit 0
+    ;;
+esac
+log "\${raw}"
 exit 0
 `;
 
@@ -53,8 +98,12 @@ interface Case {
   paused?: { runId: string; model: string; reason: string; elapsedMs: number; budgetMs: number }[];
   /** The supervisor has already picked the switch up. */
   pickedUp?: boolean;
-  /** False: `up -d fleet` does not refresh the heartbeat (the supervisor died). */
+  /** False: a restart does NOT refresh the heartbeat (the supervisor died). */
   boots?: boolean;
+  /** `.spec.replicas` on the fleet Deployment before the script runs. */
+  replicas?: number;
+  /** `kubectl get deployment/...` fails: nothing is installed. */
+  deployMissing?: boolean;
   args: string[];
   /** Pre-existing pause file. */
   paused_switch?: boolean;
@@ -68,17 +117,19 @@ interface Case {
 interface Result {
   exitCode: number;
   out: string;
-  dockerCalls: string[];
+  kubectlCalls: string[];
   /** The pause sidecar as the script left it, or null. */
   pauseFile: { paused: boolean; why: string; at: number } | null;
+  /** `.spec.replicas` as the script left it. */
+  replicas: string;
 }
 
 function run(c: Case): Result {
   const dir = mkdtempSync(join(tmpdir(), "wb-fleet-update-"));
   const bin = join(dir, "bin");
   Bun.spawnSync(["mkdir", "-p", bin]);
-  const shim = join(bin, "docker");
-  writeFileSync(shim, DOCKER_SHIM);
+  const shim = join(bin, "kubectl");
+  writeFileSync(shim, KUBECTL_SHIM);
   chmodSync(shim, 0o755);
 
   const stateJson = join(dir, "fleet-state.json");
@@ -114,8 +165,10 @@ function run(c: Case): Result {
   if (c.paused_switch === true) {
     writeFileSync(pauseJson, JSON.stringify({ paused: true, why: "set by hand", at: Date.now() }));
   }
-  const dockerLog = join(dir, "docker.log");
-  writeFileSync(dockerLog, "");
+  const kubectlLog = join(dir, "kubectl.log");
+  writeFileSync(kubectlLog, "");
+  const replicasFile = join(dir, "replicas");
+  writeFileSync(replicasFile, String(c.replicas ?? 1));
 
   // `interruptAfterS` is Ctrl-C: `timeout -s INT` signals the script mid-wait,
   // which is the only way to exercise the abort trap.
@@ -127,13 +180,15 @@ function run(c: Case): Result {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
       FORCE_COLOR: "3",
-      FAKE_DOCKER_LOG: dockerLog,
+      FAKE_KUBECTL_LOG: kubectlLog,
       FAKE_STATE_JSON: stateJson,
+      FAKE_REPLICAS_FILE: replicasFile,
       FAKE_BOOT: c.boots === false ? "0" : "1",
-      WRATHBENCH_FLEET_STATE_JSON: stateJson,
-      WRATHBENCH_FLEET_PAUSE_JSON: pauseJson,
+      ...(c.deployMissing === true ? { FAKE_DEPLOY_MISSING: "1" } : {}),
+      WRATHBENCH_FLEET_RUNS_DIR: dir,
       WRATHBENCH_FLEET_POLL_S: "1",
       WRATHBENCH_FLEET_BOOT_WAIT_S: "3",
+      WRATHBENCH_FLEET_ROLLOUT_WAIT_S: "3",
       WRATHBENCH_FLEET_TIMEOUT_S: "3",
       ...c.env,
     },
@@ -144,8 +199,9 @@ function run(c: Case): Result {
   return {
     exitCode: proc.exitCode ?? -1,
     out: `${proc.stdout.toString()}${proc.stderr.toString()}`,
-    dockerCalls: readFileSync(dockerLog, "utf8").split("\n").filter(Boolean),
+    kubectlCalls: readFileSync(kubectlLog, "utf8").split("\n").filter(Boolean),
     pauseFile: existsSync(pauseJson) ? (JSON.parse(readFileSync(pauseJson, "utf8")) as Result["pauseFile"]) : null,
+    replicas: readFileSync(replicasFile, "utf8"),
   };
 }
 
@@ -154,18 +210,31 @@ function runAborted(c: Case): Result {
   return run({ ...c, interruptAfterS: 2, env: { WRATHBENCH_FLEET_TIMEOUT_S: "60", ...(c.env ?? {}) } });
 }
 
+const restarts = (r: Result) => r.kubectlCalls.filter((l) => l.startsWith("rollout restart"));
+const scales = (r: Result) => r.kubectlCalls.filter((l) => l.startsWith("scale "));
+
 describe("fleet-update.sh", () => {
-  test("graceful: sets the switch, waits for quiet, recreates with --no-deps, clears the switch", () => {
+  test("graceful: sets the switch, waits for quiet, rollout-restarts the fleet, clears the switch", () => {
     const r = run({ aliveJobs: 0, args: ["graceful"] });
     expect(r.exitCode).toBe(0);
     expect(r.out).not.toContain("arithmetic syntax error");
     expect(r.out).toContain("pause switch SET");
     expect(r.out).toContain("quiet: no job holds a live episode");
     expect(r.out).toContain("no run was interrupted");
-    const up = r.dockerCalls.find((l) => l.includes("up -d"));
-    expect(up).toContain("--no-deps");
-    expect(up).toContain("--force-recreate");
+    expect(restarts(r)).toEqual(["rollout restart deployment/wrathbench-fleet"]);
+    // A supervisor roll never scales anything: that is `drain`'s job alone.
+    expect(scales(r)).toEqual([]);
+    expect(r.kubectlCalls.some((l) => l.startsWith("rollout status"))).toBe(true);
     // The switch is gone: the new supervisor schedules again.
+    expect(r.pauseFile).toBeNull();
+  });
+
+  test("graceful: a fleet already at 0 is scaled back to 1 rather than restarted into nothing", () => {
+    const r = run({ aliveJobs: 0, replicas: 0, args: ["graceful"] });
+    expect(r.exitCode).toBe(0);
+    expect(restarts(r)).toEqual([]);
+    expect(scales(r).some((l) => l.includes("--replicas=1"))).toBe(true);
+    expect(r.replicas).toBe("1");
     expect(r.pauseFile).toBeNull();
   });
 
@@ -174,8 +243,9 @@ describe("fleet-update.sh", () => {
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("2 run(s) still on their own clock");
     expect(r.out).toContain("TIMED OUT");
-    // Nothing was recreated or stopped: the runs are untouched.
-    expect(r.dockerCalls.filter((l) => l.includes("up -d") || l.includes("stop fleet"))).toEqual([]);
+    // Nothing was restarted or scaled: the runs are untouched.
+    expect(restarts(r)).toEqual([]);
+    expect(scales(r)).toEqual([]);
     // And the switch stays set, so the fleet is not quietly scheduling again.
     expect(r.pauseFile?.paused).toBe(true);
   });
@@ -188,8 +258,7 @@ describe("fleet-update.sh", () => {
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain("counted drained: sonnet-low-freeplay");
     expect(r.out).toContain("resumes in place");
-    const up = r.dockerCalls.find((l) => l.includes("up -d"));
-    expect(up).toContain("--force-recreate");
+    expect(restarts(r).length).toBe(1);
     expect(r.pauseFile).toBeNull();
   });
 
@@ -201,7 +270,7 @@ describe("fleet-update.sh", () => {
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("TIMED OUT");
     expect(r.out).toContain("waiting on:      sonnet-low-freeplay");
-    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+    expect(restarts(r)).toEqual([]);
     expect(r.pauseFile?.paused).toBe(true);
   });
 
@@ -212,7 +281,7 @@ describe("fleet-update.sh", () => {
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("1 run(s) still on their own clock");
     expect(r.out).toContain("waiting on:      glm-e90");
-    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+    expect(restarts(r)).toEqual([]);
     expect(r.pauseFile?.paused).toBe(true);
   });
 
@@ -255,14 +324,15 @@ describe("fleet-update.sh", () => {
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("waiting on:      glm-e90");
     expect(r.out).toContain("counted drained: sonnet-low-freeplay");
-    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+    expect(restarts(r)).toEqual([]);
   });
 
   test("graceful: aborted with SIGINT, the switch stays SET and the message says how to clear it", () => {
     const r = runAborted({ jobs: [{ name: "glm-e90", episode: "e90", source: "policy", draining: true }], args: ["graceful"] });
     expect(r.out).toContain("PAUSE SWITCH IS STILL SET");
     expect(r.out).toContain("fleet-update.sh resume");
-    expect(r.dockerCalls.filter((l) => l.includes("up -d") || l.includes("stop fleet"))).toEqual([]);
+    expect(restarts(r)).toEqual([]);
+    expect(scales(r)).toEqual([]);
     expect(r.pauseFile?.paused).toBe(true);
   });
 
@@ -277,14 +347,15 @@ describe("fleet-update.sh", () => {
     expect(r.out).toContain("41m of 90m");
   });
 
-  test("graceful: a state file that did not parse is NOT quiet — the recreate never happens", () => {
+  test("graceful: a state file that did not read back is NOT quiet — the recreate never happens", () => {
     // writeState is a plain writeFileSync, so a poll can land mid-write. Reading
-    // that as "no job is alive" would recreate the container over live
-    // episodes, which is the one thing this path exists to prevent.
+    // that as "no job is alive" would restart the pod over live episodes, which
+    // is the one thing this path exists to prevent.
     const r = run({ corruptState: true, args: ["graceful"] });
     expect(r.exitCode).toBe(1);
-    expect(r.out).toContain("did not parse this poll");
-    expect(r.dockerCalls.filter((l) => l.includes("up -d") || l.includes("stop fleet"))).toEqual([]);
+    expect(r.out).toContain("did not read back this poll");
+    expect(restarts(r)).toEqual([]);
+    expect(scales(r)).toEqual([]);
     expect(r.pauseFile?.paused).toBe(true);
   });
 
@@ -294,7 +365,7 @@ describe("fleet-update.sh", () => {
     const r = run({ aliveJobs: 0, heartbeatAgeS: 3600, args: ["graceful"] });
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("is not ticking");
-    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+    expect(restarts(r)).toEqual([]);
     expect(r.pauseFile?.paused).toBe(true);
   });
 
@@ -305,23 +376,23 @@ describe("fleet-update.sh", () => {
     expect(r.pauseFile?.paused).toBe(true);
   });
 
-  test("drain: waits for quiet, stops the fleet, and LEAVES the switch set for the deploy", () => {
+  test("drain: waits for quiet, scales the fleet to 0, and LEAVES the switch set for the deploy", () => {
     const r = run({ aliveJobs: 0, args: ["drain"] });
     expect(r.exitCode).toBe(0);
-    expect(r.dockerCalls.some((l) => l.endsWith("stop fleet"))).toBe(true);
-    expect(r.dockerCalls.filter((l) => l.includes("--force-recreate"))).toEqual([]);
+    expect(scales(r).some((l) => l.includes("--replicas=0"))).toBe(true);
+    expect(r.replicas).toBe("0");
+    expect(restarts(r)).toEqual([]);
     expect(r.pauseFile?.paused).toBe(true);
     expect(r.out).toContain("fleet-update.sh resume");
   });
 
-  test("force: says what it costs, recreates immediately with --no-deps, and needs --yes to do it unattended", () => {
+  test("force: says what it costs, restarts immediately, and needs --yes to do it unattended", () => {
     const r = run({ aliveJobs: 3, args: ["force", "--yes"] });
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain("3 job(s) are live");
     expect(r.out).toContain("attempt is spent");
-    const up = r.dockerCalls.find((l) => l.includes("up -d"));
-    expect(up).toContain("--no-deps");
-    expect(up).toContain("--force-recreate");
+    expect(restarts(r).length).toBe(1);
+    expect(scales(r)).toEqual([]);
     // Nothing set the switch, so there is nothing to clear and nothing to wait for.
     expect(r.pauseFile).toBeNull();
     expect(r.out).not.toContain("first heartbeat");
@@ -329,7 +400,7 @@ describe("fleet-update.sh", () => {
 
   test("force: a switch left set by an aborted graceful is cleared after the recreate", () => {
     // 2026-08-29: `force --yes` had to be followed by `resume` by hand. force
-    // STARTS the container, so a switch it leaves set is a fleet that runs and
+    // STARTS the fleet, so a switch it leaves set is a fleet that runs and
     // schedules nothing.
     const r = run({ aliveJobs: 1, paused_switch: true, args: ["force", "--yes"] });
     expect(r.exitCode).toBe(0);
@@ -344,33 +415,97 @@ describe("fleet-update.sh", () => {
     expect(r.pauseFile?.paused).toBe(true);
   });
 
-  test("force without --yes on a pipe refuses rather than recreating", () => {
+  test("force without --yes on a pipe refuses rather than restarting", () => {
     const r = run({ aliveJobs: 3, args: ["force"] });
     expect(r.exitCode).not.toBe(0);
-    expect(r.dockerCalls.filter((l) => l.includes("up -d"))).toEqual([]);
+    expect(restarts(r)).toEqual([]);
   });
 
-  test("--dry-run writes nothing, runs no compose command, and prints the plan", () => {
+  test("--dry-run writes nothing, runs no mutating kubectl, and prints the commands", () => {
     const r = run({ aliveJobs: 2, args: ["graceful", "--dry-run"] });
     expect(r.exitCode).toBe(0);
     expect(r.out).toContain("would: write");
-    expect(r.out).toContain("--force-recreate fleet");
+    expect(r.out).toContain("would: kubectl -n wrathbench rollout restart deployment/wrathbench-fleet");
     expect(r.out).toContain("counts as drained");
     expect(r.pauseFile).toBeNull();
-    expect(r.dockerCalls.filter((l) => l.includes("up -d") || l.includes("stop"))).toEqual([]);
+    expect(restarts(r)).toEqual([]);
+    expect(scales(r)).toEqual([]);
+    // Reads are fine — the plan is only worth anything if the values are real.
+    expect(r.kubectlCalls.some((l) => l.startsWith("get "))).toBe(true);
+  });
+
+  test("--dry-run on drain names the scale-to-0, not a restart", () => {
+    const r = run({ aliveJobs: 1, args: ["drain", "--dry-run"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("--replicas=0");
+    expect(r.out).not.toContain("would: kubectl -n wrathbench rollout restart");
+    expect(scales(r)).toEqual([]);
+  });
+
+  test("--dry-run on force names the restart and the deferred switch clear", () => {
+    const r = run({ aliveJobs: 1, paused_switch: true, args: ["force", "--dry-run"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("would: kubectl -n wrathbench rollout restart deployment/wrathbench-fleet");
+    expect(r.out).toContain("rm -f");
+    expect(r.pauseFile?.paused).toBe(true);
+    expect(restarts(r)).toEqual([]);
   });
 
   test("resume clears the switch and nothing else; status reads it back without changing it", () => {
     const cleared = run({ paused_switch: true, args: ["resume"] });
     expect(cleared.exitCode).toBe(0);
     expect(cleared.pauseFile).toBeNull();
+    expect(restarts(cleared)).toEqual([]);
+    expect(scales(cleared)).toEqual([]);
     const s = run({ paused_switch: true, aliveJobs: 1, pickedUp: true, args: ["status"] });
     expect(s.exitCode).toBe(0);
     expect(s.out).toContain("pause switch");
     expect(s.out).toContain("SET");
     expect(s.out).toContain("picked up      yes");
     expect(s.out).toContain("jobs alive     1");
+    expect(s.out).toContain("deployment     1/1 ready");
+    expect(s.out).toContain("pod wrathbench-fleet-abc123");
     expect(s.pauseFile?.paused).toBe(true);
+  });
+
+  test("resume on a drained fleet says the clear scheduled nothing, and names the scale", () => {
+    // The footgun the compose script never had: `drain` leaves the Deployment
+    // at 0, and clearing the switch there is a no-op an operator would read as
+    // "the fleet is back".
+    const r = run({ paused_switch: true, replicas: 0, args: ["resume"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.pauseFile).toBeNull();
+    expect(r.out).toContain("scaled to 0");
+    expect(r.out).toContain("--replicas=1");
+    expect(scales(r)).toEqual([]);
+  });
+
+  test("status on a namespace with no fleet Deployment says so rather than inventing a state", () => {
+    const r = run({ deployMissing: true, args: ["status"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("NOT FOUND");
+  });
+
+  test("status drives kubectl, never docker compose", () => {
+    // The regression this port exists for: `docker compose ps fleet` reported
+    // the live cluster fleet as "container not running, heartbeat 260151s ago".
+    const r = run({ aliveJobs: 1, args: ["status"] });
+    expect(r.out).not.toContain("compose");
+    // The prose still names what it replaced; no CODE line may run it.
+    const code = readFileSync(SCRIPT, "utf8")
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("#"));
+    expect(code.filter((l) => l.includes("docker compose"))).toEqual([]);
+  });
+
+  test("--namespace and --release are honoured everywhere", () => {
+    const r = run({ aliveJobs: 0, args: ["graceful", "--namespace", "wb-test", "--release", "wb"] });
+    expect(r.exitCode).toBe(0);
+    expect(restarts(r)).toEqual(["rollout restart deployment/wb-fleet"]);
+    const s = run({ args: ["status", "--namespace", "wb-test", "--release", "wb"] });
+    expect(s.out).toContain("namespace      wb-test (release wb)");
+    expect(s.out).toContain("deployment/wb-fleet");
+    expect(s.out).toContain("deployment/wb-runner");
   });
 
   test("a mode is required, and two modes are refused", () => {

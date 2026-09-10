@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 #
+# COMPOSE ONLY, and compose has been stopped since the 2026-09-08 cutover: the
+# live deploy window is infra/k8s-deploy.sh (docs/DEPLOY-NUSPHERE.md, "Day 2").
+# This script is kept for the local rehearsal stack and for the rollback path,
+# and `bun run deploy:worldserver:compose` is how it is reached.
+#
 # Deploy a new worldserver image. One command owns the whole window:
 #
 #   ./infra/deploy-worldserver.sh                     # promote :next -> :latest
@@ -86,7 +91,7 @@ while [[ $# -gt 0 ]]; do
     --no-smoke) RUN_SMOKE=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --allow-live) echo "deploy-worldserver: --allow-live is gone — the deploy drains the fleet itself (runs pause and resume; see docs/OPERATIONS.md)" >&2; exit 2 ;;
-    -h|--help) sed -n '2,55p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,60p' "$0"; exit 0 ;;
     *) echo "deploy-worldserver: unknown flag $1" >&2; exit 2 ;;
   esac
 done
