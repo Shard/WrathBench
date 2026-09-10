@@ -563,3 +563,82 @@ Everything stays fixture-tested and bare-clone green (`bun test`,
 `bun run typecheck`); the live halves are verified the way the viewer's are,
 by pointing the real publisher at a real runs directory and reading the
 bucket back.
+
+## Acceptance record
+
+The readback half of GitHub issue #31's acceptance transaction, run 2026-09-11
+against the production bucket with `infra/publish-accept.ts` — a read-only
+walk of the generation the manifest points at. It is the only part of the
+transaction the Gated shape can carry: the criteria that need a reader through
+the host need the gate's password, and the ones about edge cache need a zone,
+so both wait on item 85.
+
+**A note on the criteria.** Issue #31's criterion 2 predates the operator's
+2026-08-30 decisions and forbids four things this projection now publishes on
+purpose: scratchpads (422 published here, whole), character names, item names,
+and model-authored prose. Those clauses are superseded, not missed; what the
+criterion still binds is what is checked below.
+
+**What was read.** Source: `master` at `1db3b0f`, the verifier itself at
+`9aa6085`; the objects were written by the publisher pod running
+`harness-0.5-513-g803bd42`. Endpoint: the account's R2 S3 API
+(`<account-id>.r2.cloudflarestorage.com`), bucket `wrathbench-public`.
+Generation `0891dc5ed329`, generated `2026-09-10T23:43:37Z` (UTC; local
+2026-09-11). **1,590 objects, 61.6 MB, 422 runs** — every one of them carrying
+detail, track, entries and scratchpad pointers — across 10 aggregates. **Nothing was missing**: every key
+the manifest named and every key a `runs.json` row pointed at resolved — which
+is criterion 1, and criterion 6's "bounded reconciliation/readback pass" as one
+manual run rather than anything scheduled.
+
+**One finding, and it is real.** `wikiBundle` — the comparability tuple's wiki
+bundle stamp, whose `source` is the operator's local dump filename — is
+published in **136 places across 21 `entries.json` objects**, on `harness`
+entries of kind `comparability_restamped`, in both the `before` and `after`
+tuples. The projection withholds `wikiBundle` on a run row —
+`projectComparability` drops that one key and copies every other field of the
+tuple, so the leak is bounded to it — and this document's "Still projected out"
+list names it, but `projectEntry` copies the `harness` entry's `before`/`after`
+verbatim, so the same tuple ships unfiltered one layer down. The data was left
+as it is: the fix is a projection change and a republish, not an edit to the
+bucket.
+Tracked as item 123 in `docs/FOLLOW-UPS.md`.
+
+**Forty-five paths that are the operator's call, not the verifier's.** Sandbox
+stack traces (`/wrathbench/sdk/src/...`) inside `tool_result` text and snippet
+code: container-internal paths from the image's own working directory, not the
+operator's host, arriving through the model- and harness-authored surface
+"Residual, stated plainly" describes. The verifier counts them separately from
+its findings so they stay visible, and the record does not settle them —
+issue #31's criterion 2 says "no local paths" without qualification, and
+whether the documented residual covers a container path is a content-boundary
+question and therefore the operator's.
+
+**Cache metadata.** No object carries `Cache-Control`, which is the expected
+state: Bun's S3 writer cannot send one, and in the Gated shape
+`dashboard/worker/index.ts` sets the TTLs on egress instead (`private,
+max-age=30` on the two mutable keys, `private, max-age=31536000, immutable` on
+generation objects). Confirming that a reader sees them needs the gate
+credential; re-run after item 85 against the Open shape's zone cache rules.
+
+**Through the host**, unauthenticated: `/`, `/runs` and `/v1/manifest.json` all
+answer `401`, the manifest as JSON rather than the SPA's HTML, and
+`/robots.txt` disallows everything. That is the gate working, not the browser
+smoke — the smoke and the deep-link check are deferred to item 85. The
+bucket's Public Development URL could not be checked: the deploy token in
+`.env` carries Workers Scripts Edit and Workers R2 Storage Read, and
+`wrangler r2 bucket info` / `dev-url get` answer `Authentication error [code:
+10000]` with it. Unverified rather than passed.
+
+**Rollback, as implemented** (described, not exercised). Public access is the
+Worker: the bucket is private and its binding is the only path to an object,
+so `wrangler delete --config dashboard/wrangler.jsonc` removes the site, and
+unsetting `DASHBOARD_PASSWORD` fails the gate closed at `503` without removing
+it. Stopping the publisher (scale the Deployment to zero) freezes whatever
+generation is current, because the manifest is written last and an interrupted
+pass leaves the previous one authoritative. Rolling *data* back within the
+retention window is manual: the last five versions of each aggregate and the
+last two of each run survive a prune (`DEFAULT_KEEP_GENS`,
+`DEFAULT_KEEP_RUN_VERSIONS` in `infra/publish-core.ts`), but nothing in the
+publisher writes an older manifest back, so the supported move is to re-publish
+from the runs directory. None of it can touch the evidence: the publisher
+mounts `data/runs` read-only and writes only `data/publish`.

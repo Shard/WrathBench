@@ -300,7 +300,10 @@ export function scanBody(key: string, body: unknown): { findings: Finding[]; res
       // `objective` is a boolean on the comparability tuple (whether one was
       // allowed) and free prose on a run row; only the prose is withheld.
       if (k === "objective" && typeof v !== "string") return;
-      findings.push({ kind: "withheld-field", key, at: path, detail: `${k} = ${excerpt(String(v))}` });
+      // Serialized, not `String(v)`: a withheld field is often an object (a
+      // wiki bundle, a run config), and `[object Object]` would hide exactly
+      // the part of the finding that says what leaked.
+      findings.push({ kind: "withheld-field", key, at: path, detail: `${k} = ${excerpt(JSON.stringify(v) ?? String(v))}` });
     }
     if (k === "pauseReason" && v !== null && v !== "paused") {
       findings.push({ kind: "withheld-field", key, at: path, detail: `pauseReason = ${excerpt(String(v))}` });
