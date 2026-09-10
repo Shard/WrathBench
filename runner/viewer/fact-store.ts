@@ -33,10 +33,12 @@
  *   another corpus — every one of those reads as "no cache" and the viewer
  *   recomputes. This file may never be the reason a page fails to serve.
  *
- * A live run is deliberately never persisted: its signature moves on every
- * poll, so a persisted entry would be stale before it was written, and
+ * A live run is deliberately not written on its own account: its signature
+ * moves on every poll, so the entry would be stale before it landed and
  * marking the store dirty for it would rewrite the file every thirty seconds
- * forever. Liveness is decided from the trajectory's mtime against `now` on
+ * forever. It reaches the file once it has gone quiet, swept in by the next
+ * flush — see `flush`, which forces a write for exactly that reason.
+ * Liveness itself is decided from the trajectory's mtime against `now` on
  * every call anyway (see `readRunFactsCached`), which is what makes a cached
  * fact safe to reuse at all.
  *
@@ -49,7 +51,7 @@
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { RunFact } from "../src/models";
 import { LIVE_WINDOW_MS, type FactCacheEntry } from "./models";
 
@@ -172,11 +174,19 @@ function load(path: string, runsDir: string): Map<string, FactCacheEntry> {
 export function createFactStore(
   runsDir: string,
   path?: string,
-  opts: { debounceMs?: number } = {},
+  opts: { debounceMs?: number; now?: () => number } = {},
 ): FactStore {
-  const cache = path === undefined ? new Map<string, FactCacheEntry>() : load(path, runsDir);
+  /*
+   * Absolute, because the stamp is an identity: the viewer's own default is
+   * the relative `data/runs` and anything else naming the same tree absolutely
+   * would otherwise discard the file and rewrite it, forever, for no reason.
+   */
+  const corpus = resolve(runsDir);
+  const cache = path === undefined ? new Map<string, FactCacheEntry>() : load(path, corpus);
   const loaded = cache.size;
   const debounceMs = opts.debounceMs ?? FLUSH_DEBOUNCE_MS;
+  /** Injectable only so a test can age a run past the live window without waiting. */
+  const clock = opts.now ?? Date.now;
   let dirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   /** One line per process, not one per failed write: a full disk is not a log flood. */
@@ -185,13 +195,13 @@ export function createFactStore(
   const write = (): void => {
     if (path === undefined || !dirty) return;
     dirty = false;
-    const now = Date.now();
+    const now = clock();
     const entries: CacheFile["entries"] = {};
     for (const [id, entry] of cache) {
       if (!persistable(entry, now)) continue;
       entries[id] = { sig: entry.sig, mtime: entry.mtime, fact: entry.fact };
     }
-    const body: CacheFile = { version: FACT_CACHE_VERSION, runsDir, writtenAt: now, entries };
+    const body: CacheFile = { version: FACT_CACHE_VERSION, runsDir: corpus, writtenAt: now, entries };
     // A tmp beside the target, so the rename is atomic rather than a copy
     // across devices; the pid keeps two writers (viewer and publisher may
     // share a default path) off each other's file.
@@ -216,7 +226,7 @@ export function createFactStore(
   const onChange = (_id: string, entry: FactCacheEntry | null): void => {
     if (path === undefined) return;
     // A dropped run is a change worth writing; a live run's is not (header).
-    if (entry !== null && !persistable(entry, Date.now())) return;
+    if (entry !== null && !persistable(entry, clock())) return;
     dirty = true;
     if (timer !== undefined) return;
     // Not reset by later changes: the flush is at most `debounceMs` behind the
@@ -229,11 +239,24 @@ export function createFactStore(
     timer.unref?.();
   };
 
+  /**
+   * Write everything the map now holds, pending change or not.
+   *
+   * Forcing rather than honouring `dirty` is the point, and it is what makes
+   * "read once per corpus" true. A run that was live at its last signature
+   * miss is not persistable then, and its signature never moves again once the
+   * process writing it stops — so `onChange` never fires for it a second time
+   * and it would age past the live window in memory and never be written down.
+   * `write()` serialises the whole map, so a forced flush sweeps exactly those
+   * runs in. The viewer calls this on SIGTERM, which Kubernetes sends before it
+   * kills the pod.
+   */
   const flush = (): void => {
     if (timer !== undefined) {
       clearTimeout(timer);
       timer = undefined;
     }
+    dirty = true;
     write();
   };
 

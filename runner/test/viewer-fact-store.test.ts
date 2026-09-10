@@ -215,6 +215,34 @@ describe("persisted fact cache", () => {
     expect(Object.keys(file.entries)).toEqual(["run-a"]);
   });
 
+  /**
+   * The one case a change-driven write misses on its own: a run that was live
+   * when its signature last moved is not written then, and its signature never
+   * moves again once the process writing it stops — so nothing tells the store
+   * about it a second time. A flush writes the whole map, which is what sweeps
+   * it in; the viewer flushes on SIGTERM.
+   */
+  test("a run that goes quiet while the viewer is up is swept in by a flush", () => {
+    const runsDir = fixture();
+    writeRun(runsDir, "run-live", { responses: 4, endedAt: NOW - 1_000 });
+    const path = join(runsDir, "..", "fact-cache.json");
+    // The store's own clock, so the run can age past the live window without
+    // the test waiting two minutes for it.
+    let clock = NOW;
+    const store = createFactStore(runsDir, path, { now: () => clock });
+    readRunFactsCached(runsDir, store.cache, NOW, store.onChange);
+    store.flush();
+    const early = JSON.parse(readFileSync(path, "utf8")) as { entries: Record<string, unknown> };
+    expect(Object.keys(early.entries)).toEqual([]);
+
+    // Time passes; the file does not move, so nothing calls `onChange` again.
+    clock = NOW + 10 * 60_000;
+    readRunFactsCached(runsDir, store.cache, clock, store.onChange);
+    store.flush();
+    const later = JSON.parse(readFileSync(path, "utf8")) as { entries: Record<string, unknown> };
+    expect(Object.keys(later.entries)).toEqual(["run-live"]);
+  });
+
   test("a run that went away leaves the file", () => {
     const runsDir = fixture();
     writeRun(runsDir, "run-a", { responses: 3 });
