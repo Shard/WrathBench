@@ -195,8 +195,15 @@ The public site includes the live fleet and map (operator's choice,
 over minimap tiles — since 2026-08-30 the tiles are published to the gated
 site as an explicit publisher step and served only behind the gate, so the SPA
 requests `/tiles/...` in snapshot mode too and falls back to the labelled grid
-square wherever a tile 404s. Two clock fixes keep the staleness story honest, and both are
-improvements for the private dashboard too:
+square wherever a tile 404s. Replaying a freeplay stream end to end works there too: since item 119 the
+track carries the four scalars of its stream — the identity, the place in the
+chain and the run ids either side — so the play bar's previous/next attempt
+links need no second request, which is what makes them work over static
+snapshot objects at all. The published `track.json` is content-addressed
+beside its `detail.json`, and a new attempt changes that detail's `stream`, so
+the key rotates and the neighbours never go stale. Two clock fixes keep the
+staleness story honest, and both are improvements for the private dashboard
+too:
 
 - Fleet-heartbeat staleness must be computed against the response's own
   `now`, not the browser clock — otherwise a healthy snapshot pushed a

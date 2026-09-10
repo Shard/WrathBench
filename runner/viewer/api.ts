@@ -1328,6 +1328,20 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // The replay feed (item 22): the same position shape the live map
       // consumes, read from one finished run instead of every live one.
       const run = readRun(runsDir, runId);
+      /*
+       * Where this attempt sits in its stream, so the map's transport can step
+       * to the one either side of it (item 119) without a second fetch.
+       *
+       * Deliberately the same expression the detail route gates its `stream`
+       * with, and the same `streamViewOf` call behind it: a scored run's
+       * replay pays nothing, a freeplay one pays what its run page already
+       * pays (the memoised listing), and the two routes cannot come to
+       * different answers about who continues whom.
+       */
+      const stream =
+        run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
+          ? streamViewOf(runId, await resultRuns())
+          : null;
       const body: TrackResponse = {
         runId,
         character: run.character,
@@ -1336,6 +1350,18 @@ export function createApi(opts: ApiOptions): ApiHandle {
         points: trackFrom(readStates(runsDir, runId)),
         // The intentions beside the track: same run, different cadence.
         moves: readMoves(runsDir, runId),
+        // Absent, not null, on a run with no stream — as on the detail route.
+        ...(stream === null
+          ? {}
+          : {
+              stream: {
+                streamId: stream.streamId,
+                attempt: stream.attempt,
+                attempts: stream.attempts,
+                previous: stream.previous,
+                next: stream.next,
+              },
+            }),
       };
       return pub(body, projectTrack);
     }
