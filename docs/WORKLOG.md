@@ -71,6 +71,9 @@ Convention:
 - [2026-09-04](worklogs/2026-09-04.md) — Cerebras added at t0 (qwen-3.8-27b, first non-OpenRouter paid provider); no cache discount, so an e90 is ~$5–8; muse-spark stream paused to free the paid lane
 - [2026-09-05](worklogs/2026-09-05.md) — freeplay stream stats aggregated at read time (`stream` on `/api/run/<id>`); the run page is the stream, not the session
 - [2026-09-08](worklogs/2026-09-08.md) — the codex subscription lane in the Helm chart; then the NuSphere cutover: runs, world and lane moved onto the cluster, both streams resumed there
+- [2026-09-11](worklogs/2026-09-11.md) — public-release inventory: history unscrubbed
+  (verified), two dangling VISION.md references, fleet-update.sh compose drift; minimap
+  ships, legal opinion no longer a gate.
 
 ## Resolving a cited item number
 
