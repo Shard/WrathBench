@@ -53,13 +53,18 @@ worklogs/2026-08-29).
 ## Deployment
 
 117. **CI for the release contract** (2026-09-05; GitHub issue 7's addendum).
-    None of it is built: PR checks on the pinned Bun with a frozen install, the
-    full suite, typecheck, generated-API drift and the dashboard build; a tag
-    workflow that produces a traceable image digest tied to one source SHA;
-    chart lint/render in CI; and a check that refuses a mutable image reference.
-    The chart's own guard — `image.tag` empty or `latest` refuses to render — is
-    the only piece enforced today, and it fires at render time rather than at
-    review time. Trigger: the first deploy that is not driven by hand.
+    The PR half shipped 2026-09-11 as `.github/workflows/ci.yml`: pinned Bun
+    from `.bun-version`, frozen install, typecheck, generated-API drift, the
+    dashboard build and the full suite, plus a separate job for chart
+    lint/render (docs/DEPLOY-NUSPHERE.md, "CI"). What remains is the release
+    half — a tag workflow that produces a traceable image digest tied to one
+    source SHA, the chart published as a versioned OCI artifact or consumed
+    from a pinned GitOps path, and a check that refuses a mutable image
+    reference at review time. The chart's own guard — `image.tag` empty or
+    `latest` refuses to render — is still the only enforcement of that last
+    one, and it fires at render time. The C++ module build stays out of CI
+    deliberately; it needs the worldserver image. Trigger: the first deploy
+    that is not driven by hand.
 
 120. **Watch `iscsi-nvme` under a live fleet** (2026-09-08, out of the cutover).
     The data volume is `iscsi-nvme` because every run's evidence is a SQLite

@@ -73,7 +73,8 @@ Convention:
 - [2026-09-08](worklogs/2026-09-08.md) — the codex subscription lane in the Helm chart; then the NuSphere cutover: runs, world and lane moved onto the cluster, both streams resumed there
 - [2026-09-11](worklogs/2026-09-11.md) — public-release inventory: history unscrubbed
   (verified), two dangling VISION.md references, fleet-update.sh compose drift; minimap
-  ships, legal opinion no longer a gate.
+  ships, legal opinion no longer a gate. Lean CI: PR checks on the pinned Bun plus
+  a chart lint/render job (item 117's release half stays open).
 
 ## Resolving a cited item number
 
