@@ -22,13 +22,22 @@
  * owned by the page's route effect, so the control needs no logic of its own,
  * and an anchor keeps what an anchor gives — a real history entry, middle-click
  * and the focus ring.
+ *
+ * The attempt steps (item 119) are anchors for the same reason, and for one
+ * more: a freeplay stream is one character across attempts, so following it
+ * end to end used to mean going back to the run page for the next id. They
+ * link `/map?run=<id>` and nothing else — the route effect swaps the track and
+ * `cursormemory` resumes the attempt where it was last left, so stepping away
+ * and back keeps each attempt's own place. They render only where the track
+ * carries a `stream`: a scored run has none, and so does a track served or
+ * published before the field existed.
  */
 
 import { A } from "@solidjs/router";
 import { Show, createMemo } from "solid-js";
 import type { AgentPosition, TrackResponse } from "../api/client";
 import { shortRunId, stamp } from "../lib/format";
-import { replayHrefFor } from "../lib/mapstate";
+import { replayHref, replayHrefFor } from "../lib/mapstate";
 import { colorOf, pipName } from "../lib/mapview";
 import { type Speed, playbackClock, prevSampleBefore, progressOf } from "../lib/playback";
 import { nextSampleAfter, trackSpan } from "../lib/replay";
@@ -129,6 +138,39 @@ export function PlayBar(props: PlayBarProps) {
                 <span class="dim">
                   · {t().points.length} {t().points.length === 1 ? "position" : "positions"}
                 </span>
+                <Show when={t().stream}>
+                  {(s) => (
+                    <span class="attempt-steps">
+                      <Show when={s().previous}>
+                        {(id) => (
+                          <A
+                            class="playbar-btn step"
+                            href={replayHref(id())}
+                            title="replay the previous attempt of this stream"
+                            aria-label="previous attempt"
+                          >
+                            ‹
+                          </A>
+                        )}
+                      </Show>
+                      <span class="dim">
+                        attempt {s().attempt} of {s().attempts}
+                      </span>
+                      <Show when={s().next}>
+                        {(id) => (
+                          <A
+                            class="playbar-btn step"
+                            href={replayHref(id())}
+                            title="replay the next attempt of this stream"
+                            aria-label="next attempt"
+                          >
+                            ›
+                          </A>
+                        )}
+                      </Show>
+                    </span>
+                  )}
+                </Show>
                 <span class="grow" />
                 <Show when={t().points.length > 0}>
                   <span class="dim mono playbar-stamp" title="the cursor's wall-clock time">

@@ -89,7 +89,7 @@ const TUPLE = {
 function writeRun(
   runs: string,
   runId: string,
-  opts: { terminated: boolean; stateTs: number; old: boolean },
+  opts: { terminated: boolean; stateTs: number; old: boolean; continuedFrom?: string; episode?: string },
 ): void {
   const dir = join(runs, runId);
   mkdirSync(dir, { recursive: true });
@@ -108,10 +108,18 @@ function writeRun(
     campaign: "sweep-1",
     cell: "cell-a",
     apiKeyEnv: "OPENROUTER_KEY",
+    // A freeplay continuation names its predecessor; every other run has none.
+    ...(opts.continuedFrom === undefined ? {} : { continuedFrom: opts.continuedFrom }),
   };
   writeFileSync(
     join(dir, "meta.json"),
-    JSON.stringify({ runId, harnessVersion: "harness-0.5-1-gabc", startedAt: 1000, comparability: TUPLE, config }),
+    JSON.stringify({
+      runId,
+      harnessVersion: "harness-0.5-1-gabc",
+      startedAt: 1000,
+      comparability: opts.episode === undefined ? TUPLE : { ...TUPLE, episode: opts.episode },
+      config,
+    }),
   );
   const lines = [
     { ts: 1000, t: "meta", runId, harnessVersion: "harness-0.5-1-gabc", config },
@@ -255,6 +263,12 @@ async function render(runs: string, now: number): Promise<SnapshotResult> {
   return await renderSnapshot({ runsDir: runs, now });
 }
 
+/** One run's published track body, parsed. */
+function trackOfIn(out: SnapshotResult, runId: string): Record<string, unknown> {
+  const a = out.artifacts.find((x) => x.path.startsWith(`v1/run/${runId}/`) && x.path.endsWith("track.json"))!;
+  return JSON.parse(a.body) as Record<string, unknown>;
+}
+
 describe("renderSnapshot", () => {
   test("the cache-control constants are the contract's", () => {
     expect(MUTABLE_CACHE).toBe("public, max-age=30");
@@ -292,6 +306,44 @@ describe("renderSnapshot", () => {
       const mutable = a.path === "v1/manifest.json" || a.path === "v1/live.json";
       expect(`${a.path}: ${a.cacheControl}`).toBe(`${a.path}: ${mutable ? MUTABLE_CACHE : IMMUTABLE_CACHE}`);
     }
+  });
+
+  /*
+   * Item 119: the published track carries the stream's neighbours, so the
+   * public map's transport steps between a character's attempts with the one
+   * fetch a replay already makes. The version key covers it without being
+   * hashed over it: an attempt's own detail carries the `stream` view, so the
+   * arrival of a successor moves the key and the new track lands beside it.
+   */
+  test("a published track names the attempts either side of it", async () => {
+    const runs = mkdtempSync(join(tmpdir(), "snapshot-chain-"));
+    // A freeplay chain: the root stamped freeplay, the second attempt naming it.
+    writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true, episode: "freeplay" });
+    writeRun(runs, LIVE_RUN, { terminated: true, stateTs: 1600, old: true, continuedFrom: DEAD_RUN, episode: "freeplay" });
+    const out = await render(runs, 111);
+    const trackOf = (id: string): { stream?: unknown } =>
+      JSON.parse(out.artifacts.find((a) => a.path.startsWith(`v1/run/${id}/`) && a.path.endsWith("track.json"))!.body) as {
+        stream?: unknown;
+      };
+    expect(trackOf(DEAD_RUN).stream).toEqual({
+      streamId: DEAD_RUN,
+      attempt: 1,
+      attempts: 2,
+      previous: null,
+      next: LIVE_RUN,
+    });
+    expect(trackOf(LIVE_RUN).stream).toEqual({
+      streamId: DEAD_RUN,
+      attempt: 2,
+      attempts: 2,
+      previous: DEAD_RUN,
+      next: null,
+    });
+    // A snapshot of runs that form no chain publishes no field at all, which
+    // is what an older snapshot looks like to the page.
+    const lone = await render(fixture(false), 111);
+    expect("stream" in trackOfIn(lone, DEAD_RUN)).toBe(false);
+    rmSync(runs, { recursive: true, force: true });
   });
 
   test("no artifact path names a withheld surface", async () => {
