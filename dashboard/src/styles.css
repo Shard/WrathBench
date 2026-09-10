@@ -323,7 +323,9 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .playbar-row { display: flex; align-items: center; gap: 8px; min-height: 22px; }
 .playbar .grow { flex: 1; }
 .playbar .center { text-align: center; }
-.playbar-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* `min-width: 0` is what lets the declared ellipsis actually happen: the title
+   is the element that gives way when the row is crowded, not the steps. */
+.playbar-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .playbar-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .playbar-stamp { font-size: 11px; }
 .playbar-btn {
@@ -332,6 +334,9 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
   border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; line-height: 1.4;
 }
 .playbar-btn:hover { border-color: var(--accent); text-decoration: none; }
+/* The stream's attempt steps: the counter reads as one unit with its arrows. */
+.attempt-steps { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex: 0 0 auto; }
+.playbar-btn.step { padding: 0 6px; font-size: 14px; line-height: 1.4; }
 .live-pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
              text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
