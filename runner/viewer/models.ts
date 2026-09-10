@@ -309,10 +309,18 @@ function countCacheFor(cache: Map<string, FactCacheEntry>): CountCache {
   return counts;
 }
 
+/**
+ * Told whenever the memo changes: an entry written (`entry`) or a vanished
+ * run dropped (`null`). The persisted cache in `fact-store.ts` is the only
+ * caller that passes one; without it this behaves exactly as it always has.
+ */
+export type FactCacheChange = (id: string, entry: FactCacheEntry | null) => void;
+
 export function readRunFactsCached(
   runsDir: string,
   cache: Map<string, FactCacheEntry>,
   now = Date.now(),
+  onChange?: FactCacheChange,
 ): RunFact[] {
   let names: string[];
   try {
@@ -333,6 +341,7 @@ export function readRunFactsCached(
     if (hit === undefined || hit.sig !== sig) {
       hit = { sig, fact: readRunFact(runsDir, id, now, { counts }), mtime };
       cache.set(id, hit);
+      onChange?.(id, hit);
     }
     if (hit.fact === null) continue;
     const live = hit.fact.terminationReason === null && hit.mtime !== null && now - hit.mtime < LIVE_WINDOW_MS;
@@ -342,6 +351,7 @@ export function readRunFactsCached(
     if (seen.has(id)) continue;
     cache.delete(id);
     counts.delete(join(runsDir, id, "trajectory.jsonl"));
+    onChange?.(id, null);
   }
   out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   return out;

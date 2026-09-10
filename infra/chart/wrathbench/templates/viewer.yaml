@@ -75,6 +75,13 @@ spec:
               value: "8090"
             - name: WRATHBENCH_MINIMAP_DIR
               value: /wrathbench/data/minimap
+            # The per-run fact cache (runner/viewer/fact-store.ts), on the PVC
+            # so it survives the restart it exists for: without it the first
+            # /api/models after every deploy re-counts every trajectory in the
+            # tree. The publisher points at the same file, deliberately — same
+            # corpus, same facts, and the write is an atomic rename.
+            - name: WRATHBENCH_FACT_CACHE
+              value: /wrathbench/data/fact-cache/facts.json
             # The SPA is built into the runner image (dashboard/dist is
             # gitignored, so it exists nowhere else).
             - name: WRATHBENCH_DASHBOARD_DIR
@@ -101,7 +108,9 @@ spec:
             # Read-only, and the viewer is written to be: "Everything here
             # reads. The runs directory is never written to, and each
             # run.sqlite is opened readonly so a live writer is untouched."
-            # The stream/run totals it caches are in memory.
+            # The stream/run totals it caches are in memory; the per-run
+            # facts are memoised in memory too and mirrored to the writable
+            # fact-cache path below, never into the runs tree.
             - name: data
               mountPath: /wrathbench/data/runs
               subPath: runs
@@ -110,6 +119,12 @@ spec:
               mountPath: /wrathbench/data/minimap
               subPath: minimap
               readOnly: true
+            # The one writable path, and the only thing the viewer owns: its
+            # own derived counts, rebuilt from the runs tree whenever they are
+            # missing or stale.
+            - name: data
+              mountPath: /wrathbench/data/fact-cache
+              subPath: fact-cache
             - name: fleet-config
               mountPath: /wrathbench/config
               readOnly: true
