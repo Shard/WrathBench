@@ -960,6 +960,20 @@ export function projectTrack(t: TrackResponse): TrackResponse {
     ),
     // As on the live feed.
     moves: (t.moves ?? []).map(projectMove),
+    // The stream's neighbours: run ids and two counters, every one of them
+    // already public on `runs.json` and on the run page's attempt strip. Field
+    // by field, so a shape that grows here does not ship by accident.
+    ...(t.stream === undefined
+      ? {}
+      : {
+          stream: {
+            streamId: t.stream.streamId,
+            attempt: t.stream.attempt,
+            attempts: t.stream.attempts,
+            previous: t.stream.previous,
+            next: t.stream.next,
+          },
+        }),
   };
 }
 

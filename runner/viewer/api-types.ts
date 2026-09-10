@@ -1664,12 +1664,44 @@ export interface TrackPoint {
   nextLevelXp?: number | null;
 }
 
+/**
+ * Where a replayed run sits in its freeplay stream, and the attempts either
+ * side of it (item 119).
+ *
+ * The four scalars off `StreamView` and nothing else. The map's play bar needs
+ * somewhere to step to; it does not need the chain's totals, and carrying the
+ * whole view here would make a replay's fetch the size of a run page's for two
+ * run ids. Derived from the same `streamViewOf` call `/api/run/<id>` serves its
+ * `stream` from, so the bar's steps and the run page's attempt strip cannot
+ * name different neighbours on a fork.
+ *
+ * Absent — not null — on a run with no stream worth printing, and on a track
+ * served or published before this shipped.
+ */
+export interface TrackStream {
+  /** The chain root's run id: the stream's identity across attempts. */
+  streamId: string;
+  /** This run's 1-based place in the stream. */
+  attempt: number;
+  attempts: number;
+  /** The attempt before this one, when the viewer serves it. */
+  previous: string | null;
+  /** The attempt that continues this one, when the viewer serves it. */
+  next: string | null;
+}
+
 export interface TrackResponse extends SnapshotEnvelope {
   runId: string;
   character: string | null;
   model: string | null;
   harnessVersion: string | null;
   points: TrackPoint[];
+  /**
+   * The stream this run is an attempt of, when it is one: the play bar's
+   * previous/next steps. Optional — an older viewer and an older snapshot
+   * carry none, and the controls simply do not render.
+   */
+  stream?: TrackStream;
   /**
    * Every movement intention the run recorded, oldest first. Separate from
    * `points` because it has its own cadence: a move is dispatched when the
