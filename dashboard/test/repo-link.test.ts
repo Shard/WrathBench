@@ -13,12 +13,21 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { bibtex, repoLabel, repoUrlFromEnv } from "../src/lib/repo";
 
 const SRC = join(import.meta.dir, "..", "src");
 const read = (rel: string): string => readFileSync(join(SRC, rel), "utf8");
+
+/** Every source under `src`, the way `public-links.test.ts` walks it. */
+function sources(dir: string = SRC): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) return sources(path);
+    return name.endsWith(".ts") || name.endsWith(".tsx") ? [path] : [];
+  });
+}
 
 describe("the URL comes from the build's env, or nowhere", () => {
   test("unset, empty and whitespace are all no link", () => {
@@ -70,9 +79,12 @@ describe("nothing spells the repository URL itself", () => {
     expect(read("pages/About.tsx")).toContain("{bibtex(REPO_URL)}");
   });
 
-  test("no source outside lib/repo.ts hard-codes a repository host", () => {
-    for (const rel of ["components/Layout.tsx", "pages/About.tsx", "pages/Home.tsx"]) {
-      expect(`${rel}: ${read(rel).includes("github.com")}`).toBe(`${rel}: false`);
+  test("no source hard-codes a repository host, anywhere under src", () => {
+    // The whole tree, not an enumerated few: the regression this catches is
+    // somebody putting the URL back on a page nobody thought to list.
+    for (const path of sources()) {
+      const where = path.slice(SRC.length + 1);
+      expect(`${where}: ${readFileSync(path, "utf8").includes("github.com")}`).toBe(`${where}: false`);
     }
   });
 });
