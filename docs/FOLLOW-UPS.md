@@ -126,21 +126,6 @@ worklogs/2026-08-29).
     and the card), or wait for item 85, where the Open shape has no gate and the
     problem disappears. Verify with Discord's unfurl after either.
 
-114. **`sdk.connect()` drops a client without closing its stream** (2026-09-04,
-    found while fixing item 113). `connect()` in `sdk/src/client.ts:2184` does
-    `if (options.subscribeEvents ?? true) await client.events.connect();` and
-    returns. If that rejects, the `WrathClient` is discarded — but its
-    `EventStream` is not closed, and with reconnect enabled the ladder keeps
-    retrying forever with nobody holding a reference able to `close()` it. One
-    leaked socket ladder per failed `connect()`, for the life of the process.
-    Pre-existing, but item 113 makes it more reachable: `events.connect()` now
-    rejects on a whole failed climb of the ladder, which is a new rejection path
-    where before an unreachable server simply hung. The fix is small — close the
-    stream before rethrowing — but it belongs with a look at whether
-    `WrathClient` should own that cleanup generally, since the same shape will
-    recur for anything else the constructor starts. Trigger: any run whose
-    process shows repeated reconnect logs for a client nothing holds.
-
 115. **The viewer re-counts the whole corpus on every process start** (2026-09-04,
     disclosed by the agent that fixed the live-run half in fe3dec4). The first
     `/api/models` after a viewer restart takes ~18.5s: the process fills its fact
