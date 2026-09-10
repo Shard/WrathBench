@@ -161,6 +161,13 @@ export interface RendererOptions {
   fleetConfigPath?: string;
   moduleUrl?: string;
   /**
+   * Where the handle persists its per-run fact cache (`fact-store.ts`). A
+   * publisher restarts on every runner-image bump and on `bun ship
+   * --publisher`, and without this each restart re-counts every trajectory in
+   * the tree before its first pass.
+   */
+  factCachePath?: string;
+  /**
    * The viewer handle to render from. Built from the options above when
    * omitted; injected by the tests that need to disturb the runs directory
    * partway through a pass. A handle without `release` simply keeps its memos,
@@ -258,6 +265,7 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
       // worldserver reports `worldserver: null` quickly instead of hanging.
       moduleUrl: opts.moduleUrl ?? "http://127.0.0.1:1",
       ...(opts.fleetConfigPath !== undefined ? { fleetConfigPath: opts.fleetConfigPath } : {}),
+      ...(opts.factCachePath !== undefined ? { factCachePath: opts.factCachePath } : {}),
     });
 
   /**

@@ -55,7 +55,8 @@ import type {
 } from "./api-types";
 import { episodeOf, resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
-import { modelsResponse, readFleetRoster, readRunFactsCached, type FactCacheEntry } from "./models";
+import { modelsResponse, readFleetRoster, readRunFactsCached } from "./models";
+import { createFactStore } from "./fact-store";
 import { modelStates, outstandingWork } from "../src/models";
 import { readPositions } from "./positions";
 import { toolsResponse } from "./tools";
@@ -144,6 +145,12 @@ export interface ApiOptions {
    * labels rather than an error; a roster map is the one source of names.
    */
   fleetConfigPath?: string;
+  /**
+   * Where the per-run fact cache is persisted across process starts
+   * (`fact-store.ts`). Absent — the default everywhere but the viewer and the
+   * publisher — keeps the memo in memory only, which is what it always was.
+   */
+  factCachePath?: string;
 }
 
 /** How long one /health answer (or one failure) stands in for the next. */
@@ -551,6 +558,13 @@ export type ApiHandle = ((req: Request) => Promise<Response>) & {
    * publisher ever grows again.
    */
   cachedRuns(): { entries: number; totals: number; facts: number; rows: number };
+  /**
+   * Write the persisted fact cache now rather than on its debounce. A handle
+   * with no `factCachePath` writes nothing, so this is always safe to call —
+   * the viewer calls it as it goes down, and a test calls it to be
+   * deterministic about a file the debounce would otherwise write later.
+   */
+  flushFacts(): void;
 };
 
 export function createApi(opts: ApiOptions): ApiHandle {
@@ -646,9 +660,15 @@ export function createApi(opts: ApiOptions): ApiHandle {
    *
    * The projection reads every trajectory in full to count model responses, so
    * without this a thirty-second poll would re-read the whole runs directory
-   * forever. A finished run's fact is read once per process.
+   * forever. A finished run's fact is read once per process — and, when the
+   * handle is given a `factCachePath`, once per corpus: the store in
+   * `fact-store.ts` writes the memo to disk on a debounce and loads it back on
+   * the next start, so a restart no longer re-counts every trajectory
+   * (FOLLOW-UPS item 115). Every entry it hands back is still checked against
+   * the run's live signature below, so nothing about the rule changes.
    */
-  const factCache = new Map<string, FactCacheEntry>();
+  const factStore = createFactStore(runsDir, opts.factCachePath);
+  const factCache = factStore.cache;
 
   /**
    * Run rows and their state series for the listing routes, memoised per run
@@ -1146,7 +1166,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const body = readFleet(runsDir, now);
       const roster = readFleetRoster(opts.fleetConfigPath);
       if (roster.shape === "roster") {
-        const runs = readRunFactsCached(runsDir, factCache, now);
+        const runs = readRunFactsCached(runsDir, factCache, now, factStore.onChange);
         const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
         body.outstanding = outstandingWork({
           states,
@@ -1172,7 +1192,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       }
       const now = Date.now();
       const roster = readFleetRoster(opts.fleetConfigPath);
-      const runs = readRunFactsCached(runsDir, factCache, now);
+      const runs = readRunFactsCached(runsDir, factCache, now, factStore.onChange);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
       // The refs with a job in flight, off the supervisor's state: the verdict
       // says "running (one stream per model)" exactly where --status does.
@@ -1517,5 +1537,5 @@ export function createApi(opts: ApiOptions): ApiHandle {
     // is the only UI, so every non-API path gets the notice telling the
     // operator how to build it.
     return unbuilt();
-  }, { release, cachedRuns });
+  }, { release, cachedRuns, flushFacts: factStore.flush });
 }
