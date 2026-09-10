@@ -332,6 +332,9 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
   border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; line-height: 1.4;
 }
 .playbar-btn:hover { border-color: var(--accent); text-decoration: none; }
+/* The stream's attempt steps: the counter reads as one unit with its arrows. */
+.attempt-steps { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.playbar-btn.step { padding: 0 6px; font-size: 14px; line-height: 1.4; }
 .live-pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
              text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);

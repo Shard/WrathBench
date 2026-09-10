@@ -126,20 +126,6 @@ worklogs/2026-08-29).
     and the card), or wait for item 85, where the Open shape has no gate and the
     problem disappears. Verify with Discord's unfurl after either.
 
-119. **The map's transport should step between a freeplay stream's attempts**
-    (operator, 2026-09-05; asked for while reviewing PR #43). A replay is one run
-    id's track, and the play bar (`dashboard/src/components/PlayBar.tsx`) knows
-    nothing about the chain a durable stream's attempts form, so following one
-    character across sessions means going back to the run page for the next id.
-    The chain is already served — `stream` on `/api/run/<id>` (2026-09-05, the
-    read-time aggregation) — but not on `/api/run/<id>/track`, so the bar has
-    nothing to link. Shape: previous/next attempt controls beside the run's
-    identity in the bar, each a plain link to `/map?run=<id>` so the swap stays
-    the route effect's and the cursor memory keeps each attempt's place; either
-    the track carries the neighbouring ids or the page fetches the run detail
-    alongside the track. Trigger: the next freeplay stream anyone replays end
-    to end.
-
 114. **`sdk.connect()` drops a client without closing its stream** (2026-09-04,
     found while fixing item 113). `connect()` in `sdk/src/client.ts:2184` does
     `if (options.subscribeEvents ?? true) await client.events.connect();` and
