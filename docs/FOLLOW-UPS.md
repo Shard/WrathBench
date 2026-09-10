@@ -15,12 +15,6 @@ was larger than the list, which is the failure mode to avoid rather than repeat.
 Each open item says what, why it matters (with evidence), what unblocks it, and
 status.
 
-## Next up
-
-1. **38** — N1, N2 and N3 all shipped and deployed; what is left is N4, the
-   rung-4 attempts, plus the "unaided" half of the N3 gate (a model discovers
-   and uses a flight master on its own).
-
 ## Player surface
 
 The 2026-08-29 fan-out audit (three subagents — the SDK surface, the module's
@@ -34,73 +28,6 @@ player surface, each piece validated by a smoke test, before any 0.6 talk.**
 Items 95–101 all shipped the same day (97f4e31, dc8c9aa, 3dfd712, 5981a29;
 worklogs/2026-08-29).
 
-## Navigation
-
-38. **Navigation plan — rungs 2–4** (2026-08-22; supersedes item 18). Rung 4 — a
-    capital, the tram, one flight, unaided — is the public release trigger
-    (VISION.md). Scoped to walking, the Deeprun Tram and flight masters; boats,
-    zeppelins and elevators are rung-7 work. Source: the 2026-08-22 spatial-delivery
-    synthesis and the travel probe (worklogs/2026-08-22).
-    - **N1 — actions and statuses: shipped and deployed** (commits
-      92f7df1..b88dd1d, live as `harness-0.3-68` since 2026-08-23). Typed `no_path`
-      causes with the subdivision retry in the module, `CMSG_AREATRIGGER` on entering
-      a DBC volume, transfer packets tapped and `waitForTransfer` typed,
-      transport-relative movement. **Gate passed 2026-08-23** on `harness-0.4-73-gafd352c`:
-      `travel.ts --from tram-ironforge --rides 3` (item 45 fixture) rode IF→SW three
-      times with typed success on every leg, boarding on attempt 1 each time, rides
-      60s; N1 is proven. One residual left: triggers are only tested while a
-      `move_to` is active.
-    - **N2 — field-level observations**, each small, each earned, each logged.
-      **Shipped 2026-08-23 (an N1 amendment, built to `:next`, awaiting the deploy
-      window):** zone and area name on self (`WB_AREA` from the server's zone/area pair
-      named by the client's `AreaTable.dbc`; `state.self.zone` / `state.self.area`; HUD
-      `position: Elwynn Forest / Northshire Valley — map 0 (x, y, z)`; `milestone`
-      records `kind: zone|area` with ids only, plus `zone`/`area` state columns) and NPC
-      roles on nearby units from `UNIT_NPC_FLAGS` (`UnitView.roles`, `units({ role })`,
-      HUD `Gryth Thurden (flight master, 4.2y)` — role, not recommendation). Gate:
-      `infra/smoke/area-and-roles.ts` (login names, one `WB_AREA` each way across the
-      abbey door, Deputy Willem reports `questGiver`) — runs on the first deploy of the
-      N2 build; if the server's ids disagree with the ones read from the map files, the
-      smoke is corrected to the server's answer. **Innkeeper bind shipped 2026-08-29,
-      deployed as `harness-0.5-225-ga2c0bd2`, gate passed the same day
-      (`innkeeper-bind.ts`: login bind Coldridge Valley 132 → bind at Firebrew
-      lands 0.0y from the character as Ironforge 1537):** `SMSG_BINDER_CONFIRM` / `SMSG_BINDPOINTUPDATE` /
-      `SMSG_PLAYERBOUND` tapped, `CMSG_BINDER_ACTIVATE` on the raw allowlist,
-      `state.self.bindPoint` (map, xyz, area id + AreaTable name), `bindAtInnkeeper`
-      typed, HUD `home: Ironforge — map 0 (x, y, z)`. Payloads in
-      worklogs/2026-08-29. Gate: `infra/smoke/innkeeper-bind.ts` (scenario
-      `inn-ironforge`). N2 is complete.
-    - **N3 — flight paths, shipped 2026-08-29, deployed as
-      `harness-0.5-225-ga2c0bd2`, probe gate passed the same day:**
-      `SMSG_SHOWTAXINODES` tapped exactly as the wire has it (show flag, guid,
-      current node, 14-word mask) plus the mask decoded to `known[]` named from the
-      client's `TaxiNodes.dbc`; `state.lastTaxiNodes(guid)`, `showTaxiNodes(guid)`
-      (hello → the icon-2 taxi option → window), `activateTaxi(guid, nameOrId)`
-      typed over raw `CMSG_ACTIVATETAXI` with a hint per `ActivateTaxiReply` code.
-      Never the TaxiPath catalogue, never node positions, never a nearest-master
-      lookup. `infra/smoke/taxi-nodes.ts` passed (window current 6 Ironforge,
-      known 6/8/100 — 100 Honor Hold is the core's Alliance starting mask, not the
-      fixture's; `activateTaxi(gryth, "Thelsamar")` accepted, fare 105c;
-      `taxiFlight` true → false at 97s; landing zone Loch Modan). **Remaining:**
-      the "unaided" half of the gate — a model discovers and uses a flight master
-      on its own (N4 evidence). Residual seen on the gate: `state.self.position`
-      still read the takeoff point after landing (the fold does not follow the
-      flight spline; the zone did move) — a model reads its landing spot from
-      `self.zone` until its first own step. Open question for the operator:
-      whether the `TaxiNodes.dbc` node positions (which the client draws on its
-      taxi map) are a contract-clean observation; withheld until decided.
-    - **N4 — rung-4 attempts**: Opus/Fable runs with milestone records on, destination
-      choice scored from the records (destination chosen → connector chosen → action
-      dispatched → transfer confirmed / not_visited / waiting / wrong_map / stuck →
-      arrival at server-confirmed map+xyz). Never "ended near the coordinate"; that
-      scores `move_to`.
-    - **Not in 0.3, by decision:** a `here()` / `goTo(name)` helper, a rendered minimap
-      as model observation (the map stays operator-only), the TaxiPath /
-      areatrigger_teleport tables, walkability masks, a persistent map notebook (a
-      labelled context-engine change under 8b if ever). Wiki coordinates are a run
-      dimension withheld from scored runs (docs/METHODOLOGY.md, "Episodes, lanes,
-      and evidence"); pull back to a labelled coords
-      tier only if the names-only ladder proves unclimbable.
 
 ## Episodes and results
 
