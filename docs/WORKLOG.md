@@ -75,7 +75,8 @@ Convention:
   (verified), two dangling VISION.md references, fleet-update.sh compose drift; minimap
   ships, legal opinion no longer a gate. Lean CI: PR checks on the pinned Bun plus
   a chart lint/render job (item 117's release half stays open). The map's play bar
-  steps between a freeplay stream's attempts (item 119).
+  steps between a freeplay stream's attempts (item 119). A failed `sdk.connect()`
+  no longer leaks its reconnect ladder (item 114).
 
 ## Resolving a cited item number
 
