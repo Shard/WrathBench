@@ -305,6 +305,87 @@ describe("the play bar across the route swap", () => {
     }
   });
 
+  /**
+   * The attempt steps (item 119). They are links and nothing else — the swap
+   * they cause is the route effect's, which the first test already performs —
+   * so what is asserted here is which of them render and where they point:
+   * both on a middle attempt, one at each end of the chain, none at all on a
+   * track with no stream (a scored run, or a snapshot published before the
+   * field existed, where the old shape must render rather than throw).
+   */
+  test("the attempt steps link the stream's neighbours, and nothing where there are none", async () => {
+    const { document, restore } = installDom();
+    try {
+      const { PlayBar, MemoryRouter, Route, createMemoryHistory } = await loadEntry();
+      const [track, setTrack] = createSignal<TrackResponse>(TRACK);
+      const props: PlayBarProps = {
+        replayId: TRACK.runId,
+        get track() {
+          return track();
+        },
+        replayError: undefined,
+        feedError: undefined,
+        cursor: 1_000,
+        playing: false,
+        speed: 1,
+        count: 0,
+        seriesHidden: 0,
+        liveSeries: null,
+        selected: null,
+        onSeek: () => {},
+        onTogglePlay: () => {},
+        onStepBack: () => {},
+        onStepForward: () => {},
+        onCycleSpeed: () => {},
+      };
+      const mount = document.createElement("div");
+      const dispose = render(
+        () =>
+          createComponent(MemoryRouter, {
+            history: createMemoryHistory(),
+            get children() {
+              return createComponent(Route, { path: "*", component: () => createComponent(PlayBar, props) });
+            },
+          }),
+        mount,
+      );
+      const href = (label: string): string | null =>
+        mount.querySelector(`a[aria-label="${label}"]`)?.getAttribute("href") ?? null;
+
+      // A track with no stream: a scored run, or a snapshot older than the field.
+      expect(mount.querySelector(".attempt-steps")).toBeNull();
+      expect(href("previous attempt")).toBeNull();
+      expect(href("next attempt")).toBeNull();
+
+      // The middle of a chain: both ways, each a plain `/map?run=<id>`.
+      expect(() =>
+        setTrack({
+          ...TRACK,
+          stream: { streamId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" },
+        }),
+      ).not.toThrow();
+      expect(mount.textContent).toContain("attempt 2 of 3");
+      expect(href("previous attempt")).toBe("/map?run=a1");
+      expect(href("next attempt")).toBe("/map?run=a3");
+
+      // The first attempt has nowhere back, the last nowhere on: the control
+      // is absent rather than a link that goes nowhere.
+      setTrack({ ...TRACK, stream: { streamId: "a1", attempt: 1, attempts: 3, previous: null, next: "a2" } });
+      expect(href("previous attempt")).toBeNull();
+      expect(href("next attempt")).toBe("/map?run=a2");
+      setTrack({ ...TRACK, stream: { streamId: "a1", attempt: 3, attempts: 3, previous: "a2", next: null } });
+      expect(href("previous attempt")).toBe("/map?run=a2");
+      expect(href("next attempt")).toBeNull();
+
+      // And back to a trackless stream shape without a throw in the graph.
+      expect(() => setTrack({ ...TRACK })).not.toThrow();
+      expect(mount.querySelector(".attempt-steps")).toBeNull();
+      dispose();
+    } finally {
+      restore();
+    }
+  });
+
   test("a one-reading track shows the transport disabled rather than a dead slider", async () => {
     const { document, restore } = installDom();
     try {

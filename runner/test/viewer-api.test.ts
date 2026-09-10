@@ -1198,6 +1198,94 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(body.untiered).toBe(0);
   });
 
+  /**
+   * A freeplay chain a1 → a2 → a3, each attempt a run directory of its own.
+   * Enough of one for the lineage walk and the episode gate: the stamped
+   * episode, the predecessor, a started-at, and one state row so the track has
+   * a point to serve.
+   */
+  function chainFixture(): string {
+    const runs = mkdtempSync(join(tmpdir(), "viewer-track-stream-"));
+    const comparability = comparabilityOf(
+      configFromArgs(["--episode", "freeplay", "--model", "m"]),
+      "harness-0.5",
+    );
+    const ids = ["a1", "a2", "a3"];
+    ids.forEach((id, i) => {
+      const dir = join(runs, id);
+      mkdirSync(dir, { recursive: true });
+      const startedAt = (i + 1) * 1000;
+      const config = { model: "m", driver: "openai", character: "Bromdir", ...(i === 0 ? {} : { continuedFrom: ids[i - 1] }) };
+      writeFileSync(
+        join(dir, "meta.json"),
+        JSON.stringify({ runId: id, harnessVersion: "harness-0.5", startedAt, config, comparability }),
+      );
+      // One model response apiece: a launch that produced nothing is stillborn,
+      // and a stillborn launch is not an attempt at the character.
+      writeFileSync(
+        join(dir, "trajectory.jsonl"),
+        [
+          JSON.stringify({ ts: startedAt, t: "meta", runId: id }),
+          JSON.stringify({ ts: startedAt + 1, t: "response", turn: 1 }),
+        ].join("\n") + "\n",
+      );
+      const db = new Database(join(dir, "run.sqlite"));
+      db.run(`CREATE TABLE run (run_id TEXT PRIMARY KEY, model TEXT, driver TEXT, harness_version TEXT, started_at INTEGER, ended_at INTEGER, termination_reason TEXT, pause_reason TEXT, config_json TEXT)`);
+      db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?)`, [id, "m", "openai", "harness-0.5", startedAt, startedAt + 100, "idle", null, JSON.stringify(config)]);
+      db.run(`CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER, map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, turn INTEGER)`);
+      db.run(`INSERT INTO state VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [id, startedAt + 10, 5, 100, 0, -6240, 380, 385, 1, 1, 1]);
+      db.close();
+    });
+    return runs;
+  }
+
+  /*
+   * Item 119: the map's transport steps between a stream's attempts, so the
+   * track carries the neighbours the run page's `stream` names — not the
+   * chain, not its totals, which would make a replay's fetch a run page's.
+   */
+  test("a freeplay attempt's track names the attempts either side of it", async () => {
+    const runs = chainFixture();
+    const handle = api(runs);
+    const trackOf = async (id: string): Promise<Record<string, unknown> | undefined> =>
+      ((await (await handle(new Request(`http://x/api/run/${id}/track`))).json()) as {
+        stream?: Record<string, unknown>;
+      }).stream;
+
+    expect(await trackOf("a2")).toEqual({
+      streamId: "a1",
+      attempt: 2,
+      attempts: 3,
+      previous: "a1",
+      next: "a3",
+    });
+    // The ends of the chain have one way each, and the same identity.
+    expect(await trackOf("a1")).toMatchObject({ attempt: 1, previous: null, next: "a2" });
+    expect(await trackOf("a3")).toMatchObject({ attempt: 3, previous: "a2", next: null });
+  });
+
+  test("the track's neighbours are the ones /api/run/<id> serves, from the same walk", async () => {
+    const runs = chainFixture();
+    const handle = api(runs);
+    const detail = (await (await handle(new Request("http://x/api/run/a2"))).json()) as {
+      stream: { streamId: string; attempt: number; attempts: number; previous: string | null; next: string | null };
+    };
+    const track = (await (await handle(new Request("http://x/api/run/a2/track"))).json()) as {
+      stream: typeof detail.stream;
+    };
+    const { streamId, attempt, attempts, previous, next } = detail.stream;
+    expect(track.stream).toEqual({ streamId, attempt, attempts, previous, next });
+  });
+
+  test("a run that is no stream carries no field, and pays nothing to find out", async () => {
+    const runs = fixture();
+    const body = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as Record<
+      string,
+      unknown
+    >;
+    expect("stream" in body).toBe(false);
+  });
+
   test("/api/run/<id>/track serves the recorded positions", async () => {
     const runs = fixture();
     const body = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
