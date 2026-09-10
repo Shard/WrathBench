@@ -6,6 +6,13 @@ a fresh machine is `infra/README.md`.
 
 ## Running the fleet as a service
 
+**Where it runs, since 2026-09-08:** the cluster, as the `wrathbench-fleet`
+Deployment in namespace `wrathbench`, and compose is stopped
+(`docs/DEPLOY-NUSPHERE.md`). Read every `docker compose` line in this document
+as the local rehearsal stack's; the cluster equivalent is a `kubectl scale` or
+`kubectl rollout restart` of that Deployment, and `./infra/fleet-update.sh`
+already speaks kubectl for all five of its verbs.
+
 The fleet supervisor (`infra/run-fleet.ts`) is a compose service. It is up
 while the dev machine is up, it has no deadline, and it is steered entirely by
 editing `infra/fleet.json` — which it re-reads every 60 seconds. It lives
@@ -213,6 +220,13 @@ in `data/runs/` is what matters and it is on the bind mount.
 
 ### Updating the live fleet
 
+**Since the 2026-09-08 cutover the live fleet is the `wrathbench-fleet`
+Deployment on the cluster, not a compose container** (`docs/DEPLOY-NUSPHERE.md`).
+`infra/fleet-update.sh` drives kubectl — same five verbs, same semantics — and
+the deploy window is `infra/k8s-deploy.sh`. The compose commands still quoted
+below are the local rehearsal stack's, and the runner-image row of the table is
+now "a new image tag, which Flux owns" rather than a rebuild in place.
+
 Everything that changes the harness reaches the running fleet one of three
 ways, and the first question is always **which**:
 
@@ -319,9 +333,8 @@ campaigns: every one "enabled": false               # each drains at its episode
 queue: []                                           # nothing manual
 ```
 
-— then wait for `--status` to show no live job, `docker compose -f
-infra/compose.yml up -d --no-deps --force-recreate fleet`, and put the accounts
-and campaigns back. `infra/fleet.test.ts` pins that this edit parses and
+— then wait for `--status` to show no live job, `kubectl -n wrathbench rollout
+restart deployment/wrathbench-fleet`, and put the accounts and campaigns back. `infra/fleet.test.ts` pins that this edit parses and
 schedules nothing. It is strictly worse than the switch (it is an edit to the
 file whose every flag goes inert on a typo, and it does not stop a *resume*),
 which is why it is the bootstrap and not the recipe.
@@ -330,7 +343,7 @@ which is why it is the bootstrap and not the recipe.
 
 ```
 ./infra/fleet-update.sh force               # asks for confirmation; --yes to skip
-docker compose -f infra/compose.yml up -d --no-deps --force-recreate fleet   # the same thing by hand
+kubectl -n wrathbench rollout restart deployment/wrathbench-fleet   # the same thing by hand
 ```
 
 Compose stops the container inside its 180s `stop_grace_period`, so every live
@@ -380,9 +393,8 @@ deploy must never depend on an operator watching a wait loop.
 For the graceful version, drain first and hand the script a quiet fleet:
 
 ```
-./infra/fleet-update.sh drain      # pause, wait for quiet, stop the fleet; switch stays set
-./infra/build-worldserver.sh
-./infra/deploy-worldserver.sh      # its stop finds nothing live; it brings the fleet back up
+./infra/fleet-update.sh drain      # pause, wait for quiet, scale the fleet to 0; switch stays set
+./infra/k8s-deploy.sh              # its own drain finds nothing live; it scales the fleet back
 ./infra/fleet-update.sh resume     # clear the switch; the pool fills on the next tick
 ```
 
