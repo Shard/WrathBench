@@ -81,6 +81,8 @@ Convention:
   And the public bucket was read back for the first time (`infra/publish-accept.ts`,
   GitHub issue #31): 1,590 objects and 422 runs complete with nothing missing, and
   one real finding — the wiki bundle source ships inside published entries (item 123).
+  The viewer's per-run fact cache is persisted across restarts (item 115): 34s → 22s
+  on the first `/api/models` after a start, the fill itself 11.9s → 4ms.
 
 ## Resolving a cited item number
 
