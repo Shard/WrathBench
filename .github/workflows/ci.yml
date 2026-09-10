@@ -1,0 +1,74 @@
+# PR checks: the half of GitHub issue 7's release contract that needs no cluster
+# and no client data. Everything here runs from a bare clone — no `.env`, no
+# `data/`, no submodule — which is the property CLAUDE.md asks the suite to keep.
+#
+# Deliberately absent: the C++ module build (needs the worldserver image), the
+# tag/digest workflow, chart-as-OCI, and the mutable-image-ref review gate.
+# See docs/[removed], "CI" and "Owed".
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Bun checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      # No submodules on purpose: deps/azerothcore is a reference checkout for
+      # the C++ build, and nothing under test reads it.
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Bun version matches the pin
+        run: |
+          pinned="$(cat .bun-version)"
+          actual="$(bun --version)"
+          echo "pinned=$pinned actual=$actual"
+          test "$pinned" = "$actual"
+
+      - name: Install (frozen)
+        run: bun install --frozen-lockfile
+
+      # Fast to slow, so a bad type or a stale doc fails before the 3k-test suite.
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Regenerates sdk/API.md and fails if it differs from what is committed.
+      - name: Generated API docs are current
+        run: bun run docs:api:check
+
+      - name: Dashboard build
+        run: bun run dashboard:build
+
+      - name: Test suite
+        run: bun test
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # A dummy immutable tag: the chart refuses "" and "latest" by design
+      # (templates/_helpers.tpl), so rendering needs something shaped like a
+      # `git describe` output. It is never a deployment source.
+      - name: Lint
+        run: helm lint infra/chart/wrathbench --set image.tag=ci-lint
+
+      - name: Render
+        run: helm template ci infra/chart/wrathbench --set image.tag=ci-lint >/dev/null
