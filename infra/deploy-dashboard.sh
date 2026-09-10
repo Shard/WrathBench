@@ -48,10 +48,18 @@ if [ -z "$origin" ]; then
 fi
 og_stamp=$(bun infra/render-og.ts)
 
+# The repository link, and the BibTeX `url` line with it. Empty is the default
+# and not an error: the repo is private, and a footer link that 404s is worse
+# than no link. On the day it opens, set WRATHBENCH_REPO_URL in .env to the
+# repository's URL and redeploy — that is the whole flip.
+repo_url=$(bun -e 'process.stdout.write(process.env.WRATHBENCH_REPO_URL ?? "")')
+[ -n "$repo_url" ] && echo "deploy: repo link $repo_url" || echo "deploy: no repo link (WRATHBENCH_REPO_URL unset)"
+
 echo "deploy: snapshot-mode build"
 VITE_WRATHBENCH_SNAPSHOT_BASE=/ \
   VITE_WRATHBENCH_PUBLIC_ORIGIN="$origin" \
   VITE_WRATHBENCH_OG_STAMP="$og_stamp" \
+  VITE_WRATHBENCH_REPO_URL="$repo_url" \
   bun run --cwd dashboard build >/dev/null
 echo "deploy: wrangler"
 bunx wrangler deploy --config dashboard/wrangler.jsonc | grep -E "Success|Deployed|rror" || true
