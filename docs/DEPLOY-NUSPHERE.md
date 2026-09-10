@@ -445,11 +445,30 @@ Then point a 3.3.5a client's `realmlist.wtf` at `127.0.0.1`.
   from wherever the fleet runs; the cluster reaches it the same way the
   workstation did. Nothing about it moves.
 
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `master`,
+cancelling superseded runs on the same ref and asking for nothing but
+`contents: read`. Two jobs. **Bun checks** pins Bun from `.bun-version` (and
+asserts the running version equals the pin, so a silent drift in the setup action
+is a failure and not a surprise), installs with `--frozen-lockfile`, then runs
+what the repo already has, ordered cheap to expensive: `bun run typecheck`,
+`bun run docs:api:check` (regenerates `sdk/API.md` and fails if it differs from
+what is committed), `bun run dashboard:build`, and `bun test`. **Helm chart** is
+separate so a chart problem cannot read as a test problem: `helm lint` and
+`helm template` against `infra/chart/wrathbench` with a dummy immutable
+`image.tag`, since the chart refuses `""` and `latest` by design.
+
+It runs from a bare clone — no `.env`, no `data/`, no submodule. That is the same
+property CLAUDE.md asks the suite to keep, and CI is now the thing that notices
+when it stops being true.
+
 ## Owed
 
-The CI half of issue 7 is not built: PR checks on the pinned Bun with frozen
-install, the full suite, typecheck, generated-API drift and the dashboard build;
-a tag workflow that produces a traceable digest; chart lint/render in CI; and a
-check that refuses a mutable image reference. The chart's `image.tag` guard is
-the only piece of that contract enforced today, and it is enforced at render
-time rather than at review time.
+The release half of issue 7 is still not built: a tag workflow that produces a
+traceable image digest tied to one source SHA, the chart published as a versioned
+OCI artifact (or consumed from a pinned path in the GitOps repo), and a check
+that refuses a mutable image reference at review time. The chart's `image.tag`
+guard remains the only enforcement of that last one, and it fires at render time
+rather than at review time. The C++ module build stays out of CI: it needs the
+worldserver image, and the smoke scripts in `infra/smoke/` need the live stack.
