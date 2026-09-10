@@ -107,12 +107,6 @@ worklogs/2026-08-29).
     behind it. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
 
-109. **Hide the GitHub link until the repo opens** (2026-09-01). The footer and the
-    BibTeX entry link to `github.com/Shard/WrathBench`, which 404s while the repo is
-    private (`dashboard/src/components/Layout.tsx`, `pages/About.tsx`). The preview is
-    shared first and the repo opens after; hide or open on the day it flips. The rest
-    of the pre-open checklist was decided 2026-09-01: the operator's first name stays
-    in the worklogs, `docs:api` drift was fixed in place, the copy rewrites are done.
 111. **Social previews: let the crawler through** (operator, 2026-09-01). The
     tags and the ship-time Pareto card shipped the same day (`dashboard/src/lib/og.ts`,
     `infra/render-og.ts`, `docs/PUBLIC-DASHBOARD.md` "The social card") and the
