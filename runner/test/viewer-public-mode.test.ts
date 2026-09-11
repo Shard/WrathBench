@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import {
   CHARACTER_NAME,
+  CONTAINER_PATH,
   DEAD_RUN,
   LIVE_RUN,
   POISON,
@@ -132,6 +133,10 @@ describe("public mode is projected everywhere", () => {
       // The scratchpad is the model's own notes and is served in public mode.
       const scratchpad = await (await get(handle, `/api/run/${DEAD_RUN}/scratchpad`)).text();
       expect(scratchpad).toContain(SURVIVES.scratchpad);
+      // ...with the container install prefix stripped, which is the one edit
+      // the boundary makes to model-authored text (operator, 2026-09-11).
+      expect(scratchpad).toContain(CONTAINER_PATH.published);
+      expect(scratchpad).not.toContain("/wrathbench/");
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }
