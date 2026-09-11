@@ -78,12 +78,10 @@ Convention:
   steps between a freeplay stream's attempts (item 119). A failed `sdk.connect()`
   no longer leaks its reconnect ladder (item 114), and the dashboard's
   repository link and BibTeX `url` sit behind `VITE_WRATHBENCH_REPO_URL` (item 109).
-  The acceptance readback of the public bucket, and the one finding it made good:
-  the wiki dump filename no longer ships inside a published entry's comparability
-  tuple (item 123, deploy owed).
   And the public bucket was read back for the first time (`infra/publish-accept.ts`,
   GitHub issue #31): 1,590 objects and 422 runs complete with nothing missing, and
-  one real finding — the wiki bundle source ships inside published entries (item 123).
+  one real finding — the wiki bundle source ships inside published entries — which
+  the entry window's projection then closed, awaiting the publisher rollout (item 123).
   The viewer's per-run fact cache is persisted across restarts (item 115): 34s → 22s
   on the first `/api/models` after a start, the fill itself 11.9s → 4ms. That
   compose drift is closed: the ops scripts became cluster-native — `fleet-update.sh`
