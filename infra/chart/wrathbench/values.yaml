@@ -18,11 +18,13 @@ image:
     dbImport: wrathbench-db-import
     runner: wrathbench-runner
 
-# One real node. The cluster's other node is a tainted 1-cpu edge box that must
-# never run any of this, and the single RWO data PVC is shared by five pods —
-# which is only sound because they are all pinned here.
-nodeSelector:
-  kubernetes.io/hostname: chungusjr
+# Empty by default: a node name is one cluster's, and on a single-node cluster
+# no selector is the right answer. The nusphere deployment pins every pod to its
+# one real node — the other is a tainted 1-cpu edge box that must never run any
+# of this, and the single RWO data PVC is shared by five pods, which is only
+# sound because they are all pinned — and that pin comes from the cluster repo's
+# HelmRelease, not from here. `values.example.yaml` shows the shape.
+nodeSelector: {}
 
 storage:
   className: iscsi-nvme
