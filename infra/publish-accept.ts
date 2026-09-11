@@ -36,10 +36,10 @@
  *
  * `cache-control` is reported, not asserted: Bun's S3 writer cannot send the
  * header (see the note at the top of `infra/publish-dashboard.ts`), so objects
- * land without it by design and the TTLs are set at the edge — by the zone's
- * cache rules in the Open shape, by the gate Worker in the Gated one. What the
+ * land without it by design and the TTLs are the zone's cache rules. What the
  * S3 API can tell us is therefore only whether that is still true; the
- * through-host half of criterion 3 is a check against the host, not the bucket.
+ * through-host half of criterion 3 is a check against the host, not the bucket,
+ * and that is what `--base` below is for.
  *
  * **Read-only, structurally.** The source interface this file consumes has
  * `get` and `head` and nothing else — no put, no delete, not even a typed way
@@ -48,6 +48,14 @@
  *
  *   bun infra/publish-accept.ts            # S3_* from the environment
  *   bun infra/publish-accept.ts --json     # the report as JSON
+ *   bun infra/publish-accept.ts --base https://wrathbench-data.shard.page
+ *                                          # through the public hostname, no credential
+ *
+ * The `--base` mode walks the same generation over plain `GET`, so it is the
+ * check that answers "is the site actually serving this", which the S3 read
+ * cannot: it goes through the custom domain, the cache rules and whatever else
+ * the zone puts in the way, and its `head` sees a real `cache-control` and
+ * `cf-cache-status`.
  *
  * Exit code is 1 when anything is missing or any finding is raised, so the
  * check is usable from a script; the residual notes (below) never fail it.
@@ -94,6 +102,52 @@ export interface AcceptSource {
   get(key: string): Promise<string | null>;
   /** Metadata, when the store exposes it. Optional: a source may not have it. */
   head?(key: string): Promise<ObjectHead | null>;
+}
+
+/**
+ * The same read-only view, over the public hostname instead of the S3 API.
+ *
+ * The Open shape (2026-09-11) gave the bucket a custom domain, and that is a
+ * different question from the one the S3 source answers. The S3 API reads what
+ * is *in* the bucket; this reads what a browser on the far side of the edge
+ * actually gets — so a cache rule that never matched, a CORS policy that fails
+ * closed, an object the custom domain does not serve, or a hostname pointed at
+ * the wrong bucket all show up here and at no other layer. It is also the only
+ * way to observe a real `cache-control` and `cf-cache-status`, which is the
+ * "through-host half" the Gated shape could not carry (docs/PUBLIC-DASHBOARD.md,
+ * "Acceptance record"): objects land without the header, because Bun's S3
+ * writer cannot send one, and the TTLs are the zone's.
+ *
+ * Read-only for the same structural reason as the S3 source — `GET` and `HEAD`
+ * and no other method is reachable from here — and needs no credential at all,
+ * which is what makes it runnable from anywhere rather than only from the lab.
+ *
+ * Keys are joined, not escaped per segment: a run id is a path segment and
+ * `encodeURIComponent` would eat its separators. `encodeURI` leaves a
+ * well-formed key alone and still refuses to emit a raw space or quote.
+ */
+export function httpSource(base: string, fetchImpl: typeof globalThis.fetch = globalThis.fetch): AcceptSource {
+  const root = base.trim().replace(/\/+$/, "");
+  const url = (key: string): string => encodeURI(`${root}/${key.replace(/^\/+/, "")}`);
+  return {
+    get: async (key) => {
+      const res = await fetchImpl(url(key));
+      if (res.status === 404 || res.status === 403) return null;
+      if (!res.ok) throw new Error(`GET ${key}: ${res.status}`);
+      return await res.text();
+    },
+    head: async (key) => {
+      const res = await fetchImpl(url(key), { method: "HEAD" });
+      if (res.status === 404 || res.status === 403) return null;
+      if (!res.ok) throw new Error(`HEAD ${key}: ${res.status}`);
+      const len = Number(res.headers.get("content-length") ?? "");
+      return {
+        size: Number.isFinite(len) ? len : 0,
+        contentType: res.headers.get("content-type"),
+        cacheControl: res.headers.get("cache-control"),
+      };
+    },
+  };
 }
 
 /* ------------------------------------------------------------- the report --- */
@@ -688,6 +742,35 @@ export function describeAcceptReport(r: AcceptReport): string {
 /* --------------------------------------------------------------- the CLI --- */
 
 if (import.meta.main) {
+  /** `--base https://host` reads through the public hostname instead of the S3 API. */
+  const baseArg = ((): string | null => {
+    const i = process.argv.indexOf("--base");
+    if (i < 0) return null;
+    const v = process.argv[i + 1];
+    if (v === undefined || v.startsWith("--")) {
+      console.error("publish-accept: --base needs a URL, e.g. --base https://wrathbench-data.shard.page");
+      process.exit(2);
+    }
+    if (!/^https?:\/\/\S+$/.test(v)) {
+      console.error(`publish-accept: --base must be an http(s) URL, got ${v}`);
+      process.exit(2);
+    }
+    return v;
+  })();
+  const source = baseArg === null ? await s3Source() : httpSource(baseArg);
+  const json = process.argv.includes("--json");
+  const report = await verifyPublication(source, { log: json ? undefined : (l) => console.error(l) });
+  console.log(json ? JSON.stringify(report, null, 2) : describeAcceptReport(report));
+  process.exit(report.missing.length === 0 && report.findings.length === 0 ? 0 : 1);
+}
+
+/**
+ * The S3-API source, built from the environment. Its own function so the
+ * credential check happens only when it is the source actually being used —
+ * `--base` needs no credential at all, and exiting 2 over an unset key the run
+ * will never read would be a lie about what is wrong.
+ */
+async function s3Source(): Promise<AcceptSource> {
   const { S3Client } = await import("bun");
   for (const name of ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const) {
     if ((Bun.env[name] ?? "") === "" && (Bun.env[name.replace("S3_", "AWS_")] ?? "") === "") {
@@ -696,7 +779,7 @@ if (import.meta.main) {
     }
   }
   const s3 = new S3Client();
-  const source: AcceptSource = {
+  return {
     // One GET per object rather than an exists-then-get pair: a walk over a
     // thousand-run tree is four thousand objects, and the miss it is looking
     // for is exactly the error this catches.
@@ -726,8 +809,4 @@ if (import.meta.main) {
       return { size: stat.size, contentType: stat.type ?? null, cacheControl };
     },
   };
-  const json = process.argv.includes("--json");
-  const report = await verifyPublication(source, { log: json ? undefined : (l) => console.error(l) });
-  console.log(json ? JSON.stringify(report, null, 2) : describeAcceptReport(report));
-  process.exit(report.missing.length === 0 && report.findings.length === 0 ? 0 : 1);
 }

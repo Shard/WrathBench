@@ -1,0 +1,23 @@
+# wrathbench.shard.page — the public dashboard.
+#
+# The Gated preview's Worker answered this path with a disallow-all, ahead of
+# the password form, and that is half of why nothing unfurled: Slack and Twitter
+# honour robots.txt and Discord does not (FOLLOW-UPS item 111). The Open shape
+# has no fetch handler and so serves no robots.txt at all unless one is in
+# `dashboard/public/`, which is what this file is.
+#
+# Permissive on purpose. The site is a static projection of the run record — the
+# content boundary in docs/PUBLIC-DASHBOARD.md is what decides what a stranger
+# may read, not a crawler directive, and a directive is not an access control in
+# any case. What this buys is the social card: a link pasted anywhere unfurls
+# with the title, the sentence and the ship-time Pareto picture.
+#
+# It covers this hostname only, and that is all it needs to: the data hostname
+# (`wrathbench-data.shard.page`) serves the published JSON and nothing else, and
+# minimap tiles are not published at all — whether they ever are is an open
+# operator decision, since the retired gate was the only thing that had ever
+# kept a reader off them (infra/cloudflare/README.md, "Open, and the
+# operator's").
+
+User-agent: *
+Allow: /

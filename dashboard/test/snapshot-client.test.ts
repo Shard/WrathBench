@@ -639,16 +639,20 @@ describe("the public build's call sites", () => {
     );
   });
 
-  test("the map asks for the same tile path in both builds", () => {
-    // Since 2026-08-30 the gated site publishes the tiles too, served only
-    // behind its password (infra/publish-tiles.ts, dashboard/worker/index.ts),
-    // so the public build asks for the same URL rather than skipping. A host
-    // with nothing behind the prefix answers 404 and the grid is drawn, which
-    // is the same path a lab machine without the extraction takes.
+  test("the map draws the grid rather than asking a bucket for a texture", () => {
+    // The gated site published tiles behind its password from 2026-08-30. The
+    // Open shape has no password, so publishing one would make a Blizzard
+    // texture world-readable — an operator decision, not taken. The public
+    // build therefore withholds them and draws its labelled grid, which is
+    // the same thing a lab machine without the extraction draws, and
+    // `VITE_WRATHBENCH_TILES_BASE` is the flip if that decision is ever taken.
+    // `tiles.test.ts` owns the rules; this pins that the page consults them.
     const src = read("../src/pages/MapPage.tsx");
-    expect(src).toContain("useTiles = g.size >= TILE_MIN_PX;");
+    expect(src).toContain("const useTiles = !TILES_WITHHELD && g.size >= TILE_MIN_PX;");
+    expect(src).toContain("const src = tileSrc(map, row, col);");
+    // Not gated on SNAPSHOT_MODE directly: the question is whether a tile host
+    // was named, which is a different one from whether the data is published.
     expect(src).not.toContain("!SNAPSHOT_MODE &&");
-    expect(src).toContain("img.src = `/tiles/${map}/${row}_${col}.png`;");
   });
 });
 
