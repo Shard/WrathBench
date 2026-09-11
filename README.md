@@ -135,3 +135,7 @@ nothing Blizzard-derived may enter git (`docs/DATA-AND-LEGAL.md`):
 ## Licence
 
 `module/` is GPL-2.0-or-later; see `module/LICENSE`. All other original WrathBench code and documentation, including `sdk/`, `runner/`, `dashboard/`, `wiki/`, `minimap/`, `infra/`, and `docs/`, are MIT under the root `LICENSE`. This boundary does not relicense AzerothCore itself, Blizzard assets, or third-party dependencies; see `THIRD-PARTY-NOTICES.md` and `docs/DATA-AND-LEGAL.md`.
+
+## Contributing and security
+
+Issues and discussion are welcome, pull requests against an agreed issue — `CONTRIBUTING.md` for what holds and why, `SECURITY.md` for reporting a vulnerability, `CODE_OF_CONDUCT.md` for how we behave here.
