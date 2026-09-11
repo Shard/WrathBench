@@ -639,16 +639,19 @@ describe("the public build's call sites", () => {
     );
   });
 
-  test("the map asks for the same tile path in both builds", () => {
-    // Since 2026-08-30 the gated site publishes the tiles too, served only
-    // behind its password (infra/publish-tiles.ts, dashboard/worker/index.ts),
-    // so the public build asks for the same URL rather than skipping. A host
-    // with nothing behind the prefix answers 404 and the grid is drawn, which
-    // is the same path a lab machine without the extraction takes.
+  test("the map asks for tiles in both builds, against whichever host has them", () => {
+    // Since 2026-08-30 the public site publishes the tiles too
+    // (infra/publish-tiles.ts), so the public build asks for them rather than
+    // skipping. What changed in the Open shape (2026-09-11) is only the host:
+    // the tiles are under `tiles/` in the data bucket, so the URL is built from
+    // the snapshot base in `lib/tiles.ts` — pinned there by `tiles.test.ts`,
+    // including that no page spells the path itself. A host with nothing behind
+    // the prefix answers 404 and the grid is drawn, which is the same path a lab
+    // machine without the extraction takes.
     const src = read("../src/pages/MapPage.tsx");
     expect(src).toContain("useTiles = g.size >= TILE_MIN_PX;");
     expect(src).not.toContain("!SNAPSHOT_MODE &&");
-    expect(src).toContain("img.src = `/tiles/${map}/${row}_${col}.png`;");
+    expect(src).toContain("img.src = tileSrc(map, row, col);");
   });
 });
 
