@@ -78,6 +78,8 @@ Convention:
   steps between a freeplay stream's attempts (item 119). A failed `sdk.connect()`
   no longer leaks its reconnect ladder (item 114), and the dashboard's
   repository link and BibTeX `url` sit behind `VITE_WRATHBENCH_REPO_URL` (item 109).
+  The two stream heads the unversioned stamp stranded are ended by hand as
+  `manual`, detail `superseded` (item 122; data only, on the cluster PVC).
   And the public bucket was read back for the first time (`infra/publish-accept.ts`,
   GitHub issue #31): 1,590 objects and 422 runs complete with nothing missing, and
   one real finding — the wiki bundle source ships inside published entries — which
