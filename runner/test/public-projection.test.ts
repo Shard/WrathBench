@@ -1359,6 +1359,41 @@ describe("projectEntries", () => {
     expect(out.total).toBe(6);
   });
 
+  test("a restamped comparability tuple inside an entry crosses the run row's allowlist", () => {
+    const before = comparabilityFixture();
+    const input = {
+      from: 0,
+      total: 2,
+      entries: [
+        smuggle({
+          i: 0, t: "harness", ts: 1, start: 0, end: 10,
+          kind: "comparability_restamped", leashChanged: false,
+          before, after: comparabilityFixture(),
+        }),
+        // A restamp on a run that had no tuple to compare against: `before` is
+        // null on the way in and must stay null on the way out.
+        { i: 1, t: "harness", ts: 2, start: 11, end: 20,
+          kind: "comparability_restamped", leashChanged: true, before: null, after: comparabilityFixture() },
+      ],
+    };
+    const out = projectEntries(input as never);
+    assertClean(JSON.stringify(out));
+    expect(keyPaths(out.entries[0])).toEqual(
+      allow([
+        "i", "t", "ts", "start", "end", "kind", "leashChanged",
+        "before", ...under("before", COMPARABILITY_KEYS),
+        "after", ...under("after", COMPARABILITY_KEYS),
+      ]),
+    );
+    // Everything the run row keeps is still here, field for field.
+    expect(out.entries[0]).toMatchObject({
+      before: { harnessVersion: before.harnessVersion, effort: "high", objective: true, wikiCoords: true,
+        budget: { maxToolCalls: 3000, episodeMs: 5_400_000 }, serverBuild: { build: "harness-0.5-1-gdef" },
+        episode: "e90", resolvedModel: "some/model-served" },
+    });
+    expect((out.entries[1] as unknown as { before: unknown }).before).toBeNull();
+  });
+
   test("tool results cross the redactor; the reference tool's text goes whole; model text passes", () => {
     const input = {
       from: 3,
