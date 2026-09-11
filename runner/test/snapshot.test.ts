@@ -61,6 +61,17 @@ const SURVIVES = {
   scratchpad: "plan: talk to Marshal McBride, then Kobold Camp Cleanup",
 } as const;
 
+/**
+ * A container-internal path the model wrote into its own notes. The scratchpad
+ * has no projector — it is text, not a body — so the scrub reaches it by hand
+ * on both sides of the render (the public handle's route, and the renderer's
+ * own text read); this pins the artifact the publisher would actually write.
+ */
+const CONTAINER_PATH = {
+  written: "the stack said /wrathbench/sdk/src/client.ts:123",
+  published: "the stack said sdk/src/client.ts:123",
+} as const;
+
 const POISON_PID = 987654321;
 
 /** A tuple `parseComparability` accepts, with the poisoned wiki-bundle source. */
@@ -142,7 +153,7 @@ function writeRun(
     ...(opts.terminated ? [{ ts: 2000, t: "termination", reason: "episode-limit", detail: SURVIVES.terminationDetail }] : []),
   ];
   writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-  writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.scratchpad}\n`);
+  writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.scratchpad}\n${CONTAINER_PATH.written}\n`);
 
   const db = new Database(join(dir, "run.sqlite"));
   db.run(
@@ -427,7 +438,11 @@ describe("renderSnapshot", () => {
 
     const pad = out.artifacts.find((a) => a.path.startsWith(`v1/run/${DEAD_RUN}/`) && a.path.endsWith("/scratchpad.json"));
     expect(pad).toBeDefined();
-    expect((JSON.parse(pad!.body) as { text: string }).text).toBe(`${SURVIVES.scratchpad}\n`);
+    // Whole, and with the container install prefix stripped: the one edit the
+    // boundary makes to model-authored text (operator, 2026-09-11).
+    expect((JSON.parse(pad!.body) as { text: string }).text).toBe(
+      `${SURVIVES.scratchpad}\n${CONTAINER_PATH.published}\n`,
+    );
 
     // The row's item names and the position feed's carry through too.
     const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body) as {

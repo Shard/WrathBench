@@ -74,6 +74,7 @@ import {
   projectRuns,
   projectTrack,
 } from "./public-projection";
+import { scrubPathsText } from "./scrub-paths";
 
 /** The two mutable keys are polled; everything else is content-addressed. */
 export const MUTABLE_CACHE = "public, max-age=30";
@@ -301,12 +302,21 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     return (await res.json()) as T;
   };
 
-  /** A per-run text route, with the same 404 rule as `getIfPresent`. */
+  /**
+   * A per-run text route, with the same 404 rule as `getIfPresent`.
+   *
+   * The scrub is applied here as well as on the handle, for the same reason
+   * every JSON body crosses the projection here even though the handle is
+   * public: the invariant is "nothing reaches an artifact unscrubbed", not
+   * "the handle was public". A text route has no projector to carry it, so it
+   * says so itself. The scrub is idempotent, so doing it twice is doing it
+   * once.
+   */
   const getTextIfPresent = async (path: string): Promise<string | null> => {
     const res = await handle(new Request(`http://snapshot.local${path}`));
     if (res.status === 404) return null;
     if (res.status !== 200) throw new Error(`snapshot render: ${path} answered ${res.status}`);
-    return await res.text();
+    return scrubPathsText(await res.text());
   };
 
   return async function render(nowArg?: number, stream?: RunStream): Promise<SnapshotResult> {
