@@ -11,6 +11,6 @@ type: application
 # object — see docs/DEPLOY-NUSPHERE.md.
 version: 0.1.0
 appVersion: "0.0.0"
-home: https://github.com/wrathbench/wrathbench
+home: https://github.com/Shard/WrathBench
 maintainers:
   - name: Mark Beukers

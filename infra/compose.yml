@@ -40,15 +40,17 @@ x-wb-db: &wb-db
 # The host side is the operator's own `codex login` home, and it is the same
 # directory the host `--local` path uses. `docker compose -f infra/compose.yml`
 # takes infra/ as the project directory, so it reads infra/.env (absent) and
-# NOT the repository .env — the default below is what applies unless the
-# invoking shell exports CODEX_HOME.
+# NOT the repository .env — the invoking shell has to export CODEX_HOME. There
+# is no default: a path is one machine's, and interpolation is file-wide, so a
+# missing value fails EVERY compose command here rather than silently mounting
+# someone else's home.
 #
 # The container side is a fixed path, and the services set CODEX_HOME to it:
 # the repository .env carries the HOST path (so `--local` works) and Bun's
 # autoload does not overwrite a variable the environment already set, so the
 # compose value wins inside the container. uid 1000 on both sides, so the
 # refresh writes through.
-x-codex-lane: &codex-lane "${CODEX_HOME:-/home/mark/.codex}:/home/bun/.codex"
+x-codex-lane: &codex-lane "${CODEX_HOME:?set CODEX_HOME to the codex lane directory}:/home/bun/.codex"
 
 x-ac-build: &ac-build
   context: ..
