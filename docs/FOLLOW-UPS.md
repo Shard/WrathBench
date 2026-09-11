@@ -55,34 +55,41 @@ worklogs/2026-08-29).
     edge cache at ~$0 and never reaches the lab or a per-request compute bill.
     No domain yet (operator, 2026-09-01): this is one of the last steps before the
     public launch, after the preview has been shared.
-    Unblocked by a zone on the account (a nameserver move for an existing domain
-    or a new registration; `shard.page` was considered and declined 2026-08-25
-    because it points elsewhere). Then: attach the data custom domain, add the
-    two cache rules, apply `infra/cloudflare/r2-cors.json` with the real origin,
-    rebuild with `VITE_WRATHBENCH_SNAPSHOT_BASE=https://data.<zone>`, drop
-    `main` and the `r2_buckets` binding from `dashboard/wrangler.jsonc`, delete
-    `dashboard/worker/`, and remove `dashboard/worker` from the root typecheck
-    loop. One more step since 2026-08-30: the map page requests `/tiles/...`
-    same-origin, which only resolves while one Worker serves both the SPA and
-    the bucket. In the Open shape those requests need the data hostname (the
-    tiles are published under `tiles/` in the same bucket, so a
-    `VITE_WRATHBENCH_SNAPSHOT_BASE`-relative tile URL plus a cache rule and a
-    CORS entry for the prefix), and whatever replaces the gate has to keep them
-    behind it. Gated by issue #10 (entries/game-text) in the same breath, since
-    removing the gate is what makes the deploy genuinely public.
+    Unblocked 2026-09-11 by the `shard.page` zone on the operator's personal
+    account (it had been considered and declined 2026-08-25 because it pointed
+    elsewhere; that reversed). Hostnames decided the same day: app
+    `https://wrathbench.shard.page`, data `https://wrathbench-data.shard.page`.
+    **Repo side shipped in a651e1e and e403d37; remaining: the Cloudflare/cluster steps in
+    `infra/cloudflare/README.md`** — create the bucket on the new account, apply
+    the CORS policy, attach the data custom domain, add the two cache rules,
+    repoint the publisher (`S3_ENDPOINT` and keys in the `wrathbench-env`
+    secret) with `WRATHBENCH_PUBLISH_STATE` reset so the first pass republishes
+    everything, `bun ship`, then verify with
+    `bun infra/publish-accept.ts --base https://wrathbench-data.shard.page` and
+    a browser pass. The two cache rules already exist on the zone (operator,
+    2026-09-11) and set their TTLs explicitly by path, since no published object
+    carries a `Cache-Control`. **Minimap tiles are deliberately not part of
+    this**: the gate was the only thing that had ever made them reachable to
+    some readers and not others, so whether they go public is a new open
+    operator decision (`docs/PUBLIC-DASHBOARD.md`, "Operator decisions" 7) and
+    the public build requests none until it is taken. Delete this item when the
+    runbook has been run.
 
 111. **Social previews: let the crawler through** (operator, 2026-09-01). The
     tags and the ship-time Pareto card shipped the same day (`dashboard/src/lib/og.ts`,
     `infra/render-og.ts`, `docs/PUBLIC-DASHBOARD.md` "The social card") and the
-    public build carries `og:image` → `/og.png`. Nothing unfurls yet: the gate
-    Worker answers every credential-less request — Discord's crawler included —
-    with the 401 password form, and serves a `robots.txt` that disallows
-    everything ahead of the gate (Slack and Twitter honour it; Discord does not).
-    Two ways out, the operator's call: exempt `/`, `/og.png` and a permissive
-    `robots.txt` for crawler user agents in `dashboard/worker/index.ts` (a
-    spoofable UA gets the landing page's HTML — marketing copy, not run data —
-    and the card), or wait for item 85, where the Open shape has no gate and the
-    problem disappears. Verify with Discord's unfurl after either.
+    public build carries `og:image` → `/og.png`. Nothing unfurled under the
+    gate: the Worker answered every credential-less request — Discord's crawler
+    included — with the 401 password form, and served a `robots.txt` that
+    disallowed everything ahead of it (Slack and Twitter honour that; Discord
+    does not), so the password and the directive were two independent blockers.
+    The operator chose the second way out: item 85's Open shape, where there is
+    no Worker to do either. **Repo side shipped in a651e1e**
+    (`dashboard/public/robots.txt`, permissive, served from the assets since
+    there is no fetch handler to answer that path); **remaining: the
+    Cloudflare/cluster steps in `infra/cloudflare/README.md`**, after which the
+    check is Discord's unfurl of `https://wrathbench.shard.page`, and Slack's
+    and Twitter's for the robots half. Delete this item then.
 
 124. **The other two cold memos `/api/models` fills** (2026-09-11, measured
     while shipping item 115). With the fact cache persisted, the first

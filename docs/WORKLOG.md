@@ -85,7 +85,12 @@ Convention:
   Deployed as harness-0.5-552-gb6fff52 — the pin deployed itself out of the shared
   cluster-repo checkout before the images existed, recovered, readback clean. Then the
   pre-public audit nits, the status text read as a public repo, and the community
-  files (SECURITY, CONTRIBUTING, Code of Conduct, issue and PR templates).
+  files (SECURITY, CONTRIBUTING, Code of Conduct, issue and PR templates). And the
+  repository side of the Open shape (items 85 and 111): the gate Worker deleted, two
+  hostnames on `shard.page`, a permissive `robots.txt`, `publish-accept --base`, and
+  minimap tiles withheld from the public build because the gate was the only thing
+  that had ever kept a reader out of them — a new operator decision. The Cloudflare
+  and cluster cutover is the runbook in `infra/cloudflare/README.md`.
 
 ## Resolving a cited item number
 

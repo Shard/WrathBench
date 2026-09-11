@@ -14,6 +14,7 @@ import { describe, expect, test } from "bun:test";
 import {
   canonical,
   describeAcceptReport,
+  httpSource,
   reprojectionFindings,
   scanBody,
   verifyPublication,
@@ -536,5 +537,69 @@ describe("the checks themselves", () => {
   test("canonical ordering makes the compare about content, not key order", () => {
     expect(canonical({ b: 1, a: [{ d: 2, c: 3 }] })).toEqual(canonical({ a: [{ c: 3, d: 2 }], b: 1 }));
     expect(JSON.stringify(canonical({ b: 1, a: 2 }))).toBe('{"a":2,"b":1}');
+  });
+});
+
+// ------------------------------------------------------- through the hostname
+
+/**
+ * `--base` reads the same generation over plain HTTP, through the custom domain
+ * rather than the S3 API (docs/PUBLIC-DASHBOARD.md, the Open shape). The
+ * verifier above is indifferent to which source it is handed — that is the
+ * point of `AcceptSource` having two methods and no third — so what is left to
+ * pin is the source itself: how it joins a key, what it calls a miss, and that
+ * it can carry a whole verification end to end with no credential in sight.
+ */
+describe("the HTTP source reads the same bucket through the host", () => {
+  /** A host serving the same objects, with the headers a zone cache rule would add. */
+  function host(objects: Map<string, string>): { fetch: typeof globalThis.fetch; urls: string[] } {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      urls.push(url);
+      const key = decodeURI(new URL(url).pathname.slice(1));
+      const body = objects.get(key);
+      if (body === undefined) return new Response("not found", { status: 404 });
+      const headers = { "content-type": "application/json", "cache-control": "public, max-age=31536000, immutable" };
+      if ((init?.method ?? "GET") === "HEAD") return new Response(null, { status: 200, headers });
+      return new Response(body, { status: 200, headers });
+    }) as typeof globalThis.fetch;
+    return { fetch: fetchImpl, urls };
+  }
+
+  test("a key becomes one URL under the base, trailing slashes and all", async () => {
+    const h = host(new Map([["v1/manifest.json", "{}"]]));
+    const src = httpSource("https://wrathbench-data.shard.page/", h.fetch);
+    expect(await src.get("v1/manifest.json")).toBe("{}");
+    expect(h.urls).toEqual(["https://wrathbench-data.shard.page/v1/manifest.json"]);
+  });
+
+  test("a run id keeps its separators — a key is a path, not one component", async () => {
+    const key = "v1/run/e90-sonnet-2026-09-11/abc123/detail.json";
+    const h = host(new Map([[key, '{"ok":true}']]));
+    const src = httpSource("https://d.example", h.fetch);
+    expect(await src.get(key)).toBe('{"ok":true}');
+    expect(h.urls).toEqual([`https://d.example/${key}`]);
+  });
+
+  test("404 is a miss, not an error — which is what the verifier reports as missing", async () => {
+    const h = host(new Map());
+    const src = httpSource("https://d.example", h.fetch);
+    expect(await src.get("v1/manifest.json")).toBeNull();
+    expect(await src.head?.("v1/manifest.json")).toBeNull();
+  });
+
+  test("head reports what the edge says, which is where the TTLs actually live", async () => {
+    const h = host(new Map([["v1/snap/abc/runs.json", "{}"]]));
+    const src = httpSource("https://d.example", h.fetch);
+    expect((await src.head?.("v1/snap/abc/runs.json"))?.cacheControl).toBe("public, max-age=31536000, immutable");
+  });
+
+  test("a whole clean generation verifies through the host, with no credential", async () => {
+    const h = host(cleanBucket().objects);
+    const report = await verifyPublication(httpSource("https://d.example", h.fetch));
+    expect(report.missing).toEqual([]);
+    expect(report.findings).toEqual([]);
+    expect(report.runs).toBeGreaterThan(0);
   });
 });

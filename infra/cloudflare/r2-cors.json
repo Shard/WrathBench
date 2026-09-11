@@ -1,7 +1,7 @@
 [
   {
     "AllowedOrigins": [
-      "https://wrathbench.example.org",
+      "https://wrathbench.shard.page",
       "http://localhost:5180"
     ],
     "AllowedMethods": ["GET", "HEAD"],
