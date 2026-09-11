@@ -173,6 +173,20 @@ image include `runner/`, `sdk/`, `wiki/` and `docs/` while the root
 Then, in the cluster repo, set `image.tag` to the printed tag and let Flux
 reconcile. **Flux owns the tag. Nothing in this repo changes it.**
 
+The order matters, and it was learned the hard way on 2026-09-11: **a pin
+commit is a deploy the moment it reaches the cluster repo's master**, and the
+shared `~/git/nusphere` checkout has no private state — a pin committed there
+"for later" on a side branch was swept into another PR's base and merged two
+minutes later, before the images existed and before the fleet was drained.
+Every pod rolled to a tag Harbor did not have yet, the worldserver restarted
+under a live run (the supervisor's SIGTERM path paused it cleanly, which is the
+one thing that went right), and the namespace sat in ImagePullBackOff until the
+push finished. So: push the images and confirm the tag in Harbor; drain the
+fleet (`infra/fleet-update.sh drain`); only then write the pin, in a throwaway
+worktree of the cluster repo (`git worktree add`), as its own PR; merge; let
+Flux roll; run `infra/k8s-deploy.sh` (a fleet already at 0 is the expected
+state) for the smokes and the resume.
+
 ## Steering the fleet
 
 `infra/fleet.json` is the single source of truth on compose and on Kubernetes
