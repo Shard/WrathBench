@@ -32,7 +32,8 @@ These are the lines the project does not cross. They are rules, not arguments; t
 ## Before publication (checklist)
 
 - [ ] Git history is scrubbed or the public repository starts from fresh history. Known history contents to remove: client-data extraction script and guide, client-launch and spectator scripts and GM notes (removed from HEAD 2026-08-22, commit d4e60a6), and a named third-party client path under `data/client-source/`.
-- [x] `minimap/` (our MPQ/BLP reader) ships publicly (operator, 2026-09-11). It is tooling only; the assets it produces stay in `data/`.
+- [x] `minimap/` (our MPQ/BLP reader) ships publicly (operator, 2026-09-11). It is tooling only; the assets it produces stay in `data/` and out of git.
+- [x] The public dashboard's map draws real minimap tiles (operator, 2026-08-30, reaffirmed 2026-09-11). They are served from the published bucket's `tiles/` prefix by an explicit upload step, never by the snapshot loop; `docs/PUBLIC-DASHBOARD.md` and `infra/cloudflare/README.md` hold the mechanics.
 - [ ] The history of anything split out for publication is audited for accidental data.
 - [x] A qualified opinion on the shared-world (community agent) surface: sought and not obtained (operator, 2026-09-11) — the counsel approached said the IP questions were outside their competence and pointed elsewhere. Not a gate any more; the posture stays the one stated above (small, private, non-commercial, research framing, nothing Blizzard-owned distributed).
 

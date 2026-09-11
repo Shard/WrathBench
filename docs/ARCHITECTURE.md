@@ -198,10 +198,10 @@ the SPA owns everything that is UI.
   in would couple scheduling to a cosmetic file.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
-  network in (docs/DATA-AND-LEGAL.md). Public hosting is intended but not yet
-  decided; the open question — tiles are Blizzard textures, and entry
-  summaries carry model output and game text — is docs/DATA-AND-LEGAL.md's to
-  settle, and the first public deployment is gated on it.
+  network in (docs/DATA-AND-LEGAL.md). What a public deployment may carry is
+  docs/DATA-AND-LEGAL.md's to settle and has been: minimap tiles are shown
+  (operator, 2026-08-30), and entry summaries are published one window per run
+  with game prose stripped.
 - **Public hosting is push-based, so the lab is never an origin.**
   `infra/publish-dashboard.ts` calls the viewer's own `createApi` handler
   in-process, applies an allowlist projection, and PUTs generation-addressed

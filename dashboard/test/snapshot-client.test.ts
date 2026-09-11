@@ -639,13 +639,11 @@ describe("the public build's call sites", () => {
     );
   });
 
-  test("the map draws the grid rather than asking a bucket for a texture", () => {
-    // The gated site published tiles behind its password from 2026-08-30. The
-    // Open shape has no password, so publishing one would make a Blizzard
-    // texture world-readable — an operator decision, not taken. The public
-    // build therefore withholds them and draws its labelled grid, which is
-    // the same thing a lab machine without the extraction draws, and
-    // `VITE_WRATHBENCH_TILES_BASE` is the flip if that decision is ever taken.
+  test("the map asks lib/tiles for a URL rather than hard-coding the path", () => {
+    // Where a tile comes from moved with the Open shape: same-origin under the
+    // viewer, and `VITE_WRATHBENCH_TILES_BASE` in a public build, which is the
+    // data hostname. A build told nothing draws its labelled grid, the same
+    // thing a lab machine without the extraction draws.
     // `tiles.test.ts` owns the rules; this pins that the page consults them.
     const src = read("../src/pages/MapPage.tsx");
     expect(src).toContain("const useTiles = !TILES_WITHHELD && g.size >= TILE_MIN_PX;");

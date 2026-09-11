@@ -28,12 +28,8 @@ would need an Advanced Certificate and this does not.
 | `r2-cors.json` | The `wrathbench-public` bucket's CORS policy, in R2's own bucket-CORS format. `GET`/`HEAD` from the app origin plus `http://localhost:5180` (the Vite dev server, so snapshot mode can be developed against the real bucket). Apply with `wrangler r2 bucket cors set wrathbench-public --file infra/cloudflare/r2-cors.json`. |
 
 R2's bucket-CORS format has no prefix selector, so the policy is bucket-wide and
-therefore also covers the `tiles/` prefix. That is **only relevant if tiles are
-ever published** — they are not, and the public build does not ask for them; see
-"Open, and the operator's" at the end. The entry is not a decision about tiles
-and does not make one reachable: CORS permits a cross-origin read of an object
-that is already served, and nothing is served under that prefix to the public
-build today.
+therefore also covers the `tiles/` prefix, which the map needs: the tiles are on
+the data hostname and the SPA is on the app one.
 
 Origins match as exact strings, scheme included, so a wrong entry fails closed
 with a CORS error in the browser rather than leaking anything.
@@ -111,7 +107,7 @@ the dashboard does the same thing if you would rather not scope a token for it.
 The app and the data are different origins now, so without this every fetch the
 SPA makes fails in the browser with nothing in the bucket's logs to show for it.
 
-### 4. Add the two cache rules
+### 4. Add the three cache rules
 
 Zone `shard.page` → **Caching → Cache Rules**, in this order (first match wins).
 Cloudflare does **not** cache JSON by default, so without these every public
@@ -125,12 +121,17 @@ request is a billed read against the bucket.
    starts with "/v1/snap/" or "/v1/run/"` → eligible for cache, **Edge TTL 1
    year**, **Browser TTL 1 year**. These are content-addressed and never
    rewritten under their own key, so a long TTL is safe by construction.
+3. **Tiles** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path
+   starts with "/tiles/"` → eligible for cache, **Edge TTL 1 day**, **Browser
+   TTL 1 day**. Not content-addressed: a re-extraction reuses the same keys, so
+   a day is the window in which a re-upload is not yet visible, and a purge of
+   the prefix closes it sooner.
 
-Both rules set the TTL **explicitly by path** rather than respecting an origin
+All three rules set the TTL **explicitly by path** rather than respecting an origin
 header, and that is not a style choice: the 2026-09-11 readback confirmed that
 no published object carries a `Cache-Control` at all — Bun's S3 writer cannot
 send one, and under the gate the Worker added them on egress. "Respect origin
-TTL" would therefore respect nothing. **Both rules already exist on the zone**
+TTL" would therefore respect nothing. **All three rules already exist on the zone**
 (operator, 2026-09-11); step 9 verifies them rather than creating them.
 
 **A missing cache rule is the only way this shape costs money.** Without it every
@@ -167,32 +168,28 @@ kubectl -n wrathbench rollout restart deployment/wrathbench-publisher
 kubectl -n wrathbench logs -f deployment/wrathbench-publisher
 ```
 
-### 6. Upload the tiles — **only if the operator decides tiles go public**
+### 6. Upload the tiles
 
-**Skip this step.** Minimap tiles are Blizzard textures
-(`docs/DATA-AND-LEGAL.md`). Under the gate they were reachable only to a reader
-with the password; the Open shape has nothing in the read path able to say no,
-so publishing them now makes them world-readable, and whether that happens is
-the operator's decision and has not been taken. The public build reflects that:
-it names no tile host, requests nothing, and draws its labelled grid — the same
-thing `WRATHBENCH_VIEWER_PUBLIC=1` already makes the private viewer do, and the
-same thing a machine that never ran the extraction draws. The map page works.
-
-If the decision is ever taken, this is the step, plus
-`WRATHBENCH_TILES_BASE=https://wrathbench-data.shard.page` in `.env` and a
-redeploy — the flag is separate from the snapshot base precisely so that
-publishing the JSON never publishes the textures:
+The public map draws real minimap tiles (operator, 2026-08-30). They are not
+part of a snapshot pass and never become one — this is the step that puts them
+in the bucket, run from a checkout with `data/minimap` populated by the
+extraction in `minimap/`, with the same `S3_*` credentials as the publisher:
 
 ```
 bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
 bun infra/publish-tiles.ts --upload
 ```
 
-From a checkout with `data/minimap` populated by the extraction in `minimap/`,
-with the same `S3_*` credentials as the publisher. The skip-unchanged manifest
-(`tiles/manifest.json`) lives in the bucket. Never part of a snapshot pass, and
-never automatic. A third cache rule for `/tiles/*` would be wanted then, and a
-re-extraction reuses keys, so a re-upload wants a purge of that prefix.
+`bun ship --tiles` runs the same upload as part of a deploy. The skip-unchanged
+manifest (`tiles/manifest.json`) lives in the bucket, so a re-run with nothing
+re-extracted PUTs nothing; a re-extraction reuses keys, so a re-upload wants a
+purge of the `/tiles/` prefix to beat rule 3's day.
+
+Then set `WRATHBENCH_TILES_BASE=https://wrathbench-data.shard.page` in `.env`,
+which is what makes the build in step 7 ask for them. It is a separate flag from
+the snapshot base precisely because this step is separate: a checkout without
+`data/minimap` should publish the record and ship the labelled grid, not a site
+pointing at textures nobody uploaded.
 
 ### 7. Deploy the SPA
 
@@ -232,7 +229,9 @@ its Worker. Nothing in the repository refers to either any more.
 
 Run once, 2026-09-11, and passed in full except the unfurl, which nobody pasted
 into Discord that day; the record is `docs/PUBLIC-DASHBOARD.md`, "Acceptance
-record". Everything below is the check, kept as the check.
+record". That walk predates the tile upload later the same day, so the tile
+check below is the one line of it nothing has yet run. Everything below is the
+check, kept as the check.
 
 **The cache rule, first**, because it is the one misconfiguration that bills:
 
@@ -278,9 +277,10 @@ URL is enabled — disable it (step 1).
 - `/runs` lists, and one run detail opens — with its published entries window,
   and with no "load earlier" and no live tail.
 - `/ladder` draws.
-- `/map?run=<id>` replays over the labelled grid, and the network tab shows
-  **no request to `/tiles/`** at all. A request there would mean a build was
-  made with `WRATHBENCH_TILES_BASE` set, which is a decision nobody has taken.
+- `/map?run=<id>` replays, and the network tab shows tiles loading from
+  `wrathbench-data.shard.page/tiles/…`, `200` and on a repeat `cf-cache-status:
+  HIT`. Grid squares with no texture mean the build was made without
+  `WRATHBENCH_TILES_BASE`, or step 6 has not run for that map.
 - The console shows no CORS error. One means the app origin in `r2-cors.json`
   does not match the hostname the browser used, scheme included.
 
@@ -304,20 +304,12 @@ and are worth a second check for that reason.
 
 ## Open, and the operator's
 
-- **Do minimap tiles go public at all?** Not decided, and the repository's
-  default is no. Under the gate they were served `private, max-age=3600` and
-  `X-Robots-Tag: noindex` to an authenticated reader only, which is what
-  `docs/PUBLIC-DASHBOARD.md` promised and what made publishing them a small
-  question. In the Open shape none of those three things survives: there is no
-  authentication, the publisher cannot send a header, and the app's
-  `robots.txt` covers the app hostname only — so a published tile is a
-  world-readable, cacheable, indexable Blizzard texture. That is a
-  `docs/DATA-AND-LEGAL.md` question and therefore the operator's.
-
-  Until it is answered the public build asks for nothing and draws the labelled
-  grid, which is a working map and the same thing the private viewer draws in
-  public mode. Turning them on is three things together: upload them (step 6),
-  set `WRATHBENCH_TILES_BASE` in `.env`, redeploy. If that happens, the same
-  three losses want answering with it — a third cache rule for `/tiles/*`, and
-  either a `robots.txt` object at the bucket root (an R2 custom domain will
-  serve one) or a zone Transform Rule adding `X-Robots-Tag` on the prefix.
+- **Whether the `tiles/` prefix wants a crawler directive.** The tiles are
+  public (operator, 2026-08-30) and served from the data hostname, which the
+  app's `robots.txt` does not cover — and the publisher cannot set a header, so
+  the gate's `X-Robots-Tag: noindex` has no equivalent in this shape. Nothing
+  turns on it today: the map renders them, and a directive is not an access
+  control in any case. If the operator wants them out of image search, the two
+  forms available are a `robots.txt` object at the bucket root (an R2 custom
+  domain will serve one) or a zone Transform Rule adding `X-Robots-Tag` on the
+  prefix.

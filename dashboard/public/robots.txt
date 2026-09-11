@@ -12,12 +12,9 @@
 # any case. What this buys is the social card: a link pasted anywhere unfurls
 # with the title, the sentence and the ship-time Pareto picture.
 #
-# It covers this hostname only, and that is all it needs to: the data hostname
-# (`wrathbench-data.shard.page`) serves the published JSON and nothing else, and
-# minimap tiles are not published at all — whether they ever are is an open
-# operator decision, since the retired gate was the only thing that had ever
-# kept a reader off them (infra/cloudflare/README.md, "Open, and the
-# operator's").
+# It covers this hostname only, and that is all it needs to: everything a
+# crawler would find on the data hostname (`wrathbench-data.shard.page`) is the
+# published JSON and the minimap tiles, both of which the site itself renders.
 
 User-agent: *
 Allow: /
