@@ -67,7 +67,10 @@ export const LOCAL_PATH_ROOTS: readonly string[] = [
  * produce a new match, since what it leaves behind starts with a path segment
  * rather than a separator.
  */
-const CONTAINER_PREFIX = /(?<![A-Za-z0-9_.~\-/])\/wrathbench\/(?=[A-Za-z0-9_.~-])/g;
+const CONTAINER_PREFIX = new RegExp(
+  `(?<![A-Za-z0-9_.~\\-/])${CONTAINER_ROOT}/(?=[A-Za-z0-9_.~-])`,
+  "g",
+);
 
 /** One string with the container install prefix stripped. Pure. */
 export function scrubPathsText(s: string): string {

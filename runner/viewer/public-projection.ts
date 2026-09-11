@@ -417,7 +417,7 @@ function projectResultRun(r: ResultRun): ResultRun {
 /* ----------------------------------------------------------- responses --- */
 
 export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
-  return scrubPathsValue({
+  return scrubPathsValue<ApiInfoResponse>({
     service: "wrathbench-viewer",
     // Forced, whatever the source viewer ran as: a snapshot IS the public mode.
     publicMode: true,
@@ -437,7 +437,7 @@ export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
 }
 
 export function projectRuns(r: RunsResponse): RunsResponse {
-  return scrubPathsValue({ runs: r.runs.map(projectRunListRow) });
+  return scrubPathsValue<RunsResponse>({ runs: r.runs.map(projectRunListRow) });
 }
 
 /**
@@ -460,7 +460,7 @@ function projectStatus(s: CharacterStatus): CharacterStatus {
 }
 
 export function projectPositions(p: PositionsResponse): PositionsResponse {
-  return scrubPathsValue({
+  return scrubPathsValue<PositionsResponse>({
     positions: p.positions.map(
       (a: AgentPosition): AgentPosition => ({
         runId: a.runId,
@@ -499,7 +499,7 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
 }
 
 export function projectResults(r: ResultsResponse): ResultsResponse {
-  return scrubPathsValue({
+  return scrubPathsValue<ResultsResponse>({
     runs: r.runs.map(projectResultRun),
     episode: r.episode,
     harness: r.harness,
@@ -511,7 +511,7 @@ export function projectResults(r: ResultsResponse): ResultsResponse {
 }
 
 export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
-  return scrubPathsValue({
+  return scrubPathsValue<EpisodesResponse>({
     episodes: e.episodes.map((t) => ({
       id: t.id,
       minutes: t.minutes,
@@ -537,7 +537,7 @@ export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
  * examples beside the route); the projection still names every field.
  */
 export function projectTools(t: ToolsResponse): ToolsResponse {
-  return scrubPathsValue({
+  return scrubPathsValue<ToolsResponse>({
     tools: t.tools.map((x) => ({
       name: x.name,
       description: x.description,
@@ -557,7 +557,7 @@ export interface PublicCampaignsResponse extends Omit<CampaignsResponse, "campai
 }
 
 export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse {
-  return scrubPathsValue({
+  return scrubPathsValue<PublicCampaignsResponse>({
     campaigns: c.campaigns.map(
       (row: CampaignRowView): PublicCampaignRowView => ({
         campaign: row.campaign,
@@ -690,7 +690,7 @@ export function projectModels(m: ModelsResponse): ModelsResponse {
   for (const [key, v] of Object.entries(m.policy.maxConcurrent)) {
     if (typeof v === "number") maxConcurrent[key] = v;
   }
-  return scrubPathsValue({
+  return scrubPathsValue<ModelsResponse>({
     models: m.models.map(projectModelRow),
     roster: {
       // The roster file's location is the operator's filesystem.
@@ -780,7 +780,7 @@ function projectFleetJob(j: FleetJobView, alias: (name: string) => string): Publ
 
 export function projectFleet(f: FleetResponse): PublicFleetResponse {
   const alias = accountAlias();
-  return scrubPathsValue({
+  return scrubPathsValue<PublicFleetResponse>({
     present: f.present,
     server: projectServer(f.server),
     ...(f.startedAt !== undefined ? { startedAt: f.startedAt } : {}),
@@ -916,7 +916,7 @@ function projectStream(s: StreamView): StreamView {
 }
 
 export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
-  return scrubPathsValue({
+  return scrubPathsValue<RunDetailResponse>({
     run: projectRunRow(d.run),
     states: d.states.map(projectStatePoint),
     total: d.total,
@@ -940,7 +940,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
 }
 
 export function projectTrack(t: TrackResponse): TrackResponse {
-  return scrubPathsValue({
+  return scrubPathsValue<TrackResponse>({
     runId: t.runId,
     character: t.character,
     model: t.model,
@@ -1097,9 +1097,9 @@ export function projectEntry(e: EntrySummary): EntrySummary {
           ? projectComparability(v)
           : plain(v);
   }
-  return scrubPathsValue(redactGameProse(out));
+  return scrubPathsValue<EntrySummary>(redactGameProse(out));
 }
 
 export function projectEntries(r: EntriesResponse): EntriesResponse {
-  return scrubPathsValue({ from: r.from, total: r.total, entries: r.entries.map((e) => projectEntry(e as EntrySummary)) as EntriesResponse["entries"] });
+  return scrubPathsValue<EntriesResponse>({ from: r.from, total: r.total, entries: r.entries.map((e) => projectEntry(e as EntrySummary)) as EntriesResponse["entries"] });
 }
