@@ -71,6 +71,16 @@ export const SURVIVES = {
   scratchpad: "plan: talk to Marshal McBride, then Kobold Camp Cleanup",
 } as const;
 
+/**
+ * A container-internal path the model wrote into its own notes: published, but
+ * made repo-relative by the scrub (`runner/viewer/scrub-paths.ts`, operator
+ * 2026-09-11). Private mode serves it as written.
+ */
+export const CONTAINER_PATH = {
+  written: "the stack said /wrathbench/sdk/src/client.ts:123",
+  published: "the stack said sdk/src/client.ts:123",
+} as const;
+
 /** A tuple `parseComparability` accepts, carrying the poisoned bundle source. */
 const TUPLE = {
   harnessVersion: "harness-0.5-1-gabc",
@@ -152,7 +162,7 @@ function writeRun(runs: string, runId: string, opts: { terminated: boolean; stat
       : []),
   ];
   writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-  writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.scratchpad}\n`);
+  writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.scratchpad}\n${CONTAINER_PATH.written}\n`);
 
   const db = new Database(join(dir, "run.sqlite"));
   db.run(
