@@ -697,3 +697,22 @@ the publisher's first two passes on the new build rewrote 451 + 73 objects and
 pruned 449 + 67 old keys. Four residual notes remain, model-authored
 `filesystem-path` mentions outside any known local root, published as written.
 Criteria 3, 4 and 5 stay where they were: deferred to item 85.
+
+**Through the Open shape's data hostname**, 2026-09-11, after the cutover to
+the operator's own Cloudflare account (new bucket, custom domain
+`wrathbench-data.shard.page`, zone cache rules, CORS; the cluster publisher
+re-pointed by secret and restarted with an empty state file so its first pass
+rewrote everything): `bun infra/publish-accept.ts --base
+https://wrathbench-data.shard.page`, plain `GET`, no credential. Generation
+`8142cd47749e`, generated 2026-09-11T03:35:54Z: 1594 objects, 62.31 MB, 423
+runs, 10 aggregates, **0 missing, 0 findings**, the same four residual notes.
+This is criterion 3 (a reader through the host sees only the projection) and
+criterion 4 (cache metadata): the reader now sees `max-age=30` on
+`v1/manifest.json` and `v1/live.json` and `max-age=31536000` on generation
+objects, and a repeat request answers `cf-cache-status: HIT` — those headers
+come from the zone rules, since no object carries one. CORS answers the SPA
+origin only (`access-control-allow-origin: https://wrathbench.shard.page`).
+The bucket's development URL is disabled and answers `401`, which closes the
+"unverified" line above. Criterion 5 (the browser pass at
+`wrathbench.shard.page`) waits on the Worker deploy, which needs a credential
+on the new account; the EarlyBird copy stays up until it lands.
