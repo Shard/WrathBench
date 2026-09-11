@@ -1,18 +1,14 @@
 /**
  * Whether a build may ask for a minimap tile, and from where.
  *
- * Two things collided in the Open shape (2026-09-11, FOLLOW-UPS item 85). The
- * app and the bucket are two hostnames now, so a relative `/tiles/...` would
- * ask a host that has none. And there is no longer anything in the read path
- * able to keep a reader out, so a published tile is a world-readable Blizzard
- * texture — which is an operator decision (`docs/DATA-AND-LEGAL.md`) and has
- * not been taken.
- *
- * So the public build asks for nothing and draws its labelled grid unless
- * `VITE_WRATHBENCH_TILES_BASE` says otherwise, and the flag is separate from
- * the snapshot base on purpose: deriving one from the other would mean
- * publishing the JSON published the textures. This pins that the default is
- * withheld, that the private viewer is unaffected, and that the flip works.
+ * The Open shape (2026-09-11, FOLLOW-UPS item 85) put the app and the bucket on
+ * two hostnames, so a relative `/tiles/...` would ask a host that has none: a
+ * public build has to be told where the tiles live, which is
+ * `VITE_WRATHBENCH_TILES_BASE`. That flag is separate from the snapshot base on
+ * purpose — the tiles reach the bucket by a hand-run `publish-tiles --upload`
+ * and never by a snapshot pass, so a JSON pass must not assert they are there.
+ * This pins that a build told nothing asks for nothing and draws its grid, that
+ * the private viewer is unaffected, and that naming a host works.
  *
  * The last test is a source scan in the house style of `public-links.test.ts`:
  * the failure being caught is "somebody wrote the literal path back into a

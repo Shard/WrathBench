@@ -6,24 +6,27 @@
  * served the SPA and the bucket from one Worker behind one password, so the
  * same relative path resolved there too and the map page could hard-code it.
  *
- * The Open shape (2026-09-11) ends both of those facts at once. The app is
+ * The Open shape (2026-09-11) ends the second of those facts. The app is
  * `wrathbench.shard.page` and the data is `wrathbench-data.shard.page`, so a
- * relative path would ask a host that has no tiles; and there is no longer
- * anything in the read path able to keep a reader out, so publishing them would
- * make them world-readable. **Minimap tiles are Blizzard textures**
- * (`docs/DATA-AND-LEGAL.md`), and whether they go public is the operator's
- * decision and has not been taken. So the default in the public build is the
- * behaviour `WRATHBENCH_VIEWER_PUBLIC=1` already has: no tile is requested and
- * the map draws its labelled grid, which is a complete map view and not a
- * degraded one — it is what a lab machine that never ran the extraction draws.
+ * relative path would ask a host that has no tiles: the public build has to be
+ * told where they live. That the public site shows real minimap tiles is the
+ * operator's decision of 2026-08-30, reaffirmed 2026-09-11, and the Open shape
+ * does not reopen it — see `docs/DATA-AND-LEGAL.md`.
  *
- * `VITE_WRATHBENCH_TILES_BASE` is the flip, and it is deliberately a *separate*
- * flag from `VITE_WRATHBENCH_SNAPSHOT_BASE` rather than being derived from it.
- * Deriving would mean that publishing the JSON published the textures, which is
- * exactly the coupling the decision is about. Set it to the host holding the
- * `tiles/` prefix — the data hostname, if the operator ever decides that — and
- * the map loads them; leave it unset, which is the default everywhere including
- * `infra/deploy-dashboard.sh`, and it does not.
+ * `VITE_WRATHBENCH_TILES_BASE` names that host, and it is deliberately a
+ * *separate* flag from `VITE_WRATHBENCH_SNAPSHOT_BASE` rather than being
+ * derived from it, because the tiles get into the bucket by a different route:
+ * the snapshot loop uploads JSON on a timer and never a tile, and
+ * `infra/publish-tiles.ts --upload` is an occasional hand-run act against a
+ * checkout that has `data/minimap` populated. Deriving one flag from the other
+ * would have a JSON pass assert that tiles are there — so a lab machine that
+ * publishes the record but never ran the extraction would build a site asking
+ * for textures nobody uploaded.
+ *
+ * Unset is therefore a real state and not a broken one: no tile is requested
+ * and the map draws its labelled grid, which is a complete map view. It is what
+ * `WRATHBENCH_VIEWER_PUBLIC=1` already makes the private viewer do, and what a
+ * machine without the extraction draws.
  *
  * A cross-origin tile is fine for the canvas: it is only ever `drawImage`d,
  * never read back with `getImageData`/`toDataURL`, so the taint a cross-origin
@@ -45,7 +48,7 @@ export function tilePath(map: number, row: number, col: number): string {
  *
  * - `tilesBase` set: that host serves them, trailing slashes trimmed the way
  *   `createSnapshotClient` trims its own base.
- * - unset and `snapshotBase` set: the public build with no tiles decision —
+ * - unset and `snapshotBase` set: a public build that was given no tile host —
  *   `null`, and the grid is drawn.
  * - both unset: the private viewer, same-origin.
  */

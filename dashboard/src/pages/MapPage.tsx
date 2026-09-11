@@ -243,9 +243,9 @@ export default function MapPage() {
     }
     const img = new Image();
     const entry: TileEntry = { img, ok: false };
-    // Null means this build must not ask for a tile at all — the public one,
-    // where the textures are not published (`lib/tiles.ts`). Remembered as a
-    // miss like any other, so the grid is drawn and nothing is requested.
+    // Null means this build was given no tile host and must not ask for one
+    // (`lib/tiles.ts`). Remembered as a miss like any other, so the grid is
+    // drawn and nothing is requested.
     const src = tileSrc(map, row, col);
     if (src !== null) {
       img.onload = (): void => {
@@ -309,12 +309,12 @@ export default function MapPage() {
      * every frame would evict and re-request the lot. The threshold also keeps
      * the visible cell count inside the LRU.
      *
-     * Whether a tile may be asked for at all is `lib/tiles.ts`: the private
-     * viewer serves them same-origin, the public build does not publish them
-     * (they are Blizzard textures, and that decision is the operator's), and
-     * `VITE_WRATHBENCH_TILES_BASE` names a host when there is one. Withheld and
-     * merely missing draw identically — the labelled grid below — which is the
-     * same state a lab machine that never ran the extraction is in.
+     * Where a tile comes from is `lib/tiles.ts`: the private viewer serves
+     * them same-origin, and the public build reads
+     * `VITE_WRATHBENCH_TILES_BASE` for the host holding the `tiles/` prefix.
+     * A build given no host and a tile merely missing draw identically — the
+     * labelled grid below — which is the same state a lab machine that never
+     * ran the extraction is in.
      */
     const useTiles = !TILES_WITHHELD && g.size >= TILE_MIN_PX;
     ctx.lineWidth = 1;
@@ -366,7 +366,7 @@ export default function MapPage() {
         }
         ctx.strokeRect(x + 0.5, y + 0.5, g.size - 1, g.size - 1);
         // The label is the file name the extraction would write: it is how an
-        // operator checks orientation the moment real tiles land.
+        // operator checks orientation where there is no tile to draw.
         if (g.size > 64) ctx.fillText(`${row}_${col}`, x + 6, y + 5);
       }
     }

@@ -1158,7 +1158,7 @@ Cloudflare does **not** cache JSON by default, and the rules also have to carry
 the TTLs themselves: Bun's S3 writer cannot send a `Cache-Control` header (the
 publisher notes this at the top of `infra/publish-dashboard.ts`), so objects
 land in the bucket without one and "respect origin" would respect nothing.
-Two rules on the `shard.page` zone, first match wins:
+Three rules on the `shard.page` zone, first match wins:
 
 1. `Hostname equals wrathbench-data.shard.page and URI Path is in
    {"/v1/manifest.json", "/v1/live.json"}` — eligible for cache, edge TTL
@@ -1168,8 +1168,13 @@ Two rules on the `shard.page` zone, first match wins:
    "/v1/snap/" or "/v1/run/"` — eligible for cache, edge TTL **1 year**, browser
    TTL **1 year**. These are content-addressed and never rewritten under their
    own key, so a long TTL is safe by construction.
+3. `Hostname equals wrathbench-data.shard.page and URI Path starts with
+   "/tiles/"` — eligible for cache, edge TTL **1 day**, browser TTL **1 day**.
+   The minimap tiles. A day rather than a year because a re-extraction reuses
+   the same keys, so the TTL is how long a re-upload stays invisible; purge the
+   prefix to close that sooner.
 
-Both rules set the TTL **explicitly by path** rather than respecting an origin
+All three rules set the TTL **explicitly by path** rather than respecting an origin
 header. That is forced: no published object carries a `Cache-Control` at all
 (the 2026-09-11 readback confirmed it), because Bun's S3 writer cannot send one
 and the gate Worker used to add them on egress. "Respect origin TTL" would
@@ -1230,17 +1235,15 @@ Nothing to configure for the first two: with no fetch handler, `robots.txt` is
 whatever is in `dashboard/public/`, and what is there is permissive, so the card
 unfurls (FOLLOW-UPS item 111).
 
-**Minimap tiles are not part of the public build.** They are Blizzard textures,
-and the gate was the only thing that had ever made them reachable to some
-readers and not others — with it gone, publishing one makes it world-readable,
-cacheable and indexable, which is a `docs/DATA-AND-LEGAL.md` decision and the
-operator's. It has not been taken, so the public build names no tile host,
-requests nothing, and draws its labelled grid, exactly as
-`WRATHBENCH_VIEWER_PUBLIC=1` already makes the viewer do. The private viewer is
-unaffected and still serves them off `data/minimap`.
-`VITE_WRATHBENCH_TILES_BASE` (from `WRATHBENCH_TILES_BASE` in `.env`) is the
-flip; see `infra/cloudflare/README.md`, "Open, and the operator's", for what
-else would want doing alongside it.
+**Minimap tiles are shown** (operator, 2026-08-30): they sit under `tiles/` in
+the same bucket, reached through the data hostname, and rule 3 caches them. The
+build asks for them because `WRATHBENCH_TILES_BASE` is set in `.env` — which is
+a separate name from the snapshot base because the upload is a separate step
+(7a), so a deploy from a checkout without `data/minimap` leaves it unset and
+ships the labelled grid rather than a site pointing at nothing. The private
+viewer is unaffected and still serves them off `data/minimap` same-origin. What
+the data hostname has no equivalent of is the gate's `X-Robots-Tag: noindex`;
+see `infra/cloudflare/README.md`, "Open, and the operator's".
 
 ### 7. First publish, by hand
 
@@ -1291,7 +1294,7 @@ browser:
   snapshot pass writes no tile either; those arrive only from the separate
   step below.
 
-### 7a. Minimap tiles (optional, and never automatic)
+### 7a. Minimap tiles (a separate step, never automatic)
 
 The snapshot loop uploads JSON only. Tiles go up by hand, from a checkout with
 `data/minimap` populated by the extraction in `minimap/`, and only when the
@@ -1306,13 +1309,12 @@ bun infra/publish-tiles.ts --upload
 It reads only `data/minimap/<mapId>/<row>_<col>.png` and writes only
 `tiles/<mapId>/<row>_<col>.png` in the same bucket, with the same `S3_*`
 credentials as the snapshot publisher (`WRATHBENCH_MINIMAP_DIR` overrides the
-root). Both lines print uploaded / skipped / bytes. **This step is on hold**:
-what lands in the bucket would be world-readable, and whether minimap tiles go
-public is the open operator decision in step 6. Nothing asks for them today —
-the public build names no tile host — so uploading them would publish textures
-that nothing reads. Do it only alongside `WRATHBENCH_TILES_BASE`, a `/tiles/*`
-cache rule, and the `noindex` question, all of which are in
-`infra/cloudflare/README.md`.
+root). Both lines print uploaded / skipped / bytes. `bun ship --tiles` runs the
+same upload as part of a deploy, which is the usual way to do it after a
+re-extraction. Two things go with it: `WRATHBENCH_TILES_BASE` in `.env`, without
+which the built site asks for nothing, and — after a re-extraction, since the
+keys are reused — a purge of the `/tiles/` prefix, or rule 3's day has to pass
+before readers see the new ones.
 
 ### 8. Start the loop, then deploy the SPA
 
@@ -1348,8 +1350,9 @@ broken.
 
 `VITE_WRATHBENCH_SNAPSHOT_BASE` is what selects the snapshot client at build
 time, so the public bundle and the private one (built without it, served
-same-origin by the viewer) come off the same source with no runtime switch. It
-is also what the minimap tile URLs are relative to (`dashboard/src/lib/tiles.ts`).
+same-origin by the viewer) come off the same source with no runtime switch. The
+minimap tile URLs are relative to `VITE_WRATHBENCH_TILES_BASE` instead, which is
+the point of its being a separate flag (`dashboard/src/lib/tiles.ts`).
 
 `wrangler` is a pinned devDependency (root `package.json`), so `bunx wrangler`
 resolves to the version the lockfile names rather than whatever npm serves that
@@ -1399,9 +1402,9 @@ pass.
 - A run detail page shows its published entries window and nothing more: no
   "load earlier", no live tail, no raw line. If a raw line ever renders, stop
   the publisher — the content boundary has a hole.
-- The map draws its labelled grid and the network tab shows **no request to
-  `/tiles/`**. One would mean a build made with `WRATHBENCH_TILES_BASE` set,
-  which is a decision nobody has taken (step 6).
+- The map draws its minimap tiles, loaded from the data hostname and `HIT`ting
+  the cache on a repeat. Bare grid squares mean a build made without
+  `WRATHBENCH_TILES_BASE`, or an upload that never ran (step 7a).
 - Pasting the URL into Discord unfurls with the title, the sentence and the
   Pareto card. Slack and Twitter honour `robots.txt`, so they are worth a
   second check.

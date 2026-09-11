@@ -93,8 +93,7 @@ Convention:
   itself, to the operator's own Cloudflare account: bucket, data domain, cache rules,
   CORS, the cluster publisher re-pointed and refilling, the SPA deployed at
   `wrathbench.shard.page`, readback and browser pass clean — items 85 and 111 closed
-  and issue #31 with them. The EarlyBird copy's retirement and the tiles are the
-  operator's.
+  and issue #31 with them. The EarlyBird copy's retirement is the operator's.
 
 ## Resolving a cited item number
 
