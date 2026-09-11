@@ -135,22 +135,21 @@ worklogs/2026-08-29).
     and the card), or wait for item 85, where the Open shape has no gate and the
     problem disappears. Verify with Discord's unfurl after either.
 
-115. **The viewer re-counts the whole corpus on every process start** (2026-09-04,
-    disclosed by the agent that fixed the live-run half in fe3dec4). The first
-    `/api/models` after a viewer restart takes ~18.5s: the process fills its fact
-    cache across all 329 trajectories — 4.4 GB, ~9.3s of counting plus ~330
-    sqlite opens. **Not a regression**: the old whole-file `readFileSync` path
-    cost 10.4s for the same fill, and the steady state it replaced was 1–4s
-    spikes every 5s forever, which is strictly worse. But it is now the largest
-    single cost left in the viewer, and it is paid again on every restart —
-    which `bun ship --publisher` and every deploy trigger.
-    The fix is a persisted cache: the per-run counts are a pure function of
-    `(size, mtime)` and a finished run's never change, so ~327 of the 329 could
-    be read from disk rather than recomputed. Wants a cache file the viewer
-    writes on shutdown or incrementally, invalidated by the same signature the
-    in-memory cache already uses. Trigger: viewer restarts becoming frequent
-    enough to notice, or the corpus growing enough that 18.5s becomes minutes —
-    it scales with total trajectory bytes, which only ever grows.
+124. **The other two cold memos `/api/models` fills** (2026-09-11, measured
+    while shipping item 115). With the fact cache persisted, the first
+    `/api/models` on a fresh process against the operator's 346-run tree is
+    22.9s / 20.4s, down from 33.7s / 35.2s. What is left is the same route's
+    two other cold caches, both keyed on the identical `(size, mtime)`
+    signature and both therefore persistable the same way: `totalsCache` in
+    `runner/viewer/api.ts` (a `RunTotalsScanner` per run, from byte zero) and
+    `runReadCache` in `runner/viewer/runs.ts` (one sqlite open per run). Sizes
+    are known and small — trajectory totals measured ~0.8 KiB of JSON a run,
+    ~0.3 MiB for the tree — so the store in `runner/viewer/fact-store.ts` takes
+    a second collection rather than a rewrite. Not done with item 115 because
+    the two are heavier objects than a `RunFact` and the state series behind a
+    run row is unbounded, which wants its own decision about what is worth
+    writing down. Trigger: the same one item 115 had — restarts frequent enough
+    to notice, or a corpus that makes 22s into minutes.
 
 118. **The codex driver's next steps** (2026-09-05; shipped in 3d8666e,
     7eb44c8, d2b46a1, 3e4a130, b27fd02 — see the day file). Three things left,

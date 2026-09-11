@@ -33,6 +33,7 @@
 import { existsSync } from "node:fs";
 import { S3Client } from "bun";
 import { createRenderer } from "../runner/viewer/snapshot";
+import { defaultFactCachePath } from "../runner/viewer/fact-store";
 import { publishLoop, type ObjectStore, type PassRenderer } from "./publish-core";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
@@ -55,6 +56,16 @@ const INTERVAL_MS = Number(Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS ?? "60000");
  */
 const BATCH = Number(Bun.env.WRATHBENCH_PUBLISH_BATCH ?? "8");
 const MODULE_URL = Bun.env.WRATHBENCH_MODULE_URL;
+/*
+ * The viewer's persisted per-run fact cache (runner/viewer/fact-store.ts).
+ * This process restarts on every runner-image bump and on `bun ship
+ * --publisher`, and its first pass reads /api/models — so without a cache on
+ * disk each restart re-counts every trajectory in the tree. The default is the
+ * viewer's own, deliberately: both write the same facts for the same corpus
+ * under the same signature, so sharing one file is a benefit, not a race (the
+ * write is a rename over a pid-named temporary).
+ */
+const FACT_CACHE = Bun.env.WRATHBENCH_FACT_CACHE ?? defaultFactCachePath(RUNS_DIR);
 
 function fail(message: string): never {
   console.error(`publish-dashboard: ${message}`);
@@ -103,6 +114,7 @@ const renderer = createRenderer({
   runsDir: RUNS_DIR,
   ...(FLEET_CONFIG !== undefined ? { fleetConfigPath: FLEET_CONFIG } : {}),
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
+  factCachePath: FACT_CACHE,
 });
 
 // The streaming shape: every `BATCH` runs, the artifacts just projected go
