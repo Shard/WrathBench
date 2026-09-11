@@ -2,9 +2,12 @@
 
 An LLM evaluation harness built on World of Warcraft 3.3.5a via AzerothCore. A model drives a character through a versioned TypeScript SDK; the game server is the source of truth for what happened.
 
-Status: pre-alpha, private repository. The Phase 0 gate passed on 2026-08-21
-(`docs/PHASE-0.md`); the harness has run under versioned series since, currently
-`harness-0.5`.
+Status: pre-alpha, phase 0 — the control surface is built and models reach
+liftoff in it. The Phase 0 gate passed on 2026-08-21 (`docs/PHASE-0.md`) and the
+harness has run under versioned series since, currently `harness-0.5`; results
+so far are indicative of what a model can do here, not comparable scores — no
+single number is promised in this phase (`docs/METHODOLOGY.md`). The public
+dashboard is a gated preview (`docs/PUBLIC-DASHBOARD.md`).
 
 ## In ten lines
 
