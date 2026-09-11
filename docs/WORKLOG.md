@@ -88,8 +88,8 @@ Convention:
   files (SECURITY, CONTRIBUTING, Code of Conduct, issue and PR templates). And the
   repository side of the Open shape (items 85 and 111): the gate Worker deleted, two
   hostnames on `shard.page`, a permissive `robots.txt`, `publish-accept --base`, and
-  minimap tiles withheld from the public build because the gate was the only thing
-  that had ever kept a reader out of them — a new operator decision. Then the cutover
+  minimap tiles wrongly treated as a new operator decision (they had been decided
+  public on 2026-08-30; corrected the same night, tiles uploaded and live). Then the cutover
   itself, to the operator's own Cloudflare account: bucket, data domain, cache rules,
   CORS, the cluster publisher re-pointed and refilling, the SPA deployed at
   `wrathbench.shard.page`, readback and browser pass clean — items 85 and 111 closed

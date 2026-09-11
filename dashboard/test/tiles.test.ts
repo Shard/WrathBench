@@ -96,7 +96,7 @@ describe("one place builds it", () => {
     // Two guards, and the outer one is what keeps a withheld build from
     // creating an Image per visible cell on every pan.
     const src = readFileSync(join(SRC, "pages", "MapPage.tsx"), "utf8");
-    expect(src).toContain("const useTiles = !TILES_WITHHELD && g.size >= TILE_MIN_PX;");
+    expect(src).toContain("const useTiles = !NO_TILE_BASE && g.size >= TILE_MIN_PX;");
     expect(src).toMatch(/const src = tileSrc\(map, row, col\);\s*\n\s*if \(src !== null\) \{/);
   });
 });
