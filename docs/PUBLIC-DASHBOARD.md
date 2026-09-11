@@ -94,15 +94,20 @@ performs it. It reads `data/minimap/<mapId>/<row>_<col>.png` and writes
 viewer already serves so the SPA asks for one URL in either shape. Skip
 by content hash, held in `tiles/manifest.json` in the bucket and written after
 the objects it names, so a re-run with nothing re-extracted uploads nothing.
-They are served from the data hostname like everything else, under the
-immutable cache rule. What they lost in the move off the gate is their
-`X-Robots-Tag: noindex`: the gate Worker set it on the way out, and in the Open
-shape nothing can — the publisher cannot send a header, there is no Worker, and
-the app's `robots.txt` covers the app hostname only. The map needs them
-readable for the page to work at all, so what is left open is indexing rather
-than access, and it is the operator's (`infra/cloudflare/README.md`, "Open, and
-the operator's"). The private viewer still sends `private, max-age=3600` and
-`noindex` under `WRATHBENCH_VIEWER_TILES_PUBLIC=1`; that flag is unrelated.
+Under the gate they were served `private, max-age=3600` and `X-Robots-Tag:
+noindex` to an authenticated reader only, which is what made publishing them a
+small question. **The Open shape does not answer that question, it reopens
+it.** None of those three protections survives it: there is no authentication,
+the publisher cannot send a header, and the app's `robots.txt` covers the app
+hostname only — so a published tile would be a world-readable, cacheable,
+indexable Blizzard texture, which is a `docs/DATA-AND-LEGAL.md` matter and the
+operator's alone. It has not been decided, so the repository's default is no:
+the public build names no tile host, requests nothing, and draws the labelled
+grid, exactly as `WRATHBENCH_VIEWER_PUBLIC=1` already makes the viewer do. The
+map works; it is not a degraded state. `VITE_WRATHBENCH_TILES_BASE` is the flip
+if the decision is ever taken, and it is a separate flag from the snapshot base
+on purpose — deriving it would mean publishing the JSON published the textures,
+which is exactly the coupling the decision is about.
 
 ### Bucket layout, atomicity, freshness
 
@@ -204,16 +209,10 @@ policy, scoped to the app hostname).
 
 The public site includes the live fleet and map (operator's choice,
 2026-08-25): pips and fleet state at the push cadence (5 minutes), and the map
-over minimap tiles — since 2026-08-30 the tiles are published as an explicit
-operator step, so the SPA requests `/tiles/...` in snapshot mode too and falls
-back to the labelled grid square wherever a tile 404s. Since the Open shape
-that request goes to the *data* hostname rather than the page's own, because
-the tiles are objects in the same bucket: the URL is built from
-`VITE_WRATHBENCH_SNAPSHOT_BASE` in `dashboard/src/lib/tiles.ts` and nowhere
-else, and the private build's empty base leaves it same-origin. A relative path
-would have asked the app hostname, found nothing, and degraded the whole map to
-grid squares — indistinguishable from a machine that never ran the
-extraction. Replaying a freeplay stream end to end works there too: since item 119 the
+over the labelled grid. Whether the public map draws minimap tiles is open and
+the operator's (above); the build asks for none until it is answered, and
+`dashboard/src/lib/tiles.ts` is the one place that decides, so the private
+viewer's same-origin path is untouched by any of it. Replaying a freeplay stream end to end works there too: since item 119 the
 track carries the four scalars of its stream — the identity, the place in the
 chain and the run ids either side — so the play bar's previous/next attempt
 links need no second request, which is what makes them work over static
@@ -251,15 +250,14 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   raw trajectory lines (the unprojected record: run config, message arrays,
   every packet), and any local path or host fact. Raw lines are withheld by
   `WRATHBENCH_VIEWER_PUBLIC=1` and the publisher never renders them.
-- **Minimap tiles**: published since 2026-08-30, by the explicit
-  `infra/publish-tiles.ts` step above and never by a snapshot pass. Public
-  since the Open shape, under the data hostname's immutable rule, which is the
-  one content decision the move actually changed — a decision about Blizzard-
-  derived bytes rather than about run data, and taken on the same ground the
-  minimap extraction was: the map is not a map without them. What the boundary
-  still pins is that no snapshot *artifact* names a tile
-  (`runner/test/snapshot.test.ts`), so a tile is only ever reached by a reader
-  who is looking at the map.
+- **Minimap tiles**: uploaded since 2026-08-30 by the explicit
+  `infra/publish-tiles.ts` step above and never by a snapshot pass. They were
+  reachable only behind the gate's password, and with the gate gone **whether
+  they are public at all is an open operator decision** — they are Blizzard
+  textures, and nothing in the Open shape can keep a reader out of a published
+  object. Until it is taken the public build requests none and draws the grid.
+  Independent of that, and unchanged: no snapshot *artifact* may name a tile
+  (`runner/test/snapshot.test.ts` pins it).
 - **Entries: names and ids stay, game prose goes** (docs/DATA-AND-LEGAL.md,
   "Trajectory logs", operator 2026-08-30). One window per run is published —
   the last 200 entries, `entries.json` beside `detail.json`, in the shape the
@@ -409,8 +407,10 @@ preview shared with named people and the wrong one for a launch.
 It was retired on 2026-09-11 (item 85) when the `shard.page` zone arrived on
 the operator's personal account: `dashboard/worker/` deleted, `main` and the
 bucket binding dropped from `dashboard/wrangler.jsonc`, the bucket given its
-own custom domain and the cache rules that go with it. What that cost is the
-paragraph above it in this document — the tiles' `noindex` — and nothing else.
+own custom domain and the cache rules that go with it. What it cost is the
+minimap tiles: the gate was the only thing that had ever made them shareable
+without making them public, so its removal reopened that as an operator
+decision rather than settling it.
 The projection, the snapshot renderer, the publisher and the SPA source were
 identical between the two shapes throughout, so the move was a rebuild with a
 different `VITE_WRATHBENCH_SNAPSHOT_BASE` and a `wrangler.jsonc` that drops its
@@ -547,6 +547,16 @@ what a result means is the operator's:
 6. **Whether DATA-AND-LEGAL.md gains a "published projection" section**
    codifying decision 2 — this document can draft it; adopting it is the
    operator's edit.
+7. **Whether minimap tiles are published at all** (new, 2026-09-11, and the one
+   question the Open shape created rather than answered). Under the gate they
+   reached an authenticated reader only, `private, max-age=3600` and
+   `noindex`; with no gate, a published tile is a world-readable, cacheable,
+   indexable Blizzard texture. **Still open**, and the default until it is
+   answered is no: the public build requests none and draws the labelled grid.
+   Turning them on is `infra/publish-tiles.ts --upload`, `WRATHBENCH_TILES_BASE`
+   in `.env`, a redeploy, and — if the operator wants the old protections back
+   in the only forms the shape allows — a `/tiles/*` cache rule and either a
+   bucket-root `robots.txt` or a zone Transform Rule for `X-Robots-Tag`.
 
 Decided by the operator 2026-08-25, recorded here: the public site includes
 the live fleet and map views at snapshot cadence (not a results-only site),

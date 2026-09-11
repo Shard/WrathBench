@@ -1164,13 +1164,16 @@ Two rules on the `shard.page` zone, first match wins:
    {"/v1/manifest.json", "/v1/live.json"}` — eligible for cache, edge TTL
    **30s**, browser TTL **30s**. These are the two mutable files; worst-case
    staleness is the push cadence plus this TTL, about 90–120s.
-2. `Hostname equals wrathbench-data.shard.page` — eligible for cache, edge TTL
-   **1 year**, browser TTL **1 year**. Everything else — `/v1/snap/<ver>/*`,
-   `/v1/run/<id>/<ver>/*`, `/tiles/*` — is content-addressed or immutable in
-   practice and never rewritten under its own key, so a long TTL is safe by
-   construction. The one exception worth knowing: a re-extracted minimap tile
-   reuses its key, so a tile re-upload wants a purge of `/tiles/*` rather than a
-   wait.
+2. `Hostname equals wrathbench-data.shard.page and URI Path starts with
+   "/v1/snap/" or "/v1/run/"` — eligible for cache, edge TTL **1 year**, browser
+   TTL **1 year**. These are content-addressed and never rewritten under their
+   own key, so a long TTL is safe by construction.
+
+Both rules set the TTL **explicitly by path** rather than respecting an origin
+header. That is forced: no published object carries a `Cache-Control` at all
+(the 2026-09-11 readback confirmed it), because Bun's S3 writer cannot send one
+and the gate Worker used to add them on egress. "Respect origin TTL" would
+respect nothing.
 
 **A missing cache rule is the only way this costs money.** Without it every
 public request is a billed read against the bucket — roughly $7/month at 30M
@@ -1220,14 +1223,23 @@ cliff to sit under at all. Workers Paid ($5/month) is the insurance if a Worker
 ever enters the path. The $20/month zone "Pro" plan is the wrong SKU entirely:
 it is a zone plan and includes none of Workers, KV, D1 or R2.
 
-### 6. `robots.txt` and the social card
+### 6. `robots.txt`, the social card, and what is *not* published
 
-Nothing to configure: with no fetch handler, `robots.txt` is whatever is in
-`dashboard/public/`, and what is there is permissive, so the card unfurls
-(FOLLOW-UPS item 111). It covers the app hostname only — the data hostname
-serves no `robots.txt`, and the minimap tiles under it therefore carry no
-`noindex`, which is the one thing the move off the gate lost. See
-`infra/cloudflare/README.md`, "Open, and the operator's".
+Nothing to configure for the first two: with no fetch handler, `robots.txt` is
+whatever is in `dashboard/public/`, and what is there is permissive, so the card
+unfurls (FOLLOW-UPS item 111).
+
+**Minimap tiles are not part of the public build.** They are Blizzard textures,
+and the gate was the only thing that had ever made them reachable to some
+readers and not others — with it gone, publishing one makes it world-readable,
+cacheable and indexable, which is a `docs/DATA-AND-LEGAL.md` decision and the
+operator's. It has not been taken, so the public build names no tile host,
+requests nothing, and draws its labelled grid, exactly as
+`WRATHBENCH_VIEWER_PUBLIC=1` already makes the viewer do. The private viewer is
+unaffected and still serves them off `data/minimap`.
+`VITE_WRATHBENCH_TILES_BASE` (from `WRATHBENCH_TILES_BASE` in `.env`) is the
+flip; see `infra/cloudflare/README.md`, "Open, and the operator's", for what
+else would want doing alongside it.
 
 ### 7. First publish, by hand
 
@@ -1293,13 +1305,13 @@ bun infra/publish-tiles.ts --upload
 It reads only `data/minimap/<mapId>/<row>_<col>.png` and writes only
 `tiles/<mapId>/<row>_<col>.png` in the same bucket, with the same `S3_*`
 credentials as the snapshot publisher (`WRATHBENCH_MINIMAP_DIR` overrides the
-root). Both lines print uploaded / skipped / bytes. What lands there is served
-by the data hostname like everything else, under the immutable cache rule — so
-a re-extraction that reuses a key wants a purge of `/tiles/*`, and a tile
-carries no `noindex` any more (`infra/cloudflare/README.md`, "Open, and the
-operator's"). The SPA builds its tile URLs against the same snapshot base
-(`dashboard/src/lib/tiles.ts`), which is what makes the one path work in both
-the private viewer and the public site.
+root). Both lines print uploaded / skipped / bytes. **This step is on hold**:
+what lands in the bucket would be world-readable, and whether minimap tiles go
+public is the open operator decision in step 6. Nothing asks for them today —
+the public build names no tile host — so uploading them would publish textures
+that nothing reads. Do it only alongside `WRATHBENCH_TILES_BASE`, a `/tiles/*`
+cache rule, and the `noindex` question, all of which are in
+`infra/cloudflare/README.md`.
 
 ### 8. Start the loop, then deploy the SPA
 
@@ -1386,10 +1398,9 @@ pass.
 - A run detail page shows its published entries window and nothing more: no
   "load earlier", no live tail, no raw line. If a raw line ever renders, stop
   the publisher — the content boundary has a hole.
-- The map draws tiles where they have been uploaded (see "Minimap tiles"
-  below) and the labelled grid everywhere else. This is the check most likely
-  to fail quietly now that the tiles are on the data hostname: a tile that 404s
-  looks exactly like a machine that never ran the extraction.
+- The map draws its labelled grid and the network tab shows **no request to
+  `/tiles/`**. One would mean a build made with `WRATHBENCH_TILES_BASE` set,
+  which is a decision nobody has taken (step 6).
 - Pasting the URL into Discord unfurls with the title, the sentence and the
   Pareto card. Slack and Twitter honour `robots.txt`, so they are worth a
   second check.

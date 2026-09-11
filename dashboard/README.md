@@ -39,10 +39,14 @@ instead of a viewer (docs/PUBLIC-DASHBOARD.md). One build-time flag selects it:
 VITE_WRATHBENCH_SNAPSHOT_BASE=https://wrathbench-data.shard.page bun run dashboard:build
 ```
 
-That flag is also what the minimap tile URLs are relative to
-(`src/lib/tiles.ts`): the public app and its data are two hostnames, so a bare
-`/tiles/...` would ask the app's own, find nothing, and degrade the map to
-labelled grid squares with nothing to say why.
+Minimap tiles are a separate flag, `VITE_WRATHBENCH_TILES_BASE`, and separate
+on purpose (`src/lib/tiles.ts`): they are Blizzard textures, the public site has
+nothing in its read path able to keep a reader out, and whether they go public
+is an open operator decision — so deriving them from the snapshot base would
+mean publishing the JSON published the textures. Unset, which is the default and
+what the public site ships with, the map requests no tile and draws its labelled
+grid, the same thing the viewer does under `WRATHBENCH_VIEWER_PUBLIC=1`. The
+private build sets neither flag and serves tiles same-origin as always.
 
 The other build-time flags are `VITE_WRATHBENCH_PUBLIC_ORIGIN` and
 `VITE_WRATHBENCH_OG_STAMP` (the social card's tags, docs/PUBLIC-DASHBOARD.md)
