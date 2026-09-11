@@ -34,6 +34,7 @@ import { useFeeds } from "../lib/feeds";
 import { COST_BASIS_NOTE } from "../lib/format";
 import { latestSeries } from "../lib/harness";
 import { poll } from "../lib/poll";
+import { REPO_URL, bibtex } from "../lib/repo";
 import { runsHref } from "../lib/runs";
 
 /** The ladder for one episode — the page an episode's member count leads to. */
@@ -245,12 +246,8 @@ export default function About() {
         under <span class="mono">module/</span>, which is GPL-2.0-or-later.
       </p>
       <h2 class="section">cite</h2>
-      <pre class="cite">{`@misc{beukers2026wrathbench,
-  title  = {WrathBench: An Agent Workbench for World of Warcraft},
-  author = {Mark Beukers},
-  year   = {2026},
-  url    = {https://github.com/Shard/WrathBench}
-}`}</pre>
+      {/* The `url` line only once the repository is public; see lib/repo.ts. */}
+      <pre class="cite">{bibtex(REPO_URL)}</pre>
     </div>
   );
 }
