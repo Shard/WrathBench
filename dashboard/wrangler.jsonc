@@ -43,6 +43,11 @@
 // publisher's key pair is a separate credential and the two never meet.
 {
   "name": "wrathbench-dashboard",
+  // Pinned so a deploy can only ever land on the account that owns the zone.
+  // wrangler otherwise deploys to whichever account its login (or its cached
+  // choice in node_modules/.cache/wrangler/) happens to name, which on
+  // 2026-09-11 was the retired one. The id is an account fact, not a secret.
+  "account_id": "271673e5d8c22e4f1f7b8e091ebd3320",
   "compatibility_date": "2026-08-25",
   // The app's own hostname. `custom_domain` rather than a route: the Worker IS
   // the origin here, so Cloudflare manages the record and the certificate, and
