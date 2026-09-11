@@ -367,6 +367,7 @@ Leave the compose stack down but installed until you are satisfied.
 
 ```
 ./infra/k8s-deploy.sh                            # the deploy window
+./infra/fleet-update.sh status                   # what the fleet is doing
 ./infra/run-episode.sh --model <id> --k8s        # one ad-hoc episode
 kubectl -n wrathbench logs -f deploy/wrathbench-fleet
 kubectl -n wrathbench exec -it deploy/wrathbench-runner -- bash
@@ -385,6 +386,80 @@ swapped for `kubectl`. Two things are deliberately different:
   `kubectl exec` dies with the exec, so holding one here would be a lie and is
   not faked. Keep the window to one operator. The mutual exclusion that matters
   on the cluster is that exactly one thing — Flux — can change what is deployed.
+
+### The ops scripts, and which of them still speak compose
+
+Ported to kubectl on 2026-09-11, after `fleet-update.sh status` reported the
+live cluster fleet as "container not running, heartbeat 260151s ago" — it was
+still asking `docker compose ps`, and an operator sizing a deploy window was
+being told the fleet was dead.
+
+- **`infra/fleet-update.sh`** — the supervisor roll, and the only steering that
+  does not go through Flux. Same five verbs, same semantics, kubectl underneath:
+
+  ```
+  ./infra/fleet-update.sh status      # switch, state file, Deployment, pods
+  ./infra/fleet-update.sh graceful    # pause, wait for quiet, restart, resume
+  ./infra/fleet-update.sh force       # restart NOW (--yes to skip the prompt)
+  ./infra/fleet-update.sh drain       # pause, wait for quiet, SCALE TO 0
+  ./infra/fleet-update.sh resume      # clear the pause switch
+  ./infra/fleet-update.sh graceful --dry-run   # every kubectl command it would run
+  ```
+
+  Three things about the port are worth knowing. **Reads and writes of
+  `fleet-state.json` and the pause switch go through the RUNNER pod**, not the
+  fleet's own — same PVC, same files, and the runner is the exec target because
+  the fleet pod is the thing being recreated; `infra/k8s-deploy.sh` already read
+  it that way. **A recreate is `kubectl rollout restart`** on a Deployment whose
+  strategy is `Recreate`, so the old supervisor gets its full 180s grace and two
+  never overlap; a fleet already at 0 is scaled back to 1 instead, because a
+  rollout restart of nothing restarts nothing. And **`drain` scales to 0**
+  rather than stopping a container, which is the one verb whose exit shape
+  changed: `resume` after a drain now says so and names the `--replicas=1` that
+  has to follow it.
+
+  What did not change: the pause switch is still the sidecar file the supervisor
+  reads every tick, `graceful` still waits only on the runs a recreate would
+  COST (a draining freeplay stream or a `resume: true` campaign run resumes in
+  place and is counted as drained), an abort still leaves the switch SET, and a
+  supervisor that does not come back still leaves it set on purpose.
+
+  Three things the cluster forced that compose did not. **"Did it come back?"
+  is `startedAt`, not a timestamp comparison** — the supervisor stamps
+  `const START_AT = Date.now()` once per process, and waiting for that value to
+  CHANGE never asks the workstation clock and `chungusjr`'s to agree; "is this
+  heartbeat later than the moment I typed the restart" would, and a pod a few
+  seconds ahead would read a dying supervisor's last write as a boot and clear
+  the switch under a fleet that never came back. **A failing kubectl says the
+  switch is set**, via an ERR trap next to the Ctrl-C one: an API blip is
+  likelier than an interrupt and `set -e` alone would exit silently. And
+  **`drain` waits for the pod to be GONE**, not for `rollout status` — which on
+  a Deployment scaled to 0 does not reliably wait for a pod that is still
+  Terminating, and the supervisor spends up to its 180s grace in there writing
+  the pause records the next one resumes from.
+
+- **`infra/viewer-restart.sh`** — rollout-restarts the `wrathbench-viewer`
+  Deployment and checks `https://wrathbench.local/api/info`. On the cluster the
+  viewer's code is baked into the runner image and Flux owns the tag, so this
+  kicks a wedged process; new viewer code needs a new tag.
+  `--local` drives the retired workstation path (systemd user unit or nohup) and
+  exists for the rollback below.
+- **`infra/module-health.sh`** — the module's operator census, `kubectl exec`
+  into the worldserver pod. `--compose` is the rehearsal stack.
+- **`bun run publisher:restart`** — `kubectl rollout restart` of the publisher
+  Deployment; `publisher:restart:compose` is the rehearsal one.
+- **`bun run deploy:worldserver`** now runs `infra/k8s-deploy.sh`.
+  `deploy:worldserver:compose` is `infra/deploy-worldserver.sh`, which is
+  compose-only and says so in its header.
+
+Still compose-only, deliberately, and all of them say so in their headers:
+`infra/deploy-worldserver.sh`, `infra/build-worldserver.sh` (a local build, not
+a deploy), `infra/wrathbench-viewer.service` (retired 2026-09-08, rollback
+only), and `infra/compose.yml` itself, which stays as the documented local
+rehearsal. `infra/run-fleet.ts`, `infra/run-roster.ts` and `run-episode.sh`
+already branch on `WRATHBENCH_IN_CONTAINER`, so the fleet pod never reaches for
+a docker CLI; a handful of their operator-facing strings still name compose
+paths, which is cosmetic drift and not a wrong action.
 
 ## Rollback to compose
 

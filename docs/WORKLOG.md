@@ -82,7 +82,10 @@ Convention:
   GitHub issue #31): 1,590 objects and 422 runs complete with nothing missing, and
   one real finding — the wiki bundle source ships inside published entries (item 123).
   The viewer's per-run fact cache is persisted across restarts (item 115): 34s → 22s
-  on the first `/api/models` after a start, the fill itself 11.9s → 4ms.
+  on the first `/api/models` after a start, the fill itself 11.9s → 4ms. That
+  compose drift is closed: the ops scripts became cluster-native — `fleet-update.sh`
+  (all five verbs), `viewer-restart.sh`, `module-health.sh` and the package scripts
+  drive kubectl, and the compose-only ones say so.
 
 ## Resolving a cited item number
 
