@@ -713,6 +713,18 @@ objects, and a repeat request answers `cf-cache-status: HIT` — those headers
 come from the zone rules, since no object carries one. CORS answers the SPA
 origin only (`access-control-allow-origin: https://wrathbench.shard.page`).
 The bucket's development URL is disabled and answers `401`, which closes the
-"unverified" line above. Criterion 5 (the browser pass at
-`wrathbench.shard.page`) waits on the Worker deploy, which needs a credential
-on the new account; the EarlyBird copy stays up until it lands.
+"unverified" line above. Criterion 5 followed the same evening, once the Worker was deployed on the
+new account (`bun ship`, wrangler version `e2951af0`, source `master` at
+`48e5f64`): `/`, `/runs`, `/ladder`, `/map` and `/og.png` all answer `200` on
+`wrathbench.shard.page`, an unknown path serves the SPA rather than a 404, and
+a headless Chromium walk of `/`, `/runs`, a run detail, `/ladder` and
+`/map?run=<id>` rendered real content from the data hostname on every route —
+16 to 19 requests to the app origin and 4 to 7 to the data hostname per page,
+**no request to `/tiles/` and none to `/api/`**, which is the grid-only build
+and the snapshot base both doing what they should. The card's tags are
+absolute against the public origin and `robots.txt` is permissive. Not
+exercised: the Discord unfurl itself, which needs a paste. One thing the walk
+turned up that nobody configured in the repository: the zone injects
+Cloudflare Web Analytics (`static.cloudflareinsights.com`) into every page —
+a zone-level setting on the operator's account, cookieless, and noted here so
+it is not mistaken for something the build added.

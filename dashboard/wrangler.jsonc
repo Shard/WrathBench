@@ -34,12 +34,13 @@
 //
 //   bun ship
 //
-// The deploying shell needs WRATHBENCH_CF_DEPLOY_TOKEN in `.env` (the script
-// passes it to wrangler as CLOUDFLARE_API_TOKEN). Its scopes are Workers
-// Scripts:Edit on the account and Workers Routes:Edit on the `shard.page` zone —
-// the route below is a Custom Domain, so the deploy creates and owns the DNS
-// record for it. It needs no R2 permission at all: the publisher's key pair is a
-// separate credential and the two never meet.
+// The deploying shell needs a credential on the account that owns the zone:
+// either WRATHBENCH_CF_DEPLOY_TOKEN in `.env` (the script passes it to wrangler
+// as CLOUDFLARE_API_TOKEN; scopes Workers Scripts:Edit on the account and
+// Workers Routes:Edit on the `shard.page` zone — the route below is a Custom
+// Domain, so the deploy creates and owns the DNS record for it) or, with that
+// unset, wrangler's own browser login. It needs no R2 permission at all: the
+// publisher's key pair is a separate credential and the two never meet.
 {
   "name": "wrathbench-dashboard",
   "compatibility_date": "2026-08-25",

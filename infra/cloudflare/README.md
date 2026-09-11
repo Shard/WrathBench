@@ -63,7 +63,14 @@ needs a code change.
   dashboard. Add **Account → Account Settings: Read** if wrangler cannot resolve
   the account id on its own. It needs no object access: it never reads or writes
   a published artifact. `infra/deploy-dashboard.sh` reads it from `.env` and
-  hands it to wrangler as `CLOUDFLARE_API_TOKEN` for the one command.
+  hands it to wrangler as `CLOUDFLARE_API_TOKEN` for the one command. With it
+  unset the script falls back to wrangler's own browser login (`bunx wrangler
+  login`, on the account that owns the zone) and prints `wrangler whoami`
+  before deploying, which is how the 2026-09-11 cutover was run. One trap: after
+  a login on a *different* account wrangler still uses the account it cached in
+  `node_modules/.cache/wrangler/wrangler-account.json`, and the deploy fails
+  with `Authentication error [code: 10000]` against the old account id. The
+  script deletes that cache before every deploy for exactly this reason.
 
 A third token, zone **Cache Purge**, is only wanted if the manifest TTL is ever
 tightened by purging the two mutable URLs after each push. That is not the
@@ -194,7 +201,7 @@ Set the three public names in `.env` first:
 ```
 WRATHBENCH_SNAPSHOT_BASE=https://wrathbench-data.shard.page
 WRATHBENCH_PUBLIC_ORIGIN=https://wrathbench.shard.page
-WRATHBENCH_CF_DEPLOY_TOKEN=…
+WRATHBENCH_CF_DEPLOY_TOKEN=…        # or leave unset and `bunx wrangler login`
 ```
 
 Then:
@@ -222,6 +229,10 @@ reached them — including the gate's `DASHBOARD_PASSWORD` secret, which dies wi
 its Worker. Nothing in the repository refers to either any more.
 
 ### 9. Verify
+
+Run once, 2026-09-11, and passed in full except the unfurl, which nobody pasted
+into Discord that day; the record is `docs/PUBLIC-DASHBOARD.md`, "Acceptance
+record". Everything below is the check, kept as the check.
 
 **The cache rule, first**, because it is the one misconfiguration that bills:
 
