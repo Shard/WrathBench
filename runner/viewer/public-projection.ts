@@ -986,6 +986,12 @@ export function projectTrack(t: TrackResponse): TrackResponse {
  * its skeleton — index, type, stamps — so the feed still shows a row where
  * something happened without saying what the unlisted record held.
  *
+ * A listed field that carries a comparability tuple (`harness` entries of kind
+ * `comparability_restamped`, in `before` and `after`) is not copied whole: it
+ * goes through `projectComparability`, so the tuple's own withheld fields —
+ * `wikiBundle`, whose `source` is the operator's dump file — stay withheld here
+ * too.
+ *
  * Absent by decision, per type:
  * - `meta`: the run config (`apiBase`, the objective, the operator's paths,
  *   the wiki bundle source) — every public fact from it is on the run row.
@@ -1037,10 +1043,37 @@ function plain(v: unknown): unknown {
 }
 
 /**
+ * Whether a copied field is a comparability tuple, by its shape.
+ *
+ * A `harness` entry of kind `comparability_restamped` carries the whole tuple
+ * in `before` and `after`, so a by-name copy ships the whole tuple a layer
+ * below the run row — which is how the operator's wiki dump filename reached the public
+ * bucket (item 123, 2026-09-11). The test is structural rather than keyed on
+ * the entry kind so a future record that embeds a tuple is covered the day it
+ * is written; `budget` is part of it because the other `after` in this file
+ * (a `resume` entry's pause reason) is a plain string, and must stay one.
+ */
+function isComparabilityTuple(v: unknown): v is ComparabilityView {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    "harnessVersion" in o &&
+    typeof o["budget"] === "object" &&
+    o["budget"] !== null &&
+    !Array.isArray(o["budget"])
+  );
+}
+
+/**
  * One entry summary, projected then redacted. The skeleton is what
  * `summarize` stamps on every record; the rest is the type's list above,
  * copied by name; then `redactGameProse` replaces the game prose the copied
  * fields can carry (tool result text).
+ *
+ * A copied field that is itself a comparability tuple crosses
+ * `projectComparability` — the same allowlist the run row's tuple crosses —
+ * rather than being copied whole, so the tuple's withheld fields are withheld
+ * at every depth.
  */
 export function projectEntry(e: EntrySummary): EntrySummary {
   const out: EntrySummary = { i: e.i, t: e.t, ts: e.ts, start: e.start, end: e.end };
@@ -1049,7 +1082,13 @@ export function projectEntry(e: EntrySummary): EntrySummary {
   if (e.clipped === true) out.clipped = true;
   for (const k of ENTRY_FIELDS[e.t] ?? []) {
     if (!(k in e) || e[k] === undefined) continue;
-    out[k] = k === "items" && e.t === "state" ? projectItems(e[k] as ItemSample[] | null) : plain(e[k]);
+    const v = e[k];
+    out[k] =
+      k === "items" && e.t === "state"
+        ? projectItems(v as ItemSample[] | null)
+        : isComparabilityTuple(v)
+          ? projectComparability(v)
+          : plain(v);
   }
   return redactGameProse(out);
 }

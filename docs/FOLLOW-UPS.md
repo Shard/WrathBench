@@ -107,21 +107,6 @@ worklogs/2026-08-29).
     behind it. Gated by issue #10 (entries/game-text) in the same breath, since
     removing the gate is what makes the deploy genuinely public.
 
-123. **The wiki bundle source ships in published entries** (2026-09-11, found by
-    the acceptance readback, GitHub issue #31). `projectComparability` withholds
-    `wikiBundle` from a run row because its `source` is the operator's local dump
-    filename, and `docs/PUBLIC-DASHBOARD.md` lists it under "Still projected out" —
-    but `projectEntry` copies a `harness` entry's `before`/`after` tuples verbatim
-    (`ENTRY_FIELDS.harness`), so the same stamp ships one layer down. Measured on the
-    live bucket: 136 occurrences across 21 `entries.json` objects, all on
-    `kind: "comparability_restamped"` entries, each carrying
-    `"source":"wowwikifandomcom-20200223-history.xml.7z"`. Next: project the tuple
-    in `projectEntry` the way the run row's is projected (`resume` carries an
-    `after` too), pin it in `runner/test/public-projection.test.ts`, and let the
-    next publisher pass rewrite the affected runs — the objects are content-addressed,
-    so a corrected entries window lands on a new key and the old one prunes. Until
-    then issue #31's criterion 2 is a fail.
-
 111. **Social previews: let the crawler through** (operator, 2026-09-01). The
     tags and the ship-time Pareto card shipped the same day (`dashboard/src/lib/og.ts`,
     `infra/render-og.ts`, `docs/PUBLIC-DASHBOARD.md` "The social card") and the
