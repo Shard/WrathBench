@@ -46,7 +46,10 @@ if [ "$tests" = 1 ]; then
   bun run --cwd dashboard typecheck >/dev/null
 fi
 if [ "$tiles" = 1 ]; then
-  echo "deploy: tiles"
+  # Live, and deliberately not removed — but say out loud what it does, because
+  # the bucket is public now and these are Blizzard textures. See the header.
+  echo "deploy: tiles — uploading to a PUBLIC bucket; whether tiles go public is"
+  echo "deploy:         an open operator decision (infra/cloudflare/README.md)."
   bun infra/publish-tiles.ts --upload
 fi
 
