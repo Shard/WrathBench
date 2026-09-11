@@ -112,7 +112,7 @@ directory: `bun install` once at the root (Bun 1.4.0, pinned in
 
 ```sh
 bun test                     # every workspace's suite; all fixture-based
-bun run typecheck            # sdk, runner, infra, dashboard, dashboard/worker, wiki, minimap
+bun run typecheck            # sdk, runner, infra, dashboard, wiki, minimap
 bun run docs:api:check       # the generated SDK reference is in sync
 bun run dashboard:build      # the SPA, no data involved — build it before the viewer
 bun run viewer               # serves labelled empty states; creates data/runs
