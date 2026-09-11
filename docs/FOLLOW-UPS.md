@@ -43,54 +43,6 @@ worklogs/2026-08-29).
 
 ## Docs and release
 
-85. **Retire the gate Worker before launch** (2026-08-25; operator's explicit
-    direction). The public dashboard currently runs the **Gated** shape —
-    `dashboard/worker/index.ts` serving both the SPA and `/v1/*` from a private
-    R2 binding behind a shared password — because the account has no zone and,
-    on Cloudflare, access control and cache are custom-domain features. That is
-    scaffolding for a private preview and **not what launches**. The launch
-    shape is the design doc's **Open** one: R2 behind a custom domain with cache
-    rules, an assets-only Worker with no `main`, and therefore no Worker
-    invocation anywhere in the read path — so a traffic spike is absorbed by the
-    edge cache at ~$0 and never reaches the lab or a per-request compute bill.
-    No domain yet (operator, 2026-09-01): this is one of the last steps before the
-    public launch, after the preview has been shared.
-    Unblocked 2026-09-11 by the `shard.page` zone on the operator's personal
-    account (it had been considered and declined 2026-08-25 because it pointed
-    elsewhere; that reversed). Hostnames decided the same day: app
-    `https://wrathbench.shard.page`, data `https://wrathbench-data.shard.page`.
-    **Repo side shipped in a651e1e and e403d37; remaining: the Cloudflare/cluster steps in
-    `infra/cloudflare/README.md`** — create the bucket on the new account, apply
-    the CORS policy, attach the data custom domain, add the two cache rules,
-    repoint the publisher (`S3_ENDPOINT` and keys in the `wrathbench-env`
-    secret) with `WRATHBENCH_PUBLISH_STATE` reset so the first pass republishes
-    everything, `bun ship`, then verify with
-    `bun infra/publish-accept.ts --base https://wrathbench-data.shard.page` and
-    a browser pass. The two cache rules already exist on the zone (operator,
-    2026-09-11) and set their TTLs explicitly by path, since no published object
-    carries a `Cache-Control`. **Minimap tiles are deliberately not part of
-    this**: the gate was the only thing that had ever made them reachable to
-    some readers and not others, so whether they go public is a new open
-    operator decision (`docs/PUBLIC-DASHBOARD.md`, "Operator decisions" 7) and
-    the public build requests none until it is taken. Delete this item when the
-    runbook has been run.
-
-111. **Social previews: let the crawler through** (operator, 2026-09-01). The
-    tags and the ship-time Pareto card shipped the same day (`dashboard/src/lib/og.ts`,
-    `infra/render-og.ts`, `docs/PUBLIC-DASHBOARD.md` "The social card") and the
-    public build carries `og:image` → `/og.png`. Nothing unfurled under the
-    gate: the Worker answered every credential-less request — Discord's crawler
-    included — with the 401 password form, and served a `robots.txt` that
-    disallowed everything ahead of it (Slack and Twitter honour that; Discord
-    does not), so the password and the directive were two independent blockers.
-    The operator chose the second way out: item 85's Open shape, where there is
-    no Worker to do either. **Repo side shipped in a651e1e**
-    (`dashboard/public/robots.txt`, permissive, served from the assets since
-    there is no fetch handler to answer that path); **remaining: the
-    Cloudflare/cluster steps in `infra/cloudflare/README.md`**, after which the
-    check is Discord's unfurl of `https://wrathbench.shard.page`, and Slack's
-    and Twitter's for the robots half. Delete this item then.
-
 124. **The other two cold memos `/api/models` fills** (2026-09-11, measured
     while shipping item 115). With the fact cache persisted, the first
     `/api/models` on a fresh process against the operator's 346-run tree is

@@ -105,22 +105,36 @@ VITE_WRATHBENCH_SNAPSHOT_BASE="$snapshot_base" \
   VITE_WRATHBENCH_REPO_URL="$repo_url" \
   bun run --cwd dashboard build >/dev/null
 
-# The deploy credential, and the only one this script uses. A token with Workers
-# Scripts:Edit on the account and Workers Routes:Edit on the zone — enough to
-# upload the assets and to own the Custom Domain in dashboard/wrangler.jsonc,
-# and nothing else. It is deliberately NOT the publisher's R2 key pair: that one
-# writes objects and cannot deploy, this one deploys and cannot read an object.
-# Named WRATHBENCH_CF_DEPLOY_TOKEN in .env so it sits with the rest of the
-# project's secrets, and exported into wrangler's own name for the one command.
+# The deploy credential. Either of two, and the script says which it used:
+#
+#   - WRATHBENCH_CF_DEPLOY_TOKEN in .env: a token with Workers Scripts:Edit on
+#     the account and Workers Routes:Edit on the zone — enough to upload the
+#     assets and to own the Custom Domain in dashboard/wrangler.jsonc, and
+#     nothing else. Exported into wrangler's own name for the one command. This
+#     is the unattended form.
+#   - Unset: wrangler's own login (`bunx wrangler login`, the account the
+#     operator picked in the browser). A login on the wrong account deploys
+#     somewhere nobody wants, so the script prints who it is first.
+#
+# Neither is the publisher's R2 key pair: that one writes objects and cannot
+# deploy, the deploy credential deploys and cannot read an object.
 echo "deploy: wrangler"
 deploy_token=$(bun -e 'process.stdout.write(process.env.WRATHBENCH_CF_DEPLOY_TOKEN ?? "")')
-if [ -z "$deploy_token" ]; then
-  echo "deploy: WRATHBENCH_CF_DEPLOY_TOKEN is unset — set it in .env" >&2
-  echo "deploy: (Workers Scripts:Edit + Workers Routes:Edit; infra/cloudflare/README.md)" >&2
-  exit 1
+if [ -n "$deploy_token" ]; then
+  echo "deploy: credential is WRATHBENCH_CF_DEPLOY_TOKEN"
+  export CLOUDFLARE_API_TOKEN="$deploy_token"
+else
+  echo "deploy: no WRATHBENCH_CF_DEPLOY_TOKEN in .env — using wrangler's login:"
+  bunx wrangler whoami 2>/dev/null | grep -E "logged in|Account Name|│" | head -4 \
+    || { echo "deploy: wrangler is not logged in (bunx wrangler login), and no token is set" >&2; exit 1; }
 fi
-CLOUDFLARE_API_TOKEN="$deploy_token" \
-  bunx wrangler deploy --config dashboard/wrangler.jsonc | grep -E "Success|Deployed|rror" || true
+# No `|| true` and no output filter: a failed upload must stop the ship here,
+# before the private build below overwrites dist and "deploy: done" prints.
+# Wrangler also caches the account it last used in
+# node_modules/.cache/wrangler/wrangler-account.json; after a login on a
+# different account that cache still wins and the deploy 10000s, so clear it.
+rm -f node_modules/.cache/wrangler/wrangler-account.json
+bunx wrangler deploy --config dashboard/wrangler.jsonc
 
 echo "deploy: restore the private build"
 bun run --cwd dashboard build >/dev/null

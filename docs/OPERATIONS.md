@@ -1211,7 +1211,8 @@ Least privilege, one job each, and neither can do the other's:
   through wrangler rather than the dashboard. It never reads or writes a
   published object. `infra/deploy-dashboard.sh` passes it to wrangler as
   `CLOUDFLARE_API_TOKEN` for the one command, so wrangler's own name never has
-  to be exported into a shell.
+  to be exported into a shell. Unset, the script uses wrangler's own browser
+  login instead and prints which account that is before it deploys.
 
 A third, zone **Cache Purge**, is only wanted if the manifest TTL is ever
 tightened by purging the two mutable URLs after each push. That is not the
@@ -1339,8 +1340,8 @@ builds in snapshot mode, deploys, and rebuilds the private bundle for the
 viewer. The three names it needs come from `.env`:
 `WRATHBENCH_SNAPSHOT_BASE` (`https://wrathbench-data.shard.page`),
 `WRATHBENCH_PUBLIC_ORIGIN` (`https://wrathbench.shard.page`, which the card's
-absolute `og:image` is built against) and `WRATHBENCH_CF_DEPLOY_TOKEN`. All
-three are hard failures if unset — an empty snapshot base in particular would
+absolute `og:image` is built against) and `WRATHBENCH_CF_DEPLOY_TOKEN` (or a
+`bunx wrangler login` in its place). The first two are hard failures if unset — an empty snapshot base in particular would
 quietly build the *private* bundle, which on the public hostname polls `/api`
 forever and reads as a permanent data outage rather than as anything obviously
 broken.
