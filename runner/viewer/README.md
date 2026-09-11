@@ -6,20 +6,23 @@ JSONL by hand.
 
 ## Running
 
-```
-bun runner/viewer/serve.ts        # from the repo root, on the host
-```
+Since the 2026-09-08 cutover the viewer is the `wrathbench-viewer` Deployment on
+the cluster, behind the `wrathbench.local` Ingress
+(`docs/[removed]`); its code is baked into the runner image and Flux
+owns the tag, so it comes back on its own and new viewer code needs a new tag
+rather than a restart. `bun run viewer:restart`
+(`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
+`https://wrathbench.local/api/info` — it kicks a wedged process, it does not
+deploy anything. The workstation's systemd user unit
+(`infra/wrathbench-viewer.service`) is retired and disabled, kept only for the
+compose rollback, which is what `viewer-restart.sh --local` drives.
 
-On the operator's host the viewer is a systemd **user** unit,
-`infra/wrathbench-viewer.service`, so it comes back after a reboot instead of
-dying with the shell that launched it (2026-09-05: a reboot took it down with
-the docker stack, and nothing brought it back). Install once from the repo root
-with `systemctl --user link "$PWD/infra/wrathbench-viewer.service" && systemctl
---user enable --now wrathbench-viewer`; `bun run viewer:restart` restarts
-through the unit when it is installed and falls back to a detached launch when
-it is not. The docker stack is a separate matter: `docker.service` has to be
-enabled at boot (`sudo systemctl enable docker`) for `restart: unless-stopped`
-to mean anything after a reboot.
+Locally — a rehearsal, a bare clone, or development on the pages — it is still
+one process:
+
+```
+bun runner/viewer/serve.ts        # from the repo root
+```
 
 Then open http://127.0.0.1:8090. A bare clone works: an absent runs directory
 is created empty, and every page serves its labelled empty state.

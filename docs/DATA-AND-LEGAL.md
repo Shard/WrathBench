@@ -11,7 +11,7 @@ These are the lines the project does not cross. They are rules, not arguments; t
 
 ## Never a way for a human to play
 
-- No game client can connect. The game protocol is never exposed; the only outside surface is the MCP, and it is private until the community-access prerequisites in `docs/VISION.md` are met.
+- No game client can connect. The game protocol is never exposed; the only outside surface is the MCP, and it is private. Opening it to anyone outside the operator means meeting the posture below — never a way for a human to play, never money, small and framed as research — and it needs a harness that can run more than one session at a time, which is GitHub issue #9 (group tier) and is not built.
 - No web client, no spectate-and-type, no interface that amounts to a person playing through an agent.
 - No recruited players, no public realm listing, no advertised server.
 
