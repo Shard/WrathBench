@@ -127,7 +127,7 @@ while [[ $# -gt 0 ]]; do
     --timeout) TIMEOUT_S="${2:-}"; shift 2 ;;
     --namespace|-n) NAMESPACE="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,95p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,91p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1 (graceful | force | drain | resume | status)" ;;
   esac
 done
@@ -157,6 +157,8 @@ command -v kubectl >/dev/null 2>&1 || die "kubectl is not on PATH — this scrip
 #   switchwhy:<text>      what it says (only when set)
 #   pickedup:yes|no       the supervisor's OWN last tick saw it — not the file
 #   heartbeat:<epoch-s>   absolute, 0 when unknown; see below
+#   startedat:<epoch-ms>  the supervisor process's own start stamp, 0 when
+#                         unknown. A recreate is complete when this CHANGES.
 #   alive:<n>             job rows with a live roster process
 #   wait:<where>          a run that must finish on its own clock. A recreate
 #                         ends it `manual`: the attempt is spent. Every scored
@@ -209,6 +211,12 @@ read_state() {
     }
     out.push(`pickedup:${s.pausedSwitch ? "yes" : "no"}`);
     out.push(`heartbeat:${typeof s.heartbeatAt === "number" ? Math.floor(s.heartbeatAt / 1000) : 0}`);
+    // The supervisor PROCESS identity: `const START_AT = Date.now()` at module
+    // scope in infra/run-fleet.ts, so it changes exactly once per process. It is
+    // what proves a NEW supervisor came back, and unlike a heartbeat compared to
+    // a host timestamp it never asks two machine clocks to agree. (No
+    // apostrophes in here: the whole snippet is a single-quoted bash string.)
+    out.push(`startedat:${typeof s.startedAt === "number" ? s.startedAt : 0}`);
     let alive = 0;
     for (const [name, j] of Object.entries(s.jobs ?? {})) {
       if (!j || j.alive !== true) continue;
@@ -233,10 +241,10 @@ read_state() {
 
 # Parsed fields of the last read_state, as globals — a function that filled an
 # array in a pipeline would be filling it in a subshell.
-ST_SWITCH="unset"; ST_WHY=""; ST_PICKEDUP="no"; ST_HEARTBEAT=0; ST_ALIVE="none"; ST_OK=0
+ST_SWITCH="unset"; ST_WHY=""; ST_PICKEDUP="no"; ST_HEARTBEAT=0; ST_STARTED=0; ST_ALIVE="none"; ST_OK=0
 WAIT_LINES=(); PARK_LINES=(); PAUSED_LINES=()
 parse_state() {
-  ST_SWITCH="unset"; ST_WHY=""; ST_PICKEDUP="no"; ST_HEARTBEAT=0; ST_ALIVE="none"; ST_OK=0
+  ST_SWITCH="unset"; ST_WHY=""; ST_PICKEDUP="no"; ST_HEARTBEAT=0; ST_STARTED=0; ST_ALIVE="none"; ST_OK=0
   WAIT_LINES=(); PARK_LINES=(); PAUSED_LINES=()
   local l
   while IFS= read -r l; do
@@ -245,6 +253,7 @@ parse_state() {
       switchwhy:*) ST_WHY="${l#switchwhy:}" ;;
       pickedup:*) ST_PICKEDUP="${l#pickedup:}" ;;
       heartbeat:*) ST_HEARTBEAT="${l#heartbeat:}" ;;
+      startedat:*) ST_STARTED="${l#startedat:}" ;;
       alive:*) ST_ALIVE="${l#alive:}" ;;
       wait:*) WAIT_LINES+=("${l#wait:}") ;;
       park:*) PARK_LINES+=("${l#park:}") ;;
@@ -253,6 +262,7 @@ parse_state() {
     esac
   done <<< "$1"
   [[ "${ST_HEARTBEAT}" =~ ^[0-9]+$ ]] || ST_HEARTBEAT=0
+  [[ "${ST_STARTED}" =~ ^[0-9]+$ ]] || ST_STARTED=0
 }
 refresh_state() { parse_state "$(read_state)"; }
 
@@ -309,20 +319,27 @@ recreate_plan() {
   say "would: ${KUBECTL[*]} rollout status ${FLEET_DEPLOY} --timeout=${ROLLOUT_WAIT_S}s"
 }
 
-# Wait for the NEW supervisor's first heartbeat and only then clear the switch.
-# Strictly after the recreate: the OLD supervisor's last heartbeat is fresh too,
-# and mistaking it for the new one is how the switch gets cleared under a fleet
-# that never came back. Non-zero means it did not come back and the switch was
-# LEFT SET on purpose.
+# Wait for a NEW supervisor PROCESS and only then clear the switch. The old
+# supervisor's last heartbeat is fresh too, and mistaking it for the new one is
+# how the switch gets cleared under a fleet that never came back — so the test
+# is that `startedAt` has CHANGED, not that a timestamp is recent. That also
+# keeps the check off the clocks: `startedAt` is stamped by the pod and compared
+# only against itself, where "is this heartbeat later than the moment I typed
+# the restart" would be the workstation's clock against `chungusjr`'s and would
+# read a dying supervisor's final write as a boot if the pod ran a few seconds
+# ahead. A supervisor too old to write the field leaves it 0, and 0 never counts
+# as a boot: the window times out with the switch set, which is the safe
+# direction. Non-zero means it did not come back and the switch was LEFT SET on
+# purpose.
 await_boot_then_clear() {
-  local recreated_at="$1" boot_deadline
+  local was_started="$1" boot_deadline
   boot_deadline=$(( $(date +%s) + BOOT_WAIT_S ))
   while :; do
     refresh_state
-    if (( ST_HEARTBEAT >= recreated_at )); then break; fi
+    if (( ST_STARTED != 0 && ST_STARTED != was_started )); then break; fi
     if (( $(date +%s) >= boot_deadline )); then
-      say "no fresh heartbeat after ${BOOT_WAIT_S}s — LEAVING the switch set so the fleet cannot"
-      say "start scheduling behind a supervisor nobody has looked at. Check"
+      say "no NEW supervisor process after ${BOOT_WAIT_S}s — LEAVING the switch set, so the"
+      say "fleet cannot start scheduling behind a supervisor nobody has looked at. Check"
       say "\`${KUBECTL[*]} logs ${FLEET_DEPLOY}\`, then \`./infra/fleet-update.sh resume\`."
       return 1
     fi
@@ -400,7 +417,7 @@ if [[ "${MODE}" == "force" ]]; then
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     recreate_plan
     if [[ "${ST_SWITCH}" == "set" ]]; then
-      say "would: wait up to ${BOOT_WAIT_S}s for a fresh heartbeat, then ${KUBECTL[*]} exec ${EXEC_DEPLOY} -- rm -f ${PAUSE_JSON}"
+      say "would: wait up to ${BOOT_WAIT_S}s for a NEW supervisor process, then ${KUBECTL[*]} exec ${EXEC_DEPLOY} -- rm -f ${PAUSE_JSON}"
     fi
     exit 0
   fi
@@ -408,12 +425,13 @@ if [[ "${MODE}" == "force" ]]; then
     read -r -p "fleet-update: type yes to recreate now: " ans
     [[ "${ans}" == "yes" ]] || die "not confirmed — nothing done"
   fi
-  recreated_at=$(date +%s)
+  was_started="${ST_STARTED}"
+  had_switch="${ST_SWITCH}"
   recreate_fleet
   say "recreated. \`./infra/fleet-update.sh status\` shows the new supervisor's first tick."
-  if [[ "${ST_SWITCH}" == "set" ]]; then
-    say "waiting up to ${BOOT_WAIT_S}s for the new supervisor's first heartbeat before clearing the switch"
-    await_boot_then_clear "${recreated_at}" || exit 1
+  if [[ "${had_switch}" == "set" ]]; then
+    say "waiting up to ${BOOT_WAIT_S}s for a NEW supervisor process before clearing the switch"
+    await_boot_then_clear "${was_started}" || exit 1
   fi
   exit 0
 fi
@@ -444,7 +462,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   fi
   if [[ "${MODE}" == "graceful" ]]; then
     recreate_plan
-    say "would: wait up to ${BOOT_WAIT_S}s for a fresh heartbeat, then ${KUBECTL[*]} exec ${EXEC_DEPLOY} -- rm -f ${PAUSE_JSON}"
+    say "would: wait up to ${BOOT_WAIT_S}s for a NEW supervisor process, then ${KUBECTL[*]} exec ${EXEC_DEPLOY} -- rm -f ${PAUSE_JSON}"
   else
     say "would: ${KUBECTL[*]} scale ${FLEET_DEPLOY} --replicas=0, and LEAVE the switch set for the deploy"
   fi
@@ -464,6 +482,20 @@ on_abort() {
   exit 130
 }
 trap on_abort INT TERM
+# A kubectl that fails — an API blip, a rollout that times out — is likelier than
+# Ctrl-C, and `set -e` would take exactly the silent exit the abort trap exists
+# to prevent. Same promise, same words: nothing was killed, the switch is set.
+on_fail() {
+  local rc=$?
+  trap - ERR INT TERM
+  echo
+  say "FAILED (exit ${rc}) — nothing was killed and the PAUSE SWITCH IS STILL SET (${PAUSE_JSON})."
+  say "The fleet launches nothing and resumes nothing while it is. Read the error above, then:"
+  say "  ./infra/fleet-update.sh status"
+  say "  ./infra/fleet-update.sh resume    # to abandon the update"
+  exit "${rc}"
+}
+trap on_fail ERR
 say "waiting for every live run to finish on its own clock (up to ${TIMEOUT_S}s, polling every ${POLL_S}s)"
 say "an e360 run can hold this for six hours; Ctrl-C is safe — the switch stays set and nothing is killed"
 refresh_state
@@ -521,15 +553,34 @@ fi
 
 if [[ "${MODE}" == "drain" ]]; then
   "${KUBECTL[@]}" scale "${FLEET_DEPLOY}" --replicas=0
-  "${KUBECTL[@]}" rollout status "${FLEET_DEPLOY}" --timeout="${ROLLOUT_WAIT_S}s" >/dev/null 2>&1 || true
-  say "fleet scaled to 0 with nothing live and the switch STILL SET. Do the deploy, then:"
+  # `compose stop fleet` blocked until the container was down, and the deploy
+  # starts the moment this returns. `rollout status` on a Deployment scaled to 0
+  # does not reliably wait for a pod that is still Terminating, so the POD LIST
+  # is what is waited on: the supervisor spends up to its 180s grace writing
+  # pause records, and a deploy must not begin on top of that.
+  say "waiting for the fleet pod to go away (its 180s grace is where pause records are written)"
+  pod_deadline=$(( $(date +%s) + ROLLOUT_WAIT_S ))
+  while :; do
+    pods="$(fleet_pods)"
+    [[ -z "${pods//[[:space:]]/}" ]] && break
+    if (( $(date +%s) >= pod_deadline )); then
+      say "the fleet pod is STILL THERE ${ROLLOUT_WAIT_S}s after scaling to 0:"
+      while IFS= read -r l; do [[ -n "${l//[[:space:]]/}" ]] && say "  ${l}"; done <<< "${pods}"
+      say "The switch is set and nothing was killed. Do NOT start a deploy on top of a"
+      say "supervisor that may still be writing pause records — read"
+      say "\`${KUBECTL[*]} describe ${FLEET_DEPLOY}\` first."
+      exit 1
+    fi
+    sleep 2
+  done
+  say "fleet scaled to 0, pod gone, nothing live and the switch STILL SET. Do the deploy, then:"
   say "  ${KUBECTL[*]} scale ${FLEET_DEPLOY} --replicas=1 && ./infra/fleet-update.sh resume"
   exit 0
 fi
 
-recreated_at=$(date +%s)
+was_started="${ST_STARTED}"
 recreate_fleet
-say "recreated on the new supervisor code; waiting up to ${BOOT_WAIT_S}s for its first heartbeat"
-await_boot_then_clear "${recreated_at}" || exit 1
-trap - INT TERM
+say "recreated on the new supervisor code; waiting up to ${BOOT_WAIT_S}s for its first tick"
+await_boot_then_clear "${was_started}" || exit 1
+trap - INT TERM ERR
 say "done: new supervisor up, no run was interrupted."

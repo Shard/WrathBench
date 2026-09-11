@@ -35,9 +35,18 @@ const SCRIPT = join(REPO_ROOT, "infra", "fleet-update.sh");
  */
 const KUBECTL_SHIM = `#!/usr/bin/env bash
 log() { printf '%s\\n' "$1" >> "\${FAKE_KUBECTL_LOG}"; }
-beat() {
+boot() {
   [[ "\${FAKE_BOOT:-1}" == "1" ]] || return 0
-  bun -e 'const p=process.argv[1];const s=await Bun.file(p).json();s.heartbeatAt=Date.now();delete s.pausedSwitch;await Bun.write(p,JSON.stringify(s,null,2));' "\${FAKE_STATE_JSON}" 2>/dev/null || true
+  bun -e 'const p=process.argv[1];const s=await Bun.file(p).json();s.heartbeatAt=Date.now();s.startedAt=Date.now();delete s.pausedSwitch;await Bun.write(p,JSON.stringify(s,null,2));' "\${FAKE_STATE_JSON}" 2>/dev/null || true
+}
+# FAKE_BOOT_HEARTBEAT_ONLY: the pod comes back with a fresh heartbeat but the
+# SAME startedAt — a supervisor that never restarted, or a clock that made the
+# dying one's last write look new.
+beat_only() {
+  bun -e 'const p=process.argv[1];const s=await Bun.file(p).json();s.heartbeatAt=Date.now()+30000;await Bun.write(p,JSON.stringify(s,null,2));' "\${FAKE_STATE_JSON}" 2>/dev/null || true
+}
+recreated() {
+  if [[ "\${FAKE_BOOT_HEARTBEAT_ONLY:-0}" == "1" ]]; then beat_only; else boot; fi
 }
 while [[ $# -gt 0 ]]; do
   case "$1" in -n|--namespace) shift 2 ;; *) break ;; esac
@@ -57,7 +66,8 @@ case "\${cmd}" in
     [[ "\${FAKE_DEPLOY_MISSING:-0}" == "1" ]] && exit 1
     replicas="$(cat "\${FAKE_REPLICAS_FILE}")"
     if [[ "\${raw}" == *"pods"* ]]; then
-      [[ "\${replicas}" == "0" ]] || printf 'wrathbench-fleet-abc123 Running\\n'
+      if [[ "\${FAKE_PODS_LINGER:-0}" == "1" ]]; then printf 'wrathbench-fleet-abc123 Terminating\\n'
+      elif [[ "\${replicas}" != "0" ]]; then printf 'wrathbench-fleet-abc123 Running\\n'; fi
     elif [[ "\${raw}" == *"readyReplicas"* ]]; then
       printf '%s' "\${replicas}"
     else
@@ -69,12 +79,12 @@ case "\${cmd}" in
     log "\${raw}"
     n="\${raw##*--replicas=}"
     printf '%s' "\${n}" > "\${FAKE_REPLICAS_FILE}"
-    [[ "\${n}" == "0" ]] || beat
+    [[ "\${n}" == "0" ]] || recreated
     exit 0
     ;;
   rollout)
     log "\${raw}"
-    [[ "\${1:-}" == "restart" ]] && beat
+    [[ "\${1:-}" == "restart" ]] && recreated
     [[ "\${1:-}" == "status" && "\${FAKE_ROLLOUT_FAIL:-0}" == "1" ]] && exit 1
     exit 0
     ;;
@@ -98,8 +108,18 @@ interface Case {
   paused?: { runId: string; model: string; reason: string; elapsedMs: number; budgetMs: number }[];
   /** The supervisor has already picked the switch up. */
   pickedUp?: boolean;
-  /** False: a restart does NOT refresh the heartbeat (the supervisor died). */
+  /** False: a restart brings nothing back (the supervisor died). */
   boots?: boolean;
+  /**
+   * The restart refreshes the heartbeat but NOT `startedAt`: the same
+   * supervisor, or a pod clock far enough ahead that a dying supervisor's last
+   * write looks like a boot.
+   */
+  heartbeatOnlyBoot?: boolean;
+  /** The fleet pod is still Terminating long after the scale to 0. */
+  podsLinger?: boolean;
+  /** `kubectl rollout status` fails. */
+  rolloutFails?: boolean;
   /** `.spec.replicas` on the fleet Deployment before the script runs. */
   replicas?: number;
   /** `kubectl get deployment/...` fails: nothing is installed. */
@@ -152,6 +172,7 @@ function run(c: Case): Result {
     JSON.stringify(
       {
         heartbeatAt: Date.now() - (c.heartbeatAgeS ?? 5) * 1000,
+        startedAt: Date.now() - 3_600_000,
         jobs,
         paused: c.paused ?? [],
         ...(c.pickedUp === true ? { pausedSwitch: { why: "already paused", at: Date.now() } } : {}),
@@ -185,6 +206,9 @@ function run(c: Case): Result {
       FAKE_REPLICAS_FILE: replicasFile,
       FAKE_BOOT: c.boots === false ? "0" : "1",
       ...(c.deployMissing === true ? { FAKE_DEPLOY_MISSING: "1" } : {}),
+      ...(c.heartbeatOnlyBoot === true ? { FAKE_BOOT_HEARTBEAT_ONLY: "1" } : {}),
+      ...(c.podsLinger === true ? { FAKE_PODS_LINGER: "1" } : {}),
+      ...(c.rolloutFails === true ? { FAKE_ROLLOUT_FAIL: "1" } : {}),
       WRATHBENCH_FLEET_RUNS_DIR: dir,
       WRATHBENCH_FLEET_POLL_S: "1",
       WRATHBENCH_FLEET_BOOT_WAIT_S: "3",
@@ -372,7 +396,7 @@ describe("fleet-update.sh", () => {
   test("graceful: a supervisor that does not come back leaves the switch SET", () => {
     const r = run({ aliveJobs: 0, boots: false, args: ["graceful"] });
     expect(r.exitCode).toBe(1);
-    expect(r.out).toContain("no fresh heartbeat");
+    expect(r.out).toContain("no NEW supervisor process");
     expect(r.pauseFile?.paused).toBe(true);
   });
 
@@ -411,7 +435,7 @@ describe("fleet-update.sh", () => {
   test("force: a supervisor that does not come back leaves that switch SET", () => {
     const r = run({ aliveJobs: 1, paused_switch: true, boots: false, args: ["force", "--yes"] });
     expect(r.exitCode).toBe(1);
-    expect(r.out).toContain("no fresh heartbeat");
+    expect(r.out).toContain("no NEW supervisor process");
     expect(r.pauseFile?.paused).toBe(true);
   });
 
@@ -506,6 +530,39 @@ describe("fleet-update.sh", () => {
     expect(s.out).toContain("namespace      wb-test (release wb)");
     expect(s.out).toContain("deployment/wb-fleet");
     expect(s.out).toContain("deployment/wb-runner");
+  });
+
+  test("graceful: a fresh heartbeat from the SAME supervisor process is not a boot", () => {
+    // The clock trap the port introduced: `startedAt` is the pod's, the moment
+    // the restart was typed is the workstation's, and a pod running a few
+    // seconds ahead would make the dying supervisor's last heartbeat satisfy
+    // "later than the recreate". The identity that never asks two clocks to
+    // agree is the supervisor's own start stamp, compared against itself.
+    const r = run({ aliveJobs: 0, heartbeatOnlyBoot: true, args: ["graceful"] });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("no NEW supervisor process");
+    expect(r.pauseFile?.paused).toBe(true);
+  });
+
+  test("graceful: a kubectl that fails mid-window says the switch is still set", () => {
+    // Likelier than Ctrl-C, and `set -e` alone would exit silently — which is
+    // the failure the abort trap exists to prevent, arrived at another way.
+    const r = run({ aliveJobs: 0, rolloutFails: true, args: ["graceful"] });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.out).toContain("PAUSE SWITCH IS STILL SET");
+    expect(r.out).toContain("fleet-update.sh resume");
+    expect(r.pauseFile?.paused).toBe(true);
+  });
+
+  test("drain: a pod still Terminating is not a drained fleet", () => {
+    // `compose stop fleet` blocked until the container was down. A scale to 0
+    // returns immediately and the supervisor spends up to 180s writing pause
+    // records; the documented recipe starts a deploy right here.
+    const r = run({ aliveJobs: 0, podsLinger: true, args: ["drain"] });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("STILL THERE");
+    expect(r.out).not.toContain("pod gone");
+    expect(r.pauseFile?.paused).toBe(true);
   });
 
   test("a mode is required, and two modes are refused", () => {
