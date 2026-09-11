@@ -540,10 +540,15 @@ when it stops being true.
 
 ## Owed
 
-The release half of issue 7 is still not built: a tag workflow that produces a
-traceable image digest tied to one source SHA, the chart published as a versioned
-OCI artifact (or consumed from a pinned path in the GitOps repo), and a check
-that refuses a mutable image reference at review time. The chart's `image.tag`
-guard remains the only enforcement of that last one, and it fires at render time
-rather than at review time. The C++ module build stays out of CI: it needs the
+Nothing on the release side. The operator decided on 2026-09-11 that the
+release contract is the shape already running, and that the "release half" of
+issue 7 — a tag workflow building the images in public CI, the chart as an OCI
+artifact, a review-time mutable-reference check — is not wanted: Flux deploys
+from the pinned WrathBench commit and pulls from a LAN-only registry, and a
+public workflow could neither reach that registry nor add traceability the
+`git describe` tag of a clean tree does not already carry. So the images are
+built and pushed from the workstation (`infra/build-images.sh --push`), the
+cluster repo pins commit and tag, Flux rolls, and the deploy window is
+`infra/k8s-deploy.sh`. Nothing about deployment is exposed through public CI,
+which is the point. The C++ module build stays out of CI: it needs the
 worldserver image, and the smoke scripts in `infra/smoke/` need the live stack.
