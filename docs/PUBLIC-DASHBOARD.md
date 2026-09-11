@@ -664,3 +664,13 @@ last two of each run survive a prune (`DEFAULT_KEEP_GENS`,
 publisher writes an older manifest back, so the supported move is to re-publish
 from the runs directory. None of it can touch the evidence: the publisher
 mounts `data/runs` read-only and writes only `data/publish`.
+
+**Re-run after the 2026-09-11 deploy** (`harness-0.5-552-gb6fff52`, generation
+`d74fd1e90e2e` generated 2026-09-11T01:38:05Z, readback from the workstation,
+read-only): 1594 objects, 62.19 MB, 423 runs, 10 aggregates, **0 missing, 0
+findings**. Criterion 2's two defects are gone from the published set — the
+`wikiBundle.source` stamp (item 123) and the container-internal paths — after
+the publisher's first two passes on the new build rewrote 451 + 73 objects and
+pruned 449 + 67 old keys. Four residual notes remain, model-authored
+`filesystem-path` mentions outside any known local root, published as written.
+Criteria 3, 4 and 5 stay where they were: deferred to item 85.
