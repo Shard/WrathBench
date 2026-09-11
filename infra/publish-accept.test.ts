@@ -436,6 +436,24 @@ describe("prohibited content", () => {
     expect(kinds(report.findings)).toContain("host-fact");
   });
 
+  test("the wiki dump filename inside an entry's comparability tuple is caught", async () => {
+    // The shape item 123 found on the live bucket: a `comparability_restamped`
+    // harness entry whose tuples carry the operator's dump file. Both halves
+    // fire — the key rule on `wikiBundle`, the value scan on the filename —
+    // and the value scan is the one that survives the wrapper being renamed.
+    const src = poison(cleanBucket(), `${RUN_BASE}/entries.json`, (body) => {
+      (body["entries"] as Record<string, unknown>[])[0]!["before"] = {
+        harnessVersion: "harness-0.5-1-gabc",
+        budget: { maxTurns: null },
+        wikiBundle: { schemaVersion: "1", source: "wowwikifandomcom-20200223-history.xml.7z" },
+      };
+    });
+    const report = await verifyPublication(src);
+    expect(kinds(report.findings)).toContain("wiki-dump-source");
+    expect(kinds(report.findings)).toContain("withheld-field");
+    expect(report.residual).toEqual([]);
+  });
+
   test("a missing or altered attribution line is caught", async () => {
     const src = poison(cleanBucket(), `${RUN_BASE}/track.json`, (body) => {
       body["attribution"] = "WrathBench";
@@ -494,6 +512,13 @@ describe("the checks themselves", () => {
 
   test("the value scan does not read a fraction or a zone name as a path", () => {
     expect(scanBody("k", { a: "3/4 of the way to Kharanos", b: "Dun Morogh/Coldridge Valley" }).findings).toEqual([]);
+  });
+
+  test("the dump scan wants the archive suffix, so a bare XML filename is not a finding", () => {
+    expect(kinds(scanBody("k", { a: "wowwikifandomcom-20200223-history.xml.7z" }).findings)).toEqual([
+      "wiki-dump-source",
+    ]);
+    expect(scanBody("k", { a: "I parsed quests.xml and moved on" }).findings).toEqual([]);
   });
 
   test("canonical ordering makes the compare about content, not key order", () => {
