@@ -81,8 +81,8 @@ export function tileBasesFromEnv(env: Record<string, unknown>): { tiles: string;
 
 const BASES = tileBasesFromEnv(import.meta.env as unknown as Record<string, unknown>);
 
-/** True when this build draws the grid and asks for nothing. */
-export const TILES_WITHHELD: boolean = tileUrl(BASES.tiles, BASES.snapshot, 0, 0, 0) === null;
+/** True when no tile base is configured: this build draws the grid and asks for nothing. */
+export const NO_TILE_BASE: boolean = tileUrl(BASES.tiles, BASES.snapshot, 0, 0, 0) === null;
 
 /** What the map page calls. `null` means "draw the grid and make no request". */
 export function tileSrc(map: number, row: number, col: number): string | null {

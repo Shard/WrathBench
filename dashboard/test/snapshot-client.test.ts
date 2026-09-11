@@ -646,7 +646,7 @@ describe("the public build's call sites", () => {
     // thing a lab machine without the extraction draws.
     // `tiles.test.ts` owns the rules; this pins that the page consults them.
     const src = read("../src/pages/MapPage.tsx");
-    expect(src).toContain("const useTiles = !TILES_WITHHELD && g.size >= TILE_MIN_PX;");
+    expect(src).toContain("const useTiles = !NO_TILE_BASE && g.size >= TILE_MIN_PX;");
     expect(src).toContain("const src = tileSrc(map, row, col);");
     // Not gated on SNAPSHOT_MODE directly: the question is whether a tile host
     // was named, which is a different one from whether the data is published.

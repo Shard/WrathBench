@@ -47,7 +47,7 @@ import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
-import { TILES_WITHHELD, tileSrc } from "../lib/tiles";
+import { NO_TILE_BASE, tileSrc } from "../lib/tiles";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
 import { type Speed, keyBelongsToTarget, nextSpeed, playbackKey, prevSampleBefore, tickMs } from "../lib/playback";
 import {
@@ -316,7 +316,7 @@ export default function MapPage() {
      * labelled grid below — which is the same state a lab machine that never
      * ran the extraction is in.
      */
-    const useTiles = !TILES_WITHHELD && g.size >= TILE_MIN_PX;
+    const useTiles = !NO_TILE_BASE && g.size >= TILE_MIN_PX;
     ctx.lineWidth = 1;
     ctx.font = "11px ui-monospace, monospace";
     ctx.textBaseline = "top";
