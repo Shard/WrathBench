@@ -246,7 +246,7 @@ export default function About() {
         under <span class="mono">module/</span>, which is GPL-2.0-or-later.
       </p>
       <h2 class="section">cite</h2>
-      {/* The `url` line only once the repository is public; see lib/repo.ts. */}
+      {/* The `url` line only once the repo link is turned on; see lib/repo.ts. */}
       <pre class="cite">{bibtex(REPO_URL)}</pre>
     </div>
   );

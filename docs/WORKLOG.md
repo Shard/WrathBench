@@ -71,7 +71,7 @@ Convention:
 - [2026-09-04](worklogs/2026-09-04.md) — Cerebras added at t0 (qwen-3.8-27b, first non-OpenRouter paid provider); no cache discount, so an e90 is ~$5–8; muse-spark stream paused to free the paid lane
 - [2026-09-05](worklogs/2026-09-05.md) — freeplay stream stats aggregated at read time (`stream` on `/api/run/<id>`); the run page is the stream, not the session
 - [2026-09-08](worklogs/2026-09-08.md) — the codex subscription lane in the Helm chart; then the NuSphere cutover: runs, world and lane moved onto the cluster, both streams resumed there
-- [2026-09-11](worklogs/2026-09-11.md) — item 117 closed (Flux + workstation build is the release contract); public-release inventory: history unscrubbed; container paths made repo-relative in the public projection
+- [2026-09-11](worklogs/2026-09-11.md) — item 117 closed (Flux + workstation build is the release contract); public-release inventory: history unscrubbed; container paths made repo-relative in the public projection; pre-public audit nits (cluster-native viewer README, DATA-AND-LEGAL cite, chart home and nodeSelector, compose codex lane, dashboard version) and the status text read as a public repo
   (verified), two dangling VISION.md references, fleet-update.sh compose drift; minimap
   ships, legal opinion no longer a gate. Lean CI: PR checks on the pinned Bun plus
   a chart lint/render job (item 117's release half stays open). The map's play bar

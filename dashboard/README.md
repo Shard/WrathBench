@@ -43,10 +43,11 @@ The other build-time flags are `VITE_WRATHBENCH_PUBLIC_ORIGIN` and
 `VITE_WRATHBENCH_OG_STAMP` (the social card's tags, docs/PUBLIC-DASHBOARD.md)
 and `VITE_WRATHBENCH_REPO_URL` — where the source lives. Unset or empty, which
 is the default in both builds, the footer's repository link and the BibTeX
-`url` line on `/about` are not rendered at all: the repo is private and a link
-that 404s is worse than none. Set it to the repository's URL and both appear;
-`infra/deploy-dashboard.sh` passes it through from `WRATHBENCH_REPO_URL` in
-`.env`, so opening the repo is one env line and a redeploy (`src/lib/repo.ts`).
+`url` line on `/about` are not rendered at all: the link is not turned on yet
+and one that 404s is worse than none. Set it to the repository's URL and both
+appear; `infra/deploy-dashboard.sh` passes it through from `WRATHBENCH_REPO_URL`
+in `.env`, so turning the link on is one env line and a redeploy
+(`src/lib/repo.ts`).
 
 Set, `src/api/client.ts` hands the pages `createSnapshotClient` instead of
 `createClient`; unset, nothing about the private build changes. The snapshot
