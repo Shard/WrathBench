@@ -514,6 +514,13 @@ describe("the checks themselves", () => {
     expect(scanBody("k", { a: "3/4 of the way to Kharanos", b: "Dun Morogh/Coldridge Valley" }).findings).toEqual([]);
   });
 
+  test("the dump scan wants the archive suffix, so a bare XML filename is not a finding", () => {
+    expect(kinds(scanBody("k", { a: "wowwikifandomcom-20200223-history.xml.7z" }).findings)).toEqual([
+      "wiki-dump-source",
+    ]);
+    expect(scanBody("k", { a: "I parsed quests.xml and moved on" }).findings).toEqual([]);
+  });
+
   test("canonical ordering makes the compare about content, not key order", () => {
     expect(canonical({ b: 1, a: [{ d: 2, c: 3 }] })).toEqual(canonical({ a: [{ c: 3, d: 2 }], b: 1 }));
     expect(JSON.stringify(canonical({ b: 1, a: 2 }))).toBe('{"a":2,"b":1}');
