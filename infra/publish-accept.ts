@@ -69,6 +69,7 @@ import {
   projectTrack,
 } from "../runner/viewer/public-projection";
 import { REDACTED_PROSE } from "../runner/viewer/redact-prose";
+import { LOCAL_PATH_ROOTS } from "../runner/viewer/scrub-paths";
 import { LIVE_PATH, MANIFEST_PATH } from "./publish-core";
 
 /* ------------------------------------------------------------- the source --- */
@@ -175,9 +176,16 @@ export interface AcceptReport {
 /**
  * A local filesystem path. Anchored on the separator that follows a known root
  * so that a zone name, an in-game phrase or a `1/2` fraction cannot match.
+ *
+ * The roots come from `runner/viewer/scrub-paths.ts`, the module the projection
+ * scrubs with, so the scrub and the verifier cannot drift apart. `wrathbench`
+ * is deliberately still on that list after the scrub landed: a published string
+ * that still carries the container prefix means the scrub did not run over it,
+ * and this finding is how that regression surfaces.
  */
-const FS_PATH =
-  /(?:^|[\s"'(=,:[])(\/(?:home|root|Users|usr|var|etc|srv|opt|mnt|media|tmp|proc|wrathbench)\/[^\s"',)\]]*|[A-Za-z]:\\\\[^\s"',)\]]*)/;
+const FS_PATH = new RegExp(
+  `(?:^|[\\s"'(=,:[])(\\/(?:${LOCAL_PATH_ROOTS.join("|")})\\/[^\\s"',)\\]]*|[A-Za-z]:\\\\\\\\[^\\s"',)\\]]*)`,
+);
 
 /** A host fact: an address or a port where a public reader should see a label. */
 const HOST_FACT = /\b(?:https?:\/\/(?:\d{1,3}\.){3}\d{1,3}|https?:\/\/localhost|https?:\/\/[A-Za-z0-9.-]+:\d{2,5})/;

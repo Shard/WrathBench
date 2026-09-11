@@ -76,6 +76,7 @@ import {
   projectTools,
   projectTrack,
 } from "./public-projection";
+import { scrubPathsText } from "./scrub-paths";
 import {
   isValidRunId,
   LIVE_WINDOW_MS,
@@ -1411,10 +1412,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
 
     // The scratchpad is the model's own notes, published as written since
     // 2026-08-30 (docs/DATA-AND-LEGAL.md, "Trajectory logs"); no public gate.
+    // It has no projector — it is text, not a body — so the path scrub every
+    // projector applies is applied here by hand when the handle is public.
     if (rest === "/scratchpad") {
       const text = readScratchpad(runsDir, runId);
       if (text === null) return notFound("no scratchpad");
-      return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
+      return new Response(publicMode ? scrubPathsText(text) : text, {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
     }
 
     if (rest === "/stream") {

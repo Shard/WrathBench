@@ -510,6 +510,18 @@ describe("the checks themselves", () => {
     expect(scanBody("k", { a: "https://www.azerothcore.org" }).findings).toEqual([]);
   });
 
+  test("the scrub's output is not a finding, and a container-absolute path still is", () => {
+    // The regression detector for `runner/viewer/scrub-paths.ts` (operator,
+    // 2026-09-11): the scrub makes a container path repo-relative, so a
+    // published string that still carries the prefix means the scrub did not
+    // run over it — and the readback has to say so. Under a key the scan does
+    // not treat as model-authored, so both land in `findings`.
+    expect(scanBody("k", { a: "at move (sdk/src/client.ts:123:9)" }).findings).toEqual([]);
+    expect(kinds(scanBody("k", { a: "at move (/wrathbench/sdk/src/client.ts:123:9)" }).findings)).toEqual([
+      "filesystem-path",
+    ]);
+  });
+
   test("the value scan does not read a fraction or a zone name as a path", () => {
     expect(scanBody("k", { a: "3/4 of the way to Kharanos", b: "Dun Morogh/Coldridge Valley" }).findings).toEqual([]);
   });
