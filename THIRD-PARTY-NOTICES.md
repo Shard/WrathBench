@@ -12,4 +12,8 @@ The model logos committed under `dashboard/src/assets/model-logos/` are extracte
 
 The logos are brand marks of the companies they identify and remain those companies' trademarks. WrathBench uses them only to identify which model a run was driven by; their presence implies no affiliation with or endorsement by their owners.
 
+## Contributor Covenant
+
+`CODE_OF_CONDUCT.md` is the Contributor Covenant version 2.1, reproduced verbatim apart from the contact address, which replaces the upstream placeholder. The Contributor Covenant is the work of Coraline Ada Ehmke and contributors and is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the canonical text is at <https://www.contributor-covenant.org/version/2/1/code_of_conduct.html>.
+
 Blizzard client files, extracted assets, wiki dumps, and generated game-data bundles are not distributed in this repository. Third-party dependencies and container base images retain their own copyright and license terms; the WrathBench notices do not relicense them. See `docs/DATA-AND-LEGAL.md`.
