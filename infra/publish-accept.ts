@@ -110,6 +110,8 @@ export type FindingKind =
   | "credential"
   /** A minimap tile reference; no snapshot artifact may name one. */
   | "tile-reference"
+  /** A wiki dump archive by name: the operator's local bundle source. */
+  | "wiki-dump-source"
   /** Wiki text: a `search_reference` result that is not the placeholder. */
   | "wiki-text"
   /** A field the projection withholds, present with a value. */
@@ -183,6 +185,21 @@ const HOST_FACT = /\b(?:https?:\/\/(?:\d{1,3}\.){3}\d{1,3}|https?:\/\/localhost|
 /** Credential shapes, from the providers this project actually holds keys for. */
 const CREDENTIAL =
   /\b(?:Bearer\s+[A-Za-z0-9._~+/-]{12,}|sk-[A-Za-z0-9_-]{16,}|csk-[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,})/;
+
+/**
+ * A wiki dump archive by name, as the bundle's `source` stamp carries it
+ * (`…-history.xml.7z`).
+ *
+ * `wikiBundle` is already a withheld key, but that rule only catches the stamp
+ * while it keeps its wrapper. The value itself — the operator's local dump file
+ * — is a finding wherever it surfaces, including under a bare `source` one
+ * layer inside an entry's comparability tuple, which is where it shipped
+ * (item 123). The archive suffix is required, the way `FS_PATH` is anchored on
+ * a known root: the stamp this exists to catch always carries one, and a bare
+ * `.xml` would make every XML filename a model or a tool result happens to name
+ * a finding — and a readback that cries wolf is one nobody re-runs.
+ */
+const WIKI_DUMP_SOURCE = /[A-Za-z0-9._-]+\.xml\.(?:7z|bz2|gz|zst)\b/;
 
 /** A minimap tile: the prefix the tile publisher writes, or a raster file. */
 const TILE_REFERENCE = /(?:^|[\s"'(/])tiles\/[^\s"']*|\.png\b/;
@@ -293,6 +310,8 @@ export function scanBody(key: string, body: unknown): { findings: Finding[]; res
     if (cred !== null) findings.push({ kind: "credential", key, at: path, detail: excerpt(s, cred.index) });
     const tile = TILE_REFERENCE.exec(s);
     if (tile !== null) findings.push({ kind: "tile-reference", key, at: path, detail: excerpt(s, tile.index) });
+    const dump = WIKI_DUMP_SOURCE.exec(s);
+    if (dump !== null) where.push({ kind: "wiki-dump-source", key, at: path, detail: excerpt(s, dump.index) });
   });
 
   walkValues(body, "", (path, k, v) => {

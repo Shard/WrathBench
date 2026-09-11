@@ -260,7 +260,8 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   `status` (text and zone name) and `terminationDetail`.
 - **Still projected out**: the operator `objective`, `apiBase`, `pauseReason`
   free text (a fixed `"paused"` token stays), model last-error message text,
-  the fleet config-rejection error and preflight tails, wiki bundle source,
+  the fleet config-rejection error and preflight tails, wiki bundle source
+  (on a run row and inside an entry's restamped comparability tuple alike),
   and every local filesystem path and pid.
 - **Character names are shown** (operator decision, 2026-08-30). The runner
   generates them at character creation, so they are not game text; the
@@ -600,8 +601,14 @@ tuple, so the leak is bounded to it — and this document's "Still projected out
 list names it, but `projectEntry` copies the `harness` entry's `before`/`after`
 verbatim, so the same tuple ships unfiltered one layer down. The data was left
 as it is: the fix is a projection change and a republish, not an edit to the
-bucket.
-Tracked as item 123 in `docs/FOLLOW-UPS.md`.
+bucket. **The fix landed the same day** (`projectEntry` now sends any
+comparability tuple it copies through `projectComparability`, and the verifier
+scans for a dump filename by name as well as by key), so criterion 2's finding
+is closed in code and awaiting the redeploy: a runner image bump, a publisher
+rollout, a pass over the affected runs, then this readback re-run. Until that
+rollout the bucket still holds the 136 occurrences, and a readback will also
+report `projection-drift` on those 21 objects — re-projection now disagreeing
+with what is published is the pending deploy, not a new defect.
 
 **Forty-five paths that are the operator's call, not the verifier's.** Sandbox
 stack traces (`/wrathbench/sdk/src/...`) inside `tool_result` text and snippet
