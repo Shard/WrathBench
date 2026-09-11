@@ -20,6 +20,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createApi, json } from "./api";
+import { defaultFactCachePath } from "./fact-store";
 
 const REQUIRED_HOST = "127.0.0.1";
 const lanOptIn = process.env["WRATHBENCH_VIEWER_LAN"] === "1";
@@ -47,6 +48,17 @@ const tilesDir = process.env["WRATHBENCH_MINIMAP_DIR"] ?? "data/minimap";
  * notice that says how to build it.
  */
 const dashboardDir = process.env["WRATHBENCH_DASHBOARD_DIR"] ?? "dashboard/dist";
+/*
+ * The per-run fact cache, persisted (runner/viewer/fact-store.ts). The counts
+ * behind /api/models are a pure function of each run's (size, mtime), and a
+ * finished run's never change, so they are read from a file rather than
+ * recounted across the whole corpus on every start. A sibling of the runs
+ * directory by default, because the runs directory itself is read-only here
+ * and mounted read-only in the pod; anywhere the default is not writable (a
+ * container's ephemeral layer, say) the cache silently buys nothing, which is
+ * why the path is printed at startup.
+ */
+const factCachePath = process.env["WRATHBENCH_FACT_CACHE"] ?? defaultFactCachePath(runsDir);
 const publicMode = process.env["WRATHBENCH_VIEWER_PUBLIC"] === "1";
 /*
  * Public mode withholds minimap tiles, the only Blizzard-derived bytes the
@@ -87,7 +99,19 @@ const handle = createApi({
   tilesPublic,
   moduleUrl,
   fleetConfigPath,
+  factCachePath,
 });
+
+/*
+ * The debounce already bounds what a kill costs to a couple of seconds; this
+ * only saves those. `flushFacts` on a handle with no cache path is a no-op.
+ */
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    handle.flushFacts();
+    process.exit(0);
+  });
+}
 
 const server = Bun.serve({
   hostname: host,
@@ -100,7 +124,7 @@ const server = Bun.serve({
 });
 
 console.log(
-  `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir})` +
+  `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir}, fact cache: ${factCachePath})` +
     (built ? "" : "  [dashboard not built — run `bun run --cwd dashboard build`]") +
     (publicMode
       ? tilesPublic
