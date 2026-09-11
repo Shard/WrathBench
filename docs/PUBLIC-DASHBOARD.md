@@ -345,7 +345,7 @@ The footer's GitHub link and the BibTeX `url` line on `/about` are behind
 `VITE_WRATHBENCH_REPO_URL`, the third build-time flag beside
 `VITE_WRATHBENCH_SNAPSHOT_BASE` and the card's two. Unset or empty — the
 default everywhere, including today's public build — neither is rendered:
-the repository is private, and a link that 404s under the project's own name
+the link is not turned on yet, and one that 404s under the project's own name
 is worse than no link on the one page a stranger reads first. Set to the
 repository's URL, both appear.
 
