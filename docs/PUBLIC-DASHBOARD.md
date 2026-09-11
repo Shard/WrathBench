@@ -1,8 +1,11 @@
 # Public dashboard hosting
 
 How the public site is hosted, and why. Researched 2026-08-25, decided the same
-week, shipped 2026-08-30 in the gated shape described below; the open launch
-shape is item 85 in `docs/FOLLOW-UPS.md`. The architecture is the "published
+week, shipped 2026-08-30 in a password-gated interim shape, and moved to the
+**Open** shape described here on 2026-09-11 (item 85): the app at
+`https://wrathbench.shard.page`, the data at
+`https://wrathbench-data.shard.page`, and no Worker in the read path. The
+cutover runbook is `infra/cloudflare/README.md`. The architecture is the "published
 JSON snapshots" stage `docs/ARCHITECTURE.md` ("Persistence") names, and the
 choices that shape what the public site means are under "Operator decisions"
 at the end. GitHub issue #10 is the standing public-hosting checklist;
@@ -82,7 +85,7 @@ reading in windows rather than whole files, is what puts a pass over a
 1,016-run tree at 0.78 GB peak RSS rather than 4.4 GB (2026-09-08). Credentials are one R2 key
 pair scoped to the one bucket, held only by the publisher.
 
-Minimap tiles are published to the gated site by a second, separate script
+Minimap tiles are published by a second, separate script
 (`infra/publish-tiles.ts`), decided by the operator 2026-08-30. It is never
 part of a snapshot pass: the loop above uploads JSON only, and the tiles are
 uploaded by an explicit operator run — `--dry-run` prints the plan, `--upload`
@@ -91,9 +94,15 @@ performs it. It reads `data/minimap/<mapId>/<row>_<col>.png` and writes
 viewer already serves so the SPA asks for one URL in either shape. Skip
 by content hash, held in `tiles/manifest.json` in the bucket and written after
 the objects it names, so a re-run with nothing re-extracted uploads nothing.
-Tiles are served only behind the gate, `private, max-age=3600` and
-`X-Robots-Tag: noindex`; the same headers the viewer sends under
-`WRATHBENCH_VIEWER_TILES_PUBLIC=1`.
+They are served from the data hostname like everything else, under the
+immutable cache rule. What they lost in the move off the gate is their
+`X-Robots-Tag: noindex`: the gate Worker set it on the way out, and in the Open
+shape nothing can — the publisher cannot send a header, there is no Worker, and
+the app's `robots.txt` covers the app hostname only. The map needs them
+readable for the page to work at all, so what is left open is indexing rather
+than access, and it is the operator's (`infra/cloudflare/README.md`, "Open, and
+the operator's"). The private viewer still sends `private, max-age=3600` and
+`noindex` under `WRATHBENCH_VIEWER_TILES_PUBLIC=1`; that flag is unrelated.
 
 ### Bucket layout, atomicity, freshness
 
@@ -166,7 +175,10 @@ trajectories weigh. Two setup facts carry all the operational risk:
 ### App plane: the SPA on Workers Static Assets
 
 The built dashboard deploys as a Workers Static Assets project (`wrangler
-deploy`, SPA not-found handling for the client router). Static asset requests
+deploy`, SPA not-found handling for the client router) on
+`wrathbench.shard.page`, a Custom Domain the deploy itself creates and owns;
+`workers_dev` is off, so the site has exactly one origin and the card's
+absolute `og:image` cannot point at a second one. Static asset requests
 are free and unlimited on the free plan, and with no fetch handler there is no
 Worker invocation anywhere in the read path. Workers Static Assets rather
 than Pages: Pages still works but Cloudflare's own guidance points new
@@ -192,10 +204,16 @@ policy, scoped to the app hostname).
 
 The public site includes the live fleet and map (operator's choice,
 2026-08-25): pips and fleet state at the push cadence (5 minutes), and the map
-over minimap tiles — since 2026-08-30 the tiles are published to the gated
-site as an explicit publisher step and served only behind the gate, so the SPA
-requests `/tiles/...` in snapshot mode too and falls back to the labelled grid
-square wherever a tile 404s. Replaying a freeplay stream end to end works there too: since item 119 the
+over minimap tiles — since 2026-08-30 the tiles are published as an explicit
+operator step, so the SPA requests `/tiles/...` in snapshot mode too and falls
+back to the labelled grid square wherever a tile 404s. Since the Open shape
+that request goes to the *data* hostname rather than the page's own, because
+the tiles are objects in the same bucket: the URL is built from
+`VITE_WRATHBENCH_SNAPSHOT_BASE` in `dashboard/src/lib/tiles.ts` and nowhere
+else, and the private build's empty base leaves it same-origin. A relative path
+would have asked the app hostname, found nothing, and degraded the whole map to
+grid squares — indistinguishable from a machine that never ran the
+extraction. Replaying a freeplay stream end to end works there too: since item 119 the
 track carries the four scalars of its stream — the identity, the place in the
 chain and the run ids either side — so the play bar's previous/next attempt
 links need no second request, which is what makes them work over static
@@ -233,11 +251,15 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   raw trajectory lines (the unprojected record: run config, message arrays,
   every packet), and any local path or host fact. Raw lines are withheld by
   `WRATHBENCH_VIEWER_PUBLIC=1` and the publisher never renders them.
-- **Minimap tiles**: published to the gated site since 2026-08-30, by the
-  explicit `infra/publish-tiles.ts` step above and never by a snapshot pass.
-  The gate serves them only to an authenticated reader, `private,
-  max-age=3600` and `X-Robots-Tag: noindex`, and no snapshot artifact names
-  one (`runner/test/snapshot.test.ts` pins that).
+- **Minimap tiles**: published since 2026-08-30, by the explicit
+  `infra/publish-tiles.ts` step above and never by a snapshot pass. Public
+  since the Open shape, under the data hostname's immutable rule, which is the
+  one content decision the move actually changed — a decision about Blizzard-
+  derived bytes rather than about run data, and taken on the same ground the
+  minimap extraction was: the map is not a map without them. What the boundary
+  still pins is that no snapshot *artifact* names a tile
+  (`runner/test/snapshot.test.ts`), so a tile is only ever reached by a reader
+  who is looking at the map.
 - **Entries: names and ids stay, game prose goes** (docs/DATA-AND-LEGAL.md,
   "Trajectory logs", operator 2026-08-30). One window per run is published —
   the last 200 entries, `entries.json` beside `detail.json`, in the shape the
@@ -325,19 +347,23 @@ live chart cannot be either.
   picture does. The private viewer build names no origin and therefore carries
   no image tags at all, rather than a relative URL no crawler could resolve.
 
-**The gated preview cannot unfurl.** With `run_worker_first: true` the gate
-answers every credential-less request with the 401 password form, `/` and
-`/og.png` included, so a crawler sees the form and not the tags. Nothing about
-the card is wrong; the gate is in front of it. It starts working the moment
-item 85's Open shape lands (an assets-only Worker, no gate), or sooner if the
-operator chooses to exempt those two paths — which is a decision about who may
-see the homepage, and so the operator's, not the build's. And the password is not the only blocker: the
-gate's Worker answers `/robots.txt` ahead of it disallowing everything, so an
-exemption of those two paths would unfurl in Discord — whose crawler does not
-consult robots.txt — and still not in Slack or on Twitter, which do. The Open
-shape has no fetch handler and so serves no `robots.txt` at all unless someone
-puts one in `dashboard/public/`, which is the point at which that question
-comes back.
+- **`robots.txt`.** The Open shape has no fetch handler and so serves nothing
+  at that path unless a file is in `dashboard/public/`, which there now is, and
+  it is permissive. The Gated shape's Worker answered it with a disallow-all
+  ahead of the password form, and that was the *second* reason nothing
+  unfurled, independent of the password: Slack and Twitter honour robots.txt,
+  Discord does not, so even exempting `/` and `/og.png` from the gate would
+  have unfurled in one place and not the others. Both blockers went with the
+  gate. The file covers the app hostname only; the data hostname serves no
+  `robots.txt`, because nothing in this repository writes an object at a bucket
+  root.
+
+The card could not unfurl at all until 2026-09-11 (item 111): the gate answered
+every credential-less request — Discord's crawler included — with the 401
+password form, `/` and `/og.png` among them, so a crawler saw the form and not
+the tags. Nothing about the card was wrong; the gate was in front of it. Both
+are gone with the Worker, and the unfurl is the last check in
+`infra/cloudflare/README.md`.
 
 ## The repository link
 
@@ -360,63 +386,36 @@ the last two path segments (`owner/repo`).
 The footer only renders in the public build (it hangs off the snapshot
 attribution), so in the private viewer this flag shows in the citation alone.
 
-## The gated interim shape (no domain on the account)
+## The gated interim shape, 2026-08-30 to 2026-09-11 (history)
 
-**This shape is scaffolding, and it is not what launches.** It exists so a
-private preview can be shared before there is a domain; the launch shape is the
-one described above, and the reasons are load-bearing rather than aesthetic. See
-item 85 in `docs/FOLLOW-UPS.md` for the retirement steps.
+Everything above assumes a zone, and for six weeks the account had none. On
+Cloudflare access control, WAF and cache are all custom-domain features, and
+the managed `r2.dev` URL has none of them — "an r2.dev URL with a password on
+it" is not a configuration that exists — so a preview that had to be shareable
+but not world-readable needed something in the read path able to say no, and on
+a zoneless account only a Worker can. The **Gated** shape was that: one Worker
+on `*.workers.dev` serving the SPA from Static Assets *and* `/v1/*` and
+`/tiles/*` from a private R2 binding with `run_worker_first: true`, a shared
+`DASHBOARD_PASSWORD` accepted as a cookie, a `?k=` link or HTTP Basic, the TTLs
+set on egress because Bun's `S3Client` cannot send them, no edge cache, no
+CORS, and a disallow-all `robots.txt` answered ahead of the gate. It was
+scaffolding and was always labelled as such: a Worker in the read path bills
+every request including static assets, holds nothing at the edge, and so
+converts a spike directly into invocations and bucket reads — the exact cost
+the push-based design exists to avoid. The trade bought one shared secret with
+no identity and no per-person revocation, which is the right weight for a
+preview shared with named people and the wrong one for a launch.
 
-Everything above assumes a zone. The account has none, and that is not a
-detail to route around: on Cloudflare, access control, WAF, and cache are all
-**custom-domain features**. The managed `r2.dev` development URL has none of
-them, is rate-limited by design, and is world-readable to anyone who learns the
-hostname. "An r2.dev URL with a password on it" is not a configuration that
-exists.
-
-So a preview that must not be world-readable needs something in the read path
-able to say no, and on a zoneless account the only thing that can is a Worker.
-The interim shape, called **Gated** in the runbook:
-
-- one Worker on `*.workers.dev` serving the SPA from Static Assets **and**
-  `/v1/*` and `/tiles/*` from an R2 **binding**, with `run_worker_first: true`
-  so the gate sees the page load and not only the data. Only
-  `/tiles/<mapId>/<row>_<col>.png` is reachable under the tile prefix —
-  anything else there, `tiles/manifest.json` included, is a 404, and the Worker
-  never lists the bucket. It also answers `/robots.txt` ahead of the gate,
-  disallowing `/tiles/` and everything else;
-- the bucket private, its Public Development URL **disabled** — the binding is
-  the only path to an object;
-- a shared password (`DASHBOARD_PASSWORD`, a Worker secret) accepted three ways:
-  a session cookie, `?k=<secret>` so one link is shareable, and HTTP Basic for
-  `curl`. The cookie holds a hash of the secret, not the secret;
-- the TTLs this document puts in cache rules set by the Worker on egress
-  instead, which incidentally answers the `Cache-Control` problem in "Bucket
-  layout": Bun's `S3Client` cannot send the header, so the Worker sends it;
-- no edge cache and no CORS. One origin, few readers, free-tier bucket reads.
-
-Every one of those bullets is a cost, and the reason the Open shape is the one
-that launches. A Worker in the read path means every request — page loads,
-static assets, artifacts — is billed compute with a per-day free ceiling, and
-nothing is held at the edge, so a spike converts directly into invocations and
-bucket reads. The push-based design exists precisely so that a spike is absorbed
-by cache in front of immutable objects, at roughly zero marginal cost and with
-no compute in the path to saturate. The gate trades that away to buy a password,
-which is the right trade for a preview shared with a handful of people and the
-wrong one for a launch.
-
-This inverts the design's "no Worker in the read path" for the read path only.
-The projection, the snapshot renderer, the publisher, and the SPA source are
-untouched and identical between the two shapes, so adopting a domain later is a
-rebuild with a different `VITE_WRATHBENCH_SNAPSHOT_BASE` and a `wrangler.jsonc`
-that drops its `main` — not a redesign.
-
-What the gate is worth is exactly one shared secret: no identity, no per-person
-revocation, nothing but rotation. That is the right weight for a preview shared
-with named people, and it is why issue #10's content gate still binds the first
-genuinely public deploy rather than being satisfied by this one. A link handed
-to anyone who asks would be that deploy in all but name.
-
+It was retired on 2026-09-11 (item 85) when the `shard.page` zone arrived on
+the operator's personal account: `dashboard/worker/` deleted, `main` and the
+bucket binding dropped from `dashboard/wrangler.jsonc`, the bucket given its
+own custom domain and the cache rules that go with it. What that cost is the
+paragraph above it in this document — the tiles' `noindex` — and nothing else.
+The projection, the snapshot renderer, the publisher and the SPA source were
+identical between the two shapes throughout, so the move was a rebuild with a
+different `VITE_WRATHBENCH_SNAPSHOT_BASE` and a `wrangler.jsonc` that drops its
+`main`, exactly as this document predicted, and not a redesign. Git history has
+the Worker.
 
 ## Rejected alternatives
 
@@ -531,9 +530,20 @@ what a result means is the operator's:
    Sub-decisions riding on it: `terminationDetail` / `pauseReason` free text,
    `items[].name`. Phase 2 is gated on this. (Character names rode on it once;
    they were decided separately on 2026-08-30 and are shown.)
-3. **Domain and naming** for the app and data hostnames.
-4. **SKU**: free, or $5/month Workers Paid as cliff insurance.
-5. **Attribution wording** for the footer and artifact envelope.
+3. **Domain and naming** for the app and data hostnames. **Decided
+   2026-09-11**: `https://wrathbench.shard.page` and
+   `https://wrathbench-data.shard.page`, on the operator's personal account,
+   where the `shard.page` zone is. One label deep each, so Universal SSL covers
+   both without an Advanced Certificate — `data.wrathbench.shard.page` would
+   not have been. `shard.page` had been considered and declined on 2026-08-25
+   because it pointed elsewhere; that reversed.
+4. **SKU**: free, or $5/month Workers Paid as cliff insurance. **Decided
+   2026-09-11: free**, and now on firmer ground than when it was provisional —
+   the Open shape has no Worker in the read path at all, so the 100k
+   requests/day cliff the Gated shape sat under does not exist for it. Workers
+   Paid remains the insurance if a Worker ever enters the path.
+5. **Attribution wording** for the footer and artifact envelope. **Still
+   open.**
 6. **Whether DATA-AND-LEGAL.md gains a "published projection" section**
    codifying decision 2 — this document can draft it; adopting it is the
    operator's edit.
@@ -542,15 +552,14 @@ Decided by the operator 2026-08-25, recorded here: the public site includes
 the live fleet and map views at snapshot cadence (not a results-only site),
 accepting that positions reveal near-real-time lab activity.
 
-Also decided by the operator 2026-08-25: the first deploy is a **test run for
-going public**, not the public launch — no custom domain for now, and a basic
-shared password so the site is reachable by anyone the operator sends the link
-to and by nobody else. That settles decision 4 as *free plan* for the moment and
-defers decision 3; it does not touch decision 2, which still gates the
-ungated deploy. The operator's stated premise — an `r2.dev` hostname with a
-password on it — is not available on Cloudflare (see "The gated interim shape"),
-so the same intent is served by a Worker gate instead, and the bucket's Public
-Development URL stays disabled.
+Decided by the operator 2026-08-25 and superseded on 2026-09-11: the first
+deploy was a **test run for going public** rather than the launch — no custom
+domain, and a shared password so the site was reachable by anyone the operator
+sent the link to and nobody else. That deploy is over; see "The gated interim
+shape" for what it was. The bucket's Public Development URL stays disabled
+under both shapes, for different reasons — it was the gate's bypass, and it is
+now the uncached, un-ruled second address for objects the cache rules exist to
+put in front of.
 
 ## Phasing
 
@@ -576,10 +585,14 @@ bucket back.
 
 The readback half of GitHub issue #31's acceptance transaction, run 2026-09-11
 against the production bucket with `infra/publish-accept.ts` — a read-only
-walk of the generation the manifest points at. It is the only part of the
-transaction the Gated shape can carry: the criteria that need a reader through
-the host need the gate's password, and the ones about edge cache need a zone,
-so both wait on item 85.
+walk of the generation the manifest points at. It was the only part of the
+transaction the Gated shape could carry: the criteria that need a reader
+through the host needed the gate's password, and the ones about edge cache
+needed a zone. The Open shape has both, and
+`bun infra/publish-accept.ts --base https://wrathbench-data.shard.page` is the
+same walk over plain `GET` through the public hostname — no credential, real
+`cache-control`, real `cf-cache-status`. It is the last step of the cutover
+runbook, and this record is amended with its result once the cutover runs.
 
 **A note on the criteria.** Issue #31's criterion 2 predates the operator's
 2026-08-30 decisions and forbids four things this projection now publishes on

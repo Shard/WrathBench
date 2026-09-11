@@ -47,6 +47,7 @@ import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
+import { tileSrc } from "../lib/tiles";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
 import { type Speed, keyBelongsToTarget, nextSpeed, playbackKey, prevSampleBefore, tickMs } from "../lib/playback";
 import {
@@ -249,7 +250,9 @@ export default function MapPage() {
     // A miss changes nothing on screen — the fallback square is already there —
     // and asking for a redraw would re-request every missing tile forever.
     img.onerror = null;
-    img.src = `/tiles/${map}/${row}_${col}.png`;
+    // Not a literal path: the public build's tiles are on the data hostname,
+    // not this one (`lib/tiles.ts`).
+    img.src = tileSrc(map, row, col);
     tiles.set(key, entry);
     while (tiles.size > TILE_CACHE_MAX) {
       const oldest = tiles.keys().next().value;
@@ -302,11 +305,11 @@ export default function MapPage() {
      * every frame would evict and re-request the lot. The threshold also keeps
      * the visible cell count inside the LRU.
      *
-     * Snapshot mode asks for the same `/tiles/` path: the gated site publishes
-     * the tiles behind its password (infra/publish-tiles.ts, and the gate in
-     * dashboard/worker/index.ts serves them only to an authenticated reader).
-     * A host with nothing behind the prefix answers 404, which is the same
-     * miss a lab machine that has never run the extraction produces, and the
+     * Snapshot mode asks for the same `/tiles/` path on the data hostname
+     * rather than this one (`lib/tiles.ts`): `infra/publish-tiles.ts` writes
+     * the tiles under the same prefix in the same bucket the JSON is in. A
+     * host with nothing behind the prefix answers 404, which is the same miss
+     * a lab machine that has never run the extraction produces, and the
      * labelled grid below is what gets drawn either way.
      */
     const useTiles = g.size >= TILE_MIN_PX;
