@@ -71,24 +71,21 @@ Convention:
 - [2026-09-04](worklogs/2026-09-04.md) — Cerebras added at t0 (qwen-3.8-27b, first non-OpenRouter paid provider); no cache discount, so an e90 is ~$5–8; muse-spark stream paused to free the paid lane
 - [2026-09-05](worklogs/2026-09-05.md) — freeplay stream stats aggregated at read time (`stream` on `/api/run/<id>`); the run page is the stream, not the session
 - [2026-09-08](worklogs/2026-09-08.md) — the codex subscription lane in the Helm chart; then the NuSphere cutover: runs, world and lane moved onto the cluster, both streams resumed there
-- [2026-09-11](worklogs/2026-09-11.md) — item 117 closed (Flux + workstation build is the release contract); public-release inventory: history unscrubbed; container paths made repo-relative in the public projection; pre-public audit nits (cluster-native viewer README, DATA-AND-LEGAL cite, chart home and nodeSelector, compose codex lane, dashboard version) and the status text read as a public repo; community files for the public release (SECURITY, CONTRIBUTING, Code of Conduct, issue and PR templates)
-  (verified), two dangling VISION.md references, fleet-update.sh compose drift; minimap
-  ships, legal opinion no longer a gate. Lean CI: PR checks on the pinned Bun plus
-  a chart lint/render job (item 117's release half stays open). The map's play bar
-  steps between a freeplay stream's attempts (item 119). A failed `sdk.connect()`
-  no longer leaks its reconnect ladder (item 114), and the dashboard's
-  repository link and BibTeX `url` sit behind `VITE_WRATHBENCH_REPO_URL` (item 109).
-  The two stream heads the unversioned stamp stranded are ended by hand as
-  `manual`, detail `superseded` (item 122; data only, on the cluster PVC).
-  And the public bucket was read back for the first time (`infra/publish-accept.ts`,
-  GitHub issue #31): 1,590 objects and 422 runs complete with nothing missing, and
-  one real finding — the wiki bundle source ships inside published entries — which
-  the entry window's projection then closed, awaiting the publisher rollout (item 123).
-  The viewer's per-run fact cache is persisted across restarts (item 115): 34s → 22s
-  on the first `/api/models` after a start, the fill itself 11.9s → 4ms. That
-  compose drift is closed: the ops scripts became cluster-native — `fleet-update.sh`
-  (all five verbs), `viewer-restart.sh`, `module-health.sh` and the package scripts
-  drive kubectl, and the compose-only ones say so.
+- [2026-09-11](worklogs/2026-09-11.md) — public-release day. Inventory of everything
+  outstanding (history unscrubbed and verified so, two dangling VISION.md references,
+  fleet-update.sh compose drift); minimap ships, the legal opinion is no longer a gate;
+  item 38 closed on Fable's unaided rung 4 in freeplay. Shipped: lean CI (PR checks on
+  the pinned Bun plus chart lint/render; item 117 then closed — Flux plus the
+  workstation build is the release contract), the issue #31 bucket readback and its
+  verifier, the wiki dump filename found leaking into published entries and fixed
+  (item 123), container paths made repo-relative, the persisted viewer fact cache
+  (item 115), the map's play bar stepping between a stream's attempts (item 119), the
+  SDK connect leak (item 114), the repository link behind `VITE_WRATHBENCH_REPO_URL`
+  (item 109), ops scripts on kubectl, the two orphaned stream heads ended (item 122).
+  Deployed as harness-0.5-552-gb6fff52 — the pin deployed itself out of the shared
+  cluster-repo checkout before the images existed, recovered, readback clean. Then the
+  pre-public audit nits, the status text read as a public repo, and the community
+  files (SECURITY, CONTRIBUTING, Code of Conduct, issue and PR templates).
 
 ## Resolving a cited item number
 
