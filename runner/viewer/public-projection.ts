@@ -29,6 +29,12 @@
  * - No local filesystem path leaves: `configPath`, the roster `path`, the wiki
  *   bundle annotation (whose `source` is the operator's dump filename), and
  *   the `meta`/`driver`/`claude_system` entries' config, binaries and paths.
+ *   The one path that survives is made repo-relative rather than withheld:
+ *   every exported projector's output crosses `scrubPathsValue`
+ *   (`scrub-paths.ts`), which strips the runner image's `/wrathbench` install
+ *   prefix wherever a string carries it — a sandbox stack trace or a console
+ *   line in model- and harness-authored text — so it reads as the repository
+ *   path it already is (operator, 2026-09-11).
  * - Nothing host-like leaves: `apiBase` (a LAN base URL is topology), and the
  *   supervisor's pids.
  * - Minimap tiles are Blizzard bytes and never leave through a snapshot.
@@ -88,6 +94,7 @@ import type {
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
 import { redactGameProse } from "./redact-prose";
+import { scrubPathsValue } from "./scrub-paths";
 
 /**
  * The attribution line every published artifact carries.
@@ -410,7 +417,7 @@ function projectResultRun(r: ResultRun): ResultRun {
 /* ----------------------------------------------------------- responses --- */
 
 export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
-  return {
+  return scrubPathsValue<ApiInfoResponse>({
     service: "wrathbench-viewer",
     // Forced, whatever the source viewer ran as: a snapshot IS the public mode.
     publicMode: true,
@@ -426,11 +433,11 @@ export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
       ? { harnessSeries: i.harnessSeries.map((s) => ({ series: s.series, runs: s.runs })) }
       : {}),
     now: i.now,
-  };
+  });
 }
 
 export function projectRuns(r: RunsResponse): RunsResponse {
-  return { runs: r.runs.map(projectRunListRow) };
+  return scrubPathsValue<RunsResponse>({ runs: r.runs.map(projectRunListRow) });
 }
 
 /**
@@ -453,7 +460,7 @@ function projectStatus(s: CharacterStatus): CharacterStatus {
 }
 
 export function projectPositions(p: PositionsResponse): PositionsResponse {
-  return {
+  return scrubPathsValue<PositionsResponse>({
     positions: p.positions.map(
       (a: AgentPosition): AgentPosition => ({
         runId: a.runId,
@@ -488,11 +495,11 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         reflecting: a.reflecting ?? false,
       }),
     ),
-  };
+  });
 }
 
 export function projectResults(r: ResultsResponse): ResultsResponse {
-  return {
+  return scrubPathsValue<ResultsResponse>({
     runs: r.runs.map(projectResultRun),
     episode: r.episode,
     harness: r.harness,
@@ -500,11 +507,11 @@ export function projectResults(r: ResultsResponse): ResultsResponse {
     filteredOut: r.filteredOut,
     overridesExcluded: r.overridesExcluded,
     now: r.now,
-  };
+  });
 }
 
 export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
-  return {
+  return scrubPathsValue<EpisodesResponse>({
     episodes: e.episodes.map((t) => ({
       id: t.id,
       minutes: t.minutes,
@@ -522,7 +529,7 @@ export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
     })),
     untiered: e.untiered,
     now: e.now,
-  };
+  });
 }
 
 /**
@@ -530,7 +537,7 @@ export function projectEpisodes(e: EpisodesResponse): EpisodesResponse {
  * examples beside the route); the projection still names every field.
  */
 export function projectTools(t: ToolsResponse): ToolsResponse {
-  return {
+  return scrubPathsValue<ToolsResponse>({
     tools: t.tools.map((x) => ({
       name: x.name,
       description: x.description,
@@ -538,7 +545,7 @@ export function projectTools(t: ToolsResponse): ToolsResponse {
       example: x.example,
       returns: x.returns,
     })),
-  };
+  });
 }
 
 /** A campaign row whose config names no account: the pin is the lab's, the class the reader's. */
@@ -550,7 +557,7 @@ export interface PublicCampaignsResponse extends Omit<CampaignsResponse, "campai
 }
 
 export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse {
-  return {
+  return scrubPathsValue<PublicCampaignsResponse>({
     campaigns: c.campaigns.map(
       (row: CampaignRowView): PublicCampaignRowView => ({
         campaign: row.campaign,
@@ -582,7 +589,7 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
     // A local path; the public page has no missing-config to explain with it.
     configPath: null,
     now: c.now,
-  };
+  });
 }
 
 const TIER_IDS: readonly TierView[] = ["t0", "t1", "t2"];
@@ -683,7 +690,7 @@ export function projectModels(m: ModelsResponse): ModelsResponse {
   for (const [key, v] of Object.entries(m.policy.maxConcurrent)) {
     if (typeof v === "number") maxConcurrent[key] = v;
   }
-  return {
+  return scrubPathsValue<ModelsResponse>({
     models: m.models.map(projectModelRow),
     roster: {
       // The roster file's location is the operator's filesystem.
@@ -702,7 +709,7 @@ export function projectModels(m: ModelsResponse): ModelsResponse {
     ladderMs: [...m.ladderMs],
     harness: m.harness,
     now: m.now,
-  };
+  });
 }
 
 function projectServer(s: FleetServerView): FleetServerView {
@@ -773,7 +780,7 @@ function projectFleetJob(j: FleetJobView, alias: (name: string) => string): Publ
 
 export function projectFleet(f: FleetResponse): PublicFleetResponse {
   const alias = accountAlias();
-  return {
+  return scrubPathsValue<PublicFleetResponse>({
     present: f.present,
     server: projectServer(f.server),
     ...(f.startedAt !== undefined ? { startedAt: f.startedAt } : {}),
@@ -831,7 +838,7 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
         }
       : {}),
     now: f.now,
-  };
+  });
 }
 
 /**
@@ -909,7 +916,7 @@ function projectStream(s: StreamView): StreamView {
 }
 
 export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
-  return {
+  return scrubPathsValue<RunDetailResponse>({
     run: projectRunRow(d.run),
     states: d.states.map(projectStatePoint),
     total: d.total,
@@ -929,11 +936,11 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       ? { reflections: d.reflections.map((w) => ({ fromTurn: w.fromTurn, toTurn: w.toTurn })) }
       : {}),
     ...(d.stream !== undefined ? { stream: projectStream(d.stream) } : {}),
-  };
+  });
 }
 
 export function projectTrack(t: TrackResponse): TrackResponse {
-  return {
+  return scrubPathsValue<TrackResponse>({
     runId: t.runId,
     character: t.character,
     model: t.model,
@@ -974,7 +981,7 @@ export function projectTrack(t: TrackResponse): TrackResponse {
             next: t.stream.next,
           },
         }),
-  };
+  });
 }
 
 /* ------------------------------------------------------------- entries --- */
@@ -1090,9 +1097,9 @@ export function projectEntry(e: EntrySummary): EntrySummary {
           ? projectComparability(v)
           : plain(v);
   }
-  return redactGameProse(out);
+  return scrubPathsValue<EntrySummary>(redactGameProse(out));
 }
 
 export function projectEntries(r: EntriesResponse): EntriesResponse {
-  return { from: r.from, total: r.total, entries: r.entries.map((e) => projectEntry(e as EntrySummary)) as EntriesResponse["entries"] };
+  return scrubPathsValue<EntriesResponse>({ from: r.from, total: r.total, entries: r.entries.map((e) => projectEntry(e as EntrySummary)) as EntriesResponse["entries"] });
 }

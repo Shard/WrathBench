@@ -256,6 +256,13 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   result the model formatted as plain prose rather than JSON — is published
   as written and is not filtered; it may quote game prose. No "load earlier"
   and no live tail publicly: the window advances with the detail poll.
+- **Paths**: a container-internal prefix is made repo-relative — every
+  exported projector's output crosses `scrubPathsValue`
+  (`runner/viewer/scrub-paths.ts`), which strips the runner image's
+  `/wrathbench` working directory wherever a published string carries it, so a
+  sandbox stack trace reads as `sdk/src/client.ts:123`; the model's text is
+  otherwise as written, and every other absolute path stays "Never" (operator,
+  2026-09-11).
 - **Names now pass**: `items[].name`, a move's `target`, a position's episodic
   `status` (text and zone name) and `terminationDetail`.
 - **Still projected out**: the operator `objective`, `apiBase`, `pauseReason`
@@ -610,15 +617,23 @@ rollout the bucket still holds the 136 occurrences, and a readback will also
 report `projection-drift` on those 21 objects — re-projection now disagreeing
 with what is published is the pending deploy, not a new defect.
 
-**Forty-five paths that are the operator's call, not the verifier's.** Sandbox
-stack traces (`/wrathbench/sdk/src/...`) inside `tool_result` text and snippet
-code: container-internal paths from the image's own working directory, not the
+**Forty-five paths, settled the same day.** Sandbox stack traces
+(`/wrathbench/sdk/src/...`) inside `tool_result` text and snippet code:
+container-internal paths from the image's own working directory, not the
 operator's host, arriving through the model- and harness-authored surface
 "Residual, stated plainly" describes. The verifier counts them separately from
-its findings so they stay visible, and the record does not settle them —
-issue #31's criterion 2 says "no local paths" without qualification, and
-whether the documented residual covers a container path is a content-boundary
-question and therefore the operator's.
+its findings so they stay visible, and whether the documented residual covers a
+container path was a content-boundary question and therefore the operator's.
+**The operator's call, 2026-09-11**: strip the install prefix so such a path
+becomes the repo-relative one it already is, and leave the rest of the text as
+written — a path scrub, not prose filtering. **The scrub landed the same day**
+(`runner/viewer/scrub-paths.ts`, applied at every exported projector and to the
+scratchpad route; the verifier's root list is now imported from it, container
+root included, so a scrub that stops running shows up here as a finding), and
+it awaits the same redeploy as the `wikiBundle` fix above: until that rollout
+the bucket still holds the 45, reported as *residual* because they sit under
+`text` and `code`, alongside `projection-drift` on the objects carrying them —
+the pending deploy, not a new defect.
 
 **Cache metadata.** No object carries `Cache-Control`, which is the expected
 state: Bun's S3 writer cannot send one, and in the Gated shape
