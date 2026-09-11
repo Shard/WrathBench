@@ -285,7 +285,8 @@ const snapshotBase = ((): string => {
 
 /**
  * True in the public build. The guards that read it are the ones a bucket
- * cannot answer: the SSE tail, and the minimap tiles that never leave the lab.
+ * cannot answer: the SSE tail, and the same-origin `/tiles` path, which only a
+ * viewer serves (`lib/tiles.ts` names the public host instead).
  */
 export const SNAPSHOT_MODE: boolean = snapshotBase !== "";
 

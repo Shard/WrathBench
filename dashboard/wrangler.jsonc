@@ -22,9 +22,9 @@
 // (`infra/cloudflare/r2-cors.json`, whose `AllowedOrigins` names the app origin
 // below). The SPA is built with `VITE_WRATHBENCH_SNAPSHOT_BASE` pointing at the
 // data hostname, so it appends `/v1/...` to that rather than to its own origin.
-// Minimap tiles are NOT published: they are Blizzard textures and this shape has
-// nothing able to keep a reader out, so whether they go public is an open
-// operator decision and the build asks for none (dashboard/src/lib/tiles.ts).
+// Minimap tiles are served from that same data hostname, under `tiles/`, put
+// there by `infra/publish-tiles.ts --upload` rather than by the snapshot loop —
+// so the build is told where they are by its own flag (dashboard/src/lib/tiles.ts).
 //
 // Workers Static Assets rather than Pages: parity today, and Cloudflare raises
 // limits on Workers first.
