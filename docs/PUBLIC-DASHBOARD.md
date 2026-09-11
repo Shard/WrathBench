@@ -331,6 +331,27 @@ shape has no fetch handler and so serves no `robots.txt` at all unless someone
 puts one in `dashboard/public/`, which is the point at which that question
 comes back.
 
+## The repository link
+
+The footer's GitHub link and the BibTeX `url` line on `/about` are behind
+`VITE_WRATHBENCH_REPO_URL`, the third build-time flag beside
+`VITE_WRATHBENCH_SNAPSHOT_BASE` and the card's two. Unset or empty — the
+default everywhere, including today's public build — neither is rendered:
+the repository is private, and a link that 404s under the project's own name
+is worse than no link on the one page a stranger reads first. Set to the
+repository's URL, both appear.
+
+`infra/deploy-dashboard.sh` reads `WRATHBENCH_REPO_URL` from `.env` the way it
+reads `WRATHBENCH_PUBLIC_ORIGIN`, but empty is not an error there: no origin
+means a broken card and stops the ship, no repo URL just means no link. **On
+launch day the flip is one line in `.env` and a redeploy**, with no repository
+edit. The value is validated as an http(s) URL and otherwise ignored, so a
+stray setting cannot put an arbitrary scheme in an anchor; the link's text is
+the last two path segments (`owner/repo`).
+
+The footer only renders in the public build (it hangs off the snapshot
+attribution), so in the private viewer this flag shows in the citation alone.
+
 ## The gated interim shape (no domain on the account)
 
 **This shape is scaffolding, and it is not what launches.** It exists so a
