@@ -424,6 +424,20 @@ being told the fleet was dead.
   place and is counted as drained), an abort still leaves the switch SET, and a
   supervisor that does not come back still leaves it set on purpose.
 
+  Three things the cluster forced that compose did not. **"Did it come back?"
+  is `startedAt`, not a timestamp comparison** — the supervisor stamps
+  `const START_AT = Date.now()` once per process, and waiting for that value to
+  CHANGE never asks the workstation clock and `chungusjr`'s to agree; "is this
+  heartbeat later than the moment I typed the restart" would, and a pod a few
+  seconds ahead would read a dying supervisor's last write as a boot and clear
+  the switch under a fleet that never came back. **A failing kubectl says the
+  switch is set**, via an ERR trap next to the Ctrl-C one: an API blip is
+  likelier than an interrupt and `set -e` alone would exit silently. And
+  **`drain` waits for the pod to be GONE**, not for `rollout status` — which on
+  a Deployment scaled to 0 does not reliably wait for a pod that is still
+  Terminating, and the supervisor spends up to its 180s grace in there writing
+  the pause records the next one resumes from.
+
 - **`infra/viewer-restart.sh`** — rollout-restarts the `wrathbench-viewer`
   Deployment and checks `https://wrathbench.local/api/info`. On the cluster the
   viewer's code is baked into the runner image and Flux owns the tag, so this
