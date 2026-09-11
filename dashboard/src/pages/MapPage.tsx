@@ -47,7 +47,7 @@ import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
-import { tileSrc } from "../lib/tiles";
+import { TILES_WITHHELD, tileSrc } from "../lib/tiles";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
 import { type Speed, keyBelongsToTarget, nextSpeed, playbackKey, prevSampleBefore, tickMs } from "../lib/playback";
 import {
@@ -243,16 +243,20 @@ export default function MapPage() {
     }
     const img = new Image();
     const entry: TileEntry = { img, ok: false };
-    img.onload = (): void => {
-      entry.ok = true;
-      needsDraw = true;
-    };
-    // A miss changes nothing on screen — the fallback square is already there —
-    // and asking for a redraw would re-request every missing tile forever.
-    img.onerror = null;
-    // Not a literal path: the public build's tiles are on the data hostname,
-    // not this one (`lib/tiles.ts`).
-    img.src = tileSrc(map, row, col);
+    // Null means this build must not ask for a tile at all — the public one,
+    // where the textures are not published (`lib/tiles.ts`). Remembered as a
+    // miss like any other, so the grid is drawn and nothing is requested.
+    const src = tileSrc(map, row, col);
+    if (src !== null) {
+      img.onload = (): void => {
+        entry.ok = true;
+        needsDraw = true;
+      };
+      // A miss changes nothing on screen — the fallback square is already there
+      // — and asking for a redraw would re-request every missing tile forever.
+      img.onerror = null;
+      img.src = src;
+    }
     tiles.set(key, entry);
     while (tiles.size > TILE_CACHE_MAX) {
       const oldest = tiles.keys().next().value;
@@ -305,14 +309,14 @@ export default function MapPage() {
      * every frame would evict and re-request the lot. The threshold also keeps
      * the visible cell count inside the LRU.
      *
-     * Snapshot mode asks for the same `/tiles/` path on the data hostname
-     * rather than this one (`lib/tiles.ts`): `infra/publish-tiles.ts` writes
-     * the tiles under the same prefix in the same bucket the JSON is in. A
-     * host with nothing behind the prefix answers 404, which is the same miss
-     * a lab machine that has never run the extraction produces, and the
-     * labelled grid below is what gets drawn either way.
+     * Whether a tile may be asked for at all is `lib/tiles.ts`: the private
+     * viewer serves them same-origin, the public build does not publish them
+     * (they are Blizzard textures, and that decision is the operator's), and
+     * `VITE_WRATHBENCH_TILES_BASE` names a host when there is one. Withheld and
+     * merely missing draw identically — the labelled grid below — which is the
+     * same state a lab machine that never ran the extraction is in.
      */
-    const useTiles = g.size >= TILE_MIN_PX;
+    const useTiles = !TILES_WITHHELD && g.size >= TILE_MIN_PX;
     ctx.lineWidth = 1;
     ctx.font = "11px ui-monospace, monospace";
     ctx.textBaseline = "top";

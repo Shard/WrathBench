@@ -3,7 +3,8 @@
 #
 #   bun ship                   tests, snapshot-mode build, wrangler deploy, restore the private build
 #   bun ship --publisher     … and restart the snapshot publisher (needed after runner/viewer changes)
-#   bun ship --tiles         … and upload changed minimap tiles first
+#   bun ship --tiles         … and upload changed minimap tiles first (only if
+#                              the operator has decided tiles go public)
 #   bun ship --skip-tests
 #
 # Since 2026-09-11 the site is the design doc's **Open** shape: the app is
@@ -14,9 +15,18 @@
 #
 # The private viewer serves dashboard/dist too, so the last step rebuilds it in
 # normal mode — and that build names no origin and no snapshot base, so it
-# carries no og:image and asks its own host for tiles: the card's tags and the
+# carries no og:image and serves tiles off its own disk: the card's tags and the
 # data hostname belong to the public site only. Bun reads .env for the S3_* keys
-# the tile publisher needs and for the three WRATHBENCH_* names below.
+# the tile publisher needs and for the WRATHBENCH_* names below.
+#
+# Minimap tiles are NOT part of the public build. They are Blizzard textures,
+# the Open shape has nothing in the read path able to keep a reader out, and
+# whether they go public is the operator's decision (docs/DATA-AND-LEGAL.md) and
+# has not been taken — so no VITE_WRATHBENCH_TILES_BASE is passed below and the
+# public map draws its labelled grid, exactly as WRATHBENCH_VIEWER_PUBLIC=1
+# already makes the viewer do. `--tiles` uploads them to the bucket and is a
+# separate act with the same decision in front of it; it is not what makes the
+# site ask for them.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -79,8 +89,14 @@ og_stamp=$(bun infra/render-og.ts)
 repo_url=$(bun -e 'process.stdout.write(process.env.WRATHBENCH_REPO_URL ?? "")')
 [ -n "$repo_url" ] && echo "deploy: repo link $repo_url" || echo "deploy: no repo link (WRATHBENCH_REPO_URL unset)"
 
+# WRATHBENCH_TILES_BASE, if the operator ever decides tiles are public: the host
+# holding the `tiles/` prefix. Unset is the default and means the grid.
+tiles_base=$(bun -e 'process.stdout.write(process.env.WRATHBENCH_TILES_BASE ?? "")')
+[ -n "$tiles_base" ] && echo "deploy: tiles from $tiles_base" || echo "deploy: no tiles in the public build (grid only)"
+
 echo "deploy: snapshot-mode build ($snapshot_base)"
 VITE_WRATHBENCH_SNAPSHOT_BASE="$snapshot_base" \
+  VITE_WRATHBENCH_TILES_BASE="$tiles_base" \
   VITE_WRATHBENCH_PUBLIC_ORIGIN="$origin" \
   VITE_WRATHBENCH_OG_STAMP="$og_stamp" \
   VITE_WRATHBENCH_REPO_URL="$repo_url" \
