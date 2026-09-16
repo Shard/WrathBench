@@ -449,10 +449,14 @@ export function localRunStore(runsDir: string): RunStore {
   const tables = new Map<string, Map<string, Record<string, unknown>>>();
   let collector: { pass: () => Promise<unknown> } | null = null;
 
+  // The separator is written as an escape rather than as a literal NUL byte:
+  // the value is the same at runtime, but a source file carrying one reads as
+  // binary to `file(1)`, and grep and ripgrep then skip it silently — a
+  // repo-wide sweep for an identifier would quietly miss every hit in here.
   const key = (table: string, row: Record<string, unknown>): string => {
     const id = String(row["run_id"]);
     if (table === "runs" || table === "run_totals") return id;
-    return `${id} ${String(row["ts"])} ${String(row["seq"])}`;
+    return `${id}\u0000${String(row["ts"])}\u0000${String(row["seq"])}`;
   };
 
   const sink = {
