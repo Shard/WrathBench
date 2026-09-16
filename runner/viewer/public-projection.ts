@@ -79,6 +79,7 @@ import type {
   SpellFacts,
   StatePoint,
   CharacterAttempt,
+  CharacterResponse,
   CharacterTotals,
   CharacterView,
   TalentFacts,
@@ -913,6 +914,23 @@ function projectCharacter(s: CharacterView): CharacterView {
     runs: s.runs.map(projectCharacterAttempt),
     totals: projectCharacterTotals(s.totals),
   };
+}
+
+/**
+ * `GET /api/character/<id>` in public mode.
+ *
+ * Nothing new is decided here: the view goes through `projectCharacter`, which
+ * the run page's own card already crosses, and every sample goes through
+ * `projectStatePoint`, which `projectRunDetail` already applies to one
+ * attempt's series. A character is the same run detail read across a chain, so
+ * a fact public on one attempt's page cannot become private by being counted
+ * twelve times — and none can become public either.
+ */
+export function projectCharacterResponse(c: CharacterResponse): CharacterResponse {
+  return scrubPathsValue<CharacterResponse>({
+    character: projectCharacter(c.character),
+    states: c.states.map((s) => ({ ...projectStatePoint(s), runId: s.runId, attempt: s.attempt })),
+  });
 }
 
 export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {

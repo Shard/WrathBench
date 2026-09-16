@@ -1711,6 +1711,42 @@ export interface TrackResponse extends SnapshotEnvelope {
   moves?: MoveIntentView[];
 }
 
+/**
+ * One state sample on a character's whole climb, told from which attempt.
+ *
+ * `StatePoint` plus the two fields that make a chain of attempts legible as one
+ * series: the run the sample came from and its 1-based place in the character.
+ * The attempt number is what a chart draws a session boundary at — a seam
+ * cannot be found from the timestamps alone, because a character can be
+ * relaunched within a second of the previous attempt ending.
+ */
+export interface CharacterStatePoint extends StatePoint {
+  runId: string;
+  attempt: number;
+}
+
+/**
+ * `GET /api/character/<id>`: one character, whole.
+ *
+ * `id` is any run in the chain, not only the head — `characterViewOf` resolves
+ * the chain from any member, and `character.characterId` names the canonical
+ * one, so a link built from an attempt id lands rather than 404ing.
+ *
+ * Universal since 2026-09-16 (item 128): a scored run is a character of one
+ * attempt, and this route answers for it exactly as it does for a freeplay
+ * character on its twelfth.
+ */
+export interface CharacterResponse extends SnapshotEnvelope {
+  character: CharacterView;
+  /**
+   * Every attempt's state series laid end to end, attempt order first and
+   * timestamp within it. Attempt order rather than a global sort by `ts`
+   * because the two agree on a real chain and only the first keeps a seam
+   * where a clock skew would move a sample across one.
+   */
+  states: CharacterStatePoint[];
+}
+
 export interface ApiError {
   error: string;
 }

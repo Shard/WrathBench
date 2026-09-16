@@ -101,8 +101,26 @@ function cost(usd: number | null, p: Partial<CostFigure> = {}): CostFigure {
 }
 
 describe("characterViewOf", () => {
-  test("a lone run is not a character", () => {
-    expect(characterViewOf("a1", [run({ runId: "a1" })])).toBeNull();
+  /*
+   * Item 128: every run belongs to a character, and a run with no chain is a
+   * character of one attempt rather than no character at all. Whether that
+   * view is worth PRINTING is `hasLineage`'s question, and the run detail
+   * route still asks it — this is only the aggregation.
+   */
+  test("a lone run is a character of one attempt", () => {
+    const view = characterViewOf("a1", [run({ runId: "a1" })]);
+    expect(view?.characterId).toBe("a1");
+    expect(view?.attempt).toBe(1);
+    expect(view?.attempts).toBe(1);
+    expect(view?.previous).toBeNull();
+    expect(view?.next).toBeNull();
+    expect(view?.runs.map((r) => r.runId)).toEqual(["a1"]);
+    expect(view?.totals.attempts).toBe(1);
+  });
+
+  test("a run the set does not hold, and a stillborn launch, have no character", () => {
+    expect(characterViewOf("nobody", [run({ runId: "a1" })])).toBeNull();
+    expect(characterViewOf("a1", [run({ runId: "a1", stillborn: true })])).toBeNull();
   });
 
   test("an attempt sees the whole chain, forward as well as back", () => {

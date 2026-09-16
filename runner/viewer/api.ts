@@ -38,6 +38,8 @@ import type {
   EpisodesResponse,
   ResultsResponse,
   ResultRun,
+  CharacterResponse,
+  CharacterStatePoint,
   FleetAccountView,
   FleetJobView,
   FleetPausedView,
@@ -64,6 +66,7 @@ import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
 import {
   projectCampaigns,
+  projectCharacterResponse,
   projectEntries,
   projectEpisodes,
   projectFleet,
@@ -1272,6 +1275,45 @@ export function createApi(opts: ApiOptions): ApiHandle {
       return pub(body, projectModels);
     }
 
+    /*
+     * One character, whole (item 128): the aggregate every attempt's page
+     * shows a card of, plus the level and XP series across the WHOLE chain
+     * with the attempt each sample came from — which is the one thing no
+     * single run's page can draw, because a session's own series stops at its
+     * own logout.
+     *
+     * The id may be any run in the chain, not only the head. A reader's link
+     * is built from whatever attempt they were looking at, and making the SPA
+     * canonicalise first would be a round trip to learn something the server
+     * already knows.
+     *
+     * Served in public mode, like `/api/run/<id>`, through a projector that is
+     * the run detail's own applied across the chain.
+     */
+    const cm = /^\/api\/character\/([^/]+)$/.exec(path);
+    if (cm !== null) {
+      const id = cm[1]!;
+      if (!isValidRunId(id)) return notFound(`no such character: ${id}`);
+      const view = characterViewOf(id, await resultRuns());
+      if (view === null) return notFound(`no such character: ${id}`);
+      /*
+       * Attempt by attempt, through the same `statesOfRun` the run page reads:
+       * the derived store when it has the rows, and that attempt's own sqlite
+       * when the collector has not reached it. One degradation, not two.
+       */
+      const states: CharacterStatePoint[] = [];
+      for (const [i, a] of view.runs.entries()) {
+        const points = await statesOfRun(a.runId);
+        for (const pt of points) states.push({ ...pt, runId: a.runId, attempt: i + 1 });
+      }
+      // Within an attempt, by the clock; across them, by the chain. The two
+      // agree on a real character and only this order keeps a seam where a
+      // clock skew across a relaunch would otherwise move a sample past one.
+      states.sort((x, y) => x.attempt - y.attempt || x.ts - y.ts);
+      const body: CharacterResponse = { character: view, states };
+      return pub(body, projectCharacterResponse);
+    }
+
     const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
     if (m === null) return null;
     const runId = m[1]!;
@@ -1330,10 +1372,19 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * per process and this page and `/api/ladder` cannot disagree about what
        * a character is.
        */
-      const character =
+      const whole =
         run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
           ? characterViewOf(runId, await resultRuns())
           : null;
+      /*
+       * `characterViewOf` is universal since item 128 — every run has a
+       * character, a scored one's being a chain of one — but a card and a strip
+       * reading "attempt 1 of 1" are noise standing where a fact should be
+       * (`hasLineage`, lineage.ts). So the field stays absent below the
+       * threshold that gate has always drawn, and a reader who wants the
+       * degenerate view asks `/api/character/<id>` for it.
+       */
+      const character = whole !== null && whole.attempts > 1 ? whole : null;
       const body: RunDetailResponse = {
         run,
         states: await statesOfRun(runId),
@@ -1383,10 +1434,13 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * pays (the memoised listing), and the two routes cannot come to
        * different answers about who continues whom.
        */
-      const character =
+      const whole =
         run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
           ? characterViewOf(runId, await resultRuns())
           : null;
+      // Same threshold as the detail route's, for the same reason: a bar with
+      // no attempt either side of it has nothing to step to.
+      const character = whole !== null && whole.attempts > 1 ? whole : null;
       const body: TrackResponse = {
         runId,
         characterName: run.character,

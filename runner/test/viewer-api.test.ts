@@ -1286,6 +1286,57 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect("character" in body).toBe(false);
   });
 
+  /*
+   * Item 128: `/api/character/<id>` is the whole chain — the view every
+   * attempt's page carries a card of, plus the level and XP series across all
+   * of it, each sample told from the attempt it came from so a chart can mark
+   * the session boundaries.
+   */
+  test("/api/character/<id> serves the whole chain and its stitched series", async () => {
+    const runs = chainFixture();
+    const body = (await (await api(runs)(new Request("http://x/api/character/a1"))).json()) as {
+      character: { characterId: string; attempts: number; runs: { runId: string }[] };
+      states: { runId: string; attempt: number; ts: number; level: number | null }[];
+    };
+    expect(body.character.characterId).toBe("a1");
+    expect(body.character.attempts).toBe(3);
+    expect(body.character.runs.map((r) => r.runId)).toEqual(["a1", "a2", "a3"]);
+    // One state row per attempt in the fixture, in attempt order, each naming
+    // its own run: that pairing is the only thing that marks a seam.
+    expect(body.states.map((p) => [p.runId, p.attempt])).toEqual([
+      ["a1", 1],
+      ["a2", 2],
+      ["a3", 3],
+    ]);
+    expect(body.states.every((p) => p.level === 5)).toBe(true);
+  });
+
+  test("/api/character/<id> answers for any attempt, not only the head", async () => {
+    const runs = chainFixture();
+    const handle = api(runs);
+    const idOf = async (id: string): Promise<string> =>
+      ((await (await handle(new Request(`http://x/api/character/${id}`))).json()) as {
+        character: { characterId: string };
+      }).character.characterId;
+    expect(await idOf("a3")).toBe("a1");
+    expect(await idOf("a2")).toBe("a1");
+  });
+
+  /* Universal, not freeplay-only: a scored run is a character of one attempt. */
+  test("/api/character/<id> answers for a scored run as a chain of one", async () => {
+    const runs = fixture();
+    const body = (await (await api(runs)(new Request(`http://x/api/character/${RUN_ID}`))).json()) as {
+      character: { characterId: string; attempt: number; attempts: number; previous: string | null };
+    };
+    expect(body.character).toMatchObject({ characterId: RUN_ID, attempt: 1, attempts: 1, previous: null });
+  });
+
+  test("/api/character/<id> 404s on an id no run answers to", async () => {
+    const runs = fixture();
+    const res = await api(runs)(new Request("http://x/api/character/no-such-run"));
+    expect(res.status).toBe(404);
+  });
+
   test("/api/run/<id>/track serves the recorded positions", async () => {
     const runs = fixture();
     const body = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
