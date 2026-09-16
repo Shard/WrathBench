@@ -2,8 +2,12 @@
 {{/*
 The operator viewer (runner/viewer/serve.ts).
 
-This is the ONE Ingress in the chart, and it is LAN-only, on wrathbench.local
-with a certificate from the private ClusterIssuer. The viewer is operator-only
+This is the ONE Ingress in the chart, and it is LAN-only: `ingress.host` is
+the canonical name (first rule, the one dashboards link) and `ingress.extraHosts`
+are aliases served by the same router — the cluster repo puts the LAN-DNS name
+first and the legacy mDNS `.local` name second. TLS is the cluster's default
+certificate unless `ingress.issuer` names a ClusterIssuer, in which case the
+chart renders a per-host Certificate covering every host. The viewer is operator-only
 and running it Internet-facing is unsupported: it reads the runs directory,
 tails live trajectories, holds an SSE connection per watcher and answers
 /api/info about the lab. docs/PUBLIC-DASHBOARD.md is explicit that the public
@@ -136,6 +140,9 @@ spec:
           configMap:
             name: {{ .Values.fleetConfigMapName }}
 {{- if .Values.viewer.ingress.enabled }}
+{{- $ing := .Values.viewer.ingress }}
+{{- $hosts := prepend ($ing.extraHosts | default list) $ing.host }}
+{{- if $ing.issuer }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -147,10 +154,13 @@ metadata:
 spec:
   secretName: {{ include "wrathbench.fullname" . }}-viewer-tls
   dnsNames:
-    - {{ .Values.viewer.ingress.host | quote }}
+    {{- range $hosts }}
+    - {{ . | quote }}
+    {{- end }}
   issuerRef:
     kind: ClusterIssuer
-    name: {{ .Values.viewer.ingress.issuer }}
+    name: {{ $ing.issuer }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -160,32 +170,41 @@ metadata:
     {{- include "wrathbench.labels" . | nindent 4 }}
     app.kubernetes.io/component: viewer
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: {{ .Values.viewer.ingress.entrypoint }}
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ $ing.entrypoint }}
     # Dashboard discovery is OFF unless someone asks for it: the viewer is
     # operator-only and is not a thing to advertise on a tile wall. The chart
     # knows one such annotation by name because "off" has to be asserted, not
     # merely omitted; anything else the cluster repo wants goes through
     # `annotations` below, which is applied last and wins.
-    hajimari.io/enable: {{ .Values.viewer.ingress.hajimari.enabled | quote }}
-    {{- with .Values.viewer.ingress.annotations }}
+    hajimari.io/enable: {{ $ing.hajimari.enabled | quote }}
+    {{- with $ing.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  ingressClassName: {{ .Values.viewer.ingress.className }}
+  ingressClassName: {{ $ing.className }}
+  {{- if $ing.issuer }}
+  # Only rendered when the chart issues the certificate itself. Without an
+  # issuer there is deliberately no spec.tls: the ingress controller's default
+  # certificate (on Nusphere, the Let's Encrypt LAN wildcard) serves every host.
   tls:
     - hosts:
-        - {{ .Values.viewer.ingress.host | quote }}
+        {{- range $hosts }}
+        - {{ . | quote }}
+        {{- end }}
       secretName: {{ include "wrathbench.fullname" . }}-viewer-tls
+  {{- end }}
   rules:
-    - host: {{ .Values.viewer.ingress.host | quote }}
+    {{- range $hosts }}
+    - host: {{ . | quote }}
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "wrathbench.fullname" . }}-viewer
+                name: {{ include "wrathbench.fullname" $ }}-viewer
                 port:
                   number: 8090
+    {{- end }}
 {{- end }}
 {{- end }}
