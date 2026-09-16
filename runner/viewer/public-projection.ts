@@ -358,6 +358,7 @@ function projectResultRun(r: ResultRun): ResultRun {
     model: r.model,
     ...(r.resolvedModel !== undefined ? { resolvedModel: r.resolvedModel } : {}),
     ...(r.cliVersion !== undefined ? { cliVersion: r.cliVersion } : {}),
+    ...(r.driver !== undefined ? { driver: r.driver } : {}),
     platform: r.platform,
     harnessVersion: r.harnessVersion,
     harnessSeries: r.harnessSeries,
@@ -906,6 +907,14 @@ function projectCharacterTotals(t: CharacterTotals): CharacterTotals {
 function projectCharacter(s: CharacterView): CharacterView {
   return {
     characterId: s.characterId,
+    // Identity: every field here is already on the public runs row
+    // (`projectResultRun`), so passing it through opens no door.
+    model: s.model,
+    effort: s.effort,
+    driver: s.driver,
+    harnessVersion: s.harnessVersion,
+    name: s.name,
+    characterLabel: s.characterLabel,
     attempt: s.attempt,
     attempts: s.attempts,
     previous: s.previous,

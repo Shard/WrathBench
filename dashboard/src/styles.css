@@ -781,3 +781,18 @@ button.update:hover { background: var(--panel); }
    counted runs actually spanned. A size down from the maximum above it — the
    headline stays the headline. */
 td .spread { font-size: 11px; }
+
+/*
+ * The character page (item 128): one character across its sessions.
+ *
+ * Deliberately thin. The page is built from furniture the run page and the
+ * ladder already style — `.cards`, `.attempts`, the charts, the table — and
+ * only two things are its own: a heading that names the character rather than
+ * a run id, and the live-session panel. Both stack at phone width because
+ * every block above them already does.
+ */
+.characterhead { margin: 0 0 12px; }
+.characterhead h1 { font-size: 20px; margin: 0 0 2px; font-weight: 600; }
+.characterhead .dim { font-size: 12px; }
+.live-attempt { margin: 0 0 12px; max-width: 420px; }
+.live-attempt .unit-frame { margin: 8px 0; }

@@ -109,3 +109,25 @@ export function atBottom(
 ): boolean {
   return scrollHeight - clientHeight - scrollTop <= threshold;
 }
+
+/**
+ * How a token total was arrived at, in words — and the caveat behind it.
+ *
+ * Here rather than on a page because two pages print it: a run's own card and
+ * a character's, whose source degrades to the weakest any attempt reported
+ * (`mergeTokens` in `runner/viewer/character.ts`). One wording, so a reader
+ * moving between them is not told two different things about the same number.
+ */
+export function sourceLabel(source: string | undefined): string {
+  if (source === "reported") return "provider-reported";
+  if (source === "snapshot") return "snapshot — under-read";
+  return "estimated (chars ÷ 4)";
+}
+
+export function sourceHint(source: string | undefined): string {
+  if (source === "snapshot") {
+    return "claude-code opening usage snapshots: this run's turns never emitted a finished output count, so the completion total and the rate below are far too low";
+  }
+  if (source === "reported") return "provider-reported token counts";
+  return "no provider counted; characters ÷ 4";
+}

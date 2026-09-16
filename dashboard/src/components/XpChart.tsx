@@ -36,6 +36,13 @@ export function XpChart(props: {
   endedAt: number | null;
   episodeMs: number | null;
   now: number;
+  /**
+   * Session boundaries, in the same units as the samples' `ts` (item 128).
+   * A run's own chart has none — a run is one session. A character's chart
+   * draws one per attempt after the first, because a curve laid across twelve
+   * sessions with nothing marking where they met reads as one long climb.
+   */
+  seams?: readonly { at: number; label: string }[];
 }) {
   const model = createMemo(() =>
     xpChartModel(props.states, {
@@ -98,6 +105,27 @@ export function XpChart(props: {
             <text x={px(t.ts)} y={plot.y0 + 15} text-anchor="middle" font-size="11" fill="var(--dim)">
               {t.label}
             </text>
+          )}
+        </For>
+
+        {/* Session boundaries, when the caller has any: where one attempt's
+            last sample met the next attempt's first. Drawn under the curve so
+            the curve stays the thing being read. */}
+        <For each={props.seams ?? []}>
+          {(seam) => (
+            <Show when={seam.at > model().t0 && seam.at < model().t1}>
+              <line
+                x1={px(seam.at)}
+                y1={plot.y1}
+                x2={px(seam.at)}
+                y2={plot.y0}
+                stroke="var(--dim)"
+                stroke-dasharray="2 4"
+                opacity="0.7"
+              >
+                <title>{seam.label}</title>
+              </line>
+            </Show>
           )}
         </For>
 

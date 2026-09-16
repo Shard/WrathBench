@@ -12,6 +12,7 @@
 
 import type {
   ApiInfoResponse,
+  CharacterResponse,
   EntriesResponse,
   EpisodeIdView,
   EpisodesResponse,
@@ -64,6 +65,8 @@ export type {
   RunsResponse,
   StatePoint,
   CharacterAttempt,
+  CharacterResponse,
+  CharacterStatePoint,
   CharacterCost,
   CharacterTotals,
   CharacterView,
@@ -252,6 +255,13 @@ export function createClient(opts: ClientOptions = {}) {
       get<TrackResponse>(`/api/run/${encodeURIComponent(id)}/track`),
     run: (id: string): Promise<RunDetailResponse> =>
       get<RunDetailResponse>(`/api/run/${encodeURIComponent(id)}`),
+    /**
+     * One character, whole: the aggregate across every attempt plus the state
+     * series over all of them (item 128). `id` is any run in the chain — the
+     * server resolves it and answers with the canonical `characterId`.
+     */
+    character: (id: string): Promise<CharacterResponse> =>
+      get<CharacterResponse>(`/api/character/${encodeURIComponent(id)}`),
     entries: (id: string, from?: number, limit = 200): Promise<EntriesResponse> => {
       const q = new URLSearchParams({ limit: String(limit) });
       if (from !== undefined) q.set("from", String(from));

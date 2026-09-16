@@ -851,6 +851,23 @@ export interface CharacterTotals {
 export interface CharacterView {
   /** The chain root's run id: the character's identity across attempts. */
   characterId: string;
+  /*
+   * Who is playing, off the NEWEST attempt that recorded each.
+   *
+   * A character page has to be able to name what it is about, and an attempt
+   * row carries figures and nothing else. The newest attempt rather than the
+   * oldest because this is a heading about the present: a character can outlive
+   * a harness patch or a driver change, and what it is on now is the honest
+   * answer to "what is this". Every one of these already rides on the runs
+   * listing, so none of it is a new disclosure.
+   */
+  model: string | null;
+  effort: string | null;
+  driver: string | null;
+  harnessVersion: string | null;
+  /** The in-game character name, and its race/class label. */
+  name: string | null;
+  characterLabel: string | null;
   /** This run's 1-based place in `runs`. */
   attempt: number;
   attempts: number;
@@ -1428,6 +1445,12 @@ export interface ResultRun {
    */
   resolvedModel?: string | null;
   cliVersion?: string | null;
+  /**
+   * Which CLI drove the run. Optional for the reason `resolvedModel` is — a
+   * dashboard built against a viewer that predates the field must still render
+   * — and already public on `RunRow.driver`, which this mirrors.
+   */
+  driver?: string | null;
   platform: string | null;
   harnessVersion: string | null;
   /**

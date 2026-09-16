@@ -48,16 +48,15 @@ import {
   type FeedEntry,
   type ModelRowView,
   type RunDetailResponse,
-  type CharacterAttempt,
-  type CharacterView,
   type TokenTotals,
 } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
 import { CharacterPlot } from "../components/CharacterChart";
+import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
 import { stitchCharacter, type CharacterSeries } from "../lib/ladder";
-import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, fmtUsd, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
@@ -77,9 +76,9 @@ import {
   type ExpandPreset,
 } from "../lib/feedview";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
-import { atBottom } from "../lib/runview";
+import { atBottom, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
-import { OPAQUE_PAUSE_REASON, statusOf, statusText } from "../lib/runs";
+import { OPAQUE_PAUSE_REASON, statusOf } from "../lib/runs";
 
 const WINDOW = 200;
 
@@ -105,7 +104,7 @@ const SILENT_MS = 120_000;
 /**
  * How often a live run's summary is re-fetched.
  *
- * The entry feed arrives over the tail character, but the summary card does not:
+ * The entry feed arrives over the tail's SSE stream, but the summary card does not:
  * playtime, level and money come from `/api/run/<id>`, and playtime for a live
  * run advances with the clock. Matched to the fleet listing's own 10s poll so
  * the two pages show the same number rather than one lagging the other.
@@ -148,20 +147,6 @@ function tpsLine(d: RunDetailResponse | undefined, source?: string): string {
  * be far too low (~300× on the run with both halves). Saying so is the whole
  * point — an unrepaired figure must not read like a repaired one.
  */
-function sourceLabel(source: string | undefined): string {
-  if (source === "reported") return "provider-reported";
-  if (source === "snapshot") return "snapshot — under-read";
-  return "estimated (chars ÷ 4)";
-}
-
-function sourceHint(source: string | undefined): string {
-  if (source === "snapshot") {
-    return "claude-code opening usage snapshots: this run's turns never emitted a finished output count, so the completion total and the rate below are far too low";
-  }
-  if (source === "reported") return "provider-reported token counts";
-  return "no provider counted; characters ÷ 4";
-}
-
 export default function RunDetail() {
   const params = useParams<{ id: string }>();
   const location = useLocation();
@@ -291,7 +276,7 @@ export default function RunDetail() {
      * registered there: Solid tracks the owner through a synchronous global,
      * and an `onCleanup` called after the first await attaches to nothing. The
      * handle is registered now and filled in later. Leaking it would be worse
-     * than a stray EventSource — the server clears the character's 1 Hz rescan in
+     * than a stray EventSource — the server clears that stream's 1 Hz rescan in
      * `cancel()`, which only fires when the client closes.
      */
     let stop: (() => void) | undefined;
@@ -403,7 +388,7 @@ export default function RunDetail() {
         });
         // Only a live run needs the tail; a finished one never grows again.
         // The public build has no tail to open at all: a bucket of published
-        // JSON serves no character, and an EventSource against it would be a
+        // Static JSON serves no SSE stream, and an EventSource against it would be a
         // reconnect loop against a 404.
         if (SNAPSHOT_MODE) return;
         stop = subscribeTail(api.streamUrl(params.id), {
@@ -500,6 +485,21 @@ export default function RunDetail() {
                 */}
                 <A href={`/runs${location.search}`}>runs</A> /{" "}
                 <span title={run().runId}>{shortRunId(run().runId)}</span>
+                {/*
+                  Every run belongs to a character, and a scored run's is a
+                  chain of one (item 128), so this link is unconditional — the
+                  page does not have to know whether it is looking at freeplay
+                  to know where the character lives. The id is the chain root's
+                  when there is a chain, and the run's own when there is not,
+                  which is the same answer `characterViewOf` gives.
+                */}
+                {" · "}
+                <A
+                  href={`/character/${encodeURIComponent(d().character?.characterId ?? lineage()?.characterId ?? run().runId)}`}
+                  title="this run's character, across every attempt"
+                >
+                  character
+                </A>
               </h2>
 
               {/*
@@ -515,11 +515,9 @@ export default function RunDetail() {
                 {(l) => (
                   <p class="dim" title="a durable freeplay character: one character, continued across attempts">
                     freeplay character{" "}
-                    <Show when={l().characterId !== run().runId} fallback={shortRunId(l().characterId)}>
-                      <A href={`/run/${encodeURIComponent(l().characterId)}`} title={l().characterId}>
-                        {shortRunId(l().characterId)}
-                      </A>
-                    </Show>{" "}
+                    <A href={`/character/${encodeURIComponent(l().characterId)}`} title={l().characterId}>
+                      {shortRunId(l().characterId)}
+                    </A>{" "}
                     · attempt {l().attempt} of {l().attempts}
                     <Show when={l().previous}>
                       {(p) => (
@@ -730,7 +728,7 @@ export default function RunDetail() {
                             ? "no activity for a while — the run may have stopped"
                             : activity()}{" "}
                           · {fmtAge(now() - lastWrite())}
-                          <Show when={disconnected()}> · <span class="err">character disconnected</span></Show>
+                          <Show when={disconnected()}> · <span class="err">feed disconnected</span></Show>
                         </span>
                       </Show>
                     </Show>
@@ -926,176 +924,6 @@ export default function RunDetail() {
           );
         }}
       </Show>
-    </div>
-  );
-}
-
-/**
- * What the character has done, across every attempt of its character.
- *
- * The figures are the server's (`character.totals`, aggregated at read time in
- * `runner/viewer/character.ts`), never re-derived here, so this card and the
- * freeplay ladder cannot quote different numbers for one character. Each card
- * names this attempt's own figure underneath, because the reader is on one
- * attempt's page and the two must never be confusable.
- *
- * Null is not zero anywhere below: "not recorded" is printed as such, since a
- * character whose older attempts predate a producer has not been observed doing
- * none of it.
- */
-function CharacterTotalsCard(props: { character: CharacterView }) {
-  const t = (): CharacterView["totals"] => props.character.totals;
-  const cost = (): CharacterView["totals"]["cost"] => t().cost;
-  /*
-   * This attempt's own row from the STREAM, not from the run row beside it.
-   * The two are read at different moments on a live run — the character's
-   * attempts come off the listing's memoised rows, the run row is re-read per
-   * request — and the footnote under a total must be the same figure the strip
-   * above it lists, or the page quietly disagrees with itself.
-   */
-  const here = (): CharacterAttempt | undefined => props.character.runs[props.character.attempt - 1];
-  /** "this attempt: …" — the run's own reading, beside the character's. */
-  const mine = (v: string): string => `this attempt: ${v}`;
-  return (
-    <div class="cards">
-      <div class="card">
-        <div class="k">quests completed</div>
-        <div class="v mono">{num(t().questsCompleted)}</div>
-        <div class="sub">{mine(num(here()?.questsCompleted))}</div>
-      </div>
-      <div class="card">
-        <div class="k">xp earned</div>
-        <div class="v mono">{t().xpEarned === null ? "—" : t().xpEarned!.toLocaleString()}</div>
-        <div class="sub">
-          level {num(t().level)} · {fmtMoney(t().money)}
-        </div>
-      </div>
-      <div class="card">
-        <div class="k">playtime</div>
-        <div class="v mono">{fmtDuration(t().playtimeMs)}</div>
-        <div class="sub">{mine(fmtDuration(here()?.playtimeMs ?? null))}</div>
-      </div>
-      <div class="card">
-        <div class="k">tokens in / out</div>
-        <div class="v mono">
-          {fmtTokens(t().tokens?.promptTokens ?? null)} / {fmtTokens(t().tokens?.completionTokens ?? null)}
-        </div>
-        <div class="sub" title={sourceHint(t().tokens?.source)}>
-          {sourceLabel(t().tokens?.source)} · {t().tokens?.turns ?? 0} turns · cache r/w{" "}
-          {fmtTokens(t().tokens?.cacheReadTokens ?? null)} / {fmtTokens(t().tokens?.cacheWriteTokens ?? null)}
-        </div>
-      </div>
-      {/*
-        Two sums, never one. `CostFigure` carries a basis and a price date, and
-        a chain of attempts priced three different ways has no single one — so
-        the dollars are added and the COVERAGE is printed beside them, which is
-        what says how much of the character the figure actually accounts for.
-      */}
-      <div class="card">
-        <div class="k">cost — actual</div>
-        <div class="v mono">{fmtUsd(cost().actualUsd)}</div>
-        <div class="sub">
-          <Show
-            when={cost().actualAttempts > 0}
-            fallback={<>no attempt reports a provider charge</>}
-          >
-            {cost().actualAttempts} of {cost().attempts} attempts report one
-            <Show when={cost().asIfMetered}> · as-if-metered (a subscription was billed, not this)</Show>
-          </Show>
-        </div>
-      </div>
-      <div class="card">
-        <div class="k">cost — expected</div>
-        <div class="v mono">{fmtUsd(cost().expectedUsd)}</div>
-        <div class="sub">
-          <Show
-            when={cost().expectedAttempts > 0}
-            fallback={<>no attempt could be priced</>}
-          >
-            list prices over {cost().expectedAttempts} of {cost().attempts} attempts
-          </Show>
-        </div>
-      </div>
-      <div class="card">
-        <div class="k">deaths · flights</div>
-        <div class="v mono">
-          {t().deaths === null || t().deaths === undefined ? "—" : t().deaths!.deaths} ·{" "}
-          {t().taxi === null ? "—" : t().taxi!.flights}
-        </div>
-        <div class="sub">
-          {t().achievements === null
-            ? "achievements: not recorded"
-            : `achievements: ${t().achievements!.earned} (${t().achievements!.points} pts)`}
-        </div>
-      </div>
-      <div class="card">
-        <div class="k">spells · talents · trades</div>
-        <div class="v mono">
-          {t().spells === null || t().spells === undefined ? "—" : t().spells!.learned} ·{" "}
-          {t().talents === null || t().talents === undefined ? "—" : t().talents!.spends} ·{" "}
-          {t().trades === null || t().trades === undefined ? "—" : t().trades!.trades}
-        </div>
-        <div class="sub">
-          {num(t().toolCalls)} tool calls · {num(t().snippets)} snippets · {num(t().modelResponses)} replies
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The whole character, attempt by attempt.
- *
- * This is the thing a durable freeplay run did not have: a reader landing on
- * one attempt could see the run id either side of it and nothing else, so
- * "the run" was only ever visible one session at a time. Each attempt is a
- * link, the one being read is marked, and each carries the three facts that
- * say what happened in it — what state it ended in, how far the character got,
- * and how long it played. The figures are the attempt's own; the totals are in
- * the sidebar, which is where the character's numbers live.
- */
-function AttemptStrip(props: { character: CharacterView; runId: string }) {
-  return (
-    <div class="attempts">
-      <div class="attempts-head dim" title="a durable freeplay character: one character, continued across attempts">
-        freeplay character{" "}
-        <Show when={props.character.characterId !== props.runId} fallback={shortRunId(props.character.characterId)}>
-          <A href={`/run/${encodeURIComponent(props.character.characterId)}`} title={props.character.characterId}>
-            {shortRunId(props.character.characterId)}
-          </A>
-        </Show>{" "}
-        · attempt {props.character.attempt} of {props.character.attempts}
-        {/* The chain begins mid-history: the oldest attempt on screen still
-            names a predecessor this viewer does not serve, so every total is a
-            lower bound over what is shown. */}
-        <Show when={props.character.truncated}>
-          {" "}
-          · <span title="the oldest attempt served still names a predecessor this viewer does not hold">
-            earlier attempts not served
-          </span>
-        </Show>
-      </div>
-      <ol class="attempts-strip">
-        <For each={props.character.runs}>
-          {(a, i) => {
-            const here = (): boolean => a.runId === props.runId;
-            const status = (): string => statusOf(a);
-            return (
-              <li class={here() ? "attempt here" : "attempt"}>
-                <A href={`/run/${encodeURIComponent(a.runId)}`} title={a.runId}>
-                  <span class="n">#{i() + 1}</span>
-                  <span class={status() === "live" ? "ok" : status() === "paused" ? "warn" : "dim"}>
-                    {statusText(a)}
-                  </span>
-                </A>
-                <div class="dim">
-                  {a.level === null ? "no level" : `L${a.level}`} · {fmtDuration(a.playtimeMs)}
-                </div>
-              </li>
-            );
-          }}
-        </For>
-      </ol>
     </div>
   );
 }

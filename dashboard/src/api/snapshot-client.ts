@@ -34,6 +34,8 @@ import { PUBLIC_ATTRIBUTION } from "../lib/attribution";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
+  CharacterResponse,
+  CharacterStatePoint,
   ToolsResponse,
   EntriesResponse,
   EpisodeIdView,
@@ -49,6 +51,7 @@ import type {
   TrackResponse,
 } from "@viewer/api-types";
 import type { PublicFleetResponse } from "@viewer/public-projection";
+import { characterViewOf } from "@viewer/character";
 import { ApiError, getJson, sweepExpired, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 
@@ -409,6 +412,59 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     ladder: (episode: EpisodeIdView): Promise<ResultsResponse> =>
       snap<ResultsResponse>(`ladder-${encodeURIComponent(episode)}.json`),
     track: async (id: string): Promise<TrackResponse> => await memo<TrackResponse>(await pointer(id, "track")),
+    /*
+     * A character is assembled here rather than published as an artifact of its
+     * own, because every part of it is already in the bucket: the chain and its
+     * totals come off the runs the results aggregate carries, through the same
+     * `characterViewOf` the viewer serves `/api/character/<id>` from, and the
+     * state series is each attempt's published track. One derivation, two
+     * transports — which is the rule this whole file is written to.
+     *
+     * The walk runs against the UNFILTERED results, never a tier or series
+     * view: a character is durable across both (the ladder says so where it
+     * refuses to cut a chain by series), and resolving it against a filtered
+     * set would silently shorten the history rather than say it is short.
+     */
+    character: async (id: string): Promise<CharacterResponse> => {
+      const source = await snap<ResultsResponse>("results.json");
+      const view = characterViewOf(id, source.runs);
+      if (view === null) throw new ApiError(404, `no such character: ${id}`);
+      const states: CharacterStatePoint[] = [];
+      for (const [i, attempt] of view.runs.entries()) {
+        // An attempt the snapshot published no track for contributes nothing
+        // and does not fail the page: a character is legible with a session
+        // missing from the curve, and the attempt list still names it.
+        const t = await client.track(attempt.runId).catch(() => null);
+        if (t === null) continue;
+        for (const pt of t.points) {
+          states.push({
+            ts: pt.ts,
+            level: pt.level,
+            xp: pt.xp,
+            map: pt.map,
+            x: pt.x,
+            y: pt.y,
+            // A track point carries no z, no event count and no sequence: it is
+            // the replay's shape, not the sampler's. Null is "not published
+            // here", which is what every reader of a state sample already
+            // expects it to mean.
+            z: null,
+            eventCount: null,
+            lastSeq: null,
+            turn: pt.turn,
+            health: pt.health ?? null,
+            maxHealth: pt.maxHealth ?? null,
+            power: pt.power ?? null,
+            maxPower: pt.maxPower ?? null,
+            powerType: pt.powerType ?? null,
+            nextLevelXp: pt.nextLevelXp ?? null,
+            runId: attempt.runId,
+            attempt: i + 1,
+          });
+        }
+      }
+      return withEnvelope({ character: view, states }, source);
+    },
     run: async (id: string): Promise<RunDetailResponse> =>
       await memo<RunDetailResponse>(await pointer(id, "detail")),
     /*

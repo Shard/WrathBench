@@ -236,7 +236,14 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
             <Show when={lin()}>
               {(l) => (
                 <div class="dim" title="a durable freeplay character: one character, continued across attempts">
-                  attempt {l().attempt} of {l().attempts}
+                  {/* Freeplay rows lead to the character; scored rows lead to
+                      the run (item 128). The link is on the lineage line rather
+                      than on the id because a reader clicking a run id means
+                      that session, and only a row that HAS a chain has
+                      somewhere else worth going. */}
+                  <A href={`/character/${encodeURIComponent(l().characterId)}`} title={l().characterId}>
+                    attempt {l().attempt} of {l().attempts}
+                  </A>
                   <Show when={l().previous}>
                     {(p) => (
                       <>
