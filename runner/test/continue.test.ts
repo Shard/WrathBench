@@ -1,7 +1,7 @@
 /**
- * `--continue-from`: a freeplay stream coming back under a new run id on its
+ * `--continue-from`: a freeplay character coming back under a new run id on its
  * predecessor's account, character and scratchpad (operator ask, 2026-08-29:
- * a stream the operator disables and re-enables must not lose Bromdir).
+ * a character the operator disables and re-enables must not lose Bromdir).
  *
  * `loadContinuation` is the refusal seam, tested pure. The launch itself runs
  * run.ts as a subprocess with the stub driver against a fake module that
@@ -123,7 +123,7 @@ describe("loadContinuation", () => {
   });
 
   test("a PAUSED predecessor is a predecessor: the lineage is the newest attempt", () => {
-    // `streamsFrom` takes a paused run as a stream head since 2026-09-08, so a
+    // `streamsFrom` takes a paused run as a chain head since 2026-09-08, so a
     // continuation can now name one. Nothing here reads a termination — the
     // account and the character are the whole question — and this pins that.
     const { runsDir, runId, dir } = endedFreeplayRun();
@@ -158,7 +158,7 @@ describe("--continue-from", () => {
     try {
       const stderr = await launch(runsDir, mod.url, ["--episode", "freeplay", "--run-id", "a12", "--continue-from", runId, "--keep-characters", "Vespers"]);
       expect(stderr).toContain("continuing fleet-sub-opus-low-freeplay-opus-low-20260827-a11: Bromdir (guid 310) is on RUNNER2");
-      // Hygiene cleared the stranger and left the stream's character.
+      // Hygiene cleared the stranger and left the character's own.
       expect(mod.deleted).toEqual(["Novice"]);
       const dir = join(runsDir, "a12");
       const meta = readMeta(dir);
@@ -200,7 +200,7 @@ describe("--continue-from", () => {
 
   test("an archived predecessor still continues: the archive parks a listing, not a character", async () => {
     const { runsDir, runId, dir } = endedFreeplayRun();
-    // The freeplay ladder shows one stream per model, so the dead sessions
+    // The freeplay ladder shows one character per model, so the dead sessions
     // behind it get parked. The character is untouched by that move.
     mkdirSync(join(runsDir, ARCHIVE_DIR), { recursive: true });
     renameSync(dir, join(runsDir, ARCHIVE_DIR, runId));

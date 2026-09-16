@@ -84,7 +84,7 @@ published artifact carries.
 | `/fleet` | fleet overview: the supervisor, the gate, one table of jobs and accounts, paused and ended runs |
 | `/about` | the meta page: how to read a result, the two harness groups, the tiers (what each id fixes, how many runs sit against it; a member count leads to its ladder), pointers to the docs; `/episodes` redirects here |
 | `/runs` | every run, as a sortable table — the per-run grain; `/results` redirects here |
-| `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached. `freeplay` is the exception — the active field, one stepped line and one row per durable stream, level against cumulative active playtime |
+| `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached. `freeplay` is the exception — the active field, one stepped line and one row per durable character, level against cumulative active playtime |
 | `/models` | the roster with the scheduler's verdict on each entry |
 | `/campaigns` | probe campaign coverage: cells swept, by how many models |
 | `/run/:id` | one run, turn by turn, following the file live |
@@ -104,13 +104,18 @@ it is the harness talking to the model rather than the tool's output; a
 `harness` record with no text is bookkeeping and stays one quiet line. The pure
 half is `lib/feedview.ts` and its tests.
 
-A durable freeplay stream is one character across attempts, so `/runs` and
+A durable freeplay character is one character across attempts, so `/runs` and
 `/run/:id` say where a run sits in its chain ("attempt 2 of 3 · continues a11",
 both directions linked on the run page) rather than listing a12 as an unrelated
-row beside a11. The walk is `lib/lineage.ts`, shared with the ladder's
-`streamRows`, and it is indexed over every run the server served — a stream
-that crossed a minor bump has its predecessor outside the series filter, which
-is where the line is worth the most. The table itself never reorders: it sorts
+row beside a11, and the chain has a page of its own at `/character/:id` — the
+whole climb with its session boundaries, the totals, the live session when one
+runs, and every attempt. Every run has one: a scored run's character is a chain
+of one attempt, so nothing branches on "is this freeplay" to know where to
+link, and navigation stays freeplay-first (freeplay rows lead to the character,
+scored rows to the run). The walk is `lib/lineage.ts`, shared with the ladder's
+`characterRows`, and it is indexed over every run the server served — a
+character that crossed a minor bump has its predecessor outside the series
+filter, which is where the line is worth the most. The table itself never reorders: it sorts
 thirteen ways, so the text is the link and the rail on the run cell is only
 what adjacency happens to give.
 
@@ -160,8 +165,8 @@ Three modules are imported from the viewer rather than copied, under the
   error rather than a runtime surprise.
 - `runner/viewer/worldmap.ts` — the world→tile transform.
 - `runner/viewer/lineage.ts` — the freeplay chain walk. The server aggregates a
-  whole stream on it (`runner/viewer/stream.ts`) and this side draws the attempt
-  strip on it, so one walk answers both.
+  whole character on it (`runner/viewer/character.ts`) and this side draws the
+  attempt strip on it, so one walk answers both.
 
 All three are import-free by construction, so nothing server-side follows them
 into the browser bundle.
