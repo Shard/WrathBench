@@ -12,3 +12,6 @@ dashboard/public/og.png
 
 # Claude Code session worktrees (never part of the repo)
 .claude/worktrees/
+
+# Claude Code local harness settings (not part of the repo)
+.claude/settings.json
