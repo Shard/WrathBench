@@ -54,6 +54,7 @@ import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import {
   RUNGS,
   billingKnown,
+  scored,
   classOptions,
   filterRuns,
   harnessOptions,
@@ -64,8 +65,16 @@ import {
   type FilterChoice,
   type LadderCell,
   type LadderRow,
+  type LevelRange,
   type StreamRow,
 } from "../lib/ladder";
+import {
+  HUMAN_SPEEDRUN_BAND,
+  type ReferenceMark,
+  type ReferenceScale,
+  empiricalCeiling,
+  referenceScale,
+} from "../lib/reference";
 import { resolvedSummary } from "../lib/models";
 import { fmtMoney, fmtWhen, modelDisplay } from "../lib/format";
 import { poll } from "../lib/poll";
@@ -173,6 +182,27 @@ export default function Ladder() {
   const billingUnknown = (): boolean =>
     excludeFree() && all().length > 0 && !billingKnown(all());
   const rows = createMemo(() => ladderRows(runs()));
+  /*
+   * The reference lines are derived from the series-filtered *scored* set,
+   * deliberately before race, class, harness and "exclude free": the ceiling
+   * is labelled "best observed e90, harness 0.5", and a number that moved when
+   * a reader ticked a checkbox would make its own label false. The rows on
+   * screen only decide how far the scale has to stretch.
+   */
+  const ceiling = createMemo(() => empiricalCeiling(scored(all())));
+  const reference = createMemo((): ReferenceScale | null =>
+    freeplay()
+      ? null
+      : referenceScale({
+          episode: episode(),
+          series: series(),
+          ceiling: ceiling(),
+          reached: rows().reduce<number | null>(
+            (m, r) => (r.bestLevel === null ? m : Math.max(m ?? 0, r.bestLevel)),
+            null,
+          ),
+        }),
+  );
 
   return (
     <div class="page">
@@ -353,7 +383,7 @@ export default function Ladder() {
                     <td class="right mono dim" title={row.bestMoneyRunId ?? "not recorded"}>
                       {row.bestMoney === null ? "—" : fmtMoney(row.bestMoney)}
                     </td>
-                    <For each={row.cells}>{(cell) => <RungCell cell={cell} />}</For>
+                    <For each={row.cells}>{(cell) => <RungCell cell={cell} runs={row.runs} />}</For>
                   </tr>
                 )}
               </For>
@@ -367,6 +397,8 @@ export default function Ladder() {
             </tbody>
           </table>
         </div>
+
+        <Show when={reference()}>{(ref) => <ReferenceStrip scale={ref()} episode={episode()} />}</Show>
 
         <h2 class="section">the rungs, and how each is decided</h2>
         <div class="scroller">
@@ -487,9 +519,120 @@ function StreamTable(props: { rows: readonly StreamRow[] }) {
   );
 }
 
-/** The furthest a model's run got: `L14 · 4,120 xp`, or what was recorded of it. */
+/**
+ * The two reference lines, on a level scale under the table.
+ *
+ * A level reading on the ladder is otherwise legible only against other
+ * models' level readings, so the page says what ninety minutes in this world
+ * can contain: the best any scored run of this series actually managed, and
+ * roughly where a practised human is at the same point. The operator chose
+ * these two over a scripted grinder or walkthrough baseline (2026-09-16), so
+ * nothing new was run for either — one is a maximum over the runs on hand and
+ * the other is a constant with its sources in `lib/reference.ts`.
+ *
+ * Below the table rather than inside it: the rung table carries eight extra
+ * columns and lives in a `.scroller`, and a reference row in there would be
+ * behind a horizontal scroll on a phone. Both marks are drawn as spans — the
+ * speedrun figure is a band, not a point, because the two records bracketing
+ * it are from two games with different XP rates and neither is 3.3.5a.
+ * Provenance is on the hover and repeated in the footnote, which is the whole
+ * point of drawing them.
+ */
+const REF_W = 100;
+const REF_H = 26;
+
+function ReferenceStrip(props: { scale: ReferenceScale; episode: string }) {
+  const span = (): number => Math.max(props.scale.max - props.scale.min, 1);
+  const x = (level: number): number => ((level - props.scale.min) / span()) * REF_W;
+  return (
+    <div class="reference">
+      <div class="reference-scale">
+        <svg viewBox={`0 0 ${REF_W} ${REF_H}`} preserveAspectRatio="none" role="img" aria-label={ariaOf(props.scale)}>
+          <title>{ariaOf(props.scale)}</title>
+          {/* The rail: level 1 at the left, the far end just past the furthest
+              thing drawn, so a mark never sits on the edge. */}
+          <line x1="0" y1={REF_H - 8} x2={REF_W} y2={REF_H - 8} stroke="var(--line)" stroke-width="0.5" />
+          <For each={props.scale.marks}>
+            {(m) => (
+              <g class={`reference-mark ${m.id}`}>
+                <title>{`${m.label} — ${m.provenance}`}</title>
+                <Show
+                  when={m.high > m.low}
+                  fallback={
+                    <line
+                      x1={x(m.low)}
+                      y1={2}
+                      x2={x(m.low)}
+                      y2={REF_H - 8}
+                      stroke="var(--accent)"
+                      stroke-width="0.6"
+                    />
+                  }
+                >
+                  <rect x={x(m.low)} y={2} width={Math.max(x(m.high) - x(m.low), 0.6)} height={REF_H - 10} fill="var(--dim)" opacity="0.25" />
+                </Show>
+              </g>
+            )}
+          </For>
+        </svg>
+      </div>
+      {/* The legend carries the numbers, because the strip is squeezed on a
+          phone and a label that has to be measured off a rail is not a label. */}
+      <ul class="reference-legend dim">
+        <For each={props.scale.marks}>
+          {(m) => (
+            <li title={m.provenance}>
+              <span class={m.id === "ceiling" ? "swatch line" : "swatch band"} aria-hidden="true" />
+              <span class="mono">{m.low === m.high ? `L${m.low}` : `L${m.low}–${m.high}`}</span> {m.label}
+            </li>
+          )}
+        </For>
+      </ul>
+      <p class="dim reference-note">
+        Neither line is a score and neither enters the row order. The ceiling is derived at read time
+        from this tier's scored runs on the selected series — it is not a target and not a constant, and
+        it moves the moment a run beats it. The band is a committed constant: roughly L
+        {HUMAN_SPEEDRUN_BAND.low}–{HUMAN_SPEEDRUN_BAND.high} by {HUMAN_SPEEDRUN_BAND.minutes} minutes,
+        read off {" "}
+        <For each={HUMAN_SPEEDRUN_BAND.sources}>
+          {(src, i) => (
+            <>
+              <Show when={i() > 0}>, </Show>
+              <a href={src.url} rel="noreferrer" title={`${src.what} — ${src.note}`}>
+                {src.what}
+              </a>
+            </>
+          )}
+        </For>
+        . WotLK Classic has no speedrun board of its own — it was folded into Cataclysm Classic — and
+        the run pages answer 403 to a fetcher, so those figures came from search snippets and are
+        labelled loosely sourced until someone confirms them in a browser. The notes travel with the
+        constant in <span class="mono">dashboard/src/lib/reference.ts</span>.
+      </p>
+    </div>
+  );
+}
+
+function ariaOf(scale: ReferenceScale): string {
+  return `A level scale from L${scale.min} to L${scale.max} carrying ${scale.marks
+    .map((m: ReferenceMark) => `${m.label} at ${m.low === m.high ? `L${m.low}` : `L${m.low}–${m.high}`}`)
+    .join(" and ")}`;
+}
+
+/**
+ * The furthest a model's run got: `L14 · 4,120 xp`, or what was recorded of
+ * it — and under it, where the rest of its runs finished.
+ *
+ * The headline stays the maximum it always was. The second line is the spread
+ * the tier's evidence budget already bought (`levelRangeOf`): the median level
+ * and the range, or nothing at all when one run is all there is to disperse.
+ */
 function Furthest(props: { row: LadderRow }) {
   const r = (): LadderRow => props.row;
+  const spread = (): LevelRange | null => {
+    const lr = r().levelRange;
+    return lr !== null && lr.n > 1 ? lr : null;
+  };
   return (
     <Show when={r().bestLevel !== null} fallback={<span>—</span>}>
       <span>
@@ -498,29 +641,70 @@ function Furthest(props: { row: LadderRow }) {
           <span class="dim"> · {r().bestXp!.toLocaleString()} xp</span>
         </Show>
       </span>
+      <Show when={spread()}>
+        {(lr) => (
+          <div
+            class="dim spread"
+            title={`median L${lr().median}, range L${lr().min}–L${lr().max}, over the ${lr().n} counted run${
+              lr().n === 1 ? "" : "s"
+            } that recorded a level${
+              lr().n === r().runs ? "" : ` of ${r().runs} — the rest recorded none`
+            }. The median is an observed level: on an even count it is the lower of the two middles, never a half-level nothing was at.`}
+          >
+            L{lr().median} · {lr().min}–{lr().max}
+          </div>
+        )}
+      </Show>
     </Show>
   );
 }
 
-function RungCell(props: { cell: LadderCell }) {
+/**
+ * One rung, for one model: how many of its runs got there out of how many
+ * could be asked, linking the first that did.
+ *
+ * `2/3` and not a tick (item 125, operator 2026-09-16): a tick made a model
+ * that cleared the rung once in three tries render identically to one that
+ * cleared it three times out of three. The denominator is the runs whose
+ * records can answer *this* rung, not the row's runs — a run that predates the
+ * area or flight taps was never asked and is not counted as a failure — and
+ * the hover says so whenever the two differ.
+ */
+function RungCell(props: { cell: LadderCell; runs: number }) {
   const c = (): LadderCell => props.cell;
+  const short = (): boolean => c().askable < props.runs;
+  const title = (): string =>
+    `${c().reached} of ${c().askable} run${c().askable === 1 ? "" : "s"} reached this rung` +
+    (short()
+      ? `; ${props.runs - c().askable} of the row's ${props.runs} predate the record this rung reads and could not be asked`
+      : "") +
+    (c().runId === null ? "" : ` — link goes to ${c().runId}, the first that did`);
   return (
     <td class="right">
-      <Show when={c().status === "reached"} fallback={<Unreached cell={c()} />}>
-        <A href={`/run/${encodeURIComponent(c().runId ?? "")}`} title={c().runId ?? ""}>
-          <span class="ok">✓</span>
+      <Show when={c().status === "reached"} fallback={<Unreached cell={c()} runs={props.runs} />}>
+        <A href={`/run/${encodeURIComponent(c().runId ?? "")}`} title={title()}>
+          <span class="ok mono">
+            {c().reached}/{c().askable}
+          </span>
+          <Show when={short()}>
+            <span class="dim">*</span>
+          </Show>
         </A>
       </Show>
     </td>
   );
 }
 
-function Unreached(props: { cell: LadderCell }) {
+function Unreached(props: { cell: LadderCell; runs: number }) {
+  const asked = (): string =>
+    props.cell.askable === 0
+      ? "no run's records can answer this rung"
+      : `0 of ${props.cell.askable} run${props.cell.askable === 1 ? "" : "s"} reached it` +
+        (props.cell.askable < props.runs
+          ? `; ${props.runs - props.cell.askable} of ${props.runs} could not be asked`
+          : "");
   return (
-    <span
-      class="dim"
-      title={props.cell.status === "not-instrumented" ? "not instrumented" : "not reached"}
-    >
+    <span class="dim" title={props.cell.status === "not-instrumented" ? "not instrumented" : asked()}>
       {props.cell.status === "not-instrumented" ? "·" : "—"}
     </span>
   );

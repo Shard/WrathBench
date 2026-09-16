@@ -37,6 +37,7 @@ import {
   ladderChartLayout,
   ladderPoints,
   ladderRows,
+  levelRangeOf,
   raceOptions,
   resolveChoice,
   runCostReading,
@@ -244,6 +245,83 @@ describe("ladderRows", () => {
   test("every rung either has a rule to apply or says it has none", () => {
     expect(RUNGS).toHaveLength(8);
     for (const r of RUNGS) expect(r.rule.length).toBeGreaterThan(10);
+  });
+});
+
+describe("the ladder's dispersion (item 125, operator 2026-09-16)", () => {
+  test("a rung cell counts how many runs reached it, not just that one did", () => {
+    const rows = ladderRows([
+      run({ model: "m", runId: "a", maxLevel: 12 }),
+      run({ model: "m", runId: "b", maxLevel: 10 }),
+      run({ model: "m", runId: "c", maxLevel: 4 }),
+    ]);
+    const cell = rows[0]!.cells.find((c) => c.n === 3)!;
+    expect(cell.status).toBe("reached");
+    expect(cell.reached).toBe(2);
+    expect(cell.askable).toBe(3);
+    // The link is unchanged: the first run that passes, not the furthest.
+    expect(cell.runId).toBe("a");
+  });
+
+  test("a run that could not be asked is not counted as a failure", () => {
+    // Two runs predate the area record entirely; only one can answer rung 2.
+    const rows = ladderRows([
+      run({ model: "m", runId: "new", maxLevel: 6, areas: areas({ leftStartArea: true }) }),
+      run({ model: "m", runId: "old1", maxLevel: 6 }),
+      run({ model: "m", runId: "old2", maxLevel: 6 }),
+    ]);
+    const cell = rows[0]!.cells.find((c) => c.n === 2)!;
+    expect(cell.reached).toBe(1);
+    expect(cell.askable).toBe(1); // 1/1, never 1/3
+    expect(rows[0]!.runs).toBe(3);
+  });
+
+  test("rung 4 needs both records, so a run with areas but no taxi cannot be asked", () => {
+    const rows = ladderRows([
+      run({ model: "m", maxLevel: 6, areas: areas({ capitalZone: 1537 }) }),
+      run({ model: "m", maxLevel: 6, areas: areas({ capitalZone: 1537 }), taxi: { flights: 1 } }),
+    ]);
+    const cell = rows[0]!.cells.find((c) => c.n === 4)!;
+    expect(cell.askable).toBe(1);
+    expect(cell.reached).toBe(1);
+  });
+
+  test("an uninstrumented rung counts nothing rather than reporting 0 of n", () => {
+    const cell = ladderRows([run({ maxLevel: 6 })])[0]!.cells.find((c) => c.n === 6)!;
+    expect(cell.status).toBe("not-instrumented");
+    expect(cell.askable).toBe(0);
+    expect(cell.reached).toBe(0);
+  });
+
+  test("the level range is min, median and max over the runs that recorded a level", () => {
+    expect(levelRangeOf([run({ maxLevel: 5 }), run({ maxLevel: 7 }), run({ maxLevel: 6 })])).toEqual({
+      min: 5,
+      median: 6,
+      max: 7,
+      n: 3,
+    });
+  });
+
+  test("an even count takes the lower middle: an observed level, never a half-level", () => {
+    const lr = levelRangeOf([run({ maxLevel: 6 }), run({ maxLevel: 7 })])!;
+    expect(lr.median).toBe(6);
+    expect(Number.isInteger(lr.median)).toBe(true);
+  });
+
+  test("a run with no level reading is left out, not counted as zero; none at all is null", () => {
+    const lr = levelRangeOf([run({ maxLevel: 4 }), run({ maxLevel: null }), run({ maxLevel: 8 })])!;
+    expect(lr).toEqual({ min: 4, median: 4, max: 8, n: 2 });
+    expect(levelRangeOf([run({ maxLevel: null })])).toBeNull();
+  });
+
+  test("the row carries the spread beside the maximum, and the maximum is unchanged", () => {
+    const row = ladderRows([
+      run({ model: "m", runId: "a", maxLevel: 7 }),
+      run({ model: "m", runId: "b", maxLevel: 5 }),
+      run({ model: "m", runId: "c", maxLevel: 6 }),
+    ])[0]!;
+    expect(row.bestLevel).toBe(7);
+    expect(row.levelRange).toEqual({ min: 5, median: 6, max: 7, n: 3 });
   });
 });
 
