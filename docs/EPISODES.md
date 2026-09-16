@@ -54,7 +54,8 @@ everything else is derived from it — no list of names decides what counts.
   same prompt and leash — stamped `extra: true`; it is never counted toward a
   target and never a promotion witness.
 - **Pins in the tuple.** `episode: "e90"`, the 90-minute budget, both watchdog
-  thresholds, the tool-call ceiling, `objective: none`, `wikiCoords: false`.
+  thresholds, the tool-call ceiling, `objective: none`, `wikiCoords: false`, and
+  the reference wiki included (`wiki` is absent unless a run withheld it).
 
 Ninety minutes is short enough that a full roster gets several episodes a
 night, which is what makes `e90` the sampling episode. If it turns out to be the
@@ -86,7 +87,8 @@ because that would silently re-scope every score already carrying this label.
   where a run may execute, never how many.
 - **Pins in the tuple.** `episode: "e360"`, the six-hour budget, idle threshold,
   no-XP disabled (which is not the same as zero), `objective: none`,
-  `wikiCoords: false`, and the tool-call ceiling.
+  `wikiCoords: false`, the reference wiki included (`wiki` is absent unless a run
+  withheld it), and the tool-call ceiling.
 
 ## `probing` — the probe-campaign episode
 
