@@ -28,6 +28,8 @@
     "  below name one, because their author has never served them here: 153 gpt-oss-120b calls came",
     "  from CoreWeave and DeepInfra and none from OpenAI, and 128 glm-4.7-flash calls from DeepInfra,",
     "  Novita and Cloudflare and none from Z.AI. Those are third-party datapoints and they say so.",
+    "  nemotron-nano-omni is the one entry whose lab pin is inference: it has never run, so Nvidia",
+    "  serving it is expected rather than observed. If it fails at the first request, that is why.",
     "  REFUSED on a claude-code/codex entry or a non-OpenRouter apiBase (Cerebras, LM Studio,",
     "  OpenCode Zen): one machine behind the endpoint, nothing to route between. policy.routing sets",
     "  the fleet default; an entry's own routing replaces it whole and is never merged with it.",
