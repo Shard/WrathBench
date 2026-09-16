@@ -358,7 +358,7 @@ CREATE TABLE IF NOT EXISTS run (
   -- cross-run SELECT has to be able to ask without replaying the trajectory.
   resolved_provider TEXT,
   -- The freeplay run this one continues (RunConfig.continuedFrom): the
-  -- lineage of a freeplay stream, so a listing can follow a character across
+  -- lineage of a freeplay character, so a listing can follow it across
   -- the run ids the operator's disable/re-enable cycle gave it.
   continued_from TEXT,
   termination_reason TEXT,

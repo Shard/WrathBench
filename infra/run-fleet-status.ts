@@ -51,9 +51,9 @@ import {
   planTick,
   type ResumePlan,
   retryNumbers,
-  type Stream,
-  streamsFrom,
-  streamStanding,
+  type Character,
+  charactersFrom,
+  characterStanding,
   TICK_MS,
 } from "./run-fleet-plan";
 import {
@@ -103,22 +103,22 @@ import {
   TIERS,
 } from "../runner/src/models";
 
-/** The --status stream rows: one per `idle: "unlimited"` ref. Pure. */
-export function formatStreams(
+/** The --status character rows: one per `idle: "unlimited"` ref. Pure. */
+export function formatCharacters(
   roster: Record<string, FleetRosterEntry>,
-  streams: ReadonlyMap<string, Stream>,
+  characters: ReadonlyMap<string, Character>,
   occupants: ReadonlyMap<string, Occupant>,
   running: ReadonlySet<string>,
 ): string[] {
   const out: string[] = [];
   for (const [ref, e] of Object.entries(roster)) {
     if (e.idle !== "unlimited") continue;
-    const st = streams.get(ref);
+    const st = characters.get(ref);
     if (st === undefined) {
-      out.push(`stream ${ref}: no head — ${running.has(ref) ? "first session in flight" : "next pick starts fresh"}`);
+      out.push(`character ${ref}: no head — ${running.has(ref) ? "first session in flight" : "next pick starts fresh"}`);
       continue;
     }
-    const standing = streamStanding(ref, st, occupants);
+    const standing = characterStanding(ref, st, occupants);
     const verdict =
       running.has(ref)
         ? "in flight"
@@ -128,8 +128,8 @@ export function formatStreams(
             ? "own account, resuming"
             : standing.kind === "boundary"
               ? `held: ${standing.occupant} on it until its episode boundary`
-              : `occupied by ${standing.occupant}'s stream: fresh-next on a free account, lineage dropped`;
-    out.push(`stream ${ref}: head ${st.runId} on ${st.account} as ${st.character} — ${verdict}`);
+              : `occupied by ${standing.occupant}'s character: fresh-next on a free account, lineage dropped`;
+    out.push(`character ${ref}: head ${st.runId} on ${st.account} as ${st.character} — ${verdict}`);
   }
   return out;
 }
@@ -718,7 +718,7 @@ export function printStatus(configPath: string): void {
       if (line !== undefined) console.log(`  ${line}`);
     }
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
-    // (c') freeplay streams: each unlimited ref's head and what the next pick
+    // (c') freeplay characters: each unlimited ref's head and what the next pick
     // does with it. Occupancy is the live jobs' (plus the resumes that would
     // reserve theirs), the same facts the tick reads; heads read the archive.
     const occupants = new Map<string, Occupant>();
@@ -730,8 +730,8 @@ export function printStatus(configPath: string): void {
     for (const r of resumePlan.resume) {
       occupants.set(r.account.toUpperCase(), { ref: r.job.ref, unlimited: pausesOnDrain(r.job) && config.roster[r.job.ref]?.idle === "unlimited" });
     }
-    const streams = streamsFrom(readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }), config.roster);
-    for (const line of formatStreams(config.roster, streams, occupants, running)) console.log(`  ${line}`);
+    const characters = charactersFrom(readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }), config.roster);
+    for (const line of formatCharacters(config.roster, characters, occupants, running)) console.log(`  ${line}`);
     /*
      * How much of the schedule is left, bounded by whether anything else
      * promotes (`outstandingWork` carries the formula). Computed from the

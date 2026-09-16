@@ -1237,7 +1237,7 @@ export function ladderChartLayout(
  * belong on this page; their state is a column, not a filter.
  *
  * And a character is **one character across attempts** (docs/OPERATIONS.md,
- * "Freeplay streams are durable"). A row is a character, not a run and not a
+ * "Freeplay characters are durable"). A row is a character, not a run and not a
  * model: attempt 12 continues attempt 11 on the same character, so listing
  * both would show the same character twice with the older one looking behind.
  * The lineage is `continuedFrom`; the latest attempt carries the character's

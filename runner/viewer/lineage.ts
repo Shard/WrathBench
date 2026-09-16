@@ -2,7 +2,7 @@
  * Freeplay lineage: which run continues which.
  *
  * A durable freeplay character is one character across attempts (docs/OPERATIONS.md,
- * "Freeplay streams are durable"), and `continuedFrom` is the only link between
+ * "Freeplay characters are durable"), and `continuedFrom` is the only link between
  * them. Two pages read that link — the ladder collapses a chain to one row
  * (`dashboard/src/lib/ladder.ts`, `characterRows`), the runs table and the run page
  * show a run's place in its chain — so the walk lives here once rather than

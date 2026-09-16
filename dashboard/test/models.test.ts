@@ -70,7 +70,7 @@ describe("the --status columns", () => {
     expect(MODEL_COLUMNS).not.toContain("billing");
     expect(MODEL_COLUMNS.indexOf("tier")).toBe(MODEL_COLUMNS.indexOf("model") + 1);
     expect(schedulableOf(row())).toBe("yes: schedulable on e90");
-    expect(schedulableOf(row({ schedulable: { ok: false, why: "running (one stream per model)", extras: false } }))).toBe("no: running (one stream per model)");
+    expect(schedulableOf(row({ schedulable: { ok: false, why: "running (one character per model)", extras: false } }))).toBe("no: running (one character per model)");
     expect(extrasOf(row())).toBe(0);
     const e90 = row().perEpisode.e90!;
     expect(extrasOf(row({ perEpisode: { e90: { ...e90, extras: 2 }, e360: { ...e90, extras: 1 } } }))).toBe(3);

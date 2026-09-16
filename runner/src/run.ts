@@ -258,7 +258,7 @@ export interface Continuation {
 }
 
 /**
- * `--continue-from <run-id>`: a freeplay stream coming back under a new run id
+ * `--continue-from <run-id>`: a freeplay character coming back under a new run id
  * on its predecessor's character. Everything that would make the lineage a
  * lie is refused here, before a directory exists: the launch must be
  * `freeplay` (a scored episode is a fresh character by definition), the
@@ -269,8 +269,8 @@ export interface Continuation {
  *
  * A predecessor that has been ARCHIVED is read from `<runs>/archive/<id>`:
  * archiving parks a run so the listings stop counting it, and says nothing
- * about whether its character is still standing on the account. The stream
- * election reads archived facts too (`streamsFrom`, `includeArchived`), so
+ * about whether its character is still standing on the account. The character
+ * election reads archived facts too (`charactersFrom`, `includeArchived`), so
  * refusing here would break exactly the continuation the archive was meant
  * to leave alone.
  *
@@ -331,7 +331,7 @@ async function main(): Promise<void> {
   const resumeId = typeof args["resume"] === "string" ? args["resume"] : undefined;
   /**
    * `--keep-characters a,b`: names on this account that belong to another
-   * ref's freeplay stream and must survive this launch's hygiene. A launch
+   * ref's freeplay character and must survive this launch's hygiene. A launch
    * input, not identity — nothing about this run is different for it except
    * that those names are taken.
    */
@@ -340,9 +340,9 @@ async function main(): Promise<void> {
       ? args["keep-characters"].split(",").map((n) => n.trim()).filter((n) => n.length > 0)
       : [];
   /**
-   * `--continue-dropped <run-id> --continue-dropped-reason <why>`: the stream
+   * `--continue-dropped <run-id> --continue-dropped-reason <why>`: the character
    * head the supervisor chose NOT to continue (its account is occupied by
-   * another ref's stream), so this launch is a fresh start by decision. A
+   * another ref's character), so this launch is a fresh start by decision. A
    * launch input for the record only — the run carries no lineage, exactly as
    * a `continue-dropped` that the runner itself decides.
    */
@@ -811,7 +811,7 @@ async function main(): Promise<void> {
       account: config.account,
       log: (line) => console.error(`[wrathbench] ${line}`),
       // A continuation keeps its predecessor's character, and every launch
-      // keeps another stream's character it shares the account with;
+      // keeps another ref's freeplay character it shares the account with;
       // everything else on the account is the usual leftover.
       keep: [...(continuation !== undefined ? [continuation.character] : []), ...keepCharacters],
     });
@@ -837,7 +837,7 @@ async function main(): Promise<void> {
     const keptOthers = hygiene.kept.filter((k) => continuation === undefined || k.name.toLowerCase() !== continuation.character.toLowerCase());
     takenNames = [...hygiene.leftover, ...keptOthers.map((k) => k.name)];
     if (keptOthers.length > 0) {
-      console.error(`[wrathbench] hygiene: kept ${keptOthers.map((k) => k.name).join(", ")} (another freeplay stream's character on this account)`);
+      console.error(`[wrathbench] hygiene: kept ${keptOthers.map((k) => k.name).join(", ")} (another ref's freeplay character on this account)`);
     }
     if (hygiene.leftover.length > 0) {
       console.error(
@@ -846,7 +846,7 @@ async function main(): Promise<void> {
     }
     const own = continuation === undefined ? undefined : hygiene.kept.find((k) => k.name.toLowerCase() === continuation!.character.toLowerCase());
     if (continuation !== undefined && own !== undefined) {
-      // The character is there: the stream goes on, and the freshness belt
+      // The character is there: the chain goes on, and the freshness belt
       // stays off, as on a resume — this character is meant to have history.
       console.error(`[wrathbench] continuing ${continuation.from}: ${own.name} (guid ${own.guid}) is on ${config.account}`);
       trajectory.append({ t: "continue", from: continuation.from, character: own.name, guid: own.guid });

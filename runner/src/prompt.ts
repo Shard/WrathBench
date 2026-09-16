@@ -290,8 +290,8 @@ export function freshCharacterNote(o: { race: number; class: number; taken?: rea
  * that interpolates a name it does not have.
  */
 /**
- * The continued run's session note: a freeplay stream coming back under a new
- * run id — the operator disabled it, or the stream's previous run ended — on
+ * The continued run's session note: a freeplay character coming back under a new
+ * run id — the operator disabled it, or the character's previous run ended — on
  * the character and scratchpad its predecessor left. The same character facts
  * the resume note carries, for the same reason, and the same instruction:
  * `createSession` on the recorded name reuses the character, so the model

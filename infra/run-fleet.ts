@@ -45,7 +45,7 @@
  *  - roster policy: claude-family models (opus/sonnet/haiku/claude-*) run only
  *    via the claude-code driver, and that driver runs only claude
  *    models; the codex driver (a ChatGPT subscription) carries no claude id. Shared free-cloud pools (OpenRouter/OpenCode) carry free models
- *    only; keeping a single stream per provider pool is the whole point of
+ *    only; keeping a single run in flight per provider pool is the whole point of
  *    one job per account. A local/self-hosted openai apiBase is a distinct
  *    category: exempt from the free-suffix rule (no shared pool to meter),
  *    still barred from claude-* ids.
@@ -140,10 +140,10 @@ import {
   runnableRefs,
   serverIdentity,
   type ServerIdentity,
-  streamAffinity,
-  streamKey,
-  streamsFrom,
-  streamStanding,
+  characterAffinity,
+  characterKey,
+  charactersFrom,
+  characterStanding,
   tailOf,
   TICK_MS,
   tripsBreaker,
@@ -202,7 +202,7 @@ import { isAllowlistedFree } from "../runner/src/model-cost";
 // config <- plan <- state <- status <- here:
 //
 //   run-fleet-config.ts  the shape of fleet.json and the parser that refuses one
-//   run-fleet-plan.ts    the pure planners, the stream/drain rules, the gate verdict
+//   run-fleet-plan.ts    the pure planners, the character/drain rules, the gate verdict
 //   run-fleet-state.ts   paths, fleet-state.json, the pause switch, what /proc says
 //   run-fleet-status.ts  the format* helpers and the --status/--live-runs/--dry-run printers
 //
@@ -918,7 +918,7 @@ async function main(): Promise<void> {
         const dropped = policyJobDropped(running, cfg.roster[running.ref]);
         if (dropped !== undefined) {
           // A disabled stand-in makes diffJobs drain it, and for a freeplay
-          // stream a drain is an immediate SIGTERM (`pausesOnDrain`): the run
+          // character a drain is an immediate SIGTERM (`pausesOnDrain`): the run
           // pauses as `operator-pause` and `planResumes` leaves it listed while
           // the ref stays out of the unlimited lane, so nothing respawns it.
           drainReasons.set(name, dropped);
@@ -926,7 +926,7 @@ async function main(): Promise<void> {
           // A session under SIGTERM still holds its driver slot until the
           // process exits (runner backstop 60s, roster SIGKILL grace 90s), and
           // this tick's picks are planned below: without this the flip frees a
-          // claude lane a live stream is still on and the policy spills a spawn
+          // claude lane a live run is still on and the policy spills a spawn
           // onto it, which is the 2026-08-24 incident the backstop block below
           // was written for — and that block skips anything in `assigned`.
           runningRefs.add(running.ref);
@@ -959,7 +959,7 @@ async function main(): Promise<void> {
     // driver: a completed campaign cell draining to its episode boundary, a
     // job whose config entry vanished. The pinned loop above walks what the
     // config yields, so such a process silently stopped occupying a slot —
-    // which is how a third claude-code stream spilled onto a cap of 2 while
+    // which is how a third claude-code run spilled onto a cap of 2 while
     // nav-probe-coldridge (cell quota met, draining) was still alive
     // (2026-08-24). Count every live job the loops above did not.
     {
@@ -1056,7 +1056,7 @@ async function main(): Promise<void> {
       }
     }
     const runningAndReserved = new Map([...assigned, ...reserved]);
-    // Who holds each account this tick, for the stream rule (`streamStanding`):
+    // Who holds each account this tick, for the character rule (`characterStanding`):
     // the live pool jobs, the pinned ones, and the resumes reserving theirs.
     const occupants = new Map<string, Occupant>();
     {
@@ -1071,10 +1071,10 @@ async function main(): Promise<void> {
     // Where each model's last character is standing. Read once a
     // tick from the same run facts everything else here reads.
     const affinityMap = affinityFrom(runs, cfg.roster);
-    // Where each unlimited ref's freeplay stream stands; a freeplay pick
+    // Where each unlimited ref's freeplay character stands; a freeplay pick
     // goes back to that account, every fresh launch keeps those characters.
-    const streams = streamsFrom(runs, cfg.roster);
-    const affinity = streamAffinity(streams, affinityOf(affinityMap));
+    const characters = charactersFrom(runs, cfg.roster);
+    const affinity = characterAffinity(characters, affinityOf(affinityMap));
     lastPlan = planQueue({
       queue: poolJobs(cfg),
       roster: cfg.roster,
@@ -1095,7 +1095,7 @@ async function main(): Promise<void> {
       // The lane is settled here, on the plan's own job, so the policy's cap
       // loop counts this assignment against the subscription it actually took.
       a.job = reserveLane(a.job);
-      const keep = keepFor(account, streams);
+      const keep = keepFor(account, characters);
       if (keep.length > 0) a.job = { ...a.job, keepCharacters: keep };
       pending.set(a.job.name, a.job);
       for (const r of a.job.refs) freshAssign.push({ ref: r, account });
@@ -1121,36 +1121,36 @@ async function main(): Promise<void> {
         probeRuns: probes,
         affinity,
         }),
-        streams,
+        characters,
         cfg.roster,
         occupants,
       );
       const picks = continued.picks;
       for (const w of continued.waiting) {
-        const key = `${w.name}:stream:${w.stream.runId}:${w.why}`;
+        const key = `${w.name}:character:${w.head.runId}:${w.why}`;
         if (!announcedPicks.has(key)) {
           announcedPicks.add(key);
           say(`policy ${w.name}: waiting — ${w.why}; not starting fresh on ${w.offered}`);
-          record({ job: w.name, event: "stream-waiting", detail: `${w.why}; offered ${w.offered}` });
+          record({ job: w.name, event: "character-waiting", detail: `${w.why}; offered ${w.offered}` });
         }
       }
       for (const d of continued.dropped) {
-        const key = `${d.name}:stream-dropped:${d.stream.runId}`;
+        const key = `${d.name}:character-dropped:${d.head.runId}`;
         if (!announcedPicks.has(key)) {
           announcedPicks.add(key);
-          say(`policy ${d.name}: ${d.stream.account} is occupied by ${d.occupant}'s stream — starting fresh on ${d.account}, lineage ${d.stream.runId} (${d.stream.character}) dropped`);
-          record({ job: d.name, event: "stream-dropped", detail: `${d.stream.runId} (${d.stream.character} on ${d.stream.account}) account_occupied_by ${d.occupant}; fresh on ${d.account}` });
+          say(`policy ${d.name}: ${d.head.account} is occupied by ${d.occupant}'s character — starting fresh on ${d.account}, lineage ${d.head.runId} (${d.head.character}) dropped`);
+          record({ job: d.name, event: "character-dropped", detail: `${d.head.runId} (${d.head.character} on ${d.head.account}) account_occupied_by ${d.occupant}; fresh on ${d.account}` });
         }
       }
-      // A stream whose head is on another ref's account and that got NO pick
+      // A character whose head is on another ref's account and that got NO pick
       // this tick (no free account, the cap, the gate) says so once, so the
       // wait reads as a wait for a free account and not as the item-94 hold.
-      for (const [ref, st] of streams) {
+      for (const [ref, st] of characters) {
         if (!allowed.has(ref) || runningRefs.has(ref)) continue;
         if (picks.some((p) => p.job.ref === ref) || continued.waiting.some((w) => w.name === `${ref}-freeplay`)) continue;
-        const standing = streamStanding(ref, st, occupants);
+        const standing = characterStanding(ref, st, occupants);
         if (standing.kind !== "occupied") continue;
-        const key = `${ref}:stream-blocked:${st.runId}:${standing.occupant}`;
+        const key = `${ref}:character-blocked:${st.runId}:${standing.occupant}`;
         if (!announcedPicks.has(key)) {
           announcedPicks.add(key);
           say(`policy ${ref}: ${describeStanding(st, standing)} — none free this tick`);
@@ -1202,7 +1202,7 @@ async function main(): Promise<void> {
         assign: freshAssign,
         affinity: affinityMap,
         isFree: (a) => !busy.has(a.toUpperCase()) && held(a) === undefined,
-        protect: new Set([...streams.values()].map((s) => streamKey(s.account, s.character))),
+        protect: new Set([...characters.values()].map((s) => characterKey(s.account, s.character))),
       });
       if (sweeps.length > 0) void sweepNames(sweeps, say);
     }
@@ -1267,7 +1267,7 @@ async function main(): Promise<void> {
     // O_APPEND, not Bun.file(): a BunFile sink starts at offset 0, so a
     // respawned job used to overwrite the head of its own log and leave the
     // dead process's tail behind it — which is exactly what `--status` reads.
-    // The shared offset an append fd gives both streams also keeps stdout and
+    // The shared offset an append fd gives both characters also keeps stdout and
     // stderr from clobbering each other.
     mkdirSync(dirname(stdoutLog), { recursive: true });
     const fd = openSync(stdoutLog, "a");
