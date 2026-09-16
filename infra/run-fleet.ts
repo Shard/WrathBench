@@ -717,18 +717,25 @@ async function main(): Promise<void> {
    */
   let config = parseFleet(JSON.parse(readFleetText(args.config)));
   configLoadedAt = Date.now();
-  const seed = seedIfEmpty(args.config, { note: `fleet boot from ${args.config}` });
-  if (seed.error !== undefined) {
-    console.error(`run-fleet: config store not seeded (${seed.error}) — ${args.config} stays the live config`);
-  } else if (seed.seeded) {
-    console.error(`run-fleet: config store seeded from ${args.config} (${configDbPath()}) — edits through the app are live from the next tick`);
-  }
   // Fail fast on anything that would fail at spawn time.
   planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }), () => undefined, stampToday);
 
   if (args.dryRun) {
     printDryRun(config, args.until, stampToday);
     return;
+  }
+
+  /*
+   * Seed the store, below the dry run so a read-only command creates nothing,
+   * and only where the deployment has named somewhere durable to put it
+   * (`seedIfEmpty`). Never a reason not to start: a store that cannot be
+   * written leaves the file in charge and says so.
+   */
+  const seed = seedIfEmpty(args.config, { note: `fleet boot from ${args.config}` });
+  if (seed.error !== undefined) {
+    console.error(`run-fleet: config store not seeded (${seed.error}) — ${args.config} stays the live config`);
+  } else if (seed.seeded) {
+    console.error(`run-fleet: config store seeded from ${args.config} (${configDbPath()}) — edits through the app are live from the next tick`);
   }
 
   fleetLog = join(RUNS_DIR, `fleet-${stampToday}.jsonl`);
