@@ -143,7 +143,23 @@ export interface Rung {
   rule: string;
   /** Null when nothing recorded today can answer the rung. */
   test: ((run: ResultRun) => boolean) | null;
+  /**
+   * Whether *this run's* records can answer the rung at all — the denominator
+   * of the cell's "2 of 3", and the one thing that keeps that fraction honest.
+   *
+   * A run that predates the producer of a signal carries no reading for it and
+   * must be treated as not recorded rather than as zero (METHODOLOGY,
+   * "Scoring"). `test` already folds both cases into "not reached", which is
+   * right for a cell that only says reached-or-not; a *count* cannot, because
+   * "1 of 3" over a row whose other two runs could never be asked reports two
+   * failures that nobody observed. So the count is out of the runs that could
+   * be asked, and the cell says so when that is fewer than the row's runs.
+   */
+  askable: (run: ResultRun) => boolean;
 }
+
+/** A level rung can be asked of any run that recorded a level. */
+const hasLevel = (r: ResultRun): boolean => r.maxLevel !== null;
 
 /** Outland and Northrend map ids — the only continents past the first two. */
 export const EXPANSION_MAPS = [530, 571];
@@ -186,18 +202,21 @@ export const RUNGS: Rung[] = [
     title: "Quest chain in the starting subzone",
     rule: "level 5 observed — the starting chain ends around L5–6",
     test: (r) => (r.maxLevel ?? 0) >= 5,
+    askable: hasLevel,
   },
   {
     n: 2,
     title: "Leave the starting subzone on its own initiative",
     rule: "left the first-observed area; older runs have no record of this",
     test: (r) => r.areas?.leftStartArea === true,
+    askable: (r) => r.areas !== null && r.areas !== undefined,
   },
   {
     n: 3,
     title: "L10: class quest, first talent, spells trained",
     rule: "level 10 observed — the talent and class-quest half is not recorded",
     test: (r) => (r.maxLevel ?? 0) >= 10,
+    askable: hasLevel,
   },
   {
     n: 4,
@@ -206,12 +225,14 @@ export const RUNGS: Rung[] = [
       "entered a capital zone AND took at least one flight (milestone records); " +
       "runs before the achievement/flight taps have no flight record and cannot pass",
     test: (r) => (r.areas?.capitalZone ?? null) !== null && (r.taxi?.flights ?? 0) >= 1,
+    askable: (r) => r.areas !== null && r.areas !== undefined && r.taxi !== null && r.taxi !== undefined,
   },
   {
     n: 5,
     title: "L20 with riding skill and a mount",
     rule: "level 20 observed — riding skill and mount purchase are not recorded",
     test: (r) => (r.maxLevel ?? 0) >= 20,
+    askable: hasLevel,
   },
   {
     n: 6,
@@ -220,26 +241,43 @@ export const RUNGS: Rung[] = [
       "needs grouping and instance records; the harness runs one character per " +
       "session (docs/proposals/GROUP-PLAY.md)",
     test: null,
+    askable: () => false,
   },
   {
     n: 7,
     title: "L40, L60, Outland, Northrend",
     rule: "level 40 observed, or a state sample on map 530 (Outland) or 571 (Northrend)",
     test: (r) => (r.maxLevel ?? 0) >= 40 || r.maps.some((m) => EXPANSION_MAPS.includes(m)),
+    askable: (r) => hasLevel(r) || r.maps.length > 0,
   },
   {
     n: 8,
     title: "L80, heroics, Icecrown Citadel",
     rule: "level 80 observed — heroics and raid progress are not recorded",
     test: (r) => (r.maxLevel ?? 0) >= 80,
+    askable: hasLevel,
   },
 ];
 
 export interface LadderCell {
   n: number;
   status: RungStatus;
-  /** The run that got there, for a reached rung. */
+  /**
+   * The run that got there, for a reached rung: the first of the row's runs
+   * that passes the test, which is not necessarily the furthest one. It stays
+   * the cell's link — the count below is what tells a model that cleared the
+   * rung once from one that cleared it every time.
+   */
   runId: string | null;
+  /** How many of the row's runs passed the rung's test. */
+  reached: number;
+  /**
+   * How many of the row's runs could be asked (`Rung.askable`) — the
+   * denominator. Below `LadderRow.runs` when some of the row's runs predate
+   * the record the rung reads; the page says so rather than counting a run
+   * that was never asked as a failure.
+   */
+  askable: number;
 }
 
 export interface LadderRow {
@@ -265,6 +303,11 @@ export interface LadderRow {
    */
   bestMoney: number | null;
   bestMoneyRunId: string | null;
+  /**
+   * How far apart the row's runs finished, in levels. Null when no counted run
+   * recorded a level — never a zero, which is a reading.
+   */
+  levelRange: LevelRange | null;
   /** Harness tags among the model's scored runs, sorted. */
   harnesses: string[];
   /** Starting characters among those runs, sorted; a label, never a row key. */
@@ -277,6 +320,41 @@ export interface LadderRow {
    * average. Empty when no run recorded one.
    */
   resolvedModels: string[];
+}
+
+/**
+ * The spread of levels a row's counted runs finished at.
+ *
+ * The row's headline numbers are maxima and the file has always been plain
+ * about it. A maximum over three runs is still one reading of three, so the
+ * row also carries what those three cost the fleet to buy: the tier is an
+ * evidence budget (METHODOLOGY, "The tier is the evidence budget" — `t1` buys
+ * e90 ×3) and the dispersion is already paid for.
+ *
+ * The median is an *observed* level, never an interpolation: on an even count
+ * it is the lower of the two middles. Levels are integers the game handed out,
+ * and half a level is a number no run was at — the same rule that keeps the
+ * `(level, xp)` pair from being flattened into a synthetic total.
+ *
+ * Runs with no level reading are left out entirely rather than counted as
+ * zero, so `n` is the runs this range actually rests on and may be fewer than
+ * the row's runs.
+ */
+export interface LevelRange {
+  min: number;
+  median: number;
+  max: number;
+  /** How many counted runs carried a level reading. */
+  n: number;
+}
+
+export function levelRangeOf(runs: readonly ResultRun[]): LevelRange | null {
+  const levels = runs.map((r) => r.maxLevel).filter((l): l is number => l !== null);
+  if (levels.length === 0) return null;
+  const sorted = [...levels].sort((a, b) => a - b);
+  // Lower of the two middles on an even count: an observed level, not a mean.
+  const median = sorted[Math.floor((sorted.length - 1) / 2)]!;
+  return { min: sorted[0]!, median, max: sorted[sorted.length - 1]!, n: sorted.length };
 }
 
 /**
@@ -302,6 +380,15 @@ export interface LadderRow {
  * stable. A missing reading sorts last rather than as zero: 0 copper and 0 xp
  * are real readings, null is "never recorded". No number here is added to
  * another — there is still no aggregate score.
+ *
+ * The row also carries its own dispersion (operator, 2026-09-16): every cell
+ * counts how many of the row's askable runs passed the rung, and `levelRange`
+ * is the min/median/max of the levels the counted runs reached. The maxima
+ * stay exactly what they were — they are honest about being maxima — and the
+ * spread sits beside them rather than replacing them, so a model that reached
+ * a rung once in three no longer renders identically to one that reached it
+ * three times. It is pure derivation over the same list: no new recording, no
+ * re-runs, and nothing here enters the ordering.
  */
 export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
   const byModel = new Map<string, ResultRun[]>();
@@ -314,12 +401,15 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
   const rows: LadderRow[] = [];
   for (const [model, list] of byModel) {
     const cells = RUNGS.map((rung): LadderCell => {
-      if (rung.test === null) return { n: rung.n, status: "not-instrumented", runId: null };
+      if (rung.test === null)
+        return { n: rung.n, status: "not-instrumented", runId: null, reached: 0, askable: 0 };
       const hit = list.find((r) => rung.test!(r));
       return {
         n: rung.n,
         status: hit === undefined ? "not-reached" : "reached",
         runId: hit?.runId ?? null,
+        reached: list.filter((r) => rung.test!(r)).length,
+        askable: list.filter((r) => rung.askable(r)).length,
       };
     });
     const reached = cells.filter((c) => c.status === "reached").map((c) => c.n);
@@ -335,6 +425,7 @@ export function ladderRows(runs: readonly ResultRun[]): LadderRow[] {
       bestRunId: furthest?.runId ?? null,
       bestMoney: richest?.money ?? null,
       bestMoneyRunId: richest?.runId ?? null,
+      levelRange: levelRangeOf(list),
       harnesses: [...new Set(list.map((r) => r.harness ?? "—"))].sort(),
       characters: charactersOf(list),
       resolvedModels: [
