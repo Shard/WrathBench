@@ -694,10 +694,9 @@ describe("createRenderer", () => {
     expect(seen.length).toBeGreaterThan(1);
     for (const held of seen) expect(held).toBeLessThanOrEqual(1);
     // And the last run is released too, so nothing is left holding the tree.
+    // The entry index is the only per-run memo left: run rows, state series
+    // and totals are rows in the derived store now, not caches here.
     expect(api.cachedRuns().entries).toBe(0);
-    // The set-shaped memos are deliberately NOT released — see `release` in
-    // api.ts for the quadratic re-read that dropping them causes.
-    expect(api.cachedRuns().rows).toBeGreaterThan(0);
   });
 
   test("release: false keeps the memos, which is what a small tree wants", async () => {

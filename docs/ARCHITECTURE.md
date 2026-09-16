@@ -313,6 +313,14 @@ SSE stream — still reads files directly, because it asks about a process that
 is writing at this instant. Retiring the per-run sqlite is a later step and
 waits on the store carrying the live state series.
 
+With no `CLICKHOUSE_URL` the viewer builds the same rows in memory by running
+the collector's own ingestion over the runs directory — which is what a bare
+clone, `bun run viewer` on a laptop and every test get. It is the same code
+path, so a row means the same thing on both; it simply holds the answer in a
+process instead of a database, and drops the two big tables as they arrive
+because a read path never reads them. That is a quickstart, not a deployment:
+on the real corpus it does once per start what the store does once, ever.
+
 ## What is deliberately absent in Phase 0
 
 Results pipeline, perturbation tooling, snapshot/restore, per-character credentials, multi-agent support, concurrency beyond a few sequential or lightly parallel characters on one server.
