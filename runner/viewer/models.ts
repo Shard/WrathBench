@@ -24,7 +24,7 @@
  *   config to invent names for.
  */
 
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { readFleetText } from "../src/config-store";
@@ -36,8 +36,6 @@ import {
   policyExclusion,
   schedulability,
   schedulableView,
-  readRunFact,
-  type CountCache,
   type ModelState,
   type PolicyJob,
   type RosterModel,
@@ -53,10 +51,8 @@ import { isEpisodeId } from "../src/episodes";
 import { parseCampaigns, type Campaign } from "../src/campaigns";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
-import { isArchiveDir } from "./archive-dir";
 import { redactSecrets } from "./tail";
 
-const RUN_ID = /^[A-Za-z0-9._-]+$/;
 
 // ------------------------------------------------------------------ roster
 

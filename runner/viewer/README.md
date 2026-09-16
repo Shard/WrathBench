@@ -41,20 +41,14 @@ is created empty, and every page serves its labelled empty state.
   service").
 - `WRATHBENCH_VIEWER_TILES_PUBLIC=1` serves minimap tiles in public mode
   anyway. Off by default, and a no-op on its own.
-- `WRATHBENCH_FACT_CACHE` overrides where the per-run fact cache is persisted
-  (default `<runs dir>/../fact-cache.json` — a sibling, because the runs
-  directory is only ever read and is mounted read-only in the pod). The counts
-  behind `/api/models` are a pure function of each run's `(size, mtime)` and a
-  finished run's never change, so they are written to this file and read back
-  on the next start instead of recounted across the whole corpus: on the
-  operator's 346-run tree the first `/api/models` after a restart goes from
-  ~34s to ~22s, of which the fact fill itself is 11.9s → 4ms. Delete the file
-  and it is rebuilt; corrupt it and it is ignored. The publisher
-  (`infra/publish-dashboard.ts`) reads the same variable and defaults to the
-  same file — both write the same facts for the same corpus, and the write is a
-  rename over a pid-named temporary. The path is printed in the startup line,
-  because a cache on a path that is not writable (a container's ephemeral
-  layer) silently buys nothing.
+- `CLICKHOUSE_URL`, with `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` /
+  `CLICKHOUSE_DATABASE`, point the listing routes at the derived store
+  (`clickhouse.ts`; what it is and how it is filled are docs/ARCHITECTURE.md
+  and `collector/README.md`). Unset, the viewer builds the same rows in memory
+  by running the collector's own ingestion over the runs directory — the same
+  code, so a row means the same thing, but it does once per start what the
+  store does once, ever. That is a quickstart, not a deployment. Which one is
+  in use is printed in the startup line.
 
 ## This directory is the API; the UI is the dashboard
 

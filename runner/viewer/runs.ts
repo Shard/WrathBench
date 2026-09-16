@@ -9,10 +9,17 @@
  * bottom of this file is gone: a query is not a thousand file opens, and a
  * cache in front of one would only be a second thing that can be wrong about a
  * live run. What still reads files directly, and must, is everything that asks
- * about a process writing *right now* — the fleet supervisor's own polling
- * (`runner/src/archive.ts`), the live map (`positions.ts`) and the account
- * ledger on `/api/fleet`, each of which prefilters to the handful of runs
- * touched inside its window rather than scanning the tree.
+ * about a process writing *right now*: the fleet supervisor's own polling
+ * (`runner/src/archive.ts`), the account ledger on `/api/fleet`, and the live
+ * map (`positions.ts`).
+ *
+ * The first two prefilter to the handful of runs whose files moved inside
+ * their window. `readPositions` does not — it calls `listRuns` over the whole
+ * tree on every poll, which is the one 1,148-file fan-out the derived store has
+ * not taken away. It stays for now because the live map is the one page whose
+ * whole subject is where a character is *this second*, and the store's state
+ * series is a five-second poll behind; it goes when the store carries the live
+ * state series, which is the same step that retires the per-run sqlite.
  */
 
 import type { Database } from "bun:sqlite";

@@ -77,7 +77,7 @@ import {
   projectTrack,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
-import { isValidRunId, LIVE_WINDOW_MS, readRun, readScratchpad, runDir } from "./runs";
+import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
 import {
   factOf,
   latestStatesOf,
@@ -656,14 +656,32 @@ export function createApi(opts: ApiOptions): ApiHandle {
     return out;
   }
 
-  /** One run's row. Its own state rows answer the latest readings. */
-  async function runRowOne(runId: string, now = Date.now()): Promise<RunRow | null> {
+  /**
+   * One run's row. Its own state rows answer the latest readings.
+   *
+   * Falls back to the files when the store has no row for a directory that is
+   * there. That is not a hedge against ClickHouse: it is the first seconds of
+   * a run's life. The collector polls, so a run that started a moment ago has
+   * a directory and no row yet, and the run page existed to be watched from
+   * the first turn. `readRun` is a single run's files — one `run.sqlite`, not
+   * a scan — and this route already opens that run's trajectory for its feed.
+   */
+  async function runRowOne(runId: string, now = Date.now()): Promise<RunRow> {
     const r = await store.runRow(runId);
-    if (r === null) return null;
+    if (r === null) return readRun(runsDir, runId, now);
     return runRowOf(r, latestStatesOf(await store.stateRows(runId)).get(runId), now);
   }
 
-  /** One run's state series, as the map and the charts read it. */
+  /**
+   * One run's state series, from the store, falling back to its own sqlite for
+   * the same reason `runRowOne` does.
+   */
+  async function statesOfRun(runId: string): Promise<StatePoint[]> {
+    const rows = await store.stateRows(runId);
+    return rows.length > 0 ? rows.map(statePointOf) : readStates(runsDir, runId);
+  }
+
+  /** One run's state series, as the charts read it across the listing. */
   async function statesOf(runId: string): Promise<StatePoint[]> {
     return (await store.stateRows(runId)).map(statePointOf);
   }
@@ -713,11 +731,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const fact = factOf(t, mtimes.get(t.run_id) ?? null, now);
       if (fact !== null) out.push(fact);
     }
-    // Oldest first, as `readRunFacts` has always promised. The directory scan
-    // this replaces returned readdir order, which was whatever the filesystem
-    // felt like; a deterministic order is strictly better and nothing downstream
-    // depended on the other one.
-    out.sort((a, b) => a.startedAt - b.startedAt);
+    // Oldest first, ties broken by run id — the same order the reader this
+    // replaces produced, so nothing downstream sees a different sequence.
+    out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
     return out;
   }
 
@@ -1273,9 +1289,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * one derivation, shared with the listing — and a run that stamped it at
        * write time short-circuits the scan entirely.
        */
-      const row = await runRowOne(runId);
-      if (row === null) return notFound(`no such run: ${runId}`);
-      const run = withResolved(row, await runTotals(runId));
+      const run = withResolved(await runRowOne(runId), await runTotals(runId));
       /*
        * Playtime comes off the tail's own index rather than `runTotals`: the
        * tail is incremental, where a live run misses the (size, mtime) totals
@@ -1322,7 +1336,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
           : null;
       const body: RunDetailResponse = {
         run,
-        states: await statesOf(runId),
+        states: await statesOfRun(runId),
         total: entries.length,
         tokens,
         cost: runCost({
@@ -1359,7 +1373,6 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // The replay feed (item 22): the same position shape the live map
       // consumes, read from one finished run instead of every live one.
       const run = await runRowOne(runId);
-      if (run === null) return notFound(`no such run: ${runId}`);
       /*
        * Where this attempt sits in its stream, so the map's transport can step
        * to the one either side of it (item 119) without a second fetch.
@@ -1379,9 +1392,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
         character: run.character,
         model: run.model,
         harnessVersion: run.harnessVersion,
-        points: trackFrom(await statesOf(runId)),
+        points: trackFrom(await statesOfRun(runId)),
         // The intentions beside the track: same run, different cadence.
-        moves: moveViewsOf(await store.moveRows(runId)),
+        moves: await (async () => {
+          // Same fallback as the track's own points: a run whose moves the
+          // collector has not reached yet still draws its intentions.
+          const rows = await store.moveRows(runId);
+          return rows.length > 0 ? moveViewsOf(rows) : readMoves(runsDir, runId);
+        })(),
         // Absent, not null, on a run with no stream — as on the detail route.
         ...(stream === null
           ? {}
