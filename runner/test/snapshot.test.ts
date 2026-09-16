@@ -320,10 +320,10 @@ describe("renderSnapshot", () => {
   });
 
   /*
-   * Item 119: the published track carries the stream's neighbours, so the
+   * Item 119: the published track carries the character's neighbours, so the
    * public map's transport steps between a character's attempts with the one
    * fetch a replay already makes. The version key covers it without being
-   * hashed over it: an attempt's own detail carries the `stream` view, so the
+   * hashed over it: an attempt's own detail carries the `character` view, so the
    * arrival of a successor moves the key and the new track lands beside it.
    */
   test("a published track names the attempts either side of it", async () => {

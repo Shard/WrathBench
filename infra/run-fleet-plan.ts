@@ -1,6 +1,6 @@
 /**
  * What the supervisor SHOULD do, decided from facts it is handed: the tick's
- * planners, the stream and drain rules, the gate's verdict, and the renderings
+ * planners, the character and drain rules, the gate's verdict, and the renderings
  * the planners embed in their own reasons.
  *
  * Imports run-fleet-config and the runner's projections, and NOTHING else in
@@ -135,7 +135,7 @@ export interface QueuePlan {
 /**
  * The pool scheduler, pure. Walks the manual queue in order; every pool job
  * that is enabled, not running, not finished, promoted into its episode's
- * tier, not a second stream on a model already running, and not cooling on
+ * tier, not a second run on a model already running, and not cooling on
  * the defer ladder takes the next free pool account. Free means: in `pool`,
  * not assigned to a running job, and not held live by anything (the roster's
  * own account-busy inference, injected as `held`). A job carrying an account
@@ -158,7 +158,7 @@ export function planQueue(opts: {
    * history has earned.
    */
   eligible?: Eligible;
-  /** Roster names with a stream in flight outside `queue` (policy and pinned jobs). */
+  /** Roster names with a run in flight outside `queue` (policy and pinned jobs). */
   runningRefs?: ReadonlySet<string>;
   /**
    * The account a job's model would rather have (`affinityOf`): the
@@ -189,7 +189,7 @@ export function planQueue(opts: {
     }
     const clash = refs.find((r) => runningRefs.has(r));
     if (clash !== undefined) {
-      plan.skipped.push({ job, reason: `${clash} is already running under another job — one stream per model` });
+      plan.skipped.push({ job, reason: `${clash} is already running under another job — one character per model` });
       continue;
     }
     const cool = opts.cooling(job);
@@ -282,9 +282,9 @@ export interface PolicyPick {
 /**
  * The policy's fill for whatever the queue left free. Pure: the
  * projection is handed in. Only runs when no manual job is waiting — a manual
- * entry always outranks the policy — and never puts a second stream on a
+ * entry always outranks the policy — and never puts a second run on a
  * model. `concurrency` is the per-key cap (`concurrencyKeyOf`): `running`
- * counts every stream in flight on that key, pinned jobs included, so a
+ * counts every run in flight on that key, pinned jobs included, so a
  * subscription (or a shared free pool's daily budget) that tolerates only so
  * many sessions is a number in the file rather than a model removed from the
  * roster. `paid` is the paid cap (`policy.paid.maxConcurrent`):
@@ -578,9 +578,9 @@ export function jobSpawn(
       // policy's race/class, where a freeplay extra keeps the entry's own.
       ...(isExtraJob(job) ? { extra: true } : {}),
       ...(job.extra !== undefined ? { race: job.extra.race, class: job.extra.class } : {}),
-      // The stream's lineage rides only on the lane that owns a stream: a
+      // The character's lineage rides only on the lane that owns one: a
       // hand-written freeplay job is the operator's own experiment and starts
-      // where the operator says. Another stream's characters on the account
+      // where the operator says. Another ref's freeplay characters on the account
       // are kept on every fresh launch.
       ...(uncappedLane && job.continueFrom !== undefined ? { continueFrom: job.continueFrom } : {}),
       ...(job.keepCharacters !== undefined && job.keepCharacters.length > 0 ? { keepCharacters: [...job.keepCharacters] } : {}),
@@ -1019,10 +1019,10 @@ export function applyEnded(runs: readonly RunFact[], ended: readonly EndedRun[],
 }
 
 
-// ------------------------------------------------------------ freeplay streams
+// ---------------------------------------------------------- freeplay characters
 //
-// A freeplay stream is durable (operator ask, 2026-08-29): the operator
-// disables and re-enables an `idle: "unlimited"` ref at will, and the stream
+// A freeplay character is durable (operator ask, 2026-08-29): the operator
+// disables and re-enables an `idle: "unlimited"` ref at will, and the character
 // comes back to the same account, the same character and the same scratchpad
 // instead of a fresh level-1 character. Its identity is nothing new on disk:
 // the ref's latest ENDED freeplay run that recorded an account and a
@@ -1033,31 +1033,31 @@ export function applyEnded(runs: readonly RunFact[], ended: readonly EndedRun[],
 // every fresh launch on that account keeps it (`--keep-characters`), and the
 // cross-account name sweep never deletes it.
 
-/** Where a ref's freeplay stream stands: its last ended run, account and character. */
-export interface Stream {
+/** Where a ref's freeplay character stands: its last ended run, account and name. */
+export interface Character {
   runId: string;
   account: string;
   character: string;
 }
 
-/** The key a stream's character is protected under: account and name, case-folded as the realm folds them. */
-export function streamKey(account: string, character: string): string {
+/** The key a freeplay character is protected under: account and name, case-folded as the realm folds them. */
+export function characterKey(account: string, character: string): string {
   return `${account.toUpperCase()}:${character.toLowerCase()}`;
 }
 
 /**
- * The stream of every `idle: "unlimited"` ref, from the run facts. Pure.
+ * The character of every `idle: "unlimited"` ref, from the run facts. Pure.
  * Matching is the projection's own (model + effort), as `affinityFrom`;
  * only freeplay runs count, only those that recorded both an account and a
- * character, and only ones that are not LIVE — a live run is the stream, not
+ * character, and only ones that are not LIVE — a live run is the character, not
  * its predecessor. Latest start wins.
  *
  * A PAUSED run is a head too. It used to be excluded on the argument that
  * `planResumes` owns it, and that is true while the supervisor can see it —
  * but the runs directory is the only thing that survives a supervisor, and a
  * paused head the resume planner declines (another series, a spent ladder, a
- * job the operator disabled) then vanished from the stream entirely: on
- * 2026-09-08 the newest attempt of the nemotron-super stream sat paused while
+ * job the operator disabled) then vanished from the chain entirely: on
+ * 2026-09-08 the newest attempt of the nemotron-super character sat paused while
  * the policy started a fresh one `--continue-from` the ENDED attempt before
  * it, orphaning the paused one off the chain. The character is the same one
  * either way, so the honest lineage is the newest attempt, resumed or
@@ -1065,8 +1065,8 @@ export function streamKey(account: string, character: string): string {
  * resumed by `planResumes`, which reserves its account and job name before the
  * policy picks.
  */
-export function streamsFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Stream> {
-  const out = new Map<string, Stream>();
+export function charactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Character> {
+  const out = new Map<string, Character>();
   const at = new Map<string, number>();
   for (const [name, e] of Object.entries(roster)) {
     if (e.idle !== "unlimited") continue;
@@ -1082,10 +1082,10 @@ export function streamsFrom(runs: readonly RunFact[], roster: Record<string, Fle
   return out;
 }
 
-/** The stream characters standing on `account` that a launch of `ref` must keep. */
-export function keepFor(account: string, streams: ReadonlyMap<string, Stream>, ref?: string): string[] {
+/** The freeplay characters standing on `account` that a launch of `ref` must keep. */
+export function keepFor(account: string, characters: ReadonlyMap<string, Character>, ref?: string): string[] {
   const out: string[] = [];
-  for (const [name, s] of streams) {
+  for (const [name, s] of characters) {
     if (name === ref) continue;
     if (s.account.toUpperCase() !== account.toUpperCase()) continue;
     if (!out.some((c) => c.toLowerCase() === s.character.toLowerCase())) out.push(s.character);
@@ -1093,12 +1093,12 @@ export function keepFor(account: string, streams: ReadonlyMap<string, Stream>, r
   return out;
 }
 
-/** The account a fresh freeplay session of `ref` must have: its stream's, else the model's last. */
-export function streamAffinity(streams: ReadonlyMap<string, Stream>, fallback: AccountAffinity): AccountAffinity {
-  return (ref) => streams.get(ref)?.account ?? fallback(ref);
+/** The account a fresh freeplay session of `ref` must have: its character's, else the model's last. */
+export function characterAffinity(characters: ReadonlyMap<string, Character>, fallback: AccountAffinity): AccountAffinity {
+  return (ref) => characters.get(ref)?.account ?? fallback(ref);
 }
 
-/** Who holds an account this tick, for the stream rule: the ref, and whether its session has no boundary. */
+/** Who holds an account this tick, for the character rule: the ref, and whether its session has no boundary. */
 export interface Occupant {
   ref: string;
   /** A policy freeplay session of an `idle: "unlimited"` ref: no wall clock, ends only by watchdog or hand. */
@@ -1106,111 +1106,111 @@ export interface Occupant {
 }
 
 /**
- * Where a ref's stream head stands against the accounts in use this tick.
+ * Where a ref's character head stands against the accounts in use this tick.
  * Pure. `occupants` is keyed by upper-cased account.
  *
  * - `free`: nobody on the head's account — the next pick continues there.
  * - `own`: the ref itself is there (live, or a resume reserving it) — the
- *   stream is in flight, nothing to plan.
+ *   run is in flight, nothing to plan.
  * - `boundary`: another ref's BOUNDED run holds it (a scored episode, a
  *   probe, a hand-written job) — it ends at its episode boundary, so the
  *   pick is held; a fresh start would trade a whole character for minutes.
- * - `occupied`: another ref's UNLIMITED stream holds it — there is no
+ * - `occupied`: another ref's UNLIMITED session holds it — there is no
  *   boundary to wait for, and the wait is the item-94 deadlock: the pick
  *   starts fresh on a free account, lineage dropped and recorded.
  */
-export type StreamStanding =
+export type CharacterStanding =
   | { kind: "free" }
   | { kind: "own"; occupant: string }
   | { kind: "boundary"; occupant: string }
   | { kind: "occupied"; occupant: string };
 
-export function streamStanding(ref: string, stream: Stream, occupants: ReadonlyMap<string, Occupant>): StreamStanding {
-  const o = occupants.get(stream.account.toUpperCase());
+export function characterStanding(ref: string, head: Character, occupants: ReadonlyMap<string, Occupant>): CharacterStanding {
+  const o = occupants.get(head.account.toUpperCase());
   if (o === undefined) return { kind: "free" };
   if (o.ref === ref) return { kind: "own", occupant: o.ref };
   return o.unlimited ? { kind: "occupied", occupant: o.ref } : { kind: "boundary", occupant: o.ref };
 }
 
-/** The one-line reason a stream is not continuing this tick, for the log and --status. */
-export function describeStanding(stream: Stream, standing: StreamStanding): string {
+/** The one-line reason a character is not continuing this tick, for the log and --status. */
+export function describeStanding(head: Character, standing: CharacterStanding): string {
   switch (standing.kind) {
     case "free":
-      return `${stream.account} is free — continues ${stream.runId} (${stream.character}) there`;
+      return `${head.account} is free — continues ${head.runId} (${head.character}) there`;
     case "own":
-      return `${stream.account} is its own — in flight`;
+      return `${head.account} is its own — in flight`;
     case "boundary":
-      return `${stream.account} is held by ${standing.occupant} until its episode boundary — holding for ${stream.character} (${stream.runId})`;
+      return `${head.account} is held by ${standing.occupant} until its episode boundary — holding for ${head.character} (${head.runId})`;
     case "occupied":
-      return `${stream.account} is occupied by ${standing.occupant}'s stream — next pick starts FRESH on a free account, lineage ${stream.runId} (${stream.character}) dropped`;
+      return `${head.account} is occupied by ${standing.occupant}'s character — next pick starts FRESH on a free account, lineage ${head.runId} (${head.character}) dropped`;
   }
 }
 
-/** A policy pick held back this tick because its stream's account is busy. */
-export interface StreamWait {
+/** A policy pick held back this tick because its character's account is busy. */
+export interface CharacterWait {
   name: string;
-  stream: Stream;
+  head: Character;
   /** The account the pick would have taken instead. */
   offered: string;
   /** Why it holds rather than continuing or starting fresh. */
   why: string;
 }
 
-/** A policy pick that started fresh because its stream's account is another ref's. */
-export interface StreamDrop {
+/** A policy pick that started fresh because its character's account is another ref's. */
+export interface CharacterDrop {
   name: string;
-  stream: Stream;
-  /** The other ref's stream on the head's account. */
+  head: Character;
+  /** The other ref's character on the head's account. */
   occupant: string;
   /** The free account the fresh start went to. */
   account: string;
 }
 
 /**
- * The policy's freeplay picks, made to continue their streams. Pure. A pick
- * on an `idle: "unlimited"` ref whose stream is on the account it got carries
- * `continueFrom`. One whose stream is on another account is decided by
- * `streamStanding`: held while the account will come free at a boundary (or
+ * The policy's freeplay picks, made to continue their characters. Pure. A pick
+ * on an `idle: "unlimited"` ref whose character is on the account it got carries
+ * `continueFrom`. One whose character is on another account is decided by
+ * `characterStanding`: held while the account will come free at a boundary (or
  * is the ref's own), started FRESH on the account it was offered when
- * another ref's unlimited stream sits there — with `continueDropped` naming
+ * another ref's unlimited session sits there — with `continueDropped` naming
  * the head and the reason (`account_occupied_by <ref>`), so the new run's
  * trajectory says the lineage was dropped on purpose. Every pick (and every
- * queue assignment the caller passes) gets the other streams' characters on
+ * queue assignment the caller passes) gets the other refs' freeplay characters on
  * its account to keep.
  */
 export function planContinuations(
   picks: readonly PolicyPick[],
-  streams: ReadonlyMap<string, Stream>,
+  characters: ReadonlyMap<string, Character>,
   roster: Record<string, FleetRosterEntry>,
   occupants: ReadonlyMap<string, Occupant> = new Map(),
-): { picks: PolicyPick[]; waiting: StreamWait[]; dropped: StreamDrop[] } {
+): { picks: PolicyPick[]; waiting: CharacterWait[]; dropped: CharacterDrop[] } {
   const out: PolicyPick[] = [];
-  const waiting: StreamWait[] = [];
-  const dropped: StreamDrop[] = [];
+  const waiting: CharacterWait[] = [];
+  const dropped: CharacterDrop[] = [];
   for (const p of picks) {
-    const keep = keepFor(p.account, streams, p.job.ref);
+    const keep = keepFor(p.account, characters, p.job.ref);
     const withKeep = (job: FleetJob): FleetJob => (keep.length > 0 ? { ...job, keepCharacters: keep } : job);
-    const stream = streams.get(p.job.ref);
+    const head = characters.get(p.job.ref);
     const owns = p.job.source === "policy" && p.job.episode === "freeplay" && roster[p.job.ref]?.idle === "unlimited";
-    if (!owns || stream === undefined) {
+    if (!owns || head === undefined) {
       out.push({ ...p, job: withKeep(p.job) });
       continue;
     }
-    if (stream.account.toUpperCase() !== p.account.toUpperCase()) {
-      const standing = streamStanding(p.job.ref, stream, occupants);
+    if (head.account.toUpperCase() !== p.account.toUpperCase()) {
+      const standing = characterStanding(p.job.ref, head, occupants);
       if (standing.kind === "occupied") {
-        dropped.push({ name: p.job.name, stream, occupant: standing.occupant, account: p.account });
+        dropped.push({ name: p.job.name, head, occupant: standing.occupant, account: p.account });
         out.push({
           ...p,
-          why: `${p.why}; fresh — ${stream.account} is ${standing.occupant}'s`,
-          job: withKeep({ ...p.job, continueDropped: { runId: stream.runId, reason: `account_occupied_by ${standing.occupant}` } }),
+          why: `${p.why}; fresh — ${head.account} is ${standing.occupant}'s`,
+          job: withKeep({ ...p.job, continueDropped: { runId: head.runId, reason: `account_occupied_by ${standing.occupant}` } }),
         });
         continue;
       }
-      waiting.push({ name: p.job.name, stream, offered: p.account, why: describeStanding(stream, standing) });
+      waiting.push({ name: p.job.name, head, offered: p.account, why: describeStanding(head, standing) });
       continue;
     }
-    out.push({ ...p, job: withKeep({ ...p.job, continueFrom: stream.runId }) });
+    out.push({ ...p, job: withKeep({ ...p.job, continueFrom: head.runId }) });
   }
   return { picks: out, waiting, dropped };
 }
@@ -1221,7 +1221,7 @@ export function planContinuations(
  * wall clock, no call ceiling — so draining it means waiting for the idle
  * watchdog or a hand kill; the operator flipping the ref to `idle: "none"`
  * wants it stopped. SIGTERM takes the pause path (the runner logs the
- * character out and writes `operator-pause`), and the stream comes back on
+ * character out and writes `operator-pause`), and the character comes back on
  * re-enable: resumed in place while the pause is fresh, continued under the
  * next attempt once the stale sweep has ended it.
  */
@@ -1236,19 +1236,19 @@ export function pausesOnDrain(job: Pick<FleetJob, "source" | "episode"> | undefi
  * A policy job is made up each tick, so it is never in the file and cannot be
  * `enabled: false`; before this, a live one whose ref simply stopped generating
  * work was left enabled forever and ran until its idle watchdog, which an
- * active model never trips (item 107: flipping a stream's `idle` to `"none"`
+ * active model never trips (item 107: flipping a character's `idle` to `"none"`
  * did nothing until someone SIGTERMed the roster by hand). This is what makes
- * the ROSTER_ENTRY_KEYS hint — "to pause a stream set `idle: \"none\"`" — true.
+ * the ROSTER_ENTRY_KEYS hint — "to pause a character set `idle: \"none\"`" — true.
  *
  * The question is asked of the LOADED CONFIG, never of the plan. The caller
  * walks the accounts that are assigned, so a live policy job is reached every
  * tick whether or not the policy would pick it again, and the reasons the
  * policy would not (account busy, a lane or paid cap, cooling on the defer
- * ladder, tier not eligible) are transient: none of them belongs on a stream
+ * ladder, tier not eligible) are transient: none of them belongs on a character
  * the operator has not turned off, and none of them is visible here. The ref's
  * presence in the roster and its idle mode are the whole answer.
  *
- * Only the freeplay stream is idle-keyed. A scored (`e90`/`e360`) policy job
+ * Only the freeplay character is idle-keyed. A scored (`e90`/`e360`) policy job
  * keeps exactly the handling it had — it drains when its ref leaves the roster
  * and not otherwise — because `idle` says nothing about what a tier bought.
  */
@@ -1265,7 +1265,7 @@ export function policyJobDropped(
 /**
  * Whether this job's run comes back WHERE IT LEFT OFF after a supervisor
  * restart — same run id, account and character — rather than spending its
- * attempt. Two kinds do: the freeplay stream (`pausesOnDrain`, resumed in
+ * attempt. Two kinds do: the freeplay character (`pausesOnDrain`, resumed in
  * place while the pause is fresh) and a probe campaign that asked to be
  * resumed (`campaigns.<name>.resume`). Everything else — every scored e90 or
  * e360 — is ended `manual` on the next boot and must be waited out on its own
@@ -1313,8 +1313,8 @@ export function planNameSweeps(opts: {
   /** True when nothing holds the account and nothing this tick was given it. */
   isFree: (account: string) => boolean;
   /**
-   * Freeplay streams' characters (`streamKey`), which a sweep must never
-   * delete: the stream comes back to them.
+   * Freeplay characters (`characterKey`), which a sweep must never
+   * delete: the character comes back to it.
    */
   protect?: ReadonlySet<string>;
 }): NameSweep[] {
@@ -1324,7 +1324,7 @@ export function planNameSweeps(opts: {
     if (prev === undefined || prev.character === null) continue;
     if (prev.account.toUpperCase() === a.account.toUpperCase()) continue;
     if (!opts.isFree(prev.account)) continue;
-    if (opts.protect?.has(streamKey(prev.account, prev.character)) === true) continue;
+    if (opts.protect?.has(characterKey(prev.account, prev.character)) === true) continue;
     if (out.some((s) => s.account.toUpperCase() === prev.account.toUpperCase() && s.character === prev.character)) continue;
     out.push({ ref: a.ref, account: prev.account, character: prev.character });
   }

@@ -123,7 +123,7 @@ describe("loadContinuation", () => {
   });
 
   test("a PAUSED predecessor is a predecessor: the lineage is the newest attempt", () => {
-    // `streamsFrom` takes a paused run as a chain head since 2026-09-08, so a
+    // `charactersFrom` takes a paused run as a chain head since 2026-09-08, so a
     // continuation can now name one. Nothing here reads a termination — the
     // account and the character are the whole question — and this pins that.
     const { runsDir, runId, dir } = endedFreeplayRun();

@@ -40,7 +40,7 @@
  *   `pause_reason` and no termination — the supervisor stopped under it, or
  *   its provider ran out of quota — is an attempt but is neither counted nor
  *   a ladder failure while it is paused, and it holds its model: the policy
- *   does not start a second stream for a model whose run is waiting to be
+ *   does not start a second run for a model whose run is waiting to be
  *   resumed. It is counted, or climbs the ladder, only when it finally ends.
  * - **Billing is a model property** (`model-cost.ts`). A paid model has its own
  *   targets (hard: never extras) and shares one in-flight cap; a free model
@@ -1521,7 +1521,7 @@ export function schedulability(
   if (s.cooling !== undefined) {
     return blocked(`cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})`);
   }
-  if (running.has(s.name)) return blocked("running (one stream per model)");
+  if (running.has(s.name)) return blocked("running (one character per model)");
   if (s.paused !== undefined) {
     const spent = s.paused.episodeElapsedMs !== null ? `${Math.round(s.paused.episodeElapsedMs / 60_000)}m` : "?m";
     const of = s.paused.episodeMs !== null ? ` of ${Math.round(s.paused.episodeMs / 60_000)}m` : "";
@@ -1679,7 +1679,7 @@ export interface NextJobsOptions {
  * The policy's picks for the free pool accounts, in priority order:
  * (1) models with zero counted runs on any eligible episode, (2) the shorter
  * episode first, (3) fewest counted runs toward target, ties by roster order.
- * One job per model. `running` holds roster names with a stream in flight.
+ * One job per model. `running` holds roster names with a run in flight.
  *
  * Two additions under the paid/free split. A paid pick is held when
  * `policy.paid.maxConcurrent` paid models are already in flight, and the
@@ -1958,7 +1958,7 @@ export interface OutstandingInput {
   excluded?: Iterable<string>;
   /** How many accounts each class has. */
   accounts?: ClassAccountCounts;
-  /** `policy.maxConcurrent`: per-driver stream caps; `claude-code` and `codex` are the ones read. */
+  /** `policy.maxConcurrent`: per-driver concurrency caps; `claude-code` and `codex` are the ones read. */
   maxConcurrent?: Record<string, number>;
 }
 

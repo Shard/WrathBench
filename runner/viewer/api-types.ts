@@ -735,7 +735,7 @@ export interface PositionsResponse extends SnapshotEnvelope {
  * One attempt of a freeplay character, with its own figures.
  *
  * A durable character is one character across attempts (docs/OPERATIONS.md,
- * "Freeplay streams are durable"), and every figure the runner records is per
+ * "Freeplay characters are durable"), and every figure the runner records is per
  * *attempt*: the quest counter, the tokens, the cost, the playtime all start
  * again at each continuation. That is not changed here — the record is the
  * record — so the strip on the run page shows each attempt as it was recorded

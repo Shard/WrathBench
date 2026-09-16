@@ -63,7 +63,7 @@
 # WHAT GRACEFUL WAITS FOR. Every run a recreate would COST: the scored e90 and
 # e360 runs, which reach their own episode limit or watchdog and record their
 # verdict. NOT the runs that come back where they left off — the freeplay
-# stream and a probe campaign with `resume: true` — which the wait counts as
+# character and a probe campaign with `resume: true` — which the wait counts as
 # drained once the switch has put them in `draining`. An `idle: unlimited`
 # session has no clock to finish on, so waiting for one is waiting forever
 # (2026-08-29: the window ran to its ceiling and had to become a `force`).
@@ -170,9 +170,9 @@ command -v kubectl >/dev/null 2>&1 || die "kubectl is not on PATH — this scrip
 #                         ends it `manual`: the attempt is spent. Every scored
 #                         e90/e360 is here.
 #   park:<where>          a run that comes back WHERE IT LEFT OFF — the freeplay
-#                         stream, and a probe campaign with `resume: true`. The
+#                         character, and a probe campaign with `resume: true`. The
 #                         recreate costs it nothing (2026-08-29: the sonnet
-#                         stream came back on the same run id and character), so
+#                         session came back on the same run id and character), so
 #                         waiting on one is waiting for nothing. item 93.
 #   paused:<line>         a paused run the supervisor is NOT resuming
 #   state:unreadable      the state file did not parse this poll
@@ -454,9 +454,9 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   print_status
   say "would: write ${PAUSE_JSON} (${WHY})"
   say "would: read ${STATE_JSON} through ${EXEC_DEPLOY} every ${POLL_S}s for up to ${TIMEOUT_S}s until no run is being waited on"
-  say "would: wait on scored runs only — a draining freeplay stream, or a resume:true campaign"
+  say "would: wait on scored runs only — a draining freeplay character, or a resume:true campaign"
   say "       run, counts as drained: it comes back where it left off. On the state as it"
-  say "       stands right now — nothing is DRAINING until the switch is set, so a stream"
+  say "       stands right now — nothing is DRAINING until the switch is set, so a character"
   say "       that will park is listed here as one this window would wait on:"
   refresh_state
   if [[ "${ST_OK}" -eq 1 ]]; then
@@ -520,7 +520,7 @@ fi
 # line — and on the cluster a failed exec looks the same and is treated the
 # same); a supervisor that died leaves a file whose `alive: true` rows are
 # frozen, not current; and — the one this loop used to get wrong — a live row is
-# not automatically a reason to wait. A draining freeplay stream or resume:true
+# not automatically a reason to wait. A draining freeplay character or resume:true
 # campaign run comes back where it left off, so it is counted as drained; every
 # scored e90/e360 is waited out. k8s-deploy.sh reads an unreadable state as
 # nothing-to-drain because it only asks AFTER the fleet has scaled to 0 — here

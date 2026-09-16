@@ -259,16 +259,17 @@ Two rosters ship for the subscription driver:
   the module's `AC_WRATH_BENCH_ACCOUNTS` allowlist on container recreate, and
   until then every createSession on it answers 403 `account_not_permitted`.
 
-The roster runs its entries sequentially by design. Two streams in parallel means
-two roster processes, one per JSON, each with its own account and its own
-`--log` path so the two JSONLs do not interleave. **Superseded by the fleet**
-(next section) — hand-launching parallel rosters with `--skip` and `&` still
-works, but the fleet is the supported way to run more than one stream. If you do
-launch by hand, do not run `roster-claude.json` and `roster-claude-2wide.json`
-on the same day at the same time: both derive their run ids from the model name
-(`roster-opus-<date>`), so the two opus entries would be the same run. Fleet
-run ids carry the job name (`fleet-<job>-...`), which is how the fleet
-sidesteps that collision.
+The roster runs its entries sequentially by design. Two characters in parallel
+means two roster processes, one per JSON, each with its own account and its
+own `--log` path so the two JSONLs do not interleave. **Superseded by the
+fleet** (next section) — hand-launching parallel rosters with `--skip` and `&`
+still works, but the fleet is the supported way to run more than one
+character. If you do launch by hand, do not run `roster-claude.json` and
+`roster-claude-2wide.json` on the same day at the same time: both derive their
+run ids from the model name (`roster-opus-<date>`), so the two opus entries
+would be the same run. Fleet run ids carry the job name (`fleet-<job>-...`),
+which is how the fleet sidesteps that collision.
+
 
 ## The fleet
 
@@ -321,8 +322,8 @@ models (`opus`/`sonnet`/`haiku`/`claude-*`) run only via the
 `claude-code` driver, that driver runs claude models only, and the `codex`
 driver carries no claude id. The
 free entries exist because OpenRouter's and OpenCode Zen's free tiers are
-pooled per upstream provider: a single sequential stream per pool is both the
-polite and the effective shape — two streams on one pool just trip the same
+pooled per upstream provider: a single sequential run per pool is both the
+polite and the effective shape — two runs on one pool just trip the same
 rate limits twice. So an openai entry on a **shared free-cloud pool**
 (`openrouter.ai` / `opencode.ai`, or no `apiBase` at all, which defaults to
 OpenRouter) must carry free model ids only — ending `-free` or `:free` — unless

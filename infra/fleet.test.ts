@@ -64,14 +64,14 @@ import {
   takeAccount,
   planNameSweeps,
   sweepNames,
-  streamsFrom,
-  streamKey,
+  charactersFrom,
+  characterKey,
   keepFor,
-  streamAffinity,
+  characterAffinity,
   planContinuations,
-  streamStanding,
+  characterStanding,
   describeStanding,
-  formatStreams,
+  formatCharacters,
   pausesOnDrain,
   policyJobDropped,
   resumesInPlace,
@@ -236,7 +236,7 @@ describe("parseFleet", () => {
 
   test("a roster entry carrying a key the harness does not read is refused BY NAME, not ignored", () => {
     // 2026-08-30. `"enabled": false` was written onto a roster entry to pause a
-    // freeplay stream; the key is a queue job's, not an entry's, so it was
+    // freeplay character; the key is a queue job's, not an entry's, so it was
     // dropped in silence and the deploy's resume brought the character back.
     // An unknown key now refuses the entry and names the pause recipe.
     const config = parseFleet(
@@ -244,7 +244,7 @@ describe("parseFleet", () => {
     );
     expect(config.refusals.map((r) => r.pin)).toEqual(["roster glm"]);
     expect(config.refusals[0]!.why).toMatch(/unknown key `enabled` on a roster entry/);
-    expect(config.refusals[0]!.why).toMatch(/to pause a stream set `idle: "none"`/);
+    expect(config.refusals[0]!.why).toMatch(/to pause a character set `idle: "none"`/);
     // Refused means scheduled by nothing — and the entry is still in the catalog.
     expect(Object.keys(config.roster)).toEqual(["glm"]);
     expect(policyExclusion(config, "glm")).toMatch(/unknown key/);
@@ -317,7 +317,7 @@ describe("parseFleet", () => {
   test("a refused roster entry names its jobs, so a live freeplay run is spared", () => {
     // The 2026-08-24 lesson, carried to the entry: a refusal suppresses
     // SCHEDULING. Without `jobs` the policy job `glm-freeplay` would simply
-    // vanish from the diff and the live stream would be drained for a typo.
+    // vanish from the diff and the live run would be drained for a typo.
     const config = parseFleet(fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", nonsense: 1 } } }));
     expect(config.refusals[0]!.jobs).toContain("glm-freeplay");
     const live = { running: new Set(["glm-freeplay"]), draining: new Set<string>(), finished: new Set<string>() };
@@ -949,7 +949,7 @@ describe("the shipped fleet files", () => {
 
   test("fleet.json: the shipped file carries no key the harness would refuse", async () => {
     // The strict-key rule's own safety net. It is a REFUSAL, so a key outside
-    // the declared set costs the operator a stream rather than the file — and
+    // the declared set costs the operator a character rather than the file — and
     // that must never be discovered on a recreate.
     const config = parseFleet((await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown);
     expect(config.refusals).toEqual([]);
@@ -973,7 +973,7 @@ describe("the shipped fleet files", () => {
     }
   });
 
-  test("fleet.json: a zen/go entry loads, keys apart from the free zen/v1 stream, and is capped", async () => {
+  test("fleet.json: a zen/go entry loads, keys apart from the free zen/v1 lane, and is capped", async () => {
     // The shipped file is edited daily, so this asserts the SHAPE the go
     // surface needs, over whatever entries happen to sit on it today.
     const config = parseFleet((await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown);
@@ -1227,15 +1227,15 @@ describe("the shipped fleet files", () => {
     expect(plan.pinned.map((p) => p.job.name)).toEqual(["nav-probe-coldridge"]);
     /*
      * The cap is what matters, not which bucket spends it. Every claude-code
-     * stream counts against its SUBSCRIPTION's key wherever it is scheduled
+     * run counts against its SUBSCRIPTION's key wherever it is scheduled
      * from — the pinned probe, a manual queue job, or the policy — and each
      * subscription inherits `maxConcurrent["claude-code"]`.
      */
     const isClaude = (ref: string): boolean => config.roster[ref]?.driver === "claude-code";
-    const claudeStreams = [...plan.pinned, ...plan.queue.assign, ...plan.policy].filter((p) => isClaude(p.job.ref));
-    const byLaneAll = claudeStreams.map((p) => p.job.subscription ?? "CLAUDE_CODE_OAUTH_TOKEN");
-    expect(claudeStreams.length).toBeGreaterThan(0);
-    expect(claudeStreams.length).toBeLessThanOrEqual(config.maxConcurrent["claude-code"]!);
+    const claudeRuns = [...plan.pinned, ...plan.queue.assign, ...plan.policy].filter((p) => isClaude(p.job.ref));
+    const byLaneAll = claudeRuns.map((p) => p.job.subscription ?? "CLAUDE_CODE_OAUTH_TOKEN");
+    expect(claudeRuns.length).toBeGreaterThan(0);
+    expect(claudeRuns.length).toBeLessThanOrEqual(config.maxConcurrent["claude-code"]!);
     for (const lane of config.policy.subscriptions) {
       // A lane the file gives no `claude-code:` cap is uncapped, as every key
       // is — the codex lane has no claude sessions to limit.
@@ -1253,8 +1253,8 @@ describe("the shipped fleet files", () => {
      * working. A paid model lands on SHAKEOUT2 and the local one on RUNNER4;
      * neither ever takes a pool account.
      *
-     * The subscription drivers are counted apart: a claude-code stream by its
-     * lane keys above, and a codex stream by `codex` (1 — one live Codex
+     * The subscription drivers are counted apart: a claude-code run by its
+     * lane keys above, and a codex run by `codex` (1 — one live Codex
      * session per ChatGPT subscription), which is the same shape and not a
      * free pool at all.
      */
@@ -1264,8 +1264,8 @@ describe("the shipped fleet files", () => {
     };
     const freeOnPool = [...plan.queue.assign, ...plan.policy].filter((p) => config.accounts.pool.includes(p.account) && !isSub(p.job.ref));
     expect(freeOnPool).toHaveLength(2);
-    const codexStreams = [...plan.pinned, ...plan.queue.assign, ...plan.policy].filter((p) => config.roster[p.job.ref]?.driver === "codex");
-    expect(codexStreams.length).toBeLessThanOrEqual(config.maxConcurrent["codex"]!);
+    const codexRuns = [...plan.pinned, ...plan.queue.assign, ...plan.policy].filter((p) => config.roster[p.job.ref]?.driver === "codex");
+    expect(codexRuns.length).toBeLessThanOrEqual(config.maxConcurrent["codex"]!);
     const onPool = plan.policy.filter((p) => config.accounts.pool.includes(p.account)).map((p) => p.job.ref);
     expect(onPool).not.toContain("qwen3-8-27b");
     for (const p of plan.policy) {
@@ -1493,7 +1493,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     expect(jobSpawn(pair, roster, "RUNNER", "20260101").entries.map((e) => e.model)).toEqual(["stealth/ox-alpha:free"]);
   });
 
-  test("one stream per model: a ref already running under one job is not started under another", () => {
+  test("one character per model: a ref already running under one job is not started under another", () => {
     const queue = [job({ ref: "ox", episode: "e90" }), job({ ref: "ox", episode: "e360" })];
     const plan = planQueue({ ...base, queue, running: new Map([["ox-e90", "RUNNER"]]) });
     expect(plan.skipped.map((s) => s.reason)).toEqual([expect.stringMatching(/already running under another job/)]);
@@ -1666,7 +1666,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     ).toMatch(/!! also live here: a-e90/);
   });
 
-  test("planTick: pinned jobs spawn on their accounts, the queue then the policy fill the pool, per-driver cap counts the pinned stream", () => {
+  test("planTick: pinned jobs spawn on their accounts, the queue then the policy fill the pool, per-driver cap counts the pinned run", () => {
     const config = parseFleet({
       accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] },
       roster: {
@@ -1685,8 +1685,8 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     // whole shape exists to prevent.
     expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["probe-c1", "SHAKEOUT"]]);
     expect(plan.queue.assign).toEqual([]);
-    // The campaign holds `son`, so the second claude-code stream is `sonlo` —
-    // and the cap counts the probe's stream wherever it was scheduled from.
+    // The campaign holds `son`, so the second claude-code run is `sonlo` —
+    // and the cap counts the probe's run wherever it was scheduled from.
     expect(plan.policy.map((p) => [p.job.ref, p.account])).toEqual([["sonlo", "RUNNER"], ["glm", "RUNNER2"]]);
     // Without the cap, the other sonnet goes too.
     const uncapped = planTick({ ...config, maxConcurrent: {} }, states, () => undefined, "20260101");
@@ -1980,7 +1980,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     expect(runnableRefs(job({ ref: "glm" }), roster)).toEqual(["glm"]);
   });
 
-  test("the policy fills the accounts the queue leaves free, never while a manual job waits, never a second stream", () => {
+  test("the policy fills the accounts the queue leaves free, never while a manual job waits, never a second run", () => {
     const states = modelStatesOf(rosterModels(roster));
     // Two accounts, one taken by a manual job: the policy gets the other.
     let picks = planPolicy({ states, pool: ["RUNNER", "RUNNER2"], running: new Map([["glm-e90", "RUNNER"]]), held: () => undefined, queuePlan: empty, runningRefs: new Set(["glm"]) });
@@ -2273,7 +2273,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       ["p1-e90", "PAID2"],
     ]);
     expect(plan.heldPicks.find((h) => h.name === "p2")!.why).toBe("paid cap: 2/2 paid model(s) already in flight");
-    // A second go stream is still refused, by its own key and not the cap:
+    // A second go run is still refused, by its own key and not the cap:
     // the budget is fleet-wide, the surface is bounded on its own.
     const twoGo = parseFleet({
       ...raw,
@@ -3053,13 +3053,13 @@ describe("account affinity and cross-account name hygiene", () => {
   });
 });
 
-describe("a paused stream head is not orphaned by a supervisor restart (2026-09-08)", () => {
+describe("a paused character head is not orphaned by a supervisor restart (2026-09-08)", () => {
   // The live shape. The k8s fleet pod stamped its runs "0.0.0-phase0" (no
   // git in the image; the fix is in run-roster's harnessVersion), so
   // nemotron-super's a12 — paused `operator-pause` by the drain three minutes
   // earlier — was out of the policy's series. planResumes dropped it before
   // the loop, so it was neither resumed nor listed, and the policy then
-  // continued the stream from a11, the ENDED attempt before it, leaving a12
+  // continued the character from a11, the ENDED attempt before it, leaving a12
   // orphaned off the chain on the same character.
   const NOW = 1_800_000_000_000;
   const H = 3_600_000;
@@ -3110,11 +3110,11 @@ describe("a paused stream head is not orphaned by a supervisor restart (2026-09-
   });
   const held = (): string | undefined => undefined;
 
-  test("the newest paused attempt is the stream head, so a fresh attempt continues from IT, not from the ended one", () => {
-    expect(streamsFrom([a11, a12], roster).get(REF)).toEqual({ runId: a12.runId, account: "RUNNER", character: "Aric" });
+  test("the newest paused attempt is the character head, so a fresh attempt continues from IT, not from the ended one", () => {
+    expect(charactersFrom([a11, a12], roster).get(REF)).toEqual({ runId: a12.runId, account: "RUNNER", character: "Aric" });
     const picks = planContinuations(
       [{ job: { refs: [REF], ref: REF, episode: "freeplay", repeat: 1, name: JOB, enabled: true, source: "policy", attempt: 13 }, account: "RUNNER", why: "extra" }],
-      streamsFrom([a11, a12], roster),
+      charactersFrom([a11, a12], roster),
       roster,
     );
     expect(picks.picks[0]!.job.continueFrom).toBe(a12.runId);
@@ -3157,7 +3157,7 @@ describe("a paused stream head is not orphaned by a supervisor restart (2026-09-
   });
 });
 
-describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
+describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
   const NOW = 1_800_000_000_000;
   const roster: Record<string, FleetRosterEntry> = {
     opuslo: { model: "opus", effort: "low", driver: "claude-code", tier: "t1", idle: "unlimited" },
@@ -3199,7 +3199,7 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
     attempt,
   });
 
-  test("a stream is the ref's latest ENDED freeplay run with an account and a character", () => {
+  test("a character is the ref's latest ENDED freeplay run with an account and a name", () => {
     // The 2026-08-29 shape: sub-opus-low's a11 (Bromdir, RUNNER2) was killed
     // by hand and terminated `manual`; the a10 before it ended `idle` on Bromdal.
     const runs = [
@@ -3207,16 +3207,16 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
       fact("fleet-sub-opus-low-freeplay-opus-low-20260827-a11", {}),
       // A live one (no termination) is in flight, not a predecessor.
       fact("fleet-sonnet-low-freeplay-sonnet-low-20260827-a2", { model: "sonnet", startedAt: NOW - 1_000, account: "RUNNER3", character: "Ironvowen", terminationReason: null, live: true }),
-      // A scored run of the same model is not the stream, whatever it played.
+      // A scored run of the same model is not the character, whatever it played.
       fact("fleet-sub-opus-low-e90-opus-low-20260829", { episode: "e90", extra: false, startedAt: NOW - 1000, account: "RUNNER5", character: "Brintor", terminationReason: "episode-limit" }),
     ];
-    const streams = streamsFrom(runs, roster);
-    expect(streams.get("opuslo")).toEqual({ runId: "fleet-sub-opus-low-freeplay-opus-low-20260827-a11", account: "RUNNER2", character: "Bromdir" });
-    expect(streams.has("sonlo")).toBe(false);
+    const characters = charactersFrom(runs, roster);
+    expect(characters.get("opuslo")).toEqual({ runId: "fleet-sub-opus-low-freeplay-opus-low-20260827-a11", account: "RUNNER2", character: "Bromdir" });
+    expect(characters.has("sonlo")).toBe(false);
     // …and a PAUSED attempt is a head, even though it has no termination: it is
-    // the newest thing the stream did, and the runs directory is all a fresh
+    // the newest thing the character did, and the runs directory is all a fresh
     // supervisor has (2026-09-08). The live one above still is not.
-    const withPause = streamsFrom(
+    const withPause = charactersFrom(
       [
         ...runs,
         fact("fleet-sonnet-low-freeplay-sonnet-low-20260827", {
@@ -3231,84 +3231,84 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
       roster,
     );
     expect(withPause.get("sonlo")).toEqual({ runId: "fleet-sonnet-low-freeplay-sonnet-low-20260827", account: "RUNNER3", character: "Bronwyra" });
-    // A ref that is not in the unlimited lane owes no stream, even with runs.
-    expect(streamsFrom([fact("x", { model: "z-ai/glm-5.2:free", effort: null })], roster).has("glm")).toBe(false);
+    // A ref that is not in the unlimited lane owes no character, even with runs.
+    expect(charactersFrom([fact("x", { model: "z-ai/glm-5.2:free", effort: null })], roster).has("glm")).toBe(false);
   });
 
-  test("the policy's freeplay pick continues its stream on the stream's account, and is held elsewhere", () => {
-    const streams = new Map([["opuslo", { runId: "a11", account: "RUNNER2", character: "Bromdir" }]]);
+  test("the policy's freeplay pick continues its character on the character's account, and is held elsewhere", () => {
+    const characters = new Map([["opuslo", { runId: "a11", account: "RUNNER2", character: "Bromdir" }]]);
     // Landed on RUNNER2 (affinity did its job): continue a11.
-    const back = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER2", why: "extra" }], streams, roster);
+    const back = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER2", why: "extra" }], characters, roster);
     expect(back.waiting).toEqual([]);
     expect(back.picks[0]!.job.continueFrom).toBe("a11");
     // RUNNER2 busy, RUNNER5 offered: held, never a fresh character elsewhere.
-    const away = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER5", why: "extra" }], streams, roster);
+    const away = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER5", why: "extra" }], characters, roster);
     expect(away.picks).toEqual([]);
-    expect(away.waiting).toEqual([{ name: "opuslo", stream: streams.get("opuslo")!, offered: "RUNNER5", why: expect.stringContaining("RUNNER2 is free") }]);
-    // A ref with no stream yet starts fresh, as before.
-    const fresh = planContinuations([{ job: policyFreeplay("sonlo", 1), account: "RUNNER3", why: "extra" }], streams, roster);
+    expect(away.waiting).toEqual([{ name: "opuslo", head: characters.get("opuslo")!, offered: "RUNNER5", why: expect.stringContaining("RUNNER2 is free") }]);
+    // A ref with no character yet starts fresh, as before.
+    const fresh = planContinuations([{ job: policyFreeplay("sonlo", 1), account: "RUNNER3", why: "extra" }], characters, roster);
     expect(fresh.picks[0]!.job.continueFrom).toBeUndefined();
-    // The freeplay pick's account preference is its stream's, not the model's last run's.
-    expect(streamAffinity(streams, () => "RUNNER5")("opuslo")).toBe("RUNNER2");
-    expect(streamAffinity(streams, () => "RUNNER5")("sonlo")).toBe("RUNNER5");
+    // The freeplay pick's account preference is its character's, not the model's last run's.
+    expect(characterAffinity(characters, () => "RUNNER5")("opuslo")).toBe("RUNNER2");
+    expect(characterAffinity(characters, () => "RUNNER5")("sonlo")).toBe("RUNNER5");
   });
 
-  test("a stream head on another ref's occupied account starts fresh elsewhere; a bounded or own occupant holds (item 94)", () => {
+  test("a character head on another ref's occupied account starts fresh elsewhere; a bounded or own occupant holds (item 94)", () => {
     // The 2026-08-29 shape: fable-none's two-minute head (Thorgrima) landed on
     // RUNNER2, then opus-low reclaimed RUNNER2 for Bromdir and stays there
     // indefinitely — an unlimited session has no boundary to wait for.
-    const streams = new Map([
+    const characters = new Map([
       ["opuslo", { runId: "a11", account: "RUNNER2", character: "Bromdir" }],
       ["sonlo", { runId: "f1", account: "RUNNER2", character: "Thorgrima" }],
     ]);
     const pick = [{ job: policyFreeplay("sonlo", 2), account: "RUNNER5", why: "extra" }];
     // Same-ref occupant (opus's own resume reserving RUNNER2): holds.
-    const own = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER5", why: "extra" }], streams, roster, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]));
+    const own = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER5", why: "extra" }], characters, roster, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]));
     expect(own.picks).toEqual([]);
     expect(own.dropped).toEqual([]);
     expect(own.waiting[0]!.why).toContain("its own");
-    // Different ref's unlimited stream on the head's account: fresh on the offered account, with the record and no lineage.
-    const occupied = planContinuations(pick, streams, roster, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]));
+    // Different ref's unlimited session on the head's account: fresh on the offered account, with the record and no lineage.
+    const occupied = planContinuations(pick, characters, roster, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]));
     expect(occupied.waiting).toEqual([]);
-    expect(occupied.dropped).toEqual([{ name: "sonlo", stream: streams.get("sonlo")!, occupant: "opuslo", account: "RUNNER5" }]);
+    expect(occupied.dropped).toEqual([{ name: "sonlo", head: characters.get("sonlo")!, occupant: "opuslo", account: "RUNNER5" }]);
     expect(occupied.picks[0]!.account).toBe("RUNNER5");
     expect(occupied.picks[0]!.job.continueFrom).toBeUndefined();
     expect(occupied.picks[0]!.job.continueDropped).toEqual({ runId: "f1", reason: "account_occupied_by opuslo" });
     // A bounded occupant (a scored run) ends at its boundary: hold, as before.
-    const bounded = planContinuations(pick, streams, roster, new Map([["RUNNER2", { ref: "glm", unlimited: false }]]));
+    const bounded = planContinuations(pick, characters, roster, new Map([["RUNNER2", { ref: "glm", unlimited: false }]]));
     expect(bounded.picks).toEqual([]);
     expect(bounded.waiting[0]!.why).toContain("held by glm until its episode boundary");
     // No free account: no pick reaches here, and the standing names the reason --status prints.
-    expect(streamStanding("sonlo", streams.get("sonlo")!, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]))).toEqual({ kind: "occupied", occupant: "opuslo" });
-    expect(describeStanding(streams.get("sonlo")!, { kind: "occupied", occupant: "opuslo" })).toContain("starts FRESH");
+    expect(characterStanding("sonlo", characters.get("sonlo")!, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]))).toEqual({ kind: "occupied", occupant: "opuslo" });
+    expect(describeStanding(characters.get("sonlo")!, { kind: "occupied", occupant: "opuslo" })).toContain("starts FRESH");
     // Head account free: continues there (the pick lands on it through affinity).
-    const free = planContinuations([{ job: policyFreeplay("sonlo", 2), account: "RUNNER2", why: "extra" }], streams, roster, new Map());
+    const free = planContinuations([{ job: policyFreeplay("sonlo", 2), account: "RUNNER2", why: "extra" }], characters, roster, new Map());
     expect(free.picks[0]!.job.continueFrom).toBe("f1");
     expect(free.picks[0]!.job.continueDropped).toBeUndefined();
-    expect(streamStanding("sonlo", streams.get("sonlo")!, new Map())).toEqual({ kind: "free" });
+    expect(characterStanding("sonlo", characters.get("sonlo")!, new Map())).toEqual({ kind: "free" });
     // The --status rows, one per unlimited ref.
-    const rows = formatStreams(roster, streams, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]), new Set(["opuslo"]));
+    const rows = formatCharacters(roster, characters, new Map([["RUNNER2", { ref: "opuslo", unlimited: true }]]), new Set(["opuslo"]));
     expect(rows).toEqual([
-      expect.stringContaining("stream opuslo: head a11 on RUNNER2 as Bromdir — in flight"),
-      expect.stringContaining("stream sonlo: head f1 on RUNNER2 as Thorgrima — occupied by opuslo's stream: fresh-next"),
+      expect.stringContaining("character opuslo: head a11 on RUNNER2 as Bromdir — in flight"),
+      expect.stringContaining("character sonlo: head f1 on RUNNER2 as Thorgrima — occupied by opuslo's character: fresh-next"),
     ]);
   });
 
-  test("another stream's character on the account is kept, and the name sweep never deletes one", () => {
-    const streams = new Map([
+  test("another ref's freeplay character on the account is kept, and the name sweep never deletes one", () => {
+    const characters = new Map([
       ["opuslo", { runId: "a11", account: "RUNNER2", character: "Bromdir" }],
       ["sonlo", { runId: "s2", account: "RUNNER2", character: "Ironvowen" }],
     ]);
     // A scored launch on RUNNER2 keeps both; opuslo's own continuation keeps only the other.
-    expect(keepFor("RUNNER2", streams)).toEqual(["Bromdir", "Ironvowen"]);
-    expect(keepFor("runner2", streams, "opuslo")).toEqual(["Ironvowen"]);
-    expect(keepFor("RUNNER5", streams)).toEqual([]);
-    const picked = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER2", why: "extra" }], streams, roster);
+    expect(keepFor("RUNNER2", characters)).toEqual(["Bromdir", "Ironvowen"]);
+    expect(keepFor("runner2", characters, "opuslo")).toEqual(["Ironvowen"]);
+    expect(keepFor("RUNNER5", characters)).toEqual([]);
+    const picked = planContinuations([{ job: policyFreeplay("opuslo", 12), account: "RUNNER2", why: "extra" }], characters, roster);
     expect(picked.picks[0]!.job.keepCharacters).toEqual(["Ironvowen"]);
     // The e90 of the same model launching on RUNNER5 while RUNNER2 is free
-    // used to plan a delete of Bromdir there; a stream character is protected.
+    // used to plan a delete of Bromdir there; a freeplay character is protected.
     const affinity = new Map([["opuslo", { account: "RUNNER2", character: "Bromdir" }]]);
-    const protect = new Set([...streams.values()].map((s) => streamKey(s.account, s.character)));
+    const protect = new Set([...characters.values()].map((s) => characterKey(s.account, s.character)));
     expect(planNameSweeps({ assign: [{ ref: "opuslo", account: "RUNNER5" }], affinity, isFree: () => true, protect })).toEqual([]);
     expect(planNameSweeps({ assign: [{ ref: "opuslo", account: "RUNNER5" }], affinity, isFree: () => true })).toEqual([
       { ref: "opuslo", account: "RUNNER2", character: "Bromdir" },
@@ -3343,7 +3343,7 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
     expect(pausesOnDrain(undefined)).toBe(false);
   });
 
-  test("item 107: flipping a live stream's ref to idle:\"none\" drops it from the projection", () => {
+  test("item 107: flipping a live character's ref to idle:\"none\" drops it from the projection", () => {
     // The gap: the supervisor hot-reloads fleet.json, the policy stops
     // generating the job, and before this the live roster process was never
     // signalled — it ran until an idle watchdog an active model never trips.
@@ -3353,7 +3353,7 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
     expect(policyJobDropped(policyFreeplay("opuslo", 12), undefined)).toBe("removed from the roster");
   });
 
-  test("item 107: a stream still in the unlimited lane is never dropped, whatever the plan did this tick", () => {
+  test("item 107: a character still in the unlimited lane is never dropped, whatever the plan did this tick", () => {
     // The distinction is the LOADED CONFIG, not the plan: the reasons a policy
     // pick is absent from a tick (account busy, a lane or paid cap, cooling,
     // eligibility) are transient and none of them reaches this predicate, so a
@@ -3368,7 +3368,7 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
     expect(policyJobDropped(undefined, roster["opuslo"])).toBeUndefined();
   });
 
-  test("item 107: the dropped stream's disabled stand-in reaches diffJobs as a drain", () => {
+  test("item 107: the dropped character's disabled stand-in reaches diffJobs as a drain", () => {
     // What the supervisor pushes for a dropped live policy job, and what
     // `diffJobs` does with it: the drain, and then `pausesOnDrain` makes it an
     // immediate SIGTERM rather than a wait for an episode boundary.
@@ -3378,7 +3378,7 @@ describe("freeplay streams are durable (operator ask, 2026-08-29)", () => {
     expect(pausesOnDrain(policyFreeplay("opuslo", 12))).toBe(true);
   });
 
-  test("resumesInPlace: the freeplay stream and a resume:true campaign come back; a scored run does not", () => {
+  test("resumesInPlace: the freeplay character and a resume:true campaign come back; a scored run does not", () => {
     // What `infra/fleet-update.sh graceful` reads off each job row to decide
     // whether waiting on it buys anything (item 93). The campaign's
     // opt-in is the supervisor's to answer: the script must not re-derive it

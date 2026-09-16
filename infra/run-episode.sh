@@ -140,7 +140,7 @@ load_env
 # WINS: a container (the k8s fleet, the compose runner) has the repo but no
 # `.git` and no git binary, so recomputing here would overwrite the image tag
 # the chart passes with "0.0.0-phase0" — a stamp that names no series, which is
-# what stranded a paused freeplay stream on 2026-09-08. The K8S branch below
+# what stranded a paused freeplay character on 2026-09-08. The K8S branch below
 # already says the chart's value is the honest marker for a baked-in repo; this
 # makes that true on every launch path.
 if [ -z "${WRATHBENCH_HARNESS_VERSION:-}" ]; then

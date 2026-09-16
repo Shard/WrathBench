@@ -113,7 +113,7 @@ export function extrasOf(row: ModelRowView): number {
 }
 
 /**
- * `yes: schedulable on e90` / `no: running (one stream per model)` — the verdict
+ * `yes: schedulable on e90` / `no: running (one character per model)` — the verdict
  * as --status prints it. The extras cell's hover, not a column: it is scheduler
  * state, and a reader who wants it is already looking at what has been spent.
  */
@@ -216,7 +216,7 @@ export function resolvedSummary(
  * The model's freeplay character, for the column beside its scored episodes.
  *
  * Freeplay is one character per model and effort (docs/OPERATIONS.md, "Freeplay
- * streams are durable"), so the match is on those two fields and the row is the
+ * characters are durable"), so the match is on those two fields and the row is the
  * ladder's own `CharacterRow` — the same status and level the freeplay ladder
  * prints, so the two pages cannot disagree about whether a character is live.
  * Null when the model has never had one.

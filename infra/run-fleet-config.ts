@@ -83,7 +83,7 @@ export interface JobSpawn {
  * the breakdown.
  *
  * Smokes fan out: entries with distinct accounts run concurrently (one live
- * session per account is the module's rule, so the account is the stream), and
+ * session per account is the module's rule, so the account is the character), and
  * entries that share an account run one after the other in list order. A bare
  * string entry in fleet.json is the pre-2026-08-23 form and means "on the
  * default `account`".
@@ -220,19 +220,19 @@ export interface FleetJob {
   resume?: { runId: string; model: string; effort?: string | undefined };
   /**
    * Set by `planContinuations` on the `idle: "unlimited"` lane's next
-   * session: the stream's previous run, whose character and scratchpad this
+   * session: the character's previous run, whose character and scratchpad this
    * spawn carries on (`--continue-from`). Never from the file.
    */
   continueFrom?: string;
   /**
-   * Set on every fresh launch by the tick: the other freeplay streams'
+   * Set on every fresh launch by the tick: the other refs' freeplay
    * characters standing on the account this job got, which its hygiene must
    * leave alone (`--keep-characters`). Never from the file.
    */
   keepCharacters?: string[];
   /**
-   * Set by `planContinuations` when the stream's head sits on an account
-   * another ref's stream occupies: the head this spawn deliberately does not
+   * Set by `planContinuations` when the character's head sits on an account
+   * another ref's character occupies: the head this spawn deliberately does not
    * continue, and why (`--continue-dropped`). A record on the new run, no
    * lineage. Never from the file.
    */
@@ -297,7 +297,7 @@ export interface FleetConfig {
   /** The scheduling policy's run targets; `policy.runsPerEpisode` in the file, defaults apply. */
   policy: SchedulingPolicy;
   /**
-   * `policy.maxConcurrent`: streams the policy may have in flight per key
+   * `policy.maxConcurrent`: runs the policy may have in flight per key
    * (`concurrencyKeyOf`), counting every run on that key (pinned ones
    * included). Absent key: unlimited. The knob for a subscription — or a
    * shared free pool's daily budget — that tolerates only so many concurrent
@@ -755,7 +755,7 @@ export function parsePreflight(raw: unknown): FleetPreflight {
  * An entry is a catalog card and a job is a scheduling instruction; anything
  * else on either of them is a key the harness does not read. It used to be
  * dropped in silence, which is how `"enabled": false` sat on a roster entry
- * for a day while the stream it was meant to pause kept running (2026-08-30).
+ * for a day while the character it was meant to pause kept running (2026-08-30).
  * A key outside these sets now REFUSES that entry or job by name — scheduling
  * only, never a drain — so the operator's edit either takes effect or says why
  * it did not. Whole-file rejection stays for shape errors, and the retired
@@ -778,7 +778,7 @@ export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account",
  * spelling of a lane that an entry states as `subscription`.
  */
 const ROSTER_KEY_HINTS: Record<string, string> = {
-  enabled: 'roster entries have no `enabled`; to pause a stream set `idle: "none"`; to stop scheduling set tier/idle accordingly',
+  enabled: 'roster entries have no `enabled`; to pause a character set `idle: "none"`; to stop scheduling set tier/idle accordingly',
   tokenEnv: "use `subscription`, the NAME of the env var holding the token",
 };
 
@@ -1216,11 +1216,11 @@ function parseQueue(
     if ((j as Record<string, unknown>)["resume"] !== undefined) {
       fail(`queue ${ref}: a job must not carry resume — a scored run that pauses is a failed attempt; only campaigns opt in`);
     }
-    // Same shape of refusal: a freeplay stream's lineage is read off the
+    // Same shape of refusal: a freeplay character's lineage is read off the
     // runs, never written into the file.
     for (const k of ["continueFrom", "keepCharacters", "continueDropped"] as const) {
       if ((j as Record<string, unknown>)[k] !== undefined) {
-        fail(`queue ${ref}: a job must not carry ${k} — the supervisor derives a freeplay stream's continuation from its runs`);
+        fail(`queue ${ref}: a job must not carry ${k} — the supervisor derives a freeplay character's continuation from its runs`);
       }
     }
     const repeat = j.repeat ?? 1;

@@ -199,7 +199,7 @@ rather than a summary per entry.
 ## A freeplay character is aggregated at read time
 
 A durable freeplay character is one character across many attempts
-(docs/OPERATIONS.md, "Freeplay streams are durable"), and every counter the
+(docs/OPERATIONS.md, "Freeplay characters are durable"), and every counter the
 runner keeps is per *attempt*: `questsCompleted` is that session's own
 `completions.length`, the tokens and the cost are that attempt's trajectory, the
 playtime is that attempt's active segments. So the run page used to answer "how

@@ -1223,7 +1223,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const runs = await runFacts(now);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
       // The refs with a job in flight, off the supervisor's state: the verdict
-      // says "running (one stream per model)" exactly where --status does.
+      // says "running (one character per model)" exactly where --status does.
       const running = new Set(readFleet(runsDir, now).jobs.flatMap((j) => j.ref.split("+")));
       const body: ModelsResponse = modelsResponse({ states, runs, runsDir, roster, now, harness, running });
       /*

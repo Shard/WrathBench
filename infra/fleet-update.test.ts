@@ -274,7 +274,7 @@ describe("fleet-update.sh", () => {
     expect(r.pauseFile?.paused).toBe(true);
   });
 
-  test("graceful: a DRAINING freeplay stream is counted as drained — it resumes in place, so the window completes", () => {
+  test("graceful: a DRAINING freeplay character is counted as drained — it resumes in place, so the window completes", () => {
     // item 93: an `idle: unlimited` session has no clock to finish on, so
     // a wait loop that treats it as live runs to its ceiling. The recreate
     // costs it nothing: it comes back on the same run id and character.
@@ -286,7 +286,7 @@ describe("fleet-update.sh", () => {
     expect(r.pauseFile).toBeNull();
   });
 
-  test("graceful: a freeplay stream the switch has NOT reached yet is still waited on", () => {
+  test("graceful: a freeplay character the switch has NOT reached yet is still waited on", () => {
     // `draining` is the proof the supervisor picked the switch up. It is also
     // what keeps a refused pin — deliberately spared from draining — holding
     // the window open, as OPERATIONS.md promises.
@@ -337,7 +337,7 @@ describe("fleet-update.sh", () => {
     expect(r.out).toContain("waiting on:      q-freeplay");
   });
 
-  test("graceful: one parked stream and one scored run still waits", () => {
+  test("graceful: one parked character and one scored run still waits", () => {
     const r = run({
       jobs: [
         { name: "sonnet-low-freeplay", episode: "freeplay", source: "policy", draining: true },

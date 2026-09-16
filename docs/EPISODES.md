@@ -170,7 +170,7 @@ standing sandbox that never finishes. Duration separates neither pair.
   operator's disable/re-enable and across its own endings (2026-08-29), so the
   next attempt is launched `--continue-from` the last one — same account,
   same character, the scratchpad carried forward — and records the lineage as
-  `continued_from` (docs/OPERATIONS.md, "Freeplay streams are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
+  `continued_from` (docs/OPERATIONS.md, "Freeplay characters are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
   on the Models page and as a `freeplay` run on the Episodes page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
   first (counting is series-keyed), and freeplay resumes once they are met.

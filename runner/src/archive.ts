@@ -13,7 +13,7 @@
  *
  * `--run-ids <comma-list-or-@file>` parks exactly the runs the operator names.
  * The floor is a rule about comparability; a named list is a judgement the
- * rule cannot make — that a freeplay ladder should show one live stream per
+ * rule cannot make — that a freeplay ladder should show one live character per
  * model rather than every dead character that model ever rolled. Same held
  * guards, same `--release-paused`, same `--dry-run`; an id that names nothing
  * is reported rather than thrown, so a typo costs a line and not the run.

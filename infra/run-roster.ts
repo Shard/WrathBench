@@ -157,18 +157,18 @@ export interface RosterSpec {
   /**
    * A freeplay continuation: the run id whose character and scratchpad this
    * launch carries on (`--continue-from`). The fleet sets it on the
-   * `idle: "unlimited"` lane's next session when the stream's previous run
+   * `idle: "unlimited"` lane's next session when the character's previous run
    * ended; a fresh launch only, never restated on `--resume`.
    */
   continueFrom?: string;
   /**
-   * Characters on this account that belong to another ref's freeplay stream
+   * Characters on this account that belong to another ref's freeplay character
    * and must survive this launch's hygiene (`--keep-characters`).
    */
   keepCharacters?: string[];
   /**
-   * A stream head this launch deliberately does not continue: the supervisor
-   * found its account occupied by another ref's stream and started fresh
+   * A character head this launch deliberately does not continue: the supervisor
+   * found its account occupied by another ref's character and started fresh
    * elsewhere (`--continue-dropped`, `--continue-dropped-reason`). Record only.
    */
   continueDropped?: { runId: string; reason: string };
@@ -303,7 +303,7 @@ const CONTAINER = inContainer();
  * fails and the fallback claimed `0.0.0-phase0` — a stamp that names no
  * SERIES. Every run the pod launched or resumed was then out of the policy's
  * series, which made it invisible to the projection AND to `planResumes`
- * (`infra/run-fleet-plan.ts`): on 2026-09-08 a paused freeplay stream head
+ * (`infra/run-fleet-plan.ts`): on 2026-09-08 a paused freeplay character head
  * (`...-20260905-a12`) was neither resumed nor listed, and the policy started
  * a fresh attempt off the older ENDED run instead. The image tag the chart
  * passes is the honest marker for a checkout that cannot describe itself.
@@ -615,7 +615,7 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.tokenEnv !== undefined) argv.push("--token-env", spec.tokenEnv);
   if (spec.account !== undefined) argv.push("--account", spec.account);
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
-  // A freeplay stream's lineage and the other streams' characters on this
+  // A freeplay character's lineage and the other refs' characters on this
   // account: launch inputs, so a fresh launch only (a resume keeps the stored
   // identity and the account's hygiene does not run).
   if (spec.continueFrom !== undefined) argv.push("--continue-from", spec.continueFrom);
