@@ -5,7 +5,10 @@ honest fsync — operator decision 2026-09-05).
 `data` is the whole of `data/` in today's layout: client/ (the AzerothCore
 server data directory, read-only and never in git), runs/ (every trajectory,
 fleet-state.json, the pause switch, the lane logs), wiki/, minimap/, etc/,
-logs/ and publish/. Five pods mount it at once, which RWO permits only because
+logs/, publish/, collector/ and config/ (the live config store, a subPath the
+kubelet creates on first mount: root-owned, setgid group 1000 and
+group-writable, which is what lets uid 1000 write it without a seed step).
+Every pod mounts it as subPaths, at once, which RWO permits only because
 every one of them is nodeSelector'd to the same node.
 
 `db` is the MySQL datadir and nothing else.
