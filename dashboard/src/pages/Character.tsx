@@ -25,7 +25,7 @@ import {
   type CharacterResponse,
   type CharacterView,
 } from "../api/client";
-import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
+import { CharacterTotalsCard } from "../components/CharacterCards";
 import { CharacterPlot } from "../components/CharacterChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { UnitFrame } from "../components/UnitFrame";
@@ -192,7 +192,10 @@ export default function Character() {
                   <div class="sub dim">
                     this session: {fmtDuration(l().playtimeMs)} played · {num(l().questsCompleted)} quests
                     <Show when={standing()}>
-                      {(s) => <> · last sample {fmtAge(s().ts)} ago ({stamp(s().ts)})</>}
+                      {/* `fmtAge` takes an age, not a timestamp, and says "ago"
+                          itself. The clock is this browser's, which is the same
+                          reading the run page's own header takes. */}
+                      {(s) => <> · last sample {fmtAge(Date.now() - s().ts)} ({stamp(s().ts)})</>}
                     </Show>
                   </div>
                 </div>
@@ -237,9 +240,19 @@ export default function Character() {
               )}
             </Show>
 
-            {/* Every attempt, each a link to its own page. */}
+            {/*
+              Every attempt, each a link to its own page. The run page's compact
+              strip is deliberately NOT drawn here: there it answers "where am I
+              in the chain", which is a question a reader of this page does not
+              have, and it would say in icons what the table below says in full.
+            */}
             <h2 class="section">the attempts</h2>
-            <AttemptStrip character={st()} />
+            <Show when={st().truncated}>
+              <p class="dim" title="the oldest attempt served still names a predecessor this viewer does not hold">
+                This character begins mid-history: earlier attempts are not served, so every total above
+                is a lower bound over what is listed here.
+              </p>
+            </Show>
             <div class="scroller">
               <table>
                 <thead>
