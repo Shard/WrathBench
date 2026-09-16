@@ -74,7 +74,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --expect-tag) EXPECT_TAG="$2"; shift 2 ;;
     --allow-tag-mismatch) ALLOW_TAG_MISMATCH=1; shift ;;
-    -h|--help) sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "k8s-deploy: unknown flag $1" >&2; exit 2 ;;
   esac
 done
