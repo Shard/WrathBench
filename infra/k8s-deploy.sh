@@ -28,10 +28,20 @@
 # A deploy must never leave the fleet stopped: that is the invariant an operator
 # relies on instead of watching the window.
 #
+# THE PIN CHECK. Before anything is drained or smoked, the tag the cluster
+# actually runs (the worldserver Deployment's image, or the module's /health
+# `build` when that does not read back) is compared to `git describe` of this
+# tree, and a mismatch REFUSES. On 2026-09-16 this script ran against a pin that
+# had not landed: it smoked the old release, called it verified and resumed the
+# fleet on it. `--expect-tag` names a different tag to require;
+# `--allow-tag-mismatch` is the deliberate override and says so in the log.
+#
 #   ./infra/k8s-deploy.sh                 # drain, wait, smoke, resume
 #   ./infra/k8s-deploy.sh --dry-run       # resolved values only; change nothing
 #   ./infra/k8s-deploy.sh --no-smoke      # window WITHOUT verification (honest,
 #                                         # and it says so)
+#   ./infra/k8s-deploy.sh --expect-tag harness-0.5-627-gcf6dcc3
+#   ./infra/k8s-deploy.sh --allow-tag-mismatch
 #   ./infra/k8s-deploy.sh --namespace wrathbench --release wrathbench
 
 set -Eeuo pipefail
@@ -44,6 +54,15 @@ NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"
 RELEASE="${WRATHBENCH_K8S_RELEASE:-wrathbench}"
 RUN_SMOKE=1
 DRY_RUN=0
+# The tag this tree is. `git describe --tags --always`, exactly what
+# build-images.sh stamps into the images and the chart's image.tag.
+TREE_TAG="$(git -C "${REPO_ROOT}" describe --tags --always 2>/dev/null || true)"
+EXPECT_TAG="${WRATHBENCH_EXPECT_TAG:-}"
+ALLOW_TAG_MISMATCH=0
+# The pause switch `fleet-update.sh drain` leaves set, as the PODS see it. Same
+# file, same meaning; overridable only so the tests can point a stubbed kubectl
+# at a fixture directory.
+PAUSE_JSON="${WRATHBENCH_FLEET_RUNS_DIR:-/wrathbench/data/runs}/fleet-pause.json"
 HEALTH_WAIT_S="${WRATHBENCH_DEPLOY_HEALTH_WAIT_S:-900}"
 DRAIN_WAIT_S="${WRATHBENCH_DEPLOY_DRAIN_WAIT_S:-300}"
 
@@ -53,7 +72,9 @@ while [[ $# -gt 0 ]]; do
     --release) RELEASE="$2"; shift 2 ;;
     --no-smoke) RUN_SMOKE=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
-    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --expect-tag) EXPECT_TAG="$2"; shift 2 ;;
+    --allow-tag-mismatch) ALLOW_TAG_MISMATCH=1; shift ;;
+    -h|--help) sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "k8s-deploy: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -148,10 +169,95 @@ health_build() {
   ' 2>/dev/null | strip_ansi | tr -d '\r' || true
 }
 deployed_tag() {
-  "${KUBECTL[@]}" get "${WORLD_DEPLOY}" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true
+  # Every container's image, not [0]: a sidecar must not decide which image this
+  # Deployment is. The worldserver ref is preferred, the first tagged ref is the
+  # fallback.
+  "${KUBECTL[@]}" get "${WORLD_DEPLOY}" -o jsonpath='{.spec.template.spec.containers[*].image}' 2>/dev/null | strip_ansi | tr -d '\r' || true
 }
 fleet_replicas() {
   "${KUBECTL[@]}" get "${FLEET_DEPLOY}" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0
+}
+
+# ------------------------------------------------------------- the pin check
+#
+# 2026-09-16: a pin PR whose checks had failed never merged, the chain that
+# should have stopped there used `;` instead of `&&`, and this script ran a full
+# window against the OLD image — it smoked the old release, wrote `running` with
+# a verification, and resumed the fleet on it. Nothing in the deploy could have
+# noticed, because nothing in it ever looked at what was deployed.
+#
+# So: the tag the cluster RUNS against the tag this TREE IS, before anything is
+# drained. The registry is deliberately not compared — that is one cluster's
+# business — only the tag after the last colon, which is the immutable
+# `git describe` build-images.sh stamps everywhere (issue 7).
+ref_tag() {
+  local ref="$1" last="${1##*/}"
+  [[ "${last}" == *:* ]] || return 1
+  printf '%s' "${ref##*:}"
+}
+cluster_tag() {
+  local images ref first="" t
+  images="$(deployed_tag)"
+  for ref in ${images}; do
+    t="$(ref_tag "${ref}")" || continue
+    [[ -n "${first}" ]] || first="${t}"
+    case "${ref}" in */*worldserver:*) printf '%s' "${t}"; return 0 ;; esac
+  done
+  if [[ -n "${first}" ]]; then printf '%s' "${first}"; return 0; fi
+  # No Deployment, or no tagged image on it: the module's own /health `build` is
+  # the same string, stamped into the image at build time.
+  health_build
+}
+
+CLUSTER_TAG=""; WANT_TAG=""; TAG_CHECK=""; TAG_CHECK_WHY=""
+resolve_tag_check() {
+  WANT_TAG="${EXPECT_TAG:-${TREE_TAG}}"
+  CLUSTER_TAG="$(cluster_tag)"
+  if [[ -z "${WANT_TAG}" ]]; then
+    TAG_CHECK=unknown
+    TAG_CHECK_WHY="this tree has no tag — \`git describe --tags --always\` produced nothing (not a git checkout?), so there is nothing to compare the cluster's ${CLUSTER_TAG:-unknown} against"
+  elif [[ -z "${CLUSTER_TAG}" ]]; then
+    TAG_CHECK=unknown
+    TAG_CHECK_WHY="the cluster's image tag did not read back from ${WORLD_DEPLOY} or from the module's /health, so it cannot be shown to be ${WANT_TAG}"
+  elif [[ "${WANT_TAG}" == "${CLUSTER_TAG}" ]]; then
+    TAG_CHECK=ok
+    TAG_CHECK_WHY="the cluster runs ${CLUSTER_TAG}, which is $(if [[ -n "${EXPECT_TAG}" ]]; then echo "the --expect-tag"; else echo "this tree"; fi)"
+  else
+    TAG_CHECK=mismatch
+    TAG_CHECK_WHY="the cluster runs ${CLUSTER_TAG} but $(if [[ -n "${EXPECT_TAG}" ]]; then echo "--expect-tag is"; else echo "this tree is"; fi) ${WANT_TAG}"
+  fi
+}
+enforce_tag_check() {
+  resolve_tag_check
+  if [[ "${TAG_CHECK}" == "ok" ]]; then
+    say "pin check: ${TAG_CHECK_WHY}"
+    return 0
+  fi
+  if [[ "${ALLOW_TAG_MISMATCH}" -eq 1 ]]; then
+    say "pin check: ${TAG_CHECK_WHY} — running anyway (--allow-tag-mismatch). Whatever this window verifies, it is NOT ${WANT_TAG:-this tree}."
+    return 0
+  fi
+  {
+    echo "[$(date +%H:%M:%S)] k8s-deploy: REFUSING TO DEPLOY: ${TAG_CHECK_WHY}."
+    echo "    A window run here would drain the fleet, smoke whatever is actually deployed,"
+    echo "    record that as verified and resume the fleet on it (2026-09-16)."
+    echo "    Land the pin first and wait for the rollout, then re-run. Or, deliberately:"
+    echo "      --expect-tag <tag>        require a different tag"
+    echo "      --allow-tag-mismatch      deploy anyway, and say so in the log"
+  } >&2
+  exit 1
+}
+
+# ------------------------------------------------------------- pause switch
+# `fleet-update.sh drain` sets the switch and LEAVES it set for this window;
+# clearing it is what `fleet-update.sh resume` does, and this script's resume
+# phase is the moment for it — a deploy that brings the fleet back to a switch
+# nobody cleared brings back a fleet that schedules nothing (2026-09-16).
+pause_switch_set() {
+  in_runner sh -c "[ -f '${PAUSE_JSON}' ]" >/dev/null 2>&1
+}
+clear_pause_switch() {
+  in_runner rm -f "${PAUSE_JSON}" >/dev/null 2>&1
 }
 
 # ------------------------------------------------------------- server state
@@ -190,6 +296,12 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "  fleet config       ${FLEET_JSON}"
   say "  worldserver image  $(deployed_tag) (Flux owns this; this script never changes it)"
   say "  fleet replicas     $(fleet_replicas)"
+  resolve_tag_check
+  case "${TAG_CHECK}" in
+    ok) say "  pin check          OK — ${TAG_CHECK_WHY}" ;;
+    *)  say "  pin check          WOULD REFUSE — ${TAG_CHECK_WHY}$(if [[ "${ALLOW_TAG_MISMATCH}" -eq 1 ]]; then echo " (but --allow-tag-mismatch was given, so it would run)"; fi)" ;;
+  esac
+  say "  pause switch       $(if pause_switch_set; then echo "SET (${PAUSE_JSON}) — the resume phase would clear it"; else echo "not set (${PAUSE_JSON})"; fi)"
   say "  jobs alive         $(alive_jobs) (per the runner pod's view of fleet-state.json)"
   say "  health wait        ${HEALTH_WAIT_S}s"
   say "  drain wait         ${DRAIN_WAIT_S}s after the fleet scales to 0"
@@ -199,6 +311,12 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "  verification path  $(if [[ "${RUN_SMOKE}" -eq 0 ]]; then echo "none (--no-smoke)"; elif [[ "${#SMOKES[@]}" -eq 0 ]]; then echo "NONE — preflight has no smokes"; else echo "kubectl exec ${RUNNER_DEPLOY}, fleet at 0"; fi)"
   exit 0
 fi
+
+# ----------------------------------------------------- the pin check, enforced
+# Before the EXIT trap exists, so a refusal leaves the server-state phase alone:
+# nothing was drained, nothing failed, and the viewer's banner should not say a
+# deploy did.
+enforce_tag_check
 
 # ------------------------------------------------------------ invariants
 FLEET_STOPPED=0
@@ -213,6 +331,14 @@ bring_fleet_up() {
   say "scaling the fleet back to 1 (paused runs resume; the supervisor re-gates on the server identity)"
   "${KUBECTL[@]}" scale "${FLEET_DEPLOY}" --replicas=1
 }
+resume_pause_switch() {
+  pause_switch_set || return 0
+  if clear_pause_switch; then
+    say "pause switch CLEARED (${PAUSE_JSON}) — the same thing \`fleet-update.sh resume\` does. A \`drain\` leaves it set for this window; the supervisor schedules again within a tick (60s)."
+  else
+    say "WARNING: the pause switch ${PAUSE_JSON} is SET and could not be cleared. The fleet is UP but schedules NOTHING until you run: ./infra/fleet-update.sh resume"
+  fi
+}
 on_exit() {
   local rc="$?"
   trap - ERR EXIT
@@ -222,6 +348,18 @@ on_exit() {
       exit 1
     fi
   fi
+  # Only the resume phase clears the switch. A failed window deliberately does
+  # not: the fleet is up but gated, and an operator who reverts the tag wants
+  # the switch exactly where the drain left it.
+  case "${FINAL_PHASE}" in
+    running|unverified) resume_pause_switch ;;
+    failed)
+      if pause_switch_set; then
+        say "the pause switch is STILL SET (${PAUSE_JSON}) — deliberately, because this window FAILED."
+        say "  The fleet is up and schedules nothing. Clear it with: ./infra/fleet-update.sh resume"
+      fi
+      ;;
+  esac
   case "${FINAL_PHASE}" in
     running) write_phase running "deployed ${NEW_BUILD} at $(hhmm), verified by ${VERIFIED_BY}; fleet resumed" ;;
     unverified) write_phase running "deployed ${NEW_BUILD} at $(hhmm) UNVERIFIED (--no-smoke); the fleet's own gate is the only check" ;;
@@ -244,7 +382,17 @@ trap 'fail_closed "unexpected error at line ${LINENO} (exit $?)"' ERR
 
 # ----------------------------------------------------------------- 1. drain
 CURRENT_PHASE=draining
-if [[ "$(fleet_replicas)" != "0" ]]; then
+START_REPLICAS="$(fleet_replicas)"
+START_SWITCH=no
+if pause_switch_set; then START_SWITCH=yes; fi
+say "at the start: ${FLEET_DEPLOY} is at ${START_REPLICAS} replica(s), pause switch $(if [[ "${START_SWITCH}" == "yes" ]]; then echo "SET"; else echo "not set"; fi)"
+if [[ "${START_SWITCH}" == "yes" && "${START_REPLICAS}" != "0" ]]; then
+  say "  NOTE: a Helm upgrade resets the fleet Deployment to 1 replica even under a held"
+  say "  pause switch, so a \`fleet-update.sh drain\` that left it at 0 does NOT mean it is"
+  say "  still 0 by the time the chart has rolled (2026-09-16). Nothing was scheduled — the"
+  say "  switch holds — and this window drains it again."
+fi
+if [[ "${START_REPLICAS}" != "0" ]]; then
   n_alive="$(alive_jobs)"
   [[ "${n_alive}" =~ ^[0-9]+$ ]] || n_alive=0
   PAUSED_NOTE="${n_alive} job(s) paused and will resume"
