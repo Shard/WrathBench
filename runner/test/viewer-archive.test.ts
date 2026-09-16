@@ -212,7 +212,7 @@ describe("the series floor", () => {
 });
 
 /**
- * `--run-ids`: the operator naming the runs, because "one live stream per
+ * `--run-ids`: the operator naming the runs, because "one live character per
  * model+effort on the freeplay ladder" is a judgement no series floor can
  * make (operator ask, 2026-08-29). What matters here is that naming a run is
  * not a licence to move it — the held guards are the floor's, unchanged — and

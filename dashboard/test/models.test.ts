@@ -191,15 +191,15 @@ describe("rosterNameFor", () => {
 });
 
 describe("freeplay column", () => {
-  const stream = (over: Record<string, unknown> = {}) =>
+  const character = (over: Record<string, unknown> = {}) =>
     ({ characterId: "s", model: "sonnet", effort: "low", status: "paused", statusDetail: "operator-pause", level: 15, attempts: 3, latest: { runId: "s-a3" }, ...over }) as never;
-  test("matches the model's stream on model and effort", () => {
-    expect(freeplayOf({ model: "sonnet", effort: "low" }, [stream()])).not.toBeNull();
-    expect(freeplayOf({ model: "sonnet", effort: null }, [stream()])).toBeNull();
-    expect(freeplayOf({ model: "opus", effort: "low" }, [stream()])).toBeNull();
+  test("matches the model's character on model and effort", () => {
+    expect(freeplayOf({ model: "sonnet", effort: "low" }, [character()])).not.toBeNull();
+    expect(freeplayOf({ model: "sonnet", effort: null }, [character()])).toBeNull();
+    expect(freeplayOf({ model: "opus", effort: "low" }, [character()])).toBeNull();
   });
   test("the label is status and level", () => {
-    expect(freeplayLabel(stream())).toBe("paused · L15");
-    expect(freeplayLabel(stream({ status: "live", level: null }))).toBe("live");
+    expect(freeplayLabel(character())).toBe("paused · L15");
+    expect(freeplayLabel(character({ status: "live", level: null }))).toBe("live");
   });
 });

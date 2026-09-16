@@ -88,7 +88,7 @@ describe("resolvePowerType", () => {
 });
 
 describe("xpToNext", () => {
-  test("prefers the stream's value and falls back to the level table", () => {
+  test("prefers the character's own value and falls back to the level table", () => {
     expect(xpToNext(5, 2800)).toBe(2800);
     expect(xpToNext(5)).toBe(XP_FOR_LEVEL[5] ?? -1);
     expect(xpToNext(1)).toBe(400);
