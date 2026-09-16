@@ -41,6 +41,31 @@ describe("resolve", () => {
     expect(s).toMatchObject({ driver: "claude-code", account: "SHAKEOUT2", race: 3 });
   });
 
+  test("routing rides its own flag, and only when the entry stated one", () => {
+    // Issue #25 / 2026-09-16. An unstated routing produces the argv it always
+    // did: the runner derives the same default from the model slug, so the
+    // flag is a statement of intent rather than a restatement of a default.
+    const plain = resolve([{ model: "z-ai/glm-5.2:free" }], "20260916")[0]!;
+    expect(episodeArgv(plain, false)).not.toContain("--routing-json");
+    const pinned = resolve([{ model: "z-ai/glm-5.2:free", routing: ["Z.AI", "Together"] as never }], "20260916")[0]!;
+    // The shorthand normalises on the way through, so what the argv carries is
+    // one shape whatever the config said.
+    expect(pinned.routing).toEqual({ order: ["Z.AI", "Together"], allowFallbacks: false });
+    const argv = episodeArgv(pinned, false);
+    expect(JSON.parse(argv[argv.indexOf("--routing-json") + 1]!)).toEqual({
+      order: ["Z.AI", "Together"],
+      allowFallbacks: false,
+    });
+    // A resumed run restates no identity, routing included.
+    expect(episodeArgv(pinned, true)).not.toContain("--routing-json");
+  });
+
+  test("routing on an endpoint with one backend is refused at resolve, not dropped", () => {
+    expect(() =>
+      resolve([{ model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1", routing: ["Cerebras"] as never }], "20260916"),
+    ).toThrow(/routing is an OpenRouter setting/);
+  });
+
   test("an unknown driver is refused rather than passed through", () => {
     expect(() => resolve([{ model: "x", driver: "anthropic" as never }], "20260101")).toThrow(/unknown driver/);
   });

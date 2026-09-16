@@ -254,6 +254,66 @@ describe("parseFleet", () => {
     expect(lane.refusals[0]!.why).toMatch(/use `subscription`, the NAME of the env var/);
   });
 
+  // Provider routing (issue #25, operator decision 2026-09-16). Pinned routing
+  // is config: an entry may name the backend, the policy may set the fleet's
+  // default, and neither may be written where nothing would read it.
+  test("a roster entry may name the providers that serve it", () => {
+    const config = parseFleet(
+      fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", routing: { order: ["Z.AI", "Together"] } } } }),
+    );
+    expect(config.refusals).toEqual([]);
+    expect(config.roster["glm"]!.routing).toEqual({ order: ["Z.AI", "Together"], allowFallbacks: false });
+  });
+
+  test("routing is refused on an endpoint with one backend behind it", () => {
+    // Cerebras is a base URL of its own, not an OpenRouter route: a routing
+    // block there would be config that does nothing, and the operator who
+    // wrote it believed the run was pinned.
+    expect(() =>
+      parseFleet(
+        fleetJson([], {
+          roster: {
+            qwen: {
+              tier: "t0",
+              model: "qwen-3.8-27b",
+              billing: "paid",
+              apiBase: "https://api.cerebras.ai/v1",
+              routing: { order: ["Cerebras"] },
+            },
+          },
+        }),
+      ),
+    ).toThrow(/routing is an OpenRouter setting/);
+    expect(() =>
+      parseFleet(fleetJson([], { roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", routing: "Anthropic" } } })),
+    ).toThrow(/routing is an OpenRouter setting/);
+  });
+
+  test("a malformed routing block takes the file down, like any other shape error", () => {
+    expect(() =>
+      parseFleet(fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", routing: { only: ["Z.AI"] } } } })),
+    ).toThrow(/routing has unknown key `only`/);
+  });
+
+  test("policy.routing is the fleet default, and an entry's own routing wins", () => {
+    const config = parseFleet(
+      fleetJson([], {
+        policy: { routing: { sort: "throughput", allowFallbacks: true } },
+        roster: {
+          glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
+          ox: { tier: "t1", model: "stealth/ox-alpha:free", routing: ["Stealth"] },
+          son: { tier: "t1", model: "sonnet", driver: "claude-code" },
+        },
+      }),
+    );
+    expect(config.policy.routing).toEqual({ sort: "throughput", allowFallbacks: true });
+    expect(config.roster["glm"]!.routing).toEqual({ sort: "throughput", allowFallbacks: true });
+    // Stated whole, never merged with the policy's.
+    expect(config.roster["ox"]!.routing).toEqual({ order: ["Stealth"], allowFallbacks: false });
+    // A CLI entry has no routing to default: it would be refused if it had one.
+    expect(config.roster["son"]!.routing).toBeUndefined();
+  });
+
   test("a refused roster entry names its jobs, so a live freeplay run is spared", () => {
     // The 2026-08-24 lesson, carried to the entry: a refusal suppresses
     // SCHEDULING. Without `jobs` the policy job `glm-freeplay` would simply

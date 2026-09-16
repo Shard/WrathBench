@@ -32,6 +32,7 @@
 
 import { z } from "zod";
 import type { ChatMessage } from "./context";
+import { isOpenRouterBase, providerBodyOf, type RoutingSpec } from "./routing";
 import type { ToolDef } from "./tools";
 
 export interface ChatRequest {
@@ -202,6 +203,17 @@ export interface OpenAiAdapterOptions {
    * `max` too and is the operator's problem, not the adapter's.
    */
   effort?: string;
+  /**
+   * Which backend may serve this run (`routing.ts`), already resolved — the
+   * adapter states it, it does not decide it. Sent as OpenRouter's
+   * request-level `provider` object and only to an OpenRouter base, the same
+   * gate and the same reason as the `usage` opt-in below: a strict
+   * OpenAI-compatible server may 400 on a key it does not know.
+   *
+   * Absent is not "unrouted by choice" — it is a run whose base does not speak
+   * this, and the comparability tuple omits the field for exactly those.
+   */
+  routing?: RoutingSpec;
   maxAttempts?: number;
   requestTimeoutMs?: number;
   /** Wall-clock ceiling for one complete()'s retries (see the retry policy). */
@@ -348,6 +360,16 @@ export class OpenAiChatAdapter implements ChatAdapter {
       // `usage`. Observability, not behavior — but gated to the one host that
       // documents it, since a strict OpenAI-compat server may 400 on unknowns.
       ...(this.opts.baseUrl.includes("openrouter.ai") ? { usage: { include: true } } : {}),
+      // Which backend may serve this (operator decision 2026-09-16, see
+      // `routing.ts`). Host-gated like the usage opt-in: an aggregator is the
+      // only thing with a choice to make, and a direct endpoint would 400 on
+      // the key. With `allow_fallbacks: false` a request that cannot be served
+      // by a named provider FAILS rather than moving to another machine, which
+      // is the point — a silent move is a different measurement wearing the
+      // same row.
+      ...(this.opts.routing !== undefined && isOpenRouterBase(this.opts.baseUrl)
+        ? { provider: providerBodyOf(this.opts.routing) }
+        : {}),
     });
 
     let lastError = "";

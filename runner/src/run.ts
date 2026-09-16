@@ -44,6 +44,7 @@ import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparab
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
+import { parseRouting, routingForRun, type RoutingSpec } from "./routing";
 import { runClaudeEpisode } from "./adapter-claude";
 import { codexEffortRefusal, laneLooksLoggedIn, runCodexEpisode } from "./adapter-codex";
 import {
@@ -99,6 +100,26 @@ function flag(v: string | boolean | undefined): boolean | undefined {
   if (t === "true" || t === "1" || t === "yes") return true;
   if (t === "false" || t === "0" || t === "no") return false;
   return undefined;
+}
+
+/**
+ * `--routing-json`: the entry's routing block, as the fleet wrote it.
+ *
+ * Parsed through the same `parseRouting` the config file goes through, so a
+ * shape the fleet would have refused cannot reach a run by another door. A
+ * malformed value fails the launch rather than quietly running unrouted —
+ * unrouted is a different measurement, and a run must never take that branch
+ * by accident.
+ */
+function routingOverride(v: string | boolean | undefined): RoutingSpec | undefined {
+  if (typeof v !== "string" || v.trim().length === 0) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(v);
+  } catch {
+    throw new Error(`--routing-json is not valid JSON: ${v.slice(0, 200)}`);
+  }
+  return parseRouting(raw, "--routing-json");
 }
 
 function num(v: string | boolean | undefined): number | undefined {
@@ -183,6 +204,10 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // Identity, like model and driver: a resumed run keeps the effort it was
     // launched with, so --effort is not an override on --resume.
     effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
+    // Which backend may serve this run, as the fleet entry declared it. JSON
+    // because it is a small object and argv is not a place to spell one out
+    // flag at a time; identity like the rest, so a resume keeps it.
+    routing: routingOverride(args["routing-json"]),
     // Identity, like model and effort: an objective steers what the whole
     // run was for, so a resumed run keeps the one it was launched with.
     objective: typeof args["objective"] === "string" ? args["objective"] : undefined,
@@ -518,11 +543,16 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     trajectory.redact(apiKey);
+    // Resolved once, here, and handed to both the adapter and the tuple
+    // (`comparabilityOf` calls the same function): what the wire carries is
+    // what the run records.
+    const routing = routingForRun({ ...config, apiBase });
     adapter = new OpenAiChatAdapter({
       baseUrl: apiBase,
       apiKey,
       model: config.model,
       ...(config.effort !== undefined ? { effort: config.effort } : {}),
+      ...(routing !== null ? { routing } : {}),
     });
   }
 

@@ -64,6 +64,7 @@ import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
+import { parseRouting, routingLabel, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 
 // ----------------------------------------------------------------- policy
@@ -193,6 +194,18 @@ export interface SchedulingPolicy {
    * every config written before there was a second subscription.
    */
   subscriptions: string[];
+  /**
+   * The fleet-wide routing default for OpenRouter entries (`routing.ts`), or
+   * undefined for the built-in one — the model author's own provider, with
+   * fallbacks off (operator decision 2026-09-16).
+   *
+   * It belongs in this block because it is the same species as everything else
+   * here: *where a run may physically execute*. It buys a model no runs and
+   * costs it none. An entry that states its own `routing` overrides it
+   * outright — there is no merging of two half-specified blocks, because a
+   * merged routing is one nobody wrote down.
+   */
+  routing?: RoutingSpec;
 }
 
 /** The paid default once `policy.paid` is present: one paid run in flight. */
@@ -224,7 +237,7 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   const base = { ...DEFAULT_POLICY, series, maxConcurrent: {} as Record<string, number> };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown };
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown };
   const out = { ...base };
   if (o.runsPerEpisode !== undefined) {
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
@@ -277,7 +290,17 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
     }
     out.subscriptions = names;
   }
+  if (o.routing !== undefined) {
+    out.routing = parseRouting(o.routing, "policy.routing");
+  }
   return out;
+}
+
+/** `policy.routing` as `--status` prints it; the built-in default said plainly. */
+export function policyRoutingLabel(policy: Pick<SchedulingPolicy, "routing">): string {
+  return policy.routing === undefined
+    ? "the model author's own provider, fallbacks off (default)"
+    : routingLabel(policy.routing);
 }
 
 /** A tier name; `where` names the entry in the error. */

@@ -294,6 +294,21 @@ export interface ResolvedModel {
   model: string | null;
   /** The Claude Code CLI's version. Null on any other driver. */
   cliVersion: string | null;
+  /**
+   * The backend that actually served the run, as the response body named it
+   * (`Z.AI`, `Together`, `Google AI Studio`). Null on a driver or endpoint
+   * that names none.
+   *
+   * The same species as `model`: observed mid-episode, promoted once, never
+   * revised. It is the *answer* to the routing the tuple stamped — the request
+   * says which providers are allowed, this says which one took it — and with
+   * `allow_fallbacks: false` those agree, so a disagreement is exactly the
+   * thing worth seeing. It is an annotation and not a key for the reason the
+   * resolved model id is not one (docs/METHODOLOGY.md): a fact observed
+   * minutes after launch cannot be part of what a launch stamped, and the
+   * requested routing already carries the grouping.
+   */
+  provider: string | null;
 }
 
 export interface PauseMark {
@@ -338,6 +353,10 @@ CREATE TABLE IF NOT EXISTS run (
   -- was on without replaying the trajectory.
   resolved_model TEXT,
   resolved_cli_version TEXT,
+  -- And which backend served it (2026-09-16): an aggregator answers one slug
+  -- from many machines, so "which provider was this row on" is a question a
+  -- cross-run SELECT has to be able to ask without replaying the trajectory.
+  resolved_provider TEXT,
   -- The freeplay run this one continues (RunConfig.continuedFrom): the
   -- lineage of a freeplay stream, so a listing can follow a character across
   -- the run ids the operator's disable/re-enable cycle gave it.
@@ -406,6 +425,8 @@ const RUN_ADDED_COLUMNS: Record<string, string> = {
   // launched by an older build (and any run resumed by this one) gains them here.
   resolved_model: "TEXT",
   resolved_cli_version: "TEXT",
+  // Added 2026-09-16: the backend that served the run (`routing.ts`).
+  resolved_provider: "TEXT",
   // Added 2026-08-29: a freeplay continuation names its predecessor.
   continued_from: "TEXT",
   // Added 2026-08-30: the open reflection window, for the viewer's live feed.
@@ -534,8 +555,8 @@ export class Trajectory {
     writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
     this.db
       .query(
-        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, continued_from, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO run (run_id, harness_version, started_at, driver, shakeout, model, objective, character, platform, resolved_model, resolved_cli_version, resolved_provider, continued_from, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET harness_version = excluded.harness_version`,
       )
       .run(
@@ -550,6 +571,7 @@ export class Trajectory {
         platformOf(meta.config.apiBase, meta.config.driver),
         meta.resolved?.model ?? null,
         meta.resolved?.cliVersion ?? null,
+        meta.resolved?.provider ?? null,
         meta.config.continuedFrom ?? null,
         this.scrub(jsonLine(meta.config)),
       );
@@ -600,20 +622,32 @@ export class Trajectory {
   recordResolved(runId: string, r: Partial<ResolvedModel>): boolean {
     const model = r.model ?? null;
     const cliVersion = r.cliVersion ?? null;
-    if (model === null && cliVersion === null) return false;
+    const provider = r.provider ?? null;
+    if (model === null && cliVersion === null && provider === null) return false;
     const meta = this.readMetaFile();
     const have = meta?.resolved;
     const next: ResolvedModel = {
       model: have?.model ?? model,
       cliVersion: have?.cliVersion ?? cliVersion,
+      // `?? null` and not `?? provider`: an older run's `resolved` block has no
+      // `provider` key at all, and `undefined ?? provider` would take the new
+      // one — which is what we want — while a run that recorded `null` keeps
+      // its null. Both read the same here, and the first observation wins
+      // either way.
+      provider: have?.provider ?? provider,
     };
-    if (have !== undefined && have.model === next.model && have.cliVersion === next.cliVersion) {
+    if (
+      have !== undefined &&
+      have.model === next.model &&
+      have.cliVersion === next.cliVersion &&
+      (have.provider ?? null) === next.provider
+    ) {
       return false;
     }
     try {
       this.db
-        .query(`UPDATE run SET resolved_model = ?, resolved_cli_version = ? WHERE run_id = ?`)
-        .run(next.model, next.cliVersion, runId);
+        .query(`UPDATE run SET resolved_model = ?, resolved_cli_version = ?, resolved_provider = ? WHERE run_id = ?`)
+        .run(next.model, next.cliVersion, next.provider, runId);
     } catch {
       /* a run.sqlite that cannot take the update must not end the episode */
     }

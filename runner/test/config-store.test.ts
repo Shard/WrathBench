@@ -51,6 +51,33 @@ describe("split and render", () => {
     expect(renderFleet(splitFleet(doc))).toEqual(doc);
   });
 
+  test("a routing block survives seed -> export unchanged, in the file's own spelling", () => {
+    // Issue #25 / 2026-09-16. `parseFleet` normalises the shorthand for its own
+    // readers; the store must NOT — it holds the config as written, so the
+    // diff against infra/fleet.json stays a diff and not a reformatting.
+    const doc = fixtureConfig({
+      policy: { routing: { sort: "throughput", allowFallbacks: true } },
+      roster: {
+        glm: { tier: "t1", model: "z-ai/glm-5.2:free", routing: { order: ["Z.AI", "Together"], requireParameters: true } },
+        ox: { tier: "t1", model: "stealth/ox-alpha:free", routing: "Stealth" },
+        son: { tier: "t1", model: "sonnet", driver: "claude-code" },
+      },
+    });
+    const { store } = tempStore();
+    store.seed(doc);
+    expect(store.render()).toEqual(doc);
+    // And the supervisor reads the store and the file as the same config.
+    expect(parseFleet(store.render())).toEqual(parseFleet(doc));
+  });
+
+  test("an edit that routes a model somewhere impossible is refused like any other", () => {
+    const { store } = tempStore();
+    store.seed(fixtureConfig());
+    expect(() => store.put("roster/son", { tier: "t1", model: "sonnet", driver: "claude-code", routing: "Anthropic" })).toThrow(
+      /routing is an OpenRouter setting/,
+    );
+  });
+
   test("roster entries are rows of their own, in file order", () => {
     const rows = splitFleet(fixtureConfig());
     expect(rows.map((r) => r.key)).toContain("roster/glm");
