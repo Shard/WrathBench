@@ -51,10 +51,15 @@ export const WIKI_ERA_SENTENCE =
 
 /**
  * The tool list for a run: `TOOLS` with the `search_reference` description
- * stating whether coordinates are served. `TOOLS` itself is the names-first
- * (default) rendering.
+ * stating whether coordinates are served — or, on a run configured without the
+ * reference wiki, without `search_reference` at all. `TOOLS` itself is the
+ * names-first, wiki-on (default) rendering.
  */
-export function toolsFor(opts: { wikiCoords?: boolean | undefined }): ToolDef[] {
+export function toolsFor(opts: { wikiCoords?: boolean | undefined; wikiSearch?: boolean | undefined }): ToolDef[] {
+  // A run configured without the reference wiki (`wiki: false`, issue #61) is
+  // not handed the tool at all. Absent reads as true: the reference surface is
+  // a capability every run has unless the run said otherwise.
+  if (opts.wikiSearch === false) return TOOLS.filter((t) => t.name !== "search_reference");
   if (opts.wikiCoords !== true) return TOOLS;
   return TOOLS.map((t) =>
     t.name === "search_reference"
@@ -582,6 +587,14 @@ export interface ToolContext {
    * Absent reads as false: names-first is the default everywhere.
    */
   wikiCoords?: boolean | undefined;
+  /**
+   * Whether this run has `search_reference` at all (`config.wiki`). Absent
+   * reads as true. False is a run configured without the reference surface, so
+   * the tool is not offered and calling it answers as an unknown tool —
+   * distinct from `wiki` above being undefined, which is the bundle failing to
+   * load on a run that does have the tool.
+   */
+  wikiSearch?: boolean | undefined;
   /** Whether a game session has been established (for the summary header). */
   sessionLive: () => boolean;
   /**
@@ -669,6 +682,12 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         text:
           `unknown tool: ${name}. Valid tools: ${VALID_TOOL_NAMES.join(", ")}.` +
           (suggestion !== undefined ? ` Did you mean ${suggestion}?` : ""),
+        isError: true,
+      };
+    }
+    if (name === "search_reference" && ctx.wikiSearch === false) {
+      return {
+        text: `unknown tool: ${name}. Valid tools: ${VALID_TOOL_NAMES.filter((n) => n !== "search_reference").join(", ")}.`,
         isError: true,
       };
     }

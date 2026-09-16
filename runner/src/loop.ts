@@ -845,6 +845,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     scratchpad: o.scratchpad,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,
+    wikiSearch: config.wiki,
     sessionLive: () => builder.sessionLive,
     reflect: builder.reflect,
     episodic: o.episodic,
@@ -956,14 +957,14 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       }
 
       const messages: ChatMessage[] = [
-        { role: "system", content: buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver)) },
+        { role: "system", content: buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki) },
         ...messageWindow(history),
         { role: "user", content: contextText },
       ];
 
       // 4. model request
       trajectory.append({ t: "request", turn, adapter: o.adapter.label, messages });
-      const outcome = await o.adapter.complete({ messages, tools: toolsFor(config), signal: o.signal });
+      const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
         trajectory.setPause(runId, outcome.reason, outcome.detail, watchdogs.elapsedMs());

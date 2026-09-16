@@ -319,6 +319,19 @@ export const runConfigSchema = z.object({
    */
   wikiCoords: z.boolean().default(false),
   /**
+   * Whether this run has the reference wiki at all — the `search_reference`
+   * tool, its line in the prompt, and the bundle itself.
+   *
+   * A CAPABILITY, included by default and switchable off per run (operator
+   * decision 2026-09-16, issue #61): the reference surface is part of the
+   * fixed harness, so a run without it is a different condition, declared at
+   * launch and stamped into the comparability tuple. False means the tool is
+   * never registered, the prompt never names it, and no bundle is opened —
+   * which is not the same thing as a bundle that failed to load, where the
+   * tool exists and reports itself unavailable.
+   */
+  wiki: z.boolean().default(true),
+  /**
    * An extra run: the scheduling policy launched it past the
    * model's target, for a free model with nothing else to do. It is a normal
    * scored run of its tier — same prompt, same leash — and it is stamped so
@@ -568,7 +581,14 @@ export function loadRunConfig(raw: unknown): RunConfig {
       `config names the driver as "adapter" (${JSON.stringify(o["adapter"])}); the 0.4 shape is driver: "openai" | "claude-code" | "codex" | "stub"`,
     );
   }
-  return runConfigSchema.parse(withEpisodeDefaults(raw));
+  const config = runConfigSchema.parse(withEpisodeDefaults(raw));
+  // Refused, never ignored: `wikiCoords` is a setting *of* the reference
+  // surface, so asking for coordinates from a run that has no reference
+  // surface is a config that cannot mean what it says.
+  if (!config.wiki && config.wikiCoords) {
+    throw new Error("wikiCoords is a setting of the reference wiki, and this run has none (wiki: false)");
+  }
+  return config;
 }
 
 /** True when this driver's runs can never be read as a score (only `stub`). */

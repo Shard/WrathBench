@@ -105,7 +105,7 @@ import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, type PauseReason, type RunConfig, 
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } from "./loop";
 import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
-import { TOOLS, type ToolContext } from "./tools";
+import { toolsFor, type ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -115,9 +115,14 @@ import type { Watchdogs } from "./watchdogs";
 /** MCP server name in the generated config; also the tool-name prefix. */
 export const MCP_SERVER_NAME = "wrathbench";
 
-/** The nine tools as `claude` names them once they arrive over MCP. */
-export function mcpToolNames(): string[] {
-  return TOOLS.map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
+/**
+ * The tools as `claude` names them once they arrive over MCP — the grant on
+ * `--allowed-tools`, so it must be the same list the MCP server serves. A run
+ * without the reference wiki (`wiki: false`) is not granted `search_reference`;
+ * absent reads as "the run has it", which is every run by default.
+ */
+export function mcpToolNames(opts: { wikiSearch?: boolean | undefined } = {}): string[] {
+  return toolsFor(opts).map((t) => `mcp__${MCP_SERVER_NAME}__${t.name}`);
 }
 
 // ------------------------------------------------------------------ billing
@@ -369,6 +374,8 @@ export interface ClaudeArgsOptions {
   effort?: string | undefined;
   /** Defaults to the claude-code render of the fixed prompt, never the fixed loop's. */
   systemPrompt?: string;
+  /** Whether this run has `search_reference` (`config.wiki`); absent is true. */
+  wikiSearch?: boolean | undefined;
 }
 
 /**
@@ -442,7 +449,7 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     ...(o.effort !== undefined && o.effort !== NO_THINKING ? ["--effort", o.effort] : []),
     // variadic, therefore last
     "--allowed-tools",
-    ...mcpToolNames(),
+    ...mcpToolNames({ wikiSearch: o.wikiSearch }),
   ];
 }
 
@@ -623,6 +630,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     scratchpad: o.scratchpad,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,
+    wikiSearch: config.wiki,
     sessionLive: () => builder.sessionLive,
     reflect: builder.reflect,
     episodic: o.episodic,
@@ -810,11 +818,12 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // The claude-code render: same prompt, except the sentence about older
   // conversation, which on this harness must describe the CLI's regime and not
   // the fixed loop's trim (`contextSentence`).
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"));
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki);
   const args = claudeArgs({
     mcpConfigPath,
     systemPrompt,
     model: config.model,
+    wikiSearch: config.wiki,
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
   const thinking = thinkingEnv(config.effort);

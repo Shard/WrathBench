@@ -121,6 +121,14 @@ export interface RosterSpec {
    * should set it. Stamped into the run's comparability tuple.
    */
   wikiCoords?: boolean;
+  /**
+   * Whether this entry's runs have the reference wiki at all: the
+   * `search_reference` tool, its line in the prompt, and the bundle. Default
+   * true — the wiki is a capability every run has unless the entry switches it
+   * off (operator decision 2026-09-16, issue #61), and a run without it is a
+   * different condition, stamped as one in the comparability tuple.
+   */
+  wiki?: boolean;
   /** An extra run past the policy target: stamped `extra: true`, never counted. */
   extra?: boolean;
   /**
@@ -187,6 +195,8 @@ export interface Resolved {
   /** Undefined = the runner's default; null = no ceiling at all. */
   maxToolCalls: number | null | undefined;
   wikiCoords: boolean;
+  /** False only when the entry withheld the reference wiki; true by default. */
+  wiki: boolean;
   extra: boolean;
   episode: string | undefined;
   campaign: string | undefined;
@@ -466,6 +476,15 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
     if (s.wikiCoords !== undefined && typeof s.wikiCoords !== "boolean") {
       throw new Error(`roster entry ${s.model}: wikiCoords must be a boolean`);
     }
+    if (s.wiki !== undefined && typeof s.wiki !== "boolean") {
+      throw new Error(`roster entry ${s.model}: wiki must be a boolean`);
+    }
+    // Refused, not silently won by either side: coordinates are a setting of
+    // the reference surface, so asking for them from a run that has none is a
+    // config that cannot mean what it says (the runner refuses it too).
+    if (s.wiki === false && s.wikiCoords === true) {
+      throw new Error(`roster entry ${s.model}: wikiCoords needs the reference wiki, and this entry has wiki: false`);
+    }
     if (s.tokenEnv !== undefined && !isTokenEnvName(s.tokenEnv)) {
       // A NAME, never a token: the value would end up in argv, and argv is
       // visible in `ps` to anything sharing the container.
@@ -513,6 +532,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       watchdogs,
       maxToolCalls: s.maxToolCalls,
       wikiCoords: s.wikiCoords === true,
+      wiki: s.wiki !== false,
       extra: s.extra === true,
       episode: s.episode,
       campaign: s.campaign,
@@ -607,6 +627,9 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // Explicit value rather than a bare flag, so the runner's argv parser never
   // has to guess whether the next token is this flag's value.
   if (spec.wikiCoords) argv.push("--wiki-coords", "true");
+  // Only when the wiki is withheld: the runner defaults it on, so every argv a
+  // pre-#61 roster produced is unchanged.
+  if (!spec.wiki) argv.push("--wiki", "false");
   if (spec.extra) argv.push("--extra", "true");
   // The tier id rides its own flag (a string, never interpreted here); the
   // runner's argv parser ignores flags it does not know, so this is safe to
@@ -1661,6 +1684,7 @@ async function main(): Promise<void> {
           `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +
           (s.objective !== undefined ? `\n   objective ${s.objective}  [UNSCORED]` : "") +
           (s.wikiCoords ? `\n   wiki coords served (unscored-lane setting; see docs/METHODOLOGY.md)` : "") +
+          (s.wiki ? "" : `\n   NO reference wiki: no search_reference tool, and the prompt does not name it`) +
           (watchdogsJson(s) !== undefined ? `\n   watchdogs ${watchdogsJson(s)}` : "") +
           (s.maxToolCalls !== undefined ? `\n   maxTools  ${s.maxToolCalls}` : "");
       console.log(

@@ -171,6 +171,12 @@ export interface ComparabilityView {
    */
   wikiCoords?: boolean;
   /**
+   * Present, and `false`, only on a run configured without the reference wiki
+   * at all — no `search_reference`, and the prompt does not name it (issue
+   * #61). Absent is the ordinary run, which has it.
+   */
+  wiki?: false;
+  /**
    * Which reference bundle the run read, off the bundle's own `meta` table
    * An annotation: a text-changing rebuild is paired with a harness
    * minor bump, which is what actually groups. Null when the run had no bundle;
@@ -1488,6 +1494,12 @@ export interface ResultRun {
   serverBuild: string | null;
   /** Whether wiki coordinates were served; null when not recorded. */
   wikiCoords: boolean | null;
+  /**
+   * False when the run had no reference wiki at all (issue #61). Optional so a
+   * row built before the field existed — or by a reader that does not care —
+   * reads as the ordinary run, which is one that had it.
+   */
+  wiki?: boolean;
   /**
    * The run's episode tier: stamped when the run was launched with `--episode`,
    * otherwise derived by the reader from what the run's tuple recorded, and

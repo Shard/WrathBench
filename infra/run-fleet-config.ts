@@ -53,7 +53,7 @@ export function currentSeries(): string | null {
  * A job as it is spawned: one run-roster process on one account. This is the
  * materialised form every job takes on its way to `spawnJob` — pinned, pool
  * and policy alike. The roster entries carry every run dimension themselves
- * (objective, watchdogs, maxToolCalls, wikiCoords); the
+ * (objective, watchdogs, maxToolCalls, wikiCoords, wiki); the
  * spawn adds only the account and the fleet-scoped run ids.
  */
 export interface JobSpawn {
@@ -147,7 +147,7 @@ export type EpisodeId = (typeof EPISODE_IDS)[number];
  * `objective`), which is outside the policy and has no budget to state, where
  * it is refused instead. `idle` says what the model does with an account once
  * its tier is spent; absent is `none`. An entry may carry the run dimensions
- * (`objective`, `watchdogs`, `maxToolCalls`, `wikiCoords`): a probe with an
+ * (`objective`, `watchdogs`, `maxToolCalls`, `wikiCoords`, `wiki`): a probe with an
  * objective is a roster entry like any other, referenced by a pinned job.
  */
 export interface FleetRosterEntry extends RosterSpec {
@@ -664,6 +664,17 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     if (e.wikiCoords !== undefined && typeof e.wikiCoords !== "boolean") {
       fail(`${where}: entry ${e.model}: wikiCoords must be a boolean`);
     }
+    // The reference wiki as a capability (operator decision 2026-09-16, issue
+    // #61): included by default, switchable off per entry. Type-checked here
+    // the way every other per-entry dimension is; the pairing with wikiCoords
+    // is refused rather than resolved, because coordinates are a setting OF
+    // the surface this flag removes.
+    if (e.wiki !== undefined && typeof e.wiki !== "boolean") {
+      fail(`${where}: entry ${e.model}: wiki must be a boolean`);
+    }
+    if (e.wiki === false && e.wikiCoords === true) {
+      fail(`${where}: entry ${e.model}: wikiCoords needs the reference wiki, and this entry has wiki: false`);
+    }
     // Which backend may serve this entry (operator decision 2026-09-16,
     // runner/src/routing.ts). Refused — never ignored — on an endpoint with
     // one machine behind it: an operator who wrote a routing block on a
@@ -755,7 +766,7 @@ export function parsePreflight(raw: unknown): FleetPreflight {
 export const ROSTER_ENTRY_KEYS = [
   "model", "tier", "idle", "driver", "effort", "apiBase", "apiKeyEnv",
   "billing", "subscription", "race", "class", "watchdogs", "maxToolCalls",
-  "routing",
+  "routing", "wiki",
 ] as const;
 
 export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "subscription"] as const;

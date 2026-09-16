@@ -113,9 +113,36 @@ export function contextSentence(harness: Harness): string {
 const CLI_SCAFFOLD_CONTEXT_SENTENCE =
   "This harness does not trim your conversation: the session runs as one continuous conversation and the CLI owns its history. Your scratchpad outlasts that history — a run that is paused and resumed comes back with the scratchpad and no conversation at all — so facts you want to keep belong there.";
 
-/** The body for one harness: the fixed text with that harness's context sentence in it. */
-function bodyFor(harness: Harness): string {
-  return `${BODY_HEAD} ${contextSentence(harness)} ${BODY_TAIL}`;
+/**
+ * The two places the prompt names `search_reference`, and how the same text
+ * reads on a run configured without the reference wiki (`wiki: false`, issue
+ * #61). A run WITH the wiki renders the left-hand strings, which are the bytes
+ * the prompt has always carried — the off rendering is a deletion and nothing
+ * else, so the hash difference between the two conditions means exactly "one
+ * tool fewer" and not "a reworded prompt".
+ */
+export const WIKI_TOOL_BULLET =
+  "\n- search_reference: full-text search over a game reference wiki (quests, NPCs, zones, items). Use it when you need world knowledge such as where a questgiver stands or what an objective means. Whether results carry wiki-recorded coordinates is stated in the tool's own description for this run; when they do, they are reference notes, not live observation, and do not prove anything is at that spot now.";
+
+export const TOOLS_NOT_AMBIENT = {
+  withWiki:
+    "Tools and ambient objects are different things and do not mix: the tools below (run_snippet, search_reference, write_scratchpad, reflect, log_status, read_log, …) are called by you between snippets, and are not defined inside a snippet — write_scratchpad(...) or search_reference(...) in snippet code is a ReferenceError. Inside a snippet the equivalent is the ambient object: scratchpad.read() and scratchpad.write(text) for the notes; the reference wiki has no snippet-side equivalent, so search it with the tool.",
+  withoutWiki:
+    "Tools and ambient objects are different things and do not mix: the tools below (run_snippet, write_scratchpad, reflect, log_status, read_log, …) are called by you between snippets, and are not defined inside a snippet — write_scratchpad(...) or log_status(...) in snippet code is a ReferenceError. Inside a snippet the equivalent is the ambient object: scratchpad.read() and scratchpad.write(text) for the notes.",
+} as const;
+
+/**
+ * The body for one harness: the fixed text with that harness's context
+ * sentence in it, and — with `wiki: false` — without the reference tool.
+ */
+function bodyFor(harness: Harness, wiki = true): string {
+  // The wiki-on rendering is `BODY_HEAD` untouched, by construction rather
+  // than by test: `wiki: false` is two exact deletions from it and nothing
+  // else, so every run that has the reference surface hashes as it always did.
+  const head = wiki
+    ? BODY_HEAD
+    : BODY_HEAD.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
+  return `${head} ${contextSentence(harness)} ${BODY_TAIL}`;
 }
 
 /**
@@ -189,17 +216,21 @@ export function episodeSection(episode: EpisodeId | undefined): string | undefin
  * description. `harness` picks the context sentence and nothing else, so the
  * fixed loop's prompt and a CLI scaffold's differ by exactly the one sentence
  * that describes what each of them actually does with older conversation.
+ * `wiki` is the run's reference surface (`config.wiki`, issue #61): false
+ * renders the body with `search_reference` deleted, which is the only way the
+ * prompt ever differs on that axis.
  */
 export function buildSystemPrompt(
   objective?: string | undefined,
   episode?: EpisodeId | undefined,
   harness: Harness = "wrathbench",
+  wiki = true,
 ): string {
   const parts = [GOAL_SECTION];
   const tier = episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
   if (objective !== undefined && objective.trim().length > 0) parts.push(objectiveSection(objective.trim()));
-  parts.push(bodyFor(harness));
+  parts.push(bodyFor(harness, wiki));
   return parts.join("\n\n");
 }
 

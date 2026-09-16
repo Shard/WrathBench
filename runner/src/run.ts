@@ -17,7 +17,10 @@
  * watchdog thresholds, where `null`/`0` disables one. A third, `--wiki-coords`,
  * serves wiki-recorded coordinates through `search_reference`;
  * the default is names-first, and the choice is stamped into the
- * comparability tuple so the two never share a chart.
+ * comparability tuple so the two never share a chart. `--wiki false` goes
+ * further and withholds the reference surface entirely — no `search_reference`
+ * tool, no line for it in the prompt, no bundle opened — which is a different
+ * condition and is stamped as one.
  *
  * `--episode <e90|e360|probing|freeplay>` names an episode tier (`episodes.ts`): the
  * wall clock and both watchdogs come from that one flag, and the id is stamped
@@ -214,6 +217,10 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // Identity too: what the reference surface served is part of
     // what the run was, so a resume keeps the stored value.
     wikiCoords: flag(args["wiki-coords"]),
+    // The reference surface itself, on by default: `--wiki false` runs without
+    // `search_reference`, without its line in the prompt and without a bundle.
+    // Identity like the rest — a resume keeps the condition it launched under.
+    wiki: flag(args["wiki"]),
     // Identity as well: a resumed extra is still an extra.
     extra: flag(args["extra"]),
     // A probe campaign's identity, both or neither.
@@ -445,8 +452,11 @@ async function main(): Promise<void> {
   // Before the run directory, the trajectory and the session: a stale bundle is
   // a deploy mistake, and failing here leaves no half-run behind — the roster
   // sees an exit with no run.sqlite and calls it `launch-failed`.
-  const wiki = openWikiBundle(config.wikiBundle);
-  if (wiki === undefined) {
+  // Not opened at all on a run configured without the reference surface
+  // (`--wiki false`, issue #61): there is no tool to answer from it, and the
+  // tuple's `wikiBundle` is then absent because the run read no bundle.
+  const wiki = config.wiki ? openWikiBundle(config.wikiBundle) : undefined;
+  if (config.wiki && wiki === undefined) {
     console.error(`warning: wiki bundle not found at ${config.wikiBundle}; search_reference will report unavailable`);
   }
   // What was *in* that file, for the tuple: the config records only the path,

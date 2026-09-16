@@ -161,13 +161,14 @@ async function main(): Promise<void> {
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
   });
 
-  const wiki = openWikiBundle(config.wikiBundle);
+  const wiki = config.wiki ? openWikiBundle(config.wikiBundle) : undefined;
 
   const ctx: ToolContext = {
     sandbox,
     scratchpad,
     wiki,
     wikiCoords: config.wikiCoords,
+    wikiSearch: config.wiki,
     sessionLive: () => true, // MCP mode has no loop-side session tracking
     // No context builder here, so no window that could ever close: reflect
     // answers, read_log refuses. See ClosedWindowReflectGate.

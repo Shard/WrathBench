@@ -94,6 +94,22 @@ describe("split and render", () => {
     );
   });
 
+  test("a `wiki: false` entry survives seed -> export and reads the same both ways", () => {
+    // Issue #61 / 2026-09-16: the off switch is config like any other, so it
+    // has to come back out of the store exactly as the file wrote it.
+    const doc = fixtureConfig({
+      roster: {
+        glm: { tier: "t1", model: "z-ai/glm-5.2:free", wiki: false },
+        son: { tier: "t1", model: "sonnet", driver: "claude-code" },
+      },
+    });
+    const { store } = tempStore();
+    store.seed(doc);
+    expect(store.render()).toEqual(doc);
+    expect(parseFleet(store.render())).toEqual(parseFleet(doc));
+    expect(parseFleet(store.render()).roster["glm"]!.wiki).toBe(false);
+  });
+
   test("roster entries are rows of their own, in file order", () => {
     const rows = splitFleet(fixtureConfig());
     expect(rows.map((r) => r.key)).toContain("roster/glm");

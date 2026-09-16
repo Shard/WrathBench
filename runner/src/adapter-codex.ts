@@ -581,6 +581,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     scratchpad: o.scratchpad,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,
+    wikiSearch: config.wiki,
     sessionLive: () => builder.sessionLive,
     reflect: builder.reflect,
     episodic: o.episodic,
@@ -708,7 +709,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- files the CLI needs, all inside the run directory (absolute paths:
   // the CLI runs from a scratch temp cwd)
   const instructionsPath = resolve(o.runDir, "codex-instructions.md");
-  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"));
+  const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("codex"), config.wiki);
   writeFileSync(instructionsPath, systemPrompt, "utf8");
   // The bridge by its REPOSITORY path: the CLI's sandbox gives MCP servers a
   // private /tmp, so a temp copy would not be found ("Module not found").

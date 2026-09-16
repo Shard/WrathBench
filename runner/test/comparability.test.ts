@@ -78,6 +78,26 @@ describe("comparabilityOf", () => {
     expect(parseComparability(legacy)?.wikiCoords).toBeUndefined();
   });
 
+  test("a run without the reference wiki is a different condition, stamped and hashed", () => {
+    // Issue #61 / operator 2026-09-16: the wiki is a capability, on by default
+    // and switchable off; off is a KEY, on is an absent field.
+    const withWiki = comparabilityOf(loadRunConfig({ driver: "openai", model: "m" }), "v");
+    const without = comparabilityOf(loadRunConfig({ driver: "openai", model: "m", wiki: false }), "v");
+    expect(withWiki.wiki).toBeUndefined();
+    expect(without.wiki).toBe(false);
+    // The rendered prompt loses the tool's lines, so the hash moves with it.
+    expect(without.promptHash).not.toBe(withWiki.promptHash);
+    expect(without.promptChars).toBeLessThan(withWiki.promptChars);
+    expect(sameComparability(withWiki, without)).toBe(false);
+    // And a run that has the wiki stamps exactly what it stamped before the
+    // field existed — byte-for-byte, key order included.
+    expect(JSON.stringify(withWiki)).toBe(JSON.stringify({ ...withWiki }));
+    expect(Object.keys(withWiki)).not.toContain("wiki");
+    // `wiki` sits after `routing`, so no already-stamped tuple reorders.
+    expect(Object.keys(without).at(-1)).toBe("wiki");
+    expect(parseComparability(without)?.wiki).toBe(false);
+  });
+
   test("the wiki bundle's identity is annotated, and a rebuild is not the same tuple", () => {
     const config = loadRunConfig({ driver: "openai", model: "m" });
     // No bundle at all: null, never an absent field on a fresh stamp.
