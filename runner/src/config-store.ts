@@ -509,7 +509,7 @@ export function configStoreSeeded(env: Record<string, string | undefined> = Bun.
  * DELIBERATELY not seeded at the repo-relative default. The store must go live
  * only where it has been given somewhere durable to live, and on the cluster
  * that is a chart change: the fleet and the viewer mount subPaths of the data
- * PVC (`runs`, `wiki`, `minimap`, `fact-cache`), not `/wrathbench/data` itself,
+ * PVC (`runs`, `wiki`, `minimap`), not `/wrathbench/data` itself,
  * so a store written to the default path would sit in the pod's ephemeral
  * layer. Worse than useless: the supervisor would then read that copy and stop
  * seeing Flux's reconciliation of the ConfigMap, which is the documented way
