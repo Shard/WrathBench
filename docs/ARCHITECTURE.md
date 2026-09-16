@@ -131,19 +131,26 @@ the SPA owns everything that is UI.
   and the cost-per-level chart was deleted rather than moved: the ladder's own
   columns already say how far each model got, and a cost view worth having is a
   page with its own reason, not a chart smuggled onto another one.
-- **A freeplay run page is the stream, not the session.** A durable freeplay
-  stream is one character across attempts, and everything the runner records is
-  per attempt — so a reader could see only the session in front of them and the
-  quest count was the last session's. The viewer aggregates the chain at read
-  time (`stream` on `/api/run/<id>`, `runner/viewer/stream.ts`) and the page
-  leads with it: an attempts strip listing every attempt with its status, level
-  and playtime, each a link; the stream's level-against-cumulative-playtime line
-  above this attempt's XP chart, drawn by the same `StreamPlot` the freeplay
-  field uses; and the character's totals as the sidebar's headline with this
-  attempt's figures named underneath. The feed stays per attempt because a
-  trajectory is one run's, with a link at each seam. Nothing is written back:
-  the record is per attempt and stays that way, which is also why an attempt
-  predating a column contributes nothing rather than a zero.
+- **Every run belongs to a character, and the character has a page.** A durable
+  freeplay character is one character across attempts, and everything the runner
+  records is per attempt — so a reader could see only the session in front of
+  them and the quest count was the last session's. The viewer aggregates the
+  chain at read time (`character` on `/api/run/<id>`, `runner/viewer/character.ts`)
+  and the run page leads with it: an attempts strip listing every attempt with
+  its status, level and playtime, each a link; the character's
+  level-against-cumulative-playtime line above this attempt's XP chart, drawn by
+  the same `CharacterPlot` the freeplay field uses; and the character's totals as
+  the sidebar's headline with this attempt's figures named underneath. The feed
+  stays per attempt because a trajectory is one run's, with a link at each seam.
+  Since 2026-09-16 the character is also a page of its own — `/character/<id>`
+  over `GET /api/character/<id>` — carrying the whole chain's curve with the
+  session boundaries marked, the totals, the live session when one runs, and
+  every attempt. It is **universal, not freeplay-only**: a scored run's character
+  is a chain of one attempt, so no page branches on "is this freeplay" to know a
+  run has a character. Navigation stays freeplay-first — freeplay rows lead to
+  the character, scored rows to the run. Nothing is written back: the record is
+  per attempt and stays that way, which is also why an attempt predating a column
+  contributes nothing rather than a zero.
 - **The harness series is one shell-wide filter, not a per-page control.** The
   series — `major.minor` of a version stamp — is already the comparability
   group every page of runs is a view of, so the selector lives once, in the top

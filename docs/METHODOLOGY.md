@@ -403,6 +403,20 @@ must do what a player does: read "in the inn at Goldshire", walk there, look.
 Harder is the point; coordinates are served only in steered episodes, and if
 the names-only ladder proves unclimbable the pull-back is a labeled coords
 tier, never a silent change.
+
+**The reference wiki is a capability, and a run may be configured without it**
+(operator, 2026-09-16, issue #61). It is included by default — every scored run
+to date has had it, and the bundle is part of the fixed harness — but an entry
+may state `wiki: false`, and then the run has no `search_reference` tool, the
+prompt does not name one, and no bundle is opened. That is a declared off
+switch, not a factorial arm bought out of the tier budget: nothing schedules a
+matched bundle-off study, and withholding the bundle would not isolate a
+model’s own priors anyway, because it removes the retrieval channel and leaves
+the memorised one untouched. Because the run is a different condition, `wiki:
+false` is stamped into the comparability tuple as a KEY and the rendered prompt
+hashes differently; the field is absent on a run that has the wiki, so every
+run stamped before the switch existed stamps byte-for-byte as it did.
+
 The flight-master window carries the node *names* (`TaxiNodes.dbc`, the same
 precedent as area names), and the node positions those same client-side rows
 hold are contract-clean (`docs/CONTRACTS.md`, operator 2026-09-16) and
@@ -524,19 +538,28 @@ refuses to serve one, and none is published.
 **The freeplay ladder is an overview, not a leaderboard** (operator decision,
 2026-08-29): the top characters on freeplay at the current time. It shows the
 whole active field — every freeplay run not deleted and not tainted, including
-paused and disabled streams and runs in progress, not only finished ones — so
+paused and disabled characters and runs in progress, not only finished ones — so
 the scored surfaces' "is this evidence" predicate is deliberately not what
 filters it; a launch that produced nothing is dropped and a run's state is a
-column rather than an exclusion. Because a freeplay stream is durable, one row
+column rather than an exclusion. Because a freeplay character is durable, one row
 is **one character across attempts**, not one run: the latest attempt carries
 the character's current level and state and the lineage rides with it, so the
 same character never appears twice. The reader's own filters still apply as
 they do on the scored tiers, **"exclude free" included** (operator, 2026-08-29,
 reversing the exemption made the same day): same control, same default-on, same
 predicate, over both the table and the graph. The one exemption that stands is
-the harness series — a stream is durable across series, and cutting its older
+the harness series — a character is durable across series, and cutting its older
 attempts would report a long-lived character as attempt 1. Nothing here touches
 the scored ladders, which remain keyed by model over scored runs alone.
+
+**The character is the universal unit, and a scored run is a character of one
+attempt** (operator decision, 2026-09-16). Every run belongs to a character —
+the chain is the head run's id, as it has always been — so the scored case is
+the degenerate one rather than an exception, and nothing that reads a run has
+to ask whether it is freeplay to know it has a character. This retires the
+noun "stream" for "character" throughout, which is a consolidation and not a
+change of meaning: freeplay is still one character per model and effort, and a
+lapsed scored episode is still a failed attempt, not the start of a chain.
 
 **No single number is promised in this phase**; the honest artifact is the
 scorecard.

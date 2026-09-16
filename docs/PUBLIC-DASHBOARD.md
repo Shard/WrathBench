@@ -215,12 +215,12 @@ The public site includes the live fleet and map (operator's choice,
 over real minimap tiles (operator, 2026-08-30). Where a tile comes from is
 `dashboard/src/lib/tiles.ts` and nowhere else — the data hostname in the public
 build, same-origin in the private viewer — so the two shapes share one path and
-neither is special-cased. Replaying a freeplay stream end to end works there too: since item 119 the
-track carries the four scalars of its stream — the identity, the place in the
+neither is special-cased. Replaying a freeplay character end to end works there too: since item 119 the
+track carries the four scalars of its character — the identity, the place in the
 chain and the run ids either side — so the play bar's previous/next attempt
 links need no second request, which is what makes them work over static
 snapshot objects at all. The published `track.json` is content-addressed
-beside its `detail.json`, and a new attempt changes that detail's `stream`, so
+beside its `detail.json`, and a new attempt changes that detail's `character`, so
 the key rotates and the neighbours never go stale. Two clock fixes keep the
 staleness story honest, and both are improvements for the private dashboard
 too:
@@ -240,6 +240,35 @@ too:
 Wire-type impact is two optional fields (`generatedAt`, `attribution`) on the
 response envelopes in `runner/viewer/api-types.ts`, following that file's
 optional-so-older-consumers-still-render convention.
+
+### The character page over a bucket
+
+`/character/<id>` (item 128) is the one page assembled in the browser rather
+than published as an artifact of its own, and that is deliberate: every part of
+it is already in the bucket. The chain and its totals come off `results.json`
+through the same `characterViewOf` the viewer serves `/api/character/<id>`
+from, and the curve comes from each attempt's already-published `track.json`.
+One derivation, two transports — the rule the whole snapshot client is written
+to — so the publisher did not change and no new object was added.
+
+Three consequences worth stating rather than discovering:
+
+- The walk runs against the **unfiltered** results, never a tier or series
+  view. A character is durable across both, and resolving it against a filtered
+  set would silently shorten its history instead of saying it is short.
+- An attempt the snapshot published no track for contributes nothing to the
+  curve and does not fail the page. The attempt list still names it.
+- The page costs one extra object per attempt on first open, all of them
+  already cached by the client's own memo and by the CDN.
+
+The field rename that came with the page (`stream` → `character` on the run
+detail and the track) needed no generation bump: snapshot artifacts are
+addressed by a hash of their own content, so the renamed bodies simply mint new
+keys, and the SPA ships in the same release as the data it reads. The one
+visible effect is on a browser holding a cached SPA from before the release
+against fresh data: its character card goes missing until it reloads. There is
+no dual-reading reader, because carrying two spellings would be the half-rename
+the change exists to end.
 
 ## The content boundary
 

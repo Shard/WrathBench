@@ -244,6 +244,23 @@ freeplay or names a `continuedFrom`, so a scored run's page pays nothing for it,
 and behind the gate it is the same memoised `runTotals` the listing uses, so an
 ended attempt is read once per process.
 
+`characterViewOf` itself is **universal** since 2026-09-16 (item 128): every run
+the set holds gets a view, and a scored run's is a chain of one attempt. Null is
+reserved for a run the set does not hold and for a stillborn launch. Aggregating
+universally is not printing universally — a strip reading "attempt 1 of 1" is
+noise standing where a fact should be, which is what `hasLineage` says — so the
+two routes above embed the field only when the chain has more than one attempt,
+and a reader who wants the degenerate view asks for it:
+
+`GET /api/character/<id>` serves one character whole: the view, plus every
+attempt's state samples laid end to end with the attempt each came from. That
+pairing is the only thing that finds a session boundary — a relaunch can follow
+a logout by a second — which is why it is on the wire rather than left to the
+page. The id may be any run in the chain, not only the head, and the series
+reads the same store-then-sqlite path `/api/run/<id>` reads its own states
+through. Public mode serves it, projected by the run detail's own projectors
+applied across the chain.
+
 ## Token accounting
 
 The runner records a provider `usage` block on `response` entries whenever the
@@ -337,6 +354,7 @@ readonly, and the runs directory is only ever listed and read.
 | `/api/fleet` | the fleet supervisor's jobs, accounts, gate and heartbeat |
 | `/api/tools` | the eight model-facing tools — name, description and schema off `runner/src/tools.ts` at request time, plus one example call (tools with arguments) or one returns line (tools without); harness text only, served in public mode too |
 | `/api/run/<id>` | run row, state series, entry count, token totals, playtime, reflection windows, and — for a freeplay attempt — the whole `character` it is part of |
+| `/api/character/<id>` | one character whole: the chain, its totals, and every attempt's state samples end to end with the attempt each came from. `<id>` is any run in the chain |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200); in public mode each entry crosses `projectEntry` and `redactGameProse` |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry (withheld in public mode) |
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md — the model's own notes, served in public mode too |
