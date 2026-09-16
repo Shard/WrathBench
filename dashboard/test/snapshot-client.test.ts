@@ -710,3 +710,95 @@ describe("freshness", () => {
     expect(snapshotBanner(at, GENERATED_AT - 60_000).text).toBe("public snapshot · data as of 0s ago");
   });
 });
+
+/* --- the character, assembled (item 128) ------------------------------- */
+
+/**
+ * `/character/:id` is the one page the public build assembles rather than
+ * fetches: the chain and its totals come off `results.json` through the same
+ * `characterViewOf` the viewer serves the route from, and the curve comes off
+ * each attempt's already-published track. That means a hand-written
+ * `TrackPoint` → `StatePoint` mapping stands between the bucket and the only
+ * chart on the page, and nothing else in the suite would notice a typo in it.
+ */
+describe("character", () => {
+  const trackPoint = (ts: number, level: number, xp: number) => ({
+    ts, map: 0, x: 1, y: 2, level, xp, money: 7, questsCompleted: 3, turn: 4,
+    health: 100, maxHealth: 120, power: 10, maxPower: 20, powerType: 0, nextLevelXp: 900,
+  });
+
+  /** A two-attempt chain, each attempt's track published. */
+  function chainBucket(): Bucket {
+    const runs = [
+      run({ runId: "a1", startedAt: 1, character: "Bromdir", modelResponses: 1 }),
+      run({ runId: "a2", startedAt: 2, continuedFrom: "a1", modelResponses: 1 }),
+    ];
+    return bucket({
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
+      [snapUrl("results.json")]: resultsArtifact(runs),
+      [snapUrl("runs.json")]: {
+        generatedAt: GENERATED_AT,
+        runs: [
+          { runId: "a1", snapshot: { track: "v1/run/a1/1/track.json" } },
+          { runId: "a2", snapshot: { track: "v1/run/a2/1/track.json" } },
+        ],
+      },
+      [`${BASE}/v1/run/a1/1/track.json`]: { ...TRACK, runId: "a1", points: [trackPoint(100, 1, 0), trackPoint(200, 2, 50)] },
+      [`${BASE}/v1/run/a2/1/track.json`]: { ...TRACK, runId: "a2", points: [trackPoint(9000, 2, 60)] },
+    });
+  }
+
+  test("the chain resolves from the bucket, and any attempt answers with the canonical id", async () => {
+    const c = createSnapshotClient(BASE, { fetch: chainBucket().fetch });
+    const head = await c.character("a1");
+    expect(head.character.characterId).toBe("a1");
+    expect(head.character.attempts).toBe(2);
+    expect(head.character.runs.map((r) => r.runId)).toEqual(["a1", "a2"]);
+    expect(head.character.name).toBe("Bromdir");
+    // Asking from the second attempt gets the same character, not a new one.
+    const tail = await createSnapshotClient(BASE, { fetch: chainBucket().fetch }).character("a2");
+    expect(tail.character.characterId).toBe("a1");
+    expect(tail.character.attempt).toBe(2);
+  });
+
+  test("every sample names its attempt, and carries the reading the track published", async () => {
+    const c = createSnapshotClient(BASE, { fetch: chainBucket().fetch });
+    const body = await c.character("a1");
+    expect(body.states.map((p) => [p.runId, p.attempt, p.ts, p.level, p.xp])).toEqual([
+      ["a1", 1, 100, 1, 0],
+      ["a1", 1, 200, 2, 50],
+      ["a2", 2, 9000, 2, 60],
+    ]);
+    // The player frame rides along; what a track has no column for is null,
+    // never a zero a reader could mistake for a reading.
+    expect(body.states[0]).toMatchObject({ health: 100, maxHealth: 120, nextLevelXp: 900, turn: 4 });
+    expect(body.states[0]).toMatchObject({ z: null, eventCount: null, lastSeq: null });
+  });
+
+  test("an attempt with no published track is skipped, not fatal", async () => {
+    const runs = [
+      run({ runId: "a1", startedAt: 1, modelResponses: 1 }),
+      run({ runId: "a2", startedAt: 2, continuedFrom: "a1", modelResponses: 1 }),
+    ];
+    const b = bucket({
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
+      [snapUrl("results.json")]: resultsArtifact(runs),
+      // a2 names no track at all — an older snapshot, or a run published before
+      // the window existed.
+      [snapUrl("runs.json")]: {
+        generatedAt: GENERATED_AT,
+        runs: [{ runId: "a1", snapshot: { track: "v1/run/a1/1/track.json" } }, { runId: "a2" }],
+      },
+      [`${BASE}/v1/run/a1/1/track.json`]: { ...TRACK, runId: "a1", points: [trackPoint(100, 1, 0)] },
+    });
+    const body = await createSnapshotClient(BASE, { fetch: b.fetch }).character("a1");
+    // The attempt is still listed; only its samples are missing.
+    expect(body.character.runs.map((r) => r.runId)).toEqual(["a1", "a2"]);
+    expect(body.states.map((p) => p.runId)).toEqual(["a1"]);
+  });
+
+  test("an id no run answers to is a 404, the same answer the viewer gives", async () => {
+    const c = createSnapshotClient(BASE, { fetch: chainBucket().fetch });
+    await expect(c.character("no-such-run")).rejects.toMatchObject({ status: 404 });
+  });
+});

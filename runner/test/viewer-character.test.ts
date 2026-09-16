@@ -465,6 +465,34 @@ describe("the public projection of a character", () => {
     expect(projected?.totals.cost.actualUsd).toBeCloseTo(0.5);
   });
 
+  /*
+   * The projector is an allowlist, so what it emits is pinned rather than
+   * reasoned about (the rule `viewer-public-mode.test.ts` states). The six
+   * identity fields item 128 added are here because a character page has to be
+   * able to name what it is about, and every one of them already rides on a
+   * public runs row — but that is an argument, and this is the check.
+   */
+  test("the projected view emits exactly these fields, identity included", () => {
+    expect(Object.keys(projected ?? {}).sort()).toEqual(
+      [
+        "attempt",
+        "attempts",
+        "characterId",
+        "characterLabel",
+        "driver",
+        "effort",
+        "harnessVersion",
+        "model",
+        "name",
+        "next",
+        "previous",
+        "runs",
+        "totals",
+        "truncated",
+      ].sort(),
+    );
+  });
+
   test("a pause reason becomes the token, and the death figures are withheld whole", () => {
     expect(projected?.runs[0]?.pauseReason).toBe("paused");
     expect(projected?.totals.deaths).toBeUndefined();
