@@ -33,7 +33,7 @@
  * a reader on attempt 11 wants to see 12, which is the whole point.
  */
 
-import { chainsOf, hasLineage, lineageIndex } from "./lineage";
+import { chainsOf, lineageIndex } from "./lineage";
 import type {
   AchievementFacts,
   CostFigure,
@@ -257,7 +257,19 @@ function totalsOf(runs: readonly ResultRun[]): CharacterTotals {
 }
 
 /**
- * The character one run belongs to, or null when it belongs to none worth printing.
+ * The character one run belongs to: a view for EVERY run the set holds.
+ *
+ * Universal, not freeplay-only (operator, 2026-09-16): every run belongs to a
+ * character, and a scored run's character is a chain of one attempt. That is
+ * the degenerate case rather than an exception, so nothing downstream has to
+ * branch on "is this freeplay" to know a run has a character or where its
+ * page lives. Null is reserved for a run this set does not hold at all, or a
+ * stillborn launch, which is not an attempt at a character.
+ *
+ * Returning a one-attempt view is not the same as printing one. Whether a
+ * strip reading "attempt 1 of 1" is worth the row is a display question, and
+ * `hasLineage` in `lineage.ts` is still the answer to it — the run page and the
+ * runs table keep using it, and only the aggregation went universal.
  *
  * `all` is the set the walk resolves against — every run the viewer serves, the
  * same rows `/api/results` builds — so a predecessor that is archived or gone
@@ -271,8 +283,10 @@ function totalsOf(runs: readonly ResultRun[]): CharacterTotals {
  * own ancestors-and-self walk rather than being shown a character it is not on.
  */
 export function characterViewOf(runId: string, all: readonly ResultRun[]): CharacterView | null {
+  // Absent, not "no lineage": `lineageIndex` drops stillborn launches, and a
+  // run outside the served set has no chain to resolve against.
   const lineage = lineageIndex(all).get(runId);
-  if (!hasLineage(lineage)) return null;
+  if (lineage === undefined) return null;
 
   const kept = all.filter((r) => r.stillborn !== true);
   const byId = new Map(kept.map((r) => [r.runId, r]));
