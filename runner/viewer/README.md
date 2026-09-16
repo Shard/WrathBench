@@ -330,8 +330,10 @@ once a second, so a quiet run can be told from a dead connection.
 
 ## Endpoints
 
-Everything under `/api` is read-only: no route accepts a body, every database is
-opened readonly, and the runs directory is only ever listed and read.
+Everything under `/api` is read-only with one exception: the config API below,
+which is the only write surface the viewer has and is not mounted at all in
+public mode. Everywhere else no route accepts a body, every database is opened
+readonly, and the runs directory is only ever listed and read.
 
 | path | what |
 | --- | --- |
@@ -346,7 +348,41 @@ opened readonly, and the runs directory is only ever listed and read.
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md — the model's own notes, served in public mode too |
 | `/api/run/<id>/stream` | SSE: new entries as they are appended (withheld in public mode) |
 | `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted; withheld in public mode unless `WRATHBENCH_VIEWER_TILES_PUBLIC=1`) |
+| `/api/config...` | the fleet config, read and write — see below; **not mounted in public mode** |
 | anything else | the built SPA, or the not-built notice when there is none |
+
+### The config API (operator-only)
+
+Since item 127 the fleet config lives in a sqlite store on the data volume
+(`runner/src/config-store.ts`, `$WRATHBENCH_DATA/config.sqlite`), and
+`infra/fleet.json` is its seed and its export format. The supervisor reads the
+store on every 60s re-read, so an edit here is live one tick later with no
+restart. There is no UI yet; these are the endpoints a UI will use, and an
+operator can drive them with curl or the CLI
+(`bun runner/src/config-store.ts seed|export|get|set|patch|delete|audit`).
+
+A *key* is a row: `roster/<name>`, `campaigns/<name>`, `queue/<n>`, or one of
+the singletons `_notes`, `preflight`, `accounts`, `policy`.
+
+| path | what |
+| --- | --- |
+| `GET /api/config` | the whole config in fleet.json's shape, plus `keys`, `version` (moves on every accepted write) and whether the store has been seeded |
+| `GET /api/config/<key>` | one row's document |
+| `PUT /api/config/<key>` | replace one row |
+| `PATCH /api/config/<key>` | shallow-merge into one row |
+| `DELETE /api/config/<key>` | remove one row |
+| `GET /api/config/audit?limit=` | the change history, newest first, with the before and after documents |
+| `POST /api/config/export` | render the store to fleet.json's exact shape; returns the text, and writes a file only when the body names a `path` |
+
+Every write renders the whole candidate config and runs it through
+`parseFleet` — the same function the supervisor refuses a bad `fleet.json`
+with — so a rejected edit is a 400 carrying that refusal word for word, and
+nothing the app accepts can be rejected at the next tick. `x-wrathbench-actor`
+and `x-wrathbench-note` name who changed what and why; the actor defaults to
+`viewer`. The viewer has no authentication of its own (loopback, or a trusted
+LAN behind `WRATHBENCH_VIEWER_LAN`), so "not public" is the whole of the
+authorisation — which is why a public handle answers 404 rather than the 403
+it gives for a withheld read route.
 
 ### What it will not serve
 
