@@ -5,8 +5,9 @@ prerequisite is an AzerothCore server data directory at `data/client`.
 
 The same stack on Kubernetes is `infra/chart/wrathbench` (Helm) plus
 `infra/k8s/kustomization.yaml` (the `fleet.json` ConfigMap), built by
-`infra/build-images.sh` and operated by `infra/k8s-deploy.sh`. The runbook is
-`docs/DEPLOY-NUSPHERE.md`; nothing here changes because of it.
+`infra/build-images.sh`, released by `infra/k8s-release.sh` and operated by
+`infra/k8s-deploy.sh`. The runbook is `docs/DEPLOY-NUSPHERE.md`; nothing here
+changes because of it.
 
 | path | what |
 |---|---|
@@ -16,7 +17,8 @@ The same stack on Kubernetes is `infra/chart/wrathbench` (Helm) plus
 | `build-worldserver.sh` | the worldserver alone, to `:next`, for the compose deploy |
 | `build-images.sh` | all four images at one immutable `git describe` tag |
 | `deploy-worldserver.sh` | the compose deploy window |
-| `k8s-deploy.sh` | the same window on Kubernetes (Flux owns the tag) |
+| `k8s-deploy.sh` | the same window on Kubernetes, and it refuses a stale pin |
+| `k8s-release.sh` | a whole release in five restartable phases |
 | `run-episode.sh` | one episode: compose, `--local`, or `--k8s` |
 | `run-fleet.ts`, `fleet.json` | the supervisor and the config it re-reads |
 | `chart/wrathbench` | the Helm chart |
@@ -441,6 +443,54 @@ Blizzard-derived or run-specific.
 The MySQL data directory is the named volume `db-data`, not a bind mount.
 `docker compose down` keeps it; `docker compose down -v` throws the world away
 and the next `up` re-imports from scratch.
+
+## Releasing on Kubernetes
+
+```
+./infra/k8s-release.sh --dry-run
+./infra/k8s-release.sh --pin-hook ~/bin/place-the-pin
+```
+
+Five phases, run in order, each one idempotent and each one restartable with
+`--from <phase>`:
+
+| phase | what |
+|---|---|
+| `build` | `build-images.sh --push` at `git describe` of this tree; refuses a dirty one |
+| `drain` | `fleet-update.sh drain` — the pause switch stays set for the whole window |
+| `pin` | place the pin, then **wait until the cluster actually carries the tag** |
+| `deploy` | `k8s-deploy.sh` — the gate smokes, then the fleet comes back |
+| `resume` | `fleet-update.sh resume` |
+
+**The pin is a hook, because how a pin is placed is yours.** This repo knows the
+tag and what the chart does with it; it does not know whether your GitOps repo
+takes a commit, a pull request, a `helm upgrade --set`, or a person with an
+editor. So: your GitOps repo places the pin, and you point `--pin-hook` at
+whatever does that for you. It is run as
+
+```
+<command> <tag> <sha>          with WRATHBENCH_TAG and WRATHBENCH_SHA set
+```
+
+and only has to return once the pin is *placed*. It does not have to wait for
+the cluster: the `pin` phase does that itself, by reading the image tag the
+worldserver and viewer Deployments actually run and then waiting out every
+rollout. That is the check a hook cannot get wrong, and the one a release needs
+— on 2026-09-16 a deploy window ran against a pin that had never merged, smoked
+the old release and called it verified. With no hook the phase prints the tag,
+the commit and where the chart expects them, and waits for the same thing, so
+placing a pin by hand still works.
+
+`--helmrelease <namespace>/<name>` adds one more wait after the tag poll, never
+instead of it: a HelmRelease is still `Ready` on the previous revision, so
+waiting on it alone would return instantly and hand the deploy window the old
+image.
+
+`k8s-deploy.sh` makes the same check on its own and **refuses** when the cluster
+is not on this tree's tag — `--expect-tag <tag>` requires a different one and
+`--allow-tag-mismatch` is the deliberate override. It also clears the pause
+switch a `drain` left set when it reaches its resume phase, and says so; a
+failed window deliberately leaves it set.
 
 ## Verifying without a full boot
 
