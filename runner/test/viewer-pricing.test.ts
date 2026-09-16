@@ -450,14 +450,16 @@ describe("a sync that re-reads the catalogue", () => {
 
   test("every priced id in the corpus reads the same dollars before and after a sync that doubles every rate", () => {
     // The worst case: not one mover but all of them, on a day after every run
-    // in `data/runs`. Nothing already on disk may move by a cent.
+    // and existing price window. Nothing already on disk may move by a cent.
+    const syncDay = "2099-09-09";
+    const dayAfter = Date.parse("2099-09-10");
     const doubled = Object.fromEntries(
       Object.entries(catalogue).map(([id, r]) => [
         id,
         { input: r.input * 2, output: r.output * 2, cacheRead: r.cacheRead * 2, cacheWrite: r.cacheWrite * 2 },
       ]),
     );
-    const after = mergeWindows(current, doubled, "2026-09-09");
+    const after = mergeWindows(current, doubled, syncDay);
     for (const id of Object.keys(current)) {
       const run = august(id);
       const before = breakdownTotal(costOf(fixture, priceFor(run, run.startedAt)!));
@@ -471,18 +473,19 @@ describe("a sync that re-reads the catalogue", () => {
       // change the sync has seen, so "exactly two" would break on the first.
       const free = catalogue[id]!.input === 0 && catalogue[id]!.output === 0;
       expect(windows.length).toBe(current[id]!.length + (free ? 0 : 1));
-      if (!free) expect(windowAt(windows, Date.parse("2026-09-10"))!.input).toBe(catalogue[id]!.input * 2);
+      if (!free) expect(windowAt(windows, dayAfter)!.input).toBe(catalogue[id]!.input * 2);
     }
   });
 
   test("a second sync on the same day corrects that day's window instead of stacking a duplicate", () => {
     const id = "z-ai/glm-5.3-flash";
+    const syncDay = "2099-09-09";
     const list = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0.15 };
-    const first = mergeWindows(current, { ...catalogue, [id]: list }, "2026-09-09");
-    expect(first[id]).toHaveLength(2);
+    const first = mergeWindows(current, { ...catalogue, [id]: list }, syncDay);
+    expect(first[id]).toHaveLength(current[id]!.length + 1);
     const corrected = { input: 0.16, output: 0.52, cacheRead: 0.032, cacheWrite: 0.16 };
-    const second = mergeWindows(first, { ...catalogue, [id]: corrected }, "2026-09-09");
-    expect(second[id]).toEqual([current[id]![0]!, { ...corrected, from: "2026-09-09" }]);
+    const second = mergeWindows(first, { ...catalogue, [id]: corrected }, syncDay);
+    expect(second[id]).toEqual([...current[id]!, { ...corrected, from: syncDay }]);
     // And the August run still prices at the discount through both.
     expect(windowAt(second[id]!, Date.parse("2026-08-24"))!.input).toBe(0.075);
   });
