@@ -371,7 +371,7 @@ export class Ingester {
       comparability_json: meta["comparability"] === undefined ? "" : JSON.stringify(meta["comparability"]),
       meta_json: metaText,
       trajectory_bytes: jsonlSig?.size ?? 0,
-      trajectory_mtime: Math.trunc(jsonlSig?.mtime ?? 0),
+      trajectory_mtime: jsonlSig?.mtime ?? 0,
       ingested_at: this.deps.now(),
     });
     await this.deps.batcher.flushAll();

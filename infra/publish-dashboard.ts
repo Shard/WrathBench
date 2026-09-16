@@ -33,7 +33,6 @@
 import { existsSync } from "node:fs";
 import { S3Client } from "bun";
 import { createRenderer } from "../runner/viewer/snapshot";
-import { defaultFactCachePath } from "../runner/viewer/fact-store";
 import { publishLoop, type ObjectStore, type PassRenderer } from "./publish-core";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
@@ -56,16 +55,6 @@ const INTERVAL_MS = Number(Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS ?? "60000");
  */
 const BATCH = Number(Bun.env.WRATHBENCH_PUBLISH_BATCH ?? "8");
 const MODULE_URL = Bun.env.WRATHBENCH_MODULE_URL;
-/*
- * The viewer's persisted per-run fact cache (runner/viewer/fact-store.ts).
- * This process restarts on every runner-image bump and on `bun ship
- * --publisher`, and its first pass reads /api/models — so without a cache on
- * disk each restart re-counts every trajectory in the tree. The default is the
- * viewer's own, deliberately: both write the same facts for the same corpus
- * under the same signature, so sharing one file is a benefit, not a race (the
- * write is a rename over a pid-named temporary).
- */
-const FACT_CACHE = Bun.env.WRATHBENCH_FACT_CACHE ?? defaultFactCachePath(RUNS_DIR);
 
 function fail(message: string): never {
   console.error(`publish-dashboard: ${message}`);
@@ -105,16 +94,16 @@ const store: ObjectStore = {
   },
 };
 
-// One renderer for the process, not one per pass: the viewer handle inside it
-// holds the listing's (size, mtime) memos, so a finished run's row and totals
-// are read once and a live one only as it grows. The one memo a streaming pass
-// does NOT keep is the per-run entry index, which it releases as each batch
-// flushes — see `ApiHandle.release`.
+// One renderer for the process, not one per pass. Its handle reads run rows
+// and per-run totals from the derived store (CLICKHOUSE_URL, or a local one
+// the collector fills in memory), so a pass no longer re-reads a trajectory to
+// count what it publishes. The one memo a streaming pass does not keep is the
+// per-run entry index, which it releases as each batch flushes — see
+// `ApiHandle.release`.
 const renderer = createRenderer({
   runsDir: RUNS_DIR,
   ...(FLEET_CONFIG !== undefined ? { fleetConfigPath: FLEET_CONFIG } : {}),
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
-  factCachePath: FACT_CACHE,
 });
 
 // The streaming shape: every `BATCH` runs, the artifacts just projected go

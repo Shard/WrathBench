@@ -50,14 +50,14 @@ import type {
   RunListRow,
   RunRow,
   RunsResponse,
+  StatePoint,
   TokenTotals,
   TrackResponse,
 } from "./api-types";
 import { episodeOf, resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
-import { modelsResponse, readFleetRoster, readRunFactsCached } from "./models";
-import { createFactStore } from "./fact-store";
-import { modelStates, outstandingWork } from "../src/models";
+import { modelsResponse, readFleetRoster } from "./models";
+import { modelStates, outstandingWork, type RunFact } from "../src/models";
 import { readPositions } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
@@ -77,18 +77,17 @@ import {
   projectTrack,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
+import { isValidRunId, LIVE_WINDOW_MS, readRun, readScratchpad, runDir } from "./runs";
 import {
-  isValidRunId,
-  LIVE_WINDOW_MS,
-  listRunsCached,
-  readMoves,
-  readRun,
-  readScratchpad,
-  readStates,
-  readStatesCached,
-  type RunReadCacheEntry,
-  runDir,
-} from "./runs";
+  factOf,
+  latestStatesOf,
+  moveViewsOf,
+  runRowOf,
+  statePointOf,
+  storeFor,
+  totalsOf,
+  type RunStore,
+} from "./clickhouse";
 import { isArchiveDir } from "./archive-dir";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
 import {
@@ -153,11 +152,13 @@ export interface ApiOptions {
    */
   configDbPath?: string;
   /**
-   * Where the per-run fact cache is persisted across process starts
-   * (`fact-store.ts`). Absent — the default everywhere but the viewer and the
-   * publisher — keeps the memo in memory only, which is what it always was.
+   * Where run rows, state series and the per-run derivations are read from
+   * (`clickhouse.ts`). Absent means `storeFor(runsDir)`: ClickHouse when
+   * `CLICKHOUSE_URL` is set, and otherwise a store the collector fills in
+   * memory from the runs directory — which is what a bare clone, a test and a
+   * one-shot render get.
    */
-  factCachePath?: string;
+  store?: RunStore;
 }
 
 /** How long one /health answer (or one failure) stands in for the next. */
@@ -564,18 +565,19 @@ export type ApiHandle = ((req: Request) => Promise<Response>) & {
    * streaming pass asserts about itself, and what an operator would want if the
    * publisher ever grows again.
    */
-  cachedRuns(): { entries: number; totals: number; facts: number; rows: number };
-  /**
-   * Write the persisted fact cache now rather than on its debounce. A handle
-   * with no `factCachePath` writes nothing, so this is always safe to call —
-   * the viewer calls it as it goes down, and a test calls it to be
-   * deterministic about a file the debounce would otherwise write later.
-   */
-  flushFacts(): void;
+  cachedRuns(): { entries: number };
 };
 
 export function createApi(opts: ApiOptions): ApiHandle {
   const { runsDir, tilesDir } = opts;
+  /*
+   * The derived store. Every route that once opened all 1,148 run directories
+   * reads rows from here instead (docs/ARCHITECTURE.md, "The derived store").
+   * Nothing is memoised on this side: a query against the store is one request
+   * where the scan was a thousand file opens, and a cache would only be
+   * another thing that can be wrong about a live run.
+   */
+  const store = opts.store ?? storeFor(runsDir);
   const publicMode = opts.publicMode === true;
   const tilesPublic = opts.tilesPublic === true;
   /**
@@ -603,10 +605,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
   // The series census for /api/info, on a window: every open tab polls that
   // route, and the answer only moves when a run starts.
   let seriesCache: { at: number; value: { series: string; runs: number }[] } | undefined;
-  const seriesCensus = (): { series: string; runs: number }[] => {
+  const seriesCensus = async (): Promise<{ series: string; runs: number }[]> => {
     const now = Date.now();
     if (seriesCache === undefined || now - seriesCache.at >= SERIES_CACHE_MS) {
-      seriesCache = { at: now, value: harnessSeriesCensus(listRunsCached(runsDir, runReadCache, now)) };
+      seriesCache = { at: now, value: harnessSeriesCensus(await runRows(now)) };
     }
     return seriesCache.value;
   };
@@ -637,86 +639,86 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   /**
-   * Per-run totals for the listing, memoised on (size, mtime).
+   * Every run row, mapped and ordered as the listing wants it.
    *
-   * The listing wants tokens and a wall clock for every run, which means reading
-   * every trajectory. A finished run's file never changes, so it is read once per
-   * process; a live run is re-read only as it grows.
+   * One query where this was a thousand `run.sqlite` opens, and nothing
+   * memoises it: the store is already the memo, and a cache in front of it
+   * would only be a second thing that can be wrong about a live run. Archived
+   * runs are filtered here rather than at ingestion — the scheduler needs
+   * them, a listing must not show them, and that is a question for the reader.
    */
-  const totalsCache = new Map<
-    string,
-    {
-      size: number;
-      mtime: number;
-      totals: RunTotals;
-      /**
-       * The resumable scan behind those totals, kept only while the file is
-       * still being written. A live run's trajectory runs to hundreds of
-       * megabytes and misses the (size, mtime) key on every poll, so without
-       * this every listing route re-read it from byte zero — the whole reason
-       * the API was slow. A scanner retains one mark per reply, which is the
-       * one thing here proportional to the file, so a run whose trajectory has
-       * gone quiet drops it and keeps the totals alone.
-       */
-      scanner?: RunTotalsScanner;
-    }
-  >();
+  async function runRows(now = Date.now()): Promise<RunRow[]> {
+    const [rows, latest] = await Promise.all([store.runRows(), store.latestStates()]);
+    const out = rows
+      .filter((r) => r.archived === 0)
+      .map((r) => runRowOf(r, latest.get(r.run_id), now));
+    out.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));
+    return out;
+  }
+
+  /** One run's row. Its own state rows answer the latest readings. */
+  async function runRowOne(runId: string, now = Date.now()): Promise<RunRow | null> {
+    const r = await store.runRow(runId);
+    if (r === null) return null;
+    return runRowOf(r, latestStatesOf(await store.stateRows(runId)).get(runId), now);
+  }
+
+  /** One run's state series, as the map and the charts read it. */
+  async function statesOf(runId: string): Promise<StatePoint[]> {
+    return (await store.stateRows(runId)).map(statePointOf);
+  }
 
   /**
-   * Run facts for `/api/models`, memoised per run the same way.
+   * Per-run totals for the listing.
    *
-   * The projection reads every trajectory in full to count model responses, so
-   * without this a thirty-second poll would re-read the whole runs directory
-   * forever. A finished run's fact is read once per process — and, when the
-   * handle is given a `factCachePath`, once per corpus: the store in
-   * `fact-store.ts` writes the memo to disk on a debounce and loads it back on
-   * the next start, so a restart no longer re-counts every trajectory
-   * (FOLLOW-UPS item 115). Every entry it hands back is still checked against
-   * the run's live signature below, so nothing about the rule changes.
+   * Every one of these was computed once, by the viewer's own
+   * `RunTotalsScanner`, when the collector tailed the file — so the listing no
+   * longer re-reads a trajectory to count what it shows, and the numbers are
+   * the same numbers by construction rather than by a second implementation
+   * agreeing. See `collector/schema.sql` (`run_totals`) for why this is not a
+   * SQL aggregation.
    */
-  const factStore = createFactStore(runsDir, opts.factCachePath);
-  const factCache = factStore.cache;
+  async function allTotals(): Promise<Map<string, RunTotals>> {
+    const out = new Map<string, RunTotals>();
+    for (const r of await store.totalsRows()) {
+      const totals = totalsOf(r);
+      if (totals !== null) out.set(r.run_id, totals);
+    }
+    return out;
+  }
+
+  async function runTotals(runId: string): Promise<RunTotals | null> {
+    return totalsOf(await store.totalsRow(runId));
+  }
 
   /**
-   * Run rows and their state series for the listing routes, memoised per run
-   * the same way (`readRunCached` in `runs.ts` carries the rule, including why
-   * a live run is never served from it). Every listing route reads all 330 of
-   * them, which is 330 database opens per request without this.
+   * The scheduler's facts, off the same store.
+   *
+   * `/api/models` still serves `modelStates` — the supervisor's own verdict,
+   * so the page and the supervisor cannot disagree about why a model is not
+   * running. Only where the `RunFact[]` comes from changed: the collector
+   * called `readRunFact` as it tailed, and this reads the answer back.
+   * Liveness is the one field re-decided here, against this `now`, because a
+   * stored `true` would be a claim about a process that stopped writing hours
+   * ago.
    */
-  const runReadCache = new Map<string, RunReadCacheEntry>();
-
-  async function runTotals(runId: string, dir: string): Promise<RunTotals | null> {
-    const path = join(dir, "trajectory.jsonl");
-    let st: ReturnType<typeof statSync>;
-    try {
-      st = statSync(path);
-    } catch {
-      return null;
-    }
-    const hit = totalsCache.get(runId);
-    if (hit !== undefined && hit.size === st.size && hit.mtime === st.mtimeMs) return hit.totals;
-    /*
-     * Resume where the last scan stopped, unless the file cannot be resumed:
-     * a scanner that has already read past the current size means the file was
-     * truncated or replaced, and folding new bytes into old accumulators would
-     * double-count. Then it is read whole, once.
-     */
-    let scanner = hit?.scanner;
-    if (scanner === undefined || scanner.size > st.size) scanner = new RunTotalsScanner(path);
-    const totals = await scanner.scan();
-    /*
-     * Keep the scanner only while the trajectory is still growing. `LIVE_WINDOW_MS`
-     * is the same window the run rows call liveness on, so exactly the runs that
-     * miss this cache every poll are the ones that keep their resumable state.
-     */
-    const growing = Date.now() - st.mtimeMs < LIVE_WINDOW_MS;
-    totalsCache.set(
-      runId,
-      growing
-        ? { size: st.size, mtime: st.mtimeMs, totals, scanner }
-        : { size: st.size, mtime: st.mtimeMs, totals },
+  async function runFacts(now: number): Promise<RunFact[]> {
+    const [rows, totals] = await Promise.all([store.runRows(), store.totalsRows()]);
+    const mtimes = new Map(
+      rows.filter((r) => r.archived === 0).map((r) => [r.run_id, r.trajectory_mtime === 0 ? null : r.trajectory_mtime]),
     );
-    return totals;
+    const out: RunFact[] = [];
+    for (const t of totals) {
+      if (!mtimes.has(t.run_id)) continue;
+      const fact = factOf(t, mtimes.get(t.run_id) ?? null, now);
+      if (fact !== null) out.push(fact);
+    }
+    // Oldest first, as `readRunFacts` has always promised. The directory scan
+    // this replaces returned readdir order, which was whatever the filesystem
+    // felt like; a deterministic order is strictly better and nothing downstream
+    // depended on the other one.
+    out.sort((a, b) => a.startedAt - b.startedAt);
+    return out;
   }
 
   /**
@@ -773,24 +775,24 @@ export function createApi(opts: ApiOptions): ApiHandle {
   /**
    * Every run projected onto the results surface.
    *
-   * Built inside this closure on purpose: it reuses the same memoised
-   * `runTotals`, so the charts inherit the (size, mtime) cache instead of
-   * re-reading every trajectory on every request. The segments it passes are
-   * the run page's own, which is what makes time-to-level and playtime agree.
+   * Built inside this closure on purpose: it reads the same stored totals the
+   * run page does, so the charts and the page cannot disagree. The segments it
+   * passes are the run page's own, which is what makes time-to-level and
+   * playtime agree.
    */
   async function resultRuns(): Promise<ResultRun[]> {
     const out: ResultRun[] = [];
     // One clock for the pass: a live run's playtime is charged up to *now*, and
     // two rows of one response must not be measured against different nows.
     const now = Date.now();
-    for (const raw of listRunsCached(runsDir, runReadCache, now)) {
-      const dir = runDir(runsDir, raw.runId);
-      const totals = dir === null ? null : await runTotals(raw.runId, dir);
+    const [rows, totalsByRun] = await Promise.all([runRows(now), allTotals()]);
+    for (const raw of rows) {
+      const totals = totalsByRun.get(raw.runId) ?? null;
       const row = withResolved(raw, totals);
       out.push(
         resultRunOf(
           row,
-          readStatesCached(runsDir, row.runId, runReadCache, now),
+          await statesOf(row.runId),
           totals?.segments ?? [],
           totals === null
             ? null
@@ -1086,9 +1088,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
 
   async function listWithTotals(): Promise<RunListRow[]> {
     const out: RunListRow[] = [];
-    for (const raw of listRunsCached(runsDir, runReadCache)) {
-      const dir = runDir(runsDir, raw.runId);
-      const totals = dir === null ? null : await runTotals(raw.runId, dir);
+    const [rows, totalsByRun] = await Promise.all([runRows(), allTotals()]);
+    for (const raw of rows) {
+      const totals = totalsByRun.get(raw.runId) ?? null;
       const row = withResolved(raw, totals);
       out.push({
         ...row,
@@ -1134,7 +1136,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         dashboard: dashboardDir !== undefined && existsSync(join(dashboardDir, "index.html")),
         dashboardBuild: dashboardBuildOf(dashboardDir, buildCache),
         worldserver: await worldserver(),
-        harnessSeries: seriesCensus(),
+        harnessSeries: await seriesCensus(),
         now: Date.now(),
       };
       return pub(body, projectInfo);
@@ -1173,7 +1175,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const body = readFleet(runsDir, now);
       const roster = readFleetRoster(opts.fleetConfigPath);
       if (roster.shape === "roster") {
-        const runs = readRunFactsCached(runsDir, factCache, now, factStore.onChange);
+        const runs = await runFacts(now);
         const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
         body.outstanding = outstandingWork({
           states,
@@ -1199,7 +1201,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       }
       const now = Date.now();
       const roster = readFleetRoster(opts.fleetConfigPath);
-      const runs = readRunFactsCached(runsDir, factCache, now, factStore.onChange);
+      const runs = await runFacts(now);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
       // The refs with a job in flight, off the supervisor's state: the verdict
       // says "running (one stream per model)" exactly where --status does.
@@ -1211,11 +1213,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * the figure must be the listing's own — same memoised totals, same
        * `runCost` — or the two pages would quote different dollars for one run.
        */
-      const rows = new Map(listRunsCached(runsDir, runReadCache, now).map((r) => [r.runId, r]));
+      const [rowList, totalsByRun] = await Promise.all([runRows(now), allTotals()]);
+      const rows = new Map(rowList.map((r) => [r.runId, r]));
       for (const row of body.models) {
         for (const r of row.runs) {
-          const dir = runDir(runsDir, r.runId);
-          const totals = dir === null ? null : await runTotals(r.runId, dir);
+          const totals = totalsByRun.get(r.runId) ?? null;
           // The run's own record, not the roster entry: whether a model is local
           // is a fact about the `apiBase` it was actually served from.
           const rawRow = rows.get(r.runId);
@@ -1271,7 +1273,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * one derivation, shared with the listing — and a run that stamped it at
        * write time short-circuits the scan entirely.
        */
-      const run = withResolved(readRun(runsDir, runId), await runTotals(runId, dir));
+      const row = await runRowOne(runId);
+      if (row === null) return notFound(`no such run: ${runId}`);
+      const run = withResolved(row, await runTotals(runId));
       /*
        * Playtime comes off the tail's own index rather than `runTotals`: the
        * tail is incremental, where a live run misses the (size, mtime) totals
@@ -1318,7 +1322,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
           : null;
       const body: RunDetailResponse = {
         run,
-        states: readStates(runsDir, runId),
+        states: await statesOf(runId),
         total: entries.length,
         tokens,
         cost: runCost({
@@ -1354,7 +1358,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (rest === "/track") {
       // The replay feed (item 22): the same position shape the live map
       // consumes, read from one finished run instead of every live one.
-      const run = readRun(runsDir, runId);
+      const run = await runRowOne(runId);
+      if (run === null) return notFound(`no such run: ${runId}`);
       /*
        * Where this attempt sits in its stream, so the map's transport can step
        * to the one either side of it (item 119) without a second fetch.
@@ -1374,9 +1379,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
         character: run.character,
         model: run.model,
         harnessVersion: run.harnessVersion,
-        points: trackFrom(readStates(runsDir, runId)),
+        points: trackFrom(await statesOf(runId)),
         // The intentions beside the track: same run, different cadence.
-        moves: readMoves(runsDir, runId),
+        moves: moveViewsOf(await store.moveRows(runId)),
         // Absent, not null, on a run with no stream — as on the detail route.
         ...(stream === null
           ? {}
@@ -1486,25 +1491,18 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * also per-run in the strict sense — only `/api/run/<id>` and its feed touch
    * one — so dropping it costs nothing else this pass.
    *
-   * The two set-shaped memos are deliberately kept, and the reason is
-   * measured. `runReadCache` holds run rows and state series that the listing
-   * routes read as a whole, and `totalsCache` is consulted per run by
-   * `resultRuns()`, which a freeplay run's detail route calls to build its
-   * stream view. Dropping either mid-pass makes those set reads re-open and
-   * re-scan every run already released — quadratic, and a pass went from 64s to
-   * 158s when they were included. Small, shared, set-shaped: they stay.
+   * It is now the ONLY per-run memo this handle holds. The run rows, the
+   * state series and the per-run totals used to be memoised here because each
+   * one cost a file open or a whole-file scan; they are rows in the derived
+   * store now, and a cache in front of a query would only be a second thing
+   * that can be wrong about a live run.
    */
   const release = (runId: string): void => {
     tails.delete(runId);
     scans.delete(runId);
   };
 
-  const cachedRuns = (): { entries: number; totals: number; facts: number; rows: number } => ({
-    entries: tails.size,
-    totals: totalsCache.size,
-    facts: factCache.size,
-    rows: runReadCache.size,
-  });
+  const cachedRuns = (): { entries: number } => ({ entries: tails.size });
 
   return Object.assign(async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -1559,5 +1557,5 @@ export function createApi(opts: ApiOptions): ApiHandle {
     // is the only UI, so every non-API path gets the notice telling the
     // operator how to build it.
     return unbuilt();
-  }, { release, cachedRuns, flushFacts: factStore.flush });
+  }, { release, cachedRuns });
 }

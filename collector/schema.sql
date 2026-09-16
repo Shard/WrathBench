@@ -4,10 +4,11 @@
 --
 -- Conventions that hold for every table below, and why:
 --
---   * Timestamps are `Int64` epoch milliseconds, not `DateTime64`. That is
---     what the runner writes and what every API body already carries, so a
---     round trip through this store changes no byte a client sees. Read them
---     with `fromUnixTimestamp64Milli(ts)` when a human wants a date.
+--   * Timestamps are epoch milliseconds — `Int64`, or `Float64` where the
+--     source carries sub-millisecond precision — not `DateTime64`. That is what
+--     the runner writes and what every API body already carries, so a round trip
+--     through this store changes no byte a client sees. Read them with
+--     `fromUnixTimestamp64Milli(ts)` when a human wants a date.
 --   * No `PARTITION BY`. ReplacingMergeTree deduplicates only within a
 --     partition, and any time-based partition would split a run that crosses
 --     the boundary and keep both copies of its rows forever. The corpus is
@@ -65,7 +66,10 @@ CREATE TABLE IF NOT EXISTS wrathbench.runs
   -- The trajectory file's own size and mtime at ingestion. Liveness is decided
   -- from the mtime against `now` exactly as it is from the file today.
   trajectory_bytes      Int64,
-  trajectory_mtime      Int64,
+  -- Float64, not Int64: a stat's `mtimeMs` carries sub-millisecond precision
+  -- and the viewer puts it on the wire verbatim, so truncating it here would
+  -- change a byte of every run listing.
+  trajectory_mtime      Float64,
   ingested_at           Int64
 )
 ENGINE = ReplacingMergeTree(ingested_at)
