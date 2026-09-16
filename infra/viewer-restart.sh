@@ -2,7 +2,7 @@
 # Restart the operator viewer.
 #
 # CLUSTER-NATIVE since 2026-09-11. Since the 2026-09-08 cutover the viewer is
-# the `wrathbench-viewer` Deployment behind the `wrathbench.local` Ingress
+# the `wrathbench-viewer` Deployment behind the `wrathbench.nusphere.shard.page` Ingress
 # (docs/DEPLOY-NUSPHERE.md), not a bun process on the workstation, so a restart
 # is a rollout restart and the check that follows is the Ingress answering
 # /api/info. The workstation's systemd user unit is disabled and kept only for
@@ -20,7 +20,7 @@ set -Eeuo pipefail
 
 NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"
 RELEASE="${WRATHBENCH_K8S_RELEASE:-wrathbench}"
-VIEWER_URL="${WRATHBENCH_VIEWER_URL:-https://wrathbench.local}"
+VIEWER_URL="${WRATHBENCH_VIEWER_URL:-https://wrathbench.nusphere.shard.page}"
 LOCAL=0
 DRY_RUN=0
 while [[ $# -gt 0 ]]; do

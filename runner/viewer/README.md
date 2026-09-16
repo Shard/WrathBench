@@ -7,12 +7,12 @@ JSONL by hand.
 ## Running
 
 Since the 2026-09-08 cutover the viewer is the `wrathbench-viewer` Deployment on
-the cluster, behind the `wrathbench.local` Ingress
+the cluster, behind the `wrathbench.nusphere.shard.page` Ingress (alias `wrathbench.local`)
 (`docs/DEPLOY-NUSPHERE.md`); its code is baked into the runner image and Flux
 owns the tag, so it comes back on its own and new viewer code needs a new tag
 rather than a restart. `bun run viewer:restart`
 (`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
-`https://wrathbench.local/api/info` — it kicks a wedged process, it does not
+`https://wrathbench.nusphere.shard.page/api/info` — it kicks a wedged process, it does not
 deploy anything. The workstation's systemd user unit
 (`infra/wrathbench-viewer.service`) is retired and disabled, kept only for the
 compose rollback, which is what `viewer-restart.sh --local` drives.
