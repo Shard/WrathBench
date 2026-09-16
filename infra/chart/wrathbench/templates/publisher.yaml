@@ -71,13 +71,6 @@ spec:
             # so what a pass holds does not track the size of the runs tree.
             - name: WRATHBENCH_PUBLISH_BATCH
               value: {{ .Values.publisher.batch | quote }}
-            # The viewer's per-run fact cache (runner/viewer/fact-store.ts),
-            # the same file the viewer writes: a pass renders /api/models, and
-            # this pod restarts on every runner-image bump and on `bun ship
-            # --publisher`, so without it each restart re-counts every
-            # trajectory before its first pass.
-            - name: WRATHBENCH_FACT_CACHE
-              value: /wrathbench/data/fact-cache/facts.json
             # S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY / S3_BUCKET / S3_ENDPOINT
             # are Bun.S3Client's own variable names. This pod holds those four
             # and no model key at all.
@@ -92,11 +85,6 @@ spec:
             - name: data
               mountPath: /wrathbench/data/publish
               subPath: publish
-            # Shared with the viewer, which writes the same derived counts for
-            # the same corpus under the same (size, mtime) signature.
-            - name: data
-              mountPath: /wrathbench/data/fact-cache
-              subPath: fact-cache
             - name: fleet-config
               mountPath: /wrathbench/config
               readOnly: true

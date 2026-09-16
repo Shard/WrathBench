@@ -437,9 +437,10 @@ export function moveViewsOf(rows: readonly MoveTableRow[]): MoveIntentView[] {
  * both at once. `turns` and `events` are dropped as they arrive — the read
  * path never reads them and keeping them would mean holding the corpus.
  *
- * Every call refreshes first. A pass over an unchanged tree is one `stat` per
- * run, which is milliseconds, and it is what makes a live run's row current
- * without a cache to be wrong about.
+ * Every call refreshes first — a pass over an unchanged tree is four `stat`s
+ * per run and nothing else, which is what makes a live run's row current
+ * without a cache to be wrong about. Concurrent calls share the one pass in
+ * flight rather than each starting their own.
  */
 export function localRunStore(runsDir: string): RunStore {
   // Imported lazily: the viewer's own bundle has no reason to pull the
@@ -473,7 +474,18 @@ export function localRunStore(runsDir: string): RunStore {
     },
   };
 
-  async function refresh(): Promise<void> {
+  /**
+   * The pass in flight, if any.
+   *
+   * Without it, `Promise.all([runRows(), latestStates()])` — which is what one
+   * `/api/runs` does — both see `collector === null`, build two collectors over
+   * one sink, and run two full `RunTotalsScanner` passes over every trajectory
+   * in the tree. Right rows, twice the work, and on the operator's own corpus
+   * that is the difference between a slow first request and two.
+   */
+  let pending: Promise<void> | null = null;
+
+  async function pass(): Promise<void> {
     if (collector === null) {
       const [{ Collector }, { readConfig }, { OffsetStore }] = await Promise.all([
         import("../../collector/src/collector"),
@@ -488,6 +500,13 @@ export function localRunStore(runsDir: string): RunStore {
       });
     }
     await collector.pass();
+  }
+
+  function refresh(): Promise<void> {
+    pending ??= pass().finally(() => {
+      pending = null;
+    });
+    return pending;
   }
 
   const all = <T>(table: string): T[] => [...(tables.get(table)?.values() ?? [])] as T[];
