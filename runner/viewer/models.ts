@@ -27,6 +27,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { readFleetText } from "../src/config-store";
 import {
   DEFAULT_POLICY,
   LADDER_MS,
@@ -182,6 +183,13 @@ export function currentSeries(): string | null {
  * `unreadable` — the same posture `readFleet` takes to a missing
  * `fleet-state.json`: say the file is not usable, do not synthesise what it
  * would have said.
+ *
+ * The config comes through `readFleetText` (`runner/src/config-store.ts`), so
+ * once the config store is seeded this page shows what the supervisor is
+ * actually scheduling rather than whatever `fleet.json` the viewer happens to
+ * have on disk — on the cluster those are two different files, the fleet's
+ * being a ConfigMap. `path` still decides whether there is a config at all,
+ * and is what an unseeded deployment reads.
  */
 export function readFleetRoster(path: string | undefined, series: string | null = currentSeries()): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
@@ -192,7 +200,7 @@ export function readFleetRoster(path: string | undefined, series: string | null 
   if (!existsSync(path)) return { ...empty, shape: "missing", path };
   let parsed: z.infer<typeof fleetRosterSchema>;
   try {
-    parsed = fleetRosterSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+    parsed = fleetRosterSchema.parse(JSON.parse(readFleetText(path)));
   } catch {
     return { ...empty, shape: "unreadable", path };
   }
