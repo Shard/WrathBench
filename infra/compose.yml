@@ -385,6 +385,88 @@ services:
       worldserver:
         condition: service_started
 
+  # -------------------------------------------------------------- clickhouse
+  # The derived store (collector/README.md). Single node, one shard, no
+  # replication: it holds nothing that is not rebuildable from `data/runs`,
+  # which is the evidence record and the write path. Losing this volume costs a
+  # backfill, not a run.
+  #
+  # Loopback only, like every other port here. 8123 is the HTTP interface the
+  # collector and the viewer speak; the native protocol is not published at all
+  # because nothing in this stack uses it.
+  #
+  # `mem_limit` rather than `deploy.resources`: the latter is ignored outside
+  # swarm and podman-compose does not implement it. ClickHouse reads the
+  # cgroup limit and sizes its own caches from it, so 2 GB here is a real
+  # budget and not just an OOM ceiling.
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_DB: wrathbench
+      CLICKHOUSE_USER: ${WRATHBENCH_CLICKHOUSE_USER:-wrathbench}
+      CLICKHOUSE_PASSWORD: ${WRATHBENCH_CLICKHOUSE_PASSWORD:-wrathbench}
+      # The default user's implicit no-password access, off. Every client here
+      # authenticates as the user above.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
+    # ClickHouse wants many more descriptors than the docker default 1024, and
+    # says so loudly at boot when it does not have them.
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    mem_limit: 2g
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    # Loopback only, for operator inspection (docs/DATA-AND-LEGAL.md).
+    ports:
+      - "127.0.0.1:8123:8123"
+    networks: [wrathbench]
+    restart: unless-stopped
+    healthcheck:
+      # The image ships no curl; its own client is the probe.
+      test: ["CMD", "clickhouse-client", "--user", "${WRATHBENCH_CLICKHOUSE_USER:-wrathbench}", "--password", "${WRATHBENCH_CLICKHOUSE_PASSWORD:-wrathbench}", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # ---------------------------------------------------------------- collector
+  # Tails `data/runs` into ClickHouse (collector/README.md). The runner does
+  # not know this service exists: it appends JSONL and moves on, as a service
+  # logs, and every bit of ingestion complexity lives here.
+  #
+  # `oven/bun:1.4.0`, not the runner image, for the same reason the publisher
+  # is: this reads files and makes HTTP requests, so it needs neither git nor
+  # the Claude CLI, and a runner-image rebuild should not recreate it.
+  #
+  # The runs mount is read-only and this service is written to be. The one
+  # writable path is its own offset database, which is as disposable as the
+  # store: delete it and the next start is a full replay.
+  #
+  # No profile: unlike the fleet and the publisher, two collectors against one
+  # ClickHouse would be harmless (the keys are natural and the inserts
+  # idempotent) — but the viewer cannot answer a question about a run that
+  # nothing has ingested, so this belongs in a bare `up`.
+  collector:
+    image: oven/bun:1.4.0
+    working_dir: /wrathbench
+    command: ["bun", "collector/src/main.ts"]
+    environment:
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${WRATHBENCH_CLICKHOUSE_USER:-wrathbench}
+      CLICKHOUSE_PASSWORD: ${WRATHBENCH_CLICKHOUSE_PASSWORD:-wrathbench}
+      CLICKHOUSE_DATABASE: wrathbench
+      WRATHBENCH_RUNS_DIR: /wrathbench/data/runs
+      WRATHBENCH_COLLECTOR_DB: /wrathbench/data/collector/collector.sqlite
+    volumes:
+      - ..:/wrathbench:ro
+      - ../data/runs:/wrathbench/data/runs:ro
+      - ../data/collector:/wrathbench/data/collector
+    networks: [wrathbench]
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
   # --------------------------------------------------------------- publisher
   # The public dashboard's publisher (infra/publish-dashboard.ts): renders the
   # viewer's own API to JSON, applies the public projection, and PUTs what
@@ -436,6 +518,13 @@ services:
       # all within a few seconds of each other. Eight matches the per-run read
       # pool's width.
       WRATHBENCH_PUBLISH_BATCH: "8"
+      # The derived store. The publisher renders the viewer's own handler
+      # in-process, and that handler reads run listings from ClickHouse, so the
+      # publisher needs the same coordinates the viewer does.
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${WRATHBENCH_CLICKHOUSE_USER:-wrathbench}
+      CLICKHOUSE_PASSWORD: ${WRATHBENCH_CLICKHOUSE_PASSWORD:-wrathbench}
+      CLICKHOUSE_DATABASE: wrathbench
       # S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET and S3_ENDPOINT are
       # Bun.S3Client's own variable names and are NOT set here: Bun autoloads
       # /wrathbench/.env inside the container, which is where the R2 key pair
@@ -456,6 +545,7 @@ services:
 
 volumes:
   db-data:
+  clickhouse-data:
 
 networks:
   wrathbench:

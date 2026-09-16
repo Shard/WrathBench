@@ -191,3 +191,23 @@ the worldserver's /health build, so a run says which revision produced it. */}}
 - name: WRATHBENCH_FLEET_CONFIG
   value: /wrathbench/config/fleet.json
 {{- end -}}
+
+{{/*
+The derived store's coordinates, for every pod that reads or writes it: the
+collector, the viewer and the publisher. The password comes from the Secret by
+reference and never reaches a manifest or argv, the same way the database
+password does.
+*/}}
+{{- define "wrathbench.clickhouseEnv" -}}
+- name: CLICKHOUSE_URL
+  value: "http://{{ include "wrathbench.fullname" . }}-clickhouse:8123"
+- name: CLICKHOUSE_DATABASE
+  value: {{ .Values.clickhouse.database | quote }}
+- name: CLICKHOUSE_USER
+  value: {{ .Values.clickhouse.user | quote }}
+- name: CLICKHOUSE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.envSecretName }}
+      key: CLICKHOUSE_PASSWORD
+{{- end -}}

@@ -32,6 +32,13 @@ storage:
     size: 60Gi
   db:
     size: 20Gi
+  # The derived store's datadir. Sized against the measured ratio rather than
+  # the tree: 652 MB of archived trajectories land as 64 MB of parts (the
+  # `messages` column alone compresses 29x), so the 11 GB corpus is ~1 GB and
+  # this is years of headroom. It is also the one volume here that is MEANT to
+  # be disposable — see templates/clickhouse.yaml.
+  clickhouse:
+    size: 20Gi
   # The `codex` driver's subscription lane: a logged-in Codex HOME directory
   # (auth.json plus the persisted threads), not a token — which is why it is a
   # volume and not a Secret key. Tiny; the size is a floor, not a budget.
@@ -183,6 +190,37 @@ runner:
       memory: 512Mi
     limits:
       memory: 4Gi
+
+# The derived store (collector/README.md). A single node with no replication,
+# holding nothing that is not rebuildable from data/runs by `--replay`.
+# CLICKHOUSE_PASSWORD is a key in envSecretName, created by the cluster repo.
+clickhouse:
+  enabled: true
+  # Pinned; see infra/PINS.md for the date and the reason.
+  image: clickhouse/clickhouse-server:25.8
+  database: wrathbench
+  user: wrathbench
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      # ClickHouse reads its cgroup limit and sizes its caches from it, so this
+      # is a budget, not only an OOM ceiling.
+      memory: 2Gi
+
+# Tails data/runs into ClickHouse. Nothing else writes to the store, and the
+# runner does not know it exists.
+collector:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      # A resumable totals scanner per LIVE run; a finished run's is dropped as
+      # soon as a pass finds its files unchanged.
+      memory: 2Gi
 
 viewer:
   enabled: true

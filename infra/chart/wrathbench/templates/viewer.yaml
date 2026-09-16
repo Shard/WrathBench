@@ -73,6 +73,10 @@ spec:
           command: ["bun", "runner/viewer/serve.ts"]
           env:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
+            # The derived store. Every listing route reads it rather than
+            # opening a thousand run directories over iSCSI; the live-progress
+            # polling still reads run.sqlite directly.
+            {{- include "wrathbench.clickhouseEnv" . | nindent 12 }}
             - name: WRATHBENCH_VIEWER_LAN
               value: "1"
             - name: WRATHBENCH_VIEWER_PORT
