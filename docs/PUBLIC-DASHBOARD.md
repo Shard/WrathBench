@@ -308,6 +308,25 @@ with poisoned fields (including keys smuggled through open signatures),
 asserted against the exact allowlisted key set, fixture-based and green from
 a bare clone like everything else.
 
+## What the ladder shows
+
+Each row's headline numbers are still maxima over a model's counted runs, and
+the page is plain about that. Beside them it now shows the spread those runs
+already paid for: a rung cell reads "2/3" — how many of the runs whose records
+can answer that rung reached it, with the link still going to the first that
+did — and under the best level sits the median and range across the counted
+runs that recorded one. Below the table, two labelled reference lines say what
+a level reading means. The empirical ceiling is derived at read time from the
+scored runs of the selected series on the tier in view, so it is never a
+constant and its label names what it is a maximum over. The human speedrun
+band is roughly level 10–11 by ninety minutes and is marked "loosely sourced":
+its figures, their URLs and the reasons they are only a bracket — Classic Era
+and Cataclysm Classic run different XP rates than 3.3.5a, WotLK Classic has no
+speedrun board of its own, and speedrun.com's run pages answer 403 to a
+fetcher — live in `dashboard/src/lib/reference.ts` and are repeated in the
+footnote under the strip. Neither line is a score and neither enters the row
+order.
+
 ## The social card
 
 A link to the site pasted into Discord, Slack or anywhere else reading Open
