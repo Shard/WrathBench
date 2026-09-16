@@ -93,7 +93,7 @@ while [[ $# -gt 0 ]]; do
     --pin-wait) PIN_WAIT_S="${2:-}"; shift 2 ;;
     --namespace|-n) NAMESPACE="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument $1 (--from ${PHASES[*]}, --dry-run, --pin-hook, --helmrelease, --tag, --registry, --no-smoke, --pin-wait, --namespace, --release)" ;;
   esac
 done
@@ -132,9 +132,18 @@ SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)"
 # the 2026-09-16 window did not make. Only the tag after the last colon is
 # compared: the registry is one cluster's business.
 FLEET_DEPLOY="deployment/${RELEASE}-fleet"
-# The pin's own witnesses: worldserver carries the worldserver image, viewer the
-# runner image, so the two of them together prove BOTH images rolled.
-PIN_WITNESSES=("deployment/${RELEASE}-worldserver" "deployment/${RELEASE}-viewer")
+# The pin's own witnesses. worldserver carries the worldserver image; runner and
+# viewer carry the runner image, so together they prove BOTH images rolled. The
+# runner is in the list for a second reason: the deploy window runs every smoke
+# as `kubectl exec deploy/<release>-runner`, so a runner still on the old tag
+# would produce the "verified by N smokes" claim from the OLD harness. Its
+# `rollout status` cannot catch that — a Deployment whose spec never changed
+# reports rolled out instantly — so the tag is read instead.
+PIN_WITNESSES=(
+  "deployment/${RELEASE}-worldserver"
+  "deployment/${RELEASE}-runner"
+  "deployment/${RELEASE}-viewer"
+)
 # Everything the chart rolls that is worth waiting on. The fleet Deployment is
 # deliberately NOT here: this window holds it at 0, and a Helm upgrade may have
 # reset it to 1 under the held pause switch — either way its rollout says
