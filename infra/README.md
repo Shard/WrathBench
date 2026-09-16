@@ -27,7 +27,7 @@ The same stack on Kubernetes is `infra/chart/wrathbench` (Helm) plus
 From the repository root, on a fresh machine:
 
 ```
-mkdir -p data/{client,wiki,runs,etc,logs}
+mkdir -p data/{client,wiki,runs,etc,logs,collector}
 # place an AzerothCore server data directory (dbc/ maps/ vmaps/ mmaps/) at data/client
 docker compose -f infra/compose.yml up -d
 ```
@@ -35,7 +35,8 @@ docker compose -f infra/compose.yml up -d
 The `mkdir` is not optional. The server containers run as uid 1000 and Docker
 creates a missing bind-mount source as root, so without it the AzerothCore
 entrypoint's write test on `env/dist/etc` and `env/dist/logs` fails and the
-servers refuse to start usefully. If your uid is not 1000, set `WRATHBENCH_UID`
+servers refuse to start usefully — and the collector, which also runs as 1000,
+cannot create its offset database under a root-owned `data/collector`. If your uid is not 1000, set `WRATHBENCH_UID`
 and `WRATHBENCH_GID` before building.
 
 The first `up` takes a while: `db-import` populates three databases from the
@@ -370,6 +371,58 @@ carries the same indicators. A job that ships `enabled: false` is a switch,
 not dead config: flip it to true when there is budget to spend on it, flip it
 back and the job stops after the episode in flight.
 
+## The derived store
+
+`clickhouse` and `collector` come up with a bare `up`. The viewer and the
+publisher read their run listings from ClickHouse; the store is derived and
+disposable, and `data/runs` remains the evidence record and the write path
+(docs/ARCHITECTURE.md, "The derived store"; `collector/README.md` for the
+tables and the resume rules).
+
+Start order is what `depends_on` already encodes: ClickHouse healthy, then the
+collector, which applies `collector/schema.sql` at every start — every
+statement is `IF NOT EXISTS`, so that is a no-op against a live store and the
+thing that makes a collector pointed at an empty database come up rather than
+fail.
+
+**Backfilling, and rebuilding after a wipe.** One command, and it is the same
+code path the service runs every five seconds:
+
+```
+docker compose -f infra/compose.yml run --rm --no-deps collector \
+  bun collector/src/main.ts --replay --once
+```
+
+`--replay` forgets every offset and reads every run from byte zero. It is safe
+to run against a store that already has the rows: every table is keyed on
+something replay reproduces exactly, so re-ingesting is idempotent rather than
+additive (a `SELECT ... FINAL` sees one row either way, and the background
+merge collapses the duplicates). Expect roughly 30 seconds per gigabyte of
+trajectory.
+
+**When ClickHouse is rebuilt from scratch** — a bad image bump, a corrupted
+volume, a deliberate wipe to reclaim the disk:
+
+```
+docker compose -f infra/compose.yml down clickhouse
+docker volume rm wrathbench_clickhouse-data
+rm -f data/collector/collector.sqlite*        # or pass --replay below
+docker compose -f infra/compose.yml up -d clickhouse collector
+```
+
+Deleting the offset database and letting the collector start normally has the
+same effect as `--replay`: there is nothing to resume from, so it reads
+everything. Either is fine; do not do both halfway. Nothing is lost by any of
+this, which is the point of the store being derived — the worst case is a
+viewer that is behind until the backfill finishes.
+
+**When the collector is behind.** It logs one line per pass that found
+something. `docker compose -f infra/compose.yml logs -f collector` is the
+whole diagnostic; a ClickHouse that is down shows up as one
+"clickhouse unavailable, retrying" line and nothing else until it comes back.
+Offsets only ever advance past rows ClickHouse acknowledged, so a collector
+that has been waiting all night resumes exactly where it stopped.
+
 ## Where data lives
 
 `data/` is gitignored at the directory level and holds everything
@@ -382,6 +435,7 @@ Blizzard-derived or run-specific.
 | `data/logs` | server logs | `/azerothcore/env/dist/logs` in the servers |
 | `data/wiki` | wiki dump and built bundle | `/wrathbench/data/wiki` in runner |
 | `data/runs` | trajectories and run sqlite | `/wrathbench/data/runs` in runner |
+| `data/collector` | the collector's per-file offsets; disposable | `/wrathbench/data/collector` in collector |
 
 The MySQL data directory is the named volume `db-data`, not a bind mount.
 `docker compose down` keeps it; `docker compose down -v` throws the world away
