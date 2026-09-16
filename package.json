@@ -7,14 +7,15 @@
     "runner",
     "wiki",
     "minimap",
-    "dashboard"
+    "dashboard",
+    "collector"
   ],
   "engines": {
     "bun": "1.4.0"
   },
   "scripts": {
     "test": "bun test",
-    "typecheck": "for p in sdk runner infra dashboard wiki minimap; do tsc --noEmit -p $p || exit 1; done",
+    "typecheck": "for p in sdk runner infra dashboard wiki minimap collector; do tsc --noEmit -p $p || exit 1; done",
     "docs:api": "bun run sdk/generate-api-docs.ts",
     "dashboard:dev": "bun run --cwd dashboard dev",
     "dashboard:build": "bun run --cwd dashboard build",

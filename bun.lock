@@ -11,6 +11,14 @@
         "wrangler": "4.125.0",
       },
     },
+    "collector": {
+      "name": "@wrathbench/collector",
+      "version": "0.0.0",
+      "dependencies": {
+        "@wrathbench/runner": "workspace:*",
+        "zod": "4.4.3",
+      },
+    },
     "dashboard": {
       "name": "@wrathbench/dashboard",
       "version": "0.0.0",
@@ -347,6 +355,8 @@
     "@typescript/typescript-win32-arm64": ["@typescript/typescript-win32-arm64@7.0.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ=="],
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
+
+    "@wrathbench/collector": ["@wrathbench/collector@workspace:collector"],
 
     "@wrathbench/dashboard": ["@wrathbench/dashboard@workspace:dashboard"],
 
