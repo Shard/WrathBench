@@ -23,6 +23,7 @@ viewer:
   ingress:
     enabled: true
     host: wrathbench.local
+    extraHosts: []
     className: traefik
     issuer: [removed]-ca
     entrypoint: websecure
