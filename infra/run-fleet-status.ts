@@ -78,6 +78,7 @@ import {
   type StateJob,
 } from "./run-fleet-state";
 import { accountHeldBy } from "./run-roster";
+import { readFleetText } from "../runner/src/config-store";
 import { TAINT_AFTER } from "../runner/src/lapse";
 import {
   ACCOUNT_CLASSES,
@@ -465,7 +466,7 @@ export function formatQueue(queue: readonly FleetJob[], state: FleetState["queue
  * live episode pauses as `operator-pause` and resumes on the far side.
  */
 export function printLiveRuns(configPath: string): number {
-  const config = parseFleet(JSON.parse(readFileSync(configPath, "utf8")));
+  const config = parseFleet(JSON.parse(readFleetText(configPath)));
   // Job accounts plus the gate's own and the ad-hoc debugging account: the
   // refusal claims "no episodes are live", and a PROBE session dies in a
   // recreate exactly like a job's does.

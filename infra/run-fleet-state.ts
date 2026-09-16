@@ -10,6 +10,7 @@
  */
 
 import { openRunDb } from "../runner/src/rundb";
+import { readFleetText } from "../runner/src/config-store";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -85,7 +86,7 @@ export function statesAfterSweep(
 export function rereadFleet(
   path: string,
   lastGood: FleetConfig,
-  read: (p: string) => string = (p) => readFileSync(p, "utf8"),
+  read: (p: string) => string = readFleetText,
 ): { config: FleetConfig; error?: string } {
   try {
     return { config: parseFleet(JSON.parse(read(path))) };
@@ -100,7 +101,7 @@ export function rereadFleet(
  */
 export function loadConfigForRead(
   path: string,
-  read: (p: string) => string = (p) => readFileSync(p, "utf8"),
+  read: (p: string) => string = readFleetText,
 ): { config?: FleetConfig; error?: string } {
   try {
     return { config: parseFleet(JSON.parse(read(path))) };

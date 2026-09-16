@@ -3,4 +3,8 @@
 # from the working directory, and dashboard/bunfig.toml is not consulted from
 # here. See dashboard/test/preload-solid.ts for what it does and why.
 [test]
-preload = ["./dashboard/test/preload-solid.ts"]
+# `preload-config-store.ts` pins the config store out of the way: the fleet
+# config seam prefers a seeded store over any fleet.json a fixture writes, and
+# the suite must be green on the machine that runs the fleet as well as from a
+# bare clone.
+preload = ["./dashboard/test/preload-solid.ts", "./runner/test/preload-config-store.ts"]

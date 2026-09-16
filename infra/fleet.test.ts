@@ -115,6 +115,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
+import { ConfigStore, readFleetText } from "../runner/src/config-store";
 import { parseCampaigns } from "../runner/src/campaigns";
 import { episodeArgv, resolve } from "./run-roster";
 
@@ -634,6 +635,35 @@ describe("rereadFleet", () => {
     const r = rereadFleet("fleet.json", good, () => next);
     expect(r.error).toBeUndefined();
     expect(r.config.jobs[0]!.name).toBe("ox-e360");
+  });
+
+  /*
+   * Item 127: the default read is the config-store seam, so an edit made
+   * through the app is picked up by the same tick that picks up a file edit —
+   * no restart, no second reload path. The scheduling semantics below the
+   * seam are untouched, which is what "--status is unchanged for an unchanged
+   * config" means: seed a store from a file and the supervisor parses the same
+   * config out of either.
+   */
+  test("the default read prefers a seeded store, and the config is identical to the file's", () => {
+    const root = mkdtempSync(join(tmpdir(), "fleet-config-store-"));
+    const file = join(root, "fleet.json");
+    const db = join(root, "config.sqlite");
+    const env = { WRATHBENCH_CONFIG_DB: db };
+    writeFileSync(file, JSON.stringify(fleetJson([{ ref: "glm", episode: "e90" }])));
+
+    expect(parseFleet(JSON.parse(readFleetText(file, env)))).toEqual(good);
+
+    const store = new ConfigStore(db);
+    store.seedFromFile(file);
+    expect(parseFleet(JSON.parse(readFleetText(file, env)))).toEqual(good);
+    store.patch("roster/glm", { tier: "t2" }, { actor: "mark" });
+    store.close();
+
+    const fromStore = parseFleet(JSON.parse(readFleetText(file, env)));
+    expect(fromStore.roster["glm"]!.tier).toBe("t2");
+    // The file never moved: it is the seed and the export.
+    expect(parseFleet(JSON.parse(readFileSync(file, "utf8"))).roster["glm"]!.tier).toBe("t1");
   });
 });
 

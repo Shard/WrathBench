@@ -23,7 +23,10 @@
  * free. Every job spawns through the same path: it becomes one run-roster
  * process on one account, and releases the account when that process exits.
  * There is no other shape: a file that still says `lanes` or `accounts.pinned`
- * is refused by name. The supervisor re-reads fleet.json every tick (60s):
+ * is refused by name. The supervisor re-reads its config every tick (60s) —
+ * from the CONFIG STORE when it has been seeded, and from fleet.json when it
+ * has not (`runner/src/config-store.ts`, FOLLOW-UPS item 127); the file is the
+ * seed and the export, and an edit through the app is live one tick later:
  *
  *  - enabled:false  -> the job drains: no SIGTERM while its roster process
  *    has an episode child; once the process is between episodes it is
@@ -174,6 +177,7 @@ import {
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
 import { accountHeldBy, releaseRunSession } from "./run-roster";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
+import { configDbPath, readFleetText, seedIfEmpty } from "../runner/src/config-store";
 import {
   capFor,
   CLAUDE_TOTAL_KEY,
@@ -700,8 +704,25 @@ async function main(): Promise<void> {
   // fresh namespace mid-flight; keeping it fixed leaves both semantics exactly
   // as they were. Roll it deliberately: stop the service, start it again.
   const stampToday = dateStamp();
-  let config = parseFleet(JSON.parse(readFileSync(args.config, "utf8")));
+  /*
+   * Config comes from the STORE when it has been seeded, and from the file
+   * when it has not (`runner/src/config-store.ts`, FOLLOW-UPS item 127). One
+   * seam for boot and for every re-read below, so the two cannot disagree
+   * about which copy is live.
+   *
+   * The seed is a boot-time convenience and never a reason not to start: a
+   * deployment that has never had a store gets one from the file it was
+   * already reading, and a store that cannot be written (a read-only data
+   * volume, a permissions slip) leaves the file in charge and says so.
+   */
+  let config = parseFleet(JSON.parse(readFleetText(args.config)));
   configLoadedAt = Date.now();
+  const seed = seedIfEmpty(args.config, { note: `fleet boot from ${args.config}` });
+  if (seed.error !== undefined) {
+    console.error(`run-fleet: config store not seeded (${seed.error}) — ${args.config} stays the live config`);
+  } else if (seed.seeded) {
+    console.error(`run-fleet: config store seeded from ${args.config} (${configDbPath()}) — edits through the app are live from the next tick`);
+  }
   // Fail fast on anything that would fail at spawn time.
   planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }), () => undefined, stampToday);
 
