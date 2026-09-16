@@ -49,6 +49,8 @@ export class Collector {
   private readonly now: () => number;
   /** Each run's artefact signature at its last pass; a cheap "has it moved". */
   private readonly lastSeen = new Map<string, string>();
+  /** Run ids already reported as living in two directories; logged once each. */
+  private readonly reportedDuplicates = new Set<string>();
 
   constructor(private readonly deps: CollectorDeps) {
     this.now = deps.now ?? Date.now;
@@ -79,7 +81,13 @@ export class Collector {
       runs: 0,
       totals: 0,
     };
-    for (const entry of listRunDirs(this.deps.cfg.runsDir)) {
+    for (const entry of listRunDirs(this.deps.cfg.runsDir, (runId, skipped, kept) => {
+      if (this.reportedDuplicates.has(runId)) return;
+      this.reportedDuplicates.add(runId);
+      (this.deps.log ?? ((m: string) => console.log(m)))(
+        `collector: ${runId} exists twice; ingesting ${kept}, skipping ${skipped}`,
+      );
+    })) {
       stats.seen++;
       const before = this.lastSeen.get(entry.runId);
       if (before !== undefined && before === entry.sig) {

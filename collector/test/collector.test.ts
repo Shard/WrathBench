@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../../runner/src/trajectory";
 import { Collector } from "../src/collector";
+import { listRunDirs } from "../src/scan";
 import { readConfig } from "../src/config";
 import { OffsetStore } from "../src/offsets";
 import { memorySink } from "../src/sink";
@@ -349,6 +350,53 @@ describe("archived runs", () => {
     expect(JSON.parse(String(rowsOf(sink, "run_totals")[0]?.["fact_json"]))).toMatchObject({
       runId: "run-old",
     });
+  });
+});
+
+describe("a run id that exists twice", () => {
+  /*
+   * `data/runs/<id>/` and `data/runs/archive/<id>/` can both hold a run, and
+   * on the cluster four ids did: an attempt was archived and a later launch
+   * reused the id. Every key here is the run id alone, so the two directories
+   * thrashed — each pass re-read one from the other's committed offset and
+   * overwrote its rows under the same `(run_id, line_no)`, forever, for runs
+   * nothing was writing to.
+   */
+  test("only the non-archived directory is ingested", () => {
+    const runsDir = tmpRoot();
+    writeRun(runsDir, "run-twice");
+    writeRun(join(runsDir, "archive"), "run-twice");
+    writeRun(join(runsDir, "archive"), "run-only-archived");
+    const skipped: string[] = [];
+    const dirs = listRunDirs(runsDir, (runId) => skipped.push(runId));
+    expect(dirs.filter((d) => d.runId === "run-twice")).toEqual([
+      { runId: "run-twice", dir: join(runsDir, "run-twice"), archived: false, sig: expect.any(String) },
+    ]);
+    // An id that is only in the archive is still ingested, still flagged.
+    expect(dirs.find((d) => d.runId === "run-only-archived")?.archived).toBe(true);
+    expect(skipped).toEqual(["run-twice"]);
+  });
+
+  test("a second pass over the pair sends nothing", async () => {
+    const runsDir = tmpRoot();
+    writeRun(runsDir, "run-twice-b");
+    const archived = writeRun(join(runsDir, "archive"), "run-twice-b");
+    // The two directories differ, the way the real pair does.
+    appendFileSync(
+      join(archived, "trajectory.jsonl"),
+      `${JSON.stringify({ t: "response", ts: 3_000, turn: 9 })}\n`,
+    );
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const before = rowsOf(sink, "turns").length;
+    const stats = await collector.pass();
+    expect(stats.ingested).toBe(0);
+    expect(stats.trajectoryLines).toBe(0);
+    expect(stats.runs).toBe(0);
+    expect(stats.totals).toBe(0);
+    expect(rowsOf(sink, "turns")).toHaveLength(before);
+    // And what landed is one run's rows, not a blend of two.
+    expect(new Set(rowsOf(sink, "runs").map((r) => r["archived"]))).toEqual(new Set([0]));
   });
 });
 
