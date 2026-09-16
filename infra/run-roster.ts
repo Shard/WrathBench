@@ -53,6 +53,7 @@ import { openRunDb } from "../runner/src/rundb";
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
+import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -78,6 +79,13 @@ export interface RosterSpec {
   effort?: string;
   apiBase?: string;
   apiKeyEnv?: string;
+  /**
+   * Which backend the aggregator may route this entry to (`routing.ts`).
+   * `openai` driver on an OpenRouter base only — every other endpoint has one
+   * machine behind it and nothing to choose. Absent means the model author's
+   * own provider with fallbacks off (operator decision 2026-09-16).
+   */
+  routing?: RoutingSpec;
   /**
    * `claude-code` and `codex` only: the subscription LANE this entry runs on,
    * named by the env var holding its credential — the OAuth token for
@@ -165,6 +173,8 @@ export interface Resolved {
   effort: string | undefined;
   apiBase: string;
   apiKeyEnv: string;
+  /** The declared routing block, or undefined for "the entry said nothing". */
+  routing: RoutingSpec | undefined;
   /** The subscription lane, by env var NAME; undefined is the default lane. */
   tokenEnv: string | undefined;
   runId: string;
@@ -461,13 +471,28 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // visible in `ps` to anything sharing the container.
       throw new Error(`roster entry ${s.model}: tokenEnv must be an environment variable name, not a token`);
     }
+    const apiBase = s.apiBase ?? DEFAULT_API_BASE;
+    if (s.routing !== undefined) {
+      // Refused, not ignored. A routing block on a Cerebras, LM Studio,
+      // OpenCode Zen or CLI entry would be config that does nothing, and an
+      // operator who wrote one believed the run was pinned.
+      if (driver !== "openai" || !isOpenRouterBase(apiBase)) {
+        throw new Error(
+          `roster entry ${s.model}: routing is an OpenRouter setting — this entry runs on ${driver === "openai" ? apiBase : `the ${driver} CLI`}, which has one backend and nothing to route between`,
+        );
+      }
+    }
     out.push({
       model: s.model,
       driver,
       account: s.account,
       effort: s.effort,
-      apiBase: s.apiBase ?? DEFAULT_API_BASE,
+      apiBase,
       apiKeyEnv: s.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
+      // Normalised here too: a hand-written roster passed straight to
+      // `run-roster.ts` never went through `parseFleet`, and the shorthands
+      // must mean the same thing on both paths.
+      routing: s.routing === undefined ? undefined : parseRouting(s.routing, `roster entry ${s.model}`),
       // Only the subscription drivers (claude-code, codex) have a lane to bill.
       tokenEnv: driver === "claude-code" || driver === "codex" ? s.tokenEnv : undefined,
       // Effort is part of the run's identity, so it is part of the derived id:
@@ -560,6 +585,10 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   const argv = [...head, "--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
   if (spec.driver === "openai") {
     argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
+    // Only when the entry stated one: the runner derives the same default from
+    // the model slug, so an unstated routing produces the argv it always did
+    // and every pinned roster.test expectation stays what it was.
+    if (spec.routing !== undefined) argv.push("--routing-json", JSON.stringify(spec.routing));
   }
   // The subscription lane, by NAME. Emitted only when it is not the default, so
   // every argv a pre-lane roster produced is unchanged.
@@ -1616,7 +1645,10 @@ async function main(): Promise<void> {
       // here would be a lie, so show what it will actually use.
       const endpoint =
         s.driver === "openai"
-          ? `   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n`
+          ? `   apiBase   ${s.apiBase} (key env ${s.apiKeyEnv})\n` +
+            (isOpenRouterBase(s.apiBase)
+              ? `   routing   ${routingLabel(resolveRouting(s.routing, undefined, s.model, { effort: s.effort }))}${s.routing === undefined ? " [default: the model author's own provider]" : ""}\n`
+              : "")
           : s.driver === "codex"
             ? `   endpoint  codex CLI subscription, lane ${s.tokenEnv ?? DEFAULT_CODEX_HOME_ENV} (no api-base/api-key-env)\n`
             : `   endpoint  claude CLI subscription (no api-base/api-key-env)\n`;

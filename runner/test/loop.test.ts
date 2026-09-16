@@ -857,6 +857,10 @@ describe("prompt-cache prefix discipline", () => {
     const responses = readTrajectory(dir).filter((r) => r.t === "response");
     expect(responses.length).toBe(1);
     expect(responses[0]!.provider).toBe("SomeBackend");
+    // And onto the run itself (2026-09-16): with routing pinned, the backend
+    // that took the request is the answer to what the tuple asked for, so a
+    // cross-run SELECT must be able to read it without replaying the JSONL.
+    expect(readMeta(dir)?.resolved).toEqual({ model: null, cliVersion: null, provider: "SomeBackend" });
   });
 
   test("the served model in the response body lands on the record and is promoted onto the run", async () => {
@@ -876,7 +880,7 @@ describe("prompt-cache prefix discipline", () => {
     await runLoop(options);
     const responses = readTrajectory(dir).filter((r) => r.t === "response");
     expect(responses[0]!.model).toBe("vendor/alpha-2026-08");
-    expect(readMeta(dir)?.resolved).toEqual({ model: "vendor/alpha-2026-08", cliVersion: null });
+    expect(readMeta(dir)?.resolved).toEqual({ model: "vendor/alpha-2026-08", cliVersion: null, provider: null });
     expect(readTrajectory(dir).filter((r) => r["kind"] === "resolved_model")).toHaveLength(1);
   });
 

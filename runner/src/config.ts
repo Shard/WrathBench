@@ -18,6 +18,7 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
+import { routingSchema } from "./routing";
 
 // ---------------------------------------------------------------- watchdogs
 
@@ -387,6 +388,16 @@ export const runConfigSchema = z.object({
    * models accept and others reject, as with every level here.
    */
   effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
+  /**
+   * Which backend the aggregator may route this run to, as the fleet config
+   * declared it (`routing.ts`) — the DECLARED block, not the resolved one, so
+   * a resumed run re-derives against the same rules rather than freezing a
+   * default that was never written down. Absent means "the entry said
+   * nothing", which resolves to the model author's own provider with fallbacks
+   * off. Identity, like effort: a resumed run keeps the routing it was
+   * launched with, and the resolved answer is stamped in the tuple.
+   */
+  routing: routingSchema.optional(),
   /** Path to a JSON file of scripted stub turns (driver: "stub"). */
   stubScript: z.string().optional(),
 

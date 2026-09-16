@@ -34,6 +34,7 @@ import { moduleAuthHeaders } from "./module-auth";
 import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt } from "./prompt";
+import { routingForRun, routingSchema } from "./routing";
 import type { WikiBundleMeta } from "./wiki";
 
 /**
@@ -148,6 +149,21 @@ export const comparabilitySchema = z.object({
    */
   serverBuild: serverBuildSchema,
   /**
+   * Which backend the aggregator was allowed to route this run to, resolved
+   * exactly as the request sent it (`routing.ts`). A KEY, not an annotation:
+   * routing is stated at launch like `effort`, and two runs of one slug served
+   * by two machines — six have served `glm-5.3-flash` here — are two
+   * conditions, so they must not share a chart by default. Operator decision
+   * 2026-09-16.
+   *
+   * ABSENT, never null, for a run whose endpoint has no routing to state: a
+   * claude-code, codex, Cerebras, LM Studio or OpenCode Zen run has one
+   * backend and nothing to record. That also keeps every such run stamping
+   * byte-for-byte as it did before the field existed, so nothing already in
+   * flight restamps on resume for a fact that did not change.
+   */
+  routing: routingSchema.optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -235,6 +251,7 @@ export function comparabilityOf(
   // Rendered for THIS run's harness: the prompt's context sentence differs
   // between them, so the hash below is per-harness by design.
   const prompt = buildSystemPrompt(config.objective, config.episode, harness);
+  const routing = routingForRun(config);
   return {
     harnessVersion,
     promptHash: promptHash(prompt),
@@ -255,6 +272,10 @@ export function comparabilityOf(
     episode: config.episode ?? null,
     episodeOverride: episodeOverrideOf(config),
     serverBuild,
+    // Last, and conditional: `sameComparability` compares stringified tuples,
+    // so a field that appears in the middle for some runs and not others would
+    // reorder the rest. Resolved by the same function the adapter is handed.
+    ...(routing !== null ? { routing } : {}),
   };
 }
 

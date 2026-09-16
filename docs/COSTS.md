@@ -16,7 +16,12 @@ record.
   `usage` block when the provider sends one: `prompt_tokens`,
   `completion_tokens`, `cached_tokens`, `cache_write_tokens`,
   `reasoning_tokens`, and OpenRouter's own `cost` in credits. Since `d752ef7`
-  it also names the serving `provider` when the body reports one.
+  it also names the serving `provider` when the body reports one, and since
+  2026-09-16 the first one seen is promoted onto the run itself
+  (`run.resolved_provider`, `meta.resolved.provider`) so a cost sweep can group
+  by backend without replaying the trajectory. Routing is pinned from the same
+  date (docs/METHODOLOGY.md, "Routing is pinned"), so a cache miss attributable
+  to a backend move is now something the config has to have asked for.
 - The claude-code harness emits `usageRaw`/`costUsd` only on a clean
   `claude_result` (natural completion). Until 2026-08-25 a watchdog kill cut the
   stream before that record landed, so most subscription episodes had no

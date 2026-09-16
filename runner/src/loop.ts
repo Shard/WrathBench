@@ -998,9 +998,20 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
        * the same fact the claude-code harness reads out of its `init` event.
        */
       const servedModel = (outcome.turn.raw as { model?: unknown } | null | undefined)?.model;
-      if (typeof servedModel === "string" && servedModel.length > 0 && !promotedResolved) {
+      // One promotion, on the first response that names either fact: the
+      // provider is the answer to the routing the tuple stamped (2026-09-16),
+      // and a run whose request pinned one backend and whose response names
+      // another is the one case a reader has to be able to see. Promoted with
+      // the model rather than on its own so the flag still means "the run has
+      // been annotated", and so a per-turn meta read stays a per-run one.
+      const namedModel = typeof servedModel === "string" && servedModel.length > 0;
+      const namedProvider = typeof servedBy === "string" && servedBy.length > 0;
+      if ((namedModel || namedProvider) && !promotedResolved) {
         promotedResolved = true;
-        trajectory.recordResolved(runId, { model: servedModel });
+        trajectory.recordResolved(runId, {
+          ...(namedModel ? { model: servedModel as string } : {}),
+          ...(namedProvider ? { provider: servedBy as string } : {}),
+        });
       }
       trajectory.append({
         t: "response",

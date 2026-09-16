@@ -11,6 +11,7 @@ import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
 import { isTokenEnvName, watchdogOverrideSchema } from "../runner/src/config";
 import { isAllowlistedFree, type Billing } from "../runner/src/model-cost";
+import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { campaignWork, parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
 import {
   ACCOUNT_CLASSES,
@@ -663,6 +664,28 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     if (e.wikiCoords !== undefined && typeof e.wikiCoords !== "boolean") {
       fail(`${where}: entry ${e.model}: wikiCoords must be a boolean`);
     }
+    // Which backend may serve this entry (operator decision 2026-09-16,
+    // runner/src/routing.ts). Refused — never ignored — on an endpoint with
+    // one machine behind it: an operator who wrote a routing block on a
+    // Cerebras or CLI entry believed the run was pinned, and config that does
+    // nothing is what every strict-key rule in this file exists to prevent.
+    if (e.routing !== undefined) {
+      if (driver !== "openai" || !(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) {
+        fail(
+          `${where}: entry ${e.model}: routing is an OpenRouter setting — this entry runs on ` +
+            `${driver === "openai" ? String(e.apiBase) : `the ${driver} CLI`}, which has one backend and nothing to route between`,
+        );
+      }
+      // NORMALISED, not merely checked: the shorthands (`"Z.AI"`, `["Z.AI"]`)
+      // exist for the file, and every reader downstream — `--status`, the
+      // spawned argv, the tuple — should see one shape. The store keeps the
+      // raw document, so the file's own spelling is untouched.
+      try {
+        e.routing = parseRouting(e.routing, `${where}: entry ${e.model}`);
+      } catch (err) {
+        fail((err as Error).message);
+      }
+    }
     if (
       e.maxToolCalls !== undefined &&
       (typeof e.maxToolCalls !== "number" || !Number.isInteger(e.maxToolCalls) || e.maxToolCalls <= 0)
@@ -732,6 +755,7 @@ export function parsePreflight(raw: unknown): FleetPreflight {
 export const ROSTER_ENTRY_KEYS = [
   "model", "tier", "idle", "driver", "effort", "apiBase", "apiKeyEnv",
   "billing", "subscription", "race", "class", "watchdogs", "maxToolCalls",
+  "routing",
 ] as const;
 
 export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "subscription"] as const;
@@ -867,6 +891,20 @@ export function parseFleet(raw: unknown): FleetConfig {
     fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
   }
   const { policy, maxConcurrent } = parsePolicy(o.policy);
+  // `policy.routing` is the fleet-wide default, applied HERE rather than at
+  // launch so that `--status`, the spawned argv and the run's own config all
+  // say the same thing an operator can read off one line. An entry that states
+  // its own routing keeps it whole — the two are alternatives, never merged —
+  // and an entry on an endpoint with one backend is left alone, because a
+  // routing block there is refused, not defaulted.
+  if (policy.routing !== undefined) {
+    for (const [name, e] of Object.entries(roster)) {
+      if (e.routing !== undefined) continue;
+      if ((e.driver ?? "openai") !== "openai") continue;
+      if (!(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) continue;
+      roster[name] = { ...e, routing: policy.routing };
+    }
+  }
   // An entry pinned to a subscription the file does not configure. Refused as
   // the ENTRY, not the file: the rest of the roster is fine, and a rejected
   // re-read would make every other flag in the file inert.

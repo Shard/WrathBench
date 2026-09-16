@@ -284,7 +284,9 @@ describe("claude-code driver", () => {
     // page could read before, so it lands on all three of the run's records.
     const meta = readMeta(runDir);
     expect(meta?.config.model).toBe("opus");
-    expect(meta?.resolved).toEqual({ model: "claude-opus-5", cliVersion: "2.1.239" });
+    // No provider: the claude-code CLI names no backend, and a null there is the
+    // honest answer rather than an absent key.
+    expect(meta?.resolved).toEqual({ model: "claude-opus-5", cliVersion: "2.1.239", provider: null });
     expect(meta?.comparability?.resolvedModel).toBe("claude-opus-5");
     const row = trajectory.runRow("run-test");
     expect(row?.["model"]).toBe("opus");
