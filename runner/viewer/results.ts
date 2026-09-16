@@ -411,6 +411,7 @@ export function resultRunOf(
     money: run.money,
     questsCompleted: run.questsCompleted,
     maps: mapsOf(states),
+    driver: run.driver,
     character: run.character,
     playtimeMs: listing?.playtimeMs ?? null,
     tokens: listing?.tokens ?? null,

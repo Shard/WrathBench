@@ -319,6 +319,15 @@ export function characterViewOf(runId: string, all: readonly ResultRun[]): Chara
   const at = chain.indexOf(runId);
   return {
     characterId: lineage.characterId,
+    // The newest attempt that recorded each, not the last attempt flat: a
+    // session whose metadata is thin must not blank a name eleven sessions
+    // proved. Same `latest` rule the standing totals use.
+    model: latest(runs.map((r) => r.model)),
+    effort: latest(runs.map((r) => r.effort)),
+    driver: latest(runs.map((r) => r.driver ?? null)),
+    harnessVersion: latest(runs.map((r) => r.harnessVersion)),
+    name: latest(runs.map((r) => r.character)),
+    characterLabel: latest(runs.map((r) => r.characterLabel)),
     attempt: at + 1,
     attempts: chain.length,
     previous: at > 0 ? chain[at - 1]! : null,

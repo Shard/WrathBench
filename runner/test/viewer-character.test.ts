@@ -123,6 +123,25 @@ describe("characterViewOf", () => {
     expect(characterViewOf("a1", [run({ runId: "a1", stillborn: true })])).toBeNull();
   });
 
+  /*
+   * A character page has to be able to name what it is about, and an attempt
+   * row carries figures only. The identity comes off the NEWEST attempt that
+   * recorded each field — a character can outlive a harness patch, and a thin
+   * session must not blank a name the eleven before it proved.
+   */
+  test("the identity is the newest attempt's, field by field", () => {
+    const runs = chain(
+      { model: "old/model", harnessVersion: "harness-0.4", character: "Bromdir", effort: "low" },
+      { model: "new/model", harnessVersion: "harness-0.5", character: null, effort: null },
+    );
+    const view = characterViewOf("a1", runs);
+    expect(view?.model).toBe("new/model");
+    expect(view?.harnessVersion).toBe("harness-0.5");
+    // The second attempt recorded neither, so the first still speaks.
+    expect(view?.name).toBe("Bromdir");
+    expect(view?.effort).toBe("low");
+  });
+
   test("an attempt sees the whole chain, forward as well as back", () => {
     const runs = chain({}, {}, {});
     const view = characterViewOf("a1", runs);

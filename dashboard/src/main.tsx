@@ -23,6 +23,7 @@ if (SNAPSHOT_MODE) {
 const Home = lazy(() => import("./pages/Home"));
 const Fleet = lazy(() => import("./pages/Fleet"));
 const RunDetail = lazy(() => import("./pages/RunDetail"));
+const Character = lazy(() => import("./pages/Character"));
 const MapPage = lazy(() => import("./pages/MapPage"));
 const Runs = lazy(() => import("./pages/Runs"));
 const Ladder = lazy(() => import("./pages/Ladder"));
@@ -52,6 +53,8 @@ render(
       <Route path="/" component={Home} />
       <Route path="/fleet" component={Fleet} />
       <Route path="/run/:id" component={RunDetail} />
+      {/* One character across its attempts. The id is any run in the chain. */}
+      <Route path="/character/:id" component={Character} />
       <Route path="/map" component={MapPage} />
       <Route path="/runs" component={Runs} />
       {/* The results page became the runs page; old links keep their query. */}

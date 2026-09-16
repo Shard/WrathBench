@@ -76,7 +76,7 @@ import {
   speedrunBand,
 } from "../lib/reference";
 import { resolvedSummary } from "../lib/models";
-import { fmtMoney, fmtWhen, modelDisplay } from "../lib/format";
+import { fmtMoney, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { poll } from "../lib/poll";
 import { readBoolPref, readChoicePref, writeBoolPref, writeChoicePref } from "../lib/prefs";
 import { displayError } from "../lib/errors";
@@ -470,8 +470,13 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
                   <span title={row.model}>{modelDisplay(row.model)}</span>
                   <Show when={row.effort !== null}> · {row.effort}</Show>
                 </td>
+                {/* The freeplay row is a character, not a run, so its name
+                    leads to the character page (item 128); the "latest run"
+                    column is where a reader goes for one session. */}
                 <td>
-                  {row.character ?? "—"}
+                  <A href={`/character/${encodeURIComponent(row.characterId)}`} title={row.characterId}>
+                    {row.character ?? shortRunId(row.characterId)}
+                  </A>
                   <Show when={row.characterLabel !== null}>
                     <div class="dim">{row.characterLabel}</div>
                   </Show>
