@@ -64,10 +64,26 @@ describe("split and render", () => {
       },
     });
     const { store } = tempStore();
+    // Against a pristine copy, not against `doc`: `parseFleet` normalises a
+    // routing shorthand for its own readers, and if it ever did that in place
+    // the assertion would pass by both sides having been rewritten.
+    const pristine = structuredClone(doc);
     store.seed(doc);
-    expect(store.render()).toEqual(doc);
+    expect(store.render()).toEqual(pristine);
+    expect(doc).toEqual(pristine);
     // And the supervisor reads the store and the file as the same config.
-    expect(parseFleet(store.render())).toEqual(parseFleet(doc));
+    expect(parseFleet(store.render())).toEqual(parseFleet(pristine));
+  });
+
+  test("a routing edit through the store is accepted and read back as written", () => {
+    const { store } = tempStore();
+    store.seed(fixtureConfig());
+    store.put("roster/glm", { tier: "t1", model: "z-ai/glm-5.2:free", routing: "DeepInfra" });
+    expect((store.render()["roster"] as Record<string, unknown>)["glm"]).toEqual({
+      tier: "t1",
+      model: "z-ai/glm-5.2:free",
+      routing: "DeepInfra",
+    });
   });
 
   test("an edit that routes a model somewhere impossible is refused like any other", () => {
