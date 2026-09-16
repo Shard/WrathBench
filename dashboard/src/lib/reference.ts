@@ -75,64 +75,127 @@ export function ceilingLabel(episode: string, series: string | null): string {
 /** One figure the band rests on, with where it came from and what it is not. */
 export interface BandSource {
   what: string;
-  url: string;
+  /** Absent when the operator confirmed the figure in a browser without giving a run URL. */
+  url?: string;
   note: string;
 }
 
 /**
- * Roughly where a practised human is at ninety minutes from a fresh character:
- * **level 10–11**.
+ * Roughly where a practised human is at the tier's budget from a fresh
+ * character: **level 9–10 at ninety minutes**, **level 18–19 at six hours**.
  *
- * A band and not a point, because the two records it is bracketed by are not
- * the same game. Classic Era runs vanilla XP rates, which are slower than
- * 3.3.5a's; Cataclysm Classic runs the post-Cataclysm 1–60 revamp, which is
- * faster. Wrath's own rates sit between them, and the WotLK Classic board was
- * folded into the Cataclysm Classic one, so there is no board to read them off
- * directly.
+ * Both edges rest on the same board. speedrun.com does carry a Wrath-era
+ * leveling board — the "Wrath of the Lich King Classic Archive" — and the
+ * operator confirmed two entries on it in a browser on 2026-09-16: one 1–10
+ * category entry, an Orc Hunter in 1:31, and one 1–20 entry in 7:02:39. Those
+ * are the first 3.3.5a-rate figures the band has had; the Classic Era (vanilla
+ * rates, slower) and Cataclysm Classic (post-Cataclysm 1–60 revamp, faster)
+ * records stay as the bracket they always were.
  *
- * **Loosely sourced, and labelled that way on the page.** speedrun.com's run
- * pages answer 403 to a fetcher, so the two times below came from search
- * snippets rather than from the run pages themselves and have not been
- * confirmed in a browser. Interpolating 1–10 records into a 90-minute level is
- * a judgement, not an arithmetic: a speedrun is a pre-planned route with death
- * warps, a class picked for its early tier and a runner who has done it
- * hundreds of times, so the band is an upper bound on what the ninety minutes
- * can contain and not a par score. Nothing on the ladder is ranked against it.
+ * **Still thin, and labelled that way on the page.** One entry per category is
+ * one entry: it fixes a pace, not a distribution, and turning a 1–10 or a 1–20
+ * time into "a level at minute N" is a judgement rather than an arithmetic. A
+ * speedrun is a pre-planned route with death warps, a class picked for its
+ * early tier, and a runner who has done it hundreds of times — and the Hunter
+ * those entries were set on is a top-tier leveling class, where WrathBench's
+ * fixed character is a mid-tier Dwarf Paladin. So each band is an upper bound
+ * on what its budget can contain, not a par score. Nothing on the ladder is
+ * ranked against either.
  */
 export interface SpeedrunBand {
   /** The band's floor and ceiling in levels, inclusive. */
   low: number;
   high: number;
-  /** The minutes the band is stated at — the e90 budget. */
+  /** The minutes the band is stated at — the tier's budget. */
   minutes: number;
+  /** The episode tier it is stated for. */
+  episode: string;
   label: string;
+  /** The sentence the hover and the footnote repeat. */
+  provenance: string;
   sources: readonly BandSource[];
 }
 
-export const HUMAN_SPEEDRUN_BAND: SpeedrunBand = {
-  low: 10,
-  high: 11,
-  minutes: 90,
-  label: "human speedrun band, loosely sourced",
-  sources: [
-    {
-      what: "Classic Era Level 1–10, ~1:16:46 (Tommysalami)",
-      url: "https://www.speedrun.com/wowclassicera",
-      note: "vanilla XP rates, slower than 3.3.5a — the slow edge of the band",
-    },
-    {
-      what: "Cataclysm Classic Level 1–10, ~39:03 (Dedreama)",
-      url: "https://www.speedrun.com/wowcata",
-      note:
-        "post-Cataclysm 1–60 revamp, faster than 3.3.5a — the fast edge; the WotLK Classic board was folded into this one",
-    },
-    {
-      what: "What a speedrun actually is",
-      url: "https://www.warcrafttavern.com/wow-classic/guides/speedrunning",
-      note: "pre-planned routes, death warps, a class picked for its early tier — not a first attempt",
-    },
-  ],
+/** What a speedrun is, cited by every band: the caveat that makes it an upper bound. */
+const WHAT_A_SPEEDRUN_IS: BandSource = {
+  what: "What a speedrun actually is",
+  url: "https://www.warcrafttavern.com/wow-classic/guides/speedrunning",
+  note:
+    "pre-planned routes, death warps, and a class picked for its early tier — the entries are Hunter runs, " +
+    "where WrathBench's fixed character is a mid-tier Dwarf Paladin — so this is an upper bound, not a first attempt",
 };
+
+/**
+ * The band per tier. A band is quoted only where its budget is the tier's
+ * budget: quoting ninety minutes beside a six-hour tier would compare two
+ * different things, which is why this is a map and not a constant.
+ */
+export const HUMAN_SPEEDRUN_BANDS: Readonly<Record<string, SpeedrunBand>> = {
+  e90: {
+    low: 9,
+    high: 10,
+    minutes: 90,
+    episode: "e90",
+    label: "human speedrun band, one Wrath entry, bracketed by Classic Era and Cataclysm Classic",
+    provenance:
+      "Roughly L9–10 by 90 minutes. The floor is the one Wrath-rate figure there is: the single 1–10 entry " +
+      "on speedrun.com's Wrath of the Lich King Classic Archive board reaches 10 at 1:31, so at minute 90 that " +
+      "runner is at the top of level 9. The ceiling is inference, not data — Cataclysm Classic's faster-rate " +
+      "1–10 record (~39:03) is where a little more room comes from, with Classic Era's slower-rate ~1:16:46 on " +
+      "the other side. One confirmed entry is thin, and it is a Hunter route with death warps against " +
+      "WrathBench's Dwarf Paladin: an upper bound, not a par score.",
+    sources: [
+      {
+        what: "Wrath Level 1–10, 1:31 (Orc Hunter)",
+        url: "https://www.speedrun.com/World_of_Warcraft_Wrath_of_the_Lich_King_Classic_Archive/runs/z0dr63jy",
+        note:
+          "speedrun.com Wrath leveling board, single 1–10 entry, Orc Hunter, 1:31, confirmed by the operator " +
+          "2026-09-16 — the only 3.3.5a-rate figure the band has, and it sets the floor",
+      },
+      {
+        what: "Classic Era Level 1–10, ~1:16:46 (Tommysalami)",
+        url: "https://www.speedrun.com/wowclassicera",
+        note: "vanilla XP rates, slower than 3.3.5a — context on the slow side",
+      },
+      {
+        what: "Cataclysm Classic Level 1–10, ~39:03 (Dedreama)",
+        url: "https://www.speedrun.com/wowcata",
+        note: "post-Cataclysm 1–60 revamp, faster than 3.3.5a — context on the fast side, and where the band's ceiling comes from",
+      },
+      WHAT_A_SPEEDRUN_IS,
+    ],
+  },
+  e360: {
+    low: 18,
+    high: 19,
+    minutes: 360,
+    episode: "e360",
+    label: "human speedrun band, interpolated from one Wrath 1–20 entry",
+    provenance:
+      "Roughly L18–19 by 360 minutes, interpolated from the one Wrath-rate 1–20 entry on the same board: " +
+      "level 20 at 7:02:39, which is 422 minutes, so six hours lands short of 20. It is a band and not a point " +
+      "because a 1–20 run is not linear in level — each level costs more than the last — so where exactly minute " +
+      "360 falls is a judgement about the shape of that curve, not a division. One entry, a Hunter route, " +
+      "against WrathBench's Dwarf Paladin: an upper bound, not a par score.",
+    sources: [
+      {
+        what: "Wrath Level 1–20, 7:02:39",
+        note:
+          "speedrun.com Wrath of the Lich King Classic Archive board, single 1–20 entry, confirmed by the " +
+          "operator 2026-09-16; no run URL was given, so the board and that confirmation are the citation",
+      },
+      WHAT_A_SPEEDRUN_IS,
+    ],
+  },
+};
+
+/** The band stated at this tier's budget, or nothing when no figure covers it. */
+export function speedrunBand(episode: string): SpeedrunBand | null {
+  return HUMAN_SPEEDRUN_BANDS[episode] ?? null;
+}
+
+/** The ninety-minute band, kept named because e90 is the tier most of the site is about. */
+export const HUMAN_SPEEDRUN_BAND: SpeedrunBand = HUMAN_SPEEDRUN_BANDS.e90!;
 
 /* ------------------------------------------------------------------ drawing */
 
@@ -150,10 +213,10 @@ export interface ReferenceMark {
  * The marks to draw for one tier, and the level range wide enough to hold them
  * plus whatever the ladder itself reached.
  *
- * The speedrun band is stated at ninety minutes, so it is offered on `e90`
- * alone; quoting it beside a six-hour tier would compare two different
- * budgets. The ceiling is a maximum over whatever tier is in view and names
- * that tier in its label, so it travels everywhere.
+ * A speedrun band is stated at one tier's budget, so each is offered on that
+ * tier alone (`speedrunBand`): quoting ninety minutes beside a six-hour tier
+ * would compare two different things. The ceiling is a maximum over whatever
+ * tier is in view and names that tier in its label, so it travels everywhere.
  */
 export interface ReferenceScale {
   marks: readonly ReferenceMark[];
@@ -186,18 +249,14 @@ export function referenceScale(opts: {
         ".",
     });
   }
-  const band = HUMAN_SPEEDRUN_BAND;
-  if (opts.episode === "e90") {
+  const band = speedrunBand(opts.episode);
+  if (band !== null) {
     marks.push({
       id: "speedrun",
       low: band.low,
       high: band.high,
       label: band.label,
-      provenance:
-        `Roughly L${band.low}–${band.high} by ${band.minutes} minutes, bracketed between a Classic Era 1–10 ` +
-        `record (~1:16:46, slower rates) and a Cataclysm Classic one (~39:03, faster rates); ` +
-        `WotLK Classic has no board of its own. Read off search snippets, not confirmed in a browser — ` +
-        `sources in dashboard/src/lib/reference.ts.`,
+      provenance: `${band.provenance} Sources in dashboard/src/lib/reference.ts.`,
     });
   }
   if (marks.length === 0) return null;

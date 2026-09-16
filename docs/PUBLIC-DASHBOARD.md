@@ -319,13 +319,20 @@ runs that recorded one. Below the table, two labelled reference lines say what
 a level reading means. The empirical ceiling is derived at read time from the
 scored runs of the selected series on the tier in view, so it is never a
 constant and its label names what it is a maximum over. The human speedrun
-band is roughly level 10–11 by ninety minutes and is marked "loosely sourced":
-its figures, their URLs and the reasons they are only a bracket — Classic Era
-and Cataclysm Classic run different XP rates than 3.3.5a, WotLK Classic has no
-speedrun board of its own, and speedrun.com's run pages answer 403 to a
-fetcher — live in `dashboard/src/lib/reference.ts` and are repeated in the
-footnote under the strip. Neither line is a score and neither enters the row
-order.
+band is stated per tier — roughly level 9–10 by ninety minutes, level 18–19 by
+six hours — and each label says how thin the sourcing is rather than claiming
+there is none: "one Wrath entry, bracketed by Classic Era and Cataclysm
+Classic" at e90, "interpolated from one Wrath 1–20 entry" at e360.
+speedrun.com's Wrath of the Lich King Classic Archive board carries a single
+entry in each of those categories — 1–10 in 1:31 on an Orc Hunter, 1–20 in
+7:02:39 — both confirmed in a browser by the operator on 2026-09-16, and the
+Classic Era and Cataclysm Classic records stay as context on either side
+because they run different XP rates than 3.3.5a. One entry per category fixes a
+pace, not a distribution, and a Hunter route with death warps is an upper bound
+on what WrathBench's fixed Dwarf Paladin can do. The figures, the caveats and
+the run URL where one was given live in `dashboard/src/lib/reference.ts` and
+are repeated in the footnote under the strip. Neither line is a score and
+neither enters the row order.
 
 ## The social card
 

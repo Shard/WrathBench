@@ -69,11 +69,11 @@ import {
   type StreamRow,
 } from "../lib/ladder";
 import {
-  HUMAN_SPEEDRUN_BAND,
   type ReferenceMark,
   type ReferenceScale,
   empiricalCeiling,
   referenceScale,
+  speedrunBand,
 } from "../lib/reference";
 import { resolvedSummary } from "../lib/models";
 import { fmtMoney, fmtWhen, modelDisplay } from "../lib/format";
@@ -533,10 +533,10 @@ function StreamTable(props: { rows: readonly StreamRow[] }) {
  * Below the table rather than inside it: the rung table carries eight extra
  * columns and lives in a `.scroller`, and a reference row in there would be
  * behind a horizontal scroll on a phone. Both marks are drawn as spans — the
- * speedrun figure is a band, not a point, because the two records bracketing
- * it are from two games with different XP rates and neither is 3.3.5a.
- * Provenance is on the hover and repeated in the footnote, which is the whole
- * point of drawing them.
+ * speedrun figure is a band, not a point, because one confirmed entry fixes a
+ * pace and not a distribution, and reading a level off it at minute N is a
+ * judgement. Provenance is on the hover and repeated in the footnote, which is
+ * the whole point of drawing them.
  */
 function ReferenceStrip(props: { scale: ReferenceScale; episode: string }) {
   const span = (): number => Math.max(props.scale.max - props.scale.min, 1);
@@ -589,23 +589,37 @@ function ReferenceStrip(props: { scale: ReferenceScale; episode: string }) {
       <p class="dim reference-note">
         Neither line is a score and neither enters the row order. The ceiling is derived at read time
         from this tier's scored runs on the selected series — it is not a target and not a constant, and
-        it moves the moment a run beats it. The band is a committed constant: roughly L
-        {HUMAN_SPEEDRUN_BAND.low}–{HUMAN_SPEEDRUN_BAND.high} by {HUMAN_SPEEDRUN_BAND.minutes} minutes,
-        read off{" "}
-        <For each={HUMAN_SPEEDRUN_BAND.sources}>
-          {(src, i) => (
+        it moves the moment a run beats it.{" "}
+        <Show when={speedrunBand(props.episode)}>
+          {(band) => (
             <>
-              <Show when={i() > 0}>, </Show>
-              <a href={src.url} rel="noreferrer" title={`${src.what} — ${src.note}`}>
-                {src.what}
-              </a>
+              The band is a committed constant: roughly L{band().low}–{band().high} by {band().minutes} minutes, read off{" "}
+              <For each={band().sources}>
+                {(src, i) => (
+                  <>
+                    <Show when={i() > 0}>, </Show>
+                    <Show
+                      when={src.url}
+                      fallback={<span title={`${src.what} — ${src.note}`}>{src.what}</span>}
+                    >
+                      <a href={src.url} rel="noreferrer" title={`${src.what} — ${src.note}`}>
+                        {src.what}
+                      </a>
+                    </Show>
+                  </>
+                )}
+              </For>
+              . speedrun.com's Wrath of the Lich King Classic Archive board carries one entry in
+              each of the categories the bands rest on, both confirmed in a browser by the operator
+              on 2026-09-16; the Classic Era and Cataclysm Classic records run different XP rates and
+              are context, not the figure. One entry per category is thin, and a Hunter speedrun
+              route with death warps is an upper bound on what WrathBench's Dwarf Paladin can do, not
+              a par score.{" "}
             </>
           )}
-        </For>
-        . WotLK Classic has no speedrun board of its own — it was folded into Cataclysm Classic — and
-        the run pages answer 403 to a fetcher, so those figures came from search snippets and are
-        labelled loosely sourced until someone confirms them in a browser. The notes travel with the
-        constant in <span class="mono">dashboard/src/lib/reference.ts</span>.
+        </Show>
+        The notes travel with the constant in{" "}
+        <span class="mono">dashboard/src/lib/reference.ts</span>.
       </p>
     </div>
   );
