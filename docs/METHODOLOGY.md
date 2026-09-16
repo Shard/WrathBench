@@ -473,6 +473,20 @@ be revised without re-running anything. The dashboard ladder's row ordering
 last, never as zero) is one such derivation, versioned with the dashboard in
 `dashboard/src/lib/ladder.ts` — three separate numbers, no aggregate score.
 
+**The ladder shows its dispersion and two reference lines** (operator
+decision, 2026-09-16). A tier is an evidence budget, so a row's maxima are
+maxima over runs the fleet already paid for: the row now also says how many of
+its askable runs reached each rung and what range and median of levels its
+counted runs spanned, beside the best run rather than instead of it. Two
+labelled lines say what a level reading means — an empirical ceiling derived at
+read time from the current series' scored runs on the tier in view, never
+hardcoded, and a human speedrun band of roughly level 10–11 by ninety minutes,
+marked loosely sourced because the records bracketing it are from Classic Era
+and Cataclysm Classic rather than 3.3.5a. A scripted greedy-XP grinder and a
+deterministic walkthrough run through the same harness were considered as
+baselines and not chosen: no scripted agent is built and nothing new is run.
+Neither line is a score and neither enters the row order.
+
 **A ladder belongs to a comparability group, so `probing` has none** (operator
 decision, 2026-08-29). A probe campaign varies its cells on purpose; a table
 ranking its runs against each other ranks the sweep, not the models. Probe runs
