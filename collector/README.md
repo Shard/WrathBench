@@ -49,6 +49,13 @@ Each source has its own resume rule, because each changes differently:
 Those live in `data/collector.sqlite`, which is the only thing this service
 owns on disk and is as disposable as the store itself.
 
+A run id is not unique on disk: `runs/<id>/` and `runs/archive/<id>/` can both
+exist and hold different runs, where an attempt was archived and a later launch
+reused the id. Every key here — the offsets, the signatures, every table's
+`ORDER BY` — is the run id alone, so the pass ingests one directory per id and
+the non-archived one wins, the copy the viewer serves. The collision is logged
+once; the files are left where they are.
+
 A trajectory is never loaded whole — the largest in the corpus is 669 MB. The
 tailer slides a 4 MB window and holds at most one line across chunks; a live
 run's half-written last line is left unread, so a committed offset is always
