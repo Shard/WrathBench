@@ -83,6 +83,15 @@ spec:
             - name: data
               mountPath: /wrathbench/data/wiki
               subPath: wiki
+            # The live config store, WRATHBENCH_CONFIG_DB in harnessEnv. A
+            # subPath because the pod does not mount /wrathbench/data itself
+            # — a store written there would be pod-local and would silently
+            # replace Flux's ConfigMap steering with a copy nobody can reach.
+            # The supervisor seeds it from the ConfigMap file below the first
+            # time it boots without one, then reads it instead of the file.
+            - name: data
+              mountPath: /wrathbench/data/config
+              subPath: config
             - name: fleet-config
               mountPath: /wrathbench/config
               readOnly: true

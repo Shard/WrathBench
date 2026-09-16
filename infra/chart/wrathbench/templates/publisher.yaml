@@ -85,6 +85,15 @@ spec:
             - name: data
               mountPath: /wrathbench/data/publish
               subPath: publish
+            # The live config store (WRATHBENCH_CONFIG_DB in harnessEnv). The
+            # publisher renders the viewer's handlers in-process and their
+            # roster comes from the store once one is seeded — without this
+            # the public site would keep publishing the ConfigMap's roster
+            # after an operator edit moved the live one. Not readOnly for the
+            # WAL reason the viewer gives; the publisher never writes a row.
+            - name: data
+              mountPath: /wrathbench/data/config
+              subPath: config
             - name: fleet-config
               mountPath: /wrathbench/config
               readOnly: true
