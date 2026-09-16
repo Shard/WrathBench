@@ -197,8 +197,16 @@ viewer:
       memory: 3Gi
   ingress:
     enabled: true
+    # Canonical name: first rule host, the one NOTES.txt and dashboard tiles
+    # link. Aliases the same router should answer for (a legacy mDNS name, say)
+    # go in extraHosts, in order, after it.
     host: wrathbench.local
+    extraHosts: []
     className: traefik
+    # ClusterIssuer for a chart-managed per-host certificate covering host +
+    # extraHosts. Set to "" to render no Certificate and no spec.tls, so the
+    # ingress controller's default certificate serves every host — the right
+    # choice on a cluster whose default cert is already a trusted wildcard.
     issuer: nusphere-ca
     entrypoint: websecure
     # Passthrough, applied last and therefore able to override anything the

@@ -52,9 +52,11 @@ box that must never run any of this.
 
 **Game ports stay ClusterIP.** No MetalLB, no NodePort, and no Ingress for the
 module, MCP or game ports — ever. Spectating is a port-forward (below). The one
-Ingress in the chart is the LAN viewer at `wrathbench.local`, with a certificate
-from the `nusphere-ca` ClusterIssuer. Both the host and the issuer are values,
-not literals in a template.
+Ingress in the chart is the LAN viewer at `wrathbench.nusphere.shard.page` (with
+`wrathbench.local` as an alias via `ingress.extraHosts`). The hosts and the
+issuer are values, not literals in a template; Nusphere sets `issuer: ""` so the
+viewer rides Traefik's default Let's Encrypt wildcard instead of a per-host
+`nusphere-ca` certificate.
 
 **Images are pinned by immutable tag**, `git describe --tags --always` of the
 source SHA, in the public Harbor project `harbor.local/library`. `latest` is not
@@ -371,7 +373,7 @@ Runs pause and resume; nothing is lost. Do it in a window you are watching.
    itself on start — the same smokes again — and then resumes the runs that
    paused in step 1.
 
-9. **Confirm** on the viewer at `https://wrathbench.local` that the runs you
+9. **Confirm** on the viewer at `https://wrathbench.nusphere.shard.page` that the runs you
    paused in step 1 are live again on the new server build, and that
    `/api/info` reports the image tag you pinned.
 
@@ -453,7 +455,7 @@ being told the fleet was dead.
   the pause records the next one resumes from.
 
 - **`infra/viewer-restart.sh`** — rollout-restarts the `wrathbench-viewer`
-  Deployment and checks `https://wrathbench.local/api/info`. On the cluster the
+  Deployment and checks `https://wrathbench.nusphere.shard.page/api/info`. On the cluster the
   viewer's code is baked into the runner image and Flux owns the tag, so this
   kicks a wedged process; new viewer code needs a new tag.
   `--local` drives the retired workstation path (systemd user unit or nohup) and
