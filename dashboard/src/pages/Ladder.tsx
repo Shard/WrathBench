@@ -538,45 +538,43 @@ function StreamTable(props: { rows: readonly StreamRow[] }) {
  * Provenance is on the hover and repeated in the footnote, which is the whole
  * point of drawing them.
  */
-const REF_W = 100;
-const REF_H = 26;
-
 function ReferenceStrip(props: { scale: ReferenceScale; episode: string }) {
   const span = (): number => Math.max(props.scale.max - props.scale.min, 1);
-  const x = (level: number): number => ((level - props.scale.min) / span()) * REF_W;
+  /** A level's position along the rail, as a percentage — so the strip is fluid and needs no measuring. */
+  const at = (level: number): string => `${(((level - props.scale.min) / span()) * 100).toFixed(2)}%`;
+  const width = (m: ReferenceMark): string =>
+    `${(((m.high - m.low) / span()) * 100).toFixed(2)}%`;
+  /** Every level the rail labels: the ends, and each mark's own edges. */
+  const ticks = (): number[] =>
+    [...new Set([props.scale.min, ...props.scale.marks.flatMap((m) => [m.low, m.high]), props.scale.max])].sort(
+      (a, b) => a - b,
+    );
   return (
     <div class="reference">
-      <div class="reference-scale">
-        <svg viewBox={`0 0 ${REF_W} ${REF_H}`} preserveAspectRatio="none" role="img" aria-label={ariaOf(props.scale)}>
-          <title>{ariaOf(props.scale)}</title>
-          {/* The rail: level 1 at the left, the far end just past the furthest
-              thing drawn, so a mark never sits on the edge. */}
-          <line x1="0" y1={REF_H - 8} x2={REF_W} y2={REF_H - 8} stroke="var(--line)" stroke-width="0.5" />
-          <For each={props.scale.marks}>
-            {(m) => (
-              <g class={`reference-mark ${m.id}`}>
-                <title>{`${m.label} — ${m.provenance}`}</title>
-                <Show
-                  when={m.high > m.low}
-                  fallback={
-                    <line
-                      x1={x(m.low)}
-                      y1={2}
-                      x2={x(m.low)}
-                      y2={REF_H - 8}
-                      stroke="var(--accent)"
-                      stroke-width="0.6"
-                    />
-                  }
-                >
-                  <rect x={x(m.low)} y={2} width={Math.max(x(m.high) - x(m.low), 0.6)} height={REF_H - 10} fill="var(--dim)" opacity="0.25" />
-                </Show>
-              </g>
-            )}
-          </For>
-        </svg>
+      <div class="reference-rail" role="img" aria-label={ariaOf(props.scale)} title={ariaOf(props.scale)}>
+        <For each={props.scale.marks}>
+          {(m) => (
+            <Show
+              when={m.high > m.low}
+              fallback={<span class={`ref-mark line ${m.id}`} style={{ left: at(m.low) }} title={`${m.label} — ${m.provenance}`} />}
+            >
+              <span
+                class={`ref-mark band ${m.id}`}
+                style={{ left: at(m.low), width: width(m) }}
+                title={`${m.label} — ${m.provenance}`}
+              />
+            </Show>
+          )}
+        </For>
+        <For each={ticks()}>
+          {(t) => (
+            <span class="ref-tick mono dim" style={{ left: at(t) }}>
+              L{t}
+            </span>
+          )}
+        </For>
       </div>
-      {/* The legend carries the numbers, because the strip is squeezed on a
+      {/* The legend carries the numbers, because the rail is squeezed on a
           phone and a label that has to be measured off a rail is not a label. */}
       <ul class="reference-legend dim">
         <For each={props.scale.marks}>
@@ -593,7 +591,7 @@ function ReferenceStrip(props: { scale: ReferenceScale; episode: string }) {
         from this tier's scored runs on the selected series — it is not a target and not a constant, and
         it moves the moment a run beats it. The band is a committed constant: roughly L
         {HUMAN_SPEEDRUN_BAND.low}–{HUMAN_SPEEDRUN_BAND.high} by {HUMAN_SPEEDRUN_BAND.minutes} minutes,
-        read off {" "}
+        read off{" "}
         <For each={HUMAN_SPEEDRUN_BAND.sources}>
           {(src, i) => (
             <>
