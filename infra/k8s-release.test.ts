@@ -432,6 +432,24 @@ describe("k8s-release.sh", () => {
     expect(r.calls.find((l) => l.startsWith("k8s-deploy "))).toContain("--no-smoke");
   });
 
+  test("--help prints the header and no shell", () => {
+    // `sed -n '2,Np'` over the header is easy to get one line wrong, and
+    // nothing else in this suite runs that path.
+    const r = run({ args: ["--help"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("--pin-hook");
+    expect(r.out).not.toContain("set -Eeuo");
+    expect(r.out).not.toContain("SCRIPT_DIR=");
+  });
+
+  test("the runner Deployment is a pin witness: the smokes run from it", () => {
+    // `rollout status` on a Deployment whose spec never changed reports rolled
+    // out instantly, so it cannot tell a stale runner from a fresh one — and a
+    // stale runner produces "verified by N smokes" from the OLD harness.
+    const r = run({});
+    expect(r.out).toContain(`wrathbench-worldserver=${TAG} wrathbench-runner=${TAG} wrathbench-viewer=${TAG}`);
+  });
+
   test("the script carries no cluster-specific glue", () => {
     // The operator's rule on item 132: the nusphere repo's paths, its Flux
     // objects and its PR flow live there, not here.
