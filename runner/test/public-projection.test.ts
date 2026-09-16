@@ -287,6 +287,7 @@ function resultsFixture(): ResultsResponse {
         model: "test/model",
         resolvedModel: "some/model-served",
         cliVersion: "9.9.9",
+        driver: "openai",
         platform: "openrouter",
         harnessVersion: "harness-0.5-1-gabc",
         harnessSeries: "0.5",
@@ -460,6 +461,9 @@ const RESULT_RUN_KEYS = [
   "model",
   "resolvedModel",
   "cliVersion",
+  // Which CLI drove the run: already public on `RunRow.driver`, and the
+  // character view's header reads it from here (item 128).
+  "driver",
   "platform",
   "harnessVersion",
   "harnessSeries",
