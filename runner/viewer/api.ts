@@ -90,6 +90,7 @@ import {
   runDir,
 } from "./runs";
 import { isArchiveDir } from "./archive-dir";
+import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
 import {
   TILE_CACHE_CONTROL,
   TILE_PUBLIC_CACHE_CONTROL,
@@ -146,6 +147,11 @@ export interface ApiOptions {
    * labels rather than an error; a roster map is the one source of names.
    */
   fleetConfigPath?: string;
+  /**
+   * The config store the config API reads and writes (item 127). Absent is the
+   * data volume's default (`configDbPath`); a test names its own.
+   */
+  configDbPath?: string;
   /**
    * Where the per-run fact cache is persisted across process starts
    * (`fact-store.ts`). Absent — the default everywhere but the viewer and the
@@ -1503,6 +1509,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
   return Object.assign(async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
+
+    /*
+     * The config API (item 127): read and edit the fleet config. Operator-only,
+     * so a public handle does not serve it at all — a 404, not the 403
+     * `withheld()` gives, because a write surface should not announce itself.
+     * It lives in `config-api.ts`; this is the whole of its presence here.
+     */
+    if (!publicMode && path.startsWith(CONFIG_API_PREFIX)) {
+      const res = await handleConfigRequest(req, url, path, opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {});
+      if (res !== null) return res;
+    }
 
     if (path.startsWith("/api")) return (await api(url, path)) ?? notFound("no such path");
 

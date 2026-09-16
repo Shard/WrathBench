@@ -62,6 +62,25 @@ function isCollection(k: string): k is CollectionKey {
   return (COLLECTION_KEYS as readonly string[]).includes(k);
 }
 
+/**
+ * Whether a row key is one the renderer would actually emit.
+ *
+ * Checked on every write, because `renderFleet` walks the keys it knows: a row
+ * under a key it does not would sit in the store, pass validation (an unknown
+ * top-level key is not in the rendered config at all, so nothing refuses it)
+ * and change nothing — config that does nothing, which is exactly what the
+ * strict-key rules in `parseFleet` exist to prevent.
+ */
+export function isConfigKey(key: string): boolean {
+  const slash = key.indexOf("/");
+  if (slash < 0) return (TOP_LEVEL_KEYS as readonly string[]).includes(key);
+  const head = key.slice(0, slash);
+  const name = key.slice(slash + 1);
+  if (!isCollection(head) || name.length === 0 || name.includes("/")) return false;
+  if (head === "queue") return /^\d+$/.test(name);
+  return /^[A-Za-z0-9_.:-]+$/.test(name);
+}
+
 /** One stored document: a whole singleton block, or one entry of a collection. */
 export interface ConfigRow {
   /** `policy`, `roster/sonnet`, `queue/0`. */
@@ -328,6 +347,12 @@ export class ConfigStore {
    */
   put(key: string, value: unknown, opts: PutOptions = {}): void {
     this.requireWritable();
+    if (!isConfigKey(key)) {
+      throw new ConfigRejected(
+        `${key} is not a config key — singletons are ${TOP_LEVEL_KEYS.filter((k) => !isCollection(k)).join(", ")}; ` +
+          `entries are roster/<name>, campaigns/<name> and queue/<n>`,
+      );
+    }
     const rows = this.rows();
     const at = Date.now();
     const before = rows.find((r) => r.key === key);
