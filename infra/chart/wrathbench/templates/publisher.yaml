@@ -57,6 +57,10 @@ spec:
           command: ["bun", "infra/publish-dashboard.ts", "--loop"]
           env:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
+            # The publisher renders the viewer's own handler in-process, and
+            # that handler reads its run listings from the derived store — so
+            # the publisher needs the same coordinates the viewer does.
+            {{- include "wrathbench.clickhouseEnv" . | nindent 12 }}
             # What was uploaded last, so a pass PUTs only what changed. On the
             # PVC so a restart re-uploads nothing.
             - name: WRATHBENCH_PUBLISH_STATE

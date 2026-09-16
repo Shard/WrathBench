@@ -1,0 +1,198 @@
+{{- if .Values.clickhouse.enabled }}
+{{/*
+The derived store (collector/README.md), and the collector that fills it.
+
+A StatefulSet rather than a Deployment, and its own PVC rather than a subPath
+on the data volume: ClickHouse is the one workload here that wants exclusive
+ownership of a filesystem — it writes parts, merges them and reads its own
+metadata back at boot — and a volumeClaimTemplate is what keeps that storage
+bound to the one pod that may write it. The data PVC is RWO and already shared
+by five pods; adding a database's datadir to it would be the wrong kind of
+sharing.
+
+ONE NODE, NO REPLICATION, ON PURPOSE. Nothing in here is the only copy of
+anything: `data/runs` is the evidence record and the write path, and every
+table is rebuilt by `--replay`. Losing this volume costs a backfill, not a run.
+That is also why `helm.sh/resource-policy: keep` is deliberately ABSENT from
+the volumeClaimTemplate — unlike the data PVC, this one is meant to be
+disposable, and an operator who deletes the release should not be left with a
+stale database to clean up by hand.
+
+ClusterIP, no Ingress, ever. The collector, the viewer and the publisher reach
+it inside the namespace; an operator port-forwards. It holds every trajectory
+in the corpus and is not a thing to put on a hostname.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-clickhouse
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-clickhouse
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+spec:
+  serviceName: {{ include "wrathbench.fullname" . }}-clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: clickhouse
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: clickhouse
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext:
+        # The image's own `clickhouse` user is 101, and the datadir is written
+        # as it. Not the 1000 the rest of the chart runs as: nothing else
+        # touches this volume, so there is no uid to agree with.
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: clickhouse
+          image: {{ .Values.clickhouse.image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: CLICKHOUSE_DB
+              value: {{ .Values.clickhouse.database | quote }}
+            - name: CLICKHOUSE_USER
+              value: {{ .Values.clickhouse.user | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName }}
+                  key: CLICKHOUSE_PASSWORD
+            # The default user's implicit no-password access, off. Every client
+            # authenticates as the user above.
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "0"
+          ports:
+            - name: http
+              containerPort: 8123
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          # ClickHouse reads its cgroup limit and sizes its own caches from it,
+          # so this is a budget rather than only an OOM ceiling.
+          resources: {{ toYaml .Values.clickhouse.resources | nindent 12 }}
+          volumeMounts:
+            - name: clickhouse-data
+              mountPath: /var/lib/clickhouse
+  volumeClaimTemplates:
+    - metadata:
+        name: clickhouse-data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.storage.className }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.clickhouse.size }}
+{{- if .Values.collector.enabled }}
+---
+{{/*
+The collector (collector/README.md): tails data/runs into ClickHouse.
+
+The runner image, not oven/bun as under compose, for the reason the publisher
+gives: compose bind-mounts the repo and there is no repo to mount here.
+
+The runs volume is mounted READ-ONLY and this service is written to be — it
+opens each run.sqlite readonly and never writes into the tree. Its one
+writable path is its own offset database, which is as disposable as the store:
+delete it and the next start is a full replay.
+
+Recreate, not RollingUpdate: two collectors would not corrupt anything (every
+key is natural and every insert idempotent) but they would both re-read the
+same bytes, and the offset database is RWO and single-writer.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-collector
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: collector
+  template:
+    metadata:
+      labels:
+        {{- include "wrathbench.labels" . | nindent 8 }}
+        app.kubernetes.io/component: collector
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
+      securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: collector
+          image: {{ include "wrathbench.image.runner" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          workingDir: /wrathbench
+          command: ["bun", "collector/src/main.ts"]
+          env:
+            {{- include "wrathbench.clickhouseEnv" . | nindent 12 }}
+            - name: WRATHBENCH_RUNS_DIR
+              value: /wrathbench/data/runs
+            - name: WRATHBENCH_COLLECTOR_DB
+              value: /wrathbench/data/collector/collector.sqlite
+          resources: {{ toYaml .Values.collector.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /wrathbench/data/runs
+              subPath: runs
+              readOnly: true
+            # The only writable path, and the only thing the collector owns.
+            - name: data
+              mountPath: /wrathbench/data/collector
+              subPath: collector
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "wrathbench.fullname" . }}-data
+{{- end }}
+{{- end }}
