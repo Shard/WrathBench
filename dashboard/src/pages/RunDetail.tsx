@@ -1095,11 +1095,13 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
           </dd>
           <dt>wiki reference</dt>
           <dd>
-            {t().wikiCoords === undefined
-              ? "not recorded for older runs"
-              : t().wikiCoords
-                ? "coordinates served"
-                : "names-first, coordinates withheld"}
+            {t().wiki === false
+              ? "withheld: no search_reference tool, and the prompt does not name it"
+              : t().wikiCoords === undefined
+                ? "not recorded for older runs"
+                : t().wikiCoords
+                  ? "coordinates served"
+                  : "names-first, coordinates withheld"}
           </dd>
           <dt>server build</dt>
           <dd class="mono">

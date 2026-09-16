@@ -164,6 +164,19 @@ export const comparabilitySchema = z.object({
    */
   routing: routingSchema.optional(),
   /**
+   * Present, and `false`, only on a run configured without the reference wiki
+   * (`config.wiki`, issue #61). A KEY, not an annotation: the tool is part of
+   * the fixed harness, so a run that had it and a run that did not are two
+   * conditions and must not share a chart — the same standing `effort` and
+   * `routing` have. The rendered prompt differs too, so `promptHash` already
+   * separates them; this field is what makes the separation readable.
+   *
+   * ABSENT, never `true`, for the ordinary run: the wiki is included by
+   * default, and leaving the field off keeps every run stamped before it
+   * existed byte-for-byte identical to what it stamps now.
+   */
+  wiki: z.literal(false).optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -250,7 +263,7 @@ export function comparabilityOf(
   const harness = harnessOf(config.driver);
   // Rendered for THIS run's harness: the prompt's context sentence differs
   // between them, so the hash below is per-harness by design.
-  const prompt = buildSystemPrompt(config.objective, config.episode, harness);
+  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki);
   const routing = routingForRun(config);
   return {
     harnessVersion,
@@ -276,6 +289,9 @@ export function comparabilityOf(
     // so a field that appears in the middle for some runs and not others would
     // reorder the rest. Resolved by the same function the adapter is handed.
     ...(routing !== null ? { routing } : {}),
+    // After `routing`, for that same stringified-tuple reason: a field inserted
+    // ahead of it would reorder the routing of every already-stamped run.
+    ...(config.wiki ? {} : { wiki: false as const }),
   };
 }
 

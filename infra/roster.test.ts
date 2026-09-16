@@ -247,6 +247,22 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(() => resolve([{ model: "m", wikiCoords: "true" as never }], "20260101")).toThrow(/wikiCoords/);
   });
 
+  test("the reference wiki is on by default, and `wiki: false` reaches argv (issue #61)", () => {
+    const [plain] = resolve([{ model: "m" }], "20260101");
+    expect(plain!.wiki).toBe(true);
+    // Nothing is emitted for the default, so every pre-#61 argv is unchanged.
+    expect(episodeArgv(plain!, false)).not.toContain("--wiki");
+    const [off] = resolve([{ model: "m", wiki: false }], "20260101");
+    expect(off!.wiki).toBe(false);
+    const argv = episodeArgv(off!, false);
+    expect(argv[argv.indexOf("--wiki") + 1]).toBe("false");
+    expect(() => resolve([{ model: "m", wiki: "false" as never }], "20260101")).toThrow(/wiki must be a boolean/);
+    // Coordinates are a setting of a surface this entry does not have.
+    expect(() => resolve([{ model: "m", wiki: false, wikiCoords: true }], "20260101")).toThrow(
+      /wikiCoords needs the reference wiki/,
+    );
+  });
+
   test("an extra run reaches argv as `--extra true` and is off by default", () => {
     const [s] = resolve([{ model: "m", extra: true }], "20260101");
     expect(s!.extra).toBe(true);

@@ -351,10 +351,10 @@ low` and `opus at high` are two comparable rows, not one tuned model.
 Everything is stamped into one comparability tuple at launch
 (`runner/src/comparability.ts`) — harness version and series, prompt hash of
 the *rendered* bytes, harness tag, effort, episode id and budget, objective
-presence, `wikiCoords`, wiki-bundle identity — and never recomputed. A run
-written before a field existed reads `null` forever. A resume, where a lane
-still allows one, re-stamps for the leash actually enforced and records that
-it did.
+presence, `wikiCoords`, a withheld reference wiki, wiki-bundle identity — and
+never recomputed. A run written before a field existed reads `null` forever. A
+resume, where a lane still allows one, re-stamps for the leash actually
+enforced and records that it did.
 
 **One field of the tuple is observed rather than stamped, and it is an
 annotation, not a grouping key.** A run is launched with the string the roster
@@ -411,7 +411,7 @@ may state `wiki: false`, and then the run has no `search_reference` tool, the
 prompt does not name one, and no bundle is opened. That is a declared off
 switch, not a factorial arm bought out of the tier budget: nothing schedules a
 matched bundle-off study, and withholding the bundle would not isolate a
-model’s own priors anyway, because it removes the retrieval channel and leaves
+model's own priors anyway, because it removes the retrieval channel and leaves
 the memorised one untouched. Because the run is a different condition, `wiki:
 false` is stamped into the comparability tuple as a KEY and the rendered prompt
 hashes differently; the field is absent on a run that has the wiki, so every

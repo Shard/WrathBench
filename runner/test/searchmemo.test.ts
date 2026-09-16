@@ -9,6 +9,9 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { createMemoryBundle, makeWriter } from "@wrathbench/wiki/bundle";
 import { TOOLS, WIKI_COORDS_SENTENCE, callTool, normalizeSearchQuery, toolsFor, type ToolContext } from "../src/tools";
+import { SYSTEM_PROMPT, buildSystemPrompt } from "../src/prompt";
+import { mcpToolNames } from "../src/adapter-claude";
+import { loadRunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
@@ -196,5 +199,49 @@ describe("the wikiCoords run dimension", () => {
     expect(toolsFor({ wikiCoords: true }).filter((t) => t.name !== "search_reference")).toEqual(
       TOOLS.filter((t) => t.name !== "search_reference"),
     );
+  });
+});
+
+describe("a run configured without the reference wiki (issue #61)", () => {
+  test("the tool is not offered, and every other tool is untouched", () => {
+    const off = toolsFor({ wikiSearch: false });
+    expect(off.find((t) => t.name === "search_reference")).toBeUndefined();
+    expect(off).toEqual(TOOLS.filter((t) => t.name !== "search_reference"));
+    // Absent reads as "the run has it": the capability is on by default.
+    expect(toolsFor({})).toEqual(TOOLS);
+    expect(toolsFor({ wikiSearch: true })).toEqual(TOOLS);
+  });
+
+  test("calling it anyway answers as an unknown tool, not as a missing bundle", async () => {
+    const res = await callTool({ ...context(bundle()), wikiSearch: false }, "search_reference", { query: "x" });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain("unknown tool: search_reference");
+    expect(res.text).not.toContain("search_reference,");
+  });
+
+  test("the prompt does not name it, and the wiki-on prompt is unchanged", () => {
+    const on = buildSystemPrompt();
+    const off = buildSystemPrompt(undefined, undefined, "wrathbench", false);
+    expect(on).toBe(SYSTEM_PROMPT);
+    expect(off).not.toContain("search_reference");
+    expect(off).not.toContain("reference wiki");
+    // A deletion and nothing else: the off prompt is a subsequence of the on
+    // one, modulo the one paragraph that loses its parenthetical.
+    expect(off.length).toBeLessThan(on.length);
+    expect(off).toContain("write_scratchpad(...) or log_status(...) in snippet code is a ReferenceError");
+  });
+
+  test("the mcp tool grant for the claude CLI drops it too", () => {
+    expect(mcpToolNames()).toContain("mcp__wrathbench__search_reference");
+    expect(mcpToolNames({ wikiSearch: false })).not.toContain("mcp__wrathbench__search_reference");
+    expect(mcpToolNames({ wikiSearch: false }).length).toBe(mcpToolNames().length - 1);
+  });
+
+  test("a config that withholds the wiki but asks for its coordinates is refused", () => {
+    expect(() => loadRunConfig({ driver: "openai", model: "m", wiki: false, wikiCoords: true })).toThrow(
+      /wikiCoords is a setting of the reference wiki/,
+    );
+    expect(loadRunConfig({ driver: "openai", model: "m" }).wiki).toBe(true);
+    expect(loadRunConfig({ driver: "openai", model: "m", wiki: false }).wikiCoords).toBe(false);
   });
 });

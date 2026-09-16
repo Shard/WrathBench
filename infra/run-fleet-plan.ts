@@ -516,7 +516,7 @@ export function jobSpawn(
   /*
    * A probe's task shape comes from its campaign and nothing else.
    * The catalog entry supplies credentials and a model, so its own `objective`,
-   * `watchdogs`, `maxToolCalls` and `wikiCoords` are dropped rather than merged:
+   * `watchdogs`, `maxToolCalls`, `wikiCoords` and `wiki` are dropped rather than merged:
    * a campaign that says "no objective" must not inherit one from whichever
    * entry it borrowed, or two cells of one sweep would be running different
    * experiments. Precedence is episode table < campaign < cell, which is what
@@ -536,7 +536,7 @@ export function jobSpawn(
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
     const { tier: _tier, idle: _idle, billing: _billing, ...entry } = roster[r]!;
     // A probe keeps only what identifies the model; the campaign owns the rest.
-    const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, ...credentials } = entry;
+    const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, wiki: _wk, ...credentials } = entry;
     const isProbe = probeDims !== undefined;
     const spec: RosterSpec = isProbe ? credentials : entry;
     // The entry's own leash, kept only when the entry is the authority on it.

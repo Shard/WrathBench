@@ -1373,6 +1373,23 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     expect(parseFleet(pin({ policy: { maxConcurrent: { "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 } } })).maxConcurrent).toEqual({ "claude-code": 2, openrouter: 1, opencode: 1, "opencode-go": 1 });
   });
 
+  test("an entry may switch the reference wiki off, and may not then ask for coords", () => {
+    // Issue #61 / operator 2026-09-16: `wiki` is a roster-entry key (unlike
+    // `wikiCoords`, which belongs to the campaign that asks for it).
+    const off = parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", driver: "claude-code", wiki: false } }, queue: [] }));
+    expect(off.roster["p"]!.wiki).toBe(false);
+    expect(parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", driver: "claude-code" } }, queue: [] })).roster["p"]!.wiki).toBeUndefined();
+    expect(() =>
+      parseFleet(nextShape({ roster: { p: { tier: "t1", model: "sonnet", driver: "claude-code", wiki: "no" } }, queue: [] })),
+    ).toThrow(/wiki must be a boolean/);
+    // A roster entry cannot carry `wikiCoords` at all (it belongs to a
+    // campaign), so the pairing is refused one layer down, where an entry
+    // assembled from a campaign's dimensions is validated.
+    expect(() => validateEntries("probe", [{ model: "sonnet", driver: "claude-code", wiki: false, wikiCoords: true }])).toThrow(
+      /wikiCoords needs the reference wiki/,
+    );
+  });
+
   test("guards: pool/pinned overlap, bad refs, bad tiers, name collisions", () => {
     // Not a throw since item 66: the pin is refused, the rest of the file loads.
     const overlap = parseFleet(nextShape({ accounts: { pool: ["SHAKEOUT"] } }));

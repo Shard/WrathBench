@@ -393,6 +393,9 @@ export function resultRunOf(
     promptHash: run.comparability?.promptHash ?? null,
     serverBuild: run.comparability?.serverBuild?.build ?? null,
     wikiCoords: run.comparability?.wikiCoords ?? null,
+    // A run without the reference surface is labelled as one, never pooled
+    // with the runs that had it (issue #61); absent stamps mean it had it.
+    wiki: run.comparability?.wiki !== false,
     toolCalls: calls?.toolCalls ?? null,
     snippets: calls?.snippets ?? null,
     modelResponses: calls?.modelResponses ?? null,

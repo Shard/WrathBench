@@ -148,6 +148,7 @@ function projectComparability(c: ComparabilityView): ComparabilityView {
     },
     objective: c.objective,
     ...(c.wikiCoords !== undefined ? { wikiCoords: c.wikiCoords } : {}),
+    ...(c.wiki === false ? { wiki: false as const } : {}),
     // `wikiBundle` is withheld: its `source` names the operator's local dump
     // file, and no public page reads the annotation.
     ...(c.episode !== undefined ? { episode: c.episode } : {}),
@@ -375,6 +376,7 @@ function projectResultRun(r: ResultRun): ResultRun {
     promptHash: r.promptHash,
     serverBuild: r.serverBuild,
     wikiCoords: r.wikiCoords,
+    ...(r.wiki !== undefined ? { wiki: r.wiki } : {}),
     episode: r.episode,
     episodeSource: r.episodeSource,
     episodeOverride: r.episodeOverride,

@@ -179,6 +179,8 @@ function comparabilityFixture(): ComparabilityView {
     }),
     objective: true,
     wikiCoords: true,
+    // Off, so the projection has a value to carry (issue #61).
+    wiki: false,
     // The dump filename must not survive projection.
     wikiBundle: { schemaVersion: "1", builtAt: "2026-08-01", source: POISON.wikiSource, eraCutoff: "2010-09-01" },
     episode: "e90",
@@ -301,6 +303,7 @@ function resultsFixture(): ResultsResponse {
         promptHash: "sha256:0123456789abcdef",
         serverBuild: "harness-0.5-1-gdef",
         wikiCoords: true,
+        wiki: false,
         episode: "e90",
         episodeSource: "stamped",
         episodeOverride: false,
@@ -355,6 +358,7 @@ const COMPARABILITY_KEYS = [
   ...under("budget", BUDGET_KEYS),
   "objective",
   "wikiCoords",
+  "wiki",
   // no wikiBundle: withheld (its `source` is the operator's dump filename)
   "episode",
   "episodeOverride",
@@ -472,6 +476,7 @@ const RESULT_RUN_KEYS = [
   "promptHash",
   "serverBuild",
   "wikiCoords",
+  "wiki",
   "episode",
   "episodeSource",
   "episodeOverride",
