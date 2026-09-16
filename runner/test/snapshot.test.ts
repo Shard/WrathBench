@@ -332,19 +332,19 @@ describe("renderSnapshot", () => {
     writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true, episode: "freeplay" });
     writeRun(runs, LIVE_RUN, { terminated: true, stateTs: 1600, old: true, continuedFrom: DEAD_RUN, episode: "freeplay" });
     const out = await render(runs, 111);
-    const trackOf = (id: string): { stream?: unknown } =>
+    const trackOf = (id: string): { character?: unknown } =>
       JSON.parse(out.artifacts.find((a) => a.path.startsWith(`v1/run/${id}/`) && a.path.endsWith("track.json"))!.body) as {
-        stream?: unknown;
+        character?: unknown;
       };
-    expect(trackOf(DEAD_RUN).stream).toEqual({
-      streamId: DEAD_RUN,
+    expect(trackOf(DEAD_RUN).character).toEqual({
+      characterId: DEAD_RUN,
       attempt: 1,
       attempts: 2,
       previous: null,
       next: LIVE_RUN,
     });
-    expect(trackOf(LIVE_RUN).stream).toEqual({
-      streamId: DEAD_RUN,
+    expect(trackOf(LIVE_RUN).character).toEqual({
+      characterId: DEAD_RUN,
       attempt: 2,
       attempts: 2,
       previous: DEAD_RUN,
@@ -353,7 +353,7 @@ describe("renderSnapshot", () => {
     // A snapshot of runs that form no chain publishes no field at all, which
     // is what an older snapshot looks like to the page.
     const lone = await render(fixture(false), 111);
-    expect("stream" in trackOfIn(lone, DEAD_RUN)).toBe(false);
+    expect("character" in trackOfIn(lone, DEAD_RUN)).toBe(false);
     rmSync(runs, { recursive: true, force: true });
   });
 

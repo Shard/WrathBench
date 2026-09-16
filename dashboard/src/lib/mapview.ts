@@ -388,7 +388,7 @@ export function chooseMap(
  * map. Before it has, the map used to print the run id, which is mostly job
  * bookkeeping (`fleet-sub-fable-none-freeplay-…`): a roster key and a date
  * standing where a name belongs. The model, short, with its effort, is the
- * honest answer to "who is that" — and two streams of one model are told apart
+ * honest answer to "who is that" — and two characters of one model are told apart
  * by the effort rather than reading as the same character twice. The run id
  * stays in the hover, which is where an id belongs.
  */

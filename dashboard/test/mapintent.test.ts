@@ -103,7 +103,7 @@ describe("intentLabel", () => {
 describe("the replay feed carries the intention standing at the cursor", () => {
   const track: TrackResponse = {
     runId: "r1",
-    character: "Char",
+    characterName: "Char",
     model: "a/model",
     harnessVersion: "harness-0.5",
     points: [

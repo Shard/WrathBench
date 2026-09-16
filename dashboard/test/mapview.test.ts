@@ -340,7 +340,7 @@ describe("chooseMap", () => {
 describe("createMapState", () => {
   const TRACK: TrackResponse = {
     runId: "run-1",
-    character: "Benchy",
+    characterName: "Benchy",
     model: "test/model",
     harnessVersion: "harness-0.2",
     points: [
@@ -445,7 +445,7 @@ describe("returning to live", () => {
    */
   const TRACK: TrackResponse = {
     runId: "run-1",
-    character: "Benchy",
+    characterName: "Benchy",
     model: "test/model",
     harnessVersion: "harness-0.2",
     points: [
@@ -565,7 +565,7 @@ describe("replayHrefFor", () => {
    */
   const TRACK: TrackResponse = {
     runId: "run-1",
-    character: "Benchy",
+    characterName: "Benchy",
     model: "test/model",
     harnessVersion: "harness-0.2",
     points: [],

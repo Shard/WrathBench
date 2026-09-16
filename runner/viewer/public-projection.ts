@@ -78,9 +78,9 @@ import type {
   RunsResponse,
   SpellFacts,
   StatePoint,
-  StreamAttempt,
-  StreamTotals,
-  StreamView,
+  CharacterAttempt,
+  CharacterTotals,
+  CharacterView,
   TalentFacts,
   TaxiFacts,
   TierView,
@@ -318,7 +318,7 @@ function projectRunRow(r: RunRow): RunRow {
     terminationDetail: r.terminationDetail,
     pauseReason: pausedToken(r.pauseReason),
     // A run id, which every public listing already carries; the lineage is the
-    // only thing that makes a freeplay stream legible as one character.
+    // only thing that makes a freeplay character legible as one character.
     continuedFrom: r.continuedFrom,
     level: r.level,
     xp: r.xp,
@@ -842,7 +842,7 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
 }
 
 /**
- * A freeplay stream, field by field.
+ * A freeplay character, field by field.
  *
  * Everything here is already public elsewhere: run ids and the lineage between
  * them ride on every listing (`projectRunRow.continuedFrom`), and the figures
@@ -850,9 +850,9 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
  * attempt. Two things are withheld, and both for a reason this file already
  * states: a pause reason becomes the fixed token, and the death figures are
  * dropped whole — `RunDetailResponse.deaths` is not projected at all (corpse
- * positions), so the stream does not open a second door onto the same fact.
+ * positions), so the character does not open a second door onto the same fact.
  */
-function projectStreamAttempt(a: StreamAttempt): StreamAttempt {
+function projectCharacterAttempt(a: CharacterAttempt): CharacterAttempt {
   return {
     runId: a.runId,
     startedAt: a.startedAt,
@@ -872,7 +872,7 @@ function projectStreamAttempt(a: StreamAttempt): StreamAttempt {
   };
 }
 
-function projectStreamTotals(t: StreamTotals): StreamTotals {
+function projectCharacterTotals(t: CharacterTotals): CharacterTotals {
   return {
     attempts: t.attempts,
     startedAt: t.startedAt,
@@ -902,16 +902,16 @@ function projectStreamTotals(t: StreamTotals): StreamTotals {
   };
 }
 
-function projectStream(s: StreamView): StreamView {
+function projectCharacter(s: CharacterView): CharacterView {
   return {
-    streamId: s.streamId,
+    characterId: s.characterId,
     attempt: s.attempt,
     attempts: s.attempts,
     previous: s.previous,
     next: s.next,
     truncated: s.truncated,
-    runs: s.runs.map(projectStreamAttempt),
-    totals: projectStreamTotals(s.totals),
+    runs: s.runs.map(projectCharacterAttempt),
+    totals: projectCharacterTotals(s.totals),
   };
 }
 
@@ -935,14 +935,14 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
     ...(d.reflections !== undefined
       ? { reflections: d.reflections.map((w) => ({ fromTurn: w.fromTurn, toTurn: w.toTurn })) }
       : {}),
-    ...(d.stream !== undefined ? { stream: projectStream(d.stream) } : {}),
+    ...(d.character !== undefined ? { character: projectCharacter(d.character) } : {}),
   });
 }
 
 export function projectTrack(t: TrackResponse): TrackResponse {
   return scrubPathsValue<TrackResponse>({
     runId: t.runId,
-    character: t.character,
+    characterName: t.characterName,
     model: t.model,
     harnessVersion: t.harnessVersion,
     points: t.points.map(
@@ -967,18 +967,18 @@ export function projectTrack(t: TrackResponse): TrackResponse {
     ),
     // As on the live feed.
     moves: (t.moves ?? []).map(projectMove),
-    // The stream's neighbours: run ids and two counters, every one of them
+    // The character's neighbours: run ids and two counters, every one of them
     // already public on `runs.json` and on the run page's attempt strip. Field
     // by field, so a shape that grows here does not ship by accident.
-    ...(t.stream === undefined
+    ...(t.character === undefined
       ? {}
       : {
-          stream: {
-            streamId: t.stream.streamId,
-            attempt: t.stream.attempt,
-            attempts: t.stream.attempts,
-            previous: t.stream.previous,
-            next: t.stream.next,
+          character: {
+            characterId: t.character.characterId,
+            attempt: t.character.attempt,
+            attempts: t.character.attempts,
+            previous: t.character.previous,
+            next: t.character.next,
           },
         }),
   });

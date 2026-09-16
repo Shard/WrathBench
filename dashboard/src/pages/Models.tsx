@@ -22,7 +22,7 @@ import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayLabel, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
-import { streamRows } from "../lib/ladder";
+import { characterRows } from "../lib/ladder";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
 import { displayError } from "../lib/errors";
@@ -35,11 +35,11 @@ export default function Models() {
   const body = (): ModelsResponse | undefined => feed.latest;
   // Copied before sorting: the array is the poll signal's own payload.
   const rows = (): ModelRowView[] => [...(body()?.models ?? [])].sort(compareModelRows);
-  // The freeplay column reads the ladder's own stream rows, unfiltered by
+  // The freeplay column reads the ladder's own character rows, unfiltered by
   // series: a paused character from an older harness version is still the
   // model's freeplay state.
   const freeplay = poll(() => api.ladder("freeplay"), POLL_MS);
-  const streams = createMemo(() => streamRows(freeplay.latest?.runs ?? []));
+  const characters = createMemo(() => characterRows(freeplay.latest?.runs ?? []));
   const [open, setOpen] = createSignal<string | null>(null);
 
   // A link from a run page arrives as `/models#<name>`: open that row.
@@ -194,7 +194,7 @@ export default function Models() {
                         }}
                       </For>
                       <td title={`idle: ${row.idle}`}>
-                        <Show when={freeplayOf(row, streams())} fallback={<span class="dim">—</span>}>
+                        <Show when={freeplayOf(row, characters())} fallback={<span class="dim">—</span>}>
                           {(s) => (
                             <A
                               href={`/run/${encodeURIComponent(s().latest.runId)}`}

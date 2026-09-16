@@ -40,7 +40,7 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
   return [
     {
       runId: track.runId,
-      character: track.character,
+      character: track.characterName,
       model: track.model,
       map: p.map,
       x: p.x,

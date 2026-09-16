@@ -27,7 +27,7 @@ import { runParam } from "../src/lib/replay";
 
 const TRACK: TrackResponse = {
   runId: "run-1",
-  character: "Benchy",
+  characterName: "Benchy",
   model: "test/model",
   harnessVersion: "harness-0.2",
   points: [

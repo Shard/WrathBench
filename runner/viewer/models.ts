@@ -138,7 +138,7 @@ export interface RosterRead {
   /** The file's `policy` block over the defaults (`parsePolicyBlock`), keyed on this checkout's series. */
   policy: SchedulingPolicy;
   /**
-   * `policy.maxConcurrent`: streams the policy may have in flight per key
+   * `policy.maxConcurrent`: runs the policy may have in flight per key
    * (`concurrencyKeyOf`, plus the `claude-code:<ENV NAME>` subscription lanes,
    * which a claude run spends alongside the `claude-code` total). Absent key
    * means unlimited; an empty object means the file names no cap.

@@ -24,12 +24,12 @@
  * and the focus ring.
  *
  * The attempt steps (item 119) are anchors for the same reason, and for one
- * more: a freeplay stream is one character across attempts, so following it
+ * more: a freeplay character is one character across attempts, so following it
  * end to end used to mean going back to the run page for the next id. They
  * link `/map?run=<id>` and nothing else — the route effect swaps the track and
  * `cursormemory` resumes the attempt where it was last left, so stepping away
  * and back keeps each attempt's own place. They render only where the track
- * carries a `stream`: a scored run has none, and so does a track served or
+ * carries a `character`: a scored run has none, and so does a track served or
  * published before the field existed.
  */
 
@@ -132,13 +132,13 @@ export function PlayBar(props: PlayBarProps) {
               <>
                 <span class="swatch" style={{ background: colorOf(t().runId) }} />
                 <span class="playbar-title" title={t().runId}>
-                  {t().character ?? shortRunId(t().runId)}
+                  {t().characterName ?? shortRunId(t().runId)}
                 </span>
                 <span class="dim mono">{shortRunId(t().runId)}</span>
                 <span class="dim">
                   · {t().points.length} {t().points.length === 1 ? "position" : "positions"}
                 </span>
-                <Show when={t().stream}>
+                <Show when={t().character}>
                   {(s) => (
                     <span class="attempt-steps">
                       <Show when={s().previous}>
@@ -146,7 +146,7 @@ export function PlayBar(props: PlayBarProps) {
                           <A
                             class="playbar-btn step"
                             href={replayHref(id())}
-                            title="replay the previous attempt of this stream"
+                            title="replay the previous attempt of this character"
                             aria-label="previous attempt"
                           >
                             ‹
@@ -161,7 +161,7 @@ export function PlayBar(props: PlayBarProps) {
                           <A
                             class="playbar-btn step"
                             href={replayHref(id())}
-                            title="replay the next attempt of this stream"
+                            title="replay the next attempt of this character"
                             aria-label="next attempt"
                           >
                             ›

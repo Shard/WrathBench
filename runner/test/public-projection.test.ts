@@ -778,7 +778,7 @@ describe("projectPositions and projectTrack", () => {
   test("track: exactly the allowlist; the character name survives", () => {
     const input: TrackResponse = smuggle<TrackResponse>({
       runId: "fixture-run-1",
-      character: CHARACTER_NAME,
+      characterName: CHARACTER_NAME,
       model: "test/model",
       harnessVersion: "harness-0.5-1-gabc",
       points: [
@@ -790,15 +790,15 @@ describe("projectPositions and projectTrack", () => {
       moves: [
         smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: SURVIVES.targetName, status: "arrived" }),
       ],
-      // The stream's neighbours (item 119): run ids and two counters, each
+      // The character's neighbours (item 119): run ids and two counters, each
       // already public on every runs row, and nothing smuggled beside them.
-      stream: smuggle({ streamId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" }),
+      character: smuggle({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" }),
     });
     const out = projectTrack(input);
     expect(keyPaths(out)).toEqual(
       allow([
         "runId",
-        "character",
+        "characterName",
         "model",
         "harnessVersion",
         "points",
@@ -808,26 +808,26 @@ describe("projectPositions and projectTrack", () => {
         ]),
         "moves",
         ...under("moves[]", ["ts", "map", "x", "y", "z", "target", "status"]),
-        "stream",
-        ...under("stream", ["streamId", "attempt", "attempts", "previous", "next"]),
+        "character",
+        ...under("character", ["characterId", "attempt", "attempts", "previous", "next"]),
       ]),
     );
     assertClean(JSON.stringify(out));
-    expect(out.character).toBe(CHARACTER_NAME);
+    expect(out.characterName).toBe(CHARACTER_NAME);
     expect(out.moves![0]!.target).toBe(SURVIVES.targetName);
     expect(out.points[0]).toMatchObject({ health: 140, maxHealth: 220, powerType: 3, nextLevelXp: 2100 });
-    expect(out.stream).toEqual({ streamId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" });
+    expect(out.character).toEqual({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" });
   });
 
-  test("track: a run with no stream carries no field at all, as an older track does", () => {
+  test("track: a run with no character carries no field at all, as an older track does", () => {
     const out = projectTrack({
       runId: "fixture-run-1",
-      character: CHARACTER_NAME,
+      characterName: CHARACTER_NAME,
       model: "test/model",
       harnessVersion: "harness-0.5-1-gabc",
       points: [],
     });
-    expect("stream" in out).toBe(false);
+    expect("character" in out).toBe(false);
   });
 });
 

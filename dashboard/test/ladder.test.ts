@@ -23,8 +23,8 @@ import {
   puckRect,
   rectsOverlap,
   segmentsCross,
-  streamIconCx,
-  streamLabelX,
+  characterIconCx,
+  characterLabelX,
   billingKnown,
   classOptions,
   filterRuns,
@@ -42,10 +42,10 @@ import {
   resolveChoice,
   runCostReading,
   scored,
-  stitchStream,
-  streamChartLayout,
-  streamRows,
-  streamSeries,
+  stitchCharacter,
+  characterChartLayout,
+  characterRows,
+  characterSeries,
   timeTicks,
   xpEarnedOf,
 } from "../src/lib/ladder";
@@ -470,10 +470,10 @@ describe("the shared episode param", () => {
 
 /**
  * The freeplay field. Everything here turns on two facts the scored ladder
- * does not have: every freeplay run is unscored, and a stream is one character
+ * does not have: every freeplay run is unscored, and a character is one character
  * across attempts.
  */
-describe("freeplay streams", () => {
+describe("freeplay characters", () => {
   const fp = (over: Partial<ResultRun> = {}): ResultRun =>
     run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
 
@@ -483,11 +483,11 @@ describe("freeplay streams", () => {
     // run is ever scored, so the table was structurally empty.
     expect(scored(runs)).toEqual([]);
     expect(ladderRows(runs)).toEqual([]);
-    expect(streamRows(runs).map((r) => r.streamId)).toEqual(["a1"]);
+    expect(characterRows(runs).map((r) => r.characterId)).toEqual(["a1"]);
   });
 
-  test("a stream carries its effort, so two streams of one model are told apart", () => {
-    const rows = streamRows([
+  test("a character carries its effort, so two characters of one model are told apart", () => {
+    const rows = characterRows([
       fp({ runId: "s1", model: "z-ai/glm-4.7-flash", effort: "low", maxLevel: 3 }),
       fp({ runId: "s2", model: "z-ai/glm-4.7-flash", effort: null, maxLevel: 4 }),
     ]);
@@ -500,13 +500,13 @@ describe("freeplay streams", () => {
   });
 
   test("a chain of three collapses to one row: the latest attempt, the whole lineage", () => {
-    const rows = streamRows([
+    const rows = characterRows([
       fp({ runId: "a1", maxLevel: 3, xp: 10 }),
       fp({ runId: "a3", continuedFrom: "a2", maxLevel: 9, xp: 40, startedAt: 300 }),
       fp({ runId: "a2", continuedFrom: "a1", maxLevel: 6, xp: 20, startedAt: 200 }),
     ]);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.streamId).toBe("a1");
+    expect(rows[0]!.characterId).toBe("a1");
     expect(rows[0]!.attempts).toBe(3);
     expect(rows[0]!.chain).toEqual(["a1", "a2", "a3"]);
     // The latest attempt carries the character's current state.
@@ -517,7 +517,7 @@ describe("freeplay streams", () => {
   test("quests are the character's, summed over the chain — not the last session's", () => {
     // The runner's counter restarts at every continuation, so the latest
     // attempt's 2 is the tally of one session and the character has done 13.
-    const rows = streamRows([
+    const rows = characterRows([
       fp({ runId: "q1", questsCompleted: 4, maxLevel: 3 }),
       fp({ runId: "q2", continuedFrom: "q1", startedAt: 200, questsCompleted: 7, maxLevel: 6 }),
       fp({ runId: "q3", continuedFrom: "q2", startedAt: 300, questsCompleted: 2, maxLevel: 9 }),
@@ -528,16 +528,16 @@ describe("freeplay streams", () => {
   });
 
   test("an attempt that recorded no quest count contributes nothing, and none at all is null", () => {
-    const some = streamRows([
+    const some = characterRows([
       fp({ runId: "n1", questsCompleted: null }),
       fp({ runId: "n2", continuedFrom: "n1", startedAt: 200, questsCompleted: 5 }),
     ]);
     expect(some[0]!.questsCompleted).toBe(5);
-    const none = streamRows([
+    const none = characterRows([
       fp({ runId: "p1", questsCompleted: null }),
       fp({ runId: "p2", continuedFrom: "p1", startedAt: 200, questsCompleted: null }),
     ]);
-    // Never 0: a stream whose attempts all predate the column has not been
+    // Never 0: a character whose attempts all predate the column has not been
     // observed completing nothing.
     expect(none[0]!.questsCompleted).toBeNull();
   });
@@ -545,12 +545,12 @@ describe("freeplay streams", () => {
   test("a lineage pointing outside the set is a root, not a dropped row", () => {
     // `dropContinuation` clears the link when the character is gone, and an
     // archived predecessor is never listed: both must leave the survivor here.
-    const rows = streamRows([fp({ runId: "b7", continuedFrom: "b6-archived", maxLevel: 4 })]);
-    expect(rows.map((r) => ({ id: r.streamId, n: r.attempts }))).toEqual([{ id: "b7", n: 1 }]);
+    const rows = characterRows([fp({ runId: "b7", continuedFrom: "b6-archived", maxLevel: 4 })]);
+    expect(rows.map((r) => ({ id: r.characterId, n: r.attempts }))).toEqual([{ id: "b7", n: 1 }]);
   });
 
   test("two runs claiming one predecessor: the longer chain wins the row, then the later start", () => {
-    const rows = streamRows([
+    const rows = characterRows([
       fp({ runId: "c1", maxLevel: 2 }),
       fp({ runId: "c2", continuedFrom: "c1", startedAt: 200, maxLevel: 5 }),
       fp({ runId: "c2b", continuedFrom: "c1", startedAt: 400, maxLevel: 6 }),
@@ -561,7 +561,7 @@ describe("freeplay streams", () => {
   });
 
   test("a malformed cycle ends the walk instead of hanging the page", () => {
-    const rows = streamRows([
+    const rows = characterRows([
       fp({ runId: "d1", continuedFrom: "d2" }),
       fp({ runId: "d2", continuedFrom: "d1" }),
     ]);
@@ -569,14 +569,14 @@ describe("freeplay streams", () => {
     for (const r of rows) expect(r.attempts).toBeLessThanOrEqual(2);
   });
 
-  test("a stillborn launch is dropped; live, paused and ended streams all stay, with their status", () => {
-    const rows = streamRows([
+  test("a stillborn launch is dropped; live, paused and ended characters all stay, with their status", () => {
+    const rows = characterRows([
       fp({ runId: "live", live: true, maxLevel: 12 }),
       fp({ runId: "paused", pauseReason: "operator-pause", maxLevel: 11 }),
       fp({ runId: "ended", terminationReason: "manual", maxLevel: 10 }),
       fp({ runId: "nothing", stillborn: true, maxLevel: 20 }),
     ]);
-    expect(rows.map((r) => [r.streamId, r.status, r.statusDetail])).toEqual([
+    expect(rows.map((r) => [r.characterId, r.status, r.statusDetail])).toEqual([
       ["live", "live", null],
       ["paused", "paused", "operator-pause"],
       ["ended", "ended", "manual"],
@@ -584,22 +584,22 @@ describe("freeplay streams", () => {
   });
 
   test("ordered by level then xp, and a missing reading sorts last rather than as zero", () => {
-    const rows = streamRows([
+    const rows = characterRows([
       fp({ runId: "none", maxLevel: null, xp: null }),
       fp({ runId: "lo", maxLevel: 5, xp: 900 }),
       fp({ runId: "hi", maxLevel: 5, xp: 4000 }),
       fp({ runId: "zero", maxLevel: 5, xp: 0 }),
     ]);
-    expect(rows.map((r) => r.streamId)).toEqual(["hi", "lo", "zero", "none"]);
+    expect(rows.map((r) => r.characterId)).toEqual(["hi", "lo", "zero", "none"]);
   });
 
   /*
    * "exclude free" applies here exactly as it does on the scored tiers
    * (operator, 2026-08-29, reversing the same day's exemption). The page hands
-   * `StreamTable` and `StreamChart` the same filtered set, so the two cannot
-   * disagree; the filter itself is `filterRuns`, ahead of `streamRows`.
+   * `CharacterTable` and `CharacterChart` the same filtered set, so the two cannot
+   * disagree; the filter itself is `filterRuns`, ahead of `characterRows`.
    */
-  test("exclude free filters the field too, keeping the streams a viewer cannot answer for", () => {
+  test("exclude free filters the field too, keeping the characters a viewer cannot answer for", () => {
     const runs = [
       fp({ runId: "paid", model: "sonnet", billing: "paid", maxLevel: 9, levels: [mark(9, 1, 1000)], playtimeMs: 1000 }),
       fp({
@@ -612,17 +612,17 @@ describe("freeplay streams", () => {
       }),
       fp({ runId: "unknown", model: "old", maxLevel: 7, levels: [mark(7, 1, 1000)], playtimeMs: 1000 }),
     ];
-    expect(streamRows(runs).map((r) => r.streamId)).toEqual(["gratis", "paid", "unknown"]);
+    expect(characterRows(runs).map((r) => r.characterId)).toEqual(["gratis", "paid", "unknown"]);
     const kept = filterRuns(runs, { race: null, klass: null, harness: null, excludeFree: true });
-    expect(streamRows(kept).map((r) => r.streamId)).toEqual(["paid", "unknown"]);
-    // The chart reads the same filtered set, so it cannot show a dropped stream.
-    const chart = streamSeries(streamRows(kept), kept);
-    expect(chart.series.map((s) => s.streamId)).toEqual(["paid", "unknown"]);
+    expect(characterRows(kept).map((r) => r.characterId)).toEqual(["paid", "unknown"]);
+    // The chart reads the same filtered set, so it cannot show a dropped character.
+    const chart = characterSeries(characterRows(kept), kept);
+    expect(chart.series.map((s) => s.characterId)).toEqual(["paid", "unknown"]);
     expect(chart.omitted).toEqual([]);
   });
 
   test("a mixed-billing chain re-roots on its survivor — accepted, because billing follows the endpoint", () => {
-    // A stream is one character under one config, so this is not a shape the
+    // A character is one character under one config, so this is not a shape the
     // fleet produces; pinned so the consequence is stated rather than accidental.
     const chain = [
       fp({ runId: "m1", billing: "free", maxLevel: 3, levels: [mark(3, 1, 1000)], playtimeMs: 1000 }),
@@ -636,17 +636,17 @@ describe("freeplay streams", () => {
         playtimeMs: 2000,
       }),
     ];
-    expect(streamRows(chain)[0]!.attempts).toBe(2);
+    expect(characterRows(chain)[0]!.attempts).toBe(2);
     const kept = filterRuns(chain, { race: null, klass: null, harness: null, excludeFree: true });
-    expect(streamRows(kept).map((r) => ({ id: r.streamId, n: r.attempts }))).toEqual([
+    expect(characterRows(kept).map((r) => ({ id: r.characterId, n: r.attempts }))).toEqual([
       { id: "m2", n: 1 },
     ]);
     // The chart says the same thing the table does: the survivor is drawn and
     // marked truncated, which is already the wording for "history before the
     // oldest attempt served is not drawn" — true whether the ancestor was
     // archived or filtered.
-    const drawn = streamSeries(streamRows(kept), kept).series;
-    expect(drawn.map((d) => [d.streamId, d.truncated])).toEqual([["m2", true]]);
+    const drawn = characterSeries(characterRows(kept), kept).series;
+    expect(drawn.map((d) => [d.characterId, d.truncated])).toEqual([["m2", true]]);
   });
 });
 
@@ -1139,11 +1139,11 @@ describe("fmtCostTick", () => {
 });
 
 /**
- * The freeplay chart's series: one stepped line per stream, stitched across its
+ * The freeplay chart's series: one stepped line per character, stitched across its
  * attempts on a cumulative active-playtime axis.
  *
- * The rules worth pinning are the seams. A stream is the point of the page, and
- * a stream is many runs; every way of getting the stitch wrong shows up as a
+ * The rules worth pinning are the seams. A character is the point of the page, and
+ * a character is many runs; every way of getting the stitch wrong shows up as a
  * plausible-looking line, so each of them gets a case.
  */
 describe("timeTicks", () => {
@@ -1160,11 +1160,11 @@ describe("timeTicks", () => {
   });
 });
 
-describe("stitchStream", () => {
+describe("stitchCharacter", () => {
   const at = (runId: string, playtimeMs: number | null, marks: LevelMark[]) => ({ runId, playtimeMs, levels: marks });
 
   test("attempts lie end to end on one cumulative active-time axis", () => {
-    const st = stitchStream([
+    const st = stitchCharacter([
       at("a1", 1000, [mark(2, null, 400)]),
       at("a2", 500, [mark(3, null, 100)]),
     ]);
@@ -1177,29 +1177,29 @@ describe("stitchStream", () => {
   });
 
   test("a seam is not a ding: the level the character already held draws nothing", () => {
-    const st = stitchStream([at("a1", 1000, [mark(5, null, 300)]), at("a2", 400, [mark(5, null, 10), mark(6, null, 200)])]);
+    const st = stitchCharacter([at("a1", 1000, [mark(5, null, 300)]), at("a2", 400, [mark(5, null, 10), mark(6, null, 200)])]);
     expect(st.points.map((p) => p.level)).toEqual([5, 6]);
   });
 
   test("a prior attempt with no active time breaks the stitch rather than compressing the axis", () => {
-    const st = stitchStream([at("a1", null, []), at("a2", 400, [mark(3, null, 100)])]);
+    const st = stitchCharacter([at("a1", null, []), at("a2", 400, [mark(3, null, 100)])]);
     expect(st.broke).toBe("attempt 1 of 2 recorded no active time");
   });
 
   test("the LAST attempt with no span just ends the line at what its marks prove", () => {
-    const st = stitchStream([at("a1", 1000, []), at("a2", null, [mark(4, null, 250)])]);
+    const st = stitchCharacter([at("a1", 1000, []), at("a2", null, [mark(4, null, 250)])]);
     expect(st.broke).toBeNull();
     expect(st.endX).toBe(1250);
   });
 });
 
-describe("streamSeries", () => {
+describe("characterSeries", () => {
   const fp = (over: Partial<ResultRun> = {}): ResultRun =>
     run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
-  const seriesOf = (runs: readonly ResultRun[]): ReturnType<typeof streamSeries> =>
-    streamSeries(streamRows(runs), runs);
+  const seriesOf = (runs: readonly ResultRun[]): ReturnType<typeof characterSeries> =>
+    characterSeries(characterRows(runs), runs);
 
-  test("a nameless stream is labelled by the short model and its effort, never the raw slug", () => {
+  test("a nameless character is labelled by the short model and its effort, never the raw slug", () => {
     const { series } = seriesOf([
       fp({
         runId: "n1",
@@ -1247,7 +1247,7 @@ describe("streamSeries", () => {
       [3, 1_300_000],
       [4, 1_600_000],
     ]);
-    // The line runs on to the stream's total active time, not to its last ding.
+    // The line runs on to the character's total active time, not to its last ding.
     expect(s.endX).toBe(1_900_000);
     expect(s.endLevel).toBe(4);
   });
@@ -1279,7 +1279,7 @@ describe("streamSeries", () => {
     ]);
   });
 
-  test("a prior attempt with no active time omits the stream rather than compressing the axis", () => {
+  test("a prior attempt with no active time omits the character rather than compressing the axis", () => {
     const runs = [
       fp({ runId: "d1", levels: [mark(3, null, null)], playtimeMs: null }),
       fp({ runId: "d2", continuedFrom: "d1", startedAt: 200, levels: [mark(4, null, 60_000)], playtimeMs: 90_000 }),
@@ -1334,7 +1334,7 @@ describe("streamSeries", () => {
     expect(s.points.map((p) => p.level)).toEqual([9]);
   });
 
-  test("a live stream's line ends at the run's own total, which the viewer computes against now", () => {
+  test("a live character's line ends at the run's own total, which the viewer computes against now", () => {
     const runs = [
       fp({ runId: "g1", live: true, levels: [mark(2, null, 10_000)], playtimeMs: 900_000 }),
     ];
@@ -1343,7 +1343,7 @@ describe("streamSeries", () => {
     expect(s.endX).toBe(900_000);
   });
 
-  test("a stream with no placeable mark is omitted with its reason, never drawn flat at zero", () => {
+  test("a character with no placeable mark is omitted with its reason, never drawn flat at zero", () => {
     // Two different nothings, and the caption says which.
     expect(seriesOf([fp({ runId: "h1", levels: [], playtimeMs: 60_000 })]).omitted[0]!.why).toBe(
       "no level recorded yet",
@@ -1366,7 +1366,7 @@ describe("streamSeries", () => {
     ]);
   });
 
-  test("a viewer that predates continuedFrom does not report every stream as truncated", () => {
+  test("a viewer that predates continuedFrom does not report every character as truncated", () => {
     // The field is absent, not null, off an older viewer — and `undefined !==
     // null` would have marked the whole fleet as missing history.
     const older = fp({ runId: "m1", levels: [mark(3, null, 0)], playtimeMs: 60_000 });
@@ -1383,10 +1383,10 @@ describe("streamSeries", () => {
     const { series } = seriesOf(runs);
     expect(series.map((s) => s.label)).toEqual(["High", "Low", "Same"]);
     const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
-    const layout = streamChartLayout(series, box);
+    const layout = characterChartLayout(series, box);
     expect(layout.xMax).toBe(200_000);
     expect(layout.yMax).toBeGreaterThanOrEqual(8);
-    // Two streams sitting at the same level still get two readable labels.
+    // Two characters sitting at the same level still get two readable labels.
     const [low, same] = [layout.placed[1]!, layout.placed[2]!];
     expect(low.endCy).toBe(same.endCy);
     expect(Math.abs(low.labelY - same.labelY)).toBeGreaterThanOrEqual(12);
@@ -1396,19 +1396,19 @@ describe("streamSeries", () => {
     expect(layout.py(0)).toBe(box.y0);
   });
 
-  test("a stream label pushed more than one row off its line gets a leader from the badge; one row does not", () => {
-    // Five streams holding the same level at the same time: the stack is five rows deep.
+  test("a character label pushed more than one row off its line gets a leader from the badge; one row does not", () => {
+    // Five characters holding the same level at the same time: the stack is five rows deep.
     const runs = ["Ann", "Bob", "Cyd", "Dee", "Eve"].map((c, i) =>
       fp({ runId: `${c}1`, character: c, levels: [mark(4, null, 0)], playtimeMs: 100_000 + i }),
     );
     const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
     const { series } = seriesOf(runs);
-    const layout = streamChartLayout(series, box);
+    const layout = characterChartLayout(series, box);
     const rows = layout.placed.map((p) => Math.round((p.labelY - layout.placed[0]!.labelY) / LABEL_ROW));
     expect(rows).toEqual([0, 1, 2, 3, 4]);
     expect(layout.placed.map((p) => p.leader === null)).toEqual([true, true, false, false, false]);
     for (const p of layout.placed) {
-      expect(p.labelX).toBe(streamLabelX(p.endCx));
+      expect(p.labelX).toBe(characterLabelX(p.endCx));
       expect(p.labelY + LABEL_DESC).toBeLessThanOrEqual(box.y0);
       if (p.leader !== null) {
         expect(p.leader.y1).toBe(p.endCy);
@@ -1417,19 +1417,19 @@ describe("streamSeries", () => {
       }
     }
     // The stack is a function of the set: a reversed input places identically.
-    const again = streamChartLayout([...series].reverse(), box);
-    expect(again.placed.map((p) => [p.series.streamId, p.labelY])).toEqual(layout.placed.map((p) => [p.series.streamId, p.labelY]));
+    const again = characterChartLayout([...series].reverse(), box);
+    expect(again.placed.map((p) => [p.series.characterId, p.labelY])).toEqual(layout.placed.map((p) => [p.series.characterId, p.labelY]));
   });
 
   test("the field's cue is top-left, gives way to a badge, and a label that would reach it is pushed a row down", () => {
-    // A stream at the top tick with next to no playtime: its badge sits in
+    // A character at the top tick with next to no playtime: its badge sits in
     // the corner and its label starts a badge past the axis.
     const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
     const early = seriesOf([
       fp({ runId: "e1", character: "Early", levels: [mark(8, null, 0)], playtimeMs: 1 }),
       fp({ runId: "l1", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 }),
     ]).series;
-    const l = streamChartLayout(early, box);
+    const l = characterChartLayout(early, box);
     expect(l.cue.text).toBe("↖ better");
     expect(l.cue.anchor).toBe("start");
     expect(l.cue.rect.t).toBe(box.y1 + CUE_PAD);
@@ -1437,41 +1437,41 @@ describe("streamSeries", () => {
     expect(top.endCy).toBe(box.y1);
     // The cue stepped right past the badge on the line's end rather than sitting under it.
     expect(l.cue.rect.l).toBeGreaterThan(box.x0 + CUE_PAD);
-    expect(rectsOverlap(l.cue.rect, puckRect(streamIconCx(top.endCx), top.endCy))).toBe(false);
-    // The top stream's label sits on its line — its box ends where the cue's begins, and touching is not overlapping.
+    expect(rectsOverlap(l.cue.rect, puckRect(characterIconCx(top.endCx), top.endCy))).toBe(false);
+    // The top character's label sits on its line — its box ends where the cue's begins, and touching is not overlapping.
     expect(top.labelY).toBeCloseTo(top.endCy + 3.5, 9);
     for (const p of l.placed) expect(rectsOverlap({ l: p.labelX, t: p.labelY - 10, r: p.labelX + 60, b: p.labelY + LABEL_DESC }, l.cue.rect)).toBe(false);
     // A line just under the top tick, on a short plot, puts its label's row
     // across the cue: the label is pushed down a row, as it would be for a
     // label already there. Level 9 alone ticks to 10, so it is a tenth down.
-    // (The long stream is what puts the short one in the corner: alone, its
+    // (The long character is what puts the short one in the corner: alone, its
     // own end would be the axis's ceiling. Its label sits rows away.)
     const short = { x0: 50, x1: 900, y0: 116, y1: 16 };
     const late = fp({ runId: "l1", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 });
-    const under = streamChartLayout(seriesOf([fp({ runId: "e1", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 1 }), late]).series, short);
+    const under = characterChartLayout(seriesOf([fp({ runId: "e1", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 1 }), late]).series, short);
     const u = under.placed.find((p) => p.series.label === "Early")!;
     expect(u.endCy).toBe(26);
     // Two rows here, not one: a row down its box still reached into the cue's.
     expect(u.labelY).toBeCloseTo(u.endCy + 3.5 + 2 * LABEL_ROW, 9);
     expect(u.labelY - LABEL_H).toBeGreaterThanOrEqual(under.cue.rect.b);
     expect(rectsOverlap({ l: u.labelX, t: u.labelY - LABEL_H, r: u.labelX + 60, b: u.labelY + LABEL_DESC }, under.cue.rect)).toBe(false);
-    // The same stream further along the axis is nowhere near the cue and keeps its natural row.
-    const far = streamChartLayout(seriesOf([fp({ runId: "e1", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 150_000 }), late]).series, short);
+    // The same character further along the axis is nowhere near the cue and keeps its natural row.
+    const far = characterChartLayout(seriesOf([fp({ runId: "e1", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 150_000 }), late]).series, short);
     const f = far.placed.find((p) => p.series.label === "Early")!;
     expect(f.labelY).toBeCloseTo(f.endCy + 3.5, 9);
   });
 
   /*
-   * The badge at each line's end (operator, 2026-08-29). `StreamChart` draws it
+   * The badge at each line's end (operator, 2026-08-29). `CharacterChart` draws it
    * from `series.model` through the same `familyOf` lookup `ModelIcon` and the
    * scored scatter use, so what is testable without a DOM is the pair the
-   * component reads: one series per stream, each carrying the model whose
+   * component reads: one series per character, each carrying the model whose
    * family the badge is, and an id no family claims falling through to the
    * monogram rather than to a hole. The glob behind `logoHrefOf` is a Vite
    * feature, which is why the lookup and not the element is what is pinned —
    * `dashboard/README.md` says why the components have no DOM harness.
    */
-  test("every series carries the model its badge is drawn from, one per stream", () => {
+  test("every series carries the model its badge is drawn from, one per character", () => {
     const runs = [
       fp({ runId: "s1", model: "anthropic/claude-sonnet-4-5", character: "Anvi", levels: [mark(9, null, 0)], playtimeMs: 100_000 }),
       fp({ runId: "s2", model: "z-ai/glm-5.2:free", character: "Bree", levels: [mark(7, null, 0)], playtimeMs: 100_000 }),
@@ -1487,7 +1487,7 @@ describe("streamSeries", () => {
     expect(series.map((x) => familyOf(x.model)?.id ?? null)).toEqual(["claude", "glm", null]);
     // …and the id nothing claims gets a letter instead, never an empty badge.
     expect(monogramOf(series[2]!.model)).not.toBe("");
-    // One badge per stream, not one per attempt: a chain is still a single series.
+    // One badge per character, not one per attempt: a chain is still a single series.
     const chained = seriesOf([
       fp({ runId: "c1", model: "openai/gpt-5.6-luna", character: "Dex", levels: [mark(3, null, 0)], playtimeMs: 100_000 }),
       fp({
@@ -1513,11 +1513,11 @@ describe("a withheld pause reason is not printed back as a detail", () => {
     run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...p });
 
   test("the opaque token leaves no detail; a real reason still shows", () => {
-    const opaque = streamRows([fp({ runId: "a", pauseReason: OPAQUE_PAUSE_REASON })])[0]!;
+    const opaque = characterRows([fp({ runId: "a", pauseReason: OPAQUE_PAUSE_REASON })])[0]!;
     expect(opaque.status).toBe("paused");
     expect(opaque.statusDetail).toBeNull();
 
-    const real = streamRows([fp({ runId: "b", pauseReason: "operator-pause" })])[0]!;
+    const real = characterRows([fp({ runId: "b", pauseReason: "operator-pause" })])[0]!;
     expect(real.status).toBe("paused");
     expect(real.statusDetail).toBe("operator-pause");
   });

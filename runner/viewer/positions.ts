@@ -231,7 +231,7 @@ export function readPositions(
       model: run.model,
       // Off the comparability stamp, which is already public on the run row:
       // the map names a nameless pip by its model, and the effort is the half
-      // of that name two sibling streams differ by.
+      // of that name two sibling characters differ by.
       effort: run.comparability?.effort ?? null,
       map: pos.map,
       x: pos.x,

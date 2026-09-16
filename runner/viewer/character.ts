@@ -1,7 +1,7 @@
 /**
- * A freeplay stream, aggregated at read time.
+ * A freeplay character, aggregated at read time.
  *
- * The complaint this answers: a stream's figures are not recorded across the
+ * The complaint this answers: a character's figures are not recorded across the
  * whole run. Every counter the runner keeps is per *attempt* — `questsCompleted`
  * is the session's own `completions.length`, the tokens and the cost are that
  * attempt's trajectory, the playtime is that attempt's active segments — so a
@@ -11,7 +11,7 @@
  * The fix is here and not in the runner. What the runner writes is the
  * model-visible surface and a methodology matter; an old run is read
  * differently, not relabelled (docs/METHODOLOGY.md). So the attempts stay as
- * they were recorded and the reader sums them, which also means a stream whose
+ * they were recorded and the reader sums them, which also means a character whose
  * oldest attempts predate a column reports what the attempts that have it
  * prove, and says how many that was.
  *
@@ -25,11 +25,11 @@
  *   xp, playtime, tokens, deaths and flights happened and add up. Level, money
  *   and achievements are what the character HOLDS — the achievement tap reports
  *   the whole backlog, so the latest attempt that recorded any is already the
- *   stream's answer and summing it would count every achievement twice.
+ *   character's answer and summing it would count every achievement twice.
  *
  * The chain itself is `lineage.ts`, shared with the ladder and the runs table.
- * `runs` here is the **forward** stream — the deepest chain under the root, the
- * same one `streamRows` collapses to a row — not the ancestors-and-self walk:
+ * `runs` here is the **forward** character — the deepest chain under the root, the
+ * same one `characterRows` collapses to a row — not the ancestors-and-self walk:
  * a reader on attempt 11 wants to see 12, which is the whole point.
  */
 
@@ -40,10 +40,10 @@ import type {
   DeathFacts,
   ResultRun,
   SpellFacts,
-  StreamAttempt,
-  StreamCost,
-  StreamTotals,
-  StreamView,
+  CharacterAttempt,
+  CharacterCost,
+  CharacterTotals,
+  CharacterView,
   TalentFacts,
   TaxiFacts,
   TokenTotals,
@@ -72,11 +72,11 @@ function latest<T>(values: readonly (T | null | undefined)[]): T | null {
 }
 
 /**
- * The stream's token totals.
+ * The character's token totals.
  *
  * `contextTokens` is the size of a prompt, not a tally, so it is the last
  * attempt's reading rather than a sum of context windows that never coexisted.
- * The `source` degrades to the weakest any attempt reported: a stream holding
+ * The `source` degrades to the weakest any attempt reported: a character holding
  * one snapshot-sourced attempt is under-read as a whole, and labelling it
  * `reported` because the other eleven were would hide exactly the caveat the
  * label exists to carry.
@@ -107,7 +107,7 @@ function costUsd(c: CostFigure | null | undefined): number | null {
   return c.basis === "none" ? null : c.usd;
 }
 
-function mergeCost(runs: readonly ResultRun[]): StreamCost {
+function mergeCost(runs: readonly ResultRun[]): CharacterCost {
   const actual = runs.map((r) => costUsd(r.actualCost));
   const expected = runs.map((r) => costUsd(r.expectedCost));
   return {
@@ -154,7 +154,7 @@ function mergeSpells(runs: readonly ResultRun[]): SpellFacts | null {
     // login baseline — so it adds up. `atLogin` is a baseline and does not: the
     // second attempt logged in holding everything the first one learned, and
     // summing them would count the whole book once per continuation. The
-    // stream's baseline is its OLDEST served attempt's, which is the book the
+    // character's baseline is its OLDEST served attempt's, which is the book the
     // character carried into the history on screen.
     learned: held.reduce((n, s) => n + s.learned, 0),
     atLogin: held[0]!.atLogin,
@@ -193,14 +193,14 @@ function mergeTrades(runs: readonly ResultRun[]): TradeFacts | null {
  * The achievements the character holds.
  *
  * Not a sum: the tap reports the whole backlog a character has, so the latest
- * attempt that recorded any already speaks for the stream, and adding the
+ * attempt that recorded any already speaks for the character, and adding the
  * attempts would count every achievement once per continuation.
  */
-function streamAchievements(runs: readonly ResultRun[]): AchievementFacts | null {
+function characterAchievements(runs: readonly ResultRun[]): AchievementFacts | null {
   return latest(runs.map((r) => r.achievements ?? null));
 }
 
-function attemptOf(r: ResultRun): StreamAttempt {
+function attemptOf(r: ResultRun): CharacterAttempt {
   return {
     runId: r.runId,
     startedAt: r.startedAt,
@@ -224,12 +224,12 @@ function attemptOf(r: ResultRun): StreamAttempt {
   };
 }
 
-function totalsOf(runs: readonly ResultRun[]): StreamTotals {
+function totalsOf(runs: readonly ResultRun[]): CharacterTotals {
   const last = runs[runs.length - 1];
   return {
     attempts: runs.length,
     startedAt: runs.map((r) => r.startedAt).find((t) => t !== null) ?? null,
-    // The last attempt's end, and nothing while it is still going: a stream
+    // The last attempt's end, and nothing while it is still going: a character
     // whose newest attempt is live has not ended, whatever the older ones say.
     endedAt: last === undefined || last.live === true ? null : (last.endedAt ?? null),
     playtimeMs: sum(runs.map((r) => r.playtimeMs)),
@@ -237,14 +237,14 @@ function totalsOf(runs: readonly ResultRun[]): StreamTotals {
     xpEarned: sum(runs.map((r) => r.xpEarned)),
     tokens: mergeTokens(runs.map((r) => r.tokens)),
     cost: mergeCost(runs),
-    // The character never de-levels, so the stream's level is the highest any
+    // The character never de-levels, so the character's level is the highest any
     // attempt observed — not the last one's, which can be a sample short.
     level: runs.reduce<number | null>(
       (best, r) => (r.maxLevel === null ? best : best === null ? r.maxLevel : Math.max(best, r.maxLevel)),
       null,
     ),
     money: latest(runs.map((r) => r.money)),
-    achievements: streamAchievements(runs),
+    achievements: characterAchievements(runs),
     deaths: mergeDeaths(runs),
     taxi: mergeTaxi(runs),
     spells: mergeSpells(runs),
@@ -257,20 +257,20 @@ function totalsOf(runs: readonly ResultRun[]): StreamTotals {
 }
 
 /**
- * The stream one run belongs to, or null when it belongs to none worth printing.
+ * The character one run belongs to, or null when it belongs to none worth printing.
  *
  * `all` is the set the walk resolves against — every run the viewer serves, the
  * same rows `/api/results` builds — so a predecessor that is archived or gone
- * makes its successor a root rather than dropping it, and the stream says it
+ * makes its successor a root rather than dropping it, and the character says it
  * begins mid-history (`truncated`).
  *
  * The chain served is the deepest one under the run's root, which is the
  * forward view: attempt 11 lists 12. A fork (two launches claiming one
- * predecessor) resolves the way `streamRows` resolves it — the longer chain,
+ * predecessor) resolves the way `characterRows` resolves it — the longer chain,
  * then the later start — and a run that ends up on the losing branch keeps its
- * own ancestors-and-self walk rather than being shown a stream it is not on.
+ * own ancestors-and-self walk rather than being shown a character it is not on.
  */
-export function streamViewOf(runId: string, all: readonly ResultRun[]): StreamView | null {
+export function characterViewOf(runId: string, all: readonly ResultRun[]): CharacterView | null {
   const lineage = lineageIndex(all).get(runId);
   if (!hasLineage(lineage)) return null;
 
@@ -281,7 +281,7 @@ export function streamViewOf(runId: string, all: readonly ResultRun[]): StreamVi
   let tip = byId.get(runId);
   for (const r of kept) {
     const c = chains.get(r.runId)!;
-    if (c[0] !== lineage.streamId) continue;
+    if (c[0] !== lineage.characterId) continue;
     if (c.length > chain.length || (c.length === chain.length && (r.startedAt ?? 0) > (tip?.startedAt ?? 0))) {
       chain = c;
       tip = r;
@@ -304,7 +304,7 @@ export function streamViewOf(runId: string, all: readonly ResultRun[]): StreamVi
    */
   const at = chain.indexOf(runId);
   return {
-    streamId: lineage.streamId,
+    characterId: lineage.characterId,
     attempt: at + 1,
     attempts: chain.length,
     previous: at > 0 ? chain[at - 1]! : null,
@@ -312,7 +312,7 @@ export function streamViewOf(runId: string, all: readonly ResultRun[]): StreamVi
     /*
      * The `typeof` is not paranoia: a row served by a viewer that predates the
      * field has no `continuedFrom` at all, and `undefined !== null` would mark
-     * every stream as missing history — the rule `streamSeries` states for the
+     * every character as missing history — the rule `characterSeries` states for the
      * same flag it draws.
      */
     truncated: typeof root.continuedFrom === "string" && !byId.has(root.continuedFrom),

@@ -196,9 +196,9 @@ memoises each run's totals on the file's size and mtime: a finished run is read
 once per process, a live one only as it grows, and the scan keeps a few numbers
 rather than a summary per entry.
 
-## A freeplay stream is aggregated at read time
+## A freeplay character is aggregated at read time
 
-A durable freeplay stream is one character across many attempts
+A durable freeplay character is one character across many attempts
 (docs/OPERATIONS.md, "Freeplay streams are durable"), and every counter the
 runner keeps is per *attempt*: `questsCompleted` is that session's own
 `completions.length`, the tokens and the cost are that attempt's trajectory, the
@@ -206,7 +206,7 @@ playtime is that attempt's active segments. So the run page used to answer "how
 many quests has this character done" with the last session's tally, and a reader
 could only see the run one attempt at a time.
 
-`/api/run/<id>` now carries a `stream` (`stream.ts`) for a run with lineage: the
+`/api/run/<id>` now carries a `character` (`character.ts`) for a run with lineage: the
 whole chain, oldest first, each attempt with its own figures, plus the totals
 across them. **Nothing is written back.** What the runner records is the
 model-visible surface and a methodology matter; an old run is read differently,
@@ -228,16 +228,16 @@ What sums and what does not is the difference between a tally and a state:
 - **Cost is two sums and a coverage.** A `CostFigure` carries a basis, a price
   id and a date, and a chain whose attempts were one provider-reported, one
   priced from the table and one neither has no honest single basis — so
-  `StreamCost` adds the dollars and states how many attempts each sum covers,
+  `CharacterCost` adds the dollars and states how many attempts each sum covers,
   keeping actual and expected apart as `CostView` does. `asIfMetered` rides
-  along so a subscription stream does not read as a bill.
+  along so a subscription character does not read as a bill.
 - **Token source degrades to the weakest.** One `snapshot`-sourced attempt makes
-  the stream's total under-read, and labelling it `reported` because the other
+  the character's total under-read, and labelling it `reported` because the other
   eleven were would hide the caveat the label exists to carry.
 
 The chain is `lineage.ts`, shared with the dashboard over the `@viewer/*` alias,
 so the ladder's row, the runs table's column and this aggregation cannot
-disagree about which attempts belong to one stream. The chain served is the
+disagree about which attempts belong to one character. The chain served is the
 **forward** one — the deepest under the root — because a reader on attempt 11
 wants to see 12. The gate is narrow: the block runs only for a run that is
 freeplay or names a `continuedFrom`, so a scored run's page pays nothing for it,
@@ -336,7 +336,7 @@ readonly, and the runs directory is only ever listed and read.
 | `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
 | `/api/fleet` | the fleet supervisor's jobs, accounts, gate and heartbeat |
 | `/api/tools` | the eight model-facing tools — name, description and schema off `runner/src/tools.ts` at request time, plus one example call (tools with arguments) or one returns line (tools without); harness text only, served in public mode too |
-| `/api/run/<id>` | run row, state series, entry count, token totals, playtime, reflection windows, and — for a freeplay attempt — the whole `stream` it is part of |
+| `/api/run/<id>` | run row, state series, entry count, token totals, playtime, reflection windows, and — for a freeplay attempt — the whole `character` it is part of |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200); in public mode each entry crosses `projectEntry` and `redactGameProse` |
 | `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry (withheld in public mode) |
 | `/api/run/<id>/scratchpad` | the run's scratchpad.md — the model's own notes, served in public mode too |

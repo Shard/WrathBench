@@ -1,9 +1,9 @@
 /**
  * The pieces the hand-drawn charts share: the frame, the two axes' ticks and
- * captions, and the model puck. `LadderChart` and `StreamChart` used to each
+ * captions, and the model puck. `LadderChart` and `CharacterChart` used to each
  * carry a copy of this markup; one drift between the copies (a tick offset, a
  * ring width) would have been a difference a reader could see and nobody
- * intended. Each chart keeps its own margins — the stream chart's right
+ * intended. Each chart keeps its own margins — the character chart's right
  * margin holds its end labels, the scatter's does not — so the box is the
  * chart's and only the drawing of it is here.
  *
@@ -19,7 +19,7 @@ import { logoHrefOf } from "./ModelIcon";
 /**
  * The frame every chart shares: 1000 wide, so a viewBox unit is a tenth of a
  * percent of the width and the label metrics in `lib/ladder.ts` mean the same
- * thing on each. 380 tall is the scatter's and the stream chart's height; the
+ * thing on each. 380 tall is the scatter's and the character chart's height; the
  * run page's `XpChart` is a shorter strip and keeps its own.
  */
 export const VB_W = 1000;
@@ -31,7 +31,7 @@ export const LOGO_S = 7.5;
 /**
  * The y axis: a dashed gridline across the plot at each tick, with the tick's
  * text just left of the axis. `format` returning null draws the gridline and
- * no text — the stream chart's level 0, a line worth having and a level no
+ * no text — the character chart's level 0, a line worth having and a level no
  * one has.
  *
  * `dominant-baseline="central"` centres the text on the gridline. It replaces
@@ -138,13 +138,13 @@ export function Cue(props: { cue: ChartCue }) {
  * The puck is light in both themes on purpose — the logo SVGs paint
  * `currentColor`, which an image document resolves to black — and the caller
  * colours the puck's edge with whatever the chart's colour means there (the
- * harness on the scatter, the stream's status on the field). `ring` adds the
+ * harness on the scatter, the character's status on the field). `ring` adds the
  * page-coloured separation ring outside it, which is what tells two pucks
  * apart when they land on top of each other; the scatter wants it, the
- * stream chart's badge (one per line, never stacked) does not.
+ * character chart's badge (one per line, never stacked) does not.
  *
  * A model no family claims has no logo. The default fallback is the
- * `lib/lineup` monogram on a panel-coloured puck, so a stream is never left
+ * `lib/lineup` monogram on a panel-coloured puck, so a character is never left
  * with a hole where every other one has a badge; a caller with its own
  * convention passes `fallback` — the scatter keeps its coloured dot, the same
  * fallback every other render site takes for it.

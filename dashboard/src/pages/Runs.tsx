@@ -71,7 +71,7 @@ export default function Runs() {
   /*
    * Freeplay lineage (`runner/viewer/lineage.ts`), so a12 does not read as an unrelated
    * row beside a11. Indexed over everything the server served rather than over
-   * the rows on screen: a stream that crossed a minor bump has its predecessor
+   * the rows on screen: a character that crossed a minor bump has its predecessor
    * outside the shell's series filter, and that is exactly where the reader
    * most needs to be told what the run continues. The link still resolves —
    * the run page takes any id.
@@ -202,7 +202,7 @@ export default function Runs() {
  */
 function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | undefined }) {
   const r = (): ResultRun => props.row;
-  /** Undefined unless this run is part of a stream: one attempt is not lineage. */
+  /** Undefined unless this run is part of a character: one attempt is not lineage. */
   const lin = (): Lineage | undefined => (hasLineage(props.lineage) ? props.lineage : undefined);
   const runHref = (id: string): string => `/run/${encodeURIComponent(id)}${props.query}`;
   const href = (): string => `/run/${encodeURIComponent(r().runId)}${props.query}`;
@@ -229,13 +229,13 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
             <A href={href()} title={r().runId}>
               {shortRunId(r().runId)}
             </A>
-            {/* A durable freeplay stream is one character across attempts, and
+            {/* A durable freeplay character is one character across attempts, and
                 this line is the whole of the link between them: the table sorts
                 thirteen ways, so a11 is often nowhere near a12 and the text has
                 to carry what adjacency cannot. */}
             <Show when={lin()}>
               {(l) => (
-                <div class="dim" title="a durable freeplay stream: one character, continued across attempts">
+                <div class="dim" title="a durable freeplay character: one character, continued across attempts">
                   attempt {l().attempt} of {l().attempts}
                   <Show when={l().previous}>
                     {(p) => (
@@ -247,10 +247,10 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
                       </>
                     )}
                   </Show>
-                  <Show when={l().previous !== l().streamId && l().attempt > 2}>
+                  <Show when={l().previous !== l().characterId && l().attempt > 2}>
                     {" · from "}
-                    <A href={runHref(l().streamId)} title={l().streamId}>
-                      {shortRunId(l().streamId)}
+                    <A href={runHref(l().characterId)} title={l().characterId}>
+                      {shortRunId(l().characterId)}
                     </A>
                   </Show>
                 </div>
@@ -363,6 +363,6 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
     }
   };
   /* The rail is the cheap half of the same fact: where the sort does put a
-     stream's attempts together, they read as one block. */
-  return <tr class={lin() === undefined ? "" : "stream"}>{RUN_COLUMNS.map(cell)}</tr>;
+     character's attempts together, they read as one block. */
+  return <tr class={lin() === undefined ? "" : "character"}>{RUN_COLUMNS.map(cell)}</tr>;
 }

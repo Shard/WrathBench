@@ -10,7 +10,7 @@
  */
 
 import type { ModelEpisodeView, ModelRowView, ModelStatusView, TierView } from "@viewer/api-types";
-import type { StreamRow } from "./ladder";
+import type { CharacterRow } from "./ladder";
 
 /**
  * The table, left to right, as the header prints it — these are labels, not
@@ -213,22 +213,22 @@ export function resolvedSummary(
 }
 
 /**
- * The model's freeplay stream, for the column beside its scored episodes.
+ * The model's freeplay character, for the column beside its scored episodes.
  *
  * Freeplay is one character per model and effort (docs/OPERATIONS.md, "Freeplay
  * streams are durable"), so the match is on those two fields and the row is the
- * ladder's own `StreamRow` — the same status and level the freeplay ladder
+ * ladder's own `CharacterRow` — the same status and level the freeplay ladder
  * prints, so the two pages cannot disagree about whether a character is live.
  * Null when the model has never had one.
  */
 export function freeplayOf(
   row: Pick<ModelRowView, "model" | "effort">,
-  streams: readonly StreamRow[],
-): StreamRow | null {
-  return streams.find((s) => s.model === row.model && s.effort === row.effort) ?? null;
+  characters: readonly CharacterRow[],
+): CharacterRow | null {
+  return characters.find((s) => s.model === row.model && s.effort === row.effort) ?? null;
 }
 
 /** `live · L15` as the cell reads it; the hover carries the reason. */
-export function freeplayLabel(s: StreamRow): string {
+export function freeplayLabel(s: CharacterRow): string {
   return s.level === null ? s.status : `${s.status} · L${s.level}`;
 }

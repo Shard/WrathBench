@@ -48,15 +48,15 @@ import {
   type FeedEntry,
   type ModelRowView,
   type RunDetailResponse,
-  type StreamAttempt,
-  type StreamView,
+  type CharacterAttempt,
+  type CharacterView,
   type TokenTotals,
 } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
-import { StreamPlot } from "../components/StreamChart";
-import { stitchStream, type StreamSeries } from "../lib/ladder";
+import { CharacterPlot } from "../components/CharacterChart";
+import { stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, fmtUsd, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
@@ -105,7 +105,7 @@ const SILENT_MS = 120_000;
 /**
  * How often a live run's summary is re-fetched.
  *
- * The entry feed arrives over the tail stream, but the summary card does not:
+ * The entry feed arrives over the tail character, but the summary card does not:
  * playtime, level and money come from `/api/run/<id>`, and playtime for a live
  * run advances with the clock. Matched to the fleet listing's own 10s poll so
  * the two pages show the same number rather than one lagging the other.
@@ -191,7 +191,7 @@ export default function RunDetail() {
   };
   const [disconnected, setDisconnected] = createSignal(false);
   /*
-   * Where this run sits in its freeplay stream, or undefined for a run that has
+   * Where this run sits in its freeplay character, or undefined for a run that has
    * none. The detail endpoint reads one run directory and so cannot see a
    * sibling; the listing can, and this page already talks to it nowhere else,
    * so the lineage is one fetch off `/api/results` rather than a field the
@@ -236,38 +236,38 @@ export default function RunDetail() {
   const live = (): boolean => detail()?.run.terminationReason === null;
 
   /**
-   * This run's stream as one series for `StreamPlot` — the same shape, the same
-   * stitching (`stitchStream`) and the same axes the freeplay field is drawn
+   * This run's character as one series for `CharacterPlot` — the same shape, the same
+   * stitching (`stitchCharacter`) and the same axes the freeplay field is drawn
    * on, so a character's line does not change meaning between the two pages.
    *
-   * Null when the run is not part of a stream. A stream that cannot be laid out
+   * Null when the run is not part of a character. A character that cannot be laid out
    * — a prior attempt with no active-time reading, or no level mark carrying
    * one — comes back with an empty series and the reason, which the plot prints
    * rather than drawing something wrong.
    */
-  const streamPlot = createMemo(
-    (): { series: StreamSeries[]; omitted: { streamId: string; label: string; why: string }[] } | null => {
+  const characterPlot = createMemo(
+    (): { series: CharacterSeries[]; omitted: { characterId: string; label: string; why: string }[] } | null => {
       const d = detail();
-      const st = d?.stream;
+      const st = d?.character;
       if (d === undefined || st === undefined) return null;
       const model = d.run.model ?? "(unnamed)";
       const label = d.run.character ?? modelDisplay(model);
       const last = st.runs[st.runs.length - 1];
       if (last === undefined) {
-        return { series: [], omitted: [{ streamId: st.streamId, label, why: "no attempt served" }] };
+        return { series: [], omitted: [{ characterId: st.characterId, label, why: "no attempt served" }] };
       }
-      const { points, endX, broke } = stitchStream(st.runs);
+      const { points, endX, broke } = stitchCharacter(st.runs);
       const why = broke ?? (points.length === 0 ? "no level mark carries an active-time reading" : null);
-      if (why !== null) return { series: [], omitted: [{ streamId: st.streamId, label, why }] };
+      if (why !== null) return { series: [], omitted: [{ characterId: st.characterId, label, why }] };
       const end = points[points.length - 1]!;
       return {
         series: [
           {
-            streamId: st.streamId,
+            characterId: st.characterId,
             label,
             model,
             effort: d.run.comparability?.effort ?? null,
-            // The stream is doing whatever its newest attempt is doing.
+            // The character is doing whatever its newest attempt is doing.
             status: statusOf(last),
             attempts: st.attempts,
             latestRunId: last.runId,
@@ -291,7 +291,7 @@ export default function RunDetail() {
      * registered there: Solid tracks the owner through a synchronous global,
      * and an `onCleanup` called after the first await attaches to nothing. The
      * handle is registered now and filled in later. Leaking it would be worse
-     * than a stray EventSource — the server clears the stream's 1 Hz rescan in
+     * than a stray EventSource — the server clears the character's 1 Hz rescan in
      * `cancel()`, which only fires when the client closes.
      */
     let stop: (() => void) | undefined;
@@ -313,8 +313,8 @@ export default function RunDetail() {
         setDetail(d);
         setTokens(d.tokens);
         /*
-         * The stream this run belongs to, when the server did not answer with
-         * one. It does since 2026-09-05 (`stream` on `/api/run/<id>`, which also
+         * The character this run belongs to, when the server did not answer with
+         * one. It does since 2026-09-05 (`character` on `/api/run/<id>`, which also
          * carries the whole chain's totals), and this fetch is the fallback for
          * a snapshot or a viewer built before that field existed: it recovers
          * the lineage LINE, not the totals, which cannot be derived here.
@@ -327,7 +327,7 @@ export default function RunDetail() {
          * run whose metadata predates the stamp has no tuple and would
          * otherwise lose its line.
          */
-        if (d.stream === undefined && (d.run.continuedFrom !== null || d.run.comparability?.episode === "freeplay")) {
+        if (d.character === undefined && (d.run.continuedFrom !== null || d.run.comparability?.episode === "freeplay")) {
           void api
             .results("all", true, "all")
             .then((res) => {
@@ -403,7 +403,7 @@ export default function RunDetail() {
         });
         // Only a live run needs the tail; a finished one never grows again.
         // The public build has no tail to open at all: a bucket of published
-        // JSON serves no stream, and an EventSource against it would be a
+        // JSON serves no character, and an EventSource against it would be a
         // reconnect loop against a 404.
         if (SNAPSHOT_MODE) return;
         stop = subscribeTail(api.streamUrl(params.id), {
@@ -503,21 +503,21 @@ export default function RunDetail() {
               </h2>
 
               {/*
-                The freeplay stream this run is one attempt of, as the whole
-                stream: every attempt in order, this one marked, each a link.
+                The freeplay character this run is one attempt of, as the whole
+                character: every attempt in order, this one marked, each a link.
                 A reader landing on a12 wants a11 — and, landing on a11, wants
                 to see that the character kept playing without having to guess
                 a run id. The one-line version below is the fallback for a
-                viewer or snapshot that answers no `stream`.
+                viewer or snapshot that answers no `character`.
               */}
-              <Show when={d().stream}>{(st) => <AttemptStrip stream={st()} runId={run().runId} />}</Show>
-              <Show when={d().stream === undefined && hasLineage(lineage()) ? lineage() : undefined}>
+              <Show when={d().character}>{(st) => <AttemptStrip character={st()} runId={run().runId} />}</Show>
+              <Show when={d().character === undefined && hasLineage(lineage()) ? lineage() : undefined}>
                 {(l) => (
-                  <p class="dim" title="a durable freeplay stream: one character, continued across attempts">
-                    freeplay stream{" "}
-                    <Show when={l().streamId !== run().runId} fallback={shortRunId(l().streamId)}>
-                      <A href={`/run/${encodeURIComponent(l().streamId)}`} title={l().streamId}>
-                        {shortRunId(l().streamId)}
+                  <p class="dim" title="a durable freeplay character: one character, continued across attempts">
+                    freeplay character{" "}
+                    <Show when={l().characterId !== run().runId} fallback={shortRunId(l().characterId)}>
+                      <A href={`/run/${encodeURIComponent(l().characterId)}`} title={l().characterId}>
+                        {shortRunId(l().characterId)}
                       </A>
                     </Show>{" "}
                     · attempt {l().attempt} of {l().attempts}
@@ -546,17 +546,17 @@ export default function RunDetail() {
               </Show>
 
               {/*
-                For a stream, the character's whole climb comes first: level
+                For a character, the character's whole climb comes first: level
                 against cumulative active playtime, stitched across the
                 attempts, the same line the freeplay field draws. The per-attempt
                 XP chart stays below it — this session's shape is still worth
                 seeing, it is just not the run.
               */}
-              <Show when={streamPlot()}>
+              <Show when={characterPlot()}>
                 {(plot) => (
                   <>
-                    <h2 class="section">the stream, across {d().stream?.attempts} attempts</h2>
-                    <StreamPlot series={plot().series} omitted={plot().omitted} single />
+                    <h2 class="section">the character, across {d().character?.attempts} attempts</h2>
+                    <CharacterPlot series={plot().series} omitted={plot().omitted} single />
                     <h2 class="section">this attempt</h2>
                   </>
                 )}
@@ -628,7 +628,7 @@ export default function RunDetail() {
                         attempt is one click away, and the next one is at the
                         bottom.
                       */}
-                      <Show when={from() === 0 ? d().stream : undefined}>
+                      <Show when={from() === 0 ? d().character : undefined}>
                         {(st) => (
                           <Show when={st().previous}>
                             {(prev) => (
@@ -683,7 +683,7 @@ export default function RunDetail() {
                         attempt that has ENDED — a live one's feed has more
                         coming, and a "continues in" under it would be wrong.
                       */}
-                      <Show when={run().terminationReason !== null ? d().stream : undefined}>
+                      <Show when={run().terminationReason !== null ? d().character : undefined}>
                         {(st) => (
                           <Show when={st().next}>
                             {(next) => (
@@ -730,24 +730,24 @@ export default function RunDetail() {
                             ? "no activity for a while — the run may have stopped"
                             : activity()}{" "}
                           · {fmtAge(now() - lastWrite())}
-                          <Show when={disconnected()}> · <span class="err">stream disconnected</span></Show>
+                          <Show when={disconnected()}> · <span class="err">character disconnected</span></Show>
                         </span>
                       </Show>
                     </Show>
                   </div>
 
                   {/*
-                    For a stream, the character's totals are the headline and
+                    For a character, the character's totals are the headline and
                     this session's are the footnote — the whole complaint was a
                     page that answered "how many quests" with one attempt's
                     tally. The cards below keep the run's own figures, under a
                     heading that says which they are.
                   */}
-                  <Show when={d().stream}>
+                  <Show when={d().character}>
                     {(st) => (
                       <>
-                        <h2 class="section">the stream · {st().attempts} attempts</h2>
-                        <StreamTotals stream={st()} />
+                        <h2 class="section">the character · {st().attempts} attempts</h2>
+                        <CharacterTotalsCard character={st()} />
                         <h2 class="section">this attempt</h2>
                       </>
                     )}
@@ -931,29 +931,29 @@ export default function RunDetail() {
 }
 
 /**
- * What the character has done, across every attempt of its stream.
+ * What the character has done, across every attempt of its character.
  *
- * The figures are the server's (`stream.totals`, aggregated at read time in
- * `runner/viewer/stream.ts`), never re-derived here, so this card and the
+ * The figures are the server's (`character.totals`, aggregated at read time in
+ * `runner/viewer/character.ts`), never re-derived here, so this card and the
  * freeplay ladder cannot quote different numbers for one character. Each card
  * names this attempt's own figure underneath, because the reader is on one
  * attempt's page and the two must never be confusable.
  *
  * Null is not zero anywhere below: "not recorded" is printed as such, since a
- * stream whose older attempts predate a producer has not been observed doing
+ * character whose older attempts predate a producer has not been observed doing
  * none of it.
  */
-function StreamTotals(props: { stream: StreamView }) {
-  const t = (): StreamView["totals"] => props.stream.totals;
-  const cost = (): StreamView["totals"]["cost"] => t().cost;
+function CharacterTotalsCard(props: { character: CharacterView }) {
+  const t = (): CharacterView["totals"] => props.character.totals;
+  const cost = (): CharacterView["totals"]["cost"] => t().cost;
   /*
    * This attempt's own row from the STREAM, not from the run row beside it.
-   * The two are read at different moments on a live run — the stream's
+   * The two are read at different moments on a live run — the character's
    * attempts come off the listing's memoised rows, the run row is re-read per
    * request — and the footnote under a total must be the same figure the strip
    * above it lists, or the page quietly disagrees with itself.
    */
-  const here = (): StreamAttempt | undefined => props.stream.runs[props.stream.attempt - 1];
+  const here = (): CharacterAttempt | undefined => props.character.runs[props.character.attempt - 1];
   /** "this attempt: …" — the run's own reading, beside the character's. */
   const mine = (v: string): string => `this attempt: ${v}`;
   return (
@@ -989,7 +989,7 @@ function StreamTotals(props: { stream: StreamView }) {
         Two sums, never one. `CostFigure` carries a basis and a price date, and
         a chain of attempts priced three different ways has no single one — so
         the dollars are added and the COVERAGE is printed beside them, which is
-        what says how much of the stream the figure actually accounts for.
+        what says how much of the character the figure actually accounts for.
       */}
       <div class="card">
         <div class="k">cost — actual</div>
@@ -1044,7 +1044,7 @@ function StreamTotals(props: { stream: StreamView }) {
 }
 
 /**
- * The whole stream, attempt by attempt.
+ * The whole character, attempt by attempt.
  *
  * This is the thing a durable freeplay run did not have: a reader landing on
  * one attempt could see the run id either side of it and nothing else, so
@@ -1054,21 +1054,21 @@ function StreamTotals(props: { stream: StreamView }) {
  * and how long it played. The figures are the attempt's own; the totals are in
  * the sidebar, which is where the character's numbers live.
  */
-function AttemptStrip(props: { stream: StreamView; runId: string }) {
+function AttemptStrip(props: { character: CharacterView; runId: string }) {
   return (
     <div class="attempts">
-      <div class="attempts-head dim" title="a durable freeplay stream: one character, continued across attempts">
-        freeplay stream{" "}
-        <Show when={props.stream.streamId !== props.runId} fallback={shortRunId(props.stream.streamId)}>
-          <A href={`/run/${encodeURIComponent(props.stream.streamId)}`} title={props.stream.streamId}>
-            {shortRunId(props.stream.streamId)}
+      <div class="attempts-head dim" title="a durable freeplay character: one character, continued across attempts">
+        freeplay character{" "}
+        <Show when={props.character.characterId !== props.runId} fallback={shortRunId(props.character.characterId)}>
+          <A href={`/run/${encodeURIComponent(props.character.characterId)}`} title={props.character.characterId}>
+            {shortRunId(props.character.characterId)}
           </A>
         </Show>{" "}
-        · attempt {props.stream.attempt} of {props.stream.attempts}
+        · attempt {props.character.attempt} of {props.character.attempts}
         {/* The chain begins mid-history: the oldest attempt on screen still
             names a predecessor this viewer does not serve, so every total is a
             lower bound over what is shown. */}
-        <Show when={props.stream.truncated}>
+        <Show when={props.character.truncated}>
           {" "}
           · <span title="the oldest attempt served still names a predecessor this viewer does not hold">
             earlier attempts not served
@@ -1076,7 +1076,7 @@ function AttemptStrip(props: { stream: StreamView; runId: string }) {
         </Show>
       </div>
       <ol class="attempts-strip">
-        <For each={props.stream.runs}>
+        <For each={props.character.runs}>
           {(a, i) => {
             const here = (): boolean => a.runId === props.runId;
             const status = (): string => statusOf(a);

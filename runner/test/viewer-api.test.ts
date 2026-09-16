@@ -1098,7 +1098,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
   test("a freeplay continuation's lineage reaches the row and the results projection", async () => {
     const runs = fixture();
     // The fixture's run.sqlite predates the column, so this is also the
-    // "written before the durable stream existed" path: meta answers.
+    // "written before the durable character existed" path: meta answers.
     const dir = join(runs, RUN_ID);
     const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as {
       config: Record<string, unknown>;
@@ -1205,7 +1205,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
    * a point to serve.
    */
   function chainFixture(): string {
-    const runs = mkdtempSync(join(tmpdir(), "viewer-track-stream-"));
+    const runs = mkdtempSync(join(tmpdir(), "viewer-track-character-"));
     const comparability = comparabilityOf(
       configFromArgs(["--episode", "freeplay", "--model", "m"]),
       "harness-0.5",
@@ -1240,8 +1240,8 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
   }
 
   /*
-   * Item 119: the map's transport steps between a stream's attempts, so the
-   * track carries the neighbours the run page's `stream` names — not the
+   * Item 119: the map's transport steps between a character's attempts, so the
+   * track carries the neighbours the run page's `character` names — not the
    * chain, not its totals, which would make a replay's fetch a run page's.
    */
   test("a freeplay attempt's track names the attempts either side of it", async () => {
@@ -1249,11 +1249,11 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     const handle = api(runs);
     const trackOf = async (id: string): Promise<Record<string, unknown> | undefined> =>
       ((await (await handle(new Request(`http://x/api/run/${id}/track`))).json()) as {
-        stream?: Record<string, unknown>;
-      }).stream;
+        character?: Record<string, unknown>;
+      }).character;
 
     expect(await trackOf("a2")).toEqual({
-      streamId: "a1",
+      characterId: "a1",
       attempt: 2,
       attempts: 3,
       previous: "a1",
@@ -1268,31 +1268,31 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     const runs = chainFixture();
     const handle = api(runs);
     const detail = (await (await handle(new Request("http://x/api/run/a2"))).json()) as {
-      stream: { streamId: string; attempt: number; attempts: number; previous: string | null; next: string | null };
+      character: { characterId: string; attempt: number; attempts: number; previous: string | null; next: string | null };
     };
     const track = (await (await handle(new Request("http://x/api/run/a2/track"))).json()) as {
-      stream: typeof detail.stream;
+      character: typeof detail.character;
     };
-    const { streamId, attempt, attempts, previous, next } = detail.stream;
-    expect(track.stream).toEqual({ streamId, attempt, attempts, previous, next });
+    const { characterId, attempt, attempts, previous, next } = detail.character;
+    expect(track.character).toEqual({ characterId, attempt, attempts, previous, next });
   });
 
-  test("a run that is no stream carries no field, and pays nothing to find out", async () => {
+  test("a run that is no character carries no field, and pays nothing to find out", async () => {
     const runs = fixture();
     const body = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as Record<
       string,
       unknown
     >;
-    expect("stream" in body).toBe(false);
+    expect("character" in body).toBe(false);
   });
 
   test("/api/run/<id>/track serves the recorded positions", async () => {
     const runs = fixture();
     const body = (await (await api(runs)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
-      character: string | null;
+      characterName: string | null;
       points: { map: number; x: number; y: number }[];
     };
-    expect(body.character).toBe("Fixturely");
+    expect(body.characterName).toBe("Fixturely");
     expect(body.points).toHaveLength(1);
     expect(body.points[0]).toMatchObject({ map: 0, x: -6240, y: 380 });
   });

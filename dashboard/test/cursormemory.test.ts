@@ -27,7 +27,7 @@ function point(ts: number): TrackPoint {
 function track(runId: string, times: number[]): TrackResponse {
   return {
     runId,
-    character: "Benchy",
+    characterName: "Benchy",
     model: "test/model",
     harnessVersion: "harness-0.4",
     points: times.map(point),

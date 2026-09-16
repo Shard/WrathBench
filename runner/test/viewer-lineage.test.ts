@@ -3,7 +3,7 @@
  *
  * The cases here are the ones production makes — a predecessor outside the set,
  * a fork, a malformed cycle — because those are exactly the ones a page must
- * not hang or lie about. The ladder's own `streamRows` tests
+ * not hang or lie about. The ladder's own `characterRows` tests
  * (`dashboard/test/ladder.test.ts`) cover the row it builds on top of this.
  */
 
@@ -41,16 +41,16 @@ describe("chainsOf", () => {
 });
 
 describe("lineageIndex", () => {
-  test("attempt is the run's place and attempts is the whole stream's length", () => {
+  test("attempt is the run's place and attempts is the whole character's length", () => {
     const idx = lineageIndex([r("a1"), r("a2", "a1"), r("a3", "a2")]);
-    expect(idx.get("a1")).toMatchObject({ streamId: "a1", attempt: 1, attempts: 3, previous: null, next: "a2" });
-    expect(idx.get("a2")).toMatchObject({ streamId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" });
-    expect(idx.get("a3")).toMatchObject({ streamId: "a1", attempt: 3, attempts: 3, previous: "a2", next: null });
+    expect(idx.get("a1")).toMatchObject({ characterId: "a1", attempt: 1, attempts: 3, previous: null, next: "a2" });
+    expect(idx.get("a2")).toMatchObject({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" });
+    expect(idx.get("a3")).toMatchObject({ characterId: "a1", attempt: 3, attempts: 3, previous: "a2", next: null });
   });
 
   test("a lone run has no lineage to print", () => {
     const idx = lineageIndex([r("a1"), r("z9")]);
-    expect(idx.get("z9")).toMatchObject({ streamId: "z9", attempt: 1, attempts: 1, previous: null, next: null });
+    expect(idx.get("z9")).toMatchObject({ characterId: "z9", attempt: 1, attempts: 1, previous: null, next: null });
     expect(hasLineage(idx.get("z9"))).toBe(false);
     expect(hasLineage(undefined)).toBe(false);
   });
@@ -59,7 +59,7 @@ describe("lineageIndex", () => {
     // The link cannot be resolved, so the row reads as a root rather than
     // pointing at a run the page cannot show.
     const idx = lineageIndex([r("b7", "b6-archived")]);
-    expect(idx.get("b7")).toMatchObject({ streamId: "b7", attempt: 1, attempts: 1, previous: null, next: null });
+    expect(idx.get("b7")).toMatchObject({ characterId: "b7", attempt: 1, attempts: 1, previous: null, next: null });
   });
 
   test("a fork's `next` is the later start — the same tie-break the ladder's row takes", () => {
@@ -68,7 +68,7 @@ describe("lineageIndex", () => {
     // Both keep the parent, so neither attempt is lost.
     expect(idx.get("a2")?.previous).toBe("a1");
     expect(idx.get("a2b")?.previous).toBe("a1");
-    // The stream is as long as its longest chain, whichever fork a run is on.
+    // The character is as long as its longest chain, whichever fork a run is on.
     expect(idx.get("a2")?.attempts).toBe(2);
   });
 
@@ -77,7 +77,7 @@ describe("lineageIndex", () => {
     expect(idx.get("a1")?.next).toBe("a3");
   });
 
-  test("a mid-chain attempt knows the stream is longer than its own chain", () => {
+  test("a mid-chain attempt knows the character is longer than its own chain", () => {
     const idx = lineageIndex([r("a1"), r("a2", "a1"), r("a3", "a2"), r("a4", "a3")]);
     expect(idx.get("a2")).toMatchObject({ attempt: 2, attempts: 4 });
     expect(hasLineage(idx.get("a2"))).toBe(true);
@@ -106,7 +106,7 @@ describe("stillborn launches", () => {
       r("a13", "a11", 30),
     ]);
     expect(idx.has("a12")).toBe(false);
-    // The stream is two attempts, and a13 continues a11 rather than the launch.
+    // The character is two attempts, and a13 continues a11 rather than the launch.
     expect(idx.get("a13")).toMatchObject({ attempt: 2, attempts: 2, previous: "a11" });
     expect(idx.get("a11")?.next).toBe("a13");
   });
@@ -115,7 +115,7 @@ describe("stillborn launches", () => {
     // a13 names the dead launch as its predecessor: the link cannot resolve, so
     // a13 is a root rather than being credited with a11's progress.
     const idx = lineageIndex([r("a11", null, 10), { ...r("a12", "a11", 20), stillborn: true }, r("a13", "a12", 30)]);
-    expect(idx.get("a13")).toMatchObject({ streamId: "a13", attempt: 1, previous: null });
+    expect(idx.get("a13")).toMatchObject({ characterId: "a13", attempt: 1, previous: null });
     expect(idx.get("a11")?.next).toBe(null);
   });
 });
