@@ -374,6 +374,25 @@ to make visible. The wiki bundle's identity has the same standing: it says
 which file a run was reading, while the thing that actually groups is the
 harness minor bump a text-changing rebuild ships with.
 
+**Routing is pinned, and it is config.** An aggregator answers one model slug
+from many backends — six have served `glm-5.3-flash` here — and those are six
+machines with six quantisations, six throughputs and six prompt caches. Pooled
+as one row they are not one measurement. So, operator decision 2026-09-16:
+prefer the lab's own endpoint unless there is a specific reason, and a
+third-party provider is a deliberate, named datapoint (the way qwen 3.8 ran on
+Cerebras), never a silent fallback. The default is therefore the model author's
+own provider with fallbacks off, an entry may name providers instead, and a run
+that a named provider cannot serve fails rather than moving. The *requested*
+routing is a launch dimension exactly like effort, so it is stamped into the
+comparability tuple and it is a KEY: an unpinned run and a pinned one are two
+conditions and do not share a chart. The provider that actually *served* the
+run is recorded rather than keyed, for the reason the resolved model id is — a
+fact observed minutes after launch cannot be part of what a launch stamped —
+and with fallbacks off the two agree, which is what makes a disagreement worth
+seeing. The field is absent, not null, on a run whose endpoint has one backend
+(a CLI harness, Cerebras, LM Studio, OpenCode Zen): there is nothing to record,
+and those runs go on stamping exactly as they did before the field existed.
+
 **Steering is what makes a run unscored.** An objective is operator-authored
 world knowledge rendered into the fixed prompt at one fixed place; with no
 objective the prompt is byte-identical to the shipped one, by construction.
@@ -482,9 +501,16 @@ its askable runs reached each rung and what range and median of levels its
 counted runs spanned, beside the best run rather than instead of it. Two
 labelled lines say what a level reading means — an empirical ceiling derived at
 read time from the current series' scored runs on the tier in view, never
-hardcoded, and a human speedrun band of roughly level 10–11 by ninety minutes,
-marked loosely sourced because the records bracketing it are from Classic Era
-and Cataclysm Classic rather than 3.3.5a. A scripted greedy-XP grinder and a
+hardcoded, and a human speedrun band stated per tier from the Wrath of the
+Lich King Classic Archive board on speedrun.com, which the operator read and
+confirmed the same day: level 9–10 at ninety minutes from its single 1–10
+entry (an Orc Hunter, level 10 at 1:31), and level 18–19 at six hours
+interpolated from its 1–20 entry (7:02:39), the second labelled as
+interpolated because a 1–20 run is not linear in level. One entry each is thin
+evidence and the labels say so; the Classic Era and Cataclysm Classic records
+bracket the figures as context. Showing the band on e360 as well as e90 is the
+operator's decision (2026-09-16); a tier with no Wrath entry draws no band. A
+scripted greedy-XP grinder and a
 deterministic walkthrough run through the same harness were considered as
 baselines and not chosen: no scripted agent is built and nothing new is run.
 Neither line is a score and neither enters the row order.
