@@ -192,7 +192,7 @@ describe("rosterNameFor", () => {
 
 describe("freeplay column", () => {
   const stream = (over: Record<string, unknown> = {}) =>
-    ({ streamId: "s", model: "sonnet", effort: "low", status: "paused", statusDetail: "operator-pause", level: 15, attempts: 3, latest: { runId: "s-a3" }, ...over }) as never;
+    ({ characterId: "s", model: "sonnet", effort: "low", status: "paused", statusDetail: "operator-pause", level: 15, attempts: 3, latest: { runId: "s-a3" }, ...over }) as never;
   test("matches the model's stream on model and effort", () => {
     expect(freeplayOf({ model: "sonnet", effort: "low" }, [stream()])).not.toBeNull();
     expect(freeplayOf({ model: "sonnet", effort: null }, [stream()])).toBeNull();

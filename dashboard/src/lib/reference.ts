@@ -11,7 +11,7 @@
  * Neither is a score and neither enters an ordering. They are drawn where
  * levels are read and nowhere else — not on the cost × xp scatter, whose y is
  * xp and never level (a `cost × level` view was offered and withdrawn,
- * `lib/axes.ts`), and not on the freeplay stream chart, which plots a durable
+ * `lib/axes.ts`), and not on the freeplay character chart, which plots a durable
  * character across attempts and is a different claim than a scored episode.
  */
 

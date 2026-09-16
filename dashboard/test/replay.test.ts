@@ -29,7 +29,7 @@ function point(ts: number, map: number, x: number, y: number): TrackPoint {
 
 const TRACK: TrackResponse = {
   runId: "run-1",
-  character: "Benchy",
+  characterName: "Benchy",
   model: "test/model",
   harnessVersion: "harness-0.2",
   points: [point(100, 0, 1, 1), point(200, 0, 2, 2), point(300, 530, 9, 9)],

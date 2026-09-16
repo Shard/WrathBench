@@ -219,10 +219,10 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.campaign = str(meta.config?.campaign);
     row.cell = str(meta.config?.cell);
     row.extra = meta.config?.extra === true;
-    // The freeplay stream this launch continues. Read from meta first and from
+    // The freeplay character this launch continues. Read from meta first and from
     // the run row below, the same order every other config-and-column fact
     // here is read in; `dropContinuation` clears both together, so they cannot
-    // disagree about a stream whose character went away.
+    // disagree about a character whose character went away.
     row.continuedFrom = str(meta.config?.continuedFrom);
     row.driver = str(meta.config?.driver);
     row.character = str(meta.config?.character);
@@ -284,7 +284,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
         row.terminationReason = str(r["termination_reason"]);
         row.terminationDetail = str(r["termination_detail"]);
         row.pauseReason = str(r["pause_reason"]);
-        // Added at 0.5 with the durable stream: a run.sqlite that predates the
+        // Added at 0.5 with the durable character: a run.sqlite that predates the
         // column has no key here, which `str` reads as null.
         row.continuedFrom = str(r["continued_from"]) ?? row.continuedFrom;
         if (row.apiBase === null && typeof r["config_json"] === "string") {

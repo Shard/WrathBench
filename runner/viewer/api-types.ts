@@ -268,7 +268,7 @@ export interface RunRow {
   pauseReason: string | null;
   /**
    * The freeplay run this one continues (`continued_from` in run.sqlite, and
-   * `config.continuedFrom` in meta.json). A durable freeplay stream is one
+   * `config.continuedFrom` in meta.json). A durable freeplay character is one
    * character across attempts, and this is the only link between them; null is
    * "a fresh launch", which is also what a run written before the column
    * existed and a run whose continuation was dropped both read as.
@@ -726,19 +726,19 @@ export interface PositionsResponse extends SnapshotEnvelope {
 }
 
 /**
- * One attempt of a freeplay stream, with its own figures.
+ * One attempt of a freeplay character, with its own figures.
  *
- * A durable stream is one character across attempts (docs/OPERATIONS.md,
+ * A durable character is one character across attempts (docs/OPERATIONS.md,
  * "Freeplay streams are durable"), and every figure the runner records is per
  * *attempt*: the quest counter, the tokens, the cost, the playtime all start
  * again at each continuation. That is not changed here — the record is the
  * record — so the strip on the run page shows each attempt as it was recorded
- * and `StreamTotals` says what the character has done altogether.
+ * and `CharacterTotals` says what the character has done altogether.
  *
  * Null is "this attempt recorded none of that kind", never zero, exactly as on
  * `ResultRun`, which is where every field below is read from.
  */
-export interface StreamAttempt {
+export interface CharacterAttempt {
   runId: string;
   startedAt: number | null;
   endedAt: number | null;
@@ -757,7 +757,7 @@ export interface StreamAttempt {
   /**
    * Deaths on this attempt. **Optional, and absent from the public
    * projection**: `RunDetailResponse.deaths` is withheld there whole (corpse
-   * positions), so the stream withholds the count with it rather than opening
+   * positions), so the character withholds the count with it rather than opening
    * a second door onto the same fact. Absent is "this viewer does not answer",
    * which is not the claim `null` makes.
    */
@@ -765,13 +765,13 @@ export interface StreamAttempt {
   flights: number | null;
   /**
    * The level marks with their per-mark active playtime, so the run page can
-   * draw the stream's stitched level series without fetching every attempt.
+   * draw the character's stitched level series without fetching every attempt.
    */
   levels: LevelMark[];
 }
 
 /**
- * What a stream cost, kept as two sums and never one.
+ * What a character cost, kept as two sums and never one.
  *
  * A `CostFigure` carries a `basis`, a `priceId` and an `asOf`, and a chain
  * whose attempts were one reported, one priced from the table and one neither
@@ -780,29 +780,29 @@ export interface StreamAttempt {
  * claiming a basis it does not have. Actual and expected are never added
  * together: they are two answers to two questions (`CostView`).
  */
-export interface StreamCost {
+export interface CharacterCost {
   /** Sum over the attempts that reported an actual charge; null when none did. */
   actualUsd: number | null;
   /** How many attempts that sum covers, out of `attempts`. */
   actualAttempts: number;
   expectedUsd: number | null;
   expectedAttempts: number;
-  /** Attempts in the stream — the denominator both coverages are read against. */
+  /** Attempts in the character — the denominator both coverages are read against. */
   attempts: number;
   /**
    * Any attempt whose actual figure is a subscription driver's own
    * `total_cost_usd` (`CostFigure.asIfMetered`): money that was never billed.
-   * Carried so a stream on a subscription does not read as a bill.
+   * Carried so a character on a subscription does not read as a bill.
    */
   asIfMetered: boolean;
 }
 
 /**
- * A stream's figures, summed or unioned across its attempts.
+ * A character's figures, summed or unioned across its attempts.
  *
  * The rule everywhere: a sum over attempts where NONE recorded a kind is null;
  * where some did, those are summed and the rest contribute nothing — the same
- * null-vs-zero discipline the per-run facts keep, so a stream with one attempt
+ * null-vs-zero discipline the per-run facts keep, so a character with one attempt
  * from before a producer shipped is not reported as having done less.
  *
  * What is summed and what is taken from the furthest attempt is the difference
@@ -811,7 +811,7 @@ export interface StreamCost {
  * the CHARACTER holds now — achievements included, since the tap reports the
  * whole backlog — so the latest attempt that recorded one answers.
  */
-export interface StreamTotals {
+export interface CharacterTotals {
   attempts: number;
   /** The first attempt's start, and the last attempt's end — null while it is live. */
   startedAt: number | null;
@@ -820,13 +820,13 @@ export interface StreamTotals {
   questsCompleted: number | null;
   xpEarned: number | null;
   tokens: TokenTotals | null;
-  cost: StreamCost;
+  cost: CharacterCost;
   /** The character's current standing, from the furthest attempt that recorded it. */
   level: number | null;
   money: number | null;
   achievements: AchievementFacts | null;
   /** Tallies: counts summed, marks concatenated in attempt order. */
-  /** Withheld in public mode, as `RunDetailResponse.deaths` is; see `StreamAttempt.deaths`. */
+  /** Withheld in public mode, as `RunDetailResponse.deaths` is; see `CharacterAttempt.deaths`. */
   deaths?: DeathFacts | null;
   taxi: TaxiFacts | null;
   spells: SpellFacts | null;
@@ -838,7 +838,7 @@ export interface StreamTotals {
 }
 
 /**
- * The freeplay stream a run is one attempt of — the whole run, where the run
+ * The freeplay character a run is one attempt of — the whole run, where the run
  * row is one session of it.
  *
  * Served only for a run whose chain holds more than one attempt (`hasLineage`),
@@ -848,9 +848,9 @@ export interface StreamTotals {
  * reader's (docs/METHODOLOGY.md — an old run is read differently, not
  * relabelled).
  */
-export interface StreamView {
-  /** The chain root's run id: the stream's identity across attempts. */
-  streamId: string;
+export interface CharacterView {
+  /** The chain root's run id: the character's identity across attempts. */
+  characterId: string;
   /** This run's 1-based place in `runs`. */
   attempt: number;
   attempts: number;
@@ -858,13 +858,13 @@ export interface StreamView {
   next: string | null;
   /**
    * The root still names a predecessor this viewer did not serve (archived, or
-   * gone), so the stream begins mid-history and every total below is a lower
+   * gone), so the character begins mid-history and every total below is a lower
    * bound over the attempts on screen.
    */
   truncated: boolean;
   /** Every attempt, oldest first, each with its own figures. */
-  runs: StreamAttempt[];
-  totals: StreamTotals;
+  runs: CharacterAttempt[];
+  totals: CharacterTotals;
 }
 
 export interface RunDetailResponse extends SnapshotEnvelope {
@@ -912,12 +912,12 @@ export interface RunDetailResponse extends SnapshotEnvelope {
    */
   reflections?: ReflectionWindowView[];
   /**
-   * The freeplay stream this run is one attempt of, aggregated across the whole
+   * The freeplay character this run is one attempt of, aggregated across the whole
    * chain. Present only when the run has lineage worth printing; optional for
    * the reason `achievements` is — an older viewer does not answer it, and the
    * page falls back to the run's own figures.
    */
-  stream?: StreamView;
+  character?: CharacterView;
 }
 
 /**
@@ -1604,7 +1604,7 @@ export interface ResultRun {
   pauseReason: string | null;
   /**
    * The run this one continues; see `RunRow.continuedFrom`. What the freeplay
-   * ladder collapses a stream's attempts by.
+   * ladder collapses a character's attempts by.
    */
   continuedFrom: string | null;
   /**
@@ -1665,23 +1665,23 @@ export interface TrackPoint {
 }
 
 /**
- * Where a replayed run sits in its freeplay stream, and the attempts either
+ * Where a replayed run sits in its freeplay character, and the attempts either
  * side of it (item 119).
  *
- * The four scalars off `StreamView` and nothing else. The map's play bar needs
+ * The four scalars off `CharacterView` and nothing else. The map's play bar needs
  * somewhere to step to; it does not need the chain's totals, and carrying the
  * whole view here would make a replay's fetch the size of a run page's for two
- * run ids. Derived from the same `streamViewOf` call `/api/run/<id>` serves its
- * `stream` from, so the bar's steps and the run page's attempt strip cannot
+ * run ids. Derived from the same `characterViewOf` call `/api/run/<id>` serves its
+ * `character` from, so the bar's steps and the run page's attempt strip cannot
  * name different neighbours on a fork.
  *
- * Absent — not null — on a run with no stream worth printing, and on a track
+ * Absent — not null — on a run with no character worth printing, and on a track
  * served or published before this shipped.
  */
-export interface TrackStream {
-  /** The chain root's run id: the stream's identity across attempts. */
-  streamId: string;
-  /** This run's 1-based place in the stream. */
+export interface TrackCharacter {
+  /** The chain root's run id: the character's identity across attempts. */
+  characterId: string;
+  /** This run's 1-based place in the character. */
   attempt: number;
   attempts: number;
   /** The attempt before this one, when the viewer serves it. */
@@ -1692,16 +1692,16 @@ export interface TrackStream {
 
 export interface TrackResponse extends SnapshotEnvelope {
   runId: string;
-  character: string | null;
+  characterName: string | null;
   model: string | null;
   harnessVersion: string | null;
   points: TrackPoint[];
   /**
-   * The stream this run is an attempt of, when it is one: the play bar's
+   * The character this run is an attempt of, when it is one: the play bar's
    * previous/next steps. Optional — an older viewer and an older snapshot
    * carry none, and the controls simply do not render.
    */
-  stream?: TrackStream;
+  character?: TrackCharacter;
   /**
    * Every movement intention the run recorded, oldest first. Separate from
    * `points` because it has its own cadence: a move is dispatched when the
@@ -1894,7 +1894,7 @@ export interface ModelsResponse extends SnapshotEnvelope {
     /** The ladder itself, so a page can name a tier's budget without hardcoding it. */
     tiers: Record<TierView, { runsPerEpisode: { e90: number; e360: number }; promotesTo: TierView | null; label: string }>;
     /**
-     * `policy.maxConcurrent`: streams the policy may have in flight per key,
+     * `policy.maxConcurrent`: runs the policy may have in flight per key,
      * counting every run on that key. An absent key is unlimited; an empty
      * object is a file that names no cap.
      *

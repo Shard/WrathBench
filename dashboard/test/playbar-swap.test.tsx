@@ -119,7 +119,7 @@ afterEach(() => {
 
 const TRACK: TrackResponse = {
   runId: "fleet-a-sonnet-20260905",
-  character: "Benchy",
+  characterName: "Benchy",
   model: "anthropic/claude-sonnet-5",
   harnessVersion: "harness-0.5",
   points: [
@@ -310,10 +310,10 @@ describe("the play bar across the route swap", () => {
    * they cause is the route effect's, which the first test already performs —
    * so what is asserted here is which of them render and where they point:
    * both on a middle attempt, one at each end of the chain, none at all on a
-   * track with no stream (a scored run, or a snapshot published before the
+   * track with no character (a scored run, or a snapshot published before the
    * field existed, where the old shape must render rather than throw).
    */
-  test("the attempt steps link the stream's neighbours, and nothing where there are none", async () => {
+  test("the attempt steps link the character's neighbours, and nothing where there are none", async () => {
     const { document, restore } = installDom();
     try {
       const { PlayBar, MemoryRouter, Route, createMemoryHistory } = await loadEntry();
@@ -352,7 +352,7 @@ describe("the play bar across the route swap", () => {
       const href = (label: string): string | null =>
         mount.querySelector(`a[aria-label="${label}"]`)?.getAttribute("href") ?? null;
 
-      // A track with no stream: a scored run, or a snapshot older than the field.
+      // A track with no character: a scored run, or a snapshot older than the field.
       expect(mount.querySelector(".attempt-steps")).toBeNull();
       expect(href("previous attempt")).toBeNull();
       expect(href("next attempt")).toBeNull();
@@ -361,7 +361,7 @@ describe("the play bar across the route swap", () => {
       expect(() =>
         setTrack({
           ...TRACK,
-          stream: { streamId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" },
+          character: { characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" },
         }),
       ).not.toThrow();
       expect(mount.textContent).toContain("attempt 2 of 3");
@@ -370,14 +370,14 @@ describe("the play bar across the route swap", () => {
 
       // The first attempt has nowhere back, the last nowhere on: the control
       // is absent rather than a link that goes nowhere.
-      setTrack({ ...TRACK, stream: { streamId: "a1", attempt: 1, attempts: 3, previous: null, next: "a2" } });
+      setTrack({ ...TRACK, character: { characterId: "a1", attempt: 1, attempts: 3, previous: null, next: "a2" } });
       expect(href("previous attempt")).toBeNull();
       expect(href("next attempt")).toBe("/map?run=a2");
-      setTrack({ ...TRACK, stream: { streamId: "a1", attempt: 3, attempts: 3, previous: "a2", next: null } });
+      setTrack({ ...TRACK, character: { characterId: "a1", attempt: 3, attempts: 3, previous: "a2", next: null } });
       expect(href("previous attempt")).toBe("/map?run=a2");
       expect(href("next attempt")).toBeNull();
 
-      // And back to a trackless stream shape without a throw in the graph.
+      // And back to a trackless character shape without a throw in the graph.
       expect(() => setTrack({ ...TRACK })).not.toThrow();
       expect(mount.querySelector(".attempt-steps")).toBeNull();
       dispose();

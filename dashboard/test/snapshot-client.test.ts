@@ -194,7 +194,7 @@ const ENTRIES = {
   entries: [{ i: 40, t: "response", ts: 1, start: 0, end: 1, text: "hello" }],
 };
 
-const TRACK: TrackResponse = { runId: "r1", character: null, model: "m", harnessVersion: "harness-0.4", points: [] };
+const TRACK: TrackResponse = { runId: "r1", characterName: null, model: "m", harnessVersion: "harness-0.4", points: [] };
 
 /** The whole bucket a happy-path test reads, with the runs listing's pointers. */
 function fullBucket(runs: ResultRun[] = [run()]): Bucket {

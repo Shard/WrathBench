@@ -734,7 +734,7 @@ export interface LadderChartLayout {
 /* ----------------------------------------------------------- label metrics */
 
 /**
- * Point labels and the stream chart's end labels are set at 10 viewBox units;
+ * Point labels and the character chart's end labels are set at 10 viewBox units;
  * axis tick labels stay at 11. The viewBox is 1000 wide, so at a 600px render
  * a 10-unit label is 6 CSS px and an 11-unit one 6.6 — both already at the
  * floor of legibility, which is why the page scrolls the chart inside a 640px
@@ -766,7 +766,7 @@ export const LABEL_H = LABEL_FONT;
  * sit on the row beneath.
  */
 export const LABEL_DESC = 0.25 * LABEL_FONT;
-/** One label row — the box's full height, the pitch the outer rings and the stream chart's stack step by. */
+/** One label row — the box's full height, the pitch the outer rings and the character chart's stack step by. */
 export const LABEL_ROW = LABEL_H + LABEL_DESC;
 /** Breathing room either side of the letters, so two labels on one row never touch. */
 export const LABEL_PAD = 2;
@@ -1221,7 +1221,7 @@ export function ladderChartLayout(
   return { xScale: xSpec.scale, ...xAxis, yTicks, yMax, placed, cue, py };
 }
 
-/* ------------------------------------------------------- freeplay streams */
+/* ------------------------------------------------------- freeplay characters */
 
 /**
  * The freeplay ladder is a different question, and so a different derivation.
@@ -1236,8 +1236,8 @@ export function ladderChartLayout(
  * decided server-side — and nothing else. Live, paused and ended runs all
  * belong on this page; their state is a column, not a filter.
  *
- * And a stream is **one character across attempts** (docs/OPERATIONS.md,
- * "Freeplay streams are durable"). A row is a stream, not a run and not a
+ * And a character is **one character across attempts** (docs/OPERATIONS.md,
+ * "Freeplay streams are durable"). A row is a character, not a run and not a
  * model: attempt 12 continues attempt 11 on the same character, so listing
  * both would show the same character twice with the older one looking behind.
  * The lineage is `continuedFrom`; the latest attempt carries the character's
@@ -1248,13 +1248,13 @@ export function ladderChartLayout(
  * still reads scored runs only.
  */
 
-/** What a stream is doing now. */
+/** What a character is doing now. */
 /** The same three states `lib/runs.ts` reads; one verdict, two pages. */
-export type StreamStatus = RunStatus;
+export type CharacterStatus = RunStatus;
 
-export interface StreamRow {
-  /** The chain root's run id: the stream's identity across attempts. */
-  streamId: string;
+export interface CharacterRow {
+  /** The chain root's run id: the character's identity across attempts. */
+  characterId: string;
   model: string;
   /** The effort the latest attempt ran at, when it recorded one. */
   effort: string | null;
@@ -1263,10 +1263,10 @@ export interface StreamRow {
   /** Attempts in the chain, oldest first. `attempts` is its length. */
   chain: string[];
   attempts: number;
-  status: StreamStatus;
+  status: CharacterStatus;
   /**
    * The recorded reason behind `status`: the pause reason while paused, the
-   * termination reason once ended, null while live. A stream whose ref an
+   * termination reason once ended, null while live. A character whose ref an
    * operator disabled reads `paused (operator-pause)` or its ending — the run
    * row is the only source here and "disabled" is a fact about the roster.
    */
@@ -1282,9 +1282,9 @@ export interface StreamRow {
    *
    * The runner's counter is per attempt (`completions.length`, which starts
    * again at every continuation), so the latest attempt's reading is the last
-   * session's tally and not the stream's. Summed here for the same reason the
-   * run page's `stream.totals` sums it server-side, with the same rule: an
-   * attempt that recorded none contributes nothing, and a stream where NONE
+   * session's tally and not the character's. Summed here for the same reason the
+   * run page's `character.totals` sums it server-side, with the same rule: an
+   * attempt that recorded none contributes nothing, and a character where NONE
    * did stays null rather than claiming zero.
    *
    * Level, xp and money above are deliberately not summed: they are what the
@@ -1295,7 +1295,7 @@ export interface StreamRow {
 }
 
 
-function statusOf(r: ResultRun): { status: StreamStatus; detail: string | null } {
+function statusOf(r: ResultRun): { status: CharacterStatus; detail: string | null } {
   const status = runStatusOf(r);
   if (status === "paused") return { status, detail: r.pauseReason === OPAQUE_PAUSE_REASON ? null : r.pauseReason };
   if (status === "ended") return { status, detail: r.terminationReason };
@@ -1303,20 +1303,20 @@ function statusOf(r: ResultRun): { status: StreamStatus; detail: string | null }
 }
 
 /**
- * Collapse a set of freeplay runs into one row per stream.
+ * Collapse a set of freeplay runs into one row per character.
  *
  * The chain walk itself is `runner/viewer/lineage.ts` — shared with the runs table and
  * the run page, so the field and the inventory cannot disagree about which
- * attempts belong to one stream, and written there for the cases production
+ * attempts belong to one character, and written there for the cases production
  * produces (a predecessor the set does not hold, a fork, a malformed cycle).
  * The tie-break a fork gets there is the one this row applies: the later start.
  *
  * Order: level, then xp within it, then gold — the same "furthest, then
  * richest" comparison the scored ladder uses, with a missing reading sorting
  * last rather than as zero. Ties fall back to the most recent start and then
- * the stream id, so the order is total and stable.
+ * the character id, so the order is total and stable.
  */
-export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
+export function characterRows(runs: readonly ResultRun[]): CharacterRow[] {
   // The stillborn filter is this page's, not the walk's: the runs table is an
   // inventory and shows them, the field is a leaderboard and does not.
   const kept = runs.filter((r) => r.stillborn !== true);
@@ -1350,11 +1350,11 @@ export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
     }
     return any ? total : null;
   };
-  const rows: StreamRow[] = [];
-  for (const [streamId, { chain, run }] of best) {
+  const rows: CharacterRow[] = [];
+  for (const [characterId, { chain, run }] of best) {
     const { status, detail } = statusOf(run);
     rows.push({
-      streamId,
+      characterId,
       model: run.model ?? "(unnamed)",
       effort: run.effort ?? null,
       latest: run,
@@ -1378,24 +1378,24 @@ export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
       desc(b.xp, a.xp) ||
       desc(b.money, a.money) ||
       desc(b.startedAt, a.startedAt) ||
-      a.streamId.localeCompare(b.streamId),
+      a.characterId.localeCompare(b.characterId),
   );
   return rows;
 }
 
-/* ------------------------------------------------- the freeplay stream chart */
+/* ------------------------------------------------- the freeplay character chart */
 
 /**
- * A stream's level timeline, stitched across its attempts.
+ * A character's level timeline, stitched across its attempts.
  *
  * **The axis is cumulative active playtime, not wall clock and not turns.**
  * The scored ladders' own graph (`components/LadderChart`) has no time axis at
  * all — it is a cost/xp scatter — so the family member this borrows from is the
  * run page's `XpChart`, whose x is elapsed wall clock bounded by the episode
- * deadline. That bound is exactly what a freeplay stream does not have, and
+ * deadline. That bound is exactly what a freeplay character does not have, and
  * the three reasons the axis changes with it:
  *
- * - a freeplay stream is unbounded and spends days paused between attempts, so
+ * - a freeplay character is unbounded and spends days paused between attempts, so
  *   wall clock would draw the operator's calendar rather than the character's
  *   progress — twelve attempts over a fortnight would be mostly flat gaps;
  * - turns are not usable across a resume. `turnsUsable` in
@@ -1422,11 +1422,11 @@ export function streamRows(runs: readonly ResultRun[]): StreamRow[] {
  * At a seam between attempts, attempt k's first mark is the level the character
  * already had, not a gain — the same rule `LevelUpFacts` states for its own
  * first mark. Any mark at or below the level already drawn is dropped, so a
- * twelve-attempt stream does not draw eleven phantom rises; a mark *above* it
+ * twelve-attempt character does not draw eleven phantom rises; a mark *above* it
  * is a ding that happened in the unobserved gap and draws its step at the seam.
  */
-export interface StreamPoint {
-  /** Cumulative active playtime across the stream, in ms. */
+export interface CharacterPoint {
+  /** Cumulative active playtime across the character, in ms. */
   x: number;
   level: number;
   /** The attempt the mark was recorded on, and its wall-clock instant. */
@@ -1434,19 +1434,19 @@ export interface StreamPoint {
   ts: number;
 }
 
-export interface StreamSeries {
-  streamId: string;
+export interface CharacterSeries {
+  characterId: string;
   /** The character, falling back to the model (short, with its effort) when a run recorded no name. */
   label: string;
   model: string;
-  /** The effort behind `model`, so two streams of one model are told apart. */
+  /** The effort behind `model`, so two characters of one model are told apart. */
   effort: string | null;
-  status: StreamStatus;
+  status: CharacterStatus;
   attempts: number;
   /** The attempt the series ends on — where a click on the line goes. */
   latestRunId: string;
-  points: StreamPoint[];
-  /** Where the line stops: the stream's total active time. "Now", while live. */
+  points: CharacterPoint[];
+  /** Where the line stops: the character's total active time. "Now", while live. */
   endX: number;
   /** The level it is holding there — the last point's, which is `maxLevel`. */
   endLevel: number;
@@ -1458,26 +1458,26 @@ export interface StreamSeries {
   truncated: boolean;
 }
 
-export interface StreamChartModel {
-  series: StreamSeries[];
-  /** A stream that could not be drawn, and the reason, in `ladderPoints`' shape. */
-  omitted: { streamId: string; label: string; why: string }[];
+export interface CharacterChartModel {
+  series: CharacterSeries[];
+  /** A character that could not be drawn, and the reason, in `ladderPoints`' shape. */
+  omitted: { characterId: string; label: string; why: string }[];
 }
 
 /**
  * What the stitching needs of an attempt: its id, its level marks and the
  * active time it contributed. `ResultRun` has these and so does
- * `StreamAttempt` (the run page's own view of a stream), so one function draws
+ * `CharacterAttempt` (the run page's own view of a character), so one function draws
  * the field's twelve lines and the run page's one.
  */
-export interface StreamAttemptLike {
+export interface CharacterAttemptLike {
   runId: string;
   levels: readonly LevelMark[];
   playtimeMs: number | null;
 }
 
 /** The total active time an attempt contributes, or null when it recorded none. */
-function attemptSpan(run: StreamAttemptLike): number | null {
+function attemptSpan(run: CharacterAttemptLike): number | null {
   if (run.playtimeMs !== null) return run.playtimeMs;
   // The run's own total is the right figure — it advances with a live run. A
   // run that never got one still contributes what its marks prove it played,
@@ -1486,13 +1486,13 @@ function attemptSpan(run: StreamAttemptLike): number | null {
   return marked.length > 0 ? Math.max(...marked) : null;
 }
 
-/** One stream's stitched line, or the reason it cannot be drawn. */
-export interface StitchedStream {
-  points: StreamPoint[];
-  /** Where the line stops: the stream's total active time. */
+/** One character's stitched line, or the reason it cannot be drawn. */
+export interface StitchedCharacter {
+  points: CharacterPoint[];
+  /** Where the line stops: the character's total active time. */
   endX: number;
   /**
-   * Why the stream is not drawable, or null. A prior attempt with no
+   * Why the character is not drawable, or null. A prior attempt with no
    * active-time reading is the one case that cannot be stitched: its
    * successors' offsets would be short by an unknown amount, and folding the
    * null to zero would silently compress the axis. The LAST attempt is
@@ -1502,15 +1502,15 @@ export interface StitchedStream {
 }
 
 /**
- * Lay a stream's attempts end to end on one cumulative-active-time axis.
+ * Lay a character's attempts end to end on one cumulative-active-time axis.
  *
- * The step rule and the seam rule are `StreamPoint`'s: a mark at or below the
+ * The step rule and the seam rule are `CharacterPoint`'s: a mark at or below the
  * level already drawn is not a gain (attempt k opens holding what k-1 ended
  * with), and a mark above it is a ding that happened in the unobserved gap and
  * draws its step at the seam.
  */
-export function stitchStream(attempts: readonly StreamAttemptLike[]): StitchedStream {
-  const points: StreamPoint[] = [];
+export function stitchCharacter(attempts: readonly CharacterAttemptLike[]): StitchedCharacter {
+  const points: CharacterPoint[] = [];
   let offset = 0;
   let endX = 0;
   let highest = 0;
@@ -1539,47 +1539,47 @@ export function stitchStream(attempts: readonly StreamAttemptLike[]): StitchedSt
 }
 
 /**
- * Build one series per stream from the same rows and runs the table shows.
+ * Build one series per character from the same rows and runs the table shows.
  *
- * `rows` supplies the lineage (`streamRows` already resolved it, including the
+ * `rows` supplies the lineage (`characterRows` already resolved it, including the
  * malformed cases) and `runs` is the set those ids index into, so the chart and
  * the table can never disagree about which runs are on screen.
  *
- * The stitching itself is `stitchStream`, shared with the run page's own
- * single-stream chart; a stream it cannot lay out is omitted here with the
+ * The stitching itself is `stitchCharacter`, shared with the run page's own
+ * single-character chart; a character it cannot lay out is omitted here with the
  * reason it gave, rather than drawn wrong.
  */
-export function streamSeries(rows: readonly StreamRow[], runs: readonly ResultRun[]): StreamChartModel {
+export function characterSeries(rows: readonly CharacterRow[], runs: readonly ResultRun[]): CharacterChartModel {
   const byId = new Map(runs.map((r) => [r.runId, r]));
-  const series: StreamSeries[] = [];
-  const omitted: { streamId: string; label: string; why: string }[] = [];
-  /** When each stream's latest attempt started — the label's disambiguator. */
-  const startedOf = new Map(rows.map((r) => [r.streamId, r.startedAt]));
+  const series: CharacterSeries[] = [];
+  const omitted: { characterId: string; label: string; why: string }[] = [];
+  /** When each character's latest attempt started — the label's disambiguator. */
+  const startedOf = new Map(rows.map((r) => [r.characterId, r.startedAt]));
 
   for (const row of rows) {
     const label = row.character ?? pointKey(modelDisplay(row.model), row.effort);
     const attempts = row.chain.map((id) => byId.get(id)).filter((r): r is ResultRun => r !== undefined);
     if (attempts.length === 0) {
-      omitted.push({ streamId: row.streamId, label, why: "no attempt served" });
+      omitted.push({ characterId: row.characterId, label, why: "no attempt served" });
       continue;
     }
-    const { points, endX, broke } = stitchStream(attempts);
+    const { points, endX, broke } = stitchCharacter(attempts);
     if (broke !== null) {
-      omitted.push({ streamId: row.streamId, label, why: broke });
+      omitted.push({ characterId: row.characterId, label, why: broke });
       continue;
     }
     if (points.length === 0) {
-      // Two different nothings: a stream too young to have been sampled at a
+      // Two different nothings: a character too young to have been sampled at a
       // level at all, and one whose marks carry no active time to place them on.
       const why = attempts.every((r) => r.levels.length === 0)
         ? "no level recorded yet"
         : "no level mark carries an active-time reading";
-      omitted.push({ streamId: row.streamId, label, why });
+      omitted.push({ characterId: row.characterId, label, why });
       continue;
     }
     const root = attempts[0]!;
     series.push({
-      streamId: row.streamId,
+      characterId: row.characterId,
       label,
       model: row.model,
       effort: row.effort,
@@ -1592,30 +1592,30 @@ export function streamSeries(rows: readonly StreamRow[], runs: readonly ResultRu
       /*
        * A predecessor named and not served. The `typeof` is not paranoia: a
        * viewer that predates the field omits it entirely, and `undefined !==
-       * null` would mark every stream in the fleet as missing history — the
+       * null` would mark every character in the fleet as missing history — the
        * same "an older viewer must still work" rule `ResultRun.xpEarned` states.
        */
       truncated: typeof root.continuedFrom === "string" && !byId.has(root.continuedFrom),
     });
   }
   /*
-   * A character name is not unique: a stream that lost its character is
+   * A character name is not unique: a character that lost its character is
    * re-rolled under the same name, and four ended `Qwenlocal` lines all
    * labelled `Qwenlocal` name nothing. Where the name repeats, and only there,
-   * the stream's start date joins it — ISO, because a pure module has no
+   * the character's start date joins it — ISO, because a pure module has no
    * business picking a locale.
    */
   const seen = new Map<string, number>();
   for (const s of series) seen.set(s.label, (seen.get(s.label) ?? 0) + 1);
   for (const s of series) {
     if ((seen.get(s.label) ?? 0) < 2) continue;
-    const started = startedOf.get(s.streamId) ?? null;
+    const started = startedOf.get(s.characterId) ?? null;
     if (started !== null) s.label = `${s.label} ${new Date(started).toISOString().slice(0, 10)}`;
   }
   // Furthest first, so the eye meets the leaders and the legend order matches
-  // the table's. Ties fall back to the stream id, so the order is total.
-  series.sort((a, b) => b.endLevel - a.endLevel || b.endX - a.endX || a.streamId.localeCompare(b.streamId));
-  omitted.sort((a, b) => a.label.localeCompare(b.label) || a.streamId.localeCompare(b.streamId));
+  // the table's. Ties fall back to the character id, so the order is total.
+  series.sort((a, b) => b.endLevel - a.endLevel || b.endX - a.endX || a.characterId.localeCompare(b.characterId));
+  omitted.sort((a, b) => a.label.localeCompare(b.label) || a.characterId.localeCompare(b.characterId));
   return { series, omitted };
 }
 
@@ -1651,30 +1651,30 @@ export function timeTicks(maxMs: number, want = 6): number[] {
  * know where the label starts, and the layout is what emits the leader.
  */
 /** Marker → badge, and badge → label. */
-export const STREAM_ICON_GAP = 8;
-export const STREAM_LABEL_GAP = 4;
-export const streamIconCx = (endCx: number): number => endCx + STREAM_ICON_GAP + MARK_R;
-export const streamLabelX = (endCx: number): number => endCx + STREAM_ICON_GAP + MARK_R * 2 + STREAM_LABEL_GAP;
+export const CHARACTER_ICON_GAP = 8;
+export const CHARACTER_LABEL_GAP = 4;
+export const characterIconCx = (endCx: number): number => endCx + CHARACTER_ICON_GAP + MARK_R;
+export const characterLabelX = (endCx: number): number => endCx + CHARACTER_ICON_GAP + MARK_R * 2 + CHARACTER_LABEL_GAP;
 
-export interface PlacedStream {
-  series: StreamSeries;
-  /** The step path, in viewBox units, ending flat at the stream's own `endX`. */
+export interface PlacedCharacter {
+  series: CharacterSeries;
+  /** The step path, in viewBox units, ending flat at the character's own `endX`. */
   d: string;
   endCx: number;
   endCy: number;
-  /** The label's start and baseline. `labelX` is `streamLabelX(endCx)`, carried so the drawing and the leader agree. */
+  /** The label's start and baseline. `labelX` is `characterLabelX(endCx)`, carried so the drawing and the leader agree. */
   labelX: number;
   labelY: number;
   /** From the badge to the label, when the label was pushed more than one row off its line. */
   leader: Leader | null;
 }
 
-export interface StreamChartLayout {
+export interface CharacterChartLayout {
   xTicks: number[];
   yTicks: number[];
   xMax: number;
   yMax: number;
-  placed: PlacedStream[];
+  placed: PlacedCharacter[];
   /** The reading-direction cue: more level for less playtime is top-left, and a label never prints over it. */
   cue: ChartCue;
   px: (x: number) => number;
@@ -1683,19 +1683,19 @@ export interface StreamChartLayout {
 
 /**
  * Place the series in a plot box: the step paths, and the end labels nudged
- * apart so two streams holding the same level do not print on top of each other.
+ * apart so two characters holding the same level do not print on top of each other.
  *
  * The y axis runs from zero rather than from the lowest level drawn. A level
  * axis with a floating base would make a character that gained two levels look
  * like the whole chart, and level 1 is a real origin — it is where every
  * character starts.
  *
- * The series are re-sorted here by the order `streamSeries` already gives them
- * — furthest first, then longest, then label, then stream id — so the stack is
+ * The series are re-sorted here by the order `characterSeries` already gives them
+ * — furthest first, then longest, then label, then character id — so the stack is
  * a function of the set and not of the array's order, the same rule
  * `ladderChartLayout` follows.
  */
-export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox, better: Better = DEFAULT_BETTER): StreamChartLayout {
+export function characterChartLayout(series: readonly CharacterSeries[], box: ChartBox, better: Better = DEFAULT_BETTER): CharacterChartLayout {
   const xMax = Math.max(1, ...series.map((s) => s.endX));
   const yTicks = niceTicks(Math.max(1, ...series.map((s) => s.endLevel)));
   const yMax = yTicks[yTicks.length - 1]!;
@@ -1703,14 +1703,14 @@ export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox
   const py = scaleLinear([0, yMax], [box.y0, box.y1]);
 
   const ordered = [...series].sort(
-    (a, b) => b.endLevel - a.endLevel || b.endX - a.endX || a.label.localeCompare(b.label) || a.streamId.localeCompare(b.streamId),
+    (a, b) => b.endLevel - a.endLevel || b.endX - a.endX || a.label.localeCompare(b.label) || a.characterId.localeCompare(b.characterId),
   );
   // The cue gives way to the badges, as it does to the scatter's pucks; then
-  // it is in every label's way. A label reaches the corner only when a stream
+  // it is in every label's way. A label reaches the corner only when a character
   // at the top level has next to no playtime, but the placer does not get to
   // assume that.
-  const cue = chartCue(box, better, ordered.map((s) => puckRect(streamIconCx(px(s.endX)), py(s.endLevel))));
-  const placed: PlacedStream[] = [];
+  const cue = chartCue(box, better, ordered.map((s) => puckRect(characterIconCx(px(s.endX)), py(s.endLevel))));
+  const placed: PlacedCharacter[] = [];
   const takenY: number[] = [];
   for (const s of ordered) {
     const steps: string[] = [];
@@ -1733,7 +1733,7 @@ export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox
     // that pushing down would take the descenders past the axis, the label
     // stays where it is and overlaps rather than walking out of the viewBox,
     // which is the same call `ladderChartLayout`'s `inside()` guard makes.
-    const labelX = streamLabelX(endCx);
+    const labelX = characterLabelX(endCx);
     // The label's box at a candidate baseline, generously: the name plus the
     // "…" and " ×N" it may carry, which is a bound and not a measure.
     const labelRect = (y: number): Rect => ({ l: labelX, t: y - LABEL_H, r: labelX + (s.label.length + 4) * CHAR_W, b: y + LABEL_DESC });
@@ -1745,7 +1745,7 @@ export function streamChartLayout(series: readonly StreamSeries[], box: ChartBox
     // line drawn, from the badge's edge to the label's leading mid-height.
     const leader: Leader | null =
       labelY - natural > LABEL_ROW
-        ? { x1: streamIconCx(endCx) + MARK_R + 1, y1: endCy, x2: labelX - 1.5, y2: labelY - CAP_H / 2 }
+        ? { x1: characterIconCx(endCx) + MARK_R + 1, y1: endCy, x2: labelX - 1.5, y2: labelY - CAP_H / 2 }
         : null;
     placed.push({ series: s, d: steps.join(" "), endCx, endCy, labelX, labelY, leader });
   }

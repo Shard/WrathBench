@@ -61,7 +61,7 @@ import { modelStates, outstandingWork, type RunFact } from "../src/models";
 import { readPositions } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
-import { streamViewOf } from "./stream";
+import { characterViewOf } from "./character";
 import {
   projectCampaigns,
   projectEntries,
@@ -1317,8 +1317,8 @@ export function createApi(opts: ApiOptions): ApiHandle {
        */
       const tokens = tokenTotals(entries);
       /*
-       * The freeplay stream this run is one attempt of, aggregated across the
-       * whole chain (`stream.ts`). Every figure the runner records is per
+       * The freeplay character this run is one attempt of, aggregated across the
+       * whole chain (`character.ts`). Every figure the runner records is per
        * attempt, so without this the run page shows a twelfth session's quests
        * under a character that has been playing for a fortnight.
        *
@@ -1328,11 +1328,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * listing's own rows: `resultRuns` memoises each attempt's trajectory
        * totals on (size, mtime), so the ended attempts of a chain are read once
        * per process and this page and `/api/ladder` cannot disagree about what
-       * a stream is.
+       * a character is.
        */
-      const stream =
+      const character =
         run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
-          ? streamViewOf(runId, await resultRuns())
+          ? characterViewOf(runId, await resultRuns())
           : null;
       const body: RunDetailResponse = {
         run,
@@ -1362,9 +1362,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // by turn, and the window that opens one can sit far above whatever
         // slice of entries the page happens to have loaded.
         reflections: tail.reflections,
-        // Absent, not null, on a run with no stream: an optional field the page
+        // Absent, not null, on a run with no character: an optional field the page
         // falls back from, the same shape the facts above take.
-        ...(stream === null ? {} : { stream }),
+        ...(character === null ? {} : { character }),
       };
       return pub(body, projectRunDetail);
     }
@@ -1374,22 +1374,22 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // consumes, read from one finished run instead of every live one.
       const run = await runRowOne(runId);
       /*
-       * Where this attempt sits in its stream, so the map's transport can step
+       * Where this attempt sits in its character, so the map's transport can step
        * to the one either side of it (item 119) without a second fetch.
        *
-       * Deliberately the same expression the detail route gates its `stream`
-       * with, and the same `streamViewOf` call behind it: a scored run's
+       * Deliberately the same expression the detail route gates its `character`
+       * with, and the same `characterViewOf` call behind it: a scored run's
        * replay pays nothing, a freeplay one pays what its run page already
        * pays (the memoised listing), and the two routes cannot come to
        * different answers about who continues whom.
        */
-      const stream =
+      const character =
         run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
-          ? streamViewOf(runId, await resultRuns())
+          ? characterViewOf(runId, await resultRuns())
           : null;
       const body: TrackResponse = {
         runId,
-        character: run.character,
+        characterName: run.character,
         model: run.model,
         harnessVersion: run.harnessVersion,
         points: trackFrom(await statesOfRun(runId)),
@@ -1400,16 +1400,16 @@ export function createApi(opts: ApiOptions): ApiHandle {
           const rows = await store.moveRows(runId);
           return rows.length > 0 ? moveViewsOf(rows) : readMoves(runsDir, runId);
         })(),
-        // Absent, not null, on a run with no stream — as on the detail route.
-        ...(stream === null
+        // Absent, not null, on a run with no character — as on the detail route.
+        ...(character === null
           ? {}
           : {
-              stream: {
-                streamId: stream.streamId,
-                attempt: stream.attempt,
-                attempts: stream.attempts,
-                previous: stream.previous,
-                next: stream.next,
+              character: {
+                characterId: character.characterId,
+                attempt: character.attempt,
+                attempts: character.attempts,
+                previous: character.previous,
+                next: character.next,
               },
             }),
       };

@@ -110,7 +110,7 @@ export function healthReading(cur: number | null | undefined, max: number | null
  * L1–L79; the cap has no row): the earlier constant was a pre-Wrath curve shifted a slot, so it
  * had L59 wanting 171,900 and L60 178,100 where the 3.3.5 table has 172,000
  * and 290,000. A fallback for a feed that carries `xp` but not `nextLevelXp`;
- * the stream's own value wins when present. Level 80 is the cap and has no next.
+ * the character's own value wins when present. Level 80 is the cap and has no next.
  */
 export const XP_FOR_LEVEL: readonly number[] = [
   0,

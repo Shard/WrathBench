@@ -1,16 +1,16 @@
 /**
- * Aggregating a freeplay stream at read time (`runner/viewer/stream.ts`).
+ * Aggregating a freeplay character at read time (`runner/viewer/character.ts`).
  *
  * The rules under test are the ones that decide what a number on the run page
  * MEANS: a tally sums, a state comes from the furthest attempt, and a kind no
- * attempt recorded reads null rather than zero — so a stream whose oldest
+ * attempt recorded reads null rather than zero — so a character whose oldest
  * attempts predate a column is not reported as having done less than it did.
  * The chain walk itself is `viewer-lineage.test.ts`.
  */
 
 import { describe, expect, test } from "bun:test";
 import type { CostFigure, ResultRun, TokenTotals } from "../viewer/api-types";
-import { streamViewOf } from "../viewer/stream";
+import { characterViewOf } from "../viewer/character";
 import { projectRunDetail } from "../viewer/public-projection";
 
 function run(p: Partial<ResultRun> = {}): ResultRun {
@@ -100,27 +100,27 @@ function cost(usd: number | null, p: Partial<CostFigure> = {}): CostFigure {
   };
 }
 
-describe("streamViewOf", () => {
-  test("a lone run is not a stream", () => {
-    expect(streamViewOf("a1", [run({ runId: "a1" })])).toBeNull();
+describe("characterViewOf", () => {
+  test("a lone run is not a character", () => {
+    expect(characterViewOf("a1", [run({ runId: "a1" })])).toBeNull();
   });
 
   test("an attempt sees the whole chain, forward as well as back", () => {
     const runs = chain({}, {}, {});
-    const view = streamViewOf("a1", runs);
+    const view = characterViewOf("a1", runs);
     expect(view?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "a3"]);
     expect(view?.attempt).toBe(1);
     expect(view?.attempts).toBe(3);
     expect(view?.previous).toBeNull();
     expect(view?.next).toBe("a2");
     // The middle of the chain reads the same set, from its own place in it.
-    expect(streamViewOf("a2", runs)?.attempt).toBe(2);
-    expect(streamViewOf("a2", runs)?.previous).toBe("a1");
-    expect(streamViewOf("a3", runs)?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "a3"]);
+    expect(characterViewOf("a2", runs)?.attempt).toBe(2);
+    expect(characterViewOf("a2", runs)?.previous).toBe("a1");
+    expect(characterViewOf("a3", runs)?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "a3"]);
   });
 
   test("quests, xp and playtime sum across the attempts", () => {
-    const view = streamViewOf(
+    const view = characterViewOf(
       "a3",
       chain(
         { questsCompleted: 4, xpEarned: 1000, playtimeMs: 60_000 },
@@ -137,7 +137,7 @@ describe("streamViewOf", () => {
   });
 
   test("a kind no attempt recorded is null, not zero", () => {
-    const view = streamViewOf("a2", chain({}, {}));
+    const view = characterViewOf("a2", chain({}, {}));
     expect(view?.totals.questsCompleted).toBeNull();
     expect(view?.totals.xpEarned).toBeNull();
     expect(view?.totals.playtimeMs).toBeNull();
@@ -149,24 +149,24 @@ describe("streamViewOf", () => {
 
   test("an attempt that predates a column contributes nothing and does not zero the total", () => {
     // a1 is old enough that its run.sqlite has no quests column at all.
-    const view = streamViewOf("a2", chain({ questsCompleted: null }, { questsCompleted: 9 }));
+    const view = characterViewOf("a2", chain({ questsCompleted: null }, { questsCompleted: 9 }));
     expect(view?.totals.questsCompleted).toBe(9);
     expect(view?.runs[0]?.questsCompleted).toBeNull();
   });
 
   test("level is the highest any attempt saw; money is the furthest reading", () => {
-    const view = streamViewOf(
+    const view = characterViewOf(
       "a3",
       chain({ maxLevel: 6, money: 1200 }, { maxLevel: 9, money: 4500 }, { maxLevel: 9, money: null }),
     );
     expect(view?.totals.level).toBe(9);
-    // The newest attempt recorded no money, so the stream reports the last one
+    // The newest attempt recorded no money, so the character reports the last one
     // that did rather than losing the character's purse to a missing sample.
     expect(view?.totals.money).toBe(4500);
   });
 
   test("achievements are the latest attempt's, never a sum", () => {
-    const view = streamViewOf(
+    const view = characterViewOf(
       "a3",
       chain(
         { achievements: { earned: 3, points: 30, ids: [1, 2, 3] } },
@@ -180,7 +180,7 @@ describe("streamViewOf", () => {
   });
 
   test("flights, deaths and trades are tallies", () => {
-    const view = streamViewOf(
+    const view = characterViewOf(
       "a2",
       chain(
         {
@@ -203,7 +203,7 @@ describe("streamViewOf", () => {
   });
 
   test("spells sum their learns but keep one baseline, and talents count distinct", () => {
-    const view = streamViewOf(
+    const view = characterViewOf(
       "a2",
       chain(
         { spells: { learned: 2, atLogin: 10, ids: [7, 8], marks: [] } },
@@ -221,7 +221,7 @@ describe("streamViewOf", () => {
   });
 
   test("tokens sum, the context is the last reading, and the weakest source wins", () => {
-    const view = streamViewOf(
+    const view = characterViewOf(
       "a3",
       chain(
         { tokens: tokens({ promptTokens: 100, completionTokens: 10, totalTokens: 110, turns: 4 }) },
@@ -243,7 +243,7 @@ describe("streamViewOf", () => {
     expect(view?.totals.tokens?.totalTokens).toBe(165);
     expect(view?.totals.tokens?.turns).toBe(6);
     expect(view?.totals.tokens?.contextTokens).toBe(900);
-    // One under-read attempt makes the stream's total under-read.
+    // One under-read attempt makes the character's total under-read.
     expect(view?.totals.tokens?.source).toBe("snapshot");
     // The attempt that reported no cache figure says nothing about caching, so
     // the sum is the one that did — never 20 + 0 dressed as a full reading.
@@ -252,7 +252,7 @@ describe("streamViewOf", () => {
   });
 
   test("cost keeps actual and expected apart, with the coverage beside them", () => {
-    const view = streamViewOf(
+    const view = characterViewOf(
       "a3",
       chain(
         { actualCost: cost(0.25), expectedCost: cost(0.3, { basis: "list-price" }) },
@@ -273,13 +273,13 @@ describe("streamViewOf", () => {
   });
 
   test("no attempt reporting a charge leaves the sum null", () => {
-    const view = streamViewOf("a2", chain({ actualCost: cost(null) }, { actualCost: cost(null) }));
+    const view = characterViewOf("a2", chain({ actualCost: cost(null) }, { actualCost: cost(null) }));
     expect(view?.totals.cost.actualUsd).toBeNull();
     expect(view?.totals.cost.actualAttempts).toBe(0);
   });
 
-  test("a live last attempt leaves the stream unended", () => {
-    const view = streamViewOf(
+  test("a live last attempt leaves the character unended", () => {
+    const view = characterViewOf(
       "a2",
       chain(
         { endedAt: 5000, terminationReason: "idle" },
@@ -291,8 +291,8 @@ describe("streamViewOf", () => {
     expect(view?.runs[1]?.live).toBe(true);
   });
 
-  test("an ended last attempt ends the stream", () => {
-    const view = streamViewOf("a2", chain({ endedAt: 5000 }, { endedAt: 9000 }));
+  test("an ended last attempt ends the character", () => {
+    const view = characterViewOf("a2", chain({ endedAt: 5000 }, { endedAt: 9000 }));
     expect(view?.totals.endedAt).toBe(9000);
   });
 
@@ -301,7 +301,7 @@ describe("streamViewOf", () => {
       ...chain({ questsCompleted: 4 }, { questsCompleted: 1 }),
       run({ runId: "a3", startedAt: 3000, continuedFrom: "a2", stillborn: true, questsCompleted: null }),
     ];
-    const view = streamViewOf("a2", runs);
+    const view = characterViewOf("a2", runs);
     expect(view?.runs.map((r) => r.runId)).toEqual(["a1", "a2"]);
     expect(view?.attempts).toBe(2);
     expect(view?.next).toBeNull();
@@ -310,13 +310,13 @@ describe("streamViewOf", () => {
 
   test("a root naming a predecessor this viewer does not serve is truncated", () => {
     const runs = chain({ continuedFrom: "a0" }, {});
-    const view = streamViewOf("a2", runs);
+    const view = characterViewOf("a2", runs);
     expect(view?.truncated).toBe(true);
-    expect(view?.streamId).toBe("a1");
+    expect(view?.characterId).toBe("a1");
     // Everything on screen is still summed — it is a lower bound, and the flag
     // is what says so.
     expect(view?.attempts).toBe(2);
-    expect(streamViewOf("a2", chain({}, {}))?.truncated).toBe(false);
+    expect(characterViewOf("a2", chain({}, {}))?.truncated).toBe(false);
   });
 
   test("a fork serves the deeper branch, and the run on the other one keeps its own walk", () => {
@@ -328,8 +328,8 @@ describe("streamViewOf", () => {
       // continues it.
       run({ runId: "c3", startedAt: 3500, continuedFrom: "a2" }),
     ];
-    expect(streamViewOf("a1", runs)?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "b3", "b4"]);
-    const off = streamViewOf("c3", runs);
+    expect(characterViewOf("a1", runs)?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "b3", "b4"]);
+    const off = characterViewOf("c3", runs);
     expect(off?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "c3"]);
     expect(off?.attempt).toBe(3);
     expect(off?.next).toBeNull();
@@ -344,7 +344,7 @@ describe("streamViewOf", () => {
       // successor — while the chain served is the deeper branch through b3.
       run({ runId: "c3", startedAt: 3500, continuedFrom: "a2" }),
     ];
-    const view = streamViewOf("a2", runs);
+    const view = characterViewOf("a2", runs);
     expect(view?.runs.map((r) => r.runId)).toEqual(["a1", "a2", "b3", "b4"]);
     // The seam the feed links must be the attempt the strip lists next to it.
     expect(view?.next).toBe(view?.runs[view.attempt]?.runId);
@@ -353,7 +353,7 @@ describe("streamViewOf", () => {
   });
 
   test("call counts sum over the attempts that recorded them", () => {
-    const view = streamViewOf(
+    const view = characterViewOf(
       "a2",
       chain({ toolCalls: 40, snippets: 3, modelResponses: 20 }, { toolCalls: null, snippets: 5, modelResponses: 11 }),
     );
@@ -363,8 +363,8 @@ describe("streamViewOf", () => {
   });
 });
 
-describe("the public projection of a stream", () => {
-  const view = streamViewOf(
+describe("the public projection of a character", () => {
+  const view = characterViewOf(
     "a2",
     chain(
       { questsCompleted: 3, pauseReason: "quota exhausted on account seven" },
@@ -419,8 +419,8 @@ describe("the public projection of a stream", () => {
     tokens: tokens(),
     cost: { ...cost(null), actual: cost(null), expected: cost(null) },
     playtimeMs: null,
-    stream: view ?? undefined,
-  }).stream;
+    character: view ?? undefined,
+  }).character;
 
   test("the figures survive: they are already public per attempt", () => {
     expect(projected?.runs.map((r) => r.runId)).toEqual(["a1", "a2"]);

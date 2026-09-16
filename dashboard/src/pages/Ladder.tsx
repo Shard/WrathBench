@@ -11,8 +11,8 @@
  *
  * `freeplay` is the one id that shows something else entirely: not rungs but
  * **the top characters on freeplay right now** (operator, 2026-08-29) — the
- * whole active field, one row per durable stream, paused and in-progress
- * included. `streamRows` in `lib/ladder.ts` is that derivation; the scored
+ * whole active field, one row per durable character, paused and in-progress
+ * included. `characterRows` in `lib/ladder.ts` is that derivation; the scored
  * ladders below are untouched by it.
  *
  * Above the table, one scatter for the tier: average cost per run against
@@ -21,8 +21,8 @@
  * `?view=` so a reading is linkable, and the default is the cost/xp chart)
  * and a toggle that draws the Pareto front over the field (`lib/pareto.ts`;
  * `?pareto=1`, for the same reason).
- * Freeplay gets its own graph in that place instead — `components/StreamChart`,
- * one stepped series per stream, level against cumulative active playtime; the
+ * Freeplay gets its own graph in that place instead — `components/CharacterChart`,
+ * one stepped series per character, level against cumulative active playtime; the
  * axis argument is in `lib/ladder.ts`.
  *
  * Rows are ordered by highest rung reached, then total XP, then gold — a stated
@@ -46,7 +46,7 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import { api, type ResultsResponse, type ResultRun } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { LadderChart } from "../components/LadderChart";
-import { StreamChart } from "../components/StreamChart";
+import { CharacterChart } from "../components/CharacterChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
 import { LADDER_VIEWS, type LadderView, viewParam } from "../lib/axes";
@@ -61,12 +61,12 @@ import {
   ladderRows,
   raceOptions,
   resolveChoice,
-  streamRows,
+  characterRows,
   type FilterChoice,
   type LadderCell,
   type LadderRow,
   type LevelRange,
-  type StreamRow,
+  type CharacterRow,
 } from "../lib/ladder";
 import {
   type ReferenceMark,
@@ -117,10 +117,10 @@ export default function Ladder() {
   const served = (): ResultRun[] => body()?.runs ?? [];
   /*
    * Freeplay is a different page under the same address: an overview of the
-   * top characters on freeplay right now, one row per durable stream
+   * top characters on freeplay right now, one row per durable character
    * (operator, 2026-08-29). It reads no rungs, so it shows neither the scatter
    * nor the rung table. The shell's series filter still does not apply, and
-   * that is not a convenience: a stream is durable *across* series, so cutting
+   * that is not a convenience: a character is durable *across* series, so cutting
    * its older attempts would make the newest survivor the chain root and
    * report a thirteen-attempt character as attempt 1, which is the one number
    * this page exists to show. `useSeriesFilter` has the `active` hatch for
@@ -139,11 +139,11 @@ export default function Ladder() {
    * Race, class and harness narrow the set, and "exclude free" keeps only the
    * runs we paid for (`ResultRun.billing`, `runner/src/billing.ts` — a
    * `claude-code` subscription counts as paid there). All four are applied
-   * BEFORE the rows are derived — `ladderRows` on a scored tier, `streamRows`
+   * BEFORE the rows are derived — `ladderRows` on a scored tier, `characterRows`
    * on freeplay — so the ranking is computed over exactly the rows on screen;
    * the order itself is untouched (highest rung, XP, gold). On freeplay that
    * ordering is before the lineage walk, so a chain whose ancestor the filter
-   * drops re-roots on its survivor; billing follows the endpoint and a stream
+   * drops re-roots on its survivor; billing follows the endpoint and a character
    * is one character under one config, so a mixed chain is not a shape the
    * fleet produces (`lib/ladder.ts` pins the behaviour anyway).
    *
@@ -175,7 +175,7 @@ export default function Ladder() {
       excludeFree: excludeFree(),
     }),
   );
-  const streams = createMemo(() => streamRows(runs()));
+  const characters = createMemo(() => characterRows(runs()));
   // A viewer that predates `billing` reports it on no run at all, and a toggle
   // that excludes nothing is worse than one that is obviously off (the rule
   // `SeriesFilterNote` states for the series filter).
@@ -298,9 +298,9 @@ export default function Ladder() {
       <Show when={feed.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
         <Show when={freeplay()}>
           {/* The same rows and the same runs the table reads, so the chart and
-              the table can never disagree about which streams are on screen. */}
-          <StreamChart rows={streams()} runs={runs()} />
-          <StreamTable rows={streams()} />
+              the table can never disagree about which characters are on screen. */}
+          <CharacterChart rows={characters()} runs={runs()} />
+          <CharacterTable rows={characters()} />
         </Show>
         <Show when={!freeplay()}>
         {/* Below ~720px the scatter's labels are texture, not text: it keeps a
@@ -432,16 +432,16 @@ export default function Ladder() {
 }
 
 /**
- * The freeplay field: one row per durable stream, latest attempt first by what
+ * The freeplay field: one row per durable character, latest attempt first by what
  * the character has reached.
  *
  * Everything not deleted and not stillborn is here, in progress included — a
- * live stream is the point of the page, not an exclusion. The lineage column
- * is why a stream that has been through twelve attempts appears once
+ * live character is the point of the page, not an exclusion. The lineage column
+ * is why a character that has been through twelve attempts appears once
  * (item 92): the row is the character, and `attempts` is how many run
  * ids are behind it.
  */
-function StreamTable(props: { rows: readonly StreamRow[] }) {
+function CharacterTable(props: { rows: readonly CharacterRow[] }) {
   return (
     <div class="scroller">
       <table>
@@ -450,7 +450,7 @@ function StreamTable(props: { rows: readonly StreamRow[] }) {
             <th>model</th>
             <th>character</th>
             <th>status</th>
-            <th class="right" title="attempts in this stream; the row is the character, not the run">
+            <th class="right" title="attempts in this character; the row is the character, not the run">
               attempts
             </th>
             <th class="right" title="the latest attempt's reading — level, then xp within it">
@@ -509,7 +509,7 @@ function StreamTable(props: { rows: readonly StreamRow[] }) {
           <Show when={props.rows.length === 0}>
             <tr>
               <td colSpan={8} class="dim">
-                No freeplay streams recorded yet.
+                No freeplay characters recorded yet.
               </td>
             </tr>
           </Show>
