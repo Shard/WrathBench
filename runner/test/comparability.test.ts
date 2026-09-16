@@ -98,6 +98,17 @@ describe("comparabilityOf", () => {
     expect(parseComparability(without)?.wiki).toBe(false);
   });
 
+  test("with routing pinned too, `wiki` stays last and a resume reads the same condition", () => {
+    const raw = { driver: "openai", model: "z-ai/glm-5.2", apiBase: "https://openrouter.ai/api/v1", routing: { order: ["Z.AI"], allowFallbacks: false }, wiki: false };
+    const c = comparabilityOf(loadRunConfig(raw), "v");
+    expect(Object.keys(c).slice(-2)).toEqual(["routing", "wiki"]);
+    // meta.json holds the whole config, and a resume re-parses it: the run must
+    // come back the same condition rather than restamping as a wiki-on run.
+    const resumed = loadRunConfig(JSON.parse(JSON.stringify(loadRunConfig(raw))));
+    expect(resumed.wiki).toBe(false);
+    expect(sameComparability(c, comparabilityOf(resumed, "v"))).toBe(true);
+  });
+
   test("the wiki bundle's identity is annotated, and a rebuild is not the same tuple", () => {
     const config = loadRunConfig({ driver: "openai", model: "m" });
     // No bundle at all: null, never an absent field on a fresh stamp.
