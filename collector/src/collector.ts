@@ -47,8 +47,8 @@ export class Collector {
   private readonly batcher: Batcher;
   private readonly ingester: Ingester;
   private readonly now: () => number;
-  /** Newest artefact mtime per run at its last pass; a cheap "has it moved". */
-  private readonly lastSeen = new Map<string, number>();
+  /** Each run's artefact signature at its last pass; a cheap "has it moved". */
+  private readonly lastSeen = new Map<string, string>();
 
   constructor(private readonly deps: CollectorDeps) {
     this.now = deps.now ?? Date.now;
@@ -82,7 +82,7 @@ export class Collector {
     for (const entry of listRunDirs(this.deps.cfg.runsDir)) {
       stats.seen++;
       const before = this.lastSeen.get(entry.runId);
-      if (before !== undefined && before === entry.mtime) {
+      if (before !== undefined && before === entry.sig) {
         /*
          * Nothing in this run has moved since the last pass, so there is
          * nothing to read — and it is not being written, so its resumable
@@ -92,7 +92,7 @@ export class Collector {
         continue;
       }
       const r = await this.ingester.ingestRun(entry.runId, entry.dir, entry.archived);
-      this.lastSeen.set(entry.runId, entry.mtime);
+      this.lastSeen.set(entry.runId, entry.sig);
       const touched =
         r.trajectoryLines + r.episodicLines + r.states + r.moves > 0 || r.run || r.totals;
       if (touched) stats.ingested++;

@@ -20,6 +20,8 @@ import { splitStatements } from "../src/schema";
 import { tailLines } from "../src/tailer";
 import { parseLine, usageOf, TURN_KINDS } from "../src/lines";
 import { retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
+import { RunTotalsScanner } from "../../runner/viewer/tail";
+import { readRunFact } from "../../runner/src/models";
 
 const roots: string[] = [];
 function tmpRoot(): string {
@@ -178,6 +180,58 @@ describe("a pass over one run", () => {
     const fact = JSON.parse(String(row?.["fact_json"])) as { runId: string; bestLevel: number };
     expect(fact.runId).toBe("run-a");
     expect(fact.bestLevel).toBe(2);
+  });
+});
+
+/**
+ * The read path is about to depend on these two blobs being the whole answer,
+ * not a summary of it. A field that serialises to `null` because it was
+ * `undefined`, or a number that `JSON.stringify` turns into `null` because it
+ * was `Infinity`, would reach the viewer as a silently different run.
+ */
+describe("the stored derivations are the same objects the viewer computed", () => {
+  test("totals_json round-trips a whole RunTotals", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeRun(runsDir, "run-totals");
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const stored: unknown = JSON.parse(String(rowsOf(sink, "run_totals")[0]?.["totals_json"]));
+    const fresh = await new RunTotalsScanner(join(dir, "trajectory.jsonl")).scan();
+    expect(stored).toEqual(JSON.parse(JSON.stringify(fresh)));
+  });
+
+  test("fact_json round-trips a whole RunFact", async () => {
+    const runsDir = tmpRoot();
+    writeRun(runsDir, "run-fact");
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const stored = JSON.parse(String(rowsOf(sink, "run_totals")[0]?.["fact_json"])) as Record<string, unknown>;
+    const fresh = readRunFact(runsDir, "run-fact");
+    // `live` is decided against `now` on both sides; everything else is fixed.
+    expect(Object.keys(stored).sort()).toEqual(Object.keys(fresh ?? {}).sort());
+    expect(stored).toEqual(JSON.parse(JSON.stringify({ ...fresh, live: stored["live"] })));
+  });
+
+  /**
+   * The incremental scanner is the one thing here that could silently corrupt
+   * a live run's totals: it folds only the bytes appended since its last read,
+   * and nothing else would notice if it folded them wrongly.
+   */
+  test("an incrementally folded total equals a from-scratch one", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeRun(runsDir, "run-fold");
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const path = join(dir, "trajectory.jsonl");
+    appendFileSync(
+      path,
+      `${JSON.stringify({ t: "response", ts: 5_000, turn: 2, usage: { input_tokens: 40, output_tokens: 9 } })}\n` +
+        `${JSON.stringify({ t: "milestone", ts: 5_100, kind: "level", from: 2, to: 3 })}\n`,
+    );
+    await collector.pass();
+    const stored: unknown = JSON.parse(String(rowsOf(sink, "run_totals").at(-1)?.["totals_json"]));
+    const fresh = await new RunTotalsScanner(path).scan();
+    expect(stored).toEqual(JSON.parse(JSON.stringify(fresh)));
   });
 });
 

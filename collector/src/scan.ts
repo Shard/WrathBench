@@ -18,24 +18,35 @@ export interface RunDirEntry {
   runId: string;
   dir: string;
   archived: boolean;
-  /** Newest mtime across the run's artefacts; what "has this moved" reads. */
-  mtime: number;
+  /**
+   * `(size, mtime)` over every artefact — what "has this moved" compares.
+   *
+   * Size as well as mtime, because a coarse mtime is a real failure mode: a
+   * file appended to within the same millisecond its last pass read it has an
+   * unchanged mtime, and a gate on mtime alone would skip those bytes until
+   * something else moved the file. The same rule the viewer's own read cache
+   * states in `runner/viewer/runs.ts`.
+   */
+  sig: string;
 }
 
 function isValidRunId(id: string): boolean {
   return RUN_ID.test(id) && id !== "." && id !== "..";
 }
 
-function newestMtime(dir: string): number {
-  let newest = 0;
+function signature(dir: string): string {
+  let sig = "";
   for (const name of ["trajectory.jsonl", "episodic.jsonl", "run.sqlite", "meta.json"]) {
     try {
-      newest = Math.max(newest, statSync(join(dir, name)).mtimeMs);
+      const st = statSync(join(dir, name));
+      sig += `${name}:${st.size}:${st.mtimeMs}|`;
     } catch {
-      /* a run with no such artefact is ordinary */
+      // A run with no such artefact is ordinary, and "absent" is part of the
+      // signature: a file that appears later is a change.
+      sig += `${name}:-|`;
     }
   }
-  return newest;
+  return sig;
 }
 
 /**
@@ -67,12 +78,12 @@ export function listRunDirs(runsDir: string): RunDirEntry[] {
       for (const a of inner) {
         if (!a.isDirectory() || !isValidRunId(a.name)) continue;
         const dir = join(archiveDir, a.name);
-        out.push({ runId: a.name, dir, archived: true, mtime: newestMtime(dir) });
+        out.push({ runId: a.name, dir, archived: true, sig: signature(dir) });
       }
       continue;
     }
     const dir = join(runsDir, d.name);
-    out.push({ runId: d.name, dir, archived: false, mtime: newestMtime(dir) });
+    out.push({ runId: d.name, dir, archived: false, sig: signature(dir) });
   }
   return out;
 }
