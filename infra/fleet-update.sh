@@ -4,6 +4,12 @@
 # infra/run-roster.ts, or anything else that only takes effect when the fleet
 # process starts.
 #
+# NOT for config. A config change — a roster entry, the policy, a job — is
+# picked up by the running supervisor on its next 60s tick, whether it was made
+# in the config store (through the app, or runner/src/config-store.ts) or in
+# fleet.json on a deployment with no store yet. Nothing here is involved; see
+# docs/OPERATIONS.md, "Where the config lives".
+#
 # CLUSTER-NATIVE since 2026-09-11. The fleet is the `wrathbench-fleet`
 # Deployment in namespace `wrathbench` (docs/DEPLOY-NUSPHERE.md); compose has
 # been stopped since the 2026-09-08 cutover. Every verb below drives kubectl.
