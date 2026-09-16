@@ -253,16 +253,65 @@ Phase 0: every episode starts with a freshly created character at level 1 in its
 - Run metadata and periodic state in `bun:sqlite` under `data/runs/`.
 - Trajectories as JSONL next to it.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.
+- A single-node ClickHouse holding a **derived, disposable** copy of all of it,
+  filled by `collector/`.
 
 The files under `data/runs/` are the evidence record — the thing a result
-claim points at — and stay authoritative. The staged plan for when reads
-outgrow directory scans (proposed, not yet decided): first a single typed
-`runs/` reader plus published JSON snapshots so the dashboard stops opening
-run files in a request path (which is also the public-hosting shape); then
-Parquet exports queried with DuckDB so analysis becomes checked-in SQL instead
-of ad-hoc JSONL scripts; ClickHouse only when the Parquet set outgrows a
-laptop or the public dashboard needs live aggregates. Every stage is a derived
-view; no store ever becomes the only copy of a trajectory.
+claim points at — and stay the write path and the only authoritative copy.
+Nothing downstream ever becomes the sole holder of a trajectory: the store
+below is rebuilt from those files by one command, and is designed so that
+losing it costs a backfill rather than a run.
+
+### The derived store
+
+The corpus reached 1,148 runs and 11 GB, of which 7.5 GB is `trajectory.jsonl`
+and the largest single file is 669 MB. Roughly three quarters of those bytes
+are one field: `messages`, the rendered context re-logged on every turn. Every
+cold request to a listing route opened all 1,148 `run.sqlite` files over iSCSI
+and re-read every trajectory to count what the page showed. That is what the
+store fixes, and the shape is the operator's decision of 2026-09-16.
+
+**The runner does not change.** It appends JSONL and moves on, the way a
+service logs. It does not know the store exists, has no client for it, and
+fails in none of the ways a database client fails. All the ingestion
+complexity lives in one place.
+
+**The collector owns ingestion.** `collector/` is a separate Bun service that
+polls `data/runs/`, tails each file from a byte offset it keeps in its own
+small sqlite, and batch-inserts over ClickHouse's HTTP interface. Its
+`--replay` mode walks every run from offset zero — and that is the backfill,
+the recovery path *and* the steady-state code path, so there is no
+rarely-exercised branch to be wrong when it is needed. ClickHouse being down
+is a wait, never a loss: offsets advance only past rows the server has
+acknowledged. `collector/README.md` is the detail.
+
+**The store is derived and disposable, and the schema says so.** Every table is
+`ReplacingMergeTree` on a key that replay reproduces exactly, so re-ingesting is
+idempotent rather than additive. A trajectory line's key is its ordinal in the
+file, never `(run_id, turn)` — one turn writes five or six lines and most record
+kinds carry no turn at all. Every trajectory row keeps the whole line in `raw`,
+so a record kind the schema does not name yet is still queryable, and the schema
+can stay small without the store becoming lossy. Measured on this corpus:
+`messages` compresses 29-46x columnar, against 4.2x for gzip over the whole
+file, and 641 MB of one run's trajectory lands as ~32 MB of parts.
+
+**Derivations are computed once, by the code that already existed.** Anything
+that is a pure aggregate over typed columns — token sums, response counts,
+first and last timestamp — is SQL. Anything ordering-sensitive — active
+segments and playtime, the zone and death timelines, the level ladder, tokens
+per second over reply spans — is a state machine, and a SQL reimplementation
+would be a second implementation that can disagree with the first about a
+published number. So the collector runs the viewer's own `RunTotalsScanner`
+and `readRunFact` as it tails and stores the result as JSON on the run. Same
+code, same bytes, by construction.
+
+**The viewer reads the store; the supervisor still reads the files.** Every
+route that used to scan the runs directory answers from ClickHouse. The
+live-progress path — "is this run going right now", the supervisor's own
+polling of `run.sqlite`, the per-run trajectory tail behind `/entries` and the
+SSE stream — still reads files directly, because it asks about a process that
+is writing at this instant. Retiring the per-run sqlite is a later step and
+waits on the store carrying the live state series.
 
 ## What is deliberately absent in Phase 0
 
