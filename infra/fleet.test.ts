@@ -865,6 +865,24 @@ describe("the shipped fleet files", () => {
     expect(config.refusals).toEqual([]);
   });
 
+  test("fleet.json: the September OpenRouter cohort uses exact ids and the intended account classes", async () => {
+    const config = parseFleet((await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown);
+    const expected = [
+      ["deepseek-v41-flash", "deepseek/deepseek-v4.1-flash", "paid"],
+      ["mercury-25", "inception/mercury-2.5", "paid"],
+      ["nex-n25-pro", "nex-agi/nex-n2.5-pro:free", "pool"],
+      ["nex-n25-mini", "nex-agi/nex-n2.5-mini:free", "pool"],
+    ] as const;
+
+    for (const [name, model, accountClass] of expected) {
+      const entry = config.roster[name]!;
+      expect(entry.model).toBe(model);
+      expect(entry.tier).toBe("t0");
+      expect(entry.idle).toBe("none");
+      expect(rosterClass({ name, ...entry })).toBe(accountClass);
+    }
+  });
+
   test("fleet.json: a zen/go entry loads, keys apart from the free zen/v1 stream, and is capped", async () => {
     // The shipped file is edited daily, so this asserts the SHAPE the go
     // surface needs, over whatever entries happen to sit on it today.
