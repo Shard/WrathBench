@@ -107,7 +107,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "state_summary",
     description:
-      "A formatted summary of the cached game state: character, level, position, recent chat and notifications, whether this character continues from an earlier session.",
+      "A formatted summary of the cached game state: character, level, position, recent chat and notifications, whether any events were missed.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
