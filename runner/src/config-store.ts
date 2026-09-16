@@ -501,12 +501,30 @@ export function configStoreSeeded(env: Record<string, string | undefined> = Bun.
 
 /**
  * Seed the store from a config file if it is empty. The supervisor calls this
- * once at boot: a deployment that has never had a store gets one from the file
- * it was already reading, and from then on the file is the seed and the export.
- * Any failure is reported, never thrown — config that loads from a file is not
- * worth refusing to start over.
+ * once at boot: a deployment that has been given a place to put a store gets
+ * one from the file it was already reading, and from then on the file is the
+ * seed and the export. Any failure is reported, never thrown — config that
+ * loads from a file is not worth refusing to start over.
+ *
+ * DELIBERATELY not seeded at the repo-relative default. The store must go live
+ * only where it has been given somewhere durable to live, and on the cluster
+ * that is a chart change: the fleet and the viewer mount subPaths of the data
+ * PVC (`runs`, `wiki`, `minimap`, `fact-cache`), not `/wrathbench/data` itself,
+ * so a store written to the default path would sit in the pod's ephemeral
+ * layer. Worse than useless: the supervisor would then read that copy and stop
+ * seeing Flux's reconciliation of the ConfigMap, which is the documented way
+ * that deployment is steered, while the viewer wrote to a different ephemeral
+ * file in a different pod. So an automatic seed happens only where
+ * `WRATHBENCH_CONFIG_DB` or `WRATHBENCH_DATA` names the path outright. An
+ * operator seeding by hand (`config-store.ts seed`) is an explicit act and is
+ * not gated.
  */
 export function seedIfEmpty(path: string, opts: PutOptions = {}, env: Record<string, string | undefined> = Bun.env): { seeded: boolean; error?: string } {
+  const configured = ["WRATHBENCH_CONFIG_DB", "WRATHBENCH_DATA"].some((k) => {
+    const v = env[k];
+    return v !== undefined && v.length > 0;
+  });
+  if (!configured) return { seeded: false };
   let store: ConfigStore | null = null;
   try {
     store = new ConfigStore(configDbPath(env));

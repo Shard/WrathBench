@@ -200,6 +200,18 @@ describe("the read seam", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(fixtureConfig());
   });
 
+  test("the boot seed happens only where a store path is configured", () => {
+    // Otherwise the supervisor would seed an ephemeral store on the cluster —
+    // where only subPaths of the data PVC are mounted — and stop seeing the
+    // ConfigMap that Flux reconciles, which is how that deployment is steered.
+    const root = mkdtempSync(join(tmpdir(), "config-seed-gate-"));
+    const file = join(root, "fleet.json");
+    writeFileSync(file, JSON.stringify(fixtureConfig()));
+    expect(seedIfEmpty(file, {}, {}).seeded).toBe(false);
+    expect(seedIfEmpty(file, {}, { WRATHBENCH_DATA: root }).seeded).toBe(true);
+    expect(readFileSync(join(root, "config.sqlite")).length).toBeGreaterThan(0);
+  });
+
   test("an unreadable store falls back to the file rather than failing the read", () => {
     const root = mkdtempSync(join(tmpdir(), "config-seam-bad-"));
     const file = join(root, "fleet.json");
