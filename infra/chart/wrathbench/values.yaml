@@ -203,11 +203,15 @@ clickhouse:
   resources:
     requests:
       cpu: 500m
-      memory: 1Gi
-    limits:
-      # ClickHouse reads its cgroup limit and sizes its caches from it, so this
-      # is a budget, not only an OOM ceiling.
       memory: 2Gi
+    limits:
+      # An OOM ceiling. The cgroup limit sizes `max_server_memory_usage` (0.9 of
+      # it) and NOTHING else — every cache and thread pool keeps its big-box
+      # default however small the container is, which is how a 2Gi limit met
+      # 18 GiB of declared cache and every query died with `Code: 241`
+      # (2026-09-17). infra/clickhouse/ bounds the rest; raise this first on a
+      # bigger box, then the two caches there. See collector/README.md.
+      memory: 4Gi
 
 # Tails data/runs into ClickHouse. Nothing else writes to the store, and the
 # runner does not know it exists.

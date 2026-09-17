@@ -111,6 +111,39 @@ Archived runs are ingested too, flagged `archived = 1`. The viewer hides them
 and the fleet scheduler must see them; that filter belongs in the query, not in
 what gets stored.
 
+## The memory budget
+
+ClickHouse ships sized for a dedicated box and does not shrink to fit. It reads
+the container's cgroup limit for exactly one setting — `max_server_memory_usage`,
+at 0.9 of it — and every cache and thread pool keeps its default whatever the
+limit is: a 5 GiB mark cache, a 5 GiB primary-index cache, a 5 GiB
+index-mark cache, an 8 GiB uncompressed cache, 16 background merge threads,
+`max_threads` auto(16) and no per-query memory cap at all. Against the 1.8 GiB
+tracker a 2 GiB container gets, that is not a budget, and on 2026-09-17 two
+concurrent viewer queries over `turns` (15.7 GiB uncompressed, 715 MiB on disk)
+took the server down with `Code: 241 (total) memory limit exceeded`.
+
+`infra/clickhouse/` is the fix, and it is the same two files under both
+deployments — compose bind-mounts them, the Helm chart carries a verbatim inline
+copy in its ConfigMap, and `infra/clickhouse.test.ts` fails if the two drift.
+`config.d/memory.xml` hard-bounds the caches (mark 256 MiB, primary-index and
+index-mark 128 MiB, uncompressed off), cuts the background pools to 4 with the
+`merge_tree` free-slot thresholds scaled to match, gives merges a 512 MiB soft
+limit, and caps `max_concurrent_queries` at 32. `users.d/wrathbench-profile.xml`
+puts `max_threads` 4, `max_memory_usage` 512 MiB and `max_execution_time` 300s
+on the **`default` profile** — not on a named user, because the app user is
+created from `CLICKHOUSE_USER` by the image's entrypoint at first boot and
+inherits that profile.
+
+The numbers do not sum to the limit and are not meant to: 32 queries at 512 MiB
+each is far more than the container has. What each one buys is a bound where
+there was none, so no single cache, merge or query can reach the ceiling on its
+own, and `max_server_memory_usage` stays the backstop rather than the first
+thing hit. Both deployments now give the server 4 GiB. **On a bigger box, raise
+the container limit first** — that alone moves the backstop — then the mark and
+primary-index caches, then `background_pool_size`, then the profile's
+`max_threads`. Raising the caches without raising the limit is how this started.
+
 ## Tests
 
 `bun test` from the repository root, or from here. Fixture-based and green from
