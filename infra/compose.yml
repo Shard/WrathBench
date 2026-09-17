@@ -401,7 +401,8 @@ services:
   # `max_server_memory_usage` at 0.9 of it; every cache and every thread pool
   # keeps its big-box default however small the container is. The drop-ins in
   # `clickhouse/` are what make this a budget — see the header there and
-  # collector/README.md.
+  # collector/README.md. `logging.xml` is the same story for the server's own
+  # telemetry, which ships unbounded and outgrew the corpus in ten days.
   #
   # The drop-ins are mounted as FILES, not directories: the image's entrypoint
   # writes users.d/default-user.xml at first boot to create CLICKHOUSE_USER, and
@@ -425,6 +426,7 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ./clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+      - ./clickhouse/config.d/logging.xml:/etc/clickhouse-server/config.d/logging.xml:ro
       - ./clickhouse/users.d/wrathbench-profile.xml:/etc/clickhouse-server/users.d/wrathbench-profile.xml:ro
     # Loopback only, for operator inspection (docs/DATA-AND-LEGAL.md).
     ports:

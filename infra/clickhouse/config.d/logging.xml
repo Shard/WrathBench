@@ -1,0 +1,100 @@
+<?xml version="1.0"?>
+<!--
+  Stop ClickHouse's own telemetry from outgrowing the corpus.
+
+  The stock config.xml in the pinned image turns on trace-level logging and
+  five unbounded system log tables. After ten days on the cluster the SYSTEM
+  tables were larger than the data they describe: text_log 42.7M rows / 10 GiB
+  uncompressed, trace_log 46M rows / 18 GiB, processors_profile_log 3.3 GiB,
+  query_log 2.3 GiB, against `turns` at 15.7 GiB for the whole benchmark
+  corpus (2026-09-17).
+
+  Size was the smaller half of the problem. Background merges of the system
+  tables kept climbing past 3 GiB, dying on the server's 3.6 GiB total limit,
+  and retrying every few seconds, and every retry spiked the total tracker and
+  killed whatever viewer or publisher query was in flight with
+  `Code: 241 (total) memory limit exceeded`. system.text_log was the first one
+  caught at it; system.metric_log, see below, turned out to be the one that
+  would not stop. memory.xml bounds what a merge may allocate; this file bounds
+  what there is to merge.
+
+  TTL IN CONFIG APPLIES ONLY AT TABLE CREATION. An existing system table keeps
+  whatever it was created with, and `remove` does not drop a table that already
+  exists. See collector/README.md: the tables have to be dropped once, by hand,
+  and the server recreates them from this file.
+
+  Mounted read-only as a FILE, never as a directory, for the reason memory.xml
+  gives.
+-->
+<clickhouse>
+    <!-- warning, was trace. This is the console and rotated-file log, and it
+         also gates what is ever emitted: nothing below this level reaches
+         text_log either, whatever that table's own level says. trace here is
+         what filled 10 GiB of text_log and up to 10 GiB of rotated files in
+         the container. warning still carries every genuine problem; the cost
+         is the boot banner, so health is probed at /ping, not by log tail. -->
+    <logger>
+        <level>warning</level>
+    </logger>
+
+    <!-- Kept, bounded. text_log is worth having when the server misbehaves
+         and the pod's log is already gone, but at trace it is a firehose.
+         warning matches the logger level above, so the table holds exactly the
+         problems and none of the narration. -->
+    <text_log>
+        <level>warning</level>
+        <!-- Daily partitions, not the built-in monthly default. A TTL that
+             expires whole partitions is a part drop; one that expires rows
+             inside a monthly part is a recurring rewrite merge, which is the
+             failure mode this file exists to stop. `asynchronous_insert_log`
+             in the shipped config.xml partitions by plain event_date the same
+             way. -->
+        <partition_by>event_date</partition_by>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </text_log>
+
+    <!-- Kept with a 7 day TTL, daily partitions: both were used to diagnose
+         the memory failure. query_log is how the killed queries were
+         identified at all, and part_log is where merge peak memory is
+         recorded. Seven days is long enough to diagnose something that
+         happened over a weekend and short enough that neither can reach the
+         sizes above. Both ship with no TTL and with monthly partitions,
+         replaced here for the reason text_log gives. -->
+    <query_log>
+        <partition_by>event_date</partition_by>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_log>
+    <part_log>
+        <partition_by>event_date</partition_by>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </part_log>
+
+    <!-- Off. The sampling profiler writes a stack trace per thread per
+         sampling interval and symbolizes it: 46M rows and 18 GiB in ten days,
+         the single largest thing on the volume. It answers "which C++ frame is
+         hot", which is a question about ClickHouse, not about this corpus, and
+         nobody here has ever asked it. -->
+    <trace_log remove="remove"/>
+
+    <!-- Off. A row per pipeline processor per query. It is the one table that
+         already ships with a TTL (30 days) and it still reached 3.3 GiB,
+         which is the argument: bounding it is not enough, and query_log
+         answers everything that has actually been asked of it. -->
+    <processors_profile_log remove="remove"/>
+
+    <!-- Off, and this one was the actual killer. metric_log is 1,435 columns
+         wide and flushes one PART every 7.5 seconds: 8,595 parts on the
+         cluster, and the merge of 202609_1_8595_146 climbed past 3 GiB and
+         died on the 3.6 GiB total limit every few seconds, which is what kept
+         evicting live viewer and publisher queries. Truncating it took the
+         merges tracker straight to 0 B. A TTL would not have saved it, because
+         the cost is the merge of 1,435 columns across thousands of tiny parts,
+         not the retention. system.metrics and system.asynchronous_metrics hold
+         the current values either way; what is lost is their history. -->
+    <metric_log remove="remove"/>
+
+    <!-- Off, for the same reason one step further along: the narrow sibling of
+         metric_log, one row per asynchronous metric per 7 seconds, thousands
+         of rows a minute forever, and no reader here. -->
+    <asynchronous_metric_log remove="remove"/>
+</clickhouse>
