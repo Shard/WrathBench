@@ -809,10 +809,15 @@ export function createApi(opts: ApiOptions): ApiHandle {
     for (const raw of rows) {
       const totals = totalsByRun.get(raw.runId) ?? null;
       const row = withResolved(raw, totals);
+      // Let each series go as it is consumed: the map holds every state row of
+      // the corpus, and the publisher's pass has a hard-won peak-RSS bound
+      // (runner/viewer/snapshot.ts, item 121) to stay inside.
+      const states = statesByRun.get(row.runId) ?? [];
+      statesByRun.delete(row.runId);
       out.push(
         resultRunOf(
           row,
-          (statesByRun.get(row.runId) ?? []).map(statePointOf),
+          states.map(statePointOf),
           totals?.segments ?? [],
           totals === null
             ? null
