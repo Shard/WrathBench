@@ -1692,7 +1692,7 @@ async function main(): Promise<void> {
   const doneAlready = pending.filter((a) => a.doneCycle1 === true).length;
   say(
     `roster ${rosterPath}: ${pending.length} episode(s)` +
-      (doneAlready > 0 ? ` (${doneAlready} already done for cycle 1; kept for later --loop cycles)` : "") +
+      (doneAlready > 0 ? ` (${doneAlready} skipped for cycle 1 — already terminated, or the run id is taken; kept for later --loop cycles)` : "") +
       `, log ${logPath}` +
       (deadline !== undefined ? `, stop launching at ${new Date(deadline).toLocaleString()}` : ", no wall-clock budget"),
   );
