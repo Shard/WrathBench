@@ -207,6 +207,27 @@ describe("k8s-deploy.sh draining", () => {
     expect(lastIndex(r, "get pods")).toBeLessThan(firstIndex(r, "smoke "));
   });
 
+  test("--dry-run prints the pod list and changes nothing", () => {
+    const r = run({ args: ["--dry-run"], podPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("wrathbench-fleet-abc123 Running");
+    // The claim --dry-run makes, in full: nothing is scaled, waited on or smoked.
+    expect(r.calls.some((l) => l.includes("--replicas="))).toBe(false);
+    expect(firstIndex(r, "smoke ")).toBe(-1);
+  });
+
+  test("--dry-run says so when no pod is there to wait for", () => {
+    const r = run({ args: ["--dry-run"], podPolls: 0 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("the drain would not have to wait for one");
+  });
+
+  test("a wait that never waited says so, rather than reading as a clean drain", () => {
+    const r = run({ podPolls: 0 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("on the first look — nothing to wait for");
+  });
+
   test("a pod that outlives the drain budget fails the window closed and names it", () => {
     const r = run({ podPolls: -1, drainWaitS: 1 });
     expect(r.exitCode).toBe(1);
