@@ -6,7 +6,10 @@
 #   draining    scale the fleet Deployment to 0. SIGTERM reaches the
 #               supervisor, every live run PAUSES and is resumed when it comes
 #               back. Then wait for the supervisor's own state file to say every
-#               job has exited — never a pid probe, never a guess.
+#               job has exited — never a pid probe, never a guess — AND for the
+#               fleet POD to be gone, because the supervisor's own preflight
+#               smoke is not a job and holds a smoke account that the gate
+#               smokes need (2026-09-17).
 #   waiting     wait for the worldserver rollout and for the module to answer
 #               /health ready WITH the bearer.
 #   verifying   run the gate smokes (preflight.smokes) and then the deploy-only
@@ -74,7 +77,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --expect-tag) EXPECT_TAG="$2"; shift 2 ;;
     --allow-tag-mismatch) ALLOW_TAG_MISMATCH=1; shift ;;
-    -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "k8s-deploy: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -176,6 +179,15 @@ deployed_tag() {
 }
 fleet_replicas() {
   "${KUBECTL[@]}" get "${FLEET_DEPLOY}" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0
+}
+# The fleet's PODS, by the same selector the chart puts in the Deployment's
+# `selector.matchLabels` (instance is .Release.Name, component is `fleet`), so
+# this reads the same objects the scale acts on. One line per pod, "<name>
+# <phase>", empty when there is none — which is the whole signal the drain
+# waits for. Identical to fleet-update.sh's reader of the same name.
+fleet_pods() {
+  "${KUBECTL[@]}" get pods -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=fleet" \
+    -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}' 2>/dev/null | strip_ansi | tr -d '\r' || true
 }
 
 # ------------------------------------------------------------- the pin check
@@ -296,6 +308,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "  fleet config       ${FLEET_JSON}"
   say "  worldserver image  $(deployed_tag) (Flux owns this; this script never changes it)"
   say "  fleet replicas     $(fleet_replicas)"
+  say "  fleet pods         $(p="$(fleet_pods)"; if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — the drain would not have to wait for one"; fi)"
   resolve_tag_check
   case "${TAG_CHECK}" in
     ok) say "  pin check          OK — ${TAG_CHECK_WHY}" ;;
@@ -418,6 +431,38 @@ else
   PAUSED_NOTE="nothing was live"
   write_phase draining "the fleet was already at 0 — nothing to pause; it is scaled back at the end regardless"
 fi
+
+# THE STATE FILE IS NOT THE WHOLE DRAIN. It lists the supervisor's JOBS, and the
+# supervisor also drives sessions of its own: the preflight gate runs
+# `preflight.smokes` on the SMOKE accounts the moment it boots, and that is not
+# a job, so fleet-state.json says "no live job" while it is mid-smoke. On
+# 2026-09-17 a Helm upgrade put the fleet back to 1 replica under a held pause
+# switch, its new pod started that preflight, this window scaled to 0, read the
+# empty job list one second later and ran the GATE smoke on the same account —
+# which the module refused with 409 account_owned_by_other_token, because the
+# dying pod still held it inside its 180s termination grace.
+#
+# So the pod being GONE is the condition, not the job list. Same reader and same
+# reason as fleet-update.sh's drain: `rollout status` on a Deployment scaled to
+# 0 does not reliably wait for a pod that is still Terminating. Unconditional,
+# including when the fleet was already at 0 — that branch does no state-file
+# wait at all, and "already at 0" says nothing about a pod still in its grace.
+say "waiting for the fleet POD to go away (its 180s grace is where pause records are written, and where the supervisor's own preflight session is released; up to ${DRAIN_WAIT_S}s)"
+pod_deadline=$(( $(date +%s) + DRAIN_WAIT_S ))
+while :; do
+  fleet_pod_lines="$(fleet_pods)"
+  [[ -z "${fleet_pod_lines//[[:space:]]/}" ]] && break
+  if [[ "$(date +%s)" -ge "${pod_deadline}" ]]; then
+    pod_names=""
+    while IFS= read -r l; do
+      [[ -n "${l//[[:space:]]/}" ]] || continue
+      pod_names="${pod_names}${pod_names:+, }${l}"
+    done <<< "${fleet_pod_lines}"
+    fail_closed "the fleet pod is still there ${DRAIN_WAIT_S}s after scaling to 0: ${pod_names} — it may still hold the ${PREFLIGHT_ACCOUNT} session its own preflight opened, and a smoke run now answers 409 account_owned_by_other_token (2026-09-17). Read: ${KUBECTL[*]} describe ${FLEET_DEPLOY}"
+  fi
+  sleep 2
+done
+say "drained: no fleet pod remains, so nothing else holds the smoke accounts"
 
 # ------------------------------------------------------------------ 2. wait
 CURRENT_PHASE=waiting
