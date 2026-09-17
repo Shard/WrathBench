@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!--
+  Fit ClickHouse into a small container.
+
+  Only `max_server_memory_usage` is derived from the cgroup limit; every cache
+  and every pool below is a fixed upstream default sized for a dedicated box,
+  and none of them shrink because the container is small. On a 2 GiB limit the
+  stock mark + primary-index + uncompressed caches alone declare 18 GiB of
+  intent against a 1.8 GiB server tracker, and concurrent viewer queries duly
+  died with `Code: 241 total memory limit exceeded` (2026-09-17).
+
+  `cache_size_to_ram_max_ratio` (0.5) does cap the caches in aggregate, so they
+  were never the whole story — the thread pools and the unbounded per-query
+  budget are the other half. Sizes here are raw BYTES; ClickHouse server config
+  takes no Mi/Gi suffix.
+
+  Mounted read-only as a FILE, never as a directory: the image's entrypoint
+  writes /etc/clickhouse-server/users.d/default-user.xml at first boot, and a
+  read-only config.d/users.d would wedge it.
+-->
+<clickhouse>
+    <!-- 256 MiB, was 5 GiB. `turns` is 715 MiB on disk; its marks are a few MB,
+         so this is already the whole working set several times over. -->
+    <mark_cache_size>268435456</mark_cache_size>
+    <!-- 128 MiB, was 5 GiB. Secondary-index marks; this corpus has none worth
+         the reservation, but the cache is populated, unlike the vector and
+         iceberg caches which stay empty here and are left alone. -->
+    <index_mark_cache_size>134217728</index_mark_cache_size>
+    <!-- 128 MiB, was 5 GiB. Primary keys are (run_id, line_no)-shaped and tiny. -->
+    <primary_index_cache_size>134217728</primary_index_cache_size>
+    <!-- Off, was 8 GiB. Only ever used by queries that set
+         `use_uncompressed_cache=1`; nothing here does, so it was 8 GiB of
+         declared intent serving no query. -->
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
+    <!-- 4, was 16. Background merges are the other big allocator. One shard,
+         one node, an append-mostly corpus: merges need to keep up, not race. -->
+    <background_pool_size>4</background_pool_size>
+    <!-- 4, was 8. Moves, drops and the other common background work. -->
+    <background_common_pool_size>4</background_common_pool_size>
+    <!-- 16, was 512. 512 threads is sized for a cluster with distributed DDL
+         and many replicas; this is one node that talks to nobody. -->
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+
+    <!-- 512 MiB, was 0 (= no limit beyond the server tracker). A merge of the
+         `turns` parts is the one background job that can allocate at query
+         scale; this makes it defer instead of evicting a live query. -->
+    <merges_mutations_memory_usage_soft_limit>536870912</merges_mutations_memory_usage_soft_limit>
+
+    <!-- The merge_tree thresholds are counted in POOL SLOTS, and their
+         defaults assume the stock pool of 16 (x2 concurrency = 32 slots). With
+         a pool of 4 the server refuses to boot: "the value of
+         'number_of_free_entries_in_pool_to_execute_mutation' (20) is greater
+         than 'background_pool_size'*'background_merges_mutations_concurrency_ratio'
+         (8)". Scaled to the small pool, they keep their meaning: leave a slot
+         free for merges before starting a mutation, and only shrink the max
+         merge size when the pool is genuinely full. -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>1</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>2</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
+
+    <!-- 32, was 1000. Every client is in-namespace (viewer, collector,
+         publisher); 1000 concurrent queries at 4 threads each is a thread
+         explosion nothing here can ask for legitimately. -->
+    <max_concurrent_queries>32</max_concurrent_queries>
+
+    <!-- Unchanged from the default, stated because it is the backstop the rest
+         of this file leans on: 0.9 of the cgroup limit is the hard ceiling. -->
+    <max_server_memory_usage_to_ram_ratio>0.9</max_server_memory_usage_to_ram_ratio>
+</clickhouse>

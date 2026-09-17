@@ -396,9 +396,16 @@ services:
   # because nothing in this stack uses it.
   #
   # `mem_limit` rather than `deploy.resources`: the latter is ignored outside
-  # swarm and podman-compose does not implement it. ClickHouse reads the
-  # cgroup limit and sizes its own caches from it, so 2 GB here is a real
-  # budget and not just an OOM ceiling.
+  # swarm and podman-compose does not implement it. It is an OOM ceiling and
+  # very little more. ClickHouse reads the cgroup limit only to size
+  # `max_server_memory_usage` at 0.9 of it; every cache and every thread pool
+  # keeps its big-box default however small the container is. The drop-ins in
+  # `clickhouse/` are what make this a budget — see the header there and
+  # collector/README.md.
+  #
+  # The drop-ins are mounted as FILES, not directories: the image's entrypoint
+  # writes users.d/default-user.xml at first boot to create CLICKHOUSE_USER, and
+  # a read-only users.d would wedge it.
   clickhouse:
     image: clickhouse/clickhouse-server:25.8
     environment:
@@ -414,9 +421,11 @@ services:
       nofile:
         soft: 262144
         hard: 262144
-    mem_limit: 2g
+    mem_limit: 4g
     volumes:
       - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+      - ./clickhouse/users.d/wrathbench-profile.xml:/etc/clickhouse-server/users.d/wrathbench-profile.xml:ro
     # Loopback only, for operator inspection (docs/DATA-AND-LEGAL.md).
     ports:
       - "127.0.0.1:8123:8123"

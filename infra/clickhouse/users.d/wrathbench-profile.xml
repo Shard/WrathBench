@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<!--
+  Per-query budget, on the `default` PROFILE rather than on a named user.
+
+  The app user is created from CLICKHOUSE_USER at first boot by the image's own
+  entrypoint, which writes it with `<profile>default</profile>` — so the user
+  does not exist at the time this file is read, and the only override that
+  reaches it is one on the profile it inherits. (`<default remove="remove"/>`
+  in that generated file removes the default USER; profiles are a separate
+  tree and are untouched.)
+
+  That one user is the viewer, the collector AND the publisher, so these
+  numbers have to suit a wide `FINAL` scan and a replay insert flush alike.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- 4, was auto(16). Per query, and the container has neither 16
+                 cores to spend nor the memory for 16 threads' worth of blocks. -->
+            <max_threads>4</max_threads>
+            <!-- 512 MiB, was 0 (unlimited, i.e. bounded only by the server
+                 tracker — which is how one viewer query could take the whole
+                 server down). `max_bytes_ratio_before_external_group_by` is
+                 0.5, so a big aggregation spills to disk at ~256 MiB instead
+                 of throwing. A collector insert batch caps at 8 MB. -->
+            <max_memory_usage>536870912</max_memory_usage>
+            <!-- 300s, was 0 (no limit). Generous on purpose: a replay
+                 flush against a busy server is slow, not wrong. This is here
+                 to kill a runaway, not to police a slow query. -->
+            <max_execution_time>300</max_execution_time>
+        </default>
+    </profiles>
+</clickhouse>

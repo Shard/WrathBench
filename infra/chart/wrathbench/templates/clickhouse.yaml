@@ -1,3 +1,121 @@
+{{/*
+The server config drop-ins, inline.
+
+The canonical copies live in infra/clickhouse/ because compose bind-mounts
+them from there and `.Files.Get` cannot reach outside the chart directory.
+These two defines are a verbatim copy, and infra/clickhouse.test.ts fails if
+they drift from the files. They are `define`s rather than literals in the
+ConfigMap so the pod annotation below can checksum the same bytes.
+*/}}
+{{- define "wrathbench.clickhouse.memoryXml" -}}
+<?xml version="1.0"?>
+<!--
+  Fit ClickHouse into a small container.
+
+  Only `max_server_memory_usage` is derived from the cgroup limit; every cache
+  and every pool below is a fixed upstream default sized for a dedicated box,
+  and none of them shrink because the container is small. On a 2 GiB limit the
+  stock mark + primary-index + uncompressed caches alone declare 18 GiB of
+  intent against a 1.8 GiB server tracker, and concurrent viewer queries duly
+  died with `Code: 241 total memory limit exceeded` (2026-09-17).
+
+  `cache_size_to_ram_max_ratio` (0.5) does cap the caches in aggregate, so they
+  were never the whole story — the thread pools and the unbounded per-query
+  budget are the other half. Sizes here are raw BYTES; ClickHouse server config
+  takes no Mi/Gi suffix.
+
+  Mounted read-only as a FILE, never as a directory: the image's entrypoint
+  writes /etc/clickhouse-server/users.d/default-user.xml at first boot, and a
+  read-only config.d/users.d would wedge it.
+-->
+<clickhouse>
+    <!-- 256 MiB, was 5 GiB. `turns` is 715 MiB on disk; its marks are a few MB,
+         so this is already the whole working set several times over. -->
+    <mark_cache_size>268435456</mark_cache_size>
+    <!-- 128 MiB, was 5 GiB. Secondary-index marks; this corpus has none worth
+         the reservation, but the cache is populated, unlike the vector and
+         iceberg caches which stay empty here and are left alone. -->
+    <index_mark_cache_size>134217728</index_mark_cache_size>
+    <!-- 128 MiB, was 5 GiB. Primary keys are (run_id, line_no)-shaped and tiny. -->
+    <primary_index_cache_size>134217728</primary_index_cache_size>
+    <!-- Off, was 8 GiB. Only ever used by queries that set
+         `use_uncompressed_cache=1`; nothing here does, so it was 8 GiB of
+         declared intent serving no query. -->
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
+    <!-- 4, was 16. Background merges are the other big allocator. One shard,
+         one node, an append-mostly corpus: merges need to keep up, not race. -->
+    <background_pool_size>4</background_pool_size>
+    <!-- 4, was 8. Moves, drops and the other common background work. -->
+    <background_common_pool_size>4</background_common_pool_size>
+    <!-- 16, was 512. 512 threads is sized for a cluster with distributed DDL
+         and many replicas; this is one node that talks to nobody. -->
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+
+    <!-- 512 MiB, was 0 (= no limit beyond the server tracker). A merge of the
+         `turns` parts is the one background job that can allocate at query
+         scale; this makes it defer instead of evicting a live query. -->
+    <merges_mutations_memory_usage_soft_limit>536870912</merges_mutations_memory_usage_soft_limit>
+
+    <!-- The merge_tree thresholds are counted in POOL SLOTS, and their
+         defaults assume the stock pool of 16 (x2 concurrency = 32 slots). With
+         a pool of 4 the server refuses to boot: "the value of
+         'number_of_free_entries_in_pool_to_execute_mutation' (20) is greater
+         than 'background_pool_size'*'background_merges_mutations_concurrency_ratio'
+         (8)". Scaled to the small pool, they keep their meaning: leave a slot
+         free for merges before starting a mutation, and only shrink the max
+         merge size when the pool is genuinely full. -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>1</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>2</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
+
+    <!-- 32, was 1000. Every client is in-namespace (viewer, collector,
+         publisher); 1000 concurrent queries at 4 threads each is a thread
+         explosion nothing here can ask for legitimately. -->
+    <max_concurrent_queries>32</max_concurrent_queries>
+
+    <!-- Unchanged from the default, stated because it is the backstop the rest
+         of this file leans on: 0.9 of the cgroup limit is the hard ceiling. -->
+    <max_server_memory_usage_to_ram_ratio>0.9</max_server_memory_usage_to_ram_ratio>
+</clickhouse>
+{{- end -}}
+{{- define "wrathbench.clickhouse.profileXml" -}}
+<?xml version="1.0"?>
+<!--
+  Per-query budget, on the `default` PROFILE rather than on a named user.
+
+  The app user is created from CLICKHOUSE_USER at first boot by the image's own
+  entrypoint, which writes it with `<profile>default</profile>` — so the user
+  does not exist at the time this file is read, and the only override that
+  reaches it is one on the profile it inherits. (`<default remove="remove"/>`
+  in that generated file removes the default USER; profiles are a separate
+  tree and are untouched.)
+
+  That one user is the viewer, the collector AND the publisher, so these
+  numbers have to suit a wide `FINAL` scan and a replay insert flush alike.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- 4, was auto(16). Per query, and the container has neither 16
+                 cores to spend nor the memory for 16 threads' worth of blocks. -->
+            <max_threads>4</max_threads>
+            <!-- 512 MiB, was 0 (unlimited, i.e. bounded only by the server
+                 tracker — which is how one viewer query could take the whole
+                 server down). `max_bytes_ratio_before_external_group_by` is
+                 0.5, so a big aggregation spills to disk at ~256 MiB instead
+                 of throwing. A collector insert batch caps at 8 MB. -->
+            <max_memory_usage>536870912</max_memory_usage>
+            <!-- 300s, was 0 (no limit). Generous on purpose: a replay
+                 flush against a busy server is slow, not wrong. This is here
+                 to kill a runaway, not to police a slow query. -->
+            <max_execution_time>300</max_execution_time>
+        </default>
+    </profiles>
+</clickhouse>
+{{- end -}}
 {{- if .Values.clickhouse.enabled }}
 {{/*
 The derived store (collector/README.md), and the collector that fills it.
@@ -39,6 +157,19 @@ spec:
       port: 8123
       targetPort: 8123
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-clickhouse-config
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse
+data:
+  memory.xml: |
+    {{- include "wrathbench.clickhouse.memoryXml" . | nindent 4 }}
+  wrathbench-profile.xml: |
+    {{- include "wrathbench.clickhouse.profileXml" . | nindent 4 }}
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -59,9 +190,11 @@ spec:
         {{- include "wrathbench.labels" . | nindent 8 }}
         app.kubernetes.io/component: clickhouse
         {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
-      {{- with .Values.podAnnotations }}
-      annotations: {{ toYaml . | nindent 8 }}
-      {{- end }}
+      annotations:
+        # The drop-ins are mounted by subPath, which never hot-reloads; without
+        # this the ConfigMap would change and the pod would keep the old file.
+        checksum/clickhouse-config: {{ printf "%s%s" (include "wrathbench.clickhouse.memoryXml" .) (include "wrathbench.clickhouse.profileXml" .) | sha256sum }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
     spec:
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext:
@@ -108,12 +241,29 @@ spec:
               port: 8123
             initialDelaySeconds: 30
             periodSeconds: 30
-          # ClickHouse reads its cgroup limit and sizes its own caches from it,
-          # so this is a budget rather than only an OOM ceiling.
+          # An OOM ceiling, and only indirectly a budget: the cgroup limit
+          # sizes `max_server_memory_usage` (0.9 of it) and nothing else. The
+          # caches and pools are bounded by the ConfigMap below, not by this.
           resources: {{ toYaml .Values.clickhouse.resources | nindent 12 }}
           volumeMounts:
             - name: clickhouse-data
               mountPath: /var/lib/clickhouse
+            # subPath, so each drop-in lands as a FILE and the surrounding
+            # directory stays writable: the image's entrypoint writes
+            # users.d/default-user.xml at first boot to create CLICKHOUSE_USER,
+            # and a ConfigMap mounted over users.d/ would wedge it.
+            - name: clickhouse-config
+              mountPath: /etc/clickhouse-server/config.d/memory.xml
+              subPath: memory.xml
+              readOnly: true
+            - name: clickhouse-config
+              mountPath: /etc/clickhouse-server/users.d/wrathbench-profile.xml
+              subPath: wrathbench-profile.xml
+              readOnly: true
+      volumes:
+        - name: clickhouse-config
+          configMap:
+            name: {{ include "wrathbench.fullname" . }}-clickhouse-config
   volumeClaimTemplates:
     - metadata:
         name: clickhouse-data
