@@ -21,6 +21,7 @@ import { Trajectory } from "../src/trajectory";
 import { readRun, readStates, readMoves } from "../viewer/runs";
 import {
   clickhouseConfigFromEnv,
+  clickhouseErrorMessage,
   latestStatesOf,
   localRunStore,
   moveViewsOf,
@@ -249,5 +250,79 @@ describe("configuration", () => {
       password: "",
       database: "wrathbench",
     });
+  });
+});
+
+describe("one query for the listing, not one per run", () => {
+  /**
+   * `/api/results` and `/api/ladder` project every run's state series. Doing
+   * that a run at a time was one `states` query per run — ~700 of them per
+   * request, each reading the `items` JSON — and it ran ClickHouse out of
+   * memory (2026-09-17). The bulk read has to give back exactly what the
+   * per-run read gives back, run for run, or a chart changes with the fix.
+   */
+  const runsDir = tmpRoot();
+  writeRun(runsDir, "run-a");
+  writeRun(runsDir, "run-b");
+  const store = localRunStore(runsDir);
+
+  test("the bulk map is the per-run series, run for run and in the same order", async () => {
+    const bulk = await store.stateRowsByRun(["run-a", "run-b"]);
+    for (const id of ["run-a", "run-b"]) {
+      const one = (await store.stateRows(id)).map(statePointOf);
+      expect(JSON.stringify((bulk.get(id) ?? []).map(statePointOf))).toBe(JSON.stringify(one));
+      expect(one.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("runs the caller did not ask for are not in the map", async () => {
+    const bulk = await store.stateRowsByRun(["run-a"]);
+    expect([...bulk.keys()]).toEqual(["run-a"]);
+    expect(await store.stateRowsByRun([])).toEqual(new Map());
+  });
+
+  test("a run with no state rows is absent, not an empty series", async () => {
+    const bulk = await store.stateRowsByRun(["run-a", "run-nothing"]);
+    expect(bulk.has("run-nothing")).toBe(false);
+  });
+
+  test("one run's latest readings come off the aggregate, and a run with no states reads undefined", async () => {
+    expect(await store.latestState("run-a")).toEqual((await store.latestStates()).get("run-a")!);
+    // `runRowOf` branches on undefined for `items`; a zero-filled object would
+    // publish "no items" where the truth is "nothing recorded yet".
+    expect(await store.latestState("run-nothing")).toBeUndefined();
+  });
+});
+
+describe("a failed query says what ClickHouse said", () => {
+  /**
+   * The old message sliced the first 400 characters of the body, which is the
+   * `meta` block — the operator saw a column list and had to dig through
+   * query_log for the exception behind it.
+   */
+  test("the exception wins over the meta block that precedes it", () => {
+    const body = JSON.stringify({
+      meta: Array.from({ length: 40 }, (_, i) => ({ name: `column_${i}`, type: "Nullable(Int64)" })),
+      data: [],
+      exception: "Code: 241. DB::Exception: Memory limit (total) exceeded",
+    });
+    expect(clickhouseErrorMessage(500, body)).toBe(
+      "clickhouse 500: Code: 241. DB::Exception: Memory limit (total) exceeded",
+    );
+  });
+
+  test("a body cut off mid-stream still yields the exception", () => {
+    // A memory abort lands after `meta` and part of `data` have been flushed,
+    // so the body is not valid JSON at all.
+    const body = `{"meta":[{"name":"run_id"}],"data":[{"run_id":"r"},{"run_i` +
+      `\n\t"exception": "Code: 241. DB::Exception: Memory limit (total) exceeded: would use 56.00 GiB"`;
+    expect(clickhouseErrorMessage(500, body)).toBe(
+      "clickhouse 500: Code: 241. DB::Exception: Memory limit (total) exceeded: would use 56.00 GiB",
+    );
+  });
+
+  test("a body with no exception in it falls back to the body", () => {
+    expect(clickhouseErrorMessage(404, "Code: 60. Unknown table")).toBe("clickhouse 404: Code: 60. Unknown table");
+    expect(clickhouseErrorMessage(500, "x".repeat(600))).toBe(`clickhouse 500: ${"x".repeat(400)}`);
   });
 });
