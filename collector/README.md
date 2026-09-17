@@ -129,7 +129,8 @@ copy in its ConfigMap, and `infra/clickhouse.test.ts` fails if the two drift.
 `config.d/memory.xml` hard-bounds the caches (mark 256 MiB, primary-index and
 index-mark 128 MiB, uncompressed off), cuts the background pools to 4 with the
 `merge_tree` free-slot thresholds scaled to match, gives merges a 512 MiB soft
-limit, and caps `max_concurrent_queries` at 32. `users.d/wrathbench-profile.xml`
+limit, and caps `max_concurrent_queries` at 128 (the publisher's eight-wide snapshot walk
+alone holds ~50 queries in flight; 32 refused every pass). `users.d/wrathbench-profile.xml`
 puts `max_threads` 4, `max_memory_usage` 512 MiB and `max_execution_time` 300s
 on the **`default` profile** — not on a named user, because the app user is
 created from `CLICKHOUSE_USER` by the image's entrypoint at first boot and
