@@ -449,9 +449,18 @@ fi
 # wait at all, and "already at 0" says nothing about a pod still in its grace.
 say "waiting for the fleet POD to go away (its 180s grace is where pause records are written, and where the supervisor's own preflight session is released; up to ${DRAIN_WAIT_S}s)"
 pod_deadline=$(( $(date +%s) + DRAIN_WAIT_S ))
+pod_polls=0
 while :; do
   fleet_pod_lines="$(fleet_pods)"
-  [[ -z "${fleet_pod_lines//[[:space:]]/}" ]] && break
+  pod_polls=$(( pod_polls + 1 ))
+  if [[ -z "${fleet_pod_lines//[[:space:]]/}" ]]; then
+    # An empty list and a failed read look the same here (the reader swallows
+    # its errors), so a wait that never waited is worth one line: if the chart
+    # ever renames the component label, this is where it would go silently
+    # fail-open, and the log would otherwise read like a clean drain.
+    [[ "${pod_polls}" -eq 1 ]] && say "  (no pod matched app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=fleet on the first look — nothing to wait for)"
+    break
+  fi
   if [[ "$(date +%s)" -ge "${pod_deadline}" ]]; then
     pod_names=""
     while IFS= read -r l; do
