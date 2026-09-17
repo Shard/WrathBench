@@ -16,11 +16,13 @@ const chart = join(here, "chart/wrathbench/templates/clickhouse.yaml");
 
 const files = {
   "memory.xml": join(here, "clickhouse/config.d/memory.xml"),
+  "logging.xml": join(here, "clickhouse/config.d/logging.xml"),
   "wrathbench-profile.xml": join(here, "clickhouse/users.d/wrathbench-profile.xml"),
 } as const;
 
 const defines = {
   "memory.xml": "wrathbench.clickhouse.memoryXml",
+  "logging.xml": "wrathbench.clickhouse.loggingXml",
   "wrathbench-profile.xml": "wrathbench.clickhouse.profileXml",
 } as const;
 
@@ -65,6 +67,18 @@ describe("clickhouse drop-ins", () => {
         const body = line.replaceAll("<!--", "").replaceAll("-->", "");
         expect(body.includes("--"), `${path}:${i + 1}`).toBe(false);
       }
+    }
+  });
+
+  test("every drop-in is in the pod's config checksum", () => {
+    // subPath mounts never hot-reload, so a drop-in the annotation does not
+    // cover would change in the ConfigMap while the pod kept the old file.
+    const line = template
+      .split("\n")
+      .find((l) => l.includes("checksum/clickhouse-config:"));
+    expect(line, "the pod annotates a config checksum").toBeDefined();
+    for (const name of Object.values(defines)) {
+      expect(line!, `${name} is checksummed`).toContain(name);
     }
   });
 

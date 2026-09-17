@@ -123,7 +123,7 @@ tracker a 2 GiB container gets, that is not a budget, and on 2026-09-17 two
 concurrent viewer queries over `turns` (15.7 GiB uncompressed, 715 MiB on disk)
 took the server down with `Code: 241 (total) memory limit exceeded`.
 
-`infra/clickhouse/` is the fix, and it is the same two files under both
+`infra/clickhouse/` is the fix, and it is the same files under both
 deployments — compose bind-mounts them, the Helm chart carries a verbatim inline
 copy in its ConfigMap, and `infra/clickhouse.test.ts` fails if the two drift.
 `config.d/memory.xml` hard-bounds the caches (mark 256 MiB, primary-index and
@@ -134,6 +134,32 @@ puts `max_threads` 4, `max_memory_usage` 512 MiB and `max_execution_time` 300s
 on the **`default` profile** — not on a named user, because the app user is
 created from `CLICKHOUSE_USER` by the image's entrypoint at first boot and
 inherits that profile.
+
+`config.d/logging.xml` is the second half, and it bounds what there is to
+merge rather than what a merge may spend. The image ships trace-level logging
+and five unbounded system log tables, and in ten days on the cluster they grew
+past the corpus: `text_log` 42.7M rows / 10 GiB uncompressed, `trace_log` 46M
+rows / 18 GiB, `processors_profile_log` 3.3 GiB, `query_log` 2.3 GiB, against
+`turns` at 15.7 GiB for every trajectory ever run. Worse than the size, the
+merges kept dying: `system.metric_log` is 1,435 columns wide and flushes a part
+every 7.5 seconds, which gave it 8,595 parts, and merging them climbed past
+3 GiB and hit the 3.6 GiB total limit every few seconds — each retry spiking the
+tracker and killing whatever query was in flight. So: the console logger drops
+to `warning`, `text_log` stays at `warning` with a 7-day TTL, `query_log` and
+`part_log` keep 7-day TTLs (they are what diagnosed this), and `trace_log`,
+`processors_profile_log`, `metric_log` and `asynchronous_metric_log` are off.
+The three that stay get daily partitions so a TTL expires whole parts instead of
+rewriting monthly ones.
+
+**Both halves of that file only take on a table that does not exist yet.** A TTL
+in config is applied at table creation, and `remove` does not delete a table
+already on disk — so after deploying this, drop the affected system tables once
+(`DROP TABLE system.text_log`, and the same for `query_log`, `part_log`,
+`trace_log`, `processors_profile_log`, `metric_log` and
+`asynchronous_metric_log`); the server recreates the kept ones from the config
+and leaves the removed ones gone. `TRUNCATE TABLE` is the emergency relief when
+a merge is actively killing queries — it frees the space and stops the merge
+immediately — but it does not change the table, so the drop is still owed.
 
 The numbers do not sum to the limit and are not meant to: 32 queries at 512 MiB
 each is far more than the container has. What each one buys is a bound where
