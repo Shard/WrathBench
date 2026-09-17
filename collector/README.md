@@ -153,7 +153,9 @@ rewriting monthly ones.
 
 **Both halves of that file only take on a table that does not exist yet.** A TTL
 in config is applied at table creation, and `remove` does not delete a table
-already on disk — so after deploying this, drop the affected system tables once
+already on disk — so **restart the server with the drop-in in place first, and
+only then** drop the affected system tables once (a `DROP` issued before the new
+config is live just gets the table recreated with the old definition)
 (`DROP TABLE system.text_log`, and the same for `query_log`, `part_log`,
 `trace_log`, `processors_profile_log`, `metric_log` and
 `asynchronous_metric_log`); the server recreates the kept ones from the config
