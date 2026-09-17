@@ -645,6 +645,35 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   return [...argv, ...leashArgv(spec)];
 }
 
+export type FreshPlan = { kind: "launch" } | { kind: "skip"; reason: string };
+
+/**
+ * Whether a spec that is NOT resuming may be launched onto its projected run
+ * id. The id is a projection off the run facts the fleet can see, so a run
+ * directory that yields no fact (unparseable meta.json or run.sqlite, or a
+ * directory moved by hand) is invisible to the counter and the next launch
+ * projects the id that is already there. The runner refuses that outright
+ * (`assertRunDirFree`), so launching anyway would only turn a collision into a
+ * crashed child the supervisor has to interpret.
+ *
+ * Gated on the DIRECTORY, not on the run row: the row being unreadable is
+ * exactly the case this exists for. The spec stays in the rotation — cycle 1
+ * is skipped with a reason in the log, and `freeCycle` hands it a clean `-cN`
+ * on the next cycle.
+ */
+export function planFreshLaunch(opts: { runId: string; dirExists: boolean; resumeRoster: boolean }): FreshPlan {
+  if (!opts.dirExists) return { kind: "launch" };
+  return {
+    kind: "skip",
+    reason:
+      `${opts.runId} is already a run directory on disk` +
+      (opts.resumeRoster
+        ? ", but it yielded no readable run row (unparseable meta.json or run.sqlite)"
+        : ", and this is not --resume-roster") +
+      "; not launching a second run onto the same id (the runner refuses to open it)",
+  };
+}
+
 /** A cycle-2+ copy of a spec: same identity, its own run id. */
 export function forCycle(spec: Resolved, cycle: number): Resolved {
   return cycle <= 1 ? spec : { ...spec, runId: `${spec.runId}-c${cycle}` };
@@ -1638,15 +1667,23 @@ async function main(): Promise<void> {
       pending.push({ spec, resume: true });
       continue;
     }
+    const fresh = planFreshLaunch({
+      runId: spec.runId,
+      dirExists: existsSync(runDir(spec.runId)),
+      resumeRoster: args.resumeRoster === true,
+    });
+    if (fresh.kind === "skip") {
+      say(`skip ${spec.model} (${spec.runId}): ${fresh.reason} (cycle 1 only — under --loop it gets a fresh -cN next cycle)`);
+      if (!args.dryRun) {
+        record({ runId: spec.runId, model: spec.model, outcome: "skipped", detail: fresh.reason });
+      }
+      pending.push({ spec, resume: false, doneCycle1: true });
+      continue;
+    }
     if (args.resumeRoster && row === undefined) {
       say(
         `resume-roster: no existing run for ${spec.runId} — launching fresh` +
           ` (if you expected a resume, the date stamp moved: pass --date <the original YYYYMMDD>)`,
-      );
-    }
-    if (!args.resumeRoster && row !== undefined) {
-      say(
-        `warning: ${spec.runId} already exists and this is not --resume-roster; it will be launched fresh onto the same run id`,
       );
     }
     pending.push({ spec, resume: false });
@@ -1675,7 +1712,7 @@ async function main(): Promise<void> {
           : s.driver === "codex"
             ? `   endpoint  codex CLI subscription, lane ${s.tokenEnv ?? DEFAULT_CODEX_HOME_ENV} (no api-base/api-key-env)\n`
             : `   endpoint  claude CLI subscription (no api-base/api-key-env)\n`;
-      const cycle1 = a.doneCycle1 === true ? " [cycle 1 already terminated — launches fresh from cycle 2 under --loop]" : "";
+      const cycle1 = a.doneCycle1 === true ? " [cycle 1 skipped (already terminated, or its run id is taken) — launches fresh from cycle 2 under --loop]" : "";
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
         : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}\n` +

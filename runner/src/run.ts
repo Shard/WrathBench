@@ -303,6 +303,39 @@ export function loadContinuation(
   return { from, character: meta.config.character, race: meta.config.race, class: meta.config.class, dir };
 }
 
+/**
+ * A fresh launch must land on a name nothing holds yet.
+ *
+ * The run id is a projection, not a record: the fleet builds
+ * `fleet-<job>-<model>[-effort]-<stamp>[-aN]` and the attempt counter `N` is a
+ * count of the run facts it can SEE. A run directory that yields no fact — a
+ * missing or unparseable meta.json, no episode, no model, or a directory moved
+ * or renamed by hand — is invisible to that count, so the next launch projects
+ * the id that is already on disk. `new Trajectory(runDir)` would then mkdir
+ * into it and write a second run through the first one's trajectory, which is
+ * the one failure mode that corrupts a run nobody is watching.
+ *
+ * `archiveRun` already refuses to overwrite; the launch is the louder of the
+ * two places to refuse, because the roster sees the exit code. The archive is
+ * checked too: an archived run is parked, not gone, and a launch that landed
+ * on its id would leave two runs answering to one name.
+ *
+ * Resumes are exempt — reopening the directory is the whole point of one — and
+ * so is nothing else: `-cN` cycle copies and `-r<k>` sequence copies are
+ * distinct ids, and a `--continue-from` continuation is a fresh run id by
+ * construction.
+ */
+export function assertRunDirFree(runsDir: string, runId: string): void {
+  for (const dir of [join(runsDir, runId), join(runsDir, ARCHIVE_DIR, runId)]) {
+    if (!existsSync(dir)) continue;
+    throw new Error(
+      `run id already on disk: ${dir}\n` +
+        "  the attempt counter projected an id that exists — that run left no readable fact, so it was not counted\n" +
+        `  resume it with --resume ${runId}, or archive/remove that directory, or launch under a different --run-id`,
+    );
+  }
+}
+
 /** The predecessor's last recorded level/xp, read-only; null when there is none. */
 function lastStateIn(dir: string, runId: string): { level?: number; xp?: number } | null {
   const path = join(dir, "run.sqlite");
@@ -463,6 +496,18 @@ async function main(): Promise<void> {
   // and the path holds a different reference surface after every rebuild.
   const wikiBundle = wikiBundleMeta(wiki);
 
+  // Nothing is written until the name is known to be free: a fresh launch onto
+  // an existing run directory is a projection fault (see `assertRunDirFree`),
+  // and continuing would write a second run into the first one's trajectory.
+  if (!resumed) {
+    try {
+      assertRunDirFree(config.runsDir, config.runId);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(2);
+    }
+  }
+
   const runDir = join(config.runsDir, config.runId);
   const trajectory = new Trajectory(runDir);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
@@ -471,8 +516,9 @@ async function main(): Promise<void> {
   const episodic = new EpisodicLog(join(runDir, "episodic.jsonl"));
   // The predecessor's notes come along: the scratchpad is the durable memory,
   // and a continuation that started with an empty one would be a stranger to
-  // its own character. Only into an empty run directory — a re-launch of a
-  // continuation that already wrote notes keeps its own.
+  // its own character. The `existsSync` guard is now belt and braces: a fresh
+  // launch onto a populated directory is refused above, so the only way here
+  // is an empty one.
   if (continuation !== undefined && !existsSync(scratchpad.path) && existsSync(join(continuation.dir, "scratchpad.md"))) {
     copyFileSync(join(continuation.dir, "scratchpad.md"), scratchpad.path);
   }
