@@ -83,7 +83,6 @@ import { scrubPathsText } from "./scrub-paths";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
 import {
   factOf,
-  latestStatesOf,
   moveViewsOf,
   runRowOf,
   statePointOf,
@@ -672,7 +671,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
   async function runRowOne(runId: string, now = Date.now()): Promise<RunRow> {
     const r = await store.runRow(runId);
     if (r === null) return readRun(runsDir, runId, now);
-    return runRowOf(r, latestStatesOf(await store.stateRows(runId)).get(runId), now);
+    // The store's own aggregate, not every row of the run mapped here: this
+    // needs five values, and pulling the series to get them meant reading the
+    // `items` JSON of every sample.
+    return runRowOf(r, await store.latestState(runId), now);
   }
 
   /**
@@ -682,11 +684,6 @@ export function createApi(opts: ApiOptions): ApiHandle {
   async function statesOfRun(runId: string): Promise<StatePoint[]> {
     const rows = await store.stateRows(runId);
     return rows.length > 0 ? rows.map(statePointOf) : readStates(runsDir, runId);
-  }
-
-  /** One run's state series, as the charts read it across the listing. */
-  async function statesOf(runId: string): Promise<StatePoint[]> {
-    return (await store.stateRows(runId)).map(statePointOf);
   }
 
   /**
@@ -805,13 +802,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
     // two rows of one response must not be measured against different nows.
     const now = Date.now();
     const [rows, totalsByRun] = await Promise.all([runRows(now), allTotals()]);
+    // One query for every run's state series, not one per run: a pass over
+    // ~700 runs used to issue ~700 sequential `states` reads, which is what
+    // ran ClickHouse out of memory on 2026-09-17.
+    const statesByRun = await store.stateRowsByRun(rows.map((r) => r.runId));
     for (const raw of rows) {
       const totals = totalsByRun.get(raw.runId) ?? null;
       const row = withResolved(raw, totals);
       out.push(
         resultRunOf(
           row,
-          await statesOf(row.runId),
+          (statesByRun.get(row.runId) ?? []).map(statePointOf),
           totals?.segments ?? [],
           totals === null
             ? null

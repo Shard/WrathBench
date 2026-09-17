@@ -104,6 +104,53 @@ export interface StateTableRow {
   items: string;
 }
 
+/**
+ * A `states` row without `items`.
+ *
+ * `items` is the one large column in the table — the whole inventory as JSON,
+ * per sample — and the only thing that reads it is the latest-reading
+ * aggregate. Every other read path maps rows through `statePointOf`, which
+ * never touches it, so those reads ask for these columns by name. Selecting
+ * `*` instead was what made a listing pull ~25 MiB per run and tip ClickHouse
+ * over its memory limit (2026-09-17).
+ */
+export type StatePointRow = Omit<StateTableRow, "items">;
+
+/**
+ * The column list for `StatePointRow`, hand-written because the read paths no
+ * longer say `SELECT *`. A new column in `wrathbench.states`
+ * (`collector/schema.sql`) has to be added here too, or nothing will see it.
+ */
+const STATE_POINT_COLUMNS = [
+  "run_id",
+  "seq",
+  "ts",
+  "level",
+  "xp",
+  "map",
+  "x",
+  "y",
+  "z",
+  "event_count",
+  "last_seq",
+  "money",
+  "quests_completed",
+  "turn",
+  "zone",
+  "area",
+  "health",
+  "max_health",
+  "power",
+  "max_power",
+  "power_type",
+  "next_level_xp",
+].join(", ");
+
+/** Rows of one run, oldest first — the order every caller of a state series wants. */
+function byTsSeq(a: { ts: number; seq: number }, b: { ts: number; seq: number }): number {
+  return a.ts - b.ts || a.seq - b.seq;
+}
+
 export interface MoveTableRow {
   run_id: string;
   seq: number;
@@ -142,7 +189,17 @@ export interface RunStore {
   totalsRows(): Promise<TotalsTableRow[]>;
   totalsRow(runId: string): Promise<TotalsTableRow | null>;
   latestStates(): Promise<Map<string, LatestState>>;
-  stateRows(runId: string): Promise<StateTableRow[]>;
+  /** The latest readings of one run, or undefined when it has no state rows yet. */
+  latestState(runId: string): Promise<LatestState | undefined>;
+  stateRows(runId: string): Promise<StatePointRow[]>;
+  /**
+   * The state series of many runs in **one** query.
+   *
+   * What a listing needs: `/api/results` and `/api/ladder` project every run's
+   * series, and doing that a run at a time was ~700 sequential queries per
+   * request. Runs with no state rows are simply absent from the map.
+   */
+  stateRowsByRun(runIds: readonly string[]): Promise<Map<string, StatePointRow[]>>;
   moveRows(runId: string): Promise<MoveTableRow[]>;
 }
 
@@ -199,12 +256,12 @@ export function clickhouseStore(cfg: ClickhouseConfig): RunStore {
     url.searchParams.set("output_format_json_quote_64bit_integers", "0");
     const res = await fetch(url, { method: "POST", headers, body: sql });
     const text = await res.text();
-    if (!res.ok) throw new Error(`clickhouse ${res.status}: ${text.slice(0, 400)}`);
+    if (!res.ok) throw new Error(clickhouseErrorMessage(res.status, text));
     const body = JSON.parse(text) as { data?: unknown };
     return Array.isArray(body.data) ? (body.data as T[]) : [];
   }
 
-  const LATEST = `
+  const latestSql = (where: string): string => `
     SELECT run_id,
            argMaxIf(level, (ts, seq), level > 0)                                AS v_level,
            argMaxIf(xp, (ts, seq), level > 0)                                   AS v_xp,
@@ -212,12 +269,30 @@ export function clickhouseStore(cfg: ClickhouseConfig): RunStore {
            argMaxIf(quests_completed, (ts, seq), quests_completed IS NOT NULL)  AS v_quests,
            argMaxIf(items, (ts, seq), items != '')                              AS v_items
       FROM states FINAL
+     ${where}
      GROUP BY run_id`;
+  const LATEST = latestSql("");
   /*
    * The aliases are prefixed because ClickHouse resolves a bare `AS level`
    * back into the condition beside it and refuses the query as an aggregate
    * inside an aggregate. Nothing subtler than that is going on.
    */
+
+  type LatestRow = {
+    run_id: string;
+    v_level: number | null;
+    v_xp: number | null;
+    v_money: number | null;
+    v_quests: number | null;
+    v_items: string | null;
+  };
+  const latestOf = (r: LatestRow): LatestState => ({
+    level: r.v_level,
+    xp: r.v_xp,
+    money: r.v_money,
+    questsCompleted: r.v_quests,
+    items: r.v_items ?? "",
+  });
 
   return {
     runRows: () => rows<RunTableRow>(`SELECT * FROM runs FINAL`),
@@ -232,30 +307,82 @@ export function clickhouseStore(cfg: ClickhouseConfig): RunStore {
     },
     async latestStates() {
       const out = new Map<string, LatestState>();
-      type Row = {
-        run_id: string;
-        v_level: number | null;
-        v_xp: number | null;
-        v_money: number | null;
-        v_quests: number | null;
-        v_items: string | null;
-      };
-      for (const r of await rows<Row>(LATEST)) {
-        out.set(r.run_id, {
-          level: r.v_level,
-          xp: r.v_xp,
-          money: r.v_money,
-          questsCompleted: r.v_quests,
-          items: r.v_items ?? "",
-        });
-      }
+      for (const r of await rows<LatestRow>(LATEST)) out.set(r.run_id, latestOf(r));
       return out;
     },
-    stateRows: (runId) =>
-      rows<StateTableRow>(`SELECT * FROM states FINAL WHERE run_id = ${lit(runId)} ORDER BY ts, seq`),
+    /*
+     * One run's latest readings as the same aggregate, not as every row of the
+     * run mapped in memory: the run page wants five values and `items` is the
+     * only large column in the table.
+     */
+    async latestState(runId) {
+      const r = await rows<LatestRow>(latestSql(`WHERE run_id = ${lit(runId)}`));
+      return r[0] === undefined ? undefined : latestOf(r[0]);
+    },
+    async stateRows(runId) {
+      const r = await rows<StatePointRow>(
+        `SELECT ${STATE_POINT_COLUMNS} FROM states FINAL WHERE run_id = ${lit(runId)}`,
+      );
+      return r.sort(byTsSeq);
+    },
+    /*
+     * One query for the whole listing, and no `ORDER BY`: the grouping happens
+     * in memory anyway, `FINAL` can defeat a read-in-order plan, and a
+     * blocking sort over every state row of the corpus is exactly the shape
+     * that ran the server out of memory. The `IN` list is written out rather
+     * than replaced by an unfiltered scan so the query never reads runs the
+     * caller has already filtered away (archived ones, mostly).
+     */
+    async stateRowsByRun(runIds) {
+      const out = new Map<string, StatePointRow[]>();
+      if (runIds.length === 0) return out;
+      const ids = runIds.map(lit).join(", ");
+      const r = await rows<StatePointRow>(
+        `SELECT ${STATE_POINT_COLUMNS} FROM states FINAL WHERE run_id IN (${ids})`,
+      );
+      for (const row of r) {
+        const bucket = out.get(row.run_id);
+        if (bucket === undefined) out.set(row.run_id, [row]);
+        else bucket.push(row);
+      }
+      for (const bucket of out.values()) bucket.sort(byTsSeq);
+      return out;
+    },
     moveRows: (runId) =>
       rows<MoveTableRow>(`SELECT * FROM moves FINAL WHERE run_id = ${lit(runId)} ORDER BY ts, seq`),
   };
+}
+
+/**
+ * What a failed ClickHouse response actually said.
+ *
+ * The body of a failed query is usually a JSON envelope whose `meta` block
+ * comes first, so slicing the first 400 characters showed the column list and
+ * hid the exception — on 2026-09-17 that turned a plain memory-limit abort
+ * into a query_log dig. A memory abort can also come mid-stream, after `meta`
+ * and part of `data` have been flushed, which leaves the body invalid JSON
+ * with the exception appended; hence the regex fallback. A pre-execution
+ * failure is plain text with no JSON at all, which is the last branch.
+ */
+export function clickhouseErrorMessage(status: number, body: string): string {
+  const say = (s: string): string => `clickhouse ${status}: ${s.slice(0, 400)}`;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed === "object" && parsed !== null) {
+      const ex = (parsed as { exception?: unknown }).exception;
+      if (typeof ex === "string" && ex.length > 0) return say(ex);
+    }
+  } catch {
+    const m = /"exception"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(body);
+    if (m?.[1] !== undefined) {
+      try {
+        return say(JSON.parse(`"${m[1]}"`) as string);
+      } catch {
+        return say(m[1]);
+      }
+    }
+  }
+  return say(body);
 }
 
 // ----------------------------------------------------------------- the mapping
@@ -387,7 +514,7 @@ export function factOf(r: TotalsTableRow | undefined | null, mtime: number | nul
   return fact;
 }
 
-export function statePointOf(r: StateTableRow): StatePoint {
+export function statePointOf(r: StatePointRow): StatePoint {
   return {
     ts: r.ts,
     level: r.level,
@@ -536,17 +663,34 @@ export function localRunStore(runsDir: string): RunStore {
       await refresh();
       return latestStatesOf(all<StateTableRow>("states"));
     },
+    async latestState(runId) {
+      await refresh();
+      return latestStatesOf(all<StateTableRow>("states").filter((r) => r.run_id === runId)).get(runId);
+    },
     async stateRows(runId) {
       await refresh();
       return all<StateTableRow>("states")
         .filter((r) => r.run_id === runId)
-        .sort((a, b) => a.ts - b.ts || a.seq - b.seq);
+        .sort(byTsSeq);
+    },
+    async stateRowsByRun(runIds) {
+      await refresh();
+      const want = new Set(runIds);
+      const out = new Map<string, StatePointRow[]>();
+      for (const row of all<StateTableRow>("states")) {
+        if (!want.has(row.run_id)) continue;
+        const bucket = out.get(row.run_id);
+        if (bucket === undefined) out.set(row.run_id, [row]);
+        else bucket.push(row);
+      }
+      for (const bucket of out.values()) bucket.sort(byTsSeq);
+      return out;
     },
     async moveRows(runId) {
       await refresh();
       return all<MoveTableRow>("moves")
         .filter((r) => r.run_id === runId)
-        .sort((a, b) => a.ts - b.ts || a.seq - b.seq);
+        .sort(byTsSeq);
     },
   };
 }
