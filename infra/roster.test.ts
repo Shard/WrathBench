@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHILD_TERM_GRACE_MS, episodeArgv, forCycle, harnessVersion, inContainer, resolve, type RosterSpec } from "./run-roster";
+import { CHILD_TERM_GRACE_MS, episodeArgv, forCycle, harnessVersion, inContainer, planFreshLaunch, resolve, type RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -392,5 +392,33 @@ describe("the version stamp a spawned episode inherits", () => {
     const m = /terminationGracePeriodSeconds:\s*(\d+)/.exec(chart);
     expect(m).not.toBeNull();
     expect(Number(m![1]) * 1000).toBeGreaterThan(CHILD_TERM_GRACE_MS);
+  });
+});
+
+/**
+ * A fresh launch onto a run id that already has a directory: the runner refuses
+ * it (`assertRunDirFree`), so the roster must skip rather than hand the
+ * supervisor a crashed child. Gated on the directory, not the run row — an
+ * unreadable row is the very case the collision comes from.
+ */
+describe("planFreshLaunch", () => {
+  const spec = { runId: "roster-glm-5-2-20260101", dirExists: false, resumeRoster: false };
+
+  test("a run id with nothing on disk launches", () => {
+    expect(planFreshLaunch(spec)).toEqual({ kind: "launch" });
+    expect(planFreshLaunch({ ...spec, resumeRoster: true })).toEqual({ kind: "launch" });
+  });
+
+  test("a directory already on disk is skipped, not launched onto", () => {
+    const plan = planFreshLaunch({ ...spec, dirExists: true });
+    expect(plan.kind).toBe("skip");
+    expect(plan.kind === "skip" ? plan.reason : "").toContain("roster-glm-5-2-20260101 is already a run directory on disk");
+    expect(plan.kind === "skip" ? plan.reason : "").toContain("this is not --resume-roster");
+  });
+
+  test("under --resume-roster the reason names the unreadable row, which is why no resume was planned", () => {
+    const plan = planFreshLaunch({ ...spec, dirExists: true, resumeRoster: true });
+    expect(plan.kind).toBe("skip");
+    expect(plan.kind === "skip" ? plan.reason : "").toContain("no readable run row");
   });
 });
