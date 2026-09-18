@@ -701,6 +701,9 @@ describe("state cache: self progress, target and inventory", () => {
     expect(item?.itemId).toBe(ITEM_ENTRY);
     expect(item?.name).toBe("Gritstone Charm");
     expect(item?.stackCount).toBe(5);
+    // Quality rides the same leg of the join `name` does, as bag() rows already
+    // carry it: a paperdoll tints a slot by it.
+    expect(item?.quality).toBe(1);
     expect(cache.items.get(ITEM_ENTRY)?.value.sellPrice).toBe(40);
   });
 
@@ -710,6 +713,15 @@ describe("state cache: self progress, target and inventory", () => {
     expect(cache.inventory[0]?.guid).toBe(ITEM_GUID);
     expect(cache.inventory[0]?.itemId).toBeUndefined();
     expect(cache.inventory[0]?.name).toBeUndefined();
+    // Unanswered, not poor: quality 0 is a real quality.
+    expect(cache.inventory[0]?.quality).toBeUndefined();
+  });
+
+  test("an item whose create block arrived but whose query has not has no quality", () => {
+    const cache = withWorld([inventorySlot, itemCreate]);
+    expect(cache.inventory[0]?.itemId).toBe(ITEM_ENTRY);
+    expect(cache.inventory[0]?.name).toBeUndefined();
+    expect(cache.inventory[0]?.quality).toBeUndefined();
   });
 
   test("a map change evicts old-map objects but keeps own items", () => {

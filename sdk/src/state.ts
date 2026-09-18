@@ -542,6 +542,12 @@ export interface InventoryItem {
   readonly itemId: number | undefined;
   readonly name: string | undefined;
   readonly stackCount: number | undefined;
+  /**
+   * Item quality (0 poor .. 5 legendary) from the item query, when answered —
+   * the same leg of the join `name` comes off, and the same field `bag()` rows
+   * already carry. Undefined while the query is outstanding, as `name` is.
+   */
+  readonly quality?: number | undefined;
   readonly seq: number;
   readonly ts: number;
 }
@@ -1670,11 +1676,13 @@ export class StateCache {
       if (guid === "0") continue;
       const item = this.nearby.get(guid);
       const itemId = item?.entry?.value;
+      const info = itemId === undefined ? undefined : this.items.get(itemId)?.value;
       out.push({
         slot,
         guid,
         itemId,
-        name: itemId === undefined ? undefined : this.items.get(itemId)?.value.name,
+        name: info?.name,
+        quality: info?.quality,
         stackCount: item?.fields.get("stackCount")?.value,
         seq: Math.max(lo?.seq ?? -1, hi?.seq ?? -1),
         ts: Math.max(lo?.ts ?? 0, hi?.ts ?? 0),

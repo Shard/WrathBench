@@ -296,11 +296,39 @@ export interface RunRow {
   error?: string;
 }
 
-/** One item on a state sample: a client-cache name, its stack count, worn or carried. */
+/**
+ * One item on a state sample: a client-cache name, its stack count, worn or
+ * carried, and where it sits.
+ *
+ * Everything past `name`, `count` and `equipped` is optional and arrived later
+ * (the paperdoll/bag UI). Every row written before it carries those three and
+ * nothing else, so a reader treats an absent field as **unobserved** — never as
+ * zero, and never as slot 0. A live sample can be missing them too: a slot whose
+ * item create block or item query has not arrived yet is a real observation of
+ * an occupied slot with no id, name or quality behind it.
+ *
+ * `slot` and `bag` are the SDK's own addressing pair, unchanged, so a row is
+ * what `equipItem`/`useItem`/`destroyItem` take:
+ * - worn (`equipped: true`): `bag` absent, `slot` the equipment slot 0-18.
+ * - carried (`equipped: false`): `bag` 255 for the backpack (slots 23-38) or a
+ *   worn bag's own equipment slot 19-22 (slots 0..numSlots-1), `slot` the slot
+ *   within it.
+ *
+ * So `bag !== undefined` is the carried discriminator and `slot` means the same
+ * kind of thing on both sides of it. There is no separate `bagSlot`.
+ */
 export interface ItemSample {
   name: string;
   count: number;
   equipped: boolean;
+  /** The item template id, once the item's own create block has been seen. */
+  itemId?: number;
+  /** Item quality (0 poor .. 7 heirloom), from the item query, once answered. */
+  quality?: number;
+  /** The equipment slot when worn, the slot within `bag` when carried. */
+  slot?: number;
+  /** The container, when carried: 255 the backpack, 19-22 a worn bag. Absent when worn. */
+  bag?: number;
 }
 
 /** One `state` sample. Every field but `ts` may be absent from a given sample. */
