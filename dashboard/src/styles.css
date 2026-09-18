@@ -105,10 +105,65 @@ header.top {
   flex: none;
 }
 header.top h1 { font-size: var(--fs-lg); margin: 0; font-weight: 600; }
-header.top nav { display: inline-flex; gap: 10px; }
+header.top nav { display: inline-flex; gap: 10px; flex-wrap: wrap; }
 header.top nav a.on { color: var(--fg); font-weight: 700; }
 header.top .spacer { flex: 1; }
 
+/*
+ * The phone header (operator, 2026-09-18). Desktop puts everything on one
+ * line; at 360px the same contents took three, and the operator's build takes
+ * a seventh nav item the public one does not, so the bar has to be able to
+ * break where it is told rather than where it runs out.
+ *
+ * Two lines, at 360 and up: the brand with the series dropdown and the status
+ * badge pushed to the right of it, and below that the nav with the ADMIN /
+ * PREVIEW badge at the right end of its line. `.spacer` is what used to push
+ * the right-hand group over and is now the thing that would force a third
+ * line, so it goes; `margin-left: auto` on the series does its job instead.
+ */
+@media (max-width: 720px) {
+  header.top { gap: 6px 8px; padding: 8px 10px; }
+  header.top .spacer { display: none; }
+  /*
+   * `flex: 1 1 auto` rather than a 100% basis: the nav is one flex item, so it
+   * drops to the second line the moment the first is full, and on the second
+   * it grows to fill — which is what carries the surface badge after it to the
+   * right edge without a second `margin-left: auto` fighting the first.
+   */
+  header.top nav { order: 2; flex: 1 1 auto; gap: 4px 10px; font-size: var(--fs-sm); }
+  /* Last on the nav's line, hard right: it will not fit on the brand's. */
+  .surface { order: 3; align-self: center; }
+  /* Everything right of the brand travels as one group. */
+  .series { margin-left: auto; }
+  /*
+   * The word "series" is the accessible name of the `<label>` that wraps the
+   * select, so it is clipped rather than `display: none`d — a hidden label is
+   * a control a screen reader cannot name, and the select's own options say
+   * nothing about what they are a list of.
+   */
+  .series > .dim {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  /*
+   * "data as of … · 4m ago" (operator, 2026-09-18): a fact about the publisher
+   * that a reader on a phone is not acting on, and the one element that made
+   * the top line wrap on its own. Hidden here rather than withheld in the
+   * shell, so the public build renders exactly what it rendered before and the
+   * line is back the moment the viewport is.
+   */
+  .snapshot-age { display: none; }
+}
+
+/*
+ * The small phone. At 360 the operator's own build carries a seventh nav item
+ * (`config`) that the public one does not, and the two rows above are within a
+ * few pixels of holding it — so the gaps close rather than the nav wrapping to
+ * a third row. Nothing here is a size change; it is all spacing.
+ */
+@media (max-width: 400px) {
+  header.top { gap: 6px; padding: 8px; }
+  header.top nav { gap: 4px 6px; }
 }
 
 /* The global harness-series selector, left of the status badge. */
