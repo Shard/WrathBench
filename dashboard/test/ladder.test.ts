@@ -1177,9 +1177,9 @@ describe("hoverKeyOf — the key a pin and a row agree on", () => {
 
   test("every point of a model answers its row's key, whatever the effort", () => {
     const runs = [
-      run({ runId: "a", model: "sonnet", effort: "low", cost: 1, xpEarned: 100 }),
-      run({ runId: "b", model: "sonnet", effort: "high", cost: 2, xpEarned: 200 }),
-      run({ runId: "c", model: null, cost: 1, xpEarned: 50 }),
+      run({ runId: "a", model: "sonnet", effort: "low", xpEarned: 100 }),
+      run({ runId: "b", model: "sonnet", effort: "high", xpEarned: 200 }),
+      run({ runId: "c", model: null, xpEarned: 50 }),
     ];
     const rowKeys = new Set(ladderRows(runs).map((r) => hoverKeyOf(r.model)));
     for (const p of ladderPoints(runs).points) expect(rowKeys.has(hoverKeyOf(p.model))).toBe(true);
