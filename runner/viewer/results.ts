@@ -37,9 +37,11 @@ import type {
   TalentFacts,
   TaxiFacts,
   TokenTotals,
+  StateItemsRow,
   TrackPoint,
   TradeFacts,
 } from "./api-types";
+import { itemSamplesOf } from "./runs";
 import type { ActiveSegment } from "./tail";
 
 /**
@@ -125,10 +127,30 @@ export function mapsOf(states: readonly StatePoint[]): number[] {
  * xp with no coordinates, and interpolating through it would draw a line the
  * character never walked.
  */
-export function trackFrom(states: readonly StatePoint[]): TrackPoint[] {
+export function trackFrom(
+  states: readonly StatePoint[],
+  itemRows: readonly StateItemsRow[] = [],
+): TrackPoint[] {
   const out: TrackPoint[] = [];
+  /*
+   * The inventory is on its own rows because it is read by its own query, and
+   * it is published on change rather than on every point: the whole inventory
+   * per sample would be most of the response and nearly all of it repetition.
+   *
+   * The join is "newest reading at or before this point", which also covers the
+   * sample that changed the inventory without carrying a position — the change
+   * surfaces on the next point that has one, instead of being dropped with the
+   * sample. The comparison is on the stored text, so a sample that re-stated
+   * the same inventory is not a change.
+   */
+  let at = 0;
+  let pending: string | null = null;
+  let published: string | null = null;
   for (const s of states) {
+    while (at < itemRows.length && itemRows[at]!.ts <= s.ts) pending = itemRows[at++]!.items;
     if (s.map === null || s.x === null || s.y === null) continue;
+    const changed = pending !== null && pending !== published;
+    if (changed) published = pending;
     out.push({
       ts: s.ts,
       map: s.map,
@@ -147,6 +169,7 @@ export function trackFrom(states: readonly StatePoint[]): TrackPoint[] {
       maxPower: s.maxPower ?? null,
       powerType: s.powerType ?? null,
       nextLevelXp: s.nextLevelXp ?? null,
+      ...(changed ? { items: itemSamplesOf(pending!) ?? [] } : {}),
     });
   }
   return out;

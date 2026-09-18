@@ -31,7 +31,7 @@
  * viewer's own code, when the collector tailed the file.
  */
 
-import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StatePoint } from "./api-types";
+import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
 import { characterLabel, className, raceName } from "./characters";
 import { harnessOfRun, parseComparability } from "../src/index";
 import { platformOf } from "../src/platform";
@@ -193,6 +193,15 @@ export interface RunStore {
   latestState(runId: string): Promise<LatestState | undefined>;
   stateRows(runId: string): Promise<StatePointRow[]>;
   /**
+   * One run's `items` column, oldest first, samples that carried none left out.
+   *
+   * Its own call rather than a column on `stateRows`, deliberately: `items` is
+   * the large column, `stateRowsByRun` shares that column list, and asking for
+   * it across a listing is what ran the server out of memory (2026-09-17). One
+   * run's inventory history, for the one page that replays it, is bounded.
+   */
+  stateItemRows(runId: string): Promise<StateItemsRow[]>;
+  /**
    * The state series of many runs in **one** query.
    *
    * What a listing needs: `/api/results` and `/api/ladder` project every run's
@@ -322,6 +331,12 @@ export function clickhouseStore(cfg: ClickhouseConfig): RunStore {
     async stateRows(runId) {
       const r = await rows<StatePointRow>(
         `SELECT ${STATE_POINT_COLUMNS} FROM states FINAL WHERE run_id = ${lit(runId)}`,
+      );
+      return r.sort(byTsSeq);
+    },
+    async stateItemRows(runId) {
+      const r = await rows<StateItemsRow>(
+        `SELECT ts, seq, items FROM states FINAL WHERE run_id = ${lit(runId)} AND items != ''`,
       );
       return r.sort(byTsSeq);
     },
@@ -658,6 +673,13 @@ export function localRunStore(runsDir: string): RunStore {
       await refresh();
       return all<StateTableRow>("states")
         .filter((r) => r.run_id === runId)
+        .sort(byTsSeq);
+    },
+    async stateItemRows(runId) {
+      await refresh();
+      return all<StateTableRow>("states")
+        .filter((r) => r.run_id === runId && r.items.length > 0)
+        .map((r) => ({ ts: r.ts, seq: r.seq, items: r.items }))
         .sort(byTsSeq);
     },
     async stateRowsByRun(runIds) {

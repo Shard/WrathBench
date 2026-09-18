@@ -814,6 +814,12 @@ describe("projectPositions and projectTrack", () => {
         smuggle({
           ts: 1000, map: 0, x: -6240, y: 380, level: 1, xp: 0, money: 0, questsCompleted: 0, turn: 1,
           health: 140, maxHealth: 220, power: 30, maxPower: 100, powerType: 3, nextLevelXp: 2100,
+          items: [smuggle({ name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 })],
+        }),
+        // A point the inventory did not change on carries no `items` at all.
+        smuggle({
+          ts: 2000, map: 0, x: -6230, y: 381, level: 1, xp: 5, money: 0, questsCompleted: 0, turn: 2,
+          health: 140, maxHealth: 220, power: 30, maxPower: 100, powerType: 3, nextLevelXp: 2100,
         }),
       ],
       moves: [
@@ -834,6 +840,8 @@ describe("projectPositions and projectTrack", () => {
         ...under("points[]", [
           "ts", "map", "x", "y", "level", "xp", "money", "questsCompleted", "turn",
           "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
+          "items", "items[].name", "items[].count", "items[].equipped",
+          "items[].itemId", "items[].quality", "items[].slot",
         ]),
         "moves",
         ...under("moves[]", ["ts", "map", "x", "y", "z", "target", "status"]),
@@ -845,6 +853,12 @@ describe("projectPositions and projectTrack", () => {
     expect(out.characterName).toBe(CHARACTER_NAME);
     expect(out.moves![0]!.target).toBe(SURVIVES.targetName);
     expect(out.points[0]).toMatchObject({ health: 140, maxHealth: 220, powerType: 3, nextLevelXp: 2100 });
+    // The inventory is published where it changed, and "unchanged" stays the
+    // absence of the field rather than an empty list the reader would misread.
+    expect(out.points[0]!.items).toEqual([
+      { name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
+    ]);
+    expect("items" in out.points[1]!).toBe(false);
     expect(out.character).toEqual({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" });
   });
 
