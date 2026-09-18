@@ -78,7 +78,7 @@ import {
   type StateJob,
 } from "./run-fleet-state";
 import { accountHeldBy } from "./run-roster";
-import { readFleetText } from "../runner/src/config-store";
+import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import { TAINT_AFTER } from "../runner/src/lapse";
 import {
   ACCOUNT_CLASSES,
@@ -168,18 +168,20 @@ export function formatPaused(listed: readonly PausedListing[]): string[] {
 }
 
 /**
- * The first thing `--status` prints while the file is rejected. The failure it
- * covers is silent by construction — the operator's edit parses for THEM and is
- * ignored by the supervisor — so the banner says both halves: rejected since
- * when, and that the file's enabled flags are not what is running.
+ * The first thing `--status` prints while the config is rejected (a document
+ * the supervisor's parser refuses, or a store it could not open). The failure
+ * it covers is silent by construction — the operator's edit looks fine to
+ * THEM and is ignored by the supervisor — so the banner says both halves:
+ * rejected since when, and that the store's enabled flags are not what is
+ * running.
  */
 export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: number | undefined): string[] {
   if (rej === undefined) return [];
   return [
-    `!! fleet.json REJECTED since ${new Date(rej.since).toLocaleString()}: ${rej.error}` +
+    `!! config REJECTED since ${new Date(rej.since).toLocaleString()}: ${rej.error}` +
       ` — running on config loaded at ${loadedAt === undefined ? "an unrecorded time" : new Date(loadedAt).toLocaleString()};` +
-      ` job enabled flags in the file are NOT in effect`,
-    `   fix the file (or roll it back) — the supervisor retries every ${TICK_MS / 1000}s and clears this by itself`,
+      ` job enabled flags in the store are NOT in effect`,
+    `   fix the config (on /config or with config-store.ts) — the supervisor retries every ${TICK_MS / 1000}s and clears this by itself`,
   ];
 }
 
@@ -465,8 +467,10 @@ export function formatQueue(queue: readonly FleetJob[], state: FleetState["queue
  * script does not use it any more: it stops the fleet for its window, and a
  * live episode pauses as `operator-pause` and resumes on the far side.
  */
-export function printLiveRuns(configPath: string): number {
-  const config = parseFleet(JSON.parse(readFleetText(configPath)));
+export function printLiveRuns(): number {
+  const loaded = loadConfigForRead();
+  if (loaded.config === undefined) throw new Error(loaded.error);
+  const config = loaded.config;
   // Job accounts plus the gate's own and the ad-hoc debugging account: the
   // refusal claims "no episodes are live", and a PROBE session dies in a
   // recreate exactly like a job's does.
@@ -508,8 +512,9 @@ export function formatPauseBanner(onDisk: FleetPause | undefined, inEffect: Flee
   ];
 }
 
-export function printStatus(configPath: string): void {
-  // State first, and the banner before anything else: the file may not parse
+export function printStatus(): void {
+  const configPath = configDbPath();
+  // State first, and the banner before anything else: the store may not parse
   // here either, and even when it does, this reader can be a different code
   // version than the supervisor (that is how the shape-change incident hid).
   // The verdict that matters is the supervisor's, carried in the state file.
@@ -527,12 +532,14 @@ export function printStatus(configPath: string): void {
   // is only as fresh as the last tick, and an operator who has just flipped the
   // switch is asking this very question.
   for (const line of formatPauseBanner(readPauseSidecar(), state?.pausedSwitch)) console.log(line);
-  const { config, error: configError } = loadConfigForRead(configPath);
+  const { config, error: configError, empty } = loadConfigForRead();
   if (config === undefined) {
     console.log(
-      `!! ${configPath} does not load: ${configError}` +
-        " — rows below are what the supervisor last ran, not the file's",
+      `!! the config store does not load: ${configError}` +
+        " — rows below are what the supervisor last ran, not the store's",
     );
+  } else if (empty === true) {
+    console.log(`!! ${EMPTY_STORE_HINT}`);
   }
   for (const line of formatRefusals(config?.refusals ?? [], rejected === undefined)) console.log(line);
   // Liveness, honestly, from either side of a container boundary: a heartbeat
@@ -547,7 +554,7 @@ export function printStatus(configPath: string): void {
     state === undefined ? false : hbAgeMs !== undefined ? hbAgeMs < HEARTBEAT_STALE_MS : pidAlive(state.fleetPid);
   const where = state?.containerized === true ? "compose service `fleet`" : "host process";
   console.log(
-    `fleet ${configPath}` +
+    `fleet (config store ${configPath})` +
       (state === undefined
         ? " — no fleet-state.json: the fleet has never run here"
         : ` — supervisor pid ${state.fleetPid} (${where}) ${fleetUp ? "ALIVE" : "NOT RUNNING"}` +
@@ -903,7 +910,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   for (const line of formatQueue(poolJobs(config), undefined)) console.log(line);
   console.log(
     `\n${resumes.resume.length} paused run(s) would resume first; ${plan.pinned.length} pinned job(s) would spawn now plus ${plan.queue.assign.length + plan.policy.length} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
-      `\nsupervision: re-read fleet.json every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
+      `\nsupervision: re-read the config store every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
       `\nboundary; enabled:true/new jobs spawn; a malformed edit keeps the last good config.` +
       `\nstamp ${stampToday} is fixed for the life of the supervisor, not rolled at midnight.` +
       `\nrunning as: ${CONTAINER ? "the `fleet` compose service (episodes spawn in-process)" : "a host process (episodes go through docker compose exec)"}.`,

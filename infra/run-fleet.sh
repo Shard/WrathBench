@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 #
-# Fleet orchestrator: one run-roster process per enabled job in fleet.json.
+# Fleet orchestrator: one run-roster process per enabled job in the fleet config.
 #
-#   ./infra/run-fleet.sh infra/fleet.json --until 18:00
-#   ./infra/run-fleet.sh infra/fleet.json --dry-run
+#   ./infra/run-fleet.sh --until 18:00
+#   ./infra/run-fleet.sh --dry-run
 #   ./infra/run-fleet.sh --status
 #
-# The config IS the fleet: edit infra/fleet.json while this runs and the
-# supervisor follows (re-read every 60s). See infra/run-fleet.ts.
+# The config IS the fleet, and it is the config store (data/config.sqlite;
+# docs/OPERATIONS.md "Where the config lives"): edit it on the viewer's /config
+# page or with runner/src/config-store.ts while this runs and the supervisor
+# follows (re-read every 60s). See infra/run-fleet.ts.
 
 set -euo pipefail
 

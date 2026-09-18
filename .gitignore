@@ -15,3 +15,8 @@ dashboard/public/og.png
 
 # Claude Code local harness settings (not part of the repo)
 .claude/settings.json
+
+# The live fleet config is the sqlite store on the data volume (docs/OPERATIONS.md,
+# "Where the config lives"); an export of it is operational state, never source.
+# infra/fleet.example.json is the committed bootstrap.
+infra/fleet.json

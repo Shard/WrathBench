@@ -1274,7 +1274,7 @@ export function policyJobDropped(
  * Published per job row so `infra/fleet-update.sh` can decide what its
  * graceful window is actually waiting for without re-deriving the campaign's
  * opt-in from a config the supervisor may not even be running (the pause
- * switch exists to work while `fleet.json` is rejected). Pure.
+ * switch exists to work while the config is rejected). Pure.
  */
 export function resumesInPlace(job: Pick<FleetJob, "source" | "episode" | "probe"> | undefined, campaigns: readonly Campaign[] | undefined): boolean {
   if (job === undefined) return false;
@@ -1443,17 +1443,17 @@ export interface JobActions {
 
 // ------------------------------------------------------------- the switch
 //
-// One knob, outside fleet.json: `data/runs/fleet-pause.json`. It stops the
+// One knob, outside the config store: `data/runs/fleet-pause.json`. It stops the
 // fleet launching anything while every live episode finishes on its own clock,
 // which is what makes a supervisor update (`infra/fleet-update.sh graceful`)
 // cost no run its attempt.
 //
 // A SIDECAR rather than a config key, for the reason the models sidecar is one:
-// `infra/fleet.json` is hand-written, checked in, and a typo in it makes every
-// `enabled` flag in the file inert until someone notices the banner. A switch
-// an operator flips under time pressure must not be able to do that. It also
-// means the switch survives the file being rejected, which is exactly when
-// somebody wants to stop the fleet.
+// the config is operator-edited, and a rejected config makes every `enabled`
+// flag in it inert until someone notices the banner. A switch an operator
+// flips under time pressure must not be able to do that. It also means the
+// switch survives the config being rejected, which is exactly when somebody
+// wants to stop the fleet.
 //
 // The pause does NOT signal anything. It marks every job disabled for the
 // tick, and `diffJobs` then drains them the way it drains a job the operator

@@ -1,7 +1,7 @@
 /**
- * The fleet config: the shape of fleet.json (jobs, roster, accounts, campaigns,
+ * The fleet config: the shape of the config document (jobs, roster, accounts, campaigns,
  * preflight), the helpers that read a parsed config, and the parser that
- * refuses a bad file by name. Pure data in, data out — no scheduler state, no
+ * refuses a bad config by name. Pure data in, data out — no scheduler state, no
  * process, no disk. `run-fleet.ts` re-exports all of it, so importers may name
  * either module.
  */
@@ -85,7 +85,7 @@ export interface JobSpawn {
  * Smokes fan out: entries with distinct accounts run concurrently (one live
  * session per account is the module's rule, so the account is the character), and
  * entries that share an account run one after the other in list order. A bare
- * string entry in fleet.json is the pre-2026-08-23 form and means "on the
+ * string entry in the config is the pre-2026-08-23 form and means "on the
  * default `account`".
  *
  * `deploySmokes` is the deploy-time full arc (module-quest.ts, minutes long):
@@ -711,7 +711,7 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
 
 /**
  * Parse the optional top-level `preflight` block. Absent means "disabled with
- * no smokes" — an older fleet.json keeps working unchanged.
+ * no smokes" — an older config keeps working unchanged.
  */
 export function parsePreflight(raw: unknown): FleetPreflight {
   if (raw === undefined) return DEFAULT_PREFLIGHT;

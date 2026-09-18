@@ -1,30 +1,34 @@
 /**
- * The config store (FOLLOW-UPS item 127).
+ * The config store (FOLLOW-UPS item 127; the only fleet config since
+ * 2026-09-18).
  *
- * The invariant worth pinning is not that an export is byte-identical to the
- * file — formatting is not config — but that the supervisor cannot tell the
- * difference: `parseFleet(store.render())` deep-equals `parseFleet(file)`, so
- * `--status`, the plan and every scheduling decision read the same config
- * whether the store is live or not.
+ * Two invariants worth pinning. First, that a seed round-trips: the supervisor
+ * cannot tell the store from the document it was seeded with —
+ * `parseFleet(store.render())` deep-equals `parseFleet(doc)`. Second, that the
+ * read seam keeps EMPTY (zero rows: a real config, the empty board) apart from
+ * UNREADABLE (the store could not be opened: transient, keep the last good
+ * config), because confusing them would drain every live job on a disk
+ * hiccup.
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   ConfigRejected,
   ConfigStore,
   configDbPath,
+  configStoreSeeded,
+  EMPTY_STORE_HINT,
   openConfigStore,
-  readFleetText,
+  readFleetConfig,
   renderFleet,
-  seedIfEmpty,
   splitFleet,
 } from "../src/config-store";
 import { parseFleet } from "../../infra/run-fleet-config";
 
-const SHIPPED = resolve(import.meta.dir, "..", "..", "infra", "fleet.json");
+const EXAMPLE = resolve(import.meta.dir, "..", "..", "infra", "fleet.example.json");
 
 function tempStore(): { store: ConfigStore; root: string } {
   const root = mkdtempSync(join(tmpdir(), "config-store-"));
@@ -53,8 +57,8 @@ describe("split and render", () => {
 
   test("a routing block survives seed -> export unchanged, in the file's own spelling", () => {
     // Issue #25 / 2026-09-16. `parseFleet` normalises the shorthand for its own
-    // readers; the store must NOT — it holds the config as written, so the
-    // diff against infra/fleet.json stays a diff and not a reformatting.
+    // readers; the store must NOT — it holds the config as written, so an
+    // export diffs against an earlier export as a diff, not a reformatting.
     const doc = fixtureConfig({
       policy: { routing: { sort: "throughput", allowFallbacks: true } },
       roster: {
@@ -137,13 +141,13 @@ describe("split and render", () => {
   });
 });
 
-describe("the shipped fleet.json", () => {
+describe("the bootstrap example (infra/fleet.example.json)", () => {
   test("seeds, exports identically, and parses to the same config", async () => {
-    const original = JSON.parse(await Bun.file(SHIPPED).text()) as unknown;
+    const original = JSON.parse(await Bun.file(EXAMPLE).text()) as unknown;
     const { store } = tempStore();
-    const { seeded, keys } = store.seedFromFile(SHIPPED);
+    const { seeded, keys } = store.seedFromFile(EXAMPLE);
     expect(seeded).toBe(true);
-    expect(keys).toBeGreaterThan(10);
+    expect(keys).toBeGreaterThan(5);
     expect(store.render()).toEqual(original as Record<string, unknown>);
     expect(parseFleet(store.render())).toEqual(parseFleet(original));
     store.close();
@@ -239,45 +243,66 @@ describe("seeding", () => {
 });
 
 describe("the read seam", () => {
-  test("readFleetText serves the file until the store is seeded, then the store", () => {
+  test("a store that does not exist yet is EMPTY — a fresh deployment, not an error", () => {
     const root = mkdtempSync(join(tmpdir(), "config-seam-"));
-    const file = join(root, "fleet.json");
     const db = join(root, "config.sqlite");
-    const env = { WRATHBENCH_CONFIG_DB: db };
-    writeFileSync(file, JSON.stringify(fixtureConfig()));
+    expect(readFleetConfig(db)).toEqual({ status: "empty", path: db });
+    expect(configStoreSeeded({ WRATHBENCH_CONFIG_DB: db })).toBe(false);
+  });
 
-    expect(JSON.parse(readFleetText(file, env))).toEqual(fixtureConfig());
+  test("a store file with no rows is EMPTY too, and never created by reading", () => {
+    const { store, root } = tempStore();
+    store.close();
+    const db = join(root, "config.sqlite");
+    expect(readFleetConfig(db).status).toBe("empty");
+    // A read-only open of a path that is not there creates nothing.
+    const missing = join(root, "nope", "config.sqlite");
+    expect(readFleetConfig(missing).status).toBe("empty");
+    expect(openConfigStore(missing, { readonly: true })).toBeNull();
+  });
 
-    expect(seedIfEmpty(file, { actor: "fleet" }, env).seeded).toBe(true);
-    const store = new ConfigStore(db);
+  test("a seeded store is OK, and an edit is what the next read returns", () => {
+    const { store, root } = tempStore();
+    const db = join(root, "config.sqlite");
+    store.seed(fixtureConfig());
+    const first = readFleetConfig(db);
+    expect(first.status).toBe("ok");
+    expect(JSON.parse((first as { text: string }).text)).toEqual(fixtureConfig());
     store.patch("roster/glm", { tier: "t2" }, { actor: "mark" });
     store.close();
-
-    const fromStore = JSON.parse(readFleetText(file, env)) as { roster: Record<string, { tier: string }> };
-    expect(fromStore.roster["glm"]?.tier).toBe("t2");
-    // The file is untouched: it is the seed and the export, not the live copy.
-    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(fixtureConfig());
+    const next = readFleetConfig(db) as { status: "ok"; text: string };
+    expect((JSON.parse(next.text) as { roster: Record<string, { tier: string }> }).roster["glm"]?.tier).toBe("t2");
+    expect(configStoreSeeded({ WRATHBENCH_CONFIG_DB: db })).toBe(true);
   });
 
-  test("the boot seed happens only where a store path is configured", () => {
-    // Otherwise the supervisor would seed an ephemeral store on the cluster —
-    // where only subPaths of the data PVC are mounted — and stop seeing the
-    // ConfigMap that Flux reconciles, which is how that deployment is steered.
-    const root = mkdtempSync(join(tmpdir(), "config-seed-gate-"));
-    const file = join(root, "fleet.json");
-    writeFileSync(file, JSON.stringify(fixtureConfig()));
-    expect(seedIfEmpty(file, {}, {}).seeded).toBe(false);
-    expect(seedIfEmpty(file, {}, { WRATHBENCH_DATA: root }).seeded).toBe(true);
-    expect(readFileSync(join(root, "config.sqlite")).length).toBeGreaterThan(0);
-  });
-
-  test("an unreadable store falls back to the file rather than failing the read", () => {
+  test("a store that cannot be read is UNREADABLE — never EMPTY", () => {
+    // The distinction this seam exists for. A supervisor that read a corrupt
+    // or locked store as "zero rows" would conclude every job vanished and
+    // drain the board; it must instead keep its last good config and say why.
     const root = mkdtempSync(join(tmpdir(), "config-seam-bad-"));
-    const file = join(root, "fleet.json");
     const db = join(root, "config.sqlite");
-    writeFileSync(file, JSON.stringify(fixtureConfig()));
     writeFileSync(db, "this is not a database");
-    expect(JSON.parse(readFleetText(file, { WRATHBENCH_CONFIG_DB: db }))).toEqual(fixtureConfig());
+    const r = readFleetConfig(db);
+    expect(r.status).toBe("unreadable");
+    expect((r as { error: string }).error.length).toBeGreaterThan(0);
+  });
+
+  test("rows() rethrows anything that is not a missing table", () => {
+    // `rows()` swallows exactly one error — "no such table", the never-written
+    // store — and nothing else, so a real failure surfaces as UNREADABLE
+    // rather than as an empty roster.
+    const root = mkdtempSync(join(tmpdir(), "config-rows-bad-"));
+    const db = join(root, "config.sqlite");
+    writeFileSync(db, "garbage".repeat(64));
+    const reader = openConfigStore(db, { readonly: true });
+    expect(reader).not.toBeNull();
+    expect(() => reader!.rows()).toThrow();
+    reader!.close();
+  });
+
+  test("the empty-store hint names the seed command and the page", () => {
+    expect(EMPTY_STORE_HINT).toContain("config-store.ts seed infra/fleet.example.json");
+    expect(EMPTY_STORE_HINT).toContain("/config");
   });
 
   test("configDbPath prefers the explicit path, then the data dir", () => {
@@ -286,4 +311,3 @@ describe("the read seam", () => {
     expect(configDbPath({})).toMatch(/data\/config\.sqlite$/);
   });
 });
-

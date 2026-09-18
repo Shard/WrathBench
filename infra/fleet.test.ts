@@ -115,7 +115,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
-import { ConfigStore, readFleetText } from "../runner/src/config-store";
+import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/config-store";
 import { parseCampaigns } from "../runner/src/campaigns";
 import { episodeArgv, resolve } from "./run-roster";
 
@@ -662,18 +662,53 @@ describe("roster policy", () => {
 
 describe("rereadFleet", () => {
   const good: FleetConfig = parseFleet(fleetJson([{ ref: "glm", episode: "e90" }]));
+  const text = (t: string) => (): FleetRead => ({ status: "ok", path: "store", text: t });
 
   test("a malformed re-read keeps the last good config and reports the error", () => {
-    const r = rereadFleet("fleet.json", good, () => "{not json");
+    const r = rereadFleet(good, text("{not json"));
     expect(r.config).toBe(good);
     expect(r.error).toBeDefined();
+  });
+
+  /*
+   * 2026-09-18: the store is the only config, and its two non-ok states must
+   * never be confused. A store with ZERO ROWS is a real config — the empty
+   * board — and is acted on. A store that COULD NOT BE OPENED is transient:
+   * the last good config stays in effect and the error is reported, exactly
+   * like a document that does not parse. Reading a locked store as "zero
+   * rows" would drain every live job on a disk hiccup, which is the refused-
+   * pin lesson of 2026-08-24 all over again.
+   */
+  test("an EMPTY store is the empty config, flagged, with no error", () => {
+    const r = rereadFleet(good, () => ({ status: "empty", path: "store" }));
+    expect(r.error).toBeUndefined();
+    expect(r.empty).toBe(true);
+    expect(r.config).not.toBe(good);
+    expect(r.config.jobs).toEqual([]);
+    expect(Object.keys(r.config.roster)).toEqual([]);
+    expect(r.config.accounts.pool).toEqual([]);
+  });
+
+  test("an UNREADABLE store keeps the last good config and reports why", () => {
+    const r = rereadFleet(good, () => ({ status: "unreadable", path: "store", error: "database is locked" }));
+    expect(r.config).toBe(good);
+    expect(r.empty).toBeUndefined();
+    expect(r.error).toMatch(/could not be read: database is locked/);
+  });
+
+  test("the same distinction holds for the read-only reader", () => {
+    expect(loadConfigForRead(() => ({ status: "empty", path: "store" }))).toMatchObject({ empty: true });
+    expect(loadConfigForRead(() => ({ status: "empty", path: "store" })).config?.jobs).toEqual([]);
+    const bad = loadConfigForRead(() => ({ status: "unreadable", path: "store", error: "locked" }));
+    expect(bad.config).toBeUndefined();
+    expect(bad.error).toMatch(/locked/);
   });
 
   test("a re-read that violates a WHOLE-FILE guard keeps the last good config too", () => {
     // A duplicate job name leaves the file ambiguous — there is no losing pin to
     // pick — so it is still fatal, and the last good config stays in effect.
     const dupe = JSON.stringify(fleetJson([{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }]));
-    const r = rereadFleet("fleet.json", good, () => dupe);
+    const r = rereadFleet(good, text(dupe));
     expect(r.config).toBe(good);
     expect(r.error).toMatch(/two jobs would share the name/);
   });
@@ -683,7 +718,7 @@ describe("rereadFleet", () => {
     // `enabled:` flag in the new file went inert behind the old config; now the
     // file loads, one job is disabled, and the operator is told which.
     const clash = JSON.stringify(fleetJson([{ ref: "glm", episode: "e90", account: "X" }, { ref: "ox", episode: "e90", account: "X" }]));
-    const r = rereadFleet("fleet.json", good, () => clash);
+    const r = rereadFleet(good, text(clash));
     expect(r.error).toBeUndefined();
     expect(r.config).not.toBe(good);
     expect(r.config.jobs.map((j) => [j.name, j.enabled])).toEqual([["glm-e90", true], ["ox-e90", false]]);
@@ -692,38 +727,34 @@ describe("rereadFleet", () => {
 
   test("a valid re-read replaces the config", () => {
     const next = JSON.stringify(fleetJson([{ ref: "ox", episode: "e360" }]));
-    const r = rereadFleet("fleet.json", good, () => next);
+    const r = rereadFleet(good, text(next));
     expect(r.error).toBeUndefined();
     expect(r.config.jobs[0]!.name).toBe("ox-e360");
   });
 
   /*
    * Item 127: the default read is the config-store seam, so an edit made
-   * through the app is picked up by the same tick that picks up a file edit —
-   * no restart, no second reload path. The scheduling semantics below the
-   * seam are untouched, which is what "--status is unchanged for an unchanged
-   * config" means: seed a store from a file and the supervisor parses the same
-   * config out of either.
+   * through the app is picked up by the next tick — no restart, no second
+   * reload path. The scheduling semantics below the seam are untouched: seed
+   * a store from a document and the supervisor parses the same config out of
+   * it that it would have parsed from the document.
    */
-  test("the default read prefers a seeded store, and the config is identical to the file's", () => {
+  test("the default read is the store, and a seeded store parses to the seed's config until edited", () => {
     const root = mkdtempSync(join(tmpdir(), "fleet-config-store-"));
-    const file = join(root, "fleet.json");
     const db = join(root, "config.sqlite");
-    const env = { WRATHBENCH_CONFIG_DB: db };
-    writeFileSync(file, JSON.stringify(fleetJson([{ ref: "glm", episode: "e90" }])));
+    const seed = fleetJson([{ ref: "glm", episode: "e90" }]);
 
-    expect(parseFleet(JSON.parse(readFleetText(file, env)))).toEqual(good);
+    expect(rereadFleet(good, () => readFleetConfig(db)).empty).toBe(true);
 
     const store = new ConfigStore(db);
-    store.seedFromFile(file);
-    expect(parseFleet(JSON.parse(readFleetText(file, env)))).toEqual(good);
+    store.seed(seed);
+    expect(rereadFleet(good, () => readFleetConfig(db)).config).toEqual(good);
     store.patch("roster/glm", { tier: "t2" }, { actor: "mark" });
     store.close();
 
-    const fromStore = parseFleet(JSON.parse(readFleetText(file, env)));
-    expect(fromStore.roster["glm"]!.tier).toBe("t2");
-    // The file never moved: it is the seed and the export.
-    expect(parseFleet(JSON.parse(readFileSync(file, "utf8"))).roster["glm"]!.tier).toBe("t1");
+    const fromStore = rereadFleet(good, () => readFleetConfig(db));
+    expect(fromStore.error).toBeUndefined();
+    expect(fromStore.config.roster["glm"]!.tier).toBe("t2");
   });
 });
 
@@ -769,7 +800,7 @@ describe("jobArgv", () => {
   });
 
   test("a loop job with no stop condition loops forever — the fleet-service shape", () => {
-    // The supervisor has no deadline; steering is fleet.json.
+    // The supervisor has no deadline; steering is the config store.
     expect(jobArgv(spawn({ loop: true }), { stamp: "20260822", until: undefined })).not.toContain("--until");
   });
 });
@@ -886,9 +917,9 @@ describe("the pause switch", () => {
   });
 
   test("a config carrying an unknown top-level key is NOT rejected", () => {
-    // Why the switch could have lived in fleet.json: `parseFleet` refuses only
+    // Why the switch could have lived in the config: `parseFleet` refuses only
     // the retired keys BY NAME, so the running supervisor ignores what it does
-    // not know. It is a sidecar anyway (a typo in fleet.json makes every
+    // not know. It is a sidecar anyway (a rejected config makes every
     // `enabled` flag inert), but this is the fact that makes either delivery
     // safe against the code that is live right now.
     expect(() => parseFleet(fleetJson([], { paused: true, somethingNew: 1 }))).not.toThrow();
@@ -898,9 +929,9 @@ describe("the pause switch", () => {
     // The rollout paradox: the pause switch is supervisor code, so it is not
     // live until the supervisor is recreated. This is the escape — it needs no
     // new code, and it is what the first graceful update uses. Proven against
-    // the SHIPPED file rather than a fixture, because that is what the operator
-    // will edit.
-    const raw = JSON.parse(readFileSync(new URL("./fleet.json", import.meta.url).pathname, "utf8")) as Record<string, unknown>;
+    // the bootstrap example rather than a fixture, because that is the shape
+    // the operator's store has.
+    const raw = JSON.parse(readFileSync(new URL("./fleet.example.json", import.meta.url).pathname, "utf8")) as Record<string, unknown>;
     const drained = {
       ...raw,
       accounts: { pool: [], paid: [], local: [] },
@@ -920,23 +951,22 @@ describe("the pause switch", () => {
   });
 });
 
-describe("the shipped fleet files", () => {
-  // Durable invariants only. `fleet.json` is the LIVE file: the supervisor
-  // hot-reloads it, the operator prunes and adds roster models daily, and
-  // `enabled` is a steering knob — none of that may turn the suite red. What
-  // is durable: the shape, the pinned accounts, the probe's leash, and the
-  // roster policy (claude models only through the claude-code harness, the
-  // codex harness on OpenAI ids and a configured lane;
-  // shared free pools carry free ids only unless an entry declares
-  // `billing: "paid"` on purpose, under the paid policy).
+describe("the bootstrap example (infra/fleet.example.json)", () => {
+  // The example is the ONE config document in the repo (2026-09-18): the live
+  // config is the store, seeded from this once, and the operational cohort —
+  // which models, which classes, which tier today — is not in git and is not
+  // asserted here. What is durable: the example seeds a working board, the
+  // shape, and the roster policy (claude models only through the claude-code
+  // harness, the codex harness on OpenAI ids and a configured lane; shared
+  // free pools carry free ids only unless an entry declares `billing: "paid"`
+  // on purpose, under the paid policy).
+  const EXAMPLE = new URL("./fleet.example.json", import.meta.url).pathname;
   const rosterPolicy = (config: FleetConfig): void => {
     for (const e of Object.values(config.roster)) {
       const driver = e.driver ?? "openai";
       expect(["openai", "claude-code", "codex"]).toContain(driver);
       if (isClaudeFamily(e.model)) expect(driver).toBe("claude-code");
       if (driver === "claude-code") expect(isClaudeFamily(e.model)).toBe(true);
-      // The codex harness is the Codex CLI on a ChatGPT subscription: OpenAI's
-      // catalogue only, and a lane it can actually bill.
       if (driver === "codex") {
         expect(isClaudeFamily(e.model)).toBe(false);
         expect(e.subscription === undefined || config.policy.subscriptions.includes(e.subscription)).toBe(true);
@@ -947,74 +977,50 @@ describe("the shipped fleet files", () => {
     }
   };
 
-  test("fleet.json: the shipped file carries no key the harness would refuse", async () => {
-    // The strict-key rule's own safety net. It is a REFUSAL, so a key outside
-    // the declared set costs the operator a character rather than the file — and
-    // that must never be discovered on a recreate.
-    const config = parseFleet((await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown);
+  test("the example carries no key the harness would refuse, and seeds a working board", async () => {
+    // The strict-key rule's own safety net: a refusal costs a newcomer a
+    // roster entry on their first boot, which must never be how the rule is
+    // discovered.
+    const config = parseFleet((await Bun.file(EXAMPLE).json()) as unknown);
     expect(config.refusals).toEqual([]);
+    rosterPolicy(config);
+    // A working board: something to schedule, somewhere to schedule it, a
+    // gate that is configured, and nothing that would launch on its own.
+    expect(Object.keys(config.roster).length).toBeGreaterThan(0);
+    expect(config.accounts.pool.length).toBeGreaterThan(0);
+    expect(config.preflight.enabled).toBe(true);
+    expect(config.preflight.smokes.length).toBeGreaterThan(0);
+    expect(config.jobs).toEqual([]);
+    expect(config.campaigns).toEqual([]);
+    // And the store takes it, whole, as the one-time seed.
+    const store = new ConfigStore(join(mkdtempSync(join(tmpdir(), "fleet-example-")), "config.sqlite"));
+    const { seeded, keys } = store.seedFromFile(EXAMPLE);
+    expect(seeded).toBe(true);
+    expect(keys).toBeGreaterThan(5);
+    expect(parseFleet(store.render())).toEqual(config);
+    store.close();
   });
 
-  test("fleet.json: the September OpenRouter cohort uses exact ids and the intended account classes", async () => {
-    const config = parseFleet((await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown);
-    const expected = [
-      ["deepseek-v41-flash", "deepseek/deepseek-v4.1-flash", "paid"],
-      ["mercury-25", "inception/mercury-2.5", "paid"],
-      ["nex-n25-pro", "nex-agi/nex-n2.5-pro:free", "pool"],
-      ["nex-n25-mini", "nex-agi/nex-n2.5-mini:free", "pool"],
-    ] as const;
-
-    for (const [name, model, accountClass] of expected) {
-      const entry = config.roster[name]!;
-      expect(entry.model).toBe(model);
-      expect(entry.tier).toBe("t0");
-      expect(entry.idle).toBe("none");
-      expect(rosterClass({ name, ...entry })).toBe(accountClass);
-    }
+  test("the example's roster shows the shape: a claude-code entry, free entries and a paid one", async () => {
+    const config = parseFleet((await Bun.file(EXAMPLE).json()) as unknown);
+    const entries = Object.values(config.roster);
+    expect(entries.some((e) => e.driver === "claude-code")).toBe(true);
+    expect(entries.some((e) => e.billing === "paid")).toBe(true);
+    expect(entries.some((e) => (e.driver ?? "openai") === "openai" && e.billing !== "paid")).toBe(true);
   });
 
-  test("fleet.json: a zen/go entry loads, keys apart from the free zen/v1 lane, and is capped", async () => {
-    // The shipped file is edited daily, so this asserts the SHAPE the go
-    // surface needs, over whatever entries happen to sit on it today.
-    const config = parseFleet((await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown);
-    const goNames = Object.entries(config.roster)
-      .filter(([, e]) => (e.driver ?? "openai") === "openai" && isOpenCodeGoBase(e.apiBase))
-      .map(([n]) => n);
-    for (const n of goNames) {
-      // Paid by the RULE (no `-free`/`:free` suffix on a metered surface), and
-      // that verdict is what puts it under policy.paid.
-      const e = config.roster[n]!;
-      expect(billingOf({ model: e.model, apiBase: e.apiBase, ...(e.driver !== undefined ? { driver: e.driver } : {}) })).toBe("paid");
-      expect(concurrencyKeyOfRef(config.roster, n, "paid")).toBe("opencode-go");
-      // Capped, and NOT sharing the free tier's key on the same host.
-      expect(config.maxConcurrent["opencode-go"]).toBeGreaterThan(0);
-    }
-    // The free zen/v1 entries still key on `opencode`.
-    for (const [n, e] of Object.entries(config.roster)) {
-      if ((e.apiBase ?? "").startsWith("https://opencode.ai/zen/v1")) {
-        expect(concurrencyKeyOfRef(config.roster, n, "free")).toBe("opencode");
-      }
-    }
-  });
-
-  test("fleet.json: every model's evidence budget is its tier and its idle axis, and nothing else sets a run count", async () => {
-    const NOW = Date.parse("2027-01-15T08:00:00.000Z");
-    const raw = (await Bun.file(new URL("./fleet.json", import.meta.url).pathname).json()) as unknown;
+  test("every model's evidence budget is its tier and its idle axis, and nothing else sets a run count", async () => {
+    const raw = (await Bun.file(EXAMPLE).json()) as unknown;
     const config = parseFleet(raw);
 
     /*
-     * THE invariant this test exists for: the tier is the evidence budget. It is not a snapshot of
-     * the shipped file — the operator retiers models nightly and that must not
-     * break CI. It is the one property the refactor bought: how much a model
-     * runs is the word `tier` on its entry, full stop. No per-entry override,
-     * no per-billing table, no policy target, no queue job standing in for a
+     * THE invariant this test exists for: the tier is the evidence budget. It
+     * is the one property the refactor bought: how much a model runs is the
+     * word `tier` on its entry, full stop. No per-entry override, no
+     * per-billing table, no policy target, no queue job standing in for a
      * budget. If any of those come back, this fails and says which.
      */
     for (const [name, e] of Object.entries(config.roster)) {
-      // Every entry states exactly one budget, and it is a tier from the code
-      // table. There is no steered-entry exception left to make: an
-      // entry cannot carry an objective, so it is always in the
-      // policy and always states a tier.
       expect(TIERS).toContain(e.tier);
       expect(IDLE_MODES).toContain(e.idle);
       const asAny = e as unknown as Record<string, unknown>;
@@ -1025,255 +1031,8 @@ describe("the shipped fleet files", () => {
     const policyAny = (raw as { policy: Record<string, unknown> }).policy;
     expect(policyAny["runsPerEpisode"]).toBeUndefined();
     expect(policyAny["extras"]).toBeUndefined();
-    // Two paid models fleet-wide at once (raised from 1 on 2026-09-04 so the
-    // OpenCode Go surface can run beside another paid model); `opencode-go: 1`
-    // below still holds that surface to one of the two.
-    expect(config.policy.paid).toEqual({ maxConcurrent: 2 });
-    // Three Claude sessions at most, one on the operator's own subscription and
-    // up to three on the partner's (67169fd): a run spends both its lane's key
-    // and the total, so the total still caps the fleet at three.
-    expect(config.maxConcurrent).toEqual({
-      "claude-code": 3,
-      "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1,
-      "claude-code:CLAUDE_CODE_OAUTH_TOKEN_2": 3,
-      // One live Codex session per ChatGPT subscription (2026-09-05).
-      codex: 1,
-      openrouter: 1,
-      opencode: 1,
-      // OpenCode Zen's pay-as-you-go zen/go surface, capped apart from the
-      // free zen/v1 tier on the same host.
-      "opencode-go": 1,
-    });
-    // CODEX_HOME is a lane too — and LAST, so a claude pick reaches it only
-    // once both claude lanes are full, which the caps above forbid.
-    expect(config.policy.subscriptions).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2", "CODEX_HOME"]);
-
-    // A trial is one line and one line only: tier t0, and nothing else in the
-    // file arranges it — no queue job, no account pin, no billing flip. This is
-    // the acceptance test for the whole refactor.
-    {
-      const name = "deepseek-pro";
-      const e = config.roster[name]!;
-      expect(e.tier).toBe("t0");
-      expect(e.idle).toBe("none");
-      expect(poolJobs(config).some((j) => j.refs.includes(name))).toBe(false);
-      expect(Object.values(config.accounts.pinned)).not.toContain(`${name}-e90`);
-      // A t0 model that plays well keeps its witness without spending it.
-      const witness: RunFact = {
-        runId: `${name}-1`,
-        model: e.model,
-        effort: null,
-        episode: "e90",
-        episodeOverride: false,
-        harnessVersion: null,
-        harnessSeries: config.policy.series,
-        extra: false,
-        startedAt: NOW - 2 * 3_600_000,
-        endedAt: NOW - 3_600_000,
-        terminationReason: "episode-limit",
-        modelResponses: 20,
-        bestLevel: 6,
-        live: false,
-        pause: null,
-        account: null,
-        character: null,
-        episodeMs: null,
-        campaign: null,
-        cell: null,
-        subscription: null,
-      };
-      const st = modelStatesOf(rosterModels(config.roster), [witness], NOW, config.policy).find((x) => x.name === name)!;
-      expect(st.earnedRung1).toBe(true);
-      expect(st.tier).toBe("t0");
-      expect(st.eligible).toEqual(["e90"]);
-      expect(st.status).not.toBe("promoted");
-    }
-
-    // deepseek-flash is now on the standard t1 budget: three e90 runs and no
-    // e360 until its counted e90 evidence earns the next rung. The shipped
-    // entry is the policy; no queue job or account pin supplements it.
-    {
-      const name = "deepseek-flash";
-      const e = config.roster[name]!;
-      expect(e.tier).toBe("t1");
-      expect(e.idle).toBe("none");
-      expect(TIER_TABLE[e.tier].runsPerEpisode).toEqual({ e90: 3, e360: 0 });
-      expect(poolJobs(config).some((j) => j.refs.includes(name))).toBe(false);
-      expect(Object.values(config.accounts.pinned)).not.toContain(`${name}-e90`);
-      // A t1 model that reaches rung 1 is promoted to t2 by its existing
-      // witness, rather than needing a re-run after the operator's retier.
-      const witness: RunFact = {
-        runId: `${name}-1`,
-        model: e.model,
-        effort: null,
-        episode: "e90",
-        episodeOverride: false,
-        harnessVersion: null,
-        harnessSeries: config.policy.series,
-        extra: false,
-        startedAt: NOW - 2 * 3_600_000,
-        endedAt: NOW - 3_600_000,
-        terminationReason: "episode-limit",
-        modelResponses: 20,
-        bestLevel: 6,
-        live: false,
-        pause: null,
-        account: null,
-        character: null,
-        episodeMs: null,
-        campaign: null,
-        cell: null,
-        subscription: null,
-      };
-      const st = modelStatesOf(rosterModels(config.roster), [witness], NOW, config.policy).find((x) => x.name === name)!;
-      expect(st.declaredTier).toBe("t1");
-      expect(st.earnedRung1).toBe(true);
-      expect(st.tier).toBe("t2");
-      expect(st.eligible).toEqual(["e90", "e360"]);
-      expect(st.status).toBe("promoted");
-    }
-
-    // And leaving the trial is the same one line: gpt-luna went to t1 by
-    // operator decision on 2026-08-25 (d183fbd). Everything else about it is
-    // unchanged, which is the mechanism working rather than an exception to it.
-    expect(config.roster["gpt-luna"]!.tier).toBe("t1");
-    expect(poolJobs(config).some((j) => j.refs.includes("gpt-luna"))).toBe(false);
-    expect(Object.values(config.accounts.pinned)).not.toContain("gpt-luna-e90");
-
-    // Account classes, which billing still governs — and only these.
-    expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3", "RUNNER5", "RUNNER6"]);
-    expect(config.accounts.paid).toEqual(["SHAKEOUT2", "RUNNER7"]);
-    expect(classPoolsOf(config).paid).toEqual(["SHAKEOUT2", "RUNNER7"]);
-    expect(config.accounts.local).toEqual(["RUNNER4"]);
-    expect(rosterModels(config.roster).filter((r) => rosterClass(r) === "local").map((r) => r.name)).toEqual(["qwen3-8-27b"]);
-    // Nothing parks on the paid account any more: a pin there — even a disabled
-    // one — is a job waiting to hold SHAKEOUT2 and starve the paid class, so
-    // the queue is empty and the policy owns the account outright.
-    expect(config.jobs.find((j) => j.account === "SHAKEOUT2")).toBeUndefined();
-    // SHAKEOUT is spoken for by the nav-probe CAMPAIGN now, not by a queue job.
-    expect(Object.keys(config.accounts.pinned).sort()).toEqual(["SHAKEOUT"]);
-    expect(config.accounts.pinned["SHAKEOUT"]).toBe("campaign nav-probe");
-
-    // The roster is a CATALOG: every entry is a model and nothing
-    // else, so nothing in it carries an objective or wiki coords, and the two
-    // probes that used to live there are campaigns.
-    for (const [n, e] of Object.entries(config.roster)) {
-      expect(e.objective, `${n} carries an objective`).toBeUndefined();
-      expect(e.wikiCoords, `${n} carries wikiCoords`).toBeUndefined();
-      expect(e.tier, `${n} has no tier`).toBeDefined();
-    }
-
-    // nav-probe: the navigation probe, pinned to its own account, 6h episodes,
-    // no-xp disabled, the only thing serving wiki coords. It borrows `sonnet`'s
-    // credentials and owns its whole task shape.
-    const nav = config.campaigns.find((c) => c.name === "nav-probe")!;
-    expect(nav).toMatchObject({ enabled: true, account: "SHAKEOUT", models: ["sonnet"], wikiCoords: true, maxToolCalls: 2500 });
-    expect(nav.objective).toContain("Ironforge");
-    expect(nav.watchdogs).toEqual({ episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 });
-    expect(nav.cells.map((c) => c.id)).toEqual(["coldridge"]);
-    const navJob = pinnedCampaignJobs(config, [])[0]!;
-    expect(navJob).toMatchObject({ name: "nav-probe-coldridge", account: "SHAKEOUT", episode: "probing", ref: "sonnet" });
-    const probeSpawn = jobSpawn(navJob, config.roster, "SHAKEOUT", "20260101", undefined, config.campaigns);
-    expect(probeSpawn.entries[0]).toMatchObject({
-      episode: "probing",
-      campaign: "nav-probe",
-      cell: "coldridge",
-      // The lane's resume rule travels with the spec: this campaign
-      // does not ask to resume, so a pause ends the cell's run and it is swept
-      // again. A scored spawn is false the same way; freeplay is true.
-      resumeOnPause: false,
-      wikiCoords: true,
-      maxToolCalls: 2500,
-      watchdogs: { episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 },
-    });
-
-    // class-probe: the race/class sweep that used to be `idle: "characters"`.
-    // Eight cells named in the file rather than a code-side cycle indexed by a
-    // counter that meant something else, and unscored where it belongs.
-    const classes = config.campaigns.find((c) => c.name === "class-probe")!;
-    expect(classes.cells).toHaveLength(8);
-    expect(classes.account).toBeUndefined();
-    // Item 90 (operator pick 2026-08-29): `nemotron-super` left the sweep so
-    // its lane spends idle time on freeplay; the campaign idles on muse-spark
-    // until another free lane meets its targets.
-    expect(classes.models).toEqual(["muse-spark"]);
-    // Item 87: a probe that pauses on a provider rate limit is resumed rather
-    // than swept again as a failed attempt, and a cell whose launches keep
-    // failing is abandoned instead of swept forever.
-    expect(classes.resume).toBe(true);
-    expect(classes.maxAttemptsPerCell).toBe(3);
-    for (const c of classes.cells) {
-      expect(c.race, `${c.id} names a race`).toBeDefined();
-      expect(c.class, `${c.id} names a class`).toBeDefined();
-    }
-    // Every campaign model is a real catalog entry.
-    for (const c of config.campaigns) {
-      if (c.models === "all") continue;
-      for (const m of c.models) expect(config.roster[m], `${c.name} names ${m}`).toBeDefined();
-    }
-
-    // Manual pool jobs are operator steering; each must be a real roster ref.
-    for (const j of poolJobs(config)) expect(config.roster[j.ref]).toBeDefined();
-    rosterPolicy(config);
-
-    // With an empty run history every policy model is e90-only, whatever its
-    // tier: no tier grants an e360 that has not been earned or declared.
-    const states = modelStatesOf(rosterModels(config.roster));
-    for (const st of states) {
-      expect(st.status).toBe("new");
-      expect(st.eligible).toEqual(["e90"]);
-    }
-    const plan = planTick(config, states, () => undefined, "20260101");
-    expect(plan.pinned.map((p) => p.job.name)).toEqual(["nav-probe-coldridge"]);
-    /*
-     * The cap is what matters, not which bucket spends it. Every claude-code
-     * run counts against its SUBSCRIPTION's key wherever it is scheduled
-     * from — the pinned probe, a manual queue job, or the policy — and each
-     * subscription inherits `maxConcurrent["claude-code"]`.
-     */
-    const isClaude = (ref: string): boolean => config.roster[ref]?.driver === "claude-code";
-    const claudeRuns = [...plan.pinned, ...plan.queue.assign, ...plan.policy].filter((p) => isClaude(p.job.ref));
-    const byLaneAll = claudeRuns.map((p) => p.job.subscription ?? "CLAUDE_CODE_OAUTH_TOKEN");
-    expect(claudeRuns.length).toBeGreaterThan(0);
-    expect(claudeRuns.length).toBeLessThanOrEqual(config.maxConcurrent["claude-code"]!);
-    for (const lane of config.policy.subscriptions) {
-      // A lane the file gives no `claude-code:` cap is uncapped, as every key
-      // is — the codex lane has no claude sessions to limit.
-      const cap = config.maxConcurrent[`claude-code:${lane}`];
-      if (cap === undefined) continue;
-      const on = byLaneAll.filter((l) => l === lane).length;
-      expect(on).toBeLessThanOrEqual(cap);
-    }
-
-    /*
-     * Under the free-key caps (openrouter <= 1, opencode <= 1) the pool does
-     * not fill every account: one openrouter free model and one opencode free
-     * model take two pool accounts, one claude-code model takes a third, and
-     * the rest go idle for want of an uncapped free model — that is the cap
-     * working. A paid model lands on SHAKEOUT2 and the local one on RUNNER4;
-     * neither ever takes a pool account.
-     *
-     * The subscription drivers are counted apart: a claude-code run by its
-     * lane keys above, and a codex run by `codex` (1 — one live Codex
-     * session per ChatGPT subscription), which is the same shape and not a
-     * free pool at all.
-     */
-    const isSub = (ref: string): boolean => {
-      const d = config.roster[ref]!.driver;
-      return d === "claude-code" || d === "codex";
-    };
-    const freeOnPool = [...plan.queue.assign, ...plan.policy].filter((p) => config.accounts.pool.includes(p.account) && !isSub(p.job.ref));
-    expect(freeOnPool).toHaveLength(2);
-    const codexRuns = [...plan.pinned, ...plan.queue.assign, ...plan.policy].filter((p) => config.roster[p.job.ref]?.driver === "codex");
-    expect(codexRuns.length).toBeLessThanOrEqual(config.maxConcurrent["codex"]!);
-    const onPool = plan.policy.filter((p) => config.accounts.pool.includes(p.account)).map((p) => p.job.ref);
-    expect(onPool).not.toContain("qwen3-8-27b");
-    for (const p of plan.policy) {
-      const ref = p.job.ref;
-      if (rosterClass(rosterModels(config.roster).find((m) => m.name === ref)!) === "local") expect(p.account).toBe("RUNNER4");
-    }
+    expect(config.policy.paid?.maxConcurrent).toBeGreaterThan(0);
   });
-
 });
 
 describe("jobs, pinned and pool: one unit of work over the account classes", () => {
@@ -3344,7 +3103,7 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
   });
 
   test("item 107: flipping a live character's ref to idle:\"none\" drops it from the projection", () => {
-    // The gap: the supervisor hot-reloads fleet.json, the policy stops
+    // The gap: the supervisor hot-reloads the config, the policy stops
     // generating the job, and before this the live roster process was never
     // signalled — it ran until an idle watchdog an active model never trips.
     const stopped: Record<string, FleetRosterEntry> = { ...roster, opuslo: { ...roster["opuslo"]!, idle: "none" } };
@@ -3382,7 +3141,7 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     // What `infra/fleet-update.sh graceful` reads off each job row to decide
     // whether waiting on it buys anything (item 93). The campaign's
     // opt-in is the supervisor's to answer: the script must not re-derive it
-    // from a fleet.json the supervisor may not be running.
+    // from a config the supervisor may not be running.
     const campaigns = [
       { name: "class-probe", resume: true },
       { name: "nav-probe" },
