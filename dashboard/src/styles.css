@@ -807,6 +807,17 @@ button.update:hover { background: var(--panel); }
 .xp-inline { display: inline-flex; flex: 1 1 120px; min-width: 60px; max-width: 200px; vertical-align: middle; }
 .xp-inline .bar { height: 14px; }
 .xp-inline .level-badge { min-width: 18px; height: 18px; }
+/* The table form: a fixed narrow bar with no numbers inside it, because a
+   column is not wide enough for "1,234 / 5,400" and a squeezed bar that prints
+   half a figure is worse than one that prints none. The exact reading is the
+   cell's title (`xpCellTitle`). The heights are the inline bar's, so a row
+   carrying one is no taller than a row carrying text. */
+.xp-cell { display: inline-flex; vertical-align: middle; }
+.xp-cell .xp-inline { flex: 0 0 auto; width: 74px; min-width: 0; max-width: none; }
+.xp-cell .bar-text { display: none; }
+@media (max-width: 560px) {
+  .xp-cell .xp-inline { width: 52px; }
+}
 .xp-row .bar { flex: 1; min-width: 0; }
 .level-badge { flex: none; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 50%;
                display: inline-flex; align-items: center; justify-content: center;

@@ -49,6 +49,7 @@ import { LadderChart } from "../components/LadderChart";
 import { CharacterChart } from "../components/CharacterChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { FilterPopover, type FilterGroup } from "../components/FilterPopover";
+import { Coins, LevelXp } from "../components/CharacterFacts";
 import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
 import { COST, LADDER_VIEWS, XP, type LadderView, viewParam } from "../lib/axes";
 import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
@@ -81,7 +82,7 @@ import {
   speedrunBand,
 } from "../lib/reference";
 import { resolvedSummary } from "../lib/models";
-import { fmtMoney, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { displayError } from "../lib/errors";
@@ -468,7 +469,7 @@ export default function Ladder() {
                       <Furthest row={row} />
                     </td>
                     <td class="right mono dim" title={row.bestMoneyRunId ?? "not recorded"}>
-                      {row.bestMoney === null ? "—" : fmtMoney(row.bestMoney)}
+                      <Coins copper={row.bestMoney} />
                     </td>
                     <For each={row.cells}>{(cell) => <RungCell cell={cell} runs={row.runs} />}</For>
                   </tr>
@@ -580,16 +581,11 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
                   {row.attempts}
                 </td>
                 <td class="right mono">
-                  <Show when={row.level !== null} fallback={<span class="dim">—</span>}>
-                    <span>
-                      L{row.level}
-                      <Show when={row.xp !== null}>
-                        <span class="dim"> · {row.xp!.toLocaleString()} xp</span>
-                      </Show>
-                    </span>
-                  </Show>
+                  <LevelXp level={row.level} xp={row.xp} compact />
                 </td>
-                <td class="right mono dim">{row.money === null ? "—" : fmtMoney(row.money)}</td>
+                <td class="right mono dim">
+                  <Coins copper={row.money} />
+                </td>
                 <td class="right mono dim">{row.questsCompleted ?? "—"}</td>
                 <td class="mono">
                   <A href={`/run/${encodeURIComponent(row.latest.runId)}`}>{row.latest.runId}</A>
@@ -739,12 +735,7 @@ function Furthest(props: { row: LadderRow }) {
   };
   return (
     <Show when={r().bestLevel !== null} fallback={<span>—</span>}>
-      <span>
-        L{r().bestLevel}
-        <Show when={r().bestXp !== null}>
-          <span class="dim"> · {r().bestXp!.toLocaleString()} xp</span>
-        </Show>
-      </span>
+      <LevelXp level={r().bestLevel} xp={r().bestXp} compact />
       <Show when={spread()}>
         {(lr) => (
           <div

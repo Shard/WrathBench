@@ -11,6 +11,7 @@ import {
   healthReading,
   isDead,
   percentOf,
+  xpCellTitle,
   powerToken,
   powerTypeOf,
   resolvePowerType,
@@ -106,5 +107,36 @@ describe("xpToNext", () => {
     expect(XP_FOR_LEVEL[69]).toBe(717000);
     expect(XP_FOR_LEVEL[70]).toBe(1523800);
     expect(XP_FOR_LEVEL[79]).toBe(1670800);
+  });
+});
+
+describe("xpCellTitle — the reading a compact bar cannot print inside itself", () => {
+  test("the whole reading: level, xp within it, the level's total, the percentage", () => {
+    // L9 leaves at 6,500 xp (XP_FOR_LEVEL[9]).
+    expect(xpCellTitle(9, 3250)).toBe("level 9 — 3,250 / 6,500 xp into the level (50%)");
+  });
+
+  test("zero xp is a reading and says so", () => {
+    expect(xpCellTitle(9, 0)).toBe("level 9 — 0 / 6,500 xp into the level (0%)");
+  });
+
+  test("a level with no xp reading is not a level at 0%", () => {
+    expect(xpCellTitle(9, null)).toBe("level 9 — no xp reading");
+    expect(xpCellTitle(9, undefined)).toBe("level 9 — no xp reading");
+  });
+
+  test("no level at all", () => {
+    expect(xpCellTitle(null, 400)).toBe("level not recorded");
+    expect(xpCellTitle(undefined, undefined)).toBe("level not recorded");
+  });
+
+  test("the cap has an xp figure and no total, and says which", () => {
+    expect(xpCellTitle(80, 1234)).toBe("level 80 — 1,234 xp into the level, which has no recorded total");
+  });
+
+  test("the character's own next-level figure wins over the table", () => {
+    expect(xpCellTitle(9, 500, 1000)).toBe("level 9 — 500 / 1,000 xp into the level (50%)");
+    // Including at the cap, where the table has nothing to offer.
+    expect(xpCellTitle(80, 500, 1000)).toBe("level 80 — 500 / 1,000 xp into the level (50%)");
   });
 });

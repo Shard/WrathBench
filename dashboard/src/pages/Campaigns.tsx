@@ -15,7 +15,8 @@ import { Collapsible } from "../components/Collapsible";
 import { campaignLiveRuns, progressOf, type CampaignRunRow } from "../lib/campaigns";
 import { useFeeds } from "../lib/feeds";
 import { progressLabel, progressTitle, rowProgress, rowStateLabel, runHref } from "../lib/fleet";
-import { fmtDuration, fmtWhen, modelDisplay, num, shortRunId } from "../lib/format";
+import { fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { LevelXp } from "../components/CharacterFacts";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
 
@@ -212,7 +213,9 @@ export default function Campaigns() {
                             </Show>
                           </td>
                           <td class={`right mono ${c.runs === 0 ? "dim" : ""}`}>{c.runs}</td>
-                          <td class="right mono dim">{c.bestLevel ?? "—"}</td>
+                          <td class="right mono dim">
+                            <LevelXp level={c.bestLevel} xp={null} compact />
+                          </td>
                           <td class="dim" title={c.models.join(", ")}>
                             {c.models.length > 0 ? c.models.map(modelDisplay).join(", ") : "—"}
                           </td>
@@ -282,7 +285,9 @@ function LiveRunRow(props: { row: CampaignRunRow }) {
       >
         {r().model === null ? "—" : modelDisplay(r().model!)}
       </td>
-      <td class="right mono">{r().level === null ? "—" : `L${r().level} ${num(r().xp)}`}</td>
+      <td class="right mono">
+        <LevelXp level={r().level} xp={r().xp} compact />
+      </td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
       <td>
         <Show when={runHref(r().runId)} fallback={<span title={r().runId}>{shortRunId(r().runId)}</span>}>

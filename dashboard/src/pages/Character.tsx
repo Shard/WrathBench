@@ -34,6 +34,7 @@ import { characterSessionSeries } from "../lib/character";
 import { displayError } from "../lib/errors";
 import { fmtAge, fmtDuration, fmtMoney, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
 import { stitchCharacter, type CharacterSeries } from "../lib/ladder";
+import { LevelXp } from "../components/CharacterFacts";
 import { poll } from "../lib/poll";
 import { statusOf, statusText } from "../lib/runs";
 import type { PowerType } from "../lib/unitframe";
@@ -282,7 +283,9 @@ export default function Character() {
                           </span>
                         </td>
                         <td class="dim">{a.startedAt === null ? "—" : stamp(a.startedAt)}</td>
-                        <td class="right mono">{a.level === null ? "—" : `L${a.level}`}</td>
+                        <td class="right mono">
+                          <LevelXp level={a.level} xp={null} compact />
+                        </td>
                         <td class="right mono dim">{num(a.questsCompleted)}</td>
                         <td class="right mono dim">{fmtDuration(a.playtimeMs)}</td>
                       </tr>
