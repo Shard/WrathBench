@@ -28,8 +28,4 @@ The public build also loads Cloudflare Web Analytics (`https://static.cloudflare
 
 No font files are committed. The publisher image installs Debian's `fonts-dejavu-core` (`infra/docker/runner.Dockerfile`) so the social card renders text; DejaVu is under the Bitstream Vera and Arev free licenses and travels with that image, not with this repository.
 
-## Contributor Covenant
-
-`CODE_OF_CONDUCT.md` is the Contributor Covenant version 2.1, reproduced verbatim apart from the contact address, which replaces the upstream placeholder. The Contributor Covenant is the work of Coraline Ada Ehmke and contributors and is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the canonical text is at <https://www.contributor-covenant.org/version/2/1/code_of_conduct.html>.
-
 Blizzard client files, extracted assets, wiki dumps, and generated game-data bundles are not distributed in this repository. Third-party dependencies and container base images retain their own copyright and license terms; the WrathBench notices do not relicense them. See `docs/DATA-AND-LEGAL.md`.

@@ -2,9 +2,8 @@
 
 An LLM evaluation harness built on World of Warcraft 3.3.5a via AzerothCore. A model drives a character through a versioned TypeScript SDK; the game server is the source of truth for what happened.
 
-Status: pre-alpha, phase 0 — the control surface is built and models reach
-liftoff in it. The Phase 0 gate passed on 2026-08-21 (`docs/PHASE-0.md`) and the
-harness has run under versioned series since, currently `harness-0.5`; results
+Status: pre-alpha — the control surface is built and models reach liftoff in
+it. The harness runs under versioned series, currently `harness-0.5`; results
 so far are indicative of what a model can do here, not comparable scores — no
 single number is promised in this phase (`docs/METHODOLOGY.md`). The public
 dashboard is live at <https://wrathbench.shard.page> (`docs/PUBLIC-DASHBOARD.md`).
@@ -62,14 +61,10 @@ what it dropped is always stated on the page.
 - `docs/EPISODES.md`: the four rulesets a run can be launched under
 - `docs/ARCHITECTURE.md`: components and data flow
 - `docs/CONTRACTS.md`: what the agent may observe and do
-- `docs/OPERATIONS.md`: running the fleet, deploys, the runbooks
-- `docs/[removed]`: the Kubernetes deployment the live fleet runs on
+- `docs/RUNBOOK.md`: running the fleet, deploys, the runbooks
 - `docs/COSTS.md`: what a run costs and how that is accounted
 - `docs/PUBLIC-DASHBOARD.md`: the push-based public hosting design
-- `docs/PHASE-0.md`: the liftoff gate, met 2026-08-21
 - `docs/DATA-AND-LEGAL.md`: data handling posture and the red lines
-- `docs/WORKLOG.md`: index of the per-day worklogs in `docs/worklogs/` — what shipped and what broke, with commits; also where a closed follow-up number or a former ADR number resolves
-- `docs/FOLLOW-UPS.md`: open items only, stable numbers
 - `CLAUDE.md`: working instructions for agents and contributors
 
 ## Quick start
@@ -143,4 +138,4 @@ nothing Blizzard-derived may enter git (`docs/DATA-AND-LEGAL.md`):
 
 ## Contributing and security
 
-Issues and discussion are welcome, pull requests against an agreed issue — `CONTRIBUTING.md` for what holds and why, `SECURITY.md` for reporting a vulnerability, `CODE_OF_CONDUCT.md` for how we behave here.
+Issues and discussion are welcome, pull requests against an agreed issue — `CONTRIBUTING.md` for what holds and why, `SECURITY.md` for reporting a vulnerability.

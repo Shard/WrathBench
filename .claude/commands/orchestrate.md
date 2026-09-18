@@ -39,12 +39,13 @@ rather than respawning.
   (subscription, not API credits).
 - Nothing Blizzard-derived enters git; `data/` stays gitignored; ports bind
   127.0.0.1 only.
-- `docs/FOLLOW-UPS.md` is the open-items ledger; graduate items with a strike
-  and a dated note, then commit.
+- `/home/mark/git/wrathbench-private/FOLLOW-UPS.md` is the open-items ledger and
+  `worklogs/YYYY-MM-DD.md` beside it the day file; both are private and never
+  cited from the public tree.
 
 ## On invocation
 
-Read `docs/FOLLOW-UPS.md` and `git log --oneline -10`, check
+Read `/home/mark/git/wrathbench-private/FOLLOW-UPS.md` and `git log --oneline -10`, check
 `docker compose -f infra/compose.yml ps` and whether any run under `data/runs/`
 is live (no termination row in its run.sqlite) before touching anything. Then
 report state and proceed with the highest-priority open item, delegating per

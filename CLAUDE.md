@@ -6,10 +6,6 @@ Working instructions for agents developing this repository.
 WrathBench  an LLM evaluation harness built on World of Warcraft 3.3.5a via AzerothCore. A model writes and supervises TypeScript against a versioned SDK; a character in a live game world is the thing being driven; the server is the source of truth for what happened.
 It measures how well a model drives a fixed toolkit toward long-horizon goals in a live world. It is not a direct-play benchmark and does not pretend to be one.
 
-## Current phase
-
-Phase 0: build the control surface and get any model to liftoff. See `docs/PHASE-0.md` for the exact scope and the gate.
-
 ## Hard constraints
 
 - Nothing Blizzard-derived ever enters git: no client files, no MPQ/DBC, no extracted maps/vmaps/mmaps, no wiki dumps containing game text, no trajectory logs. These live in volumes under `data/` which is gitignored at the directory level.
@@ -42,10 +38,10 @@ data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 - Everything runs in containers via `infra/compose.yml`. The only host-side prerequisite is the AzerothCore server data directory at `data/client`.
 
 ## How to work
-- Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for structure, `docs/CONTRACTS.md` for what the agent may see and do, `docs/METHODOLOGY.md` for the decisions that shape what results mean — check it before changing anything the model sees, the scorer reads, or the scheduler counts.
+- Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for structure, `docs/CONTRACTS.md` for what the agent may see and do, `docs/METHODOLOGY.md` for the decisions that shape what results mean — check it before changing anything the model sees, the scorer reads, or the scheduler counts — and `docs/RUNBOOK.md` for running the fleet, the config store and a deploy.
 - Log at the module boundary (every observation served, every action dispatched) and in the runner (every snippet, result, and event batch the model saw). Trajectory logs are JSONL under `data/runs/<run-id>/`.
 - Tests: `bun test` at the root runs every workspace's suite (sdk, runner, wiki, minimap, dashboard, infra) — all of it fixture-based, green from a bare clone with no `data/` — and `bun run typecheck` for every project including `infra/`. Bun strips types without checking them, so a green `bun test` says nothing about types — run both. Module changes are verified by the smoke scripts in `infra/smoke/`, which do need the live stack.
-- Working memory lives in three places and nowhere else: completed work goes in the day file `docs/worklogs/YYYY-MM-DD.md` (append to today's, create it if absent; `docs/WORKLOG.md` is only the index), open items go in `docs/FOLLOW-UPS.md` (open items only, stable numbers, and nothing else — no archive), decisions go in `docs/METHODOLOGY.md` or the owning component doc. When an item ships, add a `shipped: item N — commit — where it lives` line to the day file and delete the item from FOLLOW-UPS. That line is the only thing that makes an old citation resolve, so it is not optional. An item with no next action and no trigger goes to a GitHub issue instead of sitting in the file.
+- Working memory is private and lives in the operator's own repository at `/home/mark/git/wrathbench-private`: completed work goes in the day file `worklogs/YYYY-MM-DD.md` (append to today's, create it if absent; `WORKLOG.md` is only the index), open items go in `FOLLOW-UPS.md` (open items only, stable numbers, and nothing else — no archive). When an item ships, add a `shipped: item N — commit — where it lives` line to the day file and delete the item from the ledger; that line is the only thing that makes an old citation resolve, so it is not optional. An item with no next action and no trigger goes to a GitHub issue instead. Decisions still go in `docs/METHODOLOGY.md` or the owning component doc, in this repository. Nothing in the public tree cites a day file or an item number.
 
 ## Style
 - Plain prose in docs. Bullets where they aid scanning. Keep things concise and focused on why not what.

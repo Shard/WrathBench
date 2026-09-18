@@ -1,7 +1,6 @@
 # Contributing
 
-WrathBench is in phase 0 (`docs/PHASE-0.md`): the control surface exists and
-models fly, and the shape of everything above it is still moving. Issues and
+WrathBench is early: the control surface exists and models fly, and the shape of everything above it is still moving. Issues and
 discussion are welcome — a question about why something is the way it is, a
 bug, an observation from reading the code, all of it. Open a pull request only
 against an issue that already exists and that someone has agreed on, and keep
@@ -58,15 +57,10 @@ and worth running before you push. Changes under `module/` are verified by the
 smoke scripts in `infra/smoke/`, which need the live stack and therefore cannot
 run in CI or on a bare clone.
 
-## Working memory
+## Where a change is written down
 
-Working memory lives in three places and nowhere else. Completed work goes in
-the day file `docs/worklogs/YYYY-MM-DD.md` (append to today's, create it if
-absent; `docs/WORKLOG.md` is only the index). Open items go in
-`docs/FOLLOW-UPS.md`, which holds open items and nothing else — when an item
-ships, the day file gets a `shipped: item N — commit — where it lives` line and
-the number leaves the file, because that line is the only thing that makes an
-old citation resolve. Decisions go in `docs/METHODOLOGY.md` or in the doc that
+Describe the change in the pull request itself — what it does and why, against
+the issue it lands on. Decisions go in `docs/METHODOLOGY.md` or in the doc that
 owns the component; methodological decisions are the operator's alone, so a
 pull request never changes one — if your work would contradict one, say so in
 the issue instead.
