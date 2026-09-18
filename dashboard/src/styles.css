@@ -672,6 +672,9 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
    side while there is room, stacked on a phone, and a fixed width the
    placement maths is told about. */
 .filter-popover { display: flex; gap: 10px; flex-wrap: wrap; text-align: left; font-size: var(--fs-sm); }
+/* Its own width, told to `popoverPlacement` too. The extra class beats the
+   shared panel's 320px cap, which would otherwise clip the wider one. */
+.popover.filter-popover { max-width: calc(100vw - 16px); }
 .filter-group { flex: 1 1 130px; min-width: 0; }
 .filter-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .filter-group-label { font-weight: 700; }
