@@ -98,7 +98,7 @@ export interface StartingCharacter {
  * per-billing table, so "how many runs does this model get" has exactly one
  * answer and it is the word in the config.
  *
- * The table lives in code, not in `fleet.json`, for the reason promotion is a
+ * The table lives in code, not in the fleet config, for the reason promotion is a
  * threshold rather than a judgement: a budget that every model is
  * held to alike is a recorded decision, and a bespoke volume is a NAMED tier
  * added here, reviewed like an episode id — never a number edited into one
@@ -219,7 +219,8 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
 };
 
 /**
- * The file's `policy` block (`infra/fleet.json`) over the defaults, in one
+ * The fleet config's `policy` block (the config store; `infra/fleet.example.json`
+ * shows the shape) over the defaults, in one
  * place so the supervisor, `--status` and the viewer read the same answer.
  *
  * What is left here is only ever about **where a run may physically execute

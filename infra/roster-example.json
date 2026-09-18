@@ -1,8 +1,0 @@
-[
-  { "model": "z-ai/glm-5.2:free" },
-  { "model": "nvidia/nemotron-3-ultra-550b-a55b:free" },
-  { "model": "google/gemma-4-31b-it:free" },
-  { "model": "poolside/laguna-s-2.1:free" },
-  { "model": "openai/gpt-oss-20b:free" },
-  { "model": "nvidia/nemotron-nano-9b-v2:free" }
-]

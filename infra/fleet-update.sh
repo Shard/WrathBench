@@ -5,10 +5,10 @@
 # process starts.
 #
 # NOT for config. A config change — a roster entry, the policy, a job — is
-# picked up by the running supervisor on its next 60s tick, whether it was made
-# in the config store (through the app, or runner/src/config-store.ts) or in
-# fleet.json on a deployment with no store yet. Nothing here is involved; see
-# docs/OPERATIONS.md, "Where the config lives".
+# picked up by the running supervisor on its next 60s tick once it is in the
+# config store (the viewer's /config page, or runner/src/config-store.ts through
+# the runner pod). Nothing here is involved; see docs/OPERATIONS.md, "Where the
+# config lives".
 #
 # CLUSTER-NATIVE since 2026-09-11. The fleet is the `wrathbench-fleet`
 # Deployment in namespace `wrathbench` (docs/DEPLOY-NUSPHERE.md); compose has
@@ -55,10 +55,10 @@
 # job, no policy pick, no campaign cell, no resume of a paused run — and every
 # running job drains, which means SIGTERM only once its roster is between
 # episodes. Live episodes are never signalled. The switch is a sidecar, not a
-# fleet.json key, because a typo in fleet.json makes every `enabled` flag in it
-# inert until somebody reads the banner, and a stop switch must not be able to
-# do that. On the cluster it is also the only steering that does NOT go through
-# Flux: the ConfigMap is reconciled from git, the switch is a file on the PVC.
+# config key, because a rejected config makes every `enabled` flag in it inert
+# until somebody reads the banner, and a stop switch must not be able to do
+# that. The config store and the switch are both files on the PVC; neither goes
+# through Flux.
 #
 # WHAT GRACEFUL WAITS FOR. Every run a recreate would COST: the scored e90 and
 # e360 runs, which reach their own episode limit or watchdog and record their
@@ -188,7 +188,7 @@ command -v kubectl >/dev/null 2>&1 || die "kubectl is not on PATH — this scrip
 # honest: a spared job never drains, so it still holds the window.
 #
 # `resumesInPlace` is the supervisor's own answer (it is the only side that
-# knows the campaign's opt-in, and the switch has to work while fleet.json is
+# knows the campaign's opt-in, and the switch has to work while the config is
 # rejected); a supervisor older than that field does not write it, so the
 # freeplay pair is the fallback.
 #

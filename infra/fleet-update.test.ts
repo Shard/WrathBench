@@ -311,7 +311,7 @@ describe("fleet-update.sh", () => {
 
   test("graceful: a resume:true campaign run is parked only because the supervisor said so", () => {
     // The campaign's `resume` opt-in is the supervisor's to know — the switch
-    // has to work while fleet.json is rejected, so the script never reads it.
+    // has to work while the config is rejected, so the script never reads it.
     // A probing row without the flag waits; with it, it parks.
     const waits = run({ jobs: [{ name: "muse-class-probe-gnome-mage", episode: "probing", source: "policy", draining: true }], args: ["graceful"] });
     expect(waits.exitCode).toBe(1);

@@ -57,7 +57,7 @@ export type WatchdogConfig = z.infer<typeof watchdogConfigSchema>;
 /**
  * A partial watchdog override, as a roster entry or fleet job may carry it.
  * Same vocabulary as the full config, every key optional, unknown
- * keys refused so a typo in fleet.json is a config error rather than a
+ * keys refused so a typo in the fleet config is a config error rather than a
  * silently-ignored knob.
  */
 export const watchdogOverrideSchema = z
@@ -360,7 +360,7 @@ export const runConfigSchema = z.object({
    *
    * A tier names the whole shape of a run at once — wall clock, watchdogs, and
    * whether an operator objective is allowed — so that "a 90-minute run" is
-   * something the harness knows rather than a convention held in fleet.json.
+   * something the harness knows rather than a convention held in the fleet config.
    * Absent means the run was launched flag-by-flag and belongs to no tier; the
    * reader may still *derive* one for such a run (viewer/results.ts), but nothing
    * writes it back — the tuple records what was launched, never what a reader

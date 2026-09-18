@@ -243,7 +243,7 @@ export function buildSystemPrompt(
  * across accounts the moment fresh attempts stopped returning to the account
  * their predecessor used. No name travels with the launch any more, not even
  * as a suggestion: a suggestion is a name the harness has to invent, keep
- * valid and keep unique, and an invalid one took a whole fleet.json down on
+ * valid and keep unique, and an invalid one took a whole fleet config down on
  * 2026-08-25. The race and class are NOT the model's: they are the episode's comparability dimensions
  * and every run is read against them.
  *

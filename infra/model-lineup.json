@@ -1,6 +1,6 @@
 {
   "_notes": [
-    "The model identity catalog. fleet.json stays a scheduling catalog;",
+    "The model identity catalog. The fleet config (the config store) stays a scheduling catalog;",
     "everything about recognizing and presenting a model id lives here.",
     "A family maps model id strings to a display name, vendor and logo.",
     "Matching: ids are lowercased and a trailing ':free' is stripped, then the",

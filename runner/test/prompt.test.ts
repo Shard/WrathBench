@@ -188,7 +188,7 @@ describe("the fresh-launch session note (the model names its character)", () => 
 
   test("no name travels with the launch — not as an assignment and not as a suggestion", () => {
     // A suggestion is a name the harness has to invent, keep valid and keep
-    // unique; an invalid one took a whole fleet.json down (2026-08-25).
+    // unique; an invalid one took a whole fleet config down (2026-08-25).
     expect(note()).not.toContain("suggestion");
     expect(note()).not.toContain("your assigned character");
     expect(note()).not.toContain("Use exactly these values");
