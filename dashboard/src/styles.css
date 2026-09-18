@@ -39,12 +39,12 @@
    * viewBox user units that scale with the drawing, and a rem there would be
    * an absolute size that stops scaling with it.
    */
-  --fs-2xs: 0.625rem;   /* 10px — the surface badge, sort marks, rail ticks */
+  --fs-2xs: 0.5625rem;  /* 9px — the surface badge, sort marks, rail ticks */
   --fs-xs: 0.6875rem;   /* 11px — table headers, key labels, badges */
   --fs-sm: 0.75rem;     /* 12px — captions, controls, secondary lines */
   --fs-md: 0.8125rem;   /* 13px — table body, section headings */
   --fs-base: 0.875rem;  /* 14px — body copy */
-  --fs-lg: 1rem;        /* 16px — the brand, card figures */
+  --fs-lg: 0.9375rem;   /* 15px — the brand, card figures */
   --fs-xl: 1.25rem;     /* 20px — the one page title per page */
 }
 
@@ -55,12 +55,12 @@
  */
 @media (max-width: 720px) {
   :root {
-    --fs-2xs: 0.5625rem;  /* 9px */
+    --fs-2xs: 0.5625rem;  /* 9px — already the floor; it does not step down */
     --fs-xs: 0.625rem;    /* 10px */
     --fs-sm: 0.6875rem;   /* 11px */
     --fs-md: 0.75rem;     /* 12px */
     --fs-base: 0.8125rem; /* 13px */
-    --fs-lg: 0.9375rem;   /* 15px */
+    --fs-lg: 0.875rem;    /* 14px */
     --fs-xl: 1.125rem;    /* 18px */
   }
 }
@@ -164,6 +164,10 @@ header.top .spacer { flex: 1; }
 @media (max-width: 400px) {
   header.top { gap: 6px; padding: 8px; }
   header.top nav { gap: 4px 6px; }
+  /* The status word is not fixed-width: "down" is four characters and
+     "paused for deploy" is seventeen, and at 360 the long one was the
+     difference between two rows and three. */
+  header.top .status-badge { font-size: var(--fs-xs); padding: 2px 4px; }
 }
 
 /* The global harness-series selector, left of the status badge. */
