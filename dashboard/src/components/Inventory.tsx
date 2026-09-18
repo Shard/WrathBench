@@ -23,7 +23,8 @@
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
-import { type InvItem, type Placement, carried, carriedCount, paperdoll, popoverPlacement, splitLinked } from "../lib/inventory";
+import { type InvItem, carried, carriedCount, paperdoll, splitLinked } from "../lib/inventory";
+import { type Placement, popoverPlacement } from "../lib/popover";
 import {
   PAPERDOLL_BOTTOM,
   PAPERDOLL_LEFT,

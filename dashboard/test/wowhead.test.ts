@@ -17,7 +17,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Window } from "happy-dom";
-import { carried, carriedCount, paperdoll, popoverPlacement, splitLinked, type InvItem } from "../src/lib/inventory";
+import { carried, carriedCount, paperdoll, splitLinked, type InvItem } from "../src/lib/inventory";
+import { popoverPlacement } from "../src/lib/popover";
 import {
   EQUIPMENT_SLOTS,
   PAPERDOLL_BOTTOM,
