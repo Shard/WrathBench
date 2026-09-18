@@ -13,6 +13,7 @@ import {
   indexAt,
   mapsVisited,
   nextSampleAfter,
+  itemsAt,
   positionsAt,
   routeUpTo,
   runParam,
@@ -141,5 +142,38 @@ describe("runParam", () => {
     expect(runParam(undefined)).toBeUndefined();
     expect(runParam("")).toBeUndefined();
     expect(runParam(["run-1", "run-2"])).toBeUndefined();
+  });
+});
+
+describe("the inventory a replay shows is the newest reading behind the cursor", () => {
+  // A track carries `items` only where the sample changed, so scrubbing past a
+  // change has to walk back rather than blank the panel (`TrackPoint.items`).
+  const carriedFwd: TrackPoint[] = [
+    point(1, 0, 0, 0),
+    { ...point(2, 0, 0, 0), items: [{ name: "Linen Cloth", count: 3, equipped: false }] },
+    point(3, 0, 0, 0),
+    { ...point(4, 0, 0, 0), items: [{ name: "Linen Cloth", count: 9, equipped: false }] },
+    point(5, 0, 0, 0),
+  ];
+
+  test("before the first reading it is not observed, which is not empty bags", () => {
+    expect(itemsAt(carriedFwd, 0)).toBeNull();
+    expect(itemsAt(carriedFwd, -1)).toBeNull();
+  });
+
+  test("a point with no reading keeps the last one", () => {
+    expect(itemsAt(carriedFwd, 2)?.[0]?.count).toBe(3);
+    expect(itemsAt(carriedFwd, 4)?.[0]?.count).toBe(9);
+  });
+
+  test("the feed the map draws carries it, so a replay pip shows what a live one does", () => {
+    const track: TrackResponse = { ...TRACK, points: carriedFwd };
+    expect(positionsAt(track, 3)[0]?.items?.[0]?.count).toBe(3);
+    expect(positionsAt(track, 1)[0]?.items).toBeNull();
+  });
+
+  test("a track from before the field existed shows nothing, and does not throw", () => {
+    expect(itemsAt([point(1, 0, 0, 0)], 0)).toBeNull();
+    expect(itemsAt([], 0)).toBeNull();
   });
 });

@@ -208,12 +208,19 @@ describe("what a sample says, and what it does not", () => {
     expect(d.unplaced.map((i) => i.name)).toEqual(["Small Bag"]);
   });
 
+  test("a carried row's `slot` is a bag position, not an equipment slot", () => {
+    // `slot` means two things depending on `bag`; only a worn row is placed.
+    const d = paperdoll([item({ name: "Tough Jerky", equipped: false, bag: 255, slot: 4 })]);
+    expect(d.bySlot.size).toBe(0);
+    expect(d.unplaced).toEqual([]);
+  });
+
   test("carried rows sort by bag then slot, backpack first", () => {
     const rows = carried([
-      item({ name: "c", bag: 19, bagSlot: 0 }),
-      item({ name: "a", bag: 255, bagSlot: 5 }),
-      item({ name: "b", bag: 255, bagSlot: 1 }),
-      item({ name: "d", bag: 20, bagSlot: 3 }),
+      item({ name: "c", bag: 19, slot: 0 }),
+      item({ name: "a", bag: 255, slot: 28 }),
+      item({ name: "b", bag: 255, slot: 23 }),
+      item({ name: "d", bag: 20, slot: 3 }),
     ]);
     expect(rows.map((i) => i.name)).toEqual(["b", "a", "c", "d"]);
   });
@@ -224,7 +231,7 @@ describe("what a sample says, and what it does not", () => {
   });
 
   test("positioned rows keep their order ahead of the ones mid-migration", () => {
-    const rows = carried([item({ name: "aaa" }), item({ name: "zzz", bag: 255, bagSlot: 0 })]);
+    const rows = carried([item({ name: "aaa" }), item({ name: "zzz", bag: 255, slot: 23 })]);
     expect(rows.map((i) => i.name)).toEqual(["zzz", "aaa"]);
   });
 

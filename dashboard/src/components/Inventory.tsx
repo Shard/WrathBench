@@ -30,6 +30,7 @@ import {
   qualityColor,
   refreshLinks,
   slotLabel,
+  slotShort,
 } from "../lib/wowhead";
 
 /**
@@ -95,7 +96,7 @@ function Cell(props: { item: InvItem; label?: string }) {
 function EmptySlot(props: { slot: number }) {
   return (
     <div class="inv-cell empty" title={slotLabel(props.slot)}>
-      <span class="inv-slot-label">{slotLabel(props.slot)}</span>
+      <span class="inv-slot-label">{slotShort(props.slot)}</span>
     </div>
   );
 }

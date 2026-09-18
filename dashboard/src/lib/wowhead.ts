@@ -194,9 +194,33 @@ export const PAPERDOLL_LEFT = [0, 1, 2, 14, 4, 3, 18, 8] as const;
 export const PAPERDOLL_RIGHT = [9, 5, 6, 7, 10, 11, 12, 13] as const;
 export const PAPERDOLL_BOTTOM = [15, 16, 17] as const;
 
-/** The short label a dim, empty slot square carries. */
+/** What a slot is called, in full: the square's tooltip. */
 export function slotLabel(slot: number): string {
   return EQUIPMENT_SLOTS.find((s) => s.slot === slot)?.label ?? `slot ${slot}`;
+}
+
+/**
+ * What fits *inside* an empty square, which is about six characters.
+ *
+ * Abbreviating rather than shrinking the type: the scale in `styles.css` has a
+ * floor (`--fs-2xs`, 9px) that a phone does not step below, so a label that
+ * does not fit is a label that gets clipped. The full word is the square's
+ * `title` either way.
+ */
+export function slotShort(slot: number): string {
+  const full = slotLabel(slot);
+  switch (full) {
+    case "shoulder":
+      return "shldr";
+    case "trinket":
+      return "trink";
+    case "main hand":
+      return "main";
+    case "off hand":
+      return "off";
+    default:
+      return full;
+  }
 }
 
 /** Is this a paperdoll slot at all? Bags (19-22) and nonsense are not. */
