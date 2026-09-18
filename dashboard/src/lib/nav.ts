@@ -32,13 +32,31 @@ export const NAV: readonly NavItem[] = [
 export const CONFIG_NAV: NavItem = { href: "/config", label: "config" };
 
 /**
+ * Which of the two surfaces this is, or null while it is not yet known.
+ *
+ * One derivation for the header badge AND the config nav item, so the badge
+ * and the page can never disagree about which site a reader is on: ADMIN is
+ * the operator's own build talking to a private viewer — the one where the
+ * config page exists — and PREVIEW is everything else, the public bundle and
+ * any viewer in public mode. Null only until `/api/info` has settled on a
+ * private build, so neither the badge nor the link flickers through the wrong
+ * state on the way.
+ */
+export type Surface = "ADMIN" | "PREVIEW";
+
+export function surface(snapshot: boolean, publicMode: boolean | undefined): Surface | null {
+  if (snapshot) return "PREVIEW";
+  if (publicMode === undefined) return null;
+  return publicMode ? "PREVIEW" : "ADMIN";
+}
+
+/**
  * The bar for this build and this viewer.
  *
- * `operator` is the conjunction of both facts the page needs: this is not the
- * public bundle (which reads a bucket and has no API to write to), and the
- * viewer answering is not in public mode (which 404s the config routes). The
- * caller passes `=== false` on the second rather than `!publicMode`, so the
- * link does not flash on before `/api/info` has settled.
+ * `operator` is `surface(...) === "ADMIN"`: not the public bundle (which reads
+ * a bucket and has no API to write to), and not a viewer in public mode (which
+ * 404s the config routes). It comes through `surface` rather than being
+ * recomputed, so the bar and the header badge cannot disagree.
  *
  * Config sits before `about`, which stays last (operator, 2026-08-30): the
  * meta page closes the pages about runs, and config is a page about the fleet.

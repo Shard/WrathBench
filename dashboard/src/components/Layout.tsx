@@ -14,7 +14,7 @@ import { For, Show, createSignal, onCleanup, type ParentProps } from "solid-js";
 import { SNAPSHOT_MODE, snapshotSource } from "../api/client";
 import { snapshotBanner, type SnapshotBanner, type SnapshotSource } from "../api/snapshot-client";
 import { useClock } from "../lib/clock";
-import { navItems } from "../lib/nav";
+import { navItems, surface } from "../lib/nav";
 import { FeedsContext, createFeeds } from "../lib/feeds";
 import { REPO_URL, repoLabel } from "../lib/repo";
 import { SeriesSelect } from "./SeriesSelect";
@@ -49,6 +49,12 @@ export function Layout(props: ParentProps) {
     write: (v) => setParams({ series: v }, { replace: true }),
   });
   const snapshot = snapshotSource === null ? null : snapshotShell(snapshotSource);
+  /*
+   * Which site this is. One derivation for the badge and the config nav item
+   * (`lib/nav.ts`), so the two can never disagree; null until `/api/info` has
+   * settled on a private build, and nothing is drawn in the meantime.
+   */
+  const which = (): ReturnType<typeof surface> => surface(SNAPSHOT_MODE, feeds.info.latest?.publicMode);
   return (
     <FeedsContext.Provider value={feeds}>
     <div class="app">
@@ -63,7 +69,7 @@ export function Layout(props: ParentProps) {
             in public mode, and `=== false` rather than `!publicMode` keeps the
             link from flashing on before the first `/api/info` settles.
           */}
-          <For each={navItems(!SNAPSHOT_MODE && feeds.info.latest?.publicMode === false)}>
+          <For each={navItems(which() === "ADMIN")}>
             {(n) => (
               <A href={n.href} activeClass="on">
                 {n.label}
@@ -119,6 +125,23 @@ export function Layout(props: ParentProps) {
           */}
         <SeriesSelect />
         <StatusBadge />
+        {/*
+          Which of the two sites this is, last in the header and set small like
+          a superscript: the public preview and the operator's own admin view
+          are otherwise identical, and the difference is worth one word. Its own
+          two colours, neither of them an accent used elsewhere, so it is read
+          as an identity rather than as a status.
+        */}
+        <Show when={which()}>
+          {(w) => (
+            <span
+              class={`surface ${w().toLowerCase()}`}
+              title={w() === "ADMIN" ? "the operator's own view: the config page is live here" : "the published preview: no config page, and no write surface at all"}
+            >
+              {w()}
+            </span>
+          )}
+        </Show>
       </header>
       <main class={flush() ? "flush" : ""}>{props.children}</main>
       {/* Required of every published artifact; see docs/DATA-AND-LEGAL.md. */}

@@ -822,3 +822,16 @@ td .spread { font-size: 11px; }
 .auditdiff { display: flex; gap: 16px; flex-wrap: wrap; }
 .auditdiff > div { flex: 1 1 280px; min-width: 0; }
 .auditdiff pre { overflow-x: auto; font-size: 12px; }
+
+/* Which site this is, top right of the header (item 134). Superscript-sized
+   and its own two colours — neither is an accent used anywhere else, so it
+   reads as the identity of the deployment rather than as one more status. */
+:root { --admin: #bb9af7; --preview: #56b6c2; }
+@media (prefers-color-scheme: light) { :root { --admin: #6b3fb8; --preview: #16707c; } }
+.surface {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.08em; line-height: 1;
+  align-self: flex-start; padding: 2px 4px; border-radius: 3px;
+  border: 1px solid currentColor; opacity: 0.85; margin-left: 2px;
+}
+.surface.admin { color: var(--admin); }
+.surface.preview { color: var(--preview); }
