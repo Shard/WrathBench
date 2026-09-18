@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE } from "../src/lib/format";
+import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -294,5 +294,43 @@ describe("shortRunId", () => {
     expect(shortRunId("smoke-death-recovery")).toBe("smoke-death-recovery");
     expect(shortRunId("fleet-odd-shape")).toBe("odd-shape");
     expect(shortRunId("run-20260830")).toBe("20260830");
+  });
+});
+
+describe("money as coins, for the line that draws them", () => {
+  test("only the denominations a reader would say out loud", () => {
+    expect(moneyCoins(112)).toEqual([
+      { kind: "silver", value: 1 },
+      { kind: "copper", value: 12 },
+    ]);
+    // A round gold is one coin, not three: the middle zeroes are `fmtMoney`'s
+    // padding, which exists so a column of figures lines up, and this is a line.
+    expect(moneyCoins(10000)).toEqual([{ kind: "gold", value: 1 }]);
+    expect(moneyCoins(10012)).toEqual([
+      { kind: "gold", value: 1 },
+      { kind: "copper", value: 12 },
+    ]);
+  });
+
+  test("an empty purse is an observation, so zero copper is the one zero kept", () => {
+    expect(moneyCoins(0)).toEqual([{ kind: "copper", value: 0 }]);
+  });
+
+  test("unobserved is null, and the caller draws its own dash", () => {
+    expect(moneyCoins(null)).toBeNull();
+    expect(moneyCoins(undefined)).toBeNull();
+  });
+
+  test("the text form is untouched, because a table still wants the padding", () => {
+    expect(fmtMoney(10000)).toBe("1g 0s 0c");
+    expect(fmtMoney(112)).toBe("1s 12c");
+  });
+
+  test("a negative or fractional reading does not invent a denomination", () => {
+    expect(moneyCoins(-5)).toEqual([{ kind: "copper", value: 0 }]);
+    expect(moneyCoins(112.7)).toEqual([
+      { kind: "silver", value: 1 },
+      { kind: "copper", value: 12 },
+    ]);
   });
 });

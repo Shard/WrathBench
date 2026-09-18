@@ -55,9 +55,11 @@ import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
 import { CharacterPlot } from "../components/CharacterChart";
 import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
+import { Coins, QuestCount } from "../components/CharacterFacts";
+import { XpBar } from "../components/UnitFrame";
 import { InventoryPanel } from "../components/Inventory";
 import { stitchCharacter, type CharacterSeries } from "../lib/ladder";
-import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
@@ -801,15 +803,19 @@ export default function RunDetail() {
                         </Show>
                       </div>
                       {/*
-                        `xp in level` lives here since the level/xp card was
-                        retired: the XP chart above plots CUMULATIVE xp with the
-                        levels as bands, which is a different number from
-                        progress toward the next ding, and that progress is on
-                        no other surface of this page.
+                        Progress toward the next ding lives here since the
+                        level/xp card was retired: the XP chart above plots
+                        CUMULATIVE xp with the levels as bands, which is a
+                        different number, and this progress is on no other
+                        surface of this page. It is the frame's own bar
+                        (`XpBar`), not a second one — and the money and the
+                        quest count are drawn beside it rather than spelled
+                        (operator, 2026-09-18).
                       */}
-                      <div class="sub">
-                        level {num(run().level)} · {num(run().xp)} xp in level · {fmtMoney(run().money)} ·{" "}
-                        {num(run().questsCompleted)} quests
+                      <div class="sub charline">
+                        <XpBar level={run().level} xp={run().xp} />
+                        <Coins copper={run().money} />
+                        <QuestCount count={run().questsCompleted} />
                       </div>
                       {/*
                         Newest recorded inventory (item 50). Icons and tooltips
