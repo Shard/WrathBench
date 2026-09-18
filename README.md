@@ -34,18 +34,22 @@ Blizzard-derived is in this repository (`docs/DATA-AND-LEGAL.md`).
 
 ## Reading the dashboard
 
-The operator's window on all of this (`bun run viewer`, then the SPA) is one
-page per grain:
+The same SPA is the public site at <https://wrathbench.shard.page> and the
+operator's window (`bun run viewer`, then the SPA). It is one page per grain:
 
-- **`/` fleet** — what is running right now, and the scheduler's state.
+- **`/`** — the explainer, with what is live right now and the e90 ladder.
 - **`/runs`** — every recorded run of every kind, one row each, newest first;
   every header sortable and every filter in the URL, so a view is a link.
-- **`/episodes`** — the four rulesets and how many runs sit against each.
+- **`/about`** — the episode rulesets, how many runs sit against each, and how
+  to read a mark (`/episodes` redirects here).
 - **`/ladder`** — the aggregate: highest rung reached per model, with the run
   that got there, plus cost against XP earned.
 - **`/models`** — the roster and the scheduler's verdict on each entry.
 - **`/run/:id`** — one run: its trajectory feed, comparability tuple, tokens and
   cost, and a cumulative-XP chart.
+- **`/character/:id`** — a freeplay stream: one character across its attempts.
+- **`/fleet`** — what is running right now, and the scheduler's state.
+- **`/campaigns`** — the probe campaigns and how far each cell has got.
 - **`/map`** — where characters are, live, on minimap tiles.
 
 The harness-series selector in the top bar filters every page that shows runs;
@@ -59,6 +63,7 @@ what it dropped is always stated on the page.
 - `docs/ARCHITECTURE.md`: components and data flow
 - `docs/CONTRACTS.md`: what the agent may observe and do
 - `docs/OPERATIONS.md`: running the fleet, deploys, the runbooks
+- `docs/[removed]`: the Kubernetes deployment the live fleet runs on
 - `docs/COSTS.md`: what a run costs and how that is accounted
 - `docs/PUBLIC-DASHBOARD.md`: the push-based public hosting design
 - `docs/PHASE-0.md`: the liftoff gate, met 2026-08-21
@@ -112,7 +117,7 @@ directory: `bun install` once at the root (Bun 1.4.0, pinned in
 
 ```sh
 bun test                     # every workspace's suite; all fixture-based
-bun run typecheck            # sdk, runner, infra, dashboard, wiki, minimap
+bun run typecheck            # sdk, runner, infra, dashboard, wiki, minimap, collector
 bun run docs:api:check       # the generated SDK reference is in sync
 bun run dashboard:build      # the SPA, no data involved — build it before the viewer
 bun run viewer               # serves labelled empty states; creates data/runs
