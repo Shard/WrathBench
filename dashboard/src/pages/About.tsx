@@ -31,7 +31,6 @@ import { For, Show } from "solid-js";
 import { api, type EpisodesResponse } from "../api/client";
 import { displayError } from "../lib/errors";
 import { useFeeds } from "../lib/feeds";
-import { COST_BASIS_NOTE } from "../lib/format";
 import { latestSeries } from "../lib/harness";
 import { poll } from "../lib/poll";
 import { REPO_URL, bibtex } from "../lib/repo";
@@ -126,46 +125,21 @@ export default function About() {
 
       <h2 class="section">reading a result</h2>
       <p>
-        Scored means "this specific harness series, this model, this episode". The harness —
-        SDK, loop, prompt, context policy, reference bundle — is frozen per version and identical for every
-        model; a minor series bump restarts the evidence. Every scored episode starts from a freshly created
-        level-1 character. Three harness groups exist: <code>wrathbench</code>, the fixed loop that rebuilds
-        the model's context every turn and trims old conversation; <code>claude-code</code>, where the
-        Claude Code CLI owns the conversation and its compaction; and <code>codex</code>, where the OpenAI Codex CLI
-        does the same on a ChatGPT subscription. Each CLI scaffold is its own group because each is a different
-        unversioned summarizer. Their rows sit in the same charts, visibly tagged.
-        The CLI groups have no trim, so they get neither the pre-trim status prompt nor the episodic log entries which
-        is a documented asymmetry made out of practical needs, but could also be extended to compare other harnesses.
-        The Wrathbench harness is provided as a reference harness to provide a stable baseline when comparing models.
+        A mark on the ladder is one model playing from a fresh level-1 character, same prompt,
+        same tools, ninety minutes, measured on how far it got. Nothing is tuned per model: the
+        harness is frozen per version and identical for every row, so a difference between two
+        marks is a difference between the models.
       </p>
       <p>
-        <strong>An episode is one run under one ruleset.</strong> The scored default is{" "}
-        <code>e90</code>: ninety minutes of play, no objective, the same prompt for every
-        model. Nothing carries over between episodes, and a run that pauses is a spent attempt
-        rather than a shorter episode. <strong>A tier is an evidence budget</strong>, not a
-        difficulty: <code>t0</code> buys one e90, <code>t1</code> three, <code>t2</code> three plus
-        one six-hour <code>e360</code>. A probe campaign is steered by a human running the benchmark
-        (the operator), which is what makes it unscored — it has no ladder.
+        A mark is the mean of one to three runs, so two marks inside that noise are not a result.
+        Rows tagged <code>claude-code</code> or <code>codex</code> ran through that vendor's own
+        CLI, which manages its own context, so they are a different harness in the same chart.
       </p>
       <p>
-        <strong>Effort is a run dimension</strong>, not tuning: <code>opus (low)</code> and{" "}
-        <code>opus (high)</code> are two comparable rows, stamped at launch and never recomputed.{" "}
-        <strong>Cost</strong> is what the provider charged. Where it reported nothing, the run page
-        shows a list-price estimate from the token counts. {COST_BASIS_NOTE}.
+        The model's only outside knowledge is a search over a 2020 wiki snapshot cut to patch
+        3.3.5, with exact coordinates withheld on scored runs: it reads "in the inn at Goldshire"
+        and has to find it.
       </p>
-      <p>
-        <strong>n is small on purpose.</strong> A tier buys a handful of runs, so a mark on the
-        ladder is the mean of one to three episodes. The harness records signals and never a score;
-        every number here is a derivation over them, recomputable over past runs. Differences inside
-        that much noise are not results.
-      </p>
-      <p>
-        <strong>The reference bundle</strong> is the agent's only out-of-game knowledge: a search
-        tool over a 2020 wiki dump, stripped at build time of everything that is not patch 3.3.5,
-        and frozen per harness version. Exact coordinates are withheld on scored episodes, so a
-        model reads "in the inn at Goldshire" and then has to walk there and look.
-      </p>
-
       <h2 class="section">episodes</h2>
       <p>
         The rulesets a run can be launched under, with <code>--episode &lt;id&gt;</code>. An id is a
