@@ -3,8 +3,7 @@
 Everything runs in containers from `infra/compose.yml`. The only host-side
 prerequisite is an AzerothCore server data directory at `data/client`.
 
-The same stack on Kubernetes is `infra/chart/wrathbench` (Helm) plus
-`infra/k8s/kustomization.yaml` (the `fleet.json` ConfigMap), built by
+The same stack on Kubernetes is `infra/chart/wrathbench` (Helm), built by
 `infra/build-images.sh`, released by `infra/k8s-release.sh` and operated by
 `infra/k8s-deploy.sh`. The runbook is `docs/DEPLOY-NUSPHERE.md`; nothing here
 changes because of it.
@@ -20,9 +19,9 @@ changes because of it.
 | `k8s-deploy.sh` | the same window on Kubernetes, and it refuses a stale pin |
 | `k8s-release.sh` | a whole release in five restartable phases |
 | `run-episode.sh` | one episode: compose, `--local`, or `--k8s` |
-| `run-fleet.ts`, `fleet.json` | the supervisor and the config it re-reads |
+| `run-fleet.ts` | the supervisor; its config is the store (`runner/src/config-store.ts`), re-read every tick |
+| `fleet.example.json` | the bootstrap a fresh deployment seeds the config store from, once; nothing else reads it |
 | `chart/wrathbench` | the Helm chart |
-| `k8s/kustomization.yaml` | `fleet.json` as a ConfigMap, one source of truth |
 
 ## Bringing the stack up
 
@@ -251,32 +250,30 @@ where before it launched and failed in seconds. It
 only ever *frees* its own session (`DELETE /session` is keyed on
 `token == runId`); another process's session is never touched.
 
-Two rosters ship for the subscription driver:
-
-- `roster-claude.json` — opus and sonnet alternating on `SHAKEOUT`, 90m each.
-  Runnable today: `./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30`.
-- `roster-claude-2wide.json` — opus on `SHAKEOUT`, sonnet on `SHAKEOUT2`, for
-  running both at the same time. **Not runnable until the worldserver
-  is next recreated**: the account exists in auth, but `SHAKEOUT2` only enters
-  the module's `AC_WRATH_BENCH_ACCOUNTS` allowlist on container recreate, and
-  until then every createSession on it answers 403 `account_not_permitted`.
+No roster file ships in the repo any more (the pre-0.5 `roster-*.json`
+examples were retired on 2026-09-18 with the fleet config's move into the
+store); the fleet materialises one per job from the config store at
+`data/runs/fleet-<job>-<date>.roster.json`, which is also the shape to copy
+for a hand-written one.
 
 The roster runs its entries sequentially by design. Two characters in parallel
 means two roster processes, one per JSON, each with its own account and its
 own `--log` path so the two JSONLs do not interleave. **Superseded by the
 fleet** (next section) — hand-launching parallel rosters with `--skip` and `&`
 still works, but the fleet is the supported way to run more than one
-character. If you do launch by hand, do not run `roster-claude.json` and
-`roster-claude-2wide.json` on the same day at the same time: both derive their
-run ids from the model name (`roster-opus-<date>`), so the two opus entries
-would be the same run. Fleet run ids carry the job name (`fleet-<job>-...`),
-which is how the fleet sidesteps that collision.
+character. If you do launch by hand, do not run two rosters naming the same
+model on the same day at the same time: a hand roster derives its run ids
+from the model name (`roster-opus-<date>`), so the two entries would be the
+same run. Fleet run ids carry the job name (`fleet-<job>-...`), which is how
+the fleet sidesteps that collision.
 
 
 ## The fleet
 
-`infra/fleet.json` is the whole answer to "what is running right now". Its
-unit of work is the **job**: a roster entry (or a rotation of
+The config store is the whole answer to "what is running right now" —
+`docs/OPERATIONS.md`, "Where the config lives"; the viewer's `/config` page
+is where it is read and edited, and `infra/fleet.example.json` is the shape.
+Its unit of work is the **job**: a roster entry (or a rotation of
 several), an episode tier, a repeat count, run as one `run-roster` process on
 one game **account**. Accounts have a **class** — `pool`, `paid`, `local`, or
 pinned to one job — and the class decides which job may land on them. A job
@@ -284,11 +281,11 @@ that names an `account` is pinned to it; a job without one is pool work; and
 the scheduling policy makes up jobs of its own for whatever the manual queue
 leaves free. Inspect the config, and you have inspected the fleet.
 
-    ./infra/run-fleet.sh infra/fleet.json --until 18:00   # run it
-    ./infra/run-fleet.sh infra/fleet.json --dry-run       # print the plan
-    ./infra/run-fleet.sh --status                         # read-only report
+    ./infra/run-fleet.sh --until 18:00   # run it
+    ./infra/run-fleet.sh --dry-run       # print the plan
+    ./infra/run-fleet.sh --status        # read-only report
 
-The file has a `roster` map — the model **catalog**: name → the per-entry
+The config has a `roster` map — the model **catalog**: name → the per-entry
 schema the roster accepts, plus `tier` and `idle`, and never an `objective`
 (steering belongs to a campaign) — an `accounts` block (`pool`, `paid`, `local` lists), a
 `campaigns` map (probe campaigns: an objective swept over `cells` by a set of
@@ -299,10 +296,10 @@ and a `preflight` block. A job's name is always `<first ref>-<episode>`, or
 spawns one `run-roster` process per job it places — materialized roster at
 `data/runs/fleet-<job>-<date>.roster.json`, roster JSONL at
 `fleet-<job>-<date>.jsonl`, stdout at `fleet-<job>-<date>.log` — and
-supervises them. There is no other shape: a file that still says `lanes` or
+supervises them. There is no other shape: a config that still says `lanes` or
 `accounts.pinned` is refused by name.
 
-**The tuning knob is the file.** The supervisor re-reads `fleet.json` every
+**The tuning knob is the store.** The supervisor re-reads it every
 60 seconds:
 
 - `enabled: false` **drains** the job: the roster process is only SIGTERMed
