@@ -12,6 +12,20 @@ The model logos committed under `dashboard/src/assets/model-logos/` are extracte
 
 The logos are brand marks of the companies they identify and remain those companies' trademarks. WrathBench uses them only to identify which model a run was driven by; their presence implies no affiliation with or endorsement by their owners.
 
+## Bundled runtime dependencies
+
+The public dashboard ships as a built bundle (`dashboard/dist`, deployed by `infra/deploy-dashboard.sh`), so these are redistributed as part of that artefact even though the repository itself carries only the lockfile entry. Both are MIT: `solid-js` (Copyright (c) 2016-2025 Ryan Carniato) and `@solidjs/router` (Copyright (c) 2020-2022 Ryan Carniato). Their copyright and license are not changed by WrathBench's root MIT license.
+
+Everything else pinned in `bun.lock` is build, test or deployment tooling, fetched from the npm registry at install time and redistributed by nothing here: `typescript` (Apache-2.0), `@resvg/resvg-js` (MPL-2.0), `wrangler` (MIT OR Apache-2.0), and `vite`, `vite-plugin-solid`, `happy-dom`, `zod` and `@types/bun` (MIT). Each retains its own terms.
+
+## External resources loaded by the public dashboard
+
+The dashboard links an item to [Wowhead](https://www.wowhead.com/) and loads that site's tooltip script (`https://wow.zamimg.com/js/tooltips.js`) in the reader's browser, so item art is served by Wowhead rather than extracted or hosted by WrathBench (`dashboard/src/lib/wowhead.ts`; the decision and its request consequence are in `docs/PUBLIC-DASHBOARD.md`). That script and the content it serves are Wowhead's, under Wowhead's own terms; none of it is redistributed here.
+
+## Fonts
+
+No font files are committed. The publisher image installs Debian's `fonts-dejavu-core` (`infra/docker/runner.Dockerfile`) so the social card renders text; DejaVu is under the Bitstream Vera and Arev free licenses and travels with that image, not with this repository.
+
 ## Contributor Covenant
 
 `CODE_OF_CONDUCT.md` is the Contributor Covenant version 2.1, reproduced verbatim apart from the contact address, which replaces the upstream placeholder. The Contributor Covenant is the work of Coraline Ada Ehmke and contributors and is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the canonical text is at <https://www.contributor-covenant.org/version/2/1/code_of_conduct.html>.

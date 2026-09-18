@@ -20,3 +20,9 @@ dashboard/public/og.png
 # "Where the config lives"); an export of it is operational state, never source.
 # infra/fleet.example.json is the committed bootstrap.
 infra/fleet.json
+
+# macOS Finder droppings
+.DS_Store
+
+# wrangler local state, beside dashboard/wrangler.jsonc
+.wrangler/
