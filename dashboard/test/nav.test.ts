@@ -1,6 +1,6 @@
 /** The top bar's order is the brief's: about last, no home item, and no fleet — it moved into the status popout. */
 import { describe, expect, test } from "bun:test";
-import { CONFIG_NAV, NAV, navItems } from "../src/lib/nav";
+import { CONFIG_NAV, NAV, navItems, surface } from "../src/lib/nav";
 
 describe("NAV", () => {
   test("about is last", () => {
@@ -38,5 +38,32 @@ describe("navItems", () => {
 
   test("the reader's items keep their order either way", () => {
     expect(navItems(true).filter((n) => n.href !== "/config")).toEqual([...NAV]);
+  });
+});
+
+/**
+ * The header badge and the config nav item are one derivation, so they cannot
+ * disagree about which site a reader is on (item 134).
+ */
+describe("surface", () => {
+  test("the public bundle is PREVIEW whatever a viewer would have said", () => {
+    expect(surface(true, undefined)).toBe("PREVIEW");
+    expect(surface(true, false)).toBe("PREVIEW");
+  });
+
+  test("a private build follows the viewer", () => {
+    expect(surface(false, false)).toBe("ADMIN");
+    expect(surface(false, true)).toBe("PREVIEW");
+  });
+
+  test("nothing is claimed before /api/info settles", () => {
+    expect(surface(false, undefined)).toBeNull();
+  });
+
+  test("the config item exists exactly where the badge says ADMIN", () => {
+    for (const publicMode of [true, false, undefined]) {
+      const admin = surface(false, publicMode) === "ADMIN";
+      expect(navItems(admin).includes(CONFIG_NAV)).toBe(admin);
+    }
   });
 });
