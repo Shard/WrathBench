@@ -118,9 +118,11 @@ function SlotColumn(props: { slots: readonly number[]; bySlot: Map<number, InvIt
 /**
  * The equipment sheet.
  *
- * Until track A records `slot`, every worn item lands in the "slot unknown"
- * row below and the squares are all empty. That is the honest reading of what
- * the run recorded, not a rendering failure, and the row says so in words.
+ * A worn item whose sample never recorded a `slot` lands in the "slot unknown"
+ * row below rather than in a square we guessed at — which on every run
+ * recorded before the column existed is all of them. That is the honest
+ * reading of what the run recorded, not a rendering failure, and the row says
+ * so in words.
  */
 export function Paperdoll(props: { items: readonly InvItem[] }) {
   const doll = createMemo(() => paperdoll(props.items));

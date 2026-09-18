@@ -80,7 +80,7 @@ describe("an item id becomes a link, and nothing else does", () => {
     expect(entryOf({ itemId: 6948, name: "Hearthstone" })).toBe(6948);
     expect(entryOf({ name: "item 4540" })).toBe(4540);
     expect(entryOf({ itemId: null, name: "item 4540" })).toBe(4540);
-    // A run from before track A's column, with a name that did resolve: no link.
+    // A run from before the id column, with a name that did resolve: no link.
     expect(entryOf({ name: "Hearthstone" })).toBeNull();
   });
 });
@@ -185,7 +185,7 @@ describe("the paperdoll's numbers are the server's numbers", () => {
 
 describe("what a sample says, and what it does not", () => {
   test("a worn item with no slot is listed, never placed", () => {
-    // Every run today is this case: track A has not written `slot` yet.
+    // Every run recorded before the column existed is this case.
     const d = paperdoll([item({ name: "Worn Shortsword", equipped: true })]);
     expect(d.bySlot.size).toBe(0);
     expect(d.unplaced.map((i) => i.name)).toEqual(["Worn Shortsword"]);
