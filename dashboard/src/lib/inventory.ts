@@ -83,3 +83,22 @@ export function carriedCount(items: readonly InvItem[] | null | undefined): numb
   if (items === null || items === undefined) return 0;
   return items.reduce((n, i) => (i.equipped ? n : n + 1), 0);
 }
+
+/**
+ * The rows a grid can draw, and the rows it cannot.
+ *
+ * A square is a frame around an icon, and the icon only exists for a row with
+ * an entry to link. A row without one — most of every run recorded before the
+ * id column, whose names resolved and so carry no `item <id>` to parse — would
+ * be a 40px box with "Barba ric Cloth Breec" wrapped inside it. Those rows are
+ * a list instead, and this is the split the panels draw from.
+ */
+export function splitLinked(
+  items: readonly InvItem[],
+  hasEntry: (i: InvItem) => boolean,
+): { linked: InvItem[]; unlinked: InvItem[] } {
+  const linked: InvItem[] = [];
+  const unlinked: InvItem[] = [];
+  for (const i of items) (hasEntry(i) ? linked : unlinked).push(i);
+  return { linked, unlinked };
+}

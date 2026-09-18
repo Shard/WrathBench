@@ -17,7 +17,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Window } from "happy-dom";
-import { carried, carriedCount, paperdoll, type InvItem } from "../src/lib/inventory";
+import { carried, carriedCount, paperdoll, splitLinked, type InvItem } from "../src/lib/inventory";
 import {
   EQUIPMENT_SLOTS,
   PAPERDOLL_BOTTOM,
@@ -28,11 +28,14 @@ import {
   isEquipmentSlot,
   itemUrl,
   loadWowhead,
+  onWowheadStatus,
   parseEntryFromName,
   qualityColor,
   refreshLinks,
+  resetWowheadStatus,
   slotLabel,
   wowheadConfig,
+  wowheadStatus,
 } from "../src/lib/wowhead";
 
 const SRC = join(import.meta.dir, "..", "src");
@@ -261,5 +264,86 @@ describe("one place spells the external origins", () => {
     // belongs to the pages that show items, and arrives with them.
     const html = readFileSync(join(SRC, "..", "index.html"), "utf8");
     expect(html.includes("zamimg")).toBe(false);
+  });
+});
+
+describe("a square is only drawn where an icon can arrive", () => {
+  // Three branches, and each is a decision about the reader rather than about
+  // the data: a 40px box with a wrapped name in it is less readable than a
+  // line of text, so the box is reserved for rows an icon will cover.
+  const hasEntry = (i: InvItem): boolean => entryOf(i) !== null;
+
+  test("rows with no entry are listed, not gridded", () => {
+    const { linked, unlinked } = splitLinked(
+      [item({ name: "item 6948" }), item({ name: "Barbaric Cloth Breeches" })],
+      hasEntry,
+    );
+    expect(linked.map((i) => i.name)).toEqual(["item 6948"]);
+    expect(unlinked.map((i) => i.name)).toEqual(["Barbaric Cloth Breeches"]);
+  });
+
+  test("a recorded id is an entry even when the name resolved", () => {
+    const { linked } = splitLinked([item({ name: "Hearthstone", itemId: 6948 })], hasEntry);
+    expect(linked.length).toBe(1);
+  });
+
+  test("a worn set with no slots has nothing to place, so it is a list", () => {
+    // The historical case: `paperdoll` places none, and the panel draws the
+    // list rather than an empty doll beside a chip row of the real armour.
+    const worn = [
+      item({ name: "Squire's Shirt", equipped: true }),
+      item({ name: "Light Mail Armor", equipped: true }),
+    ];
+    const d = paperdoll(worn);
+    expect(d.bySlot.size).toBe(0);
+    expect(d.unplaced.length).toBe(2);
+  });
+
+  test("one slot is enough to draw the doll", () => {
+    const d = paperdoll([
+      item({ name: "Worn Shortsword", equipped: true, slot: 15 }),
+      item({ name: "Squire's Shirt", equipped: true }),
+    ]);
+    expect(d.bySlot.size).toBe(1);
+    expect(d.unplaced.map((i) => i.name)).toEqual(["Squire's Shirt"]);
+  });
+});
+
+describe("a script that never arrives is a state, not a wait", () => {
+  test("the tag's error says so, and every watcher hears it", () => {
+    resetWowheadStatus();
+    const win = new Window();
+    const host = win as unknown as { document: Document; whTooltips?: unknown };
+    const seen: string[] = [];
+    const off = onWowheadStatus((s) => seen.push(s));
+    loadWowhead(host);
+    const tag = host.document.querySelector("script[src*=zamimg]") as unknown as { onerror?: () => void };
+    tag.onerror?.();
+    expect(seen).toEqual(["pending", "failed"]);
+    expect(wowheadStatus()).toBe("failed");
+    off();
+    resetWowheadStatus();
+  });
+
+  test("ready wins once it is reached, and does not fall back", () => {
+    resetWowheadStatus();
+    const win = new Window();
+    const host = win as unknown as { document: Document; whTooltips?: unknown };
+    loadWowhead(host);
+    const tag = host.document.querySelector("script[src*=zamimg]") as unknown as {
+      onload?: () => void;
+      onerror?: () => void;
+    };
+    tag.onload?.();
+    expect(wowheadStatus()).toBe("ready");
+    // A late error on a script that already ran must not blank the icons.
+    tag.onerror?.();
+    expect(wowheadStatus()).toBe("ready");
+    resetWowheadStatus();
+  });
+
+  test("nothing has happened yet is pending, which still draws the grid", () => {
+    resetWowheadStatus();
+    expect(wowheadStatus()).toBe("pending");
   });
 });
