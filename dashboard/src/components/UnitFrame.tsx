@@ -36,6 +36,29 @@ function Bar(props: { cls: string; pct: number; text: string; title: string; obs
   );
 }
 
+/**
+ * The experience row on its own: the level badge and the xp bar, at the size a
+ * line of text wants.
+ *
+ * Exported rather than copied, because the frame's bar is the site's bar — the
+ * bevel, the track, the unobserved treatment and the level badge are one set of
+ * rules in `styles.css` and one `Bar` here. The character card needed the
+ * reading without the health and power bars above it, which is a narrower use
+ * of this component, not a second one.
+ */
+export function XpBar(props: Pick<UnitFrameProps, "level" | "xp" | "nextLevelXp">) {
+  const next = () => xpToNext(props.level, props.nextLevelXp);
+  const xp = () => barReading(props.xp, next());
+  return (
+    <span class="xp-row xp-inline">
+      <span class="level-badge" title="level">
+        <Show when={typeof props.level === "number"} fallback="—">{props.level}</Show>
+      </span>
+      <Bar cls="xp" pct={xp().pct} text={xp().text} title={xp().title} observed={xp().observed} />
+    </span>
+  );
+}
+
 export function UnitFrame(props: UnitFrameProps) {
   const hp = () => healthReading(props.health, props.maxHealth, props.dead);
   const pw = () => barReading(props.power, props.maxPower);

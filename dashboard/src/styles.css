@@ -763,6 +763,11 @@ button.update:hover { background: var(--panel); }
 .bar.dead { border-color: var(--err); }
 .bar.dead .bar-text { color: var(--bar-text-err); text-shadow: none; }
 .xp-row { display: flex; align-items: center; gap: 5px; }
+/* The same row inside a line of text: it shrinks with the line rather than
+   taking the column, and never grows past a readable width. */
+.xp-inline { display: inline-flex; flex: 1 1 120px; min-width: 60px; max-width: 200px; vertical-align: middle; }
+.xp-inline .bar { height: 14px; }
+.xp-inline .level-badge { min-width: 18px; height: 18px; }
 .xp-row .bar { flex: 1; min-width: 0; }
 .level-badge { flex: none; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 50%;
                display: inline-flex; align-items: center; justify-content: center;
@@ -1048,3 +1053,29 @@ td .spread { font-size: var(--fs-xs); }
   .inv-cell { width: 36px; height: 36px; }
   .bag-popover { max-width: calc(100vw - 24px); }
 }
+
+/*
+ * The character card's fact line (operator, 2026-09-18): the xp bar the frame
+ * already draws, money as coins, quests behind a marker. The coins and the
+ * marker are drawn here — three circles and a question mark — because the
+ * repository serves no game art and a coin is not worth the exception.
+ */
+:root { --coin-gold: #e8b923; --coin-silver: #c7c7cf; --coin-copper: #c87533; --quest-mark: #ffd100; }
+@media (prefers-color-scheme: light) {
+  :root { --coin-gold: #b8860b; --coin-silver: #8b8b96; --coin-copper: #a75d22; --quest-mark: #b8860b; }
+}
+.charline { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.charline .fact { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.coins { gap: 6px; }
+.coin-pair { display: inline-flex; align-items: center; gap: 2px; }
+.coin-value { font-variant-numeric: tabular-nums; }
+.coin {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+  /* A coin, not a dot: lit from the top left the way the bars are. */
+  background-image: linear-gradient(to bottom right, rgba(255,255,255,.55), rgba(0,0,0,.25));
+  border: 1px solid rgba(0, 0, 0, .35);
+}
+.coin.gold { background-color: var(--coin-gold); }
+.coin.silver { background-color: var(--coin-silver); }
+.coin.copper { background-color: var(--coin-copper); }
+.quest-mark { color: var(--quest-mark); font-weight: 700; font-size: var(--fs-base); line-height: 1; }

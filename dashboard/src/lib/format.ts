@@ -20,6 +20,36 @@ export function fmtMoney(copper: number | null | undefined): string {
   return parts.join(" ");
 }
 
+/** One denomination of a money reading: the coin and how many of it. */
+export interface Coin {
+  kind: "gold" | "silver" | "copper";
+  value: number;
+}
+
+/**
+ * Money as coins, for the places that draw them rather than print `g/s/c`.
+ *
+ * Only the denominations a reader would say out loud: 1s 12c is two coins, not
+ * three, and 1g flat is one. The exception is nothing at all — a character with
+ * an empty purse has an observed zero, and the line has to say so, so zero
+ * copper is the one zero that is kept. Null is the unobserved case and the
+ * caller draws its own dash.
+ *
+ * `fmtMoney` is left as it was: it is the text form, and it pads the middle
+ * denominations on purpose so a column of figures lines up.
+ */
+export function moneyCoins(copper: number | null | undefined): Coin[] | null {
+  if (copper === null || copper === undefined) return null;
+  const total = Math.max(0, Math.floor(copper));
+  const coins: Coin[] = [
+    { kind: "gold", value: Math.floor(total / 10000) },
+    { kind: "silver", value: Math.floor((total % 10000) / 100) },
+    { kind: "copper", value: total % 100 },
+  ];
+  const shown = coins.filter((c) => c.value > 0);
+  return shown.length > 0 ? shown : [{ kind: "copper", value: 0 }];
+}
+
 export function fmtAge(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s ago`;
