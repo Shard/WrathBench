@@ -81,8 +81,7 @@ Opting in takes two steps, and the second is the one that gets forgotten:
 ```
 WRATHBENCH_VIEWER_LAN=1 \
   WRATHBENCH_MODULE_URL=http://<worldserver container ip>:8086 \
-  WRATHBENCH_FLEET_CONFIG=infra/fleet.json \
-  bun runner/viewer/serve.ts            # now binds 0.0.0.0:8090
+  bun runner/viewer/serve.ts            # now binds 0.0.0.0:8090; the roster comes from data/config.sqlite
 
 # and the host firewall, scoped to the LAN — NOT a bare --add-port, which
 # would open 8090 to every network in the zone:
@@ -366,8 +365,10 @@ readonly, and the runs directory is only ever listed and read.
 ### The config API (operator-only)
 
 Since item 127 the fleet config lives in a sqlite store on the data volume
-(`runner/src/config-store.ts`, `$WRATHBENCH_DATA/config.sqlite`), and
-`infra/fleet.json` is its seed and its export format. The supervisor reads the
+(`runner/src/config-store.ts`, `$WRATHBENCH_DATA/config.sqlite`), and since
+2026-09-18 that store is the **only** fleet config: the active config is
+operational state, never committed, and `infra/fleet.example.json` is the
+one-time bootstrap a fresh deployment seeds it from. The supervisor reads the
 store on every 60s re-read, so an edit here is live one tick later with no
 restart. The UI over these endpoints is the dashboard's `/config` page
 (`dashboard/src/pages/Config.tsx`, item 134) — a roster table with tier, idle,
@@ -382,16 +383,16 @@ the singletons `_notes`, `preflight`, `accounts`, `policy`.
 
 | path | what |
 | --- | --- |
-| `GET /api/config` | the whole config in fleet.json's shape, plus `keys`, `version` (moves on every accepted write) and whether the store has been seeded |
+| `GET /api/config` | the whole config as one document (the shape `infra/fleet.example.json` shows), plus `keys`, `version` (moves on every accepted write) and whether the store has been seeded |
 | `GET /api/config/<key>` | one row's document |
 | `PUT /api/config/<key>` | replace one row |
 | `PATCH /api/config/<key>` | shallow-merge into one row |
 | `DELETE /api/config/<key>` | remove one row |
 | `GET /api/config/audit?limit=` | the change history, newest first, with the before and after documents |
-| `POST /api/config/export` | render the store to fleet.json's exact shape; returns the text, and writes a file only when the body names a `path` |
+| `POST /api/config/export` | render the store to a config document, for reading or diffing against an earlier export (never for committing); returns the text, and writes a file only when the body names a `path` |
 
 Every write renders the whole candidate config and runs it through
-`parseFleet` — the same function the supervisor refuses a bad `fleet.json`
+`parseFleet` — the same function the supervisor refuses a bad config
 with — so a rejected edit is a 400 carrying that refusal word for word, and
 nothing the app accepts can be rejected at the next tick. `x-wrathbench-actor`
 and `x-wrathbench-note` name who changed what and why; the actor defaults to

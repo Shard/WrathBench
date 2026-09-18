@@ -173,8 +173,8 @@ the SPA owns everything that is UI.
   disagree. This is a different dimension from the harness filter, which
   selects which *loop* owned a run; both exist and compose, which is why the
   new one is spelled `series` everywhere.
-- **`infra/model-lineup.json` is the model identity catalog; `fleet.json` stays
-  a scheduling catalog.** Every roster field in `fleet.json` is a scheduling
+- **`infra/model-lineup.json` is the model identity catalog; the fleet config
+  stays a scheduling catalog.** Every roster field in the fleet config is a scheduling
   fact and presentation has always been absent from its schema, so a cosmetic
   field there would be the first — and it would have to survive the four
   parsers kept deliberately in sync. The lineup file instead defines *families*
