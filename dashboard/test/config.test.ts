@@ -15,6 +15,7 @@ import {
   RoutingParseError,
   auditVerb,
   formOf,
+  headerSafe,
   isRosterName,
   jsonEditorKeys,
   newEntryDoc,
@@ -164,5 +165,28 @@ describe("auditVerb", () => {
     expect(auditVerb({ before: null, after: {} })).toBe("created");
     expect(auditVerb({ before: {}, after: null })).toBe("deleted");
     expect(auditVerb({ before: {}, after: {} })).toBe("changed");
+  });
+});
+
+describe("headerSafe", () => {
+  test("an em dash in a note does not take the whole request down", () => {
+    // `fetch` refuses the REQUEST, not the header, on a code point above
+    // U+00FF \u2014 the failure is a browser message about `RequestInit` and
+    // says nothing about config. This repository's prose is full of em dashes.
+    expect(headerSafe("promote \u2014 it reached level 6")).toBe("promote - it reached level 6");
+    expect(headerSafe("don\u2019t \u201Cpromote\u201D yet\u2026")).toBe("don't \"promote\" yet...");
+  });
+
+  test("Latin-1 survives, because a header can carry it", () => {
+    expect(headerSafe("mark b\u00e9roald")).toBe("mark b\u00e9roald");
+  });
+
+  test("anything else becomes a ?, so the rest of the sentence still lands", () => {
+    expect(headerSafe("tier \u4e2d bump")).toBe("tier ? bump");
+    expect(/^[\u0000-\u00ff]*$/.test(headerSafe("\u2014 \u2018x\u2019 \u2026 \u4e2d"))).toBe(true);
+  });
+
+  test("a line break cannot smuggle a second header", () => {
+    expect(headerSafe("a\r\nx-evil: 1")).toBe("a x-evil: 1");
   });
 });
