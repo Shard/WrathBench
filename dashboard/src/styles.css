@@ -115,9 +115,9 @@ header.top .spacer { flex: 1; }
  * a seventh nav item the public one does not, so the bar has to be able to
  * break where it is told rather than where it runs out.
  *
- * Two lines, at 360 and up: the brand with the series dropdown and the status
- * badge pushed to the right of it, and below that the nav with the ADMIN /
- * PREVIEW badge at the right end of its line. `.spacer` is what used to push
+ * Two lines, at 360 and up: the brand (with its ADMIN / PREVIEW superscript)
+ * and the series dropdown and status badge pushed to the right of it, and
+ * below that the nav. `.spacer` is what used to push
  * the right-hand group over and is now the thing that would force a third
  * line, so it goes; `margin-left: auto` on the series does its job instead.
  */
@@ -131,8 +131,6 @@ header.top .spacer { flex: 1; }
    * right edge without a second `margin-left: auto` fighting the first.
    */
   header.top nav { order: 2; flex: 1 1 auto; gap: 4px 10px; font-size: var(--fs-sm); }
-  /* Last on the nav's line, hard right: it will not fit on the brand's. */
-  .surface { order: 3; align-self: center; }
   /* Everything right of the brand travels as one group. */
   .series { margin-left: auto; }
   /*
@@ -942,10 +940,11 @@ td .spread { font-size: var(--fs-xs); }
    reads as the identity of the deployment rather than as one more status. */
 :root { --admin: #bb9af7; --preview: #56b6c2; }
 @media (prefers-color-scheme: light) { :root { --admin: #6b3fb8; --preview: #16707c; } }
+/* A superscript on the wordmark, like an exponent on a number. */
 .surface {
   font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.08em; line-height: 1;
-  align-self: flex-start; padding: 2px 4px; border-radius: 3px;
-  border: 1px solid currentColor; opacity: 0.85; margin-left: 2px;
+  vertical-align: super; padding: 1px 3px; border-radius: 3px;
+  border: 1px solid currentColor; opacity: 0.85; margin-left: 3px;
 }
 .surface.admin { color: var(--admin); }
 .surface.preview { color: var(--preview); }
