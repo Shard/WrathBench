@@ -22,6 +22,8 @@ Everything else pinned in `bun.lock` is build, test or deployment tooling, fetch
 
 The dashboard links an item to [Wowhead](https://www.wowhead.com/) and loads that site's tooltip script (`https://wow.zamimg.com/js/tooltips.js`) in the reader's browser, so item art is served by Wowhead rather than extracted or hosted by WrathBench (`dashboard/src/lib/wowhead.ts`; the decision and its request consequence are in `docs/PUBLIC-DASHBOARD.md`). That script and the content it serves are Wowhead's, under Wowhead's own terms; none of it is redistributed here.
 
+The public build also loads Cloudflare Web Analytics (`https://static.cloudflareinsights.com/beacon.min.js`, `dashboard/src/main.tsx`). The beacon is cookieless, runs only in snapshot mode, and is Cloudflare's under Cloudflare's terms; the site-token beside it identifies the hostname and is not a credential.
+
 ## Fonts
 
 No font files are committed. The publisher image installs Debian's `fonts-dejavu-core` (`infra/docker/runner.Dockerfile`) so the social card renders text; DejaVu is under the Bitstream Vera and Arev free licenses and travels with that image, not with this repository.
