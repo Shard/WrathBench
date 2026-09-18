@@ -33,7 +33,7 @@ import { XpChart } from "../components/XpChart";
 import { characterSessionSeries } from "../lib/character";
 import { displayError } from "../lib/errors";
 import { fmtAge, fmtDuration, fmtMoney, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
-import { stitchCharacter, type CharacterSeries } from "../lib/ladder";
+import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { LevelXp } from "../components/CharacterFacts";
 import { poll } from "../lib/poll";
 import { statusOf, statusText } from "../lib/runs";
@@ -77,7 +77,9 @@ export default function Character() {
     const last = latest();
     if (st === undefined || last === undefined) return null;
     const model = st.model ?? "(unnamed)";
-    const label = st.name ?? modelDisplay(model);
+    // The line is named for the model, not the character (operator, 2026-09-18);
+    // the name rides along for the hover.
+    const label = characterSeriesLabel(model, st.effort);
     const { points, endX, broke } = stitchCharacter(st.runs);
     const why = broke ?? (points.length === 0 ? "no level mark carries an active-time reading" : null);
     if (why !== null) return { series: [], omitted: [{ characterId: st.characterId, label, why }] };
@@ -87,6 +89,7 @@ export default function Character() {
         {
           characterId: st.characterId,
           label,
+          character: st.name,
           model,
           effort: st.effort,
           status: statusOf(last),

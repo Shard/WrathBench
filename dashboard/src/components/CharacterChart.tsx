@@ -146,7 +146,7 @@ export function CharacterPlot(props: {
                 >
                   <title>
                     {[
-                      `${p.series.label} (${p.series.model}${p.series.effort === null ? "" : `, ${p.series.effort}`})`,
+                      `${p.series.label}${p.series.character === null ? "" : ` — ${p.series.character}`}`,
                       `${p.series.status}${p.series.attempts > 1 ? `, ${p.series.attempts} attempts` : ""}`,
                       `L${p.series.endLevel} after ${fmtDuration(p.series.endX)} of active play`,
                       p.series.truncated ? "history before the oldest attempt served is not drawn" : "",
@@ -178,7 +178,7 @@ export function CharacterPlot(props: {
                   />
                   {/* The model, as its family's logo. `aria-label` names it in
                       words; the anchor's own <title> above already reads
-                      "<character> (<model>)" for a pointer. */}
+                      the model for a screen reader, as the hover names it for a pointer. */}
                   <g class="characterchart-logo" role="img" aria-label={`model: ${p.series.model}`}>
                     <Puck cx={iconCx(p.endCx)} cy={p.endCy} model={p.series.model} stroke={statusColour(p.series.status)} strokeWidth={1} />
                   </g>
@@ -222,8 +222,8 @@ export function CharacterPlot(props: {
         <span style={{ color: "var(--ok)" }}>●</span> live (the line ends at now){" "}
         <span style={{ color: "var(--warn)" }}>●</span> paused{" "}
         <span style={{ color: "var(--dim)" }}>●</span> ended (dashed), the same three the status column reads.
-        Each line ends with its model's family logo — the scatter's mark, and the same badge the table's
-        model column carries — because the character label does not say which model is playing it.
+        Each line is labelled with its model and ends with that model's family logo; the character's own
+        name is in the hover.
         <Show when={anyTruncated()}>
           {" "}
           A label with a leading … begins mid-history: that character's oldest served attempt still names a

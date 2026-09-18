@@ -42,6 +42,7 @@ import {
   characterChartLayout,
   characterRows,
   characterSeries,
+  characterSeriesLabel,
   timeTicks,
   xpEarnedOf,
 } from "../src/lib/ladder";
@@ -1163,6 +1164,18 @@ describe("stitchCharacter", () => {
   });
 });
 
+describe("characterSeriesLabel", () => {
+  test("the model, short, with its effort where the entry has one", () => {
+    expect(characterSeriesLabel("sonnet", "medium")).toBe("sonnet (medium)");
+    expect(characterSeriesLabel("sonnet", null)).toBe("sonnet");
+  });
+
+  test("the provider prefix goes and a free endpoint is marked, as everywhere else", () => {
+    expect(characterSeriesLabel("anthropic/claude-sonnet-4-5", null)).toBe("claude-sonnet-4-5");
+    expect(characterSeriesLabel("z-ai/glm-5.2:free", "high")).toBe("glm-5.2 (free) (high)");
+  });
+});
+
 describe("characterSeries", () => {
   const fp = (over: Partial<ResultRun> = {}): ResultRun =>
     run({ unscored: "unscored (episode freeplay)", episode: "freeplay", ...over });
@@ -1323,16 +1336,27 @@ describe("characterSeries", () => {
     expect(unplaceable.omitted[0]!.why).toBe("no level mark carries an active-time reading");
   });
 
-  test("a repeated character name is disambiguated by its start date; a unique one is left alone", () => {
+  test("a line is labelled with its model and effort, and the character name rides in the hover", () => {
     const runs = [
-      fp({ runId: "n1", character: "Qwenlocal", startedAt: Date.UTC(2026, 7, 23), levels: [mark(3, null, 0)], playtimeMs: 60_000 }),
-      fp({ runId: "n2", character: "Qwenlocal", startedAt: Date.UTC(2026, 7, 24), levels: [mark(2, null, 0)], playtimeMs: 60_000 }),
-      fp({ runId: "n3", character: "Alone", startedAt: Date.UTC(2026, 7, 25), levels: [mark(1, null, 0)], playtimeMs: 60_000 }),
+      fp({ runId: "n1", model: "sonnet", effort: "medium", character: "Qwenlocal", levels: [mark(3, null, 0)], playtimeMs: 60_000 }),
+      fp({ runId: "n2", model: "opus", effort: null, character: "Bromdir", levels: [mark(2, null, 0)], playtimeMs: 60_000 }),
+    ];
+    expect(seriesOf(runs).series.map((s) => [s.label, s.character])).toEqual([
+      ["sonnet (medium)", "Qwenlocal"],
+      ["opus", "Bromdir"],
+    ]);
+  });
+
+  test("a repeated label — an entry's older, archived character — is disambiguated by its start date", () => {
+    const runs = [
+      fp({ runId: "n1", model: "qwen-local", character: "Qwenlocal", startedAt: Date.UTC(2026, 7, 23), levels: [mark(3, null, 0)], playtimeMs: 60_000 }),
+      fp({ runId: "n2", model: "qwen-local", character: "Qwenlocal", startedAt: Date.UTC(2026, 7, 24), levels: [mark(2, null, 0)], playtimeMs: 60_000 }),
+      fp({ runId: "n3", model: "opus", character: "Alone", startedAt: Date.UTC(2026, 7, 25), levels: [mark(1, null, 0)], playtimeMs: 60_000 }),
     ];
     expect(seriesOf(runs).series.map((s) => s.label)).toEqual([
-      "Qwenlocal 2026-08-23",
-      "Qwenlocal 2026-08-24",
-      "Alone",
+      "qwen-local 2026-08-23",
+      "qwen-local 2026-08-24",
+      "opus",
     ]);
   });
 
@@ -1346,12 +1370,12 @@ describe("characterSeries", () => {
 
   test("series are ordered furthest first, and the layout keeps their end labels apart", () => {
     const runs = [
-      fp({ runId: "i1", character: "Low", levels: [mark(2, null, 0)], playtimeMs: 100_000 }),
-      fp({ runId: "j1", character: "High", levels: [mark(2, null, 0), mark(8, null, 50_000)], playtimeMs: 200_000 }),
-      fp({ runId: "k1", character: "Same", levels: [mark(2, null, 0)], playtimeMs: 100_000 }),
+      fp({ runId: "i1", model: "low", character: "Low", levels: [mark(2, null, 0)], playtimeMs: 100_000 }),
+      fp({ runId: "j1", model: "high", character: "High", levels: [mark(2, null, 0), mark(8, null, 50_000)], playtimeMs: 200_000 }),
+      fp({ runId: "k1", model: "same", character: "Same", levels: [mark(2, null, 0)], playtimeMs: 100_000 }),
     ];
     const { series } = seriesOf(runs);
-    expect(series.map((s) => s.label)).toEqual(["High", "Low", "Same"]);
+    expect(series.map((s) => s.label)).toEqual(["high", "low", "same"]);
     const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
     const layout = characterChartLayout(series, box);
     expect(layout.xMax).toBe(200_000);
@@ -1396,8 +1420,8 @@ describe("characterSeries", () => {
     // the corner and its label starts a badge past the axis.
     const box = { x0: 50, x1: 900, y0: 340, y1: 16 };
     const early = seriesOf([
-      fp({ runId: "e1", character: "Early", levels: [mark(8, null, 0)], playtimeMs: 1 }),
-      fp({ runId: "l1", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 }),
+      fp({ runId: "e1", model: "Early", character: "Early", levels: [mark(8, null, 0)], playtimeMs: 1 }),
+      fp({ runId: "l1", model: "Late", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 }),
     ]).series;
     const l = characterChartLayout(early, box);
     expect(l.cue.text).toBe("↖ better");
@@ -1417,8 +1441,8 @@ describe("characterSeries", () => {
     // (The long character is what puts the short one in the corner: alone, its
     // own end would be the axis's ceiling. Its label sits rows away.)
     const short = { x0: 50, x1: 900, y0: 116, y1: 16 };
-    const late = fp({ runId: "l1", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 });
-    const under = characterChartLayout(seriesOf([fp({ runId: "e1", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 1 }), late]).series, short);
+    const late = fp({ runId: "l1", model: "Late", character: "Late", levels: [mark(4, null, 0)], playtimeMs: 200_000 });
+    const under = characterChartLayout(seriesOf([fp({ runId: "e1", model: "Early", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 1 }), late]).series, short);
     const u = under.placed.find((p) => p.series.label === "Early")!;
     expect(u.endCy).toBe(26);
     // Two rows here, not one: a row down its box still reached into the cue's.
@@ -1426,7 +1450,7 @@ describe("characterSeries", () => {
     expect(u.labelY - LABEL_H).toBeGreaterThanOrEqual(under.cue.rect.b);
     expect(rectsOverlap({ l: u.labelX, t: u.labelY - LABEL_H, r: u.labelX + 60, b: u.labelY + LABEL_DESC }, under.cue.rect)).toBe(false);
     // The same character further along the axis is nowhere near the cue and keeps its natural row.
-    const far = characterChartLayout(seriesOf([fp({ runId: "e1", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 150_000 }), late]).series, short);
+    const far = characterChartLayout(seriesOf([fp({ runId: "e1", model: "Early", character: "Early", levels: [mark(9, null, 0)], playtimeMs: 150_000 }), late]).series, short);
     const f = far.placed.find((p) => p.series.label === "Early")!;
     expect(f.labelY).toBeCloseTo(f.endCy + 3.5, 9);
   });
@@ -1449,9 +1473,9 @@ describe("characterSeries", () => {
     ];
     const { series } = seriesOf(runs);
     expect(series.map((x) => [x.label, x.model])).toEqual([
-      ["Anvi", "anthropic/claude-sonnet-4-5"],
-      ["Bree", "z-ai/glm-5.2:free"],
-      ["Cass", "stealth/ox-alpha"],
+      ["claude-sonnet-4-5", "anthropic/claude-sonnet-4-5"],
+      ["glm-5.2 (free)", "z-ai/glm-5.2:free"],
+      ["ox-alpha", "stealth/ox-alpha"],
     ]);
     // The logo each one resolves to — the `:free` suffix is stripped, not matched on.
     expect(series.map((x) => familyOf(x.model)?.id ?? null)).toEqual(["claude", "glm", null]);
