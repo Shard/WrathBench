@@ -29,8 +29,16 @@
 FROM oven/bun:1.4.0
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates git tini \
+    && apt-get install -y --no-install-recommends curl ca-certificates git tini fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
+
+# fonts-dejavu-core is the publisher's, not the fleet's. The publisher runs
+# this image and renders the social card (infra/og-render.ts), and resvg
+# resolves a font family through the host's font database and draws NOTHING at
+# all when it matches none — no error, no fallback box. The base image carries
+# no fonts, so without this the card would publish with its wordmark, its axis
+# captions and every model name silently missing. ~1 MB, and DejaVu Sans Mono
+# is what the card's stack (the site's own monospace face) falls back to.
 
 # tini is compose's `init: true` for the Kubernetes fleet pod: an episode can
 # leave orphaned grandchildren, and bun as pid 1 would not reap them. Compose
