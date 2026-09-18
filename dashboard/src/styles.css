@@ -149,7 +149,20 @@ main { flex: 1; min-height: 0; overflow: auto; }
 main.flush { overflow: hidden; }
 .page { padding: 16px; }
 
-/* Public build only: the attribution every published artifact carries. */
+/*
+ * Public build only: the attribution every published artifact carries.
+ *
+ * In the flow at the end of the page, not pinned to the bottom of the
+ * viewport (operator, 2026-09-18): pinned, it cost a phone a permanent strip
+ * of two or three lines for a sentence nobody reads twice. It is rendered
+ * INSIDE the scroll container (`components/Layout.tsx`), so "the end of the
+ * page" is the end of the content and the shell's layout is otherwise
+ * untouched. The one exception is the map, which is `main.flush` — a canvas
+ * that fills the viewport and never scrolls, so it has no end to put a footer
+ * at; there the footer stays a sibling of `main` and keeps its old place. The
+ * attribution is required on every published view, so it cannot simply be
+ * dropped on that one page.
+ */
 footer.attribution {
   flex: none; padding: 6px 16px; border-top: 1px solid var(--line);
   background: var(--bg); color: var(--dim); font-size: var(--fs-xs);
@@ -167,6 +180,8 @@ footer.attribution .repo {
   footer.attribution .repo { order: 2; flex-basis: 100%; }
   footer.attribution .legal { text-align: left; }
 }
+/* In the flow it needs air above it; pinned to the shell it never did. */
+main > footer.attribution { margin-top: 24px; }
 footer.attribution .repo:hover { color: var(--fg); }
 footer.attribution .legal { text-align: right; }
 pre.cite { font-size: var(--fs-sm); color: var(--dim); overflow-x: auto; margin: 0 0 16px; }
