@@ -64,6 +64,8 @@ import {
   type View,
   colorOf,
   decimateRoute,
+  defaultView,
+  emptySideNote,
   fitTo,
   hitTest,
   latticeLines,
@@ -291,6 +293,18 @@ export default function MapPage() {
     canvas.height = Math.round(H * dpr);
     const ctx = canvas.getContext("2d");
     ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    /*
+     * Until something has been fitted the view is the default framing, and it
+     * depends on the stage, so it is recomputed here rather than once at mount:
+     * the first `ResizeObserver` callback is where the real size arrives, and a
+     * phone rotated on an empty map would otherwise keep a frame built for the
+     * other orientation. `pendingFit` is exactly the "nothing has claimed the
+     * view yet" flag — once a feed consumes it this leaves the view alone, so a
+     * pan survives a resize as before. It deliberately does not live in the fit
+     * effect: that effect re-runs on every poll tick, and an empty-feed branch
+     * there would snap the view back under a reader who had just panned.
+     */
+    if (pendingFit) view = defaultView({ w: W, h: H });
     needsDraw = true;
   }
 
@@ -651,22 +665,20 @@ export default function MapPage() {
         if (needsDraw || moving || (resting && !reduceMotion)) {
           needsDraw = false;
           ctx.clearRect(0, 0, W, H);
+          // There is always a map to draw: `chooseMap` falls back to the
+          // default continent, so an empty feed gets tiles rather than the flat
+          // rectangle this used to paint when it had no map id.
           const map = activeMap();
-          if (map !== null) {
-            drawGrid(ctx, map);
-            // The route is cached twice over: the effect that owns it rebuilds
-            // the prefix only when the cursor or map moves, and `drawnRoute`
-            // decimates that to screen resolution only when the zoom changes.
-            // Recomputing either per pointer-move frame is the one thing in this
-            // loop that scales with the length of a run.
-            drawRoute(ctx, drawnRoute());
-            const intents = drawIntents(ctx, list, map);
-            if (intents || resting) drawIntentLegend(ctx, intents, resting);
-            drawPips(ctx, list, selected());
-          } else {
-            ctx.fillStyle = theme.grid;
-            ctx.fillRect(0, 0, W, H);
-          }
+          drawGrid(ctx, map);
+          // The route is cached twice over: the effect that owns it rebuilds
+          // the prefix only when the cursor or map moves, and `drawnRoute`
+          // decimates that to screen resolution only when the zoom changes.
+          // Recomputing either per pointer-move frame is the one thing in this
+          // loop that scales with the length of a run.
+          drawRoute(ctx, drawnRoute());
+          const intents = drawIntents(ctx, list, map);
+          if (intents || resting) drawIntentLegend(ctx, intents, resting);
+          drawPips(ctx, list, selected());
         }
       }
       raf = requestAnimationFrame(frame);
@@ -819,7 +831,7 @@ export default function MapPage() {
   createEffect(() => {
     const map = activeMap();
     const list = feedList();
-    if (map === null || !pendingFit || list.length === 0) return;
+    if (!pendingFit || list.length === 0) return;
     pendingFit = false;
     view = fitTo(
       { w: W, h: H },
@@ -833,7 +845,7 @@ export default function MapPage() {
     const t = track();
     const map = activeMap();
     const ts = cursor();
-    route = t === undefined || map === null ? [] : routeUpTo(t.points, map, ts);
+    route = t === undefined ? [] : routeUpTo(t.points, map, ts);
     routeColor = colorOf(t?.runId ?? "");
     needsDraw = true;
   });
@@ -1000,7 +1012,7 @@ export default function MapPage() {
           when={selected()}
           fallback={
             <span class="dim">
-              {count() > 0 ? "no character selected" : "no characters on the map"}
+              {emptySideNote(count(), replayId() !== undefined, activeMap())}
             </span>
           }
         >

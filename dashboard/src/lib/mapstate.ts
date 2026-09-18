@@ -20,7 +20,7 @@
 
 import type { AgentPosition, TrackResponse } from "@viewer/api-types";
 import { type Accessor, createMemo } from "solid-js";
-import { chooseMap, mapCounts } from "./mapview";
+import { DEFAULT_MAP, chooseMap, mapCounts } from "./mapview";
 import { mapsVisited } from "./replay";
 
 export interface MapSources {
@@ -40,7 +40,8 @@ export interface MapState {
   count: Accessor<number>;
   /** In replay, the map the cursor's sample stands on. Null when live. */
   cursorMap: Accessor<number | null>;
-  activeMap: Accessor<number | null>;
+  /** Never null: with nothing on any map the page still draws one (`chooseMap`). */
+  activeMap: Accessor<number>;
   /** The reading behind the sidebar, or null when nothing is selected. */
   selected: Accessor<AgentPosition | null>;
 }
@@ -65,9 +66,9 @@ export function createMapState(src: MapSources): MapState {
     return src.feed()[0]?.map ?? null;
   });
 
-  const activeMap = createMemo<number | null>(
-    (prev) => chooseMap(maps(), prev ?? null, src.pinned(), cursorMap()),
-    null,
+  const activeMap = createMemo<number>(
+    (prev) => chooseMap(maps(), prev, src.pinned(), cursorMap()),
+    DEFAULT_MAP,
   );
 
   /*
