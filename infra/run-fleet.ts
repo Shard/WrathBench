@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 /**
- * Fleet orchestrator: one run-roster process per enabled job in fleet.json.
+ * Fleet orchestrator: one run-roster process per enabled job in the fleet config.
  *
  *   docker compose -f infra/compose.yml up -d --no-deps fleet   (the normal shape)
- *   ./infra/run-fleet.sh infra/fleet.json --until 18:00         (ad-hoc, host)
- *   ./infra/run-fleet.sh infra/fleet.json --dry-run
+ *   ./infra/run-fleet.sh --until 18:00                          (ad-hoc, host)
+ *   ./infra/run-fleet.sh --dry-run
  *   ./infra/run-fleet.sh --status                               (host, read-only)
  *
  * The supervisor's home is the `fleet` compose service — same image and mounts
@@ -14,7 +14,7 @@
  * inferred with kill(pid, 0). Paths in that state file are repo-relative for
  * the same reason.
  *
- * The fleet is the config file, and its one unit of work is the JOB: a roster
+ * The fleet is the config, and its one unit of work is the JOB: a roster
  * entry (or a rotation of several), an episode tier, a repeat count, on ONE
  * game account for the life of its process. A job that names an `account` is
  * PINNED to it; a job without one takes whichever POOL account is free when
@@ -22,11 +22,11 @@
  * own — synthetic, never persisted — for the accounts the manual queue leaves
  * free. Every job spawns through the same path: it becomes one run-roster
  * process on one account, and releases the account when that process exits.
- * There is no other shape: a file that still says `lanes` or `accounts.pinned`
- * is refused by name. The supervisor re-reads its config every tick (60s) —
- * from the CONFIG STORE when it has been seeded, and from fleet.json when it
- * has not (`runner/src/config-store.ts`, FOLLOW-UPS item 127); the file is the
- * seed and the export, and an edit through the app is live one tick later:
+ * There is no other shape: a config that still says `lanes` or `accounts.pinned`
+ * is refused by name. The supervisor re-reads its config every tick (60s) from
+ * the CONFIG STORE (`runner/src/config-store.ts`), the only fleet config since
+ * 2026-09-18 — there is no file; `infra/fleet.example.json` is the one-time
+ * bootstrap — so an edit through the app or the CLI is live one tick later:
  *
  *  - enabled:false  -> the job drains: no SIGTERM while its roster process
  *    has an episode child; once the process is between episodes it is
@@ -36,8 +36,10 @@
  *    (30s grace), not a hard kill — so in the worst case "disable" costs one
  *    just-started episode, never a corrupted one.
  *  - enabled:true / new job -> spawned on the next tick.
- *  - malformed or invalid fleet.json on re-read -> complaint, last good
- *    config kept, nothing running is touched.
+ *  - malformed or invalid config on re-read, or a store that cannot be
+ *    opened -> complaint, last good config kept, nothing running is touched.
+ *  - an EMPTY store (zero rows: a fresh deployment before its seed) -> the
+ *    empty board, and one clear line every tick saying how to seed it.
  *
  * Guards, enforced at startup and on every re-read:
  *  - two enabled jobs must not share an account (one live session per
@@ -53,7 +55,7 @@
  * The roster's own account-busy guard still runs under every job: a job
  * pointed at an account something else is using waits, it does not clobber.
  *
- * Preflight gate (docs/OPERATIONS.md): the top-level `preflight` block in fleet.json is
+ * Preflight gate (docs/OPERATIONS.md): the top-level `preflight` block in the config is
  * the deploy-window smoke, made a normal part of fleet operation. The
  * supervisor runs those scripts against the live server before it spawns any
  * job, and again whenever the server identity changes (a recreate, or a
@@ -77,7 +79,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   classPoolsOf,
   concurrencyKeyOfRef,
@@ -177,7 +179,7 @@ import {
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
 import { accountHeldBy, releaseRunSession } from "./run-roster";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
-import { configDbPath, readFleetText, seedIfEmpty } from "../runner/src/config-store";
+import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import {
   capFor,
   CLAUDE_TOTAL_KEY,
@@ -201,7 +203,7 @@ import { isAllowlistedFree } from "../runner/src/model-cost";
 // domain sits beside it, imported one way only —
 // config <- plan <- state <- status <- here:
 //
-//   run-fleet-config.ts  the shape of fleet.json and the parser that refuses one
+//   run-fleet-config.ts  the shape of the fleet config and the parser that refuses one
 //   run-fleet-plan.ts    the pure planners, the character/drain rules, the gate verdict
 //   run-fleet-state.ts   paths, fleet-state.json, the pause switch, what /proc says
 //   run-fleet-status.ts  the format* helpers and the --status/--live-runs/--dry-run printers
@@ -586,14 +588,12 @@ function reclaimServerState(where: "boot" | "tick"): void {
 // ------------------------------------------------------------------ main
 
 function parseArgs(argv: string[]): {
-  config: string;
   dryRun: boolean;
   status: boolean;
   liveRuns: boolean;
   until: string | undefined;
   clearModel: string | undefined;
 } {
-  let config = join(REPO_ROOT, "infra", "fleet.json");
   let dryRun = false;
   let status = false;
   let liveRuns = false;
@@ -625,7 +625,7 @@ function parseArgs(argv: string[]): {
       case "--help":
         console.error(
           [
-            "usage: infra/run-fleet.sh [fleet.json] [flags]",
+            "usage: infra/run-fleet.sh [flags]",
             "",
             "  --until HH:MM   stop condition passed to every job (none when absent)",
             "  --dry-run       print what would spawn on every account right now; spawn nothing",
@@ -637,7 +637,9 @@ function parseArgs(argv: string[]): {
             "                  records the clear in data/runs/fleet-models.json; the running",
             "                  supervisor picks it up on its next tick. Safe while the fleet runs.",
             "",
-            "The supervisor's normal home is the `fleet` compose service (see docs/OPERATIONS.md):",
+            "The config is the store (runner/src/config-store.ts), edited on the viewer's /config page",
+            "or with the CLI; there is no file argument. The supervisor's normal home is the `fleet`",
+            "compose service (see docs/OPERATIONS.md):",
             "  docker compose -f infra/compose.yml up -d --no-deps fleet",
           ].join("\n"),
         );
@@ -648,10 +650,12 @@ function parseArgs(argv: string[]): {
           console.error(`run-fleet: unknown flag ${a}`);
           process.exit(2);
         }
-        config = isAbsolute(a) ? a : join(process.cwd(), a);
+        // The pre-2026-09-18 CLI took a config file here. The store is the
+        // only config now; an old invocation still starts, and is told.
+        console.error(`run-fleet: ignoring ${a} — the fleet config is the store at ${configDbPath()}, not a file`);
     }
   }
-  return { config, dryRun, status, liveRuns, until, clearModel };
+  return { dryRun, status, liveRuns, until, clearModel };
 }
 
 /**
@@ -660,10 +664,10 @@ function parseArgs(argv: string[]): {
  * toward targets is untouched. Atomic rename so a supervisor mid-read never
  * sees a torn file.
  */
-function clearModel(configPath: string, name: string): void {
-  const { config } = loadConfigForRead(configPath);
+function clearModel(name: string): void {
+  const { config } = loadConfigForRead();
   if (config !== undefined && config.roster[name] === undefined) {
-    console.error(`run-fleet: ${name} is not a roster entry in ${configPath} (clearing it anyway; names are free-form in the sidecar)`);
+    console.error(`run-fleet: ${name} is not a roster entry in the config store (clearing it anyway; names are free-form in the sidecar)`);
   }
   const path = join(RUNS_DIR, MODELS_SIDECAR);
   const prev = readModelsSidecar(RUNS_DIR);
@@ -679,21 +683,27 @@ function clearModel(configPath: string, name: string): void {
   }
 }
 
+/** The store file's mtime, for deduping the rejection complaint; 0 when there is none. */
+function storeMtime(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(Bun.argv.slice(2));
-  if (!existsSync(args.config)) {
-    console.error(`run-fleet: no such fleet config: ${args.config}`);
-    process.exit(2);
-  }
+  const configPath = configDbPath();
   if (args.status) {
-    printStatus(args.config);
+    printStatus();
     return;
   }
   if (args.liveRuns) {
-    process.exit(printLiveRuns(args.config) === 0 ? 0 : 1);
+    process.exit(printLiveRuns() === 0 ? 0 : 1);
   }
   if (args.clearModel !== undefined) {
-    clearModel(args.config, args.clearModel);
+    clearModel(args.clearModel);
     return;
   }
   // The stamp is a supervisor EPOCH, not a date. It is taken once, here, and
@@ -705,37 +715,31 @@ async function main(): Promise<void> {
   // as they were. Roll it deliberately: stop the service, start it again.
   const stampToday = dateStamp();
   /*
-   * Config comes from the STORE when it has been seeded, and from the file
-   * when it has not (`runner/src/config-store.ts`, FOLLOW-UPS item 127). One
-   * seam for boot and for every re-read below, so the two cannot disagree
-   * about which copy is live.
-   *
-   * The seed is a boot-time convenience and never a reason not to start: a
-   * deployment that has never had a store gets one from the file it was
-   * already reading, and a store that cannot be written (a read-only data
-   * volume, a permissions slip) leaves the file in charge and says so.
+   * Config comes from the STORE and nowhere else (`runner/src/config-store.ts`).
+   * The boot read is the first tick's read against an empty last-good config,
+   * one seam for boot and for every re-read below: an empty store starts an
+   * empty board and says how to seed it; a store that cannot be opened, or a
+   * document the parser refuses, starts the empty board too and carries the
+   * rejection on the state file until a re-read succeeds. Neither is a reason
+   * not to start — nothing is running yet, so there is nothing to protect by
+   * exiting, and a supervisor that is up retries every tick by itself.
    */
-  let config = parseFleet(JSON.parse(readFleetText(args.config)));
-  configLoadedAt = Date.now();
+  const boot = rereadFleet(parseFleet({}));
+  let config = boot.config;
+  let wasEmpty = boot.empty === true;
+  configRejected = nextConfigRejection(undefined, { error: boot.error, mtime: storeMtime(configPath) }, Date.now());
+  if (boot.error !== undefined) {
+    console.error(`run-fleet: config NOT loaded — starting with an empty board and retrying every tick: ${boot.error}`);
+  } else {
+    configLoadedAt = Date.now();
+  }
+  if (wasEmpty) console.error(`run-fleet: ${EMPTY_STORE_HINT}`);
   // Fail fast on anything that would fail at spawn time.
   planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }), () => undefined, stampToday);
 
   if (args.dryRun) {
     printDryRun(config, args.until, stampToday);
     return;
-  }
-
-  /*
-   * Seed the store, below the dry run so a read-only command creates nothing,
-   * and only where the deployment has named somewhere durable to put it
-   * (`seedIfEmpty`). Never a reason not to start: a store that cannot be
-   * written leaves the file in charge and says so.
-   */
-  const seed = seedIfEmpty(args.config, { note: `fleet boot from ${args.config}` });
-  if (seed.error !== undefined) {
-    console.error(`run-fleet: config store not seeded (${seed.error}) — ${args.config} stays the live config`);
-  } else if (seed.seeded) {
-    console.error(`run-fleet: config store seeded from ${args.config} (${configDbPath()}) — edits through the app are live from the next tick`);
   }
 
   fleetLog = join(RUNS_DIR, `fleet-${stampToday}.jsonl`);
@@ -1331,10 +1335,10 @@ async function main(): Promise<void> {
   process.on("SIGTERM", requestStop);
 
   say(
-    `fleet ${args.config}: ${pinnedJobs(config).filter((j) => j.enabled).length} enabled pinned job(s), ` +
+    `fleet (config store ${configPath}): ${pinnedJobs(config).filter((j) => j.enabled).length} enabled pinned job(s), ` +
       `${poolJobs(config).filter((j) => j.enabled).length} queued job(s) and ${policyRefs(config).size} policy model(s) over ${config.accounts.pool.length} pool account(s), log ${fleetLog}` +
       `, stamp ${stampToday}${CONTAINER ? " (compose service `fleet`)" : ""}` +
-      `${args.until !== undefined ? `, deadline ${args.until}` : ", no deadline — steer with fleet.json"}`,
+      `${args.until !== undefined ? `, deadline ${args.until}` : ", no deadline — steer on /config"}`,
   );
   // The gate: nothing is spawned against a server nobody has smoked. Held
   // across ticks so a passing result is not re-run for the same identity.
@@ -1356,7 +1360,7 @@ async function main(): Promise<void> {
     if (action === "skip") {
       if (gate?.skipped !== true) {
         gate = { at: Date.now(), serverIdentity: identity ?? "unknown", ok: true, skipped: true, results: [] };
-        say("preflight: disabled in fleet.json — gate open, jobs spawn unsmoked");
+        say("preflight: disabled in the config — gate open, jobs spawn unsmoked");
         record({ job: "-", event: "preflight-skipped" });
       }
       return gateOpen(action, gate);
@@ -1373,11 +1377,11 @@ async function main(): Promise<void> {
     say(`preflight: smoking the server (identity ${identity!})`);
     record({ job: "-", event: "preflight-start", detail: identity });
     preflightInFlight = { identity: identity!, since: Date.now() };
-    writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
+    writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
     // Keep the heartbeat fresh while the sequence runs: a smoke outlasts the
     // liveness window and an outside observer would otherwise read a busy
     // supervisor as a dead one.
-    const pulse = setInterval(() => writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config)), 30_000);
+    const pulse = setInterval(() => writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config)), 30_000);
     try {
       gate = await runPreflight(pf, server!);
     } finally {
@@ -1430,7 +1434,7 @@ async function main(): Promise<void> {
 
   let mayStart = await checkGate(config.preflight);
   if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);
-  writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
+  writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
 
   for (;;) {
     // A stop wakes the tick and then polls fast: the container's grace period
@@ -1467,7 +1471,7 @@ async function main(): Promise<void> {
 
     if (stopping) {
       if (sets.running.size === 0) break;
-      writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
+      writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
       continue;
     }
 
@@ -1475,33 +1479,39 @@ async function main(): Promise<void> {
     // Re-read the config: the operator's tuning knob. Unconditionally, every
     // tick — mtime gating would add a second way for an edit to go silently
     // unapplied, which is the failure this whole path exists to make loud.
-    // mtime is only recorded, and used to dedupe the complaint in the log.
-    let mtime = 0;
-    try {
-      mtime = statSync(args.config).mtimeMs;
-    } catch {
-      // Unreadable stat is itself an attempt failure; rereadFleet reports it.
-    }
-    const { config: next, error } = rereadFleet(args.config, config);
+    // The store file's mtime is only recorded, to dedupe the complaint.
+    const mtime = storeMtime(configPath);
+    const { config: next, error, empty } = rereadFleet(config);
     const wasRejected = configRejected;
     configRejected = nextConfigRejection(wasRejected, { error, mtime }, Date.now());
     if (error !== undefined) {
-      // The state field persists for --status; the log complains only when the
-      // error or the file changed, so a rejected file does not spam all night.
+      // The last good config stays in effect — a store that could not be
+      // opened this tick is NOT "every job vanished". The state field persists
+      // for --status; the log complains only when the error or the store
+      // changed, so a rejected config does not spam all night.
       if (wasRejected?.error !== error || wasRejected.mtime !== mtime) {
         say(
           `fleet config REJECTED — keeping the last good config; the enabled flags in ` +
-            `${args.config} are NOT in effect: ${error}`,
+            `the store are NOT in effect: ${error}`,
         );
         record({ job: "-", event: "config-error", detail: error });
       }
     } else {
       configLoadedAt = Date.now();
       if (wasRejected !== undefined) {
-        say("fleet config loads again — the file is back in effect");
+        say("fleet config loads again — the store is back in effect");
         record({ job: "-", event: "config-recovered" });
       }
     }
+    // An empty store is a real config (zero rows, the empty board) and says so
+    // EVERY tick: a deployment nobody has seeded must not be quiet about it.
+    if (empty === true) {
+      say(EMPTY_STORE_HINT);
+      if (!wasEmpty) record({ job: "-", event: "config-empty" });
+    } else if (wasEmpty && error === undefined) {
+      record({ job: "-", event: "config-seeded" });
+    }
+    wasEmpty = empty === true;
     config = next;
 
     // Refused pins (item 66). Deduped on the joined set, the way the rejection
@@ -1583,7 +1593,7 @@ async function main(): Promise<void> {
       record({ job: "-", event: "spawn-gated", detail: actions.start.map((l) => l.name).join(",") });
     }
 
-    writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
+    writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
     const toStart =
       diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start.length +
       (pauseSwitch !== undefined ? 0 : lastPlan.waiting.length);
@@ -1598,7 +1608,7 @@ async function main(): Promise<void> {
         say(
           pauseSwitch !== undefined
             ? `paused and quiet: no job is running and nothing will launch until ${PAUSE_PATH} is deleted — the update window is open`
-            : "no jobs running and none to spawn — idling; enable a job in fleet.json (or stop the service)",
+            : "no jobs running and none to spawn — idling; add a roster entry or enable a job on /config (or stop the service)",
         );
         record({ job: "-", event: "idle" });
       } else {
@@ -1606,7 +1616,7 @@ async function main(): Promise<void> {
       }
     }
   }
-  writeState(args.config, stampToday, procs, sets.draining, gate, poolView(config));
+  writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
   say("fleet exit");
 }
 

@@ -10,7 +10,7 @@
  */
 
 import { openRunDb } from "../runner/src/rundb";
-import { readFleetText } from "../runner/src/config-store";
+import { type FleetRead, readFleetConfig } from "../runner/src/config-store";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -81,30 +81,43 @@ export function statesAfterSweep(
 
 /**
  * Re-read the config during supervision. A broken edit must never take down
- * running jobs, so any error keeps the last good config and is reported.
+ * running jobs, so a document that does not parse keeps the last good config
+ * and is reported.
+ *
+ * The store's two non-`ok` states are handled differently, deliberately:
+ * `empty` (zero rows) is a real config — the empty board — and is returned as
+ * one with `empty: true`, so a fresh deployment runs and says how to seed;
+ * `unreadable` (the store could not be opened) keeps the last good config and
+ * reports the error, exactly like a document that does not parse, because a
+ * locked or corrupt file must never read as "every job vanished".
  */
 export function rereadFleet(
-  path: string,
   lastGood: FleetConfig,
-  read: (p: string) => string = readFleetText,
-): { config: FleetConfig; error?: string } {
+  read: () => FleetRead = readFleetConfig,
+): { config: FleetConfig; error?: string; empty?: boolean } {
+  const r = read();
+  if (r.status === "empty") return { config: parseFleet({}), empty: true };
+  if (r.status === "unreadable") return { config: lastGood, error: `config store ${r.path} could not be read: ${r.error}` };
   try {
-    return { config: parseFleet(JSON.parse(read(path))) };
+    return { config: parseFleet(JSON.parse(r.text)) };
   } catch (e) {
     return { config: lastGood, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
 /**
- * Load a config for a read-only reader (`--status`), which must survive a file
- * the supervisor already rejected instead of dying on it.
+ * Load a config for a read-only reader (`--status`), which must survive a
+ * store the supervisor already rejected instead of dying on it. An empty store
+ * is the empty config with `empty: true`.
  */
 export function loadConfigForRead(
-  path: string,
-  read: (p: string) => string = readFleetText,
-): { config?: FleetConfig; error?: string } {
+  read: () => FleetRead = readFleetConfig,
+): { config?: FleetConfig; error?: string; empty?: boolean } {
+  const r = read();
+  if (r.status === "empty") return { config: parseFleet({}), empty: true };
+  if (r.status === "unreadable") return { error: `config store ${r.path} could not be read: ${r.error}` };
   try {
-    return { config: parseFleet(JSON.parse(read(path))) };
+    return { config: parseFleet(JSON.parse(r.text)) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -123,7 +136,7 @@ export function jobLogPath(job: string, stamp: string): string {
 /**
  * The exact run-roster argv for one spawn. Pure; tested. `until` is the CLI's
  * optional cap; under the fleet service there is none — the supervisor is up
- * while the machine is up and jobs are steered by editing fleet.json.
+ * while the machine is up and jobs are steered through the config store.
  */
 export function jobArgv(
   spawn: JobSpawn,
@@ -209,11 +222,12 @@ export interface FleetState {
    */
   preflightInFlight?: { identity: string; since: number };
   stamp: string;
+  /** The config store the supervisor reads (`configDbPath`), for the reader's banner. */
   fleetConfig: string;
   /** When the config the supervisor is actually running was last parsed. */
   configLoadedAt?: number;
   /**
-   * Present while the file on disk cannot be loaded. The supervisor keeps its
+   * Present while the store cannot be loaded. The supervisor keeps its
    * last good config, which means every `enabled` flag in the file is inert —
    * so `--status` must say so loudly. Cleared by a successful re-read.
    */

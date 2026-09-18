@@ -1,7 +1,12 @@
 /**
  * The config store: the fleet config as rows in a small sqlite on the data
- * volume, so a roster or policy change is an edit through the app rather than
- * an edit to `infra/fleet.json` and a redeploy (FOLLOW-UPS item 127).
+ * volume. It is the ONLY fleet config (operator decision, 2026-09-18): the
+ * supervisor, the viewer and the deploy scripts read it and nothing else, and
+ * the active config is operational state on the data volume, never a file in
+ * git. `infra/fleet.example.json` is the bootstrap a fresh deployment seeds
+ * from once (`seed`); `export` renders the store to a local file for reading
+ * or diffing, never for committing (docs/OPERATIONS.md, "Where the config
+ * lives").
  *
  * Three rules shape everything here.
  *
@@ -9,29 +14,30 @@
  * fills defaults (`preflight.timeoutMs`, `policy.subscriptions`), normalises
  * shapes (`smokes: ["x.ts"]` becomes `{script, account}`) and annotates
  * entries it refuses. Rendering a parsed config back out would therefore never
- * equal the file it came from, and a diff against `infra/fleet.json` — the one
- * check an operator has that the store and the seed agree — would be noise.
- * So each row is the raw JSON document the file carried, and parsing is only
- * ever the accept/reject gate.
+ * equal the document that came in, and an export an operator diffs against an
+ * earlier export would be noise. So each row is the raw JSON document as it
+ * was written, and parsing is only ever the accept/reject gate.
  *
  * **One validator.** A write renders the whole candidate config and runs it
- * through `parseFleet`, the same function the supervisor runs the file
- * through. An edit the file would be refused for is refused here with the same
+ * through `parseFleet`, the same function the supervisor runs the store
+ * through. An edit the supervisor would refuse is refused here with the same
  * message. There is deliberately no second, store-shaped schema: two
- * validators is how the store and the file come to disagree about what is
- * legal.
+ * validators is how the store and the supervisor come to disagree about what
+ * is legal.
  *
  * **Granularity is per entry, and order is kept.** `roster/<name>`,
  * `campaigns/<name>` and `queue/<n>` are rows of their own so an edit to one
  * model rewrites one row; `_notes`, `preflight`, `accounts` and `policy` are
- * singletons. Every row carries an `ord` because file order is load-bearing —
- * two enabled pins on one account are resolved by "the first in file order
- * keeps it" — so a key-sorted render would change which pin wins.
+ * singletons. Every row carries an `ord` because order is load-bearing —
+ * two enabled pins on one account are resolved by "the first in order keeps
+ * it" — so a key-sorted render would change which pin wins.
  *
- * The file is not retired by any of this. `seed` imports it when the store is
- * empty, so a bare clone still starts from a file, and `export` renders the
- * store back to its exact shape, so the file stays the reviewable artefact and
- * the diff stays meaningful.
+ * **Empty and unreadable are different states** (`readFleetConfig`). A store
+ * with zero rows, or none at all, is a legitimate state: the supervisor runs
+ * an empty board and says how to seed it. A store that cannot be opened is
+ * transient: a reader keeps its last good config. The two must never be
+ * confused, because "every job vanished" and "the disk hiccupped" call for
+ * opposite actions.
  */
 
 import { Database } from "bun:sqlite";
@@ -44,8 +50,8 @@ export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
 
 /**
  * The top-level keys the store knows, in the order a rendered config writes
- * them — which is the order `infra/fleet.json` itself uses, so an export is a
- * clean diff rather than a reordering of the whole file.
+ * them — the order `infra/fleet.example.json` uses, so two exports diff
+ * cleanly rather than reordering the whole document.
  *
  * A top-level key outside this list is not carried: `parseFleet` ignores
  * unknown top-level keys, and silently round-tripping something nothing reads
@@ -282,10 +288,13 @@ export class ConfigStore {
       raw = this.db
         .query("SELECT key, ord, json, updated_at FROM config ORDER BY ord, key")
         .all() as { key: string; ord: number; json: string; updated_at: number }[];
-    } catch {
+    } catch (e) {
       // A store that has never been written has no tables; that is "empty",
-      // not an error a read-only supervisor should die on.
-      return [];
+      // not an error a read-only supervisor should die on. ANY other failure
+      // (locked, corrupt, I/O) is rethrown: reading a busy store as "zero
+      // rows" would tell the supervisor every job vanished.
+      if (/no such table/i.test(e instanceof Error ? e.message : String(e))) return [];
+      throw e;
     }
     return raw.map((r) => ({ key: r.key, ord: r.ord, value: JSON.parse(r.json) as unknown, updatedAt: r.updated_at }));
   }
@@ -295,7 +304,7 @@ export class ConfigStore {
     return this.rows().find((r) => r.key === key)?.value;
   }
 
-  /** The whole config, in fleet.json's shape. */
+  /** The whole config, in the export's shape. */
   render(): Record<string, unknown> {
     return renderFleet(this.rows());
   }
@@ -458,91 +467,63 @@ export function openConfigStore(path: string = configDbPath(), opts: OpenOptions
   return new ConfigStore(path, opts);
 }
 
+/** The one line every reader prints for an empty store. */
+export const EMPTY_STORE_HINT =
+  "config store empty — seed it: bun runner/src/config-store.ts seed infra/fleet.example.json, or add entries on /config";
+
 /**
- * The fleet config as JSON TEXT, from the store when it has been seeded and
- * from the file when it has not.
+ * What a read of the store found. Three states, and the difference between the
+ * last two is the whole point:
  *
- * This is the one seam the supervisor and the viewer read config through, so
- * "the store is live" is a property of every reader at once rather than of
- * whichever one was remembered. It returns text, not a parsed config, because
- * every caller already parses — through `parseFleet`, or through the viewer's
- * own roster schema — and handing them text leaves those refusals exactly
- * where they were.
+ * - `ok`: rows, rendered to the config document as JSON text. Text, not a
+ *   parsed config, because every caller already parses — through `parseFleet`,
+ *   or through the viewer's own roster schema — and handing them text leaves
+ *   those refusals exactly where they were.
+ * - `empty`: the store has zero rows, or no file yet. Real, and legitimate:
+ *   a fresh deployment before its one seed. The supervisor acts on it (an
+ *   empty board) and says so every tick.
+ * - `unreadable`: the store could not be opened or read (locked past the busy
+ *   timeout, corrupt, a permissions slip). Transient by assumption: a reader
+ *   keeps its last good config and reports the error, and never treats it as
+ *   "every job vanished".
  */
-export function readFleetText(path: string, env: Record<string, string | undefined> = Bun.env): string {
-  const dbPath = configDbPath(env);
+export type FleetRead =
+  | { status: "ok"; path: string; text: string }
+  | { status: "empty"; path: string }
+  | { status: "unreadable"; path: string; error: string };
+
+/**
+ * Read the fleet config from the store. The one seam the supervisor, the
+ * viewer and the CLI read config through, so "what the fleet runs" is a
+ * property of every reader at once.
+ */
+export function readFleetConfig(path: string = configDbPath()): FleetRead {
   let store: ConfigStore | null = null;
   try {
-    store = openConfigStore(dbPath, { readonly: true });
-    if (store !== null) {
-      const rows = store.rows();
-      if (rows.length > 0) return JSON.stringify(renderFleet(rows));
-    }
-  } catch {
-    // An unreadable store is not a reason to stop reading config: the file is
-    // still there, and the supervisor's own rejection path reports whatever
-    // comes back. Falling through is the conservative answer.
+    store = openConfigStore(path, { readonly: true });
+    if (store === null) return { status: "empty", path };
+    const rows = store.rows();
+    if (rows.length === 0) return { status: "empty", path };
+    return { status: "ok", path, text: JSON.stringify(renderFleet(rows)) };
+  } catch (e) {
+    return { status: "unreadable", path, error: e instanceof Error ? e.message : String(e) };
   } finally {
     store?.close();
   }
-  return readFileSync(path, "utf8");
 }
 
 /** Whether the store at this path has been seeded (cheap, closes its handle). */
 export function configStoreSeeded(env: Record<string, string | undefined> = Bun.env): boolean {
-  const store = openConfigStore(configDbPath(env), { readonly: true });
-  if (store === null) return false;
-  try {
-    return !store.isEmpty();
-  } finally {
-    store.close();
-  }
-}
-
-/**
- * Seed the store from a config file if it is empty. The supervisor calls this
- * once at boot: a deployment that has been given a place to put a store gets
- * one from the file it was already reading, and from then on the file is the
- * seed and the export. Any failure is reported, never thrown — config that
- * loads from a file is not worth refusing to start over.
- *
- * DELIBERATELY not seeded at the repo-relative default. The store must go live
- * only where it has been given somewhere durable to live, and on the cluster
- * that is a chart change: the fleet and the viewer mount subPaths of the data
- * PVC (`runs`, `wiki`, `minimap`), not `/wrathbench/data` itself,
- * so a store written to the default path would sit in the pod's ephemeral
- * layer. Worse than useless: the supervisor would then read that copy and stop
- * seeing Flux's reconciliation of the ConfigMap, which is the documented way
- * that deployment is steered, while the viewer wrote to a different ephemeral
- * file in a different pod. So an automatic seed happens only where
- * `WRATHBENCH_CONFIG_DB` or `WRATHBENCH_DATA` names the path outright. An
- * operator seeding by hand (`config-store.ts seed`) is an explicit act and is
- * not gated.
- */
-export function seedIfEmpty(path: string, opts: PutOptions = {}, env: Record<string, string | undefined> = Bun.env): { seeded: boolean; error?: string } {
-  const configured = ["WRATHBENCH_CONFIG_DB", "WRATHBENCH_DATA"].some((k) => {
-    const v = env[k];
-    return v !== undefined && v.length > 0;
-  });
-  if (!configured) return { seeded: false };
-  let store: ConfigStore | null = null;
-  try {
-    store = new ConfigStore(configDbPath(env));
-    const { seeded } = store.seedFromFile(path, { actor: "fleet", ...opts });
-    return { seeded };
-  } catch (e) {
-    return { seeded: false, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    store?.close();
-  }
+  return readFleetConfig(configDbPath(env)).status === "ok";
 }
 
 // --------------------------------------------------------------------- CLI
 
 const USAGE = `usage: bun runner/src/config-store.ts <command>
 
-  seed [file] [--force]     import a fleet config (default infra/fleet.json)
-  export [file]             render the store to fleet.json's shape (stdout, or write to file)
+  seed [file] [--force]     import a fleet config document (default infra/fleet.example.json, the bootstrap)
+  export [file]             render the store to a config document (stdout, or write to file) — for reading or
+                            diffing, never for committing
   get [key]                 print one row's document, or every key when omitted
   set <key> <json>          replace one row (JSON on argv, or "-" to read stdin); validated
   patch <key> <json>        merge into one row; validated
@@ -587,7 +568,7 @@ async function main(argv: string[]): Promise<number> {
   try {
     switch (cmd) {
       case "seed": {
-        const file = args[0] ?? join(repoRoot, "infra", "fleet.json");
+        const file = args[0] ?? join(repoRoot, "infra", "fleet.example.json");
         const { seeded, keys } = store.seedFromFile(file, { ...opts, force });
         console.error(seeded ? `seeded ${keys} keys from ${file} into ${dbPath}` : `${dbPath} already has ${keys} keys — pass --force to replace them`);
         return seeded ? 0 : 1;
