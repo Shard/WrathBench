@@ -32,8 +32,11 @@
 
 import { existsSync } from "node:fs";
 import { S3Client } from "bun";
+import type { ResultRun } from "../runner/viewer/api-types";
 import { createRenderer } from "../runner/viewer/snapshot";
-import { publishLoop, type ObjectStore, type PassRenderer } from "./publish-core";
+import { HOME_EPISODE } from "../dashboard/src/lib/homeladder";
+import { OG_KEY, renderOgPng } from "./og-render";
+import { publishLoop, type ObjectStore, type PassRenderer, type SnapshotResult } from "./publish-core";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
 const STATE_PATH = Bun.env.WRATHBENCH_PUBLISH_STATE ?? "data/publish/state.json";
@@ -106,7 +109,53 @@ const renderer = createRenderer({
 // The streaming shape: every `BATCH` runs, the artifacts just projected go
 // straight to the engine's run wave and are dropped. Same objects, same order,
 // same manifest — the pass simply never holds the whole tree at once.
-const render: PassRenderer = (sink) => renderer(undefined, { sink, batch: BATCH });
+//
+// The social card rides along at the end of the pass. It is deliberately NOT
+// one of the engine's artifacts: `SnapshotArtifact` is a JSON body addressed
+// by a content version, and widening it to carry bytes at a mutable key would
+// reach into `needsPut`, `classifyPath`, the pruning window and
+// `publish-accept.ts` for one image. `publish-tiles.ts` is the precedent —
+// a PUT of its own, outside the transaction.
+const render: PassRenderer = async (sink) => {
+  const result = await renderer(undefined, { sink, batch: BATCH });
+  await publishCard(result);
+  return result;
+};
+
+/**
+ * Render the card from the ladder this pass produced, and PUT it if it moved.
+ *
+ * Why here and not at ship time (2026-09-18): the picture used to be a static
+ * asset rendered by `infra/render-og.ts` into `dashboard/public/`, so it
+ * changed only when the SPA shipped while the numbers under it changed every
+ * pass — the card that Discord unfurled was a week behind the site's own
+ * ladder. Rendering it from `result` is what makes "the same data as the
+ * snapshot it just wrote" true by construction rather than by cadence.
+ *
+ * The stamp is remembered in memory rather than in the publish state: an
+ * unchanged card costs no PUT, a restart costs exactly one, and the state file
+ * stays the engine's own business.
+ *
+ * Never fails a pass. A card is a nicety; the JSON is the site.
+ */
+let cardStamp: string | null = null;
+async function publishCard(result: SnapshotResult): Promise<void> {
+  try {
+    const artifact = result.artifacts.find((a) => a.path.endsWith(`/ladder-${HOME_EPISODE}.json`));
+    if (artifact === undefined) {
+      log(`publish: no ladder-${HOME_EPISODE}.json in this pass — the card is unchanged`);
+      return;
+    }
+    const runs = (JSON.parse(artifact.body) as { runs?: ResultRun[] }).runs ?? [];
+    const card = renderOgPng(runs);
+    if (card.stamp === cardStamp) return;
+    await s3.write(OG_KEY, card.png, { type: "image/png" });
+    cardStamp = card.stamp;
+    log(`publish: card ${OG_KEY} (${card.runs} runs, ${(card.png.length / 1024).toFixed(0)} KiB, ${card.stamp})`);
+  } catch (e) {
+    log(`publish: the card was not updated — ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 
 const abort = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

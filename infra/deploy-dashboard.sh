@@ -71,16 +71,27 @@ if [ -z "$origin" ]; then
   exit 1
 fi
 
-# The social card. Rendered before the build because the build stamps its URL
-# with the picture's own content hash — a crawler caches a card by URL and has
-# no purge, so an unchanged picture must keep its URL and a changed one must
-# lose it. No `|| true` anywhere in here: a build whose tags point at an image
-# that is not there is worse than no card, so a failed render stops the ship
-# (`set -e` covers the assignment below). The tags are absolute against
-# $origin, which is why the card is a public-origin artifact and not a build
-# product of the private viewer.
+# The social card. Since 2026-09-18 the picture the tags point at belongs to
+# the PUBLISHER: it re-renders the card from every snapshot pass and PUTs it to
+# `v1/og.png` on the data hostname, so the preview tracks the published ladder
+# instead of the last ship (docs/PUBLIC-DASHBOARD.md, "The social card").
+#
+# The ship still renders it, for two reasons. It writes dashboard/public/og.png,
+# which the app origin serves and which is the fallback the tags name when no
+# data hostname is set; and `--upload` seeds `v1/og.png` so a first ship after
+# this change does not point at an object no publisher has written yet.
+#
+# The stamp is still the ship-time picture's content hash, and it is still what
+# `?v=` carries — a crawler caches a card by URL and has no purge, so an
+# unchanged picture must keep its URL and a changed one must lose it. What the
+# stamp cannot do is move between ships; the bytes behind the URL do.
+#
+# No `|| true` anywhere in here: a build whose tags point at an image that is
+# not there is worse than no card, so a failed render stops the ship (`set -e`
+# covers the assignment below). A missing R2 key pair is not a failed render —
+# render-og.ts says so and skips the upload.
 echo "deploy: social card"
-og_stamp=$(bun infra/render-og.ts)
+og_stamp=$(bun infra/render-og.ts --upload)
 
 # The repository link, and the BibTeX `url` line with it. Empty is the default
 # and not an error: the repo is private, and a footer link that 404s is worse
