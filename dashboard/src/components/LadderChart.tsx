@@ -20,6 +20,7 @@ import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS } from 
 import { LABEL_FONT, TICK_FONT, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
 import { paretoSteps } from "../lib/pareto";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
+import { InfoHint } from "./InfoHint";
 import { COST_BASIS_NOTE, fmtTokens, fmtUsd } from "../lib/format";
 import { runsHref } from "../lib/runs";
 
@@ -146,6 +147,25 @@ export function LadderChart(props: {
   // HTML namespace too (Solid decides by the root tag); a `<g>` root puts the
   // whole subtree in the SVG namespace. The click is routed in-app the same way.
   const navigate = useNavigate();
+
+  const note = (): string => {
+    const lines = [
+      `${xCaption()} against ${yCaption()}, one point per model and effort. A dashed ring means the means rest on a single run.`,
+      `${view().x.note}${view().x.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}.`,
+      `${view().y.note}${view().y.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}.`,
+    ];
+    if (front() !== null) {
+      lines.push(
+        `The step line is the Pareto front: the entries no other entry beats on both axes (${
+          view().x.better === "lower" ? "less" : "more"
+        } ${view().x.label} and ${view().y.better === "higher" ? "more" : "less"} ${view().y.label}); the rest are dimmed.`,
+      );
+    }
+    if (props.omittedNote !== false && model().omitted.length > 0) {
+      lines.push(`Not plotted: ${model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.`);
+    }
+    return lines.join("\n");
+  };
 
   return (
     <div class="ladderchart-wrap">
@@ -324,26 +344,12 @@ export function LadderChart(props: {
       </Show>
 
       {/* Axes, sample basis, each axis's caveat — the things a stranger would
-          otherwise assume, and assume wrongly. The hover carries the rest. The
-          caveats are the specs' own, so a view that swaps an axis swaps its
-          sentence; cost's basis note is the one every page uses and rides with
-          cost wherever it is drawn. */}
-      <p class="dim ladderchart-caption">
-        {xCaption()} against {yCaption()}, one point per model and effort. A dashed ring means the means rest
-        on a single run. {view().x.note}
-        {view().x.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}. {view().y.note}
-        {view().y.key === "cost" ? `; ${COST_BASIS_NOTE}` : ""}.
-        <Show when={front() !== null}>
-          {" "}
-          The step line is the Pareto front: the entries no other entry beats on both axes (
-          {view().x.better === "lower" ? "less" : "more"} {view().x.label} and{" "}
-          {view().y.better === "higher" ? "more" : "less"} {view().y.label}); the rest are dimmed.
-        </Show>
-        <Show when={props.omittedNote !== false && model().omitted.length > 0}>
-          {" "}
-          Not plotted: {model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
-        </Show>
-      </p>
+          otherwise assume, and assume wrongly — in the hover rather than in a
+          paragraph under the chart (operator, 2026-09-18). The caveats are the
+          specs' own, so a view that swaps an axis swaps its sentence. */}
+      <div class="chart-note">
+        <InfoHint label="about this chart" text={note()} />
+      </div>
     </div>
   );
 }

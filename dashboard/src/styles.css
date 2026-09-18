@@ -382,6 +382,22 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 
 /* The whole-feed expand preset, in the feed's own heading. */
 .section .filter.expand-preset { margin-left: 12px; font-size: var(--fs-sm); font-weight: normal; vertical-align: middle; }
+/* The hover that replaced the caption paragraphs (operator, 2026-09-18). Sized
+   off the heading it sits beside rather than off the body, so it never grows
+   with an h2. */
+.info-hint {
+  font: inherit; font-size: var(--fs-xs); font-weight: 700; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.4em; height: 1.4em; margin-left: 8px; vertical-align: middle;
+  color: var(--dim); background: none; cursor: help;
+  border: 1px solid var(--line); border-radius: 50%; padding: 0;
+}
+.info-hint:hover { color: var(--fg); border-color: var(--accent); }
+.info-hint:focus-visible { outline: 1px solid var(--accent); }
+/* Under a chart it is the whole of what used to be a paragraph, so it gets the
+   row to itself and sits under the plot's right edge. */
+.chart-note { display: flex; justify-content: flex-end; margin: 0 0 6px; }
+.chart-note .info-hint { margin-left: 0; }
 
 /*
  * A harness notice: the harness talking to the model, which is a different
@@ -649,9 +665,11 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
   box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
   max-width: calc(100vw - 16px);
   overflow-y: auto; font-size: var(--fs-sm); text-align: left;
+  /* The two boxes side by side while there is room, stacked on a phone. */
+  display: flex; gap: 10px; flex-wrap: wrap;
 }
 .filter-popover.floating { position: fixed; z-index: 60; }
-.filter-group + .filter-group { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.filter-group { flex: 1 1 130px; min-width: 0; }
 .filter-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .filter-group-label { font-weight: 700; }
 .filter-clear {
@@ -659,12 +677,15 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
   border: 0; padding: 0; cursor: pointer; text-decoration: underline;
 }
 .filter-clear:hover { color: var(--fg); }
-.filter-group-note { margin: 2px 0 6px; font-size: var(--fs-xs); }
-/* One column, so a long line name wraps inside its own row rather than
-   pushing the next option off the panel. */
-.filter-options { display: flex; flex-direction: column; gap: 3px; }
-.filter-options .filter.check { justify-content: flex-start; }
-.filter-option-n { margin-left: auto; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.filter-group select {
+  font: inherit; font-size: var(--fs-xs); color: var(--fg); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 3px; margin-top: 3px;
+  width: 100%; box-sizing: border-box;
+}
+.filter-group select:focus-visible { outline: 1px solid var(--accent); }
+@media (max-width: 420px) {
+  .filter-popover { flex-direction: column; }
+}
 
 .runview-cols { display: flex; gap: 16px; flex: 1; min-height: 320px; }
 .runview-logs { flex: 0 1 var(--log-col); min-width: 0; overflow-y: auto; }

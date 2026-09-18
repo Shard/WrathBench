@@ -5,16 +5,19 @@
  * — asked a question an eval episode cannot answer differently (every scored
  * run is the same baseline character), and the third duplicated the series
  * selector the shell already carries for every page. What is left is two
- * multi-select dimensions, and a row of checkboxes for each would be longer
- * than the chart it narrows. So: a button that says how many filters are on,
- * and a panel behind it.
+ * multi-select dimensions behind one button that says how many are on.
+ *
+ * Native `<select multiple>` rather than checkbox lists (operator,
+ * 2026-09-18): there are thirty-odd model lines on the ladder, and thirty
+ * checkboxes is a wall where six visible rows and a scrollbar is a control.
+ * Ctrl/cmd-click is the browser's own multi-select and needs nothing from us;
+ * a `clear` link per box is the one affordance it lacks.
  *
  * The panel is the portal-and-`popoverPlacement` mechanism `Inventory` landed,
  * not a second one: it hangs off a button in a wrapping controls row, and a
  * panel that is a child of that row is clipped and reflows it. Click to open
  * rather than hover — a filter panel that opened as the pointer crossed the
- * controls on its way to the chart would be in the way, which is the opposite
- * of the bag button's job.
+ * controls on its way to the chart would be in the way.
  */
 
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
@@ -25,16 +28,13 @@ import type { FilterOption } from "../lib/ladderfilter";
 /** The panel's own width, told to both the CSS and the placement maths. */
 const PANEL_W = 300;
 
-/** One dimension inside the panel: its options, and what is ticked. */
+/** One dimension inside the panel: its options, and what is selected. */
 export interface FilterGroup {
-  /** The dimension's name, as the panel heads it. */
+  /** The dimension's name, as the box is labelled. */
   label: string;
-  /** One line under the heading saying where the options come from. */
-  note: string;
   options: readonly FilterOption[];
   selected: readonly string[];
-  onToggle: (key: string, on: boolean) => void;
-  onClear: () => void;
+  onSelect: (keys: string[]) => void;
 }
 
 export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
@@ -44,7 +44,7 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
   let btn!: HTMLButtonElement;
   let panel: HTMLDivElement | undefined;
 
-  /** The number on the button: every ticked box, across every dimension. */
+  /** The number on the button: every selected value, across every dimension. */
   const active = (): number => props.groups.reduce((n, g) => n + g.selected.length, 0);
 
   const measure = (needed?: number): void => {
@@ -99,7 +99,7 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
         class={active() > 0 ? "filters-trigger on" : "filters-trigger"}
         ref={btn}
         aria-expanded={open()}
-        title="Narrow the ladder by model line and by company. Ticks combine within a dimension and narrow across them."
+        title="Narrow the ladder by company and model family. Values combine within a box and narrow across the two."
         onClick={(ev) => {
           ev.stopPropagation();
           setOpen(!open());
@@ -129,32 +129,33 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
                   <div class="filter-group-head">
                     <span class="filter-group-label">{group.label}</span>
                     <Show when={group.selected.length > 0}>
-                      <button type="button" class="filter-clear" onClick={() => group.onClear()}>
+                      <button type="button" class="filter-clear" onClick={() => group.onSelect([])}>
                         clear
                       </button>
                     </Show>
                   </div>
-                  <p class="dim filter-group-note">{group.note}</p>
-                  <Show
-                    when={group.options.length > 0}
-                    fallback={<p class="dim filter-group-note">nothing on screen to narrow</p>}
+                  {/*
+                    `selected` on each option rather than `value` on the select,
+                    for the reason `SeriesSelect` gives: `<For>` recreates every
+                    option when a poll returns, and a select whose options are
+                    all replaced loses its selection with no signal to put it
+                    back. The attribute makes the DOM say what is chosen.
+                  */}
+                  <select
+                    multiple
+                    size={6}
+                    onChange={(ev) =>
+                      group.onSelect(Array.from(ev.currentTarget.selectedOptions, (o) => o.value))
+                    }
                   >
-                    <div class="filter-options">
-                      <For each={group.options}>
-                        {(opt) => (
-                          <label class="filter check">
-                            <input
-                              type="checkbox"
-                              checked={group.selected.includes(opt.key)}
-                              onChange={(ev) => group.onToggle(opt.key, ev.currentTarget.checked)}
-                            />
-                            <span>{opt.key}</span>
-                            <span class="dim filter-option-n">{opt.n}</span>
-                          </label>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
+                    <For each={group.options}>
+                      {(opt) => (
+                        <option value={opt.key} selected={group.selected.includes(opt.key)}>
+                          {opt.key} ({opt.n})
+                        </option>
+                      )}
+                    </For>
+                  </select>
                 </div>
               )}
             </For>

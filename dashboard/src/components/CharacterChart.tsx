@@ -34,6 +34,7 @@ import {
 } from "../lib/ladder";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { fmtDuration } from "../lib/format";
+import { InfoHint } from "./InfoHint";
 
 const M = { top: 16, right: 178, bottom: 40, left: 52 };
 const BOX: ChartBox = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
@@ -100,6 +101,24 @@ export function CharacterPlot(props: {
   // `<A>` roots its template in the HTML namespace, which breaks inside an SVG.
   // Same reason, same shape, as `LadderChart`.
   const navigate = useNavigate();
+  const note = (): string => {
+    const lines = [
+      `Level against cumulative active playtime, ${
+        props.single ? "this character's line" : "one series per character"
+      }, stitched across ${props.single ? "its attempts" : "each character's attempts"}. Wall clock would draw the days a character spends paused rather than the character's progress, so the axis is the pause-corrected active time each level mark already carries.`,
+      "A line is a step, never a slope: a mark is the first sample that showed a level, so the level is held flat until the next one — a lower bound on when the ding happened.",
+      "Colour: live (the line ends at now), paused, ended (dashed) — the same three the status column reads. Each line is labelled with its model and ends with that model's family logo; the character's own name is in the hover.",
+    ];
+    if (anyTruncated()) {
+      lines.push(
+        "A label with a leading … begins mid-history: that character's oldest served attempt still names a predecessor this viewer did not serve.",
+      );
+    }
+    if (props.omitted.length > 0) {
+      lines.push(`Not plotted: ${props.omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.`);
+    }
+    return lines.join("\n");
+  };
   const layout = createMemo(() => characterChartLayout(props.series, BOX));
   const anyTruncated = (): boolean => props.series.some((s) => s.truncated);
 
@@ -212,28 +231,9 @@ export function CharacterPlot(props: {
         </svg>
       </Show>
 
-      <p class="dim ladderchart-caption">
-        level against cumulative <strong>active playtime</strong>,{" "}
-        {props.single ? "this character's line" : "one series per character"}, stitched across{" "}
-        {props.single ? "its attempts" : "each character's attempts"}. Wall clock would draw the days a character spends paused rather than the character's progress,
-        and turn indices restart on a resume, so the axis is the pause-corrected active time each level mark
-        already carries. A line is a step, never a slope: a mark is the first sample that showed a level, so
-        the level is held flat until the next one — a lower bound on when the ding happened. Colour:{" "}
-        <span style={{ color: "var(--ok)" }}>●</span> live (the line ends at now){" "}
-        <span style={{ color: "var(--warn)" }}>●</span> paused{" "}
-        <span style={{ color: "var(--dim)" }}>●</span> ended (dashed), the same three the status column reads.
-        Each line is labelled with its model and ends with that model's family logo; the character's own
-        name is in the hover.
-        <Show when={anyTruncated()}>
-          {" "}
-          A label with a leading … begins mid-history: that character's oldest served attempt still names a
-          predecessor this viewer did not serve, so its axis starts from the oldest attempt on screen.
-        </Show>
-        <Show when={props.omitted.length > 0}>
-          {" "}
-          Not plotted: {props.omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
-        </Show>
-      </p>
+      <div class="chart-note">
+        <InfoHint label="about this chart" text={note()} />
+      </div>
     </div>
   );
 }
