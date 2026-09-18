@@ -26,7 +26,7 @@
  * reader sees are the rules the runner enforces.
  */
 
-import { A } from "@solidjs/router";
+import { A, useSearchParams } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type EpisodesResponse } from "../api/client";
 import { displayError } from "../lib/errors";
@@ -53,6 +53,43 @@ function mins(m: number | null): string {
 export default function About() {
   const tiers = poll(() => api.episodes(), POLL_MS);
   const table = (): EpisodesResponse["episodes"] => tiers.latest?.episodes ?? [];
+  /*
+   * The four lanes as a tab strip rather than four stacked blocks (operator,
+   * 2026-09-18): each lane is a paragraph and a counts line, and one after
+   * another they were most of the page's height for something a reader asks
+   * one lane at a time.
+   *
+   * The chosen lane is `?lane=`, so a link can open one; it resolves against
+   * the lanes the API actually served, which is what keeps a stale link on the
+   * default rather than on an empty panel. The default is the scored default,
+   * e90, falling back to the first lane there is.
+   */
+  const [params, setParams] = useSearchParams();
+  const laneParam = (): string | null => {
+    const raw = Array.isArray(params.lane) ? params.lane[0] : params.lane;
+    return raw === undefined || raw === "" ? null : raw;
+  };
+  const lane = (): EpisodesResponse["episodes"][number] | undefined => {
+    const rows = table();
+    const want = laneParam();
+    return (
+      rows.find((t) => t.id === want) ?? rows.find((t) => t.id === "e90") ?? rows[0]
+    );
+  };
+  const pickLane = (id: string): void => setParams({ lane: id }, { replace: true });
+  /** Arrow keys walk the strip, as a tablist is expected to. */
+  const onLaneKey = (ev: KeyboardEvent & { currentTarget: HTMLElement }): void => {
+    const step = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
+    if (step === 0) return;
+    ev.preventDefault();
+    const rows = table();
+    const at = rows.findIndex((t) => t.id === lane()?.id);
+    const next = rows[(at + step + rows.length) % rows.length];
+    if (next === undefined) return;
+    pickLane(next.id);
+    const el = ev.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`button[data-lane="${next.id}"]`);
+    el?.focus();
+  };
   // The series the shell already knows about (`/api/info`, via `lib/feeds.ts`).
   // Hardcoding it here meant the status line went stale one bump after anyone
   // last read this file; `—` while the info feed is still in flight.
@@ -210,28 +247,45 @@ export default function About() {
           </table>
         </div>
 
-        <For each={table()}>
+        {/* The site's own segmented control (`.chips`), not a second one. */}
+        <div class="chips" role="tablist">
+          <For each={table()}>
+            {(t) => (
+              <button
+                role="tab"
+                data-lane={t.id}
+                class={t.id === lane()?.id ? "on" : ""}
+                aria-selected={t.id === lane()?.id}
+                tabindex={t.id === lane()?.id ? 0 : -1}
+                onKeyDown={onLaneKey}
+                onClick={() => pickLane(t.id)}
+              >
+                {t.id}
+              </button>
+            )}
+          </For>
+        </div>
+        <Show when={lane()}>
           {(t) => (
-            <>
-              <h2 class="section">{t.id}</h2>
-              <p>{t.summary}</p>
+            <div role="tabpanel">
+              <p>{t().summary}</p>
               <p class="dim">
-                {t.members} member run{t.members === 1 ? "" : "s"}
-                <Show when={t.overrides > 0}>
+                {t().members} member run{t().members === 1 ? "" : "s"}
+                <Show when={t().overrides > 0}>
                   {" · "}
-                  {t.overrides} run under different limits, so not a member of it
+                  {t().overrides} run under different limits, so not a member of it
                 </Show>
-                <Show when={t.lapsed > 0}>
+                <Show when={t().lapsed > 0}>
                   {" · "}
-                  {t.lapsed} spent attempt{t.lapsed === 1 ? "" : "s"} that never became episodes
+                  {t().lapsed} spent attempt{t().lapsed === 1 ? "" : "s"} that never became episodes
                 </Show>
                 {" · "}
-                <A href={runsHref({ episode: t.id })}>runs</A> ·{" "}
-                <A href={ladderHref(t.id)}>ladder</A>
+                <A href={runsHref({ episode: t().id })}>runs</A> ·{" "}
+                <A href={ladderHref(t().id)}>ladder</A>
               </p>
-            </>
+            </div>
           )}
-        </For>
+        </Show>
       </Show>
 
       <h2 class="section">legal</h2>
