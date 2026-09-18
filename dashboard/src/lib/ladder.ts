@@ -1386,8 +1386,16 @@ export interface CharacterPoint {
 
 export interface CharacterSeries {
   characterId: string;
-  /** The character, falling back to the model (short, with its effort) when a run recorded no name. */
+  /**
+   * What the line is labelled with: the model, and its effort where the entry
+   * has one (operator, 2026-09-18). It was the character name until then, and
+   * a character name answers a question nobody brought to this chart — freeplay
+   * is one character per model and effort, so the name is a synonym for the
+   * label at best and a riddle at worst.
+   */
   label: string;
+  /** The character's own name, for the hover; null when no run recorded one. */
+  character: string | null;
   model: string;
   /** The effort behind `model`, so two characters of one model are told apart. */
   effort: string | null;
@@ -1499,6 +1507,19 @@ export function stitchCharacter(attempts: readonly CharacterAttemptLike[]): Stit
  * single-character chart; a character it cannot lay out is omitted here with the
  * reason it gave, rather than drawn wrong.
  */
+/**
+ * What a freeplay line is called: the model, and its effort where it has one.
+ *
+ * `sonnet`, `sonnet (medium)`, `claude-fable-5 (high)` — `pointKey` over
+ * `modelDisplay`, which is exactly the scatter's own entry key, so the two
+ * charts on this page name the same thing the same way. The character's name
+ * is not in it (operator, 2026-09-18): the question a reader brings to the
+ * freeplay chart is which model is which line.
+ */
+export function characterSeriesLabel(model: string, effort: string | null): string {
+  return pointKey(modelDisplay(model), effort);
+}
+
 export function characterSeries(rows: readonly CharacterRow[], runs: readonly ResultRun[]): CharacterChartModel {
   const byId = new Map(runs.map((r) => [r.runId, r]));
   const series: CharacterSeries[] = [];
@@ -1507,7 +1528,7 @@ export function characterSeries(rows: readonly CharacterRow[], runs: readonly Re
   const startedOf = new Map(rows.map((r) => [r.characterId, r.startedAt]));
 
   for (const row of rows) {
-    const label = row.character ?? pointKey(modelDisplay(row.model), row.effort);
+    const label = characterSeriesLabel(row.model, row.effort);
     const attempts = row.chain.map((id) => byId.get(id)).filter((r): r is ResultRun => r !== undefined);
     if (attempts.length === 0) {
       omitted.push({ characterId: row.characterId, label, why: "no attempt served" });
@@ -1531,6 +1552,7 @@ export function characterSeries(rows: readonly CharacterRow[], runs: readonly Re
     series.push({
       characterId: row.characterId,
       label,
+      character: row.character,
       model: row.model,
       effort: row.effort,
       status: row.status,
@@ -1549,11 +1571,13 @@ export function characterSeries(rows: readonly CharacterRow[], runs: readonly Re
     });
   }
   /*
-   * A character name is not unique: a character that lost its character is
-   * re-rolled under the same name, and four ended `Qwenlocal` lines all
-   * labelled `Qwenlocal` name nothing. Where the name repeats, and only there,
-   * the character's start date joins it — ISO, because a pure module has no
-   * business picking a locale.
+   * A label is not unique either. Freeplay is one character per model and
+   * effort, so two lines sharing a label are the same entry's older, archived
+   * characters — and three `sonnet (low)` lines all labelled `sonnet (low)`
+   * name nothing. Where the label repeats, and only there, the character's
+   * start date joins it — ISO, because a pure module has no business picking a
+   * locale. (This was the character-name rule before 2026-09-18; the reason it
+   * exists is unchanged, only what it disambiguates.)
    */
   const seen = new Map<string, number>();
   for (const s of series) seen.set(s.label, (seen.get(s.label) ?? 0) + 1);

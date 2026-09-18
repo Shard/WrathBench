@@ -58,7 +58,7 @@ import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards"
 import { Coins, QuestCount } from "../components/CharacterFacts";
 import { XpBar } from "../components/UnitFrame";
 import { InventoryPanel } from "../components/Inventory";
-import { stitchCharacter, type CharacterSeries } from "../lib/ladder";
+import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
@@ -239,7 +239,9 @@ export default function RunDetail() {
       const st = d?.character;
       if (d === undefined || st === undefined) return null;
       const model = d.run.model ?? "(unnamed)";
-      const label = d.run.character ?? modelDisplay(model);
+      // The line is named for the model, not the character (operator, 2026-09-18);
+      // the name rides along for the hover.
+      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null);
       const last = st.runs[st.runs.length - 1];
       if (last === undefined) {
         return { series: [], omitted: [{ characterId: st.characterId, label, why: "no attempt served" }] };
@@ -253,6 +255,7 @@ export default function RunDetail() {
           {
             characterId: st.characterId,
             label,
+            character: d.run.character,
             model,
             effort: d.run.comparability?.effort ?? null,
             // The character is doing whatever its newest attempt is doing.
