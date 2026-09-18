@@ -74,7 +74,7 @@ now), and `?harness=` on the API narrows to one when wanted. `harnessVersion`
 is a different word — the `git describe` of this repo, which applies to every
 harness, since the SDK, tools, prompt and sandbox each CLI drives are ours.
 Each CLI scaffold is its own group because each is a different unversioned
-summarizer (docs/METHODOLOGY.md, operator decision 2026-09-05).
+summarizer (docs/METHODOLOGY.md, operator decision).
 
 ### Why claude-code is its own harness
 
@@ -359,7 +359,7 @@ their turns can run for tens of minutes (see Drivers above).
 Under `claude-code` the whole episode is usually ONE CLI turn, and the finished
 output count, the metered cost and the turn clock exist in exactly one place:
 the stream-json `result` envelope that closes it. Killing the CLI the moment a
-watchdog fired threw all three away — 6 of the 9 lane-2 runs of 2026-08-25 fell
+watchdog fired threw all three away — 6 of 9 runs in one batch fell
 back to `tokens.source: "snapshot"` (the API's `message_start` figures, ~300×
 low) with no cost at all. So a watchdog or the tool-call ceiling firing mid-turn
 now records the termination exactly as before and then *winds down* instead of

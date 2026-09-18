@@ -8,8 +8,8 @@ publisher, R2 as the data plane, no Worker in the read path — is
 `docs/PUBLIC-DASHBOARD.md`; the steady-state operational runbook is
 `docs/RUNBOOK.md`, "Public dashboard".
 
-Since 2026-09-11 the deployed shape is the design's **Open** one, on the
-operator's personal account, which is where the `shard.page` zone is:
+The deployed shape is the design's **Open** one, on the account that holds
+the `shard.page` zone:
 
 | | |
 | --- | --- |
@@ -38,7 +38,7 @@ The SPA's own deployment config is `dashboard/wrangler.jsonc`, kept beside the
 build it uploads rather than here. It has no `main`: the read path is static
 assets and cached bucket objects, and nothing is invoked.
 
-## The cutover runbook
+## Setting it up
 
 Do these in order — each step names the hostname or credential the next one
 depends on. Steps 1–4 are the account; 5–8 are the lab and the deploy; 9 is the
@@ -62,7 +62,7 @@ needs a code change.
   hands it to wrangler as `CLOUDFLARE_API_TOKEN` for the one command. With it
   unset the script falls back to wrangler's own browser login (`bunx wrangler
   login`, on the account that owns the zone) and prints `wrangler whoami`
-  before deploying, which is how the 2026-09-11 cutover was run. One trap: after
+  before deploying, which is how the first deployment was run. One trap: after
   a login on a *different* account wrangler still uses the account it cached in
   `node_modules/.cache/wrangler/wrangler-account.json`, and the deploy fails
   with `Authentication error [code: 10000]` against the old account id. The
@@ -128,11 +128,11 @@ request is a billed read against the bucket.
    the prefix closes it sooner.
 
 All three rules set the TTL **explicitly by path** rather than respecting an origin
-header, and that is not a style choice: the 2026-09-11 readback confirmed that
+header, and that is not a style choice: the acceptance readback confirmed that
 no published object carries a `Cache-Control` at all — Bun's S3 writer cannot
 send one, and under the gate the Worker added them on egress. "Respect origin
 TTL" would therefore respect nothing. **All three rules already exist on the zone**
-(operator, 2026-09-11); step 9 verifies them rather than creating them.
+(operator); step 9 verifies them rather than creating them.
 
 **A missing cache rule is the only way this shape costs money.** Without it every
 public request is a billed class-B read against the bucket — roughly $7/month at
@@ -170,7 +170,7 @@ kubectl -n wrathbench logs -f deployment/wrathbench-publisher
 
 ### 6. Upload the tiles
 
-The public map draws real minimap tiles (operator, 2026-08-30). They are not
+The public map draws real minimap tiles (operator). They are not
 part of a snapshot pass and never become one — this is the step that puts them
 in the bucket, run from a checkout with `data/minimap` populated by the
 extraction in `minimap/`, with the same `S3_*` credentials as the publisher:
@@ -218,14 +218,7 @@ the public hostname polls `/api` forever and reads as a permanent data outage.
 The first deploy is what creates the `wrathbench.shard.page` Custom Domain, from
 `dashboard/wrangler.jsonc`.
 
-### 8. Retire the old account's copy
-
-Once step 9 passes: delete the `wrathbench-dashboard` Worker and the
-`wrathbench-public` bucket on the old account, and revoke the tokens that
-reached them — including the gate's `DASHBOARD_PASSWORD` secret, which dies with
-its Worker. Nothing in the repository refers to either any more.
-
-### 9. Verify
+### 8. Verify
 
 Everything below is the check, kept as the check.
 
@@ -300,7 +293,7 @@ and are worth a second check for that reason.
 ## Open, and the operator's
 
 - **Whether the `tiles/` prefix wants a crawler directive.** The tiles are
-  public (operator, 2026-08-30) and served from the data hostname, which the
+  public (operator) and served from the data hostname, which the
   app's `robots.txt` does not cover — and the publisher cannot set a header, so
   the gate's `X-Robots-Tag: noindex` has no equivalent in this shape. Nothing
   turns on it today: the map renders them, and a directive is not an access
