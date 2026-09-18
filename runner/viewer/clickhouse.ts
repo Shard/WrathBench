@@ -37,7 +37,7 @@ import { harnessOfRun, parseComparability } from "../src/index";
 import { platformOf } from "../src/platform";
 import type { RunFact } from "../src/models";
 import type { RunTotals } from "./tail";
-import { LIVE_WINDOW_MS } from "./runs";
+import { LIVE_WINDOW_MS, itemSamplesOf } from "./runs";
 
 // ------------------------------------------------------------- the row shapes
 
@@ -403,21 +403,8 @@ function parse(text: string): Record<string, unknown> | null {
   }
 }
 
-/** `items` as `readRun` shape-checks it: anything unexpected reads as null. */
-function itemsOf(text: string): ItemSample[] | null {
-  const parsed = text.length === 0 ? null : (JSON.parse(text) as unknown);
-  if (!Array.isArray(parsed)) return null;
-  const out: ItemSample[] = [];
-  for (const it of parsed as { name?: unknown; count?: unknown; equipped?: unknown }[]) {
-    if (typeof it?.name !== "string") continue;
-    out.push({
-      name: it.name,
-      count: typeof it.count === "number" ? it.count : 1,
-      equipped: it.equipped === true,
-    });
-  }
-  return out;
-}
+/** `items` as `readRun` shape-checks it — the same function, so the two agree. */
+const itemsOf = itemSamplesOf;
 
 /**
  * A stored run row as the viewer's `RunRow`.

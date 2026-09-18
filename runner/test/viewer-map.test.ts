@@ -364,8 +364,10 @@ describe("readPositions", () => {
 
   test("the popout carries the newest recorded inventory, null before the column existed", () => {
     const items = JSON.stringify([
-      { name: "Worn Mace", count: 1, equipped: true },
-      { name: "Tough Jerky", count: 5, equipped: false },
+      { name: "Worn Mace", count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
+      { name: "Tough Jerky", count: 5, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 },
+      // A row from before those fields existed, read back as it was written.
+      { name: "Tunic", count: 1, equipped: true },
     ]);
     const runsDir = fixture([
       { id: "live-items", states: [[NOW - 5000, 4, 900, 0, -6240, 380, 380, 1, 0]], items },
@@ -373,6 +375,9 @@ describe("readPositions", () => {
     ]);
     const byId = new Map(readPositions(runsDir, NOW).map((p) => [p.runId, p]));
     expect(byId.get("live-items")?.items).toEqual(JSON.parse(items));
+    // Absence survives the read: an unobserved field is not filled in with a
+    // zero, which would name slot 0 and a poor-quality item nobody saw.
+    expect(Object.keys(byId.get("live-items")!.items![2]!)).toEqual(["name", "count", "equipped"]);
     expect(byId.get("live-bare")?.items).toBeNull();
   });
 

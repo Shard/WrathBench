@@ -142,6 +142,45 @@ function str(v: unknown): string | null {
 }
 
 /**
+ * An `items` column's JSON, parsed and shape-checked: anything that is not an
+ * array of named rows reads as null, and a row without a name is dropped.
+ *
+ * The one place the stored shape is re-read, so the sqlite path and the
+ * ClickHouse one (`itemsOf`) cannot come to different answers about what a
+ * sample said. Everything past name/count/equipped is copied **only** when the
+ * stored value has the right type: a row written before those fields existed
+ * keeps exactly its three keys, rather than gaining `itemId: undefined` — an
+ * absent field means unobserved, and a zero there would name slot 0 or a
+ * poor-quality item that was never seen.
+ */
+export function itemSamplesOf(text: string): ItemSample[] | null {
+  let parsed: unknown;
+  try {
+    parsed = text.length === 0 ? null : (JSON.parse(text) as unknown);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const out: ItemSample[] = [];
+  type Row = Record<"name" | "count" | "equipped" | "itemId" | "quality" | "slot" | "bag", unknown>;
+  const opt = (key: "itemId" | "quality" | "slot" | "bag", v: unknown): { [k: string]: number } =>
+    typeof v === "number" ? { [key]: v } : {};
+  for (const it of parsed as Row[]) {
+    if (typeof it?.name !== "string") continue;
+    out.push({
+      name: it.name,
+      count: typeof it.count === "number" ? it.count : 1,
+      equipped: it.equipped === true,
+      ...opt("itemId", it.itemId),
+      ...opt("quality", it.quality),
+      ...opt("slot", it.slot),
+      ...opt("bag", it.bag),
+    });
+  }
+  return out;
+}
+
+/**
  * The newest `items` sample (item 50), parsed and shape-checked: a run
  * written before the column existed, or a sample that carried none, is null.
  */
@@ -152,18 +191,7 @@ function latestItems(db: Database, runId: string, cols: Set<string>): ItemSample
       .query(`SELECT items AS v FROM state WHERE run_id = ? AND items IS NOT NULL ORDER BY ts DESC LIMIT 1`)
       .get(runId) as Record<string, unknown> | null;
     if (r === null || typeof r["v"] !== "string") return null;
-    const parsed: unknown = JSON.parse(r["v"]);
-    if (!Array.isArray(parsed)) return null;
-    const out: ItemSample[] = [];
-    for (const it of parsed as { name?: unknown; count?: unknown; equipped?: unknown }[]) {
-      if (typeof it?.name !== "string") continue;
-      out.push({
-        name: it.name,
-        count: typeof it.count === "number" ? it.count : 1,
-        equipped: it.equipped === true,
-      });
-    }
-    return out;
+    return itemSamplesOf(r["v"]);
   } catch {
     return null;
   }

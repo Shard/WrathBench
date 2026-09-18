@@ -223,7 +223,12 @@ function runRowFixture(): RunRow {
     xp: 500,
     money: 1234,
     questsCompleted: 2,
-    items: [smuggle({ name: SURVIVES.itemName, count: 1, equipped: true })],
+    items: [
+      smuggle({ name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 }),
+      smuggle({ name: SURVIVES.itemName, count: 2, equipped: false, itemId: 2589, quality: 1, slot: 23, bag: 255 }),
+      // A row as every sample carried it before the paperdoll fields existed.
+      smuggle({ name: SURVIVES.itemName, count: 3, equipped: false }),
+    ],
     mtime: 3000,
     bytes: 4096,
     live: false,
@@ -372,6 +377,11 @@ const RUN_ROW_KEYS = [
   "items[].name",
   "items[].count",
   "items[].equipped",
+  // Where a row sits and what it is: ids and names are published, prose is not.
+  "items[].itemId",
+  "items[].quality",
+  "items[].slot",
+  "items[].bag",
   "runId",
   "model",
   "driver",
@@ -541,7 +551,14 @@ describe("projectRuns", () => {
 
   test("withholds by value, not by renaming: the fields read null", () => {
     const row = projectRuns({ runs: [runListRowFixture()] }).runs[0]!;
-    expect(row.items).toEqual([{ name: SURVIVES.itemName, count: 1, equipped: true }]);
+    expect(row.items).toEqual([
+      { name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
+      { name: SURVIVES.itemName, count: 2, equipped: false, itemId: 2589, quality: 1, slot: 23, bag: 255 },
+      { name: SURVIVES.itemName, count: 3, equipped: false },
+    ]);
+    // Back-compat: an old-shape row keeps its three keys rather than gaining
+    // four undefined ones — absence is what "unobserved" looks like on the wire.
+    expect(Object.keys(row.items![2]!)).toEqual(["name", "count", "equipped"]);
     expect(row.objective).toBeNull();
     expect(row.apiBase).toBeNull();
     expect(row.terminationDetail).toBe(SURVIVES.terminationDetail);
@@ -718,7 +735,7 @@ describe("projectPositions and projectTrack", () => {
           xp: 400,
           money: 1234,
           questsCompleted: 2,
-          items: [smuggle({ name: SURVIVES.itemName, count: 1, equipped: false })],
+          items: [smuggle({ name: SURVIVES.itemName, count: 1, equipped: false, itemId: 6948, quality: 1, slot: 23, bag: 255 })],
           harnessVersion: "harness-0.5-1-gabc",
           health: 140,
           maxHealth: 220,
@@ -752,6 +769,7 @@ describe("projectPositions and projectTrack", () => {
           "questsCompleted",
           "items",
           "items[].name", "items[].count", "items[].equipped",
+          "items[].itemId", "items[].quality", "items[].slot", "items[].bag",
           "harnessVersion",
           "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
           "class",
@@ -765,7 +783,9 @@ describe("projectPositions and projectTrack", () => {
     );
     assertClean(JSON.stringify(out));
     expect(out.positions[0]!.character).toBe(CHARACTER_NAME);
-    expect(out.positions[0]!.items).toEqual([{ name: SURVIVES.itemName, count: 1, equipped: false }]);
+    expect(out.positions[0]!.items).toEqual([
+      { name: SURVIVES.itemName, count: 1, equipped: false, itemId: 6948, quality: 1, slot: 23, bag: 255 },
+    ]);
     // The model's own words and the zone name ship (names and model text are
     // published); the smuggled key beside them does not.
     expect(out.positions[0]!.status).toEqual({ turn: 11, level: 3, zone: SURVIVES.statusZone, text: SURVIVES.statusText, ts: 1300 });
@@ -1342,7 +1362,7 @@ describe("projectEntries", () => {
         smuggle({ i: 2, t: "claude_system", ts: 3, start: 21, end: 30, turn: 1, type: "system", subtype: "init", cwd: POISON.claudeCwd, memory_paths: [POISON.claudeCwd], estimated_tokens: 5 }),
         smuggle({ i: 3, t: "events_served", ts: 4, start: 31, end: 40, via: "tool", count: 1, opcodes: ["SMSG_QUESTGIVER_QUEST_DETAILS×1"], events: batch }),
         smuggle({ i: 4, t: "pause", ts: 5, start: 41, end: 50, reason: "rate-limit", detail: POISON.pauseDetail, episodeElapsedMs: 9 }),
-        smuggle({ i: 5, t: "state", ts: 6, start: 51, end: 60, turn: 2, level: 2, zone: 12, area: 9, items: [smuggle({ name: SURVIVES.itemName, count: 2, equipped: false })] }),
+        smuggle({ i: 5, t: "state", ts: 6, start: 51, end: 60, turn: 2, level: 2, zone: 12, area: 9, items: [smuggle({ name: SURVIVES.itemName, count: 2, equipped: false, itemId: 2589, quality: 1, slot: 24, bag: 255 })] }),
         smuggle({ i: 6, t: "termination", ts: 7, start: 61, end: 70, reason: "episode-limit", detail: SURVIVES.terminationDetail }),
         smuggle({ i: 7, t: "some_future_type", ts: 8, start: 71, end: 80, turn: 3, payload: POISON.smuggled }),
         smuggle({ i: 8, t: "episodic", ts: 9, start: 81, end: 90, turn: 3, level: 2, zone: SURVIVES.zoneName, text: SURVIVES.statusText }),
@@ -1362,7 +1382,11 @@ describe("projectEntries", () => {
     // The batch itself never ships; the tally does.
     expect(keyPaths(out.entries[3])).toEqual(allow(["i", "t", "ts", "start", "end", "via", "count", "opcodes"]));
     expect(keyPaths(out.entries[4])).toEqual(allow(["i", "t", "ts", "start", "end", "reason", "episodeElapsedMs"]));
-    expect(out.entries[5]).toMatchObject({ level: 2, zone: 12, items: [{ name: SURVIVES.itemName, count: 2, equipped: false }] });
+    expect(out.entries[5]).toMatchObject({
+      level: 2,
+      zone: 12,
+      items: [{ name: SURVIVES.itemName, count: 2, equipped: false, itemId: 2589, quality: 1, slot: 24, bag: 255 }],
+    });
     expect(keyPaths(out.entries[7])).toEqual(allow(["i", "t", "ts", "start", "end", "turn"]));
     expect(out.from).toBe(0);
     expect(out.total).toBe(6);
