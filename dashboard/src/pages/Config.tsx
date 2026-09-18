@@ -200,7 +200,7 @@ export default function Config() {
               fallback={
                 <div class="banner warn">
                   No config store at <code>{body().path}</code> yet — the file is still the config.
-                  Seed it with <code>bun runner/src/config-store.ts seed infra/fleet.json</code>.
+                  Seed it with <code>bun runner/src/config-store.ts seed infra/fleet.example.json</code>.
                 </div>
               }
             >
