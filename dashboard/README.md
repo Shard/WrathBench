@@ -88,6 +88,8 @@ published artifact carries.
 | `/models` | the roster with the scheduler's verdict on each entry |
 | `/campaigns` | probe campaign coverage: cells swept, by how many models |
 | `/run/:id` | one run, turn by turn, following the file live |
+| `/character/:id` | one durable character across its attempts: the climb, the totals, the live session when one runs |
+| `/config` | the config store, operator only — the page withholds itself on the public build |
 | `/map` | every live agent on the world map; `/map?run=<id>` replays one run's recorded track, with the transport bottom centre |
 
 `/run/:id` has one remembered preference of its own beside the autoscroll
@@ -121,8 +123,8 @@ what adjacency happens to give.
 
 One page per grain: the fleet page is what is
 running *now* and links to a run, never listing them; `/runs` is the runs;
-`/episodes` is the tiers; `/ladder` is aggregates over runs. A tier's member
-count on `/episodes` leads to that tier's ladder, and a point on the ladder's
+`/about` is the tiers; `/ladder` is aggregates over runs. A tier's member
+count on `/about` leads to that tier's ladder, and a point on the ladder's
 chart leads to the runs behind it.
 
 ## The series selector
@@ -204,4 +206,5 @@ after editing them. To ship copy edits to the public site: `bun ship` (tests, sn
 build, wrangler deploy, then restores the private viewer's `dist`); `bun ship
 --publisher` after `runner/viewer` changes, `bun ship --tiles` after a minimap
 extraction; `bun run viewer:restart` for the private viewer;
-`bun run deploy:worldserver` for the module (see `infra/deploy-worldserver.sh`).
+`bun run deploy:worldserver` for the module (`infra/k8s-deploy.sh`;
+`bun run deploy:worldserver:compose` is the rehearsal stack's).

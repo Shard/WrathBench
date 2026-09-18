@@ -39,8 +39,9 @@ path and no backward compatibility with callers that send none.
 Two credential classes:
 
 - **Operator** — the bearer is the *port secret*, `WrathBench.Secret`
-  (`AC_WRATH_BENCH_SECRET` in infra/compose.yml, from `WRATHBENCH_MODULE_SECRET`
-  in the operator's `.env`; docs/OPERATIONS.md "Secrets"). May use every route
+  (`AC_WRATH_BENCH_SECRET` on the worldserver, from `WRATHBENCH_MODULE_SECRET` —
+  a Secret key on the cluster, the operator's `.env` under compose;
+  docs/OPERATIONS.md "Secrets"). May use every route
   with any token. Held by the runner host process, the fleet supervisor and the
   smoke scripts; never by the snippet child (the sandbox strips it from the
   child's environment).
