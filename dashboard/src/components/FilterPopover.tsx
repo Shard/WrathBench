@@ -26,7 +26,7 @@ import { type Placement, popoverPlacement } from "../lib/popover";
 import type { FilterOption } from "../lib/ladderfilter";
 
 /** The panel's own width, told to both the CSS and the placement maths. */
-const PANEL_W = 300;
+const PANEL_W = 340;
 
 /** One dimension inside the panel: its options, and what is selected. */
 export interface FilterGroup {
