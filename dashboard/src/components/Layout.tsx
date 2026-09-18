@@ -11,10 +11,10 @@
 
 import { A, useLocation, useSearchParams } from "@solidjs/router";
 import { For, Show, createSignal, onCleanup, type ParentProps } from "solid-js";
-import { snapshotSource } from "../api/client";
+import { SNAPSHOT_MODE, snapshotSource } from "../api/client";
 import { snapshotBanner, type SnapshotBanner, type SnapshotSource } from "../api/snapshot-client";
 import { useClock } from "../lib/clock";
-import { NAV } from "../lib/nav";
+import { navItems } from "../lib/nav";
 import { FeedsContext, createFeeds } from "../lib/feeds";
 import { REPO_URL, repoLabel } from "../lib/repo";
 import { SeriesSelect } from "./SeriesSelect";
@@ -57,7 +57,19 @@ export function Layout(props: ParentProps) {
           <A href="/">WrathBench</A>
         </h1>
         <nav>
-          <For each={NAV}>{(n) => <A href={n.href} activeClass="on">{n.label}</A>}</For>
+          {/*
+            The operator's config page is in the bar only on a private build
+            served by a private viewer — the routes behind it are not mounted
+            in public mode, and `=== false` rather than `!publicMode` keeps the
+            link from flashing on before the first `/api/info` settles.
+          */}
+          <For each={navItems(!SNAPSHOT_MODE && feeds.info.latest?.publicMode === false)}>
+            {(n) => (
+              <A href={n.href} activeClass="on">
+                {n.label}
+              </A>
+            )}
+          </For>
         </nav>
         <span class="spacer" />
         {/*
