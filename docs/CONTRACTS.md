@@ -73,10 +73,8 @@ down run B — across the per-run isolation boundary the harness measures
 inside. That was accepted while every job was operator-launched on a private
 compose network, and tracked as FOLLOW-UPS item 19.
 
-The floor that closes it (2026-09-01; module side built to
-`wrathbench/worldserver:next`, deploys in the next window — until then the
-running module is still the pre-auth one and the statement above is still the
-live posture):
+The floor that closes it, live since 2026-09-01 (`module/PROTOCOL.md`
+"Authentication" is the authority on the served surface):
 
 - **A secret on the port.** Every request and every `/events` upgrade carries
   `Authorization: Bearer`; the module refuses anything else with `401` before a

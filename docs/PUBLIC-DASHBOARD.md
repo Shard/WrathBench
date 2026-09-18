@@ -167,7 +167,7 @@ tightens it to ≈ the push cadence; not needed for a ~1 minute target.
 ### Data plane: R2 behind a custom domain with a cache rule
 
 R2 has free egress and a free tier (10 GB stored, 10M reads, 1M writes per
-month) that covers this corpus many times over: ~150–200 runs today, and only
+month) that covers this corpus many times over: a few hundred runs today, and only
 projected JSON is ever uploaded — a fraction of the ~3 MB/run the private
 trajectories weigh. Two setup facts carry all the operational risk:
 

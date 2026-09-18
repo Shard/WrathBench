@@ -212,7 +212,8 @@ the SPA owns everything that is UI.
 - **Public hosting is push-based, so the lab is never an origin.**
   `infra/publish-dashboard.ts` calls the viewer's own `createApi` handler
   in-process, applies an allowlist projection, and PUTs generation-addressed
-  JSON to an R2 bucket on a ~60s timer, manifest last so a reader never
+  JSON to an R2 bucket on a timer (300s in both deployments,
+`WRATHBENCH_PUBLISH_INTERVAL_MS`), manifest last so a reader never
   observes a torn generation; every public read is then a static asset or an
   edge-cached object and no inbound path to the harness exists at all. The SPA
   builds a second time in **snapshot mode** — a build-time

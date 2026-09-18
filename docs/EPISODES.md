@@ -136,7 +136,7 @@ standing sandbox that never finishes. Duration separates neither pair.
   `probing` run does — the id pins nothing. The one exception is the
   policy-generated session in the `idle: "unlimited"` lane below, which
   materialises with no ceiling at all. It is the *job* that earns this, not the
-  ref: a freeplay job written into the fleet file that names an idle-capable
+  ref: a freeplay job written into the fleet config that names an idle-capable
   ref is an ordinary experiment and keeps the 500.
 - **Start state.** Whatever the experiment needs.
 - **Objective.** Allowed. One of the two steered ids where the operator may tell
