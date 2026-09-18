@@ -266,7 +266,10 @@ h2.section:first-child { margin-top: 0; }
 table { border-collapse: collapse; width: 100%; font-size: var(--fs-md); }
 th, td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--dim); font-weight: 600; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
-tbody tr:hover { background: var(--panel); }
+/* One highlight, two ways in: the pointer's own hover, and the shared
+   `hovered` key the ladder's chart and table agree on. */
+tbody tr:hover, tbody tr.hovered { background: var(--panel); }
+tbody tr.hovered { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
        vertical-align: middle; background: var(--dim); }
@@ -596,16 +599,16 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .ladderchart { width: 100%; max-width: 100%; height: auto; display: block; margin: 4px 0 6px;
                background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 .ladderchart-pt { cursor: pointer; }
-.ladderchart-pt:hover circle:last-of-type { stroke: var(--fg); }
-.ladderchart-pt:hover text { text-decoration: underline; }
+.ladderchart-pt:hover circle:last-of-type, .ladderchart-pt.hovered circle:last-of-type { stroke: var(--fg); }
+.ladderchart-pt:hover text, .ladderchart-pt.hovered text { text-decoration: underline; }
 /* A label every slot failed is drawn anyway (hidden is worse than ugly), dimmed so the clean ones read first. */
 .ladderchart-pt text.crowded { fill: var(--dim); }
 /* A displaced label's leader brightens with the point it belongs to, on both charts. */
-.ladderchart-pt:hover .chart-leader, .characterchart-series:hover .chart-leader { stroke: var(--fg); opacity: 1; }
+.ladderchart-pt:hover .chart-leader, .ladderchart-pt.hovered .chart-leader, .characterchart-series:hover .chart-leader { stroke: var(--fg); opacity: 1; }
 /* With the Pareto front drawn, a dominated point steps back — puck, label and
    leader together — and comes forward again under the pointer. */
 .ladderchart-pt.dominated { opacity: 0.35; }
-.ladderchart-pt.dominated:hover { opacity: 1; }
+.ladderchart-pt.dominated:hover, .ladderchart-pt.dominated.hovered { opacity: 1; }
 .ladderchart-caption { font-size: var(--fs-sm); margin: 0 0 12px; }
 
 /* The freeplay field's graph reuses the scatter's frame and caption; only the

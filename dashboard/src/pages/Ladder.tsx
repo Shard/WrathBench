@@ -59,6 +59,7 @@ import {
   billingKnown,
   scored,
   filterRuns,
+  hoverKeyOf,
   ladderPoints,
   ladderRows,
   pointKey,
@@ -228,6 +229,15 @@ export default function Ladder() {
       ? narrowed()
       : narrowed().filter((r) => !hidden().has(pointKey(r.model ?? "(unnamed)", r.effort))),
   );
+  /*
+   * What the reader is pointing at, shared by the scatter and the table so
+   * hovering either end lights both (operator, 2026-09-18). One signal at the
+   * page rather than two derivations that could disagree; the key is
+   * `hoverKeyOf`, because the chart draws per (model, effort) and the table
+   * per model, and the model is what the two have in common. Keyboard focus on
+   * a row sets it too, so the link is not pointer-only.
+   */
+  const [hovered, setHovered] = createSignal<string | null>(null);
   const groups = createMemo((): FilterGroup[] => [
     {
       label: "company",
@@ -379,7 +389,14 @@ export default function Ladder() {
         {/* Below ~720px the scatter's labels are texture, not text: it keeps a
             floor width and scrolls inside itself rather than being squeezed. */}
         <div class="wide-scroll">
-        <LadderChart runs={runs()} episode={episode()} view={view()} pareto={pareto()} />
+        <LadderChart
+          runs={runs()}
+          episode={episode()}
+          view={view()}
+          pareto={pareto()}
+          hovered={hovered()}
+          onHover={setHovered}
+        />
         </div>
 
         <div class="scroller">
@@ -412,7 +429,14 @@ export default function Ladder() {
             <tbody>
               <For each={rows()}>
                 {(row) => (
-                  <tr>
+                  <tr
+                    classList={{ hovered: hovered() === hoverKeyOf(row.model) }}
+                    tabindex="0"
+                    onMouseEnter={() => setHovered(hoverKeyOf(row.model))}
+                    onMouseLeave={() => setHovered(null)}
+                    onFocus={() => setHovered(hoverKeyOf(row.model))}
+                    onBlur={() => setHovered(null)}
+                  >
                     <td>
                       <ModelIcon model={row.model} />
                       <span title={row.model}>{modelDisplay(row.model)}</span>
