@@ -252,7 +252,7 @@ function Popover(props: { icon: string; count: number; label: string; children: 
 
   return (
     <div
-      class="bag"
+      class="popover-anchor bag"
       ref={root}
       onMouseEnter={() => {
         setSticky(false);
@@ -264,7 +264,7 @@ function Popover(props: { icon: string; count: number; label: string; children: 
     >
       <button
         type="button"
-        class="bag-button"
+        class="popover-button"
         ref={btn}
         aria-expanded={open()}
         onClick={(e) => {
@@ -285,7 +285,7 @@ function Popover(props: { icon: string; count: number; label: string; children: 
       <Show when={open()}>
         <Portal>
           <div
-            class="bag-popover floating"
+            class="popover bag-popover floating"
             ref={panel}
             onMouseEnter={() => setActive(me)}
             onMouseLeave={() => {
