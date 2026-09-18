@@ -948,3 +948,79 @@ td .spread { font-size: var(--fs-xs); }
 }
 .surface.admin { color: var(--admin); }
 .surface.preview { color: var(--preview); }
+
+/*
+ * Inventory (item icons, 2026-09-18). A cell is a fixed square that holds
+ * either Wowhead's icon or our own fallback text, so the grid does not reflow
+ * when the script lands — or when it never does. `.decorated` is written by the
+ * panel's MutationObserver: before it, the name shows; after it, the icon does.
+ */
+.inventory { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.inv-note { color: var(--dim); font-size: var(--fs-xs); }
+
+.inv-cell {
+  position: relative; width: 34px; height: 34px; flex: 0 0 auto;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--grid);
+  overflow: hidden;
+}
+.inv-cell.empty { background: transparent; border-style: dashed; opacity: 0.55; }
+.inv-cell .inv-slot-label {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--dim); font-size: var(--fs-2xs); text-align: center; line-height: 1.05; padding: 1px;
+}
+.inv-link {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  text-decoration: none; overflow: hidden;
+}
+/* The fallback: as much of the name as fits, in its quality colour. It is the
+   readable state, not a placeholder — a blocked reader never leaves it. */
+.inv-link .inv-name {
+  font-size: var(--fs-2xs); line-height: 1.05; text-align: center; padding: 1px;
+  overflow: hidden; word-break: break-word; max-height: 100%;
+}
+.inv-link.decorated .inv-name { display: none; }
+.inv-link img, .inv-link ins, .inv-link del { display: block; width: 100%; height: 100%; }
+.inv-count {
+  position: absolute; right: 1px; bottom: 0; z-index: 1;
+  font-size: var(--fs-2xs); font-weight: 700; color: var(--fg);
+  text-shadow: 0 0 2px var(--bg), 0 0 2px var(--bg), 0 0 3px var(--bg);
+  pointer-events: none;
+}
+.inv-grid { display: flex; flex-wrap: wrap; gap: 3px; }
+
+.paperdoll-grid { display: flex; gap: 6px; align-items: flex-start; }
+.paperdoll-col { display: flex; flex-direction: column; gap: 3px; }
+.paperdoll-mid { flex: 1 1 auto; min-width: 0; }
+.paperdoll-row { display: flex; gap: 3px; margin-top: 3px; }
+.inv-unplaced { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+
+/* The bag button, and the popover it opens. Hover on a desktop, tap anywhere. */
+.bag { position: relative; display: inline-block; }
+.bag-button {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font: inherit; font-size: var(--fs-sm); color: var(--fg);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px;
+}
+.bag-button:hover { border-color: var(--accent); }
+/* A bag drawn in CSS, because we ship no art: a body and a flap. */
+.bag-icon {
+  width: 11px; height: 12px; border: 1px solid currentColor; border-radius: 2px 2px 3px 3px;
+  position: relative; opacity: 0.85;
+}
+.bag-icon::before {
+  content: ""; position: absolute; left: 2px; right: 2px; top: -3px; height: 3px;
+  border: 1px solid currentColor; border-bottom: 0; border-radius: 3px 3px 0 0;
+}
+.bag-count { font-weight: 700; }
+.bag-label { color: var(--dim); font-size: var(--fs-xs); }
+.bag-popover {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 20;
+  width: max-content; max-width: min(320px, calc(100vw - 32px));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
+}
+
+@media (max-width: 400px) {
+  .inv-cell { width: 30px; height: 30px; }
+  .bag-popover { max-width: calc(100vw - 24px); }
+}
