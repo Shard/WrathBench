@@ -55,6 +55,12 @@ export function Layout(props: ParentProps) {
    * settled on a private build, and nothing is drawn in the meantime.
    */
   const which = (): ReturnType<typeof surface> => surface(SNAPSHOT_MODE, feeds.info.latest?.publicMode);
+  /* Required of every published artifact; see docs/DATA-AND-LEGAL.md. Null on
+     the private build, which publishes nothing and so attributes nothing. */
+  const attribution = () => {
+    const text = snapshot?.attribution();
+    return text === undefined || text === "" ? null : attributionFooter(text);
+  };
   return (
     <FeedsContext.Provider value={feeds}>
     <div class="app">
@@ -143,30 +149,49 @@ export function Layout(props: ParentProps) {
           )}
         </Show>
       </header>
-      <main class={flush() ? "flush" : ""}>{props.children}</main>
-      {/* Required of every published artifact; see docs/DATA-AND-LEGAL.md. */}
-      <Show when={snapshot?.attribution()}>
-        {(a) => (
-          <footer class="attribution">
-            {/* Only once there is a public repository to send a reader to; see lib/repo.ts. */}
-            <Show when={REPO_URL}>
-              {(url) => (
-                <a class="repo" href={url()} rel="noopener" target="_blank">
-                  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                    <path
-                      fill="currentColor"
-                      d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
-                    />
-                  </svg>
-                  {repoLabel(url())}
-                </a>
-              )}
-            </Show>
-            <span class="legal">{a()}</span>
-          </footer>
-        )}
-      </Show>
+      {/*
+        * The footer rides INSIDE the scroll container on every page that
+        * scrolls, so it sits at the end of the content rather than pinned to
+        * the bottom of the viewport — on a phone the pinned strip cost two or
+        * three permanent lines (operator, 2026-09-18). The map is the one page
+        * that cannot take it: `main.flush` is a canvas sized to the viewport
+        * and does not scroll, so there is no end of the page to put it at, and
+        * the attribution is required on every published view rather than
+        * optional per page. There it stays a sibling of `main`, where it was.
+        */}
+      <main class={flush() ? "flush" : ""}>
+        {props.children}
+        <Show when={!flush()}>{attribution()}</Show>
+      </main>
+      <Show when={flush()}>{attribution()}</Show>
     </div>
     </FeedsContext.Provider>
+  );
+}
+
+/**
+ * The attribution footer itself, as one function called from the two places
+ * the shell can put it — never rendered twice, because the two `Show`s are on
+ * opposite sides of the same condition.
+ */
+function attributionFooter(text: string) {
+  return (
+    <footer class="attribution">
+      {/* Only once there is a public repository to send a reader to; see lib/repo.ts. */}
+      <Show when={REPO_URL}>
+        {(url) => (
+          <a class="repo" href={url()} rel="noopener" target="_blank">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
+              />
+            </svg>
+            {repoLabel(url())}
+          </a>
+        )}
+      </Show>
+      <span class="legal">{text}</span>
+    </footer>
   );
 }
