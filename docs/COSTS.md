@@ -2,8 +2,8 @@
 
 How cost is measured in this harness, and the rules learned measuring it. The
 hard numbers that used to live here (per-episode resource tables, a pricing
-table, platform reliability counts, a what-to-try-next list) were a snapshot of
-2026-08-22/23 and went stale the moment the 0.5 series re-armed; they were
+table, platform reliability counts, a what-to-try-next list) were a snapshot
+that went stale the moment the 0.5 series re-armed; they were
 removed rather than left to mislead — `git show d752ef7:docs/COSTS.md`
 is the last revision that carries them. Cost surfaces belong in the UI
 (episode cost, campaign rollups, estimates from accumulated baselines): that
@@ -15,45 +15,40 @@ record.
 - Every `t:"response"` trajectory record carries the provider-reported
   `usage` block when the provider sends one: `prompt_tokens`,
   `completion_tokens`, `cached_tokens`, `cache_write_tokens`,
-  `reasoning_tokens`, and OpenRouter's own `cost` in credits. Since `d752ef7`
-  it also names the serving `provider` when the body reports one, and since
-  2026-09-16 the first one seen is promoted onto the run itself
+  `reasoning_tokens`, and OpenRouter's own `cost` in credits. It also names
+  the serving `provider` when the body reports one, and the first one seen is
+  promoted onto the run itself
   (`run.resolved_provider`, `meta.resolved.provider`) so a cost sweep can group
-  by backend without replaying the trajectory. Routing is pinned from the same
-  date (docs/METHODOLOGY.md, "Routing is pinned"), so a cache miss attributable
+  by backend without replaying the trajectory. Routing is pinned
+  (docs/METHODOLOGY.md, "Routing is pinned"), so a cache miss attributable
   to a backend move is now something the config has to have asked for.
 - The claude-code harness emits `usageRaw`/`costUsd` only on a clean
-  `claude_result` (natural completion). Until 2026-08-25 a watchdog kill cut the
-  stream before that record landed, so most subscription episodes had no
-  as-metered figure at all; the driver now winds down instead — it records the
+  `claude_result` (natural completion), so a watchdog kill would cut the stream
+  before that record landed; the driver winds down instead — it records the
   termination, refuses every further tool call, and reads the CLI's stream for
   up to 90s so the closing `result` can land (runner/README.md, "Winding a
-  claude-code episode down"). Runs from then on should read `source:
-  "reported"` and carry a cost; a run whose CLI never closed its turn still
-  reads `snapshot`, and its `wind-down` record says `grace-expired`. Runs before
-  that date are unchanged and stay `snapshot`.
+  claude-code episode down"). A run that gets one reads `source: "reported"`
+  and carries a cost; a run whose CLI never closed its turn reads `snapshot`,
+  and its `wind-down` record says `grace-expired`.
 - A `claude_result` lands once per harness TURN, and its two halves do not cover
   the same thing: `usage` is that turn's, so a run's output is the sum over the
   records, while `total_cost_usd` is CUMULATIVE for the CLI session, so a
-  session's cost is its LAST record and never the sum. Since 2026-08-25 the
-  record also carries `sessionId` (the boundary a pause and resume crosses) and
+  session's cost is its LAST record and never the sum. The record also carries
+  `sessionId` (the boundary a pause and resume crosses) and
   `duration_api_ms` (time inside API calls, as against `duration_ms`'s whole
   turn).
-- **2026-08-25:** every claude-code completion-token figure the viewer showed
-  before this date was wrong low by roughly 300×, and so was its tokens/second.
-  Per-response `usage.completion_tokens` under that driver is the API's
-  `message_start` snapshot, not the finished count; the input side was and is
-  correct. Output now comes off `claude_result.usageRaw.output_tokens`. Actual
-  cost (`costUsd`) never depended on it; EXPECTED cost, which prices
-  `completionTokens`, does. A run whose turns never emitted a `claude_result` at
-  all keeps the snapshot figures and is labelled `source: "snapshot"` rather
-  than `"reported"`, in the API and on the run page both.
-- **2026-08-25, same pass:** as-metered cost for a claude-code run was the SUM
-  of its `claude_result.costUsd` figures, which triangle-counts a cumulative
-  series — the haiku run read $69.30 for a session that charged $4.35. It is now
-  the last figure per CLI session, summed across sessions. Only runs with more
-  than one result record moved; the common case (a watchdog kill leaves none or
-  one) never did.
+- Per-response `usage.completion_tokens` under the claude-code driver is the
+  API's `message_start` snapshot, not the finished count — low by roughly 300×,
+  and so is any tokens/second read off it; the input side is correct. Output
+  comes off `claude_result.usageRaw.output_tokens`. Actual cost (`costUsd`)
+  never depended on it; EXPECTED cost, which prices `completionTokens`, does. A
+  run whose turns never emitted a `claude_result` at all keeps the snapshot
+  figures and is labelled `source: "snapshot"` rather than `"reported"`, in the
+  API and on the run page both.
+- As-metered cost for a claude-code run is the last `claude_result.costUsd`
+  figure per CLI session, summed across sessions. Summing every record
+  triangle-counts a cumulative series: the haiku run read $69.30 that way for a
+  session that charged $4.35.
 - Estimates and provider-reported actuals are different species and are never
   presented as each other (the deploy-window design draws the line; the viewer falls back to
   an estimate only where the provider reported nothing, and labels it).
@@ -69,10 +64,10 @@ record.
   per-response prompt tokens overshot a real `costUsd` by ~4x and the summed
   output figure undercounted real output ~6.8x on the one run with ground
   truth — and the output side is worse than that measurement suggested: the
-  figures are opening snapshots, so on the 2026-08-25 haiku run they undercount
+  figures are opening snapshots, so on the haiku run they undercount
   by ~300×. Per-response blocks are good for the SHAPE of context growth, never
   for absolute $, and on the output side not even for shape.
-- **Cost control is external to the fleet by decision** (operator, 2026-08-24): a tier is
+- **Cost control is external to the fleet by decision** (operator): a tier is
   denominated in runs, dollars are the operator's reasoning. If an in-fleet
   money budget is ever wanted, it belongs beside `policy.paid.maxConcurrent`,
   not as a new tier.
@@ -118,7 +113,7 @@ it explains these numbers rather than unscoring the rows. Nothing compacts the c
 compaction gate was never tripped by the fixed-context lanes, and the
 subscription lane arguably trips it already.
 
-**codex harness (OpenAI models via the Codex CLI on a ChatGPT subscription, 2026-09-05):** the same
+**codex harness (OpenAI models via the Codex CLI on a ChatGPT subscription):** the same
 regime with a different scaffold — one persisted thread, resumed per turn, compacted by the CLI on
 its own schedule. Its `turn.completed` usage is a finished count per turn (`input_tokens` with the
 cached part as a subset, `output_tokens`, `reasoning_output_tokens`), landed once on the turn's last
@@ -131,8 +126,8 @@ OpenAI's published list price as `openai/gpt-6-astra` ($10/$50/$1 per million in
 verified 2026-09-05 against OpenAI's own API price list). It is the same synced row an OpenRouter
 run would read; only what it means differs, and `codexPrice` in `runner/viewer/pricing.ts` says
 so — an OpenRouter run meters the operator's balance, a codex run bills a flat ChatGPT
-subscription, so the figure there is a comparison and not a bill. Operator's decision, 2026-09-05,
-on the first codex run: without it a codex run had no cost reading at all and was absent from
+subscription, so the figure there is a comparison and not a bill. It is the operator's decision,
+taken on the first codex run: without it a codex run had no cost reading at all and was absent from
 every ladder chart, whose x-axis is cost.
 
 **Why Sonnet-on-subscription is the cost outlier, in numbers:** it is not that the tokens are
