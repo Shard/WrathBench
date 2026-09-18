@@ -250,7 +250,14 @@ export default function Models() {
                                 .filter((t): t is string => t !== null)
                                 .join(" · ")}
                             >
-                              {s().status} <LevelXp level={s().level} xp={s().xp} compact />
+                              {/* The level only when there is one: a character
+                                  with no reading yet reads "live", never
+                                  "live —", which was the old label's rule. */}
+                              {s().status}
+                              <Show when={s().level !== null}>
+                                {" "}
+                                <LevelXp level={s().level} xp={s().xp} compact />
+                              </Show>
                             </A>
                           )}
                         </Show>
