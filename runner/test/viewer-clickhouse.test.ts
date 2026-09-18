@@ -88,7 +88,11 @@ function writeRun(runsDir: string, runId: string): string {
     money: 71,
     questsCompleted: 3,
     turn: 2,
-    items: [{ name: "Tough Jerky", count: 4, equipped: false }],
+    items: [
+      { name: "Tough Jerky", count: 4, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 },
+      // A row of the old three-field shape, beside the new one.
+      { name: "Worn Mace", count: 1, equipped: true },
+    ],
   });
   traj.recordMove(runId, { map: 0, x: 7, y: 8, z: 9, moveId: 1 });
   traj.recordMove(runId, { map: 0, x: 7, y: 8, z: 9, moveId: 1, status: "arrived" });
@@ -107,6 +111,17 @@ describe("a run row off the store is the run row off the files", () => {
     const fromStore = runRowOf(rows[0]!, latest.get("run-1"), NOW);
     const fromFiles = readRun(runsDir, "run-1", NOW);
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(fromFiles));
+  });
+
+  test("the stored item JSON reads back whole, old-shape rows included", async () => {
+    // The column is JSON text on both sides, so the paperdoll's fields needed
+    // no migration; what they did need is for the shape check not to drop them.
+    const row = runRowOf((await store.runRows())[0]!, (await store.latestStates()).get("run-1"), NOW);
+    expect(row.items).toEqual([
+      { name: "Tough Jerky", count: 4, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 },
+      { name: "Worn Mace", count: 1, equipped: true },
+    ]);
+    expect(Object.keys(row.items![1]!)).toEqual(["name", "count", "equipped"]);
   });
 
   test("the readings a listing shows come off the newest sample that had them", async () => {

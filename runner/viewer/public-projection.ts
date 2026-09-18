@@ -280,9 +280,28 @@ function projectAreas(a: AreaFacts): AreaFacts {
   };
 }
 
-/** Item names are names (operator, 2026-08-30); each row is still built by hand. */
+/**
+ * Item names are names (operator, 2026-08-30); each row is still built by hand.
+ *
+ * Where a row sits (`slot`, `bag`) and what it is (`itemId`, `quality`) pass
+ * with the name: ids are already published material, and none of it is prose.
+ * Each is copied only when it is there, so a row that carried none keeps the
+ * three keys it was stored with rather than gaining four undefined ones.
+ */
 function projectItems(items: ItemSample[] | null): ItemSample[] | null {
-  return items === null ? null : items.map((i) => ({ name: i.name, count: i.count, equipped: i.equipped }));
+  const opt = (key: "itemId" | "quality" | "slot" | "bag", v: number | undefined): { [k: string]: number } =>
+    typeof v === "number" ? { [key]: v } : {};
+  return items === null
+    ? null
+    : items.map((i) => ({
+        name: i.name,
+        count: i.count,
+        equipped: i.equipped,
+        ...opt("itemId", i.itemId),
+        ...opt("quality", i.quality),
+        ...opt("slot", i.slot),
+        ...opt("bag", i.bag),
+      }));
 }
 
 function projectRunRow(r: RunRow): RunRow {
