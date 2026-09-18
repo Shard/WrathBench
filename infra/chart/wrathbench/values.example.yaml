@@ -13,7 +13,6 @@ storage:
   db:
     size: 20Gi
 envSecretName: wrathbench-env
-fleetConfigMapName: wrathbench-fleet-config
 fleet:
   enabled: true
 runner:

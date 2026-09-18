@@ -188,18 +188,16 @@ the worldserver's /health build, so a run says which revision produced it. */}}
   value: "http://worldserver:8086"
 - name: WRATHBENCH_RUNS_DIR
   value: /wrathbench/data/runs
-- name: WRATHBENCH_FLEET_CONFIG
-  value: /wrathbench/config/fleet.json
-{{- /* The live config store (docs/OPERATIONS.md "Where the config lives").
-       Set here and not per pod because the seed is gated on exactly this
-       variable, and every pod that reads config must read the SAME file:
-       the supervisor seeds and re-reads it, the viewer serves and edits it,
-       the publisher renders the viewer's roster from it, and the runner pod
-       is where `config-store.ts seed` is exec'd. So every pod that includes
-       this block ALSO mounts the `config` subPath of the data PVC at this
-       path, writable — a read-only sqlite handle still creates the -wal/-shm
-       sidecars, so a readOnly mount would turn every config read into an
-       error rather than a graceful fall-through to fleet.json. */}}
+{{- /* The config store (docs/OPERATIONS.md "Where the config lives"), the
+       only fleet config. Set here and not per pod because every pod that
+       reads config must read the SAME file: the supervisor re-reads it, the
+       viewer serves and edits it, the publisher renders the viewer's roster
+       from it, and the runner pod is where `config-store.ts` is exec'd (the
+       one-time seed, and the deploy window's preflight read). So every pod
+       that includes this block ALSO mounts the `config` subPath of the data
+       PVC at this path, writable — a read-only sqlite handle still creates
+       the -wal/-shm sidecars, so a readOnly mount would turn every config
+       read into an error. */}}
 - name: WRATHBENCH_CONFIG_DB
   value: /wrathbench/data/config/config.sqlite
 {{- end -}}

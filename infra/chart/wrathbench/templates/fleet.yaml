@@ -2,13 +2,14 @@
 {{/*
 The fleet supervisor (infra/run-fleet.ts) as the Deployment ADR-0020 shaped the
 compose service as a rehearsal for. One replica, Recreate, always: two
-supervisors on one fleet.json is a night of account_in_use.
+supervisors on one config is a night of account_in_use.
 
-Steering is unchanged — edit infra/fleet.json in THIS repo, Flux's Kustomization
-regenerates the ConfigMap, the kubelet swaps the projected directory and the
-supervisor's next 60-second re-read picks it up. The mount is a DIRECTORY, not
-a subPath file: a subPath mount is copied once at start and never updated,
-which would turn hot steering into a silent no-op.
+Steering is the config store on the data PVC (WRATHBENCH_CONFIG_DB in
+harnessEnv), the only fleet config: edit it on the viewer's /config page or
+with `config-store.ts` through the runner pod, and the supervisor's next
+60-second re-read picks it up. Nothing here rolls on a config change, and no
+ConfigMap is involved — a fresh cluster seeds the store once from
+infra/fleet.example.json (docs/DEPLOY-NUSPHERE.md, "The config store").
 
 Draining is `kubectl scale --replicas=0` plus the wait on fleet-state.json that
 infra/k8s-deploy.sh does. terminationGracePeriodSeconds is the compose
@@ -55,7 +56,7 @@ spec:
           workingDir: /wrathbench
           # tini is compose's `init: true`: it reaps the orphaned grandchildren an
           # episode can leave behind, which bun as pid 1 would not.
-          command: ["/usr/bin/tini", "--", "bun", "infra/run-fleet.ts", "/wrathbench/config/fleet.json"]
+          command: ["/usr/bin/tini", "--", "bun", "infra/run-fleet.ts"]
           env:
             # Switches run-roster off the docker-compose-exec path (there is no
             # docker CLI here) and onto direct child processes.
@@ -83,18 +84,14 @@ spec:
             - name: data
               mountPath: /wrathbench/data/wiki
               subPath: wiki
-            # The live config store, WRATHBENCH_CONFIG_DB in harnessEnv. A
-            # subPath because the pod does not mount /wrathbench/data itself
-            # — a store written there would be pod-local and would silently
-            # replace Flux's ConfigMap steering with a copy nobody can reach.
-            # The supervisor seeds it from the ConfigMap file below the first
-            # time it boots without one, then reads it instead of the file.
+            # The config store, WRATHBENCH_CONFIG_DB in harnessEnv — the only
+            # fleet config. A subPath because the pod does not mount
+            # /wrathbench/data itself: a store written there would be pod-local
+            # and vanish with the pod. Seeded once, by hand, through the runner
+            # pod; an empty store runs an empty board and says so every tick.
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
-            - name: fleet-config
-              mountPath: /wrathbench/config
-              readOnly: true
             {{- if .Values.codex.enabled }}
             # NOT a subPath: the CLI rewrites auth.json in place and expects a
             # real directory it owns (uid 1000, via the pod's fsGroup).
@@ -113,9 +110,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
-        - name: fleet-config
-          configMap:
-            name: {{ .Values.fleetConfigMapName }}
         {{- if .Values.codex.enabled }}
         - name: codex-home
           persistentVolumeClaim:
