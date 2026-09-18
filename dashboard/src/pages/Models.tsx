@@ -83,8 +83,9 @@ export default function Models() {
               fallback={
                 <>
                   No fleet config was found
-                  <Show when={body()!.roster.path !== null}> at {body()!.roster.path}</Show>. Point
-                  the viewer at one with <code>WRATHBENCH_FLEET_CONFIG</code>.
+                  <Show when={body()!.roster.path !== null}> at {body()!.roster.path}</Show>. The
+                  fleet config is the config store (<code>runner/src/config-store.ts</code>, served
+                  as <code>/api/config</code>) — seed it and the rows appear.
                 </>
               }
             >
