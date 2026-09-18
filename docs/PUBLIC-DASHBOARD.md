@@ -441,8 +441,12 @@ re-renders every pass — the live chart cannot be either.
   picture is served from (the same data hostname the SPA reads its JSON from),
   and the render's hash becomes `VITE_WRATHBENCH_OG_STAMP`, appended as `?v=`.
   A build that names no snapshot base falls back to the app origin's own
-  `/og.png`; the private viewer build names no origin at all and therefore
-  carries no image tags, rather than a relative URL no crawler could resolve.
+  `/og.png` — the private build's branch, not the public site's, since
+  `deploy-dashboard.sh` hard-fails on an empty `WRATHBENCH_SNAPSHOT_BASE`; on
+  the public site `dashboard/public/og.png` therefore ships unreferenced, as
+  the thing a redirect or a rolled-back tag could still land on. The private
+  viewer build names no origin at all and carries no image tags, rather than a
+  relative URL no crawler could resolve.
 
   **The URL is still ship-stamped, and that is structural.** A crawler caches a
   card by URL and offers no purge, so the URL has to change when the picture
@@ -453,7 +457,12 @@ re-renders every pass — the live chart cannot be either.
   keeps it until the next ship moves `?v=`. The only between-ship lever is a
   short edge and browser TTL on `v1/og.png` in the zone's cache rules, and
   Bun's S3 writer cannot send `Cache-Control` (see `infra/publish-dashboard.ts`),
-  so that rule is the whole of it.
+  so that rule is the whole of it. **It is a required step, not a refinement:**
+  `v1/og.png` matches none of the existing rules (30s on the two mutable JSON
+  paths, long on `v1/snap/*` and `v1/run/*`), so it falls to the zone default
+  for a PNG with no origin header, which is `max-age=86400` — measured against
+  a `tiles/` object on the same hostname. Until a rule names it, the card at
+  the edge is up to a day old rather than up to a pass old.
 
 - **`robots.txt`.** The Open shape has no fetch handler and so serves nothing
   at that path unless a file is in `dashboard/public/`, which there now is, and
