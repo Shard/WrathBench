@@ -61,16 +61,13 @@ spec:
             - name: data
               mountPath: /wrathbench/data/wiki
               subPath: wiki
-            # The live config store, same as the fleet's: this pod is where
-            # `config-store.ts seed|export|patch` is exec'd (docs/OPERATIONS.md
-            # "Where the config lives"), so it has to see the fleet's file and
-            # not a pod-local one.
+            # The config store, same as the fleet's: this pod is where
+            # `config-store.ts seed|export|get|patch` is exec'd, by the operator
+            # and by infra/k8s-deploy.sh (docs/OPERATIONS.md "Where the config
+            # lives"), so it has to see the fleet's store and not a pod-local one.
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
-            - name: fleet-config
-              mountPath: /wrathbench/config
-              readOnly: true
             {{- if .Values.codex.enabled }}
             # NOT a subPath: the CLI rewrites auth.json in place and expects a
             # real directory it owns (uid 1000, via the pod's fsGroup).
@@ -83,9 +80,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
-        - name: fleet-config
-          configMap:
-            name: {{ .Values.fleetConfigMapName }}
         {{- if .Values.codex.enabled }}
         - name: codex-home
           persistentVolumeClaim:

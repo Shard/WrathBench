@@ -244,8 +244,8 @@ services:
       # one live session per account). It exists in auth already; this line only
       # takes effect when the worldserver container is next recreated, and until
       # then the module answers 403 account_not_permitted for it.
-      # SMOKE..SMOKE4 are the fleet's preflight-gate accounts (infra/fleet.json
-      # preflight): the gate's smokes log in as them, one account per parallel
+      # SMOKE..SMOKE4 are the fleet's preflight-gate accounts (the config store's
+      # `preflight` block): the gate's smokes log in as them, one account per parallel
       # chain, so they never contend with a lane or with PROBE (the ad-hoc
       # debugging account). Same caveat as SHAKEOUT2 — effective at the next
       # recreate, i.e. the next deploy window (SMOKE2-4 added 2026-08-23; until
@@ -253,7 +253,7 @@ services:
       # exist in auth first: `docker compose -f infra/compose.yml run --rm
       # --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE2
       # -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap` (done for all four).
-      # RUNNER7 is the second PAID account (fleet.json accounts.paid; paid class
+      # RUNNER7 is the second PAID account (accounts.paid in the config; paid class
       # split out 2026-08-23). The recreate it was waiting on landed 2026-09-01,
       # so the running worldserver does carry it; bootstrapped in auth and added
       # to accounts.paid on 2026-09-04, when policy.paid.maxConcurrent went to 2
@@ -321,8 +321,11 @@ services:
 
   # ------------------------------------------------------------------- fleet
   # The fleet supervisor (infra/run-fleet.ts) as a long-lived service: up while
-  # the dev machine is up, steered by editing infra/fleet.json, no deadline.
-  # See docs/OPERATIONS.md.
+  # the dev machine is up, steered through the config store, no deadline. The
+  # store is data/config.sqlite on the `..:/wrathbench` bind mount — the same
+  # file the viewer's /config page edits, and the ONLY fleet config; seed it
+  # once with `bun runner/src/config-store.ts seed infra/fleet.example.json`
+  # (docs/OPERATIONS.md, "Where the config lives").
   #
   # Same image and mounts as `runner` by design: the supervisor's children are
   # run-roster processes whose children are `bun runner/src/run.ts` episodes, so
@@ -331,7 +334,7 @@ services:
   # image) and onto direct child processes.
   #
   # `profiles` keeps a bare `docker compose up -d` from starting a SECOND
-  # supervisor against the same fleet.json (two lanes on one account is a night
+  # supervisor against the same config (two lanes on one account is a night
   # of account_in_use). Naming the service activates the profile, so
   #   docker compose -f infra/compose.yml up -d --no-deps fleet
   # still works — and --no-deps is not optional: without it compose may decide a
@@ -343,7 +346,7 @@ services:
       dockerfile: infra/docker/runner.Dockerfile
     profiles: [fleet]
     working_dir: /wrathbench
-    command: ["bun", "infra/run-fleet.ts", "infra/fleet.json"]
+    command: ["bun", "infra/run-fleet.ts"]
     environment:
       WRATHBENCH_IN_CONTAINER: "1"
       # For the preflight gate's fixture staging: kill-credit.ts starts from the
@@ -509,7 +512,8 @@ services:
     environment:
       # The runbook and this block must agree; both are the CLI's contract.
       WRATHBENCH_RUNS_DIR: /wrathbench/data/runs
-      WRATHBENCH_FLEET_CONFIG: /wrathbench/infra/fleet.json
+      # The roster it labels comes from the config store at the default path,
+      # data/config.sqlite on the bind mount — the fleet's and the viewer's.
       # What was uploaded last, so a pass PUTs only what changed. On the bind
       # mount so a restart re-uploads nothing.
       WRATHBENCH_PUBLISH_STATE: /wrathbench/data/publish/state.json

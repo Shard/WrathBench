@@ -120,26 +120,20 @@ spec:
               mountPath: /wrathbench/data/minimap
               subPath: minimap
               readOnly: true
-            # The live config store (WRATHBENCH_CONFIG_DB in harnessEnv): the
-            # one WRITABLE data mount on the viewer, and it has to be. It is
-            # the operator's edit surface (/api/config, operator-only and not
-            # mounted in public mode), and even the reads need it: a readonly
-            # sqlite handle still creates the -wal/-shm sidecars beside the
-            # file, so a readOnly mount would make every config read a 500
-            # instead of a fall-through to fleet.json.
+            # The config store (WRATHBENCH_CONFIG_DB in harnessEnv), the only
+            # fleet config: the one WRITABLE data mount on the viewer, and it
+            # has to be. It is the operator's edit surface (/api/config and the
+            # /config page, operator-only and not mounted in public mode), and
+            # even the reads need it: a readonly sqlite handle still creates
+            # the -wal/-shm sidecars beside the file, so a readOnly mount would
+            # make every config read a 500.
             - name: data
               mountPath: /wrathbench/data/config
               subPath: config
-            - name: fleet-config
-              mountPath: /wrathbench/config
-              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
-        - name: fleet-config
-          configMap:
-            name: {{ .Values.fleetConfigMapName }}
 {{- if .Values.viewer.ingress.enabled }}
 {{- $ing := .Values.viewer.ingress }}
 {{- $hosts := prepend ($ing.extraHosts | default list) $ing.host }}
