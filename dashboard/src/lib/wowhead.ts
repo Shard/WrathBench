@@ -130,8 +130,69 @@ export function loadWowhead(target?: ScriptHost): boolean {
   const el = h.document.createElement("script");
   el.src = SCRIPT_SRC;
   el.async = true;
+  el.onload = () => setStatus("ready");
+  el.onerror = () => setStatus("failed");
   h.document.head.appendChild(el);
+  // A host that resolves but never answers fires neither event for a long
+  // time, so the wait has an end: whatever is true then is the answer.
+  setTimeout(() => setStatus(powerPresent() ? "ready" : "failed"), READY_TIMEOUT_MS);
   return true;
+}
+
+/**
+ * Whether the script arrived, and what the panels do while they wait.
+ *
+ * A square is only worth drawing if something will fill it. Ours never fills
+ * it — the art is Wowhead's — so a blocked or missing script leaves a grid of
+ * boxes with truncated names in them, which is worse than a plain list. The
+ * panels therefore watch this: `pending` and `ready` draw the grid, `failed`
+ * degrades the whole thing to a list of `name ×count` rows.
+ *
+ * `failed` is reached two ways, because a blocked host and a slow one look the
+ * same at first: the tag's own error event, and a timeout after which the
+ * global still is not there.
+ */
+export type WowheadStatus = "pending" | "ready" | "failed";
+
+/** How long a reader waits for the script before the panels stop waiting. */
+const READY_TIMEOUT_MS = 6000;
+
+let status: WowheadStatus = "pending";
+const watchers = new Set<(s: WowheadStatus) => void>();
+
+function setStatus(next: WowheadStatus): void {
+  if (status === next || status === "ready") return;
+  status = next;
+  for (const w of watchers) w(next);
+}
+
+/** The status now. */
+export function wowheadStatus(): WowheadStatus {
+  return status;
+}
+
+/** Follow the status, starting with the one standing. Returns an unsubscribe. */
+export function onWowheadStatus(cb: (s: WowheadStatus) => void): () => void {
+  watchers.add(cb);
+  cb(status);
+  return () => watchers.delete(cb);
+}
+
+/**
+ * Back to `pending`, for a test that wants the clean slate.
+ *
+ * The status is module state because the script is: one page load fetches it
+ * once, and every panel on the page shares the answer. A test file exercising
+ * both outcomes needs a way back, and this is narrower than making every
+ * caller thread the state through.
+ */
+export function resetWowheadStatus(): void {
+  status = "pending";
+  watchers.clear();
+}
+
+function powerPresent(): boolean {
+  return (globalThis as { $WowheadPower?: unknown }).$WowheadPower !== undefined;
 }
 
 /**
@@ -145,7 +206,9 @@ export function loadWowhead(target?: ScriptHost): boolean {
  */
 export function refreshLinks(): void {
   const power = (globalThis as { $WowheadPower?: { refreshLinks?: () => void } }).$WowheadPower;
-  if (power !== undefined && typeof power.refreshLinks === "function") power.refreshLinks();
+  if (power === undefined) return;
+  setStatus("ready");
+  if (typeof power.refreshLinks === "function") power.refreshLinks();
 }
 
 /**

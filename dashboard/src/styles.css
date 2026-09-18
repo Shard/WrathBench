@@ -955,7 +955,7 @@ td .spread { font-size: var(--fs-xs); }
  * when the script lands — or when it never does. `.decorated` is written by the
  * panel's MutationObserver: before it, the name shows; after it, the icon does.
  */
-.inventory { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.inventory { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .inv-note { color: var(--dim); font-size: var(--fs-xs); }
 
 .inv-cell {
@@ -994,8 +994,24 @@ td .spread { font-size: var(--fs-xs); }
 .paperdoll-grid { display: flex; gap: 6px; align-items: flex-start; max-width: 230px; }
 .paperdoll-col { display: flex; flex-direction: column; gap: 3px; }
 .paperdoll-mid { flex: 1 1 auto; min-width: 0; }
-.paperdoll-row { display: flex; gap: 3px; margin-top: 3px; }
-.inv-unplaced { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+/* The weapon row sits centred under the two columns, as the sheet draws it. */
+.paperdoll-row { display: flex; gap: 3px; margin-top: 3px; max-width: 230px; justify-content: center; }
+.inv-unplaced { margin-top: 8px; display: flex; flex-direction: column; gap: 3px;
+                border-top: 1px solid var(--line); padding-top: 6px; }
+
+/*
+ * The readable shape. A row with no entry can never carry an icon, so it is
+ * never given a square to be truncated inside: name in quality colour, count
+ * to the right. The same list is the whole panel once the script has failed.
+ */
+.inv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px;
+            font-size: var(--fs-sm); max-width: 260px; }
+.inv-list li { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+.inv-list-name { overflow-wrap: anywhere; }
+.inv-list-link { text-decoration: none; }
+.inv-list-link:hover .inv-list-name { text-decoration: underline; }
+.inv-list-count { color: var(--dim); font-variant-numeric: tabular-nums; }
+.inv-grid + .inv-list { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
 
 /* The bag button, and the popover it opens. Hover on a desktop, tap anywhere. */
 .bag { position: relative; display: inline-block; }
@@ -1006,6 +1022,8 @@ td .spread { font-size: var(--fs-xs); }
 }
 .bag-button:hover { border-color: var(--accent); }
 /* A bag drawn in CSS, because we ship no art: a body and a flap. */
+.bag-icon.worn::before { left: 0; right: 0; top: -3px; border-radius: 2px 2px 0 0; }
+.bag-icon.worn { border-radius: 3px; }
 .bag-icon {
   width: 11px; height: 12px; border: 1px solid currentColor; border-radius: 2px 2px 3px 3px;
   position: relative; opacity: 0.85;
@@ -1021,6 +1039,9 @@ td .spread { font-size: var(--fs-xs); }
   width: max-content; max-width: min(320px, calc(100vw - 32px));
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
+  /* A full doll or a full bag is taller than the space under a button near the
+     foot of a card, so the popover scrolls rather than being clipped by it. */
+  max-height: min(60vh, 420px); overflow-y: auto;
 }
 
 @media (max-width: 400px) {

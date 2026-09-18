@@ -1,32 +1,38 @@
 /**
  * What the character wears and carries, drawn the way a client draws it.
  *
- * Two panels over one inventory sample: a bag button that opens a grid of
- * carried stacks, and a paperdoll of the nineteen equipment slots. Both are
- * layout only — the arrangement is `lib/inventory.ts`, the linking is
- * `lib/wowhead.ts`, and the art is Wowhead's, fetched by the reader's browser
- * from a link we render (operator, 2026-09-18). We hold no icons.
+ * Two buttons over one inventory sample — "N carrying" and "N equipped" —
+ * each opening a popover on hover or a tap. Buttons rather than panels because
+ * this sits in a run card and a map sidebar, and a paperdoll inline spends
+ * that whole column on something a reader looks at occasionally.
  *
- * The consequence of not holding them is that every cell has to read before
- * the script decorates it, and keep reading if it never does — a reader on a
- * blocked network, or an entry Wowhead does not know. So a cell is our own
- * text (the name in its quality colour, the stack count badged) and the script
- * replaces the text with an icon when it arrives. The swap is driven by a
- * MutationObserver rather than by an effect, because `tooltips.js` loads async:
- * the `refreshLinks()` an effect fires after a render usually finds no global
- * at all, and the decoration lands later on the script's own pass.
+ * The art is Wowhead's, fetched by the reader's browser from a link we render
+ * (operator, 2026-09-18); we hold no icons. That is why a square is not the
+ * unconditional shape here. A square is a frame around an icon, so it is drawn
+ * only where an icon can arrive: a row with an entry to link, and a script
+ * that loaded. Everything else — a row whose name resolved and so carries no
+ * id, or any row at all once the script has failed — is a list of `name
+ * ×count`, which reads. A grid of 40px boxes with "Barba ric Cloth Breec"
+ * wrapped inside them does not.
+ *
+ * Decoration is detected with a MutationObserver rather than an effect,
+ * because `tooltips.js` loads async: the `refreshLinks()` an effect fires
+ * after a render usually finds no global at all, and the script's own later
+ * pass is what decorates.
  */
 
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { type InvItem, carried, carriedCount, paperdoll } from "../lib/inventory";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { type InvItem, carried, carriedCount, paperdoll, splitLinked } from "../lib/inventory";
 import {
   PAPERDOLL_BOTTOM,
   PAPERDOLL_LEFT,
   PAPERDOLL_RIGHT,
+  type WowheadStatus,
   entryOf,
   isDecorated,
   itemUrl,
   loadWowhead,
+  onWowheadStatus,
   qualityColor,
   refreshLinks,
   slotLabel,
@@ -51,26 +57,25 @@ function watchDecoration(root: HTMLElement): () => void {
   return () => obs.disconnect();
 }
 
-/** One square: the item's link and its stack count, or nothing at all. */
-function Cell(props: { item: InvItem; label?: string }) {
-  const entry = () => entryOf(props.item);
-  const url = () => {
-    const e = entry();
-    return e === null ? null : itemUrl(e);
-  };
+const hasEntry = (i: InvItem): boolean => entryOf(i) !== null;
+const linkOf = (i: InvItem): string | null => {
+  const e = entryOf(i);
+  return e === null ? null : itemUrl(e);
+};
+const countSuffix = (i: InvItem): string => (i.count > 1 ? ` ×${i.count}` : "");
+
+/** One square: the item's link and its stack count, framed in its quality. */
+function Cell(props: { item: InvItem }) {
   const color = () => qualityColor(props.item.quality);
   return (
-    <div class="inv-cell" title={`${props.item.name}${props.item.count > 1 ? ` ×${props.item.count}` : ""}`}>
-      <Show
-        when={url()}
-        fallback={
-          // No id and no parsable placeholder: the name is all we can show, and
-          // it is not a link to anywhere.
-          <span class="inv-link" style={color() === null ? undefined : { color: color()! }}>
-            <span class="inv-name">{props.item.name}</span>
-          </span>
-        }
-      >
+    <div
+      class="inv-cell"
+      title={`${props.item.name}${countSuffix(props.item)}`}
+      // The border carries the quality even once an icon covers the middle,
+      // which is the only place a decorated cell can still say it.
+      style={color() === null ? undefined : { "border-color": color()! }}
+    >
+      <Show when={linkOf(props.item)} fallback={<span class="inv-link" />}>
         {(href) => (
           <a
             class="inv-link"
@@ -89,6 +94,39 @@ function Cell(props: { item: InvItem; label?: string }) {
         <span class="inv-count">{props.item.count}</span>
       </Show>
     </div>
+  );
+}
+
+/** The readable shape: one row per stack, in quality colour, linked if we can. */
+function ItemList(props: { items: readonly InvItem[] }) {
+  return (
+    <ul class="inv-list">
+      <For each={props.items}>
+        {(item) => {
+          const color = qualityColor(item.quality);
+          const href = linkOf(item);
+          const label = (
+            <span class="inv-list-name" style={color === null ? undefined : { color }}>
+              {item.name}
+            </span>
+          );
+          return (
+            <li>
+              <Show when={href} fallback={label}>
+                {(h) => (
+                  <a class="inv-list-link" href={h()} target="_blank" rel="noreferrer">
+                    {label}
+                  </a>
+                )}
+              </Show>
+              <Show when={item.count > 1}>
+                <span class="inv-list-count">×{item.count}</span>
+              </Show>
+            </li>
+          );
+        }}
+      </For>
+    </ul>
   );
 }
 
@@ -116,57 +154,14 @@ function SlotColumn(props: { slots: readonly number[]; bySlot: Map<number, InvIt
 }
 
 /**
- * The equipment sheet.
+ * A count you can hover on a desktop and tap on a phone.
  *
- * A worn item whose sample never recorded a `slot` lands in the "slot unknown"
- * row below rather than in a square we guessed at — which on every run
- * recorded before the column existed is all of them. That is the honest
- * reading of what the run recorded, not a rendering failure, and the row says
- * so in words.
- */
-export function Paperdoll(props: { items: readonly InvItem[] }) {
-  const doll = createMemo(() => paperdoll(props.items));
-  let root!: HTMLDivElement;
-  onMount(() => {
-    loadWowhead();
-    onCleanup(watchDecoration(root));
-  });
-  createEffect(() => {
-    doll();
-    refreshLinks();
-  });
-  return (
-    <div class="paperdoll" ref={root}>
-      <div class="paperdoll-grid">
-        <SlotColumn slots={PAPERDOLL_LEFT} bySlot={doll().bySlot} cls="paperdoll-col" />
-        <div class="paperdoll-mid" />
-        <SlotColumn slots={PAPERDOLL_RIGHT} bySlot={doll().bySlot} cls="paperdoll-col" />
-      </div>
-      <SlotColumn slots={PAPERDOLL_BOTTOM} bySlot={doll().bySlot} cls="paperdoll-row" />
-      <Show when={doll().unplaced.length > 0}>
-        <div class="inv-unplaced">
-          <div class="inv-note">equipped (slot unknown)</div>
-          <div class="inv-grid">
-            <For each={doll().unplaced}>{(item) => <Cell item={item} />}</For>
-          </div>
-        </div>
-      </Show>
-      <Show when={doll().bySlot.size === 0 && doll().unplaced.length === 0}>
-        <div class="inv-note">nothing equipped</div>
-      </Show>
-    </div>
-  );
-}
-
-/**
- * The bag: a count you can hover on a desktop and tap on a phone.
- *
- * Hover alone would hide the whole panel from touch, so the button is a real
+ * Hover alone would hide the contents from touch, so the trigger is a real
  * button and a click pins the popover open; hover is the shortcut, not the
- * mechanism.
+ * mechanism. Both panels share this, including the decoration observer, so a
+ * cell behaves the same wherever it is drawn.
  */
-export function BagGrid(props: { items: readonly InvItem[] }) {
-  const rows = createMemo(() => carried(props.items));
+function Popover(props: { icon: string; count: number; label: string; children: JSX.Element }) {
   const [hover, setHover] = createSignal(false);
   const [pinned, setPinned] = createSignal(false);
   const open = () => hover() || pinned();
@@ -188,18 +183,13 @@ export function BagGrid(props: { items: readonly InvItem[] }) {
     });
   });
   createEffect(() => {
-    // Read both, so a newly opened popover refreshes as well as a changed bag.
-    rows();
+    // A newly opened popover has links the script has not seen yet.
     open();
+    props.count;
     refreshLinks();
   });
   return (
-    <div
-      class="bag"
-      ref={root}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-    >
+    <div class="bag" ref={root} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <button
         type="button"
         class="bag-button"
@@ -209,37 +199,119 @@ export function BagGrid(props: { items: readonly InvItem[] }) {
           setPinned((p) => !p);
         }}
       >
-        <span class="bag-icon" aria-hidden="true" />
-        <span class="bag-count">{carriedCount(props.items)}</span>
-        <span class="bag-label">carrying</span>
+        <span class={`bag-icon ${props.icon}`} aria-hidden="true" />
+        <span class="bag-count">{props.count}</span>
+        <span class="bag-label">{props.label}</span>
       </button>
       <Show when={open()}>
-        <div class="bag-popover">
-          <Show when={rows().length > 0} fallback={<div class="inv-note">bags empty</div>}>
-            <div class="inv-grid">
-              <For each={rows()}>{(item) => <Cell item={item} />}</For>
-            </div>
-          </Show>
-        </div>
+        <div class="bag-popover">{props.children}</div>
       </Show>
     </div>
   );
 }
 
 /**
- * Both panels, for the places that show a whole character.
+ * Grid for what an icon can reach, list for the rest.
+ *
+ * Once the script has failed there is no such thing as a cell an icon can
+ * reach, so the whole set is a list — the squares would be empty frames.
+ */
+function Items(props: { items: readonly InvItem[]; status: WowheadStatus }) {
+  const split = createMemo(() =>
+    props.status === "failed"
+      ? { linked: [], unlinked: [...props.items] }
+      : splitLinked(props.items, hasEntry),
+  );
+  return (
+    <>
+      <Show when={split().linked.length > 0}>
+        <div class="inv-grid">
+          <For each={split().linked}>{(item) => <Cell item={item} />}</For>
+        </div>
+      </Show>
+      <Show when={split().unlinked.length > 0}>
+        <ItemList items={split().unlinked} />
+      </Show>
+    </>
+  );
+}
+
+/**
+ * The equipment sheet, when the run recorded where things are worn.
+ *
+ * The doll is drawn only when at least one worn row carries a `slot`. On every
+ * run recorded before the column existed, none does — and a doll of nineteen
+ * empty squares beside a chip row of the actual armour is not a character
+ * sheet, it is a picture of the data being missing. Those runs get the list.
+ */
+export function Equipment(props: { items: readonly InvItem[]; status: WowheadStatus }) {
+  const doll = createMemo(() => paperdoll(props.items));
+  const worn = createMemo(() => props.items.filter((i) => i.equipped));
+  return (
+    <Popover icon="worn" count={worn().length} label="equipped">
+      {/*
+        A doll of empty frames is the worst of both: once the script has failed
+        the squares can never be filled, so the sheet degrades to the same list
+        the bag does. The slots are lost with it, which is the honest trade —
+        nothing on the page can draw them.
+      */}
+      <Show
+        when={doll().bySlot.size > 0 && props.status !== "failed"}
+        fallback={<Items items={worn()} status={props.status} />}
+      >
+        <div class="paperdoll">
+          <div class="paperdoll-grid">
+            <SlotColumn slots={PAPERDOLL_LEFT} bySlot={doll().bySlot} cls="paperdoll-col" />
+            <div class="paperdoll-mid" />
+            <SlotColumn slots={PAPERDOLL_RIGHT} bySlot={doll().bySlot} cls="paperdoll-col" />
+          </div>
+          <SlotColumn slots={PAPERDOLL_BOTTOM} bySlot={doll().bySlot} cls="paperdoll-row" />
+          <Show when={doll().unplaced.length > 0}>
+            <div class="inv-unplaced">
+              <div class="inv-note">slot unknown</div>
+              <ItemList items={doll().unplaced} />
+            </div>
+          </Show>
+        </div>
+      </Show>
+      <Show when={worn().length === 0}>
+        <div class="inv-note">nothing equipped</div>
+      </Show>
+    </Popover>
+  );
+}
+
+/** The bag: what is carried, in bag order where the sample says so. */
+export function BagGrid(props: { items: readonly InvItem[]; status: WowheadStatus }) {
+  const rows = createMemo(() => carried(props.items));
+  return (
+    <Popover icon="bag" count={carriedCount(props.items)} label="carrying">
+      <Show when={rows().length > 0} fallback={<div class="inv-note">bags empty</div>}>
+        <Items items={rows()} status={props.status} />
+      </Show>
+    </Popover>
+  );
+}
+
+/**
+ * Both buttons, for the places that show a whole character.
  *
  * `null` items is a run that recorded no inventory at all, which is not an
  * empty bag; the caller decides what to say about that and this renders
  * nothing for it.
  */
 export function InventoryPanel(props: { items: readonly InvItem[] | null | undefined }) {
+  const [status, setStatus] = createSignal<WowheadStatus>("pending");
+  onMount(() => {
+    loadWowhead();
+    onCleanup(onWowheadStatus(setStatus));
+  });
   return (
     <Show when={props.items} fallback={<div class="inv-note">inventory not recorded</div>}>
       {(items) => (
         <div class="inventory">
-          <BagGrid items={items()} />
-          <Paperdoll items={items()} />
+          <BagGrid items={items()} status={status()} />
+          <Equipment items={items()} status={status()} />
         </div>
       )}
     </Show>
