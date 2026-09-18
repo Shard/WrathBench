@@ -25,6 +25,44 @@
   --claude: #da7756;
   /* The codex harness tag: OpenAI's green, for the same reason. */
   --codex: #10a37f;
+
+  /*
+   * The type scale. Seven steps, in rem against the browser's own root size,
+   * and every rule in this file that sets a size names one of them — nothing
+   * sets a pixel font-size any more. Two reasons it is tokens rather than
+   * literals: the page had eight different sizes doing the work of four, and a
+   * phone wants the whole thing a step smaller, which is one override of these
+   * seven values (below) instead of a media query per rule.
+   *
+   * SVG text is deliberately NOT on this scale (`.loop-label`, `.loop-sub`,
+   * and the `font-size` attributes the chart components write): those are
+   * viewBox user units that scale with the drawing, and a rem there would be
+   * an absolute size that stops scaling with it.
+   */
+  --fs-2xs: 0.625rem;   /* 10px — the surface badge, sort marks, rail ticks */
+  --fs-xs: 0.6875rem;   /* 11px — table headers, key labels, badges */
+  --fs-sm: 0.75rem;     /* 12px — captions, controls, secondary lines */
+  --fs-md: 0.8125rem;   /* 13px — table body, section headings */
+  --fs-base: 0.875rem;  /* 14px — body copy */
+  --fs-lg: 1rem;        /* 16px — the brand, card figures */
+  --fs-xl: 1.25rem;     /* 20px — the one page title per page */
+}
+
+/*
+ * A phone reads this dashboard one column at a time, and at desktop sizes the
+ * header alone took three lines of a 360px viewport. One step down across the
+ * board, defined in the one place the sizes are defined.
+ */
+@media (max-width: 720px) {
+  :root {
+    --fs-2xs: 0.5625rem;  /* 9px */
+    --fs-xs: 0.625rem;    /* 10px */
+    --fs-sm: 0.6875rem;   /* 11px */
+    --fs-md: 0.75rem;     /* 12px */
+    --fs-base: 0.8125rem; /* 13px */
+    --fs-lg: 0.9375rem;   /* 15px */
+    --fs-xl: 1.125rem;    /* 18px */
+  }
 }
 
 @media (prefers-color-scheme: light) {
@@ -54,7 +92,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-base)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -66,13 +104,15 @@ header.top {
   padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg);
   flex: none;
 }
-header.top h1 { font-size: 15px; margin: 0; font-weight: 600; }
+header.top h1 { font-size: var(--fs-lg); margin: 0; font-weight: 600; }
 header.top nav { display: inline-flex; gap: 10px; }
 header.top nav a.on { color: var(--fg); font-weight: 700; }
 header.top .spacer { flex: 1; }
 
+}
+
 /* The global harness-series selector, left of the status badge. */
-.series { display: inline-flex; align-items: center; gap: 6px; align-self: center; font-size: 12px; }
+.series { display: inline-flex; align-items: center; gap: 6px; align-self: center; font-size: var(--fs-sm); }
 .series select {
   font: inherit; color: var(--fg); background: var(--panel);
   border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px;
@@ -81,7 +121,7 @@ header.top .spacer { flex: 1; }
 
 /* The service status badge (top right) and its popout; derivation in lib/status.ts. */
 .status { position: relative; align-self: center; }
-.status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; }
+.status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); padding: 2px 8px; }
 .status-badge .dot { margin: 0; }
 .status-badge.green, .dot.green { color: var(--ok); }
 .status-badge.yellow, .dot.yellow { color: var(--warn); }
@@ -93,15 +133,15 @@ header.top .spacer { flex: 1; }
 .dot.grey { background: var(--dim); }
 .status-popout { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 280px; max-width: min(480px, 90vw);
                  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px;
-                 font-size: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
+                 font-size: var(--fs-sm); box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
 .status-popout dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
-.status-popout dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+.status-popout dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: var(--fs-xs); }
 .status-popout dd { margin: 0; overflow-wrap: anywhere; }
 /* The one action in the popout: the ops page the badge is about (operator, 2026-08-30). */
 .status-popout-link { display: block; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
 
 /* Public build only: how long ago the lab last pushed a snapshot. */
-.snapshot-age { align-self: center; font-size: 12px; }
+.snapshot-age { align-self: center; font-size: var(--fs-sm); }
 .snapshot-age.dim { color: var(--dim); }
 .snapshot-age.warn { color: var(--warn); }
 
@@ -112,7 +152,7 @@ main.flush { overflow: hidden; }
 /* Public build only: the attribution every published artifact carries. */
 footer.attribution {
   flex: none; padding: 6px 16px; border-top: 1px solid var(--line);
-  background: var(--bg); color: var(--dim); font-size: 11px;
+  background: var(--bg); color: var(--dim); font-size: var(--fs-xs);
   display: flex; align-items: center; justify-content: space-between; gap: 6px 16px;
   /* Two nowrap children on one line overflowed the viewport on a phone; they
      stack instead, the legal text keeping its own line. */
@@ -129,7 +169,7 @@ footer.attribution .repo {
 }
 footer.attribution .repo:hover { color: var(--fg); }
 footer.attribution .legal { text-align: right; }
-pre.cite { font-size: 12px; color: var(--dim); overflow-x: auto; margin: 0 0 16px; }
+pre.cite { font-size: var(--fs-sm); color: var(--dim); overflow-x: auto; margin: 0 0 16px; }
 
 .dim { color: var(--dim); }
 .err { color: var(--err); }
@@ -140,20 +180,20 @@ pre.cite { font-size: 12px; color: var(--dim); overflow-x: auto; margin: 0 0 16p
 .mono { font-variant-numeric: tabular-nums; }
 .right { text-align: right; }
 
-h2.section { font-size: 13px; margin: 20px 0 8px; font-weight: 700;
+h2.section { font-size: var(--fs-md); margin: 20px 0 8px; font-weight: 700;
              text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
 h2.section:first-child { margin-top: 0; }
 
 .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
-.card .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
-.card .v { font-size: 18px; font-weight: 600; }
-.card .sub { color: var(--dim); font-size: 12px; }
+.card .k { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
+.card .v { font-size: var(--fs-lg); font-weight: 600; }
+.card .sub { color: var(--dim); font-size: var(--fs-sm); }
 
 .scroller { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+table { border-collapse: collapse; width: 100%; font-size: var(--fs-md); }
 th, td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+th { color: var(--dim); font-weight: 600; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
 tbody tr:hover { background: var(--panel); }
 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
@@ -164,7 +204,7 @@ tbody tr:hover { background: var(--panel); }
 
 
 /* Row state, as a compact badge: the column an operator scans first. */
-.badge { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+.badge { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
          border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; color: var(--dim); }
 .badge.running { color: var(--ok); border-color: var(--ok); }
 .badge.draining { color: var(--warn); border-color: var(--warn); }
@@ -178,7 +218,7 @@ tbody tr:hover { background: var(--panel); }
 .badge.harness-codex { color: var(--codex); border-color: var(--codex); }
 .badge.harness-unknown { opacity: .6; }
 /* Episode progress, beside the state badge: a figure the badge leads, never competes with. */
-.progress { font-size: 11px; margin-left: 6px; }
+.progress { font-size: var(--fs-xs); margin-left: 6px; }
 
 tbody tr.clickable { cursor: pointer; }
 /* The runs spreadsheet: every header sorts, and the sorted one says which way. */
@@ -198,7 +238,7 @@ th.sortable { user-select: none; padding: 0; }
 .sortbutton:hover { color: var(--fg); }
 .sortbutton:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 th.sorted { color: var(--fg); }
-.sortmark { margin-left: 4px; font-size: 9px; }
+.sortmark { margin-left: 4px; font-size: var(--fs-2xs); }
 /* A run that continues another: a rail on the run cell, so where the sort does
    put a character's attempts side by side they read as one block. The lineage
    itself is the text in the cell — under any other sort the attempts are not
@@ -244,7 +284,7 @@ button.on { border-color: var(--accent); font-weight: 700; }
 .feed { display: flex; flex-direction: column; gap: 8px; }
 .entry { border: 1px solid var(--line); border-radius: 5px; background: var(--panel); }
 .entry > .head { display: flex; gap: 10px; align-items: baseline; padding: 5px 10px;
-                 border-bottom: 1px solid var(--line); font-size: 12px; color: var(--dim); }
+                 border-bottom: 1px solid var(--line); font-size: var(--fs-sm); color: var(--dim); }
 .entry > .head .t { color: var(--fg); font-weight: 700; }
 .entry.bad { border-left: 3px solid var(--err); }
 /*
@@ -255,21 +295,21 @@ button.on { border-color: var(--accent); font-weight: 700; }
  */
 .entry.reflecting { border-left: 3px solid var(--xp); }
 .entry.bad.reflecting { border-left-color: var(--err); }
-.entry > .head .reflect-tag { color: var(--xp); font-size: 11px; font-weight: 700;
+.entry > .head .reflect-tag { color: var(--xp); font-size: var(--fs-xs); font-weight: 700;
                               letter-spacing: .02em; white-space: nowrap; }
 .entry .body { padding: 8px 10px; }
 .entry > .head .spacer { flex: 1; }
 /* A composite card stacks input over result; the rule is the seam between them. */
 .entry .body + .body { border-top: 1px dashed var(--line); }
-.entry .body.pending { color: var(--dim); font-size: 12px; }
+.entry .body.pending { color: var(--dim); font-size: var(--fs-sm); }
 /* The latency figure earns a little contrast against the rest of the head. */
 .entry .head .lat { color: var(--fg); }
 pre.block { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
 pre.block.fold { max-height: 4.5em; overflow: hidden; }
-.toggle { background: none; border: none; color: var(--accent); padding: 0; font-size: 12px; }
+.toggle { background: none; border: none; color: var(--accent); padding: 0; font-size: var(--fs-sm); }
 
 /* The whole-feed expand preset, in the feed's own heading. */
-.section .filter.expand-preset { margin-left: 12px; font-size: 12px; font-weight: normal; vertical-align: middle; }
+.section .filter.expand-preset { margin-left: 12px; font-size: var(--fs-sm); font-weight: normal; vertical-align: middle; }
 
 /*
  * A harness notice: the harness talking to the model, which is a different
@@ -279,7 +319,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .notice-callout { display: flex; gap: 8px; align-items: baseline;
                   border-left: 3px solid var(--warn); background: var(--grid);
                   border-radius: 3px; padding: 6px 8px; }
-.notice-tag { flex: none; color: var(--warn); font-size: 11px; font-weight: 700;
+.notice-tag { flex: none; color: var(--warn); font-size: var(--fs-xs); font-weight: 700;
               text-transform: uppercase; letter-spacing: .05em; }
 .notice-lines { min-width: 0; }
 .notice-line { white-space: pre-wrap; word-break: break-word; }
@@ -314,7 +354,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
   position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
   width: min(720px, calc(100% - 24px));
   display: flex; flex-direction: column; gap: 6px;
-  padding: 8px 12px; border-radius: 8px; font-size: 12px;
+  padding: 8px 12px; border-radius: 8px; font-size: var(--fs-sm);
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   border: 1px solid var(--line); backdrop-filter: blur(6px);
   box-shadow: 0 4px 18px rgba(0, 0, 0, .25);
@@ -327,7 +367,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
    is the element that gives way when the row is crowded, not the steps. */
 .playbar-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .playbar-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.playbar-stamp { font-size: 11px; }
+.playbar-stamp { font-size: var(--fs-xs); }
 .playbar-btn {
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
   font: inherit; color: var(--accent); background: var(--bg);
@@ -336,9 +376,9 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .playbar-btn:hover { border-color: var(--accent); text-decoration: none; }
 /* The character's attempt steps: the counter reads as one unit with its arrows. */
 .attempt-steps { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex: 0 0 auto; }
-.playbar-btn.step { padding: 0 6px; font-size: 14px; line-height: 1.4; }
+.playbar-btn.step { padding: 0 6px; font-size: var(--fs-base); line-height: 1.4; }
 .live-pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
-             text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
+             text-transform: uppercase; letter-spacing: .08em; font-size: var(--fs-xs); }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
             box-shadow: 0 0 0 0 var(--ok); animation: live-pulse 2s ease-out infinite; }
 .live-link .live-dot { animation: none; }
@@ -362,9 +402,9 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .tbtn.play { width: 30px; height: 30px; background: var(--accent); color: var(--bg); }
 .tbtn.play:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
 .tbtn.play:disabled { background: var(--line); }
-.tbtn.speed { width: auto; min-width: 30px; padding: 0 6px; border-radius: 4px; font-size: 11px;
+.tbtn.speed { width: auto; min-width: 30px; padding: 0 6px; border-radius: 4px; font-size: var(--fs-xs);
               border-color: var(--line); }
-.tclock { color: var(--dim); font-size: 11px; min-width: 3.2em; text-align: center; }
+.tclock { color: var(--dim); font-size: var(--fs-xs); min-width: 3.2em; text-align: center; }
 
 .scrubber {
   -webkit-appearance: none; appearance: none; flex: 1; min-width: 80px;
@@ -386,8 +426,8 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
                               background: var(--fg); border: 2px solid var(--accent); }
 .side { width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel);
         padding: 12px 14px; overflow-y: auto; }
-.side h3 { font-size: 14px; margin: 0 0 8px; font-weight: 700; }
-.side .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.side h3 { font-size: var(--fs-base); margin: 0 0 8px; font-weight: 700; }
+.side .k { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
 .side .v { margin-bottom: 8px; word-break: break-word; }
 
 /* --- results, ladder, replay --- */
@@ -396,14 +436,14 @@ svg text { fill: var(--fg); }
 .tuple { display: grid; gap: 4px 16px; grid-template-columns: max-content 1fr;
          background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
          padding: 10px 12px; margin: 10px 0; }
-.tuple dt { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.tuple dt { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
 .tuple dd { margin: 0; word-break: break-word; }
-footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
+footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0; }
 
 /* The models page's row-detail panel: a table inside a table cell. */
 .detail { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
           padding: 8px 10px; margin: 6px 0; }
-.detail table { font-size: 12px; }
+.detail table { font-size: var(--fs-sm); }
 .detail p { margin: 0 0 6px; }
 
 /* --- the collapsible pane (components/Collapsible.tsx) --- */
@@ -431,7 +471,7 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
                     transition: transform .18s ease; }
 .collapsible.open > .collapsible-head .collapsible-chev { transform: rotate(90deg); }
 .collapsible-title { font-weight: 700; }
-.collapsible-summary { margin-left: auto; font-size: 12px; text-align: right; }
+.collapsible-summary { margin-left: auto; font-size: var(--fs-sm); text-align: right; }
 
 .collapsible-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .18s ease; }
 .collapsible.open > .collapsible-body { grid-template-rows: 1fr; }
@@ -462,7 +502,7 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
    stretched the plot rather than scaling it. */
 .xpchart { width: 100%; height: auto; display: block; margin: 4px 0 12px;
            background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
-.xpchart.empty { height: auto; padding: 14px 12px; font-size: 12px; }
+.xpchart.empty { height: auto; padding: 14px 12px; font-size: var(--fs-sm); }
 
 /* The ladder's scatter: viewBox-scaled, never wider than the page. */
 .ladderchart { width: 100%; max-width: 100%; height: auto; display: block; margin: 4px 0 6px;
@@ -478,7 +518,7 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
    leader together — and comes forward again under the pointer. */
 .ladderchart-pt.dominated { opacity: 0.35; }
 .ladderchart-pt.dominated:hover { opacity: 1; }
-.ladderchart-caption { font-size: 12px; margin: 0 0 12px; }
+.ladderchart-caption { font-size: var(--fs-sm); margin: 0 0 12px; }
 
 /* The freeplay field's graph reuses the scatter's frame and caption; only the
    hover affordance differs, because the mark is a line and not a puck. */
@@ -491,11 +531,11 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 /* The ladder's episode buttons: the axis the page turns on, so they are centred
    and a size larger than a chip row that merely narrows something. */
 .chips.episodes { justify-content: center; gap: 8px; margin: 14px 0 8px; }
-.chips.episodes button { font-size: 15px; padding: 5px 16px; }
+.chips.episodes button { font-size: var(--fs-lg); padding: 5px 16px; }
 
 /* The scatter's axis views: the tier's chips a size down, left, with a label. */
-.chips.views { gap: 6px; margin: 0; font-size: 12px; }
-.chips.views button { font-size: 12px; padding: 2px 10px; }
+.chips.views { gap: 6px; margin: 0; font-size: var(--fs-sm); }
+.chips.views button { font-size: var(--fs-sm); padding: 2px 10px; }
 
 /* The row above the chart: two groups — what is on the left (the axis views
    here, the title on the homepage) and the filters on the right — on one line
@@ -504,7 +544,7 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
    `margin-left: auto` so they sit hard right on a row of their own too, and
    when the left group is absent (freeplay has no axis views). */
 .ladder-controls { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap;
-                   justify-content: space-between; margin: 0 0 6px; font-size: 12px; }
+                   justify-content: space-between; margin: 0 0 6px; font-size: var(--fs-sm); }
 .ladder-filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .filter { display: inline-flex; align-items: center; gap: 6px; }
 .filter select {
@@ -529,10 +569,10 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
  * rather than wrapping so a twelve-attempt character stays one line to walk.
  */
 .attempts { margin: 0 0 12px; }
-.attempts-head { font-size: 12px; margin-bottom: 6px; }
+.attempts-head { font-size: var(--fs-sm); margin-bottom: 6px; }
 .attempts-strip { display: flex; gap: 6px; overflow-x: auto; list-style: none; margin: 0; padding: 0 0 4px; }
 .attempts .attempt { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px;
-                     padding: 4px 8px; background: var(--panel); font-size: 12px; }
+                     padding: 4px 8px; background: var(--panel); font-size: var(--fs-sm); }
 /* The attempt being read. Bordered, not coloured: the colour on this strip
    already means live/paused/ended and must not mean two things. */
 .attempts .attempt.here { border-color: var(--accent); }
@@ -541,11 +581,11 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
 .attempts .attempt a:hover { text-decoration: underline; }
 
 /* Where one attempt's log stops and the character carries on. */
-.feed-seam { font-size: 12px; margin: 6px 0; padding: 4px 0; border-top: 1px dashed var(--line);
+.feed-seam { font-size: var(--fs-sm); margin: 6px 0; padding: 4px 0; border-top: 1px dashed var(--line);
              border-bottom: 1px dashed var(--line); }
 
 .side-controls { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
-                 margin-bottom: 10px; font-size: 12px; }
+                 margin-bottom: 10px; font-size: var(--fs-sm); }
 .side-controls .dot { margin-right: 4px; }
 
 /*
@@ -555,8 +595,8 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
  * block that is the model's own words.
  */
 .side-status { margin: 2px 0 10px; padding-top: 8px; border-top: 1px solid var(--line); }
-.side-status .stamp { color: var(--dim); font-size: 11px; margin: 2px 0 3px; }
-.side-status .text { color: var(--dim); font-size: 12px; line-height: 1.45; word-break: break-word; }
+.side-status .stamp { color: var(--dim); font-size: var(--fs-xs); margin: 2px 0 3px; }
+.side-status .text { color: var(--dim); font-size: var(--fs-sm); line-height: 1.45; word-break: break-word; }
 /* The same Zz the pip wears, in the same purple, so the two read as one mark. */
 .side-status .reflecting { margin-left: 6px; color: var(--xp); font-style: italic; font-weight: 700;
                            text-transform: none; letter-spacing: 0; }
@@ -574,7 +614,7 @@ footer.identity { color: var(--dim); font-size: 12px; padding: 10px 0 0; }
  * a warning rather than an error: nothing is broken, the tab is just behind.
  */
 button.update {
-  font: inherit; font-size: 11px; cursor: pointer; margin-right: 10px;
+  font: inherit; font-size: var(--fs-xs); cursor: pointer; margin-right: 10px;
   padding: 2px 8px; border-radius: 4px; border: 1px solid var(--warn);
   background: transparent; color: var(--warn);
 }
@@ -645,7 +685,7 @@ button.update:hover { background: var(--panel); }
 /* The power tint is an inline background-color from the component, chosen by type. */
 .bar.pw .bar-fill { background-color: var(--power-mana); }
 .bar-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-            font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; color: var(--bar-text);
+            font-size: var(--fs-xs); line-height: 1; font-variant-numeric: tabular-nums; color: var(--bar-text);
             text-shadow: 0 1px 1px rgba(0,0,0,.7); pointer-events: none; }
 .bar.unobserved .bar-text { color: var(--bar-text-dim); text-shadow: none; }
 .bar.dead { border-color: var(--err); }
@@ -654,7 +694,7 @@ button.update:hover { background: var(--panel); }
 .xp-row .bar { flex: 1; min-width: 0; }
 .level-badge { flex: none; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 50%;
                display: inline-flex; align-items: center; justify-content: center;
-               font-size: 11px; font-weight: 700; color: var(--bar-text); background: var(--xp);
+               font-size: var(--fs-xs); font-weight: 700; color: var(--bar-text); background: var(--xp);
                border: 1px solid var(--bar-border); box-shadow: inset 0 1px 0 rgba(255,255,255,.3); }
 
 /* --- the homepage (pages/Home.tsx) --- */
@@ -671,13 +711,13 @@ button.update:hover { background: var(--panel); }
 .home-bleed .ladderchart { background: var(--bg); }
 .home-bleed .ladder-controls { margin-bottom: 4px; }
 .home-ladder-title { display: inline; margin: 0 6px 0 0; }
-.home-title { font-size: 20px; margin: 4px 0 8px; font-weight: 700; text-align: center; }
+.home-title { font-size: var(--fs-xl); margin: 4px 0 8px; font-weight: 700; text-align: center; }
 .home-intro p { margin: 0 auto 8px; line-height: 1.6; text-align: center; max-width: 720px; }
-.home-live { font-size: 13px; }
+.home-live { font-size: var(--fs-md); }
 .home-caption { margin: 6px 0 0; line-height: 1.5; }
 /* Can and can't, side by side where there is room and stacked where there is not. */
 .home-surface { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 32px; }
-.home-surface-head { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.home-surface-head { margin: 0 0 4px; font-size: var(--fs-md); font-weight: 600; }
 .home-surface ul { margin: 0; padding-left: 18px; line-height: 1.5; }
 .home-surface li { margin: 0 0 4px; }
 @media (max-width: 720px) { .home-surface { grid-template-columns: 1fr; gap: 16px; } }
@@ -695,13 +735,13 @@ button.update:hover { background: var(--panel); }
 /* The tool inspector: a list on the left, the picked tool on the right. */
 .tool-inspector { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0; }
 .tool-list { list-style: none; margin: 0; padding: 0; flex: none; display: flex; flex-direction: column; gap: 3px; }
-.tool-list button { width: 100%; text-align: left; font-size: 13px; padding: 3px 10px; }
+.tool-list button { width: 100%; text-align: left; font-size: var(--fs-md); padding: 3px 10px; }
 .tool-detail { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
                border-radius: 6px; padding: 10px 12px; }
-.tool-detail .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-top: 8px; }
+.tool-detail .k { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; margin-top: 8px; }
 .tool-sig { font-weight: 700; margin-bottom: 6px; }
 .tool-desc { margin: 0; line-height: 1.55; }
-.tool-example { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font-size: 12px; }
+.tool-example { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font-size: var(--fs-sm); }
 @media (max-width: 640px) {
   .tool-inspector { flex-direction: column; }
   .tool-list { flex-direction: row; flex-wrap: wrap; }
@@ -709,7 +749,7 @@ button.update:hover { background: var(--panel); }
 }
 
 .sdk-families { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; }
-.sdk-families dt { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
+.sdk-families dt { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
 .sdk-families dd { margin: 0; line-height: 1.5; }
 
 
@@ -767,8 +807,8 @@ button.update:hover { background: var(--panel); }
 .reference-rail .ref-mark.line { width: 2px; margin-left: -1px; background: var(--accent); }
 .reference-rail .ref-mark.band { background: var(--dim); opacity: 0.3; }
 /* Level labels sit under the rail, centred on their tick. */
-.reference-rail .ref-tick { position: absolute; top: 100%; transform: translateX(-50%); font-size: 10px; white-space: nowrap; }
-.reference-legend { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; }
+.reference-rail .ref-tick { position: absolute; top: 100%; transform: translateX(-50%); font-size: var(--fs-2xs); white-space: nowrap; }
+.reference-legend { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-sm); }
 .reference-legend li { display: flex; align-items: center; gap: 6px; }
 .reference-legend .swatch { width: 14px; height: 10px; display: inline-block; }
 /* The ceiling is one observed level, so it is a line; the speedrun figure is a
@@ -776,11 +816,11 @@ button.update:hover { background: var(--panel); }
 .reference-legend .swatch.line { width: 2px; height: 12px; background: var(--accent); }
 .reference-legend .swatch.band { background: var(--dim); opacity: 0.35; }
 .reference-legend { margin-top: 16px; }
-.reference-note { font-size: 12px; margin: 6px 0 0; max-width: 72ch; }
+.reference-note { font-size: var(--fs-sm); margin: 6px 0 0; max-width: 72ch; }
 /* The dispersion under a row's best level: the median and the range the row's
    counted runs actually spanned. A size down from the maximum above it — the
    headline stays the headline. */
-td .spread { font-size: 11px; }
+td .spread { font-size: var(--fs-xs); }
 
 /*
  * The character page (item 128): one character across its sessions.
@@ -792,8 +832,8 @@ td .spread { font-size: 11px; }
  * every block above them already does.
  */
 .characterhead { margin: 0 0 12px; }
-.characterhead h1 { font-size: 20px; margin: 0 0 2px; font-weight: 600; }
-.characterhead .dim { font-size: 12px; }
+.characterhead h1 { font-size: var(--fs-xl); margin: 0 0 2px; font-weight: 600; }
+.characterhead .dim { font-size: var(--fs-sm); }
 .live-attempt { margin: 0 0 12px; max-width: 420px; }
 .live-attempt .unit-frame { margin: 8px 0; }
 
@@ -804,7 +844,7 @@ td .spread { font-size: 11px; }
  * filter checkboxes it was never written for. Shapes follow `.filter select`.
  */
 .configbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin: 10px 0; }
-.configbar label, .configform label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--dim); }
+.configbar label, .configform label { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); color: var(--dim); }
 .configbar label.grow { flex: 1 1 320px; }
 .configbar input, .configform input, .configform select, .configtable input, .configtable select, .jsoneditor textarea {
   font: inherit; color: var(--fg); background: var(--panel);
@@ -818,10 +858,10 @@ td .spread { font-size: 11px; }
 /* The editors stack; a closed one is a single line, which is what makes a
    plain surface scannable when the store has a dozen row keys. */
 .jsoneditor { margin: 6px 0; }
-.jsoneditor textarea { display: block; width: 100%; margin: 6px 0; font-family: var(--mono, monospace); font-size: 12px; }
+.jsoneditor textarea { display: block; width: 100%; margin: 6px 0; font-family: var(--mono, monospace); font-size: var(--fs-sm); }
 .auditdiff { display: flex; gap: 16px; flex-wrap: wrap; }
 .auditdiff > div { flex: 1 1 280px; min-width: 0; }
-.auditdiff pre { overflow-x: auto; font-size: 12px; }
+.auditdiff pre { overflow-x: auto; font-size: var(--fs-sm); }
 
 /* Which site this is, top right of the header (item 134). Superscript-sized
    and its own two colours — neither is an accent used anywhere else, so it
@@ -829,7 +869,7 @@ td .spread { font-size: 11px; }
 :root { --admin: #bb9af7; --preview: #56b6c2; }
 @media (prefers-color-scheme: light) { :root { --admin: #6b3fb8; --preview: #16707c; } }
 .surface {
-  font-size: 9px; font-weight: 700; letter-spacing: 0.08em; line-height: 1;
+  font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.08em; line-height: 1;
   align-self: flex-start; padding: 2px 4px; border-radius: 3px;
   border: 1px solid currentColor; opacity: 0.85; margin-left: 2px;
 }
