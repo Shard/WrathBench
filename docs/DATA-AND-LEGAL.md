@@ -13,6 +13,7 @@ These are the lines the project does not cross. They are rules, not arguments; t
 
 - No game client can connect. The game protocol is never exposed; the only outside surface is the MCP, and it is private. Opening it to anyone outside the operator means meeting the posture below — never a way for a human to play, never money, small and framed as research — and it needs a harness that can run more than one session at a time, which is GitHub issue #9 (group tier) and is not built.
 - No web client, no spectate-and-type, no interface that amounts to a person playing through an agent.
+- The one client login that exists is the operator's own inspection account, created by `infra/spectator-account.ts` on the operator's realm and reached only over a port-forward on the operator's machine. It is how the operator watches a run, not a way for anyone else to play, and it stays in the tree (operator, 2026-09-16).
 - No recruited players, no public realm listing, no advertised server.
 
 ## Never money

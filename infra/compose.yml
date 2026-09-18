@@ -275,8 +275,8 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
-    # No healthcheck: the runtime image has no curl/nc and the module's HTTP
-    # port is not defined yet. TODO once module/ lands: probe the module.
+    # No healthcheck: the runtime image has no curl/nc. The module is probed
+    # from the runner side instead (infra/module-health.sh).
     depends_on:
       db:
         condition: service_healthy
