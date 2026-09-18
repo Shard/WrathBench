@@ -124,7 +124,11 @@ export default function Home() {
           </Show>
           <Show when={ladder.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
             <div class="wide-scroll">
-              <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} pareto={pareto()} />
+              {/* No "Not plotted: …" roll-call here (operator, 2026-09-18): the
+                  landing page's first screen is worth more to a stranger than a
+                  list of the entries this chart could not place, and /ladder
+                  still gives that account in full. */}
+              <LadderChart runs={ladderRuns()} episode={HOME_EPISODE} pareto={pareto()} omittedNote={false} />
             </div>
           </Show>
         </div>
