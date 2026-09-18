@@ -73,7 +73,7 @@ runAsUser: 1000
 runAsGroup: 1000
 fsGroup: 1000
 seccompProfile:
-  # Verified 2026-09-05 on chungusjr (kernel 6.13, containerd 2.2, Landlock ABI
+  # Verified on the reference node (kernel 6.13, containerd 2.2, Landlock ABI
   # 6): containerd's RuntimeDefault profile permits landlock_create_ruleset /
   # landlock_add_rule / landlock_restrict_self, so the snippet sandbox's
   # confinement (runner/src/sandbox/confine.ts) still applies. If that ever

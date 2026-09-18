@@ -331,7 +331,7 @@ recreate_plan() {
 # is that `startedAt` has CHANGED, not that a timestamp is recent. That also
 # keeps the check off the clocks: `startedAt` is stamped by the pod and compared
 # only against itself, where "is this heartbeat later than the moment I typed
-# the restart" would be the workstation's clock against `chungusjr`'s and would
+# the restart" would be the workstation's clock against the node's and would
 # read a dying supervisor's final write as a boot if the pod ran a few seconds
 # ahead. A supervisor too old to write the field leaves it 0, and 0 never counts
 # as a boot: the window times out with the switch set, which is the safe

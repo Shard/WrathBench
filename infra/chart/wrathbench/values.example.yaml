@@ -5,7 +5,7 @@ image:
   registry: harbor.local/library
   tag: "harness-0.5-477-g47fddc0"
 nodeSelector:
-  kubernetes.io/hostname: chungusjr
+  kubernetes.io/hostname: your-node
 storage:
   className: iscsi-nvme
   data:
