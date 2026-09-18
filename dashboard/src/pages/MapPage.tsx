@@ -1058,7 +1058,9 @@ export default function MapPage() {
               {/*
                 Inventory (2026-09-18): the bag opens over the sidebar rather
                 than widening it, and the paperdoll sits under it. A replay
-                cursor carries no items yet, so this is the null line there.
+                cursor reads the newest sample behind it (`lib/replay.ts`), and
+                before the first one there is nothing to show — which the null
+                line says rather than drawing empty bags.
               */}
               <div class="k">inventory</div>
               <div class="v">

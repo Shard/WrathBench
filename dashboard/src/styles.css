@@ -959,7 +959,7 @@ td .spread { font-size: var(--fs-xs); }
 .inv-note { color: var(--dim); font-size: var(--fs-xs); }
 
 .inv-cell {
-  position: relative; width: 34px; height: 34px; flex: 0 0 auto;
+  position: relative; width: 40px; height: 40px; flex: 0 0 auto;
   border: 1px solid var(--line); border-radius: 4px; background: var(--grid);
   overflow: hidden;
 }
@@ -967,6 +967,7 @@ td .spread { font-size: var(--fs-xs); }
 .inv-cell .inv-slot-label {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: var(--dim); font-size: var(--fs-2xs); text-align: center; line-height: 1.05; padding: 1px;
+  white-space: nowrap;
 }
 .inv-link {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -975,7 +976,7 @@ td .spread { font-size: var(--fs-xs); }
 /* The fallback: as much of the name as fits, in its quality colour. It is the
    readable state, not a placeholder — a blocked reader never leaves it. */
 .inv-link .inv-name {
-  font-size: var(--fs-2xs); line-height: 1.05; text-align: center; padding: 1px;
+  font-size: var(--fs-2xs); line-height: 1.05; text-align: center; padding: 1px 1px 8px;
   overflow: hidden; word-break: break-word; max-height: 100%;
 }
 .inv-link.decorated .inv-name { display: none; }
@@ -983,12 +984,14 @@ td .spread { font-size: var(--fs-xs); }
 .inv-count {
   position: absolute; right: 1px; bottom: 0; z-index: 1;
   font-size: var(--fs-2xs); font-weight: 700; color: var(--fg);
-  text-shadow: 0 0 2px var(--bg), 0 0 2px var(--bg), 0 0 3px var(--bg);
+  background: var(--bg); border-radius: 2px; padding: 0 2px; line-height: 1.3;
   pointer-events: none;
 }
 .inv-grid { display: flex; flex-wrap: wrap; gap: 3px; }
 
-.paperdoll-grid { display: flex; gap: 6px; align-items: flex-start; }
+/* Bounded, so the two columns sit either side of a character-sized gap rather
+   than being flung to the edges of whatever card holds them. */
+.paperdoll-grid { display: flex; gap: 6px; align-items: flex-start; max-width: 230px; }
 .paperdoll-col { display: flex; flex-direction: column; gap: 3px; }
 .paperdoll-mid { flex: 1 1 auto; min-width: 0; }
 .paperdoll-row { display: flex; gap: 3px; margin-top: 3px; }
@@ -1021,6 +1024,6 @@ td .spread { font-size: var(--fs-xs); }
 }
 
 @media (max-width: 400px) {
-  .inv-cell { width: 30px; height: 30px; }
+  .inv-cell { width: 36px; height: 36px; }
   .bag-popover { max-width: calc(100vw - 24px); }
 }

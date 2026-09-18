@@ -52,8 +52,11 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       xp: p.xp,
       money: p.money,
       questsCompleted: p.questsCompleted,
-      // Track points carry no inventory; the replay popout shows none.
-      items: null,
+      // Inventory is carried forward, not per point: the track holds a reading
+      // only where it changed, so the sidebar shows the newest one at or before
+      // the cursor. Null before the first reading — not yet observed, which is
+      // not the same as empty bags.
+      items: itemsAt(track.points, i),
       // The player frame as that sample recorded it (item 104); a track
       // from before the columns existed carries nulls and draws unobserved.
       health: p.health ?? null,
@@ -68,6 +71,22 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       move: intentAt(track.moves, ts),
     },
   ];
+}
+
+/**
+ * The inventory standing at point `i`: the newest reading at or before it.
+ *
+ * A track carries `items` only on the points where it changed (`TrackPoint`),
+ * so scrubbing backwards past a change has to walk back to the last reading
+ * rather than showing nothing. Null means no point up to here carried one,
+ * which is "not yet observed" and is what the panel says in words.
+ */
+export function itemsAt(points: readonly TrackPoint[], i: number): NonNullable<TrackPoint["items"]> | null {
+  for (let k = Math.min(i, points.length - 1); k >= 0; k--) {
+    const items = points[k]!.items;
+    if (items !== undefined) return items;
+  }
+  return null;
 }
 
 /** The span a scrubber covers. Null when the run recorded no position at all. */

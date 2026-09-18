@@ -31,22 +31,22 @@ export interface InvItem {
   equipped: boolean;
   itemId?: number | null;
   quality?: number | null;
-  /** Equipment slot 0-18 for a worn item; see `EQUIPMENT_SLOTS`. */
+  /** The equipment slot 0-18 when worn, the slot within `bag` when carried. */
   slot?: number | null;
-  /** Where a carried item sits: `bag` 255 is the backpack, 19-22 a worn bag. */
+  /** The container when carried: 255 the backpack, 19-22 a worn bag. Absent when worn. */
   bag?: number | null;
-  bagSlot?: number | null;
 }
 
 /** The carried items, in the order a player would see them across their bags. */
 export function carried(items: readonly InvItem[]): InvItem[] {
   const rows = items.filter((i) => !i.equipped);
-  const placed = rows.filter((i) => typeof i.bag === "number" && typeof i.bagSlot === "number");
-  const loose = rows.filter((i) => !(typeof i.bag === "number" && typeof i.bagSlot === "number"));
+  const positioned = (i: InvItem): boolean => typeof i.bag === "number" && typeof i.slot === "number";
+  const placed = rows.filter(positioned);
+  const loose = rows.filter((i) => !positioned(i));
   // The backpack (255) is the first bag on screen even though its number is the
   // largest, so it sorts ahead of the worn bags rather than after them.
   const bagRank = (b: number): number => (b === 255 ? -1 : b);
-  placed.sort((a, b) => bagRank(a.bag!) - bagRank(b.bag!) || a.bagSlot! - b.bagSlot!);
+  placed.sort((a, b) => bagRank(a.bag!) - bagRank(b.bag!) || a.slot! - b.slot!);
   loose.sort((a, b) => a.name.localeCompare(b.name));
   // Positioned rows first: once track A lands, a mixed sample is a sample
   // mid-migration, and the rows that know where they are should keep their
@@ -64,7 +64,11 @@ export function paperdoll(items: readonly InvItem[]): {
   for (const item of items) {
     if (!item.equipped) continue;
     const slot = item.slot;
-    if (typeof slot === "number" && Number.isInteger(slot) && slot >= 0 && slot <= 18 && !bySlot.has(slot)) {
+    // `bag` present means the row is addressed inside a container, so its
+    // `slot` is a bag position and not an equipment slot — the two share the
+    // field name. A worn row never carries one.
+    const worn = item.bag === undefined || item.bag === null;
+    if (worn && typeof slot === "number" && Number.isInteger(slot) && slot >= 0 && slot <= 18 && !bySlot.has(slot)) {
       bySlot.set(slot, item);
     } else {
       unplaced.push(item);
