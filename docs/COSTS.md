@@ -4,8 +4,7 @@ How cost is measured in this harness, and the rules learned measuring it. The
 hard numbers that used to live here (per-episode resource tables, a pricing
 table, platform reliability counts, a what-to-try-next list) were a snapshot
 that went stale the moment the 0.5 series re-armed; they were
-removed rather than left to mislead — `git show d752ef7:docs/COSTS.md`
-is the last revision that carries them. Cost surfaces belong in the UI
+removed rather than left to mislead. Cost surfaces belong in the UI
 (episode cost, campaign rollups, estimates from accumulated baselines): that
 arc is GitHub issue #13, and until it lands, the per-call data below is the
 record.

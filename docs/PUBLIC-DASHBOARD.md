@@ -523,16 +523,15 @@ The unfurl itself is the last check in `infra/cloudflare/README.md`.
 
 The footer's GitHub link and the BibTeX `url` line on `/about` are behind
 `VITE_WRATHBENCH_REPO_URL`, the third build-time flag beside
-`VITE_WRATHBENCH_SNAPSHOT_BASE` and the card's two. Unset or empty — the
-default everywhere, including today's public build — neither is rendered:
-the link is not turned on yet, and one that 404s under the project's own name
-is worse than no link on the one page a stranger reads first. Set to the
-repository's URL, both appear.
+`VITE_WRATHBENCH_SNAPSHOT_BASE` and the card's two. Unset or empty, neither is
+rendered — a link that 404s under the project's own name is worse than no link
+on the one page a stranger reads first. Set to the repository's URL, both
+appear.
 
 `infra/deploy-dashboard.sh` reads `WRATHBENCH_REPO_URL` from `.env` the way it
 reads `WRATHBENCH_PUBLIC_ORIGIN`, but empty is not an error there: no origin
-means a broken card and stops the ship, no repo URL just means no link. **On
-launch day the flip is one line in `.env` and a redeploy**, with no repository
+means a broken card and stops the ship, no repo URL just means no link, so
+turning the link on is one line in `.env` and a redeploy with no repository
 edit. The value is validated as an http(s) URL and otherwise ignored, so a
 stray setting cannot put an arbitrary scheme in an anchor; the link's text is
 the last two path segments (`owner/repo`).
@@ -647,9 +646,12 @@ do it is a link to `https://www.wowhead.com/wotlk/item=<entry>` decorated in
 the reader's browser by Wowhead's public tooltip script. So a visitor to those
 two pages fetches `https://wow.zamimg.com/js/tooltips.js` and, per item, icon
 art from `wow.zamimg.com` and tooltip JSON from `nether.wowhead.com`. Those are
-the only third-party origins the application asks for, and the script is
-injected at runtime by `dashboard/src/lib/wowhead.ts` rather than sitting in
-`index.html`, so a page with no items asks for nothing. The reason for the
+the only third-party origins the application asks for, alongside the
+Cloudflare Web Analytics script (`static.cloudflareinsights.com`) the zone
+injects into every page — a zone setting, cookieless, and not something the
+build adds. The tooltip script is injected at runtime by
+`dashboard/src/lib/wowhead.ts` rather than sitting in `index.html`, so a page
+with no items asks for nothing. The reason for the
 arrangement is the red line in `docs/DATA-AND-LEGAL.md`: we extract and serve
 no item art — we publish the `item_template.entry` the server already gave us
 and let somebody else's service supply the picture. A reader who blocks either
