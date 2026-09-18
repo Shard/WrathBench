@@ -30,6 +30,8 @@ const Ladder = lazy(() => import("./pages/Ladder"));
 const About = lazy(() => import("./pages/About"));
 const Models = lazy(() => import("./pages/Models"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
+/* Operator-only; the page itself withholds on the public build. */
+const Config = lazy(() => import("./pages/Config"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 /** `/results` was renamed `/runs`. A redirect, so a bookmarked link still lands. */
@@ -65,6 +67,7 @@ render(
       <Route path="/episodes" component={EpisodesRedirect} />
       <Route path="/models" component={Models} />
       <Route path="/campaigns" component={Campaigns} />
+      <Route path="/config" component={Config} />
       <Route path="*" component={NotFound} />
     </Router>
   ),
