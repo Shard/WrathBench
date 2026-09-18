@@ -4,7 +4,7 @@
  * The store and its API landed with item 127; this page is a client of them
  * and invents nothing. Every write renders the WHOLE candidate config and runs
  * it through `parseFleet` — the same function the supervisor refuses a bad
- * `fleet.json` with — so a refusal here is the file's own sentence, and it is
+ * config with — so a refusal here is the parser's own sentence, and it is
  * shown verbatim beside the row that caused it. The row keeps the operator's
  * unsaved value: a refusal is something to fix, not something to lose.
  *
@@ -181,7 +181,7 @@ export default function Config() {
       >
         <p>
           The live fleet config, as the store holds it. Every write is validated against the whole
-          config by the same parser the supervisor refuses <code>infra/fleet.json</code> with, and
+          config by the same parser the supervisor reads it with, and
           takes effect on the supervisor's next 60s re-read — nothing restarts. The store's history
           is below.
         </p>
@@ -260,7 +260,7 @@ export default function Config() {
                     .catch((e: unknown) => setBanner(refusal(e)));
                 }}
               >
-                export fleet.json
+                export as JSON
               </button>
               <Show when={exported()}>
                 {(text) => (
