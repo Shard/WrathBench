@@ -256,7 +256,7 @@ export default function Ladder() {
         <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
 
-      <h2 class="section">ladder</h2>
+      <h1>ladder</h1>
 
       {/* The tier is the axis this page turns on, so it is the page's control:
           centred and large, above everything the filters then narrow. */}

@@ -7,7 +7,7 @@ import { A } from "@solidjs/router";
 export default function NotFound() {
   return (
     <div class="page">
-      <h2 class="section">no such page</h2>
+      <h1>no such page</h1>
       <p class="dim">
         Nothing is served at this address. The <A href="/">homepage</A> explains what WrathBench is;{" "}
         <A href="/runs">runs</A> is every recorded run.

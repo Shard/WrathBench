@@ -74,7 +74,7 @@ export default function Campaigns() {
         <div class="banner bad">{displayError(runs.error)}</div>
       </Show>
 
-      <h2 class="section">campaigns</h2>
+      <h1>campaigns</h1>
       <p>
         Commissioned exploration: objective-driven runs that probe ad-hoc scenarios. Every run is an
         unscored probe episode (see <A href="/about">about</A>), so nothing here reaches a chart or a

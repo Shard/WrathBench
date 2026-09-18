@@ -168,7 +168,7 @@ export default function Config() {
 
   return (
     <div class="page">
-      <h2 class="section">config</h2>
+      <h1>config</h1>
 
       {/*
         Three states, not two. The public build and a public viewer withhold

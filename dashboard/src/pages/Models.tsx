@@ -98,12 +98,12 @@ export default function Models() {
         <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
 
-      <h2 class="section">
+      <h1>
         models
         <Show when={body() !== undefined}>
           <InfoHint label="about this table" text={policyNote()} />
         </Show>
-      </h2>
+      </h1>
       <p>
         The roster of models available and what the scheduler currently makes of it.
       </p>

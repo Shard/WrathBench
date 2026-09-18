@@ -65,7 +65,13 @@ export function Layout(props: ParentProps) {
     <FeedsContext.Provider value={feeds}>
     <div class="app">
       <header class="top">
-        <h1>
+        {/*
+          The wordmark is not this page's heading: every page under it has one
+          of its own, and two h1s on a document is two answers to "what is
+          this". A div with the same rule, so nothing about it moved
+          (operator, 2026-09-18).
+        */}
+        <div class="wordmark">
           <A href="/">WrathBench</A>
           {/*
             Which of the two sites this is, set as a superscript on the wordmark
@@ -85,7 +91,7 @@ export function Layout(props: ParentProps) {
               </sup>
             )}
           </Show>
-        </h1>
+        </div>
         <nav>
           {/*
             The operator's config page is in the bar only on a private build

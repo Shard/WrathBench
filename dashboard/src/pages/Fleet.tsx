@@ -68,7 +68,7 @@ export default function Fleet() {
         <div class="banner bad">{displayError(runs.error)}</div>
       </Show>
 
-      <h2 class="section">fleet</h2>
+      <h1>fleet</h1>
       {/*
         The server's phase first, in one line, in the deploy script's own words
         (infra/deploy-worldserver.sh writes data/runs/server-state.json at each

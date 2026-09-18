@@ -482,7 +482,7 @@ export default function RunDetail() {
           const playtime = (): number | null => d().playtimeMs ?? null;
           return (
             <>
-              <h2 class="section">
+              <h1 class="section">
                 {/*
                   The runs table is where a reader of this page came from — the
                   fleet is the ops view and is not even a nav item any more. The
@@ -506,7 +506,7 @@ export default function RunDetail() {
                 >
                   character
                 </A>
-              </h2>
+              </h1>
 
               {/*
                 The freeplay character this run is one attempt of, as the whole
