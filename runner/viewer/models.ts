@@ -149,7 +149,7 @@ export interface RosterRead {
    * `runner/src/models.ts` — the supervisor's own predicate): a name a pinned
    * job holds, or one carrying an objective. Their runs are a probe's, not the
    * model's evidence, so `/api/models` lists them apart from the rows rather
-   * than beside a model whose counts they would duplicate (item 52).
+   * than beside a model whose counts they would duplicate.
    */
   excluded: { name: string; reason: string }[];
   /**
@@ -445,7 +445,7 @@ export function modelsResponse(opts: {
    * objective, so its projection is `sonnet`'s counts wearing another name:
    * listed as a row it reads as a second model with the same evidence. The
    * names and the reasons ride along under `roster.excluded`, so the page can
-   * say what it is not showing (item 52).
+   * say what it is not showing.
    */
   const outside = new Set(opts.roster.excluded.map((e) => e.name));
   const states = byHarness.filter((s) => !outside.has(s.name));

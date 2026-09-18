@@ -943,7 +943,7 @@ button.update:hover { background: var(--panel); }
 .page.prose .scroller { margin: 0 -20px; padding: 0 20px; }
 
 /*
- * The character page (item 128): one character across its sessions.
+ * The character page: one character across its sessions.
  *
  * Deliberately thin. The page is built from furniture the run page and the
  * ladder already style — `.cards`, `.attempts`, the charts, the table — and
@@ -958,7 +958,7 @@ button.update:hover { background: var(--panel); }
 .live-attempt .unit-frame { margin: 8px 0; }
 
 /* ------------------------------------------------------------ config page
- * The operator's write surface (item 134). The first page with text inputs
+ * The operator's write surface. The first page with text inputs
  * and a textarea, so the rules for those live here rather than globally: the
  * rest of the dashboard reads, and a global `input` rule would style the
  * filter checkboxes it was never written for. Shapes follow `.filter select`.
@@ -983,7 +983,7 @@ button.update:hover { background: var(--panel); }
 .auditdiff > div { flex: 1 1 280px; min-width: 0; }
 .auditdiff pre { overflow-x: auto; font-size: var(--fs-sm); }
 
-/* Which site this is, top right of the header (item 134). Superscript-sized
+/* Which site this is, top right of the header. Superscript-sized
    and its own two colours — neither is an accent used anywhere else, so it
    reads as the identity of the deployment rather than as one more status. */
 :root { --admin: #bb9af7; --preview: #56b6c2; }

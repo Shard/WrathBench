@@ -1,5 +1,5 @@
 /**
- * Probe for the talent tree and respec surface (item 96): the
+ * Probe for the talent tree and respec surface: the
  * `talent_tree` action answered as `WB_TALENT_TREE` (tabs named from
  * TalentTab.dbc, talents named from Spell.dbc, `state.talentTree()` merging
  * the learned ranks), `learnTalent` spending a point, and `resetTalents`
@@ -8,9 +8,9 @@
  *
  * It FAILS against any worldserver built before the tap (`talent_tree`
  * comes back 400 unsupported_action). Run it only after the image is
- * deployed: it is the gate for the item 96 build.
+ * deployed: it is the gate for that build.
  *
- * Fixture (item 45 pattern): a persistent Human Paladin (default
+ * Fixture: a persistent Human Paladin (default
  * `Smoketalent` on MODULE_ACCOUNT, never deleted) placed by
  * `infra/fixtures/apply.ts --scenario talents-stormwind` — level 10, 5g,
  * in front of Katherine the Pure (entry 5492) in Stormwind's cathedral. Not

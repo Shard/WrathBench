@@ -453,7 +453,7 @@ run_smokes_directly() {
     started=$(date +%s)
     # `if cmd; then` and not `set +e`: an ERR trap fires on a failing command
     # even with errexit off, and only a tested command is exempt from both.
-    # The gate smokes stage their characters through infra/fixtures (item 45),
+    # The gate smokes stage their characters through infra/fixtures,
     # which needs the db service. Those four WRATHBENCH_DB_* vars are on the
     # `runner` service itself now (compose.yml's *wb-db anchor), so only the
     # account is passed here — the gate runs each smoke as its own SMOKE-N,

@@ -186,7 +186,7 @@ export function formatConfigBanner(rej: ConfigRejection | undefined, loadedAt: n
 }
 
 /**
- * The refused pins (item 66), printed under the rejection banner.
+ * The refused pins, printed under the rejection banner.
  *
  * A refusal is quieter than the outage it replaces, which is the point — and
  * also the risk. The file IS in effect, so nothing else looks wrong; the only
@@ -459,7 +459,7 @@ export function formatQueue(queue: readonly FleetJob[], state: FleetState["queue
  *
  * This is a DIFFERENT source than the --status accounts table, which reports
  * the supervisor's own `jobs` record — and saying the two were "the same
- * signal" is how a stale row there went unnoticed (item 68). They should
+ * signal" is how a stale row there went unnoticed. They should
  * now agree on every fleet-managed account; where they cannot, this one is the
  * truth about the world and that one is the truth about the supervisor.
  *

@@ -39,7 +39,7 @@
  *
  * The per-snippet timeout lives in the host. A timed-out evaluation is
  * abandoned (its eventual result discarded) but the runtime, its bindings and
- * its routines survive. Abandonment is cooperative (item 44): each eval
+ * its routines survive. Abandonment is cooperative: each eval
  * runs under its own AbortController, reachable as `signal` and threaded into
  * the SDK client through AsyncLocalStorage, so the waits the abandoned code
  * left behind (`moveTo`, `killTarget`, `waitForTransfer`, …) reject with

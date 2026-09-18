@@ -121,7 +121,7 @@ export function mapsOf(states: readonly StatePoint[]): number[] {
 }
 
 /**
- * A run's recorded track, for map replay (item 22).
+ * A run's recorded track, for map replay.
  *
  * Only samples that actually carried a position: a sample may record level and
  * xp with no coordinates, and interpolating through it would draw a line the
@@ -369,7 +369,7 @@ export function resultRunOf(
   leveling: LevelUpFacts | null = null,
   deaths: DeathFacts | null = null,
   /**
-   * Spells learned, talent points spent and trades completed (item 35). One
+   * Spells learned, talent points spent and trades completed. One
    * parameter rather than three because the positional list is already long,
    * and **omitted** rather than defaulted to nulls: a caller that does not pass
    * it leaves the three fields `undefined` — "this viewer does not answer" —

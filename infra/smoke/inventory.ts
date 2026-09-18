@@ -1,5 +1,5 @@
 /**
- * Probe for the one-bag inventory view (item 50): `state.bag()` spans
+ * Probe for the one-bag inventory view: `state.bag()` spans
  * the backpack and every worn bag, and equipment is readable off
  * `state.inventory` by slot.
  *
@@ -13,7 +13,7 @@
  * -> logout.
  *
  * What this cannot prove: the worn-bag branch. A level-1 character owns no
- * bag, a fixture cannot write one (item 57: item guids are not safe to write
+ * bag, a fixture cannot write one (item guids are not safe to write
  * from outside), and `Smoketram` — the gate's persistent fixture character —
  * was created without one for the same reason. That branch (container
  * `numSlots` + `bagSlot<n>Lo/Hi` folded into `bag()`, addressed by the bag's

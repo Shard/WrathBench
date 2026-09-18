@@ -233,7 +233,7 @@ function projectTaxi(t: TaxiFacts): TaxiFacts {
 }
 
 /**
- * Spells, talents and trades (item 35). Numbers only — spell and talent ids,
+ * Spells, talents and trades. Numbers only — spell and talent ids,
  * counts, turn indices and the timestamps the run's own rows already carry.
  * Nothing here can name anything: the record never held a spell name, a talent
  * name or a trading partner, which is why these can be projected whole while
@@ -1107,7 +1107,7 @@ function plain(v: unknown): unknown {
  * A `harness` entry of kind `comparability_restamped` carries the whole tuple
  * in `before` and `after`, so a by-name copy ships the whole tuple a layer
  * below the run row — which is how the operator's wiki dump filename reached the public
- * bucket (item 123, 2026-09-11). The test is structural rather than keyed on
+ * bucket. The test is structural rather than keyed on
  * the entry kind so a future record that embeds a tuple is covered the day it
  * is written; `budget` is part of it because the other `after` in this file
  * (a `resume` entry's pause reason) is a plain string, and must stay one.

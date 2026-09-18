@@ -195,7 +195,7 @@ describe("client: operator-bound account", () => {
 });
 
 describe("client: movement", () => {
-  test("the default signal aborts a pending moveTo, issues one stop, and leaves later waits alive (item 44)", async () => {
+  test("the default signal aborts a pending moveTo, issues one stop, and leaves later waits alive", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     // A provider, as the runner passes it: consulted at the start of each wait.
     let current: AbortSignal | undefined;
@@ -652,7 +652,7 @@ describe("client: movement", () => {
   });
 
   test("teleported (same-map port) resolves on the own-guid MSG_MOVE_TELEPORT_ACK, never waits for NEW_WORLD", async () => {
-    // item 46: a Hearthstone mid-move used to answer `transferred`, and
+    // a Hearthstone mid-move used to answer `transferred`, and
     // moveTo then waited 90s for an SMSG_NEW_WORLD that never comes on a
     // same-map port. The module now says `teleported`, and the arrival point
     // is the server's own teleport ack, sent before the result.
@@ -1211,7 +1211,7 @@ describe("client: killTarget", () => {
     await stub.stop();
   });
 
-  test("a UnitView from state.units(...) can be passed straight in (item 3b)", async () => {
+  test("a UnitView from state.units(...) can be passed straight in", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);
     const unit = client.state.units().find((u) => u.guid === CREATURE_GUID)!;
@@ -2145,7 +2145,7 @@ describe("client: equipItem", () => {
     const pending = client.equipItem(255, BACKPACK_SLOT, { timeout: 2000 });
     await untilAction(stub, "equip_item");
     // 60 is EQUIP_ERR_NOT_IN_COMBAT — the code a run reverse-engineered from
-    // context because nothing ever named it (item 101a).
+    // context because nothing ever named it.
     stub.push(JSON.stringify(inventoryChangeFailure(78, 60)));
     const result = await pending;
     if (result.ok || result.status !== "not_equipped") throw new Error("unreachable");
@@ -2290,7 +2290,7 @@ describe("guids are opaque decimal strings: guid arguments at the client surface
   });
 });
 
-describe("client: flight master window and activateTaxi (item 38 N3)", () => {
+describe("client: flight master window and activateTaxi", () => {
   const TS = 1_700_000_000_000;
   const menu = (seq: number, withTaxi = true): string =>
     JSON.stringify({
@@ -2430,7 +2430,7 @@ describe("client: flight master window and activateTaxi (item 38 N3)", () => {
   });
 });
 
-describe("client: bindAtInnkeeper (item 38 N2)", () => {
+describe("client: bindAtInnkeeper", () => {
   const TS = 1_700_000_000_000;
   const menu = (seq: number): string =>
     JSON.stringify({
@@ -2501,7 +2501,7 @@ describe("client: bindAtInnkeeper (item 38 N2)", () => {
   });
 });
 
-describe("client: gossipSelect by observed option text (item 3c)", () => {
+describe("client: gossipSelect by observed option text", () => {
   const gossipMenu = (seq: number): string =>
     JSON.stringify({
       seq,
@@ -2777,7 +2777,7 @@ describe("client: questgiver status and quest query, issued the way a client doe
   });
 });
 
-describe("client: talents and the raw escape hatch (item 39)", () => {
+describe("client: talents and the raw escape hatch", () => {
   const talentsInfo = (seq: number, talents: { talentId: number; rank: number }[], unspent = 0) =>
     JSON.stringify({
       seq,
@@ -3257,7 +3257,7 @@ describe("client: moveTo target resolution", () => {
   });
 });
 
-describe("client: queryTalentTree and resetTalents (item 96)", () => {
+describe("client: queryTalentTree and resetTalents", () => {
   const TS = 1_700_000_000_000;
   const tree = (seq: number): string =>
     JSON.stringify({
@@ -3368,7 +3368,7 @@ describe("client: queryTalentTree and resetTalents (item 96)", () => {
   });
 });
 
-describe("client: pet, group, mail and bank helpers (items 98 and 100)", () => {
+describe("client: pet, group, mail and bank helpers", () => {
   const TS = 1_700_000_000_000;
   const PET_GUID = "17365880163140632999";
   const frame = (seq: number, opcode: string, data: unknown): string => JSON.stringify({ seq, opcode, opcodeId: 0x100, ts: TS + seq, data });

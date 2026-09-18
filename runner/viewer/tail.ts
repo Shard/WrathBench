@@ -490,7 +490,7 @@ export interface ReplySpan {
  * driver splits one reply across several `response` records where only the
  * last carries usage, and that last figure is the running total for the whole
  * message (`adapter-claude.ts`), so adding an estimate for the earlier
- * envelopes counts their text twice (item 82). That is true of the
+ * envelopes counts their text twice. That is true of the
  * message's INPUT side only: its `completion` is the API's opening snapshot,
  * so where the turn has a `claude_result` the spans are resolved against it —
  * `perReplyTokens` where the turn's `iterations` really describe its replies,
@@ -687,7 +687,7 @@ function collapseClaudeTurns(
  * per-turn truth is in the spans for anyone who needs it.
  *
  * Completion tokens come from `replySpans`, so a reply split across several
- * `response` records counts once (item 82), and a claude-code turn counts
+ * `response` records counts once, and a claude-code turn counts
  * its `claude_result` output total instead of its responses' opening snapshots
  * (`ClaudeTurnUsage`) — never both. Prompt tokens carry the same
  * rule: a request's `chars / 4` estimate is held until something reports a
@@ -1030,7 +1030,7 @@ export function segmentsFrom(marks: readonly SegmentMark[]): ActiveSegment[] {
  * `Watchdogs` is constructed fresh in each worker process, but since 08cd691
  * run.ts passes `elapsedBeforeMs` from the persisted `episodeElapsedMs`, so the
  * episode clock CARRIES ACROSS A PAUSE rather than resetting on every resume
- * (this comment said otherwise until item 62). Both clocks now exclude paused
+ * (this comment said otherwise until). Both clocks now exclude paused
  * time and differ only in how they accumulate it: the watchdog rewinds one
  * start point by the elapsed total, this sums the observed active segments. So
  * the two track each other, and neither is a subset of the other — a run that
@@ -1414,7 +1414,7 @@ export function deathFactsFrom(marks: readonly DeathMark[], sawLevelUpMark: bool
   };
 }
 
-/* ------------------------------ spell, talent and trade milestones (item 35) */
+/* ------------------------------ spell, talent and trade milestones */
 
 /**
  * A spellbook milestone: the login baseline the run opened with

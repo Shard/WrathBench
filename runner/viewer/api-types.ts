@@ -287,7 +287,7 @@ export interface RunRow {
   questsCompleted: number | null;
   /**
    * What the character wears and carries, from the newest state sample that
-   * recorded it (item 50). Null on runs that predate the `items` column.
+   * recorded it. Null on runs that predate the `items` column.
    */
   items: ItemSample[] | null;
   mtime: number | null;
@@ -350,7 +350,7 @@ export interface StatePoint {
   turn: number | null;
   /**
    * The player frame's numbers, from the newest state sample that carried a
-   * position (item 104). Optional for the reason `move` is: a run
+   * position. Optional for the reason `move` is: a run
    * recorded before the columns existed, and a snapshot published before this
    * shipped, carry none, and every reader must draw those as unobserved rather
    * than as zero. A health/maxHealth pair is whole or absent — the SDK
@@ -661,7 +661,7 @@ export interface AgentPosition {
   move?: MoveIntentView | null;
   /**
    * The player frame's numbers, from the newest state sample that carried a
-   * position (item 104). Optional for the reason `move` is: a run
+   * position. Optional for the reason `move` is: a run
    * recorded before the columns existed, and a snapshot published before this
    * shipped, carry none, and every reader must draw those as unobserved rather
    * than as zero. A health/maxHealth pair is whole or absent — the SDK
@@ -1191,7 +1191,7 @@ export interface ApiInfoResponse extends SnapshotEnvelope {
    *
    * An open tab keeps running whatever JavaScript it loaded, possibly hours and
    * several commits old, while a rebuild has already replaced the files behind
-   * it — so a bug report can describe code that no longer exists (item 64). The
+   * it — so a bug report can describe code that no longer exists. The
    * SPA remembers the first value it sees, which IS its own build (index.html
    * is served `no-store`, so a loaded tab was served the build that was current
    * at the time), and says so when a later poll disagrees.
@@ -1383,7 +1383,7 @@ export interface DeathFacts {
   /** The ends of `sites`, carried so a listing row need not walk the array. */
   first: DeathSite | null;
   last: DeathSite | null;
-  /** Every death observed, in order — the death sites map replay wants (item 22). */
+  /** Every death observed, in order — the death sites map replay wants. */
   sites: DeathSite[];
 }
 
@@ -1410,7 +1410,7 @@ export interface DeathSite {
 
 /**
  * What a run learned, spent and traded, from the `spells_at_login` / `spell` /
- * `talent` / `trade` milestones (item 35, 2026-09-01).
+ * `talent` / `trade` milestones.
  *
  * `spells_at_login` is the liveness witness all three share: it is written once
  * per process by the same producer, so a run that has it and no learns really
@@ -1656,7 +1656,7 @@ export interface ResultRun {
    */
   taxi?: TaxiFacts | null;
   /**
-   * Spells learned, talent points spent and trades completed (item 35). Null is
+   * Spells learned, talent points spent and trades completed. Null is
    * "not recorded" for the reason `deaths` is — the witness is
    * `spells_at_login`, see `SpellFacts` — and `undefined` an older viewer.
    */
@@ -1710,7 +1710,7 @@ export interface StateItemsRow {
   items: string;
 }
 
-/** A run's whole recorded track, for map replay (item 22). */
+/** A run's whole recorded track, for map replay. */
 export interface TrackPoint {
   ts: number;
   map: number;
@@ -1723,7 +1723,7 @@ export interface TrackPoint {
   turn: number | null;
   /**
    * The player frame's numbers, from the newest state sample that carried a
-   * position (item 104). Optional for the reason `move` is: a run
+   * position. Optional for the reason `move` is: a run
    * recorded before the columns existed, and a snapshot published before this
    * shipped, carry none, and every reader must draw those as unobserved rather
    * than as zero. A health/maxHealth pair is whole or absent — the SDK
@@ -1757,7 +1757,7 @@ export interface TrackPoint {
 
 /**
  * Where a replayed run sits in its freeplay character, and the attempts either
- * side of it (item 119).
+ * side of it.
  *
  * The four scalars off `CharacterView` and nothing else. The map's play bar needs
  * somewhere to step to; it does not need the chain's totals, and carrying the
@@ -1823,7 +1823,7 @@ export interface CharacterStatePoint extends StatePoint {
  * the chain from any member, and `character.characterId` names the canonical
  * one, so a link built from an attempt id lands rather than 404ing.
  *
- * Universal since 2026-09-16 (item 128): a scored run is a character of one
+ * Universal since 2026-09-16: a scored run is a character of one
  * attempt, and this route answers for it exactly as it does for a freeplay
  * character on its twelfth.
  */
@@ -2008,7 +2008,7 @@ export interface ModelsResponse extends SnapshotEnvelope {
     /**
      * Entries the policy does not schedule and this response does not row:
      * a name a pinned job holds (a probe on its own account) or one carrying
-     * an objective. Same predicate as `run-fleet --status` (item 52).
+     * an objective. Same predicate as `run-fleet --status`.
      */
     excluded: { name: string; reason: string }[];
   };

@@ -1092,7 +1092,7 @@ export function accountHeldBy(account: string | undefined, ownRunId: string): st
      * than LIVE_TRAJECTORY_MS cannot be the holder however it ended, so
      * hoisting the cheapest term of the conjunction skips the meta.json read
      * and the run.sqlite open for every finished run in the directory —
-     * which is all of them but a handful (item 24). The answer is
+     * which is all of them but a handful. The answer is
      * unchanged: same conjunction, same readdir order, same first match.
      */
     const age = activityAgeMs(id);

@@ -527,7 +527,7 @@ export const updateFieldsSchema = z.looseObject({
   npcFlags: z.number().optional(),
   targetGuid: guidSchema.optional(),
   /**
-   * Who a unit belongs to (item 98): a pet's master is `summonedByGuid` /
+   * Who a unit belongs to: a pet's master is `summonedByGuid` /
    * `createdByGuid`, a mind-controlled unit's is `charmedByGuid`; `petNumber`
    * is the number a client keys the pet's name query on (0 on non-pets).
    */
@@ -1262,7 +1262,7 @@ export const talentRowSchema = z.looseObject({
 
 /**
  * `SMSG_TALENTS_INFO` for the player. The pet form arrives as `{ pet: true }`
- * with nothing else (the pet bar itself is `SMSG_PET_SPELLS`, item 98).
+ * with nothing else (the pet bar itself is `SMSG_PET_SPELLS`).
  */
 export const talentsInfoDataSchema = z.looseObject({
   pet: z.boolean(),
@@ -1392,7 +1392,7 @@ export const playerBoundDataSchema = z.looseObject({
 export type PlayerBoundData = z.infer<typeof playerBoundDataSchema>;
 
 /**
- * One faction row as the module serves it (item 99): the wire's reputation
+ * One faction row as the module serves it: the wire's reputation
  * index (`repListId`) and standing, joined to the client's `Faction.dbc`
  * (`factionId`, `name`) and the race/class base the client adds (`base`);
  * `reputation` is `base + standing`, the number the reputation pane shows.
@@ -1598,13 +1598,13 @@ export const eventDataSchemas = {
   SMSG_LOOT_MONEY_NOTIFY: lootMoneyNotifyDataSchema,
   SMSG_LOOT_CLEAR_MONEY: emptyDataSchema,
   SMSG_LOOT_RELEASE_RESPONSE: lootReleaseResponseDataSchema,
-  // group loot rolls (item 102)
+  // group loot rolls
   SMSG_LOOT_START_ROLL: lootStartRollDataSchema,
   SMSG_LOOT_ROLL: lootRollDataSchema,
   SMSG_LOOT_ROLL_WON: lootRollWonDataSchema,
   SMSG_LOOT_ALL_PASSED: lootAllPassedDataSchema,
   SMSG_LOOT_MASTER_LIST: lootMasterListDataSchema,
-  // item text (item 103)
+  // item text
   SMSG_READ_ITEM_OK: readItemDataSchema,
   SMSG_READ_ITEM_FAILED: readItemDataSchema,
   SMSG_PAGE_TEXT_QUERY_RESPONSE: pageTextQueryResponseDataSchema,
@@ -1634,14 +1634,14 @@ export const eventDataSchemas = {
   SMSG_INITIALIZE_FACTIONS: initializeFactionsDataSchema,
   SMSG_SET_FACTION_STANDING: setFactionStandingDataSchema,
   SMSG_SET_FACTION_VISIBLE: setFactionVisibleDataSchema,
-  // pets (item 98)
+  // pets
   SMSG_PET_SPELLS: petSpellsDataSchema,
   SMSG_PET_ACTION_FEEDBACK: petActionFeedbackDataSchema,
   SMSG_PET_TAME_FAILURE: petTameFailureDataSchema,
   SMSG_PET_CAST_FAILED: petCastFailedDataSchema,
   SMSG_PET_NAME_QUERY_RESPONSE: petNameQueryResponseDataSchema,
   SMSG_PET_NAME_INVALID: petNameInvalidDataSchema,
-  // group, mail, bank, trade (item 100)
+  // group, mail, bank, trade
   SMSG_GROUP_INVITE: groupInviteDataSchema,
   SMSG_GROUP_DECLINE: groupNameDataSchema,
   SMSG_GROUP_SET_LEADER: groupNameDataSchema,

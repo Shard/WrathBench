@@ -1821,7 +1821,7 @@ export interface MailOptions {
 export type LootRollRefusalStatus = "no_pending_roll" | "ambiguous_roll" | "roll_not_allowed";
 
 /**
- * The outcome of `lootRoll` (item 102). `rolled` is the server's echo of the
+ * The outcome of `lootRoll`. `rolled` is the server's echo of the
  * counted vote (`SMSG_LOOT_ROLL` for this character). That first echo is only
  * an acknowledgement of the button — `Group::CountRollVote` sends it with
  * rollNumber 0 for need and 128 for pass / greed / disenchant, and with
@@ -1851,7 +1851,7 @@ export interface LootRollOptions {
 }
 
 /**
- * The outcome of `readItem` (item 103). `read` carries the pages in order and
+ * The outcome of `readItem`. `read` carries the pages in order and
  * `text` as one string. `no_item` is a bag address or name that holds
  * nothing; `not_readable` is the server's (or the template's) word that there
  * is nothing to read on it.
@@ -3445,7 +3445,7 @@ export class WrathClient {
     });
   }
 
-  // ------------------------------------------------------------------ pets (item 98)
+  // ------------------------------------------------------------------ pets
 
   /**
    * The pet the control bar is for, or the refusal to send anything. "There is
@@ -3590,7 +3590,7 @@ export class WrathClient {
     return this.petAction(pet.guid, 3, 0x07);
   }
 
-  // ---------------------------------------------------------------- group (item 100)
+  // ---------------------------------------------------------------- group
 
   /**
    * Invite a player by name (`CMSG_GROUP_INVITE`) and return the server's
@@ -3659,7 +3659,7 @@ export class WrathClient {
     return this.state.group()!;
   }
 
-  // ----------------------------------------------------------------- mail (item 100)
+  // ----------------------------------------------------------------- mail
 
   /**
    * The sentence every mail call says when no frame is open. One text, whether
@@ -3823,7 +3823,7 @@ export class WrathClient {
     return this.waitMailResult("deleteMail", 4, sinceSeq, options.timeout ?? 10_000, `deleteMail(${mailId})`);
   }
 
-  // ----------------------------------------------------------------- bank (item 100)
+  // ----------------------------------------------------------------- bank
 
   /** Open the bank at a banker (`CMSG_BANKER_ACTIVATE`) and return it once the frame opens (`SMSG_SHOW_BANK`; also `state.bank()`). */
   async openBank(npcGuid: GuidOrUnit, options: BankOptions = {}): Promise<WithResolved<BankContents>> {
@@ -3977,7 +3977,7 @@ export class WrathClient {
     return this.action({ action: "learn_talent", talentId, rank });
   }
 
-  // ------------------------------------------- group loot rolls (item 102)
+  // ------------------------------------------- group loot rolls
 
   /**
    * Vote on an open roll frame (`CMSG_LOOT_ROLL`): the need / greed / pass /
@@ -4063,7 +4063,7 @@ export class WrathClient {
     return { ok: false, status, hint };
   }
 
-  // ------------------------------------------------------ item text (item 103)
+  // ------------------------------------------------------ item text
 
   /**
    * Read a carried book or letter and return its text. The item is the
@@ -4551,7 +4551,7 @@ export class WrathClient {
     if (status === "teleported") {
       // A same-map port: no SMSG_NEW_WORLD is coming, so waiting for one
       // (what `transferred` does) would be a full-timeout hang ending in a
-      // false "still pending" (item 46). The arrival point is the
+      // false "still pending". The arrival point is the
       // server's own MSG_MOVE_TELEPORT_ACK, sent before the result — so this
       // is a buffer lookup from before the move, and the short timeout only
       // covers a module that did not serve it.
@@ -5150,7 +5150,7 @@ export class WrathClient {
    * with `SMSG_GOSSIP_MESSAGE` carrying the quests instead of
    * `SMSG_QUESTGIVER_QUEST_LIST` — with none of the accepting. Models kept
    * rebuilding exactly this by hand over `questList` plus event scraping and
-   * getting confused by their own nulls (item 9a).
+   * getting confused by their own nulls.
    *
    * An empty `quests` is an answer: the NPC has nothing for this character
    * right now. Silence is not, so it still throws `EventTimeoutError`.

@@ -1,5 +1,5 @@
 /**
- * The stale-build notice (item 64).
+ * The stale-build notice.
  *
  * Vite empties `dist/` on every build, so an open tab keeps executing whatever
  * JavaScript it loaded while the files behind it have been replaced. The cost

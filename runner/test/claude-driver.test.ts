@@ -140,7 +140,7 @@ describe("claude-code driver", () => {
     const record = readRecord(recordPath);
     // The same fixed prompt as the OpenAI loop except for one sentence: this
     // harness applies no context policy, so it must not tell the model its
-    // conversation is being trimmed (item 8).
+    // conversation is being trimmed.
     expect(record["systemPrompt"]).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
     expect(record["systemPrompt"]).not.toBe(SYSTEM_PROMPT);
     expect(record["systemPrompt"]).toContain(contextSentence("claude-code"));

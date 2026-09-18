@@ -159,8 +159,8 @@ describe("comparabilityOf", () => {
   });
 
   test("the prompt hash is per harness: the two drivers are not sent the same text", () => {
-    // The prompt's sentence about older conversation is the harness's own
-    // (item 8): the fixed loop trims, the CLI does not. The tuple has to show
+    // The prompt's sentence about older conversation is the harness's own:
+    // the fixed loop trims, the CLI does not. The tuple has to show
     // that the bytes differed, not just that the loop did — otherwise a
     // cross-driver cost or score comparison looks like it is over one prompt.
     const loop = comparabilityOf(loadRunConfig({ driver: "openai", model: "m" }), "v");

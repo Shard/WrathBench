@@ -468,7 +468,7 @@ describe("the public projection of a character", () => {
   /*
    * The projector is an allowlist, so what it emits is pinned rather than
    * reasoned about (the rule `viewer-public-mode.test.ts` states). The six
-   * identity fields item 128 added are here because a character page has to be
+   * the identity fields added are here because a character page has to be
    * able to name what it is about, and every one of them already rides on a
    * public runs row — but that is an argument, and this is the check.
    */

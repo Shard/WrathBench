@@ -1514,7 +1514,7 @@ async function main(): Promise<void> {
     wasEmpty = empty === true;
     config = next;
 
-    // Refused pins (item 66). Deduped on the joined set, the way the rejection
+    // Refused pins. Deduped on the joined set, the way the rejection
     // is deduped on its message: a config that keeps refusing the same pin says
     // so once, not every 60s, but a NEW refusal always speaks.
     const refusals = config.refusals.map((r) => `${r.pin}: ${r.why}`).join("\n");

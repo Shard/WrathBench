@@ -1,6 +1,5 @@
 /**
- * Tool-argument leniency and strict validation (2026-08 audit, Tier 1 item 4
- * and Tier 2 items 7/8): lenient parsing of argument strings, alias
+ * Tool-argument leniency and strict validation (2026-08 audit): lenient parsing of argument strings, alias
  * normalization, strict unknown-key rejection, clamped limits, and
  * nearest-tool suggestions.
  */

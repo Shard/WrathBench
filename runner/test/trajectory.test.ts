@@ -58,7 +58,7 @@ describe("Trajectory", () => {
     traj.close();
   });
 
-  // item 36: both were derivable from config_json; a column means the
+  // both were derivable from config_json; a column means the
   // listing reads a fact rather than re-deriving a rule that could drift.
   test("writes the character and the platform as run columns", () => {
     const dir = tempRunDir();
@@ -126,7 +126,7 @@ describe("Trajectory", () => {
 
   test("items are recorded as JSON, null when the sample carried none, and the column migrates in", () => {
     const dir = tempRunDir();
-    // A state table from before the `items` column (harness 0.4, pre item 50).
+    // A state table from before the `items` column (harness 0.4, earlier).
     const db = new Database(join(dir, "run.sqlite"));
     db.exec(`CREATE TABLE state (run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER, xp INTEGER,
       map INTEGER, x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, money INTEGER,
@@ -159,7 +159,7 @@ describe("Trajectory", () => {
 
   test("the player frame's numbers round-trip, and the columns migrate into an old database", () => {
     const dir = tempRunDir();
-    // A state table from before item 104: every column the 0.4 series had, and
+    // A state table from before that: every column the 0.4 series had, and
     // none of the frame's. Opening it must add them rather than fail the insert.
     const db = new Database(join(dir, "run.sqlite"));
     db.exec(`CREATE TABLE state (run_id TEXT NOT NULL, ts INTEGER NOT NULL, level INTEGER, xp INTEGER,

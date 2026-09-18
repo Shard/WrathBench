@@ -390,7 +390,7 @@ describe("state cache: self, from the wire", () => {
   });
 
   test("an own-guid MSG_MOVE_TELEPORT_ACK moves self, and the `teleported` result after it does not", () => {
-    // item 46: a same-map port sends no SMSG_NEW_WORLD; the server's
+    // a same-map port sends no SMSG_NEW_WORLD; the server's
     // teleport ack under our guid is the arrival point. The `teleported` move
     // result that follows carries the pre-teleport position and must not win.
     const cache = StateCache.replay(toEvents([...loginSequence, selfCreate, teleportAck(40)]), { seed: SEED });
@@ -1376,7 +1376,7 @@ describe("state.closest(): criteria object or predicate", () => {
   });
 });
 
-describe("state cache: the gossip menu fold (item 3c)", () => {
+describe("state cache: the gossip menu fold", () => {
   const gossipMsg = (guid: string, seq: number) => ({
     seq,
     opcode: "SMSG_GOSSIP_MESSAGE",
@@ -1429,7 +1429,7 @@ describe("state cache: the gossip menu fold (item 3c)", () => {
   });
 });
 
-describe("state cache: vendor, trainer and loot windows (item 101b)", () => {
+describe("state cache: vendor, trainer and loot windows", () => {
   const ts = (seq: number) => 1_700_000_000_000 + seq;
   const vendorList = (guid: string, seq: number, items = [{ slot: 1, itemId: 117, price: 25, buyCount: 1, leftInStock: -1, extendedCost: 0 }]) => ({
     seq,
@@ -1567,7 +1567,7 @@ describe("state cache: vendor, trainer and loot windows (item 101b)", () => {
   });
 });
 
-describe("state cache: questgiver markers (item 27)", () => {
+describe("state cache: questgiver markers", () => {
   const withWorld = (extra: readonly unknown[]) =>
     StateCache.replay(toEvents([...worldStream, ...extra]), { seed: SEED });
 
@@ -1670,7 +1670,7 @@ describe("state cache: questgiver markers (item 27)", () => {
   });
 });
 
-describe("state cache: quest objectives from the quest query (item 28)", () => {
+describe("state cache: quest objectives from the quest query", () => {
   const withWorld = (extra: readonly unknown[]) =>
     StateCache.replay(toEvents([...worldStream, ...extra]), { seed: SEED });
 
@@ -1721,7 +1721,7 @@ describe("state cache: quest objectives from the quest query (item 28)", () => {
   });
 });
 
-describe("state cache: spellbook, cooldowns and talents (item 39)", () => {
+describe("state cache: spellbook, cooldowns and talents", () => {
   const at = (seq: number, opcode: string, opcodeId: number, data: unknown) => ({
     seq,
     opcode,
@@ -2174,7 +2174,7 @@ describe("achievements and flight paths", () => {
   });
 });
 
-describe("skills, talent tree, item stats, reputation (items 95-99)", () => {
+describe("skills, talent tree, item stats, reputation", () => {
   const TS = 1_700_000_000_000;
   const selfValues = (seq: number, fields: Record<string, number | string>) => ({
     seq,
@@ -2365,7 +2365,7 @@ describe("skills, talent tree, item stats, reputation (items 95-99)", () => {
   });
 });
 
-describe("pets, group, mail, bank, trade (items 98 and 100)", () => {
+describe("pets, group, mail, bank, trade", () => {
   const TS = 1_700_000_000_000;
   const PET_GUID = "17365880163140632999";
   const frame = (seq: number, opcode: string, data: unknown) => ({ seq, opcode, opcodeId: 0x100, ts: TS + seq, data });

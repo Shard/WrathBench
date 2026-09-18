@@ -101,7 +101,7 @@ export class Watchdogs {
    * The first observation with a character in the world. A fresh level-1
    * character has exactly level 1; hygiene's guids can never be its. `level`
    * alone is the tripwire (not xp or quests): the first live sample can trail
-   * the login by a whole turn on the openai-compatible path (item 77),
+   * the login by a whole turn on the openai-compatible path,
    * long enough for a kill or a turn-in, but not for level 2.
    */
   noteFirstLive(obs: { guid: string | undefined; level: number | undefined }): void {

@@ -37,7 +37,7 @@ export function XpChart(props: {
   episodeMs: number | null;
   now: number;
   /**
-   * Session boundaries, in the same units as the samples' `ts` (item 128).
+   * Session boundaries, in the same units as the samples' `ts`.
    * A run's own chart has none — a run is one session. A character's chart
    * draws one per attempt after the first, because a curve laid across twelve
    * sessions with nothing marking where they met reads as one long climb.

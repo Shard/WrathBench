@@ -1,5 +1,5 @@
 /**
- * The config write client (item 134).
+ * The config write client.
  *
  * The contract worth pinning: the refusal sentence arrives VERBATIM — the
  * whole point of the API is that a rejected edit carries the sentence

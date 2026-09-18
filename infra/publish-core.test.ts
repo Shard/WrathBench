@@ -1258,7 +1258,7 @@ const RUNS: RunSpec[] = [
 describe("a streamed run wave", () => {
   test("uploads each batch before the next one is projected", async () => {
     // The whole memory fix: a pass must not hold the tree. If every `put` came
-    // after every `project`, the bodies were all alive at once and item 121 is
+    // after every `project`, the bodies were all alive at once and the peak is
     // still there.
     const store = new FakeStore();
     const trace: string[] = [];

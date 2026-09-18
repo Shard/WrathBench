@@ -1,5 +1,5 @@
 /**
- * Probe for the pet surface (item 98): `SMSG_PET_SPELLS` folded into
+ * Probe for the pet surface: `SMSG_PET_SPELLS` folded into
  * `state.pet()` (guid, given name from the pet name query, creature name,
  * level/health from the pet's own unit, named spells), the pet commands
  * built as `CMSG_PET_ACTION` (`petAttack`, `petFollow`, `petDismiss`), and
@@ -7,7 +7,7 @@
  *
  * It FAILS against any worldserver built before the tap (the raw opcode is
  * refused and `state.pet()` never fills). Run it only after the image is
- * deployed: it is the gate for the item 98 build.
+ * deployed: it is the gate for that build.
  *
  * Warlock, not hunter: a level-1 warlock with Summon Imp (688) needs no
  * tame, so the whole arc fits a throwaway character. The tame path

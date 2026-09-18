@@ -1,5 +1,5 @@
 /**
- * Probe for item text (item 103): a readable letter obtained the way a
+ * Probe for item text: a readable letter obtained the way a
  * player gets one, read back through the client's own path.
  *
  * Arc: throwaway Human Warrior placed by `mcbride-report` (in front of
@@ -20,7 +20,7 @@
  *
  * It FAILS against any worldserver built before the taps (READ_ITEM_OK is not
  * whitelisted, so the wait times out). Run it only after the image is
- * deployed: it is the gate for the item 103 build.
+ * deployed: it is the gate for that build.
  *
  * Run from inside the network:
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/read-item.ts

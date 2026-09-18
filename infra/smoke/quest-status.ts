@@ -1,5 +1,5 @@
 /**
- * Probe for the questgiver-status and quest-query surface (item 27/28):
+ * Probe for the questgiver-status and quest-query surface :
  * `questgiver_status_query`, `questgiver_status_multiple_query`, `quest_query`
  * plus the `SMSG_QUESTGIVER_STATUS_MULTIPLE` and `SMSG_QUEST_QUERY_RESPONSE`
  * decodes.

@@ -1,5 +1,5 @@
 /**
- * The config page's pure half (item 134).
+ * The config page's pure half.
  *
  * What is worth pinning is not the rendering — it is the two decisions that
  * are invisible on screen and wrong in a way nothing would report: that a

@@ -5,7 +5,7 @@
  * attempt wants that attempt's feed, its live header, its own figures. But the
  * thing the benchmark actually follows is longer than a session — an instance
  * of a model at an effort, and the character it has been driving for a
- * fortnight — and until item 128 that thing had no page, only a card at the
+ * fortnight — and until that thing had no page, only a card at the
  * bottom of whichever attempt you happened to open, addressed by the head run's
  * id. This is that page.
  *

@@ -58,7 +58,7 @@ export default function Models() {
    * What the roster's rules are, as one hover rather than the paragraph this
    * page printed under its heading until 2026-09-18 (operator). It tolerates
    * an API older than this bundle for the reason it always did: a viewer and a
-   * dist/ are two artefacts and can restart out of order (item 64), and
+   * dist/ are two artefacts and can restart out of order, and
    * missing detail is worth a shorter sentence, never a blank.
    */
   const policyNote = (): string => {

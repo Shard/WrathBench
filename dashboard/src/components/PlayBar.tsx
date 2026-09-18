@@ -10,8 +10,8 @@
  *
  * It is a component rather than a block of `MapPage` for one reason: the route
  * swap has to be renderable in a test. The swap that used to freeze the page
- * was a JSX expression reading `track()!.points` on its
- * own, which re-ran after the track was cleared and threw inside the graph — an
+ * was a JSX expression reading `track()!.points` on its own, which re-ran
+ * after the track was cleared and threw inside the graph — an
  * uncaught throw in a computation stops every computation after it, and the
  * page sat on the dead replay until a reload. The rule here is that no
  * expression narrows a signal by assertion: every read of the track, the
@@ -23,7 +23,7 @@
  * and an anchor keeps what an anchor gives — a real history entry, middle-click
  * and the focus ring.
  *
- * The attempt steps (item 119) are anchors for the same reason, and for one
+ * The attempt steps are anchors for the same reason, and for one
  * more: a freeplay character is one character across attempts, so following it
  * end to end used to mean going back to the run page for the next id. They
  * link `/map?run=<id>` and nothing else — the route effect swaps the track and

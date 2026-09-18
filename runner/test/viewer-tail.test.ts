@@ -398,7 +398,7 @@ describe("tokenTotals", () => {
   });
 
   /*
-   * item 82: the claude-code driver writes one reply as several
+   * the claude-code driver writes one reply as several
    * `response` records, only the last of which carries usage, and that figure
    * is the running total for the whole message (`adapter-claude.ts`).
    */
@@ -997,7 +997,7 @@ describe("platformOf", () => {
     expect(platformOf(null, null)).toBeNull();
   });
 
-  // item 36: the LAN box is `local` — the same test `billingOf` calls
+  // the LAN box is `local` — the same test `billingOf` calls
   // the operator's own hardware — while a public IPv4 is a platform like any
   // other host and is not laundered into "local".
   test("classifies the private ranges as local and leaves public hosts alone", () => {

@@ -173,7 +173,7 @@ command -v kubectl >/dev/null 2>&1 || die "kubectl is not on PATH — this scrip
 #                         character, and a probe campaign with `resume: true`. The
 #                         recreate costs it nothing (2026-08-29: the sonnet
 #                         session came back on the same run id and character), so
-#                         waiting on one is waiting for nothing. item 93.
+#                         waiting on one is waiting for nothing.
 #   paused:<line>         a paused run the supervisor is NOT resuming
 #   state:unreadable      the state file did not parse this poll
 #   exec:failed           kubectl could not reach the exec target at all
@@ -413,7 +413,7 @@ if [[ "${MODE}" == "force" ]]; then
   say "  with it) and reattempted with a full clock, no strike against the model."
   say "  Freeplay and campaigns with resume:true come back where they left off."
   # A switch left set by an aborted `graceful` is the normal way to arrive here
-  # (2026-08-29, item 93): force STARTS the fleet, so leaving the switch set
+  # (2026-08-29): force STARTS the fleet, so leaving the switch set
   # would hand back a fleet that runs and schedules nothing — a state with no
   # use. `drain` is the mode whose job is leaving it set, and it scales to 0
   # instead.
@@ -478,7 +478,7 @@ fi
 set_switch "${WHY}"
 # From here the switch is on the PVC, so every way out of this script has to say
 # so — an aborted window that looks like nothing happened is a fleet that quietly
-# schedules nothing until somebody notices (2026-08-29, item 93).
+# schedules nothing until somebody notices (2026-08-29).
 on_abort() {
   trap - INT TERM
   echo

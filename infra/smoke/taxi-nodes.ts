@@ -8,7 +8,7 @@
  * arrives). Run it only after the image is deployed: it is the gate for the
  * N3 build.
  *
- * Fixture (item 45 pattern): a persistent character (default
+ * Fixture: a persistent character (default
  * `Smokeflight` on MODULE_ACCOUNT, never deleted) is placed by
  * `infra/fixtures/apply.ts --scenario taxi-ironforge` — level 10, 1g, in
  * front of Gryth Thurden in Ironforge with TaxiNodes 6 (Ironforge) and 8

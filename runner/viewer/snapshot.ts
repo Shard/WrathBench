@@ -471,7 +471,7 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
         }),
       ),
       // Empty when the caller took the per-run artifacts through a `RunStream`:
-      // they are already gone, and holding them here is what item 121 was.
+      // they are already gone, and holding them here is what the peak was.
       ...artifacts,
     ];
 

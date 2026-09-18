@@ -166,7 +166,7 @@ describe("readFleetRoster", () => {
     expect(read.models.map((m) => m.name)).toEqual(["alpha", "alpha-low", "beta"]);
   });
 
-  // item 52: the same predicate the supervisor schedules on.
+  // the same predicate the supervisor schedules on.
   test("names the entries the policy does not schedule, with why", () => {
     const { fleetPath } = fixture({
       ...ROSTER,
@@ -340,7 +340,7 @@ describe("/api/models", () => {
   });
 
   /*
-   * item 52: `probe` is `vendor/alpha` under an objective, so a row for
+   * `probe` is `vendor/alpha` under an objective, so a row for
    * it would show alpha's counts a second time under another name. It is named
    * in `roster.excluded`, with the concurrency cap the file sets, and rowed
    * nowhere.

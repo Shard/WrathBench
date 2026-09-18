@@ -500,8 +500,8 @@ export default function Ladder() {
  *
  * Everything not deleted and not stillborn is here, in progress included — a
  * live character is the point of the page, not an exclusion. The lineage column
- * is why a character that has been through twelve attempts appears once
- * (item 92): the row is the character, and `attempts` is how many run
+ * is why a character that has been through twelve attempts appears once:
+ * the row is the character, and `attempts` is how many run
  * ids are behind it.
  */
 function CharacterTable(props: { rows: readonly CharacterRow[] }) {
@@ -534,7 +534,7 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
                   <Show when={row.effort !== null}> · {row.effort}</Show>
                 </td>
                 {/* The freeplay row is a character, not a run, so its name
-                    leads to the character page (item 128); the "latest run"
+                    leads to the character page; the "latest run"
                     column is where a reader goes for one session. */}
                 <td>
                   <A href={`/character/${encodeURIComponent(row.characterId)}`} title={row.characterId}>
@@ -614,7 +614,7 @@ function Furthest(props: { row: LadderRow }) {
  * One rung, for one model: how many of its runs got there out of how many
  * could be asked, linking the first that did.
  *
- * `2/3` and not a tick (item 125, operator 2026-09-16): a tick made a model
+ * `2/3` and not a tick (operator 2026-09-16): a tick made a model
  * that cleared the rung once in three tries render identically to one that
  * cleared it three times out of three. The denominator is the runs whose
  * records can answer *this* rung, not the row's runs — a run that predates the

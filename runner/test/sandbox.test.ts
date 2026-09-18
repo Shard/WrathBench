@@ -308,7 +308,7 @@ describe("sandbox evaluation", () => {
   });
 });
 
-describe("cooperative abort on timeout (item 44)", () => {
+describe("cooperative abort on timeout", () => {
   /**
    * A stand-in module: acks `move_to` with a moveId and never sends the
    * verdict, so a `moveTo` hangs until something settles it; records every

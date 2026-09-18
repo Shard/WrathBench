@@ -8,7 +8,7 @@
  * built before those taps (the login event never arrives). Run it only after
  * the image is deployed.
  *
- * Fixture (item 45 pattern): a persistent character (default
+ * Fixture: a persistent character (default
  * `Smoketaxi` on MODULE_ACCOUNT, never deleted) is placed by
  * `infra/fixtures/apply.ts --scenario taxi-ironforge` — level 10, 1g, logged
  * out, standing in front of Gryth Thurden in Ironforge with TaxiNodes 6

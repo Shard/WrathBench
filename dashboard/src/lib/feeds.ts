@@ -38,7 +38,7 @@ export interface Feeds {
  * it loaded — possibly hours and several commits old — while any lazy chunk it
  * has not yet fetched is now a 404. The cost is not the crash: it is that a
  * report of "X is broken" can describe code that no longer exists, and half an
- * hour goes into establishing that (item 64).
+ * hour goes into establishing that.
  *
  * `first` is the build id the tab saw on its FIRST successful poll, which is
  * its own: `index.html` is served `no-store`, so a tab that loaded ran the

@@ -451,7 +451,7 @@ describe("k8s-release.sh", () => {
   });
 
   test("the script carries no cluster-specific glue", () => {
-    // The operator's rule on item 132: the [removed] repo's paths, its Flux
+    // The operator's rule: the [removed] repo's paths, its Flux
     // objects and its PR flow live there, not here.
     const src = readFileSync(SCRIPT, "utf8");
     for (const forbidden of ["[removed]", "flux-system", "gh pr", "harbor."]) {

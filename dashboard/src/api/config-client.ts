@@ -1,5 +1,5 @@
 /**
- * The write client over `/api/config` (item 134).
+ * The write client over `/api/config`.
  *
  * Deliberately not part of `createClient`. Three reasons, all of them things
  * the read client is right about and this one must not inherit:

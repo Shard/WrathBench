@@ -415,7 +415,7 @@ export class ContextBuilder {
     const level = snap.self?.level?.value as number | undefined;
     const xp = snap.xp?.value as number | undefined;
     const money = snap.money?.value as number | undefined;
-    // The player frame's numbers (item 104), read off the snapshot this
+    // The player frame's numbers, read off the snapshot this
     // sample already took: the SDK's derived gauges, the raw `powerType` the
     // client picks a bar with, and the XP denominator. No dead flag is written:
     // `playerFlags` is routinely a stale 0 for a whole window (see the death
@@ -785,7 +785,7 @@ export interface StateTickerOptions {
  *
  * A driver turn is one HTTP request or one CLI session, and either can run for
  * minutes: 485s was observed against a local model, leaving an eight-minute
- * hole with no state row and no XP signal (item 77). Sampling only side
+ * hole with no state row and no XP signal. Sampling only side
  * of a turn is therefore not sampling on the clock at all, so both drivers run
  * this and neither implements its own.
  *
@@ -885,7 +885,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
    * window shrank says so in its own `[harness notices]`.
    */
   let lastCut = 0;
-  // The mid-turn state clock (item 77): `build` samples once per turn, and
+  // The mid-turn state clock: `build` samples once per turn, and
   // that used to be this loop's only sampling — one 485s request left an
   // 8.1-minute blackout with no state row and no XP signal. Live for the whole
   // episode, not just the model call: a turn's tool calls can be slow too, and
@@ -986,7 +986,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       };
       // The backend that actually served the call, when the response body names
       // one (OpenRouter's top-level `provider`). Logged because cache-miss
-      // attribution is impossible without it (item 78): an aggregator
+      // attribution is impossible without it: an aggregator
       // routing the same model across backends legitimately zeroes the prompt
       // cache, and a cost sweep must be able to tell that from harness prefix
       // instability without replaying per-generation API lookups.

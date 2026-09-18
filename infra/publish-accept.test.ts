@@ -438,7 +438,7 @@ describe("prohibited content", () => {
   });
 
   test("the wiki dump filename inside an entry's comparability tuple is caught", async () => {
-    // The shape item 123 found on the live bucket: a `comparability_restamped`
+    // The shape found on the live bucket: a `comparability_restamped`
     // harness entry whose tuples carry the operator's dump file. Both halves
     // fire — the key rule on `wikiBundle`, the value scan on the filename —
     // and the value scan is the one that survives the wrapper being renamed.

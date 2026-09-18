@@ -24,7 +24,7 @@ export const NAV: readonly NavItem[] = [
 ] as const;
 
 /**
- * The config page's item (item 134). Not in `NAV`: it is an operator surface —
+ * The config page's item. Not in `NAV`: it is an operator surface —
  * the write path into the fleet config — and the routes behind it are not
  * mounted at all when the viewer is in public mode. A reader who cannot use it
  * should not be told it exists.

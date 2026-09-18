@@ -4,7 +4,7 @@
  * Both are drawn on two pages — the run page, where they say "the character
  * this session belongs to", and the character page, where they are the page.
  * They live here rather than on either so the two cannot drift into showing a
- * reader two different accounts of one character (item 128).
+ * reader two different accounts of one character.
  */
 
 import { A } from "@solidjs/router";

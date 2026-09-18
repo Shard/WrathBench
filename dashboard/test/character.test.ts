@@ -1,5 +1,5 @@
 /**
- * The character page's axis (item 128).
+ * The character page's axis.
  *
  * The one thing worth pinning here is that the gaps between sessions are
  * closed and the seams survive: a character paused for a week between two

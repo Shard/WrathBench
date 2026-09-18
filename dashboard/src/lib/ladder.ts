@@ -119,8 +119,8 @@ export const EXPANSION_MAPS = [530, 571];
  * data that actually exists.
  *
  * Rungs 2 and 4 became derivable on 2026-08-25, when the viewer was wired to
- * the zone/area milestone records the loop has written since 2026-08-23
- *: `run.areas` carries the first area observed, whether the run
+ * the zone/area milestone records the loop has written since 2026-08-23:
+ * `run.areas` carries the first area observed, whether the run
  * ever left it, and the first capital zone it entered. Rung 4 stopped being
  * partial later the same day (issue #8): the module now taps
  * `SMSG_ACTIVATETAXIREPLY` and the taxi flag on self, the loop records a `taxi`

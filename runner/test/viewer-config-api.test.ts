@@ -1,5 +1,5 @@
 /**
- * The config API (item 127): what it serves, what it refuses, and the one
+ * The config API: what it serves, what it refuses, and the one
  * thing it must never do — appear at all on a public handle.
  */
 

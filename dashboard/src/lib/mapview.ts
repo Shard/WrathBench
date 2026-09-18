@@ -197,7 +197,7 @@ export function visibleGrid(
  * Below `TILE_MIN_PX` no tile is drawn, so no cell can be covered and the whole
  * lattice is one stroked path: the 64x64 world used to put up to 4096
  * `strokeRect` calls into a pan's frame budget, and this is at most 130
- * segments (item 60). Above the threshold the caller still strokes per
+ * segments. Above the threshold the caller still strokes per
  * cell, because there a drawn tile must suppress its own cell's outline.
  *
  * `x0`/`x1` and `y0`/`y1` are the extent to span: the lines cover exactly the
@@ -246,7 +246,7 @@ export function worldPerPixel(scale: number): number {
  * one, in world units.
  *
  * A six-hour track is one `lineTo` per recorded sample every frame the operator
- * drags (item 60); at a screen-pixel tolerance the dropped points are
+ * drags; at a screen-pixel tolerance the dropped points are
  * points that had nowhere of their own to be drawn. The comparison is against
  * the last *kept* point, not the last input point: comparing against the input
  * would let a slow drift accumulate an unbounded error, because every step is

@@ -1,5 +1,5 @@
 /**
- * The per-run replay cursor remembered for the life of the page (item 61).
+ * The per-run replay cursor remembered for the life of the page.
  *
  * Two things are worth pinning. The validation, because a remembered cursor is
  * consulted against whatever track *actually* loaded and a wrong answer there

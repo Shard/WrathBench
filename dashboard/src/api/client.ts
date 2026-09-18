@@ -257,7 +257,7 @@ export function createClient(opts: ClientOptions = {}) {
       get<RunDetailResponse>(`/api/run/${encodeURIComponent(id)}`),
     /**
      * One character, whole: the aggregate across every attempt plus the state
-     * series over all of them (item 128). `id` is any run in the chain — the
+     * series over all of them. `id` is any run in the chain — the
      * server resolves it and answers with the canonical `characterId`.
      */
     character: (id: string): Promise<CharacterResponse> =>

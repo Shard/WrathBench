@@ -1,5 +1,5 @@
 /**
- * Probe for group loot rolls (item 102): `SMSG_LOOT_START_ROLL` folded
+ * Probe for group loot rolls: `SMSG_LOOT_START_ROLL` folded
  * into `state.pendingRolls()` on every member, `lootRoll` (by name or roll
  * guid) sending `CMSG_LOOT_ROLL`, `SMSG_LOOT_ROLL` / `SMSG_LOOT_ROLL_WON`
  * echoing the votes and the verdict, need beating greed, the won item
@@ -7,7 +7,7 @@
  * the late vote refused as `no_pending_roll` with a hint.
  *
  * It FAILS against any worldserver built before the tap. Run it only after
- * the image is deployed: it is the gate for the item 102 build.
+ * the image is deployed: it is the gate for that build.
  *
  * Why a chest and not a kill: a roll needs a drop at or above the group's
  * loot threshold, and the threshold cannot go below uncommon

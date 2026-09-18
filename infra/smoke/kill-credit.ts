@@ -23,7 +23,7 @@
  *   1. apply the `vineyard-kill-credit` scenario to the logged-out character;
  *   2. login; assert the fixture landed — within 15y of the vineyard edge and
  *      quest 7 in the served quest log; then empty the backpack of what
- *      previous runs looted into it, through CMSG_DESTROYITEM (item 58) —
+ *      previous runs looted into it, through CMSG_DESTROYITEM —
  *      best effort, reported, never asserted;
  *   3. engage the nearest Kobold Vermin: set_target -> face -> attack_start ->
  *      the SMSG_ATTACKERSTATEUPDATE stream -> the kobold's health reaches 0 ->

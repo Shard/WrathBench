@@ -1,5 +1,5 @@
 /**
- * Probe for the trainer action surface (item 9): `trainer_list` /
+ * Probe for the trainer action surface: `trainer_list` /
  * `trainer_buy_spell` plus the `SMSG_TRAINER_LIST`, `SMSG_TRAINER_BUY_SUCCEEDED`
  * and `SMSG_TRAINER_BUY_FAILED` decodes.
  *
@@ -15,7 +15,7 @@
  * event -> log out and delete the character.
  *
  * Northshire rather than the dwarf start on purpose: Brother Sammuel is the
- * trainer models actually walk to in trajectories (item 9), and the abbey
+ * trainer models actually walk to in trajectories, and the abbey
  * route is the one waypoint set already verified by another smoke.
  *
  * Expected branch at level 1: a level-1 paladin with stock starting money is

@@ -14,7 +14,7 @@
  * being caught is "somebody removed the guard", which no fixture render of the
  * private build would notice. Audited 2026-09-01 (GitHub issue #30); the
  * repo's GitHub link is behind `VITE_WRATHBENCH_REPO_URL` since 2026-09-11
- * (item 109, `repo-link.test.ts`), and `/fleet` stays reachable from the
+ * (`repo-link.test.ts`), and `/fleet` stays reachable from the
  * status popout in both builds (operator, 2026-08-30,
  * `dashboard/src/lib/nav.ts`).
  */

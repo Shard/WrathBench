@@ -50,7 +50,7 @@ function num(v: unknown): number | null {
 }
 
 /**
- * The player frame's columns (item 104), read from the same row as the
+ * The player frame's columns, read from the same row as the
  * position so the frame shows the character as that sample saw it rather than
  * a per-column high-water mix. Older runs lack the columns entirely, which is
  * what `stateColumns` is asked about first.

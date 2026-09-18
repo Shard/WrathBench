@@ -68,7 +68,7 @@ const JSON_ROUTES = [
   `/api/run/${LIVE_RUN}`,
   `/api/run/${LIVE_RUN}/track`,
   `/api/run/${LIVE_RUN}/entries?limit=200`,
-  // Universal since item 128: a character for a run with no chain at all, and
+  // Universal since: a character for a run with no chain at all, and
   // one for a run that has one — both cross the same projector.
   `/api/character/${DEAD_RUN}`,
   `/api/character/${LIVE_RUN}`,

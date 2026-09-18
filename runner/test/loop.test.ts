@@ -339,7 +339,7 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("the spellbook: the first book seen is the baseline, later ids are learns (item 35)", async () => {
+  test("the spellbook: the first book seen is the baseline, later ids are learns", async () => {
     const { dir, options } = walk([
       // An empty book is the cache before `SMSG_INITIAL_SPELLS`, not a baseline:
       // taking it as one would make the whole book arrive as fresh learns.
@@ -437,7 +437,7 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("the ticker records state while a model request is in flight (item 77)", async () => {
+  test("the ticker records state while a model request is in flight", async () => {
     // The openai-compatible path used to sample only in the turn preamble, so
     // one 485s request was an 8-minute observability blackout: no state row,
     // no XP signal. The ticker samples on the wall clock while complete()
@@ -720,7 +720,7 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
-  test("a turn longer than the tick still lands state samples, one at a time (item 77)", async () => {
+  test("a turn longer than the tick still lands state samples, one at a time", async () => {
     // The openai-compatible failure this fixes: one 485s provider call left the
     // run with no state row and no XP signal for eight minutes, because the only
     // sample was the turn preamble's. The ticker samples through the request.
@@ -823,7 +823,7 @@ describe("itemSample", () => {
 });
 
 /**
- * Prompt-cache prefix discipline (item 78). Measured on a real paid run
+ * Prompt-cache prefix discipline. Measured on a real paid run
  * (fleet-deepseek-…-20260824-a4): all 150 consecutive request pairs were
  * byte-stable up to the append point; every mid-block cached_tokens=0 was the
  * aggregator routing to a different backend or backend-internal cache

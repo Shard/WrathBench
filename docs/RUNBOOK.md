@@ -94,7 +94,7 @@ export — never for committing.
   would refuse is refused with the same sentence — and recorded in
   `config_audit` with the actor, the note, and the before and after documents.
 
-Edit it from the **viewer's `/config` page** (item 134): the roster as a table
+Edit it from the **viewer's `/config` page**: the roster as a table
 with tier, idle, billing and routing editable inline, a JSON editor per other
 row key — policy, accounts, and each campaign and pinned job — the audit
 history with before/after, and an export button. Every write takes a note,
@@ -678,7 +678,7 @@ account, character) and the verdict: `in flight`, `continuable`, `held: <ref>
 on it until its episode boundary`, or `occupied by <ref>'s character:
 fresh-next`. Roster changes that compete for one account go in **one write,
 owner first**: the hot reload is 60 s, and two edits in sequence let a second
-character elect the account between them (how item 94 arose). A hand-written
+character elect the account between them . A hand-written
 `freeplay` job on the same ref is the operator's own experiment and never
 continues anything. To start a character over deliberately, delete its character
 (`POST /character-delete` on the module, the sweep's own path) before
@@ -929,7 +929,7 @@ In order: the REJECTED banner when the file is not in effect; the PAUSED banner
 when `data/runs/fleet-pause.json` is set (with what the supervisor has actually
 picked up — see "Updating the live fleet"); the `!` refusal
 block when the file IS in effect but a config rule disabled something in it
-(item 66 — an enabled job or campaign on a listed account, or a second one on
+(an enabled job or campaign on a listed account, or a second one on
 an account already taken; and an entry or job carrying an
 unknown key — refused by name rather than taking the whole file down with it); the supervisor
 line (pid, where it runs, ALIVE/NOT RUNNING by heartbeat, epoch stamp); the

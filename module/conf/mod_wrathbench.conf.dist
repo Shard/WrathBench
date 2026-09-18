@@ -63,7 +63,7 @@ WrathBench.Account = "RUNNER"
 #                     serves (case-insensitive). Every surface that takes an
 #                     "account" parameter (/session, /characters,
 #                     /character-delete) refuses accounts not on this list with
-#                     403 account_not_permitted (item 14).
+#                     403 account_not_permitted.
 #        Default:     the WrathBench.Account value (single-account behaviour)
 #
 

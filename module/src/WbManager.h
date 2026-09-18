@@ -180,7 +180,7 @@ namespace WrathBench
         // Areatrigger edge detection (world thread only): the DBC volumes the
         // mover is currently inside, and the map they were tested on. A client
         // sends CMSG_AREATRIGGER once on crossing into a volume and never again
-        // while it lingers (item 56), so an id fires only when it is newly
+        // while it lingers, so an id fires only when it is newly
         // inside; it is cleared when the mover leaves the volume, changes map,
         // or is teleported, so a re-entry fires again.
         std::vector<uint32> insideTriggers;
@@ -222,7 +222,7 @@ namespace WrathBench
         std::unordered_set<uint32_t> queriedCreatures;           // creature entries
         std::unordered_set<uint64_t> queriedNames;               // player guids
         std::unordered_set<uint32_t> queriedItems;               // item entries
-        std::unordered_set<uint32_t> queriedPetNumbers;          // pet numbers whose name was asked (item 98)
+        std::unordered_set<uint32_t> queriedPetNumbers;          // pet numbers whose name was asked
         std::unordered_set<uint32_t> queriedGameObjects;         // gameobject entries
 
         // loot_all: on the next SMSG_LOOT_RESPONSE the tap replays the client's
@@ -376,7 +376,7 @@ namespace WrathBench
         bool LoadTaxiNodesDbc(std::string const& path);
         std::unordered_map<uint32, TaxiNodeRec> _taxiNodes;
         bool _taxiNodesLoaded{false};
-        // TalentTab.dbc as the client ships it (item 96): tab names for
+        // TalentTab.dbc as the client ships it: tab names for
         // the talent tree the `talent_tree` action serves. Ids only when the
         // file is absent; the tree itself comes from the core's Talent.dbc
         // and TalentTab.dbc stores (the same files a client reads).
@@ -384,7 +384,7 @@ namespace WrathBench
         std::unordered_map<uint32, TalentTabRec> _talentTabs;
         bool _talentTabsLoaded{false};
         // Faction.dbc reputation index -> faction id, built once at startup
-        // from the core's store (item 99). The wire carries the index
+        // from the core's store. The wire carries the index
         // (SMSG_INITIALIZE_FACTIONS position, SMSG_SET_FACTION_STANDING
         // entries); a client names it through this table.
         std::unordered_map<uint32, uint32> _repListToFaction;

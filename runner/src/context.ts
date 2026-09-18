@@ -195,7 +195,7 @@ export interface SnapshotLike {
    * `state.spells`: the spellbook as `SMSG_INITIAL_SPELLS` /
    * `SMSG_LEARNED_SPELL` left it. The HUD never prints it — it is tens of rows
    * for a fact a snippet can read — and the ids ride the trajectory instead
-   * (`spells_at_login` / `spell`, item 35).
+   * (`spells_at_login` / `spell`).
    */
   spells?: { spellId?: unknown }[];
   /** `state.talents`: the last `SMSG_TALENTS_INFO`. Ranks are 0-based on the wire. */
@@ -330,7 +330,7 @@ export function foldUiOpenWindows(
 /**
  * One sentence for a released ghost: where it stands, where its corpse is, and
  * the two ways back with their prices — the facts a client shows on its map
- * and in its tooltips, no more (item 53). Distances are straight-line
+ * and in its tooltips, no more. Distances are straight-line
  * and rounded; "after Ns" is the server's own reclaim delay. The healer's
  * price is a paraphrased rule, not client text.
  */

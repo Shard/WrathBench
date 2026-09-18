@@ -1,11 +1,11 @@
 /**
- * Probe for the mail surface (item 100, mail): the mailbox frame
+ * Probe for the mail surface (mail): the mailbox frame
  * (`openMailbox` -> `SMSG_SHOW_MAILBOX`), `sendMail` with money answered by
  * `SMSG_SEND_MAIL_RESULT`, the recipient's `mailList` (`SMSG_MAIL_LIST_RESULT`
  * with the sender joined by name), `takeMailMoney` and `deleteMail`.
  *
  * It FAILS against any worldserver built before the taps. Run it only after
- * the image is deployed: one of the gates for the item 100 build.
+ * the image is deployed: one of the gates for that build.
  *
  * Two throwaway characters on ONE account, in sequence: the core refuses mail
  * to yourself (MAIL_ERR_CANNOT_SEND_TO_SELF) and delays items across

@@ -42,7 +42,7 @@
     "  paid  paid picks land only here; with policy.paid present and this empty they are HELD, never spilled.",
     "  local a model on the operator's own hardware (isLocalBase) lands only here — the box serves one runner at a time.",
     "  A DISABLED pinned job may park on a listed account; an ENABLED one may not — THAT JOB is refused and left",
-    "  disabled, named in --status and the fleet log, and the rest of the config stays in effect (item 66). Same for a",
+    "  disabled, named in --status and the fleet log, and the rest of the config stays in effect. Same for a",
     "  pinned campaign, and for two enabled pins on one account (the first in order keeps it). A LIVE run under a",
     "  refused pin is left alone — it finishes and does not respawn. Shape errors still",
     "  take the whole config down: a config that does not parse has no rest to keep.",

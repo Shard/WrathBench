@@ -634,7 +634,7 @@ export function withResume(spawn: JobSpawn, resume: NonNullable<FleetJob["resume
 // clock stopped, session released) and a fleet start resumes them before the
 // queue or the policy launches anything fresh. The same planner runs every
 // tick, so a run its provider paused (rate-limited, quota-exhausted) is also
-// picked back up once its cooling is over — that is item 43.
+// picked back up once its cooling is over — that is the resume path.
 
 export interface ResumePlan {
   job: FleetJob;
@@ -1236,7 +1236,7 @@ export function pausesOnDrain(job: Pick<FleetJob, "source" | "episode"> | undefi
  * A policy job is made up each tick, so it is never in the file and cannot be
  * `enabled: false`; before this, a live one whose ref simply stopped generating
  * work was left enabled forever and ran until its idle watchdog, which an
- * active model never trips (item 107: flipping a character's `idle` to `"none"`
+ * active model never trips (flipping a character's `idle` to `"none"`
  * did nothing until someone SIGTERMed the roster by hand). This is what makes
  * the ROSTER_ENTRY_KEYS hint — "to pause a character set `idle: \"none\"`" — true.
  *

@@ -246,7 +246,7 @@ describe("ladderRows", () => {
   });
 });
 
-describe("the ladder's dispersion (item 125, operator 2026-09-16)", () => {
+describe("the ladder's dispersion (operator 2026-09-16)", () => {
   test("a rung cell counts how many runs reached it, not just that one did", () => {
     const rows = ladderRows([
       run({ model: "m", runId: "a", maxLevel: 12 }),

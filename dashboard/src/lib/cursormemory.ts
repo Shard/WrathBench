@@ -1,5 +1,5 @@
 /**
- * Where a replay was left off, per run, for the life of the page (item 61).
+ * Where a replay was left off, per run, for the life of the page.
  *
  * `/map` and `/map?run=<id>` are the only two URL states, deliberately: the
  * cursor is not a parameter because the play slider would rewrite history four

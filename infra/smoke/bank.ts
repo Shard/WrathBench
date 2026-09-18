@@ -1,12 +1,12 @@
 /**
- * Probe for the bank surface (item 100, bank): the bank frame
+ * Probe for the bank surface (bank): the bank frame
  * (`openBank` -> `SMSG_SHOW_BANK`), a deposit landing in a bank slot
  * (`PLAYER_FIELD_BANK_SLOT_1` served as `invSlot39-66`, read by
  * `state.bank()`), and the withdrawal landing back in the backpack.
  *
  * It FAILS against any worldserver built before the change (no bank slots
  * served, SMSG_SHOW_BANK dropped). Run it only after the image is deployed:
- * one of the gates for the item 100 build.
+ * one of the gates for that build.
  *
  * Throwaway Human Warrior placed by `bank-ironforge` (in front of Bailey
  * Stonemantle). A fresh character carries its starting food and water, which

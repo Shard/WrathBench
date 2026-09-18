@@ -289,7 +289,7 @@ export interface FleetConfig {
   /** The `campaigns` block, in declaration order; empty when the file has none. */
   campaigns: Campaign[];
   /**
-   * Pins refused at parse time (item 66), one line each. The rest of the file
+   * Pins refused at parse time, one line each. The rest of the file
    * IS in effect — that is the whole point of a refusal over a `fail()`. Empty
    * on a clean config; `--status` and the supervisor log name every entry.
    */
@@ -401,7 +401,7 @@ function refuse(pin: Pin, refusals: ConfigRefusal[], why: string): void {
  * They used to `fail()`. Since a rejected re-read keeps the last good config,
  * that meant one bad `enabled: true` made every other flag in the file inert
  * until somebody read the REJECTED banner — a config-wide outage from a
- * one-line edit whose intent was local (item 66). The rules themselves are
+ * one-line edit whose intent was local. The rules themselves are
  * right: two enabled pins on one account starve each other, and an enabled pin
  * on a listed account fights the scheduler for the session. So the violating
  * pin is disabled and named, and the rest of the file takes effect. Shape
@@ -492,7 +492,7 @@ export function poolJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
 /**
  * Roster names a pinned job references: never the policy's to schedule.
  * The predicate itself lives in `runner/src/models.ts`, beside the projection
- * it gates, so the viewer answers it the same way (item 52).
+ * it gates, so the viewer answers it the same way.
  */
 export function pinnedRefs(config: Pick<FleetConfig, "jobs">): Set<string> {
   return pinnedRefsOf(config.jobs);
@@ -803,7 +803,7 @@ function strictKeyWhy(kind: "roster entry" | "queue job", keys: readonly string[
  * reference it, the policy's `<ref>-<episode>`, and a campaign's
  * `<ref>-<campaign>-<cell>`. This is what a refusal of the ENTRY has to carry
  * for the tick to spare a live run under it — the same value an account-rule
- * refusal carries for a pin (item 66). A refusal suppresses scheduling; it
+ * refusal carries for a pin. A refusal suppresses scheduling; it
  * never drains.
  */
 function refJobNames(name: string, jobs: readonly FleetJob[], campaigns: readonly Campaign[]): string[] {

@@ -124,7 +124,7 @@ describe("prompt rendering", () => {
     // The one thing that *is* per driver is the sentence about older
     // conversation, and it carries the objective block unchanged with it: the
     // claude-code render differs from this one by that sentence and nothing
-    // else (item 8; `prompt.ts`, `contextSentence`).
+    // else (`prompt.ts`, `contextSentence`).
     const viaClaudeHarness = buildSystemPrompt(OBJECTIVE, undefined, "claude-code");
     expect(viaClaudeHarness).toContain(objectiveSection(OBJECTIVE));
     expect(viaClaudeHarness.replace(contextSentence("claude-code"), contextSentence("wrathbench"))).toBe(viaLoop!);

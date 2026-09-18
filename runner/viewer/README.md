@@ -58,7 +58,7 @@ the API it reads plus the static host that serves it. Build it with
 with no further configuration.
 
 The hand-written pages this directory used to serve were deleted
-(item 31). There is no fallback UI: with no build on disk every page route
+. There is no fallback UI: with no build on disk every page route
 answers with a plain-text notice naming the build command, and `/api` keeps
 serving throughout. What the dashboard renders is documented in
 `dashboard/README.md`; what follows is what the server decides before the UI
@@ -364,14 +364,14 @@ readonly, and the runs directory is only ever listed and read.
 
 ### The config API (operator-only)
 
-Since item 127 the fleet config lives in a sqlite store on the data volume
+The fleet config lives in a sqlite store on the data volume
 (`runner/src/config-store.ts`, `$WRATHBENCH_DATA/config.sqlite`), and since
 2026-09-18 that store is the **only** fleet config: the active config is
 operational state, never committed, and `infra/fleet.example.json` is the
 one-time bootstrap a fresh deployment seeds it from. The supervisor reads the
 store on every 60s re-read, so an edit here is live one tick later with no
 restart. The UI over these endpoints is the dashboard's `/config` page
-(`dashboard/src/pages/Config.tsx`, item 134) — a roster table with tier, idle,
+(`dashboard/src/pages/Config.tsx`) — a roster table with tier, idle,
 billing and routing editable inline, a JSON editor per other row key, the audit
 history and an export button. Its nav link appears only on a private build
 served by a non-public viewer, which is the same condition these routes are

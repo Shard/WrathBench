@@ -1,5 +1,5 @@
 /**
- * `/api/info`'s `dashboardBuild` (item 64).
+ * `/api/info`'s `dashboardBuild`.
  *
  * The id is Vite's own fingerprinted entry filename, parsed out of index.html,
  * because that name already changes exactly when the bundle does — a build id

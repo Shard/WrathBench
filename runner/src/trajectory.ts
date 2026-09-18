@@ -53,7 +53,7 @@ export interface StateLine {
   /** Area (subzone) id from the state cache (`self.area`). */
   area?: number | undefined;
   /**
-   * The player frame's own numbers (item 104), off the same snapshot
+   * The player frame's own numbers, off the same snapshot
    * every other field here comes from — no extra RPC. `health`/`maxHealth` and
    * `power`/`maxPower` arrive as the state cache's derived gauges, which it
    * withholds until both halves have actually been observed, so a pair is
@@ -68,7 +68,7 @@ export interface StateLine {
   powerType?: number | undefined;
   nextLevelXp?: number | undefined;
   /**
-   * What the character carries and wears (item 50): names, counts, ids and
+   * What the character carries and wears: names, counts, ids and
    * quality from the state cache's item queries, `equipped` for inventory
    * slots 0-18, carried rows from `state.bag()` across every bag with the
    * `bag`/`slot` pair the item actions take. Omitted when the snapshot had no
@@ -371,7 +371,7 @@ CREATE TABLE IF NOT EXISTS run (
   -- be able to exclude steered runs without parsing config_json.
   objective TEXT,
   -- The character this run played and the platform that served the model
-  -- (item 36). Both were derivable from config_json and from the api
+  --. Both were derivable from config_json and from the api
   -- base; a column means a cross-run SELECT — and the viewer's listing — does
   -- not have to parse a blob or re-derive a rule that could drift.
   character TEXT,
@@ -441,7 +441,7 @@ CREATE TABLE IF NOT EXISTS move (
 `;
 
 /**
- * Columns added to `run` inside the 0.4 series (item 36, at 0.4-6).
+ * Columns added to `run` inside the 0.4 series (at 0.4-6).
  * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing run.sqlite, so a
  * resumed 0.4-1..0.4-5 run would otherwise write into a table that lacks
  * them. The only migration the runner carries: every run below the 0.4
@@ -470,9 +470,9 @@ const RUN_ADDED_COLUMNS: Record<string, string> = {
 const STATE_ADDED_COLUMNS: Record<string, string> = {
   zone: "INTEGER",
   area: "INTEGER",
-  // JSON `ItemSample[]` (item 50); NULL when the sample carried none.
+  // JSON `ItemSample[]`; NULL when the sample carried none.
   items: "TEXT",
-  // Added 2026-08-30 (item 104): the player frame's numbers. Additive and
+  // Added 2026-08-30: the player frame's numbers. Additive and
   // nullable — nothing scored reads them, and a sample written before they
   // existed has NULL, which every reader renders as unobserved.
   health: "INTEGER",
@@ -538,7 +538,7 @@ export class Trajectory {
       .run(runId, m.ts ?? this.now(), m.moveId ?? null, m.map ?? null, m.x, m.y, m.z, m.target ?? null, m.status ?? null);
   }
 
-  /** One `milestone` record, the way `quest_complete` is written (item 35). */
+  /** One `milestone` record, the way `quest_complete` is written. */
   recordMilestone(m: MilestoneLine): void {
     this.append({ t: "milestone", ...m });
   }

@@ -11,7 +11,7 @@
  *
  * What the feed carries decides what draws. Level and xp are on every
  * `AgentPosition`; health, power, the power type and the class ride with them
- * since item 104, but a run recorded before that carries none, so a bar whose
+ * since, but a run recorded before that carries none, so a bar whose
  * numbers are absent renders as *unobserved* — an empty track with a dash —
  * rather than as zero. Undefined means unobserved, never zero, the same rule
  * the SDK holds.

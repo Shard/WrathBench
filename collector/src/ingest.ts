@@ -12,7 +12,7 @@
  *   meta.json         rewritten    → re-read whole when (size, mtime) moves
  *
  * Nothing here decides anything about a run. It reads what the runner wrote
- * and hands it to the sink; the runner is untouched by design (item 126) and
+ * and hands it to the sink; the runner is untouched by design and
  * every judgement — what is live, what counts, what a level means — stays
  * where it already lives.
  *

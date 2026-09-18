@@ -162,10 +162,10 @@ interface FixtureRun {
   states?: (number | null)[][];
   /** Omit the position columns entirely, as a run from before position recording does. */
   noPositionColumns?: boolean;
-  /** Add the `items` column (item 50) and set it on the newest state row. */
+  /** Add the `items` column and set it on the newest state row. */
   items?: string | null;
   /**
-   * Add the player-frame columns (item 104) and set them on the newest
+   * Add the player-frame columns and set them on the newest
    * state row: [health, maxHealth, power, maxPower, powerType, nextLevelXp].
    */
   gauges?: (number | null)[];

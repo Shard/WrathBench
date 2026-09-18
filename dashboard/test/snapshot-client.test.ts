@@ -711,7 +711,7 @@ describe("freshness", () => {
   });
 });
 
-/* --- the character, assembled (item 128) ------------------------------- */
+/* --- the character, assembled ------------------------------- */
 
 /**
  * `/character/:id` is the one page the public build assembles rather than

@@ -1,5 +1,5 @@
 /**
- * The pure half of the config page (item 134).
+ * The pure half of the config page.
  *
  * The page is a client of `/api/config`, and everything that decides *what to
  * send* lives here rather than in the JSX, because the two decisions worth

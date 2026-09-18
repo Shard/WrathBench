@@ -1,7 +1,7 @@
 /**
- * The fleet config, edited from the viewer (item 134).
+ * The fleet config, edited from the viewer.
  *
- * The store and its API landed with item 127; this page is a client of them
+ * The store and its API landed earlier; this page is a client of them
  * and invents nothing. Every write renders the WHOLE candidate config and runs
  * it through `parseFleet` — the same function the supervisor refuses a bad
  * config with — so a refusal here is the parser's own sentence, and it is

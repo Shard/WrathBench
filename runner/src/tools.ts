@@ -486,7 +486,7 @@ const RECENT_EVENTS_SCAN_MAX = 500;
  * Per-episode memory of what has already been searched.
  *
  * laguna issued 11 searches and nemotron 13 near-identical ones inside a single
- * episode, reading the same list each time as if it were new (item 25).
+ * episode, reading the same list each time as if it were new.
  * The memo says so in the result: same query, this many tool calls ago, and
  * whether anything actually changed.
  *

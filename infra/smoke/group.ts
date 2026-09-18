@@ -1,5 +1,5 @@
 /**
- * Probe for the party surface (item 100, group): two sessions on two
+ * Probe for the party surface (group): two sessions on two
  * accounts, one invites the other by name (`inviteToGroup`), the invitee sees
  * `state.group().pendingInvite` and accepts (`acceptGroupInvite`), both see
  * the party in `SMSG_GROUP_LIST` with the right leader, the leader leaves
@@ -7,7 +7,7 @@
  *
  * It FAILS against any worldserver built before the taps (no group reply is
  * whitelisted, so every wait times out). Run it only after the image is
- * deployed: it is one of the gates for the item 100 build.
+ * deployed: it is one of the gates for that build.
  *
  * Two accounts because the module holds one live session per account
  * (MODULE_ACCOUNT / MODULE_ACCOUNT2, both on WrathBench.Accounts). Two

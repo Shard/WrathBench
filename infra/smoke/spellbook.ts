@@ -1,6 +1,6 @@
 /**
  * Probe for the spellbook/cooldown/talent surface and the raw escape hatch
- * (item 39; the raw allowlist is in module/PROTOCOL.md): the `SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`,
+ * (the raw allowlist is in module/PROTOCOL.md): the `SMSG_INITIAL_SPELLS`, `SMSG_LEARNED_SPELL`,
  * `SMSG_SPELL_COOLDOWN`, `SMSG_TALENTS_INFO` decodes plus the `learn_talent`
  * and `raw` actions.
  *
@@ -139,7 +139,7 @@ async function main() {
   //    here exercises the SMSG_SPELL_COOLDOWN decode any more. The
   //    login-time `cooldowns[]` check is a DIFFERENT wire shape (the block
   //    inside SMSG_INITIAL_SPELLS) and it comes back empty at level 1, so it
-  //    covers nothing either. item 47 owns the real assertion.
+  //    covers nothing either. a later probe owns the real assertion.
   let mark = events.length;
   await action("cast_spell", { spellId: SEAL_OF_RIGHTEOUSNESS });
   const go = await waitFor(

@@ -275,7 +275,7 @@ describe("fleet-update.sh", () => {
   });
 
   test("graceful: a DRAINING freeplay character is counted as drained — it resumes in place, so the window completes", () => {
-    // item 93: an `idle: unlimited` session has no clock to finish on, so
+    // an `idle: unlimited` session has no clock to finish on, so
     // a wait loop that treats it as live runs to its ceiling. The recreate
     // costs it nothing: it comes back on the same run id and character.
     const r = run({ jobs: [{ name: "sonnet-low-freeplay", episode: "freeplay", source: "policy", draining: true }], args: ["graceful"] });

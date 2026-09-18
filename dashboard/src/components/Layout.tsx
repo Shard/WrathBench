@@ -116,7 +116,7 @@ export function Layout(props: ParentProps) {
           * thing to do about it, and it never dismisses itself — the tab really
           * is running replaced code until it reloads, and a notice that goes
           * away by itself is how half an hour gets spent debugging a bug that
-          * no longer exists (item 64).
+          * no longer exists.
           */}
         <Show when={feeds.stale()}>
           <button

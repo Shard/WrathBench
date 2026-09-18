@@ -150,7 +150,7 @@ export function replayHrefFor(
  * The route a replay of one run id lives at.
  *
  * One spelling, because two places link to it now: the selected pip's way in,
- * and the play bar's steps between a character's attempts (item 119). A swap is
+ * and the play bar's steps between a character's attempts. A swap is
  * the route effect's job either way — the link changes the URL and nothing
  * else, which is what keeps the cursor memory per attempt.
  */

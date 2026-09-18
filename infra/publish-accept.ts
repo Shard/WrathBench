@@ -256,7 +256,7 @@ const CREDENTIAL =
  * while it keeps its wrapper. The value itself — the operator's local dump file
  * — is a finding wherever it surfaces, including under a bare `source` one
  * layer inside an entry's comparability tuple, which is where it shipped
- * (item 123). The archive suffix is required, the way `FS_PATH` is anchored on
+ *. The archive suffix is required, the way `FS_PATH` is anchored on
  * a known root: the stamp this exists to catch always carries one, and a bare
  * `.xml` would make every XML filename a model or a tool result happens to name
  * a finding — and a readback that cries wolf is one nobody re-runs.

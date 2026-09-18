@@ -28,7 +28,7 @@ Push-out has a second benefit worth stating: the module hardening (shared
 secret on the module port, token-to-character binding, snippet filesystem
 sandboxing) gates any *inbound* public exposure of the control surface. A publisher that
 only makes outbound S3 PUTs exposes nothing inbound, so the public dashboard
-does not wait on item 19. The private viewer keeps its loopback/LAN posture
+does not wait on it. The private viewer keeps its loopback/LAN posture
 unchanged.
 
 ## The live viewer is not a public service
@@ -215,7 +215,7 @@ The public site includes the live fleet and map (operator's choice,
 over real minimap tiles (operator, 2026-08-30). Where a tile comes from is
 `dashboard/src/lib/tiles.ts` and nowhere else — the data hostname in the public
 build, same-origin in the private viewer — so the two shapes share one path and
-neither is special-cased. Replaying a freeplay character end to end works there too: since item 119 the
+neither is special-cased. Replaying a freeplay character end to end works there too: since the
 track carries the four scalars of its character — the identity, the place in the
 chain and the run ids either side — so the play bar's previous/next attempt
 links need no second request, which is what makes them work over static
@@ -243,7 +243,7 @@ optional-so-older-consumers-still-render convention.
 
 ### The character page over a bucket
 
-`/character/<id>` (item 128) is the one page assembled in the browser rather
+`/character/<id>` is the one page assembled in the browser rather
 than published as an artifact of its own, and that is deliberate: every part of
 it is already in the bucket. The chain and its totals come off `results.json`
 through the same `characterViewOf` the viewer serves `/api/character/<id>`
@@ -536,7 +536,7 @@ re-renders every pass — the live chart cannot be either.
   `robots.txt`, because nothing in this repository writes an object at a bucket
   root.
 
-The card could not unfurl at all until 2026-09-11 (item 111): the gate answered
+The card could not unfurl at all until 2026-09-11: the gate answered
 every credential-less request — Discord's crawler included — with the 401
 password form, `/` and `/og.png` among them, so a crawler saw the form and not
 the tags. Nothing about the card was wrong; the gate was in front of it. Both
@@ -601,7 +601,7 @@ the Worker.
 
 - **Cloudflare Tunnel / pull-through cache to the viewer** — the origin is
   the lab, so a cache-miss storm or one wrong header is inbound public load
-  on the operator's lab; it also drags item 19 into scope. Fails the premise.
+  on the operator's lab; it also drags the module hardening into scope. Fails the premise.
 - **D1 as the public store** — free tier hard-fails (errors, not throttling)
   at 5M rows read/day, exactly the hug-of-death moment; on paid, every read
   still invokes a billed Worker; read replication is still beta and its
@@ -841,12 +841,12 @@ state: Bun's S3 writer cannot send one, and in the Gated shape
 `dashboard/worker/index.ts` sets the TTLs on egress instead (`private,
 max-age=30` on the two mutable keys, `private, max-age=31536000, immutable` on
 generation objects). Confirming that a reader sees them needs the gate
-credential; re-run after item 85 against the Open shape's zone cache rules.
+credential; re-run after against the Open shape's zone cache rules.
 
 **Through the host**, unauthenticated: `/`, `/runs` and `/v1/manifest.json` all
 answer `401`, the manifest as JSON rather than the SPA's HTML, and
 `/robots.txt` disallows everything. That is the gate working, not the browser
-smoke — the smoke and the deep-link check are deferred to item 85. The
+smoke — the smoke and the deep-link check are deferred. The
 bucket's Public Development URL could not be checked: the deploy token in
 `.env` carries Workers Scripts Edit and Workers R2 Storage Read, and
 `wrangler r2 bucket info` / `dev-url get` answer `Authentication error [code:
@@ -870,11 +870,11 @@ mounts `data/runs` read-only and writes only `data/publish`.
 `d74fd1e90e2e` generated 2026-09-11T01:38:05Z, readback from the workstation,
 read-only): 1594 objects, 62.19 MB, 423 runs, 10 aggregates, **0 missing, 0
 findings**. Criterion 2's two defects are gone from the published set — the
-`wikiBundle.source` stamp (item 123) and the container-internal paths — after
+`wikiBundle.source` stamp and the container-internal paths — after
 the publisher's first two passes on the new build rewrote 451 + 73 objects and
 pruned 449 + 67 old keys. Four residual notes remain, model-authored
 `filesystem-path` mentions outside any known local root, published as written.
-Criteria 3, 4 and 5 stay where they were: deferred to item 85.
+Criteria 3, 4 and 5 stay where they were: deferred.
 
 **Through the Open shape's data hostname**, 2026-09-11, after the cutover to
 the operator's own Cloudflare account (new bucket, custom domain

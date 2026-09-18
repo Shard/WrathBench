@@ -216,7 +216,7 @@ export function shortHarness(v: string | null | undefined): string {
 
 /**
  * One inventory list as plain text: "name ×count, name, …" for the rows on
- * one side of `equipped` (item 50). Null items (a run that predates the
+ * one side of `equipped`. Null items (a run that predates the
  * column) is the dash; a recorded empty side reads "none".
  */
 export function fmtItems(

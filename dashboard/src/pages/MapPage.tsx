@@ -11,7 +11,7 @@
  *
  * Replay (`/map?run=<id>`) is a *feed swap*, not a second renderer: the same
  * `AgentPosition[]` the live poll produces is produced instead by a time cursor
- * over one run's recorded track (item 22). Nothing in the draw path asks
+ * over one run's recorded track. Nothing in the draw path asks
  * which mode it is in — the two differences are that a scrubbed pip is placed
  * rather than walked (the lerp would trail the cursor and read as a bug), and
  * that the route walked so far is drawn behind it.
@@ -144,7 +144,7 @@ export default function MapPage() {
    * cursor, playback, the pinned map, the selection, pan and zoom — is
    * per-frame state that would make the URL churn, so none of it goes here.
    * The cursor is remembered per run beside the route instead, so coming back
-   * to a replay does not restart it: `lib/cursormemory.ts` (item 61).
+   * to a replay does not restart it: `lib/cursormemory.ts`.
    */
   const [params] = useSearchParams();
   const replayId = (): string | undefined => runParam(params.run);
@@ -342,7 +342,7 @@ export default function MapPage() {
        * Below the threshold nothing is drawn into a cell, so nothing can be
        * covered and the lattice is one path rather than one rect per cell: the
        * whole world on screen was up to 4096 `strokeRect` calls, and a pan made
-       * that per frame (item 60). Shared boundaries now carry one line
+       * that per frame. Shared boundaries now carry one line
        * where the inset rects carried two, which reads thinner and is the only
        * visible change.
        */

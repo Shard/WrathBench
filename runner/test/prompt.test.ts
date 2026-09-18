@@ -97,7 +97,7 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
 
 describe("the context sentence is the harness's, and says what that harness does", () => {
   // The prompt used to state the fixed loop's aggressive trim on both
-  // harnesses. On claude-code no trim happens at all (item 8) — one CLI
+  // harnesses. On claude-code no trim happens at all — one CLI
   // conversation grows for the whole episode — so on that driver the prompt
   // stated something false about the machinery the model was running under.
   test("the fixed loop states the trim, and the scratchpad as the memory", () => {

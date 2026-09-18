@@ -1,7 +1,7 @@
 {
   // infra/ went untypechecked until 2026-08-24: `bun test` strips types without
   // checking them, so a required field added to FleetRosterEntry could land with
-  // every test still green and the fixtures silently out of shape (item 69).
+  // every test still green and the fixtures silently out of shape.
   // The supervisor is 3.6k lines of scheduling; it gets a compiler.
   "extends": "../tsconfig.base.json",
   // The smoke scripts import the SDK by path, the way an operator runs them;

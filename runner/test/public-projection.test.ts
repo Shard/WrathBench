@@ -463,7 +463,7 @@ const RUN_LIST_ROW_KEYS = [
   // no `snapshot`: only the renderer stamps it, after projection
 ];
 const STATE_KEYS = ["ts", "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "turn",
-  // The player frame's numbers (item 104): public on every surface that
+  // The player frame's numbers: public on every surface that
   // carries a state sample, as they are on the positions feed.
   "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp"];
 const RESULT_RUN_KEYS = [
@@ -472,7 +472,7 @@ const RESULT_RUN_KEYS = [
   "resolvedModel",
   "cliVersion",
   // Which CLI drove the run: already public on `RunRow.driver`, and the
-  // character view's header reads it from here (item 128).
+  // character view's header reads it from here.
   "driver",
   "platform",
   "harnessVersion",
@@ -825,7 +825,7 @@ describe("projectPositions and projectTrack", () => {
       moves: [
         smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: SURVIVES.targetName, status: "arrived" }),
       ],
-      // The character's neighbours (item 119): run ids and two counters, each
+      // The character's neighbours: run ids and two counters, each
       // already public on every runs row, and nothing smuggled beside them.
       character: smuggle({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" }),
     });

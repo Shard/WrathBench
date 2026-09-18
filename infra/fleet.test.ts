@@ -714,7 +714,7 @@ describe("rereadFleet", () => {
   });
 
   test("a re-read violating an ACCOUNT rule takes effect, minus the pin it refused", () => {
-    // The point of item 66. Before, this re-read was rejected and every other
+    // The point. Before, this re-read was rejected and every other
     // `enabled:` flag in the new file went inert behind the old config; now the
     // file loads, one job is disabled, and the operator is told which.
     const clash = JSON.stringify(fleetJson([{ ref: "glm", episode: "e90", account: "X" }, { ref: "ox", episode: "e90", account: "X" }]));
@@ -1115,7 +1115,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     // taking it out of the schedule, which is the point of the catalog cut.
     expect([...policyRefs(config)]).toEqual(["son", "glm"]);
     expect(policyExclusion(config, "son")).toBeUndefined();
-    // Account rules refuse the PIN and keep the file (item 66); shape errors
+    // Account rules refuse the PIN and keep the file; shape errors
     // still take the file down, because there is no losing pin to name.
     const pin = (over: Record<string, unknown>) => ({ accounts: { pool: ["RUNNER"] }, roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free" }, ox: { tier: "t1", model: "stealth/ox-alpha:free" } }, ...over });
     const shared = parseFleet(pin({ queue: [{ ref: "glm", episode: "e90", account: "S" }, { ref: "ox", episode: "e90", account: "s" }] }));
@@ -1150,7 +1150,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
   });
 
   test("guards: pool/pinned overlap, bad refs, bad tiers, name collisions", () => {
-    // Not a throw since item 66: the pin is refused, the rest of the file loads.
+    // Not a throw since: the pin is refused, the rest of the file loads.
     const overlap = parseFleet(nextShape({ accounts: { pool: ["SHAKEOUT"] } }));
     expect(overlap.jobs.every((j) => !j.enabled || j.account?.toUpperCase() !== "SHAKEOUT")).toBe(true);
     expect(overlap.refusals[0]!.why).toMatch(/account SHAKEOUT is in accounts.pool/);
@@ -1965,7 +1965,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["SMOKE"] }, preflight: { enabled: true, account: "SMOKE", smokes: ["x.ts"] } }),
     ).toThrow(/also in accounts.local/);
     // Coexistence holds for the local class too: only a disabled job may park.
-    // Since item 66 the enforcement is a refusal of that job, not of the file.
+    // The enforcement is a refusal of that job, not of the file.
     const onBox = parseFleet({ ...raw, accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] }, queue: [{ ref: "local", episode: "e90", account: "LOCALBOX" }] });
     expect(onBox.jobs[0]!.enabled).toBe(false);
     expect(onBox.refusals[0]!.why).toMatch(/account LOCALBOX is in accounts.local/);
@@ -1981,7 +1981,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     const plain = parseFleet({ ...raw, accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"] }, policy: {} });
     const plainStates = modelStatesOf(rosterModels(plain.roster), runs, NOW, plain.policy);
     const plainPlan = planTick(plain, plainStates, () => undefined, "20260101");
-    // No policy.paid and no accounts.paid — the configuration item 65 was
+    // No policy.paid and no accounts.paid — the configuration that was
     // about. The paid class is split ANYWAY, so the paid models are held and
     // named rather than quietly taking a free pool account and billing on it.
     // The pool model still runs: an unconfigured class holds its own picks and
@@ -3012,7 +3012,7 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     expect(characterAffinity(characters, () => "RUNNER5")("sonlo")).toBe("RUNNER5");
   });
 
-  test("a character head on another ref's occupied account starts fresh elsewhere; a bounded or own occupant holds (item 94)", () => {
+  test("a character head on another ref's occupied account starts fresh elsewhere; a bounded or own occupant holds", () => {
     // The 2026-08-29 shape: fable-none's two-minute head (Thorgrima) landed on
     // RUNNER2, then opus-low reclaimed RUNNER2 for Bromdir and stays there
     // indefinitely — an unlimited session has no boundary to wait for.
@@ -3102,7 +3102,7 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     expect(pausesOnDrain(undefined)).toBe(false);
   });
 
-  test("item 107: flipping a live character's ref to idle:\"none\" drops it from the projection", () => {
+  test("flipping a live character's ref to idle:\"none\" drops it from the projection", () => {
     // The gap: the supervisor hot-reloads the config, the policy stops
     // generating the job, and before this the live roster process was never
     // signalled — it ran until an idle watchdog an active model never trips.
@@ -3112,7 +3112,7 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     expect(policyJobDropped(policyFreeplay("opuslo", 12), undefined)).toBe("removed from the roster");
   });
 
-  test("item 107: a character still in the unlimited lane is never dropped, whatever the plan did this tick", () => {
+  test("a character still in the unlimited lane is never dropped, whatever the plan did this tick", () => {
     // The distinction is the LOADED CONFIG, not the plan: the reasons a policy
     // pick is absent from a tick (account busy, a lane or paid cap, cooling,
     // eligibility) are transient and none of them reaches this predicate, so a
@@ -3127,7 +3127,7 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     expect(policyJobDropped(undefined, roster["opuslo"])).toBeUndefined();
   });
 
-  test("item 107: the dropped character's disabled stand-in reaches diffJobs as a drain", () => {
+  test("the dropped character's disabled stand-in reaches diffJobs as a drain", () => {
     // What the supervisor pushes for a dropped live policy job, and what
     // `diffJobs` does with it: the drain, and then `pausesOnDrain` makes it an
     // immediate SIGTERM rather than a wait for an episode boundary.
@@ -3139,7 +3139,7 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
 
   test("resumesInPlace: the freeplay character and a resume:true campaign come back; a scored run does not", () => {
     // What `infra/fleet-update.sh graceful` reads off each job row to decide
-    // whether waiting on it buys anything (item 93). The campaign's
+    // whether waiting on it buys anything. The campaign's
     // opt-in is the supervisor's to answer: the script must not re-derive it
     // from a config the supervisor may not be running.
     const campaigns = [

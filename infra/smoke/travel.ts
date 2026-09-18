@@ -10,7 +10,7 @@
  * waits on server postconditions (`waitForTransfer`, `WB_RIDE_PROGRESS`,
  * `WB_TRANSPORT_PROGRESS`).
  *
- * Between leg1 and leg2 (leg1b, load-bearing, item 56): the character
+ * Between leg1 and leg2 (leg1b, load-bearing): the character
  * walks into AreaTrigger.dbc 710 at the Kharanos crossroads and keeps moving
  * inside it for >= 5s; exactly one WB_AREATRIGGER for id 710 must appear.
  * Fails against a pre-56 module, which re-fires every 1.5s.
@@ -268,7 +268,7 @@ interface HopLog {
 }
 const hopLogs: HopLog[] = [];
 const opcodesSeen = new Map<string, number>();
-/** WB_AREATRIGGER count per trigger id: the linger leg's evidence (item 56). */
+/** WB_AREATRIGGER count per trigger id: the linger leg's evidence. */
 const triggerHits = new Map<number, number>();
 /** Per-car `docked` as last reported, and when it flipped: the leg-4 evidence. */
 const dockedAt = new Map<string, { docked: boolean; y: number; ts: number }>();
@@ -361,7 +361,7 @@ const LINGER_TRIGGER = { id: 710, x: -5601.5, y: -530.7, z: 395.5, r: 35 };
 const LINGER_MS = 5_000;
 
 /**
- * Linger leg (item 56): crossing into a DBC volume sends
+ * Linger leg: crossing into a DBC volume sends
  * CMSG_AREATRIGGER exactly once, as a client does; standing and walking
  * inside it for >= 5s must not re-fire. Walks to the centre, then two short
  * hops that stay well inside the radius while the clock passes LINGER_MS, and
@@ -717,7 +717,7 @@ try {
       log(`=== ${leg.name}: complete in ${((Date.now() - legStart) / 1000).toFixed(0)}s ===`);
       if (leg.name.startsWith("leg1:")) {
         // Kharanos is where leg1 ends and trigger 710 sits: linger there
-        // before leg2 walks on (item 56).
+        // before leg2 walks on.
         const name = "leg1b: linger in areatrigger 710";
         log(`=== ${name} ===`);
         const t0 = Date.now();

@@ -144,7 +144,7 @@ export interface ApiOptions {
    */
   moduleUrl?: string;
   /**
-   * The config store (item 127; the only fleet config since 2026-09-18): what
+   * The config store (the only fleet config since 2026-09-18): what
    * the config API reads and writes, and where `/api/models` and
    * `/api/campaigns` take their roster and campaigns from. Absent is the data
    * volume's default (`configDbPath`); a test names its own. An empty or
@@ -820,7 +820,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const row = withResolved(raw, totals);
       // Let each series go as it is consumed: the map holds every state row of
       // the corpus, and the publisher's pass has a hard-won peak-RSS bound
-      // (runner/viewer/snapshot.ts, item 121) to stay inside.
+      // (runner/viewer/snapshot.ts) to stay inside.
       const states = statesByRun.get(row.runId) ?? [];
       statesByRun.delete(row.runId);
       out.push(
@@ -1291,7 +1291,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     }
 
     /*
-     * One character, whole (item 128): the aggregate every attempt's page
+     * One character, whole: the aggregate every attempt's page
      * shows a card of, plus the level and XP series across the WHOLE chain
      * with the attempt each sample came from — which is the one thing no
      * single run's page can draw, because a session's own series stops at its
@@ -1392,7 +1392,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
           ? characterViewOf(runId, await resultRuns())
           : null;
       /*
-       * `characterViewOf` is universal since item 128 — every run has a
+       * `characterViewOf` is universal since — every run has a
        * character, a scored one's being a chain of one — but a card and a strip
        * reading "attempt 1 of 1" are noise standing where a fact should be
        * (`hasLineage`, lineage.ts). So the field stays absent below the
@@ -1436,12 +1436,12 @@ export function createApi(opts: ApiOptions): ApiHandle {
     }
 
     if (rest === "/track") {
-      // The replay feed (item 22): the same position shape the live map
+      // The replay feed: the same position shape the live map
       // consumes, read from one finished run instead of every live one.
       const run = await runRowOne(runId);
       /*
        * Where this attempt sits in its character, so the map's transport can step
-       * to the one either side of it (item 119) without a second fetch.
+       * to the one either side of it without a second fetch.
        *
        * Deliberately the same expression the detail route gates its `character`
        * with, and the same `characterViewOf` call behind it: a scored run's
@@ -1598,7 +1598,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     const path = decodeURIComponent(url.pathname);
 
     /*
-     * The config API (item 127): read and edit the fleet config. Operator-only,
+     * The config API: read and edit the fleet config. Operator-only,
      * so a public handle does not serve it at all — a 404, not the 403
      * `withheld()` gives, because a write surface should not announce itself.
      * It lives in `config-api.ts`; this is the whole of its presence here.

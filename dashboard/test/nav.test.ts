@@ -21,7 +21,7 @@ describe("NAV", () => {
 /**
  * The operator's config page is not in `NAV` at all: the routes behind it are
  * not mounted in public mode, and a reader who cannot use it should not be
- * told it exists (item 134).
+ * told it exists.
  */
 describe("navItems", () => {
   test("a public build or a public viewer gets the reader's bar, unchanged", () => {
@@ -43,7 +43,7 @@ describe("navItems", () => {
 
 /**
  * The header badge and the config nav item are one derivation, so they cannot
- * disagree about which site a reader is on (item 134).
+ * disagree about which site a reader is on.
  */
 describe("surface", () => {
   test("the public bundle is PREVIEW whatever a viewer would have said", () => {

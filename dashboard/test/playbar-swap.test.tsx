@@ -306,7 +306,7 @@ describe("the play bar across the route swap", () => {
   });
 
   /**
-   * The attempt steps (item 119). They are links and nothing else — the swap
+   * The attempt steps. They are links and nothing else — the swap
    * they cause is the route effect's, which the first test already performs —
    * so what is asserted here is which of them render and where they point:
    * both on a middle attempt, one at each end of the chain, none at all on a

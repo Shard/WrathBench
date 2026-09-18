@@ -503,7 +503,7 @@ export function liveJobsFromState(state: Pick<FleetState, "jobs"> | undefined): 
  * by account and letting the last write win therefore reads the object's
  * insertion order, which is FIRST-spawn order, and a job that finished at noon
  * can mask the run holding the account now. That is what made the accounts
- * table disagree with --live-runs (item 68).
+ * table disagree with --live-runs.
  *
  * So rank rather than overwrite: a live job beats a dead one, and among live
  * ones the most recently spawned wins. `alive` is passed in so the selection

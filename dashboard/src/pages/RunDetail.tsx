@@ -154,7 +154,7 @@ export default function RunDetail() {
   const params = useParams<{ id: string }>();
   const location = useLocation();
 
-  /* Which worldserver the viewer can see, for the footer (item 42). */
+  /* Which worldserver the viewer can see, for the footer. */
   const [info, setInfo] = createSignal<ApiInfoResponse | undefined>(undefined);
   const [detail, setDetail] = createSignal<RunDetailResponse | undefined>(undefined);
   const [entries, setEntries] = createSignal<FeedEntry[]>([]);
@@ -493,7 +493,7 @@ export default function RunDetail() {
                 <span title={run().runId}>{shortRunId(run().runId)}</span>
                 {/*
                   Every run belongs to a character, and a scored run's is a
-                  chain of one (item 128), so this link is unconditional — the
+                  chain of one, so this link is unconditional — the
                   page does not have to know whether it is looking at freeplay
                   to know where the character lives. The id is the chain root's
                   when there is a chain, and the run's own when there is not,
@@ -821,7 +821,7 @@ export default function RunDetail() {
                         <QuestCount count={run().questsCompleted} />
                       </div>
                       {/*
-                        Newest recorded inventory (item 50). Icons and tooltips
+                        Newest recorded inventory. Icons and tooltips
                         come from Wowhead in the reader's browser; we serve no
                         item art (operator, 2026-09-18). A run that recorded no
                         inventory at all still says so in words, which is what
@@ -946,7 +946,7 @@ export default function RunDetail() {
 }
 
 /**
- * The worldserver this run actually drove against, when known (item 42).
+ * The worldserver this run actually drove against, when known.
  *
  * A run stamped with its own `comparability.serverBuild` states that as fact —
  * it is what `/health` reported at this run's own launch or resume, not a
