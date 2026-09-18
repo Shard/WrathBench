@@ -10,7 +10,8 @@
 import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import type { CharacterAttempt, CharacterView } from "../api/client";
-import { fmtDuration, fmtMoney, fmtTokens, fmtUsd, num, shortRunId } from "../lib/format";
+import { fmtDuration, fmtTokens, fmtUsd, num, shortRunId } from "../lib/format";
+import { Coins, LevelXp } from "./CharacterFacts";
 import { sourceHint, sourceLabel } from "../lib/runview";
 import { statusOf, statusText } from "../lib/runs";
 
@@ -57,7 +58,7 @@ export function CharacterTotalsCard(props: { character: CharacterView; runId?: s
         <div class="k">xp earned</div>
         <div class="v mono">{t().xpEarned === null ? "—" : t().xpEarned!.toLocaleString()}</div>
         <div class="sub">
-          level {num(t().level)} · {fmtMoney(t().money)}
+          <LevelXp level={t().level} xp={null} compact /> <Coins copper={t().money} />
         </div>
       </div>
       <div class="card">

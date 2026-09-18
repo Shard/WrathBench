@@ -133,3 +133,28 @@ export function xpToNext(level: number | null | undefined, nextLevelXp?: number 
 function fmtInt(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
+
+/**
+ * The exact reading a compact xp bar cannot print inside itself.
+ *
+ * A table cell is too narrow for "1,234 / 5,400", so the bar in a row carries
+ * no text and this sentence is its `title`. It is the whole reading — the
+ * level, the xp within it, the level's own total and the percentage — because
+ * a hover that says less than the bar shows is worse than no hover.
+ *
+ * Every absence is named rather than drawn as a zero: the ladder's own rule
+ * that 0 xp is a reading and "never recorded" is not. Level 80 and any level
+ * the table cannot answer for have an xp figure and no total, and say so.
+ */
+export function xpCellTitle(
+  level: number | null | undefined,
+  xp: number | null | undefined,
+  nextLevelXp?: number | null,
+): string {
+  if (typeof level !== "number") return "level not recorded";
+  const head = `level ${level}`;
+  if (typeof xp !== "number") return `${head} — no xp reading`;
+  const next = xpToNext(level, nextLevelXp);
+  if (next === null || next <= 0) return `${head} — ${fmtInt(xp)} xp into the level, which has no recorded total`;
+  return `${head} — ${fmtInt(xp)} / ${fmtInt(next)} xp into the level (${Math.round(percentOf(xp, next))}%)`;
+}

@@ -49,6 +49,7 @@ import {
   type RunColumn,
   type RunSort,
 } from "../lib/runs";
+import { LevelXp } from "../components/CharacterFacts";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
 
@@ -356,7 +357,11 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
           </td>
         );
       case "level":
-        return <td class="right mono">{num(r().maxLevel)}</td>;
+        return (
+          <td class="right mono">
+            <LevelXp level={r().maxLevel} xp={r().xp} compact />
+          </td>
+        );
       case "turns":
         return <td class="right mono dim">{num(turnsOf(r()))}</td>;
       case "duration":

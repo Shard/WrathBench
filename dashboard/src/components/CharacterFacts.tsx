@@ -1,6 +1,11 @@
 /**
- * The three facts the character card carries beside the level: money, quests,
- * and (with `XpBar`) progress toward the next ding.
+ * The facts a character is read by, wherever one is shown: the level and how
+ * far into it, money, and quests turned in.
+ *
+ * One module rather than one per page (operator, 2026-09-18). The run page's
+ * character card drew these first; a ladder row, a runs row, a campaign row
+ * and a character's attempt list all answer the same three questions, and
+ * three pages spelling gold three ways is three chances to spell it wrong.
  *
  * Drawn rather than printed, because "1s 12c · 17 quests" is a line a reader
  * parses and "1 ● 12 ● · ? 17" is a line a reader recognises. Every glyph here
@@ -14,6 +19,46 @@
 
 import { For, Show } from "solid-js";
 import { fmtMoney, moneyCoins } from "../lib/format";
+import { XpBar } from "./UnitFrame";
+import { xpCellTitle } from "../lib/unitframe";
+
+/**
+ * The level, and how far into it the run got — the site's one xp reading.
+ *
+ * `compact` is the table form: the same badge and the same `XpBar`, at a fixed
+ * narrow width with no numbers drawn inside the bar, because a column is not
+ * wide enough for "1,234 / 5,400" and a squeezed bar that prints half a figure
+ * is worse than one that prints none. The exact reading is the cell's `title`
+ * (`xpCellTitle`), and the row still sorts on the number behind it: nothing
+ * here is the sort key, it is a drawing of one.
+ *
+ * A row with a level and no xp reading gets the badge alone rather than an
+ * empty bar, which would read as "no progress" instead of "not recorded".
+ */
+export function LevelXp(props: {
+  level: number | null | undefined;
+  xp: number | null | undefined;
+  nextLevelXp?: number | null | undefined;
+  compact?: boolean;
+}) {
+  const title = (): string => xpCellTitle(props.level, props.xp, props.nextLevelXp);
+  return (
+    <Show when={typeof props.level === "number"} fallback={<span class="dim" title={title()}>—</span>}>
+      <Show
+        when={typeof props.xp === "number"}
+        fallback={
+          <span class="level-badge" title={title()}>
+            {props.level}
+          </span>
+        }
+      >
+        <span class={props.compact === true ? "xp-cell" : ""} title={title()}>
+          <XpBar level={props.level} xp={props.xp} nextLevelXp={props.nextLevelXp} />
+        </span>
+      </Show>
+    </Show>
+  );
+}
 
 /** Money as coins: one per denomination present, the count ahead of the coin. */
 export function Coins(props: { copper: number | null | undefined }) {
