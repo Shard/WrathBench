@@ -65,7 +65,7 @@ needs a code change.
   before deploying, which is how the first deployment was run. One trap: after
   a login on a *different* account wrangler still uses the account it cached in
   `node_modules/.cache/wrangler/wrangler-account.json`, and the deploy fails
-  with `Authentication error [code: 10000]` against the old account id. The
+  with `Authentication error [code: 10000]` against the previously cached account. The
   script deletes that cache before every deploy for exactly this reason.
 
 A third token, zone **Cache Purge**, is only wanted if the manifest TTL is ever
@@ -132,7 +132,7 @@ header, and that is not a style choice: the acceptance readback confirmed that
 no published object carries a `Cache-Control` at all — Bun's S3 writer cannot
 send one, and under the gate the Worker added them on egress. "Respect origin
 TTL" would therefore respect nothing. **All three rules already exist on the zone**
-(operator); step 9 verifies them rather than creating them.
+(operator); step 8 verifies them rather than creating them.
 
 **A missing cache rule is the only way this shape costs money.** Without it every
 public request is a billed class-B read against the bucket — roughly $7/month at
