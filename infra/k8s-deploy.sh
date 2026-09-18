@@ -51,8 +51,6 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-FLEET_JSON="${WRATHBENCH_DEPLOY_FLEET_JSON:-${REPO_ROOT}/infra/fleet.json}"
-
 NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"
 RELEASE="${WRATHBENCH_K8S_RELEASE:-wrathbench}"
 RUN_SMOKE=1
@@ -96,14 +94,21 @@ require_num() {
 }
 
 command -v kubectl >/dev/null 2>&1 || die "kubectl is not on PATH"
-command -v bun >/dev/null 2>&1 || die "bun is not on PATH (this script reads fleet.json with it)"
+command -v bun >/dev/null 2>&1 || die "bun is not on PATH (this script parses the preflight block with it)"
 
 readonly BUN_PLAIN_ENV=(env NO_COLOR=1 FORCE_COLOR=0 TERM=dumb)
 strip_ansi() { sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g'; }
 
 # ------------------------------------------------------------------ 0. config
-# Identical parse to deploy-worldserver.sh: fleet.json is the one place the
-# smokes and their accounts are configured, on compose and on Kubernetes.
+# Identical parse to deploy-worldserver.sh: the config store's `preflight`
+# block is the one place the smokes and their accounts are configured, on
+# compose and on Kubernetes. The store is on the data PVC, so it is read the
+# way the supervisor reads it — `config-store.ts get preflight`, through the
+# runner pod (the same pod fleet-state.json is read through). An empty or
+# unreadable store fails the window here, loudly, rather than reading as "no
+# smokes configured" further down.
+PREFLIGHT_JSON="$("${KUBECTL[@]}" exec -i "${RUNNER_DEPLOY}" -- env NO_COLOR=1 FORCE_COLOR=0 bun runner/src/config-store.ts get preflight 2>/dev/null | strip_ansi || true)"
+[[ -n "${PREFLIGHT_JSON}" ]] || die "could not read \`preflight\` from the config store through ${RUNNER_DEPLOY} — is the runner pod up, and the store seeded? (bun runner/src/config-store.ts seed infra/fleet.example.json, then edit it on /config)"
 PREFLIGHT_ACCOUNT=""
 PREFLIGHT_TIMEOUT_S=""
 DEPLOY_TIMEOUT_S=""
@@ -117,9 +122,8 @@ while IFS=$'\t' read -r key value account; do
     deploysmoke) DEPLOY_SMOKES+=("${value}"); DEPLOY_SMOKE_ACCOUNTS+=("${account}") ;;
   esac
 done < <(
-  "${BUN_PLAIN_ENV[@]}" bun -e '
-    const c = await Bun.file(process.argv[1]).json();
-    const pf = c.preflight ?? {};
+  printf '%s' "${PREFLIGHT_JSON}" | "${BUN_PLAIN_ENV[@]}" bun -e '
+    const pf = JSON.parse(await Bun.stdin.text());
     const account = pf.account ?? "SMOKE";
     const entry = (kind) => (s) =>
       typeof s === "string" ? `${kind}\t${s}\t${account}` : `${kind}\t${s.script}\t${s.account ?? account}`;
@@ -130,7 +134,7 @@ done < <(
       ...(pf.smokes ?? []).map(entry("smoke")),
       ...(pf.deploySmokes ?? []).map(entry("deploysmoke")),
     ].join("\n") + "\n");
-  ' "${FLEET_JSON}" | strip_ansi
+  ' | strip_ansi
 )
 require_num "preflight.timeoutMs (seconds)" "${PREFLIGHT_TIMEOUT_S}"
 require_num "preflight.deployTimeoutMs (seconds)" "${DEPLOY_TIMEOUT_S}"
@@ -305,7 +309,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "--dry-run: resolved values only; nothing is scaled, waited on or smoked"
   say "  namespace          ${NAMESPACE}"
   say "  release            ${RELEASE}"
-  say "  fleet config       ${FLEET_JSON}"
+  say "  fleet config       the config store, via ${RUNNER_DEPLOY} (config-store.ts get preflight)"
   say "  worldserver image  $(deployed_tag) (Flux owns this; this script never changes it)"
   say "  fleet replicas     $(fleet_replicas)"
   say "  fleet pods         $(p="$(fleet_pods)"; if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — the drain would not have to wait for one"; fi)"

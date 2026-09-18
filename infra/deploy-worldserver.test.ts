@@ -29,6 +29,8 @@ const SCRIPT = join(REPO_ROOT, "infra", "deploy-worldserver.sh");
  *                      until `compose stop fleet` has been called
  *   FAKE_STOP_DRAINS   0 => `compose stop fleet` leaves the state's jobs alive
  *   FAKE_STATE_JSON    the fleet-state.json the stop shim edits
+ *   FAKE_PREFLIGHT     the file `compose exec runner ... config-store.ts get preflight`
+ *                      answers with — the store's preflight block
  *   FAKE_DOCKER_LOG    file every argv is appended to
  */
 const DOCKER_SHIM = `#!/usr/bin/env bash
@@ -56,6 +58,7 @@ case "$1" in
     fi
     if [[ "\${args}" == *" up -d fleet"* ]]; then rm -f "\${FAKE_DOCKER_LOG}.stopped"; exit "\${FAKE_FLEET_UP_RC:-0}"; fi
     if [[ "\${args}" == *" up "* ]]; then exit 0; fi
+    if [[ "\${args}" == *"config-store.ts get preflight"* ]]; then cat "\${FAKE_PREFLIGHT}"; exit 0; fi
     # A smoke named FAIL.ts fails whatever FAKE_SMOKE_RC says; the rest obey it.
     if [[ "\${args}" == *"MODULE_ACCOUNT="* ]]; then [[ "\${args}" == *"FAIL.ts"* ]] && exit 1; exit "\${FAKE_SMOKE_RC:-0}"; fi
     if [[ "\${args}" == *"/health"* ]]; then exit "\${FAKE_HEALTH_RC:-0}"; fi
@@ -95,17 +98,15 @@ function runDeploy(c: Case = {}): Result {
   writeFileSync(shim, DOCKER_SHIM);
   chmodSync(shim, 0o755);
 
-  const fleetJson = join(dir, "fleet.json");
+  const preflightJson = join(dir, "preflight.json");
   writeFileSync(
-    fleetJson,
+    preflightJson,
     JSON.stringify({
-      preflight: {
-        enabled: true,
-        account: "SMOKE",
-        smokes: c.smokes ?? ["infra/smoke/module-quest.ts"],
-        timeoutMs: 900_000,
-        ...(c.deploySmokes !== undefined ? { deploySmokes: c.deploySmokes, deployTimeoutMs: 600_000 } : {}),
-      },
+      enabled: true,
+      account: "SMOKE",
+      smokes: c.smokes ?? ["infra/smoke/module-quest.ts"],
+      timeoutMs: 900_000,
+      ...(c.deploySmokes !== undefined ? { deploySmokes: c.deploySmokes, deployTimeoutMs: 600_000 } : {}),
     }),
   );
   const stateJson = join(dir, "fleet-state.json");
@@ -132,7 +133,7 @@ function runDeploy(c: Case = {}): Result {
         FAKE_STOP_DRAINS: c.stopDrains === false ? "0" : "1",
         FAKE_STATE_JSON: stateJson,
         FAKE_FLEET_UP_RC: String(c.fleetUpRc ?? 0),
-        WRATHBENCH_DEPLOY_FLEET_JSON: fleetJson,
+        FAKE_PREFLIGHT: preflightJson,
         WRATHBENCH_DEPLOY_STATE_JSON: stateJson,
         WRATHBENCH_DEPLOY_SERVER_STATE_JSON: serverStateJson,
         // The drain timeout is 60s in production; the stuck-supervisor case

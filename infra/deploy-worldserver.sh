@@ -51,7 +51,7 @@
 # nothing machine-read is allowed to carry terminal colour.
 #
 # --no-smoke is the honest escape hatch for a machine where the preflight
-# account does not exist in auth yet (see infra/fleet.json `preflight` notes):
+# account does not exist in auth yet (see the `preflight` notes in infra/fleet.example.json):
 # it deploys, waits for health, verifies nothing, says so, and hands the server
 # to the fleet — whose own gate is then the only check.
 #
@@ -67,7 +67,6 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 # Overridable only so the test harness can point the script at fixtures; the
 # defaults are the real thing and nothing in normal operation sets these.
 COMPOSE_FILE="${WRATHBENCH_DEPLOY_COMPOSE_FILE:-${REPO_ROOT}/infra/compose.yml}"
-FLEET_JSON="${WRATHBENCH_DEPLOY_FLEET_JSON:-${REPO_ROOT}/infra/fleet.json}"
 STATE_JSON="${WRATHBENCH_DEPLOY_STATE_JSON:-${REPO_ROOT}/data/runs/fleet-state.json}"
 SERVER_STATE_JSON="${WRATHBENCH_DEPLOY_SERVER_STATE_JSON:-${REPO_ROOT}/data/runs/server-state.json}"
 SERVER_STATE_LOCK="${SERVER_STATE_JSON%.json}.lock"
@@ -116,7 +115,7 @@ require_num() {
   [[ "${value}" =~ ^[0-9]+$ ]] || die "${name} is not a non-negative integer: $(printf %q "${value}")"
 }
 
-command -v bun >/dev/null 2>&1 || die "bun is not on PATH (this script reads fleet.json/fleet-state.json with it)"
+command -v bun >/dev/null 2>&1 || die "bun is not on PATH (this script parses the preflight block and fleet-state.json with it)"
 
 # The module's port secret (module/PROTOCOL.md "Authentication"; FOLLOW-UPS
 # 19). Compose interpolates AC_WRATH_BENCH_SECRET from the shell, and it does
@@ -134,10 +133,15 @@ command -v flock >/dev/null 2>&1 || die "flock is not on PATH (util-linux); the 
 cd "${REPO_ROOT}"
 
 # ------------------------------------------------------------------ 0. config
+# The `preflight` block comes from the config store — the only fleet config —
+# read the way the supervisor reads it (`config-store.ts get preflight`),
+# through the runner container, which is how this script reaches everything
+# else in the stack. An empty or unreadable store fails the window here,
+# loudly, rather than reading as "no smokes configured" further down.
 # One bun call, plain text out, KEY<TAB>VALUE lines — no console.log of a
 # number anywhere on a path bash will do arithmetic on.
 # Smokes are `script<TAB>account` pairs (SMOKES / SMOKE_ACCOUNTS index-aligned):
-# fleet.json entries may be a bare script (on preflight.account) or
+# entries may be a bare script (on preflight.account) or
 # { script, account }. `deploySmokes` is the deploy-time full arc the
 # supervisor never runs; it has its own budget.
 PREFLIGHT_ENABLED=""
@@ -149,7 +153,9 @@ SMOKE_ACCOUNTS=()
 DEPLOY_SMOKES=()
 DEPLOY_SMOKE_ACCOUNTS=()
 read_preflight() {
-  local key value account
+  local key value account preflight_json
+  preflight_json="$("${COMPOSE[@]}" exec -T runner env NO_COLOR=1 FORCE_COLOR=0 bun runner/src/config-store.ts get preflight 2>/dev/null | strip_ansi || true)"
+  [[ -n "${preflight_json}" ]] || die "could not read \`preflight\` from the config store through the runner container — is it up, and the store seeded? (bun runner/src/config-store.ts seed infra/fleet.example.json, then edit it on /config)"
   while IFS=$'\t' read -r key value account; do
     case "${key}" in
       enabled) PREFLIGHT_ENABLED="${value}" ;;
@@ -160,9 +166,8 @@ read_preflight() {
       deploysmoke) DEPLOY_SMOKES+=("${value}"); DEPLOY_SMOKE_ACCOUNTS+=("${account}") ;;
     esac
   done < <(
-    "${BUN_PLAIN_ENV[@]}" bun -e '
-      const c = await Bun.file(process.argv[1]).json();
-      const pf = c.preflight ?? {};
+    printf '%s' "${preflight_json}" | "${BUN_PLAIN_ENV[@]}" bun -e '
+      const pf = JSON.parse(await Bun.stdin.text());
       const account = pf.account ?? "SMOKE";
       const entry = (kind) => (s) =>
         typeof s === "string" ? `${kind}\t${s}\t${account}` : `${kind}\t${s.script}\t${s.account ?? account}`;
@@ -175,12 +180,12 @@ read_preflight() {
         ...(pf.deploySmokes ?? []).map(entry("deploysmoke")),
       ];
       process.stdout.write(lines.join("\n") + "\n");
-    ' "${FLEET_JSON}" | strip_ansi
+    ' | strip_ansi
   )
   require_num "preflight.enabled" "${PREFLIGHT_ENABLED}"
   require_num "preflight.timeoutMs (seconds)" "${PREFLIGHT_TIMEOUT_S}"
   require_num "preflight.deployTimeoutMs (seconds)" "${DEPLOY_TIMEOUT_S}"
-  [[ -n "${PREFLIGHT_ACCOUNT}" ]] || die "preflight.account is empty in ${FLEET_JSON}"
+  [[ -n "${PREFLIGHT_ACCOUNT}" ]] || die "preflight.account is empty in the config store"
 }
 read_preflight
 require_num "HEALTH_WAIT_S" "${HEALTH_WAIT_S}"
@@ -250,7 +255,7 @@ write_phase() {
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "--dry-run: resolved values only, nothing is stopped, tagged, recreated or smoked"
   say "  compose file       ${COMPOSE_FILE}"
-  say "  fleet config       ${FLEET_JSON}"
+  say "  fleet config       the config store, via docker compose exec runner (config-store.ts get preflight)"
   say "  fleet state        ${STATE_JSON}"
   say "  server state       ${SERVER_STATE_JSON} (lock ${SERVER_STATE_LOCK})"
   say "  next tag           ${NEXT_TAG} $(docker image inspect "${NEXT_TAG}" >/dev/null 2>&1 && echo "(build $(image_build "${NEXT_TAG}"))" || echo "— MISSING, the deploy would refuse")"
@@ -539,7 +544,7 @@ fi
 CURRENT_PHASE=verifying
 PHASE_PREFIX=""
 if [[ "${#SMOKES[@]}" -eq 0 ]]; then
-  say "no smokes configured in fleet.json preflight — DEPLOYED UNVERIFIED, and that was not asked for."
+  say "no smokes configured in the config store's preflight — DEPLOYED UNVERIFIED, and that was not asked for."
   say "Nothing has driven this server end to end. Configure preflight.smokes, or say so with --no-smoke."
   fail_closed "preflight has no smokes configured, and --no-smoke was not given"
 fi

@@ -46,6 +46,8 @@ const TAG = "wb-test-0.9-1-gdeadbee";
  *                    (-1 = forever, which is the pod that outlives the budget)
  *   FAKE_REPLICAS    what the fleet Deployment reports for .spec.replicas
  *   FAKE_SMOKE_RC    the exit code every smoke returns
+ *   FAKE_PREFLIGHT   the file `config-store.ts get preflight` answers with —
+ *                    the store's preflight block, read through the runner pod
  */
 const KUBECTL_SHIM = `#!/usr/bin/env bash
 log() { printf '%s\\n' "$1" >> "\${FAKE_LOG}"; }
@@ -65,6 +67,7 @@ case "\${cmd}" in
         log "smoke \${acct} \${payload##* }"
         exit "\${FAKE_SMOKE_RC:-0}"
         ;;
+      *"config-store.ts get preflight"*) log "exec get_preflight"; cat "\${FAKE_PREFLIGHT}"; exit 0 ;;
       *fleet-state.json*) log "exec alive_jobs"; printf '0\\n'; exit 0 ;;
       *worldStopped*)     log "exec health_ok"; exit 0 ;;
       *j.build*)          log "exec health_build"; printf '%s' "\${FAKE_TAG}"; exit 0 ;;
@@ -102,16 +105,14 @@ log "\${raw}"
 exit 0
 `;
 
-/** One gate smoke, one full-arc smoke: enough that the window has a verification to reach. */
-const FLEET_JSON = {
-  preflight: {
-    enabled: true,
-    account: "SMOKE",
-    smokes: [{ script: "infra/smoke/quest-accept-status.ts", account: "SMOKE" }],
-    timeoutMs: 60000,
-    deploySmokes: [],
-    deployTimeoutMs: 60000,
-  },
+/** The store's preflight block: one gate smoke, enough that the window has a verification to reach. */
+const PREFLIGHT = {
+  enabled: true,
+  account: "SMOKE",
+  smokes: [{ script: "infra/smoke/quest-accept-status.ts", account: "SMOKE" }],
+  timeoutMs: 60000,
+  deploySmokes: [],
+  deployTimeoutMs: 60000,
 };
 
 interface Case {
@@ -140,8 +141,8 @@ function run(c: Case): Result {
   writeFileSync(kubectl, KUBECTL_SHIM);
   chmodSync(kubectl, 0o755);
 
-  const fleetJson = join(dir, "fleet.json");
-  writeFileSync(fleetJson, JSON.stringify(FLEET_JSON, null, 2));
+  const preflightJson = join(dir, "preflight.json");
+  writeFileSync(preflightJson, JSON.stringify(PREFLIGHT, null, 2));
 
   const proc = Bun.spawnSync(
     // --expect-tag, because the pin check runs before anything is drained and
@@ -159,7 +160,7 @@ function run(c: Case): Result {
         FAKE_POD_POLLS: String(c.podPolls ?? 0),
         FAKE_REPLICAS: String(c.replicas ?? 1),
         ...(c.smokeRc !== undefined ? { FAKE_SMOKE_RC: String(c.smokeRc) } : {}),
-        WRATHBENCH_DEPLOY_FLEET_JSON: fleetJson,
+        FAKE_PREFLIGHT: preflightJson,
         WRATHBENCH_DEPLOY_DRAIN_WAIT_S: String(c.drainWaitS ?? 30),
         WRATHBENCH_DEPLOY_HEALTH_WAIT_S: "10",
       },
