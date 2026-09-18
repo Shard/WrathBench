@@ -756,6 +756,17 @@ export default function MapPage() {
     pips.clear();
     route = [];
     pendingFit = true;
+    /*
+     * The camera goes back to the default with the rest of it. `pendingFit`
+     * alone would not do it: nothing re-reads the flag until a feed arrives or
+     * the stage resizes, so leaving a replay onto a quiet fleet would keep the
+     * replay's continent framing while the map underneath became the default
+     * one — Northrend's camera over Eastern Kingdoms' tiles. Coming back to a
+     * busy map this shows the starter framing for the one round-trip before the
+     * refresh lands and the fit effect overwrites it, which is the right
+     * intermediate: a foreign continent's camera is not.
+     */
+    view = defaultView({ w: W, h: H });
     needsDraw = true;
     if (id === undefined) {
       // Only when leaving a replay, never on a cold load — see createLeftReplay.
