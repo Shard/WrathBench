@@ -17,16 +17,21 @@ import {
   type Pip,
   MAX_SCALE,
   MIN_SCALE,
+  DEFAULT_MAP,
+  DEFAULT_SCALE,
   centreOn,
   chooseMap,
   clampScale,
   colorOf,
   decimateRoute,
+  defaultView,
+  emptySideNote,
   fitTo,
   hitTest,
   hueOf,
   latticeLines,
   STALE_MS,
+  TILE_MIN_PX,
   mapCounts,
   mapName,
   pipName,
@@ -302,14 +307,69 @@ describe("mapCounts", () => {
   });
 });
 
+/*
+ * The empty state: what the page shows before anything is live. Its two halves
+ * are the framing and the sentence, and both are pure, so neither needs a
+ * canvas to pin.
+ */
+describe("the empty map's default view", () => {
+  /** Anvilmar in Dun Morogh and Northshire in Elwynn: where characters start. */
+  const STARTERS = [ANVILMAR, { x: -8949, y: -136 }, { x: -8913, y: 554 }];
+  const DESKTOP = { w: 1280, h: 800 };
+  const PHONE = { w: 360, h: 740 };
+
+  test("draws tiles rather than the bare lattice", () => {
+    // The whole point of not framing the continent: below this a 256px tile is
+    // suppressed and the reader gets an empty grid where a map should be.
+    expect(DEFAULT_SCALE * TILE_PX).toBeGreaterThanOrEqual(TILE_MIN_PX);
+    expect(defaultView(DESKTOP).scale).toBe(DEFAULT_SCALE);
+  });
+
+  test("holds the starter zones on screen at both sizes", () => {
+    for (const screen of [DESKTOP, PHONE]) {
+      const v = defaultView(screen);
+      for (const a of STARTERS) {
+        const s = project(v, a.x, a.y);
+        expect(s.sx).toBeGreaterThanOrEqual(0);
+        expect(s.sx).toBeLessThanOrEqual(screen.w);
+        expect(s.sy).toBeGreaterThanOrEqual(0);
+        expect(s.sy).toBeLessThanOrEqual(screen.h);
+      }
+    }
+  });
+
+  test("is a finite view on a real stage", () => {
+    const v = defaultView(PHONE);
+    expect(Number.isFinite(v.ox)).toBe(true);
+    expect(Number.isFinite(v.oy)).toBe(true);
+  });
+
+  test("the sidebar says nobody is live, and what is on screen instead", () => {
+    const note = emptySideNote(0, false, DEFAULT_MAP);
+    expect(note).toContain("live");
+    expect(note).toContain(mapName(DEFAULT_MAP));
+  });
+
+  test("a populated map keeps the selection prompt, and a replay its own", () => {
+    expect(emptySideNote(3, false, 0)).toBe("no character selected");
+    expect(emptySideNote(0, true, 0)).not.toContain("live");
+  });
+});
+
 describe("chooseMap", () => {
   const MAPS: [number, number][] = [
     [0, 2],
     [1, 1],
   ];
 
-  test("nothing on the map means no map", () => {
-    expect(chooseMap([], null, null, null)).toBeNull();
+  test("nothing on the map still names a map to draw", () => {
+    // It answered null until 2026-09-18, and the page had no rendering for
+    // that: a quiet fleet — every visitor's first sight — got a blank stage.
+    expect(chooseMap([], null, null, null)).toBe(DEFAULT_MAP);
+  });
+
+  test("a stale previous map is dropped for the default, not kept", () => {
+    expect(chooseMap([], 530, null, null)).toBe(DEFAULT_MAP);
   });
 
   test("stays where it was while that map still has an agent", () => {
@@ -514,8 +574,9 @@ describe("returning to live", () => {
     expect(g.state.count()).toBe(0);
     expect(g.state.maps()).toEqual([]);
     expect(g.state.selected()).toBeNull();
-    // The continent the replay ended on is forgotten, not merely unpinned.
-    expect(g.state.activeMap()).toBeNull();
+    // The continent the replay ended on is forgotten, not merely unpinned —
+    // it falls back to the default rather than to "no map".
+    expect(g.state.activeMap()).toBe(DEFAULT_MAP);
     g.dispose();
   });
 

@@ -13,7 +13,7 @@
  */
 
 import type { AgentPosition } from "@viewer/api-types";
-import { GRID, TILE_PX, TILE_SIZE, worldToPixel } from "@viewer/worldmap";
+import { GRID, TILE_PX, TILE_SIZE, tileToWorld, worldToPixel } from "@viewer/worldmap";
 import { modelDisplay } from "./format";
 
 export const MIN_SCALE = 0.01;
@@ -133,6 +133,36 @@ export function fitTo(screen: Screen, list: readonly Placeable[], pad = 240): Vi
   const bh = y1 - y0 + pad * 2;
   const scale = clampScale(Math.min(screen.w / bw, screen.h / bh));
   return centreOn(screen, (x0 + x1) / 2, (y0 + y1) / 2, Math.min(scale, 1.5));
+}
+
+/**
+ * Where the map looks when it has nothing to look at.
+ *
+ * An empty feed is the ordinary state of a quiet fleet, and it is what a first
+ * visitor hits; the page has to draw a map anyway. `fitTo`'s empty branch is
+ * the wrong answer for it — the whole world at 0.06 is four times under
+ * `TILE_MIN_PX`, so every tile is suppressed and the reader gets a bare
+ * lattice. A continent overview of Eastern Kingdoms has the same problem: at
+ * roughly 0.1 no tile is drawn either. There is no zoom at which "the whole
+ * continent" and "real tiles" are both true, so the default frames the place
+ * instead of the continent.
+ *
+ * That place is the starter country every character begins in: Dun Morogh
+ * (Anvilmar, row 43.7) and Elwynn (Northshire and Stormwind, row ~48.7) sit
+ * five tiles apart on the same column, and a frame centred between them holds
+ * both at a scale where tiles draw — on a phone as well as a desktop. When a
+ * position arrives the ordinary fit takes over and this is forgotten.
+ */
+export const DEFAULT_MAP = 0;
+const DEFAULT_ROW = 46.2;
+const DEFAULT_COL = 31.1;
+/** Above `TILE_MIN_PX / TILE_PX`, so the default frame draws tiles and not the lattice. */
+export const DEFAULT_SCALE = 0.4;
+
+export function defaultView(screen: Screen): View {
+  const w = tileToWorld(DEFAULT_ROW, DEFAULT_COL);
+  const p = worldToPixel(w.x, w.y);
+  return centreOn(screen, p.px, p.py, DEFAULT_SCALE);
 }
 
 /** Zoom about a screen point, keeping the world point under it in place. */
@@ -367,18 +397,40 @@ export function mapCounts(list: readonly { map: number }[]): [number, number][] 
  *
  * Precedence: an operator's chip click, then the replay cursor's own map, then
  * where we already were, then the busiest map in the feed.
+ *
+ * With nothing to go on it answers `DEFAULT_MAP` rather than "no map". It used
+ * to answer null, and the page has no rendering for that: the draw loop filled
+ * a flat rectangle, so a quiet fleet — no live character anywhere, which is the
+ * state a first visitor meets — got a blank page instead of a map. A map id is
+ * always available because the map is always drawable; whether anyone is
+ * standing on it is `count`'s question, not this one.
  */
 export function chooseMap(
   maps: readonly [number, number][],
   prev: number | null,
   pinned: number | null,
   cursor: number | null,
-): number | null {
+): number {
   const has = (m: number): boolean => maps.some(([id]) => id === m);
   if (pinned !== null && has(pinned)) return pinned;
   if (cursor !== null) return cursor;
   if (prev !== null && has(prev)) return prev;
-  return maps.length > 0 ? maps[0]![0] : null;
+  return maps.length > 0 ? maps[0]![0] : DEFAULT_MAP;
+}
+
+/**
+ * What the sidebar says when no pip is selected.
+ *
+ * The three cases are different facts and used to be two. "No characters on the
+ * map" was what an empty feed got, which reads as though the map were the
+ * problem; the fact is that nobody is running right now, and naming the
+ * continent on screen tells the reader what they are looking at instead — the
+ * chips are hidden with fewer than two maps, so otherwise nothing does.
+ */
+export function emptySideNote(count: number, replaying: boolean, map: number): string {
+  if (count > 0) return "no character selected";
+  if (replaying) return "no character at this point in the replay";
+  return `no character is live right now — showing ${mapName(map)}`;
 }
 
 /**

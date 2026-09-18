@@ -23,6 +23,7 @@ import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types
    test; `test/preload-solid.ts` installs it and says why. */
 import { createEffect, createMemo, createRoot, createSignal, getOwner, runWithOwner } from "solid-js";
 import { clearReplayState, createLeftReplay, createMapState } from "../src/lib/mapstate";
+import { DEFAULT_MAP } from "../src/lib/mapview";
 import { runParam } from "../src/lib/replay";
 
 const TRACK: TrackResponse = {
@@ -197,7 +198,9 @@ describe("the map's two URL states", () => {
     expect(p.sources.pinned()).toBeNull();
     expect(p.sources.selectedId()).toBeNull();
     expect(p.canvas.pips.size).toBe(0);
-    expect(p.state.activeMap()).toBeNull();
+    // The replay's continent is forgotten; with nothing live the map falls back
+    // to the default rather than to "no map", which draws nothing.
+    expect(p.state.activeMap()).toBe(DEFAULT_MAP);
     // And it does not sit blank waiting for the next 5s tick.
     expect(p.calls.refreshes).toBe(1);
     expect(p.calls.tracks).toEqual(["run-1"]);
@@ -225,7 +228,7 @@ describe("the map's two URL states", () => {
     // The first run is gone before the second's track can land.
     expect(p.canvas.pips.size).toBe(0);
     expect(p.sources.track()).toBeUndefined();
-    expect(p.state.activeMap()).toBeNull();
+    expect(p.state.activeMap()).toBe(DEFAULT_MAP);
     p.dispose();
   });
 
