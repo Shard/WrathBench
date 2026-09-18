@@ -1118,9 +1118,16 @@ const EQUIPMENT_LAST_SLOT = 18;
 
 /**
  * The `items` column of a state sample: what is worn (inventory slots 0-18)
- * and what is carried (`bag()` across every bag), names and counts only. A
- * row whose name has not been answered yet is kept under its item id so the
- * count stays honest. `undefined` when the snapshot carries no inventory.
+ * and what is carried (`bag()` across every bag). A row whose name has not been
+ * answered yet is kept under its item id so the count stays honest.
+ * `undefined` when the snapshot carries no inventory.
+ *
+ * Each row carries where it sits and what it is — `slot`, `bag` (carried only),
+ * `itemId`, `quality` — because a paperdoll and a bag grid are drawn from the
+ * sample, not guessed from an order. Every one of those is written only when the
+ * snapshot actually carried it: a slot whose item create block or item query has
+ * not arrived yet is an occupied slot with no id, and the field is left off the
+ * row rather than filled with a zero.
  */
 export function itemSample(snap: SnapshotLike): ItemSample[] | undefined {
   const inv = snap.inventory;
@@ -1129,14 +1136,34 @@ export function itemSample(snap: SnapshotLike): ItemSample[] | undefined {
   const out: ItemSample[] = [];
   const label = (name: unknown, itemId: unknown, fallback: string): string =>
     typeof name === "string" ? name : itemId != null ? `item ${String(itemId)}` : fallback;
+  /** An optional numeric field, present only when the snapshot carried a number. */
+  const opt = (key: "itemId" | "quality" | "slot" | "bag", v: unknown): { [k: string]: number } =>
+    typeof v === "number" ? { [key]: v } : {};
   for (const i of inv ?? []) {
     if (typeof i.slot !== "number" || i.slot > EQUIPMENT_LAST_SLOT) continue;
     const count = typeof i.stackCount === "number" ? i.stackCount : 1;
-    out.push({ name: label(i.name, i.itemId, `slot ${i.slot}`), count, equipped: true });
+    out.push({
+      name: label(i.name, i.itemId, `slot ${i.slot}`),
+      count,
+      equipped: true,
+      ...opt("itemId", i.itemId),
+      ...opt("quality", i.quality),
+      // Worn: `slot` is the equipment slot and there is no `bag`.
+      slot: i.slot,
+    });
   }
   for (const i of bag ?? []) {
     const count = typeof i.count === "number" ? i.count : 1;
-    out.push({ name: label(i.name, i.itemId, `slot ${String(i.slot)}`), count, equipped: false });
+    out.push({
+      name: label(i.name, i.itemId, `slot ${String(i.slot)}`),
+      count,
+      equipped: false,
+      ...opt("itemId", i.itemId),
+      ...opt("quality", i.quality),
+      // Carried: the `bag`/`slot` pair the item actions take, unchanged.
+      ...opt("slot", i.slot),
+      ...opt("bag", i.bag),
+    });
   }
   return out;
 }

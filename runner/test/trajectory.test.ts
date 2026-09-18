@@ -133,14 +133,24 @@ describe("Trajectory", () => {
       quests_completed INTEGER, turn INTEGER, zone INTEGER, area INTEGER)`);
     db.close();
     const traj = new Trajectory(dir);
+    // The whole row as the paperdoll needs it: where it sits, what it is.
     const items = [
-      { name: "Worn Mace", count: 1, equipped: true },
-      { name: "Tough Jerky", count: 5, equipped: false },
+      { name: "Worn Mace", count: 1, equipped: true, slot: 16, itemId: 5956, quality: 1 },
+      { name: "Tough Jerky", count: 5, equipped: false, bag: 255, slot: 23, itemId: 117, quality: 1 },
+      // An old-shape row: the three fields every sample has ever carried.
+      { name: "Tunic", count: 1, equipped: true },
     ];
     traj.recordState("run-i", { level: 1, items });
     traj.recordState("run-i", { level: 1 });
     const rows = traj.stateRows("run-i");
     expect(JSON.parse(String(rows[0]!["items"]))).toEqual(items);
+    // The column is JSON text: the new fields need no migration, and a row
+    // that carries none keeps exactly the three keys it was written with.
+    expect(Object.keys((JSON.parse(String(rows[0]!["items"])) as object[])[2]!)).toEqual([
+      "name",
+      "count",
+      "equipped",
+    ]);
     expect(rows[1]!["items"]).toBeNull();
     const line = readTrajectory(dir).find((r) => r.t === "state");
     expect(line?.["items"]).toEqual(items);

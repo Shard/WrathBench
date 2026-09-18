@@ -96,7 +96,7 @@ interface BagLike {
   freeSlots?: unknown;
   /** Backpack (16) plus every worn bag's slots; absent on a pre-item-50 snapshot. */
   totalSlots?: unknown;
-  items?: { slot?: unknown; itemId?: unknown; name?: unknown; count?: unknown }[];
+  items?: { bag?: unknown; slot?: unknown; itemId?: unknown; name?: unknown; count?: unknown; quality?: unknown }[];
 }
 
 /**
@@ -190,7 +190,7 @@ export interface SnapshotLike {
   /** `state.bag()` shape: carried items across all bags, free and total slot counts. */
   bag?: BagLike;
   /** `state.inventory` as the sandbox serialises it; equipment is `slot < 19`. */
-  inventory?: { slot?: unknown; itemId?: unknown; name?: unknown; stackCount?: unknown }[];
+  inventory?: { slot?: unknown; itemId?: unknown; name?: unknown; stackCount?: unknown; quality?: unknown }[];
   /**
    * `state.spells`: the spellbook as `SMSG_INITIAL_SPELLS` /
    * `SMSG_LEARNED_SPELL` left it. The HUD never prints it — it is tens of rows
