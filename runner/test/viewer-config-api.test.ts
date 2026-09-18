@@ -194,7 +194,7 @@ describe("audit and export", () => {
     expect((body.audit[0]?.after as { tier: string }).tier).toBe("t2");
   });
 
-  test("POST /api/config/export renders fleet.json's exact shape", async () => {
+  test("POST /api/config/export renders the config document's exact shape", async () => {
     const { handle } = fixture();
     const body = (await (await handle(req("/api/config/export", { method: "POST", body: "{}" }))).json()) as {
       path: string | null;
@@ -208,7 +208,7 @@ describe("audit and export", () => {
     const { handle } = fixture();
     const root = mkdtempSync(join(tmpdir(), "config-api-export-"));
     roots.push(root);
-    const out = join(root, "fleet.json");
+    const out = join(root, "fleet-export.json");
     const res = await handle(req("/api/config/export", { method: "POST", body: JSON.stringify({ path: out }) }));
     expect(res.status).toBe(200);
     expect(JSON.parse(await Bun.file(out).text())).toEqual(CONFIG);

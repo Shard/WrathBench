@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
+import { ConfigStore, splitFleet } from "../src/config-store";
 import { ERROR_MAX_CHARS, currentSeries, lastErrorOf, readFleetRoster } from "../viewer/models";
 import type { ModelsResponse } from "../viewer/api-types";
 
@@ -97,14 +98,30 @@ function writeRun(runsDir: string, r: Synth): void {
   db.close();
 }
 
-/** A runs directory and a fleet config beside it. */
+
+/**
+ * Seed a store with a document AS WRITTEN, past the validator: these fixtures
+ * are the viewer's own loose roster shapes (a `character`, a tierless entry)
+ * that `parseFleet` would refuse, and what is under test is how the page
+ * labels them, not whether the supervisor would take them.
+ */
+function seedRaw(dbPath: string, doc: unknown): void {
+  const store = new ConfigStore(dbPath);
+  const at = Date.now();
+  for (const r of splitFleet(doc)) {
+    store.db.run("INSERT INTO config (key, ord, json, updated_at) VALUES (?, ?, ?, ?)", [r.key, r.ord, JSON.stringify(r.value), at]);
+  }
+  store.close();
+}
+
+/** A runs directory and a config store beside it, seeded with `fleet`. */
 function fixture(fleet: unknown): { runsDir: string; fleetPath: string } {
   const root = mkdtempSync(join(tmpdir(), "viewer-models-"));
   roots.push(root);
   const runsDir = join(root, "runs");
   mkdirSync(runsDir, { recursive: true });
-  const fleetPath = join(root, "fleet.json");
-  writeFileSync(fleetPath, JSON.stringify(fleet));
+  const fleetPath = join(root, "config.sqlite");
+  seedRaw(fleetPath, fleet);
   return { runsDir, fleetPath };
 }
 
@@ -118,7 +135,7 @@ const ROSTER = {
 };
 
 async function models(runsDir: string, fleetPath: string | undefined): Promise<ModelsResponse> {
-  const handle = createApi({ runsDir, tilesDir: join(runsDir, "tiles"), fleetConfigPath: fleetPath });
+  const handle = createApi({ runsDir, tilesDir: join(runsDir, "tiles"), configDbPath: fleetPath });
   const res = await handle(new Request("http://x/api/models"));
   expect(res.status).toBe(200);
   return (await res.json()) as ModelsResponse;
@@ -191,13 +208,14 @@ describe("readFleetRoster", () => {
     expect(read.models).toEqual([]);
   });
 
-  test("absent and unreadable are labelled, not thrown", () => {
-    expect(readFleetRoster(undefined).shape).toBe("missing");
-    expect(readFleetRoster("/nope/fleet.json").shape).toBe("missing");
+  test("an empty store and an unreadable one are labelled, not thrown", () => {
+    // The default path is pinned to nowhere by the test preload: empty.
+    expect(readFleetRoster().shape).toBe("missing");
+    expect(readFleetRoster("/nope/config.sqlite").shape).toBe("missing");
     const root = mkdtempSync(join(tmpdir(), "viewer-models-bad-"));
     roots.push(root);
-    const p = join(root, "fleet.json");
-    writeFileSync(p, "{ not json");
+    const p = join(root, "config.sqlite");
+    writeFileSync(p, "this is not a database");
     expect(readFleetRoster(p).shape).toBe("unreadable");
   });
 });
@@ -343,11 +361,14 @@ describe("/api/models", () => {
     expect(body.policy.maxConcurrent).toEqual({ "claude-code": 2 });
   });
 
-  test("no fleet config at all is a normal answer, not a 500", async () => {
+  test("an empty config store is a normal answer, not a 500", async () => {
+    // The default store path is pinned to nowhere by the test preload, which
+    // is a deployment before its seed: labelled `missing`, with the store's
+    // path named so the page can say where to seed.
     const { runsDir } = fixture(ROSTER);
     const body = await models(runsDir, undefined);
     expect(body.roster.shape).toBe("missing");
-    expect(body.roster.path).toBeNull();
+    expect(body.roster.path).toMatch(/config\.sqlite$/);
     expect(body.models).toEqual([]);
   });
 

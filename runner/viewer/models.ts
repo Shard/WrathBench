@@ -27,7 +27,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { readFleetText } from "../src/config-store";
+import { configDbPath, readFleetConfig } from "../src/config-store";
 import {
   DEFAULT_POLICY,
   LADDER_MS,
@@ -175,28 +175,24 @@ export function currentSeries(): string | null {
 }
 
 /**
- * Read the roster out of a fleet config. A file without a `roster` map is
- * `unreadable` — the same posture `readFleet` takes to a missing
- * `fleet-state.json`: say the file is not usable, do not synthesise what it
- * would have said.
- *
- * The config comes through `readFleetText` (`runner/src/config-store.ts`), so
- * once the config store is seeded this page shows what the supervisor is
- * actually scheduling rather than whatever `fleet.json` the viewer happens to
- * have on disk — on the cluster those are two different files, the fleet's
- * being a ConfigMap. `path` still decides whether there is a config at all,
- * and is what an unseeded deployment reads.
+ * Read the roster out of the config store (`runner/src/config-store.ts`), the
+ * only fleet config, so this page shows what the supervisor is actually
+ * scheduling. An empty or absent store is `missing` — a deployment before its
+ * seed, labelled rather than thrown. A store that cannot be read, or a config
+ * without a `roster` map, is `unreadable` — the same posture `readFleet` takes
+ * to a missing `fleet-state.json`: say it is not usable, do not synthesise
+ * what it would have said. `path` is the store's.
  */
-export function readFleetRoster(path: string | undefined, series: string | null = currentSeries()): RosterRead {
+export function readFleetRoster(dbPath: string = configDbPath(), series: string | null = currentSeries()): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
   const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], count: 0, accounts: {}, campaigns: [] };
-  if (path === undefined || path.length === 0) {
-    return { ...empty, shape: "missing", path: null };
-  }
-  if (!existsSync(path)) return { ...empty, shape: "missing", path };
+  const read = readFleetConfig(dbPath);
+  const path = read.path;
+  if (read.status === "empty") return { ...empty, shape: "missing", path };
+  if (read.status === "unreadable") return { ...empty, shape: "unreadable", path };
   let parsed: z.infer<typeof fleetRosterSchema>;
   try {
-    parsed = fleetRosterSchema.parse(JSON.parse(readFleetText(path)));
+    parsed = fleetRosterSchema.parse(JSON.parse(read.text));
   } catch {
     return { ...empty, shape: "unreadable", path };
   }

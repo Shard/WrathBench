@@ -143,14 +143,12 @@ export interface ApiOptions {
    */
   moduleUrl?: string;
   /**
-   * The fleet config whose `roster` block names the models `/api/models` rows.
-   * Absent, missing or unreadable is a normal state the route
-   * labels rather than an error; a roster map is the one source of names.
-   */
-  fleetConfigPath?: string;
-  /**
-   * The config store the config API reads and writes (item 127). Absent is the
-   * data volume's default (`configDbPath`); a test names its own.
+   * The config store (item 127; the only fleet config since 2026-09-18): what
+   * the config API reads and writes, and where `/api/models` and
+   * `/api/campaigns` take their roster and campaigns from. Absent is the data
+   * volume's default (`configDbPath`); a test names its own. An empty or
+   * unreadable store is a normal state those routes label rather than an
+   * error.
    */
   configDbPath?: string;
   /**
@@ -987,7 +985,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
     const probes = all.filter((r) => r.campaign !== null);
-    const roster = readFleetRoster(opts.fleetConfigPath);
+    const roster = readFleetRoster(opts.configDbPath);
     const declared = new Map(roster.campaigns.map((c) => [c.name, c]));
     const names = [
       // Config order first, so the file's own priority is what the page shows;
@@ -1198,7 +1196,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
        */
       const now = Date.now();
       const body = readFleet(runsDir, now);
-      const roster = readFleetRoster(opts.fleetConfigPath);
+      const roster = readFleetRoster(opts.configDbPath);
       if (roster.shape === "roster") {
         const runs = await runFacts(now);
         const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
@@ -1225,7 +1223,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         return json({ error: `unknown harness; one of: ${[...HARNESSES, "all"].join(", ")}` }, 400);
       }
       const now = Date.now();
-      const roster = readFleetRoster(opts.fleetConfigPath);
+      const roster = readFleetRoster(opts.configDbPath);
       const runs = await runFacts(now);
       const states = modelStates({ runsDir, roster: roster.models, policy: roster.policy, runs, now });
       // The refs with a job in flight, off the supervisor's state: the verdict

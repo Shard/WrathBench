@@ -14,7 +14,7 @@
  * Env, matching the compose `publisher` service and docs/OPERATIONS.md
  * ("Public dashboard"):
  *   WRATHBENCH_RUNS_DIR             default data/runs
- *   WRATHBENCH_FLEET_CONFIG         default infra/fleet.json when it exists
+ *   WRATHBENCH_CONFIG_DB            the config store; default $WRATHBENCH_DATA/config.sqlite, else data/config.sqlite
  *   WRATHBENCH_PUBLISH_STATE        default data/publish/state.json
  *   WRATHBENCH_PUBLISH_INTERVAL_MS  default 60000
  *   WRATHBENCH_PUBLISH_BATCH        default 8; runs projected per upload flush
@@ -36,8 +36,6 @@ import { createRenderer } from "../runner/viewer/snapshot";
 import { publishLoop, type ObjectStore, type PassRenderer } from "./publish-core";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
-const FLEET_CONFIG =
-  Bun.env.WRATHBENCH_FLEET_CONFIG ?? (existsSync("infra/fleet.json") ? "infra/fleet.json" : undefined);
 const STATE_PATH = Bun.env.WRATHBENCH_PUBLISH_STATE ?? "data/publish/state.json";
 const INTERVAL_MS = Number(Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS ?? "60000");
 /**
@@ -102,7 +100,6 @@ const store: ObjectStore = {
 // `ApiHandle.release`.
 const renderer = createRenderer({
   runsDir: RUNS_DIR,
-  ...(FLEET_CONFIG !== undefined ? { fleetConfigPath: FLEET_CONFIG } : {}),
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
 });
 

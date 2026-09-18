@@ -10,7 +10,7 @@
  *
  * Scope is deliberately narrow — the catalogue is ~420 models and all but a
  * dozen are noise here. A row is written when its id is one of:
- *   - a model in `infra/fleet.json`'s roster,
+ *   - a model in the config store's roster (`runner/src/config-store.ts`),
  *   - a model any run under `data/runs` was launched on, or
  *   - a `PIN` below: ids we want priced whatever the roster says today.
  * An id we ask for that the catalogue does not carry is reported, never
@@ -51,10 +51,10 @@
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { readFleetConfig } from "../runner/src/config-store";
 
 const CATALOGUE = "https://openrouter.ai/api/v1/models";
 const OUT = "runner/viewer/prices.openrouter.json";
-const FLEET = "infra/fleet.json";
 const RUNS = "data/runs";
 
 /**
@@ -218,7 +218,9 @@ async function corpusModels(runsDir: string): Promise<string[]> {
 
 export async function main(): Promise<void> {
   const wanted = new Set<string>(PIN);
-  for (const m of rosterModels(await Bun.file(FLEET).text())) wanted.add(m);
+  const fleet = readFleetConfig();
+  if (fleet.status === "ok") for (const m of rosterModels(fleet.text)) wanted.add(m);
+  else console.error(`sync-prices: config store ${fleet.status} — pricing the corpus and the pins only`);
   for (const m of await corpusModels(RUNS)) wanted.add(m);
 
   const res = await fetch(CATALOGUE);

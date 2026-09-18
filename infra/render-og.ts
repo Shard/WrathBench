@@ -18,7 +18,7 @@
  * published numbers cannot disagree. Env is `publish-dashboard.ts`'s, because
  * it is the same renderer:
  *   WRATHBENCH_RUNS_DIR       default data/runs
- *   WRATHBENCH_FLEET_CONFIG   default infra/fleet.json when it exists
+ *   WRATHBENCH_CONFIG_DB      the config store; default $WRATHBENCH_DATA/config.sqlite, else data/config.sqlite
  *
  * Rasterising is `@resvg/resvg-js` (MPL-2.0), a napi binding to the Rust
  * resvg. Bun has no rasteriser and no canvas, and the only other thing on the
@@ -93,9 +93,7 @@ function logoHrefs(): Map<string, string> {
 async function ladderRuns(): Promise<ResultRun[]> {
   const runsDir = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
   if (!existsSync(runsDir)) fail(`no runs directory at ${runsDir} — set WRATHBENCH_RUNS_DIR`);
-  const fleetConfigPath =
-    Bun.env.WRATHBENCH_FLEET_CONFIG ?? (existsSync("infra/fleet.json") ? "infra/fleet.json" : undefined);
-  const render = createRenderer({ runsDir, ...(fleetConfigPath !== undefined ? { fleetConfigPath } : {}) });
+  const render = createRenderer({ runsDir });
   const result = await render();
   const artifact = result.artifacts.find((a) => a.path.endsWith(`/ladder-${HOME_EPISODE}.json`));
   if (artifact === undefined) fail(`the snapshot pass produced no ladder-${HOME_EPISODE}.json`);

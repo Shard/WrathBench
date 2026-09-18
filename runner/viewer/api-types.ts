@@ -1127,7 +1127,7 @@ export interface FleetResponse extends SnapshotEnvelope {
   stamp?: string;
   /** When the config in force was last parsed. */
   configLoadedAt?: number;
-  /** Set while fleet.json on disk does not load; the file's enabled flags are not in effect. */
+  /** Set while the config store does not load; the store's enabled flags are not in effect. */
   configRejected?: FleetConfigRejectedView;
   /** The last gate result; absent until the supervisor has gated once. */
   preflight?: FleetPreflightView;

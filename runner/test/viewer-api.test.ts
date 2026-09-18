@@ -14,6 +14,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
+import { ConfigStore } from "../src/config-store";
 import { configFromArgs } from "../src/run";
 import { UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
@@ -114,16 +115,16 @@ function campaignizeScoreabilityFixture(runs: string): string {
       JSON.stringify({ ...meta, config: { ...meta.config, campaign: "scoreability", cell: "cell" } }),
     );
   }
-  const fleetPath = join(runs, "fleet.json");
-  writeFileSync(
-    fleetPath,
-    JSON.stringify({
-      roster: { m: { model: "m", tier: "t1" } },
-      campaigns: {
-        scoreability: { enabled: true, models: ["m"], runsPerCell: 1, cells: [{ id: "cell" }] },
-      },
-    }),
-  );
+  const fleetPath = join(runs, "config.sqlite");
+  const store = new ConfigStore(fleetPath);
+  store.seed({
+    accounts: { pool: ["RUNNER"] },
+    roster: { m: { model: "m:free", tier: "t1" } },
+    campaigns: {
+      scoreability: { enabled: true, models: ["m"], runsPerCell: 1, cells: [{ id: "cell" }] },
+    },
+  });
+  store.close();
   return fleetPath;
 }
 
@@ -503,7 +504,7 @@ describe("scoreability projection", () => {
       const handle = createApi({
         runsDir: runs,
         tilesDir: join(runs, "..", "minimap"),
-        fleetConfigPath: fleetPath,
+        configDbPath: fleetPath,
       });
       const res = await handle(new Request("http://x/api/campaigns"));
       expect(res.status).toBe(200);

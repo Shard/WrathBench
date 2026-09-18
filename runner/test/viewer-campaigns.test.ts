@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
+import { ConfigStore, splitFleet } from "../src/config-store";
 import type { CampaignsResponse } from "../viewer/api-types";
 
 const dirs: string[] = [];
@@ -33,7 +34,23 @@ interface Probe {
   paused?: string;
 }
 
-/** A runs directory holding probe runs, and optionally a fleet config beside it. */
+
+/**
+ * Seed a store with a document AS WRITTEN, past the validator: these fixtures
+ * are the viewer's own loose roster shapes (a `character`, a tierless entry)
+ * that `parseFleet` would refuse, and what is under test is how the page
+ * labels them, not whether the supervisor would take them.
+ */
+function seedRaw(dbPath: string, doc: unknown): void {
+  const store = new ConfigStore(dbPath);
+  const at = Date.now();
+  for (const r of splitFleet(doc)) {
+    store.db.run("INSERT INTO config (key, ord, json, updated_at) VALUES (?, ?, ?, ?)", [r.key, r.ord, JSON.stringify(r.value), at]);
+  }
+  store.close();
+}
+
+/** A runs directory holding probe runs, and optionally a seeded config store beside it. */
 function fixture(probes: Probe[], fleet?: unknown): { runs: string; fleetPath: string | undefined } {
   const root = mkdtempSync(join(tmpdir(), "wb-camp-"));
   dirs.push(root);
@@ -105,8 +122,8 @@ function fixture(probes: Probe[], fleet?: unknown): { runs: string; fleetPath: s
   }
   let fleetPath: string | undefined;
   if (fleet !== undefined) {
-    fleetPath = join(root, "fleet.json");
-    writeFileSync(fleetPath, JSON.stringify(fleet));
+    fleetPath = join(root, "config.sqlite");
+    seedRaw(fleetPath, fleet);
   }
   return { runs, fleetPath };
 }
@@ -118,7 +135,7 @@ async function campaigns(probes: Probe[], fleet?: unknown): Promise<CampaignsRes
     tilesDir: join(runs, "..", "minimap"),
     publicMode: false,
     moduleUrl: "http://127.0.0.1:1",
-    ...(fleetPath !== undefined ? { fleetConfigPath: fleetPath } : {}),
+    ...(fleetPath !== undefined ? { configDbPath: fleetPath } : {}),
   });
   const res = await handle(new Request("http://x/api/campaigns"));
   expect(res.status).toBe(200);
@@ -276,9 +293,10 @@ describe("/api/campaigns", () => {
     expect(body.campaigns[0]!.config!.models).toBe(1);
   });
 
-  test("no config at all still serves the runs", async () => {
+  test("an empty config store still serves the runs", async () => {
     const body = await campaigns([{ runId: "r1", campaign: "adhoc", cell: "c" }]);
-    expect(body.configPath).toBeNull();
+    // The store's path, not null: there is always a store to name, seeded or not.
+    expect(body.configPath).toMatch(/config\.sqlite$/);
     expect(body.campaigns.map((c) => c.campaign)).toEqual(["adhoc"]);
     expect(body.campaigns[0]!.config).toBeNull();
   });
