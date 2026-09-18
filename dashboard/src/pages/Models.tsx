@@ -23,6 +23,7 @@ import { ModelIcon } from "../components/ModelIcon";
 import { fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayLabel, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { characterRows } from "../lib/ladder";
+import { InfoHint } from "../components/InfoHint";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
 import { displayError } from "../lib/errors";
@@ -52,13 +53,57 @@ export default function Models() {
     setOpen(open() === name ? null : name);
   };
 
+  /*
+   * What the roster's rules are, as one hover rather than the paragraph this
+   * page printed under its heading until 2026-09-18 (operator). It tolerates
+   * an API older than this bundle for the reason it always did: a viewer and a
+   * dist/ are two artefacts and can restart out of order (item 64), and
+   * missing detail is worth a shorter sentence, never a blank.
+   */
+  const policyNote = (): string => {
+    const b = body();
+    if (b === undefined) return "";
+    const tiers =
+      b.policy.tiers === undefined
+        ? "A model's budget is its tier."
+        : `A model's budget is its tier: ${Object.entries(b.policy.tiers)
+            .map(([t, spec]) => `${t} ${spec.label} — ${spec.runsPerEpisode.e90}x e90${spec.runsPerEpisode.e360 > 0 ? ` + ${spec.runsPerEpisode.e360}x e360` : ""}`)
+            .join("; ")}.`;
+    const lines = [
+      `${tiers} A tier that buys no e360 is not eligible for one, and t0 never promotes itself out — an operator moves it, and the promotion it earned still counts when they do.`,
+      "Rows are ordered by tier, highest first; an episode cell links to that model's runs on the runs page, and the row itself opens its runs below.",
+      `Cooling is the defer ladder — the scheduler backs off over ${b.ladderMs.length} steps, ending at ${fmtDuration(b.ladderMs[b.ladderMs.length - 1] ?? null)}; one more no-progress attempt at the ceiling retires the model until an operator clears it.`,
+    ];
+    if (Object.keys(b.policy.maxConcurrent).length > 0) {
+      lines.push(
+        `At most ${Object.entries(b.policy.maxConcurrent)
+          .map(([key, n]) => `${n} on ${key}`)
+          .join(", ")} at a time, counting every run on the key.`,
+      );
+      // A `claude-code:<VAR>` key is one Claude SUBSCRIPTION, and a run spends
+      // both it and the `claude-code` total — without this the two numbers read
+      // as a contradiction rather than a ceiling and a per-account share of it.
+      if (!SNAPSHOT_MODE && Object.keys(b.policy.maxConcurrent).some((k) => k.startsWith("claude-code:"))) {
+        lines.push(
+          "A claude-code:<VAR> key is one Claude subscription (named by the env var holding its token): a run needs a free slot on its own subscription and under the claude-code total.",
+        );
+      }
+    }
+    return lines.join("\n");
+  };
+
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
         <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
 
-      <h2 class="section">models</h2>
+      <h2 class="section">
+        models
+        <Show when={body() !== undefined}>
+          <InfoHint label="about this table" text={policyNote()} />
+        </Show>
+      </h2>
       <p>
         The roster of models available and what the scheduler currently makes of it.
       </p>
@@ -235,53 +280,6 @@ export default function Models() {
           </table>
         </div>
 
-        <Show when={rows().length > 0}>
-          <p class="dim">
-            A model's budget is its tier
-            {/* Tolerate an API older than this bundle: a viewer and a dist/ are
-                two artefacts and they can be restarted out of order (item 64).
-                Missing detail is worth a shorter sentence, never a blank page. */}
-            <Show when={body()!.policy.tiers !== undefined} fallback=".">
-              {": "}
-              {Object.entries(body()!.policy.tiers)
-                .map(([t, spec]) => `${t} ${spec.label} — ${spec.runsPerEpisode.e90}x e90${spec.runsPerEpisode.e360 > 0 ? ` + ${spec.runsPerEpisode.e360}x e360` : ""}`)
-                .join("; ")}
-              .
-            </Show>{" "}
-            A tier that buys no e360 is not eligible for one, and t0 never promotes itself out —
-            an operator moves it, and the promotion it earned still counts when they do. Rows are
-            ordered by tier, highest first; an episode cell links to that model's runs on the runs
-            page, and the row itself opens its runs below. Cooling is the defer ladder — the
-            scheduler backs off over {body()!.ladderMs.length} steps, ending at{" "}
-            {fmtDuration(body()!.ladderMs[body()!.ladderMs.length - 1] ?? null)}; one more
-            no-progress attempt at the ceiling retires the model until an operator clears it.
-            <Show when={Object.keys(body()!.policy.maxConcurrent).length > 0}>
-              {" "}
-              At most{" "}
-              {Object.entries(body()!.policy.maxConcurrent)
-                .map(([key, n]) => `${n} on ${key}`)
-                .join(", ")}{" "}
-              at a time, counting every run on the key.
-              {/*
-                A `claude-code:<VAR>` key is one Claude SUBSCRIPTION, and a run
-                spends both it and the `claude-code` total — without this the
-                two numbers read as a contradiction rather than a ceiling and
-                a per-account share of it.
-              */}
-              <Show
-                when={
-                  !SNAPSHOT_MODE &&
-                  Object.keys(body()!.policy.maxConcurrent).some((k) => k.startsWith("claude-code:"))
-                }
-              >
-                {" "}
-                A <code>claude-code:&lt;VAR&gt;</code> key is one Claude subscription (named by the env var
-                holding its token): a run needs a free slot on its own subscription <em>and</em> under the{" "}
-                <code>claude-code</code> total.
-              </Show>
-            </Show>
-          </p>
-        </Show>
 
         {/*
           Roster entries the policy does not schedule are named, not rowed. One

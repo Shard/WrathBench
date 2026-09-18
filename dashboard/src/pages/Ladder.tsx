@@ -50,7 +50,8 @@ import { CharacterChart } from "../components/CharacterChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { FilterPopover, type FilterGroup } from "../components/FilterPopover";
 import { Coins, LevelXp } from "../components/CharacterFacts";
-import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
+import { InfoHint } from "../components/InfoHint";
+import { useSeriesFilter } from "../components/SeriesSelect";
 import { COST, LADDER_VIEWS, XP, type LadderView, viewParam } from "../lib/axes";
 import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import {
@@ -176,10 +177,6 @@ export default function Ladder() {
   const setList = (name: "family" | "company", keys: readonly string[]): void => {
     setParams({ [name]: keys.length === 0 ? undefined : [...keys].join(",") }, { replace: true });
   };
-  const toggle = (name: "family" | "company", current: () => string[]) => (key: string, on: boolean): void => {
-    const now = current().filter((k) => k !== key);
-    setList(name, on ? [...now, key] : now);
-  };
   /*
    * The effort rule, in the URL like the filters it sits beside and ON by
    * default: `?efforts=all` is the one form that turns it off, so the default
@@ -233,20 +230,16 @@ export default function Ladder() {
   );
   const groups = createMemo((): FilterGroup[] => [
     {
-      label: "model line",
-      note: "derived from the slug: the provider prefix, the free marker and every version token dropped.",
-      options: lineOptions(),
-      selected: lines(),
-      onToggle: toggle("family", lines),
-      onClear: () => setList("family", []),
-    },
-    {
       label: "company",
-      note: "who serves it, from infra/model-lineup.json; an id the catalog does not claim falls back to its provider prefix.",
       options: companyOptions(),
       selected: companies(),
-      onToggle: toggle("company", companies),
-      onClear: () => setList("company", []),
+      onSelect: (keys) => setList("company", keys),
+    },
+    {
+      label: "family",
+      options: lineOptions(),
+      selected: lines(),
+      onSelect: (keys) => setList("family", keys),
     },
   ]);
   const characters = createMemo(() => characterRows(runs()));
@@ -298,8 +291,6 @@ export default function Ladder() {
         </For>
       </div>
 
-      <SeriesFilterNote series={series()} filteredOut={seriesFilter.filteredOut()} />
-
       {/* One row of controls, immediately above the chart they narrow — the
           chart and the table read the same filtered set, so the two can never
           disagree about which runs are on screen. Two groups: the axes on the
@@ -340,6 +331,16 @@ export default function Ladder() {
           />
           <span>exclude free</span>
         </label>
+        {/* Not a caption: a filter that silently kept everything would be worse
+            than one that says so, and this is the one state where "exclude
+            free" excludes nothing (operator, 2026-09-18 — a hover, not a
+            paragraph). */}
+        <Show when={billingUnknown()}>
+          <InfoHint
+            label="exclude free"
+            text="Nothing excluded: these runs predate the billing record, so this filter has nothing to go on. Runs recorded from here on carry it."
+          />
+        </Show>
         <Show when={!freeplay()}>
           <label
             class="filter check"
@@ -354,7 +355,7 @@ export default function Ladder() {
           </label>
           <label
             class="filter check"
-            title="For a model with several effort entries, show only the efforts on that model's own cost-vs-xp Pareto front — the ones no other effort of the same model beat on both cost and xp at once. A model with one entry is untouched, and nothing is ever compared across models."
+            title="Hides efforts beaten on both cost and xp by another effort of the same model."
           >
             <input
               type="checkbox"
@@ -366,22 +367,6 @@ export default function Ladder() {
         </Show>
         </div>
       </div>
-      <Show when={hidden().size > 0}>
-        <p class="dim">
-          {hidden().size === 1 ? "One effort variant is" : `${hidden().size} effort variants are`} hidden:
-          for a model with several efforts, only the efforts on that model's own cost-against-xp
-          Pareto front are shown — an effort another effort of the same model beat on both cost and
-          xp is a knob setting, not a result. A model with one entry is untouched and nothing is
-          compared across models. Untick "representative efforts" for the whole field.
-        </p>
-      </Show>
-      <Show when={billingUnknown()}>
-        <p class="dim">
-          Nothing excluded: these runs predate the <span class="mono">billing</span> record, so
-          "exclude free" has nothing to go on. Runs recorded from here on carry it — a filter that
-          silently kept everything would be worse than one that says so.
-        </p>
-      </Show>
 
       <Show when={feed.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
         <Show when={freeplay()}>

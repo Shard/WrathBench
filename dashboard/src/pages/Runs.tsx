@@ -24,7 +24,6 @@ import { For, Show, createMemo } from "solid-js";
 import { api, type ResultRun, type ResultsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
-import { SeriesFilterNote } from "../components/SeriesSelect";
 import { useFeeds } from "../lib/feeds";
 import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
@@ -50,6 +49,7 @@ import {
   type RunSort,
 } from "../lib/runs";
 import { LevelXp } from "../components/CharacterFacts";
+import { InfoHint } from "../components/InfoHint";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
 
@@ -100,15 +100,17 @@ export default function Runs() {
         <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
 
-      <h2 class="section">runs</h2>
-      <p class="dim">
-        Every recorded run, newest first. Click a header to sort; click a model, episode, character
-        or kind to narrow to it. Aggregates are the <A href="/ladder">ladder</A>; what the episodes
-        mean is on <A href="/about">about</A>. A launch that never produced a model response is
-        archived by the runner as it exits and never reaches this table.
-      </p>
-
-      <SeriesFilterNote series={series()} filteredOut={served().length - inSeries().length} />
+      <h2 class="section">
+        runs
+        <InfoHint
+          label="about this table"
+          text={
+            "Every recorded run, newest first. Click a header to sort; click a model, episode, character or kind to narrow to it. A launch that never produced a model response is archived by the runner as it exits and never reaches this table.\n" +
+            "Duration is active time: stretches between a pause and its resume are not charged. Cost is the actual figure — what the provider reported billing — and is blank wherever nothing was reported rather than showing the price table's estimate.\n" +
+            "Turns are the driver turns the provider reported usage for, or model responses where it reported none."
+          }
+        />
+      </h2>
 
       <Show when={isFiltered(filter())}>
         <p class="dim">
@@ -185,13 +187,6 @@ export default function Runs() {
             </tbody>
           </table>
         </div>
-        <p class="dim">
-          Duration is active time: stretches between a pause and its resume are not charged. Cost is
-          the <em>actual</em> figure — what the provider reported billing — and is blank wherever
-          nothing was reported rather than showing the price table's estimate; the estimate is on
-          the run page, next to the actual. Turns are the driver turns the provider reported usage
-          for, or model responses where it reported none.
-        </p>
       </Show>
     </div>
   );

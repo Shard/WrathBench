@@ -2,7 +2,7 @@
  * The harness tag every run row shows. The episode picker, the
  * harness picker and the filter note that used to live here went with the
  * ladder's `all`/overridden views: the ladder offers one tier at a time, and
- * lists what the shell's series filter removed via `SeriesFilterNote`.
+ * is filtered by the shell's series selector.
  */
 
 /** A harness tag as every row shows it. Null reads as "not recorded". */

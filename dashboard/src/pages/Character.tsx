@@ -32,9 +32,10 @@ import { UnitFrame } from "../components/UnitFrame";
 import { XpChart } from "../components/XpChart";
 import { characterSessionSeries } from "../lib/character";
 import { displayError } from "../lib/errors";
-import { fmtAge, fmtDuration, fmtMoney, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
+import { fmtAge, fmtDuration, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
-import { LevelXp } from "../components/CharacterFacts";
+import { Coins, LevelXp } from "../components/CharacterFacts";
+import { InfoHint } from "../components/InfoHint";
 import { poll } from "../lib/poll";
 import { statusOf, statusText } from "../lib/runs";
 import type { PowerType } from "../lib/unitframe";
@@ -228,18 +229,18 @@ export default function Character() {
                     now={s().totalMs}
                     seams={seams()}
                   />
-                  <p class="dim ladderchart-caption">
-                    cumulative xp against <strong>session time</strong>, every state sample, laid end to end
-                    across {st().attempts} {st().attempts === 1 ? "session" : "sessions"} with the
-                    boundaries dashed. The days a character spends paused between sessions are closed
-                    rather than drawn — a week of flat line is the pause, not the character. This is not
-                    the axis above: that one is pause-corrected <em>active</em> playtime, the figure a run
-                    is compared on, and this one is sample-to-sample elapsed time inside a session.
-                    <Show when={s().states.length < 2}>
-                      {" "}
-                      Nothing to draw yet: this character has fewer than two published samples.
-                    </Show>
-                  </p>
+                  <div class="chart-note">
+                    <InfoHint
+                      label="about this chart"
+                      text={[
+                        `Cumulative xp against session time, every state sample, laid end to end across ${st().attempts} ${st().attempts === 1 ? "session" : "sessions"} with the boundaries dashed. The days a character spends paused between sessions are closed rather than drawn.`,
+                        "This is not the axis above: that one is pause-corrected active playtime, the figure a run is compared on, and this one is sample-to-sample elapsed time inside a session.",
+                        s().states.length < 2 ? "Nothing to draw yet: this character has fewer than two published samples." : "",
+                      ]
+                        .filter((l) => l.length > 0)
+                        .join("\n")}
+                    />
+                  </div>
                 </>
               )}
             </Show>
@@ -297,9 +298,8 @@ export default function Character() {
                 </tbody>
               </table>
             </div>
-            <p class="dim">
-              gold held: {fmtMoney(st().totals.money)}. The figures above are the whole character's;
-              each attempt's own are on its run page.
+            <p class="dim" title="The figures above are the whole character's; each attempt's own are on its run page.">
+              gold held: <Coins copper={st().totals.money} />
             </p>
           </>
         )}
