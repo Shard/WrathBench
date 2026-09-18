@@ -20,6 +20,8 @@
  * build reads a bucket. The page checks both before it renders anything.
  */
 
+import { headerSafe } from "../lib/config";
+
 /**
  * One line of the change history, as `/api/config/audit` serves it.
  *
@@ -98,8 +100,11 @@ async function send<T>(
   const { attribution, ...rest } = init;
   const headers: Record<string, string> = { accept: "application/json", ...(rest.body !== undefined ? { "content-type": "application/json" } : {}) };
   if (attribution !== undefined) {
-    headers[ACTOR_HEADER] = attribution.actor;
-    headers[NOTE_HEADER] = attribution.note;
+    // Folded to what a header can carry: `fetch` refuses the whole request on a
+    // code point above U+00FF, and an em dash in a note is the likeliest thing
+    // an operator types here. See `headerSafe` in `lib/config.ts`.
+    headers[ACTOR_HEADER] = headerSafe(attribution.actor);
+    headers[NOTE_HEADER] = headerSafe(attribution.note);
   }
   const res = await f(url, { ...rest, headers });
   const text = await res.text();

@@ -87,6 +87,22 @@ export default function Config() {
   const [note, setNote] = createSignal("");
   const [banner, setBanner] = createSignal<string | null>(null);
   const [exported, setExported] = createSignal<string | null>(null);
+  /*
+   * A roster row's own message, held HERE rather than in the row.
+   * `reload()` after a successful write hands `<For>` a new array of new
+   * objects, so every row component is disposed and rebuilt — which is what
+   * re-seeds the fields from the saved document, and would also throw away a
+   * "saved" line set on the component being torn down. Keyed by roster name,
+   * it survives that. A refusal does not reload, so the row itself survives
+   * and keeps what the operator typed.
+   */
+  const [rowMessages, setRowMessages] = createSignal<Record<string, string>>({});
+  const setRowMessage = (name: string, text: string | null): void => {
+    const next = { ...rowMessages() };
+    if (text === null) delete next[name];
+    else next[name] = text;
+    setRowMessages(next);
+  };
 
   const reload = async (): Promise<void> => {
     try {
@@ -204,6 +220,7 @@ export default function Config() {
                     type="text"
                     value={note()}
                     placeholder="why — recorded in the audit table with the before and after"
+                    title="The note travels as an HTTP header, which carries Latin-1 only: an em dash is recorded as a hyphen and anything further out as ?"
                     onInput={(e) => setNote(e.currentTarget.value)}
                   />
                 </label>
@@ -214,7 +231,7 @@ export default function Config() {
               </div>
 
               <h3 class="section">roster</h3>
-              <RosterTable rows={roster()} write={write} />
+              <RosterTable rows={roster()} write={write} messages={rowMessages()} setMessage={setRowMessage} />
 
               <AddEntry write={write} />
 
@@ -274,7 +291,12 @@ export default function Config() {
 type Write = (fn: (att: { actor: string; note: string }) => Promise<unknown>) => Promise<string | null>;
 
 /** The roster, one row per entry, with the four fields an operator changes. */
-function RosterTable(props: { rows: [string, RosterEntry][]; write: Write }) {
+function RosterTable(props: {
+  rows: [string, RosterEntry][];
+  write: Write;
+  messages: Record<string, string>;
+  setMessage: (name: string, text: string | null) => void;
+}) {
   return (
     <div class="scroller">
       <table class="configtable">
@@ -301,18 +323,35 @@ function RosterTable(props: { rows: [string, RosterEntry][]; write: Write }) {
               </td>
             </tr>
           </Show>
-          <For each={props.rows}>{([name, entry]) => <RosterRow name={name} entry={entry} write={props.write} />}</For>
+          <For each={props.rows}>
+            {([name, entry]) => (
+              <RosterRow
+                name={name}
+                entry={entry}
+                write={props.write}
+                message={props.messages[name] ?? null}
+                setMessage={(text) => props.setMessage(name, text)}
+              />
+            )}
+          </For>
         </tbody>
       </table>
     </div>
   );
 }
 
-function RosterRow(props: { name: string; entry: RosterEntry; write: Write }) {
-  // Seeded from the document and NOT resynced: after a refusal the row keeps
-  // what the operator typed, which is the value they still mean to save.
+function RosterRow(props: {
+  name: string;
+  entry: RosterEntry;
+  write: Write;
+  message: string | null;
+  setMessage: (text: string | null) => void;
+}) {
+  // Seeded from the document once. After a refusal nothing reloads, so this
+  // component survives and keeps what the operator typed — the value they
+  // still mean to save. After a success the whole row is rebuilt from the
+  // saved document, which is why the message lives on the page.
   const [form, setForm] = createSignal(formOf(props.entry));
-  const [message, setMessage] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [confirming, setConfirming] = createSignal(false);
   const set = (field: EditableField, v: string): void => {
@@ -326,11 +365,11 @@ function RosterRow(props: { name: string; entry: RosterEntry; write: Write }) {
       try {
         plan = rosterWrite(props.entry, form());
       } catch (e) {
-        setMessage(refusal(e));
+        props.setMessage(refusal(e));
         return;
       }
       if (plan === null) {
-        setMessage("nothing changed");
+        props.setMessage("nothing changed");
         return;
       }
       const err = await props.write((att) =>
@@ -338,7 +377,7 @@ function RosterRow(props: { name: string; entry: RosterEntry; write: Write }) {
           ? configApi.patch(`roster/${props.name}`, plan.body, att)
           : configApi.put(`roster/${props.name}`, plan.body, att),
       );
-      setMessage(err ?? `saved (${plan.method} ${plan.changed.join(", ")})`);
+      props.setMessage(err ?? `saved (${plan.method} ${plan.changed.join(", ")})`);
     } finally {
       setBusy(false);
     }
@@ -350,7 +389,7 @@ function RosterRow(props: { name: string; entry: RosterEntry; write: Write }) {
       // Validated like any other write: removing an entry a campaign names
       // comes back as the same refusal the file would be rejected with.
       const err = await props.write((att) => configApi.remove(`roster/${props.name}`, att));
-      setMessage(err ?? "removed");
+      props.setMessage(err ?? "removed");
       setConfirming(false);
     } finally {
       setBusy(false);
@@ -433,10 +472,13 @@ function RosterRow(props: { name: string; entry: RosterEntry; write: Write }) {
           </Show>
         </td>
       </tr>
-      <Show when={message() !== null}>
+      <Show when={props.message !== null}>
         <tr>
-          <td colSpan={9} class={message()?.startsWith("saved") === true || message() === "removed" ? "ok" : "err"}>
-            {message()}
+          <td
+            colSpan={9}
+            class={props.message?.startsWith("saved") === true || props.message === "removed" ? "ok" : "err"}
+          >
+            {props.message}
           </td>
         </tr>
       </Show>
