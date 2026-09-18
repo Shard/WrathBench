@@ -603,6 +603,67 @@ the same as any other change to what the model could read; the bundle's
 self-description is stamped into the comparability tuple so the bump is
 falsifiable.
 
+## Known limitations
+
+Five things a reader of the ladder cannot see from it, each bounding what a
+number here means. Naming them is cheaper than being corrected about them.
+
+**Contamination is assumed, not controlled.** Every model measured here has
+almost certainly read Wowhead, Wowpedia, levelling guides and the quest text
+itself; fifteen years of walkthroughs for this content are in the open web.
+No probe separates what a model recalls from what it works out, and none has
+been run. That is survivable only because of what the benchmark claims: "What
+WrathBench measures" says it measures how well a model drives a fixed toolkit
+toward long-horizon goals in a live world, and that is the whole claim — not knowledge of an unseen world, not discovery. Knowing where
+Kharanos is counts as part of the model, the way knowing the standard library
+counts on a coding benchmark. The names-first rule under "Episodes, lanes, and
+evidence" is not a contamination control and should not be read as one: it
+governs the *harness's* own leakage — a coordinate list served out of our
+bundle would be an answer key we handed over — and says nothing about what the
+model already knew. The size of the prior is unmeasured.
+
+**Most rows are one to a few runs.** The tier is the evidence budget: `t0`
+buys one `e90`, `t1` three, `t2` three plus one `e360`, so a ladder entry's
+`n` is usually one to three and often one. The ladder prints that `n` beside
+every entry. One run has spread — a live world, a provider's weather, a death that costs
+minutes — and a gap of a level or two sits inside it. This is why the ladder
+shows a highest rung, a `(level, xp)` pair and gold as three separate numbers
+rather than one score ("Scoring"), and why no single number is promised in
+this phase. What `n` *should* be is an open question,
+not a decision recorded here.
+
+**There is no floor.** No scripted baseline has been run through this harness:
+no greedy XP grinder, no deterministic quest-walkthrough script, no random
+agent. So "level 9 in ninety minutes" is a number with nothing under it, and
+nothing presently distinguishes a model that planned well from one that
+remembered a guide or simply held the SDK correctly. The fixed harness bounds
+the last of those and nothing bounds the first two. Until a baseline runs, a
+rung means "a model got here", never "this is hard".
+
+**Provenance is stamped, and partial.** Every run's metadata carries the
+harness build — the repository's own describe stamp against the series tag,
+in the form `harness-0.5-<n>-g<sha>` — and beside it the comparability tuple
+(`runner/src/comparability.ts`): series, the prompt hash of the rendered
+bytes, harness tag, effort, episode id and budget, objective presence,
+`wikiCoords`, the wiki bundle's identity, and the module's own build as
+`/health` reported it. It is stamped at launch, never recomputed, served on
+the run's API row and shown on the run page. What it does not yet carry: a
+hash of the SDK source, the AzerothCore pin, the observation and action
+contract version, and the compose configuration. A run is therefore traceable
+to a build of this repository, not yet to one manifest naming every version it
+depended on.
+
+**A CLI-scaffold run's cost is not comparable to an API-driver one.** The
+`claude-code` and `codex` harnesses each own their own history and compaction
+("What WrathBench measures"), which in practice is one continuous conversation
+that grows across the episode rather than the fixed window
+`runner/src/context.ts` rebuilds. Their token counts are of a different regime,
+and both lanes bill a flat subscription rather than metered tokens: a codex run
+reports no cost at all and is shown a list-price estimate over its tokens,
+marked as-if-metered — a comparison and not a bill (operator, 2026-09-05;
+`docs/COSTS.md` §3 carries the measurements and the decision). Cost axes across
+harness groups are read accordingly.
+
 ## Changing this document
 
 A change to anything above is a change to what the benchmark measures, and it
