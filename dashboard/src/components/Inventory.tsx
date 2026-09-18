@@ -22,7 +22,8 @@
  */
 
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
-import { type InvItem, carried, carriedCount, paperdoll, splitLinked } from "../lib/inventory";
+import { Portal } from "solid-js/web";
+import { type InvItem, type Placement, carried, carriedCount, paperdoll, popoverPlacement, splitLinked } from "../lib/inventory";
 import {
   PAPERDOLL_BOTTOM,
   PAPERDOLL_LEFT,
@@ -154,49 +155,126 @@ function SlotColumn(props: { slots: readonly number[]; bySlot: Map<number, InvIt
 }
 
 /**
+ * Which panel is open, for the whole page.
+ *
+ * One at a time, deliberately: two popovers hanging off adjacent buttons
+ * overlap each other, and the reader's question is "what is in this one".
+ * Opening either closes the other because there is one answer to hold.
+ */
+const [active, setActive] = createSignal<symbol | null>(null);
+const [sticky, setSticky] = createSignal(false);
+
+/**
  * A count you can hover on a desktop and tap on a phone.
  *
  * Hover alone would hide the contents from touch, so the trigger is a real
  * button and a click pins the popover open; hover is the shortcut, not the
- * mechanism. Both panels share this, including the decoration observer, so a
- * cell behaves the same wherever it is drawn.
+ * mechanism.
+ *
+ * The panel itself is portalled to the body and positioned against the
+ * viewport (`popoverPlacement`). As a child of its card it was clipped by the
+ * sidebar's scroll area — a full paperdoll showed four rows — and no amount of
+ * z-index fixes a clip.
  */
 function Popover(props: { icon: string; count: number; label: string; children: JSX.Element }) {
-  const [hover, setHover] = createSignal(false);
-  const [pinned, setPinned] = createSignal(false);
-  const open = () => hover() || pinned();
+  const me = Symbol(props.label);
+  const open = () => active() === me;
+  const [place, setPlace] = createSignal<Placement>({ below: true, offset: 0, left: 0, maxHeight: 320 });
   let root!: HTMLDivElement;
+  let btn!: HTMLButtonElement;
+  let panel: HTMLDivElement | undefined;
+
+  const measure = (needed?: number): void => {
+    const r = btn.getBoundingClientRect();
+    setPlace(
+      popoverPlacement(
+        r,
+        { width: window.innerWidth, height: window.innerHeight },
+        needed === undefined ? {} : { needed },
+      ),
+    );
+  };
+
   onMount(() => {
     loadWowhead();
-    onCleanup(watchDecoration(root));
     const away = (e: MouseEvent): void => {
-      if (pinned() && e.target instanceof Node && !root.contains(e.target)) setPinned(false);
+      if (!open() || !(e.target instanceof Node)) return;
+      if (!root.contains(e.target) && !(panel?.contains(e.target) ?? false)) {
+        setSticky(false);
+        setActive(null);
+      }
     };
     const esc = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") setPinned(false);
+      if (e.key === "Escape" && open()) {
+        setSticky(false);
+        setActive(null);
+      }
+    };
+    // A scroll moves the button out from under a fixed panel, so the panel
+    // follows it rather than floating where it was opened.
+    const follow = (): void => {
+      if (open()) measure();
     };
     document.addEventListener("click", away);
     document.addEventListener("keydown", esc);
+    window.addEventListener("scroll", follow, true);
+    window.addEventListener("resize", follow);
     onCleanup(() => {
       document.removeEventListener("click", away);
       document.removeEventListener("keydown", esc);
+      window.removeEventListener("scroll", follow, true);
+      window.removeEventListener("resize", follow);
+      if (open()) setActive(null);
     });
   });
+
   createEffect(() => {
-    // A newly opened popover has links the script has not seen yet.
-    open();
+    // A newly opened popover has links the script has not seen yet, and a
+    // place to be measured into.
+    if (!open()) return;
     props.count;
+    measure();
     refreshLinks();
   });
+
+  createEffect(() => {
+    // The portal's contents live outside `root`, so the decoration observer
+    // watches the panel itself for as long as it exists.
+    const el = open() ? panel : undefined;
+    if (el === undefined) return;
+    // Now that there is a panel, place it against its real height rather than
+    // against a floor: the side with room for the whole thing wins.
+    measure(el.scrollHeight);
+    const stop = watchDecoration(el);
+    onCleanup(stop);
+  });
+
   return (
-    <div class="bag" ref={root} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+    <div
+      class="bag"
+      ref={root}
+      onMouseEnter={() => {
+        setSticky(false);
+        setActive(me);
+      }}
+      onMouseLeave={() => {
+        if (!sticky() && open()) setActive(null);
+      }}
+    >
       <button
         type="button"
         class="bag-button"
+        ref={btn}
         aria-expanded={open()}
         onClick={(e) => {
           e.stopPropagation();
-          setPinned((p) => !p);
+          if (open() && sticky()) {
+            setSticky(false);
+            setActive(null);
+          } else {
+            setActive(me);
+            setSticky(true);
+          }
         }}
       >
         <span class={`bag-icon ${props.icon}`} aria-hidden="true" />
@@ -204,7 +282,27 @@ function Popover(props: { icon: string; count: number; label: string; children: 
         <span class="bag-label">{props.label}</span>
       </button>
       <Show when={open()}>
-        <div class="bag-popover">{props.children}</div>
+        <Portal>
+          <div
+            class="bag-popover floating"
+            ref={panel}
+            onMouseEnter={() => setActive(me)}
+            onMouseLeave={() => {
+              if (!sticky()) setActive(null);
+            }}
+            // Both edges are named on every render: a computed key would leave
+            // the other one standing when the panel flips, and a stale `top`
+            // beats the `bottom` that replaced it.
+            style={{
+              left: `${place().left}px`,
+              top: place().below ? `${place().offset}px` : "auto",
+              bottom: place().below ? "auto" : `${place().offset}px`,
+              "max-height": `${place().maxHeight}px`,
+            }}
+          >
+            {props.children}
+          </div>
+        </Portal>
       </Show>
     </div>
   );

@@ -1009,8 +1009,11 @@ td .spread { font-size: var(--fs-xs); }
  * never given a square to be truncated inside: name in quality colour, count
  * to the right. The same list is the whole panel once the script has failed.
  */
+/* One column, wide enough for a real item name and wrapping rather than
+   clipping past it. */
 .inv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px;
-            font-size: var(--fs-sm); max-width: 260px; }
+            font-size: var(--fs-sm);
+            min-width: min(240px, calc(100vw - 48px)); max-width: min(320px, calc(100vw - 32px)); }
 .inv-list li { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
 .inv-list-name { overflow-wrap: anywhere; }
 .inv-list-link { text-decoration: none; }
@@ -1046,8 +1049,11 @@ td .spread { font-size: var(--fs-xs); }
   box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
   /* A full doll or a full bag is taller than the space under a button near the
      foot of a card, so the popover scrolls rather than being clipped by it. */
-  max-height: min(60vh, 420px); overflow-y: auto;
+  overflow-y: auto;
 }
+/* Portalled to the body and placed against the viewport (`popoverPlacement`),
+   because as a child of its card the sidebar's scroll area clipped it. */
+.bag-popover.floating { position: fixed; z-index: 60; }
 
 @media (max-width: 400px) {
   .inv-cell { width: 36px; height: 36px; }

@@ -102,3 +102,60 @@ export function splitLinked(
   for (const i of items) (hasEntry(i) ? linked : unlinked).push(i);
   return { linked, unlinked };
 }
+
+/** The button a popover hangs off, as much of its rect as the maths needs. */
+export interface AnchorRect {
+  top: number;
+  bottom: number;
+  left: number;
+}
+
+/** Where a floating popover sits, in viewport coordinates. */
+export interface Placement {
+  /** Below the button, or flipped above it. */
+  below: boolean;
+  /** The CSS offset from the viewport edge the popover is pinned to. */
+  offset: number;
+  left: number;
+  maxHeight: number;
+}
+
+/**
+ * Place a popover against the viewport rather than against its card.
+ *
+ * The panels hang off buttons inside a scrolling sidebar, and a popover that
+ * is a child of that sidebar is clipped by it — a full paperdoll showed four
+ * rows. So it is drawn through a portal, fixed, and this is the arithmetic:
+ * below the button when there is room, flipped above when there is not, always
+ * within the viewport horizontally, and never taller than what is left.
+ *
+ * Pure, so the case that matters — a button near the foot of a tall page — is
+ * testable without a browser.
+ */
+export function popoverPlacement(
+  rect: AnchorRect,
+  viewport: { width: number; height: number },
+  opts: { width?: number; gap?: number; margin?: number; min?: number; needed?: number } = {},
+): Placement {
+  const width = opts.width ?? 340;
+  const gap = opts.gap ?? 6;
+  const margin = opts.margin ?? 8;
+  const min = opts.min ?? 120;
+  const below = viewport.height - rect.bottom - gap - margin;
+  const above = rect.top - gap - margin;
+  // Below unless it is both short of a usable panel and worse than above: a
+  // popover that fits below stays below, because that is where the button is.
+  // Once the panel has been measured, `needed` is its real height, and the bar
+  // becomes "does the whole thing fit" — a nineteen-slot doll under a button
+  // near the foot of a card wants the room above it, not a scrollbar.
+  const want = opts.needed ?? min;
+  const goBelow = below >= want || below >= above;
+  const room = Math.max(min, goBelow ? below : above);
+  const left = Math.min(Math.max(margin, rect.left), Math.max(margin, viewport.width - width - margin));
+  return {
+    below: goBelow,
+    offset: goBelow ? rect.bottom + gap : viewport.height - rect.top + gap,
+    left,
+    maxHeight: room,
+  };
+}
