@@ -67,6 +67,24 @@ export function Layout(props: ParentProps) {
       <header class="top">
         <h1>
           <A href="/">WrathBench</A>
+          {/*
+            Which of the two sites this is, set as a superscript on the wordmark
+            the way an exponent sits on a number (operator, 2026-09-18): the
+            public preview and the operator's own admin view are otherwise
+            identical, and the difference is worth one small word right where
+            the name is. Its own two colours, neither an accent used elsewhere,
+            so it reads as an identity rather than a status.
+          */}
+          <Show when={which()}>
+            {(w) => (
+              <sup
+                class={`surface ${w().toLowerCase()}`}
+                title={w() === "ADMIN" ? "the operator's own view: the config page is live here" : "the published preview: no config page, and no write surface at all"}
+              >
+                {w()}
+              </sup>
+            )}
+          </Show>
         </h1>
         <nav>
           {/*
@@ -131,23 +149,6 @@ export function Layout(props: ParentProps) {
           */}
         <SeriesSelect />
         <StatusBadge />
-        {/*
-          Which of the two sites this is, last in the header and set small like
-          a superscript: the public preview and the operator's own admin view
-          are otherwise identical, and the difference is worth one word. Its own
-          two colours, neither of them an accent used elsewhere, so it is read
-          as an identity rather than as a status.
-        */}
-        <Show when={which()}>
-          {(w) => (
-            <span
-              class={`surface ${w().toLowerCase()}`}
-              title={w() === "ADMIN" ? "the operator's own view: the config page is live here" : "the published preview: no config page, and no write surface at all"}
-            >
-              {w()}
-            </span>
-          )}
-        </Show>
       </header>
       {/*
         * The footer rides INSIDE the scroll container on every page that
