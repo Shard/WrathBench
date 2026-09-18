@@ -1,6 +1,6 @@
 /**
  * The config API: read and edit the fleet config through the app
- * (FOLLOW-UPS item 127).
+ *.
  *
  * Everything this serves comes from `runner/src/config-store.ts` — the only
  * fleet config — and every write goes through the store's one validator,

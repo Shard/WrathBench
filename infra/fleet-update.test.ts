@@ -289,7 +289,7 @@ describe("fleet-update.sh", () => {
   test("graceful: a freeplay character the switch has NOT reached yet is still waited on", () => {
     // `draining` is the proof the supervisor picked the switch up. It is also
     // what keeps a refused pin — deliberately spared from draining — holding
-    // the window open, as OPERATIONS.md promises.
+    // the window open, as docs/RUNBOOK.md promises.
     const r = run({ jobs: [{ name: "sonnet-low-freeplay", episode: "freeplay", source: "policy", draining: false }], args: ["graceful"] });
     expect(r.exitCode).toBe(1);
     expect(r.out).toContain("TIMED OUT");

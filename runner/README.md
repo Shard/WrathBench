@@ -38,7 +38,7 @@ bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high
 # resume a killed or paused run (same token, same scratchpad, same trajectory)
 bun runner/src/run.ts --resume <run-id>
 
-# MCP over stdio for an external MCP-capable agent (Phase-0 gate 2)
+# MCP over stdio for an external MCP-capable agent (liftoff gate 2)
 bun runner/src/mcp.ts [--run-id <id>] [--token <token>]
 
 # read a run in minutes
@@ -205,7 +205,7 @@ echo 'CLAUDE_CODE_OAUTH_TOKEN_2=...' >> .env
 The run records the NAME (`config.subscription` in `meta.json`), never the
 value, so a reader can tell which subscription paid for it and `--resume` goes
 back to the same one. The fleet sets this flag itself — a subscription is a
-lane it schedules, see docs/OPERATIONS.md.
+lane it schedules, see docs/RUNBOOK.md.
 
 The runner refuses to start this driver without the chosen lane's token, and
 the refusal names that variable. Note that the
@@ -232,11 +232,11 @@ and differs only where the CLI does:
   turn's status and usage. `codex app-server` (JSON-RPC over stdio, a
   long-lived process, rate-limit and token-usage notifications, typed
   misalignment steers) is the upgrade path once it is no longer marked
-  experimental — docs/FOLLOW-UPS.md.
+  experimental.
 - **The prompt goes in on stdin, and stdin is closed.** The positional is `-`;
   the context message is written and stdin ended. argv has a per-argument
   ceiling a turn's context can approach, and an *open* pipe is what hung the
-  CLI for 180 s on 2026-09-05 (it reads a piped stdin to EOF as a `<stdin>`
+  CLI for 180 s (it reads a piped stdin to EOF as a `<stdin>`
   block).
 - **The fixed prompt replaces the CLI's base instructions** via
   `-c model_instructions_file=<run-dir>/codex-instructions.md` — verified to
@@ -313,7 +313,7 @@ WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --driver code
 A second subscription is a second directory under a second variable
 (`CODEX_HOME_2=/path/to/other-home`) and `--token-env CODEX_HOME_2` names it.
 The runner refuses to start without the chosen lane's `auth.json`, naming the
-variable. The compose `runner` image installs the CLI since 2026-09-05 (a
+variable. The compose `runner` image installs the CLI (a
 rebuild is owed); until then `--local` with a reachable module URL is the path.
 
 ## The sandbox

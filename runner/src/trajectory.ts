@@ -135,14 +135,14 @@ export interface ItemSample {
 }
 
 /**
- * A world-state transition the loop noticed between two samples (FOLLOW-UPS
- * 35). Kinds are additive; derivations (first capital, zone
+ * A world-state transition the loop noticed between two samples.
+ * Kinds are additive; derivations (first capital, zone
  * coverage) come later and read these. `from`/`to` carry ids only — never
  * names — so the record stays what the server said, and a rendering choice
  * (which locale, which DBC) never changes a trajectory after the fact.
  */
 /**
- * One `{ t: "milestone", ... }` trajectory record (FOLLOW-UPS 35). Kinds are
+ * One `{ t: "milestone", ... }` trajectory record. Kinds are
  * additive and every consumer ignores the ones it does not know, so a new kind
  * never invalidates a run.
  *
@@ -416,7 +416,7 @@ CREATE TABLE IF NOT EXISTS state (
   -- The driver turn in flight when the sample was taken, so turns-to-level is
   -- derivable without replaying the JSONL. Nullable, like StateLine.turn.
   turn INTEGER,
-  -- Zone and area ids (FOLLOW-UPS 38 N2): where the sample was taken, as the
+  -- Zone and area ids: where the sample was taken, as the
   -- game's own area ids; names are rendered from the client's DBC, not stored.
   zone INTEGER,
   area INTEGER
@@ -463,7 +463,7 @@ const RUN_ADDED_COLUMNS: Record<string, string> = {
 };
 
 /**
- * Columns added to `state` inside the 0.4 series (FOLLOW-UPS 38 N2). Same
+ * Columns added to `state` inside the 0.4 series. Same
  * reason: a resumed run's sqlite predates them, and the insert names them.
  * No compat reads — a sample written before the column existed has NULL.
  */

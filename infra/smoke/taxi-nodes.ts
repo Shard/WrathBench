@@ -1,5 +1,5 @@
 /**
- * Probe for the flight-master destination surface (FOLLOW-UPS 38 N3):
+ * Probe for the flight-master destination surface:
  * `SMSG_SHOWTAXINODES` tapped and folded (`state.lastTaxiNodes(guid)`),
  * `showTaxiNodes` opening the window through the master's gossip, and
  * `activateTaxi` flying one hop with the landing read off `taxiFlight`.

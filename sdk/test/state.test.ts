@@ -340,7 +340,7 @@ describe("state cache: self, from the wire", () => {
   });
 
   test("SMSG_NEW_WORLD moves self to the new map and evicts the old map's objects", () => {
-    // FOLLOW-UPS 38 N1: SMSG_LOGIN_VERIFY_WORLD is login-only, so before this
+    // SMSG_LOGIN_VERIFY_WORLD is login-only, so before this
     // a tram ride left self.position.map at the login map forever and the
     // Ironforge crowd lingered in `nearby` on map 369.
     const cache = StateCache.replay(

@@ -195,7 +195,7 @@ describe("ranking bands", () => {
     ranked = createMemoryBundle();
     const writer = makeWriter(ranked, 2);
     // A page whose only connection to 4242 is arithmetic in its body — the
-    // shape that outranked the real entity page (FOLLOW-UPS 25).
+    // shape that outranked the real entity page.
     writer.addPage(
       "Example Formula Notes",
       0,

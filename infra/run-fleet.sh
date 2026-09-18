@@ -7,7 +7,7 @@
 #   ./infra/run-fleet.sh --status
 #
 # The config IS the fleet, and it is the config store (data/config.sqlite;
-# docs/OPERATIONS.md "Where the config lives"): edit it on the viewer's /config
+# docs/RUNBOOK.md "Where the config lives"): edit it on the viewer's /config
 # page or with runner/src/config-store.ts while this runs and the supervisor
 # follows (re-read every 60s). See infra/run-fleet.ts.
 

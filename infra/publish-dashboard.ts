@@ -11,7 +11,7 @@
  *   bun infra/publish-dashboard.ts --once   # one pass, then exit (backfill, smoke)
  *   bun infra/publish-dashboard.ts --loop   # a pass every interval (the service)
  *
- * Env, matching the compose `publisher` service and docs/OPERATIONS.md
+ * Env, matching the compose `publisher` service and docs/RUNBOOK.md
  * ("Public dashboard"):
  *   WRATHBENCH_RUNS_DIR             default data/runs
  *   WRATHBENCH_CONFIG_DB            the config store; default $WRATHBENCH_DATA/config.sqlite, else data/config.sqlite
@@ -66,7 +66,7 @@ const mode = ((): "once" | "loop" => {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === "--once") return "once";
   if (args.length === 1 && args[0] === "--loop") return "loop";
-  fail("usage: bun infra/publish-dashboard.ts --once | --loop (env: docs/OPERATIONS.md, Public dashboard)");
+  fail("usage: bun infra/publish-dashboard.ts --once | --loop (env: docs/RUNBOOK.md, Public dashboard)");
 })();
 
 if (!existsSync(RUNS_DIR)) fail(`runs directory ${RUNS_DIR} does not exist`);
@@ -81,7 +81,7 @@ if (!Number.isInteger(BATCH) || BATCH < 1) {
 // than mid-pass with the SDK's.
 for (const name of ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const) {
   if ((Bun.env[name] ?? "") === "" && (Bun.env[name.replace("S3_", "AWS_")] ?? "") === "") {
-    fail(`${name} is not set (docs/OPERATIONS.md, "Public dashboard" — the R2 key pair lives in .env)`);
+    fail(`${name} is not set (docs/RUNBOOK.md, "Public dashboard" — the R2 key pair lives in .env)`);
   }
 }
 

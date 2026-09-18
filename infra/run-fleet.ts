@@ -55,7 +55,7 @@
  * The roster's own account-busy guard still runs under every job: a job
  * pointed at an account something else is using waits, it does not clobber.
  *
- * Preflight gate (docs/OPERATIONS.md): the top-level `preflight` block in the config is
+ * Preflight gate (docs/RUNBOOK.md): the top-level `preflight` block in the config is
  * the deploy-window smoke, made a normal part of fleet operation. The
  * supervisor runs those scripts against the live server before it spawns any
  * job, and again whenever the server identity changes (a recreate, or a
@@ -639,7 +639,7 @@ function parseArgs(argv: string[]): {
             "",
             "The config is the store (runner/src/config-store.ts), edited on the viewer's /config page",
             "or with the CLI; there is no file argument. The supervisor's normal home is the `fleet`",
-            "compose service (see docs/OPERATIONS.md):",
+            "compose service (see docs/RUNBOOK.md):",
             "  docker compose -f infra/compose.yml up -d --no-deps fleet",
           ].join("\n"),
         );
@@ -1023,7 +1023,7 @@ async function main(): Promise<void> {
       // The queue's gate, the policy's picks and the state file all read the
       // post-sweep projection from here down. Nothing above this line reads a
       // strike: the pinned jobs and the live pool jobs are the operator's, and
-      // the manual queue outranks a taint by decision anyway (docs/OPERATIONS.md).
+      // the manual queue outranks a taint by decision anyway (docs/RUNBOOK.md).
       states = statesAfterSweep(cfg, runs, applied, Date.now());
       eligible = eligibleFrom(states);
     }

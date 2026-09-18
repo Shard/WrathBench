@@ -657,7 +657,7 @@ describe("replayHrefFor", () => {
 });
 
 /*
- * The two costs of FOLLOW-UPS 60, both of which scaled with the thing being
+ * The two costs of the map redraw, both of which scaled with the thing being
  * drawn rather than with the screen. The canvas calls themselves are not tested
  * — there is no canvas here — but the geometry they are handed is, because that
  * is where the picture is decided.

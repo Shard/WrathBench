@@ -209,7 +209,7 @@ namespace WrathBench
 
         // Zone/area edge detection (world thread only): the ids last announced
         // as WB_AREA, sentinel until the first in-world tick so login emits one.
-        // See TickAreas (FOLLOW-UPS 38 N2).
+        // See TickAreas.
         uint32 lastZoneId{0xFFFFFFFF};
         uint32 lastAreaId{0xFFFFFFFF};
 
@@ -236,7 +236,7 @@ namespace WrathBench
 
     // A lease binds a session token to one account and — once the first
     // POST /session under it succeeds — one character, and carries the random
-    // secret the module issued for it (FOLLOW-UPS 19). Issued to the operator
+    // secret the module issued for it. Issued to the operator
     // (port-secret) caller, handed by the runner to the snippet child, and the
     // only credential the child ever holds: it authenticates /session, /action,
     // DELETE /session and /events for exactly this token, and nothing else.
@@ -343,7 +343,7 @@ namespace WrathBench
         PathResolve ResolvePath(Player* player, float x, float y, float z, bool unitTarget,
             bool* usedGroundZ = nullptr, float* groundZOut = nullptr);
 
-        // AreaTrigger.dbc as the client ships it (FOLLOW-UPS 38 N1): the
+        // AreaTrigger.dbc as the client ships it: the
         // module reads the DBC from the server data volume so the mover can
         // send CMSG_AREATRIGGER on entering a volume, exactly as a client does
         // without the player choosing to. The server still applies its own
@@ -356,7 +356,7 @@ namespace WrathBench
         std::unordered_map<uint32, std::vector<AreaTriggerRec>> _areaTriggers; // by map
         bool _areaTriggersLoaded{false};
 
-        // AreaTable.dbc as the client ships it (FOLLOW-UPS 38 N2): zone and
+        // AreaTable.dbc as the client ships it: zone and
         // subzone names. The ids themselves come from Player::GetZoneAndAreaId,
         // which the server derives from the same terrain data a client reads
         // locally, so the pair is observation-equivalent (PROTOCOL.md, WB_AREA).
@@ -370,7 +370,7 @@ namespace WrathBench
         bool LoadAchievementDbc(std::string const& path);
         std::unordered_map<uint32, AchievementRec> _achievements;
         bool _achievementsLoaded{false};
-        // TaxiNodes.dbc as the client ships it (FOLLOW-UPS 38 N3): the name
+        // TaxiNodes.dbc as the client ships it: the name
         // the client draws for each node id in SMSG_SHOWTAXINODES. Ids only
         // when the file is absent. Never TaxiPath: routes stay the server's.
         bool LoadTaxiNodesDbc(std::string const& path);

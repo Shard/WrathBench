@@ -6,7 +6,7 @@ applied by any script: the operator applies each file once, in the order the
 cutover runbook below gives. The design these shapes come from — push-based
 publisher, R2 as the data plane, no Worker in the read path — is
 `docs/PUBLIC-DASHBOARD.md`; the steady-state operational runbook is
-`docs/OPERATIONS.md`, "Public dashboard".
+`docs/RUNBOOK.md`, "Public dashboard".
 
 Since 2026-09-11 the deployed shape is the design's **Open** one, on the
 operator's personal account, which is where the `shard.page` zone is:
@@ -141,7 +141,7 @@ public request is a billed class-B read against the bucket — roughly $7/month 
 ### 5. Point the publisher at the new account
 
 The publisher's environment lives in the `wrathbench-env` secret in the
-`wrathbench` namespace on the cluster (`docs/OPERATIONS.md`). Three values
+`wrathbench` namespace on the cluster (`docs/RUNBOOK.md`). Three values
 change:
 
 | variable | value |
@@ -285,8 +285,7 @@ URL is enabled — disable it (step 1).
   does not match the hostname the browser used, scheme included.
 
 **The unfurl:** paste `https://wrathbench.shard.page` into Discord. It should
-come back with the title, the sentence and the Pareto card. This is the whole of
-FOLLOW-UPS item 111 — the Gated shape's Worker answered the crawler with a 401
+come back with the title, the sentence and the Pareto card. The Gated shape's Worker answered the crawler with a 401
 form and a disallow-all `robots.txt`, and both are gone: there is no Worker, and
 `dashboard/public/robots.txt` is permissive. Slack and Twitter honour robots.txt
 and are worth a second check for that reason.

@@ -10,7 +10,7 @@
  * `stripWikitext` throws templates away, so — like coords — this runs on the
  * RAW wikitext before the strip. Without it a query for "quest 783" can only
  * be answered by matching "783" somewhere in body prose, which is how a
- * damage-formula page came back above the quest page (FOLLOW-UPS 25).
+ * damage-formula page came back above the quest page.
  *
  * Deterministic and best-effort: a malformed field yields nothing rather than
  * a bad row, and the same input always gives the same output. Nothing here

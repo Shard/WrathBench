@@ -203,7 +203,7 @@ export type RunSink = (artifacts: SnapshotArtifact[]) => Promise<void>;
  * handle — one entry index per run, which is far the larger of the two.
  * Streaming bounds both at `batch` runs' worth, which with the scanners reading
  * in windows is what took a pass over the 1,016-run tree from 4.4 GB peak RSS
- * to 0.78 GB (2026-09-08, docs/FOLLOW-UPS.md item 121).
+ * to 0.78 GB (2026-09-08).
  *
  * Nothing about WHAT is rendered changes: the same runs, in the same listing
  * order, on the same keys, with the same bodies. Only the moment the bodies
@@ -222,7 +222,7 @@ export interface RunStream {
    * (`ApiHandle.release`). Default true, because a streaming caller is by
    * definition walking the tree once and the memos are otherwise a live set
    * that grows with it — the largest single piece of a pass's memory
-   * (docs/FOLLOW-UPS.md item 121). The cost is that the next pass reads those
+   *. The cost is that the next pass reads those
    * runs from disk again. Set false to keep a `--loop` publisher's passes cheap
    * on a tree small enough that its memos fit.
    */

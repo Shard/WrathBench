@@ -1,7 +1,7 @@
 /**
  * Whether a build may ask for a minimap tile, and from where.
  *
- * The Open shape (2026-09-11, FOLLOW-UPS item 85) put the app and the bucket on
+ * The Open shape (2026-09-11) put the app and the bucket on
  * two hostnames, so a relative `/tiles/...` would ask a host that has none: a
  * public build has to be told where the tiles live, which is
  * `VITE_WRATHBENCH_TILES_BASE`. That flag is separate from the snapshot base on

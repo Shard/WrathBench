@@ -3,7 +3,6 @@
 # Every value here is consumed by the [removed] cluster repo's HelmRelease; the
 # key names are the interface and are not renamed without changing that side in
 # the same commit. What the runbook says about each decision is in
-# docs/[removed].
 
 image:
   registry: harbor.local/library
@@ -47,7 +46,7 @@ storage:
 
 # Existing Secret, created by the cluster repo. Keys are the `.env` names.
 # The chart never templates a secret value and never puts one on a command
-# line; see docs/OPERATIONS.md ("Secrets").
+# line; see docs/RUNBOOK.md ("Secrets").
 envSecretName: wrathbench-env
 
 # The model-provider keys the fleet and runner pods carry, by NAME. They are
@@ -76,7 +75,7 @@ realm:
   id: 1
   name: WrathBench
   # What the auth handshake advertises to a client. ClusterIP-only: a spectator
-  # port-forwards, and their client is told 127.0.0.1 (docs/[removed]).
+  # port-forwards, and their client is told 127.0.0.1.
   address: 127.0.0.1
   port: 8085
 
@@ -95,8 +94,8 @@ db:
 
 worldserver:
   threads: 2
-  # PHASE-0 pins kill XP and quest XP equal at 1.0. Everything else is the
-  # stock dist value; do not add tuning without updating docs/PHASE-0.md.
+  # Kill XP and quest XP are pinned equal at 1.0. Everything else is the
+  # stock dist value; do not add tuning without saying so in the docs.
   rateXp:
     kill: "1"
     quest: "1"
@@ -174,7 +173,7 @@ fleet:
 # The CLI refreshes the token in place, so the lane is MOUNTED, never copied: a
 # second live copy invalidates the first ("refresh token was already used").
 # The PVC is seeded once from the operator's logged-in ~/.codex and is the
-# canonical lane thereafter — docs/[removed], "The codex lane".
+# canonical lane thereafter.
 # Turning this off drops the PVC, both mounts and CODEX_HOME; the codex roster
 # entries in the config store then fail their own preflight.
 codex:
@@ -266,7 +265,7 @@ publisher:
   intervalMs: 300000
   # Runs projected before a pass uploads them, drops the bodies and releases
   # their entry indexes — the pass's memory dial. See WRATHBENCH_PUBLISH_BATCH
-  # in docs/OPERATIONS.md for the measured peaks per value.
+  # in docs/RUNBOOK.md for the measured peaks per value.
   batch: 8
   resources:
     requests:

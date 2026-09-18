@@ -1,5 +1,5 @@
 /**
- * Harness version stamp for run metadata. Phase 0 is 0.x: runs are harness
+ * Harness version stamp for run metadata. The 0.x series: runs are harness
  * validation, not results. `git describe` gives the honest marker;
  * outside a git checkout (or without git) the fallback says so explicitly.
  */

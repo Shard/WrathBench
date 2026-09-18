@@ -1,6 +1,6 @@
 # RETIRED 2026-09-08, kept for the compose rollback only. The live viewer is
 # the `wrathbench-viewer` Deployment behind the `wrathbench.local` Ingress; see
-# docs/[removed] ("What stays on the workstation" and "Rollback to
+# the cluster deployment ("What stays on the workstation" and "Rollback to
 # compose"). Restarting the live viewer is `./infra/viewer-restart.sh`, which
 # drives kubectl; this unit is what `./infra/viewer-restart.sh --local` drives,
 # and it is disabled on the workstation.

@@ -1,5 +1,5 @@
 /**
- * The nine Phase-0 tools, defined once and dispatched from two places: the MCP
+ * The nine tools, defined once and dispatched from two places: the MCP
  * server (external model drives them over stdio) and the agent loop (the
  * OpenAI-compatible adapter drives them in-process). Schemas are deliberately
  * tight — few parameters, all described — because a confused tool call costs a

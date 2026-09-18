@@ -1101,7 +1101,7 @@ describe("readRun", () => {
   });
 });
 
-describe("zone and area milestones (FOLLOW-UPS 35)", () => {
+describe("zone and area milestones", () => {
   const ms = (kind: "zone" | "area", to: number, from?: number) =>
     JSON.stringify({ t: "milestone", ts: 2000, kind, to: { id: to }, ...(from === undefined ? {} : { from: { id: from } }), turn: 1 });
 
@@ -1277,7 +1277,7 @@ describe("achievement and flight milestones (issue #8)", () => {
   });
 });
 
-describe("level and death milestones (FOLLOW-UPS 35)", () => {
+describe("level and death milestones", () => {
   function fileWith(lines: string[]): string {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-deaths-"));
     const path = join(dir, "trajectory.jsonl");
@@ -1385,7 +1385,7 @@ describe("level and death milestones (FOLLOW-UPS 35)", () => {
   });
 });
 
-describe("spell, talent and trade milestones (FOLLOW-UPS 35)", () => {
+describe("spell, talent and trade milestones", () => {
   function fileWith(lines: string[]): string {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-learning-"));
     const path = join(dir, "trajectory.jsonl");

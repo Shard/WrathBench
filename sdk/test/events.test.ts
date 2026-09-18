@@ -379,7 +379,7 @@ describe("event stream: per-attempt connect deadline (issue #34)", () => {
     // Without the deadline this promise never settles: the stalled socket fires
     // neither close nor error, so nothing reschedules. With it, the stalled
     // attempt fails, the ladder retries, and the caller sees that retry open
-    // (FOLLOW-UPS 113: one attempt's failure is not the caller's verdict).
+    // (one attempt's failure is not the caller's verdict).
     await stream.connect();
     // The stalled socket is closed, not leaked half-open.
     expect(StallingSocket.instances[0]?.closeCalls).toBe(1);
@@ -399,7 +399,7 @@ describe("event stream: per-attempt connect deadline (issue #34)", () => {
   });
 });
 
-describe("event stream: connect() rides the ladder (FOLLOW-UPS 113)", () => {
+describe("event stream: connect() rides the ladder", () => {
   type Plan = "open" | "stall" | "refuse";
 
   /**

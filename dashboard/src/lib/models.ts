@@ -215,7 +215,7 @@ export function resolvedSummary(
 /**
  * The model's freeplay character, for the column beside its scored episodes.
  *
- * Freeplay is one character per model and effort (docs/OPERATIONS.md, "Freeplay
+ * Freeplay is one character per model and effort (docs/RUNBOOK.md, "Freeplay
  * characters are durable"), so the match is on those two fields and the row is the
  * ladder's own `CharacterRow` — the same status and level the freeplay ladder
  * prints, so the two pages cannot disagree about whether a character is live.

@@ -849,7 +849,7 @@ test("siblingRedirects prefers (original), and leaves a title that already answe
  * Titles Cataclysm coined: not a page, and not a name either.
  *
  * The prose is invented, as everywhere here. The titles are real, because the
- * rule is a list of them — the same names `verify.ts` and FOLLOW-UPS already
+ * rule is a list of them — the same names `verify.ts` already
  * write down.
  */
 test("a Cataclysm-coined title is neither a page nor a recovered name", async () => {

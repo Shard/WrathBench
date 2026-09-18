@@ -1,5 +1,5 @@
 /**
- * Throwaway probe for the Stage-2 module vertical slice (PHASE-0).
+ * Throwaway probe for the Stage-2 module vertical slice.
  *
  * Drives the whole slice against a booted worldserver from inside the compose
  * network: open a WebSocket for events, POST /session (create character + enter

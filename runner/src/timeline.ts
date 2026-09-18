@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Minimal terminal timeline viewer (PHASE-0): enough to read a stall in a few
+ * Minimal terminal timeline viewer: enough to read a stall in a few
  * minutes. `bun runner/src/timeline.ts <run-id> [--runs-dir data/runs]`
  */
 

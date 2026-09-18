@@ -5,7 +5,7 @@
  * deploy-time full arc (eight kills to objective completion and the kill
  * quest's own turn-in) stays module-quest.ts.
  *
- * Starts from a fixture (FOLLOW-UPS item 45). A persistent character (default
+ * Starts from a fixture. A persistent character (default
  * `Smokekc` on MODULE_ACCOUNT, never deleted) is placed by
  * `infra/fixtures/apply.ts --scenario vineyard-kill-credit`: level 1, no
  * money, logged out at the near edge of the Northshire vineyard, with
@@ -371,11 +371,11 @@ function backpack(): { slot: number; guid: string; entry: number | undefined }[]
 }
 
 /**
- * Empty the backpack of everything the fixture did not put there (FOLLOW-UPS
- * item 58), through `CMSG_DESTROYITEM` — the same opcode a player pressing
+ * Empty the backpack of everything the fixture did not put there,
+ * through `CMSG_DESTROYITEM` — the same opcode a player pressing
  * delete sends, so this needs nothing from `infra/fixtures/*`, which refuses
- * to touch item_instance rows for good reason (item 57: item guids are not
- * safe to write from outside the running server).
+ * to touch item_instance rows for good reason: item guids are not
+ * safe to write from outside the running server.
  *
  * At the START of the run, not before logout, for three reasons:
  *   1. it is idempotent — it does not matter how many previous runs left junk
@@ -463,7 +463,7 @@ async function main() {
   await assertFixtureStart();
 
   // 2b. Empty the backpack of what previous runs looted into it, before the
-  //     run adds to it (FOLLOW-UPS item 58). Best effort: reported, never
+  //     run adds to it. Best effort: reported, never
   //     asserted.
   await clearBackpack();
 

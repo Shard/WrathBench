@@ -251,7 +251,7 @@ if (import.meta.main) {
 
   for (const name of ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const) {
     if ((Bun.env[name] ?? "") === "" && (Bun.env[name.replace("S3_", "AWS_")] ?? "") === "") {
-      fail(`${name} is not set (docs/OPERATIONS.md, "Public dashboard")`);
+      fail(`${name} is not set (docs/RUNBOOK.md, "Public dashboard")`);
     }
   }
 

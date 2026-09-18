@@ -9,7 +9,7 @@ harnessEnv), the only fleet config: edit it on the viewer's /config page or
 with `config-store.ts` through the runner pod, and the supervisor's next
 60-second re-read picks it up. Nothing here rolls on a config change, and no
 ConfigMap is involved — a fresh cluster seeds the store once from
-infra/fleet.example.json (docs/[removed], "The config store").
+infra/fleet.example.json (docs/RUNBOOK.md, "Where the config lives").
 
 Draining is `kubectl scale --replicas=0` plus the wait on fleet-state.json that
 infra/k8s-deploy.sh does. terminationGracePeriodSeconds is the compose

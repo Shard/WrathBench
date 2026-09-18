@@ -3,7 +3,7 @@
  *
  * The era rules drop tens of thousands of pages by deterministic signal, and a
  * signal that is one word too broad drops a capital city. That is exactly what
- * happened once (FOLLOW-UPS 49): a `|patch=4.0.1` added to Stormwind City in
+ * happened once: a `|patch=4.0.1` added to Stormwind City in
  * 2010 read as "this page is about Cataclysm", and the build cheerfully
  * produced a bundle of this world with no Stormwind, no Durotar and no Barrens
  * — and said nothing, because every counter added up. Counters cannot see an
@@ -22,7 +22,7 @@
  * under another name. No page text is
  * asserted here and none is quoted: `wiki/src/verify.ts` is where the deeper,
  * operator-run content checks live. Nothing in this file is game text beyond
- * the place names, which are the same names FOLLOW-UPS and the docs already
+ * the place names, which are the same names the docs already
  * use.
  */
 

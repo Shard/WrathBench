@@ -986,7 +986,7 @@ function ServerFooter(props: { info: ApiInfoResponse | undefined; run: RunDetail
 }
 
 /**
- * What the run's milestone records account for (FOLLOW-UPS 35): deaths, level
+ * What the run's milestone records account for: deaths, level
  * marks, spells learned, talent points spent, trades completed.
  *
  * Counts and turn numbers, nothing else. Every one of these is a *lower bound*

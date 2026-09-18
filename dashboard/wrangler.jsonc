@@ -1,6 +1,6 @@
 // Cloudflare deployment for the PUBLIC (snapshot-mode) dashboard. The design is
 // docs/PUBLIC-DASHBOARD.md; the cutover runbook is infra/cloudflare/README.md
-// and the day-to-day one is docs/OPERATIONS.md, "Public dashboard". The private
+// and the day-to-day one is docs/RUNBOOK.md, "Public dashboard". The private
 // dashboard is unaffected — it is still the same bundle served same-origin by
 // runner/viewer over loopback.
 //

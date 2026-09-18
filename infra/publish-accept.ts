@@ -774,7 +774,7 @@ async function s3Source(): Promise<AcceptSource> {
   const { S3Client } = await import("bun");
   for (const name of ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const) {
     if ((Bun.env[name] ?? "") === "" && (Bun.env[name.replace("S3_", "AWS_")] ?? "") === "") {
-      console.error(`publish-accept: ${name} is not set (docs/OPERATIONS.md, "Public dashboard")`);
+      console.error(`publish-accept: ${name} is not set (docs/RUNBOOK.md, "Public dashboard")`);
       process.exit(2);
     }
   }

@@ -26,7 +26,7 @@ const BASE = `http://${HOST}:${PORT}`;
 // with `weak_token`, so it is random hex, not a timestamp. The *character* is
 // deliberately stable — `POST /session` is create-or-reuse, so a fixed name
 // makes re-runs idempotent instead of leaving a new saved character on the
-// account every time (the realm caps them, and Phase 0 has no delete-character
+// account every time (the realm caps them, and there is no delete-character
 // action). It also exercises the reuse branch.
 const TOKEN = `sdk-slice-${randomBytes(16).toString("hex")}`;
 const CHARACTER = process.env.SLICE_CHARACTER ?? "Benchslice";

@@ -564,8 +564,8 @@ export interface ContextInputs {
 /**
  * The client-visible sentence for an inventory refusal, appended to the raw
  * event line. The packet carries only a number, and a run was observed
- * reverse-engineering "reason 60" into "in combat" from context (FOLLOW-UPS
- * 101a); the number still renders verbatim inside the payload, so this only
+ * reverse-engineering "reason 60" into "in combat" from context; the number
+ * still renders verbatim inside the payload, so this only
  * names what the client would have shown. Nothing else is added — no advice.
  */
 function eventLineNote(e: EventSummary): string {

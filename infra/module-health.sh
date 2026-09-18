@@ -6,7 +6,7 @@
 # wget — perl is what it does have.
 #
 # CLUSTER-NATIVE since 2026-09-11: the worldserver is a Deployment in namespace
-# `wrathbench` (docs/[removed]). `--compose` is the local rehearsal
+# `wrathbench`. `--compose` is the local rehearsal
 # path against infra/compose.yml.
 #
 #   ./infra/module-health.sh             # kubectl exec into the worldserver pod

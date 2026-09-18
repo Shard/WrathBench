@@ -63,7 +63,7 @@ spec:
               subPath: wiki
             # The config store, same as the fleet's: this pod is where
             # `config-store.ts seed|export|get|patch` is exec'd, by the operator
-            # and by infra/k8s-deploy.sh (docs/OPERATIONS.md "Where the config
+            # and by infra/k8s-deploy.sh (docs/RUNBOOK.md "Where the config
             # lives"), so it has to see the fleet's store and not a pod-local one.
             - name: data
               mountPath: /wrathbench/data/config

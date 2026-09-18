@@ -208,8 +208,8 @@ services:
       AC_BIND_IP: "0.0.0.0"
       AC_WORLD_SERVER_PORT: "8085"
       AC_REALM_ID: ${WRATHBENCH_REALM_ID:-1}
-      # PHASE-0 pins kill XP and quest XP equal at 1.0. Everything else is the
-      # stock dist value; do not add tuning here without updating docs/PHASE-0.md.
+      # Kill XP and quest XP are pinned equal at 1.0. Everything else is the
+      # stock dist value; do not add tuning here without saying so in the docs.
       AC_RATE_XP_KILL: "1"
       AC_RATE_XP_QUEST: "1"
       # SOAP stays off. The harness has no privileged control path into the
@@ -229,7 +229,7 @@ services:
       # ERROR/WARN history survives restarts and container recreation on the
       # data/logs volume. Default mode "w" truncated every boot.
       AC_APPENDER_SERVER: "2,5,16,Server.log,w"
-      # The port secret (module/PROTOCOL.md "Authentication"; FOLLOW-UPS 19).
+      # The port secret (module/PROTOCOL.md "Authentication").
       # Every route needs it. It lives in the repo-root .env as
       # WRATHBENCH_MODULE_SECRET; compose does not read that file (its project
       # directory is infra/), so infra/deploy-worldserver.sh exports it before
@@ -325,7 +325,7 @@ services:
   # store is data/config.sqlite on the `..:/wrathbench` bind mount — the same
   # file the viewer's /config page edits, and the ONLY fleet config; seed it
   # once with `bun runner/src/config-store.ts seed infra/fleet.example.json`
-  # (docs/OPERATIONS.md, "Where the config lives").
+  # (docs/RUNBOOK.md, "Where the config lives").
   #
   # Same image and mounts as `runner` by design: the supervisor's children are
   # run-roster processes whose children are `bun runner/src/run.ts` episodes, so
@@ -484,7 +484,7 @@ services:
   # --------------------------------------------------------------- publisher
   # The public dashboard's publisher (infra/publish-dashboard.ts): renders the
   # viewer's own API to JSON, applies the public projection, and PUTs what
-  # changed to the R2 bucket. See docs/OPERATIONS.md ("Public dashboard") for
+  # changed to the R2 bucket. See docs/RUNBOOK.md ("Public dashboard") for
   # the Cloudflare side and docs/PUBLIC-DASHBOARD.md for why the shape is
   # push-based.
   #
@@ -543,7 +543,7 @@ services:
       # S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET and S3_ENDPOINT are
       # Bun.S3Client's own variable names and are NOT set here: Bun autoloads
       # /wrathbench/.env inside the container, which is where the R2 key pair
-      # lives (docs/OPERATIONS.md "Secrets" — `.env`, never argv, never compose).
+      # lives (docs/RUNBOOK.md "Secrets" — `.env`, never argv, never compose).
     volumes:
       # Read-only: the publisher reads the repo and writes nothing but its state
       # file, and the one credential it holds is scoped to one bucket.

@@ -5,7 +5,7 @@
  * layer above them — the search parameter reaching the effect that owns the
  * swap — because a live-run report of "the live control does nothing" pointed
  * straight at it and nothing in the suite could confirm or deny it. (It was a
- * stale bundle in an open tab, not the code; see worklogs/2026-08-24.)
+ * stale bundle in an open tab, not the code.)
  *
  * `useSearchParams` needs a DOM and a rendered `Router`, which `bun test` has
  * neither of. The stand-in below is the router's own shape: a memo over the

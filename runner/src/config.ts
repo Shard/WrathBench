@@ -47,7 +47,7 @@ export const watchdogConfigSchema = z.object({
   idleMs: msThreshold(10 * 60_000),
   /** No level/XP progress for this long (session must exist) => `no-xp`. Null/0 disables. */
   noXpMs: msThreshold(45 * 60_000),
-  /** Episode wall-clock limit => `episode-limit`. Generous per PHASE-0. Null/0 disables. */
+  /** Episode wall-clock limit => `episode-limit`. Generous by default. Null/0 disables. */
   episodeMs: msThreshold(6 * 60 * 60_000),
   /** Consecutive sandbox restarts (event-loop-blocking snippets) => `snippet-runaway`. */
   maxSandboxRestarts: z.number().int().positive().default(3),
@@ -481,7 +481,7 @@ export function newRunId(now: Date = new Date()): string {
 /**
  * The minimum length of a session token the module will accept. Shorter tokens
  * are refused with `weak_token`, because a token *is* the authentication for
- * `POST /action` and `DELETE /session` (FOLLOW-UPS 19): the old default — the
+ * `POST /action` and `DELETE /session`: the old default — the
  * run id, a second-granularity timestamp — was enumerable, so a snippet in one
  * run could drive or tear down a concurrent one.
  */

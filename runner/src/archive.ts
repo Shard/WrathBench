@@ -123,7 +123,7 @@ export interface ArchivePlan {
  * Whether a recorded harness version belongs to the given series. The series
  * is what groups results, so a `-dirty` build of it still counts:
  * `harness-0.4`, `harness-0.4-25-g1fe3951`, `harness-0.4-25-g1fe3951-dirty`
- * pass; `harness-0.3-…`, a bare commit hash or the phase-0 placeholder do not.
+ * pass; `harness-0.3-…`, a bare commit hash or the untagged placeholder do not.
  */
 export function inSeries(version: string | null, series: string): boolean {
   if (version === null) return false;

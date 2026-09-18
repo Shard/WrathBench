@@ -435,7 +435,7 @@ export class ContextBuilder {
       trajectory.append({ t: "quest_complete", questId: c.questId });
     }
     this.questsLogged = completions.length;
-    // Zone/area milestones (FOLLOW-UPS 35's first producer): ids only, from
+    // Zone/area milestones, the series's first producer: ids only, from
     // the state cache, never the names — the names are client DBC text the
     // HUD renders, and a record must stay what the server said. The first
     // observed pair is a milestone from `undefined` so a run's starting zone
@@ -516,7 +516,7 @@ export class ContextBuilder {
       }
       this.lastTaxiFlight = taxiFlight;
     }
-    // Level (FOLLOW-UPS 35): `self.level` on change, with the XP reading at the
+    // Level: `self.level` on change, with the XP reading at the
     // moment the new level was first seen. The first observation is a mark from
     // `undefined` for the same reason the first zone is one — a run's starting
     // level belongs on the record — so a level-up is a mark that carries a
@@ -532,7 +532,7 @@ export class ContextBuilder {
       });
       this.lastLevel = level;
     }
-    // Spells, talents and trades (FOLLOW-UPS 35). All three are reads over
+    // Spells, talents and trades. All three are reads over
     // what the state cache already holds — the spellbook, the last
     // `SMSG_TALENTS_INFO`, the trade window — so nothing here observes the
     // world beyond what the sample already took.
@@ -605,7 +605,7 @@ export class ContextBuilder {
         trajectory.recordMilestone({ kind: "trade", observedTs: tradeTs, ...turn });
       }
     }
-    // Death (FOLLOW-UPS 35): the transitions the sandbox child latched off the
+    // Death: the transitions the sandbox child latched off the
     // events themselves, drained here and written as they happened. The child
     // sees every event; this sample lands every `stateIntervalMs`, and a whole
     // death — die, repop, walk to the Spirit Healer, resurrect — fits between

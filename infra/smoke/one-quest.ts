@@ -1,5 +1,5 @@
 /**
- * Gate 1 (docs/PHASE-0.md): one quest end to end, through the SDK only.
+ * Liftoff gate 1: one quest end to end, through the SDK only.
  *
  * Create a character -> accept a starter quest -> turn it in -> take the kill
  * quest -> clear kobolds until the quest log says the objective is done -> loot

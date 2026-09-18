@@ -4,7 +4,7 @@ How cost is measured in this harness, and the rules learned measuring it. The
 hard numbers that used to live here (per-episode resource tables, a pricing
 table, platform reliability counts, a what-to-try-next list) were a snapshot of
 2026-08-22/23 and went stale the moment the 0.5 series re-armed; they were
-removed on 2026-08-24 rather than left to mislead — `git show d752ef7:docs/COSTS.md`
+removed rather than left to mislead — `git show d752ef7:docs/COSTS.md`
 is the last revision that carries them. Cost surfaces belong in the UI
 (episode cost, campaign rollups, estimates from accumulated baselines): that
 arc is GitHub issue #13, and until it lands, the per-call data below is the
@@ -86,11 +86,11 @@ record.
 **openai-adapter driver (OpenRouter/OpenCode/local, fixed-context policy):** prompt tokens climb
 for the first several turns then plateau — confirmed both in this window (`ox-alpha` turns 1→61:
 3,292 → 7,321 → 11,414 → 12,533 → 13,241; `qwen3.8-27b` turns 1→71: 3,466 → 10,185 → 17,955 →
-18,343) and in `docs/worklogs/2026-08-21.md` ("requests plateau at roughly 8–12k tokens regardless
-of episode length"). The runner trims older conversation aggressively (system prompt: "the
+18,343): requests plateau at roughly 8–12k tokens regardless
+of episode length. The runner trims older conversation aggressively (system prompt: "the
 scratchpad is your memory, not the chat history"), so cost per turn is bounded regardless of how
-long the episode runs. `cached_tokens` on these lanes is sporadic, and as of 2026-08-24 the
-sporadicity is measured, not assumed (closed item 78, `docs/worklogs/2026-08-24.md`; run
+long the episode runs. `cached_tokens` on these lanes is sporadic, and the
+sporadicity is measured, not assumed (run
 `fleet-deepseek-flash-e90-deepseek-v4-flash-0731-20260824-a4`, 150 calls). The harness's side is
 clean: replaying every consecutive request pair from the trajectory, the serialized message array
 was byte-identical up to the append point in all 139 non-trim pairs — the prefix the context
@@ -114,9 +114,9 @@ Separately: Anthropic models via OpenRouter still need explicit `cache_control` 
 turn window, ending near 200k right before the 500-tool-call cap. `roster-opus-20260822` similarly
 grows into the six-figure range. This is a genuinely different context policy, not a tuning
 difference — it is what makes `claude-code` a harness of its own in the run's tag, and
-it explains these numbers rather than unscoring the rows. Nothing compacts the claude-code conversation today (docs/worklogs/2026-08-21.md: the
-compaction gate wasn't tripped by the fixed-context lanes, but "the subscription-lane amendment of
-2026-08-22 arguably trips them already").
+it explains these numbers rather than unscoring the rows. Nothing compacts the claude-code conversation today: the
+compaction gate was never tripped by the fixed-context lanes, and the
+subscription lane arguably trips it already.
 
 **codex harness (OpenAI models via the Codex CLI on a ChatGPT subscription, 2026-09-05):** the same
 regime with a different scaffold — one persisted thread, resumed per turn, compacted by the CLI on

@@ -9,7 +9,7 @@
  *
  * Every case runs with FORCE_COLOR=3 in the environment, which is what made
  * bun colourise `console.log(900)` into `ESC[33m900ESC[0m` and broke the
- * script's arithmetic on 2026-08-22 (docs/WORKLOG.md).
+ * script's arithmetic on 2026-08-22.
  */
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";

@@ -104,7 +104,7 @@ the SPA owns everything that is UI.
   public mode, private one-hour cache and `noindex` when on); the static public
   snapshot never carries a tile either way.
 - `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
-  on 2026-08-22, the only UI: a homepage explainer at `/` (what the benchmark
+  the only UI: a homepage explainer at `/` (what the benchmark
   is, the loop, the tools as served by `/api/tools` so the page cannot drift
   from the runner), fleet at `/fleet`, about at `/about` (the tiers, the
   harness groups, how to read a score; `/episodes` redirects there), runs (the
@@ -221,7 +221,7 @@ the SPA owns everything that is UI.
   `Client` interface over the bucket instead of `/api`, so the pages are the
   same pages and the private build keeps its same-origin, CORS-free posture.
   Design and cost model are docs/PUBLIC-DASHBOARD.md, the Cloudflare setup is
-  docs/OPERATIONS.md ("Public dashboard"), and the gate above still binds.
+  docs/RUNBOOK.md ("Public dashboard"), and the gate above still binds.
 
 ### wiki/ (Bun/TypeScript, MIT)
 
@@ -254,7 +254,7 @@ The worldserver image (`infra/docker/server.Dockerfile`) is a close adaptation o
 
 ## Reset
 
-Phase 0: every episode starts with a freshly created character at level 1 in its starting zone. Character creation is a client action the module supports. Character snapshots (DB save and restore for mid-level starts) are deferred.
+Every episode starts with a freshly created character at level 1 in its starting zone. Character creation is a client action the module supports. Character snapshots (DB save and restore for mid-level starts) are deferred.
 
 ## Persistence
 
@@ -329,6 +329,6 @@ process instead of a database, and drops the two big tables as they arrive
 because a read path never reads them. That is a quickstart, not a deployment:
 on the real corpus it does once per start what the store does once, ever.
 
-## What is deliberately absent in Phase 0
+## What is deliberately absent
 
 Results pipeline, perturbation tooling, snapshot/restore, per-character credentials, multi-agent support, concurrency beyond a few sequential or lightly parallel characters on one server.

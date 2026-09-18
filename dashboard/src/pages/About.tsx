@@ -104,8 +104,8 @@ export default function About() {
       {/*
         First on the page, and deliberately not an apology: an outside reader
         arriving from a link has no way to tell a running experiment from a
-        finished one, and the ladder looks the same either way. Phase 0 and the
-        series are `docs/PHASE-0.md` and METHODOLOGY's harness-version rule; the
+        finished one, and the ladder looks the same either way. The series is
+        METHODOLOGY's harness-version rule; the
         0.6 reservation is the context-policy section's own note.
       */}
       <h2 class="section">project status</h2>

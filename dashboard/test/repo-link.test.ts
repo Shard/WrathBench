@@ -4,7 +4,7 @@
  * A link to a private repository is a 404 wearing the project's name, in the
  * footer of the first page a stranger reads. So the URL comes from
  * `VITE_WRATHBENCH_REPO_URL` and both places that spell it — the footer anchor
- * and the BibTeX `url` line — render nothing without it (FOLLOW-UPS item 109).
+ * and the BibTeX `url` line — render nothing without it.
  *
  * The env-reading half is unit-tested; the two call sites are pinned as a
  * source check, the way `public-links.test.ts` pins its guards, because the

@@ -1,5 +1,5 @@
 /**
- * Probe for the Phase-0 quest/combat action set (PHASE-0, docs/CONTRACTS.md).
+ * Probe for the initial quest/combat action set (docs/CONTRACTS.md).
  *
  * Full arc against a booted worldserver, raw HTTP/WS only (no SDK):
  * fresh Human Paladin in Northshire -> accept "A Threat Within" (783) from

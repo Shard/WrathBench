@@ -1,5 +1,5 @@
 /**
- * Probe for the two field-level observations of FOLLOW-UPS item 38 N2:
+ * Probe for the two field-level observations of the navigation plan:
  * zone/subzone names on self (`WB_AREA`, `state.self.zone` / `state.self.area`)
  * and NPC roles from `UNIT_NPC_FLAGS` (`state.units(...).roles`).
  *

@@ -1,5 +1,5 @@
 /**
- * Probe for the movement + update-object module pillars (PHASE-0).
+ * Probe for the movement + update-object module pillars.
  *
  * End to end against a booted worldserver, from inside the compose network:
  * session in world (Human in Northshire) -> observe own create block via

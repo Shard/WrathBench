@@ -1,5 +1,5 @@
 /**
- * Probe for the innkeeper bind (FOLLOW-UPS 38 N2): `SMSG_BINDPOINTUPDATE`
+ * Probe for the innkeeper bind: `SMSG_BINDPOINTUPDATE`
  * tapped and folded (`state.self.bindPoint`), `SMSG_BINDER_CONFIRM` answered
  * with `CMSG_BINDER_ACTIVATE` through `bindAtInnkeeper`, the way a client's
  * confirm dialog does it.

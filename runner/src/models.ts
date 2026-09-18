@@ -8,7 +8,7 @@
  * pool's free accounts. The fleet supervisor (`infra/run-fleet.ts`) calls both
  * every tick; `--status`, `--dry-run` and the viewer's `/api/models` read the
  * same projection, so there is exactly one answer to "why is this model not
- * running". The policy lives in docs/OPERATIONS.md; the tiers in
+ * running". The policy lives in docs/RUNBOOK.md; the tiers in
  * docs/METHODOLOGY.md ("Episodes, lanes, and evidence") / docs/EPISODES.md.
  *
  * Rules the projection holds to:
@@ -1593,7 +1593,7 @@ function episodeOrder(ep: EpisodeId): number {
 }
 
 /**
- * The account class a pick belongs to (docs/OPERATIONS.md, "Account
+ * The account class a pick belongs to (docs/RUNBOOK.md, "Account
  * classes"): which of `accounts.pool` / `accounts.paid` / `accounts.local`
  * it may land on. `pool` is the base class — every account that is not
  * split out belongs to it.
@@ -1655,7 +1655,7 @@ export interface NextJobsOptions {
    * the run or job holding each where the caller knows it. `classAccounts`
    * carries only what is free, so without this an all-busy class is
    * indistinguishable from an unconfigured one — and the fleet told operators
-   * to add an account they already had (FOLLOW-UPS: the SHAKEOUT2 report).
+   * to add an account they already had (the SHAKEOUT2 report).
    */
   classBusy?: Partial<Record<AccountClass, readonly BusyAccount[]>>;
   /**

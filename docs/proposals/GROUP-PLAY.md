@@ -16,7 +16,7 @@ records to derive from.
 
 Two gaps, and they are different in kind.
 
-**No group or instance record.** The milestone series (FOLLOW-UPS 35) now covers
+**No group or instance record.** The milestone series now covers
 zone and area changes, achievements, flights, levels, deaths, spells learned,
 talent points spent and completed trades — everything a lone character does to
 itself. It has nothing for joining or leaving a party, and nothing for entering
@@ -60,7 +60,7 @@ property of a single run.
   (`CMSG_LFG_JOIN`), which teleports a formed party into the instance and is
   therefore a client-legal way to attempt Deadmines before cross-continent
   travel and instance portals are reliable. It is gated behind the navigation
-  plan (FOLLOW-UPS 38) and a multi-session runner.
+  plan and a multi-session runner.
 
 ## The questions this proposal does not answer
 

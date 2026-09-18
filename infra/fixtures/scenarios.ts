@@ -3,7 +3,7 @@
  *
  * A scenario is the state a logged-out smoke character is put into so that a
  * smoke can prove a late-game claim in seconds instead of playing minutes to
- * reach it (docs/FOLLOW-UPS.md item 45). This file is data plus the pure
+ * reach it. This file is data plus the pure
  * helpers that validate it; `apply.ts` is what talks to the database.
  *
  * Operator tooling only. Nothing here is reachable from `runner/` or `sdk/`,

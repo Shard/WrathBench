@@ -3,7 +3,7 @@
 #
 # CLUSTER-NATIVE since 2026-09-11. Since the 2026-09-08 cutover the viewer is
 # the `wrathbench-viewer` Deployment behind the `wrathbench.[removed].shard.page` Ingress
-# (docs/[removed]), not a bun process on the workstation, so a restart
+# on the cluster, not a bun process on the workstation, so a restart
 # is a rollout restart and the check that follows is the Ingress answering
 # /api/info. The workstation's systemd user unit is disabled and kept only for
 # the compose rollback; `--local` is the path that drives it.
@@ -49,7 +49,7 @@ if [[ "${LOCAL}" -eq 0 ]]; then
 fi
 
 # ------------------------------------------------------------------- --local
-# RETIRED, kept for the compose rollback in docs/[removed]. The
+# RETIRED, kept for the compose rollback. The
 # systemd user unit (infra/wrathbench-viewer.service) owns the process when it
 # is installed and a restart goes through it — a nohup launch beside it would
 # race for the port. Kill by pid either way: `pkill -f` on the pattern matches

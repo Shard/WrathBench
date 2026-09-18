@@ -1532,7 +1532,7 @@ export function diffJobs(spawns: JobSpawn[], sets: JobSets): JobActions {
  * SERVICE: the config is hot, so a job can be enabled on any tick, and
  * `restart: unless-stopped` restarts on exit 0 as readily as on a crash. A
  * supervisor that exited when the operator parked every job — which is exactly
- * what docs/OPERATIONS.md tells them to do before a deploy window — would be
+ * what docs/RUNBOOK.md tells them to do before a deploy window — would be
  * restarted every 60s, taking a new epoch stamp each time. So with no deadline
  * the supervisor idles instead, which is also the honest reading of a control
  * plane that is only ever as finished as its config says.

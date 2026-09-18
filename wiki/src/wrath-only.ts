@@ -245,7 +245,7 @@ const MARKER_WINDOW = 400;
  * statement about content that *is* here; the paragraph is still mostly about
  * the later world, so it goes. What the rules cannot catch at all is a
  * present-tense 2010 paragraph describing a beta zone without naming the
- * expansion (FOLLOW-UPS 62).
+ * expansion.
  */
 const POST_WRATH_PARAGRAPH: { name: string; test: (prose: string) => boolean }[] = [
   { name: "in-cataclysm", test: (p) => /\bin cataclysm\b/i.test(p) },
@@ -260,7 +260,7 @@ const POST_WRATH_PARAGRAPH: { name: string; test: (prose: string) => boolean }[]
   { name: "future-tense", test: (p) => nearWord(p, /\bcataclysm\b/gi, /\bwill\b/i, 60) },
   // The rules below came out of an adversarial read of a built bundle
   // (2026-08-24): paragraphs that describe the later world without ever naming
-  // the expansion, which is exactly the residue FOLLOW-UPS 62 records.
+  // the expansion, which is exactly the residue the build records.
   //
   // Rated battlegrounds are a Cataclysm system; the phrase has no other meaning.
   { name: "rated-battlegrounds", test: (p) => /\brated battlegrounds?\b/i.test(p) },

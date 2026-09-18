@@ -26,7 +26,7 @@ interface Opener {
  * nesting-aware.
  *
  * Two things the obvious depth counter gets wrong, both of which used to
- * swallow the whole rest of a page (FOLLOW-UPS 63):
+ * swallow the whole rest of a page:
  *
  * - **Braces come in runs.** `{{{1|Alpha}}}` is a parameter, not a template
  *   inside a table: reading two characters at a time makes the third brace of
@@ -162,7 +162,7 @@ const OPEN_COMMENT = /<!--[\s\S]*$/;
  * without it `[^>]*` reads that self-closing tag as an *opening* one and eats
  * everything up to the next `</ref>` — on Orgrimmar's 2010 revision, 1,486
  * characters including the `}}` that closed the infobox, which then swallowed
- * the whole page (FOLLOW-UPS 63). A self-closing tag is left to `SELF_CLOSING`.
+ * the whole page. A self-closing tag is left to `SELF_CLOSING`.
  */
 const CONTAINER_TAGS = /<(ref|gallery|imagemap|score|math|timeline)\b[^>]*(?<!\/)>[\s\S]*?<\/\1\s*>/gi;
 const SELF_CLOSING = /<(ref|br|hr)\b[^>]*\/?>/gi;

@@ -34,7 +34,7 @@
  *   carries no vendor prefix (`codexPrice`).
  * - `PROVIDER_PRICES` — paid providers that are not OpenRouter, by hand,
  *   matched on the run's `apiBase` *and* id (operator's decision, 2026-09-04,
- *   closing FOLLOW-UPS item 112 on its trigger: a second such provider).
+ *   on its trigger: a second such provider).
  *
  * Figures come from the 2026-08-23 COSTS.md cross-check (§3 of `git show d752ef7:docs/COSTS.md`; the snapshot sections left the live doc on 2026-08-24), which checked the Sonnet row
  * against a real `costUsd` ($43.23 computed vs $43.90 reported, within 1.5%).
@@ -314,7 +314,7 @@ function isCodex(run: Pick<PriceableRun, "driver" | "harness">): boolean {
  * OpenRouter's `qwen/qwen3.8-27b` is neither the same id string nor the same
  * rate as Cerebras's `qwen-3.8-27b`. So these rows live in source, dated and
  * sourced the way `CLAUDE_PRICES` is, and a stale one is visible rather than
- * silent. Operator's decision, 2026-09-04 (FOLLOW-UPS item 112, on its stated
+ * silent. Operator's decision, 2026-09-04 (on its stated
  * trigger: `omen-alpha` on OpenCode's pay-as-you-go endpoint was the second
  * non-OpenRouter paid provider to enter the fleet). This is the narrow case
  * "an unknown model gets no cost at all" was not written for — the price is
@@ -365,12 +365,12 @@ export const PROVIDER_PRICES: readonly ProviderPriceRow[] = [
     model: "qwen-3.8-27b",
     // No cache discount: Cerebras caches the prefix and bills every input
     // token at the input rate whether it was served from cache or not
-    // (docs/worklogs/2026-09-04.md, "What Cerebras costs"), so cacheRead and
+    // ("What Cerebras costs"), so cacheRead and
     // cacheWrite are the input rate rather than a tier below it.
     windows: [{ input: 0.99, output: 1.49, cacheRead: 0.99, cacheWrite: 0.99 }],
     asOf: "2026-09-04",
     source: "list",
-    note: "Cerebras published price, verified 2026-09-04 (docs/worklogs/2026-09-04.md); no cache discount, so every prompt token bills at the input rate; metered against the operator's Cerebras balance",
+    note: "Cerebras published price, verified 2026-09-04; no cache discount, so every prompt token bills at the input rate; metered against the operator's Cerebras balance",
   },
   {
     id: "opencode-go/omen-alpha",

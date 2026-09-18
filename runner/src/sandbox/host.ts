@@ -201,7 +201,7 @@ export class SandboxHost {
     // Bun 1.4.0), making the child's env exactly `sandboxChildEnv`.
     //
     // The child is exec'd through confine.ts, which applies a Landlock
-    // filesystem ruleset first (FOLLOW-UPS 19): the snippet process can then
+    // filesystem ruleset first: the snippet process can then
     // read the interpreter, runner/, sdk/ and node_modules/ and nothing else —
     // not `.env` by any path, not $HOME, not /tmp — and the wrapper exits
     // instead of exec'ing when the kernel or container refuses the ruleset.

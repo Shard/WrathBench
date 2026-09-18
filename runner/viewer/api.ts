@@ -551,7 +551,7 @@ export function readFleet(runsDir: string, now = Date.now()): FleetResponse {
  * The snapshot publisher is the opposite shape: it visits every run once per
  * pass, in order, and nothing it has already published will be asked for again
  * this pass, so those memos are a live set that grows with the tree. `release`
- * lets that caller drop one run's share of it (docs/FOLLOW-UPS.md item 121).
+ * lets that caller drop one run's share of it.
  *
  * It is opt-in and nothing in the viewer calls it: a process that keeps serving
  * requests wants exactly the memos it has. The cost is symmetric and worth

@@ -31,7 +31,6 @@
  * `thread/tokenUsage/updated`, `account/rateLimits/updated`, typed misalignment
  * steers) is the upgrade path once it leaves "experimental"; it would give a
  * long-lived process and the rate-limit surface exec mode never reports.
- * Tracked in docs/FOLLOW-UPS.md.
  *
  * ## The prompt goes in on stdin, and stdin is closed
  *

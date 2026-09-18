@@ -170,7 +170,7 @@ standing sandbox that never finishes. Duration separates neither pair.
   operator's disable/re-enable and across its own endings (2026-08-29), so the
   next attempt is launched `--continue-from` the last one — same account,
   same character, the scratchpad carried forward — and records the lineage as
-  `continued_from` (docs/OPERATIONS.md, "Freeplay characters are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
+  `continued_from` (docs/RUNBOOK.md, "Freeplay characters are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
   on the Models page and as a `freeplay` run on the Episodes page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs
   first (counting is series-keyed), and freeplay resumes once they are met.
@@ -189,7 +189,7 @@ a chart: it is a launch that did not happen, not a short episode. A *paused* run
 with no response yet is not one — it is still in progress until the supervisor
 decides what becomes of it. The scheduler still reads the archive, because
 consecutive such launches are what the defer ladder backs off from
-(`docs/OPERATIONS.md`, the scheduling policy).
+(`docs/RUNBOOK.md`, the scheduling policy).
 
 ## Runs that lapsed
 
@@ -217,7 +217,7 @@ A run launched without `--episode` is not a member of any episode. It reads
 promotion, no chart), and it therefore carries no comparability claim to
 protect. So the bare watchdog defaults in the runner — idle 10m, no-XP 45m —
 stay as they are and are deliberately not aligned with `e90`'s pinned 20m/20m
-(item 48(g), decided 2026-08-23; closed — `docs/worklogs/2026-08-23.md`). They are the shape of an untagged
+(decided 2026-08-23). They are the shape of an untagged
 one-off, not a quiet third ruleset: moving them would change every flagless run
 without any tuple field saying so, and every run that is scored passes the flag.
 

@@ -132,7 +132,7 @@ appears in the rendered chart, in `helm get manifest`, or in Flux's diff.
 
 {{/*
 The credentials the harness reads out of `.env` under compose, as env from the
-Secret. See docs/[removed] for why this is env and not a mounted
+Secret. This is env and not a mounted
 `.env` file: Bun's autoload existed to keep secrets off argv, and env from a
 Secret does that at least as well, while the snippet child is protected by
 three independent things that do not depend on the file — sandboxChildEnv's
@@ -188,7 +188,7 @@ the worldserver's /health build, so a run says which revision produced it. */}}
   value: "http://worldserver:8086"
 - name: WRATHBENCH_RUNS_DIR
   value: /wrathbench/data/runs
-{{- /* The config store (docs/OPERATIONS.md "Where the config lives"), the
+{{- /* The config store (docs/RUNBOOK.md "Where the config lives"), the
        only fleet config. Set here and not per pod because every pod that
        reads config must read the SAME file: the supervisor re-reads it, the
        viewer serves and edits it, the publisher renders the viewer's roster

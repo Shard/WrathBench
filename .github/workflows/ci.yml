@@ -4,7 +4,6 @@
 #
 # Deliberately absent: the C++ module build (needs the worldserver image), the
 # tag/digest workflow, chart-as-OCI, and the mutable-image-ref review gate.
-# See docs/[removed], "CI" and "Owed".
 name: CI
 
 on:

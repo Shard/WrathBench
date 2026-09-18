@@ -8,7 +8,7 @@ JSONL by hand.
 
 Since the 2026-09-08 cutover the viewer is the `wrathbench-viewer` Deployment on
 the cluster, behind the `wrathbench.[removed].shard.page` Ingress (alias `wrathbench.local`)
-(`docs/[removed]`); its code is baked into the runner image and Flux
+on the cluster; its code is baked into the runner image and Flux
 owns the tag, so it comes back on its own and new viewer code needs a new tag
 rather than a restart. `bun run viewer:restart`
 (`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
@@ -57,7 +57,7 @@ the API it reads plus the static host that serves it. Build it with
 `bun run --cwd dashboard build`; the viewer picks it up from `dashboard/dist`
 with no further configuration.
 
-The hand-written pages this directory used to serve were deleted on 2026-08-22
+The hand-written pages this directory used to serve were deleted
 (item 31). There is no fallback UI: with no build on disk every page route
 answers with a plain-text notice naming the build command, and `/api` keeps
 serving throughout. What the dashboard renders is documented in
@@ -163,7 +163,7 @@ flight, or cut short by a watchdog) keeps its snapshot figures, which are all
 anyone has for it.
 
 A run where NONE of the turns produced a result — 21 of the 29 claude-code runs
-on disk on 2026-08-25, because a watchdog kill is the normal ending — has a
+on disk, because a watchdog kill is the normal ending — has a
 completion total resting entirely on those snapshots, and `tokenTotals` reports
 `source: "snapshot"` for it rather than `"reported"`. It is neither an estimate
 nor a measurement: provider-reported and known to be far too low, so the run page
@@ -198,7 +198,7 @@ rather than a summary per entry.
 ## A freeplay character is aggregated at read time
 
 A durable freeplay character is one character across many attempts
-(docs/OPERATIONS.md, "Freeplay characters are durable"), and every counter the
+(docs/RUNBOOK.md, "Freeplay characters are durable"), and every counter the
 runner keeps is per *attempt*: `questsCompleted` is that session's own
 `completions.length`, the tokens and the cost are that attempt's trajectory, the
 playtime is that attempt's active segments. So the run page used to answer "how
@@ -243,7 +243,7 @@ freeplay or names a `continuedFrom`, so a scored run's page pays nothing for it,
 and behind the gate it is the same memoised `runTotals` the listing uses, so an
 ended attempt is read once per process.
 
-`characterViewOf` itself is **universal** since 2026-09-16 (item 128): every run
+`characterViewOf` itself is **universal**: every run
 the set holds gets a view, and a scored run's is a chain of one attempt. Null is
 reserved for a run the set does not hold and for a stillborn launch. Aggregating
 universally is not printing universally — a strip reading "attempt 1 of 1" is
@@ -309,7 +309,7 @@ not create the directory a writer would. `reflecting` is `run.reflecting_since`
 being non-null: the trajectory keeps the window's transitions, the column keeps
 the current answer, and a process boundary clears it, since a resumed run starts
 with a fresh gate. Both publish: the entry is the model's own words under a
-zone *name*, and names and model-authored text are published since 2026-08-30
+zone *name*, and names and model-authored text are published
 (docs/DATA-AND-LEGAL.md, "Trajectory logs").
 
 Tiles come from the minimap extraction in `minimap/`, which writes

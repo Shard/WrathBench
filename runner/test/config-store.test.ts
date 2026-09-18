@@ -1,6 +1,5 @@
 /**
- * The config store (FOLLOW-UPS item 127; the only fleet config since
- * 2026-09-18).
+ * The config store — the only fleet config.
  *
  * Two invariants worth pinning. First, that a seed round-trips: the supervisor
  * cannot tell the store from the document it was seeded with —

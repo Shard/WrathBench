@@ -2,7 +2,7 @@
  * The fixture boot a smoke does before it starts proving anything: find out
  * whether its persistent character exists, create it through the module if it
  * does not, and hand the character to `infra/fixtures/apply.ts` to be placed
- * into a named scenario (docs/FOLLOW-UPS.md item 45, infra/README.md
+ * into a named scenario (infra/README.md
  * "Scenario fixtures").
  *
  * Shared by `travel.ts --from tram-ironforge` (SDK client) and

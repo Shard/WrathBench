@@ -18,7 +18,7 @@
  *
  * The bands exist because bm25 alone put a page whose only connection to
  * "quest 783" was the digits 783 inside an arithmetic example above the quest
- * page itself (FOLLOW-UPS 25). A page with no article text is a second sharp
+ * page itself. A page with no article text is a second sharp
  * case: it is not an FTS document at all, so bands 2 and 3 cannot reach it, and
  * bands 0 and 1 return it only when it has something structured to state
  * (`EMPTY_PAGE_SNIPPET`). Numbers are the sharp case: a numeric token that

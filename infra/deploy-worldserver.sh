@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # COMPOSE ONLY, and compose has been stopped since the 2026-09-08 cutover: the
-# live deploy window is infra/k8s-deploy.sh (docs/[removed], "Day 2").
+# live deploy window is infra/k8s-deploy.sh.
 # This script is kept for the local rehearsal stack and for the rollback path,
 # and `bun run deploy:worldserver:compose` is how it is reached.
 #
@@ -43,7 +43,7 @@
 # operator relies on instead of watching the window.
 #
 # VERIFICATION IS FAIL-CLOSED (2026-08-22, after a deploy that printed
-# "DEPLOYED and verified" having executed no smoke at all — see docs/WORKLOG.md):
+# "DEPLOYED and verified" having executed no smoke at all):
 # the success line prints only when VERIFIED_BY names something that actually
 # ran to a zero exit. Every other path rolls back and exits non-zero, and the
 # two honest "verified nothing" paths (--no-smoke, no smokes configured) say
@@ -89,7 +89,7 @@ while [[ $# -gt 0 ]]; do
     --next-tag) NEXT_TAG="$2"; shift 2 ;;
     --no-smoke) RUN_SMOKE=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
-    --allow-live) echo "deploy-worldserver: --allow-live is gone — the deploy drains the fleet itself (runs pause and resume; see docs/OPERATIONS.md)" >&2; exit 2 ;;
+    --allow-live) echo "deploy-worldserver: --allow-live is gone — the deploy drains the fleet itself (runs pause and resume; see docs/RUNBOOK.md)" >&2; exit 2 ;;
     -h|--help) sed -n '2,60p' "$0"; exit 0 ;;
     *) echo "deploy-worldserver: unknown flag $1" >&2; exit 2 ;;
   esac
@@ -117,8 +117,8 @@ require_num() {
 
 command -v bun >/dev/null 2>&1 || die "bun is not on PATH (this script parses the preflight block and fleet-state.json with it)"
 
-# The module's port secret (module/PROTOCOL.md "Authentication"; FOLLOW-UPS
-# 19). Compose interpolates AC_WRATH_BENCH_SECRET from the shell, and it does
+# The module's port secret (module/PROTOCOL.md "Authentication").
+# Compose interpolates AC_WRATH_BENCH_SECRET from the shell, and it does
 # not read the repo-root .env (its project directory is infra/), so the
 # recreate below would ship an empty secret and the new module would refuse
 # to listen — a rollback, every time. Load it from .env when the shell does
@@ -127,7 +127,7 @@ if [[ -z "${WRATHBENCH_MODULE_SECRET:-}" && -f "${REPO_ROOT}/.env" ]]; then
   WRATHBENCH_MODULE_SECRET="$(sed -n 's/^WRATHBENCH_MODULE_SECRET=//p' "${REPO_ROOT}/.env" | head -1 | tr -d "\"'" )"
 fi
 export WRATHBENCH_MODULE_SECRET="${WRATHBENCH_MODULE_SECRET:-}"
-[[ "${#WRATHBENCH_MODULE_SECRET}" -ge 32 ]] || die "WRATHBENCH_MODULE_SECRET is unset or shorter than 32 characters (in the shell or ${REPO_ROOT}/.env) — the module would refuse to listen; see docs/OPERATIONS.md, Secrets"
+[[ "${#WRATHBENCH_MODULE_SECRET}" -ge 32 ]] || die "WRATHBENCH_MODULE_SECRET is unset or shorter than 32 characters (in the shell or ${REPO_ROOT}/.env) — the module would refuse to listen; see docs/RUNBOOK.md, Secrets"
 command -v flock >/dev/null 2>&1 || die "flock is not on PATH (util-linux); the deploy lock needs it"
 
 cd "${REPO_ROOT}"

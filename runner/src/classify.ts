@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Manually (re)classify a finished run's termination reason — chiefly
- * `environment-defect`, which no watchdog can detect (PHASE-0: a broken quest
+ * `environment-defect`, which no watchdog can detect (a broken quest
  * looks like a stuck model until a human reads the trajectory).
  *
  *   bun runner/src/classify.ts <run-id> <reason> [note...]

@@ -674,7 +674,7 @@ describe("createRenderer", () => {
     /*
      * The point of `RunStream.release`: the viewer handle keeps one
      * `EntrySummary` per record per run, which over a thousand-run tree is the
-     * largest live thing a publish pass builds (docs/FOLLOW-UPS.md item 121).
+     * largest live thing a publish pass builds.
      * A streaming caller is walking the tree once, so a run it has published is
      * one it can forget — and the proof is that the count never climbs past the
      * batch size, whatever the tree's size.
@@ -714,7 +714,7 @@ describe("createRenderer", () => {
   test("streaming the per-run artifacts changes nothing but when they are let go of", async () => {
     /*
      * The publisher renders with a `RunStream` so it never holds the whole
-     * tree (docs/FOLLOW-UPS.md item 121). What it publishes must be byte for
+     * tree. What it publishes must be byte for
      * byte what the unstreamed render produces — same keys, same bodies, same
      * generation, same `runs.json` pointers — whatever the batch size is.
      */

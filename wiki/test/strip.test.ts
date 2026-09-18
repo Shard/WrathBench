@@ -74,7 +74,7 @@ Lorem after.`;
     expect(typeof once).toBe("string");
   });
 
-  test("a repeated named ref is self-closing, not an opening tag (FOLLOW-UPS 63)", () => {
+  test("a repeated named ref is self-closing, not an opening tag", () => {
     // `<ref name="x" />` cites a footnote a second time. Reading it as an
     // opening tag ate everything to the next `</ref>` — including the `}}`
     // that closed the infobox, which then swallowed the whole page.
@@ -88,7 +88,7 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext(wt)).toBe("Lorem ipsum dolor sit amet.");
   });
 
-  test("a brace run is a run, not two-character pairs (FOLLOW-UPS 63)", () => {
+  test("a brace run is a run, not two-character pairs", () => {
     // `{{{name|default}}}` is a template parameter. Read two characters at a
     // time, its third brace opens a `{|` table that nothing ever closes.
     expect(stripWikitext("{{box|a={{{1|Alpha}}}|b=y}}Lorem ipsum.")).toBe("Lorem ipsum.");
@@ -99,7 +99,7 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("{{box\n|criteria=\n* Collect 5 [[Example Item Delta]]\n|mode={{{m|}}}\n}}")).toBe("");
   });
 
-  test("a closer matches its own kind (FOLLOW-UPS 63)", () => {
+  test("a closer matches its own kind", () => {
     // A `{|` written inside a template argument must not eat the template's
     // `}}`, and `|}}` is a last argument's pipe, not a table closer.
     expect(stripWikitext("{{box|a=x{|y\n}}Lorem ipsum.")).toBe("Lorem ipsum.");
@@ -107,7 +107,7 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("{|\n| {{tpl|x}}\n|}\nLorem ipsum.")).toBe("Lorem ipsum.");
   });
 
-  test("an unclosed opener costs its paragraph, not the page (FOLLOW-UPS 63)", () => {
+  test("an unclosed opener costs its paragraph, not the page", () => {
     const wt = "{{infobox place\n| name = Example Hold Alpha\n\nLorem ipsum dolor sit amet.";
     expect(stripWikitext(wt)).toBe("Lorem ipsum dolor sit amet.");
     // Prose before the unclosed opener is kept, as it always was.

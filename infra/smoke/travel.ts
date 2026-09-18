@@ -1,5 +1,5 @@
 /**
- * Navigation gate (FOLLOW-UPS item 38 N1): a fresh Dwarf walks Coldridge
+ * Navigation gate: a fresh Dwarf walks Coldridge
  * Valley -> Coldridge Pass tunnel -> Kharanos -> Ironforge -> Tinker Town,
  * enters the Deeprun Tram portal, boards a tram car, rides it to the Stormwind
  * end, steps off, and takes the exit portal into Stormwind. Every leg must end
@@ -41,7 +41,7 @@
  * (built to :next 2026-08-23): it cannot pass against a worldserver older than
  * that, and says so at startup if the first transport report never arrives.
  *
- * Two starts (FOLLOW-UPS item 45):
+ * Two starts:
  *
  *   --from tram-ironforge  the fast one, and the gate's. A persistent fixture
  *     character (default `Smoketram` on MODULE_ACCOUNT, never deleted) is
@@ -62,7 +62,7 @@
  * `apply.ts` rewrites its rows on every run. The session is still closed with
  * DELETE /session at the end, as on the legacy path.
  *
- * Run (this is N1 of the navigation plan, FOLLOW-UPS 38). The module's HTTP port is not
+ * Run (this is N1 of the navigation plan). The module's HTTP port is not
  * published to the host, so the smoke runs inside the runner container:
  *
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/travel.ts --from tram-ironforge --rides 3

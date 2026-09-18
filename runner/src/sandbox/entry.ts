@@ -64,7 +64,7 @@ import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, HostToChil
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
 // this file by hand, and is random rather than a fixed `"dev"` so it can never
-// collide with — or be guessed alongside — a real run's session (FOLLOW-UPS 19).
+// collide with — or be guessed alongside — a real run's session.
 const TOKEN = process.env["WRATHBENCH_TOKEN"] ?? randomBytes(16).toString("hex");
 // The fleet-assigned game account, bound onto the client so a snippet cannot
 // pass (or omit) an account and land on the wrong one. Empty means

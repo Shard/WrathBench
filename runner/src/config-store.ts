@@ -5,7 +5,7 @@
  * the active config is operational state on the data volume, never a file in
  * git. `infra/fleet.example.json` is the bootstrap a fresh deployment seeds
  * from once (`seed`); `export` renders the store to a local file for reading
- * or diffing, never for committing (docs/OPERATIONS.md, "Where the config
+ * or diffing, never for committing (docs/RUNBOOK.md, "Where the config
  * lives").
  *
  * Three rules shape everything here.

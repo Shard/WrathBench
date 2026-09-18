@@ -3,7 +3,7 @@
  *
  * The bundle here is built by hand from the canary list, so no wiki text is
  * needed and none appears. Titles are place names, which the docs and
- * FOLLOW-UPS already name.
+ * the docs already name.
  */
 
 import { describe, expect, test } from "bun:test";

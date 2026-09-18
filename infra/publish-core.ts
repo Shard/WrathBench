@@ -571,7 +571,7 @@ export async function publish(result: SnapshotResult, store: ObjectStore, state:
  * the renderer produces them rather than in one array at the end. What the pass
  * retains then stops growing with the runs tree — the artifacts it has already
  * published, and the renderer's own memos for those runs, which together were
- * most of a pass's peak (docs/FOLLOW-UPS.md item 121).
+ * most of a pass's peak.
  * Streamed batches are uploaded before the result exists, which is safe for the
  * reason `assertResult` explains, and the two things the flip needs from them —
  * the keys' hashes for `uploaded`, the `(run, version)` pairs for the keep

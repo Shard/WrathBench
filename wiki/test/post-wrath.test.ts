@@ -204,7 +204,7 @@ describe("admitPage reasons", () => {
 });
 
 describe("a page that predates the Cataclysm announcement is a Wrath page", () => {
-  // The 588-page pocket of FOLLOW-UPS 49: a capital or a starting zone whose
+  // The 588-page pocket: a capital or a starting zone whose
   // 2010 editors annotated what was coming, dropped by its own annotation.
   const SIGNALLED = `{{zonebox|patch=4.0.1}}\n${PROSE}\n[[Category:Cataclysm]]`;
 
@@ -232,7 +232,7 @@ describe("a page that predates the Cataclysm announcement is a Wrath page", () =
     ).toEqual({ admit: false, reason: "dropped_post_wrath" });
   });
 
-  test("the announcement week is already too late to protect (FOLLOW-UPS 64)", () => {
+  test("the announcement week is already too late to protect", () => {
     // The wiki started stubs for the announced expansion the same week, and a
     // page created then is a page about it, not a page that acquired it.
     expect(

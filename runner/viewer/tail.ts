@@ -76,7 +76,7 @@ export type {
  * a line view per record over all of it) before a single record is parsed. That
  * is transient, but transient at that size is what a memory limit sees: the
  * publisher's pass peaked at 4.4 GB reading a tree whose live set is well under
- * one (docs/FOLLOW-UPS.md item 121). Reading in windows changes nothing about
+ * one. Reading in windows changes nothing about
  * what is parsed — the partial line at a window's edge is carried in `pending`
  * exactly as the partial line at the end of a live file always was — and bounds
  * the buffer instead. Four mebibytes is comfortably above the largest single
@@ -1098,7 +1098,7 @@ export function resolvedMarkOf(rec: Record<string, unknown>): ResolvedMark | nul
 /**
  * One `milestone` record of kind `zone` or `area`, projected down to the ids.
  *
- * The producer (`runner/src/loop.ts`, FOLLOW-UPS 35, 2026-08-23) writes one on
+ * The producer (`runner/src/loop.ts`, 2026-08-23) writes one on
  * every change of `self.zone` / `self.area`, `from` absent on the first
  * observation of a process. Kinds beyond these two are ignored here.
  */

@@ -2,7 +2,7 @@
  * The credential a smoke presents to the module (module/PROTOCOL.md,
  * "Authentication"). Smokes are operator tooling, so they hold the port
  * secret: `WRATHBENCH_MODULE_SECRET`, autoloaded by Bun from `/wrathbench/.env`
- * inside the runner container (docs/OPERATIONS.md, "Secrets"). It goes on
+ * inside the runner container (docs/RUNBOOK.md, "Secrets"). It goes on
  * every request and every `/events` upgrade as `Authorization: Bearer`, and
  * into `connect({ secret })` for the SDK-driven smokes.
  *

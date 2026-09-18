@@ -10,7 +10,7 @@
  *
  * It is a component rather than a block of `MapPage` for one reason: the route
  * swap has to be renderable in a test. The swap that used to freeze the page
- * (worklogs/2026-09-05) was a JSX expression reading `track()!.points` on its
+ * was a JSX expression reading `track()!.points` on its
  * own, which re-ran after the track was cleared and threw inside the graph — an
  * uncaught throw in a computation stops every computation after it, and the
  * page sat on the dead replay until a reload. The rule here is that no

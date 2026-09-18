@@ -1,5 +1,5 @@
 /**
- * Map replay's cursor maths (FOLLOW-UPS 22).
+ * Map replay's cursor maths.
  *
  * The property that keeps the one-renderer design intact is that a cursor produces the same
  * `AgentPosition[]` shape the live feed produces — these pin that, plus the
@@ -23,7 +23,7 @@ import {
 function point(ts: number, map: number, x: number, y: number): TrackPoint {
   return {
     ts, map, x, y, level: 5, xp: 100, money: null, questsCompleted: null, turn: ts,
-    // The player frame's numbers (FOLLOW-UPS 104), as a recorded track carries them.
+    // The player frame's numbers, as a recorded track carries them.
     health: 140, maxHealth: 220, power: 30, maxPower: 100, powerType: 0, nextLevelXp: 2100,
   };
 }

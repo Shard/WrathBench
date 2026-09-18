@@ -935,7 +935,7 @@ export type MoveResult =
 /**
  * Per-status recovery recipes (what happened, what it means,
  * the next step), in the result rather than in a trajectory nobody reads twice.
- * Before the module split `no_path` into causes (FOLLOW-UPS 38 N1) one hint
+ * Before the module split `no_path` into causes one hint
  * covered four failures and qwen (2026-08-22 roster) spent 8 turns discovering
  * which one it had; the cause is now the module's word and the hint is only the
  * recovery that follows from it.
@@ -1110,7 +1110,7 @@ export interface WaitForTransferOptions {
 /**
  * The outcome of waiting for a map transfer — returned, never thrown, for the
  * same reason as `MoveResult`: every arm is the game answering, and
- * the bounded-wait statuses FOLLOW-UPS 38 N1 asks for (`waiting`, `wrong_map`)
+ * the bounded-wait statuses the navigation plan asks for (`waiting`, `wrong_map`)
  * are answers too, not absences.
  */
 export type TransferResult =
@@ -1624,7 +1624,7 @@ const TAXI_REPLY_HINTS: Record<number, string> = {
  *
  * Every inventory refusal the game makes arrives as one of these numbers and
  * nothing else, and a run was observed reverse-engineering "reason 60" into
- * "in combat" from context (FOLLOW-UPS item 101a). The number stays the
+ * "in combat" from context. The number stays the
  * server's word and is always reported alongside; this table only names it.
  * Naming is not softening game semantics — the client shows this text too —
  * and it says nothing about what to do next.
@@ -2189,7 +2189,7 @@ export async function connect(options: ConnectOptions): Promise<WrathClient> {
     } catch (err) {
       // The client the caller never receives is the client nobody can close.
       // `events.connect()` rejects on a whole failed climb of the ladder
-      // (FOLLOW-UPS 113) while the stream itself keeps retrying, so without
+      // while the stream itself keeps retrying, so without
       // this every failed `connect()` leaks a reconnect ladder for the life of
       // the process. `close()` is the client's own cleanup for everything the
       // constructor started — the stream and the coalescing timers — so the
@@ -4529,7 +4529,7 @@ export class WrathClient {
     }
     if (status === "transferred") {
       // Postcondition, not dispatch: resolve only once the server has named
-      // the new map (FOLLOW-UPS 38 N1). A transfer that never completes is a
+      // the new map. A transfer that never completes is a
       // typed `ok: false` from waitForTransfer, surfaced with the move status
       // intact so the caller sees both facts.
       const transfer = await this.waitForTransfer({ timeout: options.timeout ?? 90_000, sinceSeq, epoch });
@@ -4653,7 +4653,7 @@ export class WrathClient {
    * a deadline with no transfer announced at all is `no_transfer`, and an
    * arrival on a map other than `expectMap` is `wrong_map`. Never sleeps.
    *
-   * Earned by the travel probe (`infra/smoke/travel.ts`, FOLLOW-UPS item 18):
+   * Earned by the travel probe (`infra/smoke/travel.ts`):
    * every version of it before this helper creep-walked into the tram portal
    * and slept 1.5s per step to see whether a teleport had landed.
    */

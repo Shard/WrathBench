@@ -2,7 +2,7 @@
 #
 # The Gated preview's Worker answered this path with a disallow-all, ahead of
 # the password form, and that is half of why nothing unfurled: Slack and Twitter
-# honour robots.txt and Discord does not (FOLLOW-UPS item 111). The Open shape
+# honour robots.txt and Discord does not. The Open shape
 # has no fetch handler and so serves no robots.txt at all unless one is in
 # `dashboard/public/`, which is what this file is.
 #

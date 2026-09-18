@@ -3,12 +3,12 @@
 The decisions that shape what a WrathBench result means, and the principles
 behind them. This is the successor to the numbered ADR series (50 records,
 consolidated 2026-08-25; the full texts are in git history under
-`docs/decisions/`, and `docs/WORKLOG.md` holds the table mapping each old
+`docs/decisions/`, and the operator's private record holds the table mapping each old
 number to where its decision lives now). It is edited in place: a change to
 anything here is a change to what the benchmark measures and is treated as
 such — see "Changing this document" at the end. Mechanics live in the doc that owns the
 component (`docs/ARCHITECTURE.md`, `docs/CONTRACTS.md`, `docs/EPISODES.md`,
-`docs/OPERATIONS.md`, `module/PROTOCOL.md`, `wiki/README.md`); this page is
+`docs/RUNBOOK.md`, `module/PROTOCOL.md`, `wiki/README.md`); this page is
 the why.
 
 ## The principles
@@ -463,7 +463,7 @@ reason rather than parsing a detail string is what keeps that distinction from
 being rediscovered as a bug, and one shared list of the reasons that are not
 the model's fault is what keeps a run written off by the scheduler from still
 being drawn on the ladder. Mechanics — the sweep, the strike ladder, the
-per-lane table — are `docs/OPERATIONS.md` and `docs/EPISODES.md`.
+per-lane table — are `docs/RUNBOOK.md` and `docs/EPISODES.md`.
 
 **The tier is the evidence budget.** How much a model runs is one word on its
 roster entry, denominated in runs, and it is the only thing that sets a run
@@ -479,7 +479,7 @@ a run may physically execute. A bespoke volume is a named tier added to the
 table in code, reviewed like an episode id; there is deliberately no
 per-entry override. Money caps are external to the fleet by decision.
 Scheduling mechanics — account classes, the defer ladder, priorities — are
-`docs/OPERATIONS.md`.
+`docs/RUNBOOK.md`.
 
 ## Scoring
 

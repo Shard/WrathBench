@@ -7,11 +7,11 @@
 # NOT for config. A config change — a roster entry, the policy, a job — is
 # picked up by the running supervisor on its next 60s tick once it is in the
 # config store (the viewer's /config page, or runner/src/config-store.ts through
-# the runner pod). Nothing here is involved; see docs/OPERATIONS.md, "Where the
+# the runner pod). Nothing here is involved; see docs/RUNBOOK.md, "Where the
 # config lives".
 #
 # CLUSTER-NATIVE since 2026-09-11. The fleet is the `wrathbench-fleet`
-# Deployment in namespace `wrathbench` (docs/[removed]); compose has
+# Deployment in namespace `wrathbench`; compose has
 # been stopped since the 2026-09-08 cutover. Every verb below drives kubectl.
 # There is no compose path any more: this script used to run
 # `docker compose ps fleet` and report a live fleet as "container not running,
@@ -94,7 +94,7 @@
 #
 # NOT THE DEPLOY WINDOW. This script rolls the SUPERVISOR. A worldserver deploy
 # is infra/k8s-deploy.sh, which owns its own drain and its own smokes. Neither
-# changes an image tag: Flux owns that (docs/[removed]).
+# changes an image tag: Flux owns that.
 
 set -Eeuo pipefail
 

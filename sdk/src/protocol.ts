@@ -704,7 +704,7 @@ export type MoveOpcode = (typeof MOVE_OPCODES)[number];
 
 /**
  * Terminal statuses of a `move_to`, from PROTOCOL.md (navigation vocabulary of
- * 2026-08, FOLLOW-UPS 38 N1: the former undifferentiated `no_path` is gone).
+ * 2026-08: the former undifferentiated `no_path` is gone).
  */
 export const MOVE_STATUSES = [
   "arrived",
@@ -786,7 +786,7 @@ export type TransportProgressData = z.infer<typeof transportProgressDataSchema>;
 
 // ---------------------------------------------------------- map transfers
 //
-// Navigation (FOLLOW-UPS 38 N1). `SMSG_NEW_WORLD` is the only map id a client
+// Navigation. `SMSG_NEW_WORLD` is the only map id a client
 // receives after login, so state.ts keys self position's `map` on it.
 
 export const transferPendingDataSchema = z.looseObject({

@@ -1,5 +1,5 @@
 /**
- * Probe for the navigation status vocabulary (FOLLOW-UPS item 38 N1).
+ * Probe for the navigation status vocabulary.
  *
  * End to end against a booted worldserver, from inside the compose network:
  * session in world (Human in Northshire) -> a `move_to` whose z is 5y above
@@ -192,7 +192,7 @@ async function main() {
   //    yards, not the tens this probe once assumed. Measured at this exact
   //    point on 2026-08-23: +2 and +5 arrive with meshZ, +10 and +30 are
   //    target_off_mesh (+15/+20 come back path_incomplete off a nearby roof
-  //    poly). See FOLLOW-UPS.
+  //    poly).
   const high = await move({ x: COURTYARD.x, y: COURTYARD.y, z: COURTYARD.z + 5 });
   if (high.status !== "arrived") fail(`z+5 request should arrive (mesh resolves z), got ${JSON.stringify(high)}`);
   if (dist2d(high.pos, COURTYARD) > 4) fail(`z+5 arrived ${dist2d(high.pos, COURTYARD).toFixed(1)}m from target`);

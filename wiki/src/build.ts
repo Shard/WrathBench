@@ -163,7 +163,7 @@ export interface Metric {
 }
 
 /**
- * Every number the build reports, stated once (FOLLOW-UPS 65 was three
+ * Every number the build reports, stated once (it was three
  * hand-synced lists). The key is the bundle's `meta` key: `newCounters` zeroes
  * one counter per row for the build loop to increment, `metaCounters` writes
  * every row to `meta`, and `SUMMARY` below decides how each prints. Adding a
@@ -783,7 +783,7 @@ async function main(): Promise<void> {
         const newest = redirectTarget(page.wikitext);
         // A later expansion's own coinage is not a name this world answers to,
         // whatever the wiki later pointed it at (`Ruins of Gilneas` → `Gilneas`
-        // is the shape; FOLLOW-UPS 62).
+        // is the shape).
         if (!titleIsPostWrathCoinage(page.ns, page.title)) {
           pendingRedirects.push({
             source: page.title,
@@ -926,7 +926,7 @@ async function main(): Promise<void> {
     }
     // A later expansion's own coinage is not a name this world answers to,
     // whatever the wiki later pointed it at (`Ruins of Gilneas` -> `Gilneas`
-    // is the shape; FOLLOW-UPS 62).
+    // is the shape).
     const siblings: Pending[] = siblingRedirects(survivors, answered)
       .filter((s) => !titleIsPostWrathCoinage(s.ns, s.source))
       .map((s) => ({

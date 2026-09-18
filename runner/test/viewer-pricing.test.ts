@@ -191,7 +191,7 @@ describe("priceFor", () => {
   });
 });
 
-describe("the hand-held provider table (FOLLOW-UPS 112)", () => {
+describe("the hand-held provider table", () => {
   /*
    * Paid providers that are not OpenRouter: the sync cannot price them, so
    * their rows are typed in, keyed on the run's apiBase *and* id. Two rows

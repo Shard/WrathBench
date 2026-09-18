@@ -1,5 +1,5 @@
 /**
- * The inventory lists the run page and map popout print (FOLLOW-UPS 50):
+ * The inventory lists the run page and map popout print:
  * a dash for a run that never recorded items, "none" for a recorded empty
  * side, and counts only past one.
  */

@@ -70,7 +70,7 @@ export function createSchema(db: Database): void {
   `);
   // Numeric entity ids the page states about itself, lifted from infobox
   // templates before the strip (schema 3). Without them a query for an id can
-  // only be answered by body prose, which is what FOLLOW-UPS 25 was about.
+  // only be answered by body prose.
   db.run(`
     CREATE TABLE page_ids (
       page_id INTEGER NOT NULL,

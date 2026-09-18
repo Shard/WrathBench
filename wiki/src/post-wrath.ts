@@ -412,7 +412,7 @@ const POST_WRATH_TITLES: ReadonlySet<string> = new Set([
  * titles want. This is an unconditional veto in `admitPage`, and the same
  * predicate vetoes recovering the name as a redirect source in `build.ts`: a
  * name that resolves is a name search can return, and `Ruins of Gilneas` →
- * `Gilneas` was exactly that leak (FOLLOW-UPS 62).
+ * `Gilneas` was exactly that leak.
  */
 export function titleIsPostWrathCoinage(ns: number, title: string): boolean {
   if (ns !== 0) return false;
@@ -667,7 +667,7 @@ export function hasClassic2019Signal(
  * started Cataclysm stubs the same week, and 119 of that 588 were created on or
  * after it — Blackwing Descent, Halls of Origination, Gilneas City, a run of
  * beta ability pages — Cataclysm content sitting in a Wrath bundle because the
- * line was drawn nine months too late (FOLLOW-UPS 64). Nothing about a page
+ * line was drawn nine months too late. Nothing about a page
  * created after the announcement makes its Cataclysm category an annotation
  * rather than a subject.
  *

@@ -215,7 +215,7 @@ namespace WrathBench
         if (PortSecret().size() < 32)
         {
             LOG_ERROR("module", "wrathbench: WrathBench.Secret (AC_WRATH_BENCH_SECRET) is unset or shorter than 32 characters; "
-                "the HTTP/WS control surface is NOT listening. Set WRATHBENCH_MODULE_SECRET in .env (docs/OPERATIONS.md, Secrets).");
+                "the HTTP/WS control surface is NOT listening. Set WRATHBENCH_MODULE_SECRET in .env (docs/RUNBOOK.md, Secrets).");
             return;
         }
 
@@ -587,7 +587,7 @@ namespace WrathBench
         if (token.empty())
             return {400, Json::Writer().Add("ok", false).Add("error", "missing_token").Str()};
 
-        // Minimum-length gate (FOLLOW-UPS 19). The token is no longer the
+        // Minimum-length gate. The token is no longer the
         // credential — the lease secret is (PROTOCOL.md, "Authentication") —
         // but it is still the key every session, audit file and event stream
         // is addressed by, so a guessable one still lets an operator-class
@@ -1360,7 +1360,7 @@ namespace WrathBench
     // clock doubles as the "client" clock; CMSG_TIME_SYNC_RESP below keeps the
     // session's clock delta near zero so these timestamps are accepted. When
     // the point is on a transport the packet says so the way a client's would:
-    // the server then carries the character as a passenger (FOLLOW-UPS 38 N1).
+    // the server then carries the character as a passenger.
     static void SendMovePacket(BenchSession& s, Player* player, uint16 opcode, uint32 moveFlags,
         float x, float y, float z, float o, Transport* transport = nullptr)
     {
@@ -1715,7 +1715,7 @@ namespace WrathBench
 
         // Resolve the request against the server's mmaps (the one sanctioned
         // navmesh use, docs/CONTRACTS.md "Pathing") into either a walkable
-        // polyline or one typed cause. FOLLOW-UPS item 38 N1: the old single
+        // polyline or one typed cause: the old single
         // `no_path` hid four different failures, and one of them (a 3D endpoint
         // check against a request whose z was merely stale) was self-inflicted.
         // Transports have no navmesh: a client walks straight onto (or off) a
@@ -2809,7 +2809,7 @@ namespace WrathBench
         // A map transfer or a teleport ends the move: the server discards
         // every movement opcode until the ack (TickTeleportAcks) and applies the
         // destination itself. `transferred` rather than `interrupted`, so the
-        // agent knows a portal took it (FOLLOW-UPS 38 N1); the SDK then waits
+        // agent knows a portal took it; the SDK then waits
         // for SMSG_NEW_WORLD and resolves on the new map. A same-map teleport
         // (Hearthstone, graveyard port) is `teleported` (item 46): no
         // map change is coming. The 15y desync guard
@@ -2848,7 +2848,7 @@ namespace WrathBench
         // Dying mid-run stops the move — but only while the body is still on
         // the ground. A released spirit (ghost flag) can and must move: the
         // corpse run is the normal 3.3.5a death recovery. Conflating the two
-        // death states made every corpse run impossible (FOLLOW-UPS item 14).
+        // death states made every corpse run impossible.
         if (!player->IsAlive() && !player->HasPlayerFlag(PLAYER_FLAGS_GHOST))
         {
             SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE,
@@ -3092,7 +3092,7 @@ namespace WrathBench
     // opcodes (HandleMovementOpcodes: IsBeingTeleported -> ignore) and the
     // destination is never applied, so a session that never acks is wedged at
     // its pre-teleport position forever — repop's graveyard teleport was the
-    // observed case (docs/FOLLOW-UPS.md item 14). The parked client has no
+    // observed case. The parked client has no
     // loading screen, so the module acks on the next world tick, through the
     // same handlers a real client's packets would hit. Like the
     // CMSG_TIME_SYNC_RESP answer in the tap, this is module-internal client
@@ -3440,7 +3440,7 @@ namespace WrathBench
             s->dropCount.fetch_add(1);
             _totalDrops.fetch_add(1);
             // Per-opcode histogram for the whitelist-expansion census
-            // (PHASE-0). Relaxed atomic add: this is the hot path, fired for
+            // Relaxed atomic add: this is the hot path, fired for
             // every non-whitelisted packet on world and map threads.
             if (opcode < kOpcodeSpace)
                 _dropsByOpcode[opcode].fetch_add(1, std::memory_order_relaxed);

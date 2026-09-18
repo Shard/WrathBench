@@ -762,7 +762,7 @@ export interface PositionsResponse extends SnapshotEnvelope {
 /**
  * One attempt of a freeplay character, with its own figures.
  *
- * A durable character is one character across attempts (docs/OPERATIONS.md,
+ * A durable character is one character across attempts (docs/RUNBOOK.md,
  * "Freeplay characters are durable"), and every figure the runner records is per
  * *attempt*: the quest counter, the tokens, the cost, the playtime all start
  * again at each continuation. That is not changed here — the record is the
@@ -1315,7 +1315,7 @@ export interface TaxiFacts {
 }
 
 /**
- * A run's level timeline, from its `level` milestone records (FOLLOW-UPS 35).
+ * A run's level timeline, from its `level` milestone records.
  *
  * The producer writes one mark per change of `self.level`, `from` absent on the
  * first observation of a process — so the first mark of a run is the level it
@@ -1628,7 +1628,7 @@ export interface ResultRun {
    */
   billing?: "free" | "paid";
   /**
-   * Where the run went, from its zone/area milestone records (FOLLOW-UPS 35):
+   * Where the run went, from its zone/area milestone records:
    * the ladder's rungs 2 and 4 read this. `null` is a run that wrote no such
    * record — everything before the producer shipped on 2026-08-23 — and must
    * not be read as "never left"; `undefined` is a viewer that predates the

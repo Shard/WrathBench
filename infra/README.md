@@ -5,7 +5,7 @@ prerequisite is an AzerothCore server data directory at `data/client`.
 
 The same stack on Kubernetes is `infra/chart/wrathbench` (Helm), built by
 `infra/build-images.sh`, released by `infra/k8s-release.sh` and operated by
-`infra/k8s-deploy.sh`. The runbook is `docs/[removed]`; nothing here
+`infra/k8s-deploy.sh`; nothing here
 changes because of it.
 
 | path | what |
@@ -66,7 +66,7 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
   logged-out smoke character into a named scenario. See "Scenario fixtures".
 - **fleet** — the fleet supervisor (`infra/run-fleet.ts`) as a long-lived
   service, same image and mounts as `runner`. Behind the `fleet` compose profile
-  so it only starts when named. See `docs/OPERATIONS.md` ("Running the fleet as
+  so it only starts when named. See `docs/RUNBOOK.md` ("Running the fleet as
   a service").
 - **publisher** — pushes the public dashboard's JSON to object storage on a
   timer (`infra/publish-dashboard.ts --loop`), behind the `publish` profile.
@@ -251,7 +251,7 @@ only ever *frees* its own session (`DELETE /session` is keyed on
 `token == runId`); another process's session is never touched.
 
 No roster file ships in the repo any more (the pre-0.5 `roster-*.json`
-examples were retired on 2026-09-18 with the fleet config's move into the
+examples were retired with the fleet config's move into the
 store); the fleet materialises one per job from the config store at
 `data/runs/fleet-<job>-<date>.roster.json`, which is also the shape to copy
 for a hand-written one.
@@ -271,7 +271,7 @@ the fleet sidesteps that collision.
 ## The fleet
 
 The config store is the whole answer to "what is running right now" —
-`docs/OPERATIONS.md`, "Where the config lives"; the viewer's `/config` page
+`docs/RUNBOOK.md`, "Where the config lives"; the viewer's `/config` page
 is where it is read and edited, and `infra/fleet.example.json` is the shape.
 Its unit of work is the **job**: a roster entry (or a rotation of
 several), an episode tier, a repeat count, run as one `run-roster` process on
@@ -473,7 +473,7 @@ and only has to return once the pin is *placed*. It does not have to wait for
 the cluster: the `pin` phase does that itself, by reading the image tag the
 worldserver and viewer Deployments actually run and then waiting out every
 rollout. That is the check a hook cannot get wrong, and the one a release needs
-— on 2026-09-16 a deploy window ran against a pin that had never merged, smoked
+— a deploy window once ran against a pin that had never merged, smoked
 the old release and called it verified. With no hook the phase prints the tag,
 the commit and where the chart expects them, and waits for the same thing, so
 placing a pin by hand still works.

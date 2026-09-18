@@ -15,5 +15,4 @@ The game and module ports are ClusterIP only. Spectate with:
   kubectl -n {{ .Release.Namespace }} port-forward svc/worldserver 8085:8085
 then point a 3.3.5a client's realmlist at 127.0.0.1.
 
-Day-2 flow, smokes and the cutover: docs/[removed].
 The image tag is owned by Flux; this chart never bumps it.

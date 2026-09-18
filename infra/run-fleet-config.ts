@@ -832,7 +832,7 @@ export function parseFleet(raw: unknown): FleetConfig {
     campaigns?: unknown;
   };
   if (o.lanes !== undefined) {
-    fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (see docs/OPERATIONS.md)");
+    fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (see docs/RUNBOOK.md)");
   }
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);

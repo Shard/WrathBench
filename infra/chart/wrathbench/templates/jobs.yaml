@@ -140,7 +140,7 @@ spec:
             # The realm address the auth handshake advertises. The module is
             # in-process and never reads this row, so it stays at loopback: a
             # spectator port-forwards 3724 and 8085 and their client connects to
-            # 127.0.0.1. Never a routable address (docs/[removed]).
+            # 127.0.0.1. Never a routable address.
             - name: WRATHBENCH_REALM_ADDRESS
               value: {{ .Values.realm.address | quote }}
             - name: WRATHBENCH_REALM_PORT

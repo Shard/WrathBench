@@ -2,7 +2,7 @@
 
 How the public site is hosted, and why. Researched 2026-08-25, decided the same
 week, shipped 2026-08-30 in a password-gated interim shape, and moved to the
-**Open** shape described here on 2026-09-11 (item 85): the app at
+**Open** shape described here: the app at
 `https://wrathbench.shard.page`, the data at
 `https://wrathbench-data.shard.page`, and no Worker in the read path. The
 cutover runbook is `infra/cloudflare/README.md`. The architecture is the "published
@@ -18,15 +18,15 @@ site is **push-based**: the lab pushes derived data outward on a timer, and no
 public request ever reaches it — so a traffic spike, however large, is
 Cloudflare's problem and not the lab's. Freshness of a few minutes is
 acceptable (the operator's call; the cadence was 60s at first and is 5 minutes
-since 2026-08-25, for the write-cost reason in "Cost" below. The harness's own
+now, for the write-cost reason in "Cost" below. The harness's own
 floor is finer than either: state samples land every 60s and the fleet
 heartbeat every 30–60s, so even a 60s push loses almost nothing the private
 dashboard actually has). Budget: Cloudflare free tier, with at most a small
 paid step.
 
-Push-out has a second benefit worth stating: FOLLOW-UPS item 19 (shared secret
-on the module port, token-to-character binding, snippet filesystem sandboxing)
-gates any *inbound* public exposure of the control surface. A publisher that
+Push-out has a second benefit worth stating: the module hardening (shared
+secret on the module port, token-to-character binding, snippet filesystem
+sandboxing) gates any *inbound* public exposure of the control surface. A publisher that
 only makes outbound S3 PUTs exposes nothing inbound, so the public dashboard
 does not wait on item 19. The private viewer keeps its loopback/LAN posture
 unchanged.
@@ -135,8 +135,8 @@ generation chain — for the fleet pips, freshness beats consistency. Superseded
 versions are pruned after a few cycles (the last five of each aggregate, the
 last two of each run); deletes are free.
 
-Per-aggregate versions replaced one hash over the whole set on 2026-09-04
-(operator, GitHub issue #38). Under the old scheme a single live run taking a
+Per-aggregate versions replaced one hash over the whole set
+(operator, 2026-09-04, GitHub issue #38). Under the old scheme a single live run taking a
 turn moved `runs.json`, `results.json`, every `ladder-*.json` and
 `models.json`, and the pass rewrote all ten aggregates under a fresh prefix —
 three of seven compared were byte-identical. The same pass now rewrites only
@@ -346,7 +346,7 @@ can answer that rung reached it, with the link still going to the first that
 did — and under the best level sits the median and range across the counted
 runs that recorded one.
 
-### The controls, since 2026-09-18
+### The controls
 
 The operator took three of the four dropdowns off the page. Race and class
 asked a question an eval episode cannot answer differently — every scored run
@@ -584,7 +584,7 @@ the push-based design exists to avoid. The trade bought one shared secret with
 no identity and no per-person revocation, which is the right weight for a
 preview shared with named people and the wrong one for a launch.
 
-It was retired on 2026-09-11 (item 85) when the `shard.page` zone arrived on
+It was retired when the `shard.page` zone arrived on
 the operator's personal account: `dashboard/worker/` deleted, `main` and the
 bucket binding dropped from `dashboard/wrangler.jsonc`, the bucket given its
 own custom domain and the cache rules that go with it. What it cost the minimap
@@ -756,7 +756,7 @@ put in front of.
   tests (upload ordering, diffing, pruning); snapshot client + build flag +
   SSE/entries guards + staleness banner + the fleet-clock fix; Cloudflare
   setup (bucket, custom domain, CORS, cache rule, two least-privilege
-  tokens) as an OPERATIONS.md runbook. Ships runs, ladder, episodes, models,
+  tokens) as a runbook. Ships runs, ladder, episodes, models,
   campaigns, run detail without entries, fleet and map at 60s.
 - **Phase 2 — redactor and entries**: shipped 2026-08-30 (see "The content
   boundary").

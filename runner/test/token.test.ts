@@ -1,6 +1,6 @@
 /**
  * Session tokens are the module's only authentication for `POST /action` and
- * `DELETE /session` (FOLLOW-UPS 19). They used to default to the run id — a
+ * `DELETE /session`. They used to default to the run id — a
  * second-granularity timestamp, enumerable from inside any concurrent run's
  * snippet — so these pin the two properties that replaced it: a fresh token is
  * a random secret, and a stored one too short for the module's `weak_token`

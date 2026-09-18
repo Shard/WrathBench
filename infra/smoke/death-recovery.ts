@@ -1,5 +1,5 @@
 /**
- * Probe for the death-recovery path end to end (docs/FOLLOW-UPS.md item 14).
+ * Probe for the death-recovery path end to end.
  *
  * The three fixes under test: the module now acks graveyard teleports
  * (TickTeleportAcks), lets a released ghost move (the IsAlive guard is

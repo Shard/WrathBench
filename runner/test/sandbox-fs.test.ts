@@ -1,5 +1,5 @@
 /**
- * The snippet child's filesystem confinement (FOLLOW-UPS 19, part 3): the
+ * The snippet child's filesystem confinement (part 3): the
  * child is exec'd under a Landlock ruleset by `runner/src/sandbox/confine.ts`,
  * so a snippet cannot read `.env` — or anything else outside the interpreter,
  * `runner/`, `sdk/` and `node_modules/` — by any path or API. Against the real

@@ -426,7 +426,7 @@ describe("client: movement", () => {
   });
 
   test("each typed failure carries its own recovery hint; path_incomplete carries reachedPos", async () => {
-    // FOLLOW-UPS 38 N1: the module now names the cause, so the hint is only
+    // The module now names the cause, so the hint is only
     // the recovery that follows from it.
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
@@ -627,7 +627,7 @@ describe("client: movement", () => {
   });
 
   test("transferred resolves on SMSG_NEW_WORLD, even one that landed before the move result", async () => {
-    // FOLLOW-UPS 38 N1: the postcondition is the server naming the new map,
+    // The postcondition is the server naming the new map,
     // never the dispatch. The server sends NEW_WORLD in the tick the portal
     // fires; the module's `transferred` result follows on the next world tick.
     const stub = startStub({ onConnect: () => frames(loginSequence) });
@@ -816,7 +816,7 @@ describe("client: movement", () => {
   test("a relog cannot resolve a moveTo against the previous session's stale result", async () => {
     // The module's moveId generator is per-session and restarts when the
     // session is recreated, so after a relog a fresh ack can reuse a moveId
-    // that a stale buffered result still carries (FOLLOW-UPS item 14: probes
+    // that a stale buffered result still carries (probes
     // with 8s timeouts "resolved" in 59ms against pre-relog payloads). The
     // stub pins moveId 1 on every ack to force exactly that collision.
     const stub = startStub({
@@ -3987,7 +3987,7 @@ describe("client: quest-start items and the questgiver marker pre-check (2026-08
   });
 });
 
-describe("connect() closes the stream it fails to open (FOLLOW-UPS 114)", () => {
+describe("connect() closes the stream it fails to open", () => {
   /**
    * A socket that always refuses, the way a refused TCP connect or a rejected
    * upgrade arrives. Every instance is one attempt of the reconnect ladder, so

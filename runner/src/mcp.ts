@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   };
   const runId = flag("run-id") ?? newRunId();
   // Random by default, never the run id: the token is the only thing
-  // authenticating `POST /action` and `DELETE /session` (FOLLOW-UPS 19).
+  // authenticating `POST /action` and `DELETE /session`.
   const token = flag("token") ?? newSessionToken();
   const config = loadRunConfig({
     runId,

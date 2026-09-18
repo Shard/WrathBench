@@ -419,7 +419,7 @@ function usage(): void {
       "                       a hand-started paused run still holds the shared game account",
       "  --loop               when the roster is exhausted, start over (cycle 2+ run ids get a",
       "                       -cN suffix so each pass is its own run). With no --until/--max-hours",
-      "                       it loops until stopped — that is the fleet-service shape (see docs/OPERATIONS.md)",
+      "                       it loops until stopped — that is the fleet-service shape (see docs/RUNBOOK.md)",
       "  --resume-roster      continue a partially completed roster",
       "  --date YYYYMMDD      the stamp in derived run ids and the log name. Defaults to today —",
       "                       pass the ORIGINAL date when resuming a roster after midnight, or the",
@@ -968,7 +968,7 @@ function metaCharacter(runId: string): string | undefined {
 
 /**
  * The session token a run actually holds. Tokens used to equal the run id;
- * since token hardening (FOLLOW-UPS 19) they are random secrets, so the only
+ * since token hardening they are random secrets, so the only
  * way to address a run's module session is to read the token back out of the
  * meta.json the runner persisted. The run-id fallback covers pre-hardening
  * runs, whose token *was* the run id.

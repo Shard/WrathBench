@@ -120,7 +120,7 @@ export const EXPANSION_MAPS = [530, 571];
  *
  * Rungs 2 and 4 became derivable on 2026-08-25, when the viewer was wired to
  * the zone/area milestone records the loop has written since 2026-08-23
- * (FOLLOW-UPS 35): `run.areas` carries the first area observed, whether the run
+ *: `run.areas` carries the first area observed, whether the run
  * ever left it, and the first capital zone it entered. Rung 4 stopped being
  * partial later the same day (issue #8): the module now taps
  * `SMSG_ACTIVATETAXIREPLY` and the taxi flag on self, the loop records a `taxi`
@@ -1203,7 +1203,7 @@ export function ladderChartLayout(
  * decided server-side — and nothing else. Live, paused and ended runs all
  * belong on this page; their state is a column, not a filter.
  *
- * And a character is **one character across attempts** (docs/OPERATIONS.md,
+ * And a character is **one character across attempts** (docs/RUNBOOK.md,
  * "Freeplay characters are durable"). A row is a character, not a run and not a
  * model: attempt 12 continues attempt 11 on the same character, so listing
  * both would show the same character twice with the older one looking behind.
@@ -1374,7 +1374,7 @@ export function characterRows(runs: readonly ResultRun[]): CharacterRow[] {
  *   honest axis is the one the data already carries.
  *
  * Which is also why the marks come from `ResultRun.levels` rather than the
- * `leveling` facts of FOLLOW-UPS 35: `LevelUpMark` carries `ts` and `turn` and
+ * `leveling` facts of the milestone series: `LevelUpMark` carries `ts` and `turn` and
  * no playtime at all, so it cannot be placed on this axis. Nothing new is
  * needed from the viewer — `levels` (with its per-mark `playtimeMs`) and the
  * run's own `playtimeMs` are already on `ResultRun` and already in the public

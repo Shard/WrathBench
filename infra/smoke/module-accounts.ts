@@ -10,7 +10,7 @@
  *      while a *different* token holds a live bench session on the account,
  *      and succeeds once that session is gone.
  *
- * It also probes the minimum-entropy token gate (FOLLOW-UPS 19): POST /session
+ * It also probes the minimum-entropy token gate: POST /session
  * with a sub-32-character token is refused 400 weak_token with an actionable
  * hint. That check needs the trainer/token-hardening image and fails against
  * anything older; the three account gates predate it. The one behavior
@@ -133,7 +133,7 @@ async function main() {
     403, "account_not_permitted",
   );
 
-  // --- 1b. Minimum-entropy token gate on POST /session (FOLLOW-UPS 19).
+  // --- 1b. Minimum-entropy token gate on POST /session.
   // Needs the trainer/token-hardening image; fails against anything older.
   const weak = await req("POST", "/session", {
     token: "short-token", account: ACCOUNT, character: CHARACTER, race: 1, class: 1,
