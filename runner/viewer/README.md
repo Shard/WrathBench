@@ -369,8 +369,12 @@ Since item 127 the fleet config lives in a sqlite store on the data volume
 (`runner/src/config-store.ts`, `$WRATHBENCH_DATA/config.sqlite`), and
 `infra/fleet.json` is its seed and its export format. The supervisor reads the
 store on every 60s re-read, so an edit here is live one tick later with no
-restart. There is no UI yet; these are the endpoints a UI will use, and an
-operator can drive them with curl or the CLI
+restart. The UI over these endpoints is the dashboard's `/config` page
+(`dashboard/src/pages/Config.tsx`, item 134) — a roster table with tier, idle,
+billing and routing editable inline, a JSON editor per other row key, the audit
+history and an export button. Its nav link appears only on a private build
+served by a non-public viewer, which is the same condition these routes are
+mounted under. An operator can still drive the endpoints with curl or the CLI
 (`bun runner/src/config-store.ts seed|export|get|set|patch|delete|audit`).
 
 A *key* is a row: `roster/<name>`, `campaigns/<name>`, `queue/<n>`, or one of
@@ -395,6 +399,15 @@ and `x-wrathbench-note` name who changed what and why; the actor defaults to
 LAN behind `WRATHBENCH_VIEWER_LAN`), so "not public" is the whole of the
 authorisation — which is why a public handle answers 404 rather than the 403
 it gives for a withheld read route.
+
+Two things the page has to work around, and they are properties of this API
+rather than of the page. There is **no if-version and no conflict detection**:
+`version` is the last audit id and a write carries no expectation of it, so the
+page re-reads `/api/config` immediately before each write and refuses when the
+version moved under it. And **PATCH cannot remove a key** — it is a shallow
+merge, and JSON has no `undefined` — while an absent `routing`, `idle` or
+`billing` is a distinct, deliberate state; so the page PATCHes a set and PUTs
+the whole entry with the key omitted for a clear.
 
 ### What it will not serve
 
