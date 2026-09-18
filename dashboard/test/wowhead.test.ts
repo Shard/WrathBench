@@ -17,7 +17,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Window } from "happy-dom";
-import { carried, carriedCount, paperdoll, splitLinked, type InvItem } from "../src/lib/inventory";
+import { carried, carriedCount, paperdoll, popoverPlacement, splitLinked, type InvItem } from "../src/lib/inventory";
 import {
   EQUIPMENT_SLOTS,
   PAPERDOLL_BOTTOM,
@@ -345,5 +345,47 @@ describe("a script that never arrives is a state, not a wait", () => {
   test("nothing has happened yet is pending, which still draws the grid", () => {
     resetWowheadStatus();
     expect(wowheadStatus()).toBe("pending");
+  });
+});
+
+describe("a popover is placed against the viewport, not against its card", () => {
+  const vp = { width: 1280, height: 800 };
+
+  test("below the button when there is room", () => {
+    const p = popoverPlacement({ top: 100, bottom: 120, left: 900 }, vp);
+    expect(p.below).toBe(true);
+    expect(p.offset).toBe(126);
+    expect(p.maxHeight).toBe(800 - 120 - 6 - 8);
+  });
+
+  test("flipped above it when there is not", () => {
+    // The defect: a button near the foot of a tall sidebar had four rows of a
+    // nineteen-slot doll under it.
+    const p = popoverPlacement({ top: 700, bottom: 730, left: 900 }, vp);
+    expect(p.below).toBe(false);
+    expect(p.offset).toBe(800 - 700 + 6);
+    expect(p.maxHeight).toBe(700 - 6 - 8);
+  });
+
+  test("once the panel is measured, the side that fits the whole thing wins", () => {
+    // 191px under the button is a usable panel but not a nineteen-slot doll.
+    const rect = { top: 570, bottom: 594, left: 1030 };
+    expect(popoverPlacement(rect, vp).below).toBe(true);
+    const p = popoverPlacement(rect, vp, { needed: 430 });
+    expect(p.below).toBe(false);
+    expect(p.maxHeight).toBe(570 - 6 - 8);
+  });
+
+  test("never off the right edge, and never past the left margin", () => {
+    expect(popoverPlacement({ top: 10, bottom: 30, left: 1270 }, vp).left).toBe(1280 - 340 - 8);
+    expect(popoverPlacement({ top: 10, bottom: 30, left: -50 }, vp).left).toBe(8);
+  });
+
+  test("a phone-width viewport clamps to what is left, not below the margin", () => {
+    // 360 - 340 - 8 leaves 12, so a button at 12 stays where it is; the CSS
+    // max-width is what keeps the panel itself inside the screen.
+    const p = popoverPlacement({ top: 10, bottom: 30, left: 40 }, { width: 360, height: 740 });
+    expect(p.left).toBe(12);
+    expect(popoverPlacement({ top: 10, bottom: 30, left: 0 }, { width: 360, height: 740 }).left).toBe(8);
   });
 });
