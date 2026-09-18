@@ -73,7 +73,7 @@ because that would silently re-scope every score already carrying this label.
   continent earns nothing for hours, and that is the behaviour this episode exists
   to permit — rungs 2–4 of the ladder are travel rungs. A no-XP watchdog here
   would end runs for doing the right thing. Tool-call ceiling **12000** — the
-  runaway guard of 1000 calls per 30 minutes (operator, 2026-08-23), sized so a
+  runaway guard of 1000 calls per 30 minutes (operator), sized so a
   fast model cannot touch it; it bounds the claude-code harness's inner loop,
   not the score.
 - **Ends.** As `e90`, minus `no-xp`.
@@ -167,7 +167,7 @@ standing sandbox that never finishes. Duration separates neither pair.
   idle watchdog; when the model remains active, its character and progress
   continue beyond six hours. When that session ends, the next tick starts
   another **on the same character**: a character is durable across the
-  operator's disable/re-enable and across its own endings (2026-08-29), so the
+  operator's disable/re-enable and across its own endings, so the
   next attempt is launched `--continue-from` the last one — same account,
   same character, the scratchpad carried forward — and records the lineage as
   `continued_from` (docs/RUNBOOK.md, "Freeplay characters are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
@@ -217,7 +217,7 @@ A run launched without `--episode` is not a member of any episode. It reads
 promotion, no chart), and it therefore carries no comparability claim to
 protect. So the bare watchdog defaults in the runner — idle 10m, no-XP 45m —
 stay as they are and are deliberately not aligned with `e90`'s pinned 20m/20m
-(decided 2026-08-23). They are the shape of an untagged
+(operator decision). They are the shape of an untagged
 one-off, not a quiet third ruleset: moving them would change every flagless run
 without any tuple field saying so, and every run that is scored passes the flag.
 

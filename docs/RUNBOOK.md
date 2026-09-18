@@ -49,8 +49,8 @@ reports `NOT RUNNING`.
 
 ### Where the config lives
 
-**The sqlite config store is the only fleet config** (operator decision,
-2026-09-18). The active config is operational state, not source, and is
+**The sqlite config store is the only fleet config** (operator decision). The
+active config is operational state, not source, and is
 never committed to git again. It is `config.sqlite` on the data volume, beside
 `runs/` (`$WRATHBENCH_DATA/config.sqlite`, overridable with
 `WRATHBENCH_CONFIG_DB`; on the cluster the `config` subPath of the
@@ -60,7 +60,7 @@ the same `data/` bind mount at `data/config.sqlite` — nothing to provision
 either way). The store's `config_audit` table is the history: actor, note,
 and the before and after documents of every change.
 
-`infra/fleet.json` left the repo that day (it is gitignored). The one config
+`infra/fleet.json` is gitignored and no longer in the repo. The one config
 document in git is **`infra/fleet.example.json`, the bootstrap**: a newcomer
 seeds the store from it once and gets a working board — the `_notes`
 vocabulary block, a small, valid, representative roster (free entries, one
@@ -161,9 +161,7 @@ carry free ids only) is enforced on every roster entry at every re-read.
 The store is the config ("Where the config lives", above); the shape below is
 what `infra/fleet.example.json` shows and what an export renders — a store row
 is one piece of it (a singleton block, or one roster entry, campaign or queue
-job). (Through the 0.5 rollout the file was staged beside the running one as
-`fleet.next.json`; that shim was removed once 0.5 landed — see "Changing the
-config shape" below for how a shape change ships now.)
+job). "Changing the config shape" below is how a shape change ships.
 
 ```
 preflight   the gate (below): enabled, account, smokes [{script, account}], timeoutMs,
@@ -214,7 +212,7 @@ roster      name -> entry. The keys an entry may carry, and nothing else: model,
               the run (docs/METHODOLOGY.md, "Routing is pinned").
             `wiki` — whether this entry's runs get the reference wiki at all. Default true; set
               `false` and the run has no `search_reference` tool, the prompt does not name one,
-              and no bundle is opened (operator decision 2026-09-16, issue #61). It is a
+              and no bundle is opened (operator decision, issue #61). It is a
               capability switch declared on the run, not an arm bought out of the tier budget, so
               `wiki: false` is stamped into the comparability tuple as a KEY and those runs never
               share a chart with the runs that had it. `wikiCoords` alongside it is REFUSED:
@@ -585,10 +583,10 @@ a paused run counts toward nothing until it finally ends.
 
 A freeplay character — the one an `idle: "unlimited"` ref plays across its
 sessions — is the operator's to disable and re-enable at will, and it
-survives that (operator ask, 2026-08-29). Before this, only a *pause* came back:
-every ended session (idle watchdog, a hand kill, the stale sweep) was followed
+survives that (operator ask). Without it only a *pause* would come back: every
+ended session (idle watchdog, a hand kill, the stale sweep) would be followed
 by a fresh attempt whose hygiene wiped the account and whose model named a new
-level-1 character — `sub-opus-low` went through ten names in eleven attempts.
+level-1 character.
 
 The character's identity is nothing new on disk: the ref's latest freeplay run
 that is not live and recorded an account and a character — ended **or paused**
@@ -623,7 +621,7 @@ What the supervisor does with it, per tick:
   the wrong record.
 - **The account is the character's.** A freeplay pick prefers its character's
   account over the model's last run. If that account is busy, who holds it
-  decides (`characterStanding`; operator decision, 2026-08-29):
+  decides (`characterStanding`; operator decision):
   - the ref itself (its own live run, or its resume reserving the account):
     nothing to plan, the run is in flight;
   - another ref's **bounded** run — a scored episode, a probe, a hand-written
@@ -653,7 +651,7 @@ What the supervisor does with it, per tick:
   next pick is decided the same way again.
 - **One character per model+effort.** A `unlimited` ref has exactly one
   character at a time, and the freeplay ladder shows the live field, not
-  every dead character a model ever rolled (operator ask, 2026-08-29). The
+  every dead character a model ever rolled (operator ask). The
   older ended sessions of a character are parked with
   `bun runner/src/archive.ts --run-ids` ("Archiving runs"), which is a
   decision about listings and nothing else: the character is untouched,
@@ -957,8 +955,7 @@ back (`no paid account configured`, `no local account configured`).
 
 ### Changing the config shape
 
-The pattern, from the 2026-08-23 switch to the job shape, translated to the
-store: export the store (`config-store.ts export /tmp/fleet-before.json`),
+The pattern, as the switch to the job shape ran it, translated to the store: export the store (`config-store.ts export /tmp/fleet-before.json`),
 write the new-shape document beside it, drain or `stop fleet` (running
 episodes pause and resume on start), `seed --force` the new document, check
 `--dry-run` from the new code before anything spawns, then
@@ -1077,7 +1074,7 @@ is how many sessions may be live at once.
 their OAuth tokens (`["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2"]`).
 The tokens themselves stay in `.env`; a token where a name belongs is refused
 everywhere it can be written. Absent means the single default lane, which is
-what every config written before 2026-08-25 meant.
+what a config that never named a lane means.
 
 A key the file does not name is uncapped. A claude-code run counts against
 **two** concurrency keys and needs a free slot in both:
@@ -1204,13 +1201,6 @@ The site is the design doc's **Open** shape, and there is only one shape now:
 | CORS | `infra/cloudflare/r2-cors.json` — two origins now, so the policy is load-bearing |
 | edge cache | yes, and load-bearing: it is what makes a spike cost ~$0 |
 
-A **Gated** shape preceded it: one Worker serving the SPA and
-`/v1/*` from a private bucket binding behind a shared `DASHBOARD_PASSWORD`,
-because the account had no zone and on Cloudflare access control, WAF and cache
-are all custom-domain features. It was scaffolding, it was always labelled as
-such, and it is gone — Worker deleted, password retired, no step below mentions
-it. `docs/PUBLIC-DASHBOARD.md`, "The gated interim shape", is the history.
-
 **The cutover itself** — creating the bucket on the new account, the custom
 domain, the CORS apply, the cache rules, resetting the publish state, the tiles
 and the first deploy — is `infra/cloudflare/README.md`, step by step and in
@@ -1327,7 +1317,7 @@ Nothing to configure for the first two: with no fetch handler, `robots.txt` is
 whatever is in `dashboard/public/`, and what is there is permissive, so the card
 unfurls.
 
-**Minimap tiles are shown** (operator, 2026-08-30): they sit under `tiles/` in
+**Minimap tiles are shown** (operator): they sit under `tiles/` in
 the same bucket, reached through the data hostname, and rule 3 caches them. The
 build asks for them because `WRATHBENCH_TILES_BASE` is set in `.env` — which is
 a separate name from the snapshot base because the upload is a separate step

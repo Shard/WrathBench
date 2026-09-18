@@ -119,9 +119,9 @@ at 0.9 of it — and every cache and thread pool keeps its default whatever the
 limit is: a 5 GiB mark cache, a 5 GiB primary-index cache, a 5 GiB
 index-mark cache, an 8 GiB uncompressed cache, 16 background merge threads,
 `max_threads` auto(16) and no per-query memory cap at all. Against the 1.8 GiB
-tracker a 2 GiB container gets, that is not a budget, and on 2026-09-17 two
-concurrent viewer queries over `turns` (15.7 GiB uncompressed, 715 MiB on disk)
-took the server down with `Code: 241 (total) memory limit exceeded`.
+tracker a 2 GiB container gets, that is not a budget: two concurrent viewer
+queries over `turns` (15.7 GiB uncompressed, 715 MiB on disk) were enough to
+take the server down with `Code: 241 (total) memory limit exceeded`.
 
 `infra/clickhouse/` is the fix, and it is the same files under both
 deployments — compose bind-mounts them, the Helm chart carries a verbatim inline

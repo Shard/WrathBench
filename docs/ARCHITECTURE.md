@@ -42,7 +42,7 @@ The SDK is versioned. Its surface is part of the harness version.
 - Trajectory log: JSONL per run containing every snippet, its result, every event batch the model saw, and a periodic state line (level, zone, XP, position).
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 
-**Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: run a11 (2026-08-29) took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip; the sandbox drains it once per snippet, and `tools.ts` renders it as a short `--- harness ---` block at the foot of that snippet's result — one line per status with a count, the hint text unchanged and nothing added to it. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` records it as part of what the model saw.
+**Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip; the sandbox drains it once per snippet, and `tools.ts` renders it as a short `--- harness ---` block at the foot of that snippet's result — one line per status with a count, the hint text unchanged and nothing added to it. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` records it as part of what the model saw.
 
 **Reflection, the episodic log, and the trim notices.** Three of the nine tools
 exist because of the message window rather than the world (docs/METHODOLOGY.md,
@@ -142,7 +142,7 @@ the SPA owns everything that is UI.
   the same `CharacterPlot` the freeplay field uses; and the character's totals as
   the sidebar's headline with this attempt's figures named underneath. The feed
   stays per attempt because a trajectory is one run's, with a link at each seam.
-  Since 2026-09-16 the character is also a page of its own — `/character/<id>`
+  The character is also a page of its own — `/character/<id>`
   over `GET /api/character/<id>` — carrying the whole chain's curve with the
   session boundaries marked, the totals, the live session when one runs, and
   every attempt. It is **universal, not freeplay-only**: a scored run's character
@@ -207,7 +207,7 @@ the SPA owns everything that is UI.
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). What a public deployment may carry is
   docs/DATA-AND-LEGAL.md's to settle and has been: minimap tiles are shown
-  (operator, 2026-08-30), and entry summaries are published one window per run
+  (operator), and entry summaries are published one window per run
   with game prose stripped.
 - **Public hosting is push-based, so the lab is never an origin.**
   `infra/publish-dashboard.ts` calls the viewer's own `createApi` handler
@@ -277,7 +277,7 @@ and the largest single file is 669 MB. Roughly three quarters of those bytes
 are one field: `messages`, the rendered context re-logged on every turn. Every
 cold request to a listing route opened all 1,148 `run.sqlite` files over iSCSI
 and re-read every trajectory to count what the page showed. That is what the
-store fixes, and the shape is the operator's decision of 2026-09-16.
+store fixes, and the shape is the operator's decision.
 
 **The runner does not change.** It appends JSONL and moves on, the way a
 service logs. It does not know the store exists, has no client for it, and

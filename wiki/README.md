@@ -208,8 +208,8 @@ world at all.
   `new … abilities`, `changes to abilities and mechanics`, `new talents and talent
   changes`, `mastery` (with the optional `passive`/`talent`/`tree`/`bonuses` words),
   `cataclysm class preview…` and `cataclysm changes`/`cataclysm preview` are era
-  cuts. Measured over the era revision of every page in the kept namespaces
-  (2026-08-24): 46 pages carry one — 7, 9, 8, 9, 0 and 13 respectively, and the
+  cuts. Measured over the era revision of every page in the kept namespaces:
+  46 pages carry one — 7, 9, 8, 9, 0 and 13 respectively, and the
   first four are the class pages and nothing else. `mastery` is the narrow one,
   since Stance Mastery and Tactical Mastery are 3.3.5 talents; anchored at both ends
   it reaches neither, and a plain `== Talents ==` is untouched. Headings are matched

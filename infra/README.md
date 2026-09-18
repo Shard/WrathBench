@@ -87,7 +87,7 @@ AzerothCore reads an `AC_*` environment variable in preference to the matching
 key in `worldserver.conf` / `authserver.conf`: `ConfigMgr::GetValueDefault`
 checks the environment first and only falls back to the parsed file. So the
 `.conf` files generated under `data/etc` on first boot are the stock dist files
-and every setting we care about — DataDir, database DSNs, realm id, XP rates —
+and every setting that matters — DataDir, database DSNs, realm id, XP rates —
 is set in `compose.yml` instead. Editing `data/etc/*.conf` will *not* override
 what compose sets; change compose.
 

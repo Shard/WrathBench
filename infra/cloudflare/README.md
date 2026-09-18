@@ -227,11 +227,7 @@ its Worker. Nothing in the repository refers to either any more.
 
 ### 9. Verify
 
-Run once, 2026-09-11, and passed in full except the unfurl, which nobody pasted
-into Discord that day; the record is `docs/PUBLIC-DASHBOARD.md`, "Acceptance
-record". That walk predates the tile upload later the same day, so the tile
-check below is the one line of it nothing has yet run. Everything below is the
-check, kept as the check.
+Everything below is the check, kept as the check.
 
 **The cache rule, first**, because it is the one misconfiguration that bills:
 

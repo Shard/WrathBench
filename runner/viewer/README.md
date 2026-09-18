@@ -6,7 +6,7 @@ JSONL by hand.
 
 ## Running
 
-Since the 2026-09-08 cutover the viewer is the `wrathbench-viewer` Deployment on
+The viewer is the `wrathbench-viewer` Deployment on
 the cluster, behind the `wrathbench.[removed].shard.page` Ingress (alias `wrathbench.local`)
 on the cluster; its code is baked into the runner image and Flux
 owns the tag, so it comes back on its own and new viewer code needs a new tag
@@ -139,8 +139,8 @@ it would count their text twice. `tokenTotals` reads the same spans
 (`replySpans`), so the run's completion total and its rate can never disagree
 about what one reply produced.
 
-The claude-code driver is the exception on the OUTPUT side, fixed 2026-08-25.
-Its `response` envelopes carry the API's `message_start` usage, whose
+The claude-code driver is the exception on the OUTPUT side. Its `response`
+envelopes carry the API's `message_start` usage, whose
 `output_tokens` is the snapshot taken before the reply exists — one to
 thirty-odd tokens, never the finished count — while its input figures are
 right. Summing them read ~300× low (508 responses summing to 671 output tokens
@@ -152,7 +152,7 @@ above (so a stretch across a pause drops out). The clock stays model time, which
 keeps the figure comparable to the fixed loop's request-to-response; the CLI's
 own `duration_api_ms`, then `duration_ms`, stand in only for a turn with no
 measurable span at all. `duration_ms` is not the default denominator on purpose:
-on the 2026-08-25 haiku run it sums to 5,283,659 ms of a 5,400,000 ms episode,
+on the haiku run it sums to 5,283,659 ms of a 5,400,000 ms episode,
 which is the run's elapsed clock with every MCP round trip in it.
 
 The result's `iterations` array is documented as one
@@ -274,7 +274,7 @@ the estimate for that turn, so the two never double-count.
 
 The one exception is the claude-code harness (driver id `claude-code`, formerly
 `claude-subscription`). Its
-driver discarded the CLI's usage objects until 2026-08-22, and a characters ÷ 4
+driver discarded the CLI's usage objects early on, and a characters ÷ 4
 estimate over a session that reuses an enormous cached prefix is off by orders
 of magnitude — so those runs report no usage rather than a number that would
 mislead. Runs recorded after the fix carry real counts, cache writes included.
@@ -365,8 +365,8 @@ readonly, and the runs directory is only ever listed and read.
 ### The config API (operator-only)
 
 The fleet config lives in a sqlite store on the data volume
-(`runner/src/config-store.ts`, `$WRATHBENCH_DATA/config.sqlite`), and since
-2026-09-18 that store is the **only** fleet config: the active config is
+(`runner/src/config-store.ts`, `$WRATHBENCH_DATA/config.sqlite`), and that
+store is the **only** fleet config: the active config is
 operational state, never committed, and `infra/fleet.example.json` is the
 one-time bootstrap a fresh deployment seeds it from. The supervisor reads the
 store on every 60s re-read, so an edit here is live one tick later with no
@@ -420,7 +420,7 @@ at the two places a raw record can reach a client (`summarize` and
 variable, and the value of that variable is never written to the trajectory.
 
 `WRATHBENCH_VIEWER_PUBLIC=1` makes the whole handle a boundary rather than a
-set of routes an operator has to remember (GitHub issue #30, 2026-09-01): every
+set of routes an operator has to remember (GitHub issue #30): every
 `/api` body is emitted through `pub`, which projects it in public mode with the
 same projector the snapshot uses, so a route added without one fails
 `runner/test/viewer-public-mode.test.ts` rather than shipping unprojected. The
@@ -433,8 +433,8 @@ are published as written. It is opt-in-to-public, not opt-in-to-raw: the run
 page depends on raw bodies, so a public deployment sets the flag rather than
 the developer clearing it.
 
-What a public entry carries (docs/DATA-AND-LEGAL.md, "Trajectory logs", operator
-2026-08-30): names and ids stay, game prose goes. `projectEntry`
+What a public entry carries (docs/DATA-AND-LEGAL.md, "Trajectory logs",
+operator): names and ids stay, game prose goes. `projectEntry`
 (`public-projection.ts`) is an allowlist per entry type — the `meta` entry
 sheds the run config (api base, objective, paths), `driver` and `claude_system`
 their binaries, cwd and socket paths, `pause`/`watchdog` their free-text
