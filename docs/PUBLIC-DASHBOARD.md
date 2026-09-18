@@ -369,36 +369,91 @@ A link to the site pasted into Discord, Slack or anywhere else reading Open
 Graph tags should unfurl with a title, a sentence, and a picture. Two facts
 about crawlers decide the whole shape of it: they fetch the HTML with **no
 JavaScript**, and they reject SVG. So the tags are in the static
-`dashboard/index.html` and the picture is a PNG rendered at ship time — the
-live chart cannot be either.
+`dashboard/index.html` and the picture is a PNG the snapshot publisher
+re-renders every pass — the live chart cannot be either.
 
 - **The picture** is `dashboard/src/lib/og.ts`, a pure string builder over the
   same derivation the homepage's scatter uses (`homeLadderRuns`,
   `ladderPoints`, `ladderChartLayout`, `paretoFront`), so it cannot show a
   shape the page does not. 1200×630, an explicit dark ground because a card is
   composited on someone else's chrome, the Pareto frontier as a step line, one
-  logo puck per entry with the frontier's ringed and the rest dimmed. No axis
-  labels, no point labels, no tick text: Discord renders the card about 400 px
-  wide inline and a wall of 4 px glyphs reads as a broken image. The wordmark
-  is the one text element. Colours are literal hex — resvg has no cascade, so
-  a `var()` would paint nothing.
-- **The render** is `infra/render-og.ts`, run by `infra/deploy-dashboard.sh`
-  before the snapshot-mode build. It takes its runs from a snapshot pass's own
-  `ladder-e90.json` rather than a live poll, so the picture and the published
-  numbers agree; rasterises with `@resvg/resvg-js` (MPL-2.0), Bun having no
-  rasteriser and the host's Chromium not being a pinned build dependency; and
-  writes `dashboard/public/og.png`, which is gitignored as the build product it
-  is. It prints the PNG's content hash, and the ship fails outright if the
-  render does — tags pointing at an image that is not there are worse than no
-  card.
+  logo puck per entry with the frontier's ringed and the rest dimmed. Colours
+  are literal hex and the font stack is the site's own monospace face — resvg
+  has no cascade, so a `var()` would paint nothing, and a card in a different
+  face than the page it links to reads as someone else's card.
+
+  Text is rationed rather than banned (operator, 2026-09-18). Discord renders
+  the card about 400 px wide inline, so nothing is set below 21 units — about
+  7 px there — and only four things are set at all: the wordmark, the corner
+  cue, the chart's identity in the top right, and one name above each frontier
+  entry. The identity is `XP.caption` and `COST.caption` out of
+  `dashboard/src/lib/axes.ts` verbatim, over the tier's length, so the card
+  cannot drift from the chart it is a picture of. The names are
+  `modelDisplay`'s, the front's only: the step line is the claim the card
+  makes, and a name on a dominated point spends a glyph on a point nobody is
+  being asked to read. Where two names would collide, `keepLabels` drops the
+  one that is worse on the y axis (per its spec's `better`) rather than drawing
+  them over each other, with the wordmark, the identity block and the cue
+  pre-reserved — a card is a picture nobody proofreads before it is unfurled.
+
+- **The render** is `infra/og-render.ts`: the drawing, the logos read off disk
+  (the dashboard resolves them through `import.meta.glob`, which exists only
+  under Vite), and a font probe. `@resvg/resvg-js` (MPL-2.0) rasterises, Bun
+  having no rasteriser and the host's Chromium not being a pinned build
+  dependency. The probe is load-bearing: resvg resolves a family through the
+  host's font database and draws **nothing at all** when it matches none, with
+  no error and no fallback box, so a render on a fontless host would produce a
+  plausible card with its wordmark, its captions and every model name silently
+  missing. `renderOgPng` refuses to return bytes unless a probe glyph draws,
+  and the publisher's image carries `fonts-dejavu-core` for it
+  (`infra/docker/runner.Dockerfile`).
+
+- **Who renders it, and when.** The **publisher** does, every pass: after
+  `infra/publish-dashboard.ts` has published a snapshot it renders the card
+  from that pass's own `ladder-e90.json` and PUTs it to `v1/og.png` in the
+  bucket, so the picture and the published numbers are the same data by
+  construction. It is a PUT of its own rather than one of the engine's
+  artifacts — `SnapshotArtifact` is a JSON body at a content-addressed key, and
+  widening it to carry bytes at a mutable key would reach into `needsPut`,
+  `classifyPath`, the pruning window and `infra/publish-accept.ts` for one
+  image; `infra/publish-tiles.ts` is the precedent. The stamp is remembered in
+  memory, so an unchanged card costs no PUT and a restart costs one, and a
+  failure there never fails a pass: the JSON is the site. `v1/og.png` is
+  mutable in the same sense `v1/manifest.json` is and wants the same short edge
+  TTL from the zone's cache rules.
+
+  Before 2026-09-18 the ship rendered it and nothing else did, which is why the
+  card was five days behind the ladder it drew: `bun ship` wrote
+  `dashboard/public/og.png`, wrangler uploaded it as a static asset, and it
+  therefore changed only when the SPA shipped while the data changed every five
+  minutes. (Worse, quietly: the renderer reads `WRATHBENCH_RUNS_DIR` on the
+  *shipping* machine, so a ship from a lagging checkout published a lagging
+  card whatever the cadence.) `infra/render-og.ts` survives as the ship-time
+  half — it still writes the static asset the app origin serves, still prints
+  the stamp, and `--upload` seeds `v1/og.png` so a first ship does not point at
+  an object no publisher has written yet. A missing R2 key pair skips the
+  upload with a line rather than failing the ship.
+
 - **The tags** are injected into `index.html` by a Vite `transformIndexHtml`
   hook over `dashboard/src/lib/og-tags.ts`. `og:image` must be absolute, so
-  they exist only in a build told its origin: `WRATHBENCH_PUBLIC_ORIGIN` (in
-  `.env`) becomes `VITE_WRATHBENCH_PUBLIC_ORIGIN`, and the render's hash
-  becomes `VITE_WRATHBENCH_OG_STAMP`, appended as `?v=` — a crawler caches a
-  card by URL and offers no purge, so the URL has to change exactly when the
-  picture does. The private viewer build names no origin and therefore carries
-  no image tags at all, rather than a relative URL no crawler could resolve.
+  they exist only in a build told its origin: `WRATHBENCH_PUBLIC_ORIGIN` is the
+  page the card links back to, `WRATHBENCH_SNAPSHOT_BASE` is the hostname the
+  picture is served from (the same data hostname the SPA reads its JSON from),
+  and the render's hash becomes `VITE_WRATHBENCH_OG_STAMP`, appended as `?v=`.
+  A build that names no snapshot base falls back to the app origin's own
+  `/og.png`; the private viewer build names no origin at all and therefore
+  carries no image tags, rather than a relative URL no crawler could resolve.
+
+  **The URL is still ship-stamped, and that is structural.** A crawler caches a
+  card by URL and offers no purge, so the URL has to change when the picture
+  does — but these tags live in a static `index.html` served with no Worker in
+  the read path (`dashboard/wrangler.jsonc` forecloses one on purpose), so
+  nothing short of a deploy can rewrite them. What the publisher buys is that
+  any *fresh* scrape gets the current ladder; a crawler already holding a card
+  keeps it until the next ship moves `?v=`. The only between-ship lever is a
+  short edge and browser TTL on `v1/og.png` in the zone's cache rules, and
+  Bun's S3 writer cannot send `Cache-Control` (see `infra/publish-dashboard.ts`),
+  so that rule is the whole of it.
 
 - **`robots.txt`.** The Open shape has no fetch handler and so serves nothing
   at that path unless a file is in `dashboard/public/`, which there now is, and
