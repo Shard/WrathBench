@@ -68,10 +68,11 @@ export interface StateLine {
   powerType?: number | undefined;
   nextLevelXp?: number | undefined;
   /**
-   * What the character carries and wears (item 50): names and counts
-   * from the state cache's item queries, `equipped` for inventory slots 0-18,
-   * carried rows from `state.bag()` across every bag. Omitted when the
-   * snapshot had no inventory at all.
+   * What the character carries and wears (item 50): names, counts, ids and
+   * quality from the state cache's item queries, `equipped` for inventory
+   * slots 0-18, carried rows from `state.bag()` across every bag with the
+   * `bag`/`slot` pair the item actions take. Omitted when the snapshot had no
+   * inventory at all.
    */
   items?: ItemSample[] | undefined;
 }
