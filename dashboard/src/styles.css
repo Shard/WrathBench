@@ -104,7 +104,7 @@ header.top {
   padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg);
   flex: none;
 }
-header.top h1 { font-size: var(--fs-lg); margin: 0; font-weight: 600; }
+header.top .wordmark { font-size: var(--fs-lg); margin: 0; font-weight: 600; }
 header.top nav { display: inline-flex; gap: 10px; flex-wrap: wrap; }
 header.top nav a.on { color: var(--fg); font-weight: 700; }
 header.top .spacer { flex: 1; }
@@ -252,9 +252,21 @@ pre.cite { font-size: var(--fs-sm); color: var(--dim); overflow-x: auto; margin:
 .mono { font-variant-numeric: tabular-nums; }
 .right { text-align: right; }
 
-h2.section { font-size: var(--fs-md); margin: 20px 0 8px; font-weight: 700;
-             text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
-h2.section:first-child { margin-top: 0; }
+/* One h1 per page, and it is the page's own title — the header wordmark is a
+   `div.wordmark` for that reason (operator, 2026-09-18). This rule is what
+   `.home-title` used to be; the home page's centring comes from its intro
+   block, so there is no per-page title rule left. */
+h1 { font-size: var(--fs-xl); margin: 4px 0 8px; font-weight: 700; }
+/* Section headings, a step up from where they were so the h1 is not alone in
+   being read as a heading — still plainly below it. A class rather than
+   `h2.section`, so the run page's breadcrumb h1 and the config page's h3s take
+   the same treatment without a copy of it. The `.section` after `h1` in source
+   order is what lets `h1.section` keep the breadcrumb's size. */
+.section { font-size: var(--fs-base); margin: 20px 0 8px; font-weight: 700;
+           text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+.section:first-child { margin-top: 0; }
+/* Below h2, so the outline reads in the order it is written. */
+h3.section { font-size: var(--fs-md); }
 
 .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
@@ -517,7 +529,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
                               background: var(--fg); border: 2px solid var(--accent); }
 .side { width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel);
         padding: 12px 14px; overflow-y: auto; }
-.side h3 { font-size: var(--fs-base); margin: 0 0 8px; font-weight: 700; }
+.side h3 { font-size: var(--fs-md); margin: 0 0 8px; font-weight: 700; }
 .side .k { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
 .side .v { margin-bottom: 8px; word-break: break-word; }
 
@@ -587,7 +599,7 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
  * height and `main` scrolls past them rather than crushing the feed to a sliver.
  */
 .page.runview { --log-col: 70%; display: flex; flex-direction: column; height: 100%; }
-.runview > h2.section:first-of-type { margin-top: 0; }
+.runview > h1.section:first-of-type { margin-top: 0; }
 
 /* `height: auto` with the viewBox doing the work: at phone width a fixed 200px
    stretched the plot rather than scaling it. */
@@ -862,8 +874,8 @@ button.update:hover { background: var(--panel); }
 .home-bleed .ladderchart { background: var(--bg); }
 .home-bleed .ladder-controls { margin-bottom: 4px; }
 .home-ladder-title { display: inline; margin: 0 6px 0 0; }
-.home-title { font-size: var(--fs-xl); margin: 4px 0 8px; font-weight: 700; text-align: center; }
-.home-intro p { margin: 0 auto 8px; line-height: 1.6; text-align: center; max-width: 720px; }
+.home-intro { text-align: center; }
+.home-intro p { margin: 0 auto 8px; line-height: 1.6; max-width: 720px; }
 .home-live { font-size: var(--fs-md); }
 .home-caption { margin: 6px 0 0; line-height: 1.5; }
 /* Can and can't, side by side where there is room and stacked where there is not. */

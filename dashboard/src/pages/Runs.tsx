@@ -100,7 +100,7 @@ export default function Runs() {
         <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
 
-      <h2 class="section">
+      <h1>
         runs
         <InfoHint
           label="about this table"
@@ -110,7 +110,7 @@ export default function Runs() {
             "Turns are the driver turns the provider reported usage for, or model responses where it reported none."
           }
         />
-      </h2>
+      </h1>
 
       <Show when={isFiltered(filter())}>
         <p class="dim">

@@ -63,7 +63,7 @@ export default function Home() {
     <div class="page home">
       <div class="home-col">
       <section class="home-intro">
-        <h2 class="home-title">An Agent Workbench for World of Warcraft</h2>
+        <h1>An Agent Workbench for World of Warcraft</h1>
         <p>
           WrathBench evaluates AI agents on their ability to play World of Warcraft: Wrath of the Lich King
           through a TypeScript SDK on a private AzerothCore server. A model writes and supervises code that

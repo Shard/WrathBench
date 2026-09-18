@@ -135,9 +135,12 @@ export default function Character() {
       <Show when={view()} fallback={<p class="dim loading-page">loading…</p>}>
         {(st) => (
           <>
-            <h2 class="section">
+            {/* Navigation, not a heading: this page's heading is the
+                character's name below, and a section heading above the h1
+                would put the document's outline out of order. */}
+            <div class="section">
               <A href="/ladder">ladder</A> / <span title={st().characterId}>{shortRunId(st().characterId)}</span>
-            </h2>
+            </div>
 
             {/* The header: who this character is, and whether it is playing
                 right now. The model and the harness come off the newest
