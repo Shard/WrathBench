@@ -247,9 +247,9 @@ export default function Config() {
 
               <h3 class="section">export</h3>
               <p class="dim">
-                <code>infra/fleet.json</code> in git is still the reviewable artefact: export the
-                store, write the text over the file, and commit the diff — that diff is the only
-                check that the two agree.
+                The store is the only fleet config; the active config is operational state and is
+                never committed. Export renders it to a document for reading or for diffing against
+                an earlier export.
               </p>
               <button
                 type="button"

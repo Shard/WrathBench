@@ -2,10 +2,13 @@
 /**
  * Overnight roster orchestrator.
  *
- *   ./infra/run-roster.sh infra/roster-example.json --until 07:30
- *   ./infra/run-roster.sh infra/roster-example.json --max-hours 8 --skip nvidia/nemotron-3-ultra-550b-a55b:free
- *   ./infra/run-roster.sh infra/roster-example.json --dry-run
- *   ./infra/run-roster.sh infra/roster-claude.json --loop --until 07:30
+ *   ./infra/run-roster.sh <roster.json> --until 07:30
+ *   ./infra/run-roster.sh <roster.json> --max-hours 8 --skip nvidia/nemotron-3-ultra-550b-a55b:free
+ *   ./infra/run-roster.sh <roster.json> --dry-run
+ *   ./infra/run-roster.sh <roster.json> --loop --until 07:30
+ *
+ * The fleet supervisor (run-fleet.ts) materialises one of these per job from
+ * the config store; a hand-written roster is the ad-hoc path.
  *
  * Every entry is config: `model`, `driver` (openai | claude-code),
  * `account`, `effort`, `apiBase`/`apiKeyEnv` (openai only),
@@ -813,7 +816,7 @@ export function nextDefer(
 
 // ------------------------------------------------------------ defer sidecar
 //
-// Defer state has to outlive the process: a supervisor restart or a fleet.json
+// Defer state has to outlive the process: a supervisor restart or a config
 // edit respawns the job, and without this a spec sitting on a 6h backoff would
 // come back as `fresh` and start hammering again from rung 1. The sidecar sits
 // next to the roster's --log jsonl and is keyed on the SPEC's stable cycle-1
@@ -1632,7 +1635,7 @@ async function main(): Promise<void> {
   // --loop with no deadline used to be refused, on the theory that an
   // unbounded loop is always an operator mistake. The fleet-as-a-service shape
   // makes it the normal case: the supervisor is up while the machine
-  // is up and steering is done by editing fleet.json, not by a wall clock. The
+  // is up and steering is done through the config store, not by a wall clock. The
   // stop conditions remain available as optional caps.
   if (args.loop && deadline === undefined) {
     say("--loop with no --until/--max-hours: looping until stopped (SIGTERM/SIGINT, or the job is disabled)");
@@ -1778,7 +1781,7 @@ async function main(): Promise<void> {
   // retried (the old code pushed to `queue` while the spec also stayed in the
   // rotation — double-booking that spawned a fresh L1 -cN every cycle).
   // Persisted across process restarts (see the defer sidecar section): without
-  // this, a supervisor restart or a fleet.json edit would hand a spec sitting
+  // this, a supervisor restart or a config edit would hand a spec sitting
   // on a 6h backoff a `fresh` plan and start the hammering over at rung 1.
   // Loaded unconditionally, not just under --resume-roster: the sidecar is
   // scoped by the --log path (which carries the date stamp), so it can only

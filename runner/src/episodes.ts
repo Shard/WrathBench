@@ -3,7 +3,7 @@
  *
  * A run's length, its watchdogs and whether an operator may steer it were three
  * independent flags until now, which meant "a 90-minute run" was a
- * convention held in fleet.json rather than a thing the harness knew about. A
+ * convention held in the fleet config rather than a thing the harness knew about. A
  * tier names the whole shape at once: `--episode e90` sets the budget and the
  * watchdogs together, and the id is stamped into the comparability tuple
  * so two rows on a chart can be asked whether they were given the
