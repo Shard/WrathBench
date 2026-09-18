@@ -19,5 +19,5 @@ export const HOME_EPISODE = "e90" as const;
 
 export function homeLadderRuns(runs: readonly ResultRun[], excludeFree: boolean): ResultRun[] {
   const latest = latestSeries(seriesPresent(runs));
-  return filterRuns(filterBySeries(runs, latest), { race: null, klass: null, harness: null, excludeFree });
+  return filterRuns(filterBySeries(runs, latest), { excludeFree });
 }

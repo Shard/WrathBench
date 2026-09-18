@@ -27,9 +27,9 @@ export function writeBoolPref(key: string, value: boolean): void {
  * The same, for a small remembered *choice* — a select's value, where `null`
  * is the control's default ("all"). Stored as the string itself; an empty
  * string is not a choice, so it reads back as `null` too. What a stored value
- * means once the data has moved on is the caller's problem: the ladder resolves
- * a choice its current runs cannot honour back to the default
- * (`resolveChoice`), so remembering one can never empty a table for no
+ * means once the data has moved on is the caller's problem, and the rule every
+ * caller follows is that a stored value the current data cannot honour resolves
+ * to the control's default, so remembering one can never empty a table for no
  * visible reason.
  */
 

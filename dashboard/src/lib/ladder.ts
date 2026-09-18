@@ -37,62 +37,18 @@ export function scored(runs: readonly ResultRun[]): ResultRun[] {
 /* ----------------------------------------------------------------- filters */
 
 /**
- * The four controls above the chart, as pure functions.
+ * The one control above the chart that narrows on a run's own recorded fields.
  *
- * Race and class are separate selects rather than the one chip row of
- * `Race Class` pairs this page used to carry. The pair was the honest control
- * while the extras cycle was the only thing varying a character;
- * a probe campaign varies race and class independently, so the pair
- * had become a chip row nobody could read. Offering a combination no run has
- * is not a problem the options can create: each list is the DISTINCT values
- * actually present, and an empty result is the honest answer to a pair nothing
- * ran.
- *
- * Options are computed from the page's runs BEFORE any of these filters is
- * applied, so picking a race does not prune the class list under the reader's
- * cursor. A run that never recorded a race, a class, or a harness contributes
- * no option there: it is kept by "all" and dropped by any specific pick, which
- * is what "not recorded" has to mean if it is not to be guessed at — the same
- * rule the character chips carried.
+ * Race, class and harness were three more until 2026-09-18, when the operator
+ * took them off the page: every scored run is the same baseline character, so
+ * race and class asked a question an episode cannot answer differently, and
+ * the harness select duplicated the shell's series selector. What is left is
+ * one question — does a run count as evidence we paid for. The model line and
+ * company filters that replaced them are derived from the model slug rather
+ * than read off a run, so they live in `lib/ladderfilter.ts` and not here.
  */
-
-/** Null is "all". A stored choice the current runs cannot honour resolves to it. */
-export type FilterChoice = string | null;
-
-function distinct(values: readonly (string | null)[]): string[] {
-  return [...new Set(values.filter((v): v is string => v !== null && v.length > 0))].sort();
-}
-
-export function raceOptions(runs: readonly ResultRun[]): string[] {
-  return distinct(runs.map((r) => r.raceName));
-}
-
-export function classOptions(runs: readonly ResultRun[]): string[] {
-  return distinct(runs.map((r) => r.className));
-}
-
-/** The harness tags present: `wrathbench`, `claude-code`, … */
-export function harnessOptions(runs: readonly ResultRun[]): string[] {
-  return distinct(runs.map((r) => r.harness));
-}
-
-/**
- * A remembered choice, resolved against what this episode actually has.
- *
- * A selection restored from `localStorage` can name a class no run on the
- * current tier was played on, and an empty table with no visible cause is the
- * worst outcome of remembering anything. It falls back to "all", and the
- * control shows "all", which is the same rule `displayedChoice` applies to a
- * stale harness series in `lib/harness.ts`.
- */
-export function resolveChoice(options: readonly string[], choice: FilterChoice): FilterChoice {
-  return choice !== null && options.includes(choice) ? choice : null;
-}
 
 export interface LadderFilter {
-  race: FilterChoice;
-  klass: FilterChoice;
-  harness: FilterChoice;
   /** Keep only runs we paid for. See `ResultRun.billing`. */
   excludeFree: boolean;
 }
@@ -114,13 +70,7 @@ export function billingKnown(runs: readonly ResultRun[]): boolean {
  * nothing.
  */
 export function filterRuns(runs: readonly ResultRun[], f: LadderFilter): ResultRun[] {
-  return runs.filter(
-    (r) =>
-      (f.race === null || r.raceName === f.race) &&
-      (f.klass === null || r.className === f.klass) &&
-      (f.harness === null || r.harness === f.harness) &&
-      (!f.excludeFree || r.billing !== "free"),
-  );
+  return runs.filter((r) => !f.excludeFree || r.billing !== "free");
 }
 
 /** The distinct characters in a set of runs, sorted — a row's label. */

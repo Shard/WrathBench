@@ -102,9 +102,9 @@ function asPreset(v: string | null): ExpandPreset | null {
 
 /**
  * The remembered preset. A stored value this build no longer honours resolves
- * to the default rather than to nothing — the rule `prefs.ts` states and the
- * ladder's `resolveChoice` set: a remembered choice must never leave a reader
- * looking at an empty or inexplicable page.
+ * to the default rather than to nothing — the rule `prefs.ts` states: a
+ * remembered choice must never leave a reader looking at an empty or
+ * inexplicable page.
  */
 export function readExpandPref(): ExpandPreset {
   return asPreset(readChoicePref(EXPAND_KEY)) ?? EXPAND_DEFAULT;
