@@ -111,7 +111,21 @@ export function hoverText(p: LadderPoint, episode: string, view: LadderView = DE
  * `better` off the view's specs), and every other point — label included —
  * dimmed, so a reader sees who is on the front without losing the field.
  */
-export function LadderChart(props: { runs: readonly ResultRun[]; episode: string; view?: LadderView; pareto?: boolean }) {
+export function LadderChart(props: {
+  runs: readonly ResultRun[];
+  episode: string;
+  view?: LadderView;
+  pareto?: boolean;
+  /**
+   * Whether the caption ends with the "Not plotted: …" roll-call of entries
+   * that carry no reading on one of the axes. On by default, because the
+   * ladder page owes a reader an account of every entry it left out. The
+   * homepage passes false (operator, 2026-09-18): it is a landing page whose
+   * first screen is worth more to a stranger than a list of the models this
+   * chart could not place, and the full account is one click away on /ladder.
+   */
+  omittedNote?: boolean;
+}) {
   const view = (): LadderView => props.view ?? DEFAULT_VIEW;
   const model = createMemo(() => ladderPoints(props.runs, view().x, view().y));
   const layout = createMemo(() => ladderChartLayout(model().points, BOX, view().x, view().y));
@@ -325,7 +339,7 @@ export function LadderChart(props: { runs: readonly ResultRun[]; episode: string
           {view().x.better === "lower" ? "less" : "more"} {view().x.label} and{" "}
           {view().y.better === "higher" ? "more" : "less"} {view().y.label}); the rest are dimmed.
         </Show>
-        <Show when={model().omitted.length > 0}>
+        <Show when={props.omittedNote !== false && model().omitted.length > 0}>
           {" "}
           Not plotted: {model().omitted.map((o) => `${o.label} (${o.why})`).join(", ")}.
         </Show>
