@@ -2,12 +2,12 @@
  * The config API: read and edit the fleet config through the app
  * (FOLLOW-UPS item 127).
  *
- * Everything this serves comes from `runner/src/config-store.ts`, and every
- * write goes through the store's one validator — `parseFleet`, the function
- * the supervisor runs `fleet.json` through. So a 400 from here carries the
- * config error the file would have been refused with, word for word, and there
- * is no edit the app accepts that the supervisor would then reject at its next
- * tick.
+ * Everything this serves comes from `runner/src/config-store.ts` — the only
+ * fleet config — and every write goes through the store's one validator,
+ * `parseFleet`, the function the supervisor runs the store through. So a 400
+ * from here carries the config error the supervisor would refuse with, word
+ * for word, and there is no edit the app accepts that the supervisor would
+ * then reject at its next tick.
  *
  * **Operator-only.** These routes are mounted only when the viewer is not in
  * public mode, and a public handle 404s them — not 403: a withheld route says
@@ -46,7 +46,7 @@ export interface ConfigApiOptions {
 }
 
 export interface ConfigResponse {
-  /** The whole config, in fleet.json's shape. */
+  /** The whole config, in the export's shape (`infra/fleet.example.json` is the model). */
   config: Record<string, unknown>;
   /** Every row key, in render order — what a UI lists. */
   keys: string[];
@@ -54,7 +54,7 @@ export interface ConfigResponse {
   version: number;
   /** Where the store is, so an operator can find it from the page. */
   path: string;
-  /** False before the store has been seeded: the file is still in charge. */
+  /** False before the store has been seeded: the supervisor runs an empty board. */
   seeded: boolean;
 }
 
@@ -92,13 +92,13 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
    * A GET never creates the store: on a deployment that has not been seeded
    * the answer is "not seeded", not a new empty database beside the runs. A
    * write does not create it either — seeding is `config-store.ts seed`, an
-   * operator action with a file behind it, and an empty store would be a fleet
-   * config that says nothing.
+   * operator action with the example behind it, and an empty store would be a
+   * fleet config that says nothing.
    */
   const present = existsSync(dbPath);
   if (!present && method !== "GET") {
     return json(
-      { error: `no config store at ${dbPath} — seed it first: bun runner/src/config-store.ts seed infra/fleet.json` },
+      { error: `no config store at ${dbPath} — seed it first: bun runner/src/config-store.ts seed infra/fleet.example.json` },
       409,
     );
   }
@@ -131,12 +131,10 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
 
     if (method === "POST" && rest === "export") {
       /*
-       * Export renders the store to fleet.json's shape and hands it back. It
-       * writes a file only when the request names one, deliberately: on the
-       * cluster the supervisor's fleet.json is a Flux-managed ConfigMap and the
-       * viewer's is a copy baked into the image, so a write from here would
-       * land somewhere nothing reads and be reverted on the next
-       * reconciliation. The export an operator wants is the text, to commit.
+       * Export renders the store to a config document and hands it back, for
+       * reading or diffing — never for committing: the active config is
+       * operational state, not source (2026-09-18). It writes a file only when
+       * the request names one, deliberately; nothing reads such a file.
        */
       const body = await readJson(req);
       const to = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as { path?: unknown }).path : undefined;

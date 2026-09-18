@@ -159,7 +159,8 @@ function addressable(payload: object): string {
 
 export interface RendererOptions {
   runsDir: string;
-  fleetConfigPath?: string;
+  /** The config store the roster is read from; the data volume's by default. */
+  configDbPath?: string;
   moduleUrl?: string;
   /**
    * The viewer handle to render from. Built from the options above when
@@ -258,7 +259,7 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
       // An unroutable loopback port by default, so a render on a machine with no
       // worldserver reports `worldserver: null` quickly instead of hanging.
       moduleUrl: opts.moduleUrl ?? "http://127.0.0.1:1",
-      ...(opts.fleetConfigPath !== undefined ? { fleetConfigPath: opts.fleetConfigPath } : {}),
+      ...(opts.configDbPath !== undefined ? { configDbPath: opts.configDbPath } : {}),
     });
 
   /**

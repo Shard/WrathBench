@@ -69,21 +69,14 @@ const tilesPublic = process.env["WRATHBENCH_VIEWER_TILES_PUBLIC"] === "1";
 /** Module /health for the worldserver build on /api/info; unreachable is fine (null). */
 const moduleUrl = process.env["WRATHBENCH_MODULE_URL"] ?? "http://127.0.0.1:8086";
 /*
- * The fleet config `/api/models` reads its roster from. Absent, or
- * a config that predates the roster map, is a labelled empty state on the page
- * rather than a startup failure — the viewer runs on machines that have no
- * fleet at all. (Until the 0.5 rename this preferred a staged
- * `fleet.next.json` sibling, mirroring the supervisor; the shim left with the
- * rename, 2026-08-24.)
- */
-const fleetConfigPath = ((): string | undefined => {
-  const given = process.env["WRATHBENCH_FLEET_CONFIG"];
-  return given ?? (existsSync("infra/fleet.json") ? "infra/fleet.json" : undefined);
-})();
-
-/*
+ * The fleet config `/api/models` reads its roster from is the config store
+ * (`WRATHBENCH_CONFIG_DB`, else `$WRATHBENCH_DATA/config.sqlite`), the same
+ * one the supervisor runs and `/api/config` edits. An empty store is a
+ * labelled empty state on the page rather than a startup failure — the viewer
+ * runs on machines that have no fleet at all.
+ *
  * An absent runs directory is a bare clone, not a startup failure — the same
- * posture as the tiles, the SPA and the fleet config above: the viewer only
+ * posture as the tiles, the SPA and the config store: the viewer only
  * ever lists and reads it, so an empty one serves labelled empty states.
  */
 if (!existsSync(runsDir)) mkdirSync(runsDir, { recursive: true });
@@ -96,7 +89,6 @@ const handle = createApi({
   publicMode,
   tilesPublic,
   moduleUrl,
-  fleetConfigPath,
 });
 
 const server = Bun.serve({
