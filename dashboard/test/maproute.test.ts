@@ -23,8 +23,11 @@ import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types
    test; `test/preload-solid.ts` installs it and says why. */
 import { createEffect, createMemo, createRoot, createSignal, getOwner, runWithOwner } from "solid-js";
 import { clearReplayState, createLeftReplay, createMapState } from "../src/lib/mapstate";
-import { DEFAULT_MAP } from "../src/lib/mapview";
+import { DEFAULT_MAP, defaultView, fitTo } from "../src/lib/mapview";
 import { runParam } from "../src/lib/replay";
+
+/** A stage to frame against: the page reads its own, this one only needs one. */
+const SCREEN = { w: 1280, h: 800 };
 
 const TRACK: TrackResponse = {
   runId: "run-1",
@@ -101,8 +104,10 @@ function page(initialSearch: string) {
     const [replayError, setReplayError] = createSignal<string | undefined>(undefined);
     const state = createMapState({ feed: feedList, track, pinned, selectedId });
 
-    /* What the renderer owns, so the test can see it was reset too. */
-    const canvas = { pips: new Set<string>(), fits: 0 };
+    /* What the renderer owns, so the test can see it was reset too. The view is
+       carried because the camera is renderer state like the pips: a replay's
+       framing outliving its feed is the same defect as its pips would be. */
+    const canvas = { pips: new Set<string>(), fits: 0, view: defaultView(SCREEN) };
     const calls = { tracks: [] as string[], refreshes: 0 };
     const leftReplay = createLeftReplay();
 
@@ -124,6 +129,7 @@ function page(initialSearch: string) {
       });
       canvas.pips.clear();
       canvas.fits++;
+      canvas.view = defaultView(SCREEN);
       if (id === undefined) {
         if (returningToLive) calls.refreshes++;
         return;
@@ -135,6 +141,10 @@ function page(initialSearch: string) {
     const arrive = (list: readonly AgentPosition[]): void => {
       for (const p of list) canvas.pips.add(p.runId);
       setFeedList(() => list);
+      // The page's fit effect: an empty feed has nothing to fit and leaves the
+      // view where the route reset put it.
+      const on = list.filter((p) => p.map === state.activeMap());
+      if (on.length > 0) canvas.view = fitTo(SCREEN, on);
     };
 
     return {
@@ -201,6 +211,9 @@ describe("the map's two URL states", () => {
     // The replay's continent is forgotten; with nothing live the map falls back
     // to the default rather than to "no map", which draws nothing.
     expect(p.state.activeMap()).toBe(DEFAULT_MAP);
+    /* And the camera comes back with it. Left behind, the replay's framing
+       would sit over the default map's tiles — a view of nowhere. */
+    expect(p.canvas.view).toEqual(defaultView(SCREEN));
     // And it does not sit blank waiting for the next 5s tick.
     expect(p.calls.refreshes).toBe(1);
     expect(p.calls.tracks).toEqual(["run-1"]);
