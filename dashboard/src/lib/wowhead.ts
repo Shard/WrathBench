@@ -39,9 +39,9 @@ export function itemUrl(entry: number): string | null {
  *
  * A state sample records whatever name the client cache held, and for an item
  * the server had not yet described that is the placeholder `item <id>` — which
- * still carries the id. Runs recorded before track A's `itemId` column exists
+ * still carries the id. Runs recorded before the `itemId` column existed
  * are entirely made of these and of real names, so parsing the placeholder is
- * what gets an old run icons at all. A real name returns null.
+ * what gets such a run icons at all. A real name returns null.
  */
 export function parseEntryFromName(name: string | null | undefined): number | null {
   if (typeof name !== "string") return null;

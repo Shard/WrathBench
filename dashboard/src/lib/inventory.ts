@@ -48,9 +48,9 @@ export function carried(items: readonly InvItem[]): InvItem[] {
   const bagRank = (b: number): number => (b === 255 ? -1 : b);
   placed.sort((a, b) => bagRank(a.bag!) - bagRank(b.bag!) || a.slot! - b.slot!);
   loose.sort((a, b) => a.name.localeCompare(b.name));
-  // Positioned rows first: once track A lands, a mixed sample is a sample
-  // mid-migration, and the rows that know where they are should keep their
-  // order rather than being interleaved by name.
+  // Positioned rows first: a mixed sample is one where some slots were seen
+  // and some were not, and the rows that know where they sit should keep that
+  // order rather than being interleaved by name with the ones that do not.
   return [...placed, ...loose];
 }
 
