@@ -627,6 +627,45 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .filter.check { cursor: pointer; }
 .filter.check input { accent-color: var(--accent); cursor: pointer; }
 
+/* The filters button and its panel. The panel is portalled to the body and
+   placed by `popoverPlacement` (`lib/popover.ts`, shared with the inventory
+   popovers), so it is never clipped by the controls row and never reflows it;
+   its width is told to the maths as well as to the CSS, or the clamp that
+   keeps it on screen at 360px would be against the wrong number. */
+.filter-button { position: relative; display: inline-flex; }
+.filters-trigger {
+  font: inherit; color: var(--fg); background: var(--panel); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.filters-trigger:hover { border-color: var(--accent); }
+.filters-trigger.on { border-color: var(--accent); }
+.filters-count {
+  background: var(--accent); color: var(--bg); border-radius: 8px;
+  padding: 0 5px; font-size: var(--fs-xs); font-weight: 700;
+}
+.filter-popover {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
+  max-width: calc(100vw - 16px);
+  overflow-y: auto; font-size: var(--fs-sm); text-align: left;
+}
+.filter-popover.floating { position: fixed; z-index: 60; }
+.filter-group + .filter-group { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.filter-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.filter-group-label { font-weight: 700; }
+.filter-clear {
+  font: inherit; font-size: var(--fs-xs); color: var(--dim); background: none;
+  border: 0; padding: 0; cursor: pointer; text-decoration: underline;
+}
+.filter-clear:hover { color: var(--fg); }
+.filter-group-note { margin: 2px 0 6px; font-size: var(--fs-xs); }
+/* One column, so a long line name wraps inside its own row rather than
+   pushing the next option off the panel. */
+.filter-options { display: flex; flex-direction: column; gap: 3px; }
+.filter-options .filter.check { justify-content: flex-start; }
+.filter-option-n { margin-left: auto; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+
 .runview-cols { display: flex; gap: 16px; flex: 1; min-height: 320px; }
 .runview-logs { flex: 0 1 var(--log-col); min-width: 0; overflow-y: auto; }
 .runview-side { flex: 1 1 0; min-width: 240px; overflow-y: auto; }

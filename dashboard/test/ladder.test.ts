@@ -26,9 +26,7 @@ import {
   characterIconCx,
   characterLabelX,
   billingKnown,
-  classOptions,
   filterRuns,
-  harnessOptions,
   COST_CEILING_MIN,
   COST_FLOOR,
   FREE_GUTTER_W,
@@ -38,8 +36,6 @@ import {
   ladderPoints,
   ladderRows,
   levelRangeOf,
-  raceOptions,
-  resolveChoice,
   runCostReading,
   scored,
   stitchCharacter,
@@ -343,30 +339,10 @@ describe("the ladder's filters", () => {
     run({ runId: "gratis", model: "qwen/qwen3:free", billing: "free" }),
     run({ runId: "old", race: null, raceName: null, class: null, className: null, characterLabel: null }),
   ];
-  const all = { race: null, klass: null, harness: null, excludeFree: false };
+  const all = { excludeFree: false };
 
-  test("the options are the values actually present, sorted, with unrecorded runs offering none", () => {
-    expect(raceOptions(rows)).toEqual(["Dwarf", "Human"]);
-    expect(classOptions(rows)).toEqual(["Hunter", "Paladin"]);
-    expect(harnessOptions(rows)).toEqual(["claude-code", "wrathbench"]);
-  });
-
-  test("all is the default and keeps every run, including the ones recording nothing", () => {
+  test("the default keeps every run, including the ones recording nothing", () => {
     expect(filterRuns(rows, all).map((r) => r.runId)).toEqual(["base", "extra", "gratis", "old"]);
-  });
-
-  test("a pick narrows to that value and drops the unrecorded ones rather than guessing", () => {
-    expect(filterRuns(rows, { ...all, race: "Dwarf" }).map((r) => r.runId)).toEqual(["extra"]);
-    expect(filterRuns(rows, { ...all, klass: "Paladin" }).map((r) => r.runId)).toEqual(["base", "gratis"]);
-    expect(filterRuns(rows, { ...all, harness: "claude-code" }).map((r) => r.runId)).toEqual(["extra"]);
-  });
-
-  test("race and class are independent, so a pair nothing ran is empty rather than impossible", () => {
-    expect(filterRuns(rows, { ...all, race: "Dwarf", klass: "Paladin" })).toEqual([]);
-    expect(filterRuns(rows, { ...all, race: "Human", klass: "Paladin" }).map((r) => r.runId)).toEqual([
-      "base",
-      "gratis",
-    ]);
   });
 
   test("exclude free drops the free runs and keeps the ones a viewer could not answer for", () => {
@@ -383,12 +359,6 @@ describe("the ladder's filters", () => {
     expect(billingKnown(rows)).toBe(true);
     expect(billingKnown([run({ runId: "old" })])).toBe(false);
     expect(filterRuns([run({ runId: "old" })], { ...all, excludeFree: true }).map((r) => r.runId)).toEqual(["old"]);
-  });
-
-  test("a remembered choice this episode cannot honour resolves back to all", () => {
-    expect(resolveChoice(raceOptions(rows), "Dwarf")).toBe("Dwarf");
-    expect(resolveChoice(raceOptions(rows), "Gnome")).toBeNull();
-    expect(resolveChoice(raceOptions(rows), null)).toBeNull();
   });
 
   test("filtering happens before the rows, so the ranking is over what is on screen", () => {
@@ -613,7 +583,7 @@ describe("freeplay characters", () => {
       fp({ runId: "unknown", model: "old", maxLevel: 7, levels: [mark(7, 1, 1000)], playtimeMs: 1000 }),
     ];
     expect(characterRows(runs).map((r) => r.characterId)).toEqual(["gratis", "paid", "unknown"]);
-    const kept = filterRuns(runs, { race: null, klass: null, harness: null, excludeFree: true });
+    const kept = filterRuns(runs, { excludeFree: true });
     expect(characterRows(kept).map((r) => r.characterId)).toEqual(["paid", "unknown"]);
     // The chart reads the same filtered set, so it cannot show a dropped character.
     const chart = characterSeries(characterRows(kept), kept);
@@ -637,7 +607,7 @@ describe("freeplay characters", () => {
       }),
     ];
     expect(characterRows(chain)[0]!.attempts).toBe(2);
-    const kept = filterRuns(chain, { race: null, klass: null, harness: null, excludeFree: true });
+    const kept = filterRuns(chain, { excludeFree: true });
     expect(characterRows(kept).map((r) => ({ id: r.characterId, n: r.attempts }))).toEqual([
       { id: "m2", n: 1 },
     ]);

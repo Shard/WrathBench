@@ -48,26 +48,31 @@ import { HarnessTag } from "../components/HarnessTag";
 import { LadderChart } from "../components/LadderChart";
 import { CharacterChart } from "../components/CharacterChart";
 import { ModelIcon } from "../components/ModelIcon";
+import { FilterPopover, type FilterGroup } from "../components/FilterPopover";
 import { SeriesFilterNote, useSeriesFilter } from "../components/SeriesSelect";
-import { LADDER_VIEWS, type LadderView, viewParam } from "../lib/axes";
+import { COST, LADDER_VIEWS, XP, type LadderView, viewParam } from "../lib/axes";
 import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import {
   RUNGS,
   billingKnown,
   scored,
-  classOptions,
   filterRuns,
-  harnessOptions,
+  ladderPoints,
   ladderRows,
-  raceOptions,
-  resolveChoice,
+  pointKey,
   characterRows,
-  type FilterChoice,
   type LadderCell,
   type LadderRow,
   type LevelRange,
   type CharacterRow,
 } from "../lib/ladder";
+import {
+  companyOf,
+  filterOptions,
+  lineOf,
+  matchesSelection,
+  representativeEfforts,
+} from "../lib/ladderfilter";
 import {
   type ReferenceMark,
   type ReferenceScale,
@@ -78,26 +83,31 @@ import {
 import { resolvedSummary } from "../lib/models";
 import { fmtMoney, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { poll } from "../lib/poll";
-import { readBoolPref, readChoicePref, writeBoolPref, writeChoicePref } from "../lib/prefs";
+import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { displayError } from "../lib/errors";
 
 const POLL_MS = 30_000;
 
 /*
- * The controls are remembered per viewer, not put in the URL. The episode is
- * the page's address and stays a query parameter; race, class, harness and the
- * free toggle are how one reader likes to look at it, and a link that carried
- * them would send someone else's filter along with the tier. A remembered
- * choice the current runs cannot honour resolves back to "all"
- * (`resolveChoice`), so nothing empties the table invisibly.
+ * Where the controls live, and why they are not all in one place.
  *
- * The `?character=` chip filter these replace is gone; an old link carrying it
- * lands on "all", which is the view it would have shown anyway before someone
- * clicked a chip.
+ * The narrowing filters are in the URL, beside the tier, the axes and the
+ * front (`?episode=`, `?view=`, `?pareto=`): a reading of the ladder that
+ * cannot be linked is a reading nobody can be shown, and these say which slice
+ * of the field a claim was made over. They are derived from the rows on screen
+ * (`filterOptions`), so a link naming a line or a company no run carries
+ * narrows to nothing visible rather than silently meaning something else.
+ *
+ * "exclude free" stays the per-viewer preference it has always been. It is not
+ * a slice of the field but a standing opinion about what counts as evidence,
+ * and a reader who holds one holds it on every tier.
+ *
+ * Race, class and harness are gone (operator, 2026-09-18). Every scored run is
+ * the same baseline character, so race and class asked a question an episode
+ * cannot answer differently; the harness select duplicated the series
+ * selector the shell already carries for every page. An old link or a
+ * remembered choice naming any of them is simply ignored.
  */
-const RACE_KEY = "wb.ladder.race";
-const CLASS_KEY = "wb.ladder.class";
-const HARNESS_KEY = "wb.ladder.harness";
 const FREE_KEY = "wb.ladder.excludeFree";
 
 export default function Ladder() {
@@ -136,45 +146,108 @@ export default function Ladder() {
   const series = seriesFilter.series;
   const all = seriesFilter.kept;
   /*
-   * Race, class and harness narrow the set, and "exclude free" keeps only the
-   * runs we paid for (`ResultRun.billing`, `runner/src/billing.ts` — a
-   * `claude-code` subscription counts as paid there). All four are applied
-   * BEFORE the rows are derived — `ladderRows` on a scored tier, `characterRows`
-   * on freeplay — so the ranking is computed over exactly the rows on screen;
-   * the order itself is untouched (highest rung, XP, gold). On freeplay that
-   * ordering is before the lineage walk, so a chain whose ancestor the filter
-   * drops re-roots on its survivor; billing follows the endpoint and a character
-   * is one character under one config, so a mixed chain is not a shape the
-   * fleet produces (`lib/ladder.ts` pins the behaviour anyway).
+   * Two multi-selects and two toggles narrow the set, and all of them are
+   * applied BEFORE the rows are derived — `ladderRows` on a scored tier,
+   * `characterRows` on freeplay — so the ranking is computed over exactly the
+   * rows on screen; the order itself is untouched (highest rung, XP, gold). On
+   * freeplay that ordering is before the lineage walk, so a chain whose
+   * ancestor the filter drops re-roots on its survivor; billing follows the
+   * endpoint and a character is one character under one config, so a mixed
+   * chain is not a shape the fleet produces (`lib/ladder.ts` pins the
+   * behaviour anyway).
+   *
+   * "exclude free" keeps only the runs we paid for (`ResultRun.billing`,
+   * `runner/src/billing.ts` — a `claude-code` subscription counts as paid
+   * there). The model line and the company are `lib/ladderfilter.ts`.
    *
    * None is a row key. A model's row is its best run whatever it was played
    * on, because the baseline character is the comparison set.
    */
-  const [race, setRace] = createSignal<FilterChoice>(readChoicePref(RACE_KEY));
-  const [klass, setKlass] = createSignal<FilterChoice>(readChoicePref(CLASS_KEY));
-  const [harness, setHarness] = createSignal<FilterChoice>(readChoicePref(HARNESS_KEY));
   const [excludeFree, setExcludeFree] = createSignal(readBoolPref(FREE_KEY, true));
-  const pick = (
-    set: (v: FilterChoice) => void,
-    key: string,
-  ): ((value: string) => void) => (value: string): void => {
-    const choice = value === "" ? null : value;
-    set(choice);
-    writeChoicePref(key, choice);
+  /** A comma-separated query parameter as the set of keys it names. */
+  const listParam = (raw: string | string[] | undefined): string[] => {
+    const one = Array.isArray(raw) ? raw[0] : raw;
+    return (one ?? "").split(",").map((k) => k.trim()).filter((k) => k !== "");
   };
-  // Options come from the whole episode, not from the mutually filtered set:
-  // picking a race must not prune the class list under the reader's cursor.
-  const races = createMemo(() => raceOptions(all()));
-  const classes = createMemo(() => classOptions(all()));
-  const harnesses = createMemo(() => harnessOptions(all()));
-  const runs = createMemo(() =>
-    filterRuns(all(), {
-      race: resolveChoice(races(), race()),
-      klass: resolveChoice(classes(), klass()),
-      harness: resolveChoice(harnesses(), harness()),
-      excludeFree: excludeFree(),
-    }),
+  const lines = (): string[] => listParam(params.family);
+  const companies = (): string[] => listParam(params.company);
+  /** A selection is dropped from the URL when it is empty: an empty `?family=` is noise. */
+  const setList = (name: "family" | "company", keys: readonly string[]): void => {
+    setParams({ [name]: keys.length === 0 ? undefined : [...keys].join(",") }, { replace: true });
+  };
+  const toggle = (name: "family" | "company", current: () => string[]) => (key: string, on: boolean): void => {
+    const now = current().filter((k) => k !== key);
+    setList(name, on ? [...now, key] : now);
+  };
+  /*
+   * The effort rule, in the URL like the filters it sits beside and ON by
+   * default: `?efforts=all` is the one form that turns it off, so the default
+   * reading is the short address. It is gated on a scored tier for the same
+   * reason `?view=` and `?pareto=` are — freeplay draws characters, not
+   * roster entries, and `ladderPoints` has nothing to say about it.
+   */
+  const representative = (): boolean =>
+    !freeplay() && (Array.isArray(params.efforts) ? params.efforts[0] : params.efforts) !== "all";
+  /*
+   * Options come from the series-filtered set, not from the mutually filtered
+   * one: ticking a company must not prune the model lines under the reader's
+   * cursor, and an option that vanished when it was used would be a control
+   * that fights back.
+   */
+  const lineOptions = createMemo(() => filterOptions(all().map((r) => r.model), lineOf));
+  const companyOptions = createMemo(() => filterOptions(all().map((r) => r.model), companyOf));
+  /** Everything but the effort rule, which needs these runs to compute its own. */
+  const narrowed = createMemo(() =>
+    filterRuns(all(), { excludeFree: excludeFree() }).filter((r) =>
+      matchesSelection(r.model, { lines: lines(), companies: companies() }),
+    ),
   );
+  /*
+   * The entries the effort rule hides, as `pointKey`s.
+   *
+   * Computed as a set of what is *dropped* rather than of what is kept, which
+   * is the difference between a rule and an accident: an entry `ladderPoints`
+   * could not plot at all — no run of it carrying both a cost and an xp
+   * reading — lands in `omitted` and not in `points`, and a kept-set would
+   * therefore hide it without ever having judged it. Nothing is hidden unless
+   * one of its own model's other efforts beat it on both axes.
+   *
+   * Cost and XP explicitly, never `view()`: a set of rows that changed when a
+   * reader swapped the axes would mean something different on every view.
+   */
+  const hidden = createMemo((): Set<string> => {
+    if (!representative()) return new Set();
+    const points = ladderPoints(narrowed(), COST, XP).points;
+    const kept = new Set(
+      representativeEfforts(
+        points.map((p) => ({ key: p.key, model: p.model, effort: p.effort, cost: p.x, xp: p.y })),
+      ).map((k) => k.key),
+    );
+    return new Set(points.filter((p) => !kept.has(p.key)).map((p) => p.key));
+  });
+  const runs = createMemo(() =>
+    hidden().size === 0
+      ? narrowed()
+      : narrowed().filter((r) => !hidden().has(pointKey(r.model ?? "(unnamed)", r.effort))),
+  );
+  const groups = createMemo((): FilterGroup[] => [
+    {
+      label: "model line",
+      note: "derived from the slug: the provider prefix, the free marker and every version token dropped.",
+      options: lineOptions(),
+      selected: lines(),
+      onToggle: toggle("family", lines),
+      onClear: () => setList("family", []),
+    },
+    {
+      label: "company",
+      note: "who serves it, from infra/model-lineup.json; an id the catalog does not claim falls back to its provider prefix.",
+      options: companyOptions(),
+      selected: companies(),
+      onToggle: toggle("company", companies),
+      onClear: () => setList("company", []),
+    },
+  ]);
   const characters = createMemo(() => characterRows(runs()));
   // A viewer that predates `billing` reports it on no run at all, and a toggle
   // that excludes nothing is worse than one that is obviously off (the rule
@@ -252,15 +325,9 @@ export default function Ladder() {
           </div>
         </Show>
         <div class="ladder-filters">
-        <FilterSelect label="race" options={races()} value={resolveChoice(races(), race())} onPick={pick(setRace, RACE_KEY)} />
-        <FilterSelect label="class" options={classes()} value={resolveChoice(classes(), klass())} onPick={pick(setKlass, CLASS_KEY)} />
-        <FilterSelect
-          label="harness"
-          options={harnesses()}
-          value={resolveChoice(harnesses(), harness())}
-          onPick={pick(setHarness, HARNESS_KEY)}
-          title="The harness tag. A tag on the row, not a partition — filtering by it is the reader's choice, not a comparability rule."
-        />
+        <Show when={!freeplay()}>
+          <FilterPopover groups={groups()} />
+        </Show>
         <label class="filter check" title="Keep only the runs that cost money. A claude-code or codex run counts as paid: a subscription is a bill (runner/src/billing.ts).">
           <input
             type="checkbox"
@@ -284,9 +351,29 @@ export default function Ladder() {
             />
             <span>pareto front</span>
           </label>
+          <label
+            class="filter check"
+            title="For a model with several effort entries, show only the efforts on that model's own cost-vs-xp Pareto front — the ones no other effort of the same model beat on both cost and xp at once. A model with one entry is untouched, and nothing is ever compared across models."
+          >
+            <input
+              type="checkbox"
+              checked={representative()}
+              onChange={(e) => setParams({ efforts: e.currentTarget.checked ? undefined : "all" }, { replace: true })}
+            />
+            <span>representative efforts</span>
+          </label>
         </Show>
         </div>
       </div>
+      <Show when={hidden().size > 0}>
+        <p class="dim">
+          {hidden().size === 1 ? "One effort variant is" : `${hidden().size} effort variants are`} hidden:
+          for a model with several efforts, only the efforts on that model's own cost-against-xp
+          Pareto front are shown — an effort another effort of the same model beat on both cost and
+          xp is a knob setting, not a result. A model with one entry is untouched and nothing is
+          compared across models. Untick "representative efforts" for the whole field.
+        </p>
+      </Show>
       <Show when={billingUnknown()}>
         <p class="dim">
           Nothing excluded: these runs predate the <span class="mono">billing</span> record, so
@@ -727,37 +814,3 @@ function Unreached(props: { cell: LadderCell; runs: number }) {
   );
 }
 
-/**
- * One filter select: "all" plus the values this episode's runs actually carry.
- *
- * `selected` on each option rather than `value` on the select, for the reason
- * `SeriesSelect` gives: `<For>` recreates every option when a poll returns, and
- * a select whose options are all replaced resets to the first one. The
- * attribute makes the DOM say which one is current, and makes it checkable
- * without a scripted browser.
- */
-function FilterSelect(props: {
-  label: string;
-  options: readonly string[];
-  value: FilterChoice;
-  onPick: (value: string) => void;
-  title?: string;
-}) {
-  return (
-    <label class="filter" title={props.title}>
-      <span class="dim">{props.label}</span>
-      <select onChange={(e) => props.onPick(e.currentTarget.value)}>
-        <option value="" selected={props.value === null}>
-          all
-        </option>
-        <For each={props.options}>
-          {(o) => (
-            <option value={o} selected={o === props.value}>
-              {o}
-            </option>
-          )}
-        </For>
-      </select>
-    </label>
-  );
-}
