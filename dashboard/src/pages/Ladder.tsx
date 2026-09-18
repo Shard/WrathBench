@@ -57,7 +57,6 @@ import { EPISODE_CHOICES, episodeParam } from "../lib/episodes";
 import {
   RUNGS,
   billingKnown,
-  scored,
   filterRuns,
   hoverKeyOf,
   ladderPoints,
@@ -76,13 +75,6 @@ import {
   matchesSelection,
   representativeEfforts,
 } from "../lib/ladderfilter";
-import {
-  type ReferenceMark,
-  type ReferenceScale,
-  empiricalCeiling,
-  referenceScale,
-  speedrunBand,
-} from "../lib/reference";
 import { resolvedSummary } from "../lib/models";
 import { fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { poll } from "../lib/poll";
@@ -146,7 +138,6 @@ export default function Ladder() {
    */
   const freeplay = (): boolean => episode() === "freeplay";
   const seriesFilter = useSeriesFilter(served, () => !freeplay());
-  const series = seriesFilter.series;
   const all = seriesFilter.kept;
   /*
    * Two multi-selects and two toggles narrow the set, and all of them are
@@ -259,28 +250,6 @@ export default function Ladder() {
   const billingUnknown = (): boolean =>
     excludeFree() && all().length > 0 && !billingKnown(all());
   const rows = createMemo(() => ladderRows(runs()));
-  /*
-   * The reference lines are derived from the series-filtered *scored* set,
-   * deliberately before race, class, harness and "exclude free": the ceiling
-   * is labelled "best observed e90, harness 0.5", and a number that moved when
-   * a reader ticked a checkbox would make its own label false. The rows on
-   * screen only decide how far the scale has to stretch.
-   */
-  const ceiling = createMemo(() => empiricalCeiling(scored(all())));
-  const reference = createMemo((): ReferenceScale | null =>
-    freeplay()
-      ? null
-      : referenceScale({
-          episode: episode(),
-          series: series(),
-          ceiling: ceiling(),
-          reached: rows().reduce<number | null>(
-            (m, r) => (r.bestLevel === null ? m : Math.max(m ?? 0, r.bestLevel)),
-            null,
-          ),
-        }),
-  );
-
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
@@ -495,8 +464,6 @@ export default function Ladder() {
           </table>
         </div>
 
-        <Show when={reference()}>{(ref) => <ReferenceStrip scale={ref()} episode={episode()} />}</Show>
-
         <h2 class="section">the rungs, and how each is decided</h2>
         <div class="scroller">
           <table>
@@ -614,118 +581,6 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
       </table>
     </div>
   );
-}
-
-/**
- * The two reference lines, on a level scale under the table.
- *
- * A level reading on the ladder is otherwise legible only against other
- * models' level readings, so the page says what ninety minutes in this world
- * can contain: the best any scored run of this series actually managed, and
- * roughly where a practised human is at the same point. The operator chose
- * these two over a scripted grinder or walkthrough baseline (2026-09-16), so
- * nothing new was run for either — one is a maximum over the runs on hand and
- * the other is a constant with its sources in `lib/reference.ts`.
- *
- * Below the table rather than inside it: the rung table carries eight extra
- * columns and lives in a `.scroller`, and a reference row in there would be
- * behind a horizontal scroll on a phone. Both marks are drawn as spans — the
- * speedrun figure is a band, not a point, because one confirmed entry fixes a
- * pace and not a distribution, and reading a level off it at minute N is a
- * judgement. Provenance is on the hover and repeated in the footnote, which is
- * the whole point of drawing them.
- */
-function ReferenceStrip(props: { scale: ReferenceScale; episode: string }) {
-  const span = (): number => Math.max(props.scale.max - props.scale.min, 1);
-  /** A level's position along the rail, as a percentage — so the strip is fluid and needs no measuring. */
-  const at = (level: number): string => `${(((level - props.scale.min) / span()) * 100).toFixed(2)}%`;
-  const width = (m: ReferenceMark): string =>
-    `${(((m.high - m.low) / span()) * 100).toFixed(2)}%`;
-  /** Every level the rail labels: the ends, and each mark's own edges. */
-  const ticks = (): number[] =>
-    [...new Set([props.scale.min, ...props.scale.marks.flatMap((m) => [m.low, m.high]), props.scale.max])].sort(
-      (a, b) => a - b,
-    );
-  return (
-    <div class="reference">
-      <div class="reference-rail" role="img" aria-label={ariaOf(props.scale)} title={ariaOf(props.scale)}>
-        <For each={props.scale.marks}>
-          {(m) => (
-            <Show
-              when={m.high > m.low}
-              fallback={<span class={`ref-mark line ${m.id}`} style={{ left: at(m.low) }} title={`${m.label} — ${m.provenance}`} />}
-            >
-              <span
-                class={`ref-mark band ${m.id}`}
-                style={{ left: at(m.low), width: width(m) }}
-                title={`${m.label} — ${m.provenance}`}
-              />
-            </Show>
-          )}
-        </For>
-        <For each={ticks()}>
-          {(t) => (
-            <span class="ref-tick mono dim" style={{ left: at(t) }}>
-              L{t}
-            </span>
-          )}
-        </For>
-      </div>
-      {/* The legend carries the numbers, because the rail is squeezed on a
-          phone and a label that has to be measured off a rail is not a label. */}
-      <ul class="reference-legend dim">
-        <For each={props.scale.marks}>
-          {(m) => (
-            <li title={m.provenance}>
-              <span class={m.id === "ceiling" ? "swatch line" : "swatch band"} aria-hidden="true" />
-              <span class="mono">{m.low === m.high ? `L${m.low}` : `L${m.low}–${m.high}`}</span> {m.label}
-            </li>
-          )}
-        </For>
-      </ul>
-      <p class="dim reference-note">
-        Neither line is a score and neither enters the row order. The ceiling is derived at read time
-        from this tier's scored runs on the selected series — it is not a target and not a constant, and
-        it moves the moment a run beats it.{" "}
-        <Show when={speedrunBand(props.episode)}>
-          {(band) => (
-            <>
-              The band is a committed constant: roughly L{band().low}–{band().high} by {band().minutes} minutes, read off{" "}
-              <For each={band().sources}>
-                {(src, i) => (
-                  <>
-                    <Show when={i() > 0}>, </Show>
-                    <Show
-                      when={src.url}
-                      fallback={<span title={`${src.what} — ${src.note}`}>{src.what}</span>}
-                    >
-                      <a href={src.url} rel="noreferrer" title={`${src.what} — ${src.note}`}>
-                        {src.what}
-                      </a>
-                    </Show>
-                  </>
-                )}
-              </For>
-              . speedrun.com's Wrath of the Lich King Classic Archive board carries one entry in
-              each of the categories the bands rest on, both confirmed in a browser by the operator
-              on 2026-09-16; the Classic Era and Cataclysm Classic records run different XP rates and
-              are context, not the figure. One entry per category is thin, and a Hunter speedrun
-              route with death warps is an upper bound on what WrathBench's Dwarf Paladin can do, not
-              a par score.{" "}
-            </>
-          )}
-        </Show>
-        The notes travel with the constant in{" "}
-        <span class="mono">dashboard/src/lib/reference.ts</span>.
-      </p>
-    </div>
-  );
-}
-
-function ariaOf(scale: ReferenceScale): string {
-  return `A level scale from L${scale.min} to L${scale.max} carrying ${scale.marks
-    .map((m: ReferenceMark) => `${m.label} at ${m.low === m.high ? `L${m.low}` : `L${m.low}–${m.high}`}`)
-    .join(" and ")}`;
 }
 
 /**

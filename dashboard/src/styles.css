@@ -944,30 +944,6 @@ button.update:hover { background: var(--panel); }
 .page.prose p { line-height: 1.6; }
 .page.prose .scroller { margin: 0 -20px; padding: 0 20px; }
 
-/* The ladder's two reference lines, under the rung table (item 125, operator
-   2026-09-16). Outside the table's `.scroller` on purpose: eight rung columns
-   put a reference row behind a horizontal scroll on a phone, and a reference a
-   reader has to scroll to find is not one. The legend carries the numbers so
-   the strip never has to be measured. */
-.reference { margin: 4px 0 12px; }
-/* The rail is percentage-positioned HTML rather than an SVG: a level's tick
-   label has to stay legible while the strip stretches, and a `<text>` in a
-   viewBox scaled to the page width would be squeezed with everything else. */
-.reference-rail { position: relative; height: 30px; border-bottom: 1px solid var(--line); margin-top: 8px; }
-.reference-rail .ref-mark { position: absolute; top: 0; bottom: 0; }
-.reference-rail .ref-mark.line { width: 2px; margin-left: -1px; background: var(--accent); }
-.reference-rail .ref-mark.band { background: var(--dim); opacity: 0.3; }
-/* Level labels sit under the rail, centred on their tick. */
-.reference-rail .ref-tick { position: absolute; top: 100%; transform: translateX(-50%); font-size: var(--fs-2xs); white-space: nowrap; }
-.reference-legend { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-sm); }
-.reference-legend li { display: flex; align-items: center; gap: 6px; }
-.reference-legend .swatch { width: 14px; height: 10px; display: inline-block; }
-/* The ceiling is one observed level, so it is a line; the speedrun figure is a
-   band, because the two records bracketing it are two different games. */
-.reference-legend .swatch.line { width: 2px; height: 12px; background: var(--accent); }
-.reference-legend .swatch.band { background: var(--dim); opacity: 0.35; }
-.reference-legend { margin-top: 16px; }
-.reference-note { font-size: var(--fs-sm); margin: 6px 0 0; max-width: 72ch; }
 /* The dispersion under a row's best level: the median and the range the row's
    counted runs actually spanned. A size down from the maximum above it — the
    headline stays the headline. */

@@ -1,5 +1,15 @@
 /**
- * The two reference lines the ladder draws behind its level readings.
+ * The two reference lines the ladder drew behind its level readings until
+ * 2026-09-18.
+ *
+ * **Withdrawn from the page, kept in the repository** (operator, 2026-09-18):
+ * the rail was complicated to read and one human speedrun entry per category
+ * is not enough data to earn the space it took. Nothing here is deleted — the
+ * figures, their provenance and the caveats that go with them are written
+ * record, and the rail goes back on the page if and when there are several
+ * runs to state a distribution from. What was removed is the drawing:
+ * `ReferenceStrip` in `pages/Ladder.tsx` and its styles. The prose account is
+ * in `docs/PUBLIC-DASHBOARD.md`, "The human reference".
  *
  * A level on the ladder is otherwise legible only against other models' level
  * readings: nothing on the page says what a good ninety minutes in this world
