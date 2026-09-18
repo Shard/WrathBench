@@ -65,7 +65,6 @@ import {
   characterRows,
   type LadderCell,
   type LadderRow,
-  type LevelRange,
   type CharacterRow,
 } from "../lib/ladder";
 import {
@@ -593,29 +592,22 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
  */
 function Furthest(props: { row: LadderRow }) {
   const r = (): LadderRow => props.row;
-  const spread = (): LevelRange | null => {
+  /*
+   * The spread the row's runs already paid for, as the cell's hover rather
+   * than a second line of text under the badge (operator, 2026-09-18). The
+   * cell draws the level and the bar and nothing else; "L6 · 2–6" beside them
+   * was a third number in a column that has two.
+   */
+  const spread = (): string | null => {
     const lr = r().levelRange;
-    return lr !== null && lr.n > 1 ? lr : null;
+    if (lr === null || lr.n <= 1) return null;
+    return (
+      `median L${lr.median}, range L${lr.min}–L${lr.max}, over the ${lr.n} counted run${lr.n === 1 ? "" : "s"} that recorded a level` +
+      (lr.n === r().runs ? "" : ` of ${r().runs} — the rest recorded none`) +
+      ". The median is an observed level: on an even count it is the lower of the two middles, never a half-level nothing was at."
+    );
   };
-  return (
-    <Show when={r().bestLevel !== null} fallback={<span>—</span>}>
-      <LevelXp level={r().bestLevel} xp={r().bestXp} compact />
-      <Show when={spread()}>
-        {(lr) => (
-          <div
-            class="dim spread"
-            title={`median L${lr().median}, range L${lr().min}–L${lr().max}, over the ${lr().n} counted run${
-              lr().n === 1 ? "" : "s"
-            } that recorded a level${
-              lr().n === r().runs ? "" : ` of ${r().runs} — the rest recorded none`
-            }. The median is an observed level: on an even count it is the lower of the two middles, never a half-level nothing was at.`}
-          >
-            L{lr().median} · {lr().min}–{lr().max}
-          </div>
-        )}
-      </Show>
-    </Show>
-  );
+  return <LevelXp level={r().bestLevel} xp={r().bestXp} note={spread()} compact />;
 }
 
 /**

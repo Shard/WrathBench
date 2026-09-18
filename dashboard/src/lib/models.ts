@@ -227,8 +227,3 @@ export function freeplayOf(
 ): CharacterRow | null {
   return characters.find((s) => s.model === row.model && s.effort === row.effort) ?? null;
 }
-
-/** `live · L15` as the cell reads it; the hover carries the reason. */
-export function freeplayLabel(s: CharacterRow): string {
-  return s.level === null ? s.status : `${s.status} · L${s.level}`;
-}

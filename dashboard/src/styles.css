@@ -939,11 +939,6 @@ button.update:hover { background: var(--panel); }
 .page.prose p { line-height: 1.6; }
 .page.prose .scroller { margin: 0 -20px; padding: 0 20px; }
 
-/* The dispersion under a row's best level: the median and the range the row's
-   counted runs actually spanned. A size down from the maximum above it — the
-   headline stays the headline. */
-td .spread { font-size: var(--fs-xs); }
-
 /*
  * The character page (item 128): one character across its sessions.
  *

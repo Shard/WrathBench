@@ -21,8 +21,9 @@ import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../a
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
-import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayLabel, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
+import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { characterRows } from "../lib/ladder";
+import { LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { poll } from "../lib/poll";
 import { runsHref } from "../lib/runs";
@@ -249,7 +250,7 @@ export default function Models() {
                                 .filter((t): t is string => t !== null)
                                 .join(" · ")}
                             >
-                              {freeplayLabel(s())}
+                              {s().status} <LevelXp level={s().level} xp={s().xp} compact />
                             </A>
                           )}
                         </Show>
