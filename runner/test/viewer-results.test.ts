@@ -175,6 +175,42 @@ describe("mapsOf / trackFrom", () => {
     expect(points.map((p) => p.ts)).toEqual([1, 3]);
     expect(points[0]).toMatchObject({ x: 1, y: 2, level: 3, turn: 7 });
   });
+
+  test("the inventory rides the track on change, and a change on a positionless sample is not lost", () => {
+    const worn = JSON.stringify([{ name: "Worn Mace", count: 1, equipped: true, slot: 16, itemId: 5956, quality: 1 }]);
+    const more = JSON.stringify([
+      { name: "Worn Mace", count: 1, equipped: true, slot: 16, itemId: 5956, quality: 1 },
+      { name: "Linen Cloth", count: 3, equipped: false, slot: 23, bag: 255, itemId: 2589, quality: 1 },
+    ]);
+    const points = trackFrom(
+      [
+        // Before the first reading: nothing observed yet.
+        state({ ts: 1, map: 0, x: 1, y: 2 }),
+        state({ ts: 3, map: 0, x: 3, y: 4 }),
+        // Re-stating the same inventory is not a change.
+        state({ ts: 5, map: 0, x: 5, y: 6 }),
+        // The sample that picked the cloth up carried no position; the change
+        // surfaces on the next point that has one.
+        state({ ts: 9, map: 0, x: 7, y: 8 }),
+      ],
+      [
+        { ts: 2, seq: 1, items: worn },
+        { ts: 4, seq: 2, items: worn },
+        { ts: 7, seq: 3, items: more },
+      ],
+    );
+    expect(points.map((p) => p.items?.length)).toEqual([undefined, 1, undefined, 2]);
+    expect(points[1]!.items![0]).toEqual({
+      name: "Worn Mace",
+      count: 1,
+      equipped: true,
+      slot: 16,
+      itemId: 5956,
+      quality: 1,
+    });
+    // A track of a run that recorded no inventory carries the field nowhere.
+    expect(trackFrom([state({ ts: 1, map: 0, x: 1, y: 2 })])[0]!.items).toBeUndefined();
+  });
 });
 
 describe("unscoredReason", () => {

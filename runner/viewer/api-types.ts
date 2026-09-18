@@ -1698,6 +1698,18 @@ export interface ResultsResponse extends SnapshotEnvelope {
   now: number;
 }
 
+/**
+ * One state sample's stored `items` JSON, as the replay path reads it.
+ *
+ * Raw text rather than parsed rows: the track only parses the samples where the
+ * text changed, and comparing the strings is how it knows which those are.
+ */
+export interface StateItemsRow {
+  ts: number;
+  seq: number;
+  items: string;
+}
+
 /** A run's whole recorded track, for map replay (item 22). */
 export interface TrackPoint {
   ts: number;
@@ -1725,6 +1737,22 @@ export interface TrackPoint {
   powerType?: number | null;
   /** The XP bar's denominator, as the client shows it. */
   nextLevelXp?: number | null;
+  /**
+   * What the character was wearing and carrying, so a replay pip can show what
+   * a live pip shows.
+   *
+   * **Carried forward, not per point.** It appears only on the points where the
+   * sample changed — the first point that has a reading, and every point after
+   * one where the inventory differed from the last one published. Holding the
+   * whole inventory on every point would be most of the response and nearly all
+   * of it repetition. So a reader keeps the last `items` it saw as it scrubs; a
+   * point without the field means "unchanged", never "empty bags", and a point
+   * before the first reading means "not yet observed".
+   *
+   * Absent throughout on a track served or published before this shipped, and
+   * on a run whose samples recorded no inventory at all.
+   */
+  items?: ItemSample[];
 }
 
 /**

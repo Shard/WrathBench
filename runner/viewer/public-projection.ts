@@ -1011,6 +1011,10 @@ export function projectTrack(t: TrackResponse): TrackResponse {
         maxPower: p.maxPower ?? null,
         powerType: p.powerType ?? null,
         nextLevelXp: p.nextLevelXp ?? null,
+        // Only where the sample changed, as the track serves it: the field's
+        // absence is "unchanged", so filling it in on every point here would
+        // be a different claim as well as a much larger file.
+        ...(p.items === undefined ? {} : { items: projectItems(p.items) ?? [] }),
       }),
     ),
     // As on the live feed.

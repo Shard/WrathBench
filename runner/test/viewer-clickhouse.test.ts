@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../src/trajectory";
-import { readRun, readStates, readMoves } from "../viewer/runs";
+import { readRun, readStateItems, readStates, readMoves } from "../viewer/runs";
 import {
   clickhouseConfigFromEnv,
   clickhouseErrorMessage,
@@ -134,6 +134,19 @@ describe("a run row off the store is the run row off the files", () => {
   test("the state series is the state series", async () => {
     const fromStore = (await store.stateRows("run-1")).map(statePointOf);
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readStates(runsDir, "run-1")));
+  });
+
+  test("the item samples are their own read: only the samples that carried one, and the files agree", async () => {
+    // Its own call because `items` is the large column: `stateRows` must not
+    // have grown it, and only a replay pays for it.
+    const fromStore = await store.stateItemRows("run-1");
+    expect(fromStore).toHaveLength(1);
+    expect(JSON.parse(fromStore[0]!.items)).toHaveLength(2);
+    const fromFiles = readStateItems(runsDir, "run-1");
+    expect(fromFiles.map((r) => r.items)).toEqual(fromStore.map((r) => r.items));
+    // A sample that carried no inventory is not a row here: the replay reads
+    // changes, and "" would look like an emptied bag.
+    expect(fromStore.every((r) => r.items.length > 0)).toBe(true);
   });
 
   test("the movement intentions are the movement intentions", async () => {

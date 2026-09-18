@@ -26,7 +26,7 @@ import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StatePoint } from "./api-types";
+import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/index";
@@ -416,6 +416,37 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
       nextLevelXp: num(r["next_level_xp"]),
     }));
   } catch {
+    return [];
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * One run's `items` samples, oldest first, skipping the samples that carried
+ * none — the fallback `readStates` is, for the same reason and in the same
+ * place: a run the collector has not reached yet still replays.
+ *
+ * Separate from `readStates` because `items` is the one large column of the
+ * table and nothing but a replay wants it; every other read path would be
+ * paying for a whole inventory per sample to ignore it.
+ */
+export function readStateItems(runsDir: string, runId: string): StateItemsRow[] {
+  const dir = join(runsDir, runId);
+  const db = openReadonly(dir);
+  if (db === null) return [];
+  try {
+    const rows = db
+      .query(`SELECT ts, rowid AS seq, items FROM state WHERE run_id = ? AND items IS NOT NULL ORDER BY ts, rowid`)
+      .all(runId) as Record<string, unknown>[];
+    const out: StateItemsRow[] = [];
+    for (const r of rows) {
+      if (typeof r["items"] !== "string" || r["items"].length === 0) continue;
+      out.push({ ts: num(r["ts"]) ?? 0, seq: num(r["seq"]) ?? 0, items: r["items"] });
+    }
+    return out;
+  } catch {
+    // A run.sqlite from before the `items` column: it recorded none.
     return [];
   } finally {
     db.close();

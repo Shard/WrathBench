@@ -52,6 +52,7 @@ import type {
   RunListRow,
   RunRow,
   RunsResponse,
+  StateItemsRow,
   StatePoint,
   TokenTotals,
   TrackResponse,
@@ -80,7 +81,7 @@ import {
   projectTrack,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
-import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStates, runDir } from "./runs";
+import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
   factOf,
   moveViewsOf,
@@ -682,6 +683,16 @@ export function createApi(opts: ApiOptions): ApiHandle {
   async function statesOfRun(runId: string): Promise<StatePoint[]> {
     const rows = await store.stateRows(runId);
     return rows.length > 0 ? rows.map(statePointOf) : readStates(runsDir, runId);
+  }
+
+  /**
+   * One run's inventory samples, for the replay track — the same store-then-files
+   * fallback, and its own call because `items` is the one large column and only
+   * a replay wants it.
+   */
+  async function stateItemsOfRun(runId: string): Promise<StateItemsRow[]> {
+    const rows = await store.stateItemRows(runId);
+    return rows.length > 0 ? rows : readStateItems(runsDir, runId);
   }
 
   /**
@@ -1450,7 +1461,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
         characterName: run.character,
         model: run.model,
         harnessVersion: run.harnessVersion,
-        points: trackFrom(await statesOfRun(runId)),
+        // The inventory rides the track on change (see `TrackPoint.items`), so
+        // the replay pip can show what the live pip shows.
+        points: trackFrom(await statesOfRun(runId), await stateItemsOfRun(runId)),
         // The intentions beside the track: same run, different cadence.
         moves: await (async () => {
           // Same fallback as the track's own points: a run whose moves the
