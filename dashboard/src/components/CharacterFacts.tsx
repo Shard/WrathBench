@@ -40,8 +40,14 @@ export function LevelXp(props: {
   xp: number | null | undefined;
   nextLevelXp?: number | null | undefined;
   compact?: boolean;
+  /** Anything else the cell knows — a row's spread across its runs — for the hover. */
+  note?: string | null;
 }) {
-  const title = (): string => xpCellTitle(props.level, props.xp, props.nextLevelXp);
+  const title = (): string => {
+    const head = xpCellTitle(props.level, props.xp, props.nextLevelXp);
+    const note = props.note;
+    return note === null || note === undefined || note === "" ? head : `${head}\n${note}`;
+  };
   return (
     <Show when={typeof props.level === "number"} fallback={<span class="dim" title={title()}>—</span>}>
       <Show

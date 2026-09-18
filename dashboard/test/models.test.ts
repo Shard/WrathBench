@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ModelRowView } from "../../runner/viewer/api-types";
-import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayLabel, freeplayOf, noteOf, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
+import { MODEL_COLUMNS, columnClass, compareModelRows, highestTierOf, tierOf, tierTitle, countedOf, extrasOf, isPromoted, modelsHref, freeplayOf, noteOf, rosterNameFor, schedulableOf, statusClass } from "../src/lib/models";
 
 function row(over: Partial<ModelRowView> = {}): ModelRowView {
   return {
@@ -197,9 +197,5 @@ describe("freeplay column", () => {
     expect(freeplayOf({ model: "sonnet", effort: "low" }, [character()])).not.toBeNull();
     expect(freeplayOf({ model: "sonnet", effort: null }, [character()])).toBeNull();
     expect(freeplayOf({ model: "opus", effort: "low" }, [character()])).toBeNull();
-  });
-  test("the label is status and level", () => {
-    expect(freeplayLabel(character())).toBe("paused · L15");
-    expect(freeplayLabel(character({ status: "live", level: null }))).toBe("live");
   });
 });
