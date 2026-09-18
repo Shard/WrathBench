@@ -848,3 +848,20 @@ turned up that nobody configured in the repository: the zone injects
 Cloudflare Web Analytics (`static.cloudflareinsights.com`) into every page —
 a zone-level setting on the operator's account, cookieless, and noted here so
 it is not mistaken for something the build added.
+
+That audit gained a deliberate entry on 2026-09-18 (operator): a run page and
+the map sidebar now draw item icons and tooltips, and the way they do it is a
+link to `https://www.wowhead.com/wotlk/item=<entry>` decorated in the reader's
+browser by Wowhead's public tooltip script. So a visitor to those two pages
+fetches `https://wow.zamimg.com/js/tooltips.js` and, per item, icon art from
+`wow.zamimg.com` and tooltip JSON from `nether.wowhead.com`. Those are the
+only third-party origins the application asks for, alongside the zone's own
+analytics above, and the script is injected at runtime by
+`dashboard/src/lib/wowhead.ts` rather than sitting in `index.html`, so a page
+with no items asks for nothing. The reason for the arrangement is the red line
+in `docs/DATA-AND-LEGAL.md`: we extract and serve no item art — we publish the
+`item_template.entry` the server already gave us and let somebody else's
+service supply the picture. A reader who blocks either host loses the icons
+and keeps the panel: every cell falls back to the item's name in its quality
+colour with its stack count, which is what the plain `carrying:` line said
+before.
