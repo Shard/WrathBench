@@ -43,6 +43,7 @@ import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "../components/UnitFrame";
+import { InventoryPanel } from "../components/Inventory";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
@@ -1054,8 +1055,17 @@ export default function MapPage() {
               <div class="v mono">{fmtMoney(p().money)}</div>
               <div class="k">quests completed</div>
               <div class="v mono">{num(p().questsCompleted)}</div>
-              <div class="k">carrying</div>
-              <div class="v">{fmtItems(p().items, false)}</div>
+              {/*
+                Inventory (2026-09-18): the bag opens over the sidebar rather
+                than widening it, and the paperdoll sits under it. A replay
+                cursor carries no items yet, so this is the null line there.
+              */}
+              <div class="k">inventory</div>
+              <div class="v">
+                <Show when={p().items} fallback={<span class="inv-note">{fmtItems(p().items, false)}</span>}>
+                  {(items) => <InventoryPanel items={items()} />}
+                </Show>
+              </div>
               <div class="k">map</div>
               <div class="v" title={`map ${p().map}`}>
                 {mapName(p().map)}

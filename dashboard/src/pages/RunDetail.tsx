@@ -55,6 +55,7 @@ import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
 import { CharacterPlot } from "../components/CharacterChart";
 import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
+import { InventoryPanel } from "../components/Inventory";
 import { stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtMoney, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
@@ -810,9 +811,16 @@ export default function RunDetail() {
                         level {num(run().level)} · {num(run().xp)} xp in level · {fmtMoney(run().money)} ·{" "}
                         {num(run().questsCompleted)} quests
                       </div>
-                      {/* Newest recorded inventory (item 50): plain lists, no icons. */}
-                      <div class="sub">carrying: {fmtItems(run().items, false)}</div>
-                      <div class="sub">equipped: {fmtItems(run().items, true)}</div>
+                      {/*
+                        Newest recorded inventory (item 50). Icons and tooltips
+                        come from Wowhead in the reader's browser; we serve no
+                        item art (operator, 2026-09-18). A run that recorded no
+                        inventory at all still says so in words, which is what
+                        `fmtItems` answers for null.
+                      */}
+                      <Show when={run().items} fallback={<div class="sub">carrying: {fmtItems(run().items, false)}</div>}>
+                        {(items) => <InventoryPanel items={items()} />}
+                      </Show>
                       {/*
                         Achievements and flights from this run's milestone records.
                         "not recorded" is not zero: a run from before the taps wrote
