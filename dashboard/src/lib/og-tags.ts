@@ -25,15 +25,41 @@ export interface OgTagOptions {
    * A stamp appended to the image URL as `?v=`.
    *
    * Crawlers cache a card by URL and nothing else — Discord's has no
-   * revalidation and no purge — so a redeployed card at an unchanged URL is
-   * the old picture for as long as the crawler feels like it. The stamp is
-   * the rendered PNG's own content hash (`infra/render-og.ts` prints it), so
-   * the URL changes exactly when the picture does.
+   * revalidation and no purge — so a card at an unchanged URL is the old
+   * picture for as long as the crawler feels like it. The stamp is the
+   * ship-time render's own content hash (`infra/render-og.ts` prints it), so
+   * the URL changes whenever a ship changed the picture.
+   *
+   * What it cannot do is change *between* ships, and that is a property of the
+   * shape rather than an oversight: these tags live in a static `index.html`
+   * served as an immutable asset, so only a deploy can rewrite them. Since
+   * 2026-09-18 the bytes behind the URL are re-rendered by the publisher every
+   * pass, so a crawler that scrapes the page today gets today's ladder — but a
+   * crawler that already cached the card keeps its copy until the next ship
+   * moves the URL. Changing that would mean a Worker in the read path, which
+   * `dashboard/wrangler.jsonc` forecloses on purpose.
    */
   stamp: string;
+  /**
+   * The origin the card itself is served from, when it is not the app's.
+   *
+   * It is the data hostname: the publisher writes the picture to the R2 bucket
+   * beside the snapshot it rendered it from (`v1/og.png`), and the bucket is a
+   * different host from the app. Absent — the private build, or a public build
+   * that names no data hostname — the tags fall back to the app origin's own
+   * `/og.png`, the static asset `bun ship` still writes.
+   */
+  snapshotBase?: string;
   /** The page the card links back to; defaults to the origin's root. */
   path?: string;
 }
+
+/**
+ * Where the publisher puts the card in the bucket — `infra/og-render.ts`'s
+ * `OG_KEY`, restated rather than imported because this module is built into
+ * the SPA and nothing under `infra/` may follow it in.
+ */
+export const OG_IMAGE_KEY = "v1/og.png";
 
 /** The card's title and blurb, which are the page's own — one sentence, unchanged. */
 export const OG_TITLE = "WrathBench — an agent workbench for World of Warcraft";
@@ -59,7 +85,8 @@ export function ogTags(opts: OgTagOptions | null): string {
   if (opts === null) return "";
   const origin = opts.origin.replace(/\/+$/, "");
   const url = `${origin}${opts.path ?? "/"}`;
-  const image = `${origin}/og.png?v=${encodeURIComponent(opts.stamp)}`;
+  const base = (opts.snapshotBase ?? "").replace(/\/+$/, "");
+  const image = `${base === "" ? `${origin}/og.png` : `${base}/${OG_IMAGE_KEY}`}?v=${encodeURIComponent(opts.stamp)}`;
   const tags: [string, string][] = [
     ["og:url", url],
     ["og:image", image],
@@ -95,5 +122,8 @@ export function ogTagsFromEnv(env: Record<string, string | undefined>): OgTagOpt
   // `https` and not merely absolute: Discord rejects an insecure `og:image`,
   // and the failure is invisible until someone pastes a link.
   if (!origin.startsWith("https://")) throw new Error(`VITE_WRATHBENCH_PUBLIC_ORIGIN must be an https origin, got ${origin}`);
-  return { origin, stamp };
+  const base = env["VITE_WRATHBENCH_SNAPSHOT_BASE"];
+  if (base === undefined || base === "") return { origin, stamp };
+  if (!base.startsWith("https://")) throw new Error(`VITE_WRATHBENCH_SNAPSHOT_BASE must be an https origin, got ${base}`);
+  return { origin, stamp, snapshotBase: base };
 }
