@@ -513,6 +513,23 @@ export interface LadderOmission {
  * lookup key (`pareto.ts` matches a Set of these), so a display form of it is
  * built separately — see `LadderPoint.label`.
  */
+/**
+ * What a hovered pin and a hovered table row have in common.
+ *
+ * The scatter draws one point per (model, effort) and the table draws one row
+ * per model — deliberately, on both sides: a model's row is its best run
+ * whatever effort it was played at, and a point is a mean that only means
+ * something within one effort. So the thing the two can agree on is the model,
+ * and hovering either end lights the row and every one of its pins.
+ *
+ * The fallback matters: both derivations key an unrecorded model as
+ * `(unnamed)`, and a hover that used the raw null on one side and the string
+ * on the other would light nothing on exactly the rows nobody can name.
+ */
+export function hoverKeyOf(model: string | null | undefined): string {
+  return model ?? "(unnamed)";
+}
+
 export function pointKey(model: string, effort: string | null): string {
   return effort === null ? model : `${model} (${effort})`;
 }

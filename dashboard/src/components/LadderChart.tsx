@@ -17,7 +17,7 @@ import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo } from "solid-js";
 import type { ResultRun } from "@viewer/api-types";
 import { AXES, type AxisSpec, DEFAULT_VIEW, type LadderView, METRIC_KEYS } from "../lib/axes";
-import { LABEL_FONT, TICK_FONT, type LadderPoint, ladderChartLayout, ladderPoints } from "../lib/ladder";
+import { LABEL_FONT, TICK_FONT, type LadderPoint, hoverKeyOf, ladderChartLayout, ladderPoints } from "../lib/ladder";
 import { paretoSteps } from "../lib/pareto";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { InfoHint } from "./InfoHint";
@@ -117,6 +117,13 @@ export function LadderChart(props: {
   episode: string;
   view?: LadderView;
   pareto?: boolean;
+  /**
+   * The entry the reader is pointing at, shared with the table below so the
+   * two light up together (`hoverKeyOf`). Undefined on the pages that draw the
+   * chart alone — the homepage — where there is no row to agree with.
+   */
+  hovered?: string | null;
+  onHover?: (key: string | null) => void;
   /**
    * Whether the caption ends with the "Not plotted: …" roll-call of entries
    * that carry no reading on one of the axes. On by default, because the
@@ -263,7 +270,15 @@ export function LadderChart(props: {
           {/* Points, each a link to that entry's runs on this tier. */}
           <For each={layout().placed}>
             {(d) => (
-              <g class="ladderchart-pt" classList={{ dominated: !onFront(d.point.key) }}>
+              <g
+                class="ladderchart-pt"
+                classList={{
+                  dominated: !onFront(d.point.key),
+                  hovered: props.hovered !== undefined && props.hovered === hoverKeyOf(d.point.model),
+                }}
+                onMouseEnter={() => props.onHover?.(hoverKeyOf(d.point.model))}
+                onMouseLeave={() => props.onHover?.(null)}
+              >
               <a
                 href={runsHref({ model: d.point.model, effort: d.point.effort, episode: props.episode })}
                 onClick={(e) => {
