@@ -340,28 +340,89 @@ a bare clone like everything else.
 ## What the ladder shows
 
 Each row's headline numbers are still maxima over a model's counted runs, and
-the page is plain about that. Beside them it now shows the spread those runs
+the page is plain about that. Beside them it shows the spread those runs
 already paid for: a rung cell reads "2/3" — how many of the runs whose records
 can answer that rung reached it, with the link still going to the first that
 did — and under the best level sits the median and range across the counted
-runs that recorded one. Below the table, two labelled reference lines say what
-a level reading means. The empirical ceiling is derived at read time from the
-scored runs of the selected series on the tier in view, so it is never a
-constant and its label names what it is a maximum over. The human speedrun
-band is stated per tier — roughly level 9–10 by ninety minutes, level 18–19 by
-six hours — and each label says how thin the sourcing is rather than claiming
-there is none: "one Wrath entry, bracketed by Classic Era and Cataclysm
-Classic" at e90, "interpolated from one Wrath 1–20 entry" at e360.
-speedrun.com's Wrath of the Lich King Classic Archive board carries a single
-entry in each of those categories — 1–10 in 1:31 on an Orc Hunter, 1–20 in
-7:02:39 — both confirmed in a browser by the operator on 2026-09-16, and the
-Classic Era and Cataclysm Classic records stay as context on either side
-because they run different XP rates than 3.3.5a. One entry per category fixes a
-pace, not a distribution, and a Hunter route with death warps is an upper bound
-on what WrathBench's fixed Dwarf Paladin can do. The figures, the caveats and
-the run URL where one was given live in `dashboard/src/lib/reference.ts` and
-are repeated in the footnote under the strip. Neither line is a score and
-neither enters the row order.
+runs that recorded one.
+
+### The controls, since 2026-09-18
+
+The operator took three of the four dropdowns off the page. Race and class
+asked a question an eval episode cannot answer differently — every scored run
+is the same baseline character — and the harness select was the shell's
+series selector spelled a second time. What is above the chart now:
+
+- The **tier** chips and the **axes** chips, unchanged, both in the URL.
+- A **filters** button opening a small popover with two native
+  `<select multiple>` boxes, **company** and **family**. Company is the model
+  registry's own vendor (`infra/model-lineup.json`); family is the model *line*
+  and is **derived from the slug** rather than looked up, because the registry's
+  families are vendor-wide ("Claude" covers sonnet, opus, haiku and fable) and
+  filtering by one would be filtering by company twice. The derivation is dumb
+  and stated: drop the provider prefix, drop the free marker, drop every
+  dash-separated token carrying a digit — `claude-fable-5` → `claude-fable`,
+  `gpt-6-astra` → `gpt-astra`. Both option lists are derived from the rows on
+  screen, so neither can go stale. Values combine within a box and narrow
+  across the two, and both ride in the URL (`?company=`, `?family=`) so a
+  reading of a slice can be linked. The button carries the count of what is on.
+- **exclude free**, the per-viewer preference it has always been — a standing
+  opinion about what counts as evidence, not a slice of the field.
+- **pareto front**, unchanged, `?pareto=1`.
+- **representative efforts**, new and **on by default** (`?efforts=all` turns
+  it off). For a model with several effort entries it shows only the efforts on
+  **that model's own cost-against-xp Pareto front**: an effort that earned less
+  XP *and* cost more than another effort of the same model is a knob setting,
+  not a result. A model with one entry is untouched, ties are kept, and nothing
+  is ever compared across models. The rule is `representativeEfforts` in
+  `dashboard/src/lib/ladderfilter.ts`, pure and unit-tested, applied at the
+  page so the chart and the table cannot disagree; the axes are fixed at cost
+  and XP rather than following the axes chips, or the set on screen would mean
+  something different on every view. On the data of 2026-09-18 it hides five
+  of twenty-eight entries at e90 (`claude-fable-5`, `claude-fable-5 (high)`,
+  `claude-fable-5 (none)`, `sonnet`, `sonnet (max)`) and one of eight at e360
+  (`sonnet (medium)`); it removes no table row, because the table is keyed on
+  the model and the chart on the (model, effort) pair.
+
+Hovering a pin lights its table row and hovering a row lights its pins, keyed
+on the model (`hoverKeyOf`); keyboard focus on a row does the same.
+
+### No explanatory prose on the page (operator, 2026-09-18)
+
+Every derived view here has a paragraph's worth of "and here is what that
+actually means" behind it, and each one used to be printed under its chart or
+table. A reader who already knows reads past three sentences every visit; a
+reader who does not is reading an essay where they wanted a number. The page
+shows the heading, the control labels and the axes; the sentences are one
+hover away, on a small "i" beside the heading (`components/InfoHint.tsx`), and
+at length in this document. The line counting what the header's series
+selector filtered out went with them — the selector is labelled and explains
+itself.
+
+### The human reference, withdrawn 2026-09-18
+
+Under the table sat a level rail carrying two labelled marks: an **empirical
+ceiling** derived at read time from the scored runs of the selected series on
+the tier in view, and a **human speedrun band** stated per tier — roughly level
+9–10 by ninety minutes, level 18–19 by six hours.
+
+The figures came from speedrun.com's Wrath of the Lich King Classic Archive
+board, which carries a single entry in each of those categories: **1–10 in 1:31
+on an Orc Hunter**, and **1–20 in 7:02:39**. Both were confirmed in a browser
+by the operator on 2026-09-16. The e90 band was labelled "one Wrath entry,
+bracketed by Classic Era and Cataclysm Classic"; the e360 band was
+"interpolated from one Wrath 1–20 entry", because a 1–20 run is not linear in
+level. The Classic Era and Cataclysm Classic records stayed as context on
+either side because they run different XP rates than 3.3.5a. Neither mark was
+a score and neither entered the row order.
+
+**The rail was removed from the ladder on 2026-09-18 (operator): it is
+complicated, hard to read, and one run is not enough data to earn the space it
+took.** The figures, their provenance and their caveats are not deleted — they
+live on in `dashboard/src/lib/reference.ts` with this paragraph as their prose
+account, and the rail returns to the page if and when there are several runs to
+state a distribution from. Nothing else reads them: the home page, the models
+page and the OG card never did.
 
 ## The social card
 
