@@ -650,11 +650,12 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
                    justify-content: space-between; margin: 0 0 6px; font-size: var(--fs-sm); }
 .ladder-filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
 .filter { display: inline-flex; align-items: center; gap: 6px; }
-.filter select {
+/* One select rule: the controls row's and the filter panel's. */
+.filter select, .filter-group select {
   font: inherit; color: var(--fg); background: var(--panel);
   border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px;
 }
-.filter select:focus-visible { outline: 1px solid var(--accent); }
+.filter select:focus-visible, .filter-group select:focus-visible { outline: 1px solid var(--accent); }
 .filter.check { cursor: pointer; }
 .filter.check input { accent-color: var(--accent); cursor: pointer; }
 
@@ -663,27 +664,14 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
    popovers), so it is never clipped by the controls row and never reflows it;
    its width is told to the maths as well as to the CSS, or the clamp that
    keeps it on screen at 360px would be against the wrong number. */
-.filter-button { position: relative; display: inline-flex; }
-.filters-trigger {
-  font: inherit; color: var(--fg); background: var(--panel); cursor: pointer;
-  border: 1px solid var(--line); border-radius: 3px; padding: 2px 8px;
-  display: inline-flex; align-items: center; gap: 6px;
-}
-.filters-trigger:hover { border-color: var(--accent); }
-.filters-trigger.on { border-color: var(--accent); }
 .filters-count {
   background: var(--accent); color: var(--bg); border-radius: 8px;
   padding: 0 5px; font-size: var(--fs-xs); font-weight: 700;
 }
-.filter-popover {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
-  max-width: calc(100vw - 16px);
-  overflow-y: auto; font-size: var(--fs-sm); text-align: left;
-  /* The two boxes side by side while there is room, stacked on a phone. */
-  display: flex; gap: 10px; flex-wrap: wrap;
-}
-.filter-popover.floating { position: fixed; z-index: 60; }
+/* Only what a filter panel does that `.popover` does not: two boxes side by
+   side while there is room, stacked on a phone, and a fixed width the
+   placement maths is told about. */
+.filter-popover { display: flex; gap: 10px; flex-wrap: wrap; text-align: left; font-size: var(--fs-sm); }
 .filter-group { flex: 1 1 130px; min-width: 0; }
 .filter-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .filter-group-label { font-weight: 700; }
@@ -692,12 +680,7 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
   border: 0; padding: 0; cursor: pointer; text-decoration: underline;
 }
 .filter-clear:hover { color: var(--fg); }
-.filter-group select {
-  font: inherit; font-size: var(--fs-xs); color: var(--fg); background: var(--panel);
-  border: 1px solid var(--line); border-radius: 3px; margin-top: 3px;
-  width: 100%; box-sizing: border-box;
-}
-.filter-group select:focus-visible { outline: 1px solid var(--accent); }
+.filter-group select { width: 100%; box-sizing: border-box; margin-top: 3px; font-size: var(--fs-xs); padding: 0; }
 @media (max-width: 420px) {
   .filter-popover { flex-direction: column; }
 }
@@ -1084,13 +1067,17 @@ td .spread { font-size: var(--fs-xs); }
 .inv-grid + .inv-list { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
 
 /* The bag button, and the popover it opens. Hover on a desktop, tap anywhere. */
-.bag { position: relative; display: inline-block; }
-.bag-button {
+/* The anchor a popover hangs off, and the button that opens one. Shared by the
+   bag, the paperdoll and the ladder's filters (operator, 2026-09-18: one class,
+   not one per caller) — `lib/popover.ts` is the arithmetic half of the same
+   consolidation. */
+.popover-anchor { position: relative; display: inline-flex; }
+.popover-button {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   font: inherit; font-size: var(--fs-sm); color: var(--fg);
   background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px;
 }
-.bag-button:hover { border-color: var(--accent); }
+.popover-button:hover, .popover-button.on { border-color: var(--accent); }
 /* A bag drawn in CSS, because we ship no art: a body and a flap. */
 .bag-icon.worn::before { left: 0; right: 0; top: -3px; border-radius: 2px 2px 0 0; }
 .bag-icon.worn { border-radius: 3px; }
@@ -1104,22 +1091,23 @@ td .spread { font-size: var(--fs-xs); }
 }
 .bag-count { font-weight: 700; }
 .bag-label { color: var(--dim); font-size: var(--fs-xs); }
-.bag-popover {
+/* Every hover panel on the site. Portalled to the body and placed against the
+   viewport (`popoverPlacement`), because as a child of its card the sidebar's
+   scroll area clipped it; `.floating` is that placement and the un-suffixed
+   rule is the fallback position. It scrolls rather than being clipped — a full
+   doll is taller than the room under a button near the foot of a card. */
+.popover {
   position: absolute; left: 0; top: calc(100% + 6px); z-index: 20;
   width: max-content; max-width: min(320px, calc(100vw - 32px));
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
-  /* A full doll or a full bag is taller than the space under a button near the
-     foot of a card, so the popover scrolls rather than being clipped by it. */
   overflow-y: auto;
 }
-/* Portalled to the body and placed against the viewport (`popoverPlacement`),
-   because as a child of its card the sidebar's scroll area clipped it. */
-.bag-popover.floating { position: fixed; z-index: 60; }
+.popover.floating { position: fixed; z-index: 60; }
 
 @media (max-width: 400px) {
   .inv-cell { width: 36px; height: 36px; }
-  .bag-popover { max-width: calc(100vw - 24px); }
+  .popover { max-width: calc(100vw - 24px); }
 }
 
 /*

@@ -93,10 +93,10 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
   });
 
   return (
-    <div class="filter-button" ref={root}>
+    <div class="popover-anchor" ref={root}>
       <button
         type="button"
-        class={active() > 0 ? "filters-trigger on" : "filters-trigger"}
+        class={active() > 0 ? "popover-button on" : "popover-button"}
         ref={btn}
         aria-expanded={open()}
         title="Narrow the ladder by company and model family. Values combine within a box and narrow across the two."
@@ -105,7 +105,7 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
           setOpen(!open());
         }}
       >
-        <span class="filters-label">filters</span>
+        <span>filters</span>
         <Show when={active() > 0}>
           <span class="filters-count">{active()}</span>
         </Show>
@@ -113,7 +113,7 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
       <Show when={open()}>
         <Portal>
           <div
-            class="filter-popover floating"
+            class="popover filter-popover floating"
             ref={panel}
             style={{
               left: `${place().left}px`,
