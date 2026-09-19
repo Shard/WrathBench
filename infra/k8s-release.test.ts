@@ -450,7 +450,9 @@ describe("k8s-release.sh", () => {
     expect(r.out).toContain(`wrathbench-worldserver=${TAG} wrathbench-runner=${TAG} wrathbench-viewer=${TAG}`);
   });
 
-  const FORBIDDEN = ["[removed]", "flux-system", "gh pr", "harbor."];
+  // The operator's cluster name is deliberately not in this list: naming it here
+  // would be the leak the test exists to prevent.
+  const FORBIDDEN = ["flux-system", "gh pr", "harbor."];
 
   test("the script carries no cluster-specific glue", () => {
     // The operator's rule: one cluster's repo paths, its Flux objects and its
