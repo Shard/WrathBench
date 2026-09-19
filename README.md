@@ -2,20 +2,26 @@
 
 **An agent workbench for World of Warcraft.**
 
-WrathBench evaluates AI agents on their ability to play World of Warcraft: Wrath of the Lich King through a TypeScript SDK on a private AzerothCore server. A model writes and supervises code that drives one character in a live game world. Watching an agent observe, decide and act over hours of play, levelling and questing its way out into the world, gives a direct read on its long-horizon planning, memory and problem solving.
+WrathBench evaluates AI agents on their ability to play World of Warcraft: Wrath of the Lich King through a TypeScript SDK on a private AzerothCore server. A model writes and supervises code that drives one character in a live game world. Watching an agent observe, decide and act over hours of play, levelling and questing its way out into the world, gives perspective on its long-horizon planning, memory and problem solving capabilities.
 
-Three tracks share one harness. The eval track runs fixed, timed episodes on a versioned harness and publishes the ladder: comparable results for bounded tasks. The freeplay track has no clock and no instructions beyond "go play"; agents own their goals and their own context, in the spirit of Claude Plays Pokémon. The probe track is unscored exploration of specific scenarios, feeding harness improvements and new episodes. A milestone ladder, from the starting quest chain up to Icecrown Citadel, tracks what the agents can demonstrably do.
+The long-term goals for the project include, all using fresh level-1 characters with no direction:
+- An agent reaching the level cap in freeplay
+- A group of agents form a group and enter and completes a dungeon together.
+- A raid of agents clears Icecrown Citadel
+- Community agents can join a shared server over the same protocol.
 
-The long-term goals, all from fresh level-1 characters with no direction: a group of agents enters and completes a dungeon together, an agent reaches the level cap in freeplay, a raid of agents clears Icecrown Citadel, and community agents can join a shared server over the same protocol.
-
-The pieces: a thin server module that exposes what a game client could see and do, a TypeScript SDK over it, a runner that gives a model the SDK in a sandbox and logs everything, and a dashboard that is also the public site at <https://wrathbench.shard.page>. The reasoning behind the design is `docs/METHODOLOGY.md`; the rest is under `docs/`.
+The pieces that make up WrathBench include:
+- A thin AzerothCore server module that exposes what a game client could see and do
+- A TypeScript SDK
+- A runner harness that gives a model the SDK in a sandbox and logs everything
+- A Dashboard that is also the public site at <https://wrathbench.shard.page>.
+- Other tools for setting up your own harness and running WrathBench either via Docker Compose or Helm Chart (Kubernetes).
 
 ## Running it
-
-You need Docker with compose, Bun for the host-side tooling, and an AzerothCore 3.3.5a server data directory (`dbc/ maps/ vmaps/ mmaps/`) at `data/client`. Producing that directory is outside this repository; AzerothCore's own documentation covers it. Nothing Blizzard-derived is in this repository, and `data/` is gitignored.
+You will need Docker with compose, Bun for the host-side tooling, and an [AzerothCore](https://www.azerothcore.org/) 3.3.5a server data directory (`dbc/ maps/ vmaps/ mmaps/`) at `data/client`. Producing that directory is outside this repository's scope. Nothing Blizzard-derived is hosted within this repo.
 
 ```sh
-git clone --recurse-submodules <this repo> && cd wrathbench
+git clone --recurse-submodules git@github.com:Shard/WrathBench.git && cd wrathbench
 mkdir -p data/{client,wiki,runs,etc,logs}
 # place the server data directory at data/client
 docker compose -f infra/compose.yml up -d --build
