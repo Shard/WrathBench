@@ -55,8 +55,7 @@ request/response, snippet + result, event batch served, periodic state line),
 for resume), `scratchpad.md`.
 
 The flags below are the rest of what `run.ts` reads off argv; each one
-overrides the default in `src/config.ts` for that run and is recorded in
-`meta.json`, so a `--resume` keeps it.
+overrides the default in `src/config.ts` for that run.
 
 | flag | default | what it sets |
 | --- | --- | --- |
@@ -347,19 +346,18 @@ abandoned but the runtime survives; a snippet that blocks the event loop gets
 the process killed and respawned, and the state loss is surfaced to the model
 as a harness notice. Repeats trip the `snippet-runaway` watchdog.
 
-Network posture: the real boundary is the deployment's topology — the cluster's
-NetworkPolicy, or the compose network — under which the runner can only reach
-`worldserver`. In-process, `fetch` and `WebSocket` are additionally replaced
-with versions that refuse any host but the module's — best-effort hardening,
-not a security boundary.
+Network posture: the real boundary is the deployment's network topology — the
+compose network, or whatever the cluster gives the runner pod — under which the
+runner reaches `worldserver` and nothing else. In-process, `fetch` and
+`WebSocket` are additionally replaced with versions that refuse any host but the
+module's — best-effort hardening, not a security boundary.
 
 Filesystem posture: the child is exec'd under a Linux Landlock ruleset
 (`src/sandbox/confine.ts`) that allows reads only of the interpreter and system
 libraries, `runner/`, `sdk/`, `node_modules/` and the workspace manifests, so
 `.env`, the repo root and the home directory answer `EACCES` from the kernel
-however a snippet reaches for them. It fails closed: a kernel or container that
-refuses the ruleset gets no child at all, not an unconfined one. Only the
-filesystem rides on it — the network posture is the paragraph above.
+however a snippet reaches for them. It fails closed, and it covers the
+filesystem only — the network posture is the paragraph above.
 
 ## Watchdogs
 
