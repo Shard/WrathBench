@@ -27,6 +27,8 @@ Configuration is environment only:
 | `WRATHBENCH_RUNS_DIR` | `<data>/runs` | the tree to watch |
 | `WRATHBENCH_COLLECTOR_DB` | `<data>/collector.sqlite` | per-file offsets |
 | `WRATHBENCH_COLLECTOR_POLL_MS` | `5000` | how often to re-stat the tree |
+| `WRATHBENCH_COLLECTOR_BATCH_ROWS` | `2000` | flush a table's batch at this many rows |
+| `WRATHBENCH_COLLECTOR_BATCH_BYTES` | `8388608` | ...or this many bytes of JSON |
 
 ## How it reads
 
@@ -59,7 +61,7 @@ once; the files are left where they are.
 A trajectory is never loaded whole — the largest in the corpus is 669 MB. The
 tailer slides a 4 MB window and holds at most one line across chunks; a live
 run's half-written last line is left unread, so a committed offset is always
-past a newline. Batches flush at 2,000 rows **or** 8 MB, whichever trips first,
+past a newline. Batches flush at 2,000 rows **or** 8 MB by default, whichever trips first,
 because one line of this corpus can be megabytes on its own.
 
 ClickHouse being down is a wait, never a loss: `insert` retries with capped
@@ -79,11 +81,15 @@ there is no rarely-exercised branch to be wrong.
 | `runs` | a run: its `run.sqlite` row merged with `meta.json` | `run_id` |
 | `states` | one periodic state sample | `(run_id, ts, seq)` |
 | `moves` | one movement dispatch or verdict | `(run_id, ts, seq)` |
-| `milestones` | one `{"t":"milestone"}` line, typed | `(run_id, line_no)` |
+| `milestones` | one `{"t":"milestone"}` line, typed — ad-hoc analysis only | `(run_id, line_no)` |
 | `turns` | one turn-shaped trajectory line, with `messages` | `(run_id, line_no)` |
 | `events` | every other trajectory line | `(run_id, line_no)` |
-| `episodic` | one `episodic.jsonl` entry | `(run_id, line_no)` |
+| `episodic` | one `episodic.jsonl` entry — ad-hoc analysis only | `(run_id, line_no)` |
 | `run_totals` | the per-run derivations, as JSON | `run_id` |
+
+`milestones` and `episodic` have no reader in this repository: they are
+written so an operator can query them, and the viewer's in-memory store drops
+them on arrival along with `turns` and `events`.
 
 Three things about that list are worth knowing before writing a query.
 

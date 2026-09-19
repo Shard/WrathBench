@@ -27,17 +27,35 @@ async function main(): Promise<number> {
   const noSchema = has("--no-schema");
 
   const cfg = readConfig();
+  /*
+   * `schema.sql` names `wrathbench.` on every statement, so a `CLICKHOUSE_DATABASE`
+   * pointing anywhere else would create the tables in one database and insert
+   * into another — an empty store with no error anywhere. Refuse at startup
+   * rather than run in that shape.
+   */
+  if (cfg.database !== "wrathbench") {
+    console.error(
+      `collector: CLICKHOUSE_DATABASE is ${cfg.database}, but schema.sql creates every table in wrathbench. ` +
+        "Unset it, or set it to wrathbench.",
+    );
+    return 1;
+  }
   const controller = new AbortController();
   const stop = (): void => controller.abort();
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
+  /*
+   * One line per outage, not one per retry: a ClickHouse that is down for an
+   * hour must not be an hour of log. The latch is raised on the first wait and
+   * lowered by the first call that succeeds after it — so the second outage of
+   * a long-lived process is logged too, which it was not while the latch was
+   * cleared once at startup and never again.
+   */
   let waiting = false;
   const sink = clickhouseSink(cfg, {
     signal: controller.signal,
     onRetry: (attempt, err) => {
-      // One line per outage, not one per retry: a ClickHouse that is down for
-      // an hour must not be an hour of log.
       if (waiting) return;
       waiting = true;
       console.warn(
@@ -45,11 +63,15 @@ async function main(): Promise<number> {
       );
       void attempt;
     },
+    onOk: () => {
+      if (!waiting) return;
+      waiting = false;
+      console.log("collector: clickhouse is back");
+    },
   });
 
   if (!noSchema) {
     const n = await applySchema(sink);
-    waiting = false;
     console.log(`collector: schema applied (${n} statements) at ${cfg.url}/${cfg.database}`);
   }
   if (schemaOnly) return 0;

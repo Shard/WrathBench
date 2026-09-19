@@ -441,6 +441,15 @@ describe("the boundary", () => {
     ).toMatchObject({ input_tokens: 5, output_tokens: 6, reasoning_tokens: 3 });
     expect(usageOf({}).input_tokens).toBeNull();
   });
+
+  test("the adapters' normalised cache-write field is read, and the raw one still is", () => {
+    // Every adapter writes `cache_write_tokens`; only an older trajectory
+    // carries Anthropic's own `cache_creation_input_tokens`.
+    expect(usageOf({ usage: { cache_write_tokens: 11 } }).cache_write_tokens).toBe(11);
+    expect(usageOf({ usage: { cache_creation_input_tokens: 7 } }).cache_write_tokens).toBe(7);
+    expect(usageOf({ usage: { cache_write_tokens: 11, cache_creation_input_tokens: 7 } }).cache_write_tokens).toBe(11);
+    expect(usageOf({ usage: {} }).cache_write_tokens).toBeNull();
+  });
 });
 
 describe("the sink", () => {
@@ -467,6 +476,36 @@ describe("the sink", () => {
     });
     await expect(sink.insert("runs", [{ run_id: "x" }])).rejects.toBeInstanceOf(SinkAborted);
     expect(attempts).toBeGreaterThanOrEqual(3);
+  });
+
+  test("a success lowers the outage latch, so the second outage is logged too", async () => {
+    // What `main.ts` builds its "one line per outage" latch out of: `onRetry`
+    // raises it, `onOk` lowers it. Without the second hook the latch was
+    // cleared once at startup and the service went quiet for every later
+    // outage — one line per process rather than one per outage.
+    const cfg = readConfig({ url: "http://127.0.0.1:1/never", stateDb: ":memory:" });
+    let fails = 1;
+    const calls: string[] = [];
+    const sink = clickhouseSink(cfg, {
+      sleep: async () => {},
+      onRetry: () => calls.push("retry"),
+      onOk: () => calls.push("ok"),
+    });
+    // `post` is not reached: the fetch to a closed port is what throws, and
+    // `fails` counts how many of those to let happen before the stub succeeds.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      if (fails-- > 0) throw new Error("connection refused");
+      return new Response("", { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      await sink.insert("runs", [{ run_id: "x" }]);
+      fails = 1;
+      await sink.insert("runs", [{ run_id: "y" }]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(calls).toEqual(["retry", "ok", "retry", "ok"]);
   });
 });
 

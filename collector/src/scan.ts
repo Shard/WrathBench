@@ -11,8 +11,7 @@
 import { readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { ARCHIVE_DIR } from "../../runner/viewer/archive-dir";
-
-const RUN_ID = /^[A-Za-z0-9._-]+$/;
+import { isValidRunId } from "../../runner/viewer/runs";
 
 export interface RunDirEntry {
   runId: string;
@@ -28,10 +27,6 @@ export interface RunDirEntry {
    * states in `runner/viewer/runs.ts`.
    */
   sig: string;
-}
-
-function isValidRunId(id: string): boolean {
-  return RUN_ID.test(id) && id !== "." && id !== "..";
 }
 
 function signature(dir: string): string {

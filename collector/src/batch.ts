@@ -16,18 +16,12 @@ import type { Sink } from "./sink";
 
 export class Batcher {
   private readonly buffers = new Map<string, { rows: unknown[]; bytes: number }>();
-  private flushed = 0;
 
   constructor(
     private readonly sink: Sink,
     private readonly maxRows: number,
     private readonly maxBytes: number,
   ) {}
-
-  /** How many rows have actually been handed to the sink. */
-  get sent(): number {
-    return this.flushed;
-  }
 
   async add(table: string, row: unknown): Promise<void> {
     const buf = this.buffers.get(table) ?? { rows: [], bytes: 0 };
@@ -49,7 +43,6 @@ export class Batcher {
     if (buf === undefined || buf.rows.length === 0) return;
     this.buffers.delete(table);
     await this.sink.insert(table, buf.rows);
-    this.flushed += buf.rows.length;
   }
 
   async flushAll(): Promise<void> {

@@ -42,7 +42,6 @@ import {
 import { tailLines } from "./tailer";
 
 export interface IngestDeps {
-  runsDir: string;
   batcher: Batcher;
   offsets: OffsetStore;
   now: () => number;

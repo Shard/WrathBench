@@ -21,8 +21,6 @@ export interface Sink {
   insert(table: string, rows: readonly unknown[]): Promise<void>;
   /** Run a statement that returns nothing worth parsing (DDL). */
   exec(sql: string): Promise<void>;
-  /** Run a query and return its body as text. */
-  query(sql: string): Promise<string>;
 }
 
 export interface SinkOptions {
@@ -32,6 +30,8 @@ export interface SinkOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Told about every wait, so the service can log one line per outage. */
   onRetry?: (attempt: number, err: unknown) => void;
+  /** Told when a call succeeds, so the service can say the outage is over. */
+  onOk?: () => void;
 }
 
 /** Backoff: 1s, 2s, 4s, 8s, 16s, 30s, 30s… A capped wait, never a give-up. */
@@ -91,7 +91,9 @@ export function clickhouseSink(cfg: CollectorConfig, opts: SinkOptions = {}): Si
     for (let attempt = 0; ; attempt++) {
       if (aborted()) throw new SinkAborted();
       try {
-        return await what();
+        const out = await what();
+        opts.onOk?.();
+        return out;
       } catch (err) {
         if (aborted()) throw new SinkAborted();
         opts.onRetry?.(attempt, err);
@@ -118,9 +120,6 @@ export function clickhouseSink(cfg: CollectorConfig, opts: SinkOptions = {}): Si
     async exec(sql) {
       await forever(() => post({}, sql));
     },
-    async query(sql) {
-      return forever(() => post({ database: cfg.database }, sql));
-    },
   };
 }
 
@@ -136,9 +135,6 @@ export function memorySink(): Sink & { tables: Map<string, unknown[]> } {
     },
     async exec() {
       /* a memory sink has no schema to apply */
-    },
-    async query() {
-      return "";
     },
   };
 }

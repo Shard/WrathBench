@@ -23,11 +23,6 @@ export interface FileOffset {
   nextLine: number;
 }
 
-export interface TableCursor {
-  /** The highest sqlite rowid already ingested from a run.sqlite table. */
-  rowid: number;
-}
-
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS file_offset (
   run_id TEXT NOT NULL,

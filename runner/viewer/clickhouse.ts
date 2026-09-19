@@ -22,8 +22,9 @@
  *   memory. It is what a bare clone, a test and `bun run viewer` with no
  *   ClickHouse configured get, and it goes through the same ingestion code the
  *   real store is filled by — so the two cannot drift in what a row means.
- *   It keeps only the four tables a read path needs and drops `turns` and
- *   `events` as they arrive, which is what makes holding a corpus in memory
+ *   It keeps only the four tables a read path needs — `runs`, `run_totals`,
+ *   `states`, `moves` — and drops `turns`, `events`, `milestones` and
+ *   `episodic` as they arrive, which is what makes holding a corpus in memory
  *   sane at all.
  *
  * Only aggregates are ever pushed into SQL — the latest reading per run, and
@@ -563,8 +564,10 @@ export function moveViewsOf(rows: readonly MoveTableRow[]): MoveIntentView[] {
  *
  * Not a mock. It is the collector's own ingestion, so a row here means what a
  * row in ClickHouse means, and a change to what the collector writes changes
- * both at once. `turns` and `events` are dropped as they arrive — the read
- * path never reads them and keeping them would mean holding the corpus.
+ * both at once. Of the eight tables the collector writes, only `runs`,
+ * `run_totals`, `states` and `moves` are kept; `turns`, `events`, `milestones`
+ * and `episodic` are dropped as they arrive — the read path never reads them
+ * and keeping them would mean holding the corpus.
  *
  * Every call refreshes first — a pass over an unchanged tree is four `stat`s
  * per run and nothing else, which is what makes a live run's row current
@@ -601,9 +604,6 @@ export function localRunStore(runsDir: string): RunStore {
     },
     async exec(): Promise<void> {
       /* no schema to apply in memory */
-    },
-    async query(): Promise<string> {
-      return "";
     },
   };
 

@@ -321,8 +321,9 @@ With no `CLICKHOUSE_URL` the viewer builds the same rows in memory by running
 the collector's own ingestion over the runs directory — which is what a bare
 clone, `bun run viewer` on a laptop and every test get. It is the same code
 path, so a row means the same thing on both; it simply holds the answer in a
-process instead of a database, and drops the two big tables as they arrive
-because a read path never reads them. That is a quickstart, not a deployment:
+process instead of a database, keeping only `runs`, `run_totals`, `states` and
+`moves` and dropping `turns`, `events`, `milestones` and `episodic` as they
+arrive because a read path never reads them. That is a quickstart, not a deployment:
 on the real corpus it does once per start what the store does once, ever.
 
 ## What is deliberately absent

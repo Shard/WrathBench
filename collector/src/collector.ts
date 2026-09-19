@@ -56,7 +56,6 @@ export class Collector {
     this.now = deps.now ?? Date.now;
     this.batcher = new Batcher(deps.sink, deps.cfg.batchRows, deps.cfg.batchBytes);
     this.ingester = new Ingester({
-      runsDir: deps.cfg.runsDir,
       batcher: this.batcher,
       offsets: deps.offsets,
       now: this.now,
