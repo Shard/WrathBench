@@ -305,6 +305,23 @@ function dashboardBuildOf(dir: string | undefined, cache: { mtime: number; id: s
 export const SERIES_CACHE_MS = 300_000;
 
 /**
+ * How long one whole-fleet listing build stands in for the next.
+ *
+ * Seconds, and short ones: the listing is the most expensive thing this server
+ * builds — two fleet-wide store queries, every run's totals, every run's state
+ * series — and two routes call for it *per run* (`/api/run/<id>` and its
+ * `/track`, for a freeplay run or one that continues another). The publisher
+ * fetches both for every run with eight workers, so one pass used to issue
+ * thousands of fleet-wide queries in bursts and ran ClickHouse out of memory.
+ *
+ * Fifteen seconds is what that costs and no more: a publisher pass takes about
+ * a minute, the freeplay character view a run page wears tolerates a few
+ * seconds of staleness, and the run page's own numbers — its states, tokens,
+ * cost, playtime — do not come from this listing at all.
+ */
+export const RESULT_RUNS_CACHE_MS = 15_000;
+
+/**
  * The harness series present in the run directory, newest first, with counts.
  *
  * The shell's global series selector needs this before any page has
@@ -650,10 +667,13 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * Every run row, mapped and ordered as the listing wants it.
    *
    * One query where this was a thousand `run.sqlite` opens, and nothing
-   * memoises it: the store is already the memo, and a cache in front of it
-   * would only be a second thing that can be wrong about a live run. Archived
-   * runs are filtered here rather than at ingestion — the scheduler needs
-   * them, a listing must not show them, and that is a question for the reader.
+   * memoises it *here*: the store is already the memo for one reader, and a
+   * cache in front of this would only be a second thing that can be wrong
+   * about a live run. What is memoised is one layer up — `resultRuns` holds a
+   * whole listing build on a short window, because that build is what the
+   * per-run routes ask for. Archived runs are filtered here rather than at
+   * ingestion — the scheduler needs them, a listing must not show them, and
+   * that is a question for the reader.
    */
   async function runRows(now = Date.now()): Promise<RunRow[]> {
     const [rows, latest] = await Promise.all([store.runRows(), store.latestStates()]);
@@ -812,7 +832,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * passes are the run page's own, which is what makes time-to-level and
    * playtime agree.
    */
-  async function resultRuns(): Promise<ResultRun[]> {
+  async function buildResultRuns(): Promise<ResultRun[]> {
     const out: ResultRun[] = [];
     // One clock for the pass: a live run's playtime is charged up to *now*, and
     // two rows of one response must not be measured against different nows.
@@ -857,6 +877,52 @@ export function createApi(opts: ApiOptions): ApiHandle {
       );
     }
     return out;
+  }
+
+  /**
+   * The listing, built at most once per `RESULT_RUNS_CACHE_MS`.
+   *
+   * The pending promise is what is stored, not just the settled value, so a
+   * burst of concurrent callers shares one build rather than starting one
+   * each: that burst is the whole point. The publisher fetches `/api/run/<id>`
+   * and `/api/run/<id>/track` for every run with eight workers, and both call
+   * for this listing on a freeplay run, so hundreds of fleet-wide queries used
+   * to leave in a few seconds.
+   *
+   * The build's own clock goes with it: the rows a window serves were all
+   * measured against the `now` of the build that made them, so a live run's
+   * playtime can read up to `RESULT_RUNS_CACHE_MS` short. `/api/results` still
+   * stamps its `now` at request time, which is the figure a client ages
+   * against. Fifteen seconds of that is below what any of these surfaces show.
+   *
+   * Per handle, like the series census and the build id, so a test that builds
+   * its own `createApi` starts with an empty window. It is not conditioned on
+   * which store is behind it: the local store is a memo over the same files,
+   * and one rule is easier to be right about than two.
+   *
+   * The window is restamped when the build *settles*, not when it starts: a
+   * build of the whole corpus is the expensive thing here, and a start stamp
+   * would spend most of a fifteen-second window building and leave the
+   * finished rows standing for whatever was left. A build that throws is not
+   * kept at all — the window would otherwise serve the failure until it
+   * expired.
+   */
+  let listingCache: { at: number; value: Promise<ResultRun[]> } | undefined;
+  function resultRuns(): Promise<ResultRun[]> {
+    const now = Date.now();
+    if (listingCache === undefined || now - listingCache.at >= RESULT_RUNS_CACHE_MS) {
+      const build = buildResultRuns();
+      listingCache = { at: now, value: build };
+      build.then(
+        () => {
+          if (listingCache?.value === build) listingCache = { at: Date.now(), value: build };
+        },
+        () => {
+          if (listingCache?.value === build) listingCache = undefined;
+        },
+      );
+    }
+    return listingCache.value;
   }
 
   /**
@@ -1389,10 +1455,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * Gated on the run being freeplay at all — the stamped tier, or a
        * `continuedFrom` for a run whose metadata predates the stamp — so a
        * scored run's page pays nothing for it. Behind the gate it is the
-       * listing's own rows: `resultRuns` memoises each attempt's trajectory
-       * totals on (size, mtime), so the ended attempts of a chain are read once
-       * per process and this page and `/api/ladder` cannot disagree about what
-       * a character is.
+       * listing's own rows, and this route is why that listing is held on a
+       * window at all: `resultRuns` shares one build for
+       * `RESULT_RUNS_CACHE_MS`, so a burst of run pages pays for one, and this
+       * page and `/api/ladder` cannot disagree about what a character is.
        */
       const whole =
         run.continuedFrom !== null || episodeOf(run).episode === "freeplay"
@@ -1453,8 +1519,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * Deliberately the same expression the detail route gates its `character`
        * with, and the same `characterViewOf` call behind it: a scored run's
        * replay pays nothing, a freeplay one pays what its run page already
-       * pays (the memoised listing), and the two routes cannot come to
-       * different answers about who continues whom.
+       * pays — and pays it only once, since both routes take the listing off
+       * the same `RESULT_RUNS_CACHE_MS` window — and the two routes cannot
+       * come to different answers about who continues whom.
        */
       const whole =
         run.continuedFrom !== null || episodeOf(run).episode === "freeplay"

@@ -16,7 +16,8 @@ import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { ConfigStore } from "../src/config-store";
 import { configFromArgs } from "../src/run";
-import { UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
+import { RESULT_RUNS_CACHE_MS, UNBUILT_NOTICE, createApi, harnessSeriesCensus, readFleet } from "../viewer/api";
+import { type RunStore, localRunStore } from "../viewer/clickhouse";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
 import { readRun } from "../viewer/runs";
 
@@ -1354,6 +1355,154 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     stamped(runs, TUPLE);
     for (const p of ["/api/results", `/api/run/${RUN_ID}/track`]) {
       expect(await body(await api(runs)(new Request(`http://x${p}`)))).not.toContain(SENTINEL);
+    }
+  });
+});
+
+/**
+ * The whole-fleet listing, and the two per-run routes that ask for it.
+ *
+ * `/api/run/<id>` and its `/track` build the character view from the listing
+ * on a freeplay run, and the publisher fetches both for every run with eight
+ * parallel workers. Unmemoised that was a fleet-wide store query per run —
+ * hundreds in a few seconds, which is what ran ClickHouse out of memory. The
+ * two facts pinned here are the ones the fix rests on: a burst shares one
+ * build, and the window does expire.
+ */
+describe("the listing is built once per window", () => {
+  const FREE_RUN = "freeplay-run-1";
+
+  /** One freeplay run, which is what makes the per-run routes read the listing. */
+  function freeplayFixture(): string {
+    const runs = mkdtempSync(join(tmpdir(), "viewer-listing-"));
+    const dir = join(runs, FREE_RUN);
+    mkdirSync(dir, { recursive: true });
+    const startedAt = Date.now() - 10_000;
+    const comparability = comparabilityOf(
+      configFromArgs(["--episode", "freeplay", "--model", "m"]),
+      "harness-test",
+    );
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({
+        runId: FREE_RUN,
+        harnessVersion: "harness-test",
+        startedAt,
+        config: { model: "m", driver: "openai", character: "Freely" },
+        comparability,
+      }),
+    );
+    writeFileSync(
+      join(dir, "trajectory.jsonl"),
+      [
+        { ts: startedAt, t: "meta", runId: FREE_RUN, harnessVersion: "harness-test" },
+        { ts: startedAt + 1, t: "response", turn: 1, message: { role: "assistant", content: "hi" } },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n",
+    );
+    const db = new Database(join(dir, "run.sqlite"));
+    db.run(
+      `CREATE TABLE run (run_id TEXT PRIMARY KEY, model TEXT, driver TEXT, harness_version TEXT,
+         started_at INTEGER, ended_at INTEGER, termination_reason TEXT, pause_reason TEXT, config_json TEXT)`,
+    );
+    db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?)`, [
+      FREE_RUN, "m", "openai", "harness-test", startedAt, startedAt + 5_000, "episode-limit", null, null,
+    ]);
+    db.close();
+    return runs;
+  }
+
+  /**
+   * The real local store, counting the two fleet-wide reads a build makes.
+   *
+   * `tick` is how long the build is made to appear to take: the fixture builds
+   * in a millisecond, so without it a window stamped when the build *starts*
+   * and one stamped when it *settles* are indistinguishable, and the second is
+   * what the fleet needs.
+   */
+  function countingStore(
+    runsDir: string,
+    onRead: () => void = () => {},
+  ): { store: RunStore; counts: { runRows: number; latestStates: number } } {
+    const inner = localRunStore(runsDir);
+    const counts = { runRows: 0, latestStates: 0 };
+    const store: RunStore = {
+      ...inner,
+      runRows: () => {
+        counts.runRows += 1;
+        onRead();
+        return inner.runRows();
+      },
+      latestStates: () => {
+        counts.latestStates += 1;
+        return inner.latestStates();
+      },
+    };
+    return { store, counts };
+  }
+
+  test("a burst of run pages pays for one build, and a later one rebuilds", async () => {
+    const runs = freeplayFixture();
+    const { store, counts } = countingStore(runs);
+    const handle = createApi({
+      runsDir: runs,
+      tilesDir: join(runs, "..", "minimap"),
+      moduleUrl: "http://127.0.0.1:1",
+      store,
+    });
+    // `createApi` has no clock of its own to inject, and the window is measured
+    // in seconds a test must not spend. The global clock is the injection
+    // point, restored whatever happens.
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => clock;
+    try {
+      const burst = await Promise.all(
+        Array.from({ length: 16 }, () => handle(new Request(`http://x/api/run/${FREE_RUN}`))),
+      );
+      expect(burst.map((r) => r.status)).toEqual(Array.from({ length: 16 }, () => 200));
+      expect(counts.runRows).toBe(1);
+      expect(counts.latestStates).toBe(1);
+
+      // Back-to-back inside the window, and the other route that reads it.
+      await handle(new Request(`http://x/api/run/${FREE_RUN}`));
+      await handle(new Request(`http://x/api/run/${FREE_RUN}/track`));
+      expect(counts.runRows).toBe(1);
+
+      clock += RESULT_RUNS_CACHE_MS;
+      await handle(new Request(`http://x/api/run/${FREE_RUN}`));
+      expect(counts.runRows).toBe(2);
+      expect(counts.latestStates).toBe(2);
+    } finally {
+      Date.now = realNow;
+      rmSync(runs, { recursive: true, force: true });
+    }
+  });
+
+  test("the window starts when the build finishes, not when it starts", async () => {
+    const runs = freeplayFixture();
+    // A build that takes the whole window: stamped at its start, the rows it
+    // produced would already be stale the moment they existed.
+    const { store, counts } = countingStore(runs, () => {
+      clock += RESULT_RUNS_CACHE_MS;
+    });
+    const handle = createApi({
+      runsDir: runs,
+      tilesDir: join(runs, "..", "minimap"),
+      moduleUrl: "http://127.0.0.1:1",
+      store,
+    });
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => clock;
+    try {
+      await handle(new Request(`http://x/api/run/${FREE_RUN}`));
+      await handle(new Request(`http://x/api/run/${FREE_RUN}`));
+      expect(counts.runRows).toBe(1);
+    } finally {
+      Date.now = realNow;
+      rmSync(runs, { recursive: true, force: true });
     }
   });
 });
