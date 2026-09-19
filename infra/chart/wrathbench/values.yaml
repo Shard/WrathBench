@@ -1,8 +1,8 @@
 # WrathBench on Kubernetes.
 #
-# Every value here is consumed by the [removed] cluster repo's HelmRelease; the
-# key names are the interface and are not renamed without changing that side in
-# the same commit. What the runbook says about each decision is in
+# Every value here is consumed by the deploying cluster's HelmRelease; the key
+# names are the interface and are not renamed without changing that side in
+# the same commit. The reasoning behind each decision is in docs/RUNBOOK.md.
 
 image:
   registry: harbor.local/library

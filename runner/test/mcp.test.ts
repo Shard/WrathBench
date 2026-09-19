@@ -76,7 +76,7 @@ describe("McpServer", () => {
     expect(await call(server, { jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
   });
 
-  test("tools/list exposes exactly the eight tools", async () => {
+  test("tools/list exposes exactly the nine tools", async () => {
     const { server } = makeServer();
     await initialized(server);
     const res = await call(server, { jsonrpc: "2.0", id: 2, method: "tools/list" });

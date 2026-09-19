@@ -110,17 +110,14 @@ export default function About() {
       */}
       <h2 class="section">project status</h2>
       <p>
-        <span class="mono">status: pre-release · harness {series()}</span>
+        <span class="mono">status: early · harness {series()}</span>
       </p>
       <p>
-        WrathBench is still in early development. The basics are in, and on paper agents should be capable
-        of progressing through most single-player content, but there are still many harness issues and
-        improvements to make, including proper party and communication tools for freeplay and possible future ladder episodes.
-      </p>
-      <p>
-        The data for some charts will also probably be a bit off as I work through more test runs and validate the
-        numbers against other sources. I will be looking to open-source the repo soon, once things have been
-        sufficiently cleaned up for release.
+        WrathBench is in early development. The basics are in, and on paper agents should be capable of
+        progressing through most single-player content, but there are still many harness issues and
+        improvements to make, including proper party and communication tools for freeplay and possible future
+        ladder episodes. The data for some charts may be a bit off while more test runs land and the numbers
+        are validated against other sources.
       </p>
 
       <h2 class="section">reading a result</h2>

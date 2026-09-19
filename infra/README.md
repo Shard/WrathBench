@@ -5,8 +5,8 @@ prerequisite is an AzerothCore server data directory at `data/client`.
 
 The same stack on Kubernetes is `infra/chart/wrathbench` (Helm), built by
 `infra/build-images.sh`, released by `infra/k8s-release.sh` and operated by
-`infra/k8s-deploy.sh`; nothing here
-changes because of it.
+`infra/k8s-deploy.sh`. The compose stack stays the local path; nothing in it
+changes because the chart exists.
 
 | path | what |
 |---|---|

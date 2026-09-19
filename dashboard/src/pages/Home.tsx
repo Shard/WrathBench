@@ -177,7 +177,7 @@ export default function Home() {
 
       <h2 class="section">the tools</h2>
       <p class="dim">
-        Eight tools, identical for every model. Pick one to see the description the model is given, as served
+        Nine tools, identical for every model. Pick one to see the description the model is given, as served
         by the harness right now.
       </p>
       <Show when={tools.error !== undefined}>
