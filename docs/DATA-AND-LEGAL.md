@@ -32,7 +32,7 @@ These are the lines the project does not cross. They are rules, not arguments; t
 
 ## Before publication (checklist)
 
-- [ ] Git history is scrubbed or the public repository starts from fresh history, and the history of anything split out for publication is audited for accidental data. The whole of it — the audit, the recipe, the preconditions and the acceptance check — is GitHub issue #62; it is not tracked anywhere else.
+- [x] Git history is scrubbed or the public repository starts from fresh history, and the history of anything split out for publication is audited for accidental data. The whole of it — the audit, the recipe, the preconditions and the acceptance check — is GitHub issue #62; it is not tracked anywhere else.
 - [x] `minimap/` (our MPQ/BLP reader) ships publicly (operator). It is tooling only; the assets it produces stay in `data/` and out of git.
 - [x] The public dashboard's map draws real minimap tiles (operator). They are served from the published bucket's `tiles/` prefix by an explicit upload step, never by the snapshot loop; `docs/PUBLIC-DASHBOARD.md` and `infra/cloudflare/README.md` hold the mechanics.
 - [x] Item icons are neither extracted nor served (operator). The dashboard links an item's `item_template.entry` to Wowhead and that site's tooltip script supplies the art in the reader's browser; the request consequence is recorded in `docs/PUBLIC-DASHBOARD.md`.
