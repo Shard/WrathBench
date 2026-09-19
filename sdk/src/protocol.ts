@@ -697,8 +697,8 @@ export const MOVE_OPCODES = [
 export type MoveOpcode = (typeof MOVE_OPCODES)[number];
 
 /**
- * Terminal statuses of a `move_to`, from PROTOCOL.md (navigation vocabulary of
- * 2026-08: the former undifferentiated `no_path` is gone).
+ * Terminal statuses of a `move_to`, from PROTOCOL.md. The former
+ * undifferentiated `no_path` is gone.
  */
 export const MOVE_STATUSES = [
   "arrived",

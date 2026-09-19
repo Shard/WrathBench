@@ -747,7 +747,7 @@ export interface ConnectOptions {
   secret?: string;
   /**
    * The game account this run occupies, bound operator-side exactly like
-   * `token` (decided 2026-08-22). When set it is authoritative: it
+   * `token`. When set it is authoritative: it
    * fills an omitted `createSession`/`deleteCharacter` account and overrides any
    * account the model typed, so a snippet can never land on — or delete on —
    * the wrong account (the RUNNER6→RUNNER cross-account corruption this closes).

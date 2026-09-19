@@ -268,8 +268,7 @@ export type ItemSpell = z.infer<typeof itemSpellSchema>;
 
 /**
  * `SMSG_ITEM_QUERY_SINGLE_RESPONSE`: the item template as the tooltip shows
- * it. Everything past `subClass` was added 2026-08-29 and is
- * absent from older modules' events.
+ * it. Everything past `subClass` is absent from older modules' events.
  */
 export const itemQueryResponseDataSchema = z.looseObject({
   itemId: z.number(),
