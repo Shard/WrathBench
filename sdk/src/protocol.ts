@@ -53,12 +53,6 @@ import {
 export * from "./guid";
 export * from "./protocol-social";
 
-/**
- * The protocol revision this file was written against. Bump deliberately: the
- * SDK surface is part of the harness surface (see sdk/README.md).
- */
-export const PROTOCOL_REVISION = "phase0-stage2+movement+quest-combat+trainer+spellbook";
-
 // ---------------------------------------------------------------- primitives
 
 /**

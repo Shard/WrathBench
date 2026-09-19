@@ -285,6 +285,8 @@ const STATE_INTERNAL = new Set([
   "applyCreate",
   "applySelfPosition",
   "applyUpdateBlock",
+  "bagRow",
+  "walkContainer",
   "deriveGauges",
   "evictOnMapChange",
   "forget",

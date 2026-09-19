@@ -312,11 +312,6 @@ export type RollChoice = "need" | "greed" | "pass" | "disenchant";
 /** The wire `RollVote` for each button (`CMSG_LOOT_ROLL`, `SMSG_LOOT_ROLL.rollType`). */
 export const ROLL_VOTE: Readonly<Record<RollChoice, number>> = { pass: 0, need: 1, greed: 2, disenchant: 3 };
 
-/** The button name for a wire `rollType`, or the number when it is none of them. */
-export function rollChoiceName(rollType: number): RollChoice | undefined {
-  return (["pass", "need", "greed", "disenchant"] as const)[rollType];
-}
-
 /**
  * One open roll frame: an over-threshold item on a group-looted
  * corpse the server asked this character to vote on (`SMSG_LOOT_START_ROLL`).

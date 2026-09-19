@@ -302,7 +302,7 @@ export const itemQueryResponseDataSchema = z.looseObject({
   bonding: z.number().optional(),
   description: z.string().optional(),
   startQuest: z.number().optional(),
-  /** The item's first page (PageText id) when it can be read; absent otherwise. Item 103. */
+  /** The item's first page (PageText id) when it can be read; absent otherwise. */
   pageText: z.number().optional(),
   block: z.number().optional(),
   maxDurability: z.number().optional(),

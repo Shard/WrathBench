@@ -623,7 +623,7 @@ export interface ItemInfo {
   readonly bonding: number | undefined;
   readonly description: string | undefined;
   readonly startQuest: number | undefined;
-  /** PageText id of the first page when the item can be read (a book, a letter); undefined otherwise. Item 103. */
+  /** PageText id of the first page when the item can be read (a book, a letter); undefined otherwise. */
   readonly pageText: number | undefined;
   readonly block: number | undefined;
   readonly maxDurability: number | undefined;
@@ -975,7 +975,7 @@ export interface NearbyObject extends UnitFieldsState {
   /**
    * The master of a summoned or created unit (`UNIT_FIELD_SUMMONEDBY`, else
    * `UNIT_FIELD_CREATEDBY`): a pet's owner, a totem's shaman. `"0"` reads as
-   * undefined. Item 98.
+   * undefined.
    */
   ownerGuid: Observed<GuidKey> | undefined;
   /** Who mind-controls this unit (`UNIT_FIELD_CHARMEDBY`), when observed. */
@@ -1714,45 +1714,65 @@ export class StateCache {
   bag(): BagContents {
     const items: BagSlotItem[] = [];
     const bags: WornBag[] = [];
-    const rowOf = (bag: number, slot: number, guid: GuidKey): BagSlotItem => {
-      const item = this.nearby.get(guid);
-      const itemId = item?.entry?.value;
-      const info = itemId === undefined ? undefined : this.items.get(itemId)?.value;
-      return {
-        bag,
-        slot,
-        guid,
-        itemId,
-        name: info?.name,
-        count: item?.fields.get("stackCount")?.value,
-        quality: info?.quality,
-      };
-    };
     let totalSlots = BACKPACK_SIZE;
     const inventory = this.inventory;
     // Backpack first, then each worn bag in slot order.
     for (const i of inventory) {
-      if (i.slot >= BACKPACK_FIRST_SLOT && i.slot <= BACKPACK_LAST_SLOT) items.push(rowOf(BACKPACK_BAG, i.slot, i.guid));
+      if (i.slot >= BACKPACK_FIRST_SLOT && i.slot <= BACKPACK_LAST_SLOT) items.push(this.bagRow(BACKPACK_BAG, i.slot, i.guid));
     }
     for (const i of inventory) {
       if (i.slot < BAG_FIRST_SLOT || i.slot > BAG_LAST_SLOT) continue;
-      // A worn bag: its contents are the container's own `bagSlot<n>Lo/Hi`
-      // fields, addressed by the equipment slot the bag sits in.
-      const container = this.nearby.get(i.guid);
-      const numSlots = container?.fields.get("numSlots")?.value ?? 0;
+      const { numSlots, contents } = this.walkContainer(i.guid);
       bags.push({ slot: i.slot, numSlots, name: i.name });
       totalSlots += numSlots;
-      if (!container) continue;
-      for (let n = 0; n < numSlots; n++) {
-        const lo = container.fields.get(`bagSlot${n}Lo`);
-        const hi = container.fields.get(`bagSlot${n}Hi`);
-        if (!lo && !hi) continue;
-        const guid = formatGuid((BigInt(hi?.value ?? 0) << 32n) | BigInt((lo?.value ?? 0) >>> 0));
-        if (guid === "0") continue;
-        items.push(rowOf(i.slot, n, guid));
-      }
+      for (const c of contents) items.push(this.bagRow(i.slot, c.slot, c.guid));
     }
     return { items, freeSlots: totalSlots - items.length, totalSlots, bags };
+  }
+
+  /**
+   * One slot's row: the guid joined to the item's entry (its create block) and
+   * to the item template the query answered with, which is where the name and
+   * quality come from. An unqueried item is a row with a guid and no name.
+   */
+  private bagRow(bag: number, slot: number, guid: GuidKey): BagSlotItem {
+    const item = this.nearby.get(guid);
+    const itemId = item?.entry?.value;
+    const info = itemId === undefined ? undefined : this.items.get(itemId)?.value;
+    return {
+      bag,
+      slot,
+      guid,
+      itemId,
+      name: info?.name,
+      count: item?.fields.get("stackCount")?.value,
+      quality: info?.quality,
+    };
+  }
+
+  /**
+   * What a worn bag holds: its size, and the guid in each occupied slot.
+   *
+   * A container's contents are the container item's own `bagSlot<n>Lo/Hi`
+   * update fields, so reading a bag means reading the item that *is* the bag.
+   * Bank bags work exactly the same way, which is why this walk lives once.
+   * A container whose create block has not arrived reads as zero slots and
+   * nothing in them rather than as an error.
+   */
+  private walkContainer(guid: GuidKey): { numSlots: number; contents: readonly { slot: number; guid: GuidKey }[] } {
+    const container = this.nearby.get(guid);
+    const numSlots = container?.fields.get("numSlots")?.value ?? 0;
+    const contents: { slot: number; guid: GuidKey }[] = [];
+    if (container === undefined) return { numSlots, contents };
+    for (let n = 0; n < numSlots; n++) {
+      const lo = container.fields.get(`bagSlot${n}Lo`);
+      const hi = container.fields.get(`bagSlot${n}Hi`);
+      if (!lo && !hi) continue;
+      const inner = formatGuid((BigInt(hi?.value ?? 0) << 32n) | BigInt((lo?.value ?? 0) >>> 0));
+      if (inner === "0") continue;
+      contents.push({ slot: n, guid: inner });
+    }
+    return { numSlots, contents };
   }
 
   /** The object our own `targetGuid` points at, when it is also in view. */
@@ -2090,35 +2110,20 @@ export class StateCache {
   bank(): BankContents {
     const items: BagSlotItem[] = [];
     const bags: WornBag[] = [];
-    const rowOf = (bag: number, slot: number, guid: GuidKey): BagSlotItem => {
-      const item = this.nearby.get(guid);
-      const itemId = item?.entry?.value;
-      const info = itemId === undefined ? undefined : this.items.get(itemId)?.value;
-      return { bag, slot, guid, itemId, name: info?.name, count: item?.fields.get("stackCount")?.value, quality: info?.quality };
-    };
     const inventory = this.inventory;
     // The main bank: a character starts with 28 slots and buys none (3.3.5
     // bank *bag* slots are bought; the 28 item slots are free), so every
     // slot in the range counts toward totalSlots.
     let totalSlots = BANK_LAST_SLOT - BANK_FIRST_SLOT + 1;
     for (const i of inventory) {
-      if (i.slot >= BANK_FIRST_SLOT && i.slot <= BANK_LAST_SLOT) items.push(rowOf(BACKPACK_BAG, i.slot, i.guid));
+      if (i.slot >= BANK_FIRST_SLOT && i.slot <= BANK_LAST_SLOT) items.push(this.bagRow(BACKPACK_BAG, i.slot, i.guid));
     }
     for (const i of inventory) {
       if (i.slot < BANK_BAG_FIRST_SLOT || i.slot > BANK_BAG_LAST_SLOT) continue;
-      const container = this.nearby.get(i.guid);
-      const numSlots = container?.fields.get("numSlots")?.value ?? 0;
+      const { numSlots, contents } = this.walkContainer(i.guid);
       bags.push({ slot: i.slot, numSlots, name: i.name });
       totalSlots += numSlots;
-      if (!container) continue;
-      for (let n = 0; n < numSlots; n++) {
-        const lo = container.fields.get(`bagSlot${n}Lo`);
-        const hi = container.fields.get(`bagSlot${n}Hi`);
-        if (!lo && !hi) continue;
-        const guid = formatGuid((BigInt(hi?.value ?? 0) << 32n) | BigInt((lo?.value ?? 0) >>> 0));
-        if (guid === "0") continue;
-        items.push(rowOf(i.slot, n, guid));
-      }
+      for (const c of contents) items.push(this.bagRow(i.slot, c.slot, c.guid));
     }
     return { guid: this.bankGuid?.value, items, bags, freeSlots: totalSlots - items.length, totalSlots };
   }

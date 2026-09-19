@@ -3529,6 +3529,32 @@ describe("client: pet, group, mail and bank helpers", () => {
     client.close();
     await stub.stop();
   });
+
+  test("another item's refusal does not settle a bank move", async () => {
+    const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate, creatureCreate, creatureQuery, inventorySlot, itemCreate, itemQuery]) });
+    const client = await inWorld(stub);
+    await client.events.waitForOpcode("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { timeout: 2000 });
+    const open = client.openBank(CREATURE_GUID, { timeout: 2000 });
+    let at = await untilAction(stub, "raw");
+    stub.push(frame(540, "SMSG_SHOW_BANK", { guid: CREATURE_GUID }));
+    await open;
+
+    const deposit = client.bankDeposit(255, BACKPACK_SLOT, { timeout: 2000 });
+    at = await untilAction(stub, "raw", at + 1);
+    expect(stub.actions[at]).toMatchObject({ opcode: "CMSG_AUTOBANK_ITEM" });
+    // A background loot's bag-full names a different item guid: not our answer,
+    // so the wait falls through to where the item actually landed.
+    stub.push(frame(541, "SMSG_INVENTORY_CHANGE_FAILURE", { result: 50, itemGuid: "12345" }));
+    stub.push(
+      frame(542, "SMSG_UPDATE_OBJECT", {
+        blocks: 1,
+        objects: [{ update: "values", guid: SELF_GUID, fields: { [`invSlot${BACKPACK_SLOT}Lo`]: 0, [`invSlot${BACKPACK_SLOT}Hi`]: 0, invSlot39Lo: ITEM_GUID_LO, invSlot39Hi: ITEM_GUID_HI } }],
+      }),
+    );
+    expect(await deposit).toMatchObject({ ok: true, status: "moved", bag: 255, slot: 39, guid: ITEM_GUID });
+    client.close();
+    await stub.stop();
+  });
 });
 
 describe("client: the softened inputs and the harness hints they refuse with (2026-08-29)", () => {

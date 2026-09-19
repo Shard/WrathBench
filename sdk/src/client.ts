@@ -1641,12 +1641,12 @@ const INVENTORY_RESULT_TEXT: Record<number, string> = {
   5: "a bag with things in it cannot go inside another bag",
   6: "bags with things in them cannot be traded",
   7: "only ammo can go there",
-  8: "your class has no proficiency for that weapon or armour type — a weapon master can teach some of them",
+  8: "your class has no proficiency for that weapon or armour type",
   9: "no equipment slot is free for it",
   10: "this character can never use that item",
   11: "this character can never use that item",
   12: "no equipment slot is free for it",
-  13: "a two-handed weapon is equipped — that blocks an off-hand or shield until you equip a one-hander instead",
+  13: "a two-handed weapon is equipped — that blocks an off-hand or shield",
   14: "you cannot dual wield",
   15: "that item does not go into a bag",
   16: "that item does not go into a bag",
@@ -1730,6 +1730,20 @@ const INVENTORY_RESULT_TEXT: Record<number, string> = {
  */
 export function inventoryResultText(result: number): string | undefined {
   return INVENTORY_RESULT_TEXT[result];
+}
+
+/**
+ * Is this `SMSG_INVENTORY_CHANGE_FAILURE` the verdict on the move we just sent?
+ *
+ * `result` 0 is `EQUIP_ERR_OK` and not a refusal at all, and a refusal that
+ * names a different item — a background loot's bag-full landing mid-wait — is
+ * somebody else's answer. A failure that carries no guid, or a wait that knows
+ * none, cannot be told apart from ours and is taken as ours. Shared so equip
+ * and the bank moves read the same event the same way.
+ */
+function isOwnInventoryFailure(d: InventoryChangeFailureData, guid: string | undefined): boolean {
+  if (d.result === 0) return false;
+  return d.itemGuid === undefined || guid === undefined || guidKey(d.itemGuid) === guid;
 }
 
 /** Inventory slots below this are equipment and bag slots; 23-38 are backpack. */
@@ -2898,11 +2912,7 @@ export class WrathClient {
               (sinceSeq === undefined || e.seq > sinceSeq)
             ) {
               const d = e.data as InventoryChangeFailureData;
-              // result 0 is EQUIP_ERR_OK, and a refusal that names a different
-              // item (a background loot's bag-full) is not this equip's answer.
-              const mine =
-                d.itemGuid === undefined || guid === undefined || guidKey(d.itemGuid) === guid;
-              if (d.result !== 0 && mine) {
+              if (isOwnInventoryFailure(d, guid)) {
                 failure = d;
                 return true;
               }
@@ -3006,7 +3016,7 @@ export class WrathClient {
         err.message += item === undefined
           ? ` — local state sees nothing at bag ${bag} slot ${slot}; slots shift after looting/selling, re-read state.bag()`
           : startQuest !== undefined
-            ? ` — local state sees ${label} at bag ${bag} slot ${slot}, and its tooltip says it starts quest ${startQuest}: this module build predates quest-start items (it needs the 2026-08-30 build); until then the quest cannot be started from the item`
+            ? ` — local state sees ${label} at bag ${bag} slot ${slot}, and its tooltip says it starts quest ${startQuest}: this module build predates quest-start items and must be rebuilt; until then the quest cannot be started from the item`
             : ` — local state sees ${label} at bag ${bag} slot ${slot}: that item has no on-use spell and no quest to start (per its tooltip, state.items)`;
       }
       throw err;
@@ -3878,8 +3888,13 @@ export class WrathClient {
       (e) => {
         if (sinceSeq !== undefined && e.seq <= sinceSeq) return false;
         if (isEvent(e, "SMSG_INVENTORY_CHANGE_FAILURE") && !isDecodeError(e.data)) {
-          failure = e.data as InventoryChangeFailureData;
-          return true;
+          const d = e.data as InventoryChangeFailureData;
+          // Not every refusal on the stream is this move's: one that names
+          // another item falls through to the arrival check below.
+          if (isOwnInventoryFailure(d, guid)) {
+            failure = d;
+            return true;
+          }
         }
         place = landed();
         return place !== undefined;
