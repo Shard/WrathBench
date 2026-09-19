@@ -40,11 +40,10 @@
  */
 
 import { authHeaders } from "./lib/auth";
+import { moduleBase, moduleWsBase } from "./lib/module";
 
-const HOST = process.env.MODULE_HOST ?? "worldserver";
-const PORT = process.env.MODULE_PORT ?? "8086";
-const BASE = `http://${HOST}:${PORT}`;
-const WS = `ws://${HOST}:${PORT}`;
+const BASE = moduleBase();
+const WS = moduleWsBase();
 
 const TOKEN = `probe-qaccept-${crypto.randomUUID()}`;
 // Fixed name, deleted at the START of every run and only logged out at the

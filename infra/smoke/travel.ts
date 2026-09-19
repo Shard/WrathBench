@@ -80,8 +80,9 @@ import { probeName } from "./lib/name";
 import { connect, type MovePoint, type MoveResult, type UnitView } from "../../sdk/src/index";
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { MODULE_SECRET } from "./lib/auth";
+import { moduleBase } from "./lib/module";
 
-const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
+const BASE = moduleBase();
 // Long-lived probe sessions use the PROBE account, never RUNNER: the module
 // allows one live session per account and RUNNER belongs to the runner track.
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";

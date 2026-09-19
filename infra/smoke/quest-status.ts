@@ -29,16 +29,15 @@
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/quest-status.ts
  */
 
-const HOST = process.env.MODULE_HOST ?? "worldserver";
-const PORT = process.env.MODULE_PORT ?? "8086";
-const BASE = `http://${HOST}:${PORT}`;
-const WS = `ws://${HOST}:${PORT}`;
+const BASE = moduleBase();
+const WS = moduleWsBase();
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = `probe-qstatus-${crypto.randomUUID()}`;
 import { probeName } from "./lib/name";
 import { authHeaders } from "./lib/auth";
+import { moduleBase, moduleWsBase } from "./lib/module";
 
 const CHARACTER = probeName("Bs");
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";

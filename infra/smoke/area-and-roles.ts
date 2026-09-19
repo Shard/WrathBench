@@ -37,8 +37,9 @@
 
 import { connect } from "../../sdk/src/index";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
+import { moduleBase } from "./lib/module";
 
-const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
+const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.

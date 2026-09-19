@@ -43,8 +43,9 @@ import { connect, isDecodeError, isEvent, type WrathClient } from "../../sdk/src
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
+import { moduleBase } from "./lib/module";
 
-const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
+const BASE = moduleBase();
 const ACCOUNT_A = process.env.MODULE_ACCOUNT ?? "PROBE";
 const ACCOUNT_B = process.env.MODULE_ACCOUNT2 ?? "SMOKE2";
 const RUN = crypto.randomUUID();

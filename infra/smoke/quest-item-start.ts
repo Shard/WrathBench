@@ -38,8 +38,9 @@ import { connect, WrathRequestError, type WrathClient } from "../../sdk/src/inde
 import { applyScenario, deleteFixtureCharacters, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
+import { moduleBase } from "./lib/module";
 
-const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
+const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-quest-item-start-${crypto.randomUUID()}`;
 const CHARACTER = probeName("Qi");

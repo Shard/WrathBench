@@ -24,10 +24,9 @@
  */
 
 import { authHeaders } from "./lib/auth";
+import { moduleBase } from "./lib/module";
 
-const HOST = process.env.MODULE_HOST ?? "worldserver";
-const PORT = process.env.MODULE_PORT ?? "8086";
-const BASE = `http://${HOST}:${PORT}`;
+const BASE = moduleBase();
 
 // Own account so the probe never fights the runner track for the default
 // RUNNER account (one live session per account).

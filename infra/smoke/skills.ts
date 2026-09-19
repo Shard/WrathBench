@@ -18,8 +18,9 @@
 import { connect } from "../../sdk/src/index";
 import { probeName } from "./lib/name";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
+import { moduleBase } from "./lib/module";
 
-const BASE = `http://${process.env.MODULE_HOST ?? "worldserver"}:${process.env.MODULE_PORT ?? "8086"}`;
+const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-skills-${crypto.randomUUID()}`;
 const CHARACTER = probeName("Bs");

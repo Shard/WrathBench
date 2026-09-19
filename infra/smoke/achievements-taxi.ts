@@ -39,11 +39,10 @@
 
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
+import { moduleBase, moduleWsBase } from "./lib/module";
 
-const HOST = process.env.MODULE_HOST ?? "worldserver";
-const PORT = process.env.MODULE_PORT ?? "8086";
-const BASE = `http://${HOST}:${PORT}`;
-const WS = `ws://${HOST}:${PORT}`;
+const BASE = moduleBase();
+const WS = moduleWsBase();
 
 const TOKEN = `probe-achievements-taxi-${crypto.randomUUID()}`;
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";

@@ -32,10 +32,8 @@
  *   docker compose -f infra/compose.yml exec runner bun infra/smoke/trainer.ts
  */
 
-const HOST = process.env.MODULE_HOST ?? "worldserver";
-const PORT = process.env.MODULE_PORT ?? "8086";
-const BASE = `http://${HOST}:${PORT}`;
-const WS = `ws://${HOST}:${PORT}`;
+const BASE = moduleBase();
+const WS = moduleWsBase();
 
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
@@ -44,6 +42,7 @@ const TOKEN = `probe-trainer-${crypto.randomUUID()}`;
 // Fresh character every run, deleted at the end.
 import { probeName } from "./lib/name";
 import { authHeaders } from "./lib/auth";
+import { moduleBase, moduleWsBase } from "./lib/module";
 
 const CHARACTER = probeName("Bt");
 
