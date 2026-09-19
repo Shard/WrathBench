@@ -36,9 +36,8 @@ Opening the pull request is the grant.
 ## Model results
 
 Results from outside the operator's fleet are not accepted yet, and issue #31
-keeps community submissions out of scope of the public-publication work. The
-reason is what a result is here: a claim of the form "harness vX, model Y,
-episode Z", valid only inside its comparability group, standing on the
+keeps community submissions out of scope. The reason is what a result is here:
+a claim of the form "harness vX, model Y, episode Z", valid only inside its comparability group, standing on the
 module-boundary audit log that proves the observation and action contracts held
 for that run (`docs/METHODOLOGY.md`). A number produced on someone else's
 harness has no such evidence behind it, and putting it on the same axis would

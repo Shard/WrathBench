@@ -57,8 +57,8 @@ for resume), `scratchpad.md`.
 
 `--driver` picks how the runner reaches the model; the **harness** — what owns
 the loop and the context — follows from it. The former spellings `--adapter`
-and `claude-subscription` are now refused with a message naming the current
-one, rather than silently translated.
+and `claude-subscription` are refused with a message naming the current one,
+rather than silently translated.
 
 | driver | harness | what runs the loop | scores? |
 | --- | --- | --- | --- |
@@ -69,12 +69,12 @@ one, rather than silently translated.
 
 The harness is stamped into the comparability tuple and shown on every run,
 results, ladder and models row. It is a tag, not a partition: claude-code and
-codex rows sit in the same charts as wrathbench rows (the operator's choice for
-now), and `?harness=` on the API narrows to one when wanted. `harnessVersion`
+codex rows sit in the same charts as wrathbench rows, and `?harness=` on the
+API narrows to one when wanted. `harnessVersion`
 is a different word — the `git describe` of this repo, which applies to every
 harness, since the SDK, tools, prompt and sandbox each CLI drives are ours.
 Each CLI scaffold is its own group because each is a different unversioned
-summarizer (docs/METHODOLOGY.md, operator decision).
+summarizer (docs/METHODOLOGY.md).
 
 ### Why claude-code is its own harness
 
@@ -107,7 +107,7 @@ stream-json` process for the whole episode. Each driver turn writes the
 harness's context message (the same `assembleContext` output the fixed loop
 sends) to its stdin and reads stream-json until the `result` line that closes
 the turn; in between, the CLI runs its own tool loop against our MCP server.
-Per-turn `--continue` was the fallback and is not needed.
+Per-turn `--continue` is not needed.
 
 Tools reach the runner over a loopback TCP MCP server plus `src/mcp-bridge.ts`,
 because `--mcp-config` can only launch a stdio child — running `mcp.ts` as that
@@ -151,8 +151,8 @@ actually returns to the runner:
   text is working, not idle.
 - A **coarse timer** (5s) covers a turn that makes no tool calls at all, and
   samples the world on `stateIntervalMs` so a long turn still produces state
-  rows and `no-xp` has XP data to measure. Progress is now read from
-  `state.xp` as well as level.
+  rows and `no-xp` has XP data to measure. Progress is read from `state.xp` as
+  well as level.
 - When any of these fire, the named termination is written to the trajectory
   **first**, then the CLI is torn down (SIGTERM, SIGKILL after 5s), and the
   episode returns that reason. Tool calls arriving during teardown are refused
@@ -313,8 +313,8 @@ WRATHBENCH_MODULE_URL=http://127.0.0.1:8086 ./infra/run-episode.sh --driver code
 A second subscription is a second directory under a second variable
 (`CODEX_HOME_2=/path/to/other-home`) and `--token-env CODEX_HOME_2` names it.
 The runner refuses to start without the chosen lane's `auth.json`, naming the
-variable. The compose `runner` image installs the CLI (a
-rebuild is owed); until then `--local` with a reachable module URL is the path.
+variable. The compose `runner` image installs the CLI; `--local` with a
+reachable module URL is the alternative.
 
 ## The sandbox
 
@@ -332,7 +332,7 @@ abandoned but the runtime survives; a snippet that blocks the event loop gets
 the process killed and respawned, and the state loss is surfaced to the model
 as a harness notice. Repeats trip the `snippet-runaway` watchdog.
 
-Network posture, honestly: the real boundary is compose topology (the runner
+Network posture: the real boundary is compose topology (the runner
 service can only reach `worldserver`). In-process, `fetch` and `WebSocket` are
 additionally replaced with versions that refuse any host but the module's —
 best-effort hardening, not a security boundary.
@@ -362,14 +362,13 @@ the stream-json `result` envelope that closes it. Killing the CLI the moment a
 watchdog fired threw all three away — 6 of 9 runs in one batch fell
 back to `tokens.source: "snapshot"` (the API's `message_start` figures, ~300×
 low) with no cost at all. So a watchdog or the tool-call ceiling firing mid-turn
-now records the termination exactly as before and then *winds down* instead of
-signalling: every further tool call is refused with an error telling the model
-the episode is over and to stop calling tools — nothing is dispatched, so no
-observation or action reaches the game after the termination — while the driver
-reads the CLI's stream for a bounded grace (`windDownGraceMs`, default 90s) in
-the hope of that `result`. It ends on the `result`, on the CLI exiting, or on
-the grace expiring, and a single `wind-down` trajectory record says which and
-how long it waited. The grace is not playtime: the `termination` record that
+records the termination and then *winds down* instead of signalling: every
+further tool call is refused with an error telling the model the episode is over
+and to stop calling tools — nothing is dispatched, so no observation or action
+reaches the game after the termination — while the driver reads the CLI's stream
+for a bounded grace (`windDownGraceMs`, default 90s) in the hope of that
+`result`. It ends on the `result`, on the CLI exiting, or on the grace expiring,
+and a single `wind-down` trajectory record says which and how long it waited. The grace is not playtime: the `termination` record that
 closes the active segment was written before the wind-down began. An operator
 stop or pause still kills immediately — that is intent, not a measurement
 opportunity.

@@ -161,11 +161,10 @@ What was verified, and how — the same standard the ADT orientation was held to
 ## Relationship to the viewer
 
 `runner/viewer/worldmap.ts` owns the transform and `runner/viewer/tiles.ts`
-serves `data/minimap/<mapId>/<row>_<col>.png`. Both already agree with what
-this tool writes; no reconciliation was needed. The original map-view design
-note flagged the orientation in `worldToPixel` as unverified until an extraction rendered a
-known zone — the Northshire Abbey check above is that verification, and it
-confirms the existing code rather than changing it.
+serves `data/minimap/<mapId>/<row>_<col>.png`. Both agree with what this tool
+writes. The orientation in `worldToPixel` could not be verified until an
+extraction rendered a known zone — the Northshire Abbey check above is that
+verification, and it confirms the existing code rather than changing it.
 
 ## Layout
 

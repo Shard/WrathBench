@@ -44,9 +44,8 @@ infra/export-world-ids.sh          # -> data/wiki/world-ids.json
 
 Four SELECTs against `acore_world` for the quest, creature, item and gameobject
 **id→name** maps. The export is server-derived, stays under `data/` and never
-enters git. Without the flag the build behaves exactly as it did before the door
-existed and `meta.world_ids` reads `none`; with it, `meta.world_ids` records the
-export's `exported_at` and per-kind counts, so a bundle built against a different
+enters git. Without the flag `meta.world_ids` reads `none`; with it, it records
+the export's `exported_at` and per-kind counts, so a bundle built against a different
 export is visible rather than inferred. A malformed, empty or id-only export fails
 the build rather than quietly changing which pages it keeps.
 
@@ -101,8 +100,8 @@ lives in docs/METHODOLOGY.md "The reference bundle".
   decade of corrections lives and where 30% of the coordinates only exist.
 - **Drop, do not label.** A note costs the model a line in every snippet, does not
   survive a snippet window that starts after it, and leaves the wrong world in the
-  index anyway. Out-of-game pages go the same way — an earlier rule kept them
-  reachable by exact title, and that carve-out is retracted.
+  index anyway. Out-of-game pages go the same way, not even reachable by exact
+  title.
 - **A page that predates the Cataclysm announcement is a Wrath page.** A post-Wrath
   signal never drops it, because Stormwind City picked up `|patch=4.0.1` in its own
   2010 history and the city is standing here. The line is `CATACLYSM_ANNOUNCED =
@@ -277,7 +276,7 @@ counter. The six plus `empty_pages` account for every page the parser yields exc
 those that were a `#REDIRECT` at the cutoff (`pages_era_redirect`), which the build
 test asserts as an identity so a page cannot be counted twice or lost quietly. The
 term on the right is `pages_era_redirect` and not `redirects`, because a redirect
-row can now be generated for a title that is also a counted page: a page a move
+row can be generated for a title that is also a counted page: a page a move
 emptied is still a dropped page, and recovering its name does not put the page back.
 
 - `pages_pre_cutoff` — has pre-cutoff prose, and either no post-Wrath signal or the
@@ -427,7 +426,7 @@ is the whole query, when an id word precedes it (`quest 783`, `npc entry 197`,
 `entry 721 Northshire`), or when the number opens the query and an id word follows
 (`721 npc entry Northshire`); the id word is consumed with it, since leaving "quest"
 in the text query matches every quest page. `level 5 quests` is left alone. An id
-token is **never** handed to the full-text index, so body prose can no longer answer
+token is **never** handed to the full-text index, so body prose cannot answer
 an id question.
 
 Out-of-game pages have no band and no label, because they are not in the bundle to

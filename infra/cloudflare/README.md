@@ -3,7 +3,7 @@
 The Cloudflare-side configuration for the public dashboard, checked in so the
 setup is reviewable and reproducible instead of remembered. Nothing here is
 applied by any script: the operator applies each file once, in the order the
-cutover runbook below gives. The design these shapes come from — push-based
+setup below gives. The design these shapes come from — push-based
 publisher, R2 as the data plane, no Worker in the read path — is
 `docs/PUBLIC-DASHBOARD.md`; the steady-state operational runbook is
 `docs/RUNBOOK.md`, "Public dashboard".
@@ -41,9 +41,8 @@ assets and cached bucket objects, and nothing is invoked.
 ## Setting it up
 
 Do these in order — each step names the hostname or credential the next one
-depends on. Steps 1–4 are the account; 5–8 are the lab and the deploy; 9 is the
-proof. The repository side of all of this is already merged; nothing below
-needs a code change.
+depends on. Steps 1–4 are the account; 5–7 are the lab and the deploy; 8 is the
+proof.
 
 **Two credentials, and they never meet.** Mint both before starting:
 
@@ -62,7 +61,7 @@ needs a code change.
   hands it to wrangler as `CLOUDFLARE_API_TOKEN` for the one command. With it
   unset the script falls back to wrangler's own browser login (`bunx wrangler
   login`, on the account that owns the zone) and prints `wrangler whoami`
-  before deploying, which is how the first deployment was run. One trap: after
+  before deploying. One trap: after
   a login on a *different* account wrangler still uses the account it cached in
   `node_modules/.cache/wrangler/wrangler-account.json`, and the deploy fails
   with `Authentication error [code: 10000]` against the previously cached account. The
@@ -74,8 +73,8 @@ current design — do not mint it now.
 
 ### 1. Create the bucket
 
-An R2 bucket named `wrathbench-public`, on the personal account. Only projected
-JSON is ever uploaded, a fraction of what a trajectory weighs, so the free tier
+An R2 bucket named `wrathbench-public`, on the account that holds the zone. Only
+projected JSON is ever uploaded, a fraction of what a trajectory weighs, so the free tier
 (10 GB stored, 10M reads, 1M writes a month) covers the corpus many times over.
 
 **Leave the Public Development URL disabled.** That is the bucket's own name for
@@ -104,7 +103,7 @@ pair — the two are different credentials and this is the step where that is
 easiest to get wrong. Pasting the same JSON into **Settings → CORS Policy** in
 the dashboard does the same thing if you would rather not scope a token for it.
 
-The app and the data are different origins now, so without this every fetch the
+The app and the data are different origins, so without this every fetch the
 SPA makes fails in the browser with nothing in the bucket's logs to show for it.
 
 ### 4. Add the three cache rules
@@ -128,17 +127,15 @@ request is a billed read against the bucket.
    the prefix closes it sooner.
 
 All three rules set the TTL **explicitly by path** rather than respecting an origin
-header, and that is not a style choice: the acceptance readback confirmed that
-no published object carries a `Cache-Control` at all — Bun's S3 writer cannot
-send one, and under the gate the Worker added them on egress. "Respect origin
-TTL" would therefore respect nothing. **All three rules already exist on the zone**
-(operator); step 8 verifies them rather than creating them.
+header, and that is not a style choice: no published object carries a
+`Cache-Control` at all, because Bun's S3 writer cannot send one. "Respect origin
+TTL" would therefore respect nothing.
 
 **A missing cache rule is the only way this shape costs money.** Without it every
 public request is a billed class-B read against the bucket — roughly $7/month at
-30M requests, versus roughly $0 with the rule. Step 9 checks it, first.
+30M requests, versus roughly $0 with the rule. Step 8 checks it, first.
 
-### 5. Point the publisher at the new account
+### 5. Point the publisher at the bucket
 
 The publisher's environment lives in the `wrathbench-env` secret in the
 `wrathbench` namespace on the cluster (`docs/RUNBOOK.md`). Three values
@@ -146,7 +143,7 @@ change:
 
 | variable | value |
 | --- | --- |
-| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` — the **personal** account's id, from R2 → Overview |
+| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` — that account's id, from R2 → Overview |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | the publisher token from above |
 | `S3_BUCKET` | `wrathbench-public`, unchanged |
 
@@ -154,11 +151,11 @@ The endpoint is the S3 API, not a public hostname, and is not
 `wrathbench-data.shard.page`.
 
 **Reset `WRATHBENCH_PUBLISH_STATE`.** It is the memo of what this publisher last
-uploaded *to the old bucket*, and against an empty new one every object it names
-is a phantom: the first pass would skip almost everything and flip a manifest
-pointing at keys that are not there. Delete the file (`data/publish/state.json`
-on its volume) before the first pass. It is a cache the operator may throw away,
-which is the documented repair for exactly this class of problem — the cost is
+uploaded, and against an empty bucket every object it names is a phantom: the
+first pass would skip almost everything and flip a manifest pointing at keys
+that are not there. Delete the file (`data/publish/state.json` on its volume)
+before the first pass against a bucket it has not filled. It is a cache the
+operator may throw away, which is the documented repair for exactly this class of problem — the cost is
 one full republish, which is the point.
 
 Then restart it and watch one pass land:
@@ -170,7 +167,7 @@ kubectl -n wrathbench logs -f deployment/wrathbench-publisher
 
 ### 6. Upload the tiles
 
-The public map draws real minimap tiles (operator). They are not
+The public map draws real minimap tiles. They are not
 part of a snapshot pass and never become one — this is the step that puts them
 in the bucket, run from a checkout with `data/minimap` populated by the
 extraction in `minimap/`, with the same `S3_*` credentials as the publisher:
@@ -274,10 +271,9 @@ URL is enabled — disable it (step 1).
   does not match the hostname the browser used, scheme included.
 
 **The unfurl:** paste `https://wrathbench.shard.page` into Discord. It should
-come back with the title, the sentence and the Pareto card. The Gated shape's Worker answered the crawler with a 401
-form and a disallow-all `robots.txt`, and both are gone: there is no Worker, and
-`dashboard/public/robots.txt` is permissive. Slack and Twitter honour robots.txt
-and are worth a second check for that reason.
+come back with the title, the sentence and the Pareto card. There is no Worker
+in the read path, and `dashboard/public/robots.txt` is permissive. Slack and
+Twitter honour robots.txt and are worth a second check for that reason.
 
 ## Deliberately not files
 
@@ -293,7 +289,7 @@ and are worth a second check for that reason.
 ## Open, and the operator's
 
 - **Whether the `tiles/` prefix wants a crawler directive.** The tiles are
-  public (operator) and served from the data hostname, which the
+  public and served from the data hostname, which the
   app's `robots.txt` does not cover — and the publisher cannot set a header, so
   the gate's `X-Robots-Tag: noindex` has no equivalent in this shape. Nothing
   turns on it today: the map renders them, and a directive is not an access

@@ -119,9 +119,8 @@ It is a pure auth-database write, so it is safe on a running server (add
 not usable by the module until it is in `AC_WRATH_BENCH_ACCOUNTS`, which is read
 when the worldserver container is created.
 
-
-It writes SQL directly rather than using SOAP or the worldserver console. SOAP
-cannot create the *first* account — `ACSoap.cpp` requires the caller to be
+`bootstrap.ts` writes SQL directly rather than using SOAP or the worldserver
+console. SOAP cannot create the *first* account — `ACSoap.cpp` requires the caller to be
 `SEC_ADMINISTRATOR` and the base auth schema seeds no accounts at all — and it
 would mean enabling a privileged control path into the world, which the harness
 deliberately does not have. The console (`docker compose attach worldserver`,
@@ -220,8 +219,8 @@ keeps compose from deciding `db-import` needs a rerun against a live stack.
 
 `infra/run-roster.sh <roster.json>` runs a list of episodes one at a time
 through `run-episode.sh`. The roster JSON is a plain array; every entry is
-config and everything but `model` has a default, so an old bare
-`[{ "model": ... }]` roster still produces exactly the argv it always did:
+config and everything but `model` has a default, so a bare
+`[{ "model": ... }]` roster produces exactly the argv the flags below describe:
 
 | key | default | notes |
 | --- | --- | --- |
@@ -244,17 +243,15 @@ a levelling curve.
 Before each launch the roster checks whether another run already holds the
 entry's account — no termination row and a write in the last few minutes — and
 waits (polling, giving up after 30 minutes) rather than launching into
-`account_in_use`. This applies to old rosters too: an entry without `account`
-is guarded on `RUNNER`, so it now waits behind a live hand-started run there
-where before it launched and failed in seconds. It
+`account_in_use`. An entry without `account` is guarded on
+`RUNNER`, so it waits behind a live hand-started run there rather than
+launching and failing in seconds. It
 only ever *frees* its own session (`DELETE /session` is keyed on
 `token == runId`); another process's session is never touched.
 
-No roster file ships in the repo any more (the pre-0.5 `roster-*.json`
-examples were retired with the fleet config's move into the
-store); the fleet materialises one per job from the config store at
-`data/runs/fleet-<job>-<date>.roster.json`, which is also the shape to copy
-for a hand-written one.
+No roster file ships in the repo; the fleet materialises one per job from the
+config store at `data/runs/fleet-<job>-<date>.roster.json`, which is also the
+shape to copy for a hand-written one.
 
 The roster runs its entries sequentially by design. Two characters in parallel
 means two roster processes, one per JSON, each with its own account and its
@@ -365,7 +362,7 @@ reject. No game account or module needed.
 sqlite: the supervisor's heartbeat, the gate's last result, one row per
 account with the job on it (run id, level/xp, elapsed, cooling), the models
 table with the scheduler's verdict, the paused runs it is not resuming and
-why, and — honestly — which run currently holds an account even when that run
+why, and which run currently holds an account even when that run
 is a hand-started roster the fleet does not manage. The dashboard's fleet page
 carries the same indicators. A job that ships `enabled: false` is a switch,
 not dead config: flip it to true when there is budget to spend on it, flip it
@@ -473,8 +470,8 @@ and only has to return once the pin is *placed*. It does not have to wait for
 the cluster: the `pin` phase does that itself, by reading the image tag the
 worldserver and viewer Deployments actually run and then waiting out every
 rollout. That is the check a hook cannot get wrong, and the one a release needs
-— a deploy window once ran against a pin that had never merged, smoked
-the old release and called it verified. With no hook the phase prints the tag,
+— a deploy window that runs against a pin that never merged smokes
+the old release and calls it verified. With no hook the phase prints the tag,
 the commit and where the chart expects them, and waits for the same thing, so
 placing a pin by hand still works.
 

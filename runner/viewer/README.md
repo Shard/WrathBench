@@ -6,16 +6,14 @@ JSONL by hand.
 
 ## Running
 
-The viewer is the `wrathbench-viewer` Deployment on
-the cluster, behind the `wrathbench.[removed].shard.page` Ingress (alias `wrathbench.local`)
-on the cluster; its code is baked into the runner image and Flux
+On Kubernetes the viewer is the `wrathbench-viewer` Deployment behind the
+cluster's own Ingress; its code is baked into the runner image and Flux
 owns the tag, so it comes back on its own and new viewer code needs a new tag
 rather than a restart. `bun run viewer:restart`
 (`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
-`https://wrathbench.[removed].shard.page/api/info` — it kicks a wedged process, it does not
-deploy anything. The workstation's systemd user unit
-(`infra/wrathbench-viewer.service`) is retired and disabled, kept only for the
-compose rollback, which is what `viewer-restart.sh --local` drives.
+`/api/info` on `$WRATHBENCH_VIEWER_URL` — it kicks a wedged process, it does not
+deploy anything. `viewer-restart.sh --local` drives the compose shape's systemd
+user unit (`infra/wrathbench-viewer.service`) instead.
 
 Locally — a rehearsal, a bare clone, or development on the pages — it is still
 one process:
@@ -57,8 +55,7 @@ the API it reads plus the static host that serves it. Build it with
 `bun run --cwd dashboard build`; the viewer picks it up from `dashboard/dist`
 with no further configuration.
 
-The hand-written pages this directory used to serve were deleted
-. There is no fallback UI: with no build on disk every page route
+There is no fallback UI: with no build on disk every page route
 answers with a plain-text notice naming the build command, and `/api` keeps
 serving throughout. What the dashboard renders is documented in
 `dashboard/README.md`; what follows is what the server decides before the UI
@@ -72,9 +69,8 @@ machine. Setting `WRATHBENCH_VIEWER_HOST` to anything else is a startup failure
 that prints why, unless `WRATHBENCH_VIEWER_LAN=1` explicitly opts a trusted
 private network in. That opt-in is for a LAN, not the internet: it lets someone
 on the same network read pages, and reaches nothing else — the module stays
-loopback regardless. Public hosting is intended eventually and is not this;
-the viewer/dashboard section of `docs/ARCHITECTURE.md` carries what has to be
-settled first.
+loopback regardless. Public hosting is the published snapshot, not this
+(`docs/PUBLIC-DASHBOARD.md`, "The live viewer is not a public service").
 
 Opting in takes two steps, and the second is the one that gets forgotten:
 
@@ -90,10 +86,9 @@ sudo firewall-cmd --permanent --zone=public --add-rich-rule=\
 sudo firewall-cmd --reload
 ```
 
-`--permanent` matters: a runtime-only rule is lost on the next reload or reboot,
-which is how this was set up the first time and why it stopped working. Note that
-`curl http://<lan-ip>:8090` **from the host itself** succeeds even with the port
-firewalled — that traffic is delivered over `lo` and never crosses the zone — so
+`--permanent` matters: a runtime-only rule is lost on the next reload or reboot.
+Note that `curl http://<lan-ip>:8090` **from the host itself** succeeds even
+with the port firewalled — that traffic is delivered over `lo` and never crosses the zone — so
 verify from another machine, or the check proves nothing.
 
 It also only ever reads. Each `run.sqlite` is opened readonly, so a run being
@@ -201,11 +196,11 @@ A durable freeplay character is one character across many attempts
 (docs/RUNBOOK.md, "Freeplay characters are durable"), and every counter the
 runner keeps is per *attempt*: `questsCompleted` is that session's own
 `completions.length`, the tokens and the cost are that attempt's trajectory, the
-playtime is that attempt's active segments. So the run page used to answer "how
-many quests has this character done" with the last session's tally, and a reader
-could only see the run one attempt at a time.
+playtime is that attempt's active segments. Answering "how many quests has this
+character done" from one attempt would give the last session's tally, and a
+reader would see the run one attempt at a time.
 
-`/api/run/<id>` now carries a `character` (`character.ts`) for a run with lineage: the
+`/api/run/<id>` carries a `character` (`character.ts`) for a run with lineage: the
 whole chain, oldest first, each attempt with its own figures, plus the totals
 across them. **Nothing is written back.** What the runner records is the
 model-visible surface and a methodology matter; an old run is read differently,
@@ -413,9 +408,9 @@ the whole entry with the key omitted for a clear.
 ### What it will not serve
 
 The `meta` trajectory entry embeds the whole run config, bearer token included,
-and the generic summariser used to copy it wholesale — so both `/entries?from=0`
-and `/raw/0` served it. Redaction is keyed on field name at any depth and applied
-at the two places a raw record can reach a client (`summarize` and
+which the generic summariser would otherwise copy wholesale into both
+`/entries?from=0` and `/raw/0`. Redaction is keyed on field name at any depth
+and applied at the two places a raw record can reach a client (`summarize` and
 `TrajectoryTail.raw`). `apiKeyEnv` is deliberately kept: it names an environment
 variable, and the value of that variable is never written to the trajectory.
 
@@ -433,8 +428,8 @@ are published as written. It is opt-in-to-public, not opt-in-to-raw: the run
 page depends on raw bodies, so a public deployment sets the flag rather than
 the developer clearing it.
 
-What a public entry carries (docs/DATA-AND-LEGAL.md, "Trajectory logs",
-operator): names and ids stay, game prose goes. `projectEntry`
+What a public entry carries (docs/DATA-AND-LEGAL.md, "Trajectory logs"):
+names and ids stay, game prose goes. `projectEntry`
 (`public-projection.ts`) is an allowlist per entry type — the `meta` entry
 sheds the run config (api base, objective, paths), `driver` and `claude_system`
 their binaries, cwd and socket paths, `pause`/`watchdog` their free-text

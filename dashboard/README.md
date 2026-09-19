@@ -53,9 +53,8 @@ The other build-time flags are `VITE_WRATHBENCH_PUBLIC_ORIGIN` and
 `VITE_WRATHBENCH_OG_STAMP` (the social card's tags, docs/PUBLIC-DASHBOARD.md)
 and `VITE_WRATHBENCH_REPO_URL` — where the source lives. Unset or empty, which
 is the default in both builds, the footer's repository link and the BibTeX
-`url` line on `/about` are not rendered at all: the link is not turned on yet
-and one that 404s is worse than none. Set it to the repository's URL and both
-appear; `infra/deploy-dashboard.sh` passes it through from `WRATHBENCH_REPO_URL`
+`url` line on `/about` are not rendered at all: a link that 404s is worse than
+none. Set it to the repository's URL and both appear; `infra/deploy-dashboard.sh` passes it through from `WRATHBENCH_REPO_URL`
 in `.env`, so turning the link on is one env line and a redeploy
 (`src/lib/repo.ts`).
 
@@ -140,7 +139,7 @@ what its sender saw.
 
 It is not the `?harness=` filter, which selects which *loop* owned a
 run (`wrathbench`, `claude-code` or `codex`). Different dimension, same word. `/runs`
-still filters on it by clicking a cell; the ladder no longer offers it as a
+still filters on it by clicking a cell; the ladder does not offer it as a
 control (the harness is a tag on each row and a colour on each point, not a
 partition), and offers neither `all` nor overridden runs as an episode choice —
 a rung and a scatter are claims about one comparability group.
