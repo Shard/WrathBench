@@ -49,9 +49,9 @@ reports `NOT RUNNING`.
 
 ### Where the config lives
 
-**The sqlite config store is the only fleet config** (operator decision). The
+**The sqlite config store is the only fleet config.** The
 active config is operational state, not source, and is
-never committed to git again. It is `config.sqlite` on the data volume, beside
+never committed to git. It is `config.sqlite` on the data volume, beside
 `runs/` (`$WRATHBENCH_DATA/config.sqlite`, overridable with
 `WRATHBENCH_CONFIG_DB`; on the cluster the `config` subPath of the
 `wrathbench-data` PVC at `/wrathbench/data/config/config.sqlite`, mounted
@@ -60,13 +60,13 @@ the same `data/` bind mount at `data/config.sqlite` — nothing to provision
 either way). The store's `config_audit` table is the history: actor, note,
 and the before and after documents of every change.
 
-`infra/fleet.json` is gitignored and no longer in the repo. The one config
-document in git is **`infra/fleet.example.json`, the bootstrap**: a newcomer
-seeds the store from it once and gets a working board — the `_notes`
+The one config document in git is **`infra/fleet.example.json`, the
+bootstrap**: a newcomer seeds the store from it once and gets a working board —
+the `_notes`
 vocabulary block, a small, valid, representative roster (free entries, one
 paid, one claude-code entry to show the shape), shaped-but-quiet account
 classes and policy, the preflight block, and no campaign or queue job that
-would run. Nothing else reads the example. Export (the CLI and the page) still
+would run. Nothing else reads the example. Export (the CLI and the page)
 renders the store to a document, for reading or for diffing against an earlier
 export — never for committing.
 
@@ -212,7 +212,7 @@ roster      name -> entry. The keys an entry may carry, and nothing else: model,
               the run (docs/METHODOLOGY.md, "Routing is pinned").
             `wiki` — whether this entry's runs get the reference wiki at all. Default true; set
               `false` and the run has no `search_reference` tool, the prompt does not name one,
-              and no bundle is opened (operator decision, issue #61). It is a
+              and no bundle is opened (issue #61). It is a
               capability switch declared on the run, not an arm bought out of the tier budget, so
               `wiki: false` is stamped into the comparability tuple as a KEY and those runs never
               share a chart with the runs that had it. `wikiCoords` alongside it is REFUSED:
@@ -267,12 +267,11 @@ above) and nothing else. A key outside the set REFUSES that entry or job by
 name: the refusal line in `--status` says which key it was and what to write
 instead, the rest of the file stays in effect, and a live run under the refused
 entry or job is left alone — it just does not respawn. Whole-file rejection is
-still what a shape error gets. (Campaigns were already strict, via their
+what a shape error gets. (Campaigns are strict through their own
 schema; account lists are plain names and have no keys to get wrong.)
 
-The key that cost us a day: **`enabled` is a queue job's word, not a roster
-entry's.** `"enabled": false` on an entry was silently ignored, so a freeplay
-character believed to be paused kept running through a deploy window.
+The key to watch: **`enabled` is a queue job's word, not a roster entry's** — on
+an entry it is refused by name, so it is not how a character is paused.
 To pause a character, set the entry's `idle: "none"`: the freeplay
 job stops being generated, the paused run reads "not in config — resume by
 hand", and it stays down until `idle: "unlimited"` comes back (the character is
@@ -302,7 +301,7 @@ logged out so the account is free, and the run is marked paused — not
 terminated, not counted, not a ladder failure. The roster records
 `paused-operator` and exits; the supervisor waits for every roster (polling
 every 2s while stopping) and exits. For a **scored** run the pause is where it
-ends: a stop no longer costs a run its *place*, but it does cost it that
+ends: a stop does not cost a run its *place*, but it does cost it that
 attempt — the run is ended `manual`, the model is not blamed for it,
 and the scheduler gives it a fresh attempt with a full clock. Freeplay, and a
 probe campaign that asked to resume, come back where they left off. The runner's own backstop is 60s, the
@@ -356,9 +355,9 @@ reboot. Resumes do not care: the run id is read off disk.
 
 It sets the **pause switch**, waits for every run a recreate would *cost* to end
 on its own clock, recreates the container on the new code, waits for the new
-supervisor's first heartbeat, and clears the switch. No attempt is spent. It is
-not quite true any more that nothing is signalled: the switch itself SIGTERMs a
-freeplay character at once (it has no episode boundary to drain to), and the
+supervisor's first heartbeat, and clears the switch. No attempt is spent. Some
+runs are still signalled: the switch itself SIGTERMs a freeplay character at
+once (it has no episode boundary to drain to), and the
 recreate lands on whatever parked runs are still mid-episode. Nothing *scored*
 is ever signalled, which is the promise that matters.
 
@@ -366,8 +365,8 @@ It does not wait for the runs that come back **where they left off**: the
 freeplay character and a probe campaign with `resume: true`. Once the switch has
 put such a job in `draining` the wait counts it as drained and moves on — an
 `idle: "unlimited"` session has no clock to finish on, so waiting for one is
-waiting to the 8h ceiling (the window has had to become a `force`, and
-the session then came back on the same run id and character anyway). The status
+waiting to the 8h ceiling — and such a session comes back on the same run id
+and character anyway. The status
 lines name both halves each poll: `waiting on:` for the runs holding the window
 and `counted drained:` for the parked ones. Whether a job parks is the
 supervisor's own answer, published per job row as `resumesInPlace` in
@@ -419,15 +418,13 @@ episodes.
 
 Ctrl-C during the wait is safe: no scored run has been signalled, the switch stays
 set, and `./infra/fleet-update.sh resume` puts the fleet back to work — which
-the script now says, loudly, on the way out. An aborted window that looked like
+the script says, loudly, on the way out. An aborted window that looked like
 nothing happened is how a fleet ends up scheduling nothing until somebody
 notices.
 
-**The first time, the switch is not live yet.** It is supervisor code, so a
-supervisor started before this shipped does not read it — the graceful path
-becomes available only after one restart. That restart does *not* have to be
-the forceful one: the equivalent drain against the code running right now is a
-config edit (it is hot-reloaded, so it needs nothing new) —
+**Draining a supervisor that does not read the switch.** The switch is
+supervisor code, so a supervisor from before it existed ignores it. The
+equivalent drain, needing nothing but the hot-reloaded config, is an edit —
 
 ```
 accounts: { "pool": [], "paid": [], "local": [] }   # the policy has nowhere to schedule
@@ -437,9 +434,9 @@ queue: []                                           # nothing manual
 
 — then wait for `--status` to show no live job, `kubectl -n wrathbench rollout
 restart deployment/wrathbench-fleet`, and put the accounts and campaigns back. `infra/fleet.test.ts` pins that this edit parses and
-schedules nothing. It is strictly worse than the switch (it is an edit to the
-file whose every flag goes inert on a typo, and it does not stop a *resume*),
-which is why it is the bootstrap and not the recipe.
+schedules nothing. It is strictly worse than the switch — it is an edit to the
+config whose every flag goes inert on a typo, and it does not stop a *resume* —
+so it is the fallback and never the recipe.
 
 #### Forceful — now, and it costs the live runs
 
@@ -583,7 +580,7 @@ a paused run counts toward nothing until it finally ends.
 
 A freeplay character — the one an `idle: "unlimited"` ref plays across its
 sessions — is the operator's to disable and re-enable at will, and it
-survives that (operator ask). Without it only a *pause* would come back: every
+survives that. Without it only a *pause* would come back: every
 ended session (idle watchdog, a hand kill, the stale sweep) would be followed
 by a fresh attempt whose hygiene wiped the account and whose model named a new
 level-1 character.
@@ -621,7 +618,7 @@ What the supervisor does with it, per tick:
   the wrong record.
 - **The account is the character's.** A freeplay pick prefers its character's
   account over the model's last run. If that account is busy, who holds it
-  decides (`characterStanding`; operator decision):
+  decides (`characterStanding`):
   - the ref itself (its own live run, or its resume reserving the account):
     nothing to plan, the run is in flight;
   - another ref's **bounded** run — a scored episode, a probe, a hand-written
@@ -651,7 +648,7 @@ What the supervisor does with it, per tick:
   next pick is decided the same way again.
 - **One character per model+effort.** A `unlimited` ref has exactly one
   character at a time, and the freeplay ladder shows the live field, not
-  every dead character a model ever rolled (operator ask). The
+  every dead character a model ever rolled. The
   older ended sessions of a character are parked with
   `bun runner/src/archive.ts --run-ids` ("Archiving runs"), which is a
   decision about listings and nothing else: the character is untouched,
@@ -676,7 +673,7 @@ account, character) and the verdict: `in flight`, `continuable`, `held: <ref>
 on it until its episode boundary`, or `occupied by <ref>'s character:
 fresh-next`. Roster changes that compete for one account go in **one write,
 owner first**: the hot reload is 60 s, and two edits in sequence let a second
-character elect the account between them . A hand-written
+character elect the account between them. A hand-written
 `freeplay` job on the same ref is the operator's own experiment and never
 continues anything. To start a character over deliberately, delete its character
 (`POST /character-delete` on the module, the sweep's own path) before
@@ -867,7 +864,7 @@ There are two kinds of smoke:
   worldserver recreate *and* on every restart the container does by itself.
   Entries with **distinct accounts run in parallel**; entries sharing an account
   run in order. A bare string entry means "on `account`". The three shipped
-  smokes split the old arc's claims without losing one:
+  smokes split the gate's claims without losing one:
   `quest-accept-status.ts` (login, questgiver status, quest query, accept,
   the served quest-log complete state, turn-in reward chain, XP, vendor list,
   ~20s), `kill-credit.ts` (one kobold: attack stream, kill credit, loot
@@ -955,7 +952,7 @@ back (`no paid account configured`, `no local account configured`).
 
 ### Changing the config shape
 
-The pattern, as the switch to the job shape ran it, translated to the store: export the store (`config-store.ts export /tmp/fleet-before.json`),
+The pattern: export the store (`config-store.ts export /tmp/fleet-before.json`),
 write the new-shape document beside it, drain or `stop fleet` (running
 episodes pause and resume on start), `seed --force` the new document, check
 `--dry-run` from the new code before anything spawns, then
@@ -1174,10 +1171,9 @@ worldserver's, and the control surface stays exactly as unexposed as it is
 today. `docs/PUBLIC-DASHBOARD.md` is the design and the rejected alternatives;
 this section is how to stand it up.
 
-The content decision this waited on — entry summaries and verbatim game text
-(GitHub issue #10) — has been made and the site is openly public;
-`docs/PUBLIC-DASHBOARD.md` carries both. What follows is the
-mechanism.
+The site is openly public, and what it may carry — entry summaries and
+verbatim game text (GitHub issue #10) — is `docs/PUBLIC-DASHBOARD.md`'s. What
+follows is the mechanism.
 
 The corollary, stated plainly (GitHub issue #30): **the live viewer is private
 and operator-only, and is unsupported as an Internet-facing service.** It stays
@@ -1188,9 +1184,10 @@ bridge, and never a tunnel to one. `WRATHBENCH_VIEWER_PUBLIC=1` projects every
 body it serves and withholds raw lines, tiles and the SSE tail, but it exists so
 the snapshot renderer can call the handle in-process; it is not an exposure
 plan.
+
 ### The shape
 
-The site is the design doc's **Open** shape, and there is only one shape now:
+The shape, as `docs/PUBLIC-DASHBOARD.md` designs it:
 
 | | |
 | --- | --- |
@@ -1198,11 +1195,11 @@ The site is the design doc's **Open** shape, and there is only one shape now:
 | data | `https://wrathbench-data.shard.page` — the `wrathbench-public` R2 bucket behind its own custom domain |
 | who can read it | anyone |
 | TTLs set by | zone cache rules on `shard.page` |
-| CORS | `infra/cloudflare/r2-cors.json` — two origins now, so the policy is load-bearing |
+| CORS | `infra/cloudflare/r2-cors.json` — two origins, so the policy is load-bearing |
 | edge cache | yes, and load-bearing: it is what makes a spike cost ~$0 |
 
-**The cutover itself** — creating the bucket on the new account, the custom
-domain, the CORS apply, the cache rules, resetting the publish state, the tiles
+**Standing it up** — creating the bucket, the custom
+domain, the CORS apply, the cache rules, the publish state, the tiles
 and the first deploy — is `infra/cloudflare/README.md`, step by step and in
 order. What follows here is the steady state: how the pieces are configured and
 how to operate them once they exist.
@@ -1258,9 +1255,8 @@ Three rules on the `shard.page` zone, first match wins:
 
 All three rules set the TTL **explicitly by path** rather than respecting an origin
 header. That is forced: no published object carries a `Cache-Control` at all
-(a readback confirmed it), because Bun's S3 writer cannot send one
-and the gate Worker used to add them on egress. "Respect origin TTL" would
-respect nothing.
+(a readback confirmed it), because Bun's S3 writer cannot send one.
+"Respect origin TTL" would respect nothing.
 
 **A missing cache rule is the only way this costs money.** Without it every
 public request is a billed read against the bucket — roughly $7/month at 30M
@@ -1305,10 +1301,9 @@ A third, zone **Cache Purge**, is only wanted if the manifest TTL is ever
 tightened by purging the two mutable URLs after each push. That is not the
 current design — do not mint it now.
 
-All of this runs on the **free plan**, and now on firmer ground than under the
-gate: with no Worker in the read path there is no 100k requests/day invocation
-cliff to sit under at all. Workers Paid ($5/month) is the insurance if a Worker
-ever enters the path. The $20/month zone "Pro" plan is the wrong SKU entirely:
+All of this runs on the **free plan**: with no Worker in the read path there is
+no 100k requests/day invocation cliff to sit under at all. Workers Paid
+($5/month) is the insurance if a Worker ever enters the path. The $20/month zone "Pro" plan is the wrong SKU entirely:
 it is a zone plan and includes none of Workers, KV, D1 or R2.
 
 ### 6. `robots.txt`, the social card, and what is *not* published
@@ -1317,15 +1312,15 @@ Nothing to configure for the first two: with no fetch handler, `robots.txt` is
 whatever is in `dashboard/public/`, and what is there is permissive, so the card
 unfurls.
 
-**Minimap tiles are shown** (operator): they sit under `tiles/` in
+**Minimap tiles are shown**: they sit under `tiles/` in
 the same bucket, reached through the data hostname, and rule 3 caches them. The
 build asks for them because `WRATHBENCH_TILES_BASE` is set in `.env` — which is
 a separate name from the snapshot base because the upload is a separate step
 (7a), so a deploy from a checkout without `data/minimap` leaves it unset and
 ships the labelled grid rather than a site pointing at nothing. The private
-viewer is unaffected and still serves them off `data/minimap` same-origin. What
-the data hostname has no equivalent of is the gate's `X-Robots-Tag: noindex`;
-see `infra/cloudflare/README.md`, "Open, and the operator's".
+viewer is unaffected and serves them off `data/minimap` same-origin. The data
+hostname carries no `X-Robots-Tag: noindex`; see `infra/cloudflare/README.md`,
+"Open, and the operator's".
 
 ### 7. First publish, by hand
 
@@ -1345,10 +1340,10 @@ Its environment is the compose service's, and the two must stay in agreement:
 | `WRATHBENCH_CONFIG_DB` | `data/config.sqlite` (the default; unset under compose) | the config store's roster names the models the pages label |
 | `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed |
 | `WRATHBENCH_PUBLISH_INTERVAL_MS` | `300000` | `--loop` cadence. Five minutes is a cost choice, not a freshness one — a pass writes ~24 objects regardless of cadence, so 60s measured ~1.2M R2 class-A ops/month against a 1M free tier and 300s is ~240k. The harness's own floor is 30–60s, so a faster push would buy little anyway |
-| `WRATHBENCH_PUBLISH_BATCH` | `8` | runs projected before the pass uploads them, drops the bodies and releases those runs' entry indexes from the viewer handle. The pass's memory dial: measured peak RSS over the 1,016-run tree is 1.08 GB at 25, 0.78 GB at 8 and 0.59 GB at 1, all inside 60–67s, against 4.4 GB before this work . Eight matches the per-run read pool's width — smaller leaves readers idle, larger only holds more at once |
+| `WRATHBENCH_PUBLISH_BATCH` | `8` | runs projected before the pass uploads them, drops the bodies and releases those runs' entry indexes from the viewer handle. The pass's memory dial: measured peak RSS over the 1,016-run tree is 1.08 GB at 25, 0.78 GB at 8 and 0.59 GB at 1, all inside 60–67s, against 4.4 GB without the batching. Eight matches the per-run read pool's width — smaller leaves readers idle, larger only holds more at once |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | from step 5 | `.env`, never argv |
 | `S3_BUCKET` | `wrathbench-public` | |
-| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the account's R2 S3 endpoint — the S3 API, not a public hostname, and unchanged between the two shapes |
+| `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the account's R2 S3 endpoint — the S3 API, not a public hostname |
 
 The four `S3_*` names are `Bun.S3Client`'s own, which is why they are not
 spelled `WRATHBENCH_*` and why they come from `.env` rather than from

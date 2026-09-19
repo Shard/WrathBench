@@ -1,13 +1,11 @@
 # Costs
 
-How cost is measured in this harness, and the rules learned measuring it. The
-hard numbers that used to live here (per-episode resource tables, a pricing
-table, platform reliability counts, a what-to-try-next list) were a snapshot
-that went stale the moment the 0.5 series re-armed; they were
-removed rather than left to mislead. Cost surfaces belong in the UI
-(episode cost, campaign rollups, estimates from accumulated baselines): that
-arc is GitHub issue #13, and until it lands, the per-call data below is the
-record.
+How cost is measured in this harness, and the rules learned measuring it. It
+carries no per-episode resource tables, pricing table or platform reliability
+counts: such a snapshot goes stale the moment a series re-arms. Cost
+surfaces belong in the UI (episode cost, campaign rollups, estimates from
+accumulated baselines): that arc is GitHub issue #13, and until it lands, the
+per-call data below is the record.
 
 ## 1. Where the data lives
 
@@ -66,7 +64,7 @@ record.
   figures are opening snapshots, so on the haiku run they undercount
   by ~300×. Per-response blocks are good for the SHAPE of context growth, never
   for absolute $, and on the output side not even for shape.
-- **Cost control is external to the fleet by decision** (operator): a tier is
+- **Cost control is external to the fleet by decision**: a tier is
   denominated in runs, dollars are the operator's reasoning. If an in-fleet
   money budget is ever wanted, it belongs beside `policy.paid.maxConcurrent`,
   not as a new tier.
@@ -78,7 +76,7 @@ record.
 ## 3. Context growth across an episode
 
 **openai-adapter driver (OpenRouter/OpenCode/local, fixed-context policy):** prompt tokens climb
-for the first several turns then plateau — confirmed both in this window (`ox-alpha` turns 1→61:
+for the first several turns then plateau — confirmed on both lanes measured (`ox-alpha` turns 1→61:
 3,292 → 7,321 → 11,414 → 12,533 → 13,241; `qwen3.8-27b` turns 1→71: 3,466 → 10,185 → 17,955 →
 18,343): requests plateau at roughly 8–12k tokens regardless
 of episode length. The runner trims older conversation aggressively (system prompt: "the
@@ -98,9 +96,9 @@ returned `cached_tokens: 0` on a byte-identical prefix sent seconds after a hit,
 internal (load-balancing across replicas with per-node KV caches), not anything the request can
 change. Classes 2 and 3 are provider weather; the response record now carries the serving
 `provider` name so future sweeps can attribute misses without generation-API replays. The
-mid-run `prompt_tokens` drop this item flagged is class 1 — the trim working as designed.
+mid-run `prompt_tokens` drop is class 1 — the trim working as designed.
 Separately: Anthropic models via OpenRouter still need explicit `cache_control` breakpoints
-(memory: 0%→89% measured); the open models cache implicitly, no opt-in involved.
+(0%→89% measured); the open models cache implicitly, no opt-in involved.
 
 **claude-code harness (Sonnet/Opus via the Claude Code CLI on a subscription):** no trimming
 — the full conversation replays every turn and grows essentially unbounded. `roster-sonnet-20260822`
@@ -122,11 +120,11 @@ subscription, so a codex cost is only ever the list-price estimate over its toke
 as-if-metered. The rate for that estimate comes from the OpenRouter sync, under the vendor
 prefix the Codex CLI's own slug omits: the lane records `gpt-6-astra` and the catalogue carries
 OpenAI's published list price as `openai/gpt-6-astra` ($10/$50/$1 per million in/out/cache-read,
-verified 2026-09-05 against OpenAI's own API price list). It is the same synced row an OpenRouter
+verified against OpenAI's own API price list). It is the same synced row an OpenRouter
 run would read; only what it means differs, and `codexPrice` in `runner/viewer/pricing.ts` says
 so — an OpenRouter run meters the operator's balance, a codex run bills a flat ChatGPT
-subscription, so the figure there is a comparison and not a bill. It is the operator's decision,
-taken on the first codex run: without it a codex run had no cost reading at all and was absent from
+subscription, so the figure there is a comparison and not a bill. It is the operator's decision:
+without it a codex run would have no cost reading at all and would be absent from
 every ladder chart, whose x-axis is cost.
 
 **Why Sonnet-on-subscription is the cost outlier, in numbers:** it is not that the tokens are
@@ -141,6 +139,6 @@ subscription rather than metered API tokens, the operator's marginal cost is $0 
 large that cache-read number gets. `usageRaw`/`costUsd` are only emitted by the SDK on a clean
 `claude_result` (natural turn-loop completion); a hard watchdog kill (episode-limit,
 tool-call-limit) cuts the stream before that record lands, so an as-metered $ figure exists for
-only one run in this window: `fleet-nav-probe-sonnet-20260822-c2` (a full 6h e360, ended cleanly),
+only one measured run: `fleet-nav-probe-sonnet-20260822-c2` (a full 6h e360, ended cleanly),
 `costUsd: $43.90` for 201.6M cumulative prompt tokens (201.1M cached, 99.75%), 186,646 output
 tokens, 905 turns.

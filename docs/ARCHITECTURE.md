@@ -103,9 +103,8 @@ the SPA owns everything that is UI.
   whose operator has decided it may serve them (off by default, no-op outside
   public mode, private one-hour cache and `noindex` when on); the static public
   snapshot never carries a tile either way.
-- `dashboard/` is a SolidJS SPA and, since the hand-written pages were deleted
-  the only UI: a homepage explainer at `/` (what the benchmark
-  is, the loop, the tools as served by `/api/tools` so the page cannot drift
+- `dashboard/` is a SolidJS SPA and the only UI: a homepage explainer at `/`
+  (what the benchmark is, the loop, the tools as served by `/api/tools` so the page cannot drift
   from the runner), fleet at `/fleet`, about at `/about` (the tiers, the
   harness groups, how to read a score; `/episodes` redirects there), runs (the
   per-run grain), ladder, models, run detail, and the map view — minimap
@@ -124,13 +123,12 @@ the SPA owns everything that is UI.
   first, every header sortable, the sort and every filter in the URL, and a
   value in a cell the link that narrows to it; `/about` is the tiers, what
   each id fixes and how many runs sit against it, listing no runs of its own;
-  `/ladder` is the aggregates. Runs had been listed in two places and neither
-  was where all of them were, while the aggregate page had become a wall of
-  chips that opened with most of its rows filtered away — so the aggregate page
-  became the runs table, `/results` redirects to `/runs` with its query intact,
-  and the cost-per-level chart was deleted rather than moved: the ladder's own
-  columns already say how far each model got, and a cost view worth having is a
-  page with its own reason, not a chart smuggled onto another one.
+  `/ladder` is the aggregates. Runs are listed in one place and one only — a
+  page that opens with most of its rows filtered away is not that place — so
+  `/results` redirects to `/runs` with its query intact, and there is no
+  cost-per-level chart: the ladder's own columns already say how far each model
+  got, and a cost view worth having is a page with its own reason, not a chart
+  smuggled onto another one.
 - **Every run belongs to a character, and the character has a page.** A durable
   freeplay character is one character across attempts, and everything the runner
   records is per attempt — so a reader could see only the session in front of
@@ -171,8 +169,8 @@ the SPA owns everything that is UI.
   construction, and the models page is the scheduler's verdict computed
   server-side, where a client-side filter would make the counts and the list
   disagree. This is a different dimension from the harness filter, which
-  selects which *loop* owned a run; both exist and compose, which is why the
-  new one is spelled `series` everywhere.
+  selects which *loop* owned a run; both exist and compose, which is why this
+  one is spelled `series` everywhere.
 - **`infra/model-lineup.json` is the model identity catalog; the fleet config
   stays a scheduling catalog.** Every roster field in the fleet config is a scheduling
   fact and presentation has always been absent from its schema, so a cosmetic
@@ -189,10 +187,9 @@ the SPA owns everything that is UI.
   the runs table's model column, the ladder table's rungs rows, the fleet
   page's model cells and paused list, the models page's roster names, the run
   page's model card, the map's pips and sidebar, and the ladder scatter, whose
-  marks are logo pucks. The scatter shipped first with plain dots to keep the
-  harness colour legend; the logo arrived by moving that colour to the puck's
-  ring, so the legend reads as a ring rather than a fill and still says exactly
-  what it said. Logos are fetched rather than drawn:
+  marks are logo pucks. The scatter's harness colour lives on the puck's ring
+  rather than its fill, so the legend reads as a ring and says exactly what a
+  plain dot's colour said. Logos are fetched rather than drawn:
   `infra/fetch-model-logos.ts` pulls the npm tarball of the Lobe Icons package
   at the version pinned in the lineup's own `icons` block and extracts exactly
   the icons the lineup names; the SVGs are committed, because they are a few
@@ -206,9 +203,8 @@ the SPA owns everything that is UI.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). What a public deployment may carry is
-  docs/DATA-AND-LEGAL.md's to settle and has been: minimap tiles are shown
-  (operator), and entry summaries are published one window per run
-  with game prose stripped.
+  docs/DATA-AND-LEGAL.md's to settle: minimap tiles are shown, and entry
+  summaries are published one window per run with game prose stripped.
 - **Public hosting is push-based, so the lab is never an origin.**
   `infra/publish-dashboard.ts` calls the viewer's own `createApi` handler
   in-process, applies an allowlist projection, and PUTs generation-addressed
@@ -272,12 +268,12 @@ losing it costs a backfill rather than a run.
 
 ### The derived store
 
-The corpus reached 1,148 runs and 11 GB, of which 7.5 GB is `trajectory.jsonl`
-and the largest single file is 669 MB. Roughly three quarters of those bytes
-are one field: `messages`, the rendered context re-logged on every turn. Every
-cold request to a listing route opened all 1,148 `run.sqlite` files over iSCSI
-and re-read every trajectory to count what the page showed. That is what the
-store fixes, and the shape is the operator's decision.
+The corpus was measured at 1,148 runs and 11 GB, of which 7.5 GB was
+`trajectory.jsonl` and the largest single file 669 MB. Roughly three quarters of
+those bytes are one field: `messages`, the rendered context re-logged on every
+turn. Without a store, every cold request to a listing route opens every
+`run.sqlite` over iSCSI and re-reads every trajectory to count what the
+page shows. That is what the store is for.
 
 **The runner does not change.** It appends JSONL and moves on, the way a
 service logs. It does not know the store exists, has no client for it, and
@@ -314,10 +310,10 @@ and `readRunFact` as it tails and stores the result as JSON on the run. Same
 code, same bytes, by construction.
 
 **The viewer reads the store; the supervisor still reads the files.** Every
-route that used to scan the runs directory answers from ClickHouse. The
-live-progress path — "is this run going right now", the supervisor's own
-polling of `run.sqlite`, the per-run trajectory tail behind `/entries` and the
-SSE stream — still reads files directly, because it asks about a process that
+listing route answers from ClickHouse. The live-progress path — "is this run
+going right now", the supervisor's own polling of `run.sqlite`, the per-run
+trajectory tail behind `/entries` and the SSE stream — still reads files
+directly, because it asks about a process that
 is writing at this instant. Retiring the per-run sqlite is a later step and
 waits on the store carrying the live state series.
 

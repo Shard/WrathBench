@@ -3,10 +3,10 @@
 How the public site is hosted, and why. The app is at
 `https://wrathbench.shard.page`, the data at
 `https://wrathbench-data.shard.page`, and no Worker sits in the read path. The
-cutover runbook is `infra/cloudflare/README.md`. The architecture is the "published
-JSON snapshots" stage `docs/ARCHITECTURE.md` ("Persistence") names. GitHub
-issue #10 is the standing public-hosting checklist;
-`docs/DATA-AND-LEGAL.md` remains the binding constraint set.
+Cloudflare setup is `infra/cloudflare/README.md`; the published JSON snapshots
+this describes are the public face of what `docs/ARCHITECTURE.md`
+("Persistence") records. GitHub issue #10 is the standing public-hosting
+checklist; `docs/DATA-AND-LEGAL.md` remains the binding constraint set.
 
 ## Goal and constraints
 
@@ -14,8 +14,8 @@ The runs stay on the operator's hardware. The public
 site is **push-based**: the lab pushes derived data outward on a timer, and no
 public request ever reaches it — so a traffic spike, however large, is
 Cloudflare's problem and not the lab's. Freshness of a few minutes is
-acceptable (the operator's call; the cadence is 5 minutes, for the write-cost
-reason in "Cost" below. The harness's own
+acceptable; the cadence is 5 minutes, for the write-cost
+reason in "Cost" below. (The harness's own
 floor is finer than either: state samples land every 60s and the fleet
 heartbeat every 30–60s, so even a 60s push loses almost nothing the private
 dashboard actually has). Budget: Cloudflare free tier, with at most a small
@@ -45,11 +45,11 @@ withheld in public mode`. That makes the flag a *boundary* rather than a set of
 routes an operator has to remember, which is what the snapshot renderer needs
 from it, since the renderer calls the same handle in-process. It is not a
 hardening measure, and it does not make the viewer safe to expose. The same
-applies to any future Helm/[removed] deployment: the public surface is the
+applies to the cluster deployment: the public surface is the
 static artifact bucket and the SPA in front of it, never a viewer, module or
 MCP Service or Ingress.
 
-## Recommended architecture
+## The architecture
 
 Three pieces: a publisher on the lab, an R2 bucket as the data plane, and the
 existing SPA built in a snapshot mode as the app plane. No Worker, no D1, no
@@ -83,7 +83,7 @@ reading in windows rather than whole files, is what puts a pass over a
 key pair scoped to the one bucket, held only by the publisher.
 
 Minimap tiles are published by a second, separate script
-(`infra/publish-tiles.ts`), decided by the operator. It is never part of a
+(`infra/publish-tiles.ts`). It is never part of a
 snapshot pass: the loop above uploads JSON only, and the tiles are
 uploaded by an explicit operator run — `--dry-run` prints the plan, `--upload`
 performs it. It reads `data/minimap/<mapId>/<row>_<col>.png` and writes
@@ -129,12 +129,12 @@ generation chain — for the fleet pips, freshness beats consistency. Superseded
 versions are pruned after a few cycles (the last five of each aggregate, the
 last two of each run); deletes are free.
 
-Per-aggregate versions replaced one hash over the whole set
-(operator, GitHub issue #38). Under the old scheme a single live run taking a
-turn moved `runs.json`, `results.json`, every `ladder-*.json` and
-`models.json`, and the pass rewrote all ten aggregates under a fresh prefix —
-three of seven compared were byte-identical. The same pass now rewrites only
-what moved. `playtimeMs` is zeroed alongside `now` when a payload is hashed for
+Each aggregate carries its own content version rather than one hash over the
+whole set (GitHub issue #38), so a pass rewrites only what moved. Under a
+single hash a live run taking a turn moved `runs.json`, `results.json`, every
+`ladder-*.json` and `models.json`, and the pass rewrote all ten aggregates
+under a fresh prefix — three of seven compared were byte-identical.
+`playtimeMs` is zeroed alongside `now` when a payload is hashed for
 addressing, for the same reason: it advances with the wall clock on every pass
 of a live run, so hashing it made a run's detail and every aggregate carrying
 the figure churn on passes where nothing had happened. The cost is that a
@@ -142,17 +142,11 @@ change to `playtimeMs` alone — the live figure between turns, or a level mark
 revised by a pause recorded after the fact — publishes on the next real change
 rather than immediately.
 
-**Publisher and reader move together.** The manifest is a contract, and the
-transition has one asymmetry: a reader that knows `artifacts` falls back to the
-old one-prefix layout when it meets a manifest without it, but a reader too old
-to know `artifacts` reads `gen` and derives a key that no longer exists. So the
-dashboard deploys first and the publisher second; between the two the site is
-correct on both shapes. A tab still running pre-#38 JavaScript across the
-publisher deploy sees 404s on the aggregates until it is reloaded — bounded by
-the manifest's 30s TTL plus a reload, and not worth a compatibility write of
-the whole set under one prefix, which is the cost the change exists to remove.
-The pre-#38 objects need no migration: their keys classify as ordinary versions
-of the names they carry, so the first flip after the change prunes them.
+**The manifest is a contract, so publisher and reader move together.** A
+reader that knows `artifacts` falls back to the one-prefix layout when it meets
+a manifest without it, but a reader that does not know `artifacts` reads `gen`
+and derives a key no longer written. So the dashboard deploys first and the
+publisher second; between the two the site is correct on both shapes.
 
 Worst-case staleness is push cadence + edge TTL ≈ 90–120s. If that ever
 matters, a cache-purge API call on the two mutable URLs after each push
@@ -206,9 +200,9 @@ flag produces the public bundle and the private build keeps its same-origin,
 CORS-free posture (the bucket carries the project's first and only CORS
 policy, scoped to the app hostname).
 
-The public site includes the live fleet and map (operator's choice): pips and
+The public site includes the live fleet and map: pips and
 fleet state at the push cadence (5 minutes), and the map over real minimap
-tiles (operator). Where a tile comes from is
+tiles. Where a tile comes from is
 `dashboard/src/lib/tiles.ts` and nowhere else — the data hostname in the public
 build, same-origin in the private viewer — so the two shapes share one path and
 neither is special-cased. Replaying a freeplay character end to end works there too: since the
@@ -257,15 +251,6 @@ Three consequences worth stating rather than discovering:
 - The page costs one extra object per attempt on first open, all of them
   already cached by the client's own memo and by the CDN.
 
-The field rename that came with the page (`stream` → `character` on the run
-detail and the track) needed no generation bump: snapshot artifacts are
-addressed by a hash of their own content, so the renamed bodies simply mint new
-keys, and the SPA ships in the same release as the data it reads. The one
-visible effect is on a browser holding a cached SPA from before the release
-against fresh data: its character card goes missing until it reloads. There is
-no dual-reading reader, because carrying two spellings would be the half-rename
-the change exists to end.
-
 ## The content boundary
 
 The projection is the legal boundary in code, and it is an **allowlist by
@@ -278,12 +263,12 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   raw trajectory lines (the unprojected record: run config, message arrays,
   every packet), and any local path or host fact. Raw lines are withheld by
   `WRATHBENCH_VIEWER_PUBLIC=1` and the publisher never renders them.
-- **Minimap tiles**: shown on the public map (operator), uploaded by the
+- **Minimap tiles**: shown on the public map, uploaded by the
   explicit `infra/publish-tiles.ts` step above and never by a
-  snapshot pass. Independent of that, and unchanged: no snapshot
+  snapshot pass. Independent of that: no snapshot
   *artifact* may name a tile (`runner/test/snapshot.test.ts` pins it).
 - **Entries: names and ids stay, game prose goes** (docs/DATA-AND-LEGAL.md,
-  "Trajectory logs", operator). One window per run is published —
+  "Trajectory logs"). One window per run is published —
   the last 200 entries, `entries.json` beside `detail.json`, in the shape the
   run page's private path loads first — after `projectEntry` (an allowlist
   per entry type: the `meta` entry sheds the run config, `driver` and
@@ -305,15 +290,15 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   (`runner/viewer/scrub-paths.ts`), which strips the runner image's
   `/wrathbench` working directory wherever a published string carries it, so a
   sandbox stack trace reads as `sdk/src/client.ts:123`; the model's text is
-  otherwise as written, and every other absolute path stays "Never" (operator).
-- **Names now pass**: `items[].name`, a move's `target`, a position's episodic
+  otherwise as written, and every other absolute path stays "Never".
+- **Names pass**: `items[].name`, a move's `target`, a position's episodic
   `status` (text and zone name) and `terminationDetail`.
 - **Still projected out**: the operator `objective`, `apiBase`, `pauseReason`
   free text (a fixed `"paused"` token stays), model last-error message text,
   the fleet config-rejection error and preflight tails, wiki bundle source
   (on a run row and inside an entry's restamped comparability tuple alike),
   and every local filesystem path and pid.
-- **Character names are shown** (operator decision). The runner
+- **Character names are shown**. The runner
   generates them at character creation, so they are not game text; the
   `characterLabel` race/class pair, resolved from ids by our own tables, is
   shown beside them.
@@ -326,7 +311,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   reconstruction of 3.3.5a; nothing Blizzard-owned is distributed), rendered
   in the shell footer.
 
-The projection gets the most-tested file in the change: fixture responses
+The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
 asserted against the exact allowlisted key set, fixture-based and green from
 a bare clone like everything else.
@@ -342,10 +327,10 @@ runs that recorded one.
 
 ### The controls
 
-The operator took three of the four dropdowns off the page. Race and class
+Three of the four dropdowns are off the page. Race and class
 asked a question an eval episode cannot answer differently — every scored run
 is the same baseline character — and the harness select was the shell's
-series selector spelled a second time. What is above the chart now:
+series selector spelled a second time. What is above the chart:
 
 - The **tier** chips and the **axes** chips, unchanged, both in the URL.
 - A **filters** button opening a small popover with two native
@@ -363,7 +348,7 @@ series selector spelled a second time. What is above the chart now:
 - **exclude free**, the per-viewer preference it has always been — a standing
   opinion about what counts as evidence, not a slice of the field.
 - **pareto front**, unchanged, `?pareto=1`.
-- **representative efforts**, new and **on by default** (`?efforts=all` turns
+- **representative efforts**, **on by default** (`?efforts=all` turns
   it off). For a model with several effort entries it shows only the efforts on
   **that model's own cost-against-xp Pareto front**: an effort that earned less
   XP *and* cost more than another effort of the same model is a knob setting,
@@ -372,8 +357,8 @@ series selector spelled a second time. What is above the chart now:
   `dashboard/src/lib/ladderfilter.ts`, pure and unit-tested, applied at the
   page so the chart and the table cannot disagree; the axes are fixed at cost
   and XP rather than following the axes chips, or the set on screen would mean
-  something different on every view. On the data of 2026-09-18 it hides five
-  of twenty-eight entries at e90 (`claude-fable-5`, `claude-fable-5 (high)`,
+  something different on every view. On the data measured it hides
+  five of twenty-eight entries at e90 (`claude-fable-5`, `claude-fable-5 (high)`,
   `claude-fable-5 (none)`, `sonnet`, `sonnet (max)`) and one of eight at e360
   (`sonnet (medium)`); it removes no table row, because the table is keyed on
   the model and the chart on the (model, effort) pair.
@@ -381,17 +366,16 @@ series selector spelled a second time. What is above the chart now:
 Hovering a pin lights its table row and hovering a row lights its pins, keyed
 on the model (`hoverKeyOf`); keyboard focus on a row does the same.
 
-### No explanatory prose on the page (operator)
+### No explanatory prose on the page
 
 Every derived view here has a paragraph's worth of "and here is what that
-actually means" behind it, and each one used to be printed under its chart or
-table. A reader who already knows reads past three sentences every visit; a
-reader who does not is reading an essay where they wanted a number. The page
-shows the heading, the control labels and the axes; the sentences are one
+actually means" behind it, and none of it is printed under the chart or the
+table. A reader who already knows would read past three sentences every visit;
+a reader who does not would be reading an essay where they wanted a number. The
+page shows the heading, the control labels and the axes; the sentences are one
 hover away, on a small "i" beside the heading (`components/InfoHint.tsx`), and
-at length in this document. The line counting what the header's series
-selector filtered out went with them — the selector is labelled and explains
-itself.
+at length in this document. The same goes for a line counting what the header's
+series selector filtered out — the selector is labelled and explains itself.
 
 ### The human reference
 
@@ -402,8 +386,8 @@ tier — roughly level 9–10 by ninety minutes, level 18–19 by six hours.
 
 The figures come from speedrun.com's Wrath of the Lich King Classic Archive
 board, which carries a single entry in each of those categories: **1–10 in 1:31
-on an Orc Hunter**, and **1–20 in 7:02:39**, both confirmed in a browser on
-2026-09-16. The e90 band is labelled "one Wrath entry, bracketed by Classic Era
+on an Orc Hunter**, and **1–20 in 7:02:39**, both confirmed in a browser. The
+e90 band is labelled "one Wrath entry, bracketed by Classic Era
 and Cataclysm Classic"; the e360 band is "interpolated from one Wrath 1–20
 entry", because a 1–20 run is not linear in level. The Classic Era and
 Cataclysm Classic records sit either side as context, because they run
@@ -434,7 +418,7 @@ re-renders every pass — the live chart cannot be either.
   has no cascade, so a `var()` would paint nothing, and a card in a different
   face than the page it links to reads as someone else's card.
 
-  Text is rationed rather than banned (operator). Discord renders
+  Text is rationed rather than banned. Discord renders
   the card about 400 px wide inline, so nothing is set below 21 units — about
   7 px there — and only four things are set at all: the wordmark, the corner
   cue, the chart's identity in the top right, and one name above each frontier
@@ -552,8 +536,8 @@ attribution), so in the private viewer this flag shows in the citation alone.
   opposite of reads-at-the-edge; the worst shape for a spike.
 - **KV as primary** — propagation is "up to 60 seconds or more", consuming
   the entire freshness budget before the push cadence spends a cent of it;
-  the free tier's 1,000 writes/day sat under the original 1-minute cadence's
-  1,440 (at today's 5-minute cadence that particular clause no longer bites,
+  the free tier's 1,000 writes/day sits under a 1-minute cadence's
+  1,440 (at the 5-minute cadence that particular clause does not bite,
   but the others do); and reads bill per key unless fronted by the cache — at
   which point R2 does the same job with explicit TTLs.
 - **Pages** — no advantage over Workers Static Assets for this shape, and
@@ -571,13 +555,13 @@ attribution), so in the private viewer this flag shows in the citation alone.
 
 ## Cost
 
-Numbers verified 2026-08-25 against the Cloudflare docs source (the
+Numbers verified against the Cloudflare docs source (the
 `cloudflare-docs` repo, which is what renders on the docs site). Modeling a
 viral week at 1M requests/day:
 
 | design | viral week | sustained 30M req/month |
 |---|---|---|
-| Static assets + R2 behind cache rule (recommended) | ~$0 | ~$0 |
+| Static assets + R2 behind cache rule (this design) | ~$0 | ~$0 |
 | Same, cache rule forgotten | $0 (inside free reads) | ~$7 |
 | Worker + KV or D1 in the read path (paid) | $5 | ~$11–21 |
 | Worker + anything on the free plan | fails (100k req/day cap) | fails |
@@ -597,29 +581,26 @@ The plan ladder that matters here is Workers Free (sufficient) → Workers Paid
 ### The write side, measured
 
 The table above prices **reads** — the spike this design exists to survive. The
-**writes** went unpriced until the loop actually ran, and they are the side that
-has a live-fleet-shaped cost.
+**writes** are the side with a live-fleet-shaped cost.
 
-Measured 2026-08-25 against a real fleet: a steady pass was **24 PUTs + ~4
-DELETEs**, made of the ten snapshot aggregates, `manifest.json`, `live.json`,
-and a detail/track pair per live run (six, at the time). The count was
-near-constant whatever the cadence, because `gen` was a single hash over every
-aggregate: one live run taking a turn changed `runs.json`, `results.json`,
-`ladder-*.json` and `models.json`, and that rewrote all ten under a fresh
-prefix. Those are real data changes — token counts, turns, levels, cost basis —
-not clock artifacts, so normalizing timestamps alone would not have removed
-them.
+Measured against a real fleet under a single `gen` hash over every aggregate, a
+steady pass was **24 PUTs + ~4 DELETEs**: the ten snapshot aggregates,
+`manifest.json`, `live.json`, and a detail/track pair per live run (six, at the
+time). The count was near-constant whatever the cadence, because one live run
+taking a turn changed `runs.json`, `results.json`, `ladder-*.json` and
+`models.json`, and that rewrote all ten under a fresh prefix. Those are real
+data changes — token counts, turns, levels, cost basis — not clock artifacts,
+so normalizing timestamps alone would not have removed them.
 
-Per-aggregate versions take the aggregate half of that from ten to
+Per-aggregate versions take the aggregate half of that down to
 the ones that actually moved — three of seven compared on that pass were
 byte-identical — and zeroing `playtimeMs` when hashing removes the passes where
-a live run's clock alone had advanced. The post-change figure has not been
-measured against a fleet; on the issue's own ratio a steady pass should land
-around twenty. The floor is unchanged and was always the point: an **idle**
+a live run's clock alone had advanced; on that ratio a steady pass should land
+around twenty. The floor is the point: an **idle**
 fleet costs one `live.json` PUT per pass at any cadence (~9k/month at 300s).
 
-Rolling the publisher *back* across this change wants the state file deleted.
-An old binary reads `state.gens` as generation stamps, finds hashes that were
+A publisher rolled back to the single-hash scheme wants the state file deleted.
+It reads `state.gens` as generation stamps, finds hashes that were
 never path segments, and plans every aggregate as surplus — self-healing, but
 it churns a pass. The state file is a cache the operator may throw away, which
 is the documented repair for exactly this.
@@ -629,8 +610,8 @@ is the documented repair for exactly this.
 | 60s | ~1.21M | over, about $0.94/month |
 | 300s (current) | ~242k | ~24% |
 
-The entire write cost is live runs. The cadence was the first lever pulled;
-per-aggregate addressing is the second.
+The entire write cost is live runs, and the two levers on it are the cadence
+and per-aggregate addressing.
 
 Unverified at research time (primary pages blocked from the research
 environment; confirm before relying on them): the exact Pro-plan feature

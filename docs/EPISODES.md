@@ -73,7 +73,7 @@ because that would silently re-scope every score already carrying this label.
   continent earns nothing for hours, and that is the behaviour this episode exists
   to permit — rungs 2–4 of the ladder are travel rungs. A no-XP watchdog here
   would end runs for doing the right thing. Tool-call ceiling **12000** — the
-  runaway guard of 1000 calls per 30 minutes (operator), sized so a
+  runaway guard of 1000 calls per 30 minutes, sized so a
   fast model cannot touch it; it bounds the claude-code harness's inner loop,
   not the score.
 - **Ends.** As `e90`, minus `no-xp`.
@@ -151,11 +151,10 @@ standing sandbox that never finishes. Duration separates neither pair.
 - **Promotion.** None in either direction. A freeplay run neither qualifies nor
   disqualifies a model for anything.
 - **Extras.** A model whose entry says `idle: "unlimited"` takes its extras
-  here; the default `none` buys nothing, and those are now the only two values
-  the axis has. (It briefly had a third, `idle: "characters"`, which spent a
-  spare account on a scored run with the next race/class in a code-side cycle.
-  That was an unscored question asked in the scored lane, so it became
-  the class-probe campaign instead.) Once a model has met its tier's targets the
+  here; the default `none` buys nothing, and those are the only two values
+  the axis has — a race/class sweep is a probe campaign, not an idle mode,
+  because it is an unscored question and would otherwise be asked in the scored
+  lane. Once a model has met its tier's targets the
   policy gives it one continuous freeplay session at a time, with **no episode
   wall-clock cap and no tool-call ceiling** — a runaway guard sized in calls per
   thirty minutes means nothing on a session with no minutes, and it was ending
@@ -216,8 +215,8 @@ A run launched without `--episode` is not a member of any episode. It reads
 `episode: null`, the scheduling policy counts it toward nothing (no target, no
 promotion, no chart), and it therefore carries no comparability claim to
 protect. So the bare watchdog defaults in the runner — idle 10m, no-XP 45m —
-stay as they are and are deliberately not aligned with `e90`'s pinned 20m/20m
-(operator decision). They are the shape of an untagged
+stay as they are and are deliberately not aligned with `e90`'s pinned 20m/20m.
+They are the shape of an untagged
 one-off, not a quiet third ruleset: moving them would change every flagless run
 without any tuple field saying so, and every run that is scored passes the flag.
 
