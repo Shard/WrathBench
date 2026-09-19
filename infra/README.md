@@ -75,10 +75,10 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
   that uploads `data/minimap` to the same bucket under `tiles/`, skipping by
   content hash, and it is the only thing that ever puts a tile there.
 
-Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. The only ports
-published to the host are 3724 (authserver) and 8085 (worldserver), bound
-explicitly to `127.0.0.1` for operator inspection. Nothing may ever bind
-beyond loopback. Any other port needed for debugging follows the same rule
+Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. Every port
+compose publishes is bound explicitly to `127.0.0.1`, for operator inspection:
+3724 (authserver), 8085 (worldserver) and 8123 (ClickHouse). Nothing may ever
+bind beyond loopback. Any other port needed for debugging follows the same rule
 and is not committed.
 
 ## Configuration

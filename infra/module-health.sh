@@ -5,9 +5,8 @@
 # counters (module/PROTOCOL.md, "Authentication"). The image has no curl or
 # wget — perl is what it does have.
 #
-# CLUSTER-NATIVE since 2026-09-11: the worldserver is a Deployment in namespace
-# `wrathbench`. `--compose` is the local rehearsal
-# path against infra/compose.yml.
+# CLUSTER-NATIVE: the worldserver is a Deployment in namespace `wrathbench`.
+# `--compose` is the local rehearsal path against infra/compose.yml.
 #
 #   ./infra/module-health.sh             # kubectl exec into the worldserver pod
 #   ./infra/module-health.sh --compose   # the compose rehearsal stack

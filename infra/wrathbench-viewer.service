@@ -1,9 +1,7 @@
-# RETIRED 2026-09-08, kept for the compose rollback only. The live viewer is
-# the `wrathbench-viewer` Deployment behind the `wrathbench.local` Ingress; see
-# the cluster deployment ("What stays on the workstation" and "Rollback to
-# compose"). Restarting the live viewer is `./infra/viewer-restart.sh`, which
-# drives kubectl; this unit is what `./infra/viewer-restart.sh --local` drives,
-# and it is disabled on the workstation.
+# RETIRED, kept for the compose rollback path only. The live viewer is the
+# `wrathbench-viewer` Deployment behind its Ingress, and restarting it is
+# `./infra/viewer-restart.sh`, which drives kubectl. This unit is what
+# `./infra/viewer-restart.sh --local` drives; it is disabled by default.
 #
 # The private LAN viewer (bun runner/viewer/serve.ts on :8090) as a systemd
 # USER unit, so it survives a reboot instead of dying with the nohup shell that
@@ -25,7 +23,9 @@ After=network-online.target
 
 [Service]
 WorkingDirectory=%h/git/wrathbench
-Environment=WRATHBENCH_MODULE_URL=http://192.168.192.3:8086
+# The module, as this host reaches it. systemd does no shell expansion here, so
+# it is a literal: edit it when the worldserver is not on loopback.
+Environment=WRATHBENCH_MODULE_URL=http://127.0.0.1:8086
 Environment=WRATHBENCH_VIEWER_LAN=1
 ExecStart=%h/.bun/bin/bun runner/viewer/serve.ts
 Restart=on-failure

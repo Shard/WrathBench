@@ -9,7 +9,7 @@
 #               job has exited — never a pid probe, never a guess — AND for the
 #               fleet POD to be gone, because the supervisor's own preflight
 #               smoke is not a job and holds a smoke account that the gate
-#               smokes need (2026-09-17).
+#               smokes need.
 #   waiting     wait for the worldserver rollout and for the module to answer
 #               /health ready WITH the bearer.
 #   verifying   run the gate smokes (preflight.smokes) and then the deploy-only
@@ -34,9 +34,10 @@
 # THE PIN CHECK. Before anything is drained or smoked, the tag the cluster
 # actually runs (the worldserver Deployment's image, or the module's /health
 # `build` when that does not read back) is compared to `git describe` of this
-# tree, and a mismatch REFUSES. On 2026-09-16 this script ran against a pin that
-# had not landed: it smoked the old release, called it verified and resumed the
-# fleet on it. `--expect-tag` names a different tag to require;
+# tree, and a mismatch REFUSES. A window run against a pin that never landed
+# smokes the OLD release, calls it verified and resumes the fleet on it, which
+# is the one failure this script must not have. `--expect-tag` names a
+# different tag to require;
 # `--allow-tag-mismatch` is the deliberate override and says so in the log.
 #
 #   ./infra/k8s-deploy.sh                 # drain, wait, smoke, resume

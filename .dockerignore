@@ -12,3 +12,7 @@ runner
 sdk
 wiki
 docs
+dashboard
+collector
+minimap
+infra/chart

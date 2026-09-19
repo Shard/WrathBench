@@ -6,11 +6,11 @@
 #   bun ship --tiles         … and upload changed minimap tiles first
 #   bun ship --skip-tests
 #
-# Since 2026-09-11 the site is the design doc's **Open** shape: the app is
+# The site is the **Open** shape docs/PUBLIC-DASHBOARD.md describes: the app is
 # `wrathbench.shard.page`, served as static assets with no Worker in the read
 # path, and the data is `wrathbench-data.shard.page`, the R2 bucket behind its
-# own custom domain. There is no gate and no password step any more; the
-# Cloudflare-side setup this deploy assumes is `infra/cloudflare/README.md`.
+# own custom domain. There is no gate and no password step; the Cloudflare-side
+# setup this deploy assumes is `infra/cloudflare/README.md`.
 #
 # The private viewer serves dashboard/dist too, so the last step rebuilds it in
 # normal mode — and that build names no origin and no snapshot base, so it

@@ -62,7 +62,7 @@ if systemctl --user cat wrathbench-viewer.service >/dev/null 2>&1; then
 else
   pid=$(ps -eo pid,args | grep "[b]un runner/viewer/serve.ts" | grep -v "bash -c" | awk '{print $1}' | head -1 || true)
   [ -n "${pid:-}" ] && kill "$pid" && sleep 2
-  WRATHBENCH_MODULE_URL="${WRATHBENCH_MODULE_URL:-http://192.168.192.3:8086}" \
+  WRATHBENCH_MODULE_URL="${WRATHBENCH_MODULE_URL:?set WRATHBENCH_MODULE_URL: how this host reaches the module, e.g. http://127.0.0.1:8086}" \
   WRATHBENCH_VIEWER_LAN="${WRATHBENCH_VIEWER_LAN:-1}" \
     setsid nohup bun runner/viewer/serve.ts > data/viewer.log 2>&1 < /dev/null &
 fi

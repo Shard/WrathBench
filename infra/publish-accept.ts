@@ -299,7 +299,7 @@ const WITHHELD_KEYS: ReadonlySet<string> = new Set([
  *
  * `text` and `code` are the model's turn text, its snippet source, the
  * scratchpad body, an episodic line, and the tool-result text it formatted —
- * exactly the surfaces the design doc calls the residual. A scan hit inside one
+ * exactly the surfaces docs/PUBLIC-DASHBOARD.md calls the residual. A scan hit inside one
  * of these is reported as a residual note rather than a finding.
  */
 const MODEL_AUTHORED: ReadonlySet<string> = new Set(["text", "code"]);

@@ -1,7 +1,7 @@
 # Ignore list for the RUNNER image only. BuildKit prefers
 # <dockerfile-path>.dockerignore over the root .dockerignore, which exists for
-# the server image and excludes runner/, sdk/, wiki/ and docs/ — the very
-# things this image is made of.
+# the server image and excludes the TypeScript workspaces — the very things
+# this image is made of.
 #
 # Same red line as everywhere else (docs/DATA-AND-LEGAL.md): nothing under
 # data/ enters an image.
@@ -10,7 +10,9 @@ data
 node_modules
 deps
 dashboard/dist
+dashboard/dist-public
 dashboard/node_modules
+collector/node_modules
 runner/node_modules
 sdk/node_modules
 wiki/node_modules

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 #
-# COMPOSE ONLY, and compose has been stopped since the 2026-09-08 cutover: the
-# live deploy window is infra/k8s-deploy.sh.
-# This script is kept for the local rehearsal stack and for the rollback path,
-# and `bun run deploy:worldserver:compose` is how it is reached.
+# COMPOSE ONLY: the canonical deploy window is infra/k8s-deploy.sh, on the
+# cluster. This script is the local rehearsal stack and the rollback path, and
+# `bun run deploy:worldserver:compose` is how it is reached.
 #
 # Deploy a new worldserver image. One command owns the whole window:
 #
@@ -42,8 +41,8 @@
 # A deploy must never leave the fleet stopped: that is the invariant an
 # operator relies on instead of watching the window.
 #
-# VERIFICATION IS FAIL-CLOSED (2026-08-22, after a deploy that printed
-# "DEPLOYED and verified" having executed no smoke at all):
+# VERIFICATION IS FAIL-CLOSED — a deploy must never print "DEPLOYED and
+# verified" having executed no smoke at all:
 # the success line prints only when VERIFIED_BY names something that actually
 # ran to a zero exit. Every other path rolls back and exits non-zero, and the
 # two honest "verified nothing" paths (--no-smoke, no smokes configured) say

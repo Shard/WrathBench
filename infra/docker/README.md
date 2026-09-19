@@ -18,7 +18,6 @@ From the repository root:
 ./infra/build-worldserver.sh   # worldserver, stamped with git describe (-> :next)
 docker build --target worldserver -t wrathbench/worldserver -f infra/docker/server.Dockerfile .   # unstamped: /health.build = "unknown"
 docker build --target authserver  -t wrathbench/authserver  -f infra/docker/server.Dockerfile .
-docker build --target tools       -t wrathbench/tools       -f infra/docker/server.Dockerfile .
 docker build --target db-import   -t wrathbench/db-import   -f infra/docker/server.Dockerfile .
 ```
 

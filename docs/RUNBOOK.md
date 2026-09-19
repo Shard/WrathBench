@@ -690,6 +690,31 @@ runs are at a boundary, as "Updating the live fleet" describes.
 
 ### Deploy window (worldserver changes)
 
+The canonical deployment is the Kubernetes chart; the rest of this chapter is
+the compose path, which is the local rehearsal stack and the rollback.
+
+#### On the cluster
+
+```
+./infra/build-images.sh --push                 # every image, tagged `git describe`
+./infra/k8s-release.sh                         # the whole release, start to finish
+./infra/k8s-release.sh --dry-run
+./infra/k8s-release.sh --pin-hook ~/bin/place-wrathbench-pin
+./infra/k8s-release.sh --from pin              # restart at a phase
+./infra/k8s-deploy.sh                          # the deploy window alone
+```
+
+`k8s-release.sh` runs five idempotent phases — **build**, **drain**, **pin**,
+**deploy**, **resume**. `--pin-hook <command>` is how the image tag reaches
+whatever GitOps repo pins it (it is called with the tag and the SHA, and the
+script then waits until the cluster actually carries that tag); with no hook
+the phase prints the tag and polls. `--from <phase>` resumes a release that
+died. The **deploy** phase is `k8s-deploy.sh`, which is the window on its own:
+drain, wait for the rollout, run the gate smokes through the runner pod,
+resume. `infra/README.md`, "Releasing on Kubernetes", has the phase table.
+
+#### On compose
+
 Two scripts, from the host; the deploy is **one command** that owns the whole
 window and needs nothing from you while it runs:
 

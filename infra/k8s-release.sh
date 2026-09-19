@@ -4,12 +4,11 @@
 # pin in front of the cluster, run the smoke-gated deploy window, put the fleet
 # back to work.
 #
-# WHY THIS EXISTS. The scripted ends of a release have worked for a while; what
-# went wrong on 2026-09-16 was the hand-driven middle — the pin, the wait for it
-# to actually reach the cluster, and a pause switch nobody cleared. A chain of
-# shell joined with `;` ran the deploy window against an image that had never
-# changed. So the middle is scripted too, and the one part of it that is not the
-# same anywhere — HOW a pin is placed — is a hook.
+# WHY THIS EXISTS. The ends of a release script themselves; the middle — the
+# pin, the wait for it to actually reach the cluster, and the pause switch —
+# is where a hand-typed chain joined with `;` runs the deploy window against an
+# image that never changed. So the middle is scripted too, and the one part of
+# it that is not the same anywhere — HOW a pin is placed — is a hook.
 #
 #   build    ./infra/build-images.sh --push, on a clean tree
 #   drain    ./infra/fleet-update.sh drain — the pause switch stays set

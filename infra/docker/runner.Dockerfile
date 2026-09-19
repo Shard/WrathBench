@@ -1,6 +1,6 @@
 # Runner service image: Bun (pinned), git, the Claude Code CLI for the
-# claude-subscription shakeout driver, and — since the Kubernetes work
-# (2026-09-05) — the repository itself baked in.
+# claude-subscription shakeout driver, and the repository itself baked in (the
+# cluster has no bind mount to supply it).
 #
 # git is here for one reason: the fleet supervisor runs INSIDE this image
 # (compose service `fleet`) and stamps every episode with
@@ -59,8 +59,8 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # nothing but `bin/codex.js`, a shim with a `node` shebang that re-execs the
 # native binary out of an optional platform dependency — and there is no node in
 # this image. `bun add -g` does not help either: bun's global bin directory here
-# is /usr/local/bin, which uid 1000 cannot write, so the link fails EACCES
-# (verified 2026-09-05). `@openai/codex@<version>-linux-x64` IS the vendor
+# is /usr/local/bin, which uid 1000 cannot write, so the link fails EACCES.
+# `@openai/codex@<version>-linux-x64` IS the vendor
 # payload — a statically linked musl binary plus the codex-resources it locates
 # relative to itself — so installing that one package and symlinking its binary
 # onto PATH is the smallest thing that produces a working `codex`, with no node,
@@ -85,6 +85,7 @@ COPY --chown=1000:1000 runner/package.json    runner/package.json
 COPY --chown=1000:1000 wiki/package.json      wiki/package.json
 COPY --chown=1000:1000 minimap/package.json   minimap/package.json
 COPY --chown=1000:1000 dashboard/package.json dashboard/package.json
+COPY --chown=1000:1000 collector/package.json collector/package.json
 RUN bun install --frozen-lockfile
 
 COPY --chown=1000:1000 . .

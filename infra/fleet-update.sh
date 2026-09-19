@@ -10,12 +10,11 @@
 # the runner pod). Nothing here is involved; see docs/RUNBOOK.md, "Where the
 # config lives".
 #
-# CLUSTER-NATIVE since 2026-09-11. The fleet is the `wrathbench-fleet`
-# Deployment in namespace `wrathbench`; compose has
-# been stopped since the 2026-09-08 cutover. Every verb below drives kubectl.
-# There is no compose path any more: this script used to run
-# `docker compose ps fleet` and report a live fleet as "container not running,
-# heartbeat 260151s ago", which is a lie an operator makes deploy decisions on.
+# CLUSTER-NATIVE. The fleet is the `wrathbench-fleet` Deployment in namespace
+# `wrathbench` and every verb below drives kubectl. There is deliberately no
+# compose path: a compose-shaped probe against a cluster fleet reports a live
+# supervisor as "container not running, heartbeat 260151s ago", which is a lie
+# an operator makes deploy decisions on.
 #
 #   ./infra/fleet-update.sh graceful   # pause, wait for every run that has a
 #                                      # clock to finish on it, recreate, resume

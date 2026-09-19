@@ -35,7 +35,7 @@ x-wb-db: &wb-db
 # logged-in Codex home — a DIRECTORY holding auth.json and the persisted
 # threads, never a token. It is mounted, never copied: the CLI refreshes the
 # ChatGPT token in place and a second copy invalidates the first ("refresh
-# token was already used", seen on this host 2026-09-05).
+# token was already used").
 #
 # The host side is the operator's own `codex login` home, and it is the same
 # directory the host `--local` path uses. `docker compose -f infra/compose.yml`
@@ -241,23 +241,19 @@ services:
       # Account allowlist: every surface taking an "account" param serves only
       # these (module refuses others with 403 account_not_permitted).
       # SHAKEOUT2 is the second subscription-lane account (parallel opus+sonnet;
-      # one live session per account). It exists in auth already; this line only
-      # takes effect when the worldserver container is next recreated, and until
-      # then the module answers 403 account_not_permitted for it.
+      # one live session per account).
       # SMOKE..SMOKE4 are the fleet's preflight-gate accounts (the config store's
       # `preflight` block): the gate's smokes log in as them, one account per parallel
       # chain, so they never contend with a lane or with PROBE (the ad-hoc
-      # debugging account). Same caveat as SHAKEOUT2 — effective at the next
-      # recreate, i.e. the next deploy window (SMOKE2-4 added 2026-08-23; until
-      # that recreate the running module permits SMOKE alone) — and each must
-      # exist in auth first: `docker compose -f infra/compose.yml run --rm
-      # --no-deps -e WRATHBENCH_ACCOUNT_USER=SMOKE2
-      # -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap` (done for all four).
-      # RUNNER7 is the second PAID account (accounts.paid in the config; paid class
-      # split out 2026-08-23). The recreate it was waiting on landed 2026-09-01,
-      # so the running worldserver does carry it; bootstrapped in auth and added
-      # to accounts.paid on 2026-09-04, when policy.paid.maxConcurrent went to 2
-      # and the account — checked before the cap — was the real constraint.
+      # debugging account).
+      # RUNNER7 is the second PAID account (accounts.paid in the config).
+      #
+      # ADDING ONE IS TWO STEPS. A name here takes effect only when the
+      # worldserver container is next recreated, and until then the module
+      # answers 403 account_not_permitted for it; and the account must exist in
+      # auth first: `docker compose -f infra/compose.yml run --rm --no-deps
+      # -e WRATHBENCH_ACCOUNT_USER=SMOKE2 -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2
+      # bootstrap`.
       AC_WRATH_BENCH_ACCOUNTS: "${WRATHBENCH_ACCOUNT_USER:-RUNNER},RUNNER2,RUNNER3,RUNNER4,RUNNER5,RUNNER6,RUNNER7,SHAKEOUT,SHAKEOUT2,PROBE,SMOKE,SMOKE2,SMOKE3,SMOKE4"
       AC_WRATH_BENCH_THREADS: "2"
     volumes:
