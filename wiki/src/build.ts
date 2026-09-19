@@ -38,7 +38,7 @@ import { redirectTarget, stripWikitext } from "./strip";
  *
  * The step-back below trades the newest pre-cutoff revision for an older, clean
  * one, and an older revision is sometimes a stub or a blanking. Measured over
- * the dump (2026-08-24): of 495 protected pages with an earlier signal-free
+ * the dump: of 495 protected pages with an earlier signal-free
  * revision, 10 fall under this line — Varian Wrynn's was zero bytes — and the
  * other 485 keep 88% of the text at the median. A quarter is well clear of the
  * 0.17 the refused ones reach at p90 and well under the 0.5 the real step-backs

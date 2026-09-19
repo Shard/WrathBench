@@ -279,7 +279,7 @@ const SIGNAL_PREFILTER =
 /**
  * Does this revision body carry a post-Wrath signal?
  *
- * Measured over the dump (2026-08-24): 110,192 revisions tested across 91,108
+ * Measured over the dump: 110,192 revisions tested across 91,108
  * pages — 1.2 per page, because the search stops as soon as a signal-free
  * revision is found and this dump is newest-first — of which 26.5% passed the
  * prefilter. Total 0.96s, 2.2% of a 43s scan of 22.2 GiB.

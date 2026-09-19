@@ -104,7 +104,7 @@ export const FORBIDDEN_PHRASES: readonly (readonly [string, string])[] = [
   // Names Cataclysm took for a zone that this world's wiki already used for
   // something else, so the page is right to be here and its 2010 rewrite is
   // not. Each phrase was checked absent from the revision the bundle now
-  // indexes (the dump scan of 2026-08-24) and is a coinage of the expansion:
+  // indexes (the dump scan) and is a coinage of the expansion:
   // Deepholm's Cataclysm geography, Uldum's Cataclysm inhabitants, the goblin
   // and worgen starting stories. Bare `Therazane`, `Tol'vir`, `Trade Prince`
   // and `Greymane Wall` are deliberately absent from this list — all four are

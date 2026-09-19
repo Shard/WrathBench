@@ -89,8 +89,8 @@ discriminate. Three independent checks were run instead:
 
    | source | world (x, y) | row, col | tile | what the pixels show |
    | --- | --- | --- | --- | --- |
-   | dwarf start, runs `night-sonnet-2` / `night-opus-1` | −6240, 331 | 43.70, 31.38 | `43_31` | Dun Morogh snow; marker on a small dwarven settlement, consistent with Coldridge Valley |
-   | human start, runs `gate2-ox-1` / `roster-laguna-s-2-1-20260822` | −8870, −115 | 48.63, 32.22 | `48_32` | Elwynn green; the marker lands exactly on Northshire Abbey's red roof |
+   | dwarf start | −6240, 331 | 43.70, 31.38 | `43_31` | Dun Morogh snow; marker on a small dwarven settlement, consistent with Coldridge Valley |
+   | human start | −8870, −115 | 48.63, 32.22 | `48_32` | Elwynn green; the marker lands exactly on Northshire Abbey's red roof |
 
    The Northshire Abbey hit is pixel-accurate and is the strongest evidence:
    it fixes the row/column order, the sign of both axes, and the within-tile
@@ -152,9 +152,9 @@ What was verified, and how — the same standard the ADT orientation was held to
    between its two stations, and every group's painted span matches its own
    bounding box to within half a yard.
 3. **The mirror sign**, against our own trajectories. The two Fable freeplay
-   runs that rode the tram (`…-20260829-a2`, `…-20260830-a3`, 34 state samples
-   between them) sit at world x −45.4 and 4.5 — symmetric to a quarter yard
-   about the tunnel's centre line under `worldX = −x`, and outside the tunnel
+   runs that rode the tram (34 state samples between them) sit at world x −45.4
+   and 4.5 — symmetric to a quarter yard about the tunnel's centre line under
+   `worldX = −x`, and outside the tunnel
    entirely under the other sign. Overlaying all 34 on the finished composite
    puts every one of them on a track or a station platform.
 

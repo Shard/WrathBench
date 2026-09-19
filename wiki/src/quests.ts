@@ -11,9 +11,9 @@
  * about the ender at all: the page for quest 783 reduces to "Speak with ."
  * because even the inline NPC template is gone.
  *
- * That gap is what ~150 `EventTimeoutError`s across 17 of 18 runs were made of
- * (night-report 2026-08-23 §2a): a model turns a quest in to the NPC that gave
- * it, the ender is someone else, and the server simply never answers.
+ * That gap is what ~150 `EventTimeoutError`s across 17 of 18 runs were made of:
+ * a model turns a quest in to the NPC that gave it, the ender is someone else,
+ * and the server simply never answers.
  *
  * Two rules keep this honest:
  *

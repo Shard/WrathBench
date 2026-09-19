@@ -12,9 +12,8 @@
  * A nav-probe run read one of those paragraphs, concluded that a starter-zone
  * pass was collapsed and that the only way out of the valley was a gyrocopter
  * quest, and spent the rest of its session chasing a quest chain that does not
- * exist in 3.3.5 (night-report 2026-08-23 §4, run
- * `fleet-nav-probe-sonnet-20260822-c3`). The tunnel is there in this world; the
- * collapse is Cataclysm's.
+ * exist in 3.3.5. The tunnel is there in this world; the collapse is
+ * Cataclysm's.
  *
  * The bundle is a concise Wrath reference. Content that is not 3.3.5 is
  * removed, not labelled: a label costs the model a paragraph of reading and
@@ -115,7 +114,7 @@ const HEADING_ERA: RegExp[] = [
   // exist yet and abilities no trainer here teaches. A run read the Rogue one.
   //
   // These are ERA cuts, not out-of-world trims: the content is about the next
-  // world, not about the wiki. Measured on the dump (2026-08-24) over the era
+  // world, not about the wiki. Measured on the dump over the era
   // revision of every page in the kept namespaces — 46 pages in total, and the
   // count per rule is in `wiki/README.md`. `mastery` was the one to watch,
   // since Stance Mastery and Tactical Mastery are 3.3.5 talents: anchored at
@@ -258,9 +257,9 @@ const POST_WRATH_PARAGRAPH: { name: string; test: (prose: string) => boolean }[]
       /\b(upcoming|beta)\b/i.test(p) && /\b(cataclysm|deathwing|the shattering)\b/i.test(p),
   },
   { name: "future-tense", test: (p) => nearWord(p, /\bcataclysm\b/gi, /\bwill\b/i, 60) },
-  // The rules below came out of an adversarial read of a built bundle
-  // (2026-08-24): paragraphs that describe the later world without ever naming
-  // the expansion, which is exactly the residue the build records.
+  // The rules below came out of an adversarial read of a built bundle:
+  // paragraphs that describe the later world without ever naming the
+  // expansion, which is exactly the residue the build records.
   //
   // Rated battlegrounds are a Cataclysm system; the phrase has no other meaning.
   { name: "rated-battlegrounds", test: (p) => /\brated battlegrounds?\b/i.test(p) },

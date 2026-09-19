@@ -6,8 +6,7 @@
  * most of the work — a page with no revision before 2010-10-12 is a page about
  * a world this server does not run — and this module does the rest: the pages
  * that were written before the cutoff *about* what was coming, which the census
- * of 2026-08-24 counted at 444 one-paragraph beta stubs for Cataclysm zones and
- * NPCs.
+ * counted at 444 one-paragraph beta stubs for Cataclysm zones and NPCs.
  *
  * The signals are read on the revision the prose comes from, and one more thing
  * about the page: a page that existed before Cataclysm was announced is a Wrath
@@ -20,7 +19,7 @@
  * not in the parser or the build loop.
  *
  * Every rule is deterministic over raw wikitext and the title, with the one
- * exception the operator approved on 2026-08-24: the id oracle, which comes off
+ * exception the operator approved: the id oracle, which comes off
  * an exported file at BUILD time and reaches the agent as nothing but ordinary
  * wiki text. Nothing here reads a live server, the DBC tables or
  * anything else outside the dump and that export (CONTRACTS.md).
@@ -312,7 +311,7 @@ const TITLE_SUBPAGE =
  * below reads the categories written *on* a page and never the name of a
  * category page itself: `Category:Deepholm quests` carries no category of its
  * own, so it sailed through every signal. An adversarial read of the built
- * bundle (2026-08-24) found 33 such stubs in it.
+ * bundle found 33 such stubs in it.
  *
  * It is deliberately **not** applied to ns 0. Mount Hyjal, Tol Barad, Gilneas
  * and Uldum all have Wrath-era lore pages under those names — which is why
@@ -657,7 +656,7 @@ export function hasClassic2019Signal(
  * The signals below are read on the revision the prose comes from, but a Wrath
  * page edited in 2010 can carry them honestly: Stormwind City picked up
  * `|patch=4.0.1` and a `[[Category:Cataclysm]]` in its own pre-cutoff history,
- * and the city is standing in this world. The census of 2026-08-24 found 588
+ * and the city is standing in this world. The census found 588
  * such pages at a 2010-06-01 line — capitals, starting zones, the zones
  * Cataclysm reshaped — against 4,859 pages the beta ramp created from scratch.
  * What separates the two is not the wikitext, it is the page's age: a page that

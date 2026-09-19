@@ -8,6 +8,10 @@
  * RGBA). Idempotent: existing tiles are skipped unless `--force`.
  *
  *   bun run minimap/src/extract.ts [--map 0,1,369,530,571] [--force] [--limit N]
+ *                                  [--out <data dir>] [--client <client dir>]
+ *
+ * `--out` moves the `minimap/` output tree off `data/`; `--client` points at a
+ * client install other than `data/client`.
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";

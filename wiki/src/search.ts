@@ -81,7 +81,7 @@ export interface SearchResult {
    *
    * `end` absent means the page does not say — never that the ender is the
    * giver. Giver and ender differ often enough that guessing is the bug this
-   * field exists to fix (night-report 2026-08-23 §2a).
+   * field exists to fix.
    */
   quest?: WikiQuest;
 }

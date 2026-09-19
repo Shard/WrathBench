@@ -13,6 +13,7 @@
   "scripts": {
     "build-bundle": "bun src/build.ts",
     "search": "bun src/search.ts",
+    "verify": "bun src/verify.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit -p ."
   }
