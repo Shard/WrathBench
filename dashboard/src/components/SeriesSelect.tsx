@@ -57,7 +57,7 @@ export function SeriesSelect() {
  * What the shell's series filter left of this page's rows.
  *
  * It used to be paired with a line under the heading saying how many rows it
- * had removed. That line is gone (operator, 2026-09-18): the control doing the
+ * had removed. That line is gone: the control doing the
  * dropping is in the header, it is labelled, and it says what it does in its
  * own hover — a counter under every table was a sentence the reader had
  * already read. `filteredOut` stays because the map still reads it.

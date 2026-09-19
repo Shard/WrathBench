@@ -9,7 +9,7 @@
  * item id the server already tells us about.
  *
  * So the dashboard links the entry and lets Wowhead's public tooltip script
- * decorate the link in the reader's browser (operator, 2026-09-18). Nothing is
+ * decorate the link in the reader's browser. Nothing is
  * served by us, nothing is cached by us, and a reader who blocks
  * `wow.zamimg.com` sees the fallback this module's callers render — the item's
  * name in its quality colour — rather than a broken page. The external-request

@@ -7,7 +7,7 @@
  * (a real button, so the keyboard gets it for free), closes on Escape, on a
  * click outside, and on navigation, and is anchored under the badge by CSS.
  *
- * It also carries the one link to the fleet page (operator, 2026-08-30), which
+ * It also carries the one link to the fleet page, which
  * left the top bar the same day: the fleet is the ops view of the service this
  * badge already reports on, so it belongs here rather than among the pages a
  * reader came for. The route itself is unchanged.

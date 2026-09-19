@@ -39,8 +39,8 @@ export function scored(runs: readonly ResultRun[]): ResultRun[] {
 /**
  * The one control above the chart that narrows on a run's own recorded fields.
  *
- * Race, class and harness were three more until 2026-09-18, when the operator
- * took them off the page: every scored run is the same baseline character, so
+ * Race, class and harness were three more until the operator took them off
+ * the page: every scored run is the same baseline character, so
  * race and class asked a question an episode cannot answer differently, and
  * the harness select duplicated the shell's series selector. What is left is
  * one question — does a run count as evidence we paid for. The model line and
@@ -118,11 +118,11 @@ export const EXPANSION_MAPS = [530, 571];
  * The eight rungs of the milestone ladder (docs/VISION.md), with the derivation each one gets from the
  * data that actually exists.
  *
- * Rungs 2 and 4 became derivable on 2026-08-25, when the viewer was wired to
- * the zone/area milestone records the loop has written since 2026-08-23:
- * `run.areas` carries the first area observed, whether the run
- * ever left it, and the first capital zone it entered. Rung 4 stopped being
- * partial later the same day (issue #8): the module now taps
+ * Rungs 2 and 4 became derivable when the viewer was wired to the zone/area
+ * milestone records the loop writes: `run.areas` carries the first area
+ * observed, whether the run ever left it, and the first capital zone it
+ * entered. Rung 4 stopped being partial soon after (issue #8): the module now
+ * taps
  * `SMSG_ACTIVATETAXIREPLY` and the taxi flag on self, the loop records a `taxi`
  * milestone per flight, and `run.taxi.flights` answers the flight-master half,
  * so the rung tests both clauses of its own title.
@@ -133,7 +133,7 @@ export const EXPANSION_MAPS = [530, 571];
  * soon as *any* of the model's runs passes, so an old run cannot make a
  * derivation look false — it simply says nothing.
  *
- * Deaths and the level timeline joined the milestone records on 2026-08-29
+ * Deaths and the level timeline joined the milestone records later
  * (`run.deaths`, `run.leveling`), but neither bears on a rung: no rung asks how
  * often a character died, and the level rungs already read `maxLevel`.
  *
@@ -321,7 +321,7 @@ export function levelRangeOf(runs: readonly ResultRun[]): LevelRange | null {
  * reached rung, so it is unaffected by the holes below it.
  *
  * The row order is a stated derivation, versioned with this file
- * (amendment, 2026-08-23): **highest rung reached, then total XP, then gold.**
+ * (as amended): **highest rung reached, then total XP, then gold.**
  * Total XP is the `(level, xp)` pair compared lexicographically — xp resets at
  * every ding and level never falls, so the pair *is* the total-XP ordering, and
  * no `level * K + xp` integer is synthesised because no XP-per-level table
@@ -331,7 +331,7 @@ export function levelRangeOf(runs: readonly ResultRun[]): LevelRange | null {
  * are real readings, null is "never recorded". No number here is added to
  * another — there is still no aggregate score.
  *
- * The row also carries its own dispersion (operator, 2026-09-16): every cell
+ * The row also carries its own dispersion: every cell
  * counts how many of the row's askable runs passed the rung, and `levelRange`
  * is the min/median/max of the levels the counted runs reached. The maxima
  * stay exactly what they were — they are honest about being maxima — and the
@@ -534,7 +534,7 @@ export function pointKey(model: string, effort: string | null): string {
   return effort === null ? model : `${model} (${effort})`;
 }
 
-/** The drawn label is the key alone; the run count lives in the hover text (operator, 2026-08-30). */
+/** The drawn label is the key alone; the run count lives in the hover text. */
 export function pointLabel(key: string, _runs: number): string {
   return key;
 }
@@ -1193,9 +1193,8 @@ export function ladderChartLayout(
 /**
  * The freeplay ladder is a different question, and so a different derivation.
  *
- * Operator decision, 2026-08-29: it is **an overview of the top characters on
- * freeplay right now** — the whole active field, not a leaderboard of finished
- * evidence. So `scored()` is not applied here, and it is not that a filter was
+ * It is **an overview of the top characters on freeplay right now** — the
+ * whole active field, not a leaderboard of finished evidence. So `scored()` is not applied here, and it is not that a filter was
  * forgotten: every freeplay run is `unscored (episode freeplay)` by definition
  * (`unscoredReason` in `runner/viewer/results.ts`), which is exactly why
  * `ladderRows` showed this page an empty table. What is dropped instead is a
@@ -1405,7 +1404,7 @@ export interface CharacterSeries {
   characterId: string;
   /**
    * What the line is labelled with: the model, and its effort where the entry
-   * has one (operator, 2026-09-18). It was the character name until then, and
+   * has one. It was the character name until then, and
    * a character name answers a question nobody brought to this chart — freeplay
    * is one character per model and effort, so the name is a synonym for the
    * label at best and a riddle at worst.
@@ -1530,7 +1529,7 @@ export function stitchCharacter(attempts: readonly CharacterAttemptLike[]): Stit
  * `sonnet`, `sonnet (medium)`, `claude-fable-5 (high)` — `pointKey` over
  * `modelDisplay`, which is exactly the scatter's own entry key, so the two
  * charts on this page name the same thing the same way. The character's name
- * is not in it (operator, 2026-09-18): the question a reader brings to the
+ * is not in it: the question a reader brings to the
  * freeplay chart is which model is which line.
  */
 export function characterSeriesLabel(model: string, effort: string | null): string {
@@ -1593,8 +1592,8 @@ export function characterSeries(rows: readonly CharacterRow[], runs: readonly Re
    * characters — and three `sonnet (low)` lines all labelled `sonnet (low)`
    * name nothing. Where the label repeats, and only there, the character's
    * start date joins it — ISO, because a pure module has no business picking a
-   * locale. (This was the character-name rule before 2026-09-18; the reason it
-   * exists is unchanged, only what it disambiguates.)
+   * locale. (This was the character-name rule before the label replaced it;
+   * the reason it exists is unchanged, only what it disambiguates.)
    */
   const seen = new Map<string, number>();
   for (const s of series) seen.set(s.label, (seen.get(s.label) ?? 0) + 1);

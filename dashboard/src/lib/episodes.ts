@@ -11,7 +11,7 @@
  * it is stamped with — so neither can share a chart, and a choice the chart
  * cannot honour is not a choice.
  *
- * `probing` is not offered either (operator, 2026-08-29): a campaign varies
+ * `probing` is not offered either: a campaign varies
  * its cells on purpose, so ranking its runs against each other ranks the sweep
  * rather than the models, and there is no group for a row to be a member of.
  * The viewer refuses `/api/ladder?episode=probing` for the same reason and

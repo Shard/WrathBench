@@ -68,14 +68,13 @@ export function Layout(props: ParentProps) {
         {/*
           The wordmark is not this page's heading: every page under it has one
           of its own, and two h1s on a document is two answers to "what is
-          this". A div with the same rule, so nothing about it moved
-          (operator, 2026-09-18).
+          this". A div with the same rule, so nothing about it moved.
         */}
         <div class="wordmark">
           <A href="/">WrathBench</A>
           {/*
             Which of the two sites this is, set as a superscript on the wordmark
-            the way an exponent sits on a number (operator, 2026-09-18): the
+            the way an exponent sits on a number: the
             public preview and the operator's own admin view are otherwise
             identical, and the difference is worth one small word right where
             the name is. Its own two colours, neither an accent used elsewhere,
@@ -160,7 +159,7 @@ export function Layout(props: ParentProps) {
         * The footer rides INSIDE the scroll container on every page that
         * scrolls, so it sits at the end of the content rather than pinned to
         * the bottom of the viewport — on a phone the pinned strip cost two or
-        * three permanent lines (operator, 2026-09-18). The map is the one page
+        * three permanent lines. The map is the one page
         * that cannot take it: `main.flush` is a canvas sized to the viewport
         * and does not scroll, so there is no end of the page to put it at, and
         * the attribution is required on every published view rather than

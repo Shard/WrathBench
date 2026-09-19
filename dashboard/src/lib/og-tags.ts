@@ -32,9 +32,9 @@ export interface OgTagOptions {
    *
    * What it cannot do is change *between* ships, and that is a property of the
    * shape rather than an oversight: these tags live in a static `index.html`
-   * served as an immutable asset, so only a deploy can rewrite them. Since
-   * 2026-09-18 the bytes behind the URL are re-rendered by the publisher every
-   * pass, so a crawler that scrapes the page today gets today's ladder — but a
+   * served as an immutable asset, so only a deploy can rewrite them. The bytes
+   * behind the URL are re-rendered by the publisher every pass, so a crawler
+   * that scrapes the page today gets today's ladder — but a
    * crawler that already cached the card keeps its copy until the next ship
    * moves the URL. Changing that would mean a Worker in the read path, which
    * `dashboard/wrangler.jsonc` forecloses on purpose.

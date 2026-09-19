@@ -665,7 +665,7 @@ function AuditPanel(props: { rows: AuditRow[] }) {
               <>
                 <tr
                   onClick={() => setOpen(open() === row.id ? null : row.id)}
-                  style={{ cursor: "pointer" }}
+                  class="clickable"
                   title="show the before and after"
                 >
                   <td class="dim">{fmtWhen(row.ts)}</td>

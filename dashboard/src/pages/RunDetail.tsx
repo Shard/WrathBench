@@ -239,7 +239,7 @@ export default function RunDetail() {
       const st = d?.character;
       if (d === undefined || st === undefined) return null;
       const model = d.run.model ?? "(unnamed)";
-      // The line is named for the model, not the character (operator, 2026-09-18);
+      // The line is named for the model, not the character;
       // the name rides along for the hover.
       const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null);
       const last = st.runs[st.runs.length - 1];
@@ -812,8 +812,7 @@ export default function RunDetail() {
                         different number, and this progress is on no other
                         surface of this page. It is the frame's own bar
                         (`XpBar`), not a second one — and the money and the
-                        quest count are drawn beside it rather than spelled
-                        (operator, 2026-09-18).
+                        quest count are drawn beside it rather than spelled out.
                       */}
                       <div class="sub charline">
                         <XpBar level={run().level} xp={run().xp} />
@@ -823,7 +822,7 @@ export default function RunDetail() {
                       {/*
                         Newest recorded inventory. Icons and tooltips
                         come from Wowhead in the reader's browser; we serve no
-                        item art (operator, 2026-09-18). A run that recorded no
+                        item art. A run that recorded no
                         inventory at all still says so in words, which is what
                         `fmtItems` answers for null.
                       */}

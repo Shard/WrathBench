@@ -19,6 +19,11 @@ import { fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { LevelXp } from "../components/CharacterFacts";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
+import { InfoHint } from "../components/InfoHint";
+
+/** What a campaign is, and why nothing here reaches a chart. */
+const CAMPAIGNS_NOTE =
+  "Commissioned exploration: objective-driven runs that probe ad-hoc scenarios. Every run is an unscored probe episode (see the about page), so nothing here reaches a chart or a target.";
 
 /** Campaign progress moves when a probe ends, which is a ~90-minute event. */
 const POLL_MS = 60_000;
@@ -74,12 +79,10 @@ export default function Campaigns() {
         <div class="banner bad">{displayError(runs.error)}</div>
       </Show>
 
-      <h1>campaigns</h1>
-      <p>
-        Commissioned exploration: objective-driven runs that probe ad-hoc scenarios. Every run is an
-        unscored probe episode (see <A href="/about">about</A>), so nothing here reaches a chart or a
-        target.
-      </p>
+      <h1>
+        campaigns
+        <InfoHint label="about this page" text={CAMPAIGNS_NOTE} />
+      </h1>
 
       <Show when={body() !== undefined} fallback={<p class="dim">loading…</p>}>
         <Show when={rows().length === 0}>

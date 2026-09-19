@@ -28,7 +28,7 @@ export const HEARTBEAT_STALE_MS = 180_000;
  * against `Date.now()` in the browser measures the two machines' clock skew as
  * well as the silence, and there is a deployment where the skew is not noise:
  * the public dashboard reads a snapshot pushed up to a whole publish cadence
- * earlier — 5 minutes since 2026-08-25 (docs/PUBLIC-DASHBOARD.md) — so a
+ * earlier — 5 minutes (docs/PUBLIC-DASHBOARD.md) — so a
  * perfectly healthy fleet would drift toward the three-tick threshold and read
  * dead. Against `now` the age is what it was when the response was rendered,
  * which is the honest reading in both builds.

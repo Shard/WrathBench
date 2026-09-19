@@ -128,7 +128,7 @@ export function LadderChart(props: {
    * Whether the caption ends with the "Not plotted: …" roll-call of entries
    * that carry no reading on one of the axes. On by default, because the
    * ladder page owes a reader an account of every entry it left out. The
-   * homepage passes false (operator, 2026-09-18): it is a landing page whose
+   * homepage passes false: it is a landing page whose
    * first screen is worth more to a stranger than a list of the models this
    * chart could not place, and the full account is one click away on /ladder.
    */
@@ -360,8 +360,8 @@ export function LadderChart(props: {
 
       {/* Axes, sample basis, each axis's caveat — the things a stranger would
           otherwise assume, and assume wrongly — in the hover rather than in a
-          paragraph under the chart (operator, 2026-09-18). The caveats are the
-          specs' own, so a view that swaps an axis swaps its sentence. */}
+          paragraph under the chart. The caveats are the specs' own, so a
+          view that swaps an axis swaps its sentence. */}
       <div class="chart-note">
         <InfoHint label="about this chart" text={note()} />
       </div>

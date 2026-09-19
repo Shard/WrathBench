@@ -2,7 +2,7 @@
  * The facts a character is read by, wherever one is shown: the level and how
  * far into it, money, and quests turned in.
  *
- * One module rather than one per page (operator, 2026-09-18). The run page's
+ * One module rather than one per page. The run page's
  * character card drew these first; a ladder row, a runs row, a campaign row
  * and a character's attempt list all answer the same three questions, and
  * three pages spelling gold three ways is three chances to spell it wrong.

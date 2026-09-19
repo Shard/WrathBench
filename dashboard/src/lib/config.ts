@@ -224,12 +224,6 @@ export function jsonEditorKeys(keys: readonly string[]): string[] {
   return keys.filter((k) => k !== "roster" && !k.startsWith("roster/"));
 }
 
-/** A key's group heading on the page: the top-level name it belongs to. */
-export function keyGroup(key: string): string {
-  const slash = key.indexOf("/");
-  return slash < 0 ? key : key.slice(0, slash);
-}
-
 /**
  * The typographic characters this repository's prose is full of, and the ASCII
  * a header can carry instead.

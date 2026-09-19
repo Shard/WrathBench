@@ -68,7 +68,7 @@ export const SNAPSHOT_TTL_MS = 30_000;
  * Past this age the banner turns warning-coloured.
  *
  * Three clocks exist — the supervisor's heartbeat (30–60s), the publisher's
- * push (the publish cadence, 5 minutes since 2026-08-25) and the edge TTL
+ * push (the publish cadence, 5 minutes) and the edge TTL
  * (≤60s) — and this one is about the publisher only. Two cadences, not one:
  * a snapshot is on average half a cadence old the moment it is fetched and a
  * whole cadence old just before the next push lands, so a threshold equal to

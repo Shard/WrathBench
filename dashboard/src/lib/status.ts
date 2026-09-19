@@ -5,7 +5,7 @@
  * The badge sits in the top bar on every page because it is about the
  * service — is the supervisor alive, is a deploy holding the server, can the
  * API be reached — and not about any one page. It replaces the stats strip
- * that used to head the fleet page (2026-08-23): the four lines of counters
+ * that used to head the fleet page: the four lines of counters
  * were read once and then scanned past, while the one question they were
  * answering ("is it running?") is a colour.
  *

@@ -158,7 +158,7 @@ src/pages/    one file per route
 src/components/  the shell and the pieces shared between pages
 ```
 
-Three modules are imported from the viewer rather than copied, under the
+Five modules are imported from the viewer rather than copied, under the
 `@viewer/*` alias:
 
 - `runner/viewer/api-types.ts` — the wire shapes. The viewer imports the same
@@ -166,10 +166,16 @@ Three modules are imported from the viewer rather than copied, under the
   error rather than a runtime surprise.
 - `runner/viewer/worldmap.ts` — the world→tile transform.
 - `runner/viewer/lineage.ts` — the freeplay chain walk. The server aggregates a
-  whole character on it (`runner/viewer/character.ts`) and this side draws the
-  attempt strip on it, so one walk answers both.
+  whole character on it and this side draws the attempt strip on it, so one
+  walk answers both.
+- `runner/viewer/character.ts` — the read-time aggregation of a character over
+  that chain, so a continuation's figures are the character's and not the last
+  attempt's.
+- `runner/viewer/public-projection.ts` — the allowlist that says what of the
+  API may leave the operator's machine, so the public build and the snapshot
+  publisher agree on it.
 
-All three are import-free by construction, so nothing server-side follows them
+All five are import-free by construction, so nothing server-side follows them
 into the browser bundle.
 
 ## Tests

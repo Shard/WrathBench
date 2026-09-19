@@ -273,7 +273,7 @@ export function modelDisplay(model: string): string {
   const base = slash === -1 ? model : model.slice(slash + 1);
   if (base.length === 0) return model;
   // A free endpoint is the same fact whether the slug spells it `:free`
-  // (OpenRouter) or bakes in `-free` (operator, 2026-08-30).
+  // (OpenRouter) or bakes in `-free`.
   for (const suffix of [":free", "-free"]) {
     if (base.endsWith(suffix)) {
       const name = base.slice(0, -suffix.length);

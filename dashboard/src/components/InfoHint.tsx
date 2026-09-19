@@ -5,7 +5,7 @@
  * that actually means" behind it, and for a long time each one was printed on
  * the page. A reader who already knows reads past three sentences every visit;
  * a reader who does not is reading an essay where they wanted a number. The
- * operator's call, 2026-09-18: the page shows the heading and the axes, and
+ * operator's call: the page shows the heading and the axes, and
  * the sentences live one hover away — here, and at length in
  * `docs/PUBLIC-DASHBOARD.md`, which is where an explanation belongs.
  *

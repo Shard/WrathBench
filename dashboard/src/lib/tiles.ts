@@ -6,12 +6,12 @@
  * served the SPA and the bucket from one Worker behind one password, so the
  * same relative path resolved there too and the map page could hard-code it.
  *
- * The Open shape (2026-09-11) ends the second of those facts. The app is
+ * The Open shape ends the second of those facts. The app is
  * `wrathbench.shard.page` and the data is `wrathbench-data.shard.page`, so a
  * relative path would ask a host that has no tiles: the public build has to be
  * told where they live. That the public site shows real minimap tiles is the
- * operator's decision of 2026-08-30, reaffirmed 2026-09-11, and the Open shape
- * does not reopen it — see `docs/DATA-AND-LEGAL.md`.
+ * operator's settled decision, and the Open shape does not reopen it — see
+ * `docs/DATA-AND-LEGAL.md`.
  *
  * `VITE_WRATHBENCH_TILES_BASE` names that host, and it is deliberately a
  * *separate* flag from `VITE_WRATHBENCH_SNAPSHOT_BASE` rather than being

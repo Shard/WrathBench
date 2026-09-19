@@ -40,7 +40,7 @@ const M = { top: 16, right: 178, bottom: 40, left: 52 };
 const BOX: ChartBox = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
 
 /*
- * The model's logo at the end of its line (operator, 2026-08-29): a reader
+ * The model's logo at the end of its line: a reader
  * looking at the field wants to know which character is which model, and the
  * character label alone does not say. Exactly `LadderChart`'s mark — the shared
  * `Puck`, with the `lib/lineup` monogram it falls back to for an id no family

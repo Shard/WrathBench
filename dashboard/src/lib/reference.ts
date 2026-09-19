@@ -1,8 +1,8 @@
 /**
- * The two reference lines the ladder drew behind its level readings until
- * 2026-09-18.
+ * The two reference lines the ladder drew behind its level readings until they
+ * were withdrawn.
  *
- * **Withdrawn from the page, kept in the repository** (operator, 2026-09-18):
+ * **Withdrawn from the page, kept in the repository**:
  * the rail was complicated to read and one human speedrun entry per category
  * is not enough data to earn the space it took. Nothing here is deleted — the
  * figures, their provenance and the caveats that go with them are written
@@ -13,7 +13,7 @@
  *
  * A level on the ladder is otherwise legible only against other models' level
  * readings: nothing on the page says what a good ninety minutes in this world
- * *is*. The operator's direction (2026-09-16) was that neither line is a
+ * *is*. The operator's direction was that neither line is a
  * scripted baseline — no greedy XP grinder and no deterministic walkthrough is
  * built or run. One line is derived from runs that already exist, the other is
  * a committed constant with its sources written down beside it.
@@ -96,7 +96,7 @@ export interface BandSource {
  *
  * Both edges rest on the same board. speedrun.com does carry a Wrath-era
  * leveling board — the "Wrath of the Lich King Classic Archive" — and the
- * operator confirmed two entries on it in a browser on 2026-09-16: one 1–10
+ * operator confirmed two entries on it in a browser: one 1–10
  * category entry, an Orc Hunter in 1:31, and one 1–20 entry in 7:02:39. Those
  * are the first 3.3.5a-rate figures the band has had; the Classic Era (vanilla
  * rates, slower) and Cataclysm Classic (post-Cataclysm 1–60 revamp, faster)

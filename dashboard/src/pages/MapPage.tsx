@@ -90,8 +90,8 @@ const POLL_MS = 5000;
 const TILE_CACHE_MAX = 512;
 
 /*
- * The pip's own geometry, half again the size it was drawn at until
- * 2026-08-25: a logo legible enough to name the model at a glance is what the
+ * The pip's own geometry, half again the size it was first drawn at: a logo
+ * legible enough to name the model at a glance is what the
  * puck is for, and at a 9-unit radius it was a smudge. The fallback dot and the
  * label's clearance are scaled with it so an unrecognised model still reads as
  * the same kind of mark. Nothing here touches the sidebar, whose icons are
@@ -116,6 +116,20 @@ const PIP_HIT_R = 24;
 const DEST_R = 6;
 const DEST_MIN_PX = 14;
 const DEST_MIN_PX_LIVE = 4;
+/**
+ * The canvas colours, as the stylesheet's own tokens resolve them. Named once
+ * here because the canvas needs them as strings: `readTheme` reads the live
+ * custom properties every theme change and falls back to these, and the same
+ * values are what the map draws with before the first read.
+ */
+const DEFAULT_THEME = {
+  grid: "#1a1d22",
+  gridline: "#23272e",
+  dim: "#8a94a3",
+  fg: "#d8dee6",
+  bg: "#14161a",
+  line: "#2b3038",
+};
 /**
  * The one colour the map states rather than derives. A failed move is not a
  * run's identity, it is a fact about the move, so it does not take the run's
@@ -229,7 +243,7 @@ export default function MapPage() {
   let needsDraw = true;
   let W = 0;
   let H = 0;
-  let theme = { grid: "#1a1d22", gridline: "#23272e", dim: "#8a94a3", fg: "#d8dee6", bg: "#14161a", line: "#2b3038" };
+  let theme = { ...DEFAULT_THEME };
 
   /*
    * Tiles: an LRU of Image objects with misses remembered in the same map.
@@ -273,12 +287,12 @@ export default function MapPage() {
     const cs = getComputedStyle(document.documentElement);
     const get = (n: string, fallback: string): string => cs.getPropertyValue(n).trim() || fallback;
     theme = {
-      grid: get("--grid", "#1a1d22"),
-      gridline: get("--gridline", "#23272e"),
-      dim: get("--dim", "#8a94a3"),
-      fg: get("--fg", "#d8dee6"),
-      bg: get("--bg", "#14161a"),
-      line: get("--line", "#2b3038"),
+      grid: get("--grid", DEFAULT_THEME.grid),
+      gridline: get("--gridline", DEFAULT_THEME.gridline),
+      dim: get("--dim", DEFAULT_THEME.dim),
+      fg: get("--fg", DEFAULT_THEME.fg),
+      bg: get("--bg", DEFAULT_THEME.bg),
+      line: get("--line", DEFAULT_THEME.line),
     };
     INTENT_FAIL = get("--err", "#f7768e");
     REST_TINT = get("--xp", "#7b3fd6");
@@ -1056,7 +1070,7 @@ export default function MapPage() {
               <div class="k">quests completed</div>
               <div class="v mono">{num(p().questsCompleted)}</div>
               {/*
-                Inventory (2026-09-18): the bag opens over the sidebar rather
+                Inventory: the bag opens over the sidebar rather
                 than widening it, and the paperdoll sits under it. A replay
                 cursor reads the newest sample behind it (`lib/replay.ts`), and
                 before the first one there is nothing to show — which the null

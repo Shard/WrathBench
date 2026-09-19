@@ -6,8 +6,8 @@
  * this sits in a run card and a map sidebar, and a paperdoll inline spends
  * that whole column on something a reader looks at occasionally.
  *
- * The art is Wowhead's, fetched by the reader's browser from a link we render
- * (operator, 2026-09-18); we hold no icons. That is why a square is not the
+ * The art is Wowhead's, fetched by the reader's browser from a link we render;
+ * we hold no icons. That is why a square is not the
  * unconditional shape here. A square is a frame around an icon, so it is drawn
  * only where an icon can arrive: a row with an entry to link, and a script
  * that loaded. Everything else — a row whose name resolved and so carries no
@@ -24,7 +24,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 import { type InvItem, carried, carriedCount, paperdoll, splitLinked } from "../lib/inventory";
-import { type Placement, popoverPlacement } from "../lib/popover";
+import { type Placement, popoverPlacement, popoverStyle } from "../lib/popover";
 import {
   PAPERDOLL_BOTTOM,
   PAPERDOLL_LEFT,
@@ -291,15 +291,7 @@ function Popover(props: { icon: string; count: number; label: string; children: 
             onMouseLeave={() => {
               if (!sticky()) setActive(null);
             }}
-            // Both edges are named on every render: a computed key would leave
-            // the other one standing when the panel flips, and a stale `top`
-            // beats the `bottom` that replaced it.
-            style={{
-              left: `${place().left}px`,
-              top: place().below ? `${place().offset}px` : "auto",
-              bottom: place().below ? "auto" : `${place().offset}px`,
-              "max-height": `${place().maxHeight}px`,
-            }}
+            style={popoverStyle(place())}
           >
             {props.children}
           </div>

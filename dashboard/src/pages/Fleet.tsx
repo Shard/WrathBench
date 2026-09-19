@@ -1,7 +1,7 @@
 /**
  * Fleet overview: what the supervisor is running, right now.
  *
- * One grain per page (2026-08-23). This one is the fleet's:
+ * One grain per page. This one is the fleet's:
  * one table keyed by the job with the idle accounts under it, the
  * paused and ended runs. The per-run grain is the runs page, and a job's
  * run link is the only per-run reference here.

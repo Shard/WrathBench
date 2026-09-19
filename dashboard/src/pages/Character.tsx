@@ -9,7 +9,7 @@
  * bottom of whichever attempt you happened to open, addressed by the head run's
  * id. This is that page.
  *
- * Universal, not freeplay-only (operator, 2026-09-16): a scored run is a
+ * Universal, not freeplay-only: a scored run is a
  * character of one attempt, so this page renders for any run id. The strip
  * reads "1 attempt", the curve is one session, and nothing branches.
  *
@@ -78,7 +78,7 @@ export default function Character() {
     const last = latest();
     if (st === undefined || last === undefined) return null;
     const model = st.model ?? "(unnamed)";
-    // The line is named for the model, not the character (operator, 2026-09-18);
+    // The line is named for the model, not the character;
     // the name rides along for the hover.
     const label = characterSeriesLabel(model, st.effort);
     const { points, endX, broke } = stitchCharacter(st.runs);

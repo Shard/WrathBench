@@ -14,6 +14,11 @@ import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { SDK_FAMILIES, paramNames, selectedTool } from "../lib/tools";
 import { displayError } from "../lib/errors";
 import { modelDisplay } from "../lib/format";
+import { InfoHint } from "../components/InfoHint";
+
+/** What the loop diagram is showing, one hover off its heading. */
+const LOOP_NOTE =
+  "Each turn the model sees a fixed state summary, the newest server events, any harness notices and its own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back every turn; the episodic log is a one-line status the harness asks for before it trims older conversation, which the model can page through while reflecting at an inn.";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;
@@ -124,7 +129,7 @@ export default function Home() {
           </Show>
           <Show when={ladder.latest !== undefined} fallback={<p class="dim loading-chart">loading…</p>}>
             <div class="wide-scroll">
-              {/* No "Not plotted: …" roll-call here (operator, 2026-09-18): the
+              {/* No "Not plotted: …" roll-call here: the
                   landing page's first screen is worth more to a stranger than a
                   list of the entries this chart could not place, and /ladder
                   still gives that account in full. */}
@@ -135,17 +140,13 @@ export default function Home() {
       </section>
 
       <div class="home-col">
-      <h2 class="section">the loop</h2>
+      <h2 class="section">
+        the loop
+        <InfoHint label="about this diagram" text={LOOP_NOTE} />
+      </h2>
       <div class="wide-scroll">
         <LoopDiagram />
       </div>
-      <p class="dim home-caption">
-        Each turn the model sees a fixed state summary, the newest server events, any harness notices and its
-        own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the
-        next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back
-        every turn; the episodic log is a one-line status the harness asks for before it trims older
-        conversation, which the model can page through while reflecting at an inn.
-      </p>
 
       <h2 class="section">what the agent can see and do</h2>
       <p class="dim">
@@ -325,7 +326,7 @@ function LoopDiagram() {
         The scratchpad edge is one-directional on purpose. There is no read
         tool — the notes are read by being injected into every turn's context,
         which is the edge already drawn along the left. (`read_scratchpad` was
-        removed on 2026-08-30 for exactly that reason: it re-served text the
+        removed for exactly that reason: it re-served text the
         turn already carried.)
       */}
       {box(100, 166, 120, "scratchpad", "notes, markdown")}

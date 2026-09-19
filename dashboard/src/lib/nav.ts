@@ -1,11 +1,11 @@
 /**
  * The top bar's links, in order. The brand ("WrathBench") is the home link
  * and is not in this list: the homepage is the explainer, and a nav item
- * for it would be a second way to say the same thing. About is last (operator,
- * 2026-08-30) — the meta page closes the pages about runs.
+ * for it would be a second way to say the same thing. About is last — the
+ * meta page closes the pages about runs.
  *
- * Fleet was second-last and is no longer a nav item at all (operator,
- * 2026-08-30, both builds): it is the ops view, and it belongs beside the
+ * Fleet was second-last and is no longer a nav item at all, in either build:
+ * it is the ops view, and it belongs beside the
  * service badge rather than beside the pages a reader came for. The `/fleet`
  * route stays, reached from the status popout in `components/StatusBadge.tsx`.
  */
@@ -58,7 +58,7 @@ export function surface(snapshot: boolean, publicMode: boolean | undefined): Sur
  * 404s the config routes). It comes through `surface` rather than being
  * recomputed, so the bar and the header badge cannot disagree.
  *
- * Config sits before `about`, which stays last (operator, 2026-08-30): the
+ * Config sits before `about`, which stays last: the
  * meta page closes the pages about runs, and config is a page about the fleet.
  */
 export function navItems(operator: boolean): readonly NavItem[] {

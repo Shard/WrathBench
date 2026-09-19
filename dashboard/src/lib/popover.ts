@@ -1,7 +1,7 @@
 /**
  * Where a floating popover sits, against the viewport rather than its card.
  *
- * Lifted out of `lib/inventory.ts` on 2026-09-18 when the ladder's filter
+ * Lifted out of `lib/inventory.ts` when the ladder's filter
  * button wanted the same arithmetic: the maths is about a button, a viewport
  * and a panel, and nothing in it was ever about items. One mechanism, so a
  * second popover on the site cannot drift into its own placement rules.
@@ -22,6 +22,24 @@ export interface Placement {
   offset: number;
   left: number;
   maxHeight: number;
+}
+
+/**
+ * A placement as the style object a fixed panel is drawn with.
+ *
+ * Both edges are named on every render: a computed key would leave the other
+ * one standing when the panel flips, and a stale `top` beats the `bottom` that
+ * replaced it. One helper, so a second popover cannot name only one of them.
+ */
+export function popoverStyle(p: Placement, width?: number): Record<string, string> {
+  const style: Record<string, string> = {
+    left: `${p.left}px`,
+    top: p.below ? `${p.offset}px` : "auto",
+    bottom: p.below ? "auto" : `${p.offset}px`,
+    "max-height": `${p.maxHeight}px`,
+  };
+  if (width !== undefined) style["width"] = `${width}px`;
+  return style;
 }
 
 /**

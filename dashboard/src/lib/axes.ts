@@ -275,7 +275,7 @@ const view = (id: string, x: AxisSpec, y: AxisSpec): LadderView => ({ id, title:
  * early end), and less of it is not better — the one x here that would break
  * the front's reading. It stays in the bag for the hover.
  *
- * Nor level on y (operator, 2026-09-01): a cost × level view was offered and
+ * Nor level on y: a cost × level view was offered and
  * withdrawn as redundant against cost × xp — level is xp with the steps
  * quantised, so the two charts ranked the same points in the same order with
  * less resolution on one. `LEVEL` stays a spec because the hover's "also"

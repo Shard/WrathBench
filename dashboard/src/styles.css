@@ -110,7 +110,7 @@ header.top nav a.on { color: var(--fg); font-weight: 700; }
 header.top .spacer { flex: 1; }
 
 /*
- * The phone header (operator, 2026-09-18). Desktop puts everything on one
+ * The phone header. Desktop puts everything on one
  * line; at 360px the same contents took three, and the operator's build takes
  * a seventh nav item the public one does not, so the bar has to be able to
  * break where it is told rather than where it runs out.
@@ -144,7 +144,7 @@ header.top .spacer { flex: 1; }
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
   }
   /*
-   * "data as of … · 4m ago" (operator, 2026-09-18): a fact about the publisher
+   * "data as of … · 4m ago": a fact about the publisher
    * that a reader on a phone is not acting on, and the one element that made
    * the top line wrap on its own. Hidden here rather than withheld in the
    * shell, so the public build renders exactly what it rendered before and the
@@ -194,7 +194,7 @@ header.top .spacer { flex: 1; }
 .status-popout dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
 .status-popout dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: var(--fs-xs); }
 .status-popout dd { margin: 0; overflow-wrap: anywhere; }
-/* The one action in the popout: the ops page the badge is about (operator, 2026-08-30). */
+/* The one action in the popout: the ops page the badge is about. */
 .status-popout-link { display: block; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
 
 /* Public build only: how long ago the lab last pushed a snapshot. */
@@ -210,7 +210,7 @@ main.flush { overflow: hidden; }
  * Public build only: the attribution every published artifact carries.
  *
  * In the flow at the end of the page, not pinned to the bottom of the
- * viewport (operator, 2026-09-18): pinned, it cost a phone a permanent strip
+ * viewport: pinned, it cost a phone a permanent strip
  * of two or three lines for a sentence nobody reads twice. It is rendered
  * INSIDE the scroll container (`components/Layout.tsx`), so "the end of the
  * page" is the end of the content and the shell's layout is otherwise
@@ -253,7 +253,7 @@ pre.cite { font-size: var(--fs-sm); color: var(--dim); overflow-x: auto; margin:
 .right { text-align: right; }
 
 /* One h1 per page, and it is the page's own title — the header wordmark is a
-   `div.wordmark` for that reason (operator, 2026-09-18). This rule is what
+   `div.wordmark` for that reason. This rule is what
    `.home-title` used to be; the home page's centring comes from its intro
    block, so there is no per-page title rule left. */
 h1 { font-size: var(--fs-xl); margin: 4px 0 8px; font-weight: 700; }
@@ -397,7 +397,7 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 
 /* The whole-feed expand preset, in the feed's own heading. */
 .section .filter.expand-preset { margin-left: 12px; font-size: var(--fs-sm); font-weight: normal; vertical-align: middle; }
-/* The hover that replaced the caption paragraphs (operator, 2026-09-18). Sized
+/* The hover that replaced the caption paragraphs. Sized
    off the heading it sits beside rather than off the body, so it never grows
    with an h2. */
 .info-hint {
@@ -621,7 +621,6 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
    leader together — and comes forward again under the pointer. */
 .ladderchart-pt.dominated { opacity: 0.35; }
 .ladderchart-pt.dominated:hover, .ladderchart-pt.dominated.hovered { opacity: 1; }
-.ladderchart-caption { font-size: var(--fs-sm); margin: 0 0 12px; }
 
 /* The freeplay field's graph reuses the scatter's frame and caption; only the
    hover affordance differs, because the mark is a line and not a puck. */
@@ -863,7 +862,6 @@ button.update:hover { background: var(--panel); }
 .home-intro { text-align: center; }
 .home-intro p { margin: 0 auto 8px; line-height: 1.6; max-width: 720px; }
 .home-live { font-size: var(--fs-md); }
-.home-caption { margin: 6px 0 0; line-height: 1.5; }
 /* Can and can't, side by side where there is room and stacked where there is not. */
 .home-surface { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 32px; }
 .home-surface-head { margin: 0 0 4px; font-size: var(--fs-md); font-weight: 600; }
@@ -998,7 +996,7 @@ button.update:hover { background: var(--panel); }
 .surface.preview { color: var(--preview); }
 
 /*
- * Inventory (item icons, 2026-09-18). A cell is a fixed square that holds
+ * Inventory (item icons). A cell is a fixed square that holds
  * either Wowhead's icon or our own fallback text, so the grid does not reflow
  * when the script lands — or when it never does. `.decorated` is written by the
  * panel's MutationObserver: before it, the name shows; after it, the icon does.
@@ -1066,7 +1064,7 @@ button.update:hover { background: var(--panel); }
 
 /* The bag button, and the popover it opens. Hover on a desktop, tap anywhere. */
 /* The anchor a popover hangs off, and the button that opens one. Shared by the
-   bag, the paperdoll and the ladder's filters (operator, 2026-09-18: one class,
+   bag, the paperdoll and the ladder's filters (one class,
    not one per caller) — `lib/popover.ts` is the arithmetic half of the same
    consolidation. */
 .popover-anchor { position: relative; display: inline-flex; }
@@ -1109,7 +1107,7 @@ button.update:hover { background: var(--panel); }
 }
 
 /*
- * The character card's fact line (operator, 2026-09-18): the xp bar the frame
+ * The character card's fact line: the xp bar the frame
  * already draws, money as coins, quests behind a marker. The coins and the
  * marker are drawn here — three circles and a question mark — because the
  * repository serves no game art and a coin is not worth the exception.

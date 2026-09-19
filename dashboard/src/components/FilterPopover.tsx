@@ -7,8 +7,8 @@
  * selector the shell already carries for every page. What is left is two
  * multi-select dimensions behind one button that says how many are on.
  *
- * Native `<select multiple>` rather than checkbox lists (operator,
- * 2026-09-18): there are thirty-odd model lines on the ladder, and thirty
+ * Native `<select multiple>` rather than checkbox lists: there are
+ * thirty-odd model lines on the ladder, and thirty
  * checkboxes is a wall where six visible rows and a scrollbar is a control.
  * Ctrl/cmd-click is the browser's own multi-select and needs nothing from us;
  * a `clear` link per box is the one affordance it lacks.
@@ -22,7 +22,7 @@
 
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
-import { type Placement, popoverPlacement } from "../lib/popover";
+import { type Placement, popoverPlacement, popoverStyle } from "../lib/popover";
 import type { FilterOption } from "../lib/ladderfilter";
 
 /** The panel's own width, told to both the CSS and the placement maths. */
@@ -115,13 +115,7 @@ export function FilterPopover(props: { groups: readonly FilterGroup[] }) {
           <div
             class="popover filter-popover floating"
             ref={panel}
-            style={{
-              left: `${place().left}px`,
-              top: place().below ? `${place().offset}px` : "auto",
-              bottom: place().below ? "auto" : `${place().offset}px`,
-              "max-height": `${place().maxHeight}px`,
-              width: `${PANEL_W}px`,
-            }}
+            style={popoverStyle(place(), PANEL_W)}
           >
             <For each={props.groups}>
               {(group) => (

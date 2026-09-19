@@ -56,7 +56,7 @@ export default function Models() {
 
   /*
    * What the roster's rules are, as one hover rather than the paragraph this
-   * page printed under its heading until 2026-09-18 (operator). It tolerates
+   * page printed under its heading. It tolerates
    * an API older than this bundle for the reason it always did: a viewer and a
    * dist/ are two artefacts and can restart out of order, and
    * missing detail is worth a shorter sentence, never a blank.
@@ -71,6 +71,8 @@ export default function Models() {
             .map(([t, spec]) => `${t} ${spec.label} — ${spec.runsPerEpisode.e90}x e90${spec.runsPerEpisode.e360 > 0 ? ` + ${spec.runsPerEpisode.e360}x e360` : ""}`)
             .join("; ")}.`;
     const lines = [
+      "The roster of models available and what the scheduler currently makes of it.",
+      "A model is eligible for e90 from the moment it is listed, and a t1 model earns e360 by reaching level 5 in an un-overridden e90 run. Counts are counted runs — launches that produced at least one model response; a launch that produced none is archived as it ends, and consecutive ones are what the defer ladder backs off from.",
       `${tiers} A tier that buys no e360 is not eligible for one, and t0 never promotes itself out — an operator moves it, and the promotion it earned still counts when they do.`,
       "Rows are ordered by tier, highest first; an episode cell links to that model's runs on the runs page, and the row itself opens its runs below.",
       `Cooling is the defer ladder — the scheduler backs off over ${b.ladderMs.length} steps, ending at ${fmtDuration(b.ladderMs[b.ladderMs.length - 1] ?? null)}; one more no-progress attempt at the ceiling retires the model until an operator clears it.`,
@@ -105,17 +107,6 @@ export default function Models() {
           <InfoHint label="about this table" text={policyNote()} />
         </Show>
       </h1>
-      <p>
-        The roster of models available and what the scheduler currently makes of it.
-      </p>
-      <p>
-        A model is eligible for{" "}
-        <A href="/about">e90</A> from the moment it is listed, and a <code>t1</code> model earns{" "}
-        <code>e360</code> by reaching level 5 in an un-overridden e90 run. Counts are <em>counted</em> runs —
-        launches that produced at least one model response; a launch that produced none is archived
-        as it ends, and consecutive ones are what the defer ladder backs off from.
-      </p>
-
       <Show when={body() !== undefined} fallback={<p class="dim">loading…</p>}>
         {/*
           Operator-facing: a public reader cannot point a viewer at a config,
@@ -165,7 +156,7 @@ export default function Models() {
                     <tr
                       id={row.name}
                       onClick={() => toggle(row.name)}
-                      style={{ cursor: "pointer" }}
+                      class="clickable"
                       title="show this model's runs"
                     >
                       <td>

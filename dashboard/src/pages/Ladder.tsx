@@ -5,12 +5,12 @@
  * because a rung reached in six hours is not the same claim as the same rung
  * reached in ninety minutes. There is no "all" and no overridden view: neither
  * is a comparability group, so neither can be a ladder, and there is no
- * `probing` either (operator, 2026-08-29 — a sweep varies its cells on
+ * `probing` either (a sweep varies its cells on
  * purpose, so ranking its runs ranks the sweep). The runs page lists every run
  * regardless.
  *
  * `freeplay` is the one id that shows something else entirely: not rungs but
- * **the top characters on freeplay right now** (operator, 2026-08-29) — the
+ * **the top characters on freeplay right now** — the
  * whole active field, one row per durable character, paused and in-progress
  * included. `characterRows` in `lib/ladder.ts` is that derivation; the scored
  * ladders below are untouched by it.
@@ -96,7 +96,7 @@ const POLL_MS = 30_000;
  * a slice of the field but a standing opinion about what counts as evidence,
  * and a reader who holds one holds it on every tier.
  *
- * Race, class and harness are gone (operator, 2026-09-18). Every scored run is
+ * Race, class and harness are gone. Every scored run is
  * the same baseline character, so race and class asked a question an episode
  * cannot answer differently; the harness select duplicated the series
  * selector the shell already carries for every page. An old link or a
@@ -121,8 +121,8 @@ export default function Ladder() {
   const served = (): ResultRun[] => body()?.runs ?? [];
   /*
    * Freeplay is a different page under the same address: an overview of the
-   * top characters on freeplay right now, one row per durable character
-   * (operator, 2026-08-29). It reads no rungs, so it shows neither the scatter
+   * top characters on freeplay right now, one row per durable character. It
+   * reads no rungs, so it shows neither the scatter
    * nor the rung table. The shell's series filter still does not apply, and
    * that is not a convenience: a character is durable *across* series, so cutting
    * its older attempts would make the newest survivor the chain root and
@@ -130,8 +130,8 @@ export default function Ladder() {
    * this page exists to show. `useSeriesFilter` has the `active` hatch for
    * exactly this — the map's replay mode uses it for the same reason.
    *
-   * "exclude free" *does* apply, and did not at first (operator, 2026-08-29,
-   * reversing the same day's exemption): it is the same control, the same
+   * "exclude free" *does* apply, and did not at first (an early exemption,
+   * since reversed): it is the same control, the same
    * default, and the same predicate the episode ladders use, over both the
    * table and the chart. Only the series exemption survives.
    */
@@ -221,7 +221,7 @@ export default function Ladder() {
   );
   /*
    * What the reader is pointing at, shared by the scatter and the table so
-   * hovering either end lights both (operator, 2026-09-18). One signal at the
+   * hovering either end lights both. One signal at the
    * page rather than two derivations that could disagree; the key is
    * `hoverKeyOf`, because the chart draws per (model, effort) and the table
    * per model, and the model is what the two have in common. Keyboard focus on
@@ -311,7 +311,7 @@ export default function Ladder() {
         </label>
         {/* Not a caption: a filter that silently kept everything would be worse
             than one that says so, and this is the one state where "exclude
-            free" excludes nothing (operator, 2026-09-18 — a hover, not a
+            free" excludes nothing (a hover, not a
             paragraph). */}
         <Show when={billingUnknown()}>
           <InfoHint
@@ -594,7 +594,7 @@ function Furthest(props: { row: LadderRow }) {
   const r = (): LadderRow => props.row;
   /*
    * The spread the row's runs already paid for, as the cell's hover rather
-   * than a second line of text under the badge (operator, 2026-09-18). The
+   * than a second line of text under the badge. The
    * cell draws the level and the bar and nothing else; "L6 · 2–6" beside them
    * was a third number in a column that has two.
    */
@@ -614,7 +614,7 @@ function Furthest(props: { row: LadderRow }) {
  * One rung, for one model: how many of its runs got there out of how many
  * could be asked, linking the first that did.
  *
- * `2/3` and not a tick (operator 2026-09-16): a tick made a model
+ * `2/3` and not a tick: a tick made a model
  * that cleared the rung once in three tries render identically to one that
  * cleared it three times out of three. The denominator is the runs whose
  * records can answer *this* rung, not the row's runs — a run that predates the

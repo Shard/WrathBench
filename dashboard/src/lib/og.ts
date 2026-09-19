@@ -12,7 +12,7 @@
  * - **No DOM and no Solid.** Solid's DOM build has no `renderToString`, so
  *   this is a plain string builder — which also makes it testable with the
  *   ladder fixtures, like every other pure module in `lib/`.
- * - **Text is rationed, not banned** (operator, 2026-09-18). Discord renders a
+ * - **Text is rationed, not banned**. Discord renders a
  *   `summary_large_image` card about 400 px wide inline, so anything set at
  *   the live chart's 10-unit label size is a smear. Nothing here is set below
  *   21 units — ~7 px at that inline width — and only three things are set at
@@ -67,7 +67,7 @@ const FG = "#d8dee6";
  * The card's one margin. Left, right and bottom are the same number so the
  * picture sits square in the frame — the old 80-unit left margin was there to
  * keep a `$0` gutter puck off the axis line, and it read as a hole in the
- * left of the card (operator, 2026-09-18). The clearance it was buying is
+ * left of the card. The clearance it was buying is
  * geometry, not padding: the gutter's centre is `FREE_GUTTER_W / 3` inside
  * `x0` and a puck's outer edge is `OG_MARK_R + 3`, so at this margin the
  * leftmost possible mark still clears the edge of the card by more than a
@@ -137,7 +137,7 @@ export interface OgOptions {
   logoHref?: (model: string) => string | null;
   /** The wordmark, on by default. */
   wordmark?: boolean;
-  /** The "↖ better" reading cue in the plot's top-left, on by default (operator, 2026-09-01: try it, drop it if it does not read). */
+  /** The "↖ better" reading cue in the plot's top-left, on by default (try it, drop it if it does not read). */
   cue?: boolean;
   /** The top-right block naming the two axes and the tier, on by default. */
   identity?: boolean;
@@ -294,7 +294,7 @@ export function ogSvgOf(runs: readonly ResultRun[], opts: OgOptions = {}): strin
      * What the picture is, in the words the site already uses: the two axis
      * captions out of `lib/axes.ts` verbatim, so the card cannot drift from
      * the chart it is a picture of, and the tier's own length underneath
-     * (operator, 2026-09-18 — a reader who has never seen the site needs the
+     * (a reader who has never seen the site needs the
      * axes named before the frontier means anything).
      */
     const lines: [string, number, string][] = [

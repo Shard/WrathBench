@@ -1,7 +1,7 @@
 /**
  * About: the meta page — the episode tiers a run can be launched under, the
- * two harness groups, and how to read a score. Renamed from Episodes on
- * 2026-08-30 (`/episodes` redirects here); the homepage is the explainer for
+ * two harness groups, and how to read a score. Renamed from Episodes
+ * (`/episodes` redirects here); the homepage is the explainer for
  * a newcomer, this is the page for someone who wants to know what a row means.
  *
  * One page per grain. The middle of this page is the *episodes* — the
@@ -53,8 +53,8 @@ export default function About() {
   const tiers = poll(() => api.episodes(), POLL_MS);
   const table = (): EpisodesResponse["episodes"] => tiers.latest?.episodes ?? [];
   /*
-   * The four lanes as a tab strip rather than four stacked blocks (operator,
-   * 2026-09-18): each lane is a paragraph and a counts line, and one after
+   * The four lanes as a tab strip rather than four stacked blocks: each lane
+   * is a paragraph and a counts line, and one after
    * another they were most of the page's height for something a reader asks
    * one lane at a time.
    *

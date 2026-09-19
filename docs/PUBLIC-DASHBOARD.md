@@ -378,6 +378,10 @@ hover away, on a small "i" beside the heading (`components/InfoHint.tsx`), and
 at length in this document. The same goes for a line counting what the header's
 series selector filtered out — the selector is labelled and explains itself.
 
+The rule is scoped to the derived views. Home and the about page carry the
+site's intro copy: a reader arriving cold needs to be told what this is before
+any number means anything.
+
 ### The human reference
 
 `dashboard/src/lib/reference.ts` holds two references the ladder does not draw:
@@ -629,9 +633,9 @@ the reader's browser by Wowhead's public tooltip script. So a visitor to those
 two pages fetches `https://wow.zamimg.com/js/tooltips.js` and, per item, icon
 art from `wow.zamimg.com` and tooltip JSON from `nether.wowhead.com`. Those are
 the only third-party origins the application asks for, alongside the
-Cloudflare Web Analytics script (`static.cloudflareinsights.com`) the zone
-injects into every page — a zone setting, cookieless, and not something the
-build adds. The tooltip script is injected at runtime by
+Cloudflare Web Analytics script (`static.cloudflareinsights.com`) — cookieless,
+and appended at startup by `dashboard/src/main.tsx` on the public build only,
+so the same bundle served by the private viewer reports nothing. The tooltip script is injected at runtime by
 `dashboard/src/lib/wowhead.ts` rather than sitting in `index.html`, so a page
 with no items asks for nothing. The reason for the
 arrangement is the red line in `docs/DATA-AND-LEGAL.md`: we extract and serve
