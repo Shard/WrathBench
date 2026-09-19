@@ -70,6 +70,19 @@ export function ogSvgWithLogos(runs: readonly ResultRun[], hrefs: Map<string, st
  * it". Certain in a way a lookup in resvg's font list would not be — the stack
  * ends in a generic family and only the renderer knows what it maps that to.
  */
+/**
+ * Where resvg looks for faces. `loadSystemFonts` alone finds nothing inside the
+ * publisher's container — resvg's system scan leans on fontconfig, which the
+ * image does not carry — while naming the directory finds DejaVu at once
+ * (verified in the pod: the probe rendered 142 bytes of nothing without the
+ * directory and a glyph with it). On a workstation with fontconfig the extra
+ * directory is harmless. `WRATHBENCH_FONT_DIRS` (colon-separated) overrides.
+ */
+export const FONT_OPTIONS = {
+  loadSystemFonts: true,
+  fontDirs: (Bun.env.WRATHBENCH_FONT_DIRS ?? "/usr/share/fonts").split(":").filter((d) => d !== ""),
+};
+
 export function fontsDraw(): boolean {
   const probe =
     `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">` +
@@ -77,7 +90,7 @@ export function fontsDraw(): boolean {
     `</svg>`;
   // Nothing in the probe but the glyph, so the rendered bounding box exists
   // only if a face resolved. `getBBox` answers undefined for an empty tree.
-  return new Resvg(probe).getBBox() !== undefined;
+  return new Resvg(probe, { font: FONT_OPTIONS }).getBBox() !== undefined;
 }
 
 /** The message a caller prints when `fontsDraw` says no. It names the fix, because the failure is invisible otherwise. */
@@ -104,7 +117,7 @@ export function renderOgPng(runs: readonly ResultRun[], opts: { width?: number; 
   if (!fontsDraw()) throw new Error(NO_FONTS);
   const width = Math.round(opts.width ?? OG_W);
   const svg = ogSvgWithLogos(runs, opts.hrefs ?? logoHrefs());
-  const png = new Resvg(svg, { fitTo: { mode: "width", value: width } }).render().asPng();
+  const png = new Resvg(svg, { fitTo: { mode: "width", value: width }, font: FONT_OPTIONS }).render().asPng();
   return { png, stamp: new Bun.CryptoHasher("sha256").update(png).digest("hex").slice(0, 8), runs: runs.length };
 }
 
