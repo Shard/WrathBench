@@ -10,15 +10,6 @@ Transport: plain HTTP/1.1 and RFC6455 WebSocket on `WrathBench.BindAddress:Port`
 (default `0.0.0.0:8086`), reachable only from inside the deployment's private network.
 All request and response bodies are JSON (`Content-Type: application/json`).
 
-**u64 values are decimal strings.** Every guid the module emits — in responses
-and in events (`guid`, `senderGuid`, `targetGuid`, `guids[]`) — is serialized as
-a decimal string, e.g. `"17365880163140632581"`. 3.3.5a guids carry a high part
-(creatures start at 0xF130...) that exceeds `Number.MAX_SAFE_INTEGER`, so a bare
-JSON number would be corrupted by any IEEE-double consumer before it could
-react. Consumers should compare guids as strings or parse them as BigInt.
-(Counters that cannot exceed 2^53 — `seq`, `ts`, drop counts, `moveId` — remain
-JSON numbers.)
-
 Two error channels, deliberately separated (docs/CONTRACTS.md):
 
 - **Transport / request errors** — malformed request, unknown token, wrong state —
@@ -27,6 +18,17 @@ Two error channels, deliberately separated (docs/CONTRACTS.md):
   are never HTTP errors. They arrive as events on the WebSocket (e.g. a
   `SMSG_CHARACTER_LOGIN_FAILED` or `SMSG_NOTIFICATION` event), because that is how
   a real client would learn of them.
+
+## u64 values are decimal strings
+
+Every guid the module emits — in responses and in events (`guid`, `senderGuid`,
+`targetGuid`, `guids[]`) — is serialized as a decimal string, e.g.
+`"17365880163140632581"`. 3.3.5a guids carry a high part
+(creatures start at 0xF130...) that exceeds `Number.MAX_SAFE_INTEGER`, so a bare
+JSON number would be corrupted by any IEEE-double consumer before it could
+react. Consumers should compare guids as strings or parse them as BigInt.
+(Counters that cannot exceed 2^53 — `seq`, `ts`, drop counts, `moveId` — remain
+JSON numbers.)
 
 ## Authentication
 
@@ -72,6 +74,13 @@ The lease is what binds a token to an account and a character:
   and lost every `SMSG_UPDATE_OBJECT` of the login.)
 - `DELETE /lease { token }` (operator) revokes the credential; it does not touch
   a live session under the token.
+
+A method and target the module does not serve is `404 not_found`, after
+authentication and after the operator-only check — which is also how a caller
+tells a module build that predates a route from one that refuses it: the runner
+reads `404 not_found` on `POST /lease` as "this module has no leasing" and runs
+without a session secret, where `403 operator_only` would mean the route is
+there and the credential is wrong.
 
 The module never logs a secret; `POST /lease` is the only response that carries
 one. Secrets are compared in constant time. With `WrathBench.Secret` unset or
@@ -1178,7 +1187,7 @@ The server declines a bind silently (not an innkeeper, out of range, dead,
 inside an instance): no packet follows the confirm, and the SDK reports that
 as the absence of an answer, never as a status.
 
-Death:
+#### Death
 
 | opcode | id | `data` fields |
 |---|---|---|

@@ -2878,8 +2878,8 @@ namespace WrathBench
             // this loop without ever advancing `seg` — so the geometric-end
             // check below never fired, no MSG_MOVE_STOP was sent, and the
             // move heartbeated in place forever with no WB_MOVE_RESULT
-            // (module-navigation step 5 on the harness-0.4 smoke shape,
-            // 2026-08-23: walk home, off-mesh, too_far, then "walk home" again).
+            // (module-navigation step 5 of the smoke shape: walk home,
+            // off-mesh, too_far, then "walk home" again).
             if (segLen <= 0.0001f)
             {
                 ++m.seg;
@@ -3318,7 +3318,7 @@ namespace WrathBench
                     {
                         uint64_t matchGuid = FindCharInEnum(packet, s->charName);
                         if (matchGuid == 0)
-                            FailAck(*s, "character_not_found");
+                            FailAck(*s, "character_not_found", 400);
                         else
                         {
                             s->targetGuidRaw = matchGuid;
