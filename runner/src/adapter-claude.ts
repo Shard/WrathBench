@@ -106,6 +106,7 @@ import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } fro
 import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import { toolsFor, type ToolContext } from "./tools";
+import { signalGroup } from "./adapter-shared";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -392,27 +393,6 @@ export const NO_THINKING = "none";
 /** Env the CLI needs for an effort level, where a level is not a flag. */
 export function thinkingEnv(effort: string | undefined): Record<string, string> {
   return effort === NO_THINKING ? { [THINKING_ENV]: "0" } : {};
-}
-
-/**
- * Signal the CLI's whole process group, falling back to the process itself.
- *
- * The group is the point: the CLI spawns the MCP bridge, and killing only the
- * CLI leaves that grandchild reparented to init. `process.kill(-pid)` needs the
- * child to lead its own group, which is what `detached` buys.
- */
-function signalGroup(proc: { pid: number; kill: (sig: NodeJS.Signals) => void }, sig: NodeJS.Signals): void {
-  try {
-    process.kill(-proc.pid, sig);
-    return;
-  } catch {
-    // no such group (already reaped, or not detached): fall through
-  }
-  try {
-    proc.kill(sig);
-  } catch {
-    // already gone
-  }
 }
 
 /**

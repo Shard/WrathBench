@@ -64,7 +64,7 @@ import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
-import { parseRouting, routingLabel, type RoutingSpec } from "./routing";
+import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 
 // ----------------------------------------------------------------- policy
@@ -295,13 +295,6 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
     out.routing = parseRouting(o.routing, "policy.routing");
   }
   return out;
-}
-
-/** `policy.routing` as `--status` prints it; the built-in default said plainly. */
-export function policyRoutingLabel(policy: Pick<SchedulingPolicy, "routing">): string {
-  return policy.routing === undefined
-    ? "the model author's own provider, fallbacks off (default)"
-    : routingLabel(policy.routing);
 }
 
 /** A tier name; `where` names the entry in the error. */
@@ -1620,20 +1613,6 @@ export function accountClassOf(s: Pick<ModelState, "billing" | "platform">): Acc
  */
 export function rosterClass(r: RosterModel): AccountClass {
   return accountClassOf({ billing: rosterBilling(r), platform: platformOf(r.apiBase, r.driver) });
-}
-
-/**
- * What a model does with an idle account: the entry's own `idle` axis, read
- * straight off the state.
- *
- * It used to be inferred — the local class asked `policy.extras.local`, every
- * other class was assumed to want characters — so the same model meant
- * different things depending on which account it landed on, and a non-local
- * model could not take unlimited sessions at all. One axis, stated per model,
- * replaces both spellings.
- */
-export function idleModeOf(s: Pick<ModelState, "idle">): IdleMode {
-  return s.idle;
 }
 
 export interface NextJobsOptions {

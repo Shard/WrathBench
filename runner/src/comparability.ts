@@ -90,7 +90,6 @@ export const wikiBundleSchema = z
     eraCutoff: z.string().nullable(),
   })
   .nullable();
-export type WikiBundle = z.infer<typeof wikiBundleSchema>;
 
 export const comparabilitySchema = z.object({
   /** `git describe` of the harness, as `version.ts` resolved it. */

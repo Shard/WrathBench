@@ -10,7 +10,8 @@ character. The context policy is fixed in `src/context.ts` and explained in
 
 The operator entry point is `infra/run-episode.sh`, which loads `.env`,
 computes the harness version on the host (the container has no git) and execs
-the runner inside the compose `runner` service:
+the runner inside the `runner` service of whichever deployment it is pointed
+at — the Kubernetes cluster or the local compose stack:
 
 ```bash
 ./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex|stub] [flags...]
@@ -25,7 +26,7 @@ Underneath it is just the runner:
 bun runner/src/run.ts --driver openai --model <id> --api-base <url> [--api-key-env OPENROUTER_KEY]
 
 # the same loop driven by a scripted stub — harness testing without a model
-bun runner/src/run.ts --driver stub --stub runner/fixtures/stub-live-check.json
+bun runner/src/run.ts --driver stub --stub runner/test/fixtures/stub-live-check.json
 
 # bound a run: --max-turns caps driver turns, --max-tool-calls caps tool calls
 # for the whole episode (default 500; the meaningful bound for an external
@@ -38,7 +39,7 @@ bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high
 # resume a killed or paused run (same token, same scratchpad, same trajectory)
 bun runner/src/run.ts --resume <run-id>
 
-# MCP over stdio for an external MCP-capable agent (liftoff gate 2)
+# MCP over stdio for an external MCP-capable agent
 bun runner/src/mcp.ts [--run-id <id>] [--token <token>]
 
 # read a run in minutes
@@ -52,6 +53,20 @@ Runs live under `data/runs/<run-id>/`: `trajectory.jsonl` (every model
 request/response, snippet + result, event batch served, periodic state line),
 `run.sqlite` (metadata + state rows for cross-run queries), `meta.json` (config
 for resume), `scratchpad.md`.
+
+The flags below are the rest of what `run.ts` reads off argv; each one
+overrides the default in `src/config.ts` for that run and is recorded in
+`meta.json`, so a `--resume` keeps it.
+
+| flag | default | what it sets |
+| --- | --- | --- |
+| `--module-url <url>` | `http://worldserver:8086` (or `$WRATHBENCH_MODULE_URL`) | where the SDK reaches the module |
+| `--runs-dir <path>` | `data/runs` | where this run's directory is written, and where `--resume` looks for one |
+| `--wiki-bundle <path>` | `data/wiki/bundle.sqlite` | the reference bundle `searchmemo` reads |
+| `--step-interval-ms <n>` | `3000` | fixed pacing between model steps — an API courtesy, not a tuning knob |
+| `--state-interval-ms <n>` | `60000` | how often a periodic state line is recorded |
+| `--snippet-timeout-ms <n>` | `30000` | per-snippet evaluation timeout; the eval is abandoned, the runtime survives |
+| `--idle-ms <n>` | `600000` | the `idle` watchdog: no model output for this long ends the episode. `0` disables it |
 
 ## Drivers
 
@@ -332,10 +347,19 @@ abandoned but the runtime survives; a snippet that blocks the event loop gets
 the process killed and respawned, and the state loss is surfaced to the model
 as a harness notice. Repeats trip the `snippet-runaway` watchdog.
 
-Network posture: the real boundary is compose topology (the runner
-service can only reach `worldserver`). In-process, `fetch` and `WebSocket` are
-additionally replaced with versions that refuse any host but the module's —
-best-effort hardening, not a security boundary.
+Network posture: the real boundary is the deployment's topology — the cluster's
+NetworkPolicy, or the compose network — under which the runner can only reach
+`worldserver`. In-process, `fetch` and `WebSocket` are additionally replaced
+with versions that refuse any host but the module's — best-effort hardening,
+not a security boundary.
+
+Filesystem posture: the child is exec'd under a Linux Landlock ruleset
+(`src/sandbox/confine.ts`) that allows reads only of the interpreter and system
+libraries, `runner/`, `sdk/`, `node_modules/` and the workspace manifests, so
+`.env`, the repo root and the home directory answer `EACCES` from the kernel
+however a snippet reaches for them. It fails closed: a kernel or container that
+refuses the ruleset gets no child at all, not an unconfined one. Only the
+filesystem rides on it — the network posture is the paragraph above.
 
 ## Watchdogs
 

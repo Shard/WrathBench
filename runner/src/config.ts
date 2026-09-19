@@ -173,13 +173,13 @@ export function isTokenEnvName(raw: string): boolean {
 /**
  * The driver vocabulary is closed and has one spelling per driver. A value
  * outside it is refused by name, so an old file (`claude-subscription`, the
- * pre-0.4 spelling) fails loudly rather than parsing as something else.
+ * former spelling) fails loudly rather than parsing as something else.
  */
 const driverSchema = z.string().superRefine((v, ctx) => {
   if (!isDriver(v)) {
     ctx.addIssue({
       code: "custom",
-      message: `driver "${v}" is not one of ${DRIVERS.join("|")} — the 0.4 shape writes driver: "claude-code" for the Claude Code CLI and driver: "codex" for the Codex CLI`,
+      message: `driver "${v}" is not one of ${DRIVERS.join("|")} — the current shape writes driver: "claude-code" for the Claude Code CLI and driver: "codex" for the Codex CLI`,
     });
   }
 }).transform((v) => v as Driver);
@@ -570,15 +570,15 @@ export function episodeOverrideOf(config: RunConfig): boolean {
  * Parse and default a run config object (e.g. from CLI flags or meta.json).
  *
  * `driver` is the one field that names the driver. A config that carries the
- * pre-0.4 `adapter` key *instead* is refused by name; one that carries both
- * (every 0.4 build through 0.4-30 wrote the duplicate) reads `driver` and the
+ * former `adapter` key *instead* is refused by name; one that carries both
+ * (the builds that wrote the duplicate) reads `driver` and the
  * duplicate is dropped like any other unknown key.
  */
 export function loadRunConfig(raw: unknown): RunConfig {
   const o = (raw ?? {}) as Record<string, unknown>;
   if (o["driver"] === undefined && o["adapter"] !== undefined) {
     throw new Error(
-      `config names the driver as "adapter" (${JSON.stringify(o["adapter"])}); the 0.4 shape is driver: "openai" | "claude-code" | "codex" | "stub"`,
+      `config names the driver as "adapter" (${JSON.stringify(o["adapter"])}); the current shape is driver: "openai" | "claude-code" | "codex" | "stub"`,
     );
   }
   const config = runConfigSchema.parse(withEpisodeDefaults(raw));

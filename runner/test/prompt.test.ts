@@ -12,11 +12,11 @@ import {
 /**
  * The prompt is harness surface, so the facts a run proved models
  * get wrong are pinned here rather than left to a careful re-read. Each case
- * cites the trajectory that made it worth a sentence.
+ * says what the runs got wrong that made it worth a sentence.
  */
 describe("system prompt: the shapes and seams runs proved models get wrong", () => {
   test("state.closest is documented as taking the same criteria object as units()", () => {
-    // 4 of 5 models in the 2026-08-22 review called closest({entry}) by
+    // 4 of 5 models in one review called closest({entry}) by
     // analogy with units(filter); the SDK now agrees, and so must the prompt.
     expect(SYSTEM_PROMPT).toContain("state.closest(filter) for the nearest match by distance");
     expect(SYSTEM_PROMPT).toContain("the same criteria object state.units() takes, or a predicate");
@@ -24,7 +24,7 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
 
   test("the no-match shapes of units() and closest() are stated", () => {
     // Models chained `.distance`/`.guid` off a miss and read the bare V8
-    // TypeError as a harness fault (closing fan-out, 2026-08-23).
+    // TypeError as a harness fault (a closing fan-out).
     expect(SYSTEM_PROMPT).toContain("state.units(...) returns an empty array");
     expect(SYSTEM_PROMPT).toContain("state.closest(...) returns undefined");
   });
@@ -63,9 +63,9 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
   });
 
   test("long moves are named as the thing that does not fit one snippet", () => {
-    // 2026-08-23 navigation fan-out: 6 of 7 runs hit the 30s abandon with a
-    // moveTo in flight; nav-probe-c4 re-issued the identical blocking call to
-    // one coordinate five times.
+    // A navigation fan-out: 6 of 7 runs hit the 30s abandon with a moveTo in
+    // flight, and one re-issued the identical blocking call to one coordinate
+    // five times.
     expect(SYSTEM_PROMPT).toContain("a move of more than roughly 200y cannot finish inside one snippet");
     expect(SYSTEM_PROMPT).toContain("await sdk.moveToAsync(target)");
   });

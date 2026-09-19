@@ -626,7 +626,7 @@ describe("roster policy", () => {
     [undefined, true], // absent -> run-roster's OpenRouter default -> shared pool
     ["https://openrouter.ai/api/v1", true],
     ["https://opencode.ai/zen/v1", true],
-    ["http://192.168.1.20:1234/v1", false], // local LM Studio box on the LAN
+    ["http://192.168.100.20:1234/v1", false], // local LM Studio box on the LAN
     ["http://localhost:1234/v1", false],
   ] as const)("isSharedFreePool(%s) === %s", (base, expected) => {
     expect(isSharedFreePool(base)).toBe(expected);
@@ -645,7 +645,7 @@ describe("roster policy", () => {
   test("a local/self-hosted openai entry is exempt from the free-suffix rule", () => {
     expect(
       validateEntries("roster:x", [
-        { model: "qwen/qwen3.8-27b", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" },
+        { model: "qwen/qwen3.8-27b", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" },
       ]),
     ).toHaveLength(1);
   });
@@ -655,7 +655,7 @@ describe("roster policy", () => {
     expect(() => validateEntries("roster:x", [{ model: "anthropic/claude-3.5-sonnet:free" }])).toThrow(/roster policy/);
     // Local entry: exempt from the free-suffix rule but never from the claude bar.
     expect(() =>
-      validateEntries("roster:x", [{ model: "claude-4-opus", apiBase: "http://192.168.1.20:1234/v1" }]),
+      validateEntries("roster:x", [{ model: "claude-4-opus", apiBase: "http://192.168.100.20:1234/v1" }]),
     ).toThrow(/roster policy/);
   });
 });
@@ -1758,7 +1758,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       roster: {
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
         big: { tier: "t1", model: "vendor/big", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
-        local: { tier: "t1", model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+        local: { tier: "t1", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
       },
       policy: { paid: {} },
     };
@@ -1831,7 +1831,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
         big: { tier: "t1", model: "vendor/big", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
         bigger: { tier: "t1", model: "vendor/bigger", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
         glm: { tier: "t1", idle: "unlimited", model: "z-ai/glm-5.2:free" },
-        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
         forced: { tier: "t1", model: "z-ai/other:free", billing: "paid" },
       },
       policy: { paid: {} },
@@ -2048,7 +2048,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] },
       roster: {
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
-        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.1.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
       },
       policy: {},
     };

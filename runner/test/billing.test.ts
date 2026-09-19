@@ -45,7 +45,7 @@ describe("runBilling", () => {
     },
     {
       why: "the operator's own hardware, by the api base a run recorded",
-      run: { model: "qwen3-30b", apiBase: "http://192.168.1.20:1234/v1", harness: "wrathbench" },
+      run: { model: "qwen3-30b", apiBase: "http://192.168.100.20:1234/v1", harness: "wrathbench" },
       want: "free",
     },
     {
@@ -82,7 +82,7 @@ describe("runBilling", () => {
     // so the local case is asserted through the base both of them look at.)
     expect(billingOf({ model: "openai/gpt-5" })).toBe("paid");
     expect(billingOf({ model: "qwen/qwen3-coder:free" })).toBe("free");
-    expect(billingOf({ model: "qwen3-30b", apiBase: "http://192.168.1.20:1234/v1" })).toBe("free");
+    expect(billingOf({ model: "qwen3-30b", apiBase: "http://192.168.100.20:1234/v1" })).toBe("free");
     expect(billingOf({ model: "stealth/ox-alpha" })).toBe("paid");
   });
 

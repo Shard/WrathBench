@@ -142,7 +142,7 @@ describe("the request body", () => {
   test("no other host is sent one, whatever the run config says", async () => {
     // A strict OpenAI-compatible server may 400 on a key it does not know, and
     // a direct endpoint has nothing to route between anyway.
-    for (const base of ["https://api.cerebras.ai/v1", "https://opencode.ai/zen/v1", "http://192.168.1.20:1234/v1"]) {
+    for (const base of ["https://api.cerebras.ai/v1", "https://opencode.ai/zen/v1", "http://192.168.100.20:1234/v1"]) {
       const { adapter, seen } = capture(base, { order: ["Z.AI"], allowFallbacks: false });
       await adapter.complete({ messages: [], tools: [] });
       expect(seen.body).not.toHaveProperty("provider");

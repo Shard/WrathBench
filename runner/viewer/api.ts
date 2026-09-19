@@ -340,7 +340,14 @@ export function harnessSeriesCensus(rows: readonly { harnessVersion: string | nu
  */
 const ACCOUNT_HELD_MS = 3 * 60_000;
 
-/** Age of the most recently touched artefact of a run — either file, whichever. */
+/**
+ * Age of the most recently touched artefact of a run — either file, whichever.
+ *
+ * Deliberately narrower than `archive.ts`'s four-file version: an account is
+ * held only while the run is still WRITING, and `meta.json` and `scratchpad.md`
+ * are written once at launch, so counting them would keep an account held for
+ * minutes after the writer died.
+ */
 function runActivityAge(dir: string, now: number): number | undefined {
   let newest: number | undefined;
   for (const name of ["trajectory.jsonl", "run.sqlite"]) {

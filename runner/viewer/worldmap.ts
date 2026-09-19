@@ -77,11 +77,6 @@ export function pixelToWorld(px: number, py: number): { x: number; y: number } {
   return tileToWorld(py / TILE_PX, px / TILE_PX);
 }
 
-/** Whether a tile index pair addresses a tile that could exist on disk. */
-export function isTileInGrid(row: number, col: number): boolean {
-  return Number.isInteger(row) && Number.isInteger(col) && row >= 0 && row < GRID && col >= 0 && col < GRID;
-}
-
 /** The file name convention the extraction writes and the tile route serves. */
 export function tileName(row: number, col: number): string {
   return `${row}_${col}.png`;

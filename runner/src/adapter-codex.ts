@@ -114,6 +114,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
+import { signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } from "./loop";
 import { McpServer } from "./mcp";
@@ -429,25 +430,6 @@ export function codexArgs(o: CodexArgsOptions): string[] {
     // the prompt is read from stdin, which the driver writes and CLOSES
     "-",
   ];
-}
-
-/**
- * Signal the CLI's whole process group, falling back to the process itself.
- * Same reason as the claude driver's: the CLI spawns the MCP bridge, and a
- * signal to the CLI alone leaves that grandchild reparented to init.
- */
-function signalGroup(proc: { pid: number; kill: (sig: NodeJS.Signals) => void }, sig: NodeJS.Signals): void {
-  try {
-    process.kill(-proc.pid, sig);
-    return;
-  } catch {
-    // no such group (already reaped, or not detached): fall through
-  }
-  try {
-    proc.kill(sig);
-  } catch {
-    // already gone
-  }
 }
 
 // ------------------------------------------------------------------ episode

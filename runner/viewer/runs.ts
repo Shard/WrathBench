@@ -29,7 +29,7 @@ import { join } from "node:path";
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
-import { harnessOfRun, parseComparability } from "../src/index";
+import { harnessOfRun, parseComparability } from "../src/comparability";
 import { platformOf as sharedPlatformOf } from "../src/platform";
 
 /**

@@ -748,14 +748,14 @@ describe("childEnv", () => {
 });
 
 describe("driver selection and stamping", () => {
-  test("config defaults to the openai driver and refuses pre-0.4 spellings by name", () => {
+  test("config defaults to the openai driver and refuses the former spellings by name", () => {
     expect(loadRunConfig({}).driver).toBe("openai");
     expect(loadRunConfig({ driver: "stub" }).driver).toBe("stub");
     expect(loadRunConfig({ driver: "claude-code" }).driver).toBe("claude-code");
-    // Pre-0.4 shapes are errors that name the 0.4 shape, never aliases.
+    // The former shapes are errors that name the current one, never aliases.
     expect(() => loadRunConfig({ driver: "claude-subscription" })).toThrow(/claude-code/);
-    expect(() => loadRunConfig({ adapter: "stub" })).toThrow(/the 0\.4 shape is driver/);
-    // A 0.4 file that wrote the duplicate key reads its driver; the duplicate is dropped.
+    expect(() => loadRunConfig({ adapter: "stub" })).toThrow(/the current shape is driver/);
+    // A file that wrote the duplicate key reads its driver; the duplicate is dropped.
     const both = loadRunConfig({ driver: "stub", adapter: "stub" }) as Record<string, unknown>;
     expect(both["driver"]).toBe("stub");
     expect("adapter" in both).toBe(false);
@@ -943,6 +943,27 @@ describe("driver selection and stamping", () => {
     expect(await proc.exited).toBe(2);
     expect(stderr).toContain("$CLAUDE_CODE_OAUTH_TOKEN_2");
     expect(stderr).toContain("CLAUDE_CODE_OAUTH_TOKEN_2=...");
+  }, 20_000);
+
+  test("run.ts refuses the former --adapter spelling by name, rather than ignoring it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-refuse-adapter-"));
+    const proc = Bun.spawn({
+      cmd: [
+        process.execPath,
+        join(import.meta.dir, "..", "src", "run.ts"),
+        "--adapter",
+        "stub",
+        "--runs-dir",
+        dir,
+      ],
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(2);
+    expect(stderr).toContain("--adapter");
+    expect(stderr).toContain("--driver");
   }, 20_000);
 });
 

@@ -60,7 +60,7 @@ export const LOCAL_PATH_ROOTS: readonly string[] = [
  * `/wrathbench/` where a path can start, and nowhere else.
  *
  * The lookbehind rejects a preceding path or word character, so the operator's
- * own worktree — `/home/mark/git/wrathbench/sdk/src/client.ts` — is left whole
+ * own worktree — `/home/operator/git/wrathbench/sdk/src/client.ts` — is left whole
  * and stays a filesystem-path finding, which is what "Never" means for it. The
  * lookahead requires a first segment character, so a bare `/wrathbench` is not
  * rewritten to nothing. Global, and idempotent: the replacement can never

@@ -136,7 +136,7 @@ export const FREE_PRICE: PriceRow = {
   asOf: "2026-08-22",
   source: "list",
   asIfMetered: true,
-  note: "free tier — request-capped, not token-billed (docs/COSTS.md §1)",
+  note: "free tier — request-capped, not token-billed",
 };
 
 /** `-contributor-free` slugs (OpenCode Zen): free because the provider keeps prompts and completions. */
@@ -621,8 +621,9 @@ function expectedCost(args: {
   }
   const breakdown = costOf(tokens, price);
   /*
-   * COSTS.md §3 measured this exact reconstruction against a real `costUsd` on
-   * the claude-code harness and found the summed per-response usage overstates
+   * COSTS.md ("Rules, each paid for") measured this exact reconstruction
+   * against a real `costUsd` on the claude-code
+   * harness and found the summed per-response usage overstates
    * the session by roughly 4x (783.6M summed prompt tokens against 201.6M real)
    * while undercounting output. The figure is still shown — the alternative is
    * a blank where an order of magnitude is useful — but it does not get to be
@@ -630,7 +631,7 @@ function expectedCost(args: {
    */
   const caveat =
     claudeCode && !free
-      ? " — per-response usage sums overstate this harness's real bill (docs/COSTS.md §3), so read it as an upper bound"
+      ? " — per-response usage sums overstate this harness's real bill (docs/COSTS.md, \"Rules, each paid for\"), so read it as an upper bound"
       : "";
   return {
     usd: breakdownTotal(breakdown),

@@ -542,7 +542,7 @@ describe("the attribution line", () => {
 });
 
 describe("projectRuns", () => {
-  test("emits exactly the allowlist and none of the poisoned values", () => {
+  test("emits exactly the allowlist and none of the poisoned values (projectRuns)", () => {
     const input: RunsResponse = smuggle<RunsResponse>({ runs: [runListRowFixture()] });
     const out = projectRuns(input);
     expect(keyPaths(out)).toEqual(allow(["runs", ...under("runs[]", RUN_LIST_ROW_KEYS)]));
@@ -602,7 +602,7 @@ describe("projectRunDetail", () => {
     expect(projectRunDetail(input).run.comparability!.budget.maxToolCalls).toBeNull();
   });
 
-  test("emits exactly the allowlist and none of the poisoned values", () => {
+  test("emits exactly the allowlist and none of the poisoned values (projectRunDetail)", () => {
     const input: RunDetailResponse = smuggle<RunDetailResponse>({
       run: runRowFixture(),
       states: [
@@ -698,7 +698,7 @@ describe("projectRunDetail", () => {
 });
 
 describe("projectResults", () => {
-  test("emits exactly the allowlist and none of the poisoned values", () => {
+  test("emits exactly the allowlist and none of the poisoned values (projectResults)", () => {
     const out = projectResults(resultsFixture());
     expect(keyPaths(out)).toEqual(
       allow([

@@ -82,7 +82,7 @@ WRATHBENCH_VIEWER_LAN=1 \
 # and the host firewall, scoped to the LAN — NOT a bare --add-port, which
 # would open 8090 to every network in the zone:
 sudo firewall-cmd --permanent --zone=public --add-rich-rule=\
-  'rule family="ipv4" source address="192.168.1.0/24" port port="8090" protocol="tcp" accept'
+  'rule family="ipv4" source address="<your-lan>/24" port port="8090" protocol="tcp" accept'
 sudo firewall-cmd --reload
 ```
 

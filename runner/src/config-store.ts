@@ -58,7 +58,6 @@ export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
  * would make the store a place to hide config that does nothing.
  */
 export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "roster", "policy", "campaigns", "queue"] as const;
-export type TopLevelKey = (typeof TOP_LEVEL_KEYS)[number];
 
 /** The keys whose entries get a row each. Everything else is a singleton row. */
 export const COLLECTION_KEYS = ["roster", "campaigns", "queue"] as const;

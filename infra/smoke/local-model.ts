@@ -20,11 +20,11 @@
  *
  * Run:
  *   bun infra/smoke/local-model.ts
- *   MODEL_BASE=http://192.168.1.20:1234/v1 MODEL_ID=qwen/qwen3.8-27b \
+ *   MODEL_BASE=http://192.0.2.20:1234/v1 MODEL_ID=qwen/qwen3.8-27b \
  *     bun infra/smoke/local-model.ts
  */
 
-const BASE = (process.env.MODEL_BASE ?? "http://192.168.1.20:1234/v1").replace(/\/+$/, "");
+const BASE = (process.env.MODEL_BASE ?? "http://192.0.2.20:1234/v1").replace(/\/+$/, "");
 const MODEL = process.env.MODEL_ID ?? "qwen/qwen3.8-27b";
 // LM Studio ignores the bearer value; the adapter always sends one.
 const KEY = process.env.LMSTUDIO_KEY ?? "lm-studio";

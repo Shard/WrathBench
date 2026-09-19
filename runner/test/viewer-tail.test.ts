@@ -1001,7 +1001,7 @@ describe("platformOf", () => {
   // the operator's own hardware — while a public IPv4 is a platform like any
   // other host and is not laundered into "local".
   test("classifies the private ranges as local and leaves public hosts alone", () => {
-    expect(platformOf("http://192.168.1.50:1234/v1", "openai")).toBe("local");
+    expect(platformOf("http://192.168.100.50:1234/v1", "openai")).toBe("local");
     expect(platformOf("http://10.0.0.4:1234/v1", "openai")).toBe("local");
     expect(platformOf("http://172.16.3.9:1234/v1", "openai")).toBe("local");
     expect(platformOf("http://studio.local:1234/v1", "openai")).toBe("local");
@@ -1043,7 +1043,7 @@ describe("readRun", () => {
       config_json TEXT);`);
     db.query(
       `INSERT INTO run (run_id, driver, character, platform, config_json) VALUES (?, ?, ?, ?, ?)`,
-    ).run("stamped-run", "openai", "Grimbold", "local", '{"apiBase":"http://192.168.1.50:1234/v1"}');
+    ).run("stamped-run", "openai", "Grimbold", "local", '{"apiBase":"http://192.168.100.50:1234/v1"}');
     db.close();
 
     const row = readRun(runsDir, "stamped-run");
@@ -1264,7 +1264,7 @@ describe("achievement and flight milestones (issue #8)", () => {
     expect(achievementFactsFrom([])).toBeNull();
   });
 
-  test("the tail's incremental index derives the same facts as the whole-file scan", async () => {
+  test("the tail's incremental index derives the same facts as the whole-file scan (achievement and flight marks)", async () => {
     const path = fileWith([meta, login([6], 10), earn(12, 10), takeoff]);
     const tail = new TrajectoryTail(path);
     await tail.scan();
@@ -1372,7 +1372,7 @@ describe("level and death milestones", () => {
     expect(levelUpFactsFrom([])).toBeNull();
   });
 
-  test("the tail's incremental index derives the same facts as the whole-file scan", async () => {
+  test("the tail's incremental index derives the same facts as the whole-file scan (level and death marks)", async () => {
     const path = fileWith([meta, level(1, undefined, 0), death(4444), level(2, 1, 10)]);
     const tail = new TrajectoryTail(path);
     await tail.scan();
@@ -1454,7 +1454,7 @@ describe("spell, talent and trade milestones", () => {
     expect(tradeFactsFrom([], true)!.trades).toBe(0);
   });
 
-  test("the tail's incremental index derives the same facts as the whole-file scan", async () => {
+  test("the tail's incremental index derives the same facts as the whole-file scan (spell, talent and trade marks)", async () => {
     const path = fileWith([meta, login([78]), spell(772), talent(1683, 1), trade(4444)]);
     const tail = new TrajectoryTail(path);
     await tail.scan();

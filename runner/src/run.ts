@@ -385,6 +385,18 @@ async function main(): Promise<void> {
     console.error(`unknown --driver ${args["driver"]} (one of: ${DRIVERS.join(", ")})`);
     process.exit(2);
   }
+  /*
+   * `--adapter` is the former spelling of `--driver`. It is refused by name,
+   * never translated — the same rule `loadRunConfig` applies to a stored
+   * config that names the driver `adapter`. Silently accepting it would run
+   * the default driver while the operator believed they had chosen one.
+   */
+  if (args["adapter"] !== undefined) {
+    console.error(
+      `--adapter is the former spelling; the flag is --driver (one of: ${DRIVERS.join(", ")})`,
+    );
+    process.exit(2);
+  }
   if (args["episode"] !== undefined && !isEpisodeId(args["episode"])) {
     console.error(`unknown --episode ${String(args["episode"])} (one of: ${EPISODE_IDS.join(", ")})`);
     process.exit(2);

@@ -15,7 +15,6 @@
       "name": "@wrathbench/collector",
       "version": "0.0.0",
       "dependencies": {
-        "@wrathbench/runner": "workspace:*",
         "zod": "4.4.3",
       },
     },

@@ -25,7 +25,7 @@ describe("the scrub itself", () => {
   test("a path under the operator's home is left whole, word or no word", () => {
     // Never published at all (docs/DATA-AND-LEGAL.md); the verifier's job, not
     // this module's — and rewriting it would hide a real leak.
-    const host = "/home/mark/git/wrathbench/sdk/src/client.ts";
+    const host = "/home/operator/git/wrathbench/sdk/src/client.ts";
     expect(scrubPathsText(host)).toBe(host);
   });
 

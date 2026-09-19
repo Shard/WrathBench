@@ -107,7 +107,7 @@ const roster: RosterModel[] = [
   { name: "sonnet", model: "sonnet", driver: "claude-code", tier: "t1" },
   // t0 is the one-run trial tier: the same budget the old per-entry override spelled.
   { name: "sonnet-low", model: "sonnet", effort: "low", driver: "claude-code", tier: "t0" },
-  { name: "local", model: "qwen/q", apiBase: "http://192.168.1.20:1234/v1", tier: "t1", idle: "unlimited" },
+  { name: "local", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", tier: "t1", idle: "unlimited" },
 ];
 
 let runsDir: string;
@@ -599,8 +599,8 @@ describe("paid and free", () => {
 
   test("held reasons: an unconfigured class and an all-busy one are different sentences", () => {
     const p1 = st({ name: "p1", model: "v/one" }, []);
-    const l1 = st({ name: "l1", model: "q/one", apiBase: "http://192.168.1.20:1234/v1" }, []);
-    const l2 = st({ name: "l2", model: "q/two", apiBase: "http://192.168.1.20:1234/v1" }, []);
+    const l1 = st({ name: "l1", model: "q/one", apiBase: "http://192.168.100.20:1234/v1" }, []);
+    const l2 = st({ name: "l2", model: "q/two", apiBase: "http://192.168.100.20:1234/v1" }, []);
     // Nothing free and nothing busy: the class really is empty, and the fix is
     // a line in the file.
     expect(planNextJobs([p1], ["R1"], new Set(), { policy, classAccounts: { paid: [] } }).held[0]!.why).toBe(
@@ -634,7 +634,7 @@ describe("paid and free", () => {
   });
 
   test("the local account class: a local model lands on the box, never the pool, and is held when the box has no account", () => {
-    const l1 = st({ name: "l1", model: "qwen/q", apiBase: "http://192.168.1.20:1234/v1" }, []);
+    const l1 = st({ name: "l1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1" }, []);
     const f1 = st({ name: "f1", model: "v/three:free" }, []);
     const p1 = st({ name: "p1", model: "v/one" }, []);
     // Local is its own class even though `model-cost` prices it free.
@@ -748,7 +748,7 @@ describe("outstandingWork", () => {
   const promoted = st({ name: "promoted", model: "v/promoted:free" }, [1, 2, 3].map((i) => good("v/promoted:free", "e90", i, 5)));
   const unpromoted = st({ name: "unpromoted", model: "v/unpromoted:free" }, [good("v/unpromoted:free", "e90", 1)]);
   const paid = st({ name: "paid", model: "vendor/paid" }, []);
-  const local = st({ name: "local", model: "vendor/local", apiBase: "http://192.168.1.20:1234/v1" }, []);
+  const local = st({ name: "local", model: "vendor/local", apiBase: "http://192.168.100.20:1234/v1" }, []);
   const forced = st({ name: "forced", model: "v/forced:free", tier: "t2" }, []);
   const cc = st({ name: "cc", model: "opus", driver: "claude-code" }, []);
   const pinned = st({ name: "pinned", model: "v/pinned:free" }, []);
@@ -824,7 +824,7 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
     // Paid on OpenRouter (deepseek-flash): governed by policy.paid, NOT a free key.
     expect(key({}, "paid")).toBe("openai");
     // Local (qwen3-8-27b): free by billing but its one box is its limit — driver key.
-    expect(key({ driver: "openai", apiBase: "http://192.168.1.20:1234/v1" }, "free")).toBe("openai");
+    expect(key({ driver: "openai", apiBase: "http://192.168.100.20:1234/v1" }, "free")).toBe("openai");
     // Stub keeps its driver key.
     expect(key({ driver: "stub" }, "free")).toBe("stub");
   });

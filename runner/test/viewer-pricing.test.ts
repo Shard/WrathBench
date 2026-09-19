@@ -76,8 +76,8 @@ describe("priceFor", () => {
   test("a model served from the operator's LAN is local, whatever it is called", () => {
     const p = priceFor({
       model: "qwen/qwen3.8-27b",
-      apiBase: "http://192.168.1.20:1234/v1",
-      platform: "192.168.1.20",
+      apiBase: "http://192.168.100.20:1234/v1",
+      platform: "192.168.100.20",
       driver: "openai",
       harness: "wrathbench",
     });
@@ -211,7 +211,7 @@ describe("the hand-held provider table", () => {
     expect(p.asIfMetered).toBe(false);
     expect(p.asOf).toBe("2026-09-04");
     expect(p.source).toBe("list");
-    // The worklog's measured call — 18.7k prompt, 3.2k completion — comes to
+    // A measured call — 18.7k prompt, 3.2k completion — comes to
     // the $0.0233 it recorded, whatever share of the prompt was cached.
     const call = tokens({ promptTokens: 18_700, completionTokens: 3_200, cacheReadTokens: 18_000 });
     expect(breakdownTotal(costOf(call, p))).toBeCloseTo(0.0233, 3);
@@ -283,7 +283,7 @@ describe("the hand-held provider table", () => {
 
   test("the table does not shadow the answers that come before or after it", () => {
     // Local base wins even for an id the table names.
-    expect(priceFor({ ...cerebras, apiBase: "http://192.168.1.20:1234/v1" })?.id).toBe("local");
+    expect(priceFor({ ...cerebras, apiBase: "http://192.168.100.20:1234/v1" })?.id).toBe("local");
     // A free or contributor slug on a provider base stays free.
     expect(priceFor({ ...omen, model: "hy3-free" })?.id).toBe("free-tier");
     expect(priceFor({ ...omen, model: "muse-spark-1.2-contributor-free" })?.id).toBe("contributor-free");
