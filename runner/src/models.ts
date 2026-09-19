@@ -1593,8 +1593,8 @@ function episodeOrder(ep: EpisodeId): number {
 }
 
 /**
- * The account class a pick belongs to (docs/RUNBOOK.md, "Account
- * classes"): which of `accounts.pool` / `accounts.paid` / `accounts.local`
+ * The account class a pick belongs to (docs/RUNBOOK.md, "Steer it",
+ * `accounts`): which of `accounts.pool` / `accounts.paid` / `accounts.local`
  * it may land on. `pool` is the base class — every account that is not
  * split out belongs to it.
  */

@@ -1339,7 +1339,7 @@ Its environment is the compose service's, and the two must stay in agreement:
 | `WRATHBENCH_RUNS_DIR` | `data/runs` | the evidence record, read-only |
 | `WRATHBENCH_CONFIG_DB` | `data/config.sqlite` (the default; unset under compose) | the config store's roster names the models the pages label |
 | `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed |
-| `WRATHBENCH_PUBLISH_INTERVAL_MS` | `300000` | `--loop` cadence. Five minutes is a cost choice, not a freshness one — a pass writes ~24 objects regardless of cadence, so 60s measured ~1.2M R2 class-A ops/month against a 1M free tier and 300s is ~240k. The harness's own floor is 30–60s, so a faster push would buy little anyway |
+| `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` in the script; the chart and compose set `300000` | `--loop` cadence. Five minutes is a cost choice, not a freshness one — a pass writes ~24 objects regardless of cadence, so 60s measured ~1.2M R2 class-A ops/month against a 1M free tier and 300s is ~240k. The harness's own floor is 30–60s, so a faster push would buy little anyway |
 | `WRATHBENCH_PUBLISH_BATCH` | `8` | runs projected before the pass uploads them, drops the bodies and releases those runs' entry indexes from the viewer handle. The pass's memory dial: measured peak RSS over the 1,016-run tree is 1.08 GB at 25, 0.78 GB at 8 and 0.59 GB at 1, all inside 60–67s, against 4.4 GB without the batching. Eight matches the per-run read pool's width — smaller leaves readers idle, larger only holds more at once |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | from step 5 | `.env`, never argv |
 | `S3_BUCKET` | `wrathbench-public` | |
@@ -1473,9 +1473,9 @@ pass.
   console means the app origin in step 4 does not match the hostname the
   browser used, scheme included.
 - The staleness banner reads a plausible age: a minute or two, never hours and
-  never negative. Three clocks are in play (fleet heartbeat 30–60s, push 60s,
-  and a TTL ≤60s) and the banner reads only the last push, so hours means the
-  publisher stopped, not that a cache is cold.
+  never negative. Three clocks are in play (fleet heartbeat 30–60s, push every
+  five minutes, and a TTL ≤60s) and the banner reads only the last push, so
+  hours means the publisher stopped, not that a cache is cold.
 - A run detail page shows its published entries window and nothing more: no
   "load earlier", no live tail, no raw line. If a raw line ever renders, stop
   the publisher — the content boundary has a hole.

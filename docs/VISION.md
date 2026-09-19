@@ -21,7 +21,16 @@ A research workbench to explore the capabilities and expression of AI models wit
   - Serves as information that can be used for further harness improvement or new eval episodes.
 
 ## Milestone ladder
-A kind of achievement system for measuring programmatically basic capabilities the models show, which can allow them to be promoted into new episodes.
+A kind of achievement system for measuring programmatically basic capabilities the models show, which can allow them to be promoted into new episodes. The eight rungs, as the dashboard derives them (`dashboard/src/lib/ladder.ts`):
+
+1. Quest chain in the starting subzone
+2. Leave the starting subzone on its own initiative
+3. L10: class quest, first talent, spells trained
+4. Reach a capital city; use a flight master
+5. L20 with riding skill and a mount
+6. A 5-man dungeon cleared by a party of agents
+7. L40, L60, Outland, Northrend
+8. L80, heroics, Icecrown Citadel
 
 ### Long term freeplay goals
 A few goals of mine for the project, all from level 1 fresh characters with no explicit direction:

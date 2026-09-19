@@ -67,8 +67,9 @@ handler you can call directly", split out of `serve.ts` for exactly this — so
 the public snapshot can never drift from what the private viewer computes.
 On each pass it applies a public projection (below), diffs against what it
 last uploaded, and PUTs changed artifacts to R2 with `Bun.S3Client` (a Bun
-built-in; no rclone, no wrangler in the data path). Cadence: a fast lane
-every ~60s, aggregate and per-run artifacts only when their inputs change.
+built-in; no rclone, no wrangler in the data path). Cadence: one pass every
+five minutes (`WRATHBENCH_PUBLISH_INTERVAL_MS`), aggregate and per-run
+artifacts only when their inputs change.
 Runs as one long-lived loop (a k8s Deployment or a compose service beside the
 fleet) rather than a CronJob, because change detection wants the same
 persistent mtime/size memoisation the viewer already uses; a `--once` mode
@@ -148,9 +149,9 @@ a manifest without it, but a reader that does not know `artifacts` reads `gen`
 and derives a key no longer written. So the dashboard deploys first and the
 publisher second; between the two the site is correct on both shapes.
 
-Worst-case staleness is push cadence + edge TTL ≈ 90–120s. If that ever
-matters, a cache-purge API call on the two mutable URLs after each push
-tightens it to ≈ the push cadence; not needed for a ~1 minute target.
+Worst-case staleness is push cadence + edge TTL, about six minutes at the
+five-minute cadence. If that ever matters, a cache-purge API call on the two
+mutable URLs after each push tightens it to the push cadence.
 
 ### Data plane: R2 behind a custom domain with a cache rule
 
@@ -549,9 +550,9 @@ attribution), so in the private viewer this flag shows in the citation alone.
   JSON. Not first: the range-request VFS is experimental with a
   cache-invalidation-per-push gotcha, Turso's embedded replicas want a
   long-lived process with local disk (a VPS shape, not an edge one), and
-  ARCHITECTURE.md's own staging says JSON snapshots come first, with
-  Parquet/DuckDB when analysis outgrows JSONL scripts and ClickHouse only if
-  a public dashboard ever needs live aggregates.
+  the public site needs no live aggregates: ClickHouse is the operator's
+  derived store (`docs/ARCHITECTURE.md`, "The derived store"), and the site
+  is served from JSON snapshots.
 
 ## Cost
 

@@ -7,7 +7,7 @@ surface the module serves today: session lifecycle, the action set of
 event stream.
 
 Transport: plain HTTP/1.1 and RFC6455 WebSocket on `WrathBench.BindAddress:Port`
-(default `0.0.0.0:8086`), reachable only from inside the private compose network.
+(default `0.0.0.0:8086`), reachable only from inside the deployment's private network.
 All request and response bodies are JSON (`Content-Type: application/json`).
 
 **u64 values are decimal strings.** Every guid the module emits — in responses
@@ -84,7 +84,7 @@ so a mis-deployed worldserver is unreachable rather than open.
 
 Module and world status. Either credential class, no body.
 
-Two views. Callers on the compose network — the runner and, through
+Two views. Callers on that network — the runner and, through
 it, the snippet sandbox — get liveness plus build identity: `ok`, `module`,
 `worldStopped`, `build`, `startedAtMs`, `uptimeMs`,
 with `sessions` / `droppedPackets` / `droppedPacketsLive` present but zeroed

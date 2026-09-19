@@ -544,7 +544,7 @@ describe("the checks themselves", () => {
 
 /**
  * `--base` reads the same generation over plain HTTP, through the custom domain
- * rather than the S3 API (docs/PUBLIC-DASHBOARD.md, the Open shape). The
+ * rather than the S3 API (docs/PUBLIC-DASHBOARD.md, "The architecture"). The
  * verifier above is indifferent to which source it is handed — that is the
  * point of `AcceptSource` having two methods and no third — so what is left to
  * pin is the source itself: how it joins a key, what it calls a miss, and that

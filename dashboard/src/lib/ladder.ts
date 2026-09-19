@@ -115,7 +115,7 @@ const hasLevel = (r: ResultRun): boolean => r.maxLevel !== null;
 export const EXPANSION_MAPS = [530, 571];
 
 /**
- * The eight rungs of docs/VISION.md, with the derivation each one gets from the
+ * The eight rungs of the milestone ladder (docs/VISION.md), with the derivation each one gets from the
  * data that actually exists.
  *
  * Rungs 2 and 4 became derivable on 2026-08-25, when the viewer was wired to

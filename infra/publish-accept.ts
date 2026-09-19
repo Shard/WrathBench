@@ -114,8 +114,8 @@ export interface AcceptSource {
  * closed, an object the custom domain does not serve, or a hostname pointed at
  * the wrong bucket all show up here and at no other layer. It is also the only
  * way to observe a real `cache-control` and `cf-cache-status`, which is the
- * "through-host half" the Gated shape could not carry (docs/PUBLIC-DASHBOARD.md,
- * "Acceptance record"): objects land without the header, because Bun's S3
+ * "through-host half" (docs/PUBLIC-DASHBOARD.md, "Data plane: R2 behind a
+ * custom domain with a cache rule"): objects land without the header, because Bun's S3
  * writer cannot send one, and the TTLs are the zone's.
  *
  * Read-only for the same structural reason as the S3 source — `GET` and `HEAD`
