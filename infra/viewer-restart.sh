@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Restart the operator viewer.
 #
-# CLUSTER-NATIVE since 2026-09-11. Since the 2026-09-08 cutover the viewer is
-# the `wrathbench-viewer` Deployment behind the `wrathbench.[removed].shard.page` Ingress
-# on the cluster, not a bun process on the workstation, so a restart
-# is a rollout restart and the check that follows is the Ingress answering
-# /api/info. The workstation's systemd user unit is disabled and kept only for
-# the compose rollback; `--local` is the path that drives it.
+# The viewer is the `wrathbench-viewer` Deployment behind the cluster's Ingress,
+# not a bun process on the workstation, so a restart is a rollout restart and
+# the check that follows is the Ingress answering /api/info
+# (WRATHBENCH_VIEWER_URL names it; it must be set). The workstation's systemd
+# user unit is disabled and kept only for the compose rollback; `--local` is
+# the path that drives it.
 #
 #   ./infra/viewer-restart.sh            # rollout restart the viewer Deployment
 #   ./infra/viewer-restart.sh --dry-run  # print the kubectl commands only
@@ -20,7 +20,7 @@ set -Eeuo pipefail
 
 NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"
 RELEASE="${WRATHBENCH_K8S_RELEASE:-wrathbench}"
-VIEWER_URL="${WRATHBENCH_VIEWER_URL:-https://wrathbench.[removed].shard.page}"
+VIEWER_URL="${WRATHBENCH_VIEWER_URL:?set WRATHBENCH_VIEWER_URL to the viewer Ingress URL}"
 LOCAL=0
 DRY_RUN=0
 while [[ $# -gt 0 ]]; do

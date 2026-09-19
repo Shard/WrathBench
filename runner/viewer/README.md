@@ -346,7 +346,7 @@ readonly, and the runs directory is only ever listed and read.
 | `/api/runs` | run listing, with per-run token totals and active playtime |
 | `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
 | `/api/fleet` | the fleet supervisor's jobs, accounts, gate and heartbeat |
-| `/api/tools` | the eight model-facing tools — name, description and schema off `runner/src/tools.ts` at request time, plus one example call (tools with arguments) or one returns line (tools without); harness text only, served in public mode too |
+| `/api/tools` | the nine model-facing tools — name, description and schema off `runner/src/tools.ts` at request time, plus one example call (tools with arguments) or one returns line (tools without); harness text only, served in public mode too |
 | `/api/run/<id>` | run row, state series, entry count, token totals, playtime, reflection windows, and — for a freeplay attempt — the whole `character` it is part of |
 | `/api/character/<id>` | one character whole: the chain, its totals, and every attempt's state samples end to end with the attempt each came from. `<id>` is any run in the chain |
 | `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200); in public mode each entry crosses `projectEntry` and `redactGameProse` |

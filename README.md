@@ -21,8 +21,8 @@ The pieces that make up WrathBench include:
 You will need Docker with compose, Bun for the host-side tooling, and an [AzerothCore](https://www.azerothcore.org/) 3.3.5a server data directory (`dbc/ maps/ vmaps/ mmaps/`) at `data/client`. Producing that directory is outside this repository's scope. Nothing Blizzard-derived is hosted within this repo.
 
 ```sh
-git clone --recurse-submodules git@github.com:Shard/WrathBench.git && cd wrathbench
-mkdir -p data/{client,wiki,runs,etc,logs}
+git clone --recurse-submodules git@github.com:Shard/WrathBench.git && cd WrathBench
+mkdir -p data/{client,wiki,runs,collector,etc,logs}
 # place the server data directory at data/client
 docker compose -f infra/compose.yml up -d --build
 ```

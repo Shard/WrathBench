@@ -330,9 +330,8 @@ holds waits rather than clobbering.
 ### Local (self-hosted) models
 
 An openai entry may point `apiBase` at a self-hosted OpenAI-compatible endpoint
-instead of a cloud pool — the shipped `qwen3-8-27b` entry targets an LM Studio
-box on the LAN (`http://192.0.2.20:1234/v1`, model `qwen/qwen3.8-27b`). A
-local apiBase is a distinct category in the roster policy, and its runs land
+instead of a cloud pool, for example an LM Studio box on the LAN
+(`http://192.0.2.20:1234/v1`, model `qwen/qwen3.8-27b`). A local apiBase is a distinct category in the roster policy, and its runs land
 only on the `local` account class:
 
 - **Exempt from the free-suffix rule.** There is no shared free tier to meter,
