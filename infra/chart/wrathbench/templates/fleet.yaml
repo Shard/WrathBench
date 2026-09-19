@@ -1,8 +1,9 @@
 {{- if .Values.fleet.enabled }}
 {{/*
-The fleet supervisor (infra/run-fleet.ts) as the Deployment ADR-0020 shaped the
-compose service as a rehearsal for. One replica, Recreate, always: two
-supervisors on one config is a night of account_in_use.
+The fleet supervisor (infra/run-fleet.ts) as a Deployment. The supervisor is a
+long-lived service, not a cron of one-shot episodes, so it is deployed as one:
+one replica, Recreate, always — two supervisors on one config is a night of
+account_in_use.
 
 Steering is the config store on the data PVC (WRATHBENCH_CONFIG_DB in
 harnessEnv), the only fleet config: edit it on the viewer's /config page or

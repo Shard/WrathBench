@@ -15,7 +15,7 @@ once, silently, at the first episode rather than at deploy. Do not tidy them.
 
 The database Service IS prefixed (`wrathbench-db`), because nothing compiles
 that name in: bootstrap.ts's `db` is only a default, and the AC_*_DATABASE_INFO
-strings are built here. The cluster repo's restic CronJob runs mysqldump
+strings are built here. A backup CronJob outside the chart runs mysqldump
 against `wrathbench-db` and mounts the `wrathbench-data` PVC by name, so both
 names are part of the interface and are not renamed on this side alone.
 */}}
@@ -49,17 +49,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $t -}}
 {{- end -}}
 
+{{/* The image registry, validated. One cluster's registry is not a default. */}}
+{{- define "wrathbench.registry" -}}
+{{- required "set image.registry: the registry (and any project path) the WrathBench images are pushed to, e.g. registry.example.com/wrathbench." .Values.image.registry -}}
+{{- end -}}
+
 {{- define "wrathbench.image.worldserver" -}}
-{{ .Values.image.registry }}/{{ .Values.image.names.worldserver }}:{{ include "wrathbench.tag" . }}
+{{ include "wrathbench.registry" . }}/{{ .Values.image.names.worldserver }}:{{ include "wrathbench.tag" . }}
 {{- end -}}
 {{- define "wrathbench.image.authserver" -}}
-{{ .Values.image.registry }}/{{ .Values.image.names.authserver }}:{{ include "wrathbench.tag" . }}
+{{ include "wrathbench.registry" . }}/{{ .Values.image.names.authserver }}:{{ include "wrathbench.tag" . }}
 {{- end -}}
 {{- define "wrathbench.image.dbImport" -}}
-{{ .Values.image.registry }}/{{ .Values.image.names.dbImport }}:{{ include "wrathbench.tag" . }}
+{{ include "wrathbench.registry" . }}/{{ .Values.image.names.dbImport }}:{{ include "wrathbench.tag" . }}
 {{- end -}}
 {{- define "wrathbench.image.runner" -}}
-{{ .Values.image.registry }}/{{ .Values.image.names.runner }}:{{ include "wrathbench.tag" . }}
+{{ include "wrathbench.registry" . }}/{{ .Values.image.names.runner }}:{{ include "wrathbench.tag" . }}
 {{- end -}}
 
 {{/*

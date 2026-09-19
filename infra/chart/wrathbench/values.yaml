@@ -5,7 +5,10 @@
 # the same commit. The reasoning behind each decision is in docs/RUNBOOK.md.
 
 image:
-  registry: harbor.local/library
+  # REQUIRED, and deliberately empty: the registry is one cluster's. The
+  # deploying cluster's HelmRelease sets it; the chart refuses to render
+  # without it rather than guessing a host.
+  registry: ""
   # REQUIRED. The immutable tag `git describe --tags --always` of the source
   # SHA, produced by infra/build-images.sh. `latest` is refused by the chart:
   # a mutable tag is not a deployment source (GitHub issue 7).
@@ -18,15 +21,16 @@ image:
     runner: wrathbench-runner
 
 # Empty by default: a node name is one cluster's, and on a single-node cluster
-# no selector is the right answer. The [removed] deployment pins every pod to its
-# one real node — the other is a tainted 1-cpu edge box that must never run any
-# of this, and the single RWO data PVC is shared by five pods, which is only
-# sound because they are all pinned — and that pin comes from the cluster repo's
-# HelmRelease, not from here. `values.example.yaml` shows the shape.
+# no selector is the right answer. Where the data PVC is RWO and shared by
+# several pods, every one of them has to land on the same node, and that pin
+# belongs to the deploying cluster's HelmRelease, not here.
+# `values.example.yaml` shows the shape.
 nodeSelector: {}
 
 storage:
-  className: iscsi-nvme
+  # Empty means the cluster's default StorageClass. Set it where the default is
+  # not the class these volumes want.
+  className: ""
   data:
     size: 60Gi
   db:
@@ -44,7 +48,8 @@ storage:
   codexHome:
     size: 1Gi
 
-# Existing Secret, created by the cluster repo. Keys are the `.env` names.
+# Existing Secret, created by the deploying cluster's HelmRelease. Keys are
+# the `.env` names.
 # The chart never templates a secret value and never puts one on a command
 # line; see docs/RUNBOOK.md ("Secrets").
 envSecretName: wrathbench-env
@@ -52,7 +57,7 @@ envSecretName: wrathbench-env
 # The model-provider keys the fleet and runner pods carry, by NAME. They are
 # read from `envSecretName` and marked optional, so a lane whose key is not in
 # the Secret fails its own preflight with a clear message instead of wedging
-# the pod. Adding a provider is one line here and one key in the cluster repo.
+# the pod. Adding a provider is one line here and one key in that Secret.
 #
 # Enumerated rather than `envFrom` on the whole Secret on purpose — see the
 # note in templates/_helpers.tpl; `envFrom` would put WRATHBENCH_ACCOUNT_PASSWORD
@@ -192,7 +197,7 @@ runner:
 
 # The derived store (collector/README.md). A single node with no replication,
 # holding nothing that is not rebuildable from data/runs by `--replay`.
-# CLICKHOUSE_PASSWORD is a key in envSecretName, created by the cluster repo.
+# CLICKHOUSE_PASSWORD is a key in envSecretName.
 clickhouse:
   enabled: true
   # Pinned; see infra/PINS.md for the date and the reason.
@@ -206,10 +211,10 @@ clickhouse:
     limits:
       # An OOM ceiling. The cgroup limit sizes `max_server_memory_usage` (0.9 of
       # it) and NOTHING else — every cache and thread pool keeps its big-box
-      # default however small the container is, which is how a 2Gi limit met
-      # 18 GiB of declared cache and every query died with `Code: 241`
-      # (2026-09-17). infra/clickhouse/ bounds the rest; raise this first on a
-      # bigger box, then the two caches there. See collector/README.md.
+      # default however small the container is, so a small limit against 18 GiB
+      # of declared cache kills every query with `Code: 241`. infra/clickhouse/
+      # bounds the rest; raise this first on a bigger box, then the two caches
+      # there. See collector/README.md.
       memory: 4Gi
 
 # Tails data/runs into ClickHouse. Nothing else writes to the store, and the
@@ -248,15 +253,15 @@ viewer:
     # extraHosts. Set to "" to render no Certificate and no spec.tls, so the
     # ingress controller's default certificate serves every host — the right
     # choice on a cluster whose default cert is already a trusted wildcard.
-    issuer: [removed]-ca
+    issuer: ""
     entrypoint: websecure
     # Passthrough, applied last and therefore able to override anything the
-    # chart sets. The cluster repo adds its own tile/annotation conventions
+    # chart sets. A deploying cluster adds its own tile/annotation conventions
     # here; the chart does not need to know about them.
     annotations: {}
     # hajimari's dashboard discovery, asserted off. The viewer is operator-only
     # and is not a thing to advertise on a tile wall; turning it on is the
-    # cluster repo's call, either here or through `annotations` above.
+    # deploying cluster's call, either here or through `annotations` above.
     hajimari:
       enabled: false
 
@@ -272,11 +277,11 @@ publisher:
       cpu: 100m
       memory: 256Mi
     limits:
-      # 2x the measured peak, rounded up: a --once pass over the 1,016-run tree
-      # peaks at 0.78 GB at the default batch (2026-09-08, was 4.4 GB before the
-      # scanners read in windows and the pass released each run's entry index).
+      # 2x the measured peak, rounded up: a --once pass over a ~1,000-run tree
+      # peaks at 0.78 GB at the default batch, the scanners reading in windows
+      # and the pass releasing each run's entry index.
       memory: 2Gi
 
-# Extra pod annotations/labels, if the cluster repo wants them.
+# Extra pod annotations/labels, if the deploying cluster wants them.
 podAnnotations: {}
 podLabels: {}

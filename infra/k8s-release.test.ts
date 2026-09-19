@@ -450,12 +450,30 @@ describe("k8s-release.sh", () => {
     expect(r.out).toContain(`wrathbench-worldserver=${TAG} wrathbench-runner=${TAG} wrathbench-viewer=${TAG}`);
   });
 
+  const FORBIDDEN = ["[removed]", "flux-system", "gh pr", "harbor."];
+
   test("the script carries no cluster-specific glue", () => {
-    // The operator's rule: the [removed] repo's paths, its Flux
-    // objects and its PR flow live there, not here.
+    // The operator's rule: one cluster's repo paths, its Flux objects and its
+    // PR flow live there, not here.
     const src = readFileSync(SCRIPT, "utf8");
-    for (const forbidden of ["[removed]", "flux-system", "gh pr", "harbor."]) {
+    for (const forbidden of FORBIDDEN) {
       expect(src.toLowerCase().includes(forbidden)).toBe(false);
+    }
+  });
+
+  test("the chart carries no cluster-specific glue either", () => {
+    // Same rule, and the chart is where it slips in first: a registry host, a
+    // ClusterIssuer name or a node name from one cluster reads as a default.
+    // Chart.yaml's `home:` URL is a project link, not cluster glue, and trips
+    // none of these strings.
+    const dir = join(import.meta.dir, "chart", "wrathbench");
+    const files = [...new Bun.Glob("**/*").scanSync({ cwd: dir })].sort();
+    expect(files.length).toBeGreaterThan(5);
+    for (const rel of files) {
+      const src = readFileSync(join(dir, rel), "utf8").toLowerCase();
+      for (const forbidden of FORBIDDEN) {
+        expect({ file: rel, forbidden, hit: src.includes(forbidden) }).toEqual({ file: rel, forbidden, hit: false });
+      }
     }
   });
 });

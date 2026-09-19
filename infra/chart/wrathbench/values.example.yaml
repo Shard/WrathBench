@@ -1,31 +1,181 @@
-# A values file matching the interface the [removed] HelmRelease supplies.
-# Used by `helm lint` / `helm template` in this repo; the cluster repo is the
-# real one.
+# A complete values file with placeholder values: what a deploying cluster's
+# HelmRelease has to supply, in the shape the chart expects. Every top-level
+# key values.yaml defines appears here, so this file also renders in CI and
+# fails when the interface drifts. Comments live in values.yaml; this is the
+# shape, not the reasoning.
+
 image:
-  registry: harbor.local/library
-  tag: "harness-0.5-477-g47fddc0"
+  # REQUIRED. The registry (and any project path) the images were pushed to.
+  registry: registry.example.com/wrathbench
+  # REQUIRED. The immutable tag infra/build-images.sh produced — `git describe`
+  # of the source SHA, e.g. harness-0.5-N-g<sha>. "" and "latest" are refused.
+  tag: "harness-0.5-N-g0000000"
+  pullPolicy: IfNotPresent
+  names:
+    worldserver: wrathbench-worldserver
+    authserver: wrathbench-authserver
+    dbImport: wrathbench-db-import
+    runner: wrathbench-runner
+
+# Where the RWO data PVC lives, every pod that mounts it has to land.
 nodeSelector:
   kubernetes.io/hostname: your-node
+
 storage:
-  className: iscsi-nvme
+  # "" is the cluster's default StorageClass.
+  className: ""
   data:
     size: 60Gi
   db:
     size: 20Gi
+  clickhouse:
+    size: 20Gi
+  codexHome:
+    size: 1Gi
+
+# An existing Secret whose keys are the `.env` names.
 envSecretName: wrathbench-env
+
+modelKeys:
+  - CLAUDE_CODE_OAUTH_TOKEN
+  - CLAUDE_CODE_OAUTH_TOKEN_2
+  - OPENROUTER_KEY
+  - OPENCODE_KEY
+  - CEREBRAS_KEY
+  - LMSTUDIO_KEY
+
+realm:
+  id: 1
+  name: WrathBench
+  address: 127.0.0.1
+  port: 8085
+
+db:
+  image: mysql:8.4
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  runAsUser: 1000
+
+worldserver:
+  threads: 2
+  rateXp:
+    kill: "1"
+    quest: "1"
+  accounts:
+    - RUNNER
+    - SMOKE
+  appenderServer: "1,5,0"
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      memory: 8Gi
+  startupProbe:
+    periodSeconds: 10
+    failureThreshold: 90
+
+authserver:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+jobs:
+  dbImport:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+  bootstrap:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 512Mi
+
 fleet:
   enabled: true
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      memory: 6Gi
+
+codex:
+  enabled: false
+
 runner:
   enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 4Gi
+
+clickhouse:
+  enabled: true
+  image: clickhouse/clickhouse-server:25.8
+  database: wrathbench
+  user: wrathbench
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 4Gi
+
+collector:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi
+
 viewer:
   enabled: true
+  resources:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      memory: 3Gi
   ingress:
     enabled: true
-    host: wrathbench.local
+    host: wrathbench.example.com
     extraHosts: []
     className: traefik
-    issuer: [removed]-ca
+    # A ClusterIssuer name for a chart-managed certificate; "" leaves the
+    # ingress controller's default certificate to serve every host.
+    issuer: ""
     entrypoint: websecure
+    annotations: {}
+    hajimari:
+      enabled: false
+
 publisher:
   enabled: true
   intervalMs: 300000
+  batch: 8
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi
+
+podAnnotations: {}
+podLabels: {}

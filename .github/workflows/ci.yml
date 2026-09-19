@@ -63,11 +63,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # A dummy immutable tag: the chart refuses "" and "latest" by design
-      # (templates/_helpers.tpl), so rendering needs something shaped like a
-      # `git describe` output. It is never a deployment source.
+      # A dummy immutable tag and a dummy registry: the chart refuses "",
+      # "latest" and a missing registry by design (templates/_helpers.tpl), so
+      # rendering needs something shaped like a `git describe` output and a
+      # registry to put in front of it. Neither is ever a deployment source.
       - name: Lint
-        run: helm lint infra/chart/wrathbench --set image.tag=ci-lint
+        run: helm lint infra/chart/wrathbench --set image.tag=ci-lint --set image.registry=ci
 
       - name: Render
-        run: helm template ci infra/chart/wrathbench --set image.tag=ci-lint >/dev/null
+        run: helm template ci infra/chart/wrathbench --set image.tag=ci-lint --set image.registry=ci >/dev/null
+
+      # The example values file is the documented interface; rendering it keeps
+      # it from drifting out of sync with the chart it claims to describe.
+      - name: Render the example values
+        run: helm template ci infra/chart/wrathbench -f infra/chart/wrathbench/values.example.yaml --set image.tag=ci-lint >/dev/null
