@@ -135,6 +135,27 @@ TTL" would therefore respect nothing.
 public request is a billed class-B read against the bucket — roughly $7/month at
 30M requests, versus roughly $0 with the rule. Step 8 checks it, first.
 
+### 4b. Add the rate limit on per-run detail
+
+Zone `shard.page` → **Security → WAF → Rate limiting rules**, one rule (the
+Free plan's allowance):
+
+- **Expression** — `(http.host eq "wrathbench-data.shard.page" and
+  starts_with(http.request.uri.path, "/v1/run/"))`
+- **Characteristics** — IP with data center (`ip.src`, `cf.colo.id`; the Free
+  plan requires the second)
+- **60 requests per 10 seconds**, then **block for 10 seconds**
+
+A run page fetches a handful of objects under `/v1/run/`, so a reader clicking
+through runs never reaches the limit; a crawler pulling every run's detail
+does within its first second. Together with the data hostname's own
+`robots.txt` (`infra/robots.ts`, published by the publisher at start-up) this is
+the whole crawler posture: the headline material is open, the transcripts are
+disallowed by directive and throttled at the edge. The zone's AI crawler
+controls stay off — a rule that blocks by bot class would be the next step,
+and paying crawlers through Cloudflare's pay-per-crawl the one after, when
+that leaves its beta (docs/PUBLIC-DASHBOARD.md, "Crawlers").
+
 ### 5. Point the publisher at the bucket
 
 The publisher's environment lives in the `wrathbench-env` secret in the

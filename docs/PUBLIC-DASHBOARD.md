@@ -625,6 +625,31 @@ quotas, Cache Reserve pricing, and whether a Workers deploy rate limit would
 constrain a redeploy-per-minute pattern (moot here — data moves through R2,
 not redeploys).
 
+## Crawlers
+
+The site is a static projection, so what a crawler may read is decided by the
+content boundary above, not by a directive. What the crawler posture decides is
+*volume*: the headline material is meant to be found, the transcripts are not
+meant to be bulk-pulled.
+
+- The app hostname's `robots.txt` (`dashboard/public/robots.txt`) allows
+  everything; it exists so link previews unfurl.
+- The data hostname's `robots.txt` (`infra/robots.ts`, PUT by the publisher at
+  start-up) allows the aggregates, the manifest, the live file, the social card
+  and the tiles, and disallows `/v1/run/` for every agent. Its content-signal
+  line states the terms for what is allowed: search and live answers yes,
+  training no.
+- A zone rate limit on `/v1/run/` at the data hostname (sixty requests per ten
+  seconds per client, then a ten-second block) is the enforcement for agents
+  that do not read the file. A reader paging through runs stays well under it
+  (`infra/cloudflare/README.md`, step 4b).
+
+Not done, deliberately: blocking by bot class, and charging crawlers for the
+transcripts through Cloudflare's pay-per-crawl. The first is the next step if
+the limit proves insufficient; the second is the intended shape for the
+transcripts once that feature is generally available, and is the reason they
+are disallowed rather than served with terms attached.
+
 ## Third-party origins
 
 A run page and the map sidebar draw item icons and tooltips, and the way they

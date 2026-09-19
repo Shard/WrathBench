@@ -36,6 +36,7 @@ import type { ResultRun } from "../runner/viewer/api-types";
 import { createRenderer } from "../runner/viewer/snapshot";
 import { HOME_EPISODE } from "../dashboard/src/lib/homeladder";
 import { OG_KEY, renderOgPng } from "./og-render";
+import { ROBOTS_KEY, ROBOTS_TXT } from "./robots";
 import { publishLoop, type ObjectStore, type PassRenderer, type SnapshotResult } from "./publish-core";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
@@ -119,8 +120,26 @@ const renderer = createRenderer({
 const render: PassRenderer = async (sink) => {
   const result = await renderer(undefined, { sink, batch: BATCH });
   await publishCard(result);
+  await publishRobots();
   return result;
 };
+
+/**
+ * robots.txt at the bucket root, once per process (`infra/robots.ts` says why
+ * it exists). Same posture as the card: outside the transaction, never fails a
+ * pass, and a restart costs one PUT.
+ */
+let robotsPublished = false;
+async function publishRobots(): Promise<void> {
+  if (robotsPublished) return;
+  try {
+    await s3.write(ROBOTS_KEY, ROBOTS_TXT, { type: "text/plain; charset=utf-8" });
+    robotsPublished = true;
+    log(`publish: ${ROBOTS_KEY}`);
+  } catch (e) {
+    log(`publish: ${ROBOTS_KEY} was not written — ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 
 /**
  * Render the card from the ladder this pass produced, and PUT it if it moved.

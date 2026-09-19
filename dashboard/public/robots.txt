@@ -7,9 +7,9 @@
 # honour it, so a link pasted anywhere unfurls with the title, the sentence and
 # the ship-time Pareto picture.
 #
-# It covers this hostname only, and that is all it needs to: everything a
-# crawler would find on the data hostname (`wrathbench-data.shard.page`) is the
-# published JSON and the minimap tiles, both of which the site itself renders.
+# It covers this hostname only. The data hostname (`wrathbench-data.shard.page`)
+# serves its own robots.txt (infra/robots.ts): the aggregates and tiles are
+# open there, the per-run transcripts are not for bulk crawling.
 
 User-agent: *
 Allow: /
