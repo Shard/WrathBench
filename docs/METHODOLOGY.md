@@ -561,7 +561,7 @@ noun "stream" for "character" throughout, which is a consolidation and not a
 change of meaning: freeplay is still one character per model and effort, and a
 lapsed scored episode is still a failed attempt, not the start of a chain.
 
-**No single number is promised in this phase**; the honest artifact is the
+**No single number is promised**; the honest artifact is the
 scorecard.
 
 ## The reference bundle
@@ -674,7 +674,7 @@ would require changing or contradicting one stops and puts the question to
 the operator first. Surface, prompt, context policy, contract, or bundle-text
 changes move the harness version (minor at least; contract widenings are
 major). Scheduling and derivation changes do not bump the version but are
-still edits to this page or the owning doc, dated in the worklog. Keep this
+still edits to this page or the owning doc, dated. Keep this
 document consolidated: fold a new decision into the section it belongs to,
 prune what it obsoletes, and let git history hold the past — no append-only
 records.

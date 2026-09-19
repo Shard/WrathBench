@@ -451,8 +451,8 @@ through `upsertNearby()`. Landing a new event means: add the schema in
 `src/protocol.ts`, add one `case` in `src/state.ts`, and derive rather than
 duplicate if it belongs to `self`. The pets, group, mail, bank, trade, loot-roll
 and item-text families live in `src/protocol-social.ts` and
-`src/state-social.ts` instead — the same two steps, one file over in each case
-. `src/guid.ts` is the leaf both halves of the protocol import for
+`src/state-social.ts` instead — the same two steps, one file over in each
+case. `src/guid.ts` is the leaf both halves of the protocol import for
 `guidSchema`; it exists so `protocol-social.ts` never reaches back into
 `protocol.ts` at value level, which is a module-eval cycle `tsc` cannot see. Unknown opcodes,
 unknown update-block kinds and unknown `data` fields all already pass through

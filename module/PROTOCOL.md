@@ -31,9 +31,9 @@ Two error channels, deliberately separated (docs/CONTRACTS.md):
 ## Authentication
 
 Every HTTP request and every `/events` upgrade carries
-`Authorization: Bearer <credential>` (the accepted-risk statement
-in docs/CONTRACTS.md). A request without a valid one is `401 unauthorized`
-before any route runs, including `GET /health`. There is no unauthenticated
+`Authorization: Bearer <credential>` (docs/CONTRACTS.md,
+"Control-surface authentication"). A request without a valid one is
+`401 unauthorized` before any route runs, including `GET /health`. There is no unauthenticated
 path and no backward compatibility with callers that send none.
 
 Two credential classes:
@@ -150,14 +150,14 @@ Request:
 ```
 
 `race`/`class` semantics: when the named character already
-exists on the account, `race` and `class` are ignored entirely (as before —
-the existing character is logged in as-is). When the character does not exist
+exists on the account, `race` and `class` are ignored entirely — the existing
+character is logged in as-is. When the character does not exist
 — so this request will CREATE one — both must be numeric and in `[1,11]`;
 anything else (absent, non-numeric, out of range) fails the request with
 `400 {"ok":false,"error":"invalid_race_class","token":...}` before any
-char-create packet is synthesized. There is no silent default character
-anymore. Whether a create is needed is only known once the module sees the
-account's character list, so this check happens mid-flow (after `SMSG_CHAR_ENUM`),
+char-create packet is synthesized. There is no silent default character.
+Whether a create is needed is only known once the module sees the account's
+character list, so this check happens mid-flow (after `SMSG_CHAR_ENUM`),
 not at request parse time.
 
 Success `200`:
@@ -184,7 +184,7 @@ Errors:
 - `400 {"ok":false,"error":"missing_token"}`
 - `400 {"ok":false,"error":"missing_character"}`
 - `400 {"ok":false,"error":"weak_token","received":<len>,"minimum":32,"hint":...}` —
-  the token is shorter than 32 characters. The token is no longer the credential
+  the token is shorter than 32 characters. The token is not the credential
   (the lease secret is; "Authentication" above) but it still keys every session,
   audit file and event stream, so a guessable one lets an operator-class caller
   collide with another run by accident. Checked before the session is
@@ -234,8 +234,8 @@ stale, and reclaiming it is correct, not a race:
   account is torn down via the normal teardown path, and the create waits for the
   core to fully release the account before entering world. If the release does not
   complete within the reclaim wait, the create returns `504 timeout` (retryable),
-  never the old `account_in_use`. `account_in_use` no longer fires on `POST
-  /session`; it remains only on the read-only `POST /characters` and on
+  never `account_in_use`. `account_in_use` does not fire on `POST /session`;
+  it applies only to the read-only `POST /characters` and to
   `POST /character-delete`, neither of which reclaims.
 
 The login flow the module performs internally, all through the real handlers:
@@ -546,8 +546,7 @@ A parked utility session (never enters world) answers with the decoded `SMSG_CHA
 Operator only (`403 operator_only` for a session-class caller; the snippet
 child therefore cannot delete any character, its own included — a fresh start
 is the operator's episode reset, not the model's). Delete a character by name
-through the real `CMSG_CHAR_DELETE` path (added in the quest/combat
-extension). Needed because per-episode fresh
+through the real `CMSG_CHAR_DELETE` path. Needed because per-episode fresh
 characters accumulate against the realm's 10-characters-per-account
 cap. The module stands up a short-lived parked session, authenticates, walks
 the character list, sends `CMSG_CHAR_DELETE` for the matching name, and tears
@@ -574,10 +573,9 @@ deterministically: a `POST /character-delete` that finds another token on the
 account gets `409 account_owned_by_other_token` — character-delete never evicts a
 running episode. A `POST /session` create, by contrast, reclaims (see the create
 reclaim note above): it tears the other session down and takes ownership rather
-than returning `account_in_use`, so the create-mode side of the old race no
-longer produces `account_in_use`. `POST /session` and `POST /characters` apply
-the same allowlist. Minimal ownership gate for the per-run account scheme;
-per-character credentials are the Phase-1 fix.)
+than returning `account_in_use`, so a create never produces `account_in_use`.
+`POST /session` and `POST /characters` apply the same allowlist. Minimal ownership gate for the per-run account scheme;
+per-character credentials are the fuller fix.)
 
 Success `200`: `{ "ok": true, "token": ..., "character": "Benchy", "deleted": true }`
 Errors: `400 missing_token`, `400 missing_character`, `409 token_in_use`,
@@ -808,8 +806,7 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 2^53, so it falls under the counter exemption to the u64-as-string rule stated
 at the top of this document.
 
-`WB_MOVE_RESULT.status` is one of (navigation vocabulary; the
-former undifferentiated `no_path` no longer exists):
+`WB_MOVE_RESULT.status` is one of (navigation vocabulary):
 - `arrived` — the server-side character reached the destination; `pos` is the
   server-confirmed position. When the navmesh resolved the request to a ground
   z more than 1y from the requested z, the result also carries `meshZ` (the z
@@ -905,7 +902,7 @@ behind. A hit the server still rejects is not retried. Each dispatch is
 audited (`op: "areatrigger"`) and mirrored as `WB_AREATRIGGER`. Consequences
 are whatever the server does for that trigger, as for a client: a map
 transfer (`SMSG_TRANSFER_PENDING` … `transferred`), exploration quest credit
-(`SMSG_QUESTUPDATE_COMPLETE`), or the inn's rest flag — all of which now
+(`SMSG_QUESTUPDATE_COMPLETE`), or the inn's rest flag — all of which
 happen without an agent action, because they happen to a client without a
 player action. Triggers fire only while a `move_to` is in progress; the
 server's own radius check rejects any hit the interpolation got wrong.
@@ -931,8 +928,7 @@ session, the module compares the pair to the last one announced and emits
 login announces the starting zone, and a teleport or map transfer announces
 its arrival the same way a walk across a subzone edge does. The event is
 audited like every other (`kind: "event"`). What the server does with the
-pair (exploration credit, PvP flags, rest state) is unchanged and was never
-gated on this.
+pair (exploration credit, PvP flags, rest state) is not gated on this.
 
 ### Quest/combat extension whitelist (additive)
 
@@ -1126,9 +1122,9 @@ coordinates ride any of these.
 | `SMSG_ITEM_TEXT_QUERY_RESPONSE` | 0x244 | `{ "found": <bool>, "guid"?, "text"? }` — `found` false is "no such carried item"; a carried item with nothing written on it answers `found` true with an empty `text` |
 
 The auction house stays outside both lists: `CMSG_AUCTION_*` is not
-allowlisted and no auction reply is tapped (operator decision:
-deferred, with the dungeon finder, guilds, battlegrounds, glyphs, dual spec
-and equipment sets, until single-player play is validated; docs/CONTRACTS.md).
+allowlisted and no auction reply is tapped (deferred, with the dungeon finder,
+guilds, battlegrounds, glyphs, dual spec and equipment sets, until
+single-player play is validated; docs/CONTRACTS.md).
 
 Achievements and flight paths (issue #8 first half):
 
