@@ -622,15 +622,16 @@ governs the *harness's* own leakage — a coordinate list served out of our
 bundle would be an answer key we handed over — and says nothing about what the
 model already knew. The size of the prior is unmeasured.
 
-**Most rows are one to a few runs.** The tier is the evidence budget: `t0`
-buys one `e90`, `t1` three, `t2` three plus one `e360`, so a ladder entry's
-`n` is usually one to three and often one. The ladder prints that `n` beside
-every entry. One run has spread — a live world, a provider's weather, a death that costs
-minutes — and a gap of a level or two sits inside it. This is why the ladder
-shows a highest rung, a `(level, xp)` pair and gold as three separate numbers
-rather than one score ("Scoring"), and why no single number is promised in
-this phase. What `n` *should* be is an open question,
-not a decision recorded here.
+**Most rows are one to a few runs, and that is a budget.** The tier is the
+evidence budget: `t0` buys one `e90`, `t1` three, `t2` three plus one `e360`,
+so a ladder entry's `n` is usually one and never more than three. The ladder
+prints that `n` beside every entry. One run has spread — a live world, a
+provider's weather, a death that costs minutes — and a gap of a level or two
+sits inside it. This is why the ladder shows a highest rung, a `(level, xp)`
+pair and gold as three separate numbers rather than one score ("Scoring"), and
+why no single number is promised. The cap is not a claim that three is enough;
+it is what the operator can pay for across the whole board today, and it is
+expected to rise as the cost of an episode falls (operator, 2026-09-19).
 
 **There is no floor.** No scripted baseline has been run through this harness:
 no greedy XP grinder, no deterministic quest-walkthrough script, no random
