@@ -547,11 +547,21 @@ off a model whose launches keep failing.
 whose last activity (its pause mark, else its trajectory) is older than **its
 own** episode budget — 12h for a run with no wall clock — is ended. That is the
 half-day outage case: the host slept, and every run left live or paused had its
-budget elapse in wall clock while nobody was playing it. A stale freeplay
-session is ended too, and the next tick continues it on the same character
-under a new run id (below). A run the fleet did
+budget elapse in wall clock while nobody was playing it. A freeplay session is
+never stale: it has no budget to elapse, and it is resumed under its own run id
+however long the gap (below). A run the fleet did
 not launch (no `fleet-` prefix) is never ended by the supervisor: it is listed
 for the operator.
+
+A run with **no verdict at all** — no termination, no pause, no live process —
+is a runner that was killed before it could write (a SIGKILL inside the stop
+grace, a host that lost power). On the lanes that resume, the supervisor reads
+it as paused `offline` as of its last activity and resumes it on the next tick
+exactly as an `operator-pause`; `--status` shows it the same way. It is never
+left in limbo, and its character is never a launch's leftover: it stays the
+character head and every other launch on its account keeps it. The scored
+lanes are left to the stale sweep above — a lapsed `e90` is a failed attempt
+either way.
 
 For the lanes that **do** resume — freeplay, and `campaigns.<name>.resume` —
 `--status` shows `paused (reason, Xm elapsed of Ym) — <run id> Lx xp` and a
@@ -581,7 +591,7 @@ a paused run counts toward nothing until it finally ends.
 A freeplay character — the one an `idle: "unlimited"` ref plays across its
 sessions — is the operator's to disable and re-enable at will, and it
 survives that. Without it only a *pause* would come back: every
-ended session (idle watchdog, a hand kill, the stale sweep) would be followed
+ended session (idle watchdog, a hand kill) would be followed
 by a fresh attempt whose hygiene wiped the account and whose model named a new
 level-1 character.
 
@@ -600,11 +610,11 @@ What the supervisor does with it, per tick:
   there is no episode boundary to wait for on a session with no wall clock.
   The runner logs the character out and writes `operator-pause`; `--status`
   lists the run as `paused, not in config` while the ref stays `none`.
-- **Re-enable within 12h**: the paused run is resumed in place by the ordinary
-  resume path — same run id, account, character, scratchpad.
-- **Re-enable later**, or after any ended session: the stale sweep (or the
-  watchdog, or the operator's kill) has ended the run, so the next policy pick
-  is a **continuation**: a new run id (`-a<n+1>`) launched with
+- **Re-enable**, however much later: the paused run is resumed in place by the
+  ordinary resume path — same run id, account, character, scratchpad. A
+  freeplay pause never goes stale.
+- **After an ended session** (the watchdog, or the operator's kill): the next
+  policy pick is a **continuation**: a new run id (`-a<n+1>`) launched with
   `--continue-from <predecessor>`. The runner refuses it unless the launch is
   `freeplay`, the predecessor is a freeplay run on the same account and named
   a character; then hygiene keeps that character and clears the rest, the

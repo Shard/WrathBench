@@ -1077,7 +1077,7 @@ export function applyEnded(runs: readonly RunFact[], ended: readonly EndedRun[],
 // instead of a fresh level-1 character. Its identity is nothing new on disk:
 // the ref's latest ENDED freeplay run that recorded an account and a
 // character. A paused one is `planResumes`' (same run id); an ended one — the
-// idle watchdog, a hand kill, a stale sweep — is continued under the next
+// idle watchdog, a hand kill — is continued under the next
 // attempt's run id with `--continue-from`, which is the lineage the run
 // record then carries. Two things keep the character standing meanwhile:
 // every fresh launch on that account keeps it (`--keep-characters`), and the
@@ -1279,8 +1279,8 @@ export function planContinuations(
  * watchdog or a hand kill; the operator flipping the ref to `idle: "none"`
  * wants it stopped. SIGTERM takes the pause path (the runner logs the
  * character out and writes `operator-pause`), and the character comes back on
- * re-enable: resumed in place while the pause is fresh, continued under the
- * next attempt once the stale sweep has ended it.
+ * re-enable: resumed in place, however long it sat — a freeplay pause never
+ * goes stale.
  */
 export function pausesOnDrain(job: Pick<FleetJob, "source" | "episode"> | undefined): boolean {
   return job !== undefined && job.source === "policy" && job.episode === "freeplay";
@@ -1323,7 +1323,7 @@ export function policyJobDropped(
  * Whether this job's run comes back WHERE IT LEFT OFF after a supervisor
  * restart — same run id, account and character — rather than spending its
  * attempt. Two kinds do: the freeplay character (`pausesOnDrain`, resumed in
- * place while the pause is fresh) and a probe campaign that asked to be
+ * place however long it sat) and a probe campaign that asked to be
  * resumed (`campaigns.<name>.resume`). Everything else — every scored e90 or
  * e360 — is ended `manual` on the next boot and must be waited out on its own
  * clock.

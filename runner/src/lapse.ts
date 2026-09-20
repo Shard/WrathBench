@@ -14,7 +14,12 @@
  * - `e90` / `e360` — never resume. The run is a **failed attempt**: ended,
  *   account and character released, and the scheduler gives the model a fresh
  *   attempt with a new run id and a full clock.
- * - `freeplay` — resume, exactly as before.
+ * - `freeplay` — resume, exactly as before, and however long the gap: a
+ *   freeplay run has no budget for a stale gap to spend, and the trajectory
+ *   is the character's whole life, so a session that went quiet for a day is
+ *   resumed under its own run id rather than ended `stale` and continued
+ *   under the next attempt (operator requirement, 2026-09-20: a freeplay run
+ *   continues from where it left off after any infrastructure restart).
  * - `probing` — resume only when the campaign says `resume: true`.
  *
  * The shared scoreability rule below answers the broader question — whether a
@@ -166,6 +171,9 @@ export function classifyLapse(opts: {
 }): Lapse {
   const cause = opts.pause?.reason ?? OFFLINE_PAUSE;
   const provider = PROVIDER_PAUSES.has(cause);
+  // Freeplay has no clock, so nothing elapsed while nobody was playing it:
+  // the gap is a gap in the character's life, not a broken measurement.
+  if (opts.episode === "freeplay") return { kind: "resume", counts: false };
   if (opts.staleForMs !== null) {
     // A stale gap is the harness's weather, not the model's failure — unless
     // the run was already waiting on its provider when the lights went out.

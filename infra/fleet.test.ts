@@ -3245,6 +3245,14 @@ describe("a run whose runner died before its verdict is paused, not invisible (2
     expect(resumeNotBefore(runs[0]!.pause!)).toBeNull();
   });
 
+  test("the stale sweep never ends it, and neither does a twelve-hour gap", () => {
+    const runs = implicitPauses({ runs: [verdictless({}, 12 * H + 15 * 60_000)], now: NOW });
+    expect(planStaleRuns({ runs, refs: Object.keys(roster), now: NOW })).toEqual([]);
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.resume.map((r) => r.runId)).toEqual(["fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919"]);
+  });
+
   test("it is the character head: the next pick would continue it, and every other launch on the account keeps Aurelian", () => {
     const older = verdictless({
       runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260917",
