@@ -674,7 +674,18 @@ What the supervisor does with it, per tick:
   another ref's freeplay character gets `--keep-characters`, so a scored run's
   hygiene leaves it standing (the model is told the name is taken, and the
   freshness tripwire still arms on its guid); the cross-account name sweep
-  skips freeplay characters.
+  skips freeplay characters and the character of every run that has not
+  ended.
+- **Hygiene has a guard of its own**, below anything the supervisor passes:
+  before deleting, the runner reads the run directories for the account
+  (`characterOwners`) and never deletes a character whose newest run has no
+  termination — it may be minutes from being resumed, and a character is the
+  one thing a resume cannot recreate. A character above level 1 that no
+  *ended* run accounts for is kept too, unless the launch passes
+  `--allow-character-delete` (the fleet never does). Both are logged as
+  `hygiene: KEPT <name> (guid, level) — <why>` and recorded in the trajectory
+  as `hygiene-kept`; the model is told the name is taken. A level-1 leftover,
+  or a scored episode's leftover whose run ended, is cleared as always.
 
 The policy line says what happened: `policy sub-opus-low: sub-opus-low freeplay
 attempt 12 (extra) (continues fleet-…-a11) on RUNNER2`, and `--status` prints

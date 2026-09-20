@@ -41,7 +41,7 @@ import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
-import { clearAccountCharacters } from "./hygiene";
+import { characterOwners, clearAccountCharacters } from "./hygiene";
 import { leaseSessionSecret, releaseSessionSecret } from "./module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
@@ -372,6 +372,12 @@ async function main(): Promise<void> {
     typeof args["keep-characters"] === "string"
       ? args["keep-characters"].split(",").map((n) => n.trim()).filter((n) => n.length > 0)
       : [];
+  /**
+   * `--allow-character-delete`: let hygiene delete a character above level 1
+   * that no ended run on this account accounts for. Never passed by the
+   * fleet; an operator's explicit choice on a hand launch (hygiene.ts).
+   */
+  const allowCharacterDelete = flag(args["allow-character-delete"]) === true;
   /**
    * `--continue-dropped <run-id> --continue-dropped-reason <why>`: the character
    * head the supervisor chose NOT to continue (its account is occupied by
@@ -893,8 +899,12 @@ async function main(): Promise<void> {
       log: (line) => console.error(`[wrathbench] ${line}`),
       // A continuation keeps its predecessor's character, and every launch
       // keeps another ref's freeplay character it shares the account with;
-      // everything else on the account is the usual leftover.
+      // everything else on the account is the usual leftover — unless a run
+      // that has not ended still owns it, or it is levelled and unaccounted
+      // for (hygiene's own guard, from the run directories).
       keep: [...(continuation !== undefined ? [continuation.character] : []), ...keepCharacters],
+      owners: characterOwners(config.runsDir, config.account, config.runId),
+      allowCharacterDelete,
     });
     if (!hygiene.ok) {
       console.error(`[wrathbench] ${hygiene.reason}`);
@@ -914,11 +924,16 @@ async function main(): Promise<void> {
       trajectory.append({ t: "harness", kind: "hygiene", cleared: hygiene.cleared });
     }
     // A kept character is as taken as a slot-eater: `createSession` on its
-    // name would reuse it, and the tripwire below would end the run.
+    // name would reuse it, and the tripwire below would end the run. So is
+    // one the guard refused to delete.
     const keptOthers = hygiene.kept.filter((k) => continuation === undefined || k.name.toLowerCase() !== continuation.character.toLowerCase());
-    takenNames = [...hygiene.leftover, ...keptOthers.map((k) => k.name)];
+    takenNames = [...hygiene.leftover, ...keptOthers.map((k) => k.name), ...hygiene.protected.map((p) => p.name)];
     if (keptOthers.length > 0) {
       console.error(`[wrathbench] hygiene: kept ${keptOthers.map((k) => k.name).join(", ")} (another ref's freeplay character on this account)`);
+    }
+    for (const p of hygiene.protected) {
+      console.error(`[wrathbench] hygiene: KEPT ${p.name} (guid ${p.guid || "?"}${p.level !== null ? `, level ${p.level}` : ""}) — ${p.why}`);
+      trajectory.append({ t: "harness", kind: "hygiene-kept", character: p.name, guid: p.guid, level: p.level, detail: p.why });
     }
     if (hygiene.leftover.length > 0) {
       console.error(

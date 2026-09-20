@@ -5,7 +5,12 @@
  * loaded), the re-list is refused during the core's linger.
  */
 import { describe, expect, test } from "bun:test";
-import { clearAccountCharacters } from "../src/hygiene";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadRunConfig, newSessionToken } from "../src/config";
+import { characterOwners, clearAccountCharacters } from "../src/hygiene";
+import { Trajectory } from "../src/trajectory";
 
 type Reply = { status?: number; body: unknown };
 
@@ -22,7 +27,7 @@ function fakeFetch(script: { list: Reply[]; del: Reply[] }) {
   return { f, calls };
 }
 
-const enumOf = (...chars: { name: string; guid: string }[]) => ({
+const enumOf = (...chars: { name: string; guid: string; level?: number }[]) => ({
   body: { ok: true, token: "t", enum: { count: chars.length, characters: chars } },
 });
 const refused = { status: 409, body: { ok: false, error: "account_in_use" } };
@@ -166,5 +171,99 @@ describe("clearAccountCharacters with keep", () => {
     expect(out.ok).toBe(true);
     if (!out.ok) throw new Error("unreachable");
     expect(out.kept).toEqual([]);
+  });
+});
+
+describe("clearAccountCharacters never deletes a character a run still owns (2026-09-20)", () => {
+  // The listing the incident's launch saw: Aurelian, level 7, guid 625 — the
+  // character of a freeplay run whose runner had been SIGKILLed with no
+  // verdict — next to a level-1 leftover of a scored run that ended.
+  const listing = enumOf({ name: "Aurelian", guid: "625", level: 7 }, { name: "Novice", guid: "631", level: 1 });
+  const owners = new Map([
+    ["aurelian", { runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919", ended: false }],
+    ["novice", { runId: "fleet-ox-e90-stealth-ox-alpha-free-20260919", ended: true }],
+  ]);
+
+  test("an un-ended run's character is kept and said loudly; the ended run's leftover goes", async () => {
+    const { f, calls } = fakeFetch({ list: [listing, enumOf({ name: "Aurelian", guid: "625", level: 7 })], del: [deleted("Novice")] });
+    const lines: string[] = [];
+    const out = await clearAccountCharacters({ ...base, fetch: f, owners, log: (l) => lines.push(l) });
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(calls.filter((c) => c.path === "/character-delete").map((c) => c.body["character"])).toEqual(["Novice"]);
+    expect(out.cleared).toBe(1);
+    expect(out.leftover).toEqual([]);
+    expect(out.protected).toEqual([
+      { name: "Aurelian", guid: "625", level: 7, why: "belongs to run fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919, which has not ended" },
+    ]);
+    expect(lines.some((l) => l.includes("KEEPING Aurelian (guid 625, level 7)") && l.includes("has not ended"))).toBe(true);
+    // Said once, not once per listing round.
+    expect(lines.filter((l) => l.includes("KEEPING Aurelian")).length).toBe(1);
+  });
+
+  test("a levelled character nobody accounts for is kept without --allow-character-delete, and deleted with it", async () => {
+    const stray = enumOf({ name: "Wanderer", guid: "700", level: 4 });
+    const held = await clearAccountCharacters({ ...base, fetch: fakeFetch({ list: [stray], del: [] }).f, owners: new Map() });
+    expect(held.ok).toBe(true);
+    if (!held.ok) throw new Error("unreachable");
+    expect(held.protected.map((p) => p.name)).toEqual(["Wanderer"]);
+    expect(held.protected[0]!.why).toContain("--allow-character-delete");
+    expect(held.cleared).toBe(0);
+
+    const { f, calls } = fakeFetch({ list: [stray, enumOf()], del: [deleted("Wanderer")] });
+    const allowed = await clearAccountCharacters({ ...base, fetch: f, owners: new Map(), allowCharacterDelete: true });
+    expect(allowed.ok).toBe(true);
+    if (!allowed.ok) throw new Error("unreachable");
+    expect(calls.filter((c) => c.path === "/character-delete").map((c) => c.body["character"])).toEqual(["Wanderer"]);
+    expect(allowed.protected).toEqual([]);
+    expect(allowed.cleared).toBe(1);
+  });
+
+  test("the flag does not reach an un-ended run's character: that one is never a leftover", async () => {
+    const { f, calls } = fakeFetch({ list: [enumOf({ name: "Aurelian", guid: "625", level: 7 })], del: [] });
+    const out = await clearAccountCharacters({ ...base, fetch: f, owners, allowCharacterDelete: true });
+    expect(out.ok).toBe(true);
+    expect(calls.filter((c) => c.path === "/character-delete")).toEqual([]);
+  });
+
+  test("a level-1 stranger and an ended run's levelled leftover are still cleared, as before", async () => {
+    const { f, calls } = fakeFetch({
+      list: [enumOf({ name: "Fresh", guid: "1", level: 1 }, { name: "Novice", guid: "631", level: 5 }), enumOf()],
+      del: [deleted("x")],
+    });
+    const out = await clearAccountCharacters({ ...base, fetch: f, owners });
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(calls.filter((c) => c.path === "/character-delete").map((c) => c.body["character"]).sort()).toEqual(["Fresh", "Novice"]);
+    expect(out.protected).toEqual([]);
+  });
+});
+
+describe("characterOwners", () => {
+  /** A run directory on `account` that played `character`, ended or not. */
+  function run(runsDir: string, runId: string, o: { account: string; character: string; startedAt: number; ended?: string; archived?: boolean }): void {
+    const dir = join(runsDir, ...(o.archived === true ? ["archive", runId] : [runId]));
+    mkdirSync(dir, { recursive: true });
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({ runId, token: newSessionToken(), driver: "stub", episode: "freeplay", runsDir, moduleUrl: "http://127.0.0.1:9", account: o.account, character: o.character, race: 3, class: 2 });
+    traj.writeMeta({ runId, harnessVersion: "0.0.0-test", startedAt: o.startedAt, config });
+    if (o.ended !== undefined) traj.setTermination(runId, o.ended as "manual", "test");
+    traj.close();
+  }
+
+  test("the newest run per name on the account decides, archived runs included, case-folded, the asking launch excluded", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-owners-"));
+    run(runsDir, "old-aurelian", { account: "RUNNER2", character: "Aurelian", startedAt: 1, ended: "idle" });
+    run(runsDir, "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919", { account: "runner2", character: "Aurelian", startedAt: 2 });
+    run(runsDir, "novice-run", { account: "RUNNER2", character: "Novice", startedAt: 3, ended: "episode-limit", archived: true });
+    run(runsDir, "elsewhere", { account: "RUNNER3", character: "Stranger", startedAt: 4 });
+    run(runsDir, "me-now", { account: "RUNNER2", character: "Suggested", startedAt: 5 });
+    const owners = characterOwners(runsDir, "RUNNER2", "me-now");
+    expect(owners.get("aurelian")).toEqual({ runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919", ended: false });
+    expect(owners.get("novice")).toEqual({ runId: "novice-run", ended: true });
+    expect(owners.has("stranger")).toBe(false);
+    expect(owners.has("suggested")).toBe(false);
+    // No runs directory at all is simply no owners.
+    expect(characterOwners(join(runsDir, "nowhere"), "RUNNER2").size).toBe(0);
   });
 });

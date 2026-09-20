@@ -66,6 +66,7 @@ overrides the default in `src/config.ts` for that run.
 | `--state-interval-ms <n>` | `60000` | how often a periodic state line is recorded |
 | `--snippet-timeout-ms <n>` | `30000` | per-snippet evaluation timeout; the eval is abandoned, the runtime survives |
 | `--idle-ms <n>` | `600000` | the `idle` watchdog: no model output for this long ends the episode. `0` disables it |
+| `--allow-character-delete` | off | lets episode hygiene delete a character above level 1 that no ended run on the account accounts for. Never passed by the fleet: without it such a character is kept and named to the model as taken (`src/hygiene.ts`) |
 
 ## Drivers
 
