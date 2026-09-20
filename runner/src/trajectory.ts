@@ -783,10 +783,22 @@ export class Trajectory {
    * Record a pause. `episodeElapsedMs` rides on the record when the caller
    * knows it (run.ts does; the drivers pass what their watchdogs say) so the
    * pause line in the trajectory reads as "paused at 41m of 90m".
+   *
+   * One pause per segment: a row that already carries a `pause_reason` is
+   * left as it is and no second record is appended. The signal handler in
+   * run.ts writes the pause the instant SIGTERM lands (so a SIGKILL a second
+   * later still leaves a verdict), and the driver's own cooperative unwind
+   * then reaches the same call — the first write is the verdict, and the
+   * pause count `readRunFact` derives from the trajectory stays one per
+   * segment. `--resume` clears the row (`clearPause`), so the next segment's
+   * pause is recorded again.
    */
-  setPause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number): void {
+  setPause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number): boolean {
+    const row = this.db.query(`SELECT pause_reason FROM run WHERE run_id = ?`).get(runId) as { pause_reason?: unknown } | null;
+    if (row !== null && typeof row.pause_reason === "string" && row.pause_reason !== "") return false;
     this.append({ t: "pause", reason, detail, ...(episodeElapsedMs !== undefined ? { episodeElapsedMs } : {}) });
     this.db.query(`UPDATE run SET pause_reason = ? WHERE run_id = ?`).run(reason, runId);
+    return true;
   }
 
   clearPause(runId: string): void {

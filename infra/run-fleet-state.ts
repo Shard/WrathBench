@@ -285,6 +285,14 @@ export interface StateJob {
   /** The paused run this spawn is resuming. */
   resuming?: string;
   /**
+   * The run ids the roster was materialized with, written at spawn: what was
+   * running is on disk from the moment the process exists, so a supervisor
+   * that comes back after a hard kill can name the runs its predecessor was
+   * playing even when a runner never got to write anything. Absent on a state
+   * file written by an older supervisor.
+   */
+  runIds?: string[];
+  /**
    * The Claude subscription this job is billing, by env var NAME. Absent on the
    * default lane and on everything that is not a claude-code job.
    */

@@ -308,3 +308,23 @@ describe("a freeplay continuation's lineage", () => {
     expect(readTrajectory(dir).some((r) => r["kind"] === "continue-dropped")).toBe(true);
   });
 });
+
+describe("one pause per segment", () => {
+  test("a second setPause in the same segment is a no-op; a resume clears the row and the next pause records again", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({});
+    traj.writeMeta({ runId: "run-p", harnessVersion: "v", startedAt: 1, config });
+    // The signal handler's write, then the driver's unwind reaching the same call.
+    expect(traj.setPause("run-p", "operator-pause", "SIGTERM: supervisor stop", 1000)).toBe(true);
+    expect(traj.setPause("run-p", "rate-limited", "429", 1200)).toBe(false);
+    expect(traj.runRow("run-p")?.["pause_reason"]).toBe("operator-pause");
+    expect(readTrajectory(dir).filter((r) => r.t === "pause")).toHaveLength(1);
+    // --resume consumes the pause; the next segment's pause is a new record.
+    traj.clearPause("run-p");
+    expect(traj.setPause("run-p", "quota-exhausted", "quota", 5000)).toBe(true);
+    expect(traj.runRow("run-p")?.["pause_reason"]).toBe("quota-exhausted");
+    expect(readTrajectory(dir).filter((r) => r.t === "pause")).toHaveLength(2);
+    traj.close();
+  });
+});

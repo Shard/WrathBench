@@ -773,15 +773,38 @@ async function main(): Promise<void> {
     console.error(`[wrathbench] episode clock resumes at ${Math.round(elapsedBeforeMs / 60_000)}m`);
   }
 
+  const metaNow = (): RunMeta => ({
+    runId: config.runId,
+    harnessVersion: version,
+    startedAt: Date.now(),
+    config,
+    comparability,
+    ...(shakeout !== undefined ? { shakeout } : {}),
+  });
+  const pauseMark = (p: { reason: PauseMark["reason"]; detail?: string | undefined }): PauseMark => ({
+    reason: p.reason,
+    ...(p.detail !== undefined ? { detail: p.detail } : {}),
+    at: Date.now(),
+    episodeElapsedMs: watchdogs.elapsedMs(),
+  });
   // A stopped runner must still leave a run that says what happened to it.
   // Two signals, two meanings:
   //  - SIGTERM is what a supervisor sends — `docker compose stop`, a drain, a
   //    recreate. The run PAUSES as `operator-pause`: clock stopped, session
   //    released, resumable with --resume. The fleet's stop must not cost a run.
   //  - SIGINT is the operator's Ctrl-C on a hand-started run: `manual`.
-  // Either way the driver is asked to unwind cooperatively (the request in
-  // flight is abandoned, the CLI child torn down) and the record is written
-  // by the loop; a backstop writes it if the unwind wedges.
+  // The verdict is written FIRST, synchronously, before the driver is asked
+  // to do anything: on 2026-09-20 the kubelet evicted the fleet pod under
+  // DiskPressure and SIGKILLed it two seconds after SIGTERM, inside the
+  // cooperative unwind, and the freeplay run it was playing was left with
+  // neither a termination nor a pause — invisible to the resume planner and
+  // its level-7 character wiped by the next launch's hygiene. The pause row,
+  // its trajectory record and the meta.json mark are a few synchronous writes
+  // and they land before this handler returns; whatever the kill grace is,
+  // the run reads as paused. Then the driver unwinds cooperatively (the
+  // request in flight is abandoned, the CLI child torn down, the session
+  // released); its own pause write is a no-op against the row already there,
+  // and a backstop exits the process if the unwind wedges.
   let stopping = false;
   const abort = new AbortController();
   const onSignal = (sig: "SIGINT" | "SIGTERM"): void => {
@@ -796,6 +819,20 @@ async function main(): Promise<void> {
         ? `\n${sig}: pausing run as \`operator-pause\` (resume with --resume ${config.runId})`
         : `\n${sig}: terminating run as \`manual\``,
     );
+    if (req.kind === "pause") {
+      try {
+        const row = trajectory.runRow(config.runId);
+        const ended = row !== null && (row["termination_reason"] ?? null) !== null;
+        // A run that already has its termination keeps it; a pause never
+        // overwrites a verdict.
+        if (!ended) {
+          trajectory.setPause(config.runId, req.reason, req.detail, watchdogs.elapsedMs());
+          trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: pauseMark(req) });
+        }
+      } catch (err) {
+        console.error(`[wrathbench] could not write the pause record at once: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     abort.abort(req);
     // Backstop: never hang forever waiting for a wedged child or snippet. If
     // the loop has not written its record by then, write it here so the run
@@ -814,20 +851,6 @@ async function main(): Promise<void> {
       process.exit(130);
     }, req.kind === "pause" ? 60_000 : 20_000).unref();
   };
-  const metaNow = (): RunMeta => ({
-    runId: config.runId,
-    harnessVersion: version,
-    startedAt: Date.now(),
-    config,
-    comparability,
-    ...(shakeout !== undefined ? { shakeout } : {}),
-  });
-  const pauseMark = (p: { reason: PauseMark["reason"]; detail?: string | undefined }): PauseMark => ({
-    reason: p.reason,
-    ...(p.detail !== undefined ? { detail: p.detail } : {}),
-    at: Date.now(),
-    episodeElapsedMs: watchdogs.elapsedMs(),
-  });
   process.on("SIGINT", () => onSignal("SIGINT"));
   process.on("SIGTERM", () => onSignal("SIGTERM"));
 

@@ -454,6 +454,8 @@ interface JobProc {
    * attempt to the fallbacks and came out as a pinned freeplay job.
    */
   job?: FleetJob;
+  /** The run ids this process's roster was materialized with (`fillEntries`). */
+  runIds: string[];
   proc: ReturnType<typeof Bun.spawn>;
   pid: number;
   spawnedAt: number;
@@ -497,6 +499,7 @@ function writeState(
       ...stateJobFacts(name, j),
       account: p.spawn.account,
       ...(p.spawn.resumeRunId !== undefined ? { resuming: p.spawn.resumeRunId } : {}),
+      runIds: p.runIds,
       models: p.spawn.entries.map((e) => e.model),
       pid: p.pid,
       rosterPath: relative(REPO_ROOT, jobRosterPath(name, stampToday)),
@@ -1287,7 +1290,7 @@ async function main(): Promise<void> {
     const pj =
       pending.get(spawn.name) ??
       [...pinnedJobs(config), ...campaignJobs].find((j) => j.name === spawn.name);
-    const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
+    const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), runIds: entries.map((e) => e.runId), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
     void proc.exited.then((code) => {
       lp.exited = true;
       lp.exitCode = code;
