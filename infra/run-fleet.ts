@@ -131,6 +131,7 @@ import {
   planNameSweeps,
   planPolicy,
   planQueue,
+  implicitPauses,
   planResumes,
   planStaleRuns,
   planTick,
@@ -816,8 +817,19 @@ async function main(): Promise<void> {
     drainReasons.clear();
     // The run facts once a tick, shared by the projection and the resume
     // planner. Eligibility for the queue's gate and the policy's picks read
-    // the same answer; resumes read the same facts.
-    const runs = readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true });
+    // the same answer; resumes read the same facts. A verdict-less run on a
+    // resuming lane reads as paused `offline` from here on — unless one of
+    // this supervisor's own processes is playing it, or a live job holds its
+    // account (the same guards the stale sweep applies, for the same reason).
+    const runs = implicitPauses({
+      runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }),
+      campaigns: cfg.campaigns,
+      running: new Set([...procs.values()].filter((p) => !p.exited).flatMap((p) => p.runIds)),
+      busyAccounts: new Set(
+        [...assigned.values(), ...pinnedJobs(cfg).filter((j) => sets.running.has(j.name)).map((j) => j.account!)].map((a) => a.toUpperCase()),
+      ),
+      now: Date.now(),
+    });
     // Both are re-derived below if this tick's sweep ends anything: a strike
     // written halfway down a tick has to be in the projection the queue and
     // the policy read at the bottom of it.
@@ -1209,7 +1221,12 @@ async function main(): Promise<void> {
         assign: freshAssign,
         affinity: affinityMap,
         isFree: (a) => !busy.has(a.toUpperCase()) && held(a) === undefined,
-        protect: new Set([...characters.values()].map((s) => characterKey(s.account, s.character))),
+        // Every freeplay head, and the character of every run that has not
+        // ended — whatever its lane, a run without a verdict still owns it.
+        protect: new Set([
+          ...[...characters.values()].map((s) => characterKey(s.account, s.character)),
+          ...runs.filter((f) => f.terminationReason === null && f.account !== null && f.character !== null).map((f) => characterKey(f.account!, f.character!)),
+        ]),
       });
       if (sweeps.length > 0) void sweepNames(sweeps, say);
     }
@@ -1290,7 +1307,7 @@ async function main(): Promise<void> {
     const pj =
       pending.get(spawn.name) ??
       [...pinnedJobs(config), ...campaignJobs].find((j) => j.name === spawn.name);
-    const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), runIds: entries.map((e) => e.runId), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
+    const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), runIds: entries.map((e) => e.runId).filter((id): id is string => id !== undefined), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
     void proc.exited.then((code) => {
       lp.exited = true;
       lp.exitCode = code;

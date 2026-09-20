@@ -38,6 +38,18 @@ export const STALE_FALLBACK_MS = 12 * 60 * 60_000;
 /** Pause reasons that are the provider's doing, and therefore the model's problem. */
 export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", "rate-limited"]);
 
+/**
+ * The pause a run never got to write. A fleet run with no termination, no
+ * pause row and no live process behind it is a run whose runner died before
+ * its verdict — a SIGKILL inside the stop grace, a host that lost power. The
+ * supervisor treats it as paused for this reason (`implicitPauses` in
+ * infra/run-fleet-plan.ts), never as nothing: on 2026-09-20 such a freeplay
+ * run sat invisible to the resume planner for the whole twelve-hour stale
+ * window while the policy started a fresh character over the one it was
+ * playing. Nothing on disk ever carries this reason; it is derived.
+ */
+export const OFFLINE_PAUSE = "offline";
+
 /** Terminations this record writes. These are the runner's lapse/attempt states. */
 export const ATTEMPT_FAILURE_REASONS: ReadonlySet<string> = new Set(["attempt-failed", "stale"]);
 
@@ -152,7 +164,7 @@ export function classifyLapse(opts: {
   pause: { reason: string } | null;
   staleForMs: number | null;
 }): Lapse {
-  const cause = opts.pause?.reason ?? "offline";
+  const cause = opts.pause?.reason ?? OFFLINE_PAUSE;
   const provider = PROVIDER_PAUSES.has(cause);
   if (opts.staleForMs !== null) {
     // A stale gap is the harness's weather, not the model's failure — unless

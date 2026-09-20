@@ -46,6 +46,7 @@ import {
   PAUSE_SIDECAR,
   type PausedListing,
   pausesOnDrain,
+  implicitPauses,
   planResumes,
   planStaleRuns,
   planTick,
@@ -572,7 +573,15 @@ export function printStatus(): void {
   const live = liveJobsFromState(state);
   // Paused runs: what the supervisor would resume now, and what it
   // lists instead — computed from disk so it is right with the fleet down.
-  const runFacts = readRunFacts(RUNS_DIR);
+  // What the tick reads: a verdict-less run on a resuming lane is a paused
+  // one, unless a live job of an alive supervisor holds its account.
+  const runFacts = implicitPauses({
+    runs: readRunFacts(RUNS_DIR),
+    ...(config !== undefined ? { campaigns: config.campaigns } : {}),
+    running: new Set([...live.values()].filter((j) => fleetUp && j.alive).flatMap((j) => j.runIds ?? [])),
+    busyAccounts: new Set([...live.values()].filter((j) => fleetUp && j.alive).map((j) => j.account.toUpperCase())),
+    now: Date.now(),
+  });
   const pausedRuns = runFacts.filter((f) => f.pause !== null && !isStaleRun(f, Date.now())).sort((a, b) => b.pause!.at - a.pause!.at);
   const resumePlan =
     config !== undefined
@@ -810,7 +819,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   } else {
     console.log("  gate open: jobs spawn without smoking the server first");
   }
-  const runs = readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true });
+  const runs = implicitPauses({ runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }), campaigns: config.campaigns, now: Date.now() });
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
   const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now() });

@@ -44,6 +44,7 @@ import {
   planTick,
   formatConcurrency,
   jobSpawn,
+  implicitPauses,
   planResumes,
   planStaleRuns,
   retryNumbers,
@@ -3157,5 +3158,115 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     expect(resumesInPlace({ source: "policy", episode: "e90" }, campaigns)).toBe(false);
     expect(resumesInPlace({ source: "pinned", episode: "e360" }, campaigns)).toBe(false);
     expect(resumesInPlace(undefined, campaigns)).toBe(false);
+  });
+});
+
+describe("a run whose runner died before its verdict is paused, not invisible (2026-09-20)", () => {
+  const NOW = 1_800_000_000_000;
+  const H = 3_600_000;
+  const roster: Record<string, FleetRosterEntry> = {
+    "deepseek-v41-flash": { model: "deepseek/deepseek-v4.1-flash", tier: "t1", idle: "unlimited" },
+    ox: { model: "stealth/ox-alpha:free", tier: "t1", idle: "none" },
+  };
+  const config = (): Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> => ({
+    jobs: [],
+    roster,
+    policy: { ...DEFAULT_POLICY, series: "0.5" },
+    accounts: { pinned: {}, pool: ["RUNNER2", "RUNNER3"], paid: [], local: [] },
+  });
+  const held = (): string | undefined => undefined;
+  /** No termination, no pause, trajectory last touched `quietFor` ago: exactly what the pod left behind. */
+  const verdictless = (over: Partial<RunFact> = {}, quietFor = 9 * H + 25 * 60_000): RunFact => ({
+    runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919",
+    model: "deepseek/deepseek-v4.1-flash",
+    effort: null,
+    episode: "freeplay",
+    episodeOverride: false,
+    harnessVersion: "harness-0.5-776-g170e07de",
+    harnessSeries: "0.5",
+    extra: true,
+    startedAt: NOW - 30 * H,
+    endedAt: NOW - quietFor,
+    terminationReason: null,
+    modelResponses: 900,
+    bestLevel: 7,
+    live: false,
+    pause: null,
+    account: "RUNNER2",
+    character: "Aurelian",
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    subscription: null,
+    ...over,
+  });
+
+  test("implicitPauses: a verdict-less fleet freeplay run reads as paused `offline` as of its last activity", () => {
+    const [f] = implicitPauses({ runs: [verdictless()], now: NOW });
+    expect(f!.pause).toEqual({ reason: "offline", at: NOW - 9 * H - 25 * 60_000, count: 1, episodeElapsedMs: null });
+    // Everything else about the fact is untouched.
+    expect(f!.terminationReason).toBeNull();
+    expect(f!.character).toBe("Aurelian");
+  });
+
+  test("implicitPauses leaves alone what it must: live, ended, already paused, hand-launched, held, and the scored lanes", () => {
+    const keep = (f: RunFact, opts: Partial<Parameters<typeof implicitPauses>[0]> = {}): void => {
+      expect(implicitPauses({ runs: [f], now: NOW, ...opts })[0]).toEqual(f);
+    };
+    keep(verdictless({ live: true }, 30_000));
+    keep(verdictless({ terminationReason: "idle" }));
+    keep(verdictless({ pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: null } }));
+    keep(verdictless({ runId: "roster-deepseek-20260919" }));
+    // The supervisor's own child is playing it, or a live job holds its account.
+    keep(verdictless(), { running: new Set(["fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919"]) });
+    keep(verdictless(), { busyAccounts: new Set(["RUNNER2"]) });
+    // A scored run is the stale sweep's: a lapsed e90 is a failed attempt either way.
+    keep(verdictless({ episode: "e90", extra: false, episodeMs: 90 * 60_000 }));
+    // A probe campaign that did not ask to resume is not resumed here either.
+    keep(verdictless({ episode: "probing", campaign: "nav", cell: "c1" }), { campaigns: [{ name: "nav", resume: false } as unknown as Campaign] });
+  });
+
+  test("planResumes brings it back on the next tick — same run id, same account, at once", () => {
+    const runs = implicitPauses({ runs: [verdictless()], now: NOW });
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.listed).toEqual([]);
+    expect(plan.resume).toHaveLength(1);
+    expect(plan.resume[0]).toMatchObject({
+      runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919",
+      account: "RUNNER2",
+      pauseCount: 1,
+    });
+    expect(plan.resume[0]!.job.resume?.runId).toBe("fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919");
+    expect(plan.resume[0]!.job.source).toBe("policy");
+    expect(plan.resume[0]!.why).toContain("offline");
+    // An offline pause has no cadence: the runner was killed under the run,
+    // and the provider had nothing to do with it.
+    expect(resumeNotBefore(runs[0]!.pause!)).toBeNull();
+  });
+
+  test("it is the character head: the next pick would continue it, and every other launch on the account keeps Aurelian", () => {
+    const older = verdictless({
+      runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260917",
+      startedAt: NOW - 60 * H,
+      endedAt: NOW - 31 * H,
+      terminationReason: "idle",
+      character: "Aurelius",
+      bestLevel: 3,
+    });
+    // Read raw — a head is a head whether or not the planner has stamped the
+    // implicit pause yet, because charactersFrom is also what --status reads.
+    const characters = charactersFrom([older, verdictless()], roster);
+    expect(characters.get("deepseek-v41-flash")).toEqual({
+      runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919",
+      account: "RUNNER2",
+      character: "Aurelian",
+    });
+    expect(keepFor("RUNNER2", characters, "ox")).toEqual(["Aurelian"]);
+    // A fresh policy pick of the same ref landing on RUNNER2 continues it
+    // rather than starting a level-1 character over it.
+    const pick = { job: { refs: ["deepseek-v41-flash"], ref: "deepseek-v41-flash", episode: "freeplay" as const, repeat: 1, name: "deepseek-v41-flash-freeplay", enabled: true, source: "policy" as const, attempt: 2 }, account: "RUNNER2", why: "extra" };
+    const { picks } = planContinuations([pick], characters, roster);
+    expect(picks[0]!.job.continueFrom).toBe("fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919");
   });
 });

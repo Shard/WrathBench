@@ -33,7 +33,7 @@ import { backoffMs, isTainted, type RosterSpec, slug } from "./run-roster";
 import { type Campaign, type ProbeRun, workDimensions } from "../runner/src/campaigns";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
 import { isScoredEpisode } from "../runner/src/episodes";
-import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
+import { classifyLapse, OFFLINE_PAUSE, resumesOnPause } from "../runner/src/lapse";
 import {
   ACCOUNT_CLASSES,
   type AccountClass,
@@ -45,6 +45,7 @@ import {
   DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT,
   type HeldPick,
   inSeries,
+  lastActivityOf,
   type ModelState,
   type NextJob,
   planNextJobs,
@@ -711,7 +712,9 @@ export function fmtPaused(elapsedMs: number | null, budgetMs: number | null): st
  * run is listed, not hammered. Null means "now".
  */
 export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
-  if (pause.reason === "operator-pause") return null;
+  // An offline pause is the harness's own doing too: the runner was killed
+  // under the run, and nothing about the provider changed.
+  if (pause.reason === "operator-pause" || pause.reason === OFFLINE_PAUSE) return null;
   if (isTainted(pause.count)) return "never";
   return pause.at + backoffMs(pause.count);
 }
@@ -728,18 +731,65 @@ export function campaignResumeOf(campaigns: readonly Campaign[] | undefined, cam
 }
 
 /**
+ * The runs as the supervisor reads them, with the pause a dead runner never
+ * wrote filled in. Pure.
+ *
+ * A `fleet-` run with no termination, no pause and no live process is a run
+ * whose runner was killed before its verdict. It used to be nothing at all:
+ * `planResumes` walks paused runs, `planStaleRuns` waits out the run's budget
+ * (twelve hours for freeplay, which has none), and in between the run was
+ * invisible — not resumed, not a character head, its character fair game for
+ * the next launch's hygiene. On 2026-09-20 that cost a level-7 freeplay
+ * character: the pod was SIGKILLed two seconds into its stop grace, and nine
+ * hours later the policy started a fresh attempt on the same account.
+ *
+ * Such a run is paused `offline` as of its last activity, on the lanes that
+ * resume a pause (freeplay, and a campaign that asked): `planResumes` then
+ * brings it back on the next tick, same run id, same character. The scored
+ * lanes are left to the stale sweep — a lapsed e90 is a failed attempt either
+ * way, and the sweep's wait is the guard against ending a run that is merely
+ * quiet.
+ *
+ * The same guards as the stale sweep, and for the same reason: a run the
+ * supervisor's own processes hold (`running`, by run id) or that sits on an
+ * account a live job holds (`busyAccounts`) is left exactly as read. The
+ * supervisor cannot see inside its children, and a run that has not touched
+ * its trajectory for two minutes is not a dead one.
+ */
+export function implicitPauses(opts: {
+  runs: readonly RunFact[];
+  campaigns?: readonly Campaign[];
+  /** Run ids the supervisor's own processes hold. */
+  running?: ReadonlySet<string>;
+  /** Accounts a live job holds, upper-cased. */
+  busyAccounts?: ReadonlySet<string>;
+  now: number;
+}): RunFact[] {
+  const running = opts.running ?? new Set<string>();
+  const busy = opts.busyAccounts ?? new Set<string>();
+  return opts.runs.map((f) => {
+    if (f.terminationReason !== null || f.pause !== null || f.live) return f;
+    if (!f.runId.startsWith("fleet-") || running.has(f.runId)) return f;
+    if (f.account !== null && busy.has(f.account.toUpperCase())) return f;
+    if (!resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign))) return f;
+    return { ...f, pause: { reason: OFFLINE_PAUSE, at: lastActivityOf(f), count: 1, episodeElapsedMs: null } };
+  });
+}
+
+/**
  * Runs nothing came back for. Pure.
  *
  * The host slept, or the fleet was down for half a day: a run left live or
  * paused is cooked, because its episode budget elapsed in wall clock while
  * nobody was playing it. Every such run is ENDED — a failed attempt when it
  * was waiting on its provider, `stale` otherwise, since an offline gap is the
- * harness's weather and not the model's failure. Freeplay is ended the same
- * way; the next tick starts a fresh session rather than resuming a dead one.
+ * harness's weather and not the model's failure. Freeplay is not: it has no
+ * budget to elapse, and `classifyLapse` resumes it however long the gap.
  *
  * Paused runs are handled by `planResumes`, which walks them anyway; this
- * covers the ones with no pause record at all — a run whose process died with
- * the machine.
+ * covers the ones with no pause record at all — a scored run whose process
+ * died with the machine (`implicitPauses` has already turned the resumable
+ * lanes' verdict-less runs into paused ones).
  */
 export function planStaleRuns(opts: {
   runs: readonly RunFact[];
@@ -1064,6 +1114,13 @@ export function characterKey(account: string, character: string): string {
  * continued from. Nothing here launches anything: a head that IS resumable is
  * resumed by `planResumes`, which reserves its account and job name before the
  * policy picks.
+ *
+ * So is a run with NO verdict at all — no termination, no pause, no live
+ * process. That is a runner killed before it could write (2026-09-20), and
+ * excluding it made the run before it the head: the next pick continued a
+ * stale predecessor, launches on the account got no `--keep-characters` for
+ * the character it was actually playing, and hygiene deleted it. The newest
+ * attempt is the head whatever it managed to write on the way down.
  */
 export function charactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Character> {
   const out = new Map<string, Character>();
@@ -1072,7 +1129,7 @@ export function charactersFrom(runs: readonly RunFact[], roster: Record<string, 
     if (e.idle !== "unlimited") continue;
     for (const f of runs) {
       if (f.episode !== "freeplay" || f.account === null || f.character === null) continue;
-      if (f.live || (f.terminationReason === null && f.pause === null)) continue;
+      if (f.live) continue;
       if (f.model !== e.model || (f.effort ?? null) !== (e.effort ?? null)) continue;
       if ((at.get(name) ?? -1) >= f.startedAt) continue;
       at.set(name, f.startedAt);
