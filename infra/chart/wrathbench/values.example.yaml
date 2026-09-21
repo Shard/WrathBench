@@ -21,6 +21,11 @@ image:
 nodeSelector:
   kubernetes.io/hostname: your-node
 
+# A PriorityClass the CLUSTER defines; the chart creates none. "" omits the
+# field from every pod, which is where a chart that does not know its cluster
+# has to leave it.
+priorityClassName: your-priority-class
+
 storage:
   # "" is the cluster's default StorageClass.
   className: ""
@@ -56,6 +61,7 @@ db:
     requests:
       cpu: 500m
       memory: 1Gi
+      ephemeral-storage: 256Mi
     limits:
       memory: 2Gi
   runAsUser: 1000
@@ -73,8 +79,10 @@ worldserver:
     requests:
       cpu: "2"
       memory: 4Gi
+      ephemeral-storage: 256Mi
     limits:
       memory: 8Gi
+  tempSizeLimit: 2Gi
   startupProbe:
     periodSeconds: 10
     failureThreshold: 90
@@ -84,8 +92,11 @@ authserver:
     requests:
       cpu: 100m
       memory: 256Mi
+      ephemeral-storage: 256Mi
     limits:
       memory: 512Mi
+  logsSizeLimit: 1Gi
+  tempSizeLimit: 2Gi
 
 jobs:
   dbImport:
@@ -93,13 +104,16 @@ jobs:
       requests:
         cpu: 500m
         memory: 512Mi
+        ephemeral-storage: 256Mi
       limits:
         memory: 2Gi
+    logsSizeLimit: 1Gi
   bootstrap:
     resources:
       requests:
         cpu: 100m
         memory: 256Mi
+        ephemeral-storage: 256Mi
       limits:
         memory: 512Mi
 
@@ -109,8 +123,10 @@ fleet:
     requests:
       cpu: "1"
       memory: 2Gi
+      ephemeral-storage: 256Mi
     limits:
       memory: 6Gi
+  tmpSizeLimit: 2Gi
 
 codex:
   enabled: false
@@ -121,8 +137,10 @@ runner:
     requests:
       cpu: 100m
       memory: 512Mi
+      ephemeral-storage: 256Mi
     limits:
       memory: 4Gi
+  tmpSizeLimit: 2Gi
 
 clickhouse:
   enabled: true
@@ -133,6 +151,7 @@ clickhouse:
     requests:
       cpu: 500m
       memory: 2Gi
+      ephemeral-storage: 256Mi
     limits:
       memory: 4Gi
 
@@ -142,6 +161,7 @@ collector:
     requests:
       cpu: 100m
       memory: 256Mi
+      ephemeral-storage: 256Mi
     limits:
       memory: 2Gi
 
@@ -151,6 +171,7 @@ viewer:
     requests:
       cpu: 200m
       memory: 1Gi
+      ephemeral-storage: 256Mi
     limits:
       memory: 3Gi
   ingress:
@@ -174,6 +195,7 @@ publisher:
     requests:
       cpu: 100m
       memory: 256Mi
+      ephemeral-storage: 256Mi
     limits:
       memory: 2Gi
 

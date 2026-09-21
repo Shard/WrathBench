@@ -44,6 +44,9 @@ spec:
       annotations: {{ toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
       containers:
@@ -85,8 +88,11 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
-        # Not on the PVC: the authserver's log is chatter, not evidence.
+        # Not on the PVC: the authserver's log is chatter, not evidence. Still
+        # bounded — nothing rotates it, and an unbounded emptyDir is node disk.
         - name: logs
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.authserver.logsSizeLimit }}
         - name: temp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.authserver.tempSizeLimit }}

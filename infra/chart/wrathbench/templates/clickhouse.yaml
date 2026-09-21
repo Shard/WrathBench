@@ -304,6 +304,9 @@ spec:
         checksum/clickhouse-config: {{ printf "%s%s%s" (include "wrathbench.clickhouse.memoryXml" .) (include "wrathbench.clickhouse.loggingXml" .) (include "wrathbench.clickhouse.profileXml" .) | sha256sum }}
         {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
     spec:
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext:
         # The image's own `clickhouse` user is 101, and the datadir is written
@@ -427,6 +430,9 @@ spec:
       annotations: {{ toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
       containers:

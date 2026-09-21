@@ -731,6 +731,38 @@ half (`planContinuations`, the pause-on-drain, `--keep-characters`) needs the
 `fleet` container recreated — `./infra/fleet-update.sh graceful` once the live
 runs are at a boundary, as "Updating the live fleet" describes.
 
+### Node disk pressure
+
+A node that runs out of root disk evicts pods, and it does not ask nicely: at
+the hard threshold the grace period is zero, so `terminationGracePeriodSeconds`
+buys nothing and a live episode dies without writing its pause record. The
+chart is built so that WrathBench is neither the cause of that nor the first
+thing chosen when it happens.
+
+The kubelet ranks candidates by whether a pod's ephemeral-storage use exceeds
+its **request** before it looks at anything else, so a container with no
+request is in the first group to go however little it is writing. Every
+container in the chart therefore requests `ephemeral-storage`, at the same
+modest default: what these containers write to node-local disk is a log line on
+its way to the runtime and a scratch directory of a few kilobytes, because
+everything that is evidence — trajectories, the module's audit trail, the
+config store — is on the data PVC, which is not ephemeral storage and does not
+count toward it. The request is a rank, not a budget.
+
+Every `emptyDir` carries a `sizeLimit` for the other direction: unbounded, it
+is simply node disk with a friendly name, and the pod that fills a node is the
+one that gets evicted for it. The ceilings sit far above the working set on
+purpose. They are a backstop against a runaway, not a quota to run near —
+exceeding one evicts the pod, which costs every run it was supervising, so a
+limit that could be reached in normal operation would be worse than none.
+
+`priorityClassName` is the third piece and the only one the chart cannot
+decide: priority is compared across every workload on a cluster, so the value
+is the deploying cluster's and the chart creates no PriorityClass. Left empty,
+the field is omitted from every pod and the deployment behaves as before. Set
+it to a class the cluster defines and the realm outranks whatever else is
+sharing the node when one fills.
+
 ### Deploy window (worldserver changes)
 
 The canonical deployment is the Kubernetes chart; the rest of this chapter is

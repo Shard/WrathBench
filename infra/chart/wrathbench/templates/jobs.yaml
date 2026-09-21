@@ -39,6 +39,9 @@ spec:
         app.kubernetes.io/component: db-import
     spec:
       restartPolicy: Never
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
       initContainers:
@@ -56,7 +59,7 @@ spec:
           env:
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
           resources:
-            requests: { cpu: 10m, memory: 64Mi }
+            requests: { cpu: 10m, memory: 64Mi, ephemeral-storage: 256Mi }
             limits: { memory: 256Mi }
       containers:
         - name: db-import
@@ -81,7 +84,8 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
         - name: logs
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.jobs.dbImport.logsSizeLimit }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -103,6 +107,9 @@ spec:
         app.kubernetes.io/component: bootstrap
     spec:
       restartPolicy: Never
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
       initContainers:
@@ -120,7 +127,7 @@ spec:
           env:
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
           resources:
-            requests: { cpu: 10m, memory: 64Mi }
+            requests: { cpu: 10m, memory: 64Mi, ephemeral-storage: 256Mi }
             limits: { memory: 256Mi }
       containers:
         - name: bootstrap
