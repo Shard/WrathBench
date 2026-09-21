@@ -26,7 +26,7 @@ jobs:
     steps:
       # No submodules on purpose: deps/azerothcore is a reference checkout for
       # the C++ build, and nothing under test reads it.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # A dummy immutable tag and a dummy registry: the chart refuses "",
       # "latest" and a missing registry by design (templates/_helpers.tpl), so
