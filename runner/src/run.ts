@@ -846,10 +846,10 @@ async function main(): Promise<void> {
         const ended = row !== null && (row["termination_reason"] ?? null) !== null;
         // A run that already has its termination keeps it; a pause never
         // overwrites a verdict.
-        if (!ended) {
-          trajectory.setPause(config.runId, req.reason, req.detail, watchdogs.elapsedMs());
-          trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: pauseMark(req) });
-        }
+        // Nor does it move a pause already there: a run that paused on its
+        // provider and is then stopped keeps that pause's reason AND its
+        // instant, which is what the resume cadence counts from.
+        if (!ended) trajectory.pauseWithMark(config.runId, pauseMark(req), readMeta(runDir) ?? metaNow());
       } catch (err) {
         console.error(`[wrathbench] could not write the pause record at once: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -863,8 +863,7 @@ async function main(): Promise<void> {
       const recorded = row !== null && ((row["termination_reason"] ?? null) !== null || (row["pause_reason"] ?? null) !== null);
       if (!recorded) {
         if (req.kind === "pause") {
-          trajectory.setPause(config.runId, req.reason, `${req.detail} (backstop)`, watchdogs.elapsedMs());
-          trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: pauseMark(req) });
+          trajectory.pauseWithMark(config.runId, pauseMark({ reason: req.reason, detail: `${req.detail} (backstop)` }), readMeta(runDir) ?? metaNow());
         } else {
           trajectory.setTermination(config.runId, "manual", `${req.detail} (backstop)`);
         }
@@ -1102,7 +1101,12 @@ async function main(): Promise<void> {
      * the session is touched so a crash in the release still leaves a
      * resumable run.
      */
-    trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: pauseMark(outcome) });
+    // Once per segment, like the pause itself: when the signal handler has
+    // already marked this pause, the mark stands — rewriting it here would move
+    // its instant by however long the unwind took. (`--resume` consumes the
+    // mark, so one that is present is this segment's.)
+    const metaThen = readMeta(runDir);
+    if (metaThen?.pause === undefined) trajectory.writeMeta({ ...(metaThen ?? metaNow()), pause: pauseMark(outcome) });
   }
   if (outcome.kind === "terminated" || outcome.reason === "operator-pause") {
     // A finished run frees its module session so the account is not held

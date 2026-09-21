@@ -75,4 +75,40 @@ describe("SIGTERM writes the pause before anything else", () => {
     const pauses = readFileSync(jsonl, "utf8").split("\n").filter((l) => l.includes('"t":"pause"'));
     expect(pauses).toHaveLength(1);
   }, 40_000);
+
+  test("the cooperative unwind that follows does not move the mark the handler wrote", async () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-at-"));
+    const script = join(runsDir, "stub.json");
+    writeFileSync(script, JSON.stringify([1, 2, 3].map((i) => ({ content: `turn ${i}`, toolCalls: [] }))));
+    const proc = Bun.spawn({
+      cmd: [
+        process.execPath, RUN_TS,
+        "--driver", "stub", "--stub", script,
+        "--run-id", RUN_ID,
+        "--episode", "freeplay",
+        "--runs-dir", runsDir,
+        "--module-url", "http://127.0.0.1:9",
+        "--account", "RUNNER2",
+        "--race", "3", "--class", "2",
+        // Long enough that the signal lands mid-sleep, short enough that the
+        // loop comes round to honour it while the test is still watching.
+        "--step-interval-ms", "2500",
+      ],
+      cwd: runsDir,
+      env: { ...process.env, WRATHBENCH_MODULE_URL: "http://127.0.0.1:9", WRATHBENCH_MODULE_SECRET: undefined },
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const dir = join(runsDir, RUN_ID);
+    const jsonl = join(dir, "trajectory.jsonl");
+    await until(() => existsSync(jsonl) && readFileSync(jsonl, "utf8").includes('"t":"response"'), 20_000);
+    proc.kill("SIGTERM");
+    await until(() => readMeta(dir)?.pause !== undefined, 5_000);
+    const marked = readMeta(dir)!.pause!;
+    await proc.exited;
+    // The driver's own unwind ran to the end and the run is still paused once,
+    // at the instant the signal landed.
+    expect(readMeta(dir)?.pause).toEqual(marked);
+    expect(readFileSync(jsonl, "utf8").split("\n").filter((l) => l.includes('"t":"pause"'))).toHaveLength(1);
+  }, 90_000);
 });

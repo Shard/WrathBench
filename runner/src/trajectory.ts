@@ -801,6 +801,19 @@ export class Trajectory {
     return true;
   }
 
+  /**
+   * The pause and its meta.json mark, together and once per segment: when the
+   * row already carries a pause, NOTHING is written — not the record, not the
+   * row, and not the mark. A run that paused on its provider and is then
+   * stopped keeps that pause's reason and its instant (`at`), which is what
+   * the resume cadence counts from. `meta` is the run's meta as it stands.
+   */
+  pauseWithMark(runId: string, mark: PauseMark, meta: RunMeta): boolean {
+    if (!this.setPause(runId, mark.reason, mark.detail, mark.episodeElapsedMs)) return false;
+    this.writeMeta({ ...meta, pause: mark });
+    return true;
+  }
+
   clearPause(runId: string): void {
     this.db.query(`UPDATE run SET pause_reason = NULL WHERE run_id = ?`).run(runId);
   }
