@@ -37,6 +37,7 @@
 
 import { copyFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { hostname } from "node:os";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { archiveIfNoResponses } from "./archive";
@@ -71,7 +72,8 @@ import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./p
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
 import { Scratchpad } from "./scratchpad";
-import { Trajectory, readMeta, type PauseMark, type RunMeta } from "./trajectory";
+import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
+import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
 import { className, raceName } from "../viewer/characters";
@@ -524,10 +526,23 @@ async function main(): Promise<void> {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(2);
     }
+  } else {
+    // A resume onto a run somebody is still playing is two runners on one run
+    // id, one account and one character. Refused before anything is written —
+    // the directory, the row and the session are the owner's. A cold heartbeat
+    // is not an owner: that is the hard-killed run a resume exists for.
+    const owner = liveOwnerOf(config.runsDir, config.runId);
+    if (owner !== null) {
+      console.error(`[wrathbench] --resume ${config.runId} refused: the run has a live owner — ${owner}. Nothing was written; retry once it has stopped.`);
+      process.exit(RESUME_REFUSED_EXIT);
+    }
   }
 
   const runDir = join(config.runsDir, config.runId);
   const trajectory = new Trajectory(runDir);
+  // From here until the process exits, however it exits short of a SIGKILL.
+  const stopHeartbeat = startHeartbeat(runDir, `${hostname()} ${process.pid}`);
+  process.on("exit", stopHeartbeat);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
   // The episodic log lives beside the scratchpad and survives a pause the same
   // way: it is append-only, so a resumed run reads its own past back.

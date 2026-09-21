@@ -712,9 +712,12 @@ export function fmtPaused(elapsedMs: number | null, budgetMs: number | null): st
  * run is listed, not hammered. Null means "now".
  */
 export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
-  // An offline pause is the harness's own doing too: the runner was killed
-  // under the run, and nothing about the provider changed.
-  if (pause.reason === "operator-pause" || pause.reason === OFFLINE_PAUSE) return null;
+  if (pause.reason === "operator-pause") return null;
+  // An offline pause is the harness's own doing too — the runner was killed
+  // under the run, and nothing about the provider changed — but it is derived,
+  // not written, so it is resumable only from the instant the run provably
+  // has no live owner.
+  if (pause.reason === OFFLINE_PAUSE) return pause.notBefore ?? null;
   if (isTainted(pause.count)) return "never";
   return pause.at + backoffMs(pause.count);
 }
@@ -728,6 +731,27 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
 export function campaignResumeOf(campaigns: readonly Campaign[] | undefined, campaign: string | null): boolean {
   if (campaign === null || campaigns === undefined) return false;
   return campaigns.find((c) => c.name === campaign)?.resume === true;
+}
+
+/** The quiet a run with no heartbeat and no recorded idle watchdog must show before it reads as ownerless. */
+export const OFFLINE_QUIET_FLOOR_MS = 30 * 60_000;
+/** Added to the run's idle watchdog, which is checked between turns and so fires a little late. */
+export const OFFLINE_QUIET_MARGIN_MS = 2 * 60_000;
+
+/**
+ * When a verdict-less run is provably without a live owner. Pure.
+ *
+ * A run that carries a heartbeat is ownerless the moment the heartbeat is
+ * cold — `live` already reads it, so "not live" is the proof (0: at once), and
+ * a hard-killed run comes back as soon as the supervisor does. A run with no
+ * heartbeat file (its runner predates the heartbeat, or exited without a
+ * verdict) has only its silence to go by, and the proof may not be weaker than
+ * the silence the run is permitted: its own idle watchdog plus a margin, or a
+ * floor when it recorded none.
+ */
+export function ownerlessAt(f: Pick<RunFact, "pause" | "endedAt" | "startedAt" | "heartbeatAt" | "idleMs">): number {
+  if (f.heartbeatAt != null) return 0;
+  return lastActivityOf(f) + (f.idleMs ?? OFFLINE_QUIET_FLOOR_MS) + OFFLINE_QUIET_MARGIN_MS;
 }
 
 /**
@@ -752,9 +776,14 @@ export function campaignResumeOf(campaigns: readonly Campaign[] | undefined, cam
  *
  * The same guards as the stale sweep, and for the same reason: a run the
  * supervisor's own processes hold (`running`, by run id) or that sits on an
- * account a live job holds (`busyAccounts`) is left exactly as read. The
- * supervisor cannot see inside its children, and a run that has not touched
- * its trajectory for two minutes is not a dead one.
+ * account a live job holds (`busyAccounts`) is left exactly as read.
+ *
+ * Those guards only cover this supervisor's own children, and the run may be
+ * somebody else's — another replica during an upgrade, a hand `--resume`, a
+ * runner in another pod — so the resume also needs proof that NO process owns
+ * the run (`ownerlessAt`, carried as the pause's `notBefore`). A trajectory
+ * quiet for two minutes is not that: a run waiting on a slow provider writes
+ * nothing for as long as the request takes.
  */
 export function implicitPauses(opts: {
   runs: readonly RunFact[];
@@ -772,7 +801,14 @@ export function implicitPauses(opts: {
     if (!f.runId.startsWith("fleet-") || running.has(f.runId)) return f;
     if (f.account !== null && busy.has(f.account.toUpperCase())) return f;
     if (!resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign))) return f;
-    return { ...f, pause: { reason: OFFLINE_PAUSE, at: lastActivityOf(f), count: 1, episodeElapsedMs: null } };
+    // Stamped either way — a run that is waiting out its proof still holds its
+    // model, its account's character and the head, or the policy would start
+    // the next attempt over it — but resumed only once the proof is in.
+    const proofAt = ownerlessAt(f);
+    return {
+      ...f,
+      pause: { reason: OFFLINE_PAUSE, at: lastActivityOf(f), count: 1, episodeElapsedMs: null, ...(proofAt > opts.now ? { notBefore: proofAt } : {}) },
+    };
   });
 }
 

@@ -556,12 +556,25 @@ for the operator.
 A run with **no verdict at all** — no termination, no pause, no live process —
 is a runner that was killed before it could write (a SIGKILL inside the stop
 grace, a host that lost power). On the lanes that resume, the supervisor reads
-it as paused `offline` as of its last activity and resumes it on the next tick
-exactly as an `operator-pause`; `--status` shows it the same way. It is never
-left in limbo, and its character is never a launch's leftover: it stays the
-character head and every other launch on its account keeps it. The scored
-lanes are left to the stale sweep above — a lapsed `e90` is a failed attempt
-either way.
+it as paused `offline` as of its last activity and resumes it as it would an
+`operator-pause`, once the run provably has no owner; `--status` shows it the
+same way. It is never left in limbo, and its character is never a launch's
+leftover: it stays the character head, it holds its model, and every other
+launch on its account keeps it. The scored lanes are left to the stale sweep
+above — a lapsed `e90` is a failed attempt either way.
+
+The proof of "no owner" is the run's **heartbeat**: a runner rewrites
+`heartbeat` in its run directory every twenty seconds and removes it on any
+exit it gets to make, so a fresh one (under two minutes) means a process owns
+the run — on this pod or any other — and a cold one means it was killed. A
+quiet trajectory proves nothing, because a run waiting on a slow provider
+writes nothing. A verdict-less run with a cold heartbeat is resumed on the next
+tick; one with no heartbeat file at all (its runner predates it) is listed as
+`offline … resuming after` until it has been silent for its own idle watchdog
+plus two minutes (thirty minutes when it recorded none). `run.ts --resume`
+and the roster both refuse a run with a fresh heartbeat — exit 75, nothing
+written, the session not touched — so a resume by hand cannot land on a run
+the fleet is playing, nor the reverse.
 
 For the lanes that **do** resume — freeplay, and `campaigns.<name>.resume` —
 `--status` shows `paused (reason, Xm elapsed of Ym) — <run id> Lx xp` and a

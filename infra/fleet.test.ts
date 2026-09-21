@@ -45,6 +45,8 @@ import {
   formatConcurrency,
   jobSpawn,
   implicitPauses,
+  OFFLINE_QUIET_FLOOR_MS,
+  OFFLINE_QUIET_MARGIN_MS,
   planResumes,
   planStaleRuns,
   retryNumbers,
@@ -3243,6 +3245,43 @@ describe("a run whose runner died before its verdict is paused, not invisible (2
     // An offline pause has no cadence: the runner was killed under the run,
     // and the provider had nothing to do with it.
     expect(resumeNotBefore(runs[0]!.pause!)).toBeNull();
+  });
+
+  test("a run that is quiet but inside its own idle window is held, not resumed: the proof is never weaker than the silence it is allowed", () => {
+    // Twenty minutes of idle watchdog, no heartbeat file (a runner that
+    // predates it), five minutes of silence: a slow request, not a dead run.
+    const quiet = verdictless({ idleMs: 20 * 60_000, heartbeatAt: null }, 5 * 60_000);
+    const [f] = implicitPauses({ runs: [quiet], now: NOW });
+    // Stamped, so it still holds its model and the head — but not resumable
+    // until the idle window plus the margin has passed without a write.
+    expect(f!.pause).toMatchObject({ reason: "offline", notBefore: NOW - 5 * 60_000 + 20 * 60_000 + OFFLINE_QUIET_MARGIN_MS });
+    const plan = planResumes({ runs: [f!], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.end).toEqual([]);
+    expect(plan.listed.map((l) => l.runId)).toEqual([quiet.runId]);
+    expect(plan.listed[0]!.resumeAfter).toBe(f!.pause!.notBefore!);
+    // The same run once the window has passed is resumed.
+    const later = NOW + 17 * 60_000 + 1;
+    const again = implicitPauses({ runs: [quiet], now: later });
+    expect(again[0]!.pause!.notBefore).toBeUndefined();
+    expect(planResumes({ runs: again, config: config(), running: new Map(), held, now: later }).resume.map((r) => r.runId)).toEqual([quiet.runId]);
+  });
+
+  test("a run with no recorded idle watchdog waits out the floor", () => {
+    const [f] = implicitPauses({ runs: [verdictless({ idleMs: null }, 10 * 60_000)], now: NOW });
+    expect(f!.pause!.notBefore).toBe(NOW - 10 * 60_000 + OFFLINE_QUIET_FLOOR_MS + OFFLINE_QUIET_MARGIN_MS);
+  });
+
+  test("a hard-killed run that carried a heartbeat is resumable the moment the heartbeat is cold", () => {
+    // Trajectory and heartbeat both three minutes old: `live` is false, and a
+    // runner that beats every twenty seconds has been gone for nine beats.
+    const killed = verdictless({ idleMs: 20 * 60_000, heartbeatAt: NOW - 3 * 60_000 }, 3 * 60_000);
+    const runs = implicitPauses({ runs: [killed], now: NOW });
+    expect(runs[0]!.pause).toEqual({ reason: "offline", at: NOW - 3 * 60_000, count: 1, episodeElapsedMs: null });
+    expect(planResumes({ runs, config: config(), running: new Map(), held, now: NOW }).resume.map((r) => r.runId)).toEqual([killed.runId]);
+    // While the heartbeat is fresh the run is live, whatever its trajectory says.
+    const beating = verdictless({ live: true, heartbeatAt: NOW - 15_000 }, 8 * 60_000);
+    expect(implicitPauses({ runs: [beating], now: NOW })[0]).toEqual(beating);
   });
 
   test("the stale sweep never ends it, and neither does a twelve-hour gap", () => {
