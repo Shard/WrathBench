@@ -27,6 +27,19 @@ image:
 # `values.example.yaml` shows the shape.
 nodeSelector: {}
 
+# Empty by default, and then the key is omitted from every rendered pod
+# entirely — a pod with no class is Burstable at priority 0, which is where a
+# chart that does not know its cluster has to leave it. Set it to a class the
+# DEPLOYING CLUSTER defines and every WrathBench pod carries it; the chart
+# creates no PriorityClass, because a global-scoped object with a cluster-wide
+# value is not one a workload chart gets to invent. Kubelet eviction ranks by
+# priority once it has ranked by ephemeral-storage-over-request, so this is
+# what puts the live realm above a neighbour's disposable batch work when a
+# node fills. `values.example.yaml` shows the shape. One value for all
+# workloads, as with nodeSelector: no per-workload override exists until a
+# deployment needs one.
+priorityClassName: ""
+
 storage:
   # Empty means the cluster's default StorageClass. Set it where the default is
   # not the class these volumes want.
@@ -84,12 +97,23 @@ realm:
   address: 127.0.0.1
   port: 8085
 
+# EVERY container below requests `ephemeral-storage`, and the number is the
+# same 256Mi everywhere because none of them is near it: what a WrathBench
+# container writes to node-local disk is a log line on its way to the runtime
+# and a scratch directory of a few kilobytes — everything that is evidence is
+# on the data PVC, which is not ephemeral storage and does not count. The
+# request is not a budget, it is a RANK: the kubelet evicts pods whose
+# ephemeral-storage usage exceeds their request before it touches anything
+# else, so a container with no request is in the first group to go whatever it
+# is using. Raise one only for a container that has a reason to write more.
+
 db:
   image: mysql:8.4
   resources:
     requests:
       cpu: 500m
       memory: 1Gi
+      ephemeral-storage: 256Mi
     limits:
       memory: 2Gi
   # The mysql image's datadir is written as the container user. runAsNonRoot +
@@ -131,8 +155,15 @@ worldserver:
     requests:
       cpu: "2"
       memory: 4Gi
+      ephemeral-storage: 256Mi
     limits:
       memory: 8Gi
+  # AzerothCore's temp dir (AC_TEMP_DIR), the one path this pod writes that is
+  # not on the data PVC — Server.log goes to the console and Errors.log and the
+  # module's audit trail are evidence, on the volume. It holds nothing in
+  # normal operation; the ceiling is what keeps a crash dump loop from taking
+  # the node down with it.
+  tempSizeLimit: 2Gi
   # World load takes minutes on a cold map cache. The startup probe is what
   # buys that time without a readiness flap; failureThreshold * periodSeconds
   # is the budget.
@@ -145,8 +176,16 @@ authserver:
     requests:
       cpu: 100m
       memory: 256Mi
+      ephemeral-storage: 256Mi
     limits:
       memory: 512Mi
+  # The auth log is chatter on an emptyDir, not evidence on the PVC, and
+  # nothing rotates it: a realm nobody is logging into writes a few lines an
+  # hour, so 1Gi is months of uptime and still a ceiling that stops a login
+  # storm from filling a node. The temp dir is AzerothCore's scratch and is
+  # empty in normal operation.
+  logsSizeLimit: 1Gi
+  tempSizeLimit: 2Gi
 
 jobs:
   dbImport:
@@ -154,13 +193,18 @@ jobs:
       requests:
         cpu: 500m
         memory: 512Mi
+        ephemeral-storage: 256Mi
       limits:
         memory: 2Gi
+    # `dbimport`'s own log of what it applied, on an emptyDir because the Job
+    # is gone before anyone reads it. A full import writes a few megabytes.
+    logsSizeLimit: 1Gi
   bootstrap:
     resources:
       requests:
         cpu: 100m
         memory: 256Mi
+        ephemeral-storage: 256Mi
       limits:
         memory: 512Mi
 
@@ -170,9 +214,19 @@ fleet:
     requests:
       cpu: "1"
       memory: 2Gi
+      ephemeral-storage: 256Mi
     limits:
       # It spawns every run-roster and every snippet sandbox as children.
       memory: 6Gi
+  # /tmp. Not the model's write path: a snippet arrives over the IPC channel
+  # and the sandbox's Landlock ruleset grants it no write access here at all
+  # (runner/src/sandbox/confine.ts). What lands in it is the driver adapters'
+  # scratch cwd — one empty directory per episode, so that the CLI does not
+  # walk up into a checkout — and bun's own temporaries. Kilobytes. The ceiling
+  # is a backstop against a runaway child, set far enough above the working set
+  # that hitting it means something is wrong; the pod is EVICTED when it is
+  # exceeded, and that costs every live run.
+  tmpSizeLimit: 2Gi
 
 # The `codex` driver's ChatGPT-subscription lane (runner/README.md, Drivers).
 # The CLI refreshes the token in place, so the lane is MOUNTED, never copied: a
@@ -192,8 +246,12 @@ runner:
     requests:
       cpu: 100m
       memory: 512Mi
+      ephemeral-storage: 256Mi
     limits:
       memory: 4Gi
+  # As the fleet's, and for the same reason: an operator's hand-run episode
+  # uses this pod's /tmp exactly the way the supervisor's children use theirs.
+  tmpSizeLimit: 2Gi
 
 # The derived store (collector/README.md). A single node with no replication,
 # holding nothing that is not rebuildable from data/runs by `--replay`.
@@ -208,6 +266,7 @@ clickhouse:
     requests:
       cpu: 500m
       memory: 2Gi
+      ephemeral-storage: 256Mi
     limits:
       # An OOM ceiling. The cgroup limit sizes `max_server_memory_usage` (0.9 of
       # it) and NOTHING else — every cache and thread pool keeps its big-box
@@ -225,6 +284,7 @@ collector:
     requests:
       cpu: 100m
       memory: 256Mi
+      ephemeral-storage: 256Mi
     limits:
       # A resumable totals scanner per LIVE run; a finished run's is dropped as
       # soon as a pass finds its files unchanged.
@@ -239,6 +299,7 @@ viewer:
     requests:
       cpu: 200m
       memory: 1Gi
+      ephemeral-storage: 256Mi
     limits:
       memory: 3Gi
   ingress:
@@ -276,6 +337,7 @@ publisher:
     requests:
       cpu: 100m
       memory: 256Mi
+      ephemeral-storage: 256Mi
     limits:
       # 2x the measured peak, rounded up: a --once pass over a ~1,000-run tree
       # peaks at 0.78 GB at the default batch, the scanners reading in windows

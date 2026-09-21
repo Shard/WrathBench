@@ -479,3 +479,114 @@ describe("k8s-release.sh", () => {
     }
   });
 });
+
+/**
+ * The chart's eviction guards (docs/RUNBOOK.md, "Node disk pressure").
+ *
+ * These are properties of the whole chart, not of one template, and the way
+ * they break is by omission: a workload added later gets cpu and memory
+ * because those are obvious and no ephemeral-storage request, no sizeLimit and
+ * no priority guard because those are not. Each test below is therefore
+ * written against EVERY pod spec and EVERY volume in the chart rather than
+ * against a list of the ones that exist today, so the new workload fails it.
+ *
+ * Static, over the template source: the suite has to be green from a bare
+ * clone, which cannot assume a `helm` binary.
+ */
+describe("chart eviction guards", () => {
+  const CHART = join(import.meta.dir, "chart", "wrathbench");
+  const templates = [...new Bun.Glob("templates/*.yaml").scanSync({ cwd: CHART })].sort();
+  const valuesFiles = ["values.yaml", "values.example.yaml"];
+  const read = (rel: string): string => readFileSync(join(CHART, rel), "utf8");
+
+  test("every pod spec carries the priority-class guard", () => {
+    // `nodeSelector: {{ toYaml .Values.nodeSelector ... }}` is one line per pod
+    // spec in this chart, so it counts them; the guard has to appear as often.
+    let specs = 0;
+    let guards = 0;
+    for (const rel of templates) {
+      const src = read(rel);
+      specs += [...src.matchAll(/^\s*nodeSelector: \{\{ toYaml \.Values\.nodeSelector/gm)].length;
+      guards += [...src.matchAll(/^\s*priorityClassName: \{\{ \. \}\}$/gm)].length;
+    }
+    expect(specs).toBeGreaterThan(5);
+    expect(guards).toBe(specs);
+  });
+
+  test("the priority class is values-gated and the chart creates none", () => {
+    // Empty must mean ABSENT, not `priorityClassName: ""` — an empty string is
+    // not a valid class name and the API server rejects the pod. And priority
+    // is compared across every workload on a cluster, so the object that
+    // defines the number is the cluster's, never this chart's.
+    for (const rel of templates) {
+      const src = read(rel);
+      for (const m of src.matchAll(/^[^\n]*priorityClassName:[^\n]*$/gm)) {
+        expect({ file: rel, line: m[0].trim() }).toEqual({ file: rel, line: "priorityClassName: {{ . }}" });
+      }
+      for (const m of src.matchAll(/^[^\n]*\.Values\.priorityClassName[^\n]*$/gm)) {
+        expect({ file: rel, line: m[0].trim() }).toEqual({ file: rel, line: "{{- with .Values.priorityClassName }}" });
+      }
+      expect({ file: rel, hit: /kind: PriorityClass/.test(src) }).toEqual({ file: rel, hit: false });
+    }
+    expect(read("values.yaml")).toContain('priorityClassName: ""');
+  });
+
+  test("every emptyDir is bounded", () => {
+    // An emptyDir with no ceiling is node disk with a friendly name, and the
+    // pod that fills a node is the one evicted for it.
+    let seen = 0;
+    for (const rel of templates) {
+      const lines = read(rel).split("\n");
+      for (const [i, line] of lines.entries()) {
+        if (!/^\s*emptyDir:\s*$/.test(line) && !/^\s*emptyDir: \{\}/.test(line)) continue;
+        seen += 1;
+        expect({ file: rel, line: i + 1, bounded: /^\s*sizeLimit: /.test(lines[i + 1] ?? "") }).toEqual({
+          file: rel,
+          line: i + 1,
+          bounded: true,
+        });
+      }
+    }
+    expect(seen).toBeGreaterThan(3);
+  });
+
+  test("every container requests ephemeral-storage", () => {
+    // The kubelet ranks eviction candidates by usage OVER REQUEST first, so a
+    // container with no request is in the first group to go whatever it is
+    // using. Block form in the values files, flow form inline in a template.
+    let blocks = 0;
+    for (const rel of [...valuesFiles, ...templates]) {
+      const lines = read(rel).split("\n");
+      for (const [i, line] of lines.entries()) {
+        const flow = /^\s*requests: \{/.exec(line);
+        if (flow) {
+          blocks += 1;
+          expect({ file: rel, line: i + 1, requested: line.includes("ephemeral-storage:") }).toEqual({
+            file: rel,
+            line: i + 1,
+            requested: true,
+          });
+          continue;
+        }
+        const block = /^(\s*)requests:\s*$/.exec(line);
+        if (!block) continue;
+        const body: string[] = [];
+        for (let j = i + 1; j < lines.length; j += 1) {
+          const next = lines[j] ?? "";
+          if (next.trim() !== "" && !next.startsWith(`${block[1]} `)) break;
+          body.push(next);
+        }
+        // A volume claim's `requests: { storage: … }` is a different resource
+        // block on a different object; it is sized by storage.* in values.yaml.
+        if (body.some((l) => /^\s*storage:/.test(l))) continue;
+        blocks += 1;
+        expect({ file: rel, line: i + 1, requested: body.some((l) => l.includes("ephemeral-storage:")) }).toEqual({
+          file: rel,
+          line: i + 1,
+          requested: true,
+        });
+      }
+    }
+    expect(blocks).toBeGreaterThan(10);
+  });
+});

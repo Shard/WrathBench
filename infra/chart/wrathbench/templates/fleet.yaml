@@ -46,6 +46,9 @@ spec:
       annotations: {{ toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
       terminationGracePeriodSeconds: 180
@@ -116,6 +119,9 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-codex-home
         {{- end }}
+        # Bounded: an emptyDir with no ceiling is node disk, and the pod that
+        # fills a node is the pod the kubelet evicts — see values.yaml.
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.fleet.tmpSizeLimit }}
 {{- end }}

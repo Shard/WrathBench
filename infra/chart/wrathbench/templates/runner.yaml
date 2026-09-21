@@ -30,6 +30,9 @@ spec:
       annotations: {{ toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
       terminationGracePeriodSeconds: 60
@@ -86,5 +89,6 @@ spec:
             claimName: {{ include "wrathbench.fullname" . }}-codex-home
         {{- end }}
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.runner.tmpSizeLimit }}
 {{- end }}

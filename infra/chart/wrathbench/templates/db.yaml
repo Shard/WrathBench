@@ -50,6 +50,9 @@ spec:
       annotations: {{ toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext:
         runAsNonRoot: true

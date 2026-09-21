@@ -52,6 +52,9 @@ spec:
       annotations: {{ toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
       # The world takes minutes to load and holds live sessions; give it room
@@ -169,4 +172,5 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
         - name: temp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: {{ .Values.worldserver.tempSizeLimit }}
