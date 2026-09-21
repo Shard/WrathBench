@@ -797,6 +797,12 @@ function stateSnapshot(): unknown {
   snap["units"] = toJsonSafe(units, 4);
   snap["bag"] = toJsonSafe(client.state.bag(), 4);
   snap["ui"] = foldUiOpenWindows(client.events.recent());
+  // Whether this child's own event stream is still open. Not an observation of
+  // the world and never printed by the HUD (`formatStateSummary` reads named
+  // fields): the cache below is a pure local read, so a stream that stopped
+  // folding into it looks exactly like a world where nothing happens, and the
+  // host's stall detector (loop.ts) needs the difference.
+  snap["observation"] = { connected: client.events.connected };
   // Where the character is trying to get to (`moveIntent`). Not an observation
   // of the world — it is this session's own last dispatch — so it rides the
   // snapshot rather than the state cache, and the HUD never prints it.
