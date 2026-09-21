@@ -14,7 +14,12 @@
  * - `e90` / `e360` — never resume. The run is a **failed attempt**: ended,
  *   account and character released, and the scheduler gives the model a fresh
  *   attempt with a new run id and a full clock.
- * - `freeplay` — resume, exactly as before.
+ * - `freeplay` — resume, exactly as before, and however long the gap: a
+ *   freeplay run has no budget for a stale gap to spend, and the trajectory
+ *   is the character's whole life, so a session that went quiet for a day is
+ *   resumed under its own run id rather than ended `stale` and continued
+ *   under the next attempt (operator requirement, 2026-09-20: a freeplay run
+ *   continues from where it left off after any infrastructure restart).
  * - `probing` — resume only when the campaign says `resume: true`.
  *
  * The shared scoreability rule below answers the broader question — whether a
@@ -37,6 +42,18 @@ export const STALE_FALLBACK_MS = 12 * 60 * 60_000;
 
 /** Pause reasons that are the provider's doing, and therefore the model's problem. */
 export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", "rate-limited"]);
+
+/**
+ * The pause a run never got to write. A fleet run with no termination, no
+ * pause row and no live process behind it is a run whose runner died before
+ * its verdict — a SIGKILL inside the stop grace, a host that lost power. The
+ * supervisor treats it as paused for this reason (`implicitPauses` in
+ * infra/run-fleet-plan.ts), never as nothing: on 2026-09-20 such a freeplay
+ * run sat invisible to the resume planner for the whole twelve-hour stale
+ * window while the policy started a fresh character over the one it was
+ * playing. Nothing on disk ever carries this reason; it is derived.
+ */
+export const OFFLINE_PAUSE = "offline";
 
 /** Terminations this record writes. These are the runner's lapse/attempt states. */
 export const ATTEMPT_FAILURE_REASONS: ReadonlySet<string> = new Set(["attempt-failed", "stale"]);
@@ -109,6 +126,18 @@ export function staleAfterMs(episodeMs: number | null): number {
 }
 
 /**
+ * The lane a gap cannot cook. Freeplay has no clock, so nothing elapsed while
+ * nobody was playing it: the gap is a gap in the character's life, not a
+ * broken measurement. One answer for every reader — the lapse rule below, the
+ * stale predicate (`isStaleRun`), and through it the model hold, the resume
+ * planner and the status listing — so none of them can drop a freeplay run the
+ * others still intend to resume.
+ */
+export function neverStale(episode: string | null | undefined): boolean {
+  return episode === "freeplay";
+}
+
+/**
  * Whether a lane resumes a lapsed run. `resume` is the campaign key an
  * operator writes (`campaigns.<name>.resume`); `resumeOnPause` is the same
  * answer travelling on a roster spec. An episode the table does not know —
@@ -152,8 +181,9 @@ export function classifyLapse(opts: {
   pause: { reason: string } | null;
   staleForMs: number | null;
 }): Lapse {
-  const cause = opts.pause?.reason ?? "offline";
+  const cause = opts.pause?.reason ?? OFFLINE_PAUSE;
   const provider = PROVIDER_PAUSES.has(cause);
+  if (neverStale(opts.episode)) return { kind: "resume", counts: false };
   if (opts.staleForMs !== null) {
     // A stale gap is the harness's weather, not the model's failure — unless
     // the run was already waiting on its provider when the lights went out.

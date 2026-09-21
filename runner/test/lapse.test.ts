@@ -67,11 +67,24 @@ describe("what happens to a lapsed run", () => {
       want: { kind: "stale", reason: "stale", counts: false },
     },
     {
-      what: "a stale freeplay session: ended too — the next tick starts a fresh one",
+      what: "a stale freeplay session: resumed under its own run id, however long the gap (operator, 2026-09-20)",
       episode: "freeplay",
       pause: { reason: "operator-pause" },
       staleForMs: 13 * H,
-      want: { kind: "stale", reason: "stale", counts: false },
+      want: { kind: "resume", counts: false },
+    },
+    {
+      what: "a freeplay session that was waiting on its provider when the lights went out: still resumed — it never counts",
+      episode: "freeplay",
+      pause: { reason: "rate-limited" },
+      staleForMs: 13 * H,
+      want: { kind: "resume", counts: false },
+    },
+    {
+      what: "a freeplay run whose runner died before its verdict (the planner's `offline` pause): resumed",
+      episode: "freeplay",
+      pause: { reason: "offline" },
+      want: { kind: "resume", counts: false },
     },
     {
       what: "a hand-written roster with no episode: the original behaviour, untouched",

@@ -33,7 +33,7 @@ import { backoffMs, isTainted, type RosterSpec, slug } from "./run-roster";
 import { type Campaign, type ProbeRun, workDimensions } from "../runner/src/campaigns";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
 import { isScoredEpisode } from "../runner/src/episodes";
-import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
+import { classifyLapse, OFFLINE_PAUSE, resumesOnPause, staleAfterMs } from "../runner/src/lapse";
 import {
   ACCOUNT_CLASSES,
   type AccountClass,
@@ -45,6 +45,7 @@ import {
   DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT,
   type HeldPick,
   inSeries,
+  lastActivityOf,
   type ModelState,
   type NextJob,
   planNextJobs,
@@ -712,6 +713,11 @@ export function fmtPaused(elapsedMs: number | null, budgetMs: number | null): st
  */
 export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
   if (pause.reason === "operator-pause") return null;
+  // An offline pause is the harness's own doing too — the runner was killed
+  // under the run, and nothing about the provider changed — but it is derived,
+  // not written, so it is resumable only from the instant the run provably
+  // has no live owner.
+  if (pause.reason === OFFLINE_PAUSE) return pause.notBefore ?? null;
   if (isTainted(pause.count)) return "never";
   return pause.at + backoffMs(pause.count);
 }
@@ -727,6 +733,89 @@ export function campaignResumeOf(campaigns: readonly Campaign[] | undefined, cam
   return campaigns.find((c) => c.name === campaign)?.resume === true;
 }
 
+/** The quiet a run with no heartbeat and no recorded idle watchdog must show before it reads as ownerless. */
+export const OFFLINE_QUIET_FLOOR_MS = 30 * 60_000;
+/** Added to the run's idle watchdog, which is checked between turns and so fires a little late. */
+export const OFFLINE_QUIET_MARGIN_MS = 2 * 60_000;
+
+/**
+ * When a verdict-less run is provably without a live owner. Pure.
+ *
+ * A run that carries a heartbeat is ownerless the moment the heartbeat is
+ * cold — `live` already reads it, so "not live" is the proof (0: at once), and
+ * a hard-killed run comes back as soon as the supervisor does. A run with no
+ * heartbeat file (its runner predates the heartbeat, or exited without a
+ * verdict) has only its silence to go by, and the proof may not be weaker than
+ * the silence the run is permitted: its own idle watchdog plus a margin, or a
+ * floor when it recorded none.
+ */
+export function ownerlessAt(f: Pick<RunFact, "pause" | "endedAt" | "startedAt" | "heartbeatAt" | "idleMs">): number {
+  if (f.heartbeatAt != null) return 0;
+  return lastActivityOf(f) + (f.idleMs ?? OFFLINE_QUIET_FLOOR_MS) + OFFLINE_QUIET_MARGIN_MS;
+}
+
+/**
+ * The runs as the supervisor reads them, with the pause a dead runner never
+ * wrote filled in. Pure.
+ *
+ * A `fleet-` run with no termination, no pause and no live process is a run
+ * whose runner was killed before its verdict. It used to be nothing at all:
+ * `planResumes` walks paused runs, `planStaleRuns` waits out the run's budget
+ * (twelve hours for freeplay, which has none), and in between the run was
+ * invisible — not resumed, not a character head, its character fair game for
+ * the next launch's hygiene. On 2026-09-20 that cost a level-7 freeplay
+ * character: the pod was SIGKILLed two seconds into its stop grace, and nine
+ * hours later the policy started a fresh attempt on the same account.
+ *
+ * Such a run is paused `offline` as of its last activity, on the lanes that
+ * resume a pause (freeplay, and a campaign that asked): `planResumes` then
+ * brings it back on the next tick, same run id, same character. The scored
+ * lanes are left to the stale sweep — a lapsed e90 is a failed attempt either
+ * way, and the sweep's wait is the guard against ending a run that is merely
+ * quiet.
+ *
+ * The same guards as the stale sweep, and for the same reason: a run the
+ * supervisor's own processes hold (`running`, by run id) or that sits on an
+ * account a live job holds (`busyAccounts`) is left exactly as read.
+ *
+ * Those guards only cover this supervisor's own children, and the run may be
+ * somebody else's — another replica during an upgrade, a hand `--resume`, a
+ * runner in another pod — so the resume also needs proof that NO process owns
+ * the run (`ownerlessAt`, carried as the pause's `notBefore`). A trajectory
+ * quiet for two minutes is not that: a run waiting on a slow provider writes
+ * nothing for as long as the request takes.
+ */
+export function implicitPauses(opts: {
+  runs: readonly RunFact[];
+  campaigns?: readonly Campaign[];
+  /** Run ids the supervisor's own processes hold. */
+  running?: ReadonlySet<string>;
+  /** Accounts a live job holds, upper-cased. */
+  busyAccounts?: ReadonlySet<string>;
+  now: number;
+}): RunFact[] {
+  const running = opts.running ?? new Set<string>();
+  const busy = opts.busyAccounts ?? new Set<string>();
+  return opts.runs.map((f) => {
+    if (f.terminationReason !== null || f.pause !== null || f.live) return f;
+    // An archived run is put away and not under the runs directory any more:
+    // `--resume` cannot find it, and stamping it would respawn a resume that
+    // exits on "no meta.json" every tick, ahead of the model's real paused run.
+    if (f.archived === true) return f;
+    if (!f.runId.startsWith("fleet-") || running.has(f.runId)) return f;
+    if (f.account !== null && busy.has(f.account.toUpperCase())) return f;
+    if (!resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign))) return f;
+    // Stamped either way — a run that is waiting out its proof still holds its
+    // model, its account's character and the head, or the policy would start
+    // the next attempt over it — but resumed only once the proof is in.
+    const proofAt = ownerlessAt(f);
+    return {
+      ...f,
+      pause: { reason: OFFLINE_PAUSE, at: lastActivityOf(f), count: 1, episodeElapsedMs: null, ...(proofAt > opts.now ? { notBefore: proofAt } : {}) },
+    };
+  });
+}
+
 /**
  * Runs nothing came back for. Pure.
  *
@@ -734,12 +823,13 @@ export function campaignResumeOf(campaigns: readonly Campaign[] | undefined, cam
  * paused is cooked, because its episode budget elapsed in wall clock while
  * nobody was playing it. Every such run is ENDED — a failed attempt when it
  * was waiting on its provider, `stale` otherwise, since an offline gap is the
- * harness's weather and not the model's failure. Freeplay is ended the same
- * way; the next tick starts a fresh session rather than resuming a dead one.
+ * harness's weather and not the model's failure. Freeplay is not: it has no
+ * budget to elapse, and `classifyLapse` resumes it however long the gap.
  *
  * Paused runs are handled by `planResumes`, which walks them anyway; this
- * covers the ones with no pause record at all — a run whose process died with
- * the machine.
+ * covers the ones with no pause record at all — a scored run whose process
+ * died with the machine (`implicitPauses` has already turned the resumable
+ * lanes' verdict-less runs into paused ones).
  */
 export function planStaleRuns(opts: {
   runs: readonly RunFact[];
@@ -820,7 +910,9 @@ export function planResumes(opts: {
   // Any scheduled class may carry a resume: a paid or local run comes back on
   // its own account, exactly as a pool run comes back on its pool account.
   const poolSet = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
-  const paused = opts.runs.filter((f) => f.pause !== null).sort((a, b) => b.pause!.at - a.pause!.at);
+  // Archived runs are read for the ladder, never for a resume: there is no
+  // directory under the runs dir for `--resume` to open.
+  const paused = opts.runs.filter((f) => f.pause !== null && f.archived !== true).sort((a, b) => b.pause!.at - a.pause!.at);
   const seenModel = new Set<string>();
   for (const f of paused) {
     const pause = f.pause!;
@@ -834,9 +926,11 @@ export function planResumes(opts: {
     // series (42 of them on 2026-09-08). It used to be filtered out before the
     // loop, which made it invisible everywhere, including in `--status`. A
     // FRESH one is listed instead, because that is a run somebody is waiting
-    // on; a cold one stays out of the listing, as it always was.
+    // on; a cold one stays out of the listing, as it always was. Cold by the
+    // wall clock, not by `isStaleRun`: a freeplay run is never stale, and this
+    // is a listing of another supervisor's runs, not a decision about one.
     if (!inSeries(f, config.policy)) {
-      if (staleForMs(f, now) === null) {
+      if (now - lastActivityOf(f) <= staleAfterMs(f.episodeMs)) {
         list(
           `paused under harness series ${f.harnessSeries ?? "unversioned"}, this supervisor runs ${config.policy.series ?? "no series"} — resume by hand (--resume ${f.runId}) or archive`,
         );
@@ -1027,7 +1121,7 @@ export function applyEnded(runs: readonly RunFact[], ended: readonly EndedRun[],
 // instead of a fresh level-1 character. Its identity is nothing new on disk:
 // the ref's latest ENDED freeplay run that recorded an account and a
 // character. A paused one is `planResumes`' (same run id); an ended one — the
-// idle watchdog, a hand kill, a stale sweep — is continued under the next
+// idle watchdog, a hand kill — is continued under the next
 // attempt's run id with `--continue-from`, which is the lineage the run
 // record then carries. Two things keep the character standing meanwhile:
 // every fresh launch on that account keeps it (`--keep-characters`), and the
@@ -1064,6 +1158,13 @@ export function characterKey(account: string, character: string): string {
  * continued from. Nothing here launches anything: a head that IS resumable is
  * resumed by `planResumes`, which reserves its account and job name before the
  * policy picks.
+ *
+ * So is a run with NO verdict at all — no termination, no pause, no live
+ * process. That is a runner killed before it could write (2026-09-20), and
+ * excluding it made the run before it the head: the next pick continued a
+ * stale predecessor, launches on the account got no `--keep-characters` for
+ * the character it was actually playing, and hygiene deleted it. The newest
+ * attempt is the head whatever it managed to write on the way down.
  */
 export function charactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Character> {
   const out = new Map<string, Character>();
@@ -1072,7 +1173,10 @@ export function charactersFrom(runs: readonly RunFact[], roster: Record<string, 
     if (e.idle !== "unlimited") continue;
     for (const f of runs) {
       if (f.episode !== "freeplay" || f.account === null || f.character === null) continue;
-      if (f.live || (f.terminationReason === null && f.pause === null)) continue;
+      if (f.live) continue;
+      // Put away without a verdict: not a run anything resumes or continues,
+      // so not one that may displace the head that is.
+      if (f.archived === true && f.terminationReason === null) continue;
       if (f.model !== e.model || (f.effort ?? null) !== (e.effort ?? null)) continue;
       if ((at.get(name) ?? -1) >= f.startedAt) continue;
       at.set(name, f.startedAt);
@@ -1222,8 +1326,8 @@ export function planContinuations(
  * watchdog or a hand kill; the operator flipping the ref to `idle: "none"`
  * wants it stopped. SIGTERM takes the pause path (the runner logs the
  * character out and writes `operator-pause`), and the character comes back on
- * re-enable: resumed in place while the pause is fresh, continued under the
- * next attempt once the stale sweep has ended it.
+ * re-enable: resumed in place, however long it sat — a freeplay pause never
+ * goes stale.
  */
 export function pausesOnDrain(job: Pick<FleetJob, "source" | "episode"> | undefined): boolean {
   return job !== undefined && job.source === "policy" && job.episode === "freeplay";
@@ -1266,7 +1370,7 @@ export function policyJobDropped(
  * Whether this job's run comes back WHERE IT LEFT OFF after a supervisor
  * restart — same run id, account and character — rather than spending its
  * attempt. Two kinds do: the freeplay character (`pausesOnDrain`, resumed in
- * place while the pause is fresh) and a probe campaign that asked to be
+ * place however long it sat) and a probe campaign that asked to be
  * resumed (`campaigns.<name>.resume`). Everything else — every scored e90 or
  * e360 — is ended `manual` on the next boot and must be waited out on its own
  * clock.

@@ -308,3 +308,39 @@ describe("a freeplay continuation's lineage", () => {
     expect(readTrajectory(dir).some((r) => r["kind"] === "continue-dropped")).toBe(true);
   });
 });
+
+describe("one pause per segment", () => {
+  test("a stop that lands on a run already paused moves nothing: the first pause keeps its reason and its instant", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({});
+    const meta = { runId: "run-q", harnessVersion: "v", startedAt: 1, config };
+    traj.writeMeta(meta);
+    // The provider pause, marked at its own instant…
+    expect(traj.pauseWithMark("run-q", { reason: "quota-exhausted", detail: "quota", at: 1_000_000, episodeElapsedMs: 4000 }, meta)).toBe(true);
+    // …then SIGTERM while the process is on its way out.
+    expect(traj.pauseWithMark("run-q", { reason: "operator-pause", detail: "SIGTERM: supervisor stop", at: 9_000_000, episodeElapsedMs: 9000 }, readMeta(dir)!)).toBe(false);
+    expect(traj.runRow("run-q")?.["pause_reason"]).toBe("quota-exhausted");
+    expect(readMeta(dir)?.pause).toEqual({ reason: "quota-exhausted", detail: "quota", at: 1_000_000, episodeElapsedMs: 4000 });
+    expect(readTrajectory(dir).filter((r) => r.t === "pause")).toHaveLength(1);
+    traj.close();
+  });
+
+  test("a second setPause in the same segment is a no-op; a resume clears the row and the next pause records again", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const config = loadRunConfig({});
+    traj.writeMeta({ runId: "run-p", harnessVersion: "v", startedAt: 1, config });
+    // The signal handler's write, then the driver's unwind reaching the same call.
+    expect(traj.setPause("run-p", "operator-pause", "SIGTERM: supervisor stop", 1000)).toBe(true);
+    expect(traj.setPause("run-p", "rate-limited", "429", 1200)).toBe(false);
+    expect(traj.runRow("run-p")?.["pause_reason"]).toBe("operator-pause");
+    expect(readTrajectory(dir).filter((r) => r.t === "pause")).toHaveLength(1);
+    // --resume consumes the pause; the next segment's pause is a new record.
+    traj.clearPause("run-p");
+    expect(traj.setPause("run-p", "quota-exhausted", "quota", 5000)).toBe(true);
+    expect(traj.runRow("run-p")?.["pause_reason"]).toBe("quota-exhausted");
+    expect(readTrajectory(dir).filter((r) => r.t === "pause")).toHaveLength(2);
+    traj.close();
+  });
+});

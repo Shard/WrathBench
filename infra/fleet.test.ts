@@ -44,6 +44,9 @@ import {
   planTick,
   formatConcurrency,
   jobSpawn,
+  implicitPauses,
+  OFFLINE_QUIET_FLOOR_MS,
+  OFFLINE_QUIET_MARGIN_MS,
   planResumes,
   planStaleRuns,
   retryNumbers,
@@ -107,7 +110,7 @@ import {
   BREAKER_TRIPS,
 } from "./run-fleet";
 import { billingOf, FREE_SUFFIXLESS_ALLOWLIST } from "../runner/src/model-cost";
-import { DEFAULT_POLICY, IDLE_MODES, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -3157,5 +3160,204 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     expect(resumesInPlace({ source: "policy", episode: "e90" }, campaigns)).toBe(false);
     expect(resumesInPlace({ source: "pinned", episode: "e360" }, campaigns)).toBe(false);
     expect(resumesInPlace(undefined, campaigns)).toBe(false);
+  });
+});
+
+describe("a run whose runner died before its verdict is paused, not invisible (2026-09-20)", () => {
+  const NOW = 1_800_000_000_000;
+  const H = 3_600_000;
+  const roster: Record<string, FleetRosterEntry> = {
+    "deepseek-v41-flash": { model: "deepseek/deepseek-v4.1-flash", tier: "t1", idle: "unlimited" },
+    ox: { model: "stealth/ox-alpha:free", tier: "t1", idle: "none" },
+  };
+  const config = (): Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> => ({
+    jobs: [],
+    roster,
+    policy: { ...DEFAULT_POLICY, series: "0.5" },
+    accounts: { pinned: {}, pool: ["RUNNER2", "RUNNER3"], paid: [], local: [] },
+  });
+  const held = (): string | undefined => undefined;
+  /** No termination, no pause, trajectory last touched `quietFor` ago: exactly what the pod left behind. */
+  const verdictless = (over: Partial<RunFact> = {}, quietFor = 9 * H + 25 * 60_000): RunFact => ({
+    runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919",
+    model: "deepseek/deepseek-v4.1-flash",
+    effort: null,
+    episode: "freeplay",
+    episodeOverride: false,
+    harnessVersion: "harness-0.5-776-g170e07de",
+    harnessSeries: "0.5",
+    extra: true,
+    startedAt: NOW - 30 * H,
+    endedAt: NOW - quietFor,
+    terminationReason: null,
+    modelResponses: 900,
+    bestLevel: 7,
+    live: false,
+    pause: null,
+    account: "RUNNER2",
+    character: "Aurelian",
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    subscription: null,
+    ...over,
+  });
+
+  test("implicitPauses: a verdict-less fleet freeplay run reads as paused `offline` as of its last activity", () => {
+    const [f] = implicitPauses({ runs: [verdictless()], now: NOW });
+    expect(f!.pause).toEqual({ reason: "offline", at: NOW - 9 * H - 25 * 60_000, count: 1, episodeElapsedMs: null });
+    // Everything else about the fact is untouched.
+    expect(f!.terminationReason).toBeNull();
+    expect(f!.character).toBe("Aurelian");
+  });
+
+  test("implicitPauses leaves alone what it must: live, ended, already paused, hand-launched, held, and the scored lanes", () => {
+    const keep = (f: RunFact, opts: Partial<Parameters<typeof implicitPauses>[0]> = {}): void => {
+      expect(implicitPauses({ runs: [f], now: NOW, ...opts })[0]).toEqual(f);
+    };
+    keep(verdictless({ live: true }, 30_000));
+    keep(verdictless({ terminationReason: "idle" }));
+    keep(verdictless({ pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: null } }));
+    keep(verdictless({ runId: "roster-deepseek-20260919" }));
+    // Archived: put away, and not where `--resume` could open it.
+    keep(verdictless({ archived: true }));
+    // The supervisor's own child is playing it, or a live job holds its account.
+    keep(verdictless(), { running: new Set(["fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919"]) });
+    keep(verdictless(), { busyAccounts: new Set(["RUNNER2"]) });
+    // A scored run is the stale sweep's: a lapsed e90 is a failed attempt either way.
+    keep(verdictless({ episode: "e90", extra: false, episodeMs: 90 * 60_000 }));
+    // A probe campaign that did not ask to resume is not resumed here either.
+    keep(verdictless({ episode: "probing", campaign: "nav", cell: "c1" }), { campaigns: [{ name: "nav", resume: false } as unknown as Campaign] });
+  });
+
+  test("planResumes brings it back on the next tick — same run id, same account, at once", () => {
+    const runs = implicitPauses({ runs: [verdictless()], now: NOW });
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.listed).toEqual([]);
+    expect(plan.resume).toHaveLength(1);
+    expect(plan.resume[0]).toMatchObject({
+      runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919",
+      account: "RUNNER2",
+      pauseCount: 1,
+    });
+    expect(plan.resume[0]!.job.resume?.runId).toBe("fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919");
+    expect(plan.resume[0]!.job.source).toBe("policy");
+    expect(plan.resume[0]!.why).toContain("offline");
+    // An offline pause has no cadence: the runner was killed under the run,
+    // and the provider had nothing to do with it.
+    expect(resumeNotBefore(runs[0]!.pause!)).toBeNull();
+  });
+
+  test("a run that is quiet but inside its own idle window is held, not resumed: the proof is never weaker than the silence it is allowed", () => {
+    // Twenty minutes of idle watchdog, no heartbeat file (a runner that
+    // predates it), five minutes of silence: a slow request, not a dead run.
+    const quiet = verdictless({ idleMs: 20 * 60_000, heartbeatAt: null }, 5 * 60_000);
+    const [f] = implicitPauses({ runs: [quiet], now: NOW });
+    // Stamped, so it still holds its model and the head — but not resumable
+    // until the idle window plus the margin has passed without a write.
+    expect(f!.pause).toMatchObject({ reason: "offline", notBefore: NOW - 5 * 60_000 + 20 * 60_000 + OFFLINE_QUIET_MARGIN_MS });
+    const plan = planResumes({ runs: [f!], config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.end).toEqual([]);
+    expect(plan.listed.map((l) => l.runId)).toEqual([quiet.runId]);
+    expect(plan.listed[0]!.resumeAfter).toBe(f!.pause!.notBefore!);
+    // The same run once the window has passed is resumed.
+    const later = NOW + 17 * 60_000 + 1;
+    const again = implicitPauses({ runs: [quiet], now: later });
+    expect(again[0]!.pause!.notBefore).toBeUndefined();
+    expect(planResumes({ runs: again, config: config(), running: new Map(), held, now: later }).resume.map((r) => r.runId)).toEqual([quiet.runId]);
+  });
+
+  test("a run with no recorded idle watchdog waits out the floor", () => {
+    const [f] = implicitPauses({ runs: [verdictless({ idleMs: null }, 10 * 60_000)], now: NOW });
+    expect(f!.pause!.notBefore).toBe(NOW - 10 * 60_000 + OFFLINE_QUIET_FLOOR_MS + OFFLINE_QUIET_MARGIN_MS);
+  });
+
+  test("a hard-killed run that carried a heartbeat is resumable the moment the heartbeat is cold", () => {
+    // Trajectory and heartbeat both three minutes old: `live` is false, and a
+    // runner that beats every twenty seconds has been gone for nine beats.
+    const killed = verdictless({ idleMs: 20 * 60_000, heartbeatAt: NOW - 3 * 60_000 }, 3 * 60_000);
+    const runs = implicitPauses({ runs: [killed], now: NOW });
+    expect(runs[0]!.pause).toEqual({ reason: "offline", at: NOW - 3 * 60_000, count: 1, episodeElapsedMs: null });
+    expect(planResumes({ runs, config: config(), running: new Map(), held, now: NOW }).resume.map((r) => r.runId)).toEqual([killed.runId]);
+    // While the heartbeat is fresh the run is live, whatever its trajectory says.
+    const beating = verdictless({ live: true, heartbeatAt: NOW - 15_000 }, 8 * 60_000);
+    expect(implicitPauses({ runs: [beating], now: NOW })[0]).toEqual(beating);
+  });
+
+  test("a freeplay pause the planner will not resume is still everybody's paused run: listed, holding its model, never continued from", () => {
+    // Thirty hours into a quota pause that is past the defer ladder.
+    const stuck = verdictless({ pause: { reason: "quota-exhausted", at: NOW - 30 * H, count: 11, episodeElapsedMs: null } }, 30 * H);
+    const runs = implicitPauses({ runs: [stuck], now: NOW });
+    // The tick: neither resumed nor ended — listed for the operator.
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.end).toEqual([]);
+    expect(plan.listed.map((l) => l.runId)).toEqual([stuck.runId]);
+    expect(planStaleRuns({ runs, refs: Object.keys(roster), now: NOW })).toEqual([]);
+    // `--status` filters its paused runs with the same predicate, so it shows
+    // the run the tick listed instead of hiding it.
+    expect(runs.filter((f) => isStandingPause(f, NOW)).map((f) => f.runId)).toEqual([stuck.runId]);
+    // The projection the policy picks from: the ref is held by its paused run,
+    // so there is no fresh freeplay pick for `planContinuations` to hang a
+    // `continueFrom` on — the run with no termination is never continued.
+    const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(roster), policy: config().policy, runs, now: NOW });
+    const st = states.find((x) => x.name === "deepseek-v41-flash")!;
+    expect(st.paused?.runId).toBe(stuck.runId);
+    expect(schedulability(st).verdict).toBe("blocked");
+    // And it is still the head, so every other launch on RUNNER2 keeps Aurelian.
+    expect(keepFor("RUNNER2", charactersFrom(runs, roster), "ox")).toEqual(["Aurelian"]);
+  });
+
+  test("an archived run is nobody's to resume: not stamped, not resumed, not shadowing the real paused run, holding nothing", () => {
+    const archived = verdictless({ runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260920-a2", startedAt: NOW - 2 * H, archived: true }, H);
+    const real = verdictless({ pause: { reason: "operator-pause", at: NOW - 3 * H, count: 1, episodeElapsedMs: null } }, 3 * H);
+    const runs = implicitPauses({ runs: [real, archived], now: NOW });
+    expect(runs[1]).toEqual(archived);
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume.map((r) => r.runId)).toEqual([real.runId]);
+    expect(plan.listed).toEqual([]);
+    // Even one that was archived WITH a pause row is left out of the resume walk…
+    const pausedArchived = { ...archived, pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: null } };
+    const again = planResumes({ runs: [real, pausedArchived], config: config(), running: new Map(), held, now: NOW });
+    expect(again.resume.map((r) => r.runId)).toEqual([real.runId]);
+    expect(again.listed).toEqual([]);
+    expect(again.end).toEqual([]);
+    // …and holds no model.
+    expect(isStandingPause(pausedArchived, NOW)).toBe(false);
+  });
+
+  test("the stale sweep never ends it, and neither does a twelve-hour gap", () => {
+    const runs = implicitPauses({ runs: [verdictless({}, 12 * H + 15 * 60_000)], now: NOW });
+    expect(planStaleRuns({ runs, refs: Object.keys(roster), now: NOW })).toEqual([]);
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.resume.map((r) => r.runId)).toEqual(["fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919"]);
+  });
+
+  test("it is the character head: the next pick would continue it, and every other launch on the account keeps Aurelian", () => {
+    const older = verdictless({
+      runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260917",
+      startedAt: NOW - 60 * H,
+      endedAt: NOW - 31 * H,
+      terminationReason: "idle",
+      character: "Aurelius",
+      bestLevel: 3,
+    });
+    // Read raw — a head is a head whether or not the planner has stamped the
+    // implicit pause yet, because charactersFrom is also what --status reads.
+    const characters = charactersFrom([older, verdictless()], roster);
+    expect(characters.get("deepseek-v41-flash")).toEqual({
+      runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919",
+      account: "RUNNER2",
+      character: "Aurelian",
+    });
+    expect(keepFor("RUNNER2", characters, "ox")).toEqual(["Aurelian"]);
+    // A fresh policy pick of the same ref landing on RUNNER2 continues it
+    // rather than starting a level-1 character over it.
+    const pick = { job: { refs: ["deepseek-v41-flash"], ref: "deepseek-v41-flash", episode: "freeplay" as const, repeat: 1, name: "deepseek-v41-flash-freeplay", enabled: true, source: "policy" as const, attempt: 2 }, account: "RUNNER2", why: "extra" };
+    const { picks } = planContinuations([pick], characters, roster);
+    expect(picks[0]!.job.continueFrom).toBe("fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919");
   });
 });

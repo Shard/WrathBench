@@ -37,11 +37,12 @@
 
 import { copyFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { hostname } from "node:os";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
-import { clearAccountCharacters } from "./hygiene";
+import { characterOwners, clearAccountCharacters } from "./hygiene";
 import { leaseSessionSecret, releaseSessionSecret } from "./module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
@@ -71,7 +72,8 @@ import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./p
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
 import { Scratchpad } from "./scratchpad";
-import { Trajectory, readMeta, type PauseMark, type RunMeta } from "./trajectory";
+import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
+import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
 import { className, raceName } from "../viewer/characters";
@@ -373,6 +375,12 @@ async function main(): Promise<void> {
       ? args["keep-characters"].split(",").map((n) => n.trim()).filter((n) => n.length > 0)
       : [];
   /**
+   * `--allow-character-delete`: let hygiene delete a character above level 1
+   * that no ended run on this account accounts for. Never passed by the
+   * fleet; an operator's explicit choice on a hand launch (hygiene.ts).
+   */
+  const allowCharacterDelete = flag(args["allow-character-delete"]) === true;
+  /**
    * `--continue-dropped <run-id> --continue-dropped-reason <why>`: the character
    * head the supervisor chose NOT to continue (its account is occupied by
    * another ref's character), so this launch is a fresh start by decision. A
@@ -518,10 +526,23 @@ async function main(): Promise<void> {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(2);
     }
+  } else {
+    // A resume onto a run somebody is still playing is two runners on one run
+    // id, one account and one character. Refused before anything is written —
+    // the directory, the row and the session are the owner's. A cold heartbeat
+    // is not an owner: that is the hard-killed run a resume exists for.
+    const owner = liveOwnerOf(config.runsDir, config.runId);
+    if (owner !== null) {
+      console.error(`[wrathbench] --resume ${config.runId} refused: the run has a live owner — ${owner}. Nothing was written; retry once it has stopped.`);
+      process.exit(RESUME_REFUSED_EXIT);
+    }
   }
 
   const runDir = join(config.runsDir, config.runId);
   const trajectory = new Trajectory(runDir);
+  // From here until the process exits, however it exits short of a SIGKILL.
+  const stopHeartbeat = startHeartbeat(runDir, `${hostname()} ${process.pid}`);
+  process.on("exit", stopHeartbeat);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
   // The episodic log lives beside the scratchpad and survives a pause the same
   // way: it is append-only, so a resumed run reads its own past back.
@@ -773,47 +794,6 @@ async function main(): Promise<void> {
     console.error(`[wrathbench] episode clock resumes at ${Math.round(elapsedBeforeMs / 60_000)}m`);
   }
 
-  // A stopped runner must still leave a run that says what happened to it.
-  // Two signals, two meanings:
-  //  - SIGTERM is what a supervisor sends — `docker compose stop`, a drain, a
-  //    recreate. The run PAUSES as `operator-pause`: clock stopped, session
-  //    released, resumable with --resume. The fleet's stop must not cost a run.
-  //  - SIGINT is the operator's Ctrl-C on a hand-started run: `manual`.
-  // Either way the driver is asked to unwind cooperatively (the request in
-  // flight is abandoned, the CLI child torn down) and the record is written
-  // by the loop; a backstop writes it if the unwind wedges.
-  let stopping = false;
-  const abort = new AbortController();
-  const onSignal = (sig: "SIGINT" | "SIGTERM"): void => {
-    if (stopping) process.exit(130);
-    stopping = true;
-    const req: StopRequest =
-      sig === "SIGTERM"
-        ? { kind: "pause", reason: "operator-pause", detail: `${sig}: supervisor stop` }
-        : { kind: "terminate", detail: sig };
-    console.error(
-      req.kind === "pause"
-        ? `\n${sig}: pausing run as \`operator-pause\` (resume with --resume ${config.runId})`
-        : `\n${sig}: terminating run as \`manual\``,
-    );
-    abort.abort(req);
-    // Backstop: never hang forever waiting for a wedged child or snippet. If
-    // the loop has not written its record by then, write it here so the run
-    // is never left with neither a termination nor a pause.
-    setTimeout(() => {
-      const row = trajectory.runRow(config.runId);
-      const recorded = row !== null && ((row["termination_reason"] ?? null) !== null || (row["pause_reason"] ?? null) !== null);
-      if (!recorded) {
-        if (req.kind === "pause") {
-          trajectory.setPause(config.runId, req.reason, `${req.detail} (backstop)`, watchdogs.elapsedMs());
-          trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: pauseMark(req) });
-        } else {
-          trajectory.setTermination(config.runId, "manual", `${req.detail} (backstop)`);
-        }
-      }
-      process.exit(130);
-    }, req.kind === "pause" ? 60_000 : 20_000).unref();
-  };
   const metaNow = (): RunMeta => ({
     runId: config.runId,
     harnessVersion: version,
@@ -828,6 +808,69 @@ async function main(): Promise<void> {
     at: Date.now(),
     episodeElapsedMs: watchdogs.elapsedMs(),
   });
+  // A stopped runner must still leave a run that says what happened to it.
+  // Two signals, two meanings:
+  //  - SIGTERM is what a supervisor sends — `docker compose stop`, a drain, a
+  //    recreate. The run PAUSES as `operator-pause`: clock stopped, session
+  //    released, resumable with --resume. The fleet's stop must not cost a run.
+  //  - SIGINT is the operator's Ctrl-C on a hand-started run: `manual`.
+  // The verdict is written FIRST, synchronously, before the driver is asked
+  // to do anything: on 2026-09-20 the kubelet evicted the fleet pod under
+  // DiskPressure and SIGKILLed it two seconds after SIGTERM, inside the
+  // cooperative unwind, and the freeplay run it was playing was left with
+  // neither a termination nor a pause — invisible to the resume planner and
+  // its level-7 character wiped by the next launch's hygiene. The pause row,
+  // its trajectory record and the meta.json mark are a few synchronous writes
+  // and they land before this handler returns; whatever the kill grace is,
+  // the run reads as paused. Then the driver unwinds cooperatively (the
+  // request in flight is abandoned, the CLI child torn down, the session
+  // released); its own pause write is a no-op against the row already there,
+  // and a backstop exits the process if the unwind wedges.
+  let stopping = false;
+  const abort = new AbortController();
+  const onSignal = (sig: "SIGINT" | "SIGTERM"): void => {
+    if (stopping) process.exit(130);
+    stopping = true;
+    const req: StopRequest =
+      sig === "SIGTERM"
+        ? { kind: "pause", reason: "operator-pause", detail: `${sig}: supervisor stop` }
+        : { kind: "terminate", detail: sig };
+    console.error(
+      req.kind === "pause"
+        ? `\n${sig}: pausing run as \`operator-pause\` (resume with --resume ${config.runId})`
+        : `\n${sig}: terminating run as \`manual\``,
+    );
+    if (req.kind === "pause") {
+      try {
+        const row = trajectory.runRow(config.runId);
+        const ended = row !== null && (row["termination_reason"] ?? null) !== null;
+        // A run that already has its termination keeps it; a pause never
+        // overwrites a verdict.
+        // Nor does it move a pause already there: a run that paused on its
+        // provider and is then stopped keeps that pause's reason AND its
+        // instant, which is what the resume cadence counts from.
+        if (!ended) trajectory.pauseWithMark(config.runId, pauseMark(req), readMeta(runDir) ?? metaNow());
+      } catch (err) {
+        console.error(`[wrathbench] could not write the pause record at once: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    abort.abort(req);
+    // Backstop: never hang forever waiting for a wedged child or snippet. If
+    // the loop has not written its record by then, write it here so the run
+    // is never left with neither a termination nor a pause.
+    setTimeout(() => {
+      const row = trajectory.runRow(config.runId);
+      const recorded = row !== null && ((row["termination_reason"] ?? null) !== null || (row["pause_reason"] ?? null) !== null);
+      if (!recorded) {
+        if (req.kind === "pause") {
+          trajectory.pauseWithMark(config.runId, pauseMark({ reason: req.reason, detail: `${req.detail} (backstop)` }), readMeta(runDir) ?? metaNow());
+        } else {
+          trajectory.setTermination(config.runId, "manual", `${req.detail} (backstop)`);
+        }
+      }
+      process.exit(130);
+    }, req.kind === "pause" ? 60_000 : 20_000).unref();
+  };
   process.on("SIGINT", () => onSignal("SIGINT"));
   process.on("SIGTERM", () => onSignal("SIGTERM"));
 
@@ -870,8 +913,12 @@ async function main(): Promise<void> {
       log: (line) => console.error(`[wrathbench] ${line}`),
       // A continuation keeps its predecessor's character, and every launch
       // keeps another ref's freeplay character it shares the account with;
-      // everything else on the account is the usual leftover.
+      // everything else on the account is the usual leftover — unless a run
+      // that has not ended still owns it, or it is levelled and unaccounted
+      // for (hygiene's own guard, from the run directories).
       keep: [...(continuation !== undefined ? [continuation.character] : []), ...keepCharacters],
+      owners: characterOwners(config.runsDir, config.account, config.runId),
+      allowCharacterDelete,
     });
     if (!hygiene.ok) {
       console.error(`[wrathbench] ${hygiene.reason}`);
@@ -891,11 +938,16 @@ async function main(): Promise<void> {
       trajectory.append({ t: "harness", kind: "hygiene", cleared: hygiene.cleared });
     }
     // A kept character is as taken as a slot-eater: `createSession` on its
-    // name would reuse it, and the tripwire below would end the run.
+    // name would reuse it, and the tripwire below would end the run. So is
+    // one the guard refused to delete.
     const keptOthers = hygiene.kept.filter((k) => continuation === undefined || k.name.toLowerCase() !== continuation.character.toLowerCase());
-    takenNames = [...hygiene.leftover, ...keptOthers.map((k) => k.name)];
+    takenNames = [...hygiene.leftover, ...keptOthers.map((k) => k.name), ...hygiene.protected.map((p) => p.name)];
     if (keptOthers.length > 0) {
       console.error(`[wrathbench] hygiene: kept ${keptOthers.map((k) => k.name).join(", ")} (another ref's freeplay character on this account)`);
+    }
+    for (const p of hygiene.protected) {
+      console.error(`[wrathbench] hygiene: KEPT ${p.name} (guid ${p.guid || "?"}${p.level !== null ? `, level ${p.level}` : ""}) — ${p.why}`);
+      trajectory.append({ t: "harness", kind: "hygiene-kept", character: p.name, guid: p.guid, level: p.level, detail: p.why });
     }
     if (hygiene.leftover.length > 0) {
       console.error(
@@ -1049,7 +1101,12 @@ async function main(): Promise<void> {
      * the session is touched so a crash in the release still leaves a
      * resumable run.
      */
-    trajectory.writeMeta({ ...(readMeta(runDir) ?? metaNow()), pause: pauseMark(outcome) });
+    // Once per segment, like the pause itself: when the signal handler has
+    // already marked this pause, the mark stands — rewriting it here would move
+    // its instant by however long the unwind took. (`--resume` consumes the
+    // mark, so one that is present is this segment's.)
+    const metaThen = readMeta(runDir);
+    if (metaThen?.pause === undefined) trajectory.writeMeta({ ...(metaThen ?? metaNow()), pause: pauseMark(outcome) });
   }
   if (outcome.kind === "terminated" || outcome.reason === "operator-pause") {
     // A finished run frees its module session so the account is not held

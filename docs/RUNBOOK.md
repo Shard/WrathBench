@@ -547,11 +547,34 @@ off a model whose launches keep failing.
 whose last activity (its pause mark, else its trajectory) is older than **its
 own** episode budget — 12h for a run with no wall clock — is ended. That is the
 half-day outage case: the host slept, and every run left live or paused had its
-budget elapse in wall clock while nobody was playing it. A stale freeplay
-session is ended too, and the next tick continues it on the same character
-under a new run id (below). A run the fleet did
+budget elapse in wall clock while nobody was playing it. A freeplay session is
+never stale: it has no budget to elapse, and it is resumed under its own run id
+however long the gap (below). A run the fleet did
 not launch (no `fleet-` prefix) is never ended by the supervisor: it is listed
 for the operator.
+
+A run with **no verdict at all** — no termination, no pause, no live process —
+is a runner that was killed before it could write (a SIGKILL inside the stop
+grace, a host that lost power). On the lanes that resume, the supervisor reads
+it as paused `offline` as of its last activity and resumes it as it would an
+`operator-pause`, once the run provably has no owner; `--status` shows it the
+same way. It is never left in limbo, and its character is never a launch's
+leftover: it stays the character head, it holds its model, and every other
+launch on its account keeps it. The scored lanes are left to the stale sweep
+above — a lapsed `e90` is a failed attempt either way.
+
+The proof of "no owner" is the run's **heartbeat**: a runner rewrites
+`heartbeat` in its run directory every twenty seconds and removes it on any
+exit it gets to make, so a fresh one (under two minutes) means a process owns
+the run — on this pod or any other — and a cold one means it was killed. A
+quiet trajectory proves nothing, because a run waiting on a slow provider
+writes nothing. A verdict-less run with a cold heartbeat is resumed on the next
+tick; one with no heartbeat file at all (its runner predates it) is listed as
+`offline … resuming after` until it has been silent for its own idle watchdog
+plus two minutes (thirty minutes when it recorded none). `run.ts --resume`
+and the roster both refuse a run with a fresh heartbeat — exit 75, nothing
+written, the session not touched — so a resume by hand cannot land on a run
+the fleet is playing, nor the reverse.
 
 For the lanes that **do** resume — freeplay, and `campaigns.<name>.resume` —
 `--status` shows `paused (reason, Xm elapsed of Ym) — <run id> Lx xp` and a
@@ -581,7 +604,7 @@ a paused run counts toward nothing until it finally ends.
 A freeplay character — the one an `idle: "unlimited"` ref plays across its
 sessions — is the operator's to disable and re-enable at will, and it
 survives that. Without it only a *pause* would come back: every
-ended session (idle watchdog, a hand kill, the stale sweep) would be followed
+ended session (idle watchdog, a hand kill) would be followed
 by a fresh attempt whose hygiene wiped the account and whose model named a new
 level-1 character.
 
@@ -600,11 +623,16 @@ What the supervisor does with it, per tick:
   there is no episode boundary to wait for on a session with no wall clock.
   The runner logs the character out and writes `operator-pause`; `--status`
   lists the run as `paused, not in config` while the ref stays `none`.
-- **Re-enable within 12h**: the paused run is resumed in place by the ordinary
-  resume path — same run id, account, character, scratchpad.
-- **Re-enable later**, or after any ended session: the stale sweep (or the
-  watchdog, or the operator's kill) has ended the run, so the next policy pick
-  is a **continuation**: a new run id (`-a<n+1>`) launched with
+- **Re-enable**, however much later: the paused run is resumed in place by the
+  ordinary resume path — same run id, account, character, scratchpad. A
+  freeplay pause never goes stale — for every reader alike: while it sits it is
+  listed by `--status`, it holds its model (the policy starts nothing for that
+  ref, scored or not), and it is never continued from, because a continuation
+  is only ever hung on a run that ended. A pause the supervisor will not resume
+  by itself (a provider pause past the defer ladder, a ref no longer in the
+  unlimited lane) therefore waits for the operator: resume it by hand, or end it.
+- **After an ended session** (the watchdog, or the operator's kill): the next
+  policy pick is a **continuation**: a new run id (`-a<n+1>`) launched with
   `--continue-from <predecessor>`. The runner refuses it unless the launch is
   `freeplay`, the predecessor is a freeplay run on the same account and named
   a character; then hygiene keeps that character and clears the rest, the
@@ -664,7 +692,22 @@ What the supervisor does with it, per tick:
   another ref's freeplay character gets `--keep-characters`, so a scored run's
   hygiene leaves it standing (the model is told the name is taken, and the
   freshness tripwire still arms on its guid); the cross-account name sweep
-  skips freeplay characters.
+  skips freeplay characters and the character of every run that has not
+  ended.
+- **Hygiene has a guard of its own**, below anything the supervisor passes:
+  before deleting, the runner reads the run directories for the account
+  (`characterOwners`) and never deletes a character whose newest run has no
+  termination — it may be minutes from being resumed, and a character is the
+  one thing a resume cannot recreate. A character above level 1 that no
+  *ended* run accounts for is kept too, unless the launch passes
+  `--allow-character-delete` (the fleet never does). Both are logged as
+  `hygiene: KEPT <name> (guid, level) — <why>` and recorded in the trajectory
+  as `hygiene-kept`; the model is told the name is taken. A level-1 leftover,
+  or a scored episode's leftover whose run ended, is cleared as always.
+  Archiving a run does **not** release its character: the guard reads
+  `archive/` too, so an archived run with no termination still owns its
+  character (the supervisor, for its part, never resumes or continues an
+  archived run). The release is a termination on the run's row.
 
 The policy line says what happened: `policy sub-opus-low: sub-opus-low freeplay
 attempt 12 (extra) (continues fleet-…-a11) on RUNNER2`, and `--status` prints

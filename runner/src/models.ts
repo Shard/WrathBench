@@ -61,11 +61,12 @@ import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { badEvidenceReason, neverStale, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { HEARTBEAT_DEAD_MS, heartbeatAt, heartbeatOwner } from "./trajectory";
 
 // ----------------------------------------------------------------- policy
 
@@ -475,8 +476,26 @@ export interface RunFact {
   modelResponses: number | null;
   /** Highest `state.level` observed, or null when there are no rows. */
   bestLevel: number | null;
-  /** No termination row, not paused, and a trajectory that grew recently. */
+  /**
+   * No termination row, not paused, and a sign of a live owner: a trajectory
+   * that grew recently, or a fresh heartbeat (a run waiting on a slow request
+   * writes nothing to its trajectory but keeps beating).
+   */
   live: boolean;
+  /**
+   * When the run's owner last beat (`heartbeat` in the run directory), or null
+   * when there is no such file: the owner exited cleanly and removed it, or the
+   * run was written by a runner that predates the heartbeat.
+   */
+  heartbeatAt?: number | null;
+  /** The run's idle watchdog (`watchdogs.idleMs`), null when disabled or unrecorded. */
+  idleMs?: number | null;
+  /**
+   * Read from `archive/` (`readRunFacts` with `includeArchived`). The scheduler
+   * reads such a run for the ladder and for attempt numbers and for nothing
+   * else: it is not under the runs directory any more, so nothing can resume it.
+   */
+  archived?: boolean;
   /**
    * Set while the run is paused: `pause_reason` in run.sqlite with
    * no termination. `at` is meta.json's pause mark when present, else the
@@ -484,7 +503,14 @@ export interface RunFact {
    * is what a resume cadence indexes; `episodeElapsedMs` is the clock the run
    * will continue from (null for a pause written before the mark existed).
    */
-  pause: { reason: string; at: number; count: number; episodeElapsedMs: number | null } | null;
+  pause: {
+    reason: string;
+    at: number;
+    count: number;
+    episodeElapsedMs: number | null;
+    /** Only on the supervisor's derived `offline` pause: not resumable before this instant. */
+    notBefore?: number;
+  } | null;
   /** The game account the run was launched on; a resume must go back to it. */
   account: string | null;
   /**
@@ -883,7 +909,7 @@ export function readRunFact(
       campaign?: unknown;
       cell?: unknown;
       subscription?: unknown;
-      watchdogs?: { episodeMs?: unknown };
+      watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown };
@@ -917,6 +943,8 @@ export function readRunFact(
     account: str(meta.config?.account),
     character: str(meta.config?.character),
     episodeMs: num(meta.config?.watchdogs?.episodeMs),
+    idleMs: num(meta.config?.watchdogs?.idleMs),
+    heartbeatAt: heartbeatAt(dir),
     campaign: str(meta.config?.campaign),
     cell: str(meta.config?.cell),
     subscription: str(meta.config?.subscription),
@@ -981,9 +1009,34 @@ export function readRunFact(
       episodeElapsedMs: num(meta.pause?.episodeElapsedMs),
     };
   }
-  fact.live = fact.terminationReason === null && fact.pause === null && mtime !== null && now - mtime < LIVE_WINDOW_MS;
+  const beating = fact.heartbeatAt != null && now - fact.heartbeatAt < HEARTBEAT_DEAD_MS;
+  fact.live = fact.terminationReason === null && fact.pause === null && ((mtime !== null && now - mtime < LIVE_WINDOW_MS) || beating);
   if (!fact.live && fact.endedAt === null) fact.endedAt = mtime;
   return fact;
+}
+
+/** `run.ts --resume` refused because the run has a live owner (EX_TEMPFAIL): nothing was written. */
+export const RESUME_REFUSED_EXIT = 75;
+
+/**
+ * Why a run may not be resumed right now — a process still owns it — or null.
+ *
+ * Two signs, either enough: a fresh heartbeat, whatever the row says (a paused
+ * run whose runner is still unwinding is still that runner's); or, for a run
+ * with no heartbeat file at all, the reading `live` has always had. A cold
+ * heartbeat is no owner: that is a runner killed without a chance to remove
+ * it, which is the run a resume exists for.
+ */
+export function liveOwnerOf(runsDir: string, runId: string, now = Date.now()): string | null {
+  const dir = join(runsDir, runId);
+  const beat = heartbeatAt(dir);
+  if (beat !== null && now - beat < HEARTBEAT_DEAD_MS) {
+    const who = heartbeatOwner(dir);
+    return `its heartbeat is ${Math.round((now - beat) / 1000)}s old${who !== "" ? ` (${who})` : ""}`;
+  }
+  const f = readRunFact(runsDir, runId, now);
+  if (f !== null && f.live) return "its trajectory was written in the last two minutes and it has neither a pause nor a termination";
+  return null;
 }
 
 /**
@@ -1001,16 +1054,16 @@ export function readRunFact(
 export function readRunFacts(runsDir: string, now = Date.now(), opts: { includeArchived?: boolean } = {}): RunFact[] {
   if (!existsSync(runsDir)) return [];
   const out: RunFact[] = [];
-  const scan = (dir: string): void => {
+  const scan = (dir: string, archived: boolean): void => {
     if (!existsSync(dir)) return;
     for (const d of readdirSync(dir, { withFileTypes: true })) {
       if (!d.isDirectory() || !RUN_ID.test(d.name) || d.name === ARCHIVE_DIR) continue;
       const f = readRunFact(dir, d.name, now);
-      if (f !== null) out.push(f);
+      if (f !== null) out.push(archived ? { ...f, archived: true } : f);
     }
   };
-  scan(runsDir);
-  if (opts.includeArchived === true) scan(join(runsDir, ARCHIVE_DIR));
+  scan(runsDir, false);
+  if (opts.includeArchived === true) scan(join(runsDir, ARCHIVE_DIR), true);
   out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   return out;
 }
@@ -1205,10 +1258,26 @@ export function lastActivityOf(f: Pick<RunFact, "pause" | "endedAt" | "startedAt
  * `STALE_FALLBACK_MS`). The host slept, or the fleet was down; either way the
  * run is cooked and is ended rather than resumed. A live process is excluded
  * by `f.live`, which the caller must have computed against the same clock.
+ * A freeplay run is never stale (`neverStale`): a paused one holds its model,
+ * stays in the status listing and is resumed or listed by `planResumes`
+ * however long it has sat, so no reader drops a run another still means to
+ * bring back.
  */
-export function isStaleRun(f: Pick<RunFact, "pause" | "endedAt" | "startedAt" | "episodeMs" | "live" | "terminationReason">, now: number): boolean {
-  if (f.terminationReason !== null || f.live) return false;
+export function isStaleRun(f: Pick<RunFact, "pause" | "endedAt" | "startedAt" | "episodeMs" | "episode" | "live" | "terminationReason">, now: number): boolean {
+  if (f.terminationReason !== null || f.live || neverStale(f.episode)) return false;
   return now - lastActivityOf(f) > staleAfterMs(f.episodeMs);
+}
+
+/**
+ * A pause that still stands: the run is paused and not stale, so it is
+ * somebody's to resume. The one test behind both the model hold (the policy
+ * starts nothing for a model whose run is waiting) and the status listing —
+ * they read the same runs the resume planner walks, or a run one of them
+ * dropped would be continued or hidden while another still meant to resume it.
+ */
+export function isStandingPause(f: Parameters<typeof isStaleRun>[0] & Pick<RunFact, "archived">, now: number): boolean {
+  // An archived run is put away: nobody resumes it, so it holds nothing.
+  return f.pause !== null && f.archived !== true && !isStaleRun(f, now);
 }
 
 /** How long a stale run has been silent, or null when it is current. */
@@ -1403,8 +1472,9 @@ export function projectModel(
     perEpisode,
     ladder,
   };
-  // The newest paused run that is not stale holds the model.
-  const pausedRun = [...mine].reverse().find((f) => f.pause !== null && !isStaleRun(f, opts.now));
+  // The newest standing pause holds the model — a freeplay one for as long as
+  // it sits, since it is never stale and is resumed, never rescheduled.
+  const pausedRun = [...mine].reverse().find((f) => isStandingPause(f, opts.now));
   if (pausedRun !== undefined && pausedRun.pause !== null) {
     state.paused = {
       runId: pausedRun.runId,

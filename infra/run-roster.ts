@@ -59,6 +59,7 @@ import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
+import { liveOwnerOf } from "../runner/src/models";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -1409,6 +1410,19 @@ async function attemptSpec(
   }
   for (let retry = 0; ; retry++) {
     if (!(await awaitAccount(spec, opts.deadline, opts.dryRun))) return "done";
+    // Before the session is touched: the pre-resume release below is keyed on
+    // the run's own token, and on a run somebody is still playing it would log
+    // the live owner's character out from under it. The runner refuses the
+    // same resume itself; this keeps the refusal ahead of the one side effect
+    // that precedes it. The run is left exactly as it is, for a later tick.
+    if (resume && !opts.dryRun) {
+      const owner = liveOwnerOf(join(REPO_ROOT, RUNS_DIR), spec.runId);
+      if (owner !== null) {
+        say(`resume ${spec.runId} refused: the run has a live owner — ${owner}`);
+        record({ runId: spec.runId, model: spec.model, outcome: "unknown", detail: `resume refused, live owner: ${owner}` });
+        return "done";
+      }
+    }
     await freeSession(spec, resume ? "pre-resume hygiene" : "pre-launch hygiene", opts.dryRun);
     const launchTs = Date.now();
     // The name is the model's own and is not known until it creates the
