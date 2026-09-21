@@ -126,6 +126,18 @@ export function staleAfterMs(episodeMs: number | null): number {
 }
 
 /**
+ * The lane a gap cannot cook. Freeplay has no clock, so nothing elapsed while
+ * nobody was playing it: the gap is a gap in the character's life, not a
+ * broken measurement. One answer for every reader — the lapse rule below, the
+ * stale predicate (`isStaleRun`), and through it the model hold, the resume
+ * planner and the status listing — so none of them can drop a freeplay run the
+ * others still intend to resume.
+ */
+export function neverStale(episode: string | null | undefined): boolean {
+  return episode === "freeplay";
+}
+
+/**
  * Whether a lane resumes a lapsed run. `resume` is the campaign key an
  * operator writes (`campaigns.<name>.resume`); `resumeOnPause` is the same
  * answer travelling on a roster spec. An episode the table does not know —
@@ -171,9 +183,7 @@ export function classifyLapse(opts: {
 }): Lapse {
   const cause = opts.pause?.reason ?? OFFLINE_PAUSE;
   const provider = PROVIDER_PAUSES.has(cause);
-  // Freeplay has no clock, so nothing elapsed while nobody was playing it:
-  // the gap is a gap in the character's life, not a broken measurement.
-  if (opts.episode === "freeplay") return { kind: "resume", counts: false };
+  if (neverStale(opts.episode)) return { kind: "resume", counts: false };
   if (opts.staleForMs !== null) {
     // A stale gap is the harness's weather, not the model's failure — unless
     // the run was already waiting on its provider when the lights went out.

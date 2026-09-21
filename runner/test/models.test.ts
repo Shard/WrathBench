@@ -11,6 +11,7 @@ import {
   isCounted,
   isNoProgress,
   isStaleRun,
+  isStandingPause,
   stillbornOf,
   modelStates,
   nextJobs,
@@ -313,6 +314,31 @@ describe("the ladder", () => {
       fail(14, NOW - 1000, "environment-defect", 2),
     ];
     for (const fact of cases) expect(isCounted(fact)).toBe(false);
+  });
+
+  test("a freeplay pause never goes stale: it holds its model however long it sits, so nothing is started over it", () => {
+    const old: RunFact = {
+      ...fail(9, NOW - 30 * HOUR, null, 30),
+      episode: "freeplay",
+      extra: true,
+      // Past the defer ladder, so the supervisor lists it rather than resuming
+      // it — exactly the run the policy used to pick fresh over after 12 h.
+      pause: { reason: "quota-exhausted", at: NOW - 30 * HOUR, count: 11, episodeElapsedMs: null },
+      episodeMs: null,
+      account: "RUNNER3",
+      character: "Aurelian",
+    };
+    expect(isStaleRun(old, NOW)).toBe(false);
+    expect(isStandingPause(old, NOW)).toBe(true);
+    // The same silence on a scored lane is stale, as it always was.
+    expect(isStaleRun({ ...old, episode: "e90" }, NOW)).toBe(true);
+    expect(isStandingPause({ ...old, episode: "e90" }, NOW)).toBe(false);
+    const s = projectModel({ ...m, idle: "unlimited" }, [old], DEFAULT_POLICY, { now: NOW });
+    expect(s.paused).toMatchObject({ runId: "f-9", episode: "freeplay", reason: "quota-exhausted" });
+    const v = schedulability(s);
+    expect(v.verdict).toBe("blocked");
+    expect(v.why).toContain("resumed by the supervisor, never rescheduled");
+    expect(nextJobs([s], ["A"])).toEqual([]);
   });
 
   test("a stale pause (older than its own budget) no longer holds the model", () => {

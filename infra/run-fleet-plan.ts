@@ -33,7 +33,7 @@ import { backoffMs, isTainted, type RosterSpec, slug } from "./run-roster";
 import { type Campaign, type ProbeRun, workDimensions } from "../runner/src/campaigns";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
 import { isScoredEpisode } from "../runner/src/episodes";
-import { classifyLapse, OFFLINE_PAUSE, resumesOnPause } from "../runner/src/lapse";
+import { classifyLapse, OFFLINE_PAUSE, resumesOnPause, staleAfterMs } from "../runner/src/lapse";
 import {
   ACCOUNT_CLASSES,
   type AccountClass,
@@ -920,9 +920,11 @@ export function planResumes(opts: {
     // series (42 of them on 2026-09-08). It used to be filtered out before the
     // loop, which made it invisible everywhere, including in `--status`. A
     // FRESH one is listed instead, because that is a run somebody is waiting
-    // on; a cold one stays out of the listing, as it always was.
+    // on; a cold one stays out of the listing, as it always was. Cold by the
+    // wall clock, not by `isStaleRun`: a freeplay run is never stale, and this
+    // is a listing of another supervisor's runs, not a decision about one.
     if (!inSeries(f, config.policy)) {
-      if (staleForMs(f, now) === null) {
+      if (now - lastActivityOf(f) <= staleAfterMs(f.episodeMs)) {
         list(
           `paused under harness series ${f.harnessSeries ?? "unversioned"}, this supervisor runs ${config.policy.series ?? "no series"} — resume by hand (--resume ${f.runId}) or archive`,
         );

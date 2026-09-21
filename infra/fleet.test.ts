@@ -110,7 +110,7 @@ import {
   BREAKER_TRIPS,
 } from "./run-fleet";
 import { billingOf, FREE_SUFFIXLESS_ALLOWLIST } from "../runner/src/model-cost";
-import { DEFAULT_POLICY, IDLE_MODES, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
+import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -3282,6 +3282,30 @@ describe("a run whose runner died before its verdict is paused, not invisible (2
     // While the heartbeat is fresh the run is live, whatever its trajectory says.
     const beating = verdictless({ live: true, heartbeatAt: NOW - 15_000 }, 8 * 60_000);
     expect(implicitPauses({ runs: [beating], now: NOW })[0]).toEqual(beating);
+  });
+
+  test("a freeplay pause the planner will not resume is still everybody's paused run: listed, holding its model, never continued from", () => {
+    // Thirty hours into a quota pause that is past the defer ladder.
+    const stuck = verdictless({ pause: { reason: "quota-exhausted", at: NOW - 30 * H, count: 11, episodeElapsedMs: null } }, 30 * H);
+    const runs = implicitPauses({ runs: [stuck], now: NOW });
+    // The tick: neither resumed nor ended — listed for the operator.
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.end).toEqual([]);
+    expect(plan.listed.map((l) => l.runId)).toEqual([stuck.runId]);
+    expect(planStaleRuns({ runs, refs: Object.keys(roster), now: NOW })).toEqual([]);
+    // `--status` filters its paused runs with the same predicate, so it shows
+    // the run the tick listed instead of hiding it.
+    expect(runs.filter((f) => isStandingPause(f, NOW)).map((f) => f.runId)).toEqual([stuck.runId]);
+    // The projection the policy picks from: the ref is held by its paused run,
+    // so there is no fresh freeplay pick for `planContinuations` to hang a
+    // `continueFrom` on — the run with no termination is never continued.
+    const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(roster), policy: config().policy, runs, now: NOW });
+    const st = states.find((x) => x.name === "deepseek-v41-flash")!;
+    expect(st.paused?.runId).toBe(stuck.runId);
+    expect(schedulability(st).verdict).toBe("blocked");
+    // And it is still the head, so every other launch on RUNNER2 keeps Aurelian.
+    expect(keepFor("RUNNER2", charactersFrom(runs, roster), "ox")).toEqual(["Aurelian"]);
   });
 
   test("the stale sweep never ends it, and neither does a twelve-hour gap", () => {

@@ -88,7 +88,7 @@ import {
   extrasSoFar,
   formatOutstanding,
   type HeldPick,
-  isStaleRun,
+  isStandingPause,
   LADDER_MS,
   liveSubscriptions,
   type ModelState,
@@ -582,7 +582,7 @@ export function printStatus(): void {
     busyAccounts: new Set([...live.values()].filter((j) => fleetUp && j.alive).map((j) => j.account.toUpperCase())),
     now: Date.now(),
   });
-  const pausedRuns = runFacts.filter((f) => f.pause !== null && !isStaleRun(f, Date.now())).sort((a, b) => b.pause!.at - a.pause!.at);
+  const pausedRuns = runFacts.filter((f) => isStandingPause(f, Date.now())).sort((a, b) => b.pause!.at - a.pause!.at);
   const resumePlan =
     config !== undefined
       ? planResumes({

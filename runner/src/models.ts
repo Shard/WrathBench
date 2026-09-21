@@ -61,7 +61,7 @@ import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { badEvidenceReason, neverStale, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
@@ -1252,10 +1252,25 @@ export function lastActivityOf(f: Pick<RunFact, "pause" | "endedAt" | "startedAt
  * `STALE_FALLBACK_MS`). The host slept, or the fleet was down; either way the
  * run is cooked and is ended rather than resumed. A live process is excluded
  * by `f.live`, which the caller must have computed against the same clock.
+ * A freeplay run is never stale (`neverStale`): a paused one holds its model,
+ * stays in the status listing and is resumed or listed by `planResumes`
+ * however long it has sat, so no reader drops a run another still means to
+ * bring back.
  */
-export function isStaleRun(f: Pick<RunFact, "pause" | "endedAt" | "startedAt" | "episodeMs" | "live" | "terminationReason">, now: number): boolean {
-  if (f.terminationReason !== null || f.live) return false;
+export function isStaleRun(f: Pick<RunFact, "pause" | "endedAt" | "startedAt" | "episodeMs" | "episode" | "live" | "terminationReason">, now: number): boolean {
+  if (f.terminationReason !== null || f.live || neverStale(f.episode)) return false;
   return now - lastActivityOf(f) > staleAfterMs(f.episodeMs);
+}
+
+/**
+ * A pause that still stands: the run is paused and not stale, so it is
+ * somebody's to resume. The one test behind both the model hold (the policy
+ * starts nothing for a model whose run is waiting) and the status listing —
+ * they read the same runs the resume planner walks, or a run one of them
+ * dropped would be continued or hidden while another still meant to resume it.
+ */
+export function isStandingPause(f: Parameters<typeof isStaleRun>[0], now: number): boolean {
+  return f.pause !== null && !isStaleRun(f, now);
 }
 
 /** How long a stale run has been silent, or null when it is current. */
@@ -1450,8 +1465,9 @@ export function projectModel(
     perEpisode,
     ladder,
   };
-  // The newest paused run that is not stale holds the model.
-  const pausedRun = [...mine].reverse().find((f) => f.pause !== null && !isStaleRun(f, opts.now));
+  // The newest standing pause holds the model — a freeplay one for as long as
+  // it sits, since it is never stale and is resumed, never rescheduled.
+  const pausedRun = [...mine].reverse().find((f) => isStandingPause(f, opts.now));
   if (pausedRun !== undefined && pausedRun.pause !== null) {
     state.paused = {
       runId: pausedRun.runId,

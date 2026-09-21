@@ -625,7 +625,12 @@ What the supervisor does with it, per tick:
   lists the run as `paused, not in config` while the ref stays `none`.
 - **Re-enable**, however much later: the paused run is resumed in place by the
   ordinary resume path — same run id, account, character, scratchpad. A
-  freeplay pause never goes stale.
+  freeplay pause never goes stale — for every reader alike: while it sits it is
+  listed by `--status`, it holds its model (the policy starts nothing for that
+  ref, scored or not), and it is never continued from, because a continuation
+  is only ever hung on a run that ended. A pause the supervisor will not resume
+  by itself (a provider pause past the defer ladder, a ref no longer in the
+  unlimited lane) therefore waits for the operator: resume it by hand, or end it.
 - **After an ended session** (the watchdog, or the operator's kill): the next
   policy pick is a **continuation**: a new run id (`-a<n+1>`) launched with
   `--continue-from <predecessor>`. The runner refuses it unless the launch is
