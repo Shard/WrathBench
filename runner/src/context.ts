@@ -216,6 +216,12 @@ export interface SnapshotLike {
   gaps?: unknown[];
   lastSeq?: number;
   eventCount?: number;
+  /**
+   * The sandbox child's report on its own event stream, not an observation of
+   * the world: the HUD prints nothing from it, and only the stall detector in
+   * `loop.ts` reads it.
+   */
+  observation?: { connected?: boolean };
 }
 
 function fmt(v: unknown, fallback = "unobserved"): string {

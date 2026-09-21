@@ -315,6 +315,13 @@ class EventStream implements AsyncIterable<StreamEvent> {
 Every event carries `seq`, `opcode`, `opcodeId`, `ts`, `data`, exactly as
 PROTOCOL.md defines them.
 
+`connect()` resolves at once while the socket is open, joins the attempt or
+pending retry the reconnect ladder already owns, and reopens the stream after a
+`close()` — a consumer that hung up can dial again, and the gap accounting
+carries across, so the events emitted while it was down arrive as one
+`stream_gap`. What `close()` really ended stays ended: the waits it rejected and
+the async iterators it finished belong to the caller that closed them.
+
 `waitFor` searches the retained buffer (default 500 events) *before* waiting,
 so a wait issued after an action was acked can still find an event that arrived
 during the call. `{ sinceSeq }` bounds how far back it looks;

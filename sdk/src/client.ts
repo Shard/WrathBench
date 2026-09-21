@@ -1030,6 +1030,41 @@ const MOVE_LEAVES_NO_STOP: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * How long the server's refusal of a `moveTo` stands for.
+ *
+ * A refusal in `MOVE_LEAVES_NO_STOP` is a planning answer about two fixed
+ * things — where the character is standing and where it asked to go — so
+ * re-asking the same question from the same spot inside a quarter second cannot
+ * get a different answer. It can get a great deal of traffic: one 25-second
+ * snippet re-issued one refused destination 4014 times (~160/s), which is 4014
+ * requests through the module's bridge for a verdict the SDK already had. The
+ * repeat is answered from the remembered one instead. Nothing new appears on
+ * the model surface: the result is the verdict the server gave, in the same
+ * shape with the same hint, and the hint tally counts the call as the failure it
+ * is. The window is short on purpose — it bounds a loop without ever standing in
+ * for an answer the world could have changed, and the world is not observed from
+ * here to decide that.
+ */
+const MOVE_REJECTION_MEMO_MS = 250;
+
+/**
+ * How close two points must be to be the same point, in yards: the destination
+ * asked for, and where the character is standing. Tight, because "has not moved"
+ * has to mean it — a character that walked even a step is asking a different
+ * question, and server positions are exact, not jittery.
+ */
+const MOVE_REJECTION_MEMO_EPSILON = 0.1;
+
+/** Same point within `MOVE_REJECTION_MEMO_EPSILON` on all three axes. */
+function samePointish(a: Point3, b: Point3): boolean {
+  return (
+    Math.abs(a.x - b.x) <= MOVE_REJECTION_MEMO_EPSILON &&
+    Math.abs(a.y - b.y) <= MOVE_REJECTION_MEMO_EPSILON &&
+    Math.abs(a.z - b.z) <= MOVE_REJECTION_MEMO_EPSILON
+  );
+}
+
+/**
  * What an `arrived` with `meshZ` means. Within 3y the mesh corrected a stale
  * z and the agent should quote the mesh's value. Beyond that the module's
  * drop guard should have refused the walk, so the honest reading is that the
@@ -2232,6 +2267,28 @@ export class WrathClient {
   /** Hint-bearing failures since the last drain, by `action:status`. See `ActionHint`. */
   private readonly actionHints = new Map<string, ActionHint>();
 
+  /**
+   * The last `moveTo` the server refused without moving anything, kept for
+   * `MOVE_REJECTION_MEMO_MS` so an identical repeat from the same spot is
+   * answered rather than re-sent. One slot: a loop re-asks its own last
+   * question, and anything else replaces this one.
+   */
+  private lastMoveRejection:
+    | {
+        /** Where the refused move was headed. */
+        readonly point: MovePoint;
+        /** Where the character was standing when it was refused. */
+        readonly from: Point3;
+        /** When the refusal came back (epoch ms). */
+        readonly at: number;
+        /** The status and recipe, so a short-circuited repeat tallies exactly as the call it repeats. */
+        readonly status: string;
+        readonly recipe: string | undefined;
+        /** The verdict itself, returned again verbatim — it is the same verdict. */
+        readonly result: MoveResult;
+      }
+    | null = null;
+
   constructor(options: ConnectOptions) {
     this.token = options.token;
     this.boundAccount = options.account;
@@ -2539,6 +2596,9 @@ export class WrathClient {
 
   /** The `move_to` POST itself; `guid` is the planning hint `resolveMoveTarget` attaches to unit targets. */
   private postMoveTo(point: MovePoint, guid?: string): Promise<MoveToResponse> {
+    // Any dispatch supersedes a remembered refusal, whichever call made it:
+    // what comes back is the verdict now.
+    this.lastMoveRejection = null;
     return this.request(
       "POST",
       "/action",
@@ -4407,6 +4467,15 @@ export class WrathClient {
       return { ok: false, status: "unknown_target", hint: resolved.unknown };
     }
     const point = resolved.point;
+    const repeat = this.recallMoveRejection(point);
+    if (repeat !== null) {
+      // The same refusal, tallied like the call it is, and no request. The
+      // `stop()` the status would otherwise send is skipped with it: the
+      // remembered refusal already sent one and the character has not moved
+      // since, so a second is a second packet for the same repair.
+      this.noteActionHint("moveTo", repeat.status, repeat.recipe, point);
+      return repeat.result;
+    }
     // Notes that belong on whatever verdict comes back: a stale-position
     // fallback, and the budget estimate below. They explain the call, so they
     // ride the `hint` rather than changing the module's status (the status
@@ -4624,7 +4693,7 @@ export class WrathClient {
     this.noteActionHint("moveTo", status, recipe, point);
     const hint = withNotes(recipe);
     const reachedPos = data.reachedPos ? { x: data.reachedPos.x, y: data.reachedPos.y, z: data.reachedPos.z } : undefined;
-    return {
+    const result: MoveResult = {
       ok: false,
       status,
       ...common,
@@ -4632,6 +4701,44 @@ export class WrathClient {
       ...(data.dz !== undefined ? { dz: data.dz } : {}),
       ...(hint !== undefined ? { hint } : {}),
     };
+    if (MOVE_LEAVES_NO_STOP.has(status)) {
+      // Nothing moved, so this verdict is about a position and a destination
+      // that both still hold: remember it for the repeat (see
+      // `MOVE_REJECTION_MEMO_MS`). The refusal's own `pos` is already folded
+      // into the cache, so `recallMoveRejection` compares like with like.
+      const here = this.state.self.position?.value;
+      if (here !== undefined) {
+        this.lastMoveRejection = { point, from: here, at: Date.now(), status, recipe, result };
+      }
+    }
+    return result;
+  }
+
+  /**
+   * The remembered refusal, when this `moveTo` is the same question again: the
+   * same destination, from the same spot, inside `MOVE_REJECTION_MEMO_MS`. Null
+   * whenever any of the three fails — and a memory that fails on time or on
+   * position is dropped, because neither can come back.
+   *
+   * Only `moveTo` reads this. `moveToAsync` acks with a `moveId` the module
+   * mints, and there is no honest way to answer one without dispatching: an
+   * invented id is precisely the class of value the SDK never returns.
+   */
+  private recallMoveRejection(point: MovePoint): typeof this.lastMoveRejection {
+    const memo = this.lastMoveRejection;
+    if (memo === null) return null;
+    if (Date.now() - memo.at > MOVE_REJECTION_MEMO_MS) {
+      this.lastMoveRejection = null;
+      return null;
+    }
+    const here = this.state.self.position?.value;
+    // No position to compare is no claim that the character stood still.
+    if (here === undefined) return null;
+    if (!samePointish(here, memo.from)) {
+      this.lastMoveRejection = null;
+      return null;
+    }
+    return samePointish(point, memo.point) ? memo : null;
   }
 
   /**

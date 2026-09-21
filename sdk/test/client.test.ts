@@ -357,6 +357,116 @@ describe("client: movement", () => {
     }
   });
 
+  describe("a refusal already given is not re-asked on the wire", () => {
+    /**
+     * One 25-second snippet re-issued a refused `moveTo` 4014 times — ~160
+     * requests a second through the module's bridge for a planning verdict about
+     * a destination and a position that had not changed. The repeat inside the
+     * memo window is answered from the refusal the server already gave.
+     */
+    const dispatches = (stub: { actions: { action: string }[] }): number =>
+      stub.actions.filter((a) => a.action === "move_to").length;
+
+    /** Where the state cache says the character is; a walk moves it. */
+    const walked = (seq: number): string =>
+      JSON.stringify({ ...moveProgress, seq, data: { moveId: 9, pos: { x: -1190, y: 981, z: 42, o: 1.2 } } });
+
+    async function refused(
+      client: Awaited<ReturnType<typeof connect>>,
+      stub: ReturnType<typeof startStub>,
+      point: { x: number; y: number; z: number },
+      status: string,
+      moveId: number,
+      seq: number,
+    ) {
+      const pending = client.moveTo(point, { timeout: 2000 });
+      stub.push(JSON.stringify(moveResult(status, moveId, seq)));
+      return pending;
+    }
+
+    async function session() {
+      const stub = startStub({ onConnect: () => frames(loginSequence) });
+      const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+      await client.createSession({ character: "Fenwick" });
+      return { stub, client, done: async () => { client.close(); await stub.stop(); } };
+    }
+
+    test("the same refused destination, repeated at once, is one request and the same verdict", async () => {
+      const { stub, client, done } = await session();
+      const point = { x: 1, y: 2, z: 3 };
+      const first = await refused(client, stub, point, "drop", 1, 30);
+      expect(first.status).toBe("drop");
+
+      // What the loop did: the same call again, and again, with nothing to
+      // answer it on the stream.
+      const repeats = [await client.moveTo(point), await client.moveTo({ ...point })];
+      for (const r of repeats) expect(r).toEqual(first);
+      expect(dispatches(stub)).toBe(1);
+
+      // The hint tally still counts calls, not dispatches: the model is told
+      // about every refusal it asked for, exactly as before.
+      const drained = client.drainActionHints();
+      expect(drained).toHaveLength(1);
+      expect(drained[0]?.status).toBe("drop");
+      expect(drained[0]?.count).toBe(3);
+      await done();
+    });
+
+    test("every status where nothing moved is remembered; one where something did is not", async () => {
+      for (const status of ["too_far", "no_mesh", "target_off_mesh", "start_off_mesh", "path_incomplete", "drop"] as const) {
+        const { stub, client, done } = await session();
+        await refused(client, stub, { x: 1, y: 2, z: 3 }, status, 1, 30);
+        await client.moveTo({ x: 1, y: 2, z: 3 });
+        expect(dispatches(stub)).toBe(1);
+        await done();
+      }
+      // `interrupted` is a move that started and stopped, not a refusal: the
+      // character is somewhere new and the question is open again.
+      for (const status of ["interrupted", "stopped", "superseded", "arrived"] as const) {
+        const { stub, client, done } = await session();
+        await refused(client, stub, { x: 1, y: 2, z: 3 }, status, 1, 30);
+        const again = refused(client, stub, { x: 1, y: 2, z: 3 }, status, 2, 31);
+        expect((await again).status).toBe(status);
+        expect(dispatches(stub)).toBe(2);
+        await done();
+      }
+    });
+
+    test("a different destination, a character that moved, or a later retry all go to the wire", async () => {
+      const { stub, client, done } = await session();
+      await refused(client, stub, { x: 1, y: 2, z: 3 }, "drop", 1, 30);
+
+      // A destination a yard away is a different question.
+      expect((await refused(client, stub, { x: 2, y: 2, z: 3 }, "drop", 2, 31)).status).toBe("drop");
+      expect(dispatches(stub)).toBe(2);
+
+      // The character walked: the refusal was about where it was standing.
+      stub.push(walked(32));
+      await client.events.waitForOpcode("WB_MOVE_PROGRESS", { timeout: 2000 });
+      expect((await refused(client, stub, { x: 2, y: 2, z: 3 }, "drop", 3, 33)).status).toBe("drop");
+      expect(dispatches(stub)).toBe(3);
+
+      // And the window is short: after it, the question is asked again.
+      await Bun.sleep(300);
+      expect((await refused(client, stub, { x: 2, y: 2, z: 3 }, "drop", 4, 34)).status).toBe("drop");
+      expect(dispatches(stub)).toBe(4);
+      await done();
+    });
+
+    test("a dispatched move by any route clears the memory", async () => {
+      const { stub, client, done } = await session();
+      const point = { x: 1, y: 2, z: 3 };
+      await refused(client, stub, point, "start_off_mesh", 1, 30);
+      // The async sibling cannot be answered from memory — its `moveId` is the
+      // module's to mint — so it dispatches, and what it dispatched is now the
+      // live move.
+      await client.moveToAsync(point);
+      expect((await refused(client, stub, point, "start_off_mesh", 3, 31)).status).toBe("start_off_mesh");
+      expect(dispatches(stub)).toBe(3);
+      await done();
+    });
+  });
+
   test("hint-bearing failures are tallied per status on the client's own channel and drained once", async () => {
     // The hint rides inside the result object, so a snippet that keeps only
     // `.status` never shows it to the model (run a11: 41 `too_far`, hint read 0
@@ -441,7 +551,9 @@ describe("client: movement", () => {
     expect(r1.hint).toContain("not on walkable ground");
     expect(r1.reachedPos).toBeUndefined();
 
-    const p2 = client.moveTo({ x: 10, y: 20, z: 30 }, { timeout: 2000 });
+    // A destination of its own per status: a repeat of a refused one inside the
+    // memo window is answered from the refusal already given, not the wire.
+    const p2 = client.moveTo({ x: 11, y: 20, z: 30 }, { timeout: 2000 });
     const partial = moveResult("path_incomplete", 2, 31) as { data: Record<string, unknown> };
     partial.data.reachedPos = { x: 5, y: 6, z: 7 };
     stub.push(JSON.stringify(partial));
@@ -451,13 +563,13 @@ describe("client: movement", () => {
     expect(r2.reachedPos).toEqual({ x: 5, y: 6, z: 7 });
     expect(r2.hint).toContain("ends at (5.0, 6.0)");
 
-    const p3 = client.moveTo({ x: 10, y: 20, z: 30 }, { timeout: 2000 });
+    const p3 = client.moveTo({ x: 12, y: 20, z: 30 }, { timeout: 2000 });
     stub.push(JSON.stringify(moveResult("no_mesh", 3, 32)));
     const r3 = await p3;
     if (r3.ok) throw new Error("unreachable");
     expect(r3.hint).toContain("harness data limitation");
 
-    const p4 = client.moveTo({ x: 10, y: 20, z: 30 }, { timeout: 2000 });
+    const p4 = client.moveTo({ x: 13, y: 20, z: 30 }, { timeout: 2000 });
     stub.push(JSON.stringify(moveResult("start_off_mesh", 4, 33)));
     const r4 = await p4;
     if (r4.ok) throw new Error("unreachable");

@@ -37,6 +37,14 @@ import type { Watchdogs } from "./watchdogs";
  */
 const TRADE_STATUS_COMPLETE = 8;
 
+/**
+ * Written samples in a row that must find the observation standing still
+ * behind a closed stream before the stall is named on the record. Three is
+ * three minutes at the fleet's `stateIntervalMs`, long enough that a stream
+ * dropping and coming back on its own reconnect ladder is never called one.
+ */
+const OBSERVATION_STALL_SAMPLES = 3;
+
 export interface LoopOptions {
   config: RunConfig & { runId: string; token: string };
   adapter: ChatAdapter;
@@ -193,6 +201,20 @@ export class ContextBuilder {
   private signalWindow = false;
   /** `sandbox.totalRestarts` as the last sample read it; a change abandons `signalWindow`. */
   private lastRestarts = 0;
+  /**
+   * The child's observation cursor at the last written sample, and how many
+   * written samples in a row have found it standing still behind a stream that
+   * is no longer open. See `noteObservationStall`.
+   */
+  private lastCursor: { eventCount: number; lastSeq: number } | null = null;
+  private stalledSamples = 0;
+  private stallRecorded = false;
+  /**
+   * Whether the cursor has ever moved in this process. Latched, so a sandbox
+   * restart — whose fresh child starts the count at zero again — cannot disarm
+   * the detector for the rest of a run that had been observing fine.
+   */
+  private everObserved = false;
   /**
    * The driver turn currently in flight, stamped onto every state sample.
    *
@@ -392,6 +414,66 @@ export class ContextBuilder {
       z: m.z,
       target: m.target,
       status: m.status,
+    });
+  }
+
+  /**
+   * Name a sample that is no longer an observation.
+   *
+   * The sampler reads the sandbox child's state cache, and that read is purely
+   * local: it cannot fail, and a cache nothing folds into any more reads
+   * exactly like a world in which nothing is happening. A run whose snippet
+   * closed the child's own event stream therefore kept writing the same level,
+   * the same position and the same event cursor for fifteen hours while the
+   * character went on playing — recorded silently, because nothing in the path
+   * had an error to raise.
+   *
+   * So the stall is put on the record instead: the child says its stream is
+   * not open and the cursor has not moved for `OBSERVATION_STALL_SAMPLES`
+   * samples in a row, which no quiet world produces — an idle character still
+   * receives the world's update packets. Armed only once the cursor has moved
+   * at least once, so a run whose first snippet has yet to connect is not a
+   * stall. The record is then reasserted every `OBSERVATION_STALL_SAMPLES`
+   * samples for as long as it holds, so a run paused hours into one ends with
+   * the verdict beside its last rows rather than a single line to scroll back
+   * to, and one more record says when the observation came back. The sample
+   * itself is still written throughout: the last known reading is what a
+   * resumed run counts its turns from, and a timeline that simply stops is its
+   * own kind of lie.
+   *
+   * The same closed stream is what feeds the event window served each turn, so
+   * this record speaks for that freeze too.
+   */
+  private noteObservationStall(snap: SnapshotLike, turn: { turn?: number }): void {
+    const eventCount = snap.eventCount ?? 0;
+    const lastSeq = snap.lastSeq ?? -1;
+    const cursor = { eventCount, lastSeq };
+    const moved =
+      this.lastCursor === null ||
+      eventCount !== this.lastCursor.eventCount ||
+      lastSeq !== this.lastCursor.lastSeq;
+    if (eventCount > 0) this.everObserved = true;
+    this.lastCursor = cursor;
+    // `connected` absent is a sandbox that does not report on itself (tests, an
+    // older child): no claim either way, so no stall.
+    if (moved || !this.everObserved || snap.observation?.connected !== false) {
+      if (this.stallRecorded) {
+        this.o.trajectory.append({ t: "harness", kind: "observation_resumed", ...cursor, ...turn });
+      }
+      this.stalledSamples = 0;
+      this.stallRecorded = false;
+      return;
+    }
+    this.stalledSamples++;
+    if (this.stalledSamples % OBSERVATION_STALL_SAMPLES !== 0) return;
+    this.stallRecorded = true;
+    this.o.trajectory.append({
+      t: "harness",
+      kind: "observation_stalled",
+      detail: `the sandbox event stream is closed and the observation cursor has not moved for ${this.stalledSamples} samples; every state row since is the last reading repeated, not the world`,
+      samples: this.stalledSamples,
+      ...cursor,
+      ...turn,
     });
   }
 
@@ -697,6 +779,7 @@ export class ContextBuilder {
       // erasing it: "we did not see playerFlags this sample" is not "not a ghost".
       if (ghost !== undefined) this.lastGhost = ghost;
     }
+    this.noteObservationStall(snap, turn);
     trajectory.recordState(config.runId, {
       level,
       xp,
