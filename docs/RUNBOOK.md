@@ -704,6 +704,10 @@ What the supervisor does with it, per tick:
   `hygiene: KEPT <name> (guid, level) — <why>` and recorded in the trajectory
   as `hygiene-kept`; the model is told the name is taken. A level-1 leftover,
   or a scored episode's leftover whose run ended, is cleared as always.
+  Archiving a run does **not** release its character: the guard reads
+  `archive/` too, so an archived run with no termination still owns its
+  character (the supervisor, for its part, never resumes or continues an
+  archived run). The release is a termination on the run's row.
 
 The policy line says what happened: `policy sub-opus-low: sub-opus-low freeplay
 attempt 12 (extra) (continues fleet-…-a11) on RUNNER2`, and `--status` prints

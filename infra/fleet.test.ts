@@ -3219,6 +3219,8 @@ describe("a run whose runner died before its verdict is paused, not invisible (2
     keep(verdictless({ terminationReason: "idle" }));
     keep(verdictless({ pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: null } }));
     keep(verdictless({ runId: "roster-deepseek-20260919" }));
+    // Archived: put away, and not where `--resume` could open it.
+    keep(verdictless({ archived: true }));
     // The supervisor's own child is playing it, or a live job holds its account.
     keep(verdictless(), { running: new Set(["fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919"]) });
     keep(verdictless(), { busyAccounts: new Set(["RUNNER2"]) });
@@ -3306,6 +3308,24 @@ describe("a run whose runner died before its verdict is paused, not invisible (2
     expect(schedulability(st).verdict).toBe("blocked");
     // And it is still the head, so every other launch on RUNNER2 keeps Aurelian.
     expect(keepFor("RUNNER2", charactersFrom(runs, roster), "ox")).toEqual(["Aurelian"]);
+  });
+
+  test("an archived run is nobody's to resume: not stamped, not resumed, not shadowing the real paused run, holding nothing", () => {
+    const archived = verdictless({ runId: "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260920-a2", startedAt: NOW - 2 * H, archived: true }, H);
+    const real = verdictless({ pause: { reason: "operator-pause", at: NOW - 3 * H, count: 1, episodeElapsedMs: null } }, 3 * H);
+    const runs = implicitPauses({ runs: [real, archived], now: NOW });
+    expect(runs[1]).toEqual(archived);
+    const plan = planResumes({ runs, config: config(), running: new Map(), held, now: NOW });
+    expect(plan.resume.map((r) => r.runId)).toEqual([real.runId]);
+    expect(plan.listed).toEqual([]);
+    // Even one that was archived WITH a pause row is left out of the resume walk…
+    const pausedArchived = { ...archived, pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: null } };
+    const again = planResumes({ runs: [real, pausedArchived], config: config(), running: new Map(), held, now: NOW });
+    expect(again.resume.map((r) => r.runId)).toEqual([real.runId]);
+    expect(again.listed).toEqual([]);
+    expect(again.end).toEqual([]);
+    // …and holds no model.
+    expect(isStandingPause(pausedArchived, NOW)).toBe(false);
   });
 
   test("the stale sweep never ends it, and neither does a twelve-hour gap", () => {

@@ -491,6 +491,12 @@ export interface RunFact {
   /** The run's idle watchdog (`watchdogs.idleMs`), null when disabled or unrecorded. */
   idleMs?: number | null;
   /**
+   * Read from `archive/` (`readRunFacts` with `includeArchived`). The scheduler
+   * reads such a run for the ladder and for attempt numbers and for nothing
+   * else: it is not under the runs directory any more, so nothing can resume it.
+   */
+  archived?: boolean;
+  /**
    * Set while the run is paused: `pause_reason` in run.sqlite with
    * no termination. `at` is meta.json's pause mark when present, else the
    * trajectory's mtime; `count` is how many times this run has paused, which
@@ -1048,16 +1054,16 @@ export function liveOwnerOf(runsDir: string, runId: string, now = Date.now()): s
 export function readRunFacts(runsDir: string, now = Date.now(), opts: { includeArchived?: boolean } = {}): RunFact[] {
   if (!existsSync(runsDir)) return [];
   const out: RunFact[] = [];
-  const scan = (dir: string): void => {
+  const scan = (dir: string, archived: boolean): void => {
     if (!existsSync(dir)) return;
     for (const d of readdirSync(dir, { withFileTypes: true })) {
       if (!d.isDirectory() || !RUN_ID.test(d.name) || d.name === ARCHIVE_DIR) continue;
       const f = readRunFact(dir, d.name, now);
-      if (f !== null) out.push(f);
+      if (f !== null) out.push(archived ? { ...f, archived: true } : f);
     }
   };
-  scan(runsDir);
-  if (opts.includeArchived === true) scan(join(runsDir, ARCHIVE_DIR));
+  scan(runsDir, false);
+  if (opts.includeArchived === true) scan(join(runsDir, ARCHIVE_DIR), true);
   out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   return out;
 }
@@ -1269,8 +1275,9 @@ export function isStaleRun(f: Pick<RunFact, "pause" | "endedAt" | "startedAt" | 
  * they read the same runs the resume planner walks, or a run one of them
  * dropped would be continued or hidden while another still meant to resume it.
  */
-export function isStandingPause(f: Parameters<typeof isStaleRun>[0], now: number): boolean {
-  return f.pause !== null && !isStaleRun(f, now);
+export function isStandingPause(f: Parameters<typeof isStaleRun>[0] & Pick<RunFact, "archived">, now: number): boolean {
+  // An archived run is put away: nobody resumes it, so it holds nothing.
+  return f.pause !== null && f.archived !== true && !isStaleRun(f, now);
 }
 
 /** How long a stale run has been silent, or null when it is current. */

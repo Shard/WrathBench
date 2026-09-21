@@ -798,6 +798,10 @@ export function implicitPauses(opts: {
   const busy = opts.busyAccounts ?? new Set<string>();
   return opts.runs.map((f) => {
     if (f.terminationReason !== null || f.pause !== null || f.live) return f;
+    // An archived run is put away and not under the runs directory any more:
+    // `--resume` cannot find it, and stamping it would respawn a resume that
+    // exits on "no meta.json" every tick, ahead of the model's real paused run.
+    if (f.archived === true) return f;
     if (!f.runId.startsWith("fleet-") || running.has(f.runId)) return f;
     if (f.account !== null && busy.has(f.account.toUpperCase())) return f;
     if (!resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign))) return f;
@@ -906,7 +910,9 @@ export function planResumes(opts: {
   // Any scheduled class may carry a resume: a paid or local run comes back on
   // its own account, exactly as a pool run comes back on its pool account.
   const poolSet = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
-  const paused = opts.runs.filter((f) => f.pause !== null).sort((a, b) => b.pause!.at - a.pause!.at);
+  // Archived runs are read for the ladder, never for a resume: there is no
+  // directory under the runs dir for `--resume` to open.
+  const paused = opts.runs.filter((f) => f.pause !== null && f.archived !== true).sort((a, b) => b.pause!.at - a.pause!.at);
   const seenModel = new Set<string>();
   for (const f of paused) {
     const pause = f.pause!;
@@ -1168,6 +1174,9 @@ export function charactersFrom(runs: readonly RunFact[], roster: Record<string, 
     for (const f of runs) {
       if (f.episode !== "freeplay" || f.account === null || f.character === null) continue;
       if (f.live) continue;
+      // Put away without a verdict: not a run anything resumes or continues,
+      // so not one that may displace the head that is.
+      if (f.archived === true && f.terminationReason === null) continue;
       if (f.model !== e.model || (f.effort ?? null) !== (e.effort ?? null)) continue;
       if ((at.get(name) ?? -1) >= f.startedAt) continue;
       at.set(name, f.startedAt);
