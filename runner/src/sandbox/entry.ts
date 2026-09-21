@@ -7,7 +7,9 @@
  *   sdk         the WrathClient for this session (constructed, not connected)
  *   state       alias for sdk.state (the StateCache)
  *   events      alias for sdk.events (the EventStream)
- *   connect()   open the event stream (idempotent); call before createSession
+ *   connect()   open the event stream; call before createSession. A no-op while
+ *               the stream is open, and a reopen once it is not — including
+ *               after something closed it
  *   sleep(ms, options?)  Promise timer that resolves with why it woke:
  *               "elapsed", or early with "attacked" (a unit started attacking
  *               us) or "died" (our health reached zero, transition only).
@@ -460,16 +462,31 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
   });
 }
 
-let eventsConnected = false;
 const ambient: Record<string, unknown> = {
   sdk: client,
   state: client.state,
   events: client.events,
   API_MD_PATH,
+  /**
+   * Open the event stream, reading the stream itself for whether it is already
+   * open. Cheap when it is; a reopen when it is not, including after a snippet
+   * closed it (`events.close()`, or a cleanup loop calling `.close()` on every
+   * closable binding — which is how one freeplay run spent fifteen hours
+   * reading a frozen state cache while `connect()` kept answering ok over a
+   * dead socket). A latched "we connected once" flag cannot tell the difference
+   * and so could only lie; `connected` is the fact.
+   *
+   * What comes back after a reopen is the module's business, and it already
+   * does the right thing: a subscribe to a session that is in world gets a
+   * `WB_SESSION_STATE` (PROTOCOL.md, "/events"), which folds into the cache, so
+   * `state` is current again from the next packets on, with the events missed
+   * while the socket was down shown as one `stream_gap`. A session that is gone
+   * is not re-created here — the refusal is the honest answer, and it is the
+   * caller's to read.
+   */
   connect: async (): Promise<void> => {
-    if (eventsConnected) return;
+    if (client.events.connected) return;
     await client.events.connect();
-    eventsConnected = true;
   },
   sleep,
   scratchpad: {
