@@ -26,3 +26,6 @@ infra/fleet.json
 
 # wrangler local state, beside dashboard/wrangler.jsonc
 .wrangler/
+
+# Operator-local agent commands (cite private paths)
+.claude/commands/orchestrate.md
