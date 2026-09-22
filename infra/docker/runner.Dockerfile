@@ -8,9 +8,11 @@
 # does on the host. Without it a containerised supervisor would have to trust a
 # stamp written at `up` time, which goes stale the moment a tracked file is
 # edited — a dirty tree would stamp clean. The CLI is the native binary from
-# Anthropic's installer; its version is recorded at build time in the image
-# (claude --version) but not pinned — shakeout runs are never scored, so CLI
-# drift cannot contaminate results (see runner/README.md Drivers).
+# Anthropic's installer, PINNED below: a new model can require a newer CLI,
+# and an unpinned install is a cached layer, so a rebuild for that reason
+# would ship the old binary again. Bumping the pin is what busts the cache.
+# Shakeout runs are never scored, so CLI drift cannot contaminate results
+# (see runner/README.md Drivers).
 #
 # Why the repo is baked in
 # ------------------------
@@ -48,7 +50,8 @@ RUN apt-get update \
 # the same uid the compose service and the Kubernetes pods run with.
 USER bun
 ENV HOME=/home/bun
-RUN curl -fsSL https://claude.ai/install.sh | bash \
+ARG CLAUDE_CODE_VERSION=2.1.280
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
     && /home/bun/.local/bin/claude --version
 # The OpenAI Codex CLI for the `codex` driver (runner/README.md, Drivers),
 # PINNED: the driver's flag set, feature names and event JSONL were verified
