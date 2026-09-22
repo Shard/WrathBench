@@ -320,7 +320,7 @@ describe("renderSnapshot", () => {
   });
 
   /*
-   * Item 119: the published track carries the character's neighbours, so the
+   * The published track carries the character's neighbours, so the
    * public map's transport steps between a character's attempts with the one
    * fetch a replay already makes. The version key covers it without being
    * hashed over it: an attempt's own detail carries the `character` view, so the

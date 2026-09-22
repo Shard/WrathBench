@@ -1242,7 +1242,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
   }
 
   /*
-   * Item 119: the map's transport steps between a character's attempts, so the
+   * The map's transport steps between a character's attempts, so the
    * track carries the neighbours the run page's `character` names — not the
    * chain, not its totals, which would make a replay's fetch a run page's.
    */
@@ -1289,7 +1289,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
   });
 
   /*
-   * Item 128: `/api/character/<id>` is the whole chain — the view every
+   * `/api/character/<id>` is the whole chain — the view every
    * attempt's page carries a card of, plus the level and XP series across all
    * of it, each sample told from the attempt it came from so a chart can mark
    * the session boundaries.

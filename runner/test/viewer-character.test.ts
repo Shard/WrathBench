@@ -102,7 +102,7 @@ function cost(usd: number | null, p: Partial<CostFigure> = {}): CostFigure {
 
 describe("characterViewOf", () => {
   /*
-   * Item 128: every run belongs to a character, and a run with no chain is a
+   * Every run belongs to a character, and a run with no chain is a
    * character of one attempt rather than no character at all. Whether that
    * view is worth PRINTING is `hasLineage`'s question, and the run detail
    * route still asks it — this is only the aggregation.

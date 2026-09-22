@@ -160,7 +160,7 @@ describe("parseFleet", () => {
   });
 
   test("two enabled jobs sharing an account: the LATER one is refused, the file survives", () => {
-    // Item 66. This used to take the whole config down, and because a rejected
+    // This used to take the whole config down, and because a rejected
     // re-read keeps the last good one, every other `enabled:` flag in the file
     // went inert with it. The rule stands — one live session per account — but
     // it is enforced against the pin, in file order, so the first keeps it.
@@ -736,7 +736,7 @@ describe("rereadFleet", () => {
   });
 
   /*
-   * Item 127: the default read is the config-store seam, so an edit made
+   * The default read is the config-store seam, so an edit made
    * through the app is picked up by the next tick — no restart, no second
    * reload path. The scheduling semantics below the seam are untouched: seed
    * a store from a document and the supervisor parses the same config out of
