@@ -259,12 +259,16 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   (`runner/viewer/redact-prose.ts`), which replaces the prose fields enumerated
   from `sdk/src/protocol.ts` wherever a decoded payload appears in a tool
   result. Quest titles, item, NPC, zone and spell names and
-  every id remain. The run's `scratchpad.json` ships whole beside it.
+  every id remain. The run's workspace ships whole beside it as one
+  `workspace.json` — the listing and every file's text, notes.md first; a run
+  from before the workspace publishes its scratchpad as notes.md.
   **Residual, stated plainly**: model-authored text — turn text, snippet
-  code, the scratchpad, the episodic status, console lines, and any tool
+  code, the workspace files, the episodic status, console lines, and any tool
   result the model formatted as plain prose rather than JSON — is published
-  as written and is not filtered; it may quote game prose. No "load earlier"
-  and no live tail publicly: the window advances with the detail poll.
+  as written and is not filtered; it may quote game prose. That includes
+  whatever a snippet saved to a workspace file, which can be a decoded payload
+  written out whole: the redactor above sees tool results, not files. No "load
+  earlier" and no live tail publicly: the window advances with the detail poll.
 - **Paths**: a container-internal prefix is made repo-relative — every
   exported projector's output crosses `scrubPathsValue`
   (`runner/viewer/scrub-paths.ts`); the model's text is otherwise as written, and every other absolute path stays "Never".

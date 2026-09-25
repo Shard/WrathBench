@@ -330,6 +330,21 @@ readonly, and the runs directory is only ever listed and read. The routes and
 their response shapes are `api.ts` and `api-types.ts`; anything that is not a
 route is the built SPA, or the not-built notice when there is none.
 
+### A run's workspace
+
+`/api/run/<id>/workspace` lists the model's files (`runner/src/workspace.ts`;
+only the runner writes them): notes.md first, then the rest by path, each with
+its size, mtime and first line. `/api/run/<id>/workspace/<path>` serves one file
+as plain text with `nosniff`, because it is model-authored text on the viewer's
+own origin and must never be taken for a page. A path is served only if the
+listing would list it — every directory on the way a real directory and the
+file a regular one, by `lstat` — so a link is never followed out of the
+workspace, and a `..` segment, which reaches the handler once an encoded slash
+is decoded, is a 400. A run from before the workspace has only its
+`scratchpad.md` and serves it as notes.md, the name the runner seeds it into
+when such a run is resumed or continued, rather than keeping a second route
+alive; where both exist the workspace wins, since that run was resumed onto it.
+
 ### The config API (operator-only)
 
 The fleet config is the sqlite store `docs/RUNBOOK.md`, "Where the config
@@ -388,11 +403,12 @@ same projector the snapshot uses, so a route added without one fails
 three routes with no projected form are withheld outright — raw entries and
 minimap tiles (the unprojected record, and Blizzard-derived bytes) and the SSE
 tail, whose whole point is unprojected entries as they are appended; a public
-reader's window is the snapshot's one published tail instead. `/scratchpad` is
-the deliberate exception, served in public mode because the model's own notes
-are published as written. It is opt-in-to-public, not opt-in-to-raw: the run
-page depends on raw bodies, so a public deployment sets the flag rather than
-the developer clearing it.
+reader's window is the snapshot's one published tail instead. A workspace file
+is the deliberate exception: text rather than a body, served in public mode
+because the model's own files are published as written, with the path scrub
+every projector applies done by hand. The flag is opt-in-to-public, not
+opt-in-to-raw: the run page depends on raw bodies, so a public deployment sets
+the flag rather than the developer clearing it.
 
 What a public entry carries (docs/DATA-AND-LEGAL.md, "Trajectory logs"):
 names and ids stay, game prose goes. `projectEntry`
@@ -404,7 +420,7 @@ decoded payload turns up in a tool result: an event batch, a JSON value, a
 `recent_events` line, a string holding JSON one or two levels down; a cut
 fragment is redacted from its first prose key to the end, and a
 `search_reference` result (wiki text) goes whole. Model-authored text — turn
-text, snippet code, the scratchpad, the episodic log, console lines and any
+text, snippet code, the workspace files, the episodic log, console lines and any
 result the model formatted as plain prose — is published as written; it can
 quote the world, and that residual is stated in `docs/PUBLIC-DASHBOARD.md`.
 
