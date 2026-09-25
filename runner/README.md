@@ -524,21 +524,22 @@ the spike was built on.
 - **Trajectory.** `wake`, `wake_end`, `deploy` and `program_error` records,
   and `wake` on every `request` and `response` (`EntrypointRecord`,
   `src/trajectory.ts`); a `program_error`'s `kind` is `failed` for an `sdk`
-  call and `thrown` for everything else. Each `wake_end` carries the program's ticks, longest
-  tick, overruns, halts and restarts since the previous one, and the
-  `program_error` rows written just before it count each occurrence once; a
-  final `wake_end` (`run_end`) flushes the last period. Wake, deploy and
-  version numbers start again in each process, so a resumed run is read per
-  segment.
+  call and `thrown` for everything else. Each `wake_end` carries the
+  program's ticks, longest tick, overruns, halts and restarts since the
+  previous one, and the `program_error` rows written just before it count
+  each occurrence once; a final `wake_end` (`run_end`) flushes the last
+  period. Wake, deploy and version numbers start again in each process, so a
+  resumed run is read per segment.
 - **What the model is told.** A second prompt body, built from the snippet
   body by exact replacements — a target that is not found throws at load — so
   the SDK surface is the same bytes on both loops: "## Your program" and
   "## Snippets" replace the REPL paragraph, "## Each wake" replaces
-  "## Each turn", and the last sentence says a turn ends with a reply without
-  a tool call. `run_snippet`'s description becomes "run once, now; nothing it
-  starts outlives it", the goal line adds "end your turn by replying without a
-  tool call", and the restart, timeout, reset and resume texts say what this
-  loop keeps. None of it names the snippet loop's bindings or routines.
+  "## Each turn", and the last sentences say a turn ends with a reply without
+  a tool call, and that a reply containing any tool call continues the turn
+  whatever its text says, until the request cap. `run_snippet`'s description
+  becomes "run once, now; nothing it starts outlives it", the goal line adds
+  "end your turn by replying without a tool call", and the restart, timeout,
+  reset and resume texts say what this loop keeps. None of it names the snippet loop's bindings or routines.
 
 ## Watchdogs
 

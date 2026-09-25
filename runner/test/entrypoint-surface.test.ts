@@ -43,7 +43,8 @@ describe("the entrypoint prompt", () => {
     expect(ENTRY).toContain("## Each wake");
     expect(ENTRY).toContain("- memory: your program's memory, the same object as ctx.memory.");
     expect(ENTRY.endsWith(
-      "Older conversation is trimmed aggressively — notes.md is your memory, not the chat history. End your turn by replying without a tool call; your program keeps running and you are woken for its errors, its ctx.wake calls, level-ups, quest turn-ins and deaths, and at the latest after five minutes.",
+      "Older conversation is trimmed aggressively — notes.md is your memory, not the chat history. End your turn by replying without a tool call; your program keeps running and you are woken for its errors, its ctx.wake calls, level-ups, quest turn-ins and deaths, and at the latest after five minutes. " +
+        "A reply that contains any tool call continues your turn, whatever its text says, until the request cap in the [wake] header.",
     )).toBe(true);
     // "ok means sent" stays.
     expect(ENTRY).toContain("means the opcode was dispatched, not that it worked");

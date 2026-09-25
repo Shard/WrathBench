@@ -228,9 +228,14 @@ const ENTRYPOINT_REPLACEMENTS: readonly [string, string][] = [
 
 const ENTRYPOINT_BODY_HEAD = ENTRYPOINT_REPLACEMENTS.reduce((text, [from, to]) => replaceExactly(text, from, to), BODY_HEAD);
 
-/** The last sentence of the entrypoint prompt: how a turn ends there, and what wakes the model. */
+/**
+ * The last sentences of the entrypoint prompt: how a turn ends there, what
+ * wakes the model, and that saying a turn is over does not end it — a model
+ * twice wrote "ending my turn" beside a tool call and kept its wake going.
+ */
 const ENTRYPOINT_BODY_TAIL =
-  "End your turn by replying without a tool call; your program keeps running and you are woken for its errors, its ctx.wake calls, level-ups, quest turn-ins and deaths, and at the latest after five minutes.";
+  "End your turn by replying without a tool call; your program keeps running and you are woken for its errors, its ctx.wake calls, level-ups, quest turn-ins and deaths, and at the latest after five minutes. " +
+  "A reply that contains any tool call continues your turn, whatever its text says, until the request cap in the [wake] header.";
 
 /**
  * The fixed system prompt on the fixed loop, exactly as it has always read:
