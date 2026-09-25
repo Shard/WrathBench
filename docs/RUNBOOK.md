@@ -591,7 +591,10 @@ with why:
   its process lives;
   once it gives up and exits, the supervisor takes over on the longer ladder,
   resuming in place on the same run id. Past the ladder the run is listed,
-  not hammered.
+  not hammered. A run paused `observation-stalled` (its sandbox's event stream
+  closed and the recorded state stopped moving) cools on the same ladder, but
+  the runner releases its session and the roster advances, so the supervisor
+  always brings it back, with a fresh sandbox and session.
 - **waiting** — its account is busy with another job or held by a
   hand-started run. A resume never moves to another account.
 
