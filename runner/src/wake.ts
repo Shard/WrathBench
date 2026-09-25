@@ -132,6 +132,8 @@ export interface WakeView {
   console: { lines: number; entries: LogEntry[] };
   /** memory.json as it is on disk; null when there is none. */
   memory: string | null;
+  /** memory.json is what the previous request of this wake showed: one line instead of the text. */
+  memoryUnchanged: boolean;
 }
 
 // ----------------------------------------------------------------- the log
@@ -373,6 +375,7 @@ export class WakeLog {
     program: WakeView["program"];
     delta: StateDelta | null;
     memory: string | null;
+    memoryUnchanged?: boolean;
   }): WakeView {
     return {
       wake: o.wake,
@@ -392,6 +395,7 @@ export class WakeLog {
       hints: [...this.hints.values()],
       console: { lines: this.consoleLines, entries: [...this.console] },
       memory: o.memory,
+      memoryUnchanged: o.memoryUnchanged ?? false,
     };
   }
 }
@@ -598,11 +602,17 @@ function consoleBlock(c: WakeView["console"]): string[] {
   return [`[program console: ${count(c.lines)} line${c.lines === 1 ? "" : "s"}, last ${shown.length} shown, repeats folded]`, ...shown];
 }
 
-function memoryBlock(memory: string | null): string[] {
+/**
+ * memory.json: whole up to `WAKE_MEMORY_CHARS`, otherwise its last that many
+ * characters — a program appends, so the newest entries are at the end — and
+ * one line when it is what the previous request of this wake showed.
+ */
+function memoryBlock(memory: string | null, unchanged: boolean): string[] {
   if (memory === null) return [];
+  if (unchanged) return [`[memory.json unchanged, ${count(memory.length)} chars]`];
   const head = `[memory.json, ${count(memory.length)} chars]`;
   if (memory.length <= WAKE_MEMORY_CHARS) return [head, memory];
-  return [head, `${memory.slice(0, WAKE_MEMORY_CHARS)}`, "… read_file memory.json for the rest"];
+  return [head, `… (${count(memory.length - WAKE_MEMORY_CHARS)} chars before)`, memory.slice(-WAKE_MEMORY_CHARS)];
 }
 
 /**
@@ -646,6 +656,6 @@ export function renderWake(v: WakeView): string {
     if (v.hints.length > shown.length) lines.push(`(+${v.hints.length - shown.length} other failure statuses)`);
   }
   lines.push(...consoleBlock(v.console));
-  lines.push(...memoryBlock(v.memory));
+  lines.push(...memoryBlock(v.memory, v.memoryUnchanged));
   return lines.join("\n");
 }

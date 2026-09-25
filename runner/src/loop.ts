@@ -905,6 +905,8 @@ export class EntrypointPhases {
   private asleepMs: number | null = null;
   /** The world when the model last ended its turn, for the block's delta line. */
   private snapAtYield: SnapshotLike | null = null;
+  /** memory.json as the last request of this wake showed it; undefined before the first. */
+  private memoryShown: string | null | undefined = undefined;
   private restartsSeen: number;
   /** `sandbox.totalRestarts` when the model last ended its turn. */
   private restartsAtYield: number;
@@ -966,7 +968,10 @@ export class EntrypointPhases {
     }
     const state: ProgramState = sandbox.programState ?? { kind: "none" };
     const main = this.o.workspace.read(MAIN_PATH);
-    const memory = this.o.workspace.read(MEMORY_PATH);
+    const read = this.o.workspace.read(MEMORY_PATH);
+    const memory = read.ok ? read.text : null;
+    const memoryUnchanged = memory !== null && memory === this.memoryShown;
+    this.memoryShown = memory;
     const view = this.log.view({
       wake: this.wake,
       request: this.requests,
@@ -979,7 +984,8 @@ export class EntrypointPhases {
         mainExists: main.ok,
       },
       delta: stateDelta(this.snapAtYield, snap, this.log.facts()),
-      memory: memory.ok ? memory.text : null,
+      memory,
+      memoryUnchanged,
     });
     this.log.markShown();
     return renderWake(view);
@@ -1039,6 +1045,7 @@ export class EntrypointPhases {
     if (state === "running" && this.o.sandbox.totalRestarts === this.restartsAtYield) this.o.watchdogs.noteProgramAlive();
     this.wake++;
     this.requests = 0;
+    this.memoryShown = undefined;
     this.awake = true;
     this.wokeFor = reasons;
     this.asleepMs = sleptMs;

@@ -506,7 +506,10 @@ the spike was built on.
   rendered by the pure `renderWake`: the program's deploy and tick counts,
   failed loads, halts, errors with their workspace frames, `ctx.wake` calls,
   the level/xp/money/quest/death/zone delta, action hints, the last 40 lines of
-  the program's console and memory.json. A turn is still one model request.
+  the program's console and memory.json — whole up to 2,000 characters, else
+  its last 2,000 after a count of what comes before (a program appends, so the
+  newest entries are at the end), and one line on a later request of the wake
+  while it is unchanged. A turn is still one model request.
 - **Trajectory.** `wake`, `wake_end`, `deploy` and `program_error` records,
   and `wake` on every `request` and `response` (`EntrypointRecord`,
   `src/trajectory.ts`); a `program_error`'s `kind` is `failed` for an `sdk`

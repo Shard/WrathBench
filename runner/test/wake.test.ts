@@ -10,6 +10,7 @@ import {
   FALLBACK_WAKE_MS,
   MIN_SLEEP_MS,
   WAKE_COALESCE_MS,
+  WAKE_MEMORY_CHARS,
   WakeLog,
   clock,
   duration,
@@ -264,6 +265,7 @@ describe("the [wake] block", () => {
       hints: [],
       console: { lines: 1_204, entries: [{ level: "log", ts: T0, text: "pulling Kobold ×3" }] },
       memory: '{"phase":"grind","target":"Kobold"}',
+      memoryUnchanged: false,
       ...over,
     };
   }
@@ -334,8 +336,32 @@ describe("the [wake] block", () => {
     expect(text).toContain("deploy 8 failed to load (12:31:02); deploy 7 keeps running:\n    BuildMessage: Unexpected ; at main.ts:3:13 — const x = ;");
     expect(text).toContain("- +2 more signatures");
     expect(text).toContain("[program console: 60 lines, last 40 shown, repeats folded]\nline 20\n");
-    expect(text).toContain("… read_file memory.json for the rest");
     expect(text).not.toContain("line 19\n");
+  });
+
+  test("memory.json over the cap shows its last characters, and one line when this wake already showed it", () => {
+    const log = Array.from({ length: 200 }, (_, i) => `"entry ${String(i).padStart(3, "0")}"`).join(",");
+    const memory = `{"log":[${log}]}`;
+    expect(memory.length).toBeGreaterThan(WAKE_MEMORY_CHARS);
+    const text = renderWake(view({ memory }));
+    const tail = text.slice(text.indexOf("[memory.json"));
+    expect(tail).toBe(
+      [
+        `[memory.json, ${memory.length.toLocaleString("en-US")} chars]`,
+        `… (${(memory.length - WAKE_MEMORY_CHARS).toLocaleString("en-US")} chars before)`,
+        memory.slice(-WAKE_MEMORY_CHARS),
+      ].join("\n"),
+    );
+    // The newest entry is the one shown; the oldest is not.
+    expect(tail).toContain('"entry 199"]}');
+    expect(tail).not.toContain('"entry 000"');
+    // Unchanged since the previous request of the wake: one line, whatever its size.
+    expect(renderWake(view({ memory, memoryUnchanged: true })).endsWith(`[memory.json unchanged, ${memory.length.toLocaleString("en-US")} chars]`)).toBe(true);
+    expect(renderWake(view({ memoryUnchanged: true })).endsWith("[memory.json unchanged, 35 chars]")).toBe(true);
+    // Up to the cap it is shown whole.
+    const whole = `{"blob":"${"x".repeat(WAKE_MEMORY_CHARS - 11)}"}`;
+    expect(whole.length).toBe(WAKE_MEMORY_CHARS);
+    expect(renderWake(view({ memory: whole })).endsWith(`[memory.json, 2,000 chars]\n${whole}`)).toBe(true);
   });
 
   test("formats: clock in UTC, durations, money", () => {

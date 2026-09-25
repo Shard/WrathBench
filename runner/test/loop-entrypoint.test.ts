@@ -270,6 +270,39 @@ describe("the entrypoint loop's phases", () => {
     ]);
   });
 
+  test("memory.json is shown on a wake's first request and when it changed, and is one line while it has not", async () => {
+    const stub = new StubAdapter([
+      { content: "look", toolCalls: [{ name: "state_summary", arguments: {} }] },
+      { content: "look again", toolCalls: [{ name: "state_summary", arguments: {} }] },
+      { content: "done", toolCalls: [] },
+      { content: "woken", toolCalls: [] },
+    ]);
+    let calls = 0;
+    let ws: Workspace | undefined;
+    const adapter = {
+      label: "stub",
+      complete: async (req: Parameters<StubAdapter["complete"]>[0]) => {
+        calls++;
+        // The program saves between the second and the third request.
+        if (calls === 2) ws!.writeMemory('{"phase":"rest"}');
+        return stub.complete(req);
+      },
+    };
+    const ctx = setup(adapter);
+    ws = ctx.options.workspace;
+    ws.writeMemory('{"phase":"grind"}');
+    await runLoop(ctx.options);
+    const memoryPart = (n: number): string => {
+      const m = userMessage(ctx.dir, n);
+      return m.slice(m.indexOf("[memory.json")).split("\n").slice(0, 2).join("\n");
+    };
+    expect(memoryPart(0)).toBe('[memory.json, 17 chars]\n{"phase":"grind"}');
+    expect(memoryPart(1).split("\n")[0]).toBe("[memory.json unchanged, 17 chars]");
+    expect(memoryPart(2)).toBe('[memory.json, 16 chars]\n{"phase":"rest"}');
+    // A new wake shows it again, changed or not.
+    expect(memoryPart(3)).toBe('[memory.json, 16 chars]\n{"phase":"rest"}');
+  });
+
   test(`a wake ends at ${WAKE_MAX_REQUESTS} requests, and the next one says so`, async () => {
     const turns = Array.from({ length: WAKE_MAX_REQUESTS + 1 }, () => ({ content: "busy", toolCalls: [{ name: "state_summary", arguments: {} }] }));
     const { dir, options } = setup(new StubAdapter(turns));
