@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { compileSnippet, extractPatternNames, scanTopLevelDeclarations } from "../src/sandbox/rewrite";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  compileSnippet,
+  extractImportStatements,
+  extractPatternNames,
+  resolveWorkspaceImport,
+  scanTopLevelDeclarations,
+  stampWorkspaceImports,
+} from "../src/sandbox/rewrite";
 
 describe("extractPatternNames", () => {
   test("object shorthand and renamed keys", () => {
@@ -66,5 +76,136 @@ describe("compileSnippet", () => {
     const c = compileSnippet("1 + 1 // done");
     expect(c.expressionBody.startsWith("return (\n")).toBe(true);
     expect(c.expressionBody.endsWith("\n);")).toBe(true);
+  });
+});
+
+describe("import statements", () => {
+  const ws = mkdtempSync(join(tmpdir(), "wrathbench-rw-"));
+  mkdirSync(join(ws, "lib", "deep"), { recursive: true });
+  writeFileSync(join(ws, "util.ts"), "export const one = 1;\n");
+  writeFileSync(join(ws, "lib", "deep", "two.ts"), "export const two = 2;\n");
+  writeFileSync(join(ws, "lib", "index.ts"), "export const idx = 0;\n");
+
+  test("a snippet with no import statement compiles to exactly the bytes it always did", () => {
+    for (const src of ["40 + 2", "const a = 1;\nreturn a;", 'const s = "import x from \\"./x\\"";', "await import(\"node:fs\")", "import.meta"]) {
+      const wrapped = new Bun.Transpiler({ loader: "ts", target: "bun", deadCodeElimination: false }).transformSync(
+        `const __wrathbench_snippet__ = async () => {\n${src}\n};`,
+      );
+      const js = wrapped.slice(wrapped.indexOf("{") + 1, wrapped.lastIndexOf("}"));
+      expect(compileSnippet(src, { workspace: ws }).js).toBe(js);
+      expect(compileSnippet(src, { workspace: ws })).toEqual(compileSnippet(src));
+    }
+  });
+
+  test("only top-level import declarations are lifted: not import(), not import.meta, not strings or comments", () => {
+    const src = [
+      'import { one } from "./util";',
+      "// import { no } from \"./comment\"",
+      'const s = `import { no } from "./template"`;',
+      'const d = await import("node:path");',
+      "if (true) { const m = import.meta; }",
+      "one",
+    ].join("\n");
+    const lifted = extractImportStatements(src);
+    expect(lifted.imports.map((i) => i.text)).toEqual(['import { one } from "./util";']);
+    // Blanked in place, line breaks kept, so later line numbers still match the user's.
+    expect(lifted.body.split("\n")).toHaveLength(src.split("\n").length);
+    expect(lifted.body.split("\n")[0]).toBe("");
+  });
+
+  test("multi-line imports with comments, attributes and no semicolon are lifted whole", () => {
+    const src = 'import {\n  one, // the first\n  /* and */ one as uno,\n} from \'./util\'\nimport data from "./d.json" with { type: "json" }\none';
+    const lifted = extractImportStatements(src);
+    expect(lifted.imports.map((i) => i.text)).toEqual([
+      "import { one, one as uno, } from './util'",
+      'import data from "./d.json" with { type: "json" }',
+    ]);
+    expect(lifted.body).toBe("\n\n\n\n\none");
+  });
+
+  test("each specifier form resolves to the workspace file's absolute path", () => {
+    for (const [spec, rel] of [
+      ["./util", "util.ts"],
+      ["./util.ts", "util.ts"],
+      ["util", "util.ts"],
+      ["util.ts", "util.ts"],
+      ["lib/deep/two", "lib/deep/two.ts"],
+      ["./lib/deep/two.ts", "lib/deep/two.ts"],
+      ["./lib", "lib/index.ts"],
+    ] as const) {
+      expect(resolveWorkspaceImport(spec, ws)).toEqual({ abs: `${ws}/${rel}`, rel });
+    }
+    expect(resolveWorkspaceImport("node:fs", ws)).toBeNull();
+    expect(() => resolveWorkspaceImport("./nope", ws)).toThrow(
+      'import "./nope": no such file in the workspace (looked for nope, nope.ts, nope.tsx, nope.js, nope.mjs, nope.jsx, nope/index.ts, nope/index.js)',
+    );
+    expect(() => resolveWorkspaceImport("/etc/passwd", ws)).toThrow("imports name workspace files by relative path");
+    expect(() => resolveWorkspaceImport("../x", ws)).toThrow(".. would leave the workspace");
+    expect(() => resolveWorkspaceImport("./util", undefined)).toThrow("this sandbox has no workspace to import from");
+  });
+
+  test("named, default, namespace and side-effect imports become awaited dynamic imports with checked exports", () => {
+    const c = compileSnippet(
+      [
+        'import { one, one as uno } from "./util";',
+        'import dflt, { two } from "lib/deep/two";',
+        'import * as ns from "util.ts";',
+        'import "./util";',
+        "return one + uno + two + ns.one + (dflt ?? 0);",
+      ].join("\n"),
+      { workspace: ws },
+    );
+    const util = JSON.stringify(`${ws}/util.ts`);
+    const two = JSON.stringify(`${ws}/lib/deep/two.ts`);
+    expect(c.statementsBody).toContain(`const __wrathbench_import_0__ = await import(${util});`);
+    expect(c.statementsBody).toContain('for (const __wrathbench_name__ of ["one","one"])');
+    expect(c.statementsBody).toContain('throw new SyntaxError("util.ts has no export named " + JSON.stringify(__wrathbench_name__));');
+    expect(c.statementsBody).toContain("const { one, \"one\": uno } = __wrathbench_import_0__;");
+    expect(c.statementsBody).toContain(`const __wrathbench_import_1__ = await import(${two});`);
+    expect(c.statementsBody).toContain("const dflt = __wrathbench_import_1__.default;");
+    expect(c.statementsBody).toContain("const ns = __wrathbench_import_2__;");
+    expect(c.statementsBody).toContain(`await import(${util});\n`);
+    // Import bindings are the snippet's own: never copied back onto the global.
+    expect(c.names).toEqual([]);
+    expect(c.statementsBody).not.toContain('globalThis["one"]');
+  });
+
+  test("a type-only import is dropped, as a TypeScript file drops it", () => {
+    const c = compileSnippet('import type { T } from "./util";\nimport { one } from "./util";\nconst x: T = one;\nreturn x;', {
+      workspace: ws,
+    });
+    expect(c.statementsBody.match(/await import/g)).toHaveLength(1);
+  });
+
+  test("a single expression after its imports keeps its REPL value", () => {
+    const c = compileSnippet('import { one } from "./util"\none + 1', { workspace: ws });
+    expect(c.canTryExpression).toBe(true);
+    expect(c.expressionBody.endsWith("return (\none + 1\n);")).toBe(true);
+    expect(c.expressionBody.startsWith("const __wrathbench_import_0__")).toBe(true);
+  });
+
+  test("a parse error below an import still names the user's line", () => {
+    try {
+      compileSnippet('const x = 1;\nimport { one } from "./util"\nconst y = ;', { workspace: ws });
+      throw new Error("expected a parse error");
+    } catch (e) {
+      const pos = (e as { position?: { line?: number } }).position;
+      // Line 1 of the transpiled text is the wrapper; the user's line 3 is line 4.
+      expect(pos?.line).toBe(4);
+    }
+  });
+
+  test("a workspace module's relative imports are stamped with the version it was loaded at", () => {
+    const file = `${ws}/lib/deep/user.ts`;
+    const src = 'import { one } from "../../util";\nimport { two } from \'./two\';\nexport * from "./two";\nconst s = "from \\"./nowhere\\"";\nconst d = () => import("./two.ts");\nexport const u = one + two;\n';
+    const out = stampWorkspaceImports(src, file, ws, "7", "ts");
+    expect(out).toContain(`from "${ws}/util.ts?v=7"`);
+    expect(out).toContain(`from '${ws}/lib/deep/two.ts?v=7'`);
+    expect(out).toContain(`export * from "${ws}/lib/deep/two.ts?v=7"`);
+    expect(out).toContain(`import("${ws}/lib/deep/two.ts?v=7")`);
+    // Not an import: left exactly as written.
+    expect(out).toContain('const s = "from \\"./nowhere\\""');
+    // Nothing relative: untouched, byte for byte.
+    expect(stampWorkspaceImports("export const a = 1;\n", file, ws, "7", "ts")).toBe("export const a = 1;\n");
   });
 });
