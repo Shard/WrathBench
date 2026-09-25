@@ -128,17 +128,23 @@ async function main() {
   log(`TALENTS_INFO: unspent=${talents.data.unspentPoints} specs=${talents.data.specs.length} active=${talents.data.activeSpec}`);
 
   // 2. Cast a known spell -> SMSG_SPELL_GO naming us as caster.
-  //    Deliberately NOT SMSG_SPELL_COOLDOWN: in 3.3.5 the server only sends
-  //    that packet for a cooldown the client cannot derive itself, so a
-  //    GCD-only spell never produces one. Measured 2026-08-23 on a level-1
-  //    Human Paladin: neither 21084 (Seal of Righteousness) nor 59752 (Every
-  //    Man for Himself, a real 2-minute racial) emits SMSG_SPELL_COOLDOWN or
-  //    SMSG_COOLDOWN_EVENT, and no other spell in the level-1 book has an
-  //    observable cooldown. Be honest about the hole this leaves: nothing
-  //    here exercises the SMSG_SPELL_COOLDOWN decode any more. The
-  //    login-time `cooldowns[]` check is a DIFFERENT wire shape (the block
-  //    inside SMSG_INITIAL_SPELLS) and it comes back empty at level 1, so it
-  //    covers nothing either. a later probe owns the real assertion.
+  //    Deliberately NOT SMSG_SPELL_COOLDOWN: for a player's own cast the core
+  //    sends it only when a cooldown-modifying aura changed the timer
+  //    (module/PROTOCOL.md, after the spellbook table), so no cast this
+  //    character can make produces it, and a higher level alone would not
+  //    change that. Measured on a level-1 Human Paladin: 21084 (Seal of
+  //    Righteousness, GCD only), 59752 (Every Man for Himself, a 2-minute
+  //    racial) and the Hearthstone (a 30-minute cooldown) all cast without
+  //    any cooldown opcode. The hole this leaves: nothing here exercises the
+  //    SMSG_SPELL_COOLDOWN or SMSG_COOLDOWN_EVENT decode, and the login-time
+  //    `cooldowns[]` check above is a different wire shape (the block inside
+  //    SMSG_INITIAL_SPELLS) that is empty on a fresh character. Routes that
+  //    could close part of it, none built: relog after a Hearthstone and read
+  //    its cooldown back from `cooldowns[]` (measured to work; needs a
+  //    fixture that clears character_spell_cooldown and adds minutes to every
+  //    deploy); drink a potion for SMSG_COOLDOWN_EVENT (needs a purchased
+  //    one, which waits on issue #33); or cancel a Rogue's Stealth, which the
+  //    core source says also sends SMSG_COOLDOWN_EVENT (not yet observed).
   let mark = events.length;
   await action("cast_spell", { spellId: SEAL_OF_RIGHTEOUSNESS });
   const go = await waitFor(

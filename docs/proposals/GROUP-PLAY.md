@@ -52,15 +52,20 @@ property of a single run.
   than a map-id guess). Additive kinds, like everything else in the series; the
   ladder's rung 6 test then derives from them the way rung 4 derives from
   capital-zone plus flight.
-- **Party actions and taps** — issue #9 holds the list, kept whole there so it
-  is not re-derived: `CMSG_GROUP_INVITE` / `ACCEPT` / `DECLINE` / `UNINVITE` /
-  `DISBAND`, `CMSG_LOOT_METHOD`, the `SMSG_GROUP_INVITE` / `SMSG_GROUP_LIST` /
-  `SMSG_PARTY_MEMBER_STATS` / `SMSG_PARTY_COMMAND_RESULT` taps, party chat and
-  whisper, quest sharing. Issue #9 also raises 3.3.5's Dungeon Finder
+- **The rest of the party surface.** Most of it exists (module/PROTOCOL.md,
+  the raw allowlist and the group, mail, bank and trade events): the group
+  opcodes are allowlisted, the `SMSG_GROUP_*` and `SMSG_PARTY_COMMAND_RESULT`
+  replies are served, the SDK has `inviteToGroup`, `acceptGroupInvite`,
+  `declineGroupInvite`, `leaveGroup` and `lootRoll` over them and folds the
+  party into `state.group()`, and party chat and whispers ride raw
+  `CMSG_MESSAGECHAT`. Still missing: the `SMSG_PARTY_MEMBER_STATS` tap (the
+  party frame's health, power, zone and position for the other members), quest
+  sharing (`CMSG_PUSHQUESTTOPARTY`), and 3.3.5's Dungeon Finder
   (`CMSG_LFG_JOIN`), which teleports a formed party into the instance and is
   therefore a client-legal way to attempt Deadmines before cross-continent
-  travel and instance portals are reliable. It is gated behind the navigation
-  plan and a multi-session runner.
+  travel and instance portals are reliable. Issue #9 tracks these alongside
+  the multi-session runner, the group and instance records above, and the
+  scoring questions below.
 
 ## The questions this proposal does not answer
 

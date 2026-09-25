@@ -3,9 +3,11 @@
 How cost is measured in this harness, and the rules learned measuring it. It
 carries no per-episode resource tables, pricing table or platform reliability
 counts: such a snapshot goes stale the moment a series re-arms. Cost
-surfaces belong in the UI (episode cost, campaign rollups, estimates from
-accumulated baselines): that arc is GitHub issue #13, and until it lands, the
-per-call data below is the record.
+surfaces belong in the UI, and the viewer has them: actual and expected cost
+on the run page, and cost columns on the run, model and fleet listings. What
+it lacks is a projected cost for a model not yet run; that is to come with
+drafted models, as a list-price estimate over the observed e90 token profile
+(GitHub issue #66).
 
 ## 1. Where the data lives
 
