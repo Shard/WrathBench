@@ -454,13 +454,17 @@ the spike was built on.
   throw is caught and counted under a signature (hook, error name, first
   workspace frame, rendered through `workspaceRelative`); its first occurrence
   in a deploy wakes the model, and the program keeps being called. An `sdk`
-  call from the program that throws, rejects or answers `ok: false` is counted
-  the same way whether or not the program catches it — signature: hook, helper,
-  status or error name; text: the helper's own words and the workspace lines
-  of the call — because a program that catches everything otherwise stalls
-  where nothing can see it. `observeSdk` wraps the client once, at the ambient
-  boundary rather than in each helper; a snippet's calls pass through, and two
-  call sites of one helper and status share a signature.
+  call from the program that throws or rejects (a timeout, an
+  `EventAbortedError`, a transport error) is such an error whether or not the
+  program catches it — signature: hook, helper, error name; text: the helper's
+  own words and the workspace lines of the call — because a program that
+  catches everything otherwise stalls where nothing can see it. One that
+  answers `ok: false` is counted and shown the same way, signature ending in
+  its status, but never wakes the model: an outcome (a corpse with nothing on
+  it, a mob that walked off) is information, an exception is an error.
+  `observeSdk` wraps the client once, at the ambient boundary rather than in
+  each helper; a snippet's calls pass through, and two call sites of one
+  helper and status share a signature.
 - **Deploy on yield** (`SandboxHost.deployAtYield`). When the model ends a
   turn, main.ts loads at the current import version if a code or JSON file
   changed, the program is halted or stopped, or nothing was tried at this
@@ -500,10 +504,12 @@ the spike was built on.
   deployed, by a good snippet) — never by ticks alone, so a program that runs
   a few ticks and then blocks on every deploy still ends the run.
 - **Waking** (`src/wake.ts`). A reply with no tool call, or the 20th request,
-  ends a wake. The model then sleeps until a new error signature, a failed
-  load, a halt, a restart, `ctx.wake(reason)`, a level, a quest turn-in or a
-  death — coalesced over 2 s, never sooner than 5 s after the yield — or five
-  minutes pass; a reason already shown in a request never wakes it again, and
+  ends a wake. The model then sleeps until a new error signature (a throw or
+  rejection out of a hook, an overrun, a memory not saved, or an `sdk` call
+  that threw or rejected, caught or not — never an `ok: false` answer), a
+  failed load, a halt, a restart, `ctx.wake(reason)`, a level, a quest turn-in
+  or a death — coalesced over 2 s, never sooner than 5 s after the yield — or
+  five minutes pass; a reason already shown in a request never wakes it again, and
   whatever arrived after the last request was rendered (a report landing
   while the reply was in flight) carries into the next wake rather than being
   cleared unseen.
@@ -512,7 +518,8 @@ the spike was built on.
   Every request of a wake carries a `[wake]` block after the goal line,
   headed "request N of 20 in this wake" so the cap is known before it is met,
   rendered by the pure `renderWake`: the program's deploy and tick counts,
-  failed loads, halts, errors with their workspace frames, `ctx.wake` calls,
+  failed loads, halts, errors with their workspace frames (most recent
+  first, so the cap of 8 never hides the newest), `ctx.wake` calls,
   the level/xp/money/quest/death/zone delta, action hints, the last 40 lines of
   the program's console and memory.json — whole up to 2,000 characters, else
   its last 2,000 after a count of what comes before (a program appends, so the

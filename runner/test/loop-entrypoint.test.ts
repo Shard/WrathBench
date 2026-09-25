@@ -227,7 +227,7 @@ describe("the entrypoint loop's phases", () => {
     ]);
   });
 
-  test("a failed sdk call the program caught wakes the model, and its program_error row says failed", async () => {
+  test("an ok:false answer the program got is shown and written as failed, and does not wake the model", async () => {
     const adapter = new StubAdapter([
       { content: "done", toolCalls: [] },
       { content: "seen it", toolCalls: [] },
@@ -248,7 +248,7 @@ describe("the entrypoint loop's phases", () => {
                   kind: "failed",
                   text: 'sdk.killTarget() returned ok:false, status "timeout" — still up after 30s\n    at hunt (lib/brain.ts:88:21)',
                   count: 3,
-                  isNew: true,
+                  isNew: false,
                   deploy: 1,
                   firstTs: now,
                   lastTs: now,
@@ -261,7 +261,8 @@ describe("the entrypoint loop's phases", () => {
     });
     await runLoop(ctx.options);
     const records = readTrajectory(ctx.dir);
-    expect(records.filter((r) => r.t === "wake")[1]!["reasons"]).toEqual(["error"]);
+    // Slept on to the fallback: the answer is information, not a reason to wake.
+    expect(records.filter((r) => r.t === "wake")[1]).toMatchObject({ reasons: ["fallback"], sleptMs: FALLBACK_WAKE_MS });
     expect(userMessage(ctx.dir, 1)).toContain(
       '- loop() sdk.killTarget() returned ok:false, status "timeout" — still up after 30s ×3 (first 12:00:20, last 12:00:20)\n    at hunt (lib/brain.ts:88:21)',
     );

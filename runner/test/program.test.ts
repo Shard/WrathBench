@@ -299,7 +299,7 @@ describe("on keys that are not event names", () => {
 });
 
 describe("sdk failures: counted whether or not the program catches them", () => {
-  test("a caught rejection and an ok:false answer are each a new signature once, with the workspace line of the call", async () => {
+  test("a caught rejection is a new signature once, an ok:false answer is only counted, each with the workspace line of the call", async () => {
     const { host, ws } = makeHost();
     write(
       ws,
@@ -332,12 +332,14 @@ describe("sdk failures: counted whether or not the program catches them", () => 
     expect(answered.signature).toBe("loop() sdk.moveTo unknown_target");
     expect(answered.text.split("\n")[0]).toBe('sdk.moveTo() returned ok:false, status "unknown_target"');
     expect(answered.text).toContain("    at loop (main.ts:7:");
-    // First occurrence in the deploy is new, repeats are only counted; nothing reached a hook as a throw.
-    for (const sig of [rejected.signature, answered.signature]) {
-      const rows = failed.filter((e) => e.signature === sig);
-      expect(rows.filter((e) => e.isNew)).toHaveLength(1);
-      expect(rows[0]!.isNew).toBe(true);
-    }
+    // The rejection's first occurrence in the deploy is new (it wakes), repeats are only counted;
+    // the ok:false answer is counted every time and new never. Nothing reached a hook as a throw.
+    const rejections = failed.filter((e) => e.signature === rejected.signature);
+    expect(rejections.filter((e) => e.isNew)).toHaveLength(1);
+    expect(rejections[0]!.isNew).toBe(true);
+    const answers = failed.filter((e) => e.signature === answered.signature);
+    expect(answers.reduce((n, e) => n + e.count, 0)).toBeGreaterThanOrEqual(1);
+    expect(answers.filter((e) => e.isNew)).toEqual([]);
     expect(errorsOf(all).filter((e) => e.kind === "thrown")).toEqual([]);
     // The program's own result is untouched by the watch.
     expect(await memoryValue(host, "memory.status")).toBe('"unknown_target"');

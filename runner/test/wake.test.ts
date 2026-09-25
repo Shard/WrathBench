@@ -110,7 +110,7 @@ describe("when a sleeping model is due", () => {
     expect(v.console).toEqual({ lines: 1, entries: [{ level: "log", ts: 0, text: "late line" }] });
   });
 
-  test("a failed sdk call the program caught wakes the model like a throw, once, and the ledger keeps its kind", () => {
+  test("an sdk call that threw, caught by the program, wakes the model like a throw, once, and the ledger keeps its kind", () => {
     const log = new WakeLog();
     log.yielded(T0, false);
     const failed = {
@@ -386,6 +386,49 @@ describe("the [wake] block", () => {
     );
     // A clean load adds no line of its own.
     expect(text).not.toContain("deploy 9 loaded");
+  });
+
+  test("an ok:false answer is shown and booked, and wakes no one", () => {
+    const log = new WakeLog();
+    log.yielded(T0, false);
+    const answered = {
+      signature: "loop() sdk.lootCorpse empty",
+      hook: "loop()",
+      kind: "failed" as const,
+      text: 'sdk.lootCorpse() returned ok:false, status "empty"\n    at loot (lib/brain.ts:40:9)',
+      count: 6,
+      isNew: false,
+      deploy: 3,
+      firstTs: T0 + 10_000,
+      lastTs: T0 + 90_000,
+    };
+    log.noteReport(report({ deploy: 3, errors: [answered] }), T0 + 90_000);
+    expect(log.due()).toEqual({ at: T0 + FALLBACK_WAKE_MS, reasons: ["fallback"] });
+    const v = log.view({ wake: 4, request: 1, asleepMs: FALLBACK_WAKE_MS, wokeFor: ["fallback"], program: { state: "running", deploy: 3, deployedAt: T0, editsSinceDeploy: false, mainExists: true }, delta: null, memory: null });
+    expect(renderWake(v)).toContain('errors:\n- loop() sdk.lootCorpse() returned ok:false, status "empty" ×6 (first 12:31:12, last 12:32:32)');
+    expect([...log.drainLedger().errors.values()]).toEqual([
+      { signature: "loop() sdk.lootCorpse empty", hook: "loop()", kind: "failed", deploy: 3, count: 6 },
+    ]);
+  });
+
+  test("error rows run newest first, so the cap never hides the latest signature", () => {
+    const row = (i: number, lastTs: number) => ({
+      signature: `loop() E${i}`,
+      hook: "loop()",
+      kind: "thrown" as const,
+      text: `E${i}: x`,
+      count: 1,
+      deploy: 7,
+      firstTs: T0,
+      lastTs,
+    });
+    // Ten routine rows, then the one that arrived last, listed first in arrival order.
+    const errors = [...Array.from({ length: 10 }, (_, i) => row(i, T0 + 1_000 * (i + 1))), row(99, T0 + 60_000)];
+    const text = renderWake(view({ errors }));
+    const shown = text.split("\n").filter((l) => l.startsWith("- "));
+    expect(shown[0]).toBe("- loop() E99: x (at 12:31:02)");
+    expect(shown.slice(1, 8).map((l) => l.split(":")[0])).toEqual(["- loop() E9", "- loop() E8", "- loop() E7", "- loop() E6", "- loop() E5", "- loop() E4", "- loop() E3"]);
+    expect(shown[8]).toBe("- +3 more signatures");
   });
 
   test("formats: clock in UTC, durations, money", () => {

@@ -19,11 +19,13 @@
  *    signature (hook, error name, first workspace frame); a signature's first
  *    occurrence in a deploy is marked new, and that is what wakes the model.
  *    The program keeps being called.
- *  - SDK failures: an `sdk` call made from the program that throws, rejects or
- *    answers `ok: false` is counted the same way, under the hook, the helper and
- *    the status or error name — whether or not the program catches it, because
- *    a program that catches everything otherwise fails where no one can see it
- *    (`observeSdk`).
+ *  - SDK failures: an `sdk` call made from the program that throws or rejects
+ *    is an error like a hook's own, counted under the hook, the helper and the
+ *    error name, and its first occurrence in a deploy wakes the model — whether
+ *    or not the program catches it, because a program that catches everything
+ *    otherwise fails where no one can see it (`observeSdk`). One that answers
+ *    `ok: false` is counted and shown the same way but never wakes anyone: an
+ *    outcome is information, an exception is an error.
  *  - Memory: one plain-JSON object, `ctx.memory` (and `memory` in a snippet),
  *    serialized after every tick, handler and snippet; a change is sent to the
  *    host, which alone writes memory.json.
@@ -746,8 +748,11 @@ export class ProgramRuntime {
    * One failed `sdk` call from the program, counted under the hook, the helper
    * and the status or error name. The text says which call, how it failed and
    * from which workspace lines — the fact, and nothing about what to do. A
-   * deploy that was replaced or unloaded took its calls with it: their aborts
-   * are the harness's, not the program's.
+   * throw or rejection wakes the model on its first occurrence in the deploy;
+   * an `ok: false` answer — a corpse with nothing on it, a mob that walked off,
+   * a questgiver with nothing to offer — is the world answering, and is only
+   * counted. A deploy that was replaced or unloaded took its calls with it:
+   * their aborts are the harness's, not the program's.
    */
   private sdkFailure(d: Deploy, hook: string, helper: string, outcome: SdkCallOutcome, site: Error): void {
     if (this.current !== d || d.retired) return;
@@ -767,12 +772,13 @@ export class ProgramRuntime {
     const mine = stackFrames(site, this.deps.workspace, this.deps.relative).filter((f) => f.workspace);
     const lines = [head, ...mine.slice(0, STACK_FRAMES_SHOWN).map((f) => `    ${f.text}`)];
     if (mine.length > STACK_FRAMES_SHOWN) lines.push(`    (${mine.length - STACK_FRAMES_SHOWN} more workspace frames)`);
-    this.noteError(d, hook, `${hook} sdk.${helper} ${what}`, "failed", lines.join("\n"));
+    this.noteError(d, hook, `${hook} sdk.${helper} ${what}`, "failed", lines.join("\n"), "threw" in outcome);
   }
 
-  private noteError(d: Deploy | null, hook: string, signature: string, kind: ProgramErrorNote["kind"], text: string): void {
+  /** Count one occurrence; `wakes` false keeps a signature from ever being marked new, so it wakes no one. */
+  private noteError(d: Deploy | null, hook: string, signature: string, kind: ProgramErrorNote["kind"], text: string, wakes = true): void {
     const seen = d?.seen ?? this.seenWithoutDeploy;
-    const isNew = !seen.has(signature);
+    const isNew = wakes && !seen.has(signature);
     seen.add(signature);
     const now = this.now();
     // Keyed by deploy as well: the same signature in the next deploy is its

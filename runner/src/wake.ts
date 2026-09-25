@@ -654,7 +654,9 @@ export function renderWake(v: WakeView): string {
   for (const h of v.host) lines.push(`${h.kind} ${clock(h.at)}: ${h.detail}`);
   if (v.errors.length > 0) {
     lines.push("errors:");
-    for (const e of v.errors.slice(0, WAKE_ERRORS_SHOWN)) lines.push(...errorLines(e));
+    // Most recent occurrence first, so the cap never hides the newest signature.
+    const newest = [...v.errors].sort((a, b) => b.lastTs - a.lastTs || a.signature.localeCompare(b.signature));
+    for (const e of newest.slice(0, WAKE_ERRORS_SHOWN)) lines.push(...errorLines(e));
     if (v.errors.length > WAKE_ERRORS_SHOWN) lines.push(`- +${v.errors.length - WAKE_ERRORS_SHOWN} more signatures`);
   }
   if (v.requests.length > 0) {

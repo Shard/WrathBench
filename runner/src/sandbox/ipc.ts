@@ -212,7 +212,8 @@ export type DeployAnswer =
  * inside the workspace — or, for a failed `sdk` call, which hook, the helper,
  * and the status or error name. `count` is how many times it happened since
  * the last report; `isNew` marks the report that carries its first occurrence
- * in this deploy, which is the one that wakes the model.
+ * in this deploy, which is the one that wakes the model. An `sdk` call that
+ * answered `ok: false` is never new: it is counted and shown, and wakes no one.
  */
 export interface ProgramErrorNote {
   signature: string;
