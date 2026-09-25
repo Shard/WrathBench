@@ -120,7 +120,8 @@ import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
 import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/config-store";
 import { parseCampaigns } from "../runner/src/campaigns";
-import { episodeArgv, resolve } from "./run-roster";
+import { backoffMs, episodeArgv, resolve } from "./run-roster";
+import { STALL_PAUSE } from "../runner/src/lapse";
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -2500,6 +2501,28 @@ describe("pause and resume across a fleet stop", () => {
     // A scored run never reaches the ladder at all: it is a failed attempt on the first pause.
     const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260823", model: "stealth/ox-alpha:free", account: "RUNNER3", pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } });
     expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
+  });
+
+  test("a run paused for a stalled observation is resumed on the provider ladder, not at once (operator, 2026-09-25)", () => {
+    const job: FleetJob = { refs: ["nav"], ref: "nav", episode: "freeplay", repeat: "loop", name: "nav-freeplay", enabled: true, account: "RUNNER", source: "pinned" };
+    const base = paused({ runId: "fleet-nav-freeplay-sonnet-20260925", model: "sonnet", account: "RUNNER", episode: "freeplay", episodeMs: null });
+    // The cadence is a provider pause's, rung for rung — not an operator-pause's "now".
+    const at = NOW - 30_000;
+    expect(resumeNotBefore({ reason: STALL_PAUSE, at, count: 1, episodeElapsedMs: 0 })).toBe(at + backoffMs(1));
+    expect(resumeNotBefore({ reason: STALL_PAUSE, at, count: 4, episodeElapsedMs: 0 })).toBe(
+      resumeNotBefore({ reason: "rate-limited", at, count: 4, episodeElapsedMs: 0 }),
+    );
+    // Cooling: listed with its reason and when it comes back...
+    let plan = planResumes({ runs: [{ ...base, pause: { reason: STALL_PAUSE, at, count: 1, episodeElapsedMs: 0 } }], config: config([job]), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.listed[0]!.why).toContain(`${STALL_PAUSE}, pause 1: resuming after`);
+    // ...then resumed in place once the rung is over: same run id, same account.
+    plan = planResumes({ runs: [{ ...base, pause: { reason: STALL_PAUSE, at, count: 1, episodeElapsedMs: 0 } }], config: config([job]), running: new Map(), held, now: at + backoffMs(1) });
+    expect(plan.resume.map((r) => [r.runId, r.account])).toEqual([[base.runId, "RUNNER"]]);
+    expect(plan.resume[0]!.why).toContain(STALL_PAUSE);
+    // A scored run is ended under the existing rule instead: the attempt is spent, and it is no strike.
+    const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260925", model: "stealth/ox-alpha:free", account: "RUNNER3", pause: { reason: STALL_PAUSE, at, count: 1, episodeElapsedMs: 0 } });
+    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "manual", counts: false });
   });
 
   test("a resume waits for its own account — never a different one — and a running job handles its own pause", () => {

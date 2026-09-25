@@ -76,6 +76,7 @@ import {
 } from "../lib/ladderfilter";
 import { resolvedSummary } from "../lib/models";
 import { fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { statusTitle, statusTone } from "../lib/runs";
 import { poll } from "../lib/poll";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { displayError } from "../lib/errors";
@@ -545,7 +546,7 @@ function CharacterTable(props: { rows: readonly CharacterRow[] }) {
                   </Show>
                 </td>
                 <td>
-                  <span class={row.status === "live" ? "ok" : row.status === "paused" ? "warn" : "dim"}>
+                  <span class={statusTone(row.status)} title={statusTitle(row.status)}>
                     {row.status}
                   </span>
                   <Show when={row.statusDetail !== null}>

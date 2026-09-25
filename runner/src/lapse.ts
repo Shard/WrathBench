@@ -44,6 +44,23 @@ export const STALE_FALLBACK_MS = 12 * 60 * 60_000;
 export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", "rate-limited"]);
 
 /**
+ * The pause a run takes when its observation stops arriving: the sandbox
+ * child's event stream is closed and the sampler has found the cursor
+ * standing still for long enough to write `observation_stalled` (loop.ts). A
+ * run that went on past that point would record the last reading repeated as
+ * though it were the world, so it stops and waits instead, under the rules
+ * every other pause keeps (operator, 2026-09-25): a lane that resumes brings
+ * it back on the same defer ladder a provider pause cools on, with a fresh
+ * sandbox and session, and a scored lane ends it. It is not in
+ * `PROVIDER_PAUSES`, so on a scored lane it ends as `manual` and is no strike.
+ *
+ * Declared here rather than beside `PAUSE_REASONS` because the viewer's public
+ * projection reads it, and this module is the light one: it must keep
+ * importing nothing but `./episodes`.
+ */
+export const STALL_PAUSE = "observation-stalled";
+
+/**
  * The pause a run never got to write. A fleet run with no termination, no
  * pause row and no live process behind it is a run whose runner died before
  * its verdict — a SIGKILL inside the stop grace, a host that lost power. The

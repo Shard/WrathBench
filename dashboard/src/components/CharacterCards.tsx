@@ -13,7 +13,7 @@ import type { CharacterAttempt, CharacterView } from "../api/client";
 import { fmtDuration, fmtTokens, fmtUsd, num, shortRunId } from "../lib/format";
 import { Coins, LevelXp } from "./CharacterFacts";
 import { sourceHint, sourceLabel } from "../lib/runview";
-import { statusOf, statusText } from "../lib/runs";
+import { type RunStatus, statusOf, statusText, statusTitle, statusTone } from "../lib/runs";
 
 /**
  * What a character has done, across every attempt of it.
@@ -170,12 +170,12 @@ export function AttemptStrip(props: { character: CharacterView; runId?: string }
         <For each={props.character.runs}>
           {(a, i) => {
             const here = (): boolean => a.runId === props.runId;
-            const status = (): string => statusOf(a);
+            const status = (): RunStatus => statusOf(a);
             return (
               <li class={here() ? "attempt here" : "attempt"}>
                 <A href={`/run/${encodeURIComponent(a.runId)}`} title={a.runId}>
                   <span class="n">#{i() + 1}</span>
-                  <span class={status() === "live" ? "ok" : status() === "paused" ? "warn" : "dim"}>
+                  <span class={statusTone(status())} title={statusTitle(status())}>
                     {statusText(a)}
                   </span>
                 </A>

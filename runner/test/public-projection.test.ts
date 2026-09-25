@@ -55,6 +55,7 @@ import {
   projectEntries,
   projectTrack,
 } from "../viewer/public-projection";
+import { STALL_PAUSE } from "../src/lapse";
 
 /* ------------------------------------------------------------- poisons --- */
 
@@ -574,6 +575,18 @@ describe("projectRuns", () => {
   test("a run that never paused stays null: the token marks paused runs only", () => {
     const input = { runs: [{ ...runListRowFixture(), pauseReason: null }] };
     expect(projectRuns(input).runs[0]!.pauseReason).toBeNull();
+  });
+
+  test("the stall pause crosses as itself, so the public site can say stalled; every other reason is still the token", () => {
+    const stalled = { runs: [{ ...runListRowFixture(), terminationReason: null, pauseReason: STALL_PAUSE }] };
+    expect(projectRuns(stalled).runs[0]!.pauseReason).toBe("observation-stalled");
+    for (const other of ["rate-limited", "operator-pause", `${STALL_PAUSE}: with words after it`]) {
+      const row = projectRuns({ runs: [{ ...runListRowFixture(), terminationReason: null, pauseReason: other }] }).runs[0]!;
+      expect(row.pauseReason).toBe("paused");
+    }
+    const results = resultsFixture();
+    results.runs[0]!.pauseReason = STALL_PAUSE;
+    expect(projectResults(results).runs[0]!.pauseReason).toBe("observation-stalled");
   });
 });
 

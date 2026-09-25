@@ -37,7 +37,7 @@ import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../
 import { Coins, LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { poll } from "../lib/poll";
-import { statusOf, statusText } from "../lib/runs";
+import { statusOf, statusText, statusTitle, statusTone } from "../lib/runs";
 import type { PowerType } from "../lib/unitframe";
 
 /**
@@ -166,7 +166,7 @@ export default function Character() {
                   )}
                 </Show>
                 {" · "}
-                <span class={isLive() ? "ok" : statusOf(latest()!) === "paused" ? "warn" : "dim"}>
+                <span class={statusTone(statusOf(latest()!))} title={statusTitle(statusOf(latest()!))}>
                   {statusText(latest()!)}
                 </span>
                 {" · "}
@@ -285,7 +285,7 @@ export default function Character() {
                           </A>
                         </td>
                         <td>
-                          <span class={statusOf(a) === "live" ? "ok" : statusOf(a) === "paused" ? "warn" : "dim"}>
+                          <span class={statusTone(statusOf(a))} title={statusTitle(statusOf(a))}>
                             {statusText(a)}
                           </span>
                         </td>

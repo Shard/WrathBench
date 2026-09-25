@@ -15,15 +15,18 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { StubAdapter } from "../src/adapter";
 import { loadRunConfig } from "../src/config";
-import { ContextBuilder } from "../src/loop";
+import { EpisodicLog } from "../src/episodic";
+import { STALL_PAUSE } from "../src/lapse";
+import { ContextBuilder, runLoop, type StopRequest } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 
 /** The snapshot the loop reads, with the cursor and the stream slot a test rewrites. */
-function harness(slot: { eventCount: number; lastSeq: number; connected?: boolean }) {
+function harness(slot: { eventCount: number; lastSeq: number; connected?: boolean }, onObservationStalled?: (detail: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-stall-"));
   let clock = 1_000_000;
   const config = {
@@ -55,6 +58,7 @@ function harness(slot: { eventCount: number; lastSeq: number; connected?: boolea
     trajectory,
     watchdogs: new Watchdogs(config.watchdogs),
     now: () => clock,
+    onObservationStalled,
   });
   return {
     dir,
@@ -160,6 +164,123 @@ describe("the sampler names an observation that stopped arriving", () => {
     for (let i = 0; i < 6; i++) await h.sample();
     expect(h.records("observation_stalled")).toHaveLength(0);
     h.trajectory.close();
+  });
+});
+
+describe("a stalled observation asks for the pause", () => {
+  test("once, on the first stall record, and not before", async () => {
+    const asked: string[] = [];
+    const slot = { eventCount: 900, lastSeq: 900, connected: false };
+    const h = harness(slot, (detail) => asked.push(detail));
+    // The arming sample and two standing ones: inside the reconnect window.
+    for (let i = 0; i < 3; i++) await h.sample();
+    expect(asked).toHaveLength(0);
+    await h.sample();
+    expect(asked).toHaveLength(1);
+    // The request carries the record's own sentence.
+    expect(asked[0]).toBe(h.records("observation_stalled")[0]!["detail"] as string);
+    // A builder that keeps sampling (nobody honoured the request) reasserts
+    // the record but never asks twice.
+    for (let i = 0; i < 6; i++) await h.sample();
+    expect(h.records("observation_stalled")).toHaveLength(3);
+    expect(asked).toHaveLength(1);
+    h.trajectory.close();
+  });
+
+  test("a drop the reconnect ladder repairs never asks", async () => {
+    const asked: string[] = [];
+    const slot = { eventCount: 10, lastSeq: 10, connected: true };
+    const h = harness(slot, (detail) => asked.push(detail));
+    await h.sample();
+    slot.connected = false;
+    await h.sample();
+    await h.sample();
+    slot.connected = true;
+    slot.eventCount += 5;
+    slot.lastSeq += 5;
+    for (let i = 0; i < 4; i++) {
+      slot.eventCount++;
+      slot.lastSeq++;
+      await h.sample();
+    }
+    expect(asked).toHaveLength(0);
+    h.trajectory.close();
+  });
+
+  test("a sandbox restart whose fresh child never reconnects asks too", async () => {
+    // The likeliest real trigger: the child is rebuilt (a runaway snippet, a
+    // long provider request) and nothing calls connect() in it again.
+    const asked: string[] = [];
+    const slot = { eventCount: 4_000, lastSeq: 4_000, connected: true };
+    const h = harness(slot, (detail) => asked.push(detail));
+    await h.sample();
+    slot.eventCount = 0;
+    slot.lastSeq = -1;
+    slot.connected = false;
+    for (let i = 0; i < 4; i++) await h.sample();
+    expect(asked).toHaveLength(1);
+    h.trajectory.close();
+  });
+
+  test("the fixed loop pauses as observation-stalled before it writes another request", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-stall-loop-"));
+    const config = {
+      ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1_000 }),
+      runId: "run-stall-loop",
+      token: "run-stall-loop",
+    };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: "run-stall-loop", harnessVersion: "t", startedAt: 1, config });
+    // Observed once, then a closed stream behind a standing cursor for good.
+    let samples = 0;
+    const sandbox = {
+      evalSnippet: () => Promise.resolve({ ok: true, value: "", logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: () => {
+        samples++;
+        return Promise.resolve({
+          self: { guid: "7", level: { value: 9, seq: 1, ts: 1 } },
+          lastSeq: 300,
+          eventCount: 300,
+          observation: { connected: samples === 1 },
+        });
+      },
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+    // What run.ts does with the request: a pause, through the same abort a
+    // supervisor stop uses, so every driver honours it on its existing path.
+    const abort = new AbortController();
+    let clock = 0;
+    const outcome = await runLoop({
+      config,
+      adapter: new StubAdapter(Array.from({ length: 10 }, (_, i) => ({ content: `turn ${i + 1}`, toolCalls: [] }))),
+      sandbox,
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+      sleep: () => Promise.resolve(),
+      now: () => (clock += 60_000),
+      signal: abort.signal,
+      onObservationStalled: (detail) => abort.abort({ kind: "pause", reason: STALL_PAUSE, detail } satisfies StopRequest),
+    });
+    expect(outcome.kind).toBe("paused");
+    expect(outcome.kind === "paused" ? outcome.reason : null).toBe("observation-stalled");
+    expect(trajectory.runRow("run-stall-loop")?.["pause_reason"]).toBe("observation-stalled");
+    expect(trajectory.runRow("run-stall-loop")?.["termination_reason"]).toBeNull();
+    const records = readTrajectory(dir);
+    // Three turns went out; the fourth turn's sample found the stall and the
+    // pause won before its request was written.
+    expect(records.filter((r) => r.t === "request")).toHaveLength(3);
+    expect(records.filter((r) => r.t === "pause").map((r) => r["reason"])).toEqual(["observation-stalled"]);
+    const stall = records.findIndex((r) => r.t === "harness" && r["kind"] === "observation_stalled");
+    const pause = records.findIndex((r) => r.t === "pause");
+    expect(stall).toBeGreaterThan(-1);
+    expect(pause).toBeGreaterThan(stall);
+    trajectory.close();
   });
 });
 

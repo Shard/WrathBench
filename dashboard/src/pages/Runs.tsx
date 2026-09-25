@@ -44,6 +44,8 @@ import {
   sortRuns,
   statusOf,
   statusText,
+  statusTitle,
+  statusTone,
   turnsOf,
   type RunColumn,
   type RunSort,
@@ -347,7 +349,7 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
         );
       case "status":
         return (
-          <td class={statusOf(r()) === "ended" ? "dim" : statusOf(r()) === "live" ? "ok" : "warn"}>
+          <td class={statusTone(statusOf(r()))} title={statusTitle(statusOf(r()))}>
             {statusText(r())}
           </td>
         );

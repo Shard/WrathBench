@@ -8,6 +8,8 @@
 
 import { describe, expect, test } from "bun:test";
 import type { ResultRun } from "../../runner/viewer/api-types";
+import { STALL_PAUSE } from "../../runner/src/lapse";
+import { projectResults } from "../../runner/viewer/public-projection";
 import {
   COLUMN_TITLES,
   DEFAULT_SORT,
@@ -23,8 +25,11 @@ import {
   sortParam,
   sortQuery,
   sortRuns,
+  STALL_PAUSE_REASON,
   statusOf,
   statusText,
+  statusTitle,
+  statusTone,
   turnsOf,
 } from "../src/lib/runs";
 
@@ -102,6 +107,34 @@ describe("readings", () => {
     // The public projection's fixed token is a withheld reason, not one that reads "paused".
     expect(statusText(run({ pauseReason: "paused", terminationReason: null }))).toBe("paused");
     expect(statusText(run())).toBe("episode-elapsed");
+  });
+
+  test("a run paused because its observation stalled reads stalled, on the private and the public surface alike", () => {
+    // The dashboard's copy of the reason is the runner's, verbatim.
+    expect(STALL_PAUSE_REASON).toBe(STALL_PAUSE);
+    const stalled = run({ live: false, terminationReason: null, pauseReason: STALL_PAUSE_REASON });
+    expect(statusOf(stalled)).toBe("stalled");
+    expect(statusText(stalled)).toBe("stalled");
+    // A fresh directory can still read live: the pause wins, as it does for any pause.
+    expect(statusOf({ ...stalled, live: true })).toBe("stalled");
+    // The public projection passes the stall through as itself, so a
+    // published row reads the same word rather than a bare "paused".
+    const publish = (r: ResultRun): ResultRun =>
+      projectResults({ runs: [r], episode: "all", harness: "all", includeOverrides: false, filteredOut: 0, overridesExcluded: 0, now: 0 }).runs[0]!;
+    const published = publish(stalled);
+    expect(statusText(published)).toBe("stalled");
+    const cooling = publish(run({ terminationReason: null, pauseReason: "rate-limited" }));
+    expect(statusText(cooling)).toBe("paused");
+  });
+
+  test("one tone per status, and only the new word carries a hover", () => {
+    expect(statusTone("live")).toBe("ok");
+    expect(statusTone("paused")).toBe("warn");
+    expect(statusTone("stalled")).toBe("warn");
+    expect(statusTone("ended")).toBe("dim");
+    expect(statusTitle("stalled")).toBeString();
+    for (const s of ["live", "paused", "ended"] as const) expect(statusTitle(s)).toBeUndefined();
+    expect(COLUMN_TITLES.status).toContain("stalled");
   });
 
   test("kind reads the campaign, the tier, the unscored reason, and the extra flag, in that order", () => {

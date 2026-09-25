@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { STALL_PAUSE } from "../src/lapse";
 import { Trajectory } from "../src/trajectory";
 import { localRunStore, type RunStore } from "../viewer/clickhouse";
 import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
@@ -508,7 +509,7 @@ describe("positionsFromStore", () => {
   function writeRun(
     runsDir: string,
     runId: string,
-    o: { stateTs: number; terminated?: boolean; reflecting?: boolean; episodic?: string },
+    o: { stateTs: number; terminated?: boolean; reflecting?: boolean; episodic?: string; paused?: "rate-limited" | typeof STALL_PAUSE },
   ): void {
     const dir = join(runsDir, runId);
     let clock = NOW - 60_000;
@@ -538,6 +539,7 @@ describe("positionsFromStore", () => {
     traj.recordMove(runId, { map: 0, x: 7, y: 8, z: 9, moveId: 1 });
     if (o.reflecting === true) traj.append({ t: "reflect_window", event: "open" });
     if (o.terminated === true) traj.setTermination(runId, "episode-elapsed" as never, "done");
+    if (o.paused !== undefined) traj.setPause(runId, o.paused, "fixture");
     traj.close();
     if (o.episodic !== undefined)
       writeFileSync(join(dir, "episodic.jsonl"), `${JSON.stringify({ ts: o.stateTs, turn: 7, text: o.episodic })}\n`);
@@ -594,6 +596,16 @@ describe("positionsFromStore", () => {
     };
     expect((await positionsFromStore(store, runsDir, NOW)).map((p) => p.runId)).toEqual(["live-a"]);
     expect(reads).toEqual({ runRows: 1, latestStates: 1 });
+  });
+
+  test("a run paused because its observation stalled is off the map in both feeds; another pause is not", async () => {
+    // A stalled run's newest rows are the last reading repeated while the
+    // character went on elsewhere: fresh by the stamp, wrong by the content.
+    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-map-stall-"));
+    writeRun(runsDir, "stalled", { stateTs: NOW - 1_000, paused: STALL_PAUSE });
+    writeRun(runsDir, "cooling", { stateTs: NOW - 2_000, paused: "rate-limited" });
+    expect(readPositions(runsDir, NOW).map((p) => p.runId)).toEqual(["cooling"]);
+    expect((await positionsFromStore(localRunStore(runsDir), runsDir, NOW)).map((p) => p.runId)).toEqual(["cooling"]);
   });
 
   test("a row the store flags archived is not drawn, even when its files would answer", async () => {

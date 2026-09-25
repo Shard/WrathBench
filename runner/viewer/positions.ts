@@ -22,6 +22,7 @@
 
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
+import { STALL_PAUSE } from "../src/lapse";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
@@ -217,14 +218,18 @@ export function readLatestMove(runsDir: string, runId: string): MoveIntentView |
 
 /**
  * One run's entry on the map, or null when it is not worth drawing:
- * terminated, or not standing anywhere inside the window.
+ * terminated, paused because its observation stalled, or not standing
+ * anywhere inside the window.
  *
  * Trajectory mtime deliberately plays no part — that is the listing's notion of
  * live, keyed on a different file for a different question. Here the position's
- * own age is the whole test.
+ * own age is the whole test, with the one exception of a stalled run: its
+ * newest rows are the last reading repeated while the character went on
+ * elsewhere, so the position is fresh by its stamp and wrong by its content.
  */
 function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number): AgentPosition | null {
   if (run.terminationReason !== null) return null;
+  if (run.pauseReason === STALL_PAUSE) return null;
   const pos = readLatestPosition(runsDir, run.runId);
   if (pos === null) return null;
   if (now - pos.ts > windowMs) return null;

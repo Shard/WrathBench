@@ -102,7 +102,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { DEFAULT_CLAUDE_TOKEN_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
-import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } from "./loop";
+import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import { toolsFor, type ToolContext } from "./tools";
@@ -472,6 +472,8 @@ export interface ClaudeEpisodeOptions {
    * record instead of leaving the trajectory open.
    */
   signal?: AbortSignal;
+  /** See `ContextBuilderOptions.onObservationStalled` (loop.ts). */
+  onObservationStalled?: ObservationStallHook | undefined;
 }
 
 /**
@@ -602,6 +604,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     watchdogs,
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
+    onObservationStalled: o.onObservationStalled,
   });
 
   // ---- MCP over loopback TCP, dispatching into the one live sandbox

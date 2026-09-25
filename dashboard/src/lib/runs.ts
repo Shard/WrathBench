@@ -49,7 +49,7 @@ export const COLUMN_TITLES: Partial<Record<RunColumn, string>> = {
   harness: "which loop owned the run, and the harness series it ran on",
   kind: "what the run was for: a scored tier attempt, a probe cell, freeplay, or a steered objective",
   episode: "the episode this run was launched under; (labeled) is the reader's guess at an older run, never membership",
-  status: "live, paused (with why), or how it ended",
+  status: "live, paused (with why), stalled, or how it ended",
   level: "the highest level any state sample observed",
   turns: "driver turns the provider reported usage for; model responses where nothing reported",
   duration: "active time: the stretches between a pause and its resume are not charged",
@@ -65,10 +65,23 @@ export const COLUMN_TITLES: Partial<Record<RunColumn, string>> = {
  */
 export const OPAQUE_PAUSE_REASON = "paused";
 
-export type RunStatus = "live" | "paused" | "ended";
+/**
+ * The pause a run takes when its observation stops arriving — `STALL_PAUSE` in
+ * `runner/src/lapse.ts`, spelled out because the alias does not reach
+ * `runner/src` (dashboard/test/runs.test.ts pins the two). The public
+ * projection passes it through as itself, so both surfaces read it here.
+ */
+export const STALL_PAUSE_REASON = "observation-stalled";
 
 /**
- * Live, paused, or ended.
+ * `stalled` is a pause with its own word: the run stopped because the world
+ * it was recording stopped arriving, and until it is resumed its last rows
+ * are a frozen reading, which "paused" alone would not tell a reader.
+ */
+export type RunStatus = "live" | "paused" | "stalled" | "ended";
+
+/**
+ * Live, paused, stalled, or ended.
  *
  * `live` is the viewer's own reading (the file is still being written) and is
  * trusted when present. A viewer that predates the field is read off what the
@@ -77,6 +90,7 @@ export type RunStatus = "live" | "paused" | "ended";
  * runner writes one or the other on the way out.
  */
 export function statusOf(r: Pick<ResultRun, "live" | "pauseReason" | "terminationReason">): RunStatus {
+  if (r.pauseReason === STALL_PAUSE_REASON) return "stalled";
   if (r.pauseReason !== null) return "paused";
   if (r.live === true) return "live";
   if (r.terminationReason !== null) return "ended";
@@ -89,8 +103,21 @@ export function statusText(r: Pick<ResultRun, "live" | "pauseReason" | "terminat
   // The public projection replaces the reason with the fixed `paused` token;
   // printing it would read "paused: paused", a defect rather than a withheld field.
   if (s === "paused") return r.pauseReason === OPAQUE_PAUSE_REASON ? "paused" : `paused: ${r.pauseReason}`;
+  if (s === "stalled") return "stalled";
   if (s === "ended") return r.terminationReason ?? "ended";
   return "live";
+}
+
+/** The class a status is drawn in, on every surface that shows one. */
+export function statusTone(s: RunStatus): "ok" | "warn" | "dim" {
+  return s === "live" ? "ok" : s === "ended" ? "dim" : "warn";
+}
+
+/** The hover a status carries: only `stalled` needs one, the word being new. */
+export function statusTitle(s: RunStatus): string | undefined {
+  return s === "stalled"
+    ? "paused because the event stream closed and the recorded state stopped moving"
+    : undefined;
 }
 
 /**

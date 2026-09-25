@@ -81,7 +81,7 @@ import {
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
 import { atBottom, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
-import { OPAQUE_PAUSE_REASON, statusOf } from "../lib/runs";
+import { statusOf, statusText, statusTitle } from "../lib/runs";
 
 const WINDOW = 200;
 
@@ -923,13 +923,12 @@ export default function RunDetail() {
                   </Show>
                   <Show when={run().terminationReason === null && run().pauseReason !== null}>
                     {/*
-                      The public projection replaces a pause reason's free text
-                      with the fixed `paused` token, and "paused: paused" reads
-                      as a bug rather than a withheld field.
+                      The status cell's own words: "paused", "paused: <reason>",
+                      or "stalled" (`statusText`, which also keeps the public
+                      token from reading "paused: paused").
                     */}
-                    <div class="banner warn">
-                      paused
-                      <Show when={run().pauseReason !== OPAQUE_PAUSE_REASON}>: {run().pauseReason}</Show>
+                    <div class="banner warn" title={statusTitle(statusOf(run()))}>
+                      {statusText(run())}
                     </div>
                   </Show>
 

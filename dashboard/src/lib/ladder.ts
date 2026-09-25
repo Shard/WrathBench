@@ -1215,7 +1215,7 @@ export function ladderChartLayout(
  */
 
 /** What a character is doing now. */
-/** The same three states `lib/runs.ts` reads; one verdict, two pages. */
+/** The same states `lib/runs.ts` reads; one verdict, two pages. */
 export type CharacterStatus = RunStatus;
 
 export interface CharacterRow {

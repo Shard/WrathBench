@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { NOT_THE_MODELS_FAULT, TAINT_AFTER, classifyLapse, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
+import { PAUSE_REASONS } from "../src/config";
+import { NOT_THE_MODELS_FAULT, PROVIDER_PAUSES, STALL_PAUSE, TAINT_AFTER, classifyLapse, resumesOnPause, staleAfterMs, STALE_FALLBACK_MS, type Lapse } from "../src/lapse";
 
 /**
  * The whole of the lapse rule, as a table. Every row is a case an operator
@@ -93,6 +94,25 @@ describe("what happens to a lapsed run", () => {
       want: { kind: "resume", counts: false },
     },
     { what: "a current run that never paused: nothing to do", episode: "e90", pause: null, want: { kind: "resume", counts: false } },
+    {
+      what: "a freeplay run whose observation stalled: resumed, like any other pause (operator, 2026-09-25)",
+      episode: "freeplay",
+      pause: { reason: STALL_PAUSE },
+      want: { kind: "resume", counts: false },
+    },
+    {
+      what: "an e90 whose observation stalled: a failed attempt under the existing rule, and not a strike",
+      episode: "e90",
+      pause: { reason: STALL_PAUSE },
+      want: { kind: "fail", reason: "manual", counts: false },
+    },
+    {
+      what: "a stale e90 that had stalled: ended `stale`, never counted",
+      episode: "e90",
+      pause: { reason: STALL_PAUSE },
+      staleForMs: 12 * H,
+      want: { kind: "stale", reason: "stale", counts: false },
+    },
   ];
 
   for (const c of cases) {
@@ -138,6 +158,12 @@ describe("what happens to a lapsed run", () => {
   test("three strikes", () => {
     expect(TAINT_AFTER).toBe(3);
   });
+});
+
+test("the stall pause is a pause reason the runner writes, and not a provider's", () => {
+  expect(STALL_PAUSE).toBe("observation-stalled");
+  expect((PAUSE_REASONS as readonly string[]).includes(STALL_PAUSE)).toBe(true);
+  expect(PROVIDER_PAUSES.has(STALL_PAUSE)).toBe(false);
 });
 
 test("adapter-error is not the model's fault (operator, 2026-08-30)", () => {

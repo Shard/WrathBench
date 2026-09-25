@@ -67,6 +67,7 @@ import {
   type RunConfig,
   type WatchdogOverride,
 } from "./config";
+import { STALL_PAUSE } from "./lapse";
 import { runLoop, type StopRequest } from "./loop";
 import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./prompt";
 import { SandboxHost } from "./sandbox/host";
@@ -828,6 +829,21 @@ async function main(): Promise<void> {
   // and a backstop exits the process if the unwind wedges.
   let stopping = false;
   const abort = new AbortController();
+  /** The pause row, its record and its meta.json mark, written now rather than after the unwind. */
+  const pauseNow = (req: { reason: PauseMark["reason"]; detail: string }): void => {
+    try {
+      const row = trajectory.runRow(config.runId);
+      const ended = row !== null && (row["termination_reason"] ?? null) !== null;
+      // A run that already has its termination keeps it; a pause never
+      // overwrites a verdict.
+      // Nor does it move a pause already there: a run that paused on its
+      // provider and is then stopped keeps that pause's reason AND its
+      // instant, which is what the resume cadence counts from.
+      if (!ended) trajectory.pauseWithMark(config.runId, pauseMark(req), readMeta(runDir) ?? metaNow());
+    } catch (err) {
+      console.error(`[wrathbench] could not write the pause record at once: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   const onSignal = (sig: "SIGINT" | "SIGTERM"): void => {
     if (stopping) process.exit(130);
     stopping = true;
@@ -840,20 +856,7 @@ async function main(): Promise<void> {
         ? `\n${sig}: pausing run as \`operator-pause\` (resume with --resume ${config.runId})`
         : `\n${sig}: terminating run as \`manual\``,
     );
-    if (req.kind === "pause") {
-      try {
-        const row = trajectory.runRow(config.runId);
-        const ended = row !== null && (row["termination_reason"] ?? null) !== null;
-        // A run that already has its termination keeps it; a pause never
-        // overwrites a verdict.
-        // Nor does it move a pause already there: a run that paused on its
-        // provider and is then stopped keeps that pause's reason AND its
-        // instant, which is what the resume cadence counts from.
-        if (!ended) trajectory.pauseWithMark(config.runId, pauseMark(req), readMeta(runDir) ?? metaNow());
-      } catch (err) {
-        console.error(`[wrathbench] could not write the pause record at once: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
+    if (req.kind === "pause") pauseNow(req);
     abort.abort(req);
     // Backstop: never hang forever waiting for a wedged child or snippet. If
     // the loop has not written its record by then, write it here so the run
@@ -873,6 +876,22 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", () => onSignal("SIGINT"));
   process.on("SIGTERM", () => onSignal("SIGTERM"));
+  /*
+   * The observation stalled (loop.ts, `noteObservationStall`): the sandbox's
+   * event stream is closed and nothing has moved for the whole reconnect
+   * window. The run stops the way a supervisor stop does — the pause written
+   * first, then the driver unwound through the same abort — but as
+   * `observation-stalled`, which the scheduler resumes on the defer ladder a
+   * provider pause cools on (lapse.ts, `STALL_PAUSE`). A stop already under
+   * way keeps its own verdict.
+   */
+  const onObservationStalled = (detail: string): void => {
+    if (stopping || abort.signal.aborted) return;
+    const req: StopRequest = { kind: "pause", reason: STALL_PAUSE, detail };
+    console.error(`[wrathbench] observation stalled: pausing run as \`${STALL_PAUSE}\` (resume with --resume ${config.runId})`);
+    pauseNow(req);
+    abort.abort(req);
+  };
 
   console.error(
     `[wrathbench] run ${config.runId} (${resumed ? "resumed" : "new"}) — driver ${config.driver}${adapter !== undefined ? ` (${adapter.label})` : ""}, harness ${version}`,
@@ -1065,6 +1084,7 @@ async function main(): Promise<void> {
           initialNotices,
           turnOffset,
           signal: abort.signal,
+          onObservationStalled,
         })
       : config.driver === "codex"
         ? await runCodexEpisode({
@@ -1079,6 +1099,7 @@ async function main(): Promise<void> {
             initialNotices,
             turnOffset,
             signal: abort.signal,
+            onObservationStalled,
           })
         : await runLoop({
           config,
@@ -1092,6 +1113,7 @@ async function main(): Promise<void> {
           initialNotices,
           turnOffset,
           signal: abort.signal,
+          onObservationStalled,
         });
 
   if (outcome.kind === "paused") {
@@ -1108,11 +1130,13 @@ async function main(): Promise<void> {
     const metaThen = readMeta(runDir);
     if (metaThen?.pause === undefined) trajectory.writeMeta({ ...(metaThen ?? metaNow()), pause: pauseMark(outcome) });
   }
-  if (outcome.kind === "terminated" || outcome.reason === "operator-pause") {
+  if (outcome.kind === "terminated" || outcome.reason === "operator-pause" || outcome.reason === STALL_PAUSE) {
     // A finished run frees its module session so the account is not held
     // (the realm caps characters/sessions per account). So does a run the
     // supervisor paused: the fleet is going down, and the account must be
-    // free for the resume (same character — logout, never a wipe). A run
+    // free for the resume (same character — logout, never a wipe). So does a
+    // run whose observation stalled: the session is what stopped reporting,
+    // and the resume's fresh one is the cure. A run
     // paused by its provider keeps the session alive on purpose: that is
     // the in-place retry path, and the roster frees it when it moves on.
     try {

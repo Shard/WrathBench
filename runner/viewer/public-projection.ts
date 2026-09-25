@@ -24,8 +24,9 @@
  *   `objective`, the model last-error `message` (its enum-ish `reason` stays),
  *   a run row's read-`error`, the fleet `configRejected.error`, and the
  *   preflight scripts' output `tail` (smoke output embeds paths).
- *   `pauseReason` keeps only the fixed token `"paused"` (see `pausedToken`),
- *   and the `pause` entry's `detail` goes with it.
+ *   `pauseReason` keeps only a fixed token — `"paused"`, or the harness's
+ *   own `observation-stalled` (see `pausedToken`) — and the `pause` entry's
+ *   `detail` goes with it.
  * - No local filesystem path leaves: `configPath`, the roster `path`, the wiki
  *   bundle annotation (whose `source` is the operator's dump filename), and
  *   the `meta`/`driver`/`claude_system` entries' config, binaries and paths.
@@ -94,6 +95,7 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
+import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
 
@@ -126,9 +128,15 @@ export interface PublicFleetResponse extends Omit<FleetResponse, "fleetPid" | "j
  * the field's non-nullness, so nulling it would misreport paused runs as
  * something else. A fixed token keeps the status honest while withholding the
  * words; null stays null.
+ *
+ * The one reason that crosses as itself is the stall pause: it is a token the
+ * harness writes, never text, and it is what lets the public dashboard say
+ * "stalled" rather than "paused" about a run whose observation froze. The
+ * fleet's own paused listing already publishes its reasons verbatim.
  */
 function pausedToken(reason: string | null): string | null {
-  return reason === null || reason === "" ? null : "paused";
+  if (reason === null || reason === "") return null;
+  return reason === STALL_PAUSE ? STALL_PAUSE : "paused";
 }
 
 function projectComparability(c: ComparabilityView): ComparabilityView {

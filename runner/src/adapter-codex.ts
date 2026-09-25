@@ -116,7 +116,7 @@ import { z } from "zod";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
 import { signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
-import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome } from "./loop";
+import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
 import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
@@ -458,6 +458,8 @@ export interface CodexEpisodeOptions {
   /** See the claude driver: grace for the CLI to close its turn after the harness ended the episode mid-turn. */
   windDownGraceMs?: number;
   signal?: AbortSignal;
+  /** See `ContextBuilderOptions.onObservationStalled` (loop.ts). */
+  onObservationStalled?: ObservationStallHook | undefined;
 }
 
 export const DEFAULT_WIND_DOWN_GRACE_MS = 90_000;
@@ -554,6 +556,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     watchdogs,
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
+    onObservationStalled: o.onObservationStalled,
   });
 
   // ---- MCP over loopback TCP, dispatching into the one live sandbox

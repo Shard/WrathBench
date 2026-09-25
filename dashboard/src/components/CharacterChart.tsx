@@ -34,6 +34,7 @@ import {
 } from "../lib/ladder";
 import { AxisFrame, Cue, Puck, VB_H, VB_W, XAxis, YAxis } from "./ChartParts";
 import { fmtDuration } from "../lib/format";
+import { statusTone } from "../lib/runs";
 import { InfoHint } from "./InfoHint";
 
 const M = { top: 16, right: 178, bottom: 40, left: 52 };
@@ -60,7 +61,7 @@ const iconCx = characterIconCx;
 
 /** The colour of a character's line: exactly the class the table's status cell takes. */
 function statusColour(status: CharacterStatus): string {
-  return status === "live" ? "var(--ok)" : status === "paused" ? "var(--warn)" : "var(--dim)";
+  return `var(--${statusTone(status)})`;
 }
 
 /** A playtime tick: whole hours past an hour, minutes below it. */
@@ -107,7 +108,7 @@ export function CharacterPlot(props: {
         props.single ? "this character's line" : "one series per character"
       }, stitched across ${props.single ? "its attempts" : "each character's attempts"}. Wall clock would draw the days a character spends paused rather than the character's progress, so the axis is the pause-corrected active time each level mark already carries.`,
       "A line is a step, never a slope: a mark is the first sample that showed a level, so the level is held flat until the next one — a lower bound on when the ding happened.",
-      "Colour: live (the line ends at now), paused, ended (dashed) — the same three the status column reads. Each line is labelled with its model and ends with that model's family logo; the character's own name is in the hover.",
+      "Colour: live (the line ends at now), paused or stalled, ended (dashed) — as the status column reads. Each line is labelled with its model and ends with that model's family logo; the character's own name is in the hover.",
     ];
     if (anyTruncated()) {
       lines.push(

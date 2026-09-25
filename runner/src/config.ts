@@ -18,6 +18,7 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
+import { STALL_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
 
 // ---------------------------------------------------------------- watchdogs
@@ -110,8 +111,10 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * (codex: "Your access token could not be refreshed" — a refresh token spent
  * by another process on the same CODEX_HOME, or a 401). Nothing about the
  * model; the run resumes once the operator has logged the lane back in.
+ * `observation-stalled` is the sandbox's event stream closed with the
+ * observation standing still (`STALL_PAUSE`, lapse.ts).
  */
-export const PAUSE_REASONS = ["quota-exhausted", "rate-limited", "operator-pause", "auth-failed"] as const;
+export const PAUSE_REASONS = ["quota-exhausted", "rate-limited", "operator-pause", "auth-failed", STALL_PAUSE] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 // --------------------------------------------------------------- run config

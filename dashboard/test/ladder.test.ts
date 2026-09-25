@@ -47,7 +47,7 @@ import {
   timeTicks,
   xpEarnedOf,
 } from "../src/lib/ladder";
-import { OPAQUE_PAUSE_REASON } from "../src/lib/runs";
+import { OPAQUE_PAUSE_REASON, STALL_PAUSE_REASON } from "../src/lib/runs";
 import { familyOf, monogramOf } from "../src/lib/lineup";
 import { resolvedSummary } from "../src/lib/models";
 import { EPISODE_CHOICES, episodeParam } from "../src/lib/episodes";
@@ -1537,5 +1537,11 @@ describe("a withheld pause reason is not printed back as a detail", () => {
     const real = characterRows([fp({ runId: "b", pauseReason: "operator-pause" })])[0]!;
     expect(real.status).toBe("paused");
     expect(real.statusDetail).toBe("operator-pause");
+  });
+
+  test("a stalled character reads stalled, and the word is its own detail", () => {
+    const stalled = characterRows([fp({ runId: "c", terminationReason: null, pauseReason: STALL_PAUSE_REASON })])[0]!;
+    expect(stalled.status).toBe("stalled");
+    expect(stalled.statusDetail).toBeNull();
   });
 });

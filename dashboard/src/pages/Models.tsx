@@ -26,7 +26,7 @@ import { characterRows } from "../lib/ladder";
 import { LevelXp } from "../components/CharacterFacts";
 import { InfoHint } from "../components/InfoHint";
 import { poll } from "../lib/poll";
-import { runsHref } from "../lib/runs";
+import { runsHref, statusTitle, statusTone } from "../lib/runs";
 import { displayError } from "../lib/errors";
 
 /** The roster moves when a run ends or an operator edits the config. */
@@ -236,8 +236,8 @@ export default function Models() {
                           {(s) => (
                             <A
                               href={`/run/${encodeURIComponent(s().latest.runId)}`}
-                              class={s().status === "live" ? "ok" : s().status === "paused" ? "warn" : "dim"}
-                              title={[s().statusDetail, `idle: ${row.idle}`, `${s().attempts} attempt${s().attempts === 1 ? "" : "s"}`]
+                              class={statusTone(s().status)}
+                              title={[statusTitle(s().status) ?? null, s().statusDetail, `idle: ${row.idle}`, `${s().attempts} attempt${s().attempts === 1 ? "" : "s"}`]
                                 .filter((t): t is string => t !== null)
                                 .join(" · ")}
                             >

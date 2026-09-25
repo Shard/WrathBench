@@ -45,6 +45,14 @@ const TRADE_STATUS_COMPLETE = 8;
  */
 const OBSERVATION_STALL_SAMPLES = 3;
 
+/**
+ * Asks the runner to pause the run because its observation has stalled
+ * (`STALL_PAUSE`, lapse.ts). `detail` is the stall record's own sentence.
+ * Every driver takes it and hands it to its `ContextBuilder`; run.ts answers it
+ * by stopping the run the way a supervisor stop does, as a pause.
+ */
+export type ObservationStallHook = (detail: string) => void;
+
 export interface LoopOptions {
   config: RunConfig & { runId: string; token: string };
   adapter: ChatAdapter;
@@ -61,6 +69,8 @@ export interface LoopOptions {
   turnOffset?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** See `ContextBuilderOptions.onObservationStalled`. */
+  onObservationStalled?: ObservationStallHook | undefined;
   /**
    * How often the world is sampled while a turn is in flight (`startStateTicker`).
    * Coarse by design and deliberately not derived from `stateIntervalMs`: the
@@ -114,6 +124,15 @@ export interface ContextBuilderOptions {
    */
   turnOffset?: number;
   now?: () => number;
+  /**
+   * Called once, the first time this process writes `observation_stalled`:
+   * the observation has stood still behind a closed stream for the whole
+   * window the reconnect ladder gets, so nothing on its own is going to bring
+   * it back. The run pauses rather than go on recording the last reading as
+   * the world. Absent (tests, a bare builder), the stall is recorded and
+   * nothing else happens.
+   */
+  onObservationStalled?: ObservationStallHook | undefined;
 }
 
 /**
@@ -209,6 +228,8 @@ export class ContextBuilder {
   private lastCursor: { eventCount: number; lastSeq: number } | null = null;
   private stalledSamples = 0;
   private stallRecorded = false;
+  /** Whether `onObservationStalled` has been called; once per process. */
+  private stallPauseAsked = false;
   /**
    * Whether the cursor has ever moved in this process. Latched, so a sandbox
    * restart — whose fresh child starts the count at zero again — cannot disarm
@@ -443,6 +464,11 @@ export class ContextBuilder {
    *
    * The same closed stream is what feeds the event window served each turn, so
    * this record speaks for that freeze too.
+   *
+   * The first record also asks the runner to pause the run
+   * (`onObservationStalled`): the window before it is the reconnect ladder's,
+   * and past it the rows are repetition, not play. The reassertions exist for
+   * a builder with no one to ask.
    */
   private noteObservationStall(snap: SnapshotLike, turn: { turn?: number }): void {
     const eventCount = snap.eventCount ?? 0;
@@ -467,14 +493,19 @@ export class ContextBuilder {
     this.stalledSamples++;
     if (this.stalledSamples % OBSERVATION_STALL_SAMPLES !== 0) return;
     this.stallRecorded = true;
+    const detail = `the sandbox event stream is closed and the observation cursor has not moved for ${this.stalledSamples} samples; every state row since is the last reading repeated, not the world`;
     this.o.trajectory.append({
       t: "harness",
       kind: "observation_stalled",
-      detail: `the sandbox event stream is closed and the observation cursor has not moved for ${this.stalledSamples} samples; every state row since is the last reading repeated, not the world`,
+      detail,
       samples: this.stalledSamples,
       ...cursor,
       ...turn,
     });
+    if (!this.stallPauseAsked && this.o.onObservationStalled !== undefined) {
+      this.stallPauseAsked = true;
+      this.o.onObservationStalled(detail);
+    }
   }
 
   private async doSampleState(): Promise<SnapshotLike | null> {
@@ -920,6 +951,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     watchdogs,
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
     ...(o.now !== undefined ? { now: o.now } : {}),
+    onObservationStalled: o.onObservationStalled,
   });
 
   let turn = 0;
@@ -1031,6 +1063,10 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         lastCut = cut;
       }
       const contextText = await builder.build(turn, pendingNotices);
+      // The sample above may have been the one that found the observation
+      // stalled, and the pause it asked for wins before a request is written.
+      const stopBuilt = stopped();
+      if (stopBuilt !== null) return stopBuilt;
       // The sample above may have been the first sight of the character; a
       // stale one ends the run here, not after a whole turn on it.
       const integrity = watchdogs.check();
