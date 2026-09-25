@@ -940,7 +940,7 @@ export class EntrypointPhases {
         ok: e.answer.ok,
         action: "load",
         reload: true,
-        ...(e.answer.ok ? {} : { error: e.answer.error }),
+        ...(e.answer.ok ? (e.answer.warnings !== undefined ? { warnings: e.answer.warnings } : {}) : { error: e.answer.error }),
       } satisfies EntrypointRecord);
     }
   }

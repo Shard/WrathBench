@@ -364,6 +364,30 @@ describe("the [wake] block", () => {
     expect(renderWake(view({ memory: whole })).endsWith(`[memory.json, 2,000 chars]\n${whole}`)).toBe(true);
   });
 
+  test("a load that went through with on keys that are not event names says so, key by key", () => {
+    const log = new WakeLog();
+    log.noteDeploy(
+      {
+        deploy: 8,
+        version: 26,
+        ok: true,
+        exports: ["loop", "on.SMSG_LEVELUP"],
+        warnings: ["on.SMSG_LEVELUP is not an event name on the event stream, so it is never called; nearest: SMSG_LEVELUP_INFO"],
+        action: "load",
+      },
+      T0,
+    );
+    log.noteDeploy({ deploy: 9, version: 27, ok: true, exports: ["loop"], action: "load" }, T0);
+    const text = renderWake(
+      log.view({ wake: 3, request: 1, asleepMs: 60_000, wokeFor: ["fallback"], program: { state: "running", deploy: 9, deployedAt: T0, editsSinceDeploy: false, mainExists: true }, delta: null, memory: null }),
+    );
+    expect(text).toContain(
+      "deploy 8 loaded (12:31:02) with 1 warning:\n    on.SMSG_LEVELUP is not an event name on the event stream, so it is never called; nearest: SMSG_LEVELUP_INFO",
+    );
+    // A clean load adds no line of its own.
+    expect(text).not.toContain("deploy 9 loaded");
+  });
+
   test("formats: clock in UTC, durations, money", () => {
     expect(clock(T0)).toBe("12:31:02");
     expect([duration(31_200), duration(245_000), duration(7_380_000)]).toEqual(["31.2s", "4m05s", "2h03m"]);

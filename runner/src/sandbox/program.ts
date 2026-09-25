@@ -37,6 +37,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { KNOWN_OPCODES, STREAM_ERROR, STREAM_GAP } from "@wrathbench/sdk";
 import { MEMORY_MAX_CHARS, MEMORY_PATH } from "../workspace";
 import { HarnessStop, isHarnessStop, Owner, type Ownership } from "./owners";
 import type {
@@ -582,10 +583,13 @@ export class ProgramRuntime {
     };
     this.current = d;
     void this.runTicks(d);
+    // A key that names no event loads like any other — it is only never called — and the deploy says so.
+    const warnings = unknownEventWarnings(Object.keys(shape.on ?? {}));
     return {
       ok: true,
       deploy: number,
       exports: [...(shape.loop !== undefined ? ["loop"] : []), ...Object.keys(shape.on ?? {}).map((k) => `on.${k}`)],
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
@@ -870,6 +874,54 @@ export class ProgramRuntime {
     this.milestones = [];
     return out;
   }
+}
+
+// ------------------------------------------------------------ event names
+
+/**
+ * Every event name an `on` handler can be called for: the module's events the
+ * SDK has a schema for, the stream's own `stream_gap` and `stream_error`, and
+ * the module events it passes through without one (module/PROTOCOL.md lists
+ * `WB_AREATRIGGER`; a test holds this set to every event row there).
+ * Dispatch is by exact name, so a key outside it is a handler never called.
+ */
+export const PROGRAM_EVENT_NAMES: ReadonlySet<string> = new Set<string>([...KNOWN_OPCODES, STREAM_GAP, STREAM_ERROR, "WB_AREATRIGGER"]);
+
+/** At most this many near names are an obvious match; more is a list, and none is offered. */
+const NEAR_NAMES_MAX = 3;
+/** A key's stem (after `SMSG_`, `MSG_`, `WB_`) shorter than this is too little to call a match. */
+const NEAR_STEM_MIN = 4;
+/** A key that runs past a known name by more than this many characters is not that name misspelt. */
+const NEAR_OVERRUN_MAX = 3;
+
+const eventStem = (name: string): string => name.toUpperCase().replace(/^(C?SMSG|MSG|WB)_/, "");
+
+/**
+ * Known names the unknown key is the start of, or that it runs past by a
+ * character or three, compared case-insensitively after the family prefix —
+ * `SMSG_LEVELUP` finds `SMSG_LEVELUP_INFO`, `MOVE_RESULT` and
+ * `WB_MOVE_RESULTS` find `WB_MOVE_RESULT`. Nearest first by length; empty when
+ * nothing matches or when more than three do.
+ */
+export function nearEventNames(key: string, known: ReadonlySet<string> = PROGRAM_EVENT_NAMES): string[] {
+  const k = eventStem(key);
+  if (k.length < NEAR_STEM_MIN) return [];
+  const hits = [...known].filter((name) => {
+    const n = eventStem(name);
+    return n.startsWith(k) || (k.startsWith(n) && k.length - n.length <= NEAR_OVERRUN_MAX);
+  });
+  if (hits.length > NEAR_NAMES_MAX) return [];
+  return hits.sort((a, b) => Math.abs(a.length - key.length) - Math.abs(b.length - key.length) || a.localeCompare(b));
+}
+
+/** One line per `on` key that is not an event name: the key, that it is never called, and the near names if any. */
+export function unknownEventWarnings(keys: readonly string[], known: ReadonlySet<string> = PROGRAM_EVENT_NAMES): string[] {
+  return keys
+    .filter((k) => !known.has(k))
+    .map((k) => {
+      const near = nearEventNames(k, known);
+      return `on.${k} is not an event name on the event stream, so it is never called${near.length > 0 ? `; nearest: ${near.join(", ")}` : ""}`;
+    });
 }
 
 /** What main.ts exported, checked: at least one of `loop` (a function) and `on` (an object of functions). */

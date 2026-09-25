@@ -314,6 +314,7 @@ export type EntrypointRecord =
       action: "load" | "unload";
       error?: string;
       exports?: string[];
+      warnings?: string[];
       reload?: true;
     }
   | {

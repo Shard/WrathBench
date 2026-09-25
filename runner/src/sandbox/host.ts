@@ -247,6 +247,8 @@ export interface DeployRecord {
   ok: boolean;
   error?: string;
   exports?: string[];
+  /** `on` keys that are not event names, when a load had any (`DeployAnswer`). */
+  warnings?: string[];
   /** What the deploy did to the program: loaded it, unloaded it (main.ts is gone), or failed. */
   action: "load" | "unload";
 }
@@ -583,7 +585,7 @@ export class SandboxHost {
     }
     if (answer.ok) {
       this.programState = { kind: "running", deploy, version, at: this.nowMs() };
-      return { deploy, version, ok: true, exports: answer.exports, action: "load" };
+      return { deploy, version, ok: true, exports: answer.exports, ...(answer.warnings !== undefined ? { warnings: answer.warnings } : {}), action: "load" };
     }
     // The previous deploy keeps running if it was; a halted or stopped one is gone.
     if (s.kind === "halted" || s.kind === "stopped") this.programState = { kind: "none" };

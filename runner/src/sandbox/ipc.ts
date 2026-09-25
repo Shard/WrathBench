@@ -198,9 +198,13 @@ export type ChildToHost =
  */
 export type ProgramRpcMethod = "program_deploy" | "program_unload" | "program_report";
 
-/** What a deploy answered. The previous deploy keeps running when `ok` is false. */
+/**
+ * What a deploy answered. The previous deploy keeps running when `ok` is
+ * false. `warnings` (absent when there are none) name `on` keys that are not
+ * event names: the deploy loaded, and those handlers are never called.
+ */
 export type DeployAnswer =
-  | { ok: true; deploy: number; exports: string[] }
+  | { ok: true; deploy: number; exports: string[]; warnings?: string[] }
   | { ok: false; deploy: number; error: string };
 
 /**

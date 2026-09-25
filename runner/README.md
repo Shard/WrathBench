@@ -467,7 +467,14 @@ the spike was built on.
   version; a failed load leaves the running deploy running and is not retried
   until something changes, and a deleted main.ts unloads. On yield because
   edits spread over several tool calls must never load half-applied, and
-  because each load is a module graph that is never freed.
+  because each load is a module graph that is never freed. An `on` key that
+  is not an event name (`PROGRAM_EVENT_NAMES`: the SDK's opcodes, the
+  stream's `stream_gap` and `stream_error`, and `WB_AREATRIGGER`, which the
+  SDK passes through without a schema — a test holds the set to every event
+  row of module/PROTOCOL.md) loads, since dispatch is by exact name and it is
+  merely never called; the deploy carries a warning naming the key and, when
+  one to three names start with it (or it overruns one by up to three
+  characters), those names, shown in the next `[wake]` block.
 - **Ownership** (`src/sandbox/owners.ts`). Timers and event listeners belong
   to the async context that created them: a snippet's go when it returns (its
   signal is aborted too), a deploy's when it is replaced. Keyed on the async

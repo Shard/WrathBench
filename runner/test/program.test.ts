@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SandboxHost, STATE_RESET_NOTICE_ENTRYPOINT } from "../src/sandbox/host";
 import type { ProgramErrorNote, ProgramReport } from "../src/sandbox/ipc";
+import { PROGRAM_EVENT_NAMES, nearEventNames, unknownEventWarnings } from "../src/sandbox/program";
 import { Workspace } from "../src/workspace";
 
 const hosts: SandboxHost[] = [];
@@ -128,7 +129,13 @@ describe("deploy and ticks", () => {
       "main.ts",
       'export const on = {\n  SMSG_PROBE(e, ctx) {\n    ctx.memory.heard = e.seq;\n    ctx.wake("bags full");\n  },\n};\n',
     );
-    expect(await host.deployProgram(1)).toEqual({ ok: true, deploy: 1, exports: ["on.SMSG_PROBE"] });
+    // Not an event name the stream carries: it loads, is called for what arrives under that name, and the deploy says so.
+    expect(await host.deployProgram(1)).toEqual({
+      ok: true,
+      deploy: 1,
+      exports: ["on.SMSG_PROBE"],
+      warnings: ["on.SMSG_PROBE is not an event name on the event stream, so it is never called"],
+    });
     await host.evalSnippet('events.ingest(JSON.stringify({ seq: 4, opcode: "SMSG_PROBE", opcodeId: 1, ts: 5, data: {} }))');
     expect(await memoryValue(host, "memory.heard")).toBe("4");
     const all = await reportsUntil(host, (rs) => rs.some((r) => r.requests.length > 0));
@@ -244,6 +251,50 @@ describe("errors: signatures, first occurrence, and the line they came from", ()
     await until(async () => (Number(await memoryValue(host, "memory.n")) > n ? true : undefined));
     expect(await memoryValue(host, "memory.gen")).toBe("1");
     expect((await host.programReport()).deploy).toBe(1);
+  });
+});
+
+describe("on keys that are not event names", () => {
+  test("a deploy with one loads, and its answer and its yield record name the key and the near name", async () => {
+    const { host, ws } = makeHost();
+    write(
+      ws,
+      "main.ts",
+      'export const on = {\n  SMSG_LEVELUP(e, ctx) { ctx.wake("level"); },\n  SMSG_ATTACKSTART(e, ctx) {},\n  WB_MOVE_RESULTS(e, ctx) {},\n};\n',
+    );
+    const rec = await host.deployAtYield();
+    expect(rec).toEqual({
+      deploy: 1,
+      version: ws.importVersion,
+      ok: true,
+      exports: ["on.SMSG_LEVELUP", "on.SMSG_ATTACKSTART", "on.WB_MOVE_RESULTS"],
+      warnings: [
+        "on.SMSG_LEVELUP is not an event name on the event stream, so it is never called; nearest: SMSG_LEVELUP_INFO",
+        "on.WB_MOVE_RESULTS is not an event name on the event stream, so it is never called; nearest: WB_MOVE_RESULT",
+      ],
+      action: "load",
+    });
+    expect(host.programState.kind).toBe("running");
+  });
+
+  test("near names: a prefix either way, any case, any family; nothing when it is a list", () => {
+    expect(nearEventNames("SMSG_LEVELUP")).toEqual(["SMSG_LEVELUP_INFO"]);
+    expect(nearEventNames("smsg_levelup_info")).toEqual(["SMSG_LEVELUP_INFO"]);
+    expect(nearEventNames("MOVE_RESULT")).toEqual(["WB_MOVE_RESULT"]);
+    expect(nearEventNames("SMSG_MOVE_RESULT")).toEqual(["WB_MOVE_RESULT"]);
+    expect(nearEventNames("SMSG_ATTACK")).toEqual(["SMSG_ATTACKSTOP", "SMSG_ATTACKSTART", "SMSG_ATTACKERSTATEUPDATE"]);
+    // Many questgiver packets share the stem, so none of them is the obvious one.
+    expect(nearEventNames("SMSG_QUEST")).toEqual([]);
+    expect(nearEventNames("SMSG_PROBE")).toEqual([]);
+    expect(nearEventNames("*")).toEqual([]);
+    expect(unknownEventWarnings(["SMSG_ATTACKSTART", "WB_MOVE_RESULT", "stream_gap", "WB_AREATRIGGER"])).toEqual([]);
+  });
+
+  test("every event row of module/PROTOCOL.md is an event name a handler can be keyed by", () => {
+    const md = readFileSync(join(import.meta.dir, "..", "..", "module", "PROTOCOL.md"), "utf8");
+    const rows = [...md.matchAll(/^\| `((?:SMSG|MSG|WB)_[A-Z0-9_]+)` \|/gm)].map((m) => m[1]!);
+    expect(rows.length).toBeGreaterThan(100);
+    expect(rows.filter((r) => !PROGRAM_EVENT_NAMES.has(r))).toEqual([]);
   });
 });
 

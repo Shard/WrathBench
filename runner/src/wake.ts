@@ -89,6 +89,8 @@ export interface WakeLoadRow {
   ok: boolean;
   action: "load" | "unload";
   error?: string | undefined;
+  /** A load that went through with `on` keys that are not event names. */
+  warnings?: string[] | undefined;
   at: number;
 }
 
@@ -277,7 +279,7 @@ export class WakeLog {
           deploy: e.deploy,
           ok: e.answer.ok,
           action: "load",
-          ...(e.answer.ok ? {} : { error: e.answer.error }),
+          ...(e.answer.ok ? (e.answer.warnings !== undefined ? { warnings: e.answer.warnings } : {}) : { error: e.answer.error }),
           at: e.at,
         });
         if (!e.answer.ok) this.reason("load", now);
@@ -287,7 +289,14 @@ export class WakeLog {
 
   /** The deploy made as the model ended its turn: the first thing the next wake sees. */
   noteDeploy(rec: DeployRecord, now: number): void {
-    this.loads.push({ deploy: rec.deploy, ok: rec.ok, action: rec.action, ...(rec.error !== undefined ? { error: rec.error } : {}), at: now });
+    this.loads.push({
+      deploy: rec.deploy,
+      ok: rec.ok,
+      action: rec.action,
+      ...(rec.error !== undefined ? { error: rec.error } : {}),
+      ...(rec.warnings !== undefined ? { warnings: rec.warnings } : {}),
+      at: now,
+    });
     if (!rec.ok) this.reason("load", now);
   }
 
@@ -631,8 +640,12 @@ export function renderWake(v: WakeView): string {
   lines.push(programLine(v));
   for (const l of v.loads) {
     if (l.action === "unload") lines.push(`deploy ${l.deploy} unloaded (${clock(l.at)}): main.ts is gone, so no program runs`);
-    else if (l.ok) continue;
-    else {
+    else if (l.ok) {
+      const w = l.warnings ?? [];
+      if (w.length === 0) continue;
+      lines.push(`deploy ${l.deploy} loaded (${clock(l.at)}) with ${w.length} warning${w.length === 1 ? "" : "s"}:`);
+      for (const t of w) lines.push(`    ${t}`);
+    } else {
       const keeps = v.program.state === "running" ? `deploy ${v.program.deploy ?? "?"} keeps running` : "no program is running";
       lines.push(`deploy ${l.deploy} failed to load (${clock(l.at)}); ${keeps}:`);
       for (const t of (l.error ?? "").split("\n")) lines.push(`    ${t.trim()}`);
