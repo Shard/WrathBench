@@ -344,7 +344,12 @@ Imports: a snippet's top-level import statements name workspace files
 passes through). `rewrite.ts` lifts them out of the snippet and turns each into
 an awaited dynamic import of the resolved absolute path, checking every named
 export so a missing one is an error naming the file; the bindings are the
-snippet's own and never copied back. Only code and JSON files resolve
+snippet's own and never copied back. A string-literal `import("./lib/x")` in
+the snippet body — often inside a background routine — takes the same path,
+resolved when the call runs rather than when the snippet compiled; left alone,
+it would resolve against the sandbox's own entry module and fail naming the
+harness's path. Scheme specifiers (`node:fs`), absolute paths and computed
+arguments are left as written. Only code and JSON files resolve
 (`isImportable` in `workspace.ts`); notes.md and other text are read, not
 imported. An edited file must load fresh, and so must a file it imports: the
 host sends the child the import version after every write, edit or delete of

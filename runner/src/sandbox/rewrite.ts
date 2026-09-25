@@ -29,7 +29,9 @@
  * (`isImportable`, workspace.ts); naming notes.md or a .txt is refused. The
  * bindings are local to the snippet —
  * never copied back — so a later snippet imports again and gets the file as it
- * is then. Freshness across edits is the sandbox's business (entry.ts stamps
+ * is then. A string-literal `import("./x")` in the snippet body is routed to
+ * the same place (`routeDynamicImports`), resolved when the call runs.
+ * Freshness across edits is the sandbox's business (entry.ts stamps
  * every workspace module with the import version; `stampWorkspaceImports`
  * below carries the stamp into the files a workspace module imports itself).
  * A snippet with no import statement compiles to exactly the bytes it always
@@ -365,7 +367,8 @@ export function compileSnippet(source: string, options: CompileOptions = {}): Co
   const lifted = extractImportStatements(source);
   if (lifted.imports.length === 0) {
     const wrapped = transpiler.transformSync(`${WRAPPER_OPEN}\n${source}\n};`);
-    return finishCompile(wrapped.slice(wrapped.indexOf("{") + 1, wrapped.lastIndexOf("}")), "");
+    const js = wrapped.slice(wrapped.indexOf("{") + 1, wrapped.lastIndexOf("}"));
+    return finishCompile(routeDynamicImports(js, wrapped), "");
   }
   // Imports stay outside the wrapper, where a module may declare them, so the
   // transpiler sees them used by the body and drops only the type-only and
@@ -378,7 +381,7 @@ export function compileSnippet(source: string, options: CompileOptions = {}): Co
   if (open === -1) throw new Error("snippet compile: the transpiler dropped the snippet wrapper");
   const js = wrapped.slice(open + WRAPPER_OPEN.length, wrapped.lastIndexOf("}"));
   const prelude = importPrelude(parseTranspiledImports(wrapped.slice(0, open)), options.workspace);
-  return finishCompile(js, prelude);
+  return finishCompile(routeDynamicImports(js, wrapped), prelude);
 }
 
 /** The shared tail of `compileSnippet`: persistence rewrite, copy-back, both bodies. */
@@ -412,6 +415,54 @@ const importTranspiler = new Bun.Transpiler({
   deadCodeElimination: false,
   trimUnusedImports: true,
 });
+
+/** A specifier with a scheme (`node:fs`, `bun:sqlite`): never a workspace file. */
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+/**
+ * A snippet's string-literal `import("…")` calls, routed to the workspace.
+ *
+ * A snippet's code is evaluated from the sandbox's own entry module, so an
+ * unrouted `import("./lib/combat")` resolves against the harness's directory
+ * and fails naming the harness's path — inside a background routine, as an
+ * unhandled rejection. Each call whose specifier names a workspace file the way
+ * an import statement would (`./x`, `x`, `x.ts`, nested, or a `..` that the
+ * resolver refuses by name) becomes `__wrathbench_import__("./x", …)`: the
+ * sandbox resolves it when the call runs — so a file the snippet wrote a line
+ * earlier is found — and loads it through the same versioned path the
+ * statement form takes. A specifier with a scheme, an absolute path and a
+ * computed argument are left exactly as written.
+ *
+ * Only calls the transpiler itself reports as dynamic imports are touched, so
+ * text that merely looks like one inside a string is left alone unless the
+ * same specifier is also imported for real. `wrapped` is the transpiled
+ * module the body `js` was cut from.
+ */
+function routeDynamicImports(js: string, wrapped: string): string {
+  if (!js.includes("import")) return js;
+  let specifiers: Set<string>;
+  try {
+    specifiers = new Set(
+      importTranspiler
+        .scanImports(wrapped)
+        .filter((i) => i.kind === "dynamic-import")
+        .map((i) => i.path)
+        .filter((p) => !SCHEME.test(p) && !p.startsWith("/")),
+    );
+  } catch {
+    return js;
+  }
+  if (specifiers.size === 0) return js;
+  return js.replace(
+    /(?<![\w$.])import\s*\(\s*("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')/g,
+    (whole, literal: string) => {
+      // A path with an escape in it is not one a workspace file has; leave it.
+      if (literal.includes("\\")) return whole;
+      const spec = literal.slice(1, -1);
+      return specifiers.has(spec) ? `__wrathbench_import__(${JSON.stringify(spec)}` : whole;
+    },
+  );
+}
 
 /** An import the snippet's resolution or linking refused; the message names the path. */
 export class ImportError extends Error {
@@ -726,7 +777,7 @@ export function resolveWorkspaceImport(
   specifier: string,
   workspace: string | undefined,
 ): { abs: string; rel: string } | null {
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier)) return null;
+  if (SCHEME.test(specifier)) return null;
   const shown = JSON.stringify(specifier);
   if (workspace === undefined || workspace.length === 0) {
     throw new ImportError(`import ${shown}: this sandbox has no workspace to import from`);

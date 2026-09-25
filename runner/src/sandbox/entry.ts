@@ -70,7 +70,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
-import { compileSnippet, importedBindingNames, stampWorkspaceImports } from "./rewrite";
+import { compileSnippet, importedBindingNames, resolveWorkspaceImport, stampWorkspaceImports } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
 import type {
@@ -184,8 +184,14 @@ const versionTag = (): string => (retrySalt === 0 ? String(workspaceVersion) : `
 let importedAtStamp: { stamp: string; names: Set<string> } = { stamp: "", names: new Set() };
 
 /**
- * Import a workspace module for a snippet (rewrite.ts's prelude calls this for
- * every workspace file it names).
+ * Import a workspace module for a snippet. rewrite.ts routes both forms here:
+ * an import statement's prelude passes the absolute path it resolved while
+ * compiling, and a string-literal `import("./lib/x")` passes the specifier as
+ * written, resolved now — at the call, which may be inside a background
+ * routine long after the snippet compiled, and after a file the same snippet
+ * wrote. Either way the path taken is the one below: the versioned workspace
+ * module, and for a specifier that names no importable file, a rejection with
+ * `resolveWorkspaceImport`'s path-naming error.
  *
  * Bun 1.4.0 occasionally loses an import binding when it loads a module graph
  * whose specifiers carry query strings: the module that imported `x` fails with
@@ -200,7 +206,11 @@ let importedAtStamp: { stamp: string; names: Set<string> } = { stamp: "", names:
  * as a fresh graph under a new stamp. A retried graph re-runs the top-level
  * code of the modules that had already evaluated.
  */
-async function importWorkspaceModule(path: string, options?: ImportCallOptions): Promise<unknown> {
+async function importWorkspaceModule(specifier: string, options?: ImportCallOptions): Promise<unknown> {
+  const path =
+    WORKSPACE !== undefined && specifier.startsWith(`${WORKSPACE}/`)
+      ? specifier
+      : (resolveWorkspaceImport(specifier, WORKSPACE)?.abs ?? specifier);
   try {
     return await import(path, options);
   } catch (err) {
@@ -256,11 +266,16 @@ if (WORKSPACE !== undefined) {
 
 /**
  * Error text as the model should read it: workspace paths relative to the
- * workspace, without the version stamp that only the loader cares about.
+ * workspace, without the version stamp that only the loader cares about, and
+ * never this file's own path. A snippet's code is evaluated from here, so a
+ * dynamic import the rewrite cannot route (a computed specifier) fails
+ * "imported from …/runner/src/sandbox/entry.ts", which names the harness and
+ * says nothing true about where the snippet looked.
  */
 function workspaceRelative(text: string): string {
-  if (WORKSPACE === undefined) return text;
-  return text.split(`${WORKSPACE}/`).join("").replace(/\?v=[\d.]+/g, "");
+  const own = text.split(import.meta.path).join("your snippet");
+  if (WORKSPACE === undefined) return own;
+  return own.split(`${WORKSPACE}/`).join("").replace(/\?v=[\d.]+/g, "");
 }
 
 // ------------------------------------------------------- movement intention

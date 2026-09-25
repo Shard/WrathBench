@@ -184,6 +184,101 @@ describe("snippet imports", () => {
   });
 });
 
+describe("dynamic import() of a workspace file", () => {
+  // Found live: a model's background routine did `await import("./lib/combat")`,
+  // which resolved against the sandbox's own entry module and failed naming the
+  // harness path, as an unhandled rejection.
+  const COMBAT = 'export const kill = (guid: string) => `kill ${guid}`;\nexport const tag = Symbol("combat");\n';
+
+  test("the static and the dynamic form load the same module", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "lib/combat.ts", COMBAT);
+    const res = await host.evalSnippet(
+      'import * as statically from "./lib/combat";\nconst dynamically = await import("./lib/combat");\nreturn [dynamically === statically, dynamically.kill("7")];',
+    );
+    expect(res.error).toBeUndefined();
+    expect(res.value).toBe('[ true, "kill 7" ]');
+    // Every spelling a statement accepts, dynamically too.
+    const forms = await host.evalSnippet(
+      'const a = await import("lib/combat"); const b = await import("./lib/combat.ts"); const c = await import("lib/combat.ts");\nreturn a === b && b === c;',
+    );
+    expect(forms.value).toBe("true");
+  });
+
+  test("a dynamic import inside a background routine works", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "lib/combat.ts", COMBAT);
+    const launched = await host.evalSnippet(
+      'void (async () => { await sleep(50, { wake: false }); const { kill } = await import("./lib/combat"); console.log("routine:", kill("9")); })(); "started"',
+    );
+    expect(launched.ok).toBe(true);
+    await Bun.sleep(300);
+    const next = await host.evalSnippet("1");
+    expect(next.logs.map((l) => l.text)).toContain("routine: kill 9");
+    expect(host.drainNotices().filter((n) => n.text.includes("unhandled"))).toEqual([]);
+  });
+
+  test("a file the snippet wrote a line earlier is found, and an edit is seen fresh", async () => {
+    const { host } = makeHost();
+    const res = await host.evalSnippet(
+      'await files.write("gen.ts", "export const g = 1;\\n");\nconst first = (await import("./gen")).g;\nawait files.write("gen.ts", "export const g = 2;\\n");\nreturn [first, (await import("./gen")).g];',
+    );
+    expect(res.value).toBe("[ 1, 2 ]");
+  });
+
+  test("a missing file is the clear path-naming error, never the harness path — in a snippet and in a routine", async () => {
+    const { host, ws } = makeHost();
+    const direct = await host.evalSnippet('await import("./lib/nope")');
+    expect(direct.ok).toBe(false);
+    expect(direct.error).toBe(
+      'ImportError: import "./lib/nope": no such file in the workspace (looked for lib/nope.ts, lib/nope.tsx, lib/nope.js, lib/nope.mjs, lib/nope.jsx, lib/nope/index.ts, lib/nope/index.js)',
+    );
+    const escape = await host.evalSnippet('await import("../outside")');
+    expect(escape.error).toBe('ImportError: import "../outside": .. would leave the workspace');
+
+    await host.evalSnippet('void (async () => { await import("./lib/nope"); })(); "started"');
+    await Bun.sleep(300);
+    const next = await host.evalSnippet("1");
+    const said = [...next.logs.map((l) => l.text), ...host.drainNotices().map((n) => n.text)].join("\n");
+    expect(said).toContain('import "./lib/nope": no such file in the workspace');
+    for (const text of [direct.error ?? "", escape.error ?? "", said]) {
+      expect(text).not.toContain("entry.ts");
+      expect(text).not.toContain("runner/src");
+      expect(text).not.toContain(ws.dir);
+    }
+  });
+
+  test("node builtins and computed specifiers are left as written; a computed miss still names no harness path", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "lib/combat.ts", COMBAT);
+    expect((await host.evalSnippet('(await import("node:path")).join("a", "b")')).value).toBe('"a/b"');
+    const computed = await host.evalSnippet('const p = "./lib/combat";\nawait import(p)');
+    expect(computed.ok).toBe(false);
+    expect(computed.error).not.toContain("entry.ts");
+    expect(computed.error).toContain("your snippet");
+  });
+});
+
+describe("a workspace module and the snippet that calls it", () => {
+  test("see the same ambient objects, and the module reads the calling snippet's signal", async () => {
+    const { host, ws } = makeHost();
+    write(
+      ws,
+      "lib/probe.ts",
+      [
+        "declare const sdk: unknown, state: unknown, events: unknown, sleep: unknown, signal: AbortSignal;",
+        "export function bindings(callerSignal: AbortSignal) {",
+        "  const g = globalThis as Record<string, unknown>;",
+        "  return [sdk === g.sdk, state === g.state, events === g.events, sleep === g.sleep, signal === callerSignal, signal.aborted];",
+        "}",
+      ].join("\n"),
+    );
+    const res = await host.evalSnippet('import { bindings } from "./lib/probe";\nreturn bindings(signal);');
+    expect(res.error).toBeUndefined();
+    expect(res.value).toBe("[ true, true, true, true, true, false ]");
+  });
+});
+
 describe("the files object", () => {
   test("read, write, edit, delete and list go through the host with the tools' rules", async () => {
     const { host, ws } = makeHost();

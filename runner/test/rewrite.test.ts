@@ -178,6 +178,34 @@ describe("import statements", () => {
     expect(c.statementsBody).not.toContain('globalThis["one"]');
   });
 
+  test("a string-literal import() of a workspace file is routed to the workspace; schemes, absolute paths and computed arguments are not", () => {
+    const c = compileSnippet(
+      [
+        'const a = await import("./lib/combat");',
+        "const b = await import('lib/deep/two', { with: { type: \"ts\" } });",
+        'const c = await import("node:fs");',
+        'const d = await import("/abs/x.ts");',
+        "const p = './util'; const e = await import(p);",
+        'const s = "import(\\"./only-in-a-string\\")";',
+        'const f = obj.import("./lib/combat");',
+        "void (async () => { await import(\"./util\"); })();",
+      ].join("\n"),
+      { workspace: ws },
+    );
+    const body = c.statementsBody;
+    expect(body).toContain('__wrathbench_import__("./lib/combat")');
+    expect(body).toContain('__wrathbench_import__("lib/deep/two", {');
+    expect(body).toContain('import("node:fs")');
+    expect(body).toContain('import("/abs/x.ts")');
+    expect(body).toContain("import(p)");
+    expect(body).toContain("only-in-a-string");
+    expect(body).not.toContain('__wrathbench_import__("./only-in-a-string")');
+    expect(body).toContain('obj.import("./lib/combat")');
+    expect(body).toContain('__wrathbench_import__("./util")');
+    // A snippet without a routed call is untouched.
+    expect(compileSnippet('await import("node:fs")', { workspace: ws })).toEqual(compileSnippet('await import("node:fs")'));
+  });
+
   test("a pass-through specifier stays an ordinary dynamic import", () => {
     const c = compileSnippet('import { join } from "node:path";\nreturn join("a", "b");', { workspace: ws });
     expect(c.statementsBody).toContain('const __wrathbench_import_0__ = await import("node:path");');
