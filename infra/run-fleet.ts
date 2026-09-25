@@ -193,6 +193,7 @@ import {
   readRunFacts,
   schedulability,
   serializeModelsSidecar,
+  type CountCache,
 } from "../runner/src/models";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { Trajectory } from "../runner/src/trajectory";
@@ -785,6 +786,14 @@ async function main(): Promise<void> {
   const shortLivedExits = new Map<string, number[]>();
   /** name -> hold-until, so a held job logs once per hold, not once per tick. */
   const breakerHolds = new Map<string, number>();
+  /**
+   * The run facts' record counts, held for the life of the process: every
+   * tick reads every run's facts twice, and without this each read went over
+   * every trajectory in the tree from byte zero. With it a finished run is
+   * read once and then only stat'd, and a live one folds what it appended.
+   * The facts are the same either way.
+   */
+  const factCounts: CountCache = new Map();
 
   /** Why a job is not runnable on the defer ladder, or undefined. Reads its own sidecar. */
   const jobCooling = (job: FleetJob): string | undefined => {
@@ -822,7 +831,7 @@ async function main(): Promise<void> {
     // this supervisor's own processes is playing it, or a live job holds its
     // account (the same guards the stale sweep applies, for the same reason).
     const runs = implicitPauses({
-      runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }),
+      runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true, counts: factCounts }),
       campaigns: cfg.campaigns,
       running: new Set([...procs.values()].filter((p) => !p.exited).flatMap((p) => p.runIds)),
       busyAccounts: new Set(

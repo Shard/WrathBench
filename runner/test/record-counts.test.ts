@@ -9,7 +9,7 @@
  * asserted here against a whole-file read, which is the definition of right.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,7 @@ import {
   countRecords,
   countRecordsCached,
   readRunFact,
+  readRunFacts,
   type CountCache,
 } from "../src/models";
 
@@ -164,6 +165,21 @@ describe("countRecordsCached (resumable)", () => {
     expect([...countRecordsCached(cache, p, ["response"])!]).toEqual([["response", 3]]);
   });
 
+  test("a whole final record with no newline counts as the one-shot counts it, and once", () => {
+    const p = join(dir, "tail.jsonl");
+    const cache: CountCache = new Map();
+    const rec = (ts: number): string => JSON.stringify({ t: "response", ts });
+    writeFileSync(p, `${rec(1)}\n${rec(2)}`);
+    expect(countRecords(p, KINDS)!.get("response")).toBe(2);
+    expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(2);
+    // The newline that completes it does not count it again.
+    appendFileSync(p, "\n");
+    expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(2);
+    appendFileSync(p, `${rec(3)}\n`);
+    expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(3);
+    expect(countRecords(p, KINDS)!.get("response")).toBe(3);
+  });
+
   test("a vanished file is null and drops its scanner", () => {
     const p = join(dir, "gone.jsonl");
     const cache: CountCache = new Map();
@@ -199,6 +215,60 @@ describe("readRunFact with a scanner cache", () => {
       expect(readRunFact(runs, "live-1", Date.now(), { counts })!.modelResponses).toBe(4);
       // The cache is an optimisation, never a different answer.
       expect(readRunFact(runs, "live-1")!.modelResponses).toBe(4);
+    } finally {
+      rmSync(runs, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("readRunFacts with a scanner cache", () => {
+  const NOW = 2_000_000_000_000;
+  const rec = (t: string, ts: number): string => JSON.stringify({ t, ts });
+
+  function writeRun(runs: string, id: string, body: string): void {
+    mkdirSync(join(runs, id), { recursive: true });
+    writeFileSync(
+      join(runs, id, "meta.json"),
+      JSON.stringify({ harnessVersion: "harness-0.5-1-gabc", startedAt: 1, config: { model: "m" }, comparability: { episode: "freeplay" } }),
+    );
+    writeFileSync(join(runs, id, "trajectory.jsonl"), body);
+  }
+
+  /** The cached read against the uncached one, over the same tree at the same moment. */
+  function same(runs: string, counts: CountCache): void {
+    const cached = readRunFacts(runs, NOW, { includeArchived: true, counts });
+    expect(cached).toEqual(readRunFacts(runs, NOW, { includeArchived: true }));
+  }
+
+  test("the same facts as a fresh read, across appends, tails and an archive move", () => {
+    const runs = mkdtempSync(join(tmpdir(), "wb-facts-"));
+    try {
+      writeRun(runs, "live-1", `${rec("response", 1)}\n${rec("pause", 2)}\n`);
+      writeRun(runs, "done-1", `${rec("response", 1)}\n${rec("response", 2)}\n`);
+      const counts: CountCache = new Map();
+      same(runs, counts);
+      expect(readRunFacts(runs, NOW, { counts }).find((f) => f.runId === "live-1")!.modelResponses).toBe(1);
+
+      const traj = join(runs, "live-1", "trajectory.jsonl");
+      appendFileSync(traj, `${rec("response", 3)}\n`);
+      same(runs, counts);
+      // A torn tail, then a whole one with no newline yet, then its newline.
+      appendFileSync(traj, '{"t":"respo');
+      same(runs, counts);
+      appendFileSync(traj, `nse","ts":4}`);
+      same(runs, counts);
+      expect(readRunFacts(runs, NOW, { counts }).find((f) => f.runId === "live-1")!.modelResponses).toBe(3);
+      appendFileSync(traj, "\n");
+      same(runs, counts);
+
+      // Archived by a rename, as the runner archives: the fact follows the run
+      // into archive/, and the scanner for the path it left is dropped.
+      mkdirSync(join(runs, "archive"));
+      renameSync(join(runs, "done-1"), join(runs, "archive", "done-1"));
+      same(runs, counts);
+      expect([...counts.keys()].sort()).toEqual(
+        [join(runs, "archive", "done-1", "trajectory.jsonl"), join(runs, "live-1", "trajectory.jsonl")].sort(),
+      );
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }

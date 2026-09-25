@@ -738,8 +738,9 @@ export class RecordCountScanner {
     return this.consumed + this.pending.length;
   }
 
-  private take(line: Buffer): void {
-    if (line.length === 0) return;
+  /** The kind a line counts toward, or null. */
+  private kindOf(line: Buffer): string | null {
+    if (line.length === 0) return null;
     let text: string | null = null;
     let rec: { t?: unknown } | null = null;
     let torn = false;
@@ -755,11 +756,14 @@ export class RecordCountScanner {
         }
       }
       const k = this.kinds[i]!;
-      if (rec !== null && rec.t === k) {
-        this.counts.set(k, (this.counts.get(k) ?? 0) + 1);
-        return; // one line counts toward at most one kind
-      }
+      if (rec !== null && rec.t === k) return k; // one line counts toward at most one kind
     }
+    return null;
+  }
+
+  private take(line: Buffer): void {
+    const k = this.kindOf(line);
+    if (k !== null) this.counts.set(k, (this.counts.get(k) ?? 0) + 1);
   }
 
   /** Fold a buffer of appended bytes, answering the trailing partial line. */
@@ -823,8 +827,9 @@ export class RecordCountScanner {
    * Fold the trailing bytes that carry no newline as a line of their own, then
    * answer. Only the one-shot form does this: a file whose last record was
    * written without a terminating newline still has that record counted,
-   * exactly as the whole-file read always did. A resumable scanner must not,
-   * because the next append would count those bytes twice.
+   * exactly as the whole-file read always did. A resumable scanner must not
+   * fold them, because the next append would count those bytes twice;
+   * `scanAsWhole` gives the same answer without folding.
    */
   countOnce(): Map<string, number> | null {
     const counts = this.scan();
@@ -835,6 +840,22 @@ export class RecordCountScanner {
       this.pending = EMPTY;
     }
     return this.snapshot();
+  }
+
+  /**
+   * `scan`, answered the way `countOnce` answers: trailing bytes with no
+   * newline that already parse as a whole record count, as a whole-file read
+   * counts them. Only the answer includes them — they stay pending, so the
+   * scanner still resumes from the same byte and the newline that completes
+   * them later does not count them twice. A torn tail does not parse and
+   * counts nowhere, exactly as before.
+   */
+  scanAsWhole(): Map<string, number> | null {
+    const counts = this.scan();
+    if (counts === null) return null;
+    const k = this.kindOf(this.pending);
+    if (k !== null) counts.set(k, (counts.get(k) ?? 0) + 1);
+    return counts;
   }
 
   /** A copy: the caller must never hold a reference to resumable state. */
@@ -880,7 +901,9 @@ export function countRecordsCached(cache: CountCache, path: string, kinds: reado
     scanner = new RecordCountScanner(path, kinds);
     cache.set(path, scanner);
   }
-  return scanner!.scan();
+  // `scanAsWhole`, not `scan`: the cache is an optimisation, never a different
+  // answer, and a whole-file read counts a final record with no newline.
+  return scanner!.scanAsWhole();
 }
 
 /**
@@ -1050,20 +1073,35 @@ export function liveOwnerOf(runsDir: string, runId: string, now = Date.now()): s
  * every launch relaunches forever at rung zero. They also number attempts:
  * a run id carries a date stamp plus `-a<attempt>`, so an invisible attempt
  * would have the next one collide with a directory already on disk.
+ *
+ * `counts` is a scanner cache for a caller that reads every run on a timer —
+ * the fleet supervisor, twice a tick — so each trajectory is read whole once
+ * and after that only for what was appended since the last call, instead of
+ * the whole tree from byte zero every time. Same facts either way.
  */
-export function readRunFacts(runsDir: string, now = Date.now(), opts: { includeArchived?: boolean } = {}): RunFact[] {
+export function readRunFacts(
+  runsDir: string,
+  now = Date.now(),
+  opts: { includeArchived?: boolean; counts?: CountCache } = {},
+): RunFact[] {
   if (!existsSync(runsDir)) return [];
   const out: RunFact[] = [];
+  const seen = new Set<string>();
   const scan = (dir: string, archived: boolean): void => {
     if (!existsSync(dir)) return;
     for (const d of readdirSync(dir, { withFileTypes: true })) {
       if (!d.isDirectory() || !RUN_ID.test(d.name) || d.name === ARCHIVE_DIR) continue;
-      const f = readRunFact(dir, d.name, now);
+      seen.add(join(dir, d.name, "trajectory.jsonl"));
+      const f = readRunFact(dir, d.name, now, opts.counts === undefined ? {} : { counts: opts.counts });
       if (f !== null) out.push(archived ? { ...f, archived: true } : f);
     }
   };
   scan(runsDir, false);
   if (opts.includeArchived === true) scan(join(runsDir, ARCHIVE_DIR), true);
+  // A cache held across calls keeps only the paths this call visited: a run
+  // moved into `archive/` leaves its old path behind, and nothing else would
+  // ever drop that scanner.
+  if (opts.counts !== undefined) for (const path of opts.counts.keys()) if (!seen.has(path)) opts.counts.delete(path);
   out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   return out;
 }
