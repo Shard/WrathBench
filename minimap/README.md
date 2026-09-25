@@ -165,17 +165,3 @@ serves `data/minimap/<mapId>/<row>_<col>.png`. Both agree with what this tool
 writes. The orientation in `worldToPixel` could not be verified until an
 extraction rendered a known zone — the Northshire Abbey check above is that
 verification, and it confirms the existing code rather than changing it.
-
-## Layout
-
-```
-src/crypt.ts     Blizzard crypt table, string hash, block (de)cryption
-src/mpq.ts       MPQ v1/v2 reader; MpqChain applies patch load order
-src/compress.ts  sector decompression dispatch (zlib; bzip2 via bunzip2)
-src/explode.ts   PKWARE implode — stub, see above
-src/blp.ts       BLP2 decoder (palette / DXT1,3,5 / raw BGRA), mip 0
-src/png.ts       minimal RGBA PNG encoder
-src/dbc.ts       WDBC reader and the Map.dbc directory → id lookup
-src/trs.ts       md5translate.trs parser
-src/extract.ts   CLI
-```

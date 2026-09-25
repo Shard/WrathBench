@@ -16,11 +16,9 @@ records to derive from.
 
 Two gaps, and they are different in kind.
 
-**No group or instance record.** The milestone series now covers
-zone and area changes, achievements, flights, levels, deaths, spells learned,
-talent points spent and completed trades — everything a lone character does to
-itself. It has nothing for joining or leaving a party, and nothing for entering
-an instance. A map-id change in the state samples is not an instance record: it
+**No group or instance record.** The milestone series covers what a lone
+character does to itself. It has nothing for joining or leaving a party, and
+nothing for entering an instance. A map-id change in the state samples is not an instance record: it
 cannot tell a dungeon from a boat ride, and a rung that reads it would be
 answering a different question than the one it prints. The SDK does hold a
 `state.group`, so the party half is closer than the instance half — but a
@@ -53,14 +51,11 @@ property of a single run.
   ladder's rung 6 test then derives from them the way rung 4 derives from
   capital-zone plus flight.
 - **The rest of the party surface.** Most of it exists (module/PROTOCOL.md,
-  the raw allowlist and the group, mail, bank and trade events): the group
-  opcodes are allowlisted, the `SMSG_GROUP_*` and `SMSG_PARTY_COMMAND_RESULT`
-  replies are served, the SDK has `inviteToGroup`, `acceptGroupInvite`,
-  `declineGroupInvite`, `leaveGroup` and `lootRoll` over them and folds the
-  party into `state.group()`, and party chat and whispers ride raw
-  `CMSG_MESSAGECHAT`. Still missing: the `SMSG_PARTY_MEMBER_STATS` tap (the
-  party frame's health, power, zone and position for the other members), quest
-  sharing (`CMSG_PUSHQUESTTOPARTY`), and 3.3.5's Dungeon Finder
+  the raw allowlist and the group, mail, bank and trade events; `sdk/API.md`,
+  the group helpers and `state.group()`). Still missing: the
+  `SMSG_PARTY_MEMBER_STATS` tap (the party frame's health, power, zone and
+  position for the other members), quest sharing (`CMSG_PUSHQUESTTOPARTY`),
+  and 3.3.5's Dungeon Finder
   (`CMSG_LFG_JOIN`), which teleports a formed party into the instance and is
   therefore a client-legal way to attempt Deadmines before cross-continent
   travel and instance portals are reliable. Issue #9 tracks these alongside

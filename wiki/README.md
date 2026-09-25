@@ -162,13 +162,10 @@ lives in docs/METHODOLOGY.md "The reference bundle".
   the article — unless the chain does not end at a surviving page, in which case the
   redirect is dropped with its target.
 - Wikitext is reduced to plain text: templates, tables, refs, comments and file
-  links are removed, `[[link|label]]` becomes `label`, headings become plain lines,
-  whitespace is collapsed. Most infobox data lives in templates and is therefore
-  lost. The consumer is a model reading search results, not a browser.
-  Brace-matching is a run at a time and by kind — `{{{param|default}}}` is a
-  parameter, `}}` closes a template and `|}` a table — and an opener that is never
-  closed costs its own paragraph, not the page: the strip resumes at the next blank
-  line after it.
+  links are removed. Most infobox data lives in templates and is therefore
+  lost. The consumer is a model reading search results, not a browser. An opener
+  that is never closed costs its own paragraph, not the page: the strip resumes
+  at the next blank line after it.
 - Three things are lifted off the raw wikitext **before** the strip, because they
   live in the templates the strip removes:
   - **Coordinates** (`extractCoords`): `{{coords|x|y|zone}}` and infobox
@@ -182,10 +179,9 @@ lives in docs/METHODOLOGY.md "The reference bundle".
     giver, 6,637 state an ender, and search says "not stated on this page" for the
     rest rather than guessing the giver.
   - **Entity ids** (`extractIds`): the numeric ids a page states about itself
-    (`|id=`, `|itemid=`, `|npcid=`, `|questid=`, `|entry=`) into `page_ids`, tagged
-    with the kind the enclosing template implies. Without this an id can only be
-    matched against body prose, and a page whose arithmetic happens to contain the
-    digits outranks the entity page.
+    into `page_ids`, tagged with the kind the enclosing template implies.
+    Without this an id can only be matched against body prose, and a page whose
+    arithmetic happens to contain the digits outranks the entity page.
 
 Nothing here reads the AzerothCore DB, DBC tables or Questie; it is all
 deterministic parsing of the wikitext. The world-id export is the one place the
@@ -215,34 +211,22 @@ world at all.
   on their normalised form, so a trailing colon or bold markup does not hide one.
 - **Era paragraphs.** A blank-line-separated block whose prose (its templates
   removed first, so an infobox field never decides) matches a narrow phrase rule
-  goes: `in Cataclysm`, `with Cataclysm`, `World of Warcraft: Cataclysm`, `after the
-  Shattering`, `upcoming`/`beta` beside Cataclysm, Deathwing or the Shattering,
-  `will` within 60 characters of `Cataclysm`, and the class preview's own framing
-  (`development on Cataclysm continues`, `Cataclysm class preview`). An adversarial
-  read of a built bundle added the rules for prose that describes the later world
-  **without** naming the expansion: `rated battleground(s)`, an inline
-  `(Expansion: …)` tag, `playable` beside `worgen` or `goblin`, `Archaeology` unless
-  a `dig site`, `team`, `unit` or `expedition` sits within 20 characters of it
-  either side, and `Mastery` only when the paragraph also carries the 2010 dev voice
-  (`we plan`, `we're planning`, `will be a new`, `new passive stat`). The last two
-  are the narrow ones and are tested both ways: a quest's archaeology team and the
-  Stance Mastery and Tactical Mastery talents are all in this world and all survive.
-  A handful of rules cut a single **line** rather than the block — `Speedbarge` is
-  the only one today — because a block is as often a list of subzones as it is a
-  paragraph, and one item of it can be the only later-world thing on the page. A
-  bare mention of Deathwing, the Legion, Draenor or Garrosh is not a rule: all four
-  are in this world. Precision on a hand-checked 33-paragraph sample is about 0.8;
-  the residue is recorded with the build.
-- **Out-of-world sections.** A fixed set of headings is dropped, heading line and
-  body together: `external links`, `references`, `see also`, `patch changes`,
-  `patches and hotfixes`, `patch history`, `patch notes`, `changes`, `gallery`,
-  `videos`, `video`, `images`, `media`, `trivia`, `notes and trivia`, `speculation`,
-  `quotes`, `quote`, `dialogue`, `criticism`, `reception`, `development`, `history`,
-  `background`, `lore`, `in the rpg`, `rpg`, `in the warcraft rpg`, `in the tcg`,
-  `tcg`, `in the manga`, `in the comics`, `in the novels`, `in hearthstone`,
-  `in warcraft iii`, `in warcraft ii`, `in warcraft i`, `addons`, `macros`. The
-  heading is normalised first — trimmed, case-folded, markup and trailing
-  punctuation removed — and matched **exactly**, never as a prefix or a substring,
+  goes; `wiki/src/wrath-only.ts` holds the rules, each with its reason. An
+  adversarial read of a built bundle added the rules for prose that describes
+  the later world **without** naming the expansion. The Archaeology and Mastery
+  rules are the narrow ones and are tested both ways: a quest's archaeology team
+  and the Stance Mastery and Tactical Mastery talents are all in this world and
+  all survive. A handful of rules cut a single **line** rather than the block,
+  because a block is as often a list of subzones as it is a paragraph, and one
+  item of it can be the only later-world thing on the page. A bare mention of
+  Deathwing, the Legion, Draenor or Garrosh is not a rule: all four are in this
+  world. Precision on a hand-checked 33-paragraph sample is about 0.8; the
+  residue is recorded with the build.
+- **Out-of-world sections.** A fixed set of headings (`wiki/src/wrath-only.ts`:
+  link farms and citations, the patch record, media, commentary, lore, other
+  Warcraft products and client tooling) is dropped, heading line and body
+  together. The heading is normalised first — trimmed, case-folded, markup and
+  trailing punctuation removed — and matched **exactly**, never as a prefix or a substring,
   which is the whole reason `changes` goes while `past changes` stays and `notes and
   trivia` goes while `notes` stays. Nothing is rewritten: a section is here in full
   or not at all. There is no keep list in the code, only the drop set, but these
@@ -318,19 +302,11 @@ emptied is still a dropped page, and recovering its name does not put the page b
   An empty row is not an FTS document: indexing a title with no body behind it would
   let bm25 rank it above a page that has something to say.
 
-Subsets, tagged on a counter above and deliberately outside the identity:
-`pages_era_swapped` (prose from an older timestamp than the structured fields),
-`pages_pre_announcement_protected`, `pages_stepped_back` and
-`pages_step_back_refused`, `pages_id_name_mismatch` (pages the name rule refused —
-the number to read first if the id door is ever retuned), and
-`pages_emptied_by_trim`.
-
-Cut counters: `sections_dropped` and `paragraphs_dropped` for the era cuts,
-`sections_trimmed` and `sections_trimmed_json` (broken down by normalised heading,
-the empty-section removals under `(empty)`) for the out-of-world trim. The two stay
-separate so a regression in one cannot hide in the other. Redirect counters:
-`redirects_dropped_dangling`, `redirects_recovered_newest`,
-`redirects_original_sibling`.
+The rest of the `METRICS` table — subsets of the counters above, the cut
+counters and the redirect counters — sits deliberately outside the identity.
+`pages_id_name_mismatch` (pages the name rule refused) is the number to read
+first if the id door is ever retuned. The era cuts and the out-of-world trim
+are counted separately so a regression in one cannot hide in the other.
 
 The post-Wrath signals are read on the revision the prose comes from, **never** on a
 later one: a Wrath zone that Cataclysm rearranged had its Cataclysm category added
@@ -394,12 +370,6 @@ import { openBundle, searchReference } from "@wrathbench/wiki";
 
 const db = openBundle();                       // data/wiki/bundle.sqlite, read-only
 searchReference(db, "example quest alpha", { limit: 8, namespaces: [0, 118] });
-// -> { title, ns, snippet, rank, exactTitle?, redirectedFrom?, matchedId?, coords?, quest? }[]
-//    coords?: { zone?, x, y }[] — wiki-reference positions, not a live observation
-//    matchedId?: { kind, id }   — the page states this id in an infobox field
-//    quest?: { start?, end?, category? } — the quest infobox; absent `end` means
-//            the page does not state one, never that the giver takes it back.
-//            The same line leads the snippet, so the model reads it either way.
 ```
 
 Results come back in bands, and only inside a band does `bm25` decide:
@@ -415,11 +385,10 @@ Results come back in bands, and only inside a band does `bm25` decide:
 
 A page with no article text is never in bands 3 and 4 — it is not an FTS document —
 and bands 1 and 2 return it only when it has something structured to state (a quest
-infobox, an id, or coordinates when they are served), with the fixed snippet
-`(no article text; the page states only what is listed here)` ahead of the quest
-line. An empty page that states nothing is skipped outright and the query falls
-through to the other bands, rather than answering its own title at rank 1 with
-silence.
+infobox, an id, or coordinates when they are served), with a fixed
+no-article-text snippet ahead of the quest line. An empty page that states
+nothing is skipped outright and the query falls through to the other bands,
+rather than answering its own title at rank 1 with silence.
 
 `parseIdQuery` decides what counts as an id. A numeric token is an id lookup when it
 is the whole query, when an id word precedes it (`quest 783`, `npc entry 197`,
