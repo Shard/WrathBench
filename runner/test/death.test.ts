@@ -23,7 +23,7 @@ import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
 import type { DeathSignal } from "../src/sandbox/ipc";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 
@@ -34,7 +34,7 @@ function makeHost(): SandboxHost {
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     snippetTimeoutMs: 5_000,
     pingGraceMs: 1_000,
   });
@@ -216,7 +216,7 @@ function builder(queue: DeathSignal[][], snapshot: Record<string, unknown> = {})
   const ctx = new ContextBuilder({
     config,
     sandbox: fakeSandbox(queue, snapshot),
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     trajectory,
     watchdogs: new Watchdogs(config.watchdogs),
     now: () => clock,
@@ -373,7 +373,7 @@ describe("the loop writes what the child latched", () => {
     const ctx = new ContextBuilder({
       config,
       sandbox: fake,
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
     });

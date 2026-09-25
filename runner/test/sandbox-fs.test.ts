@@ -17,7 +17,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const hosts: SandboxHost[] = [];
@@ -27,7 +27,7 @@ function makeHost(opts: Partial<ConstructorParameters<typeof SandboxHost>[0]> = 
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     snippetTimeoutMs: 5_000,
     pingGraceMs: 1_000,
     ...opts,

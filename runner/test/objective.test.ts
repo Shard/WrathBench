@@ -23,7 +23,7 @@ import {
 import { runLoop } from "../src/loop";
 import { SYSTEM_PROMPT, buildSystemPrompt, contextSentence, objectiveSection } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { readMeta, readTrajectory, Trajectory } from "../src/trajectory";
 import { configFromArgs } from "../src/run";
@@ -110,7 +110,7 @@ describe("prompt rendering", () => {
       config,
       adapter,
       sandbox: fakeSandbox(),
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),

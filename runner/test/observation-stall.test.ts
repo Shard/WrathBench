@@ -21,7 +21,7 @@ import { EpisodicLog } from "../src/episodic";
 import { STALL_PAUSE } from "../src/lapse";
 import { ContextBuilder, runLoop, type StopRequest } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 
@@ -54,7 +54,7 @@ function harness(slot: { eventCount: number; lastSeq: number; connected?: boolea
   const ctx = new ContextBuilder({
     config,
     sandbox,
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     trajectory,
     watchdogs: new Watchdogs(config.watchdogs),
     now: () => clock,
@@ -258,7 +258,7 @@ describe("a stalled observation asks for the pause", () => {
       config,
       adapter: new StubAdapter(Array.from({ length: 10 }, (_, i) => ({ content: `turn ${i + 1}`, toolCalls: [] }))),
       sandbox,
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
@@ -296,7 +296,7 @@ describe("sandbox child: the stream report rides the state snapshot", () => {
     const host = new SandboxHost({
       moduleUrl: "http://worldserver:8086",
       token: "test-token",
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       snippetTimeoutMs: 5_000,
       pingGraceMs: 1_000,
     });

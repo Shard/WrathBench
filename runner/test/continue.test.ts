@@ -149,7 +149,7 @@ describe("loadContinuation", () => {
 });
 
 describe("--continue-from", () => {
-  test("the new run keeps the character, carries the scratchpad and records its lineage", async () => {
+  test("the new run keeps the character, carries a pre-workspace scratchpad into notes.md and records its lineage", async () => {
     const { runsDir, runId } = endedFreeplayRun();
     const mod = fakeModule([
       { name: "Bromdir", guid: "310" },
@@ -165,7 +165,7 @@ describe("--continue-from", () => {
       expect(meta?.config.continuedFrom).toBe(runId);
       expect(meta?.config.character).toBe("Bromdir");
       expect(meta?.config.race).toBe(3);
-      expect(readFileSync(join(dir, "scratchpad.md"), "utf8")).toContain("the pass bends west first");
+      expect(readFileSync(join(dir, "workspace", "notes.md"), "utf8")).toContain("the pass bends west first");
       const records = readTrajectory(dir);
       expect(records.find((r) => r.t === "continue")).toMatchObject({ from: runId, character: "Bromdir", guid: "310" });
       // The model is told it continues, with where the character was left
@@ -175,6 +175,25 @@ describe("--continue-from", () => {
       expect(all).toContain("level 8 with 6410 xp");
       // No freshness tripwire on a continued character: the run was not ended stale-character.
       expect(records.some((r) => r.t === "termination" && r["reason"] === "stale-character")).toBe(false);
+    } finally {
+      mod.stop();
+    }
+  }, 60_000);
+
+  test("a predecessor with a workspace hands over the whole workspace, modules and all", async () => {
+    const { runsDir, runId, dir: pred } = endedFreeplayRun();
+    mkdirSync(join(pred, "workspace", "lib"), { recursive: true });
+    writeFileSync(join(pred, "workspace", "notes.md"), "# Bromdir\nfrom the workspace\n");
+    writeFileSync(join(pred, "workspace", "lib", "nav.ts"), "export const west = true;\n");
+    const mod = fakeModule([{ name: "Bromdir", guid: "310" }]);
+    try {
+      await launch(runsDir, mod.url, ["--episode", "freeplay", "--run-id", "a12", "--continue-from", runId]);
+      const next = join(runsDir, "a12");
+      // The workspace wins over the old pad beside it: it is the newer memory.
+      expect(readFileSync(join(next, "workspace", "notes.md"), "utf8")).toBe("# Bromdir\nfrom the workspace\n");
+      expect(readFileSync(join(next, "workspace", "lib", "nav.ts"), "utf8")).toBe("export const west = true;\n");
+      // A copy: the predecessor's files are untouched.
+      expect(readFileSync(join(pred, "workspace", "lib", "nav.ts"), "utf8")).toBe("export const west = true;\n");
     } finally {
       mod.stop();
     }
@@ -190,6 +209,8 @@ describe("--continue-from", () => {
       expect(readMeta(dir)?.config.continuedFrom).toBeUndefined();
       expect(readMeta(dir)?.config.character).toBeUndefined();
       expect(existsSync(join(dir, "scratchpad.md"))).toBe(false);
+      // The copied notes went with the lineage; the directory itself stays.
+      expect(readFileSync(join(dir, "workspace", "notes.md"), "utf8")).toBe("");
       const records = readTrajectory(dir);
       expect(records.some((r) => r.t === "harness" && r["kind"] === "continue-dropped")).toBe(true);
       expect(JSON.stringify(records)).toContain("name your character");
@@ -216,7 +237,7 @@ describe("--continue-from", () => {
       const next = join(runsDir, "a12");
       expect(readMeta(next)?.config.continuedFrom).toBe(runId);
       // The predecessor's notes come along from the archive, too.
-      expect(readFileSync(join(next, "scratchpad.md"), "utf8")).toContain("the pass bends west first");
+      expect(readFileSync(join(next, "workspace", "notes.md"), "utf8")).toContain("the pass bends west first");
     } finally {
       mod.stop();
     }

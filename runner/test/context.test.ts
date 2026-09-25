@@ -13,6 +13,10 @@ import {
   type ContextInputs,
 } from "../src/context";
 import type { EventSummary } from "../src/sandbox/ipc";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WORKSPACE_LISTING_HEADER, Workspace } from "../src/workspace";
 
 function makeInputs(): ContextInputs {
   const events: EventSummary[] = Array.from({ length: 70 }, (_, i) => ({
@@ -39,7 +43,13 @@ function makeInputs(): ContextInputs {
       { sessionLive: true },
     ),
     events,
-    scratchpad: "# plan\n- do quests",
+    workspace: {
+      files: [
+        { path: "lib/nav.ts", bytes: 64, firstLine: "// walking helpers" },
+        { path: "notes.md", bytes: 18, firstLine: "# plan" },
+      ],
+      notes: "# plan\n- do quests",
+    },
     notices: [{ ts: 1, kind: "sandbox_restarted", text: "restarted" }],
     turn: 7,
   };
@@ -52,6 +62,27 @@ describe("assembleContext", () => {
     expect(a).toBe(b);
   });
 
+  test("with a workspace: the listing, then notes.md verbatim, close the message — byte for byte", () => {
+    const text = assembleContext(makeInputs());
+    expect(text.endsWith(
+      "\n\n<workspace>\n" +
+        `${WORKSPACE_LISTING_HEADER}\n` +
+        "lib/nav.ts  64 bytes  // walking helpers\n" +
+        "notes.md  18 bytes  # plan\n" +
+        "</workspace>\n\n" +
+        '<notes path="notes.md" usage="0% 18/32000">\n' +
+        "# plan\n- do quests\n" +
+        "</notes>",
+    )).toBe(true);
+    // Read off a real workspace, the same bytes come back.
+    const ws = new Workspace(join(mkdtempSync(join(tmpdir(), "wrathbench-ctx-")), "workspace"));
+    ws.write("notes.md", "# plan\n- do quests");
+    ws.write("lib/nav.ts", `// walking helpers\n${"x".repeat(45)}`);
+    const fromDisk = assembleContext({ ...makeInputs(), workspace: ws.view() });
+    expect(fromDisk).toBe(text);
+    expect(assembleContext({ ...makeInputs(), workspace: ws.view() })).toBe(fromDisk);
+  });
+
   test("includes exactly the last EVENT_WINDOW events", () => {
     const text = assembleContext(makeInputs());
     expect(text).toContain(`[events: last ${CONTEXT_POLICY.EVENT_WINDOW}, newest last]`);
@@ -60,7 +91,7 @@ describe("assembleContext", () => {
     expect(text).not.toContain(`#${69 - CONTEXT_POLICY.EVENT_WINDOW} `);
   });
 
-  test("carries notices, scratchpad, turn and summary", () => {
+  test("carries notices, notes, turn and summary", () => {
     const text = assembleContext(makeInputs());
     expect(text).toContain("[turn 7]");
     expect(text).toContain("- sandbox_restarted: restarted");
@@ -73,13 +104,14 @@ describe("assembleContext", () => {
     const text = assembleContext({
       stateSummary: formatStateSummary(null, { sessionLive: false }),
       events: [],
-      scratchpad: "",
+      workspace: { files: [{ path: "notes.md", bytes: 0, firstLine: "" }], notes: "" },
       notices: [],
       turn: 1,
     });
     expect(text).toContain("no sandbox state yet");
     expect(text).toContain("[events]\nnone yet");
-    expect(text).toContain("(empty — write your plan");
+    expect(text).toContain("notes.md  0 bytes\n</workspace>");
+    expect(text.endsWith('<notes path="notes.md" usage="0% 0/32000">\n</notes>')).toBe(true);
   });
 });
 

@@ -27,7 +27,7 @@ import { comparabilityOf, harnessOfRun } from "../src/comparability";
 import { HARNESSES, harnessOf, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, CODEX_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import { TOOLS } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
@@ -103,7 +103,7 @@ function setupEpisode(
       config,
       runDir,
       sandbox: fakeSandbox(),
-      scratchpad: new Scratchpad(join(runDir, "scratchpad.md")),
+      workspace: new Workspace(join(runDir, "workspace")),
       episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),

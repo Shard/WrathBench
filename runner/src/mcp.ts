@@ -21,7 +21,7 @@ import { ClosedWindowReflectGate } from "./reflect";
 import { callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
 import { leaseSessionSecret } from "./module-auth";
 import { SandboxHost } from "./sandbox/host";
-import { Scratchpad } from "./scratchpad";
+import { openRunWorkspace } from "./workspace";
 import { Trajectory } from "./trajectory";
 import { newRunId, newSessionToken, loadRunConfig } from "./config";
 import { harnessVersion } from "./version";
@@ -43,6 +43,29 @@ interface JsonRpcResponse {
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 
 /**
+ * The most text one tool result may carry over MCP, in characters.
+ *
+ * The CLI scaffolds apply their own ceilings to an MCP result and handle an
+ * overflow in ways this harness does not control: Claude Code (2.1.280)
+ * truncates past `MAX_MCP_OUTPUT_TOKENS` (25,000 tokens by default) and caps an
+ * MCP tool's result at 100,000 characters, beyond which it would offer a file
+ * the model has no tool to read. Nearly every result is far below this — the
+ * largest by design is a whole workspace file, 32,000 characters — but a
+ * snippet's console output has no fixed bound. 48,000 characters stays under
+ * 25,000 tokens at two or more characters per token, which covers the text our
+ * tools return (ASCII prose, JSON and code). A cut is said in the result, and
+ * the trajectory records the text the model was actually given.
+ */
+export const MCP_RESULT_MAX_CHARS = 48_000;
+
+/** The result text as served over MCP: whole, or cut at `MCP_RESULT_MAX_CHARS` with the cut stated. */
+export function capMcpResult(text: string): { text: string; truncatedFrom?: number } {
+  if (text.length <= MCP_RESULT_MAX_CHARS) return { text };
+  const note = `\n[result truncated by the harness: ${text.length} chars, the first ${MCP_RESULT_MAX_CHARS} shown — print less and run again]`;
+  return { text: text.slice(0, MCP_RESULT_MAX_CHARS - note.length) + note, truncatedFrom: text.length };
+}
+
+/**
  * Told about every `tools/call` once it has an answer. `dispatchTs` is the
  * wall clock taken as the call arrived, before the tool ran: every writer of
  * this callback appends its records after the fact, so their own timestamps
@@ -51,7 +74,8 @@ export const MCP_PROTOCOL_VERSION = "2024-11-05";
 export type OnToolCall = (
   name: string,
   args: unknown,
-  result: { text: string; isError?: boolean },
+  /** What the model was served; `truncatedFrom` is the full length when `capMcpResult` cut it. */
+  result: { text: string; isError?: boolean; truncatedFrom?: number },
   dispatchTs: number,
 ) => void;
 
@@ -111,9 +135,15 @@ export class McpServer {
         // JSON *string* (sometimes fenced); coerceToolArgs handles that.
         const raw = msg.params?.["arguments"] ?? {};
         const coerced = coerceToolArgs(name, raw);
-        const result = coerced.ok
+        const full = coerced.ok
           ? await callTool(this.ctx, name, coerced.args)
           : { text: coerced.error, isError: true };
+        const capped = capMcpResult(full.text);
+        const result = {
+          ...full,
+          text: capped.text,
+          ...(capped.truncatedFrom !== undefined ? { truncatedFrom: capped.truncatedFrom } : {}),
+        };
         const args = coerced.ok ? coerced.args : raw;
         this.opts.onToolCall?.(name, args, result, dispatchTs);
         return respond({
@@ -141,6 +171,7 @@ export function trajectoryToolCallWriter(trajectory: Trajectory): OnToolCall {
       name,
       isError: result.isError ?? false,
       text: result.text,
+      ...(result.truncatedFrom !== undefined ? { truncatedFrom: result.truncatedFrom } : {}),
       ...(name === "reflect" ? { reflect: true } : {}),
     });
   };
@@ -177,7 +208,7 @@ async function main(): Promise<void> {
   });
   const runDir = join(config.runsDir, runId);
   const trajectory = new Trajectory(runDir);
-  const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
+  const workspace = openRunWorkspace(runDir);
   trajectory.writeMeta({ runId, harnessVersion: harnessVersion(), startedAt: Date.now(), config });
 
   // The session secret for this token (module/PROTOCOL.md, "Authentication");
@@ -190,7 +221,7 @@ async function main(): Promise<void> {
     token: config.token ?? token,
     secret: lease.secret,
     account: config.account,
-    scratchpad,
+    workspace,
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
@@ -200,7 +231,7 @@ async function main(): Promise<void> {
 
   const ctx: ToolContext = {
     sandbox,
-    scratchpad,
+    workspace,
     wiki,
     wikiCoords: config.wikiCoords,
     wikiSearch: config.wiki,

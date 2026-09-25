@@ -59,7 +59,7 @@ export const HELD_MS = 10 * 60_000;
 /** Age of the most recently written artefact of a run, or null when it has none. */
 export function runActivityAge(dir: string, now: number): number | null {
   let newest: number | null = null;
-  for (const name of ["trajectory.jsonl", "run.sqlite", "meta.json", "scratchpad.md"]) {
+  for (const name of ["trajectory.jsonl", "run.sqlite", "meta.json", "scratchpad.md", "workspace/notes.md"]) {
     try {
       const m = statSync(join(dir, name)).mtimeMs;
       if (newest === null || m > newest) newest = m;

@@ -20,15 +20,15 @@ import {
 import type { ActionHintNote } from "../src/sandbox/ipc";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import type { SandboxHost } from "../src/sandbox/host";
 
-/** Context for calls that never reach the sandbox (validation failures) or only touch the scratchpad. */
+/** Context for calls that never reach the sandbox (validation failures) or only touch the workspace. */
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-tools-"));
   return {
     sandbox: undefined as unknown as SandboxHost,
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     sessionLive: () => false,
     reflect: new ReflectGate(),
     episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
@@ -128,17 +128,21 @@ describe("alias normalization", () => {
     });
   });
 
-  test("text/markdown map to content, q maps to query", () => {
-    expect(normalizeToolArgs("write_scratchpad", { text: "# t" })).toEqual({ content: "# t" });
-    expect(normalizeToolArgs("write_scratchpad", { markdown: "# m" })).toEqual({ content: "# m" });
+  test("q maps to query; the file tools have no aliases", () => {
     expect(normalizeToolArgs("search_reference", { q: "kobold" })).toEqual({ query: "kobold" });
+    expect(normalizeToolArgs("write_file", { file_path: "x", text: "y" })).toEqual({ file_path: "x", text: "y" });
+    expect(normalizeToolArgs("edit_file", { old: "a", new: "b", replaceAll: true })).toEqual({ old: "a", new: "b", replaceAll: true });
   });
 
-  test("aliases work end-to-end through callTool (write_scratchpad via text)", async () => {
+  test("aliases work end-to-end through callTool (log_status via content)", async () => {
     const ctx = makeCtx();
-    const res = await callTool(ctx, "write_scratchpad", { text: "# via alias" });
+    const res = await callTool(
+      { ...ctx, sandbox: { stateSnapshot: () => Promise.reject(new Error("no sandbox")) } as unknown as SandboxHost },
+      "log_status",
+      { content: "via alias" },
+    );
     expect(res.isError ?? false).toBe(false);
-    expect(ctx.scratchpad.read()).toContain("# via alias");
+    expect(res.text).toContain("logged (entry 1");
   });
 });
 
@@ -379,7 +383,10 @@ describe("unknown tool suggestions", () => {
       "recent_events",
       "state_summary",
       "search_reference",
-      "write_scratchpad",
+      "read_file",
+      "write_file",
+      "edit_file",
+      "delete_file",
     ]) {
       expect(res.text).toContain(name);
     }
@@ -390,7 +397,7 @@ describe("unknown tool suggestions", () => {
     const res = await callTool(makeCtx(), "run_snipet", {});
     expect(res.text).toContain("Did you mean run_snippet?");
     expect(nearestTool("recent_event")).toBe("recent_events");
-    expect(nearestTool("Write_Scratchpad")).toBe("write_scratchpad");
+    expect(nearestTool("Write_File")).toBe("write_file");
   });
 
   test("a mangled name containing a valid tool is recognized (observed live)", async () => {

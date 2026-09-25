@@ -7,7 +7,8 @@
  *
  * It builds a Linux Landlock ruleset that allows reads only where the child
  * legitimately needs them (the Bun binary and system libraries, `runner/`,
- * `sdk/`, `node_modules/`, the workspace manifests), applies it to itself and
+ * `sdk/`, `node_modules/`, the repository's package manifests, and the run's
+ * workspace directory), applies it to itself and
  * then `execv`s the real child in place. Landlock is inherited across exec and
  * cannot be lifted by the restricted process, so a snippet doing
  * `readFileSync("/home/.../wrathbench/.env")` — or `../../.env`, or anything
@@ -104,8 +105,14 @@ interface Rule {
  * What the child may read. Directories get read+execute (execute so the
  * dynamic loader and `bun` itself can be mapped), files get read only.
  * Missing paths are skipped — a rule needs an inode to hang on.
+ *
+ * `workspace` is the run's workspace directory: readable (files and listing,
+ * never execute) so a snippet's import statements resolve, and never
+ * writable — the runner process writes it on the child's behalf. The rule
+ * binds to the directory's inode, which is why the runner never removes or
+ * replaces that directory while a run is alive.
  */
-export function confinementRules(repoRoot: string, bunExe: string): Rule[] {
+export function confinementRules(repoRoot: string, bunExe: string, workspace?: string): Rule[] {
   const dirRead = ACCESS_FS.READ_FILE | ACCESS_FS.READ_DIR | ACCESS_FS.EXECUTE;
   const fileRead = ACCESS_FS.READ_FILE;
   const rules: Rule[] = [];
@@ -124,6 +131,9 @@ export function confinementRules(repoRoot: string, bunExe: string): Rule[] {
   for (const d of ["runner", "sdk", "node_modules"]) rules.push({ path: join(repoRoot, d), access: dirRead });
   for (const f of ["package.json", "tsconfig.json", "tsconfig.base.json", "bunfig.toml"]) {
     rules.push({ path: join(repoRoot, f), access: fileRead });
+  }
+  if (workspace !== undefined && workspace.length > 0) {
+    rules.push({ path: workspace, access: ACCESS_FS.READ_FILE | ACCESS_FS.READ_DIR });
   }
   return rules.filter((r) => existsSync(r.path));
 }
@@ -198,6 +208,8 @@ if (import.meta.main) {
   // binary that runs the host runs the child.
   const exe = childArgv[0] === "bun" ? process.execPath : (Bun.which(childArgv[0]!) ?? childArgv[0]!);
   const repoRoot = resolve(dirname(import.meta.path), "..", "..", "..");
-  restrict(confinementRules(repoRoot, exe));
+  // The host sets this explicitly for every child (sandbox/host.ts); the
+  // exec'd child inherits the same environment and resolves imports against it.
+  restrict(confinementRules(repoRoot, exe, process.env["WRATHBENCH_WORKSPACE"]));
   execv([exe, ...childArgv.slice(1)]);
 }

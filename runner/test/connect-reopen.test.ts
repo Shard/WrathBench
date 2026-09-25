@@ -17,7 +17,7 @@ import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
 import type { SandboxHost } from "../src/sandbox/host";
 import { SandboxHost as RealSandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 
@@ -100,7 +100,7 @@ function makeHost(moduleUrl: string): SandboxHost {
   const host = new RealSandboxHost({
     moduleUrl,
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     snippetTimeoutMs: 20_000,
     pingGraceMs: 2_000,
   });
@@ -183,7 +183,7 @@ describe("the stall detector sees the reopen", () => {
     const ctx = new ContextBuilder({
       config,
       sandbox: host,
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
       now: () => clock,

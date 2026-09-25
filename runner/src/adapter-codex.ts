@@ -122,7 +122,7 @@ import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { Scratchpad } from "./scratchpad";
+import type { Workspace } from "./workspace";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
@@ -438,7 +438,8 @@ export interface CodexEpisodeOptions {
   config: RunConfig & { runId: string; token: string };
   runDir: string;
   sandbox: SandboxHost;
-  scratchpad: Scratchpad;
+  /** The run's workspace: the file tools' target, and what every turn's context lists. */
+  workspace: Workspace;
   episodic: EpisodicLog;
   wiki?: Database | undefined;
   trajectory: Trajectory;
@@ -551,7 +552,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   const builder = new ContextBuilder({
     config,
     sandbox: o.sandbox,
-    scratchpad: o.scratchpad,
+    workspace: o.workspace,
     trajectory,
     watchdogs,
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
@@ -562,7 +563,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   // ---- MCP over loopback TCP, dispatching into the one live sandbox
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
-    scratchpad: o.scratchpad,
+    workspace: o.workspace,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,
     wikiSearch: config.wiki,
@@ -621,6 +622,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         name: short,
         isError: result.isError ?? false,
         text: result.text,
+        // The model was served a cut text (mcp.ts, `capMcpResult`); this is the full length.
+        ...(result.truncatedFrom !== undefined ? { truncatedFrom: result.truncatedFrom } : {}),
         ...(short === "reflect" ? { reflect: true } : {}),
       });
       if (short === "run_snippet") {

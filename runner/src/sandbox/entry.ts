@@ -17,8 +17,10 @@
  *               reason if this snippet is abandoned
  *   signal      AbortSignal for the *current* snippet; fires when the host
  *               abandons it (timeout). Every SDK wait honors it by default.
- *   scratchpad  { read(), write(content), append(text) } — the run's markdown
- *               scratchpad, bridged to the host process which owns the file
+ *   files       { read(path), write(path, content), edit(path, old_string,
+ *               new_string, replace_all?), delete(path), list() } — the run's
+ *               workspace, bridged to the host process, which alone writes it
+ *               (the same rules and limits as the file tools)
  *   API_MD_PATH absolute path to the generated SDK reference (sdk/API.md);
  *               read it with `await Bun.file(API_MD_PATH).text()`, in slices
  *   setTimeout / setInterval / clearInterval / …  the normal timers; routines
@@ -26,7 +28,16 @@
  *
  * Top-level `const`/`let`/`var`/`function`/`class` declarations persist across
  * snippets (copied onto globalThis after each evaluation — see rewrite.ts for
- * the exact mechanics and limitations). `import` is not available.
+ * the exact mechanics and limitations); the prompt does not teach it.
+ *
+ * Import statements name workspace files (rewrite.ts turns each into an
+ * awaited dynamic import of the absolute path). This process may read the
+ * workspace — its Landlock grant admits the directory read-only — and never
+ * writes it. A module is loaded fresh after any workspace change: the host
+ * sends the workspace version on every write, edit or delete, and the plugin
+ * below stamps every workspace module path with it, so an edited file (or a
+ * file it imports) is a new module on the next import rather than a cached
+ * one.
  *
  * ### Network posture — stated honestly
  *
@@ -56,12 +67,24 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
-import { compileSnippet } from "./rewrite";
+import { compileSnippet, stampWorkspaceImports } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
-import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
+import type {
+  ActionHintNote,
+  ChildToHost,
+  DeathSignal,
+  EventSummary,
+  HostcallMethod,
+  HostcallParams,
+  HostToChild,
+  HostcallResult,
+  LogEntry,
+  MoveIntentNote,
+} from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
@@ -82,6 +105,10 @@ const SECRET_ENV = process.env["WRATHBENCH_SECRET"];
 const SECRET = SECRET_ENV !== undefined && SECRET_ENV.length > 0 ? SECRET_ENV : undefined;
 const VALUE_MAX_CHARS = 4_000;
 const LOG_MAX_CHARS = 4_000;
+// The run's workspace (absolute), which import statements resolve against.
+// Empty means none (running this file by hand): imports are then refused.
+const WORKSPACE_ENV = process.env["WRATHBENCH_WORKSPACE"];
+const WORKSPACE = WORKSPACE_ENV !== undefined && WORKSPACE_ENV.length > 0 ? WORKSPACE_ENV.replace(/\/+$/, "") : undefined;
 
 const send = (msg: ChildToHost): void => {
   // Bun provides process.send when spawned with ipc; absent means we were run
@@ -128,6 +155,59 @@ class GuardedWebSocket extends RealWebSocket {
   }
 }
 globalThis.WebSocket = GuardedWebSocket as unknown as typeof WebSocket;
+
+// ------------------------------------------------------- workspace modules
+
+/**
+ * The workspace version this process last heard from the host. Every
+ * workspace module is loaded as `<path>?v=<version>`, so a module registry
+ * entry is per (file, version): after any write, edit or delete the next
+ * import is a new module, and the old one is simply never asked for again.
+ */
+let workspaceVersion = 0;
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function loaderFor(path: string): "ts" | "tsx" | "js" | "jsx" {
+  if (path.endsWith(".tsx")) return "tsx";
+  if (path.endsWith(".jsx")) return "jsx";
+  if (path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".cts")) return "ts";
+  return "js";
+}
+
+if (WORKSPACE !== undefined) {
+  const root = escapeRegExp(WORKSPACE);
+  Bun.plugin({
+    name: "wrathbench-workspace",
+    setup(build) {
+      // A snippet's import arrives here as the absolute path rewrite.ts
+      // resolved; it leaves stamped with the current version.
+      build.onResolve({ filter: new RegExp(`^${root}/`) }, (args) => ({
+        path: `${args.path.replace(/\?.*$/, "")}?v=${workspaceVersion}`,
+      }));
+      // Bun does not consult `onResolve` for the static imports inside a
+      // module it loads (Bun 1.4.0), so the stamp is carried by the loader:
+      // a workspace module's own relative imports are rewritten to the same
+      // version it was loaded at (`stampWorkspaceImports`).
+      build.onLoad({ filter: new RegExp(`^${root}/.*\\.[cm]?[jt]sx?(\\?.*)?$`) }, (args) => {
+        const q = args.path.indexOf("?");
+        const file = q === -1 ? args.path : args.path.slice(0, q);
+        const version = /[?&]v=(\d+)/.exec(q === -1 ? "" : args.path.slice(q))?.[1] ?? String(workspaceVersion);
+        const loader = loaderFor(file);
+        return { contents: stampWorkspaceImports(readFileSync(file, "utf8"), file, WORKSPACE, version, loader), loader };
+      });
+    },
+  });
+}
+
+/**
+ * Error text as the model should read it: workspace paths relative to the
+ * workspace, without the version stamp that only the loader cares about.
+ */
+function workspaceRelative(text: string): string {
+  if (WORKSPACE === undefined) return text;
+  return text.split(`${WORKSPACE}/`).join("").replace(/\?v=\d+/g, "");
+}
 
 // ------------------------------------------------------- movement intention
 
@@ -351,7 +431,7 @@ client.events.on("WB_MOVE_RESULT", (e) => {
 let hostcallId = 0;
 const hostcallPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
-function hostcall(method: "scratchpad_read" | "scratchpad_write" | "scratchpad_append", params: { content?: string } = {}): Promise<unknown> {
+function hostcall(method: HostcallMethod, params: HostcallParams = {}): Promise<unknown> {
   const id = ++hostcallId;
   return new Promise((resolve, reject) => {
     hostcallPending.set(id, { resolve, reject });
@@ -489,10 +569,20 @@ const ambient: Record<string, unknown> = {
     await client.events.connect();
   },
   sleep,
-  scratchpad: {
-    read: (): Promise<unknown> => hostcall("scratchpad_read"),
-    write: (content: string): Promise<unknown> => hostcall("scratchpad_write", { content }),
-    append: (text: string): Promise<unknown> => hostcall("scratchpad_append", { content: text }),
+  /**
+   * The workspace from inside a snippet. Every call is a hostcall: the host
+   * process owns the directory and answers with the same rules and limits the
+   * file tools apply, and a refusal rejects with the same sentence. `read`
+   * resolves with the file's text, `write`/`edit`/`delete` with the result
+   * line (usage included), `list` with `[{ path, bytes }]`.
+   */
+  files: {
+    read: (path: string): Promise<unknown> => hostcall("files_read", { path }),
+    write: (path: string, content: string): Promise<unknown> => hostcall("files_write", { path, content }),
+    edit: (path: string, old_string: string, new_string: string, replace_all?: boolean): Promise<unknown> =>
+      hostcall("files_edit", { path, old_string, new_string, ...(replace_all !== undefined ? { replace_all } : {}) }),
+    delete: (path: string): Promise<unknown> => hostcall("files_delete", { path }),
+    list: (): Promise<unknown> => hostcall("files_list"),
   },
 };
 Object.assign(globalThis, ambient);
@@ -549,6 +639,10 @@ const BIGINT_STRINGIFY_RE = /serialize\s+(a\s+)?BigInt/i;
  *   - JSON.stringify on a bigint — keep the TypeError but name the fix.
  */
 export function renderError(err: unknown): string {
+  return workspaceRelative(renderErrorRaw(err));
+}
+
+function renderErrorRaw(err: unknown): string {
   if (err instanceof AggregateError && Array.isArray(err.errors) && err.errors.length > 0) {
     const subs = err.errors.map((e) => renderBuildMessage(e as { message?: string; position?: BuildPosition }));
     return `${err.name}: ${err.message}\n${subs.map((s) => `  ${s}`).join("\n")}`;
@@ -570,6 +664,10 @@ export function renderError(err: unknown): string {
     }
     return `${err.name}: ${err.message}`;
   }
+  // Bun's module resolver rejects a failed import with a ResolveMessage, which
+  // is not an Error instance but carries the same two fields.
+  const e = err as { name?: unknown; message?: unknown } | null;
+  if (typeof e?.name === "string" && typeof e.message === "string") return `${e.name}: ${e.message}`;
   return Bun.inspect(err).slice(0, 1_000);
 }
 
@@ -581,7 +679,7 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
   const controller = new AbortController();
   evalControllers.set(id, controller);
   try {
-    const compiled = compileSnippet(code);
+    const compiled = compileSnippet(code, { workspace: WORKSPACE });
     let fn: ((...args: unknown[]) => Promise<unknown>) | null = null;
     if (compiled.canTryExpression) {
       try {
@@ -871,6 +969,12 @@ function handle(msg: HostToChild | HostcallResult): void {
       }
       return;
     }
+    case "workspace_version":
+      // Always ahead of the reply to the hostcall that caused it, on the one
+      // ordered channel: a snippet that writes a file and then imports it sees
+      // the new version.
+      workspaceVersion = msg.version;
+      return;
     case "hostcall_result": {
       const pending = hostcallPending.get(msg.id);
       if (pending) {

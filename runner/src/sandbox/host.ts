@@ -12,11 +12,19 @@
  *    The loss is recorded as a harness notice the model will see.
  *  - Consecutive restarts are counted for the `snippet-runaway` watchdog; a
  *    successful evaluation resets the count.
+ *  - The first snippet result from a new sandbox process — after a restart,
+ *    an unexpected exit, or on a resumed run — begins with a one-line state-reset
+ *    notice (`STATE_RESET_NOTICE`), so the model learns its bindings and
+ *    routines are gone from the result it is reading, not a turn later.
+ *  - The workspace is this process's to write. The child's `files` calls
+ *    arrive as hostcalls and are answered from the one `Workspace`, and every
+ *    change, from a hostcall or a tool, is announced to the child as a new
+ *    workspace version before anything else is said to it.
  */
 
 import { join } from "node:path";
 import type { Subprocess } from "bun";
-import type { Scratchpad } from "../scratchpad";
+import { SNIPPET_VOCABULARY, type Workspace, type WorkspaceResult } from "../workspace";
 import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
@@ -36,6 +44,11 @@ export interface SnippetResult {
   timedOut?: boolean;
   /** Set when the timeout escalated to a kill: all sandbox state was lost. */
   restarted?: boolean;
+  /**
+   * Set on the first result from a new sandbox process (after a restart, or
+   * on a resumed run): the line the rendered result must begin with.
+   */
+  resetNotice?: string | undefined;
 }
 
 export interface HarnessNotice {
@@ -76,7 +89,17 @@ export interface SandboxHostOptions {
    * the client unbound (standalone behavior).
    */
   account?: string;
-  scratchpad: Scratchpad;
+  /**
+   * The run's workspace. Required: the child is granted read access to its
+   * directory when it is spawned, and answers every `files` call from it.
+   */
+  workspace: Workspace;
+  /**
+   * The run resumed (or continued) with state a new sandbox does not have:
+   * the first snippet result carries the state-reset notice even though this
+   * host never restarted anything itself.
+   */
+  resumed?: boolean;
   snippetTimeoutMs: number;
   pingGraceMs: number;
   entryPath?: string;
@@ -135,11 +158,21 @@ export function sandboxChildEnv(
 }
 
 /** Appended to every state-loss notice so the model knows the recovery steps. */
-const STATE_LOSS_RECOVERY =
-  "All top-level bindings and routines were lost. " +
+export const STATE_LOSS_RECOVERY =
+  "Top-level bindings and background routines lived only in that sandbox and are gone; " +
+  "your workspace files, notes.md included, are unchanged, so import what you need again. " +
   "The game session may still exist server-side under the same token: run " +
   "`await connect()` to resubscribe to events, then `await sdk.createSession({...})` " +
   "— a `token_in_use` error means the session is still alive and `sdk` works as-is.";
+
+/**
+ * The first line of the first snippet result a new sandbox process returns.
+ * One line, and first, because it is the fact the model most needs before it
+ * reads anything else in that result: a name that resolved a snippet ago may
+ * not resolve now.
+ */
+export const STATE_RESET_NOTICE =
+  "[state reset] this snippet ran in a new sandbox: top-level bindings and background routines from before are gone; workspace files are unchanged.";
 
 export class SandboxHost {
   private proc: Subprocess | null = null;
@@ -160,8 +193,25 @@ export class SandboxHost {
    * losing or polluting the "Last stderr" diagnostic).
    */
   private stderr: { tail: string; done: Promise<void> } = { tail: "", done: Promise.resolve() };
+  /**
+   * Whether the next snippet result is the first from a sandbox that lost
+   * state. Taken when an eval starts, so the snippet whose timeout caused a
+   * restart never carries it — the one after does.
+   */
+  private resetPending: boolean;
 
-  constructor(private readonly opts: SandboxHostOptions) {}
+  constructor(private readonly opts: SandboxHostOptions) {
+    this.resetPending = opts.resumed === true;
+    // Every change, whoever made it, reaches the child before anything else is
+    // said to it — for a hostcall, before the reply to the call that made it.
+    opts.workspace.onChange((version) => {
+      try {
+        this.proc?.send({ t: "workspace_version", version } satisfies HostToChild);
+      } catch {
+        // the child is gone; a new one starts with an empty module registry
+      }
+    });
+  }
 
   get entryPath(): string {
     return this.opts.entryPath ?? join(import.meta.dir, "entry.ts");
@@ -202,14 +252,19 @@ export class SandboxHost {
     //
     // The child is exec'd through confine.ts, which applies a Landlock
     // filesystem ruleset first: the snippet process can then
-    // read the interpreter, runner/, sdk/ and node_modules/ and nothing else —
-    // not `.env` by any path, not $HOME, not /tmp — and the wrapper exits
-    // instead of exec'ing when the kernel or container refuses the ruleset.
+    // read the interpreter, runner/, sdk/, node_modules/ and the run's
+    // workspace and nothing else — not `.env` by any path, not $HOME, not
+    // /tmp — and write nowhere; the wrapper exits instead of exec'ing when the
+    // kernel or container refuses the ruleset.
     // The IPC channel and stdio are inherited descriptors and survive the exec.
     this.proc = Bun.spawn(["bun", this.confinePath, "bun", "--env-file=/dev/null", this.entryPath], {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,
+        // Explicit, like the two below: confine.ts grants read access to this
+        // directory, so a stray value from the operator's shell must never
+        // stand in for the run's own.
+        WRATHBENCH_WORKSPACE: this.opts.workspace.dir,
         // Explicit and possibly empty, for the same reason as WRATHBENCH_ACCOUNT
         // below: nothing leaked from the operator's shell may stand in for it.
         WRATHBENCH_SECRET: this.opts.secret ?? "",
@@ -234,6 +289,7 @@ export class SandboxHost {
           this.proc = null;
           this.consecutiveRestarts++;
           this.totalRestarts++;
+          this.resetPending = true;
           // Let the stderr pipe drain (briefly) so the crash output makes it
           // into the notice — Bun prints the fatal error just before exiting.
           const emit = (): void => {
@@ -296,10 +352,29 @@ export class SandboxHost {
           this.proc?.send(res);
         };
         try {
-          const pad = this.opts.scratchpad;
-          if (msg.method === "scratchpad_read") reply(true, pad.read());
-          else if (msg.method === "scratchpad_write") reply(true, pad.write(msg.params.content ?? ""));
-          else reply(true, pad.append(msg.params.content ?? ""));
+          const ws = this.opts.workspace;
+          const p = msg.params;
+          const answer = (r: WorkspaceResult, op: string): void =>
+            r.ok ? reply(true, r.text) : reply(false, undefined, `files.${op}: ${r.error}`);
+          switch (msg.method) {
+            case "files_read":
+              answer(ws.read(p.path, SNIPPET_VOCABULARY), "read");
+              break;
+            case "files_write":
+              answer(ws.write(p.path, p.content), "write");
+              break;
+            case "files_edit":
+              answer(ws.edit(p.path, p.old_string, p.new_string, p.replace_all ?? false, SNIPPET_VOCABULARY), "edit");
+              break;
+            case "files_delete":
+              answer(ws.delete(p.path, SNIPPET_VOCABULARY), "delete");
+              break;
+            case "files_list":
+              reply(true, ws.list().map((f) => ({ path: f.path, bytes: f.bytes })));
+              break;
+            default:
+              reply(false, undefined, `unknown hostcall ${String((msg as { method?: unknown }).method)}`);
+          }
         } catch (err) {
           reply(false, undefined, String(err));
         }
@@ -345,6 +420,15 @@ export class SandboxHost {
   /** Evaluate one snippet with the configured hard timeout. */
   async evalSnippet(code: string): Promise<SnippetResult> {
     await this.start();
+    // Taken now, before this eval can itself cause a restart: that restart's
+    // notice belongs on the next result, the first from the new process.
+    const reset = this.resetPending;
+    this.resetPending = false;
+    const res = await this.evalOnce(code);
+    return reset ? { ...res, resetNotice: STATE_RESET_NOTICE } : res;
+  }
+
+  private async evalOnce(code: string): Promise<SnippetResult> {
     const id = this.nextId++;
     try {
       const res = await this.request<EvalResultMsg>(
@@ -410,10 +494,12 @@ export class SandboxHost {
             `as the move is queued, and you poll state.self.position or the WB_MOVE_RESULT event for the ` +
             `verdict. ` +
             `Work longer than ${Math.round(this.opts.snippetTimeoutMs / 1000)}s belongs in a background ` +
-            `routine (launch it without awaiting, e.g. ` +
-            `\`globalThis.trip = (async () => { for (const p of waypoints) await sdk.moveTo(p); return "done"; })().catch(String); "started"\` ` +
-            `— the trailing value keeps the snippet from awaiting the promise REPL-style; it returns instantly, then a later snippet checks \`await Promise.race([trip, "running"])\`); ` +
-            `code that was not awaiting the SDK may still be running, so check state/events before assuming it failed.`,
+            `routine: launch it without awaiting and end the snippet with a plain value, e.g. ` +
+            `\`void (async () => { for (const p of waypoints) await sdk.moveTo(p); console.log("arrived"); })().catch((e) => console.log(String(e))); "started"\` ` +
+            `— the trailing value keeps the snippet from awaiting the promise REPL-style, so it returns at once, and ` +
+            `what the routine prints arrives with later snippet results. Code you will launch again belongs in a ` +
+            `workspace file you import. Code that was not awaiting the SDK may still be running, so check ` +
+            `state/events before assuming it failed.`,
           logs: ping.logs,
           // The abandoned snippet's hints: its result is discarded, so this
           // pong is the only channel that still reaches the model.
@@ -456,6 +542,7 @@ export class SandboxHost {
   private async restart(reason: string): Promise<void> {
     this.consecutiveRestarts++;
     this.totalRestarts++;
+    this.resetPending = true;
     const old = this.proc;
     this.proc = null;
     this.abandonedEvals.clear();

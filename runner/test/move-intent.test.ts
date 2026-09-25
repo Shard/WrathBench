@@ -17,7 +17,7 @@ import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
 import { SandboxHost } from "../src/sandbox/host";
 import type { MoveIntentNote } from "../src/sandbox/ipc";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { readMoves } from "../viewer/runs";
@@ -47,7 +47,7 @@ function harness(slot: { move: MoveIntentNote | null }) {
   const ctx = new ContextBuilder({
     config,
     sandbox,
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     trajectory,
     watchdogs: new Watchdogs(config.watchdogs),
     now: () => clock,
@@ -244,7 +244,7 @@ function makeHost(moduleUrl: string): SandboxHost {
   const host = new SandboxHost({
     moduleUrl,
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     snippetTimeoutMs: 4_000,
     pingGraceMs: 1_000,
   });

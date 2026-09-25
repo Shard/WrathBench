@@ -8,7 +8,7 @@
  *   run.sqlite         run metadata row + periodic state rows, for querying
  *                      across runs without parsing JSONL.
  *   meta.json          the run config + harness version, for `--resume`.
- *   scratchpad.md      owned by Scratchpad, lives in the same directory.
+ *   workspace/         owned by Workspace (notes.md and the model's other files).
  *
  * Redaction: records never carry API keys by construction (headers are never
  * logged), and every string is additionally scrubbed against the secret values

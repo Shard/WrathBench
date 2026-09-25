@@ -1,5 +1,5 @@
 /**
- * `/api/tools`: the nine model-facing tools, read off `TOOLS` at request time
+ * `/api/tools`: the model-facing tools, read off `TOOLS` at request time
  * so the homepage's tool inspector cannot drift from what a run is given.
  *
  * The description text is the runner's (names-first rendering — the
@@ -22,8 +22,10 @@ export const TOOL_EXAMPLES: Readonly<Record<string, string>> = {
   run_snippet: `{ "code": "await sdk.killTarget(state.closest({ alive: true, maxDistance: 30 }))" }`,
   recent_events: `{ "limit": 20 }`,
   search_reference: `{ "query": "Northshire quests" }`,
-  write_scratchpad: `{ "content": "# Plan\\n- turn in the two finished quests\\n- train at level 4" }`,
-  edit_scratchpad: `{ "old": "- [ ] train at level 4", "new": "- [x] trained at level 4", "replaceAll": false }`,
+  read_file: `{ "path": "lib/util.ts" }`,
+  write_file: `{ "path": "notes.md", "content": "# Plan\\n- turn in the two finished quests\\n- train at level 4" }`,
+  edit_file: `{ "path": "notes.md", "old_string": "- [ ] train at level 4", "new_string": "- [x] trained at level 4" }`,
+  delete_file: `{ "path": "lib/old.ts" }`,
   log_status: `{ "text": "L3, clearing the field south of the abbey; two quests ready to turn in" }`,
   read_log: `{ "offset": 0, "limit": 20 }`,
 };

@@ -36,7 +36,7 @@ import {
   ClosedWindowReflectGate,
   restingOf,
 } from "../src/reflect";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import { callTool, TOOLS, type ToolContext } from "../src/tools";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readTrajectory } from "../src/trajectory";
@@ -73,7 +73,7 @@ function makeCtx(state: { resting?: boolean; level?: number; zone?: string } = {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-"));
   const ctx: ToolContext = {
     sandbox: fakeSandbox(state),
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
     reflect: new ReflectGate(),
     turn: () => 7,
@@ -313,7 +313,7 @@ describe("the window-trim notices", () => {
       config,
       adapter: new StubAdapter(script),
       sandbox: fakeSandbox({ resting: false }),
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
@@ -334,7 +334,7 @@ describe("the window-trim notices", () => {
     expect(lastContent(requests[pending[0]!]!)).toContain(
       "Older conversation will be trimmed after this turn. Record a short status entry",
     );
-    expect(lastContent(requests[trimmed[0]!]!)).toContain("your scratchpad is your memory");
+    expect(lastContent(requests[trimmed[0]!]!)).toContain("notes.md is your memory");
     trajectory.close();
   });
 
@@ -342,7 +342,7 @@ describe("the window-trim notices", () => {
     const inputs = {
       stateSummary: "== state ==",
       events: [],
-      scratchpad: "",
+      workspace: { files: [], notes: "" },
       notices: [{ ts: 1, kind: "trim_pending" as const, text: "t" }],
       turn: 3,
     };
@@ -369,7 +369,7 @@ describe("the reflection window on the record", () => {
       config,
       adapter: new StubAdapter(script),
       sandbox: fakeSandbox(state),
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
@@ -412,7 +412,7 @@ describe("the reflection window on the record", () => {
     const builder = new ContextBuilder({
       config,
       sandbox: fakeSandbox(state),
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
     });

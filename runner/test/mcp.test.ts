@@ -6,10 +6,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { McpServer, trajectoryToolCallWriter } from "../src/mcp";
+import { MCP_RESULT_MAX_CHARS, McpServer, capMcpResult, trajectoryToolCallWriter } from "../src/mcp";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import type { ToolContext } from "../src/tools";
@@ -38,24 +38,24 @@ function fakeSandbox(): SandboxHost {
   return fake as unknown as SandboxHost;
 }
 
-function makeCtx(sandbox: SandboxHost = fakeSandbox()): { ctx: ToolContext; scratchpad: Scratchpad } {
+function makeCtx(sandbox: SandboxHost = fakeSandbox()): { ctx: ToolContext; workspace: Workspace } {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-"));
-  const scratchpad = new Scratchpad(join(dir, "scratchpad.md"));
+  const workspace = new Workspace(join(dir, "workspace"));
   const ctx: ToolContext = {
     sandbox,
-    scratchpad,
+    workspace,
     wiki: undefined,
     sessionLive: () => true,
     reflect: new ReflectGate(),
     episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
     turn: () => 1,
   };
-  return { ctx, scratchpad };
+  return { ctx, workspace };
 }
 
-function makeServer(): { server: McpServer; scratchpad: Scratchpad } {
-  const { ctx, scratchpad } = makeCtx();
-  return { server: new McpServer(ctx, { serverVersion: "test" }), scratchpad };
+function makeServer(sandbox?: SandboxHost): { server: McpServer; workspace: Workspace } {
+  const { ctx, workspace } = makeCtx(sandbox);
+  return { server: new McpServer(ctx, { serverVersion: "test" }), workspace };
 }
 
 /** A sandbox whose snippet takes `ms` and notes the moment it started. */
@@ -96,22 +96,54 @@ describe("McpServer", () => {
     expect(await call(server, { jsonrpc: "2.0", method: "notifications/initialized" })).toBeNull();
   });
 
-  test("tools/list exposes exactly the nine tools", async () => {
+  test("tools/list exposes exactly the eleven tools", async () => {
     const { server } = makeServer();
     await initialized(server);
     const res = await call(server, { jsonrpc: "2.0", id: 2, method: "tools/list" });
-    const tools = (res?.["result"] as { tools: { name: string }[] }).tools.map((t) => t.name);
-    expect(tools).toEqual([
+    const listed = (res?.["result"] as { tools: { name: string; description: string }[] }).tools;
+    expect(listed.map((t) => t.name)).toEqual([
       "run_snippet",
       "recent_events",
       "state_summary",
       "search_reference",
-      "write_scratchpad",
-      "edit_scratchpad",
+      "read_file",
+      "write_file",
+      "edit_file",
+      "delete_file",
       "reflect",
       "log_status",
       "read_log",
     ]);
+    // Every description stays under 2,000 characters.
+    for (const t of listed) expect(t.description.length).toBeLessThan(2_000);
+  });
+
+  test("a result longer than the MCP cap is cut, says so, and the trajectory keeps what was served", async () => {
+    const long = "L".repeat(MCP_RESULT_MAX_CHARS * 2);
+    const sandbox = {
+      ...(fakeSandbox() as unknown as Record<string, unknown>),
+      evalSnippet: (): Promise<SnippetResult> => Promise.resolve({ ok: true, value: long, logs: [], durationMs: 1 }),
+    } as unknown as SandboxHost;
+    const { ctx } = makeCtx(sandbox);
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-cap-"));
+    const trajectory = new Trajectory(dir);
+    const server = new McpServer(ctx, { serverVersion: "test", onToolCall: trajectoryToolCallWriter(trajectory) });
+    await initialized(server);
+    const res = await call(server, {
+      jsonrpc: "2.0",
+      id: 30,
+      method: "tools/call",
+      params: { name: "run_snippet", arguments: { code: "x" } },
+    });
+    const text = (res?.["result"] as { content: { text: string }[] }).content[0]!.text;
+    expect(text.length).toBe(MCP_RESULT_MAX_CHARS);
+    expect(text).toContain(`[result truncated by the harness: ${long.length + "ok (1ms)\n=> ".length} chars`);
+    const rec = readTrajectory(dir).find((r) => r.t === "tool_result");
+    expect(rec?.["text"]).toBe(text);
+    expect(rec?.["truncatedFrom"]).toBe(long.length + "ok (1ms)\n=> ".length);
+    trajectory.close();
+    // Under the cap, nothing changes.
+    expect(capMcpResult("short")).toEqual({ text: "short" });
   });
 
   test("tools/call run_snippet dispatches to the sandbox", async () => {
@@ -153,28 +185,57 @@ describe("McpServer", () => {
     expect(eventText).toContain("#2 SMSG_MESSAGECHAT");
   });
 
-  // The write is a tool; the read is not. `read_scratchpad` was removed
-  // (operator, 2026-08-30) because the scratchpad is injected verbatim into
-  // every turn's context, so the tool re-served text the model already had.
-  test("write_scratchpad reaches the scratchpad, and read_scratchpad is gone", async () => {
-    const { server, scratchpad } = makeServer();
+  test("the file tools reach the workspace, and the scratchpad tools are gone", async () => {
+    const { server, workspace } = makeServer();
     await initialized(server);
-    await call(server, {
+    const tool = async (id: number, name: string, args: unknown): Promise<{ text: string; isError: boolean }> => {
+      const res = await call(server, { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+      const r = res?.["result"] as { content: { text: string }[]; isError: boolean };
+      return { text: r.content[0]!.text, isError: r.isError };
+    };
+    expect((await tool(6, "write_file", { path: "notes.md", content: "# remembered" })).text).toBe(
+      "wrote notes.md\n[0% — 12/32000 chars]",
+    );
+    expect(workspace.readNotes()).toBe("# remembered");
+    expect(await tool(7, "read_file", { path: "notes.md" })).toEqual({ text: "# remembered", isError: false });
+    expect((await tool(8, "edit_file", { path: "notes.md", old_string: "remembered", new_string: "kept" })).text).toContain(
+      "edited notes.md (1 replacement)",
+    );
+    expect((await tool(9, "write_file", { path: "lib/a.ts", content: "export {};\n" })).text).toContain("created lib/a.ts");
+    expect(await tool(10, "delete_file", { path: "lib/a.ts" })).toEqual({ text: "deleted lib/a.ts (11 bytes)", isError: false });
+    // Refusals are isError, named for the tool.
+    const miss = await tool(11, "edit_file", { path: "notes.md", old_string: "nope", new_string: "x" });
+    expect(miss.isError).toBe(true);
+    expect(miss.text).toStartWith("edit_file: old_string was not found in notes.md");
+    const escape = await tool(12, "read_file", { path: "../meta.json" });
+    expect(escape).toEqual({ text: 'read_file: path "../meta.json" contains ..; paths stay inside the workspace', isError: true });
+    for (const gone of ["write_scratchpad", "edit_scratchpad", "read_scratchpad"]) {
+      const r = await tool(13, gone, {});
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain(`unknown tool: ${gone}`);
+    }
+  });
+
+  test("the file tools take their arguments as declared: no aliases, no coercion", async () => {
+    const { server } = makeServer();
+    await initialized(server);
+    const res = await call(server, {
       jsonrpc: "2.0",
-      id: 6,
+      id: 14,
       method: "tools/call",
-      params: { name: "write_scratchpad", arguments: { content: "# remembered" } },
+      params: { name: "edit_file", arguments: { file_path: "notes.md", old_string: "a", new_string: "b" } },
     });
-    expect(scratchpad.read()).toBe("# remembered");
-    const read = await call(server, {
+    const text = (res?.["result"] as { content: { text: string }[] }).content[0]!.text;
+    expect(text).toContain('unknown key(s) "file_path" — valid keys for edit_file: path, old_string, new_string, replace_all');
+    const coerced = await call(server, {
       jsonrpc: "2.0",
-      id: 7,
+      id: 15,
       method: "tools/call",
-      params: { name: "read_scratchpad", arguments: {} },
+      params: { name: "edit_file", arguments: { path: "notes.md", old_string: "a", new_string: "b", replace_all: "true" } },
     });
-    const result = read?.["result"] as { content: { text: string }[]; isError: boolean };
-    expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain("unknown tool: read_scratchpad");
+    const r = coerced?.["result"] as { content: { text: string }[]; isError: boolean };
+    expect(r.isError).toBe(true);
+    expect(r.content[0]!.text).toContain("invalid arguments for edit_file: replace_all:");
   });
 
   test("bad tool name and bad arguments come back as isError, not protocol errors", async () => {
@@ -229,10 +290,9 @@ describe("McpServer", () => {
 
   test("the recorded tool-call args are the parsed object, not the raw string", async () => {
     const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-"));
-    const scratchpad = new Scratchpad(join(dir, "scratchpad.md"));
     const ctx: ToolContext = {
       sandbox: fakeSandbox(),
-      scratchpad,
+      workspace: new Workspace(join(dir, "workspace")),
       wiki: undefined,
       sessionLive: () => true,
       reflect: new ReflectGate(),

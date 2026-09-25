@@ -30,12 +30,12 @@
  *
  * Flags map 1:1 onto config.ts. A resumed run reloads its config from
  * meta.json, keeps its token (so a still-alive module session is reattached by
- * the model's next createSession call), keeps its scratchpad and trajectory,
+ * the model's next createSession call), keeps its workspace and trajectory,
  * and starts the message window empty with a harness notice saying so — the
- * scratchpad, not the chat history, is the durable memory.
+ * workspace, not the chat history, is the durable memory.
  */
 
-import { copyFileSync, existsSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { hostname } from "node:os";
 import type { Database } from "bun:sqlite";
@@ -72,7 +72,7 @@ import { runLoop, type StopRequest } from "./loop";
 import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./prompt";
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
-import { Scratchpad } from "./scratchpad";
+import { carryWorkspace, openRunWorkspace } from "./workspace";
 import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { harnessVersion } from "./version";
@@ -229,7 +229,7 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // A probe campaign's identity, both or neither.
     campaign: typeof args["campaign"] === "string" ? args["campaign"] : undefined,
     cell: typeof args["cell"] === "string" ? args["cell"] : undefined,
-    // A freeplay continuation: the run id whose character and scratchpad this
+    // A freeplay continuation: the run id whose character and workspace this
     // launch carries on. Validated against the predecessor in `main`.
     continuedFrom: typeof args["continue-from"] === "string" ? args["continue-from"] : undefined,
     stubScript: typeof args["stub"] === "string" ? args["stub"] : undefined,
@@ -544,18 +544,21 @@ async function main(): Promise<void> {
   // From here until the process exits, however it exits short of a SIGKILL.
   const stopHeartbeat = startHeartbeat(runDir, `${hostname()} ${process.pid}`);
   process.on("exit", stopHeartbeat);
-  const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
-  // The episodic log lives beside the scratchpad and survives a pause the same
+  // Opened (and, for a run from before the workspace, seeded from its old
+  // scratchpad) before anything can read it; the directory is created here
+  // once and never replaced, because the sandbox child's read grant is bound
+  // to it.
+  const workspaceExisted = existsSync(join(runDir, "workspace"));
+  const workspace = openRunWorkspace(runDir);
+  // The episodic log lives beside the workspace and survives a pause the same
   // way: it is append-only, so a resumed run reads its own past back.
   const episodic = new EpisodicLog(join(runDir, "episodic.jsonl"));
-  // The predecessor's notes come along: the scratchpad is the durable memory,
-  // and a continuation that started with an empty one would be a stranger to
-  // its own character. The `existsSync` guard is now belt and braces: a fresh
-  // launch onto a populated directory is refused above, so the only way here
-  // is an empty one.
-  if (continuation !== undefined && !existsSync(scratchpad.path) && existsSync(join(continuation.dir, "scratchpad.md"))) {
-    copyFileSync(join(continuation.dir, "scratchpad.md"), scratchpad.path);
-  }
+  // The predecessor's workspace comes along whole: notes.md is the durable
+  // memory and its modules are the code it wrote, and a continuation that
+  // started without them would be a stranger to its own character. The
+  // `workspaceExisted` guard is belt and braces: a fresh launch onto a
+  // populated directory is refused above, so the only way here is an empty one.
+  if (continuation !== undefined && !workspaceExisted) carryWorkspace(workspace, continuation.dir);
 
   // driver
   let adapter: ChatAdapter | undefined;
@@ -693,7 +696,7 @@ async function main(): Promise<void> {
      * The pause mark is consumed: meta.json says "paused" only while the run
      * is. The claude-code driver cannot reattach the CLI's own conversation
      * (the CLI owns that history; the runner starts a fresh session with the
-     * same fixed prompt and the scratchpad), so such a resume is stamped
+     * same fixed prompt and the workspace), so such a resume is stamped
      * `resumedFresh` in meta.json — sticky: the run had at least one fresh
      * restart in its life, which a reader of its turns should know.
      */
@@ -703,7 +706,7 @@ async function main(): Promise<void> {
         ...rest,
         // Codex could resume its own thread, but the runner starts a fresh one
         // on purpose: the thread id is not run identity and a resumed run's
-        // conversation should be exactly what the scratchpad note says it is.
+        // conversation should be exactly what the resume note says it is.
         ...(config.driver === "claude-code" || config.driver === "codex" ? { resumedFresh: true } : {}),
       };
       trajectory.writeMeta({ ...resumedMeta, harnessVersion: version, config, comparability });
@@ -778,7 +781,10 @@ async function main(): Promise<void> {
     token: config.token,
     secret: lease.secret,
     account: config.account,
-    scratchpad,
+    workspace,
+    // A resumed run's model may still expect what its old sandbox held: the
+    // first snippet result says that sandbox is gone.
+    resumed,
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
@@ -989,7 +995,8 @@ async function main(): Promise<void> {
         console.error(`[wrathbench] ${detail}`);
         trajectory.dropContinuation(config.runId, detail);
         config = { ...config, character: undefined, continuedFrom: undefined };
-        if (existsSync(scratchpad.path)) rmSync(scratchpad.path);
+        // Emptied in place, never removed: the directory is the child's grant.
+        workspace.clear();
         continuation = undefined;
       }
       watchdogs.expectFreshCharacter(new Set(hygiene.seen.values()));
@@ -1076,7 +1083,7 @@ async function main(): Promise<void> {
           config,
           runDir,
           sandbox,
-          scratchpad,
+          workspace,
           episodic,
           wiki,
           trajectory,
@@ -1091,7 +1098,7 @@ async function main(): Promise<void> {
             config,
             runDir,
             sandbox,
-            scratchpad,
+            workspace,
             episodic,
             wiki,
             trajectory,
@@ -1105,7 +1112,7 @@ async function main(): Promise<void> {
           config,
           adapter: adapter!,
           sandbox,
-          scratchpad,
+          workspace,
           episodic,
           wiki,
           trajectory,

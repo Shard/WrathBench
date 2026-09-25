@@ -13,7 +13,7 @@ import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thin
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import { renderTimeline } from "../src/timeline";
 import { TOOLS } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -85,7 +85,7 @@ function setupEpisode(
       config,
       runDir,
       sandbox: fakeSandbox(),
-      scratchpad: new Scratchpad(join(runDir, "scratchpad.md")),
+      workspace: new Workspace(join(runDir, "workspace")),
       episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),

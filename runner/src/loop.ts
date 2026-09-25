@@ -26,7 +26,7 @@ import { harnessOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { DeathSignal } from "./sandbox/ipc";
-import type { Scratchpad } from "./scratchpad";
+import type { Workspace } from "./workspace";
 import type { ItemSample, Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
@@ -57,7 +57,7 @@ export interface LoopOptions {
   config: RunConfig & { runId: string; token: string };
   adapter: ChatAdapter;
   sandbox: SandboxHost;
-  scratchpad: Scratchpad;
+  workspace: Workspace;
   /** The run's append-only episodic log (`log_status` / `read_log`). */
   episodic: EpisodicLog;
   wiki?: Database | undefined;
@@ -110,7 +110,7 @@ export type LoopOutcome =
 export interface ContextBuilderOptions {
   config: RunConfig & { runId: string };
   sandbox: SandboxHost;
-  scratchpad: Scratchpad;
+  workspace: Workspace;
   trajectory: Trajectory;
   watchdogs: Watchdogs;
   /**
@@ -866,7 +866,7 @@ export class ContextBuilder {
     const contextText = assembleContext({
       stateSummary: formatStateSummary(snap, { sessionLive: this.live }),
       events,
-      scratchpad: this.o.scratchpad.read(),
+      workspace: this.o.workspace.view(),
       notices: pendingNotices.splice(0, pendingNotices.length),
       turn,
     });
@@ -946,7 +946,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const builder = new ContextBuilder({
     config,
     sandbox: o.sandbox,
-    scratchpad: o.scratchpad,
+    workspace: o.workspace,
     trajectory,
     watchdogs,
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
@@ -957,7 +957,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   let turn = 0;
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
-    scratchpad: o.scratchpad,
+    workspace: o.workspace,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,
     wikiSearch: config.wiki,
@@ -1058,7 +1058,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         pendingNotices.push({
           ts: o.now?.() ?? Date.now(),
           kind: "window_trimmed",
-          text: `Older conversation was trimmed (${dropped} message${dropped === 1 ? "" : "s"} dropped); your scratchpad is your memory.`,
+          text: `Older conversation was trimmed (${dropped} message${dropped === 1 ? "" : "s"} dropped); notes.md is your memory.`,
         });
         lastCut = cut;
       }

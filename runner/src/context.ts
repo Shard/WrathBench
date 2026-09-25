@@ -10,7 +10,7 @@
  *     stay intact ]
  *   [ one fresh user message assembled by `assembleContext`:
  *       goal line, harness notices, state summary, last EVENT_WINDOW events,
- *       scratchpad ]
+ *       the workspace listing, notes.md ]
  *
  * The window grows to MESSAGE_WINDOW_MAX and is then cut back by one block of
  * MESSAGE_WINDOW_TRIM messages, rather than sliding one message per turn. The
@@ -34,6 +34,7 @@ import { inventoryResultText } from "@wrathbench/sdk";
 import { compactJson } from "./jsonsafe";
 import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
 import type { HarnessNotice } from "./sandbox/host";
+import { renderWorkspaceContext, type WorkspaceView } from "./workspace";
 
 export const CONTEXT_POLICY = {
   /** Last N events included in every turn's context. */
@@ -561,7 +562,12 @@ export interface ContextInputs {
   stateSummary: string;
   /** Oldest first; only the last EVENT_WINDOW are rendered. */
   events: EventSummary[];
-  scratchpad: string;
+  /**
+   * The workspace as data — its listing and notes.md's text — read by the
+   * caller, so this function stays pure and a trajectory replays into the
+   * same bytes.
+   */
+  workspace: WorkspaceView;
   notices: HarnessNotice[];
   /** Model turn number, for the model's own orientation. */
   turn: number;
@@ -617,11 +623,9 @@ export function assembleContext(inputs: ContextInputs): string {
     );
   }
 
-  parts.push(
-    inputs.scratchpad.trim().length === 0
-      ? "[scratchpad]\n(empty — write your plan and durable facts with write_scratchpad)"
-      : `[scratchpad]\n${inputs.scratchpad}`,
-  );
+  // Last, where the durable memory has always sat: the listing, then
+  // notes.md verbatim (workspace.ts owns both renderings).
+  parts.push(renderWorkspaceContext(inputs.workspace));
 
   return parts.join("\n\n");
 }

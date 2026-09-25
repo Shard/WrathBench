@@ -1,5 +1,5 @@
 /**
- * The nine tools, defined once and dispatched from two places: the MCP
+ * The eleven tools, defined once and dispatched from two places: the MCP
  * server (external model drives them over stdio) and the agent loop (the
  * OpenAI-compatible adapter drives them in-process). Schemas are deliberately
  * tight — few parameters, all described — because a confused tool call costs a
@@ -15,7 +15,7 @@ import { EPISODIC_PAGE_DEFAULT, EPISODIC_PAGE_MAX, type EpisodicEntry, type Epis
 import { READ_LOG_CLOSED, restingOf, type ReflectGate } from "./reflect";
 import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
-import type { Scratchpad } from "./scratchpad";
+import { FILE_MAX_CHARS, NOTES_MAX_CHARS, WORKSPACE_MAX_BYTES, type Workspace, type WorkspaceResult } from "./workspace";
 
 export interface ToolDef {
   name: string;
@@ -72,7 +72,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "run_snippet",
     description:
-      "Execute a TypeScript snippet in the persistent game sandbox. Top-level bindings persist across snippets; `sdk`, `state`, `events`, `connect()`, `sleep(ms)`, `scratchpad` and `signal` (aborted if this snippet is abandoned) are ambient. A single expression returns its value. This is the only way to act in the world.",
+      "Execute a TypeScript snippet in the game sandbox, one long-lived process. `sdk`, `state`, `events`, `connect()`, `sleep(ms)`, `files` (your workspace) and `signal` (aborted if this snippet is abandoned) are ambient, and import statements load modules from your workspace, e.g. import { helper } from \"./lib/util\". A single expression returns its value. This is the only way to act in the world.",
     inputSchema: {
       type: "object",
       properties: {
@@ -129,33 +129,75 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: "write_scratchpad",
+    name: "read_file",
     description:
-      "Replace the entire scratchpad with new markdown. Keep it current: plan, progress, durable facts. It survives restarts; conversation history does not.",
+      "Return one file from your workspace, its text exactly as stored — no line numbers, no paging. " +
+      "The path is relative to the workspace, e.g. lib/util.ts. Every turn's context already lists your files " +
+      "(path, size, first line) and shows notes.md in full.",
     inputSchema: {
       type: "object",
       properties: {
-        content: { type: "string", description: "The full new scratchpad content (markdown)." },
+        path: { type: "string", description: "Workspace-relative path, e.g. notes.md or lib/util.ts." },
       },
-      required: ["content"],
+      required: ["path"],
       additionalProperties: false,
     },
   },
   {
-    name: "edit_scratchpad",
+    name: "write_file",
     description:
-      "Change part of the scratchpad in place: replace the exact text `old` with `new`. " +
-      "Use this for ordinary upkeep — striking a done item, correcting a coordinate, adding a line under a heading — " +
-      "and write_scratchpad only to start the pad or rewrite it wholesale. " +
-      "`old` must match the pad byte for byte, whitespace included, and must appear exactly once unless replaceAll is set.",
+      "Create a file in your workspace, or replace a file's whole content. Paths are relative to the workspace " +
+      "(notes.md, lib/util.ts); parent directories are created as needed, and .. or an absolute path is refused. " +
+      "notes.md is your memory and is shown in full in every turn's context; a .ts file is a module a snippet can " +
+      "import (import { helper } from \"./lib/util\"). " +
+      `Limits: notes.md at most ${NOTES_MAX_CHARS} characters, every other file at most ${FILE_MAX_CHARS} characters, ` +
+      `the whole workspace at most ${WORKSPACE_MAX_BYTES} bytes. A write that would exceed a limit is refused and ` +
+      "nothing is written — the refusal says how large the result would have been; nothing is ever truncated. " +
+      "A write that lands above 80% of a limit succeeds with a warning, and every result ends with a usage line.",
     inputSchema: {
       type: "object",
       properties: {
-        old: { type: "string", description: "The exact existing text to replace, copied from the scratchpad." },
-        new: { type: "string", description: "What to put in its place. Empty string deletes the text." },
-        replaceAll: { type: "boolean", description: "Replace every occurrence instead of requiring a unique one. Default false." },
+        path: { type: "string", description: "Workspace-relative path, e.g. notes.md or lib/util.ts." },
+        content: { type: "string", description: "The file's whole new content. May be empty." },
       },
-      required: ["old", "new"],
+      required: ["path", "content"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "edit_file",
+    description:
+      "Replace exact text in a workspace file. old_string must match the file exactly — every character, " +
+      "whitespace and line breaks included — and must occur exactly once, unless replace_all is true, which " +
+      "replaces every occurrence. There is no fuzzy matching: a miss is refused, and so is a second occurrence, " +
+      "with the line number of each; nothing changes on a refusal. Use it for ordinary upkeep — striking a done " +
+      "item, fixing a coordinate, adding a line under a heading — and write_file to create a file or replace it " +
+      `wholesale. The result is held to write_file's limits: notes.md at most ${NOTES_MAX_CHARS} characters, every ` +
+      `other file at most ${FILE_MAX_CHARS}, the workspace at most ${WORKSPACE_MAX_BYTES} bytes; past a limit the ` +
+      "edit is refused, above 80% it succeeds with a warning.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Workspace-relative path of the file to edit." },
+        old_string: { type: "string", description: "The exact existing text to replace, copied from the file." },
+        new_string: { type: "string", description: "What to put in its place. An empty string deletes the text." },
+        replace_all: { type: "boolean", description: "Replace every occurrence instead of requiring exactly one. Default false." },
+      },
+      required: ["path", "old_string", "new_string"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "delete_file",
+    description:
+      "Delete one file from your workspace. Refused when the file does not exist. notes.md cannot be deleted — " +
+      "empty it with write_file instead.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Workspace-relative path of the file to delete." },
+      },
+      required: ["path"],
       additionalProperties: false,
     },
   },
@@ -163,7 +205,7 @@ export const TOOLS: ToolDef[] = [
     name: "reflect",
     description:
       "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; " +
-      "nothing is summarised for you and nothing is remembered unless you write it to the scratchpad. " +
+      "nothing is summarised for you and nothing is remembered unless you write it down in notes.md. " +
       "Available only while your character is resting — the state summary shows `resting` when it applies — and once per rest visit.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
@@ -172,7 +214,7 @@ export const TOOLS: ToolDef[] = [
     description:
       "Append one short status entry — what you are doing and how it is going — to your episodic log. " +
       "The log is append-only: each entry is stamped with the turn, your level and your zone, and nothing can edit or remove it afterwards. " +
-      "It is not the scratchpad. Entries are read back with read_log while reflecting.",
+      "It is not notes.md. Entries are read back with read_log while reflecting.",
     inputSchema: {
       type: "object",
       properties: {
@@ -243,15 +285,20 @@ const argSchemas = {
       .transform((n) => Math.min(20, Math.max(1, Math.round(n))))
       .default(8),
   }),
-  write_scratchpad: z.strictObject({ content: z.string() }),
-  // `old` is deliberately not `.min(1)`: an empty `old` is a semantic refusal
-  // with its own hint ("use write_scratchpad to start a pad"), and a schema
-  // error would replace that with the generic parameter restatement.
-  edit_scratchpad: z.strictObject({
-    old: z.string(),
-    new: z.string(),
-    replaceAll: booleanish.default(false),
+  // The file tools take their arguments exactly as declared: no key aliases and
+  // no value coercion (a `replace_all` of "true" is refused, not read as true).
+  // `path` and `old_string` are deliberately not `.min(1)`: an empty one is a
+  // semantic refusal with its own sentence (workspace.ts), which a schema error
+  // would replace with the generic parameter restatement.
+  read_file: z.strictObject({ path: z.string() }),
+  write_file: z.strictObject({ path: z.string(), content: z.string() }),
+  edit_file: z.strictObject({
+    path: z.string(),
+    old_string: z.string(),
+    new_string: z.string(),
+    replace_all: z.boolean().default(false),
   }),
+  delete_file: z.strictObject({ path: z.string() }),
   reflect: z.strictObject({}).default({}),
   log_status: z.strictObject({ text: z.string().min(1) }),
   // Lenient by declaration, like `recent_events`: a clamped page is an answer,
@@ -281,11 +328,14 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
   state_summary: "state_summary takes no parameters ({}).",
   search_reference:
     "search_reference expects { query: string, limit?: number } — title or keywords, and max results 1-20 (default 8).",
-  write_scratchpad: "write_scratchpad expects { content: string } — the full new scratchpad markdown.",
-  edit_scratchpad:
-    "edit_scratchpad expects { old: string, new: string, replaceAll?: boolean } — the exact existing text to " +
-    "replace, what to put there, and whether to replace every occurrence (default false, which requires old to " +
-    "appear exactly once).",
+  read_file: "read_file expects { path: string } — a workspace-relative path such as notes.md or lib/util.ts.",
+  write_file:
+    "write_file expects { path: string, content: string } — a workspace-relative path and the file's whole new content.",
+  edit_file:
+    "edit_file expects { path: string, old_string: string, new_string: string, replace_all?: boolean } — the file, " +
+    "the exact existing text to replace, what to put there, and whether to replace every occurrence (true or false, " +
+    "default false, which requires old_string to occur exactly once).",
+  delete_file: "delete_file expects { path: string } — the workspace-relative path of the file to delete.",
   reflect: "reflect takes no parameters ({}).",
   log_status: "log_status expects { text: string } — one short status entry.",
   read_log:
@@ -299,19 +349,6 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
  */
 const ARG_ALIASES: Record<string, Record<string, string>> = {
   run_snippet: { cmd: "code", snippet: "code", source: "code", script: "code", ts: "code" },
-  write_scratchpad: { text: "content", markdown: "content" },
-  edit_scratchpad: {
-    old_string: "old",
-    oldString: "old",
-    old_text: "old",
-    search: "old",
-    new_string: "new",
-    newString: "new",
-    new_text: "new",
-    replace: "new",
-    replace_all: "replaceAll",
-    replaceall: "replaceAll",
-  },
   log_status: { content: "text", status: "text", entry: "text", note: "text" },
   read_log: { start: "offset", count: "limit", n: "limit" },
   recent_events: { include_movement: "includeMovement", includemovement: "includeMovement" },
@@ -561,25 +598,19 @@ function searchRepeatNote(ctx: ToolContext, query: string, titles: string[]): st
 }
 
 /**
- * Why an `edit_scratchpad` refusal happened, said as a per-failed-call hint in
- * the house style: what was expected and how to fix the call, never strategy
- * (docs/METHODOLOGY.md, "Softening: repair the deterministic, explain the
- * rest"). Two matches have two readings, so the harness refuses rather than
- * picking one.
+ * A workspace operation's answer as a tool result. A refusal is the file
+ * tools' per-failed-call hint in the house style — what was expected and how
+ * to fix the call, never strategy (docs/METHODOLOGY.md, "Softening: repair the
+ * deterministic, explain the rest") — named for the tool that refused.
  */
-const EDIT_SCRATCHPAD_HINTS: Record<"empty_old" | "identical" | "not_found" | "ambiguous", (matches: number) => string> = {
-  empty_old: () =>
-    "edit_scratchpad: old was empty. There is nothing to match — use write_scratchpad to start a pad, then edit it.",
-  identical: () => "edit_scratchpad: old and new are the same text, so this edit would change nothing.",
-  not_found: () =>
-    "edit_scratchpad: old was not found in the scratchpad; copy the text exactly, whitespace included. The scratchpad as last written is in this turn's context.",
-  ambiguous: (matches) =>
-    `edit_scratchpad: old matches ${matches} places; include more surrounding text or set replaceAll.`,
-};
+function fileToolResult(tool: string, r: WorkspaceResult): ToolResult {
+  return r.ok ? { text: r.text } : { text: `${tool}: ${r.error}`, isError: true };
+}
 
 export interface ToolContext {
   sandbox: SandboxHost;
-  scratchpad: Scratchpad;
+  /** The run's workspace: the file tools' only target, and notes.md's home. */
+  workspace: Workspace;
   /** Wiki bundle; absent means search_reference reports unavailability. */
   wiki?: Database | undefined;
   /**
@@ -708,6 +739,8 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         const { code } = parsed.data as { code: string };
         const res = await ctx.sandbox.evalSnippet(code);
         const lines: string[] = [];
+        // First, whatever follows: the first result from a new sandbox says so.
+        if (res.resetNotice !== undefined) lines.push(res.resetNotice);
         lines.push(res.ok ? `ok (${res.durationMs}ms)` : `error (${res.durationMs}ms)`);
         if (res.value !== undefined) lines.push(`=> ${res.value}`);
         if (res.hint !== undefined) lines.push(res.hint);
@@ -855,31 +888,21 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         const { offset, limit } = parsed.data as { offset: number; limit: number };
         return { text: ctx.episodic.page(offset, limit) };
       }
-      case "edit_scratchpad": {
-        const { old, new: replacement, replaceAll } = parsed.data as {
-          old: string;
-          new: string;
-          replaceAll: boolean;
-        };
-        const res = ctx.scratchpad.edit(old, replacement, replaceAll);
-        if (!res.ok) {
-          return { text: EDIT_SCRATCHPAD_HINTS[res.reason](res.matches), isError: true };
-        }
-        const where = res.replaced === 1 ? "1 replacement" : `${res.replaced} replacements`;
-        return {
-          text: res.truncated
-            ? `edited (${where}; ${res.chars} chars, ${res.lines} lines, TRUNCATED at cap — keep it shorter)`
-            : `edited (${where}; ${res.chars} chars, ${res.lines} lines)`,
-        };
+      case "read_file": {
+        const { path } = parsed.data as { path: string };
+        return fileToolResult(name, ctx.workspace.read(path));
       }
-      case "write_scratchpad": {
-        const { content } = parsed.data as { content: string };
-        const res = ctx.scratchpad.write(content);
-        return {
-          text: res.truncated
-            ? `written (${res.chars} chars, TRUNCATED at cap — keep it shorter)`
-            : `written (${res.chars} chars)`,
-        };
+      case "write_file": {
+        const { path, content } = parsed.data as { path: string; content: string };
+        return fileToolResult(name, ctx.workspace.write(path, content));
+      }
+      case "edit_file": {
+        const d = parsed.data as { path: string; old_string: string; new_string: string; replace_all: boolean };
+        return fileToolResult(name, ctx.workspace.edit(d.path, d.old_string, d.new_string, d.replace_all));
+      }
+      case "delete_file": {
+        const { path } = parsed.data as { path: string };
+        return fileToolResult(name, ctx.workspace.delete(path));
       }
     }
   } catch (err) {

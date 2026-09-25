@@ -109,7 +109,7 @@ import { toolsFor, type ToolContext } from "./tools";
 import { signalGroup } from "./adapter-shared";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { Scratchpad } from "./scratchpad";
+import type { Workspace } from "./workspace";
 import type { Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
@@ -439,7 +439,8 @@ export interface ClaudeEpisodeOptions {
   config: RunConfig & { runId: string; token: string };
   runDir: string;
   sandbox: SandboxHost;
-  scratchpad: Scratchpad;
+  /** The run's workspace: the file tools' target, and what every turn's context lists. */
+  workspace: Workspace;
   /** The run's append-only episodic log (`log_status` / `read_log`). */
   episodic: EpisodicLog;
   wiki?: Database | undefined;
@@ -599,7 +600,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const builder = new ContextBuilder({
     config,
     sandbox: o.sandbox,
-    scratchpad: o.scratchpad,
+    workspace: o.workspace,
     trajectory,
     watchdogs,
     ...(o.turnOffset !== undefined ? { turnOffset: o.turnOffset } : {}),
@@ -610,7 +611,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // ---- MCP over loopback TCP, dispatching into the one live sandbox
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
-    scratchpad: o.scratchpad,
+    workspace: o.workspace,
     wiki: o.wiki,
     wikiCoords: config.wikiCoords,
     wikiSearch: config.wiki,
@@ -679,6 +680,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         name: short,
         isError: result.isError ?? false,
         text: result.text,
+        // The model was served a cut text (mcp.ts, `capMcpResult`); this is the full length.
+        ...(result.truncatedFrom !== undefined ? { truncatedFrom: result.truncatedFrom } : {}),
         // Same marker the fixed loop writes; see loop.ts. The trim notice has
         // no counterpart here on purpose — this driver runs no message window.
         ...(short === "reflect" ? { reflect: true } : {}),

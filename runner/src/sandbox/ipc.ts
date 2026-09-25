@@ -99,7 +99,29 @@ export type HostToChild =
   /** Abort the eval with this id: fires its `signal`, so SDK waits it left behind settle. */
   | { t: "abort"; id: number }
   | { t: "rpc"; id: number; method: "recent_events" | "state_summary" | "death_signals"; params: { limit?: number } }
+  /**
+   * The workspace changed (a write, edit or delete, from a tool or from this
+   * child's own hostcall): the next workspace import must load fresh modules.
+   * Sent before the reply to the hostcall that caused it.
+   */
+  | { t: "workspace_version"; version: number }
   | { t: "shutdown" };
+
+/** The workspace operations a snippet's `files` object makes over the hostcall channel. */
+export type HostcallMethod = "files_read" | "files_write" | "files_edit" | "files_delete" | "files_list";
+
+/**
+ * Arguments as the snippet passed them. Deliberately untyped past the JSON
+ * boundary: a snippet can pass anything, and the host's `Workspace` is what
+ * refuses a wrong type, with the same sentence the tools give.
+ */
+export interface HostcallParams {
+  path?: unknown;
+  content?: unknown;
+  old_string?: unknown;
+  new_string?: unknown;
+  replace_all?: unknown;
+}
 
 export interface EvalResultMsg {
   t: "result";
@@ -146,7 +168,7 @@ export type ChildToHost =
    */
   | { t: "pong"; id: number; logs?: LogEntry[]; note?: string; hints?: ActionHintNote[] }
   | { t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }
-  | { t: "hostcall"; id: number; method: "scratchpad_read" | "scratchpad_write" | "scratchpad_append"; params: { content?: string } }
+  | { t: "hostcall"; id: number; method: HostcallMethod; params: HostcallParams }
   | { t: "fatal"; error: string };
 
 // host -> child, reply to hostcall

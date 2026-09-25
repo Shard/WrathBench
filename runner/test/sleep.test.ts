@@ -14,7 +14,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 
 const hosts: SandboxHost[] = [];
 
@@ -23,7 +23,7 @@ function makeHost(snippetTimeoutMs = 5_000): SandboxHost {
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     snippetTimeoutMs,
     pingGraceMs: 1_000,
   });

@@ -7,7 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 
 const hosts: SandboxHost[] = [];
 
@@ -16,7 +16,7 @@ function makeHost(opts: Partial<ConstructorParameters<typeof SandboxHost>[0]> = 
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     snippetTimeoutMs: 2_000,
     pingGraceMs: 1_000,
     ...opts,
@@ -217,15 +217,17 @@ describe("sandbox evaluation", () => {
     expect(crash!.text).toContain("doom marker 42");
   }, 15_000);
 
-  test("scratchpad helpers bridge to the host-owned file", async () => {
+  test("the files helpers bridge to the host-owned workspace", async () => {
     const host = makeHost();
-    const write = await host.evalSnippet('await scratchpad.write("# notes\\nline one")');
+    const write = await host.evalSnippet('await files.write("notes.md", "# notes\\nline one")');
     expect(write.ok).toBe(true);
-    const read = await host.evalSnippet("await scratchpad.read()");
+    const read = await host.evalSnippet('await files.read("notes.md")');
     expect(read.value).toContain("line one");
-    await host.evalSnippet('await scratchpad.append("line two")');
-    const again = await host.evalSnippet("await scratchpad.read()");
+    await host.evalSnippet('await files.edit("notes.md", "line one", "line one\\nline two")');
+    const again = await host.evalSnippet('await files.read("notes.md")');
     expect(again.value).toContain("line two");
+    // The scratchpad object is gone with the scratchpad.
+    expect((await host.evalSnippet("typeof scratchpad")).value).toBe('"undefined"');
   });
 
   test("fetch to a non-module host is refused in-process", async () => {

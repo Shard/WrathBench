@@ -12,7 +12,7 @@ import { loadRunConfig } from "../src/config";
 import { toJsonSafe } from "../src/jsonsafe";
 import { ContextBuilder, itemSample, runLoop } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
@@ -51,7 +51,7 @@ function setup(
       config,
       adapter,
       sandbox: fakeSandbox(snapshot),
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
@@ -64,7 +64,7 @@ describe("runLoop", () => {
   test("stub script runs tool calls, then terminates stub-complete", async () => {
     const adapter = new StubAdapter([
       { content: "acting", toolCalls: [{ name: "run_snippet", arguments: { code: "1+1" } }] },
-      { content: null, toolCalls: [{ name: "write_scratchpad", arguments: { content: "# hi" } }] },
+      { content: null, toolCalls: [{ name: "write_file", arguments: { path: "notes.md", content: "# hi" } }] },
     ]);
     const { dir, options } = setup(adapter);
     const outcome = await runLoop(options);
@@ -90,7 +90,12 @@ describe("runLoop", () => {
       expect(dispatchTs as number).toBeLessThanOrEqual(c.ts);
       expect(results[k]!.ts).toBeGreaterThanOrEqual(dispatchTs as number);
     });
-    expect(options.scratchpad.read()).toBe("# hi");
+    expect(options.workspace.readNotes()).toBe("# hi");
+    // A file tool call is an ordinary tool_call / tool_result pair.
+    expect(calls[1]?.["name"]).toBe("write_file");
+    expect(calls[1]?.["args"]).toEqual({ path: "notes.md", content: "# hi" });
+    expect(results[1]?.["t"]).toBe("tool_result");
+    expect(String(results[1]?.["text"])).toContain("wrote notes.md");
     const row = options.trajectory.runRow("run-test");
     expect(row?.["termination_reason"]).toBe("stub-complete");
     options.trajectory.close();
@@ -516,7 +521,7 @@ describe("runLoop", () => {
     const builder = new ContextBuilder({
       config,
       sandbox,
-      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      workspace: new Workspace(join(dir, "workspace")),
       trajectory,
       watchdogs: new Watchdogs(config.watchdogs),
     });
