@@ -620,7 +620,8 @@ function memoryBlock(memory: string | null, unchanged: boolean): string[] {
  * and numbers render with a fixed locale, so a replay produces the same bytes.
  */
 export function renderWake(v: WakeView): string {
-  const head = [`wake ${v.wake}`, `request ${v.request} of this wake`];
+  // The cap is stated on every request, so a model can plan the end of its turn rather than meet it.
+  const head = [`wake ${v.wake}`, `request ${v.request} of ${WAKE_MAX_REQUESTS} in this wake`];
   if (v.asleepMs !== null) head.push(`asleep ${duration(v.asleepMs)}`);
   head.push(`woke for: ${v.wokeFor.join(", ")}`);
   const lines = [`[${head.join(" · ")}]`];

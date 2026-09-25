@@ -273,7 +273,7 @@ describe("the [wake] block", () => {
   test("renders the design's shape, byte for byte", () => {
     expect(renderWake(view())).toBe(
       [
-        "[wake 12 · request 1 of this wake · asleep 4m05s · woke for: error, requested]",
+        "[wake 12 · request 1 of 20 in this wake · asleep 4m05s · woke for: error, requested]",
         "program: main.ts deploy 7 (12:31:02), running · 243 ticks since you ended your turn, longest 31.2s, 0 overruns · no edits since deploy",
         "errors:",
         "- loop() TypeError: Cannot read properties of undefined (reading 'guid') ×38 (first 12:33:10, last 12:35:07)",
@@ -307,7 +307,7 @@ describe("the [wake] block", () => {
         memory: null,
       }),
     );
-    expect(text).toBe("[wake 1 · request 1 of this wake · woke for: start]\nprogram: none · write main.ts; it loads when you end your turn");
+    expect(text).toBe("[wake 1 · request 1 of 20 in this wake · woke for: start]\nprogram: none · write main.ts; it loads when you end your turn");
   });
 
   test("a failed load names the deploy still running, a cap is said, and the caps hold", () => {

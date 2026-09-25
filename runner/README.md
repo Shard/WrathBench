@@ -503,13 +503,17 @@ the spike was built on.
   Asleep, the stop signal and the watchdogs are checked every second (`idle`
   does not fire on a sleeping model) and the state ticker keeps writing rows.
   Every request of a wake carries a `[wake]` block after the goal line,
+  headed "request N of 20 in this wake" so the cap is known before it is met,
   rendered by the pure `renderWake`: the program's deploy and tick counts,
   failed loads, halts, errors with their workspace frames, `ctx.wake` calls,
   the level/xp/money/quest/death/zone delta, action hints, the last 40 lines of
   the program's console and memory.json — whole up to 2,000 characters, else
   its last 2,000 after a count of what comes before (a program appends, so the
   newest entries are at the end), and one line on a later request of the wake
-  while it is unchanged. A turn is still one model request.
+  while it is unchanged. A turn is still one model request. The pre-trim
+  `log_status` ask (`TRIM_PENDING_NOTICE_ENTRYPOINT`) names ending the turn as
+  the other way through it, since on this loop the call is a tool call and so
+  continues the wake.
 - **Trajectory.** `wake`, `wake_end`, `deploy` and `program_error` records,
   and `wake` on every `request` and `response` (`EntrypointRecord`,
   `src/trajectory.ts`); a `program_error`'s `kind` is `failed` for an `sdk`

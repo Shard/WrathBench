@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { StubAdapter, type ChatAdapter } from "../src/adapter";
 import { loadRunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
-import { runLoop, type StopRequest } from "../src/loop";
+import { TRIM_PENDING_NOTICE, TRIM_PENDING_NOTICE_ENTRYPOINT, runLoop, type StopRequest } from "../src/loop";
 import type { DeployRecord, ProgramHostEvent, ProgramState, SandboxHost, SnippetResult } from "../src/sandbox/host";
 import type { ProgramReport } from "../src/sandbox/ipc";
 import { Trajectory, readTrajectory } from "../src/trajectory";
@@ -165,11 +165,11 @@ describe("the entrypoint loop's phases", () => {
     expect(first.split("\n")[0]).toBe(
       "[turn 1] Goal: survive and level as far as you can. Act via tools and your program; end your turn by replying without a tool call.",
     );
-    expect(first).toContain("[wake 1 · request 1 of this wake · woke for: start]\nprogram: none · write main.ts; it loads when you end your turn");
+    expect(first).toContain("[wake 1 · request 1 of 20 in this wake · woke for: start]\nprogram: none · write main.ts; it loads when you end your turn");
     // Re-rendered on every request of the wake.
-    expect(userMessage(dir, 1)).toContain("[wake 1 · request 2 of this wake · woke for: start]");
+    expect(userMessage(dir, 1)).toContain("[wake 1 · request 2 of 20 in this wake · woke for: start]");
     const woken = userMessage(dir, 2);
-    expect(woken).toContain("[wake 2 · request 1 of this wake · asleep 5m00s · woke for: fallback]");
+    expect(woken).toContain("[wake 2 · request 1 of 20 in this wake · asleep 5m00s · woke for: fallback]");
     expect(woken).toContain("program: main.ts deploy 1 (12:00:00), running");
     // The block sits right after the goal line and before the state summary.
     expect(woken.indexOf("[wake 2")).toBeLessThan(woken.indexOf("[workspace") === -1 ? Infinity : woken.indexOf("<workspace>"));
@@ -310,6 +310,33 @@ describe("the entrypoint loop's phases", () => {
     const records = readTrajectory(dir);
     expect(records.find((r) => r.t === "wake_end")).toMatchObject({ wake: 1, requests: WAKE_MAX_REQUESTS, reason: "cap" });
     expect(userMessage(dir, WAKE_MAX_REQUESTS)).toContain(`(your last wake ended at the ${WAKE_MAX_REQUESTS}-request cap`);
+    // Every request states the cap, so the last one is known before it is made.
+    expect(userMessage(dir, 0)).toContain(`[wake 1 · request 1 of ${WAKE_MAX_REQUESTS} in this wake · woke for: start]`);
+    expect(userMessage(dir, WAKE_MAX_REQUESTS - 1)).toContain(
+      `[wake 1 · request ${WAKE_MAX_REQUESTS} of ${WAKE_MAX_REQUESTS} in this wake · woke for: start]`,
+    );
+  });
+
+  test("the pre-trim ask names ending the turn as the other way through; the snippet loop's keeps its bytes", async () => {
+    expect(TRIM_PENDING_NOTICE).toBe(
+      "Older conversation will be trimmed after this turn. Record a short status entry — what you are doing and how it is going — with log_status.",
+    );
+    expect(TRIM_PENDING_NOTICE_ENTRYPOINT).toBe(
+      "Older conversation will be trimmed after this reply, whether or not it ends your turn. Record a short status entry — what you are doing and how it is going — with log_status, or end your turn without one.",
+    );
+    // Growth varies per request, and the cap ends wakes along the way, as a real run's would.
+    const turns = Array.from({ length: 50 }, (_, i) => ({
+      content: "busy",
+      toolCalls: Array.from({ length: [1, 3, 2, 1][i % 4]! }, () => ({ name: "state_summary", arguments: {} })),
+    }));
+    const { dir, options } = setup(new StubAdapter(turns));
+    await runLoop(options);
+    const requests = readTrajectory(dir).filter((r) => r.t === "request");
+    const messages = requests.map((_, i) => userMessage(dir, i));
+    const asked = messages.filter((m) => m.includes("- trim_pending: "));
+    expect(asked.length).toBeGreaterThanOrEqual(2);
+    for (const m of asked) expect(m).toContain(`- trim_pending: ${TRIM_PENDING_NOTICE_ENTRYPOINT}`);
+    expect(messages.some((m) => m.includes(TRIM_PENDING_NOTICE))).toBe(false);
   });
 
   test("a stop while asleep ends the run at once with its own verdict", async () => {

@@ -115,7 +115,7 @@ describe("assembleContext", () => {
   });
 
   test("entrypoint loop: the [wake] block sits right after the goal line and before the notices, and nothing else moves", () => {
-    const wake = "[wake 3 · request 1 of this wake · asleep 5m00s · woke for: fallback]\nprogram: none";
+    const wake = "[wake 3 · request 1 of 20 in this wake · asleep 5m00s · woke for: fallback]\nprogram: none";
     const plain = assembleContext(makeInputs());
     const woken = assembleContext({ ...makeInputs(), wake });
     const [goal, ...rest] = woken.split("\n\n");

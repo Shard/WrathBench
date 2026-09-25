@@ -1065,6 +1065,25 @@ export class EntrypointPhases {
   }
 }
 
+/**
+ * The pre-trim ask (METHODOLOGY, "An episodic log, written before each
+ * trim"), on the last turn before a block-trim.
+ */
+export const TRIM_PENDING_NOTICE =
+  "Older conversation will be trimmed after this turn. Record a short status entry — " +
+  "what you are doing and how it is going — with log_status.";
+
+/**
+ * The same ask on the entrypoint loop, where a log_status call is a tool call
+ * and so continues the wake: a model about to end its turn was otherwise told
+ * to do the one thing that does not end it. The ask stays; ending the turn is
+ * named as the other way through, and the trim happens either way. True on
+ * the capped request too, where any reply ends the wake.
+ */
+export const TRIM_PENDING_NOTICE_ENTRYPOINT =
+  "Older conversation will be trimmed after this reply, whether or not it ends your turn. Record a short status entry — " +
+  "what you are doing and how it is going — with log_status, or end your turn without one.";
+
 /** Default cadence of the state ticker: coarse, and independent of `stateIntervalMs`. */
 export const DEFAULT_STATE_TICK_MS = 5_000;
 
@@ -1250,9 +1269,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         pendingNotices.push({
           ts: o.now?.() ?? Date.now(),
           kind: "trim_pending",
-          text:
-            "Older conversation will be trimmed after this turn. Record a short status entry — " +
-            "what you are doing and how it is going — with log_status.",
+          text: entry === null ? TRIM_PENDING_NOTICE : TRIM_PENDING_NOTICE_ENTRYPOINT,
         });
       }
       if (cut > lastCut) {
