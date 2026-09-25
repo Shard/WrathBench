@@ -100,3 +100,50 @@ export function campaignLiveRuns(
   }
   return out;
 }
+
+/**
+ * What a campaign's runs were billed, as a sum with its coverage beside it.
+ *
+ * Summed over the `/api/runs` rows the page already polls, whose `cost` the
+ * viewer builds off the stored per-run totals (`listWithTotals` in
+ * runner/viewer/api.ts): no campaign query of its own, because a listing
+ * query per campaign is the shape that ran the store out of memory.
+ *
+ * Only a provider's billed figure counts — `cost.actual` with a `reported`
+ * basis, never `cost` itself, whose top-level fields are the list-price
+ * estimate. A subscription run's reported figure is as-if-metered money that
+ * nobody was charged, so it is counted beside the sum and never in it; a codex
+ * run reports nothing at all and lands in neither. Null when no run reported a
+ * charge, which is not the same claim as $0.
+ */
+export interface CampaignCost {
+  actualUsd: number | null;
+  /** Runs the sum covers. */
+  reported: number;
+  /** Runs whose only reported figure is a subscription's as-if-metered one. */
+  asIfMetered: number;
+  /** Every run recorded against the campaign — live, failed and re-swept included. */
+  runs: number;
+}
+
+export function campaignCosts(runs: readonly RunListRow[]): Map<string, CampaignCost> {
+  const out = new Map<string, CampaignCost>();
+  for (const run of runs) {
+    if (run.campaign === null) continue;
+    let c = out.get(run.campaign);
+    if (c === undefined) {
+      c = { actualUsd: null, reported: 0, asIfMetered: 0, runs: 0 };
+      out.set(run.campaign, c);
+    }
+    c.runs += 1;
+    const actual = run.cost?.actual ?? null;
+    if (actual === null || actual.basis !== "reported" || actual.usd === null) continue;
+    if (actual.asIfMetered) {
+      c.asIfMetered += 1;
+      continue;
+    }
+    c.reported += 1;
+    c.actualUsd = (c.actualUsd ?? 0) + actual.usd;
+  }
+  return out;
+}

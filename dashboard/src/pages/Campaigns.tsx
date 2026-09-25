@@ -12,10 +12,10 @@ import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type CampaignRowView, type CampaignsResponse } from "../api/client";
 import { Collapsible } from "../components/Collapsible";
-import { campaignLiveRuns, progressOf, type CampaignRunRow } from "../lib/campaigns";
+import { campaignCosts, campaignLiveRuns, progressOf, type CampaignCost, type CampaignRunRow } from "../lib/campaigns";
 import { useFeeds } from "../lib/feeds";
 import { progressLabel, progressTitle, rowProgress, rowStateLabel, runHref } from "../lib/fleet";
-import { fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { LevelXp } from "../components/CharacterFacts";
 import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
@@ -49,6 +49,18 @@ function plural(n: number, word: string): string {
   return n === 1 ? word : `${word}s`;
 }
 
+/**
+ * The cost figure's tooltip. Its denominator is every run the campaign has,
+ * which is not the swept count beside it, so the title says which runs it is.
+ */
+function costTitle(c: CampaignCost): string {
+  const excluded =
+    c.asIfMetered === 0
+      ? ""
+      : `; ${c.asIfMetered} subscription ${plural(c.asIfMetered, "run")} reported an as-if-metered figure, not summed`;
+  return `what the providers reported billing, summed over the runs that reported a charge, out of every run recorded against this campaign (live and failed included)${excluded}`;
+}
+
 function stateOf(row: CampaignRowView): { label: string; cls: string } {
   if (row.config === null) return { label: "retired", cls: "dim" };
   // A finished sweep reads quieter than a running one: same green, faded, so
@@ -69,6 +81,10 @@ export default function Campaigns() {
   const body = (): CampaignsResponse | undefined => feed.latest;
   const rows = (): CampaignRowView[] => body()?.campaigns ?? [];
   const live = (): Map<string, CampaignRunRow[]> => campaignLiveRuns(fleet.latest, runs.latest ?? []);
+  // Undefined until the runs feed lands, so a pane shows no figure rather than a
+  // "0 of 0" that only means the feed is still in flight.
+  const cost = (campaign: string): CampaignCost | undefined =>
+    runs.latest === undefined ? undefined : campaignCosts(runs.latest).get(campaign);
 
   return (
     <div class="page">
@@ -114,6 +130,16 @@ export default function Campaigns() {
                 <>
                   {coverage(row)}
                   <Show when={row.live > 0}> · {row.live} live</Show>
+                  <Show when={cost(row.campaign)}>
+                    {(c) => (
+                      <>
+                        {" · "}
+                        <span title={costTitle(c())}>
+                          {fmtUsd(c().actualUsd)} actual ({c().reported} of {c().runs} {plural(c().runs, "run")})
+                        </span>
+                      </>
+                    )}
+                  </Show>
                   {/* The account NAME is operator detail and is being taken
                       out of the public projection; that it is pinned at all is
                       the fact a reader of this page needs. */}

@@ -8,8 +8,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { FleetJobView, FleetResponse, RunListRow } from "../../runner/viewer/api-types";
-import { campaignLiveRuns, progressOf } from "../src/lib/campaigns";
+import type { CostFigure, CostView, FleetJobView, FleetResponse, RunListRow } from "../../runner/viewer/api-types";
+import { campaignCosts, campaignLiveRuns, progressOf } from "../src/lib/campaigns";
 import { rowProgress } from "../src/lib/fleet";
 
 function job(over: Partial<FleetJobView> = {}): FleetJobView {
@@ -159,5 +159,82 @@ describe("progress", () => {
 
     const noBudget = campaignLiveRuns(fleet(), [run({ comparability: null })]).get("nav-probe")![0]!;
     expect(rowProgress(progressOf(noBudget)!)).toBeNull();
+  });
+});
+
+/*
+ * The pane header's cost: provider-billed `actual` figures summed per campaign,
+ * with the coverage beside them. Typed figures rather than a cast, so a renamed
+ * field breaks the typecheck instead of quietly summing nothing.
+ */
+function figure(over: Partial<CostFigure> = {}): CostFigure {
+  return { usd: null, basis: "none", asIfMetered: false, breakdown: null, priceId: null, asOf: null, note: "", ...over };
+}
+
+/** A cost view whose top level is the list-price estimate, as the viewer serves it. */
+function costView(actual: CostFigure, expectedUsd = 9.99): CostView {
+  const expected = figure({ usd: expectedUsd, basis: "list-price", priceId: "p", asOf: "2026-09-01" });
+  return { ...expected, actual, expected };
+}
+
+const billed = (usd: number): CostView => costView(figure({ usd, basis: "reported" }));
+
+describe("campaign cost", () => {
+  test("billed figures are summed, and the coverage counts every run of the campaign", () => {
+    const c = campaignCosts([
+      run({ runId: "a", cost: billed(1.25) }),
+      run({ runId: "b", cost: billed(0.5), terminationReason: "episode-limit" }),
+      run({ runId: "c", cost: costView(figure()) }),
+    ]).get("nav-probe")!;
+    expect(c).toEqual({ actualUsd: 1.75, reported: 2, asIfMetered: 0, runs: 3 });
+  });
+
+  test("the estimate on the view's top level is never read: an unreported run adds nothing", () => {
+    const c = campaignCosts([run({ cost: costView(figure(), 42) })]).get("nav-probe")!;
+    expect(c.actualUsd).toBeNull();
+    expect(c.reported).toBe(0);
+  });
+
+  test("a subscription's as-if-metered figure is counted beside the sum, never in it", () => {
+    const c = campaignCosts([
+      run({ runId: "a", cost: billed(2) }),
+      run({ runId: "b", cost: costView(figure({ usd: 30, basis: "reported", asIfMetered: true })) }),
+    ]).get("nav-probe")!;
+    expect(c).toEqual({ actualUsd: 2, reported: 1, asIfMetered: 1, runs: 2 });
+  });
+
+  test("a codex run's as-if-metered estimate lives on `expected` and reaches neither count", () => {
+    const codex: CostView = {
+      ...figure({ usd: 12, basis: "list-price", asIfMetered: true }),
+      actual: figure(),
+      expected: figure({ usd: 12, basis: "list-price", asIfMetered: true }),
+    };
+    expect(campaignCosts([run({ cost: codex })]).get("nav-probe")).toEqual({
+      actualUsd: null,
+      reported: 0,
+      asIfMetered: 0,
+      runs: 1,
+    });
+  });
+
+  test("an unreadable run counts in the denominator only", () => {
+    const c = campaignCosts([run({ runId: "a", cost: null }), run({ runId: "b", cost: billed(3) })]).get("nav-probe")!;
+    expect(c).toEqual({ actualUsd: 3, reported: 1, asIfMetered: 0, runs: 2 });
+  });
+
+  test("no report is null, and a reported $0 is zero — two different claims", () => {
+    expect(campaignCosts([run({ cost: costView(figure()) })]).get("nav-probe")!.actualUsd).toBeNull();
+    expect(campaignCosts([run({ cost: billed(0) })]).get("nav-probe")!.actualUsd).toBe(0);
+  });
+
+  test("each campaign sums its own runs, and a run with no campaign reaches none", () => {
+    const by = campaignCosts([
+      run({ runId: "a", campaign: "nav-probe", cost: billed(1) }),
+      run({ runId: "b", campaign: "class-probe", cost: billed(4) }),
+      run({ runId: "c", campaign: null, cell: null, cost: billed(100) }),
+    ]);
+    expect([...by.keys()].sort()).toEqual(["class-probe", "nav-probe"]);
+    expect(by.get("nav-probe")!.actualUsd).toBe(1);
+    expect(by.get("class-probe")!.actualUsd).toBe(4);
   });
 });

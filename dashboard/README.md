@@ -85,7 +85,7 @@ published artifact carries.
 | `/runs` | every run, as a sortable table — the per-run grain; `/results` redirects here |
 | `/ladder` | one tier at a time: a scatter of average cost per run against average XP earned, one point per model, over the rungs each model has reached. `freeplay` is the exception — the active field, one stepped line and one row per durable character, level against cumulative active playtime |
 | `/models` | the roster with the scheduler's verdict on each entry |
-| `/campaigns` | probe campaign coverage: cells swept, by how many models |
+| `/campaigns` | probe campaign coverage: cells swept, by how many models, and the providers' billed total with how many runs reported one |
 | `/run/:id` | one run, turn by turn, following the file live |
 | `/character/:id` | one durable character across its attempts: the climb, the totals, the live session when one runs |
 | `/config` | the config store, operator only — the page withholds itself on the public build |
