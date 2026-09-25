@@ -10,7 +10,7 @@
  *
  * The component renders its header from `FLEET_COLUMNS` and its body from
  * `fleetRows`, so what is asserted here is what ships — the same reason the run
- * rows keep their maths in `format.ts` (see dashboard/README.md).
+ * rows keep their maths in `format.ts`.
  */
 
 import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView, TpsFacts } from "@viewer/api-types";

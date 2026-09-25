@@ -189,7 +189,7 @@ the SPA owns everything that is UI.
   `Client` interface over the bucket instead of `/api`, so the pages are the
   same pages and the private build keeps its same-origin, CORS-free posture.
   Design and cost model are docs/PUBLIC-DASHBOARD.md, the Cloudflare setup is
-  docs/RUNBOOK.md ("Public dashboard"), and the gate above still binds.
+  infra/cloudflare/README.md, and the gate above still binds.
 
 ### wiki/ (Bun/TypeScript, MIT)
 

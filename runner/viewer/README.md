@@ -57,9 +57,8 @@ with no further configuration.
 
 There is no fallback UI: with no build on disk every page route
 answers with a plain-text notice naming the build command, and `/api` keeps
-serving throughout. What the dashboard renders is documented in
-`dashboard/README.md`; what follows is what the server decides before the UI
-sees it.
+serving throughout. The dashboard's own rules are in `dashboard/README.md`;
+what follows is what the server decides before the UI sees it.
 
 ## Loopback only
 

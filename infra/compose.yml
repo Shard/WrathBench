@@ -31,7 +31,7 @@ x-wb-db: &wb-db
   WRATHBENCH_DB_USER: root
   WRATHBENCH_DB_PASSWORD: ${WRATHBENCH_DB_ROOT_PASSWORD:-wrathbench}
 
-# The `codex` driver's subscription LANE (runner/README.md, Drivers): a
+# The `codex` driver's subscription LANE (runner/README.md, "The codex driver"): a
 # logged-in Codex home — a DIRECTORY holding auth.json and the persisted
 # threads, never a token. It is mounted, never copied: the CLI refreshes the
 # ChatGPT token in place and a second copy invalidates the first ("refresh
@@ -480,7 +480,7 @@ services:
   # --------------------------------------------------------------- publisher
   # The public dashboard's publisher (infra/publish-dashboard.ts): renders the
   # viewer's own API to JSON, applies the public projection, and PUTs what
-  # changed to the R2 bucket. See docs/RUNBOOK.md ("Public dashboard") for
+  # changed to the R2 bucket. See infra/cloudflare/README.md for
   # the Cloudflare side and docs/PUBLIC-DASHBOARD.md for why the shape is
   # push-based.
   #
