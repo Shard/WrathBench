@@ -89,7 +89,7 @@ describe("reflectingAt", () => {
 describe("isReflectTool", () => {
   test("the three tools of the surface, and nothing else", () => {
     for (const n of ["reflect", "log_status", "read_log"]) expect(isReflectTool(n)).toBe(true);
-    for (const n of ["run_snippet", "write_scratchpad", "search_reference", "", "read_logs"])
+    for (const n of ["run_snippet", "write_file", "search_reference", "", "read_logs"])
       expect(isReflectTool(n)).toBe(false);
     expect(isReflectTool(null)).toBe(false);
     expect(isReflectTool(undefined)).toBe(false);

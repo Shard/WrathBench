@@ -18,7 +18,7 @@ import { InfoHint } from "../components/InfoHint";
 
 /** What the loop diagram is showing, one hover off its heading. */
 const LOOP_NOTE =
-  "Each turn the model sees a fixed state summary, the newest server events, any harness notices and its own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back every turn; the episodic log is a one-line status the harness asks for before it trims older conversation, which the model can page through while reflecting at an inn.";
+  "Each turn the model sees a fixed state summary, the newest server events, any harness notices, a listing of its workspace and its own notes. It acts by running a snippet; the server answers with packets; those fold into the next turn's state. The workspace is the model's own files: notes.md, rewritten by it and handed back whole every turn, and TypeScript modules its snippets import; the episodic log is a one-line status the harness asks for before it trims older conversation, which the model can page through while reflecting at an inn.";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;
@@ -159,7 +159,7 @@ export default function Home() {
           <ul class="dim">
             <li>See what a game client sees: units in range, its quests, bags, spells, chat, position.</li>
             <li>Act through the handlers a client hits: move, fight, talk, loot, trade, train, fly, mail.</li>
-            <li>Keep its own notes: a scratchpad it rewrites, and an episodic log it can read.</li>
+            <li>Keep its own files: notes it rewrites, modules its snippets import, and an episodic log it can read.</li>
             <li>Reflection mode, allowing agents resting at an inn or in a city to consider their next steps.</li>
             <li>Search a frozen 3.3.5a reference wiki; on scored episodes it gets names, never actual coordinates.</li>
           </ul>
@@ -178,8 +178,8 @@ export default function Home() {
 
       <h2 class="section">the tools</h2>
       <p class="dim">
-        Nine tools, identical for every model. Pick one to see the description the model is given, as served
-        by the harness right now.
+        {tools.latest?.length ?? "The"} tools, identical for every model. Pick one to see the description the
+        model is given, as served by the harness right now.
       </p>
       <Show when={tools.error !== undefined}>
         <div class="banner bad">{displayError(tools.error)}</div>
@@ -275,9 +275,9 @@ export default function Home() {
 
 /**
  * The execution loop, as inline SVG so it follows the theme through the same
- * custom properties as everything else. Boxes are the loop; the scratchpad
+ * custom properties as everything else. Boxes are the loop; the workspace
  * and the log sit under it as the two memories, each edge a tool the model
- * calls (or, for the scratchpad, the context injection).
+ * calls (or, for notes.md, the context injection).
  */
 function LoopDiagram() {
   const box = (x: number, y: number, w: number, label: string, sub?: string) => (
@@ -297,7 +297,7 @@ function LoopDiagram() {
     <line x1={x1} y1={y1} x2={x2} y2={y2} class={dashed ? "loop-edge dashed" : "loop-edge"} marker-end="url(#loop-head)" />
   );
   return (
-    <svg class="loop" viewBox="-28 0 788 222" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; scratchpad and episodic log beside it.">
+    <svg class="loop" viewBox="-28 0 788 222" role="img" aria-label="The execution loop: context, model turn, run_snippet, server, events, back to context; workspace and episodic log beside it.">
       <defs>
         <marker id="loop-head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L8,4 L0,8 z" class="loop-head" />
@@ -318,23 +318,24 @@ function LoopDiagram() {
       <text x="385" y="19" text-anchor="middle" class="loop-sub">next turn: the packets fold into cached state</text>
       {/*
         The two memories, as the harness actually uses them (runner/src/context.ts,
-        tools.ts, reflect.ts): the model writes the scratchpad and the harness reads
-        it back by injecting it into every turn's context; the log is appended by the
-        model before a trim and paged back by the model while reflecting. No edge
-        joins the two.
+        tools.ts, workspace.ts, reflect.ts): the model reads and writes its
+        workspace through the four file tools, and the harness also hands notes.md
+        back whole, with a listing of every file, in every turn's context; the log
+        is appended by the model before a trim and paged back by the model while
+        reflecting. No edge joins the two.
 
-        The scratchpad edge is one-directional on purpose. There is no read
-        tool — the notes are read by being injected into every turn's context,
-        which is the edge already drawn along the left. (`read_scratchpad` was
-        removed for exactly that reason: it re-served text the
-        turn already carried.)
+        So the workspace edge is two-way, like the log's: read_file reads any
+        file on demand, and the context edge along the left is the notes and the
+        listing arriving unasked.
       */}
-      {box(100, 166, 120, "scratchpad", "notes, markdown")}
+      {box(100, 166, 120, "workspace", "notes.md, modules")}
       {box(240, 166, 120, "episodic log", "append-only")}
-      {/* Two parallel verticals off the model turn, one per memory — the scratchpad's is a write only; the read is the context edge hugging the left. */}
-      <line x1="200" y1="92" x2="200" y2="164" class="loop-edge dashed" marker-end="url(#loop-head)" />
-      <text x="194" y="126" text-anchor="end" class="loop-sub">write_scratchpad</text>
-      <text x="194" y="137" text-anchor="end" class="loop-sub">edit_scratchpad</text>
+      {/* Two parallel verticals off the model turn, one per memory. */}
+      <line x1="200" y1="92" x2="200" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
+      <text x="194" y="115" text-anchor="end" class="loop-sub">read_file</text>
+      <text x="194" y="126" text-anchor="end" class="loop-sub">write_file</text>
+      <text x="194" y="137" text-anchor="end" class="loop-sub">edit_file</text>
+      <text x="194" y="148" text-anchor="end" class="loop-sub">delete_file</text>
       <line x1="270" y1="92" x2="270" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
       <text x="278" y="126" class="loop-sub">log_status before a trim</text>
       <text x="278" y="137" class="loop-sub">read_log while reflecting, at an inn</text>
