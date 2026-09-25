@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StubAdapter } from "../src/adapter";
+import { StubAdapter, type ChatAdapter } from "../src/adapter";
 import { loadRunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { runLoop, type StopRequest } from "../src/loop";
@@ -70,7 +70,7 @@ function fakeProgramSandbox() {
   };
 }
 
-function setup(adapter: StubAdapter, opts: { watchdogs?: Record<string, unknown>; onSleep?: (now: number) => void } = {}) {
+function setup(adapter: ChatAdapter, opts: { watchdogs?: Record<string, unknown>; onSleep?: (now: number) => void } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-loopep-"));
   const config = {
     ...loadRunConfig({
@@ -144,7 +144,10 @@ describe("the entrypoint loop's phases", () => {
       "deploy:2",
       "wake:3",
       "request:3",
+      "wake_end:3",
     ]);
+    // The last ledger is flushed when the run stops, mid-wake here.
+    expect(records.filter((r) => r.t === "wake_end").at(-1)).toMatchObject({ wake: 3, requests: 1, reason: "run_end" });
     const wakes = records.filter((r) => r.t === "wake");
     expect(wakes.map((w) => [w["turn"], w["reasons"], w["sleptMs"]])).toEqual([
       [1, ["start"], 0],
@@ -259,28 +262,79 @@ describe("the entrypoint loop's phases", () => {
     expect(readTrajectory(limited.dir).some((r) => r.t === "watchdog" && r["reason"] === "episode-limit")).toBe(true);
   });
 
-  test("a sandbox restart while asleep is counted toward snippet-runaway, and a ticking program clears the count", async () => {
-    const adapter = new StubAdapter([{ content: "done", toolCalls: [] }, { content: "again", toolCalls: [] }]);
-    const ctx = setup(adapter, {
+  test("a program that blocks on every deploy ends the run as snippet-runaway, however many ticks it completes first", async () => {
+    const yields = () => new StubAdapter(Array.from({ length: 6 }, () => ({ content: "done", toolCalls: [] })));
+    const halt = (fake: ReturnType<typeof fakeProgramSandbox>, now: number): void => {
+      (fake.sandbox as unknown as { totalRestarts: number }).totalRestarts++;
+      fake.emit({ kind: "halted", deploy: 1, at: now });
+    };
+    // Ticks, then a halt, on every deploy: the ticks never clear the count.
+    const blocking = setup(yields(), {
       watchdogs: { maxSandboxRestarts: 2 },
       onSleep: (now) => {
-        const s = ctx.fake.sandbox as unknown as { totalRestarts: number };
-        if (now === T0 + 10_000 || now === T0 + 20_000) s.totalRestarts++;
+        if (now === T0 + 8_000 || now === T0 + 38_000) blocking.fake.emit({ kind: "report", report: emptyReport({ deploy: 1, ticks: 5 }) });
+        if (now === T0 + 10_000 || now === T0 + 40_000) halt(blocking.fake, now);
       },
     });
-    const outcome = await runLoop(ctx.options);
-    expect(outcome).toEqual({ kind: "terminated", reason: "snippet-runaway", detail: "2 consecutive sandbox restarts" });
+    expect(await runLoop(blocking.options)).toEqual({ kind: "terminated", reason: "snippet-runaway", detail: "2 consecutive sandbox restarts" });
+    const wakes = readTrajectory(blocking.dir).filter((r) => r.t === "wake");
+    expect(wakes[1]!["reasons"]).toEqual(["halted"]);
+    const ends = readTrajectory(blocking.dir).filter((r) => r.t === "wake_end");
+    expect(ends.reduce((n, r) => n + (r["halts"] as number), 0)).toBe(2);
+    expect(ends.reduce((n, r) => n + (r["ticks"] as number), 0)).toBe(10);
 
-    const alive = setup(new StubAdapter([{ content: "done", toolCalls: [] }, { content: "again", toolCalls: [] }]), {
+    // A healthy program with the odd halt: a sleep that ends with it running
+    // and no restart since the yield clears the count in between.
+    const healthy = setup(yields(), {
       watchdogs: { maxSandboxRestarts: 2 },
       onSleep: (now) => {
-        const s = alive.fake.sandbox as unknown as { totalRestarts: number };
-        if (now === T0 + 10_000) s.totalRestarts++;
-        if (now === T0 + 15_000) alive.fake.emit({ kind: "report", report: emptyReport({ deploy: 1, ticks: 5 }) });
-        if (now === T0 + 20_000) s.totalRestarts++;
+        if (now === T0 + 10_000 || now === T0 + 400_000) halt(healthy.fake, now);
       },
     });
-    expect(await runLoop(alive.options)).toEqual({ kind: "terminated", reason: "stub-complete" });
+    expect(await runLoop(healthy.options)).toEqual({ kind: "terminated", reason: "stub-complete" });
+  });
+
+  test("a report that lands while the yielding reply is in flight reaches the next wake, and the ledger counts it once", async () => {
+    const late = {
+      signature: "loop() TypeError at loop (main.ts:9:5)",
+      hook: "loop()",
+      text: "TypeError: late\n    at loop (main.ts:9:5)",
+      isNew: true,
+      deploy: 1,
+      firstTs: T0,
+      lastTs: T0,
+    };
+    let calls = 0;
+    let emit: (e: ProgramHostEvent) => void = () => {};
+    const stub = new StubAdapter([
+      { content: "working", toolCalls: [{ name: "state_summary", arguments: {} }] },
+      { content: "done", toolCalls: [] },
+      { content: "seen", toolCalls: [] },
+    ]);
+    const adapter = {
+      label: "stub",
+      complete: async (req: Parameters<StubAdapter["complete"]>[0]) => {
+        calls++;
+        // The first request's block shows 2; one more lands during the second (yielding) request.
+        if (calls === 1) emit({ kind: "report", report: emptyReport({ deploy: 1, errors: [{ ...late, count: 2 }] }) });
+        if (calls === 2) emit({ kind: "report", report: emptyReport({ deploy: 1, errors: [{ ...late, count: 1, isNew: false }, { ...late, signature: "on.SMSG_X Error", hook: "on.SMSG_X", text: "Error: during the reply", count: 1 }] }) });
+        return stub.complete(req);
+      },
+    };
+    const ctx = setup(adapter);
+    emit = ctx.fake.emit;
+    await runLoop(ctx.options);
+    const records = readTrajectory(ctx.dir);
+    const second = records.filter((r) => r.t === "wake")[1]!;
+    expect(second["reasons"]).toEqual(["error"]);
+    const woken = userMessage(ctx.dir, 2);
+    expect(woken).toContain("- on.SMSG_X Error: during the reply");
+    expect(woken).toContain("- loop() TypeError: late (at");
+    const counts = new Map<string, number>();
+    for (const r of records.filter((x) => x.t === "program_error")) {
+      counts.set(r["signature"] as string, (counts.get(r["signature"] as string) ?? 0) + (r["count"] as number));
+    }
+    expect(Object.fromEntries(counts)).toEqual({ "loop() TypeError at loop (main.ts:9:5)": 3, "on.SMSG_X Error": 1 });
   });
 
   test("the minimum sleep holds even for a reason that arrives at once", async () => {

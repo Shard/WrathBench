@@ -124,10 +124,11 @@ export class Watchdogs {
   }
 
   /**
-   * Entrypoint loop: the program completed a tick, so the sandbox is healthy
-   * again. The reset that loop uses in place of a successful snippet: a model
-   * that runs one good snippet per wake must not keep a program that blocks on
-   * every deploy from ever tripping `snippet-runaway`.
+   * Entrypoint loop: a sleep ended with the program running and no restart
+   * since the model's yield, so the sandbox is healthy again. The reset that
+   * loop uses in place of a successful snippet: neither a good snippet per
+   * wake nor a few ticks before each block may keep a program that blocks on
+   * every deploy from tripping `snippet-runaway` (loop.ts, `EntrypointPhases`).
    */
   noteProgramAlive(): void {
     this.sandboxRestarts = 0;

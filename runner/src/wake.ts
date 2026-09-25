@@ -155,6 +155,27 @@ export class WakeLog {
   private consoleLines = 0;
   private hints = new Map<string, ActionHintNote>();
   private capped = false;
+  /**
+   * What the last rendered request showed, by position and count. The yield
+   * clears only that: rows that arrived after the last render — a report
+   * landing while the model's reply was in flight — carry into the next wake,
+   * or the model would be woken for an error it is never shown.
+   */
+  private shown: {
+    errors: Map<string, number>;
+    requests: Map<string, number>;
+    hints: Map<string, number>;
+    milestones: number;
+    loads: number;
+    host: number;
+    console: number;
+    consoleLines: number;
+  } = { errors: new Map(), requests: new Map(), hints: new Map(), milestones: 0, loads: 0, host: 0, console: 0, consoleLines: 0 };
+  /**
+   * The trajectory's ledger, kept apart from what the block shows: every
+   * occurrence counted once, drained as each wake ends (`drainLedger`).
+   */
+  private ledger: WakeLedger = emptyLedger();
 
   /** When the model last ended its turn; null before the first yield of this process. */
   get asleepSince(): number | null {
@@ -170,6 +191,9 @@ export class WakeLog {
     this.ticks += r.ticks;
     this.longestTickMs = Math.max(this.longestTickMs, r.longestTickMs);
     this.overruns += r.overruns;
+    this.ledger.ticks += r.ticks;
+    this.ledger.longestTickMs = Math.max(this.ledger.longestTickMs, r.longestTickMs);
+    this.ledger.overruns += r.overruns;
     for (const e of r.errors) {
       const key = `${e.deploy ?? "-"}\u0000${e.signature}`;
       const row = this.errors.get(key);
@@ -187,6 +211,9 @@ export class WakeLog {
           lastTs: e.lastTs,
         });
       }
+      const booked = this.ledger.errors.get(key);
+      if (booked !== undefined) booked.count += e.count;
+      else this.ledger.errors.set(key, { signature: e.signature, hook: e.hook, deploy: e.deploy, count: e.count });
       if (e.isNew) this.reason("error", now);
     }
     for (const q of r.requests) {
@@ -202,7 +229,11 @@ export class WakeLog {
     }
     this.consoleLines += r.logLines;
     this.console.push(...r.logs);
-    if (this.console.length > CONSOLE_KEEP) this.console.splice(0, this.console.length - CONSOLE_KEEP);
+    if (this.console.length > CONSOLE_KEEP) {
+      const drop = this.console.length - CONSOLE_KEEP;
+      this.console.splice(0, drop);
+      this.shown.console = Math.max(0, this.shown.console - drop);
+    }
     for (const h of r.hints) {
       const key = `${h.action}\u0000${h.status}`;
       const prev = this.hints.get(key);
@@ -222,10 +253,12 @@ export class WakeLog {
           at: e.at,
           detail: `your program (deploy ${e.deploy}) blocked the event loop; the sandbox restarted, and main.ts loads again when you end your turn`,
         });
+        this.ledger.halts++;
         this.reason("halted", now);
         return;
       case "restart":
         this.host.push({ kind: "restart", at: e.at, detail: `${e.detail}; the sandbox restarted` });
+        this.ledger.restarts++;
         this.reason("restart", now);
         return;
       case "stopped":
@@ -255,25 +288,42 @@ export class WakeLog {
   }
 
   /**
-   * The model ended its turn. Everything it has been shown is behind it; a
-   * reason it has not been shown yet — one that arrived after the last request
-   * was rendered — stays and wakes it.
+   * The model ended its turn. What it was shown is behind it; what arrived
+   * after the last render — reasons and rows alike — carries into the next
+   * wake, where it is shown and, for a reason, wakes it.
    */
   yielded(now: number, capped: boolean): void {
+    const s = this.shown;
     this.yieldedAt = now;
     this.capped = capped;
     this.reasons = this.reasons.filter((r) => !r.shown);
-    this.errors.clear();
-    this.requests.clear();
-    this.milestones = [];
-    this.loads = [];
-    this.host = [];
+    const errors = new Map<string, WakeErrorRow>();
+    for (const [key, row] of this.errors) {
+      const seen = s.errors.get(key) ?? 0;
+      if (row.count > seen) errors.set(key, seen === 0 ? row : { ...row, count: row.count - seen, firstTs: row.lastTs });
+    }
+    this.errors = errors;
+    const requests = new Map<string, WakeRequestRow>();
+    for (const [key, row] of this.requests) {
+      const seen = s.requests.get(key) ?? 0;
+      if (row.count > seen) requests.set(key, { ...row, count: row.count - seen });
+    }
+    this.requests = requests;
+    const hints = new Map<string, ActionHintNote>();
+    for (const [key, h] of this.hints) {
+      const seen = s.hints.get(key) ?? 0;
+      if (h.count > seen) hints.set(key, { ...h, count: h.count - seen });
+    }
+    this.hints = hints;
+    this.milestones = this.milestones.slice(s.milestones);
+    this.loads = this.loads.slice(s.loads);
+    this.host = this.host.slice(s.host);
+    this.console = this.console.slice(s.console);
+    this.consoleLines = Math.max(0, this.consoleLines - s.consoleLines);
     this.ticks = 0;
     this.longestTickMs = 0;
     this.overruns = 0;
-    this.console = [];
-    this.consoleLines = 0;
-    this.hints.clear();
+    this.shown = { errors: new Map(), requests: new Map(), hints: new Map(), milestones: 0, loads: 0, host: 0, console: 0, consoleLines: 0 };
   }
 
   /** When the sleeping model is due to wake, and why. */
@@ -285,14 +335,26 @@ export class WakeLog {
     return { at: Math.max(first + WAKE_COALESCE_MS, since + MIN_SLEEP_MS), reasons: kindsOf(pending) };
   }
 
-  /** A request just showed the model everything logged so far: none of it wakes it again. */
+  /** A request just showed the model everything logged so far: none of it wakes it again, and the yield clears it. */
   markShown(): void {
     for (const r of this.reasons) r.shown = true;
+    this.shown = {
+      errors: new Map([...this.errors].map(([k, r]) => [k, r.count])),
+      requests: new Map([...this.requests].map(([k, r]) => [k, r.count])),
+      hints: new Map([...this.hints].map(([k, h]) => [k, h.count])),
+      milestones: this.milestones.length,
+      loads: this.loads.length,
+      host: this.host.length,
+      console: this.console.length,
+      consoleLines: this.consoleLines,
+    };
   }
 
-  /** The error rows since the yield, for the trajectory's `program_error` records. */
-  errorRows(): WakeErrorRow[] {
-    return [...this.errors.values()];
+  /** Everything counted since the last drain, for the trajectory; and reset. */
+  drainLedger(): WakeLedger {
+    const out = this.ledger;
+    this.ledger = emptyLedger();
+    return out;
   }
 
   /** The facts since the yield: the state delta counts deaths and turn-ins from them. */
@@ -332,6 +394,24 @@ export class WakeLog {
   }
 }
 
+/**
+ * What the trajectory records as each wake ends: every error signature and the
+ * program's tick, overrun, halt and restart counts since the previous drain,
+ * each occurrence exactly once — independent of what the block showed.
+ */
+export interface WakeLedger {
+  errors: Map<string, { signature: string; hook: string; deploy: number | null; count: number }>;
+  ticks: number;
+  longestTickMs: number;
+  overruns: number;
+  halts: number;
+  restarts: number;
+}
+
+function emptyLedger(): WakeLedger {
+  return { errors: new Map(), ticks: 0, longestTickMs: 0, overruns: 0, halts: 0, restarts: 0 };
+}
+
 function kindsOf(reasons: readonly { kind: WakeKind }[]): WakeKind[] {
   const set = new Set(reasons.map((r) => r.kind));
   return KIND_ORDER.filter((k) => set.has(k));
@@ -360,7 +440,9 @@ export type SleepOutcome<T> = { kind: "woke"; reasons: WakeKind[]; sleptMs: numb
  * meanwhile; nothing here touches them.
  */
 export async function sleepUntilWake<T>(o: SleepOptions<T>): Promise<SleepOutcome<T>> {
-  const started = o.now();
+  // Slept since the yield, not since this call: the deploy at the yield comes
+  // between the two, and the minimum sleep is counted from the yield.
+  const started = o.log.asleepSince ?? o.now();
   const step = o.checkMs ?? SLEEP_CHECK_MS;
   for (;;) {
     o.onCheck?.();

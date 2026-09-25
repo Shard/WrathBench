@@ -480,15 +480,19 @@ the spike was built on.
   blamed and the program comes back by itself — unless files changed since
   its deploy, in which case it stays stopped until the yield rather than run
   code the model has not ended its turn on; otherwise the program halts until
-  the next yield. Every restart counts toward `snippet-runaway`; on this loop
-  a completed tick clears the count, and a good snippet does only while no
-  program is deployed, so a program that blocks on every deploy still ends the
-  run.
+  the next yield. Every restart counts toward `snippet-runaway`, asleep or
+  awake. On this loop the count is cleared by a sleep that ends with the
+  program running and no restart since the yield (or, with no program
+  deployed, by a good snippet) — never by ticks alone, so a program that runs
+  a few ticks and then blocks on every deploy still ends the run.
 - **Waking** (`src/wake.ts`). A reply with no tool call, or the 20th request,
   ends a wake. The model then sleeps until a new error signature, a failed
   load, a halt, a restart, `ctx.wake(reason)`, a level, a quest turn-in or a
   death — coalesced over 2 s, never sooner than 5 s after the yield — or five
-  minutes pass; a reason already shown in a request never wakes it again.
+  minutes pass; a reason already shown in a request never wakes it again, and
+  whatever arrived after the last request was rendered (a report landing
+  while the reply was in flight) carries into the next wake rather than being
+  cleared unseen.
   Asleep, the stop signal and the watchdogs are checked every second (`idle`
   does not fire on a sleeping model) and the state ticker keeps writing rows.
   Every request of a wake carries a `[wake]` block after the goal line,
@@ -498,7 +502,12 @@ the spike was built on.
   the program's console and memory.json. A turn is still one model request.
 - **Trajectory.** `wake`, `wake_end`, `deploy` and `program_error` records,
   and `wake` on every `request` and `response` (`EntrypointRecord`,
-  `src/trajectory.ts`).
+  `src/trajectory.ts`). Each `wake_end` carries the program's ticks, longest
+  tick, overruns, halts and restarts since the previous one, and the
+  `program_error` rows written just before it count each occurrence once; a
+  final `wake_end` (`run_end`) flushes the last period. Wake, deploy and
+  version numbers start again in each process, so a resumed run is read per
+  segment.
 - **What the model is told.** A second prompt body, built from the snippet
   body by exact replacements — a target that is not found throws at load — so
   the SDK surface is the same bytes on both loops: "## Your program" and

@@ -89,6 +89,41 @@ describe("when a sleeping model is due", () => {
     expect(log.due()).toEqual({ at: T0 + 1_000 + MIN_SLEEP_MS, reasons: ["milestone"] });
   });
 
+  test("what arrived after the last render carries across the yield: the reason, and the rows it is about", () => {
+    const log = new WakeLog();
+    log.noteReport(report({ errors: [errorNote(true, 2)] }), T0);
+    log.markShown();
+    // The model's reply is in flight: a new signature, one more of the old, a death.
+    const other = { ...errorNote(true), signature: "on.SMSG_X RangeError", hook: "on.SMSG_X", text: "RangeError: late\n    at h (main.ts:3:1)" };
+    log.noteReport(report({ errors: [other, errorNote(false, 3)], milestones: [{ fact: "death", ts: 0 }], logs: [{ level: "log", ts: 0, text: "late line" }], logLines: 1 }), T0 + 500);
+    log.yielded(T0 + 1_000, false);
+    expect(log.due().reasons).toEqual(["error", "milestone"]);
+    const v = log.view({ wake: 2, request: 1, asleepMs: 5_000, wokeFor: ["error"], program: { state: "running", deploy: 7, deployedAt: T0, editsSinceDeploy: false, mainExists: true }, delta: null, memory: null });
+    // The late signature whole, and only the unshown part of the shown one.
+    expect(v.errors.map((e) => [e.signature, e.count, e.text.split("\n")[0]])).toEqual([
+      ["loop() TypeError at loop (main.ts:9:17)", 3, "TypeError: Cannot read properties of undefined (reading 'guid')"],
+      ["on.SMSG_X RangeError", 1, "RangeError: late"],
+    ]);
+    expect(log.facts()).toEqual([{ fact: "death", ts: 0 }]);
+    expect(v.console).toEqual({ lines: 1, entries: [{ level: "log", ts: 0, text: "late line" }] });
+  });
+
+  test("the ledger counts every occurrence once, whatever the block showed or carried", () => {
+    const log = new WakeLog();
+    log.noteReport(report({ ticks: 10, longestTickMs: 40, overruns: 1, errors: [errorNote(true, 2)] }), T0);
+    log.markShown();
+    log.noteReport(report({ ticks: 5, longestTickMs: 90, errors: [errorNote(false, 3)] }), T0 + 500);
+    log.noteHost({ kind: "halted", deploy: 7, at: T0 }, T0);
+    const first = log.drainLedger();
+    log.yielded(T0 + 1_000, false);
+    log.noteReport(report({ ticks: 2, errors: [errorNote(false, 1)] }), T0 + 2_000);
+    const second = log.drainLedger();
+    expect([...first.errors.values()].map((e) => e.count)).toEqual([5]);
+    expect([first.ticks, first.longestTickMs, first.overruns, first.halts, first.restarts]).toEqual([15, 90, 1, 1, 0]);
+    expect([...second.errors.values()].map((e) => e.count)).toEqual([1]);
+    expect(second.ticks).toBe(2);
+  });
+
   test("a failed deploy at the yield, a halt and a restart are reasons of their own", () => {
     const log = new WakeLog();
     log.yielded(T0, false);

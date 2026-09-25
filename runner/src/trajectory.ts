@@ -276,18 +276,35 @@ export type MilestoneLine =
  *   `wake.ts` `WakeKind`: start, error, load, halted, restart, requested,
  *   milestone, fallback) and how long the model had slept (0 on the first).
  * - `wake_end`: it ended — `requests` made, and whether by a reply without a
- *   tool call (`yield`) or at the request cap (`cap`).
+ *   tool call (`yield`) or at the request cap (`cap`); `run_end` is the last
+ *   one, written when the run stops (`requests` 0 if it stopped asleep). Each
+ *   carries the program's `ticks`, `longestTickMs`, `overruns`, `halts` and
+ *   `restarts` since the previous `wake_end`, so the records sum to the run.
  * - `deploy`: main.ts loaded (or failed to, with the error the model is
  *   shown) as a wake ended, or unloaded because it was deleted; `reload: true`
  *   marks the host bringing a deploy back after a restart it was not blamed
  *   for. `version` is the workspace import version it loaded at.
  * - `program_error`: one error signature and how many times it happened since
- *   the previous `wake_end`, written as each wake ends (and at the end of the
- *   run), so the counts sum to every occurrence exactly once.
+ *   the previous `wake_end`, written just before each `wake_end`, so the counts
+ *   sum to every occurrence exactly once.
+ *
+ * `wake`, `deploy` and `version` count from 1 in each process, and `turn` here
+ * is the process's own, as on `request`: a resumed run starts them again, so
+ * an analysis keys them on the segment, which `resume` records delimit.
  */
 export type EntrypointRecord =
   | { t: "wake"; wake: number; turn: number; reasons: string[]; sleptMs: number }
-  | { t: "wake_end"; wake: number; requests: number; reason: "yield" | "cap" }
+  | {
+      t: "wake_end";
+      wake: number;
+      requests: number;
+      reason: "yield" | "cap" | "run_end";
+      ticks: number;
+      longestTickMs: number;
+      overruns: number;
+      halts: number;
+      restarts: number;
+    }
   | {
       t: "deploy";
       wake: number;

@@ -899,11 +899,15 @@ export class EntrypointPhases {
   wake = 1;
   /** Requests made in this wake so far. */
   requests = 0;
+  /** Whether a wake is in progress (false while the model sleeps). */
+  private awake = true;
   private wokeFor: WakeKind[] = ["start"];
   private asleepMs: number | null = null;
   /** The world when the model last ended its turn, for the block's delta line. */
   private snapAtYield: SnapshotLike | null = null;
   private restartsSeen: number;
+  /** `sandbox.totalRestarts` when the model last ended its turn. */
+  private restartsAtYield: number;
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -917,6 +921,7 @@ export class EntrypointPhases {
     },
   ) {
     this.restartsSeen = o.sandbox.totalRestarts;
+    this.restartsAtYield = o.sandbox.totalRestarts;
     const subscribe = (o.sandbox as Partial<SandboxHost>).onProgramEvent;
     this.unsubscribe =
       typeof subscribe === "function" ? subscribe.call(o.sandbox, (e: ProgramHostEvent) => this.onProgramEvent(e)) : () => {};
@@ -924,7 +929,6 @@ export class EntrypointPhases {
 
   private onProgramEvent(e: ProgramHostEvent): void {
     this.log.noteHost(e, this.o.now());
-    if (e.kind === "report" && e.report.ticks > 0) this.o.watchdogs.noteProgramAlive();
     if (e.kind === "reload") {
       this.o.trajectory.append({
         t: "deploy",
@@ -935,7 +939,7 @@ export class EntrypointPhases {
         action: "load",
         reload: true,
         ...(e.answer.ok ? {} : { error: e.answer.error }),
-      });
+      } satisfies EntrypointRecord);
     }
   }
 
@@ -982,41 +986,73 @@ export class EntrypointPhases {
   }
 
   /**
-   * The wake is over: record it and every error signature since the last
-   * yield, take the world as it stands, then deploy what changed. The deploy's
-   * result is the first thing the next wake sees.
+   * Write what the ledger counted since the last `wake_end`: one
+   * `program_error` per signature, then the `wake_end` itself with the
+   * program's tick, overrun, halt and restart counts over the same period.
    */
-  async end(reason: "yield" | "cap"): Promise<void> {
+  private flush(reason: "yield" | "cap" | "run_end"): void {
     const t = this.o.trajectory;
-    for (const e of this.log.errorRows()) {
+    const ledger = this.log.drainLedger();
+    for (const e of ledger.errors.values()) {
       t.append({ t: "program_error", wake: this.wake, signature: e.signature, hook: e.hook, count: e.count, deploy: e.deploy } satisfies EntrypointRecord);
     }
-    t.append({ t: "wake_end", wake: this.wake, requests: this.requests, reason } satisfies EntrypointRecord);
+    t.append({
+      t: "wake_end",
+      wake: this.wake,
+      requests: this.awake ? this.requests : 0,
+      reason,
+      ticks: ledger.ticks,
+      longestTickMs: ledger.longestTickMs,
+      overruns: ledger.overruns,
+      halts: ledger.halts,
+      restarts: ledger.restarts,
+    } satisfies EntrypointRecord);
+  }
+
+  /**
+   * The wake is over: record it, take the world as it stands, then deploy what
+   * changed. The deploy's result is the first thing the next wake sees.
+   */
+  async end(reason: "yield" | "cap"): Promise<void> {
+    this.flush(reason);
+    this.awake = false;
+    this.restartsAtYield = this.o.sandbox.totalRestarts;
     this.snapAtYield = await this.o.builder.snapshot();
     this.log.yielded(this.o.now(), reason === "cap");
     const deployAtYield = (this.o.sandbox as Partial<SandboxHost>).deployAtYield;
     if (typeof deployAtYield !== "function") return;
     const rec = await deployAtYield.call(this.o.sandbox);
     if (rec === null) return;
-    t.append({ t: "deploy", wake: this.wake, ...rec });
+    this.o.trajectory.append({ t: "deploy", wake: this.wake, ...rec } satisfies EntrypointRecord);
     this.log.noteDeploy(rec, this.o.now());
   }
 
-  /** A new wake starts: why, and after how long asleep. */
+  /**
+   * A new wake starts: why, and after how long asleep. A sleep that ends with
+   * the program running and no restart since the yield is what clears the
+   * consecutive-restart count on this loop: a program that blocks on every
+   * deploy never gets there, however many ticks it completes first, so it
+   * still ends the run as `snippet-runaway`.
+   */
   next(reasons: WakeKind[], sleptMs: number, turn: number): void {
+    const state = (this.o.sandbox as Partial<SandboxHost>).programState?.kind ?? "none";
+    if (state === "running" && this.o.sandbox.totalRestarts === this.restartsAtYield) this.o.watchdogs.noteProgramAlive();
     this.wake++;
     this.requests = 0;
+    this.awake = true;
     this.wokeFor = reasons;
     this.asleepMs = sleptMs;
     this.o.trajectory.append({ t: "wake", wake: this.wake, turn, reasons, sleptMs } satisfies EntrypointRecord);
   }
 
-  /** The run is over: the errors not yet recorded, and the program stopped before anything else touches the session. */
+  /**
+   * The run is over: the ledger since the last `wake_end` is written as a
+   * final one (`run_end`; `requests` 0 when the run ended asleep), and the
+   * program stops before anything else touches the session.
+   */
   async close(): Promise<void> {
     this.unsubscribe();
-    for (const e of this.log.errorRows()) {
-      this.o.trajectory.append({ t: "program_error", wake: this.wake, signature: e.signature, hook: e.hook, count: e.count, deploy: e.deploy } satisfies EntrypointRecord);
-    }
+    this.flush("run_end");
     const unload = (this.o.sandbox as Partial<SandboxHost>).unloadProgram;
     if (typeof unload === "function") await unload.call(this.o.sandbox).catch(() => undefined);
   }
