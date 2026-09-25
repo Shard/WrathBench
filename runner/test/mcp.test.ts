@@ -6,10 +6,11 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { McpServer } from "../src/mcp";
+import { McpServer, trajectoryToolCallWriter } from "../src/mcp";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
+import { Trajectory, readTrajectory } from "../src/trajectory";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import type { ToolContext } from "../src/tools";
 
@@ -37,11 +38,11 @@ function fakeSandbox(): SandboxHost {
   return fake as unknown as SandboxHost;
 }
 
-function makeServer(): { server: McpServer; scratchpad: Scratchpad } {
+function makeCtx(sandbox: SandboxHost = fakeSandbox()): { ctx: ToolContext; scratchpad: Scratchpad } {
   const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-"));
   const scratchpad = new Scratchpad(join(dir, "scratchpad.md"));
   const ctx: ToolContext = {
-    sandbox: fakeSandbox(),
+    sandbox,
     scratchpad,
     wiki: undefined,
     sessionLive: () => true,
@@ -49,7 +50,26 @@ function makeServer(): { server: McpServer; scratchpad: Scratchpad } {
     episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
     turn: () => 1,
   };
+  return { ctx, scratchpad };
+}
+
+function makeServer(): { server: McpServer; scratchpad: Scratchpad } {
+  const { ctx, scratchpad } = makeCtx();
   return { server: new McpServer(ctx, { serverVersion: "test" }), scratchpad };
+}
+
+/** A sandbox whose snippet takes `ms` and notes the moment it started. */
+function slowSandbox(ms: number): { sandbox: SandboxHost; startedAt: () => number } {
+  let started = 0;
+  const sandbox = {
+    ...(fakeSandbox() as unknown as Record<string, unknown>),
+    evalSnippet: async (code: string): Promise<SnippetResult> => {
+      started = Date.now();
+      await Bun.sleep(ms);
+      return { ok: true, value: `evaluated:${code}`, logs: [], durationMs: ms };
+    },
+  } as unknown as SandboxHost;
+  return { sandbox, startedAt: () => started };
 }
 
 async function call(server: McpServer, msg: unknown): Promise<Record<string, unknown> | null> {
@@ -234,6 +254,79 @@ describe("McpServer", () => {
       params: { name: "run_snippet", arguments: '{"code":"1+1"}' },
     });
     expect(recorded).toEqual({ code: "1+1" });
+  });
+
+  // Every writer of this callback appends after the call ran, so the stamp it
+  // is handed is the only start of the call a reader gets.
+  test("the tool-call callback is handed the dispatch time, taken before the tool ran", async () => {
+    const { sandbox, startedAt } = slowSandbox(40);
+    const { ctx } = makeCtx(sandbox);
+    const seen: { dispatchTs: number; at: number }[] = [];
+    const server = new McpServer(ctx, {
+      serverVersion: "test",
+      onToolCall: (_name, _args, _result, dispatchTs) => seen.push({ dispatchTs, at: Date.now() }),
+    });
+    await initialized(server);
+    await call(server, {
+      jsonrpc: "2.0",
+      id: 30,
+      method: "tools/call",
+      params: { name: "run_snippet", arguments: { code: "1+1" } },
+    });
+    expect(seen).toHaveLength(1);
+    const { dispatchTs, at } = seen[0]!;
+    expect(dispatchTs).toBeGreaterThan(0);
+    expect(dispatchTs).toBeLessThanOrEqual(startedAt());
+    // Not write time: the callback fires a whole snippet after the stamp.
+    expect(at - dispatchTs).toBeGreaterThanOrEqual(30);
+  });
+
+  test("a call refused at the argument check is stamped too", async () => {
+    const { ctx } = makeCtx();
+    const stamps: number[] = [];
+    const before = Date.now();
+    const server = new McpServer(ctx, {
+      serverVersion: "test",
+      onToolCall: (_name, _args, result, dispatchTs) => {
+        expect(result.text).toContain("not valid JSON");
+        stamps.push(dispatchTs);
+      },
+    });
+    await initialized(server);
+    await call(server, {
+      jsonrpc: "2.0",
+      id: 31,
+      method: "tools/call",
+      params: { name: "run_snippet", arguments: "{not json" },
+    });
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0]!).toBeGreaterThanOrEqual(before);
+  });
+
+  test("the standalone server's writer puts the dispatch time on the tool_call record", async () => {
+    const { sandbox, startedAt } = slowSandbox(40);
+    const { ctx } = makeCtx(sandbox);
+    const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-traj-"));
+    const trajectory = new Trajectory(dir);
+    const server = new McpServer(ctx, { serverVersion: "test", onToolCall: trajectoryToolCallWriter(trajectory) });
+    await initialized(server);
+    await call(server, {
+      jsonrpc: "2.0",
+      id: 32,
+      method: "tools/call",
+      params: { name: "run_snippet", arguments: { code: "1+1" } },
+    });
+    trajectory.close();
+    const records = readTrajectory(dir).filter((r) => r.t === "tool_call" || r.t === "tool_result");
+    expect(records.map((r) => r.t)).toEqual(["tool_call", "tool_result"]);
+    const [callRec, resultRec] = records;
+    // Turn-less, as before: the stamp, not the shape, is what times it.
+    expect(callRec!["turn"]).toBeUndefined();
+    const dispatchTs = callRec!["dispatchTs"] as number;
+    expect(typeof dispatchTs).toBe("number");
+    expect(dispatchTs).toBeLessThanOrEqual(startedAt());
+    expect(callRec!.ts - dispatchTs).toBeGreaterThanOrEqual(30);
+    expect(resultRec!["dispatchTs"]).toBeUndefined();
   });
 
   test("search_reference without a bundle reports unavailability", async () => {

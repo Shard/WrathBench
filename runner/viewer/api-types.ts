@@ -553,6 +553,13 @@ export interface ToolCallEntry extends EntryBase {
   t: "tool_call";
   name?: string;
   args?: unknown;
+  /**
+   * When the writer handed the call to the tool, stamped by every writer. The
+   * MCP-backed ones append the call after it ran, so their `ts` is write time
+   * and this is the only real start; a call's duration is its result's `ts`
+   * minus this. Absent on trajectories written before the stamp.
+   */
+  dispatchTs?: number;
 }
 
 export interface SnippetResultEntry extends EntryBase {

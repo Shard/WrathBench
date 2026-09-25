@@ -294,6 +294,19 @@ describe("summarize", () => {
     expect(s["usage"]).toEqual({ prompt: 900, completion: 40 });
   });
 
+  // The feed times a call from this stamp, so the summary must carry it.
+  test("a tool_call keeps its dispatch stamp and call index", () => {
+    const s = summarize(
+      { t: "tool_call", ts: 5_000, turn: 1, call: 7, name: "run_snippet", args: { code: "1" }, dispatchTs: 1_200 },
+      0,
+      0,
+      10,
+    );
+    expect(s["dispatchTs"]).toBe(1_200);
+    expect(s["call"]).toBe(7);
+    expect(s.ts).toBe(5_000);
+  });
+
   test("unknown types fall through generically with long strings cut", () => {
     const s = summarize({ t: "watchdog", ts: 1, kind: "idle", detail: "d".repeat(5000) }, 0, 0, 10);
     expect(s["kind"]).toBe("idle");

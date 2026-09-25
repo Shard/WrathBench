@@ -195,6 +195,14 @@ describe("codex driver", () => {
     expect(types.filter((t) => t === "request")).toHaveLength(2);
     const snippetResult = records.find((r) => r.t === "snippet_result");
     expect(snippetResult?.["text"]).toContain('ran:await sdk.say("inner 1")');
+    // Appended after the call ran, so the call carries when it was dispatched:
+    // a number no later than its own write time, and only on the call record.
+    const toolCall = records.find((r) => r.t === "tool_call");
+    const dispatchTs = toolCall?.["dispatchTs"];
+    expect(typeof dispatchTs).toBe("number");
+    expect(dispatchTs as number).toBeGreaterThan(0);
+    expect(dispatchTs as number).toBeLessThanOrEqual(toolCall!.ts);
+    expect(snippetResult?.["dispatchTs"]).toBeUndefined();
     // The driver record names the lane by NAME, never by path or contents.
     const driver = records.find((r) => r.t === "driver");
     expect(driver?.["driver"]).toBe("codex");

@@ -78,6 +78,18 @@ describe("runLoop", () => {
     expect(types).toContain("termination");
     const snippetResult = records.find((r) => r.t === "snippet_result");
     expect(snippetResult?.["text"]).toContain("ran:1+1");
+    // Every call carries its dispatch stamp, the same field the CLI drivers
+    // write, so a reader times calls from it rather than from record shape.
+    const calls = records.filter((r) => r.t === "tool_call");
+    const results = records.filter((r) => r.t === "snippet_result" || r.t === "tool_result");
+    expect(calls).toHaveLength(2);
+    expect(results).toHaveLength(2);
+    calls.forEach((c, k) => {
+      const dispatchTs = c["dispatchTs"];
+      expect(typeof dispatchTs).toBe("number");
+      expect(dispatchTs as number).toBeLessThanOrEqual(c.ts);
+      expect(results[k]!.ts).toBeGreaterThanOrEqual(dispatchTs as number);
+    });
     expect(options.scratchpad.read()).toBe("# hi");
     const row = options.trajectory.runRow("run-test");
     expect(row?.["termination_reason"]).toBe("stub-complete");

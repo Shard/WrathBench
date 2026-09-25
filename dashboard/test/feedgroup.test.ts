@@ -1,9 +1,11 @@
 /**
  * The feed grouping (`lib/feedgroup.ts`): what may be glued together and, just
- * as load-bearing, what may not. The three trajectory writers order the same
- * entry types differently (see the module comment), so each writer's shape is
- * pinned here, along with the edges the derivation must survive — a window cut
- * mid-pair and a live tail that has a call but no result yet.
+ * as load-bearing, what may not. The trajectory writers order the same entry
+ * types differently (see the module comment), so each writer's shape is pinned
+ * here, along with the edges the derivation must survive — a window cut
+ * mid-pair and a live tail that has a call but no result yet. The per-writer
+ * fixtures carry no `dispatchTs`, so their durations pin the legacy fallback
+ * for trajectories written before the stamp.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -133,6 +135,61 @@ describe("groupFeed on the claude driver's shape", () => {
     const card = groups[0]!;
     if (card.kind !== "call") throw new Error(card.kind);
     expect(card.result?.text).toBe("hit");
+    expect(card.durationMs).toBeNull();
+  });
+});
+
+describe("groupFeed with the writers' dispatch stamp", () => {
+  // Every writer now stamps `dispatchTs`; the shape inference above is only
+  // the fallback for trajectories written before it.
+  test("a stamped claude-driver triple shows its real duration", () => {
+    const entries = [
+      e("tool_call", 9_000, { turn: 1, call: 7, name: "run_snippet", args: {}, dispatchTs: 1_000 }),
+      e("snippet", 9_000, { turn: 1, call: 7, code: "y" }),
+      e("snippet_result", 9_001, { turn: 1, call: 7, name: "run_snippet", isError: false, text: "ok" }),
+    ];
+    const card = groupFeed(entries)[0]!;
+    if (card.kind !== "call") throw new Error(card.kind);
+    expect(card.durationMs).toBe(8_001);
+  });
+
+  test("a stamped MCP-server pair shows its real duration", () => {
+    const entries = [
+      e("tool_call", 700, { name: "search_reference", args: { query: "q" }, dispatchTs: 400 }),
+      e("tool_result", 701, { name: "search_reference", isError: false, text: "hit" }),
+    ];
+    const card = groupFeed(entries)[0]!;
+    if (card.kind !== "call") throw new Error(card.kind);
+    expect(card.durationMs).toBe(301);
+  });
+
+  test("the stamp wins over the record's own ts on the fixed loop's shape", () => {
+    const entries = [
+      e("tool_call", 1_010, { turn: 3, name: "run_snippet", args: {}, dispatchTs: 1_000 }),
+      e("snippet", 1_010, { turn: 3, code: "x" }),
+      e("snippet_result", 1_500, { turn: 3, name: "run_snippet", isError: false, text: "ok" }),
+    ];
+    const card = groupFeed(entries)[0]!;
+    if (card.kind !== "call") throw new Error(card.kind);
+    expect(card.durationMs).toBe(500);
+  });
+
+  test("a stamp later than the result is no duration, never a fallback", () => {
+    const entries = [
+      e("tool_call", 100, { turn: 3, name: "run_snippet", args: {}, dispatchTs: 900 }),
+      e("snippet_result", 500, { turn: 3, name: "run_snippet", isError: false, text: "ok" }),
+    ];
+    const card = groupFeed(entries)[0]!;
+    if (card.kind !== "call") throw new Error(card.kind);
+    expect(card.result?.text).toBe("ok");
+    expect(card.durationMs).toBeNull();
+  });
+
+  test("a stamped call with no result yet has no duration", () => {
+    const entries = [e("tool_call", 100, { turn: 1, call: 2, name: "await_events", args: {}, dispatchTs: 50 })];
+    const card = groupFeed(entries)[0]!;
+    if (card.kind !== "call") throw new Error(card.kind);
+    expect(card.result).toBeNull();
     expect(card.durationMs).toBeNull();
   });
 });

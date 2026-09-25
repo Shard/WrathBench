@@ -1441,6 +1441,25 @@ describe("projectEntries", () => {
     expect((out.entries[1] as unknown as { before: unknown }).before).toBeNull();
   });
 
+  // The feed times a call from its writer's dispatch stamp; without it here the
+  // public feed would fall back to guessing the writer from the record's shape.
+  test("a tool call keeps its dispatch stamp, its call index and nothing smuggled", () => {
+    const input = {
+      from: 0,
+      total: 1,
+      entries: [
+        smuggle({ i: 0, t: "tool_call", ts: 900, start: 0, end: 1, turn: 1, call: 7, name: "run_snippet",
+          args: { code: "1" }, dispatchTs: 400 }),
+      ],
+    };
+    const out = projectEntries(input as never);
+    assertClean(JSON.stringify(out));
+    expect(keyPaths(out.entries[0])).toEqual(
+      allow(["i", "t", "ts", "start", "end", "turn", "call", "name", "args", "args.code", "dispatchTs"]),
+    );
+    expect(out.entries[0]).toMatchObject({ call: 7, dispatchTs: 400 });
+  });
+
   test("tool results cross the redactor; the reference tool's text goes whole; model text passes", () => {
     const input = {
       from: 3,

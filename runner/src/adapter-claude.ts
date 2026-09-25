@@ -658,13 +658,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   };
 
   const server = new McpServer(toolCtx, {
-    onToolCall: (name, args, result) => {
+    onToolCall: (name, args, result, dispatchTs) => {
       const short = name.replace(`mcp__${MCP_SERVER_NAME}__`, "");
       // `turn` is the driver turn and this driver legitimately runs one long
       // turn (the CLI owns the inner loop), so it is nearly always 1 here —
       // `call` is the monotonic tool-call index that turn-style analysis of
-      // this driver should key on instead.
-      trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args });
+      // this driver should key on instead. These records are appended after
+      // the call ran, so `dispatchTs` is when it started, not their `ts`.
+      trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args, dispatchTs });
       if (short === "run_snippet") {
         trajectory.append({ t: "snippet", turn, call: toolCalls, code: (args as { code?: string }).code ?? "" });
       }

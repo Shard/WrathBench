@@ -30,15 +30,22 @@
  *   those means the result was never written. An allow-list of ambient types
  *   would rot each time the runner grows a record kind; the structural set is
  *   closed by design.
- * - `runner/src/adapter-claude.ts` and `runner/src/mcp.ts` append the whole
- *   run after the call completes, so the members are strictly adjacent — and
- *   their timestamp spread is write time, not run time. A call entry that
- *   carries a `call` index (the claude driver) or no `turn` at all (the MCP
- *   server) is one of these, and its card shows no duration rather than a
- *   fabricated ~0ms.
+ * - `runner/src/adapter-claude.ts`, `runner/src/adapter-codex.ts` and
+ *   `runner/src/mcp.ts` append the whole run after the call completes, so the
+ *   members are strictly adjacent — and their timestamp spread is write time,
+ *   not run time.
  *
  * Where turn/call/name fields exist on both sides they must agree, so a
  * result can never be glued to a stranger's call across a missing partner.
+ *
+ * A card's duration is the result's `ts` minus the call's `dispatchTs`, which
+ * every writer stamps with the moment it handed the call to the tool. That is
+ * the only reading for a stamped call: the field shapes above say how records
+ * pair, never how they were timed. Trajectories from before the stamp fall
+ * back to inferring the writer from shape — `turn` present and `call` absent
+ * is the fixed loop, whose `ts` was taken before dispatch; a `call` index (a
+ * CLI driver) or no `turn` at all (the MCP server) is post-hoc, and shows no
+ * duration rather than a fabricated ~0ms.
  */
 
 import type {
@@ -77,8 +84,9 @@ export interface CallGroup {
   snippet: SnippetEntry | null;
   result: SnippetResultEntry | null;
   /**
-   * `result.ts − call.ts`, only when the writer recorded the call before
-   * running it (see module comment); null for the post-hoc appenders and for
+   * `result.ts − call.dispatchTs` (see module comment). On an unstamped
+   * legacy call, `result.ts − call.ts` when the shape says the call was
+   * recorded before it ran and null for the post-hoc appenders. Null for
    * orphan halves.
    */
   durationMs: number | null;
@@ -198,14 +206,21 @@ function takeCall(
     }
   }
 
-  // Genuine only when the call was recorded before dispatch: the fixed loop
-  // writes `turn` and never `call`; both post-hoc writers fail one of the two.
-  const genuine =
-    call !== null && result !== null && call.turn !== undefined && call.call === undefined;
-  const durationMs =
-    genuine && call!.ts > 0 && result!.ts >= call!.ts ? result!.ts - call!.ts : null;
+  return { group: { kind: "call", call, snippet, result, durationMs: callDuration(call, result) }, skipped, next };
+}
 
-  return { group: { kind: "call", call, snippet, result, durationMs }, skipped, next };
+/** How long a paired call took; see the module comment for the two readings. */
+function callDuration(call: ToolCallEntry | null, result: SnippetResultEntry | null): number | null {
+  if (call === null || result === null) return null;
+  // Stamped by its writer: the only reading, whatever the record's shape.
+  if (typeof call.dispatchTs === "number") {
+    return call.dispatchTs > 0 && result.ts >= call.dispatchTs ? result.ts - call.dispatchTs : null;
+  }
+  // Legacy, unstamped: genuine only when the call was recorded before dispatch
+  // — the fixed loop writes `turn` and never `call`; the post-hoc writers fail
+  // one of the two.
+  const genuine = call.turn !== undefined && call.call === undefined;
+  return genuine && call.ts > 0 && result.ts >= call.ts ? result.ts - call.ts : null;
 }
 
 /** The entry a group is anchored on — its identity across re-derivations. */

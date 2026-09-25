@@ -1138,7 +1138,10 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         const coerced = coerceToolArgs(tc.name, tc.arguments);
         if (coerced.ok) args = coerced.args;
         else argError = coerced.error;
-        trajectory.append({ t: "tool_call", turn, name: tc.name, args: argError ?? args });
+        // Written before the call runs, so `ts` already is the dispatch; the
+        // explicit stamp is what a reader keys on, the same field the drivers
+        // that record after the fact carry, so no reader infers it from shape.
+        trajectory.append({ t: "tool_call", turn, name: tc.name, args: argError ?? args, dispatchTs: Date.now() });
         if (tc.name === "run_snippet" && argError === null) {
           // Log the normalized code: a model that used an alias key (cmd/snippet/
           // source/script/ts) has the real source under that key, and callTool

@@ -42,12 +42,25 @@ interface JsonRpcResponse {
 
 export const MCP_PROTOCOL_VERSION = "2024-11-05";
 
+/**
+ * Told about every `tools/call` once it has an answer. `dispatchTs` is the
+ * wall clock taken as the call arrived, before the tool ran: every writer of
+ * this callback appends its records after the fact, so their own timestamps
+ * are write time, and this is the only honest start of the call it has.
+ */
+export type OnToolCall = (
+  name: string,
+  args: unknown,
+  result: { text: string; isError?: boolean },
+  dispatchTs: number,
+) => void;
+
 export class McpServer {
   private initialized = false;
 
   constructor(
     private readonly ctx: ToolContext,
-    private readonly opts: { serverVersion?: string; onToolCall?: (name: string, args: unknown, result: { text: string; isError?: boolean }) => void } = {},
+    private readonly opts: { serverVersion?: string; onToolCall?: OnToolCall } = {},
   ) {}
 
   /** Handle one raw JSON-RPC line. Returns the response line, or null for notifications. */
@@ -91,6 +104,9 @@ export class McpServer {
       case "tools/call": {
         if (!this.initialized) return fail(-32002, "server not initialized");
         const name = String(msg.params?.["name"] ?? "");
+        // Stamped before anything runs, the argument check included, so a
+        // refused call's near-zero duration is measured rather than assumed.
+        const dispatchTs = Date.now();
         // Leniency at the transport edge: some clients send `arguments` as a
         // JSON *string* (sometimes fenced); coerceToolArgs handles that.
         const raw = msg.params?.["arguments"] ?? {};
@@ -99,7 +115,7 @@ export class McpServer {
           ? await callTool(this.ctx, name, coerced.args)
           : { text: coerced.error, isError: true };
         const args = coerced.ok ? coerced.args : raw;
-        this.opts.onToolCall?.(name, args, result);
+        this.opts.onToolCall?.(name, args, result, dispatchTs);
         return respond({
           content: [{ type: "text", text: result.text }],
           isError: result.isError ?? false,
@@ -109,6 +125,25 @@ export class McpServer {
         return fail(-32601, `method not found: ${msg.method}`);
     }
   }
+}
+
+/**
+ * The standalone server's trajectory writer: a turn-less `tool_call` and its
+ * result, appended together once the call is answered. The call carries
+ * `dispatchTs`, so a reader measures the call from it and never from the
+ * pair's write-time spread.
+ */
+export function trajectoryToolCallWriter(trajectory: Trajectory): OnToolCall {
+  return (name, args, result, dispatchTs) => {
+    trajectory.append({ t: "tool_call", name, args, dispatchTs });
+    trajectory.append({
+      t: "tool_result",
+      name,
+      isError: result.isError ?? false,
+      text: result.text,
+      ...(name === "reflect" ? { reflect: true } : {}),
+    });
+  };
 }
 
 async function* lines(stream: ReadableStream<Uint8Array>): AsyncGenerator<string> {
@@ -186,16 +221,7 @@ async function main(): Promise<void> {
   };
   const server = new McpServer(ctx, {
     serverVersion: harnessVersion(),
-    onToolCall: (name, args, result) => {
-      trajectory.append({ t: "tool_call", name, args });
-      trajectory.append({
-        t: "tool_result",
-        name,
-        isError: result.isError ?? false,
-        text: result.text,
-        ...(name === "reflect" ? { reflect: true } : {}),
-      });
-    },
+    onToolCall: trajectoryToolCallWriter(trajectory),
   });
 
   console.error(`[wrathbench-mcp] run ${runId} — trajectory at ${runDir}`);

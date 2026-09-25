@@ -602,11 +602,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   };
 
   const server = new McpServer(toolCtx, {
-    onToolCall: (name, args, result) => {
+    onToolCall: (name, args, result, dispatchTs) => {
       // Codex calls with the plain tool name; the claude prefix is stripped
-      // defensively so both drivers' records read alike.
+      // defensively so both drivers' records read alike. Appended after the
+      // call ran, so `dispatchTs` carries when it started.
       const short = name.replace(`mcp__${MCP_SERVER_NAME}__`, "").replace(`mcp__${MCP_SERVER_NAME}.`, "");
-      trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args });
+      trajectory.append({ t: "tool_call", turn, call: toolCalls, name: short, args, dispatchTs });
       if (short === "run_snippet") {
         trajectory.append({ t: "snippet", turn, call: toolCalls, code: (args as { code?: string }).code ?? "" });
       }

@@ -1068,7 +1068,7 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
   events_served: ["via", "count", "opcodes", "ambient", "moreOpcodes", "folded"],
   response: ["text", "tools", "outChars", "usage"],
   snippet: ["code"],
-  tool_call: ["name", "args"],
+  tool_call: ["name", "args", "dispatchTs"],
   snippet_result: ["name", "isError", "text", "reflect"],
   tool_result: ["name", "isError", "text", "reflect"],
   state: [
