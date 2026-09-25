@@ -17,7 +17,7 @@
  * parked in an inn cannot hold the window open for a whole episode.
  *
  * Nothing here summarizes anything. The tool returns a fixed, content-free
- * prompt and the model writes the outcome into its own scratchpad — that is
+ * prompt and the model writes the outcome into its own notes.md — that is
  * what separates this from the model-driven summarizer the context policy
  * rejected.
  */
@@ -62,12 +62,12 @@ export const REFLECT_BREAKER_NOTICE = `Reflection ended after ${REFLECT_MAX_TURN
  */
 export const REFLECTION_PROMPT = `Take this turn to think rather than act.
 
-- Read your scratchpad against what you have actually observed and what you have been told.
+- Read your notes.md against what you have actually observed and what you have been told.
 - State what you believe to be true, and the evidence for each belief.
 - Say what has worked and what has not.
 - Decide what to do next.
 
-Write the outcome to your scratchpad.`;
+Write the outcome to your notes.md.`;
 
 /** Why a reflection window closed. */
 export type ReflectCloseReason = "left_rest" | "breaker" | "run_end";

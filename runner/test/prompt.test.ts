@@ -2,12 +2,17 @@ import { describe, expect, test } from "bun:test";
 
 import {
   CLAUDE_CODE_SYSTEM_PROMPT,
+  STATE_KEPT_AND_LOST,
   SYSTEM_PROMPT,
+  buildSystemPrompt,
   contextSentence,
   freshCharacterNote,
   resumeSessionNote,
   continuedSessionNote,
 } from "../src/prompt";
+import { REFLECTION_PROMPT } from "../src/reflect";
+import { STATE_LOSS_RECOVERY, STATE_RESET_NOTICE } from "../src/sandbox/host";
+import { TOOLS } from "../src/tools";
 
 /**
  * The prompt is harness surface, so the facts a run proved models
@@ -78,7 +83,7 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
   });
 
   test("tools are distinguished from ambient snippet objects", () => {
-    // laguna and hy3 called write_scratchpad(...) / search_reference(...) as
+    // laguna and hy3 called write_scratchpad(...) / search_reference(...) (tools of the day) as
     // bare globals inside snippets.
     expect(SYSTEM_PROMPT).toContain("Tools and ambient objects are different things");
     expect(SYSTEM_PROMPT).toContain("is a ReferenceError");
@@ -100,9 +105,9 @@ describe("the context sentence is the harness's, and says what that harness does
   // harnesses. On claude-code no trim happens at all — one CLI
   // conversation grows for the whole episode — so on that driver the prompt
   // stated something false about the machinery the model was running under.
-  test("the fixed loop states the trim, and the scratchpad as the memory", () => {
+  test("the fixed loop states the trim, and notes.md as the memory", () => {
     expect(contextSentence("wrathbench")).toBe(
-      "Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history.",
+      "Older conversation is trimmed aggressively — notes.md is your memory, not the chat history.",
     );
     expect(SYSTEM_PROMPT).toContain(contextSentence("wrathbench"));
     expect(SYSTEM_PROMPT).not.toContain("does not trim");
@@ -117,12 +122,12 @@ describe("the context sentence is the harness's, and says what that harness does
     expect(CLAUDE_CODE_SYSTEM_PROMPT).not.toContain("not the chat history");
   });
 
-  test("the scratchpad survives on claude-code only with the reason it is true", () => {
-    // Kept because a pause and resume restores the scratchpad and no
+  test("the workspace survives on claude-code only with the reason it is true", () => {
+    // Kept because a pause and resume restores the workspace and no
     // conversation (`resumeSessionNote`) — not as leftover advice.
     const s = contextSentence("claude-code");
     expect(s).toContain("paused and resumed");
-    expect(s).toContain("scratchpad");
+    expect(s).toContain("workspace");
   });
 
   test("the two prompts differ by exactly that sentence and nothing else", () => {
@@ -256,6 +261,46 @@ describe("continuedSessionNote", () => {
     expect(note).toContain("level 8 with 6410 xp");
     expect(note).toContain("Do not create a different one");
     expect(note).toContain('createSession({ character: "Bromdir", race: 3, class: 2 })');
-    expect(note).toContain("your scratchpad was");
+    expect(note).toContain("your workspace, notes.md included, was kept");
+    expect(note).toContain("top-level bindings or background routines");
+  });
+});
+
+describe("persistence is taught as the workspace, never as globalThis", () => {
+  const prompts = [SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt(undefined, undefined, "wrathbench", false)];
+
+  test("no model-facing text names globalThis", () => {
+    for (const p of prompts) expect(p).not.toContain("globalThis");
+    expect(STATE_LOSS_RECOVERY).not.toContain("globalThis");
+    expect(STATE_RESET_NOTICE).not.toContain("globalThis");
+    expect(STATE_KEPT_AND_LOST).not.toContain("globalThis");
+    for (const t of TOOLS) expect(t.description).not.toContain("globalThis");
+    expect(REFLECTION_PROMPT).not.toContain("globalThis");
+  });
+
+  test("the prompt teaches files and import, notes.md as memory, and what a restart loses", () => {
+    expect(SYSTEM_PROMPT).toContain('import { helper } from "./lib/util"');
+    expect(SYSTEM_PROMPT).toContain("notes.md in the workspace is your memory: it is shown in full every turn");
+    expect(SYSTEM_PROMPT).toContain(
+      "Background routines and top-level bindings live only in the running sandbox and are lost if the sandbox restarts; workspace files are not.",
+    );
+    expect(SYSTEM_PROMPT).toContain("the next import loads every workspace module afresh");
+    expect(SYSTEM_PROMPT).toContain("- files: your workspace from inside a snippet");
+    expect(SYSTEM_PROMPT).not.toContain("import is not available");
+    expect(SYSTEM_PROMPT).not.toContain("scratchpad");
+    // Top-level persistence still works (rewrite.ts) but is not taught.
+    expect(SYSTEM_PROMPT).not.toContain("declarations persist across snippets");
+  });
+
+  test("the file tools and their limits are in the prompt's tool list", () => {
+    expect(SYSTEM_PROMPT).toContain("- read_file / write_file / edit_file / delete_file: your workspace.");
+    expect(SYSTEM_PROMPT).toContain("Each file holds at most 32000 characters and the workspace at most 1048576 bytes");
+    expect(SYSTEM_PROMPT).toContain("the listing of your workspace, and your notes.md");
+  });
+
+  test("the resume note says bindings and routines were lost and the workspace kept", () => {
+    const note = resumeSessionNote({ character: "Bromdir", race: 3, class: 2, clock: "40 minutes elapsed of 90", seen: "" });
+    expect(note).toContain("neither were top-level bindings or background routines — this is a new sandbox");
+    expect(note).toContain("your workspace, notes.md included, was kept");
   });
 });

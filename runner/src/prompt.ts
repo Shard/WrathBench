@@ -30,7 +30,9 @@ You do not play directly. You write TypeScript snippets that run in a persistent
  */
 const BODY_HEAD = `## The snippet runtime
 
-Snippets run in one long-lived process. Top-level const/let/var/function/class declarations persist across snippets (destructured declarations may not persist; prefer simple names or assign to globalThis). Background routines persist too: a setInterval, or an async function you call without awaiting, keeps running between snippets and after the snippet that started it returns — so work longer than one snippet's time limit belongs in one, and you stop it from a later snippet. await works at the top level. A single-expression snippet returns its value, REPL-style; otherwise use return or console.log to see results. import is not available — everything you need is ambient:
+Snippets run in one long-lived sandbox process. await works at the top level. A single-expression snippet returns its value, REPL-style; otherwise use return or console.log to see results. Background routines keep running between snippets: a setInterval, or an async function you call without awaiting, runs on after the snippet that started it returns — so work longer than one snippet's time limit belongs in one, and you stop it from a later snippet.
+
+Your workspace is a directory of files that outlives the sandbox. Code you want to reuse belongs there: write a TypeScript module (write_file, or files.write inside a snippet) and import it at the top of a snippet with an ordinary import statement, e.g. import { helper } from "./lib/util" — specifiers resolve against the workspace (./x, x, x.ts and nested paths all work; a node builtin keeps its node: prefix). Workspace files import each other with relative paths. After any change to the workspace, the next import loads every workspace module afresh, so a module's own variables start over. notes.md in the workspace is your memory: it is shown in full every turn. Background routines and top-level bindings live only in the running sandbox and are lost if the sandbox restarts; workspace files are not. Everything else you need is ambient:
 
 - sdk: the game client. Key surface today:
   - await connect() — open the event stream. Call once, before creating the session.
@@ -49,12 +51,13 @@ Snippets run in one long-lived process. Top-level const/let/var/function/class d
   - Every call that takes a guid — helpers, raw actions (setTarget, attackStart, gossipHello, loot, vendorList, ...), and a { guid } field inside a raw(...) payload — also accepts a unit object from state.units(...) directly, or the name of something in view: case, spacing and apostrophes are ignored, then an exact name, else a unique substring, else a unique near-miss. Nothing matching, or two things matching, is refused with what is in view (the SDK never picks between referents); when the match was not exact the answer carries resolved: { input, name, guid }. moveTo and moveToAsync take a unit, a guid or a name as well as a point { x, y, z } — a unit resolves to its position in the state cache, and a guid nothing in view answers to comes back as { ok: false, status: "unknown_target", hint } rather than throwing.
   - gossipSelect(guid, "option text") selects by an option's visible text from the last observed gossip menu (case-insensitive exact or unique substring); the numeric gossipSelect(guid, menuId, optionId) form still works.
 - state, events: aliases for sdk.state and sdk.events.
-- sleep(ms, options?), scratchpad.read()/write(content)/append(text). Sleeping is blind — prefer an SDK wait or events.once/waitForOpcode when you are waiting for something specific — so sleep resolves with why it woke: "elapsed", or early with "attacked" (a unit started attacking you) or "died" — the reason is the resolved value itself, e.g. const why = await sleep(20000); if (why === "attacked") { await sdk.killTarget(state.closest({ alive: true, maxDistance: 10 })); } — pass { wake: false } for a plain timer.
+- files: your workspace from inside a snippet — await files.read(path), files.write(path, content), files.edit(path, old_string, new_string, replace_all?), files.delete(path) and files.list(), with the same rules and limits as the file tools.
+- sleep(ms, options?). Sleeping is blind — prefer an SDK wait or events.once/waitForOpcode when you are waiting for something specific — so sleep resolves with why it woke: "elapsed", or early with "attacked" (a unit started attacking you) or "died" — the reason is the resolved value itself, e.g. const why = await sleep(20000); if (why === "attacked") { await sdk.killTarget(state.closest({ alive: true, maxDistance: 10 })); } — pass { wake: false } for a plain timer.
 - signal: this snippet's AbortSignal. Aborted when the snippet is abandoned; check signal.aborted in long loops, or pass it to your own timers.
 
-Tools and ambient objects are different things and do not mix: the tools below (run_snippet, search_reference, write_scratchpad, reflect, log_status, read_log, …) are called by you between snippets, and are not defined inside a snippet — write_scratchpad(...) or search_reference(...) in snippet code is a ReferenceError. Inside a snippet the equivalent is the ambient object: scratchpad.read() and scratchpad.write(text) for the notes; the reference wiki has no snippet-side equivalent, so search it with the tool.
+Tools and ambient objects are different things and do not mix: the tools below (run_snippet, search_reference, write_file, reflect, log_status, read_log, …) are called by you between snippets, and are not defined inside a snippet — write_file(...) or search_reference(...) in snippet code is a ReferenceError. Inside a snippet the equivalent is the ambient object: files.read(path) and files.write(path, content) for the workspace; the reference wiki has no snippet-side equivalent, so search it with the tool.
 
-A raw action's { ok: true } means the opcode was dispatched, not that it worked: the server drops an opcode it will not honor without answering, so questComplete/questChooseReward against an NPC that does not end the quest, or an interact out of range, return ok:true and change nothing. Use the helper that waits for the outcome — turnInQuest/acceptQuestFrom over the raw quest actions, killTarget over attackStart — and treat a raw action's ok as "sent". Errors the server decides after an action is acknowledged arrive as events, not exceptions. A snippet that runs past the time limit is abandoned but the runtime survives: the snippet's ambient signal (an AbortSignal, the same one every sdk wait honors by default) is aborted, so its pending waits — moveTo, killTarget, waitForTransfer, turnInQuest, sleep — reject with EventAbortedError, a move in flight is stopped, and the result tells you so; bindings and routines started by earlier snippets are untouched. A long walk is the usual way to hit that limit — at a base run speed of 7yd/s a move of more than roughly 200y cannot finish inside one snippet — so dispatch those with await sdk.moveToAsync(target), or from a background routine, and poll state.self.position or the WB_MOVE_RESULT event instead of awaiting sdk.moveTo inline. A single-expression snippet that evaluates to a promise waits for that promise, so launch a background routine as a statement followed by a value (globalThis.trip = (async () => { … })().catch(String); "started"). A snippet that blocks the event loop gets the whole sandbox killed and restarted, losing all bindings and routines — you will be told when that happens.
+A raw action's { ok: true } means the opcode was dispatched, not that it worked: the server drops an opcode it will not honor without answering, so questComplete/questChooseReward against an NPC that does not end the quest, or an interact out of range, return ok:true and change nothing. Use the helper that waits for the outcome — turnInQuest/acceptQuestFrom over the raw quest actions, killTarget over attackStart — and treat a raw action's ok as "sent". Errors the server decides after an action is acknowledged arrive as events, not exceptions. A snippet that runs past the time limit is abandoned but the runtime survives: the snippet's ambient signal (an AbortSignal, the same one every sdk wait honors by default) is aborted, so its pending waits — moveTo, killTarget, waitForTransfer, turnInQuest, sleep — reject with EventAbortedError, a move in flight is stopped, and the result tells you so; bindings and routines started by earlier snippets are untouched. A long walk is the usual way to hit that limit — at a base run speed of 7yd/s a move of more than roughly 200y cannot finish inside one snippet — so dispatch those with await sdk.moveToAsync(target), or from a background routine, and poll state.self.position or the WB_MOVE_RESULT event instead of awaiting sdk.moveTo inline. A single-expression snippet that evaluates to a promise waits for that promise, so launch a background routine as a statement followed by a value (void (async () => { … })().catch((e) => console.log(String(e))); "started"); what it prints arrives with later snippet results. A snippet that blocks the event loop gets the whole sandbox killed and restarted, losing every top-level binding and background routine but not your workspace — you will be told when that happens, and the first result from the new sandbox begins by saying so.
 
 ## Tools
 
@@ -62,14 +65,14 @@ A raw action's { ok: true } means the opcode was dispatched, not that it worked:
 - recent_events: the last events from the server, newest last. Ambient movement packets (monster moves, your own heartbeats) are folded out with a count — they already feed the state cache; pass {includeMovement: true} if you truly need the raw stream.
 - state_summary: a formatted summary of the state cache. Every turn's context already contains the full state HUD (character, position, health, xp, money, bag, quests, target, nearby, open windows, stream) — call state_summary only when you want a fresher read partway through a turn.
 - search_reference: full-text search over a game reference wiki (quests, NPCs, zones, items). Use it when you need world knowledge such as where a questgiver stands or what an objective means. Whether results carry wiki-recorded coordinates is stated in the tool's own description for this run; when they do, they are reference notes, not live observation, and do not prove anything is at that spot now.
-- write_scratchpad / edit_scratchpad: your durable notes. The scratchpad survives restarts and context loss; keep your plan, progress, and hard-won facts (coordinates, quest ids, what failed) there. write_scratchpad replaces the whole document — use it to start the pad or rewrite it wholesale. edit_scratchpad({old, new}) changes one part in place: old must match the pad byte for byte and appear exactly once (or pass replaceAll), new replaces it, and an empty new deletes it. Ordinary upkeep — striking a done item, fixing a coordinate, adding a line — is an edit, not a rewrite. There is no read tool: every turn's context already carries the scratchpad as last written, and inside a snippet scratchpad.read() returns it.
-- log_status: append one short status entry to your episodic log. The log is append-only and stamped by the harness with the turn, your level and your zone; unlike the scratchpad, entries cannot be edited or removed once written.
+- read_file / write_file / edit_file / delete_file: your workspace. notes.md is your durable memory — it survives restarts and context loss, so keep your plan, progress, and hard-won facts (coordinates, quest ids, what failed) there; every turn's context shows it in full and lists every other file with its size and first line, and read_file returns a file's text. write_file creates a file or replaces its whole content. edit_file({path, old_string, new_string}) changes one part in place: old_string must match the file exactly, whitespace included, and occur exactly once (or pass replace_all: true), new_string replaces it, and an empty new_string deletes it. Ordinary upkeep — striking a done item, fixing a coordinate, adding a line — is an edit, not a rewrite. delete_file removes a file; notes.md can be emptied but not deleted. Each file holds at most 32000 characters and the workspace at most 1048576 bytes: a change past a limit is refused, never truncated, and one above 80% of a limit comes back with a warning.
+- log_status: append one short status entry to your episodic log. The log is append-only and stamped by the harness with the turn, your level and your zone; unlike notes.md, entries cannot be edited or removed once written.
 - reflect: spend a turn thinking instead of acting. It returns a fixed set of review questions and nothing else — nothing is summarised for you, and nothing is remembered unless you write it down. It works only while your character is resting, and once per stay: leaving the rest area and returning makes it available again.
 - read_log: page your episodic log, oldest first. It works only while you are reflecting; reflect opens that window and leaving the rest area closes it again.
 
 ## Each turn
 
-Every turn you receive the current state summary, the most recent events, any harness notices, and your scratchpad.`;
+Every turn you receive the current state summary, the most recent events, any harness notices, the listing of your workspace, and your notes.md.`;
 
 /** The last sentence of the prompt, after the harness's context sentence. */
 const BODY_TAIL = `Act through tools every turn; text without a tool call does nothing in the world.`;
@@ -86,10 +89,10 @@ const BODY_TAIL = `Act through tools every turn; text without a tool call does n
  * plan around a rule that is not being applied to it.
  *
  * The CLI-scaffold sentence is deliberately a statement of the regime and
- * nothing more — no advice about how to use it. The scratchpad clause survives
+ * nothing more — no advice about how to use it. The workspace clause survives
  * there only because it is still true and has a reason it is worth saying: a
- * pause and resume replays no conversation but does restore the scratchpad
- * (`resumeSessionNote`), so the notes are the only thing that crosses that gap.
+ * pause and resume replays no conversation but does restore the workspace
+ * (`resumeSessionNote`), so its files are the only thing that crosses that gap.
  * It names "the CLI", never which one: claude-code and codex are the same
  * regime (one continuous session the scaffold owns and compacts), so they get
  * the same bytes, and the prompt hash in the comparability tuple stays equal
@@ -102,7 +105,7 @@ const BODY_TAIL = `Act through tools every turn; text without a tool call does n
 export function contextSentence(harness: Harness): string {
   switch (harness) {
     case "wrathbench":
-      return "Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history.";
+      return "Older conversation is trimmed aggressively — notes.md is your memory, not the chat history.";
     case "claude-code":
     case "codex":
       return CLI_SCAFFOLD_CONTEXT_SENTENCE;
@@ -111,7 +114,7 @@ export function contextSentence(harness: Harness): string {
 
 /** What both CLI scaffolds are told about their conversation; see `contextSentence`. */
 const CLI_SCAFFOLD_CONTEXT_SENTENCE =
-  "This harness does not trim your conversation: the session runs as one continuous conversation and the CLI owns its history. Your scratchpad outlasts that history — a run that is paused and resumed comes back with the scratchpad and no conversation at all — so facts you want to keep belong there.";
+  "This harness does not trim your conversation: the session runs as one continuous conversation and the CLI owns its history. Your workspace outlasts that history — a run that is paused and resumed comes back with its workspace, notes.md included, and no conversation at all — so facts you want to keep belong there.";
 
 /**
  * The two places the prompt names `search_reference`, and how the same text
@@ -126,9 +129,9 @@ export const WIKI_TOOL_BULLET =
 
 export const TOOLS_NOT_AMBIENT = {
   withWiki:
-    "Tools and ambient objects are different things and do not mix: the tools below (run_snippet, search_reference, write_scratchpad, reflect, log_status, read_log, …) are called by you between snippets, and are not defined inside a snippet — write_scratchpad(...) or search_reference(...) in snippet code is a ReferenceError. Inside a snippet the equivalent is the ambient object: scratchpad.read() and scratchpad.write(text) for the notes; the reference wiki has no snippet-side equivalent, so search it with the tool.",
+    "Tools and ambient objects are different things and do not mix: the tools below (run_snippet, search_reference, write_file, reflect, log_status, read_log, …) are called by you between snippets, and are not defined inside a snippet — write_file(...) or search_reference(...) in snippet code is a ReferenceError. Inside a snippet the equivalent is the ambient object: files.read(path) and files.write(path, content) for the workspace; the reference wiki has no snippet-side equivalent, so search it with the tool.",
   withoutWiki:
-    "Tools and ambient objects are different things and do not mix: the tools below (run_snippet, write_scratchpad, reflect, log_status, read_log, …) are called by you between snippets, and are not defined inside a snippet — write_scratchpad(...) or log_status(...) in snippet code is a ReferenceError. Inside a snippet the equivalent is the ambient object: scratchpad.read() and scratchpad.write(text) for the notes.",
+    "Tools and ambient objects are different things and do not mix: the tools below (run_snippet, write_file, reflect, log_status, read_log, …) are called by you between snippets, and are not defined inside a snippet — write_file(...) or log_status(...) in snippet code is a ReferenceError. Inside a snippet the equivalent is the ambient object: files.read(path) and files.write(path, content) for the workspace.",
 } as const;
 
 /**
@@ -290,9 +293,17 @@ export function freshCharacterNote(o: { race: number; class: number; taken?: rea
  * that interpolates a name it does not have.
  */
 /**
+ * What a resumed or continued run kept and what it lost, said the same way in
+ * both notes: the conversation and everything that lived in the old sandbox
+ * are gone; the workspace came back whole.
+ */
+export const STATE_KEPT_AND_LOST =
+  "Conversation history was not preserved, and neither were top-level bindings or background routines — this is a new sandbox; your workspace, notes.md included, was kept.";
+
+/**
  * The continued run's session note: a freeplay character coming back under a new
  * run id — the operator disabled it, or the character's previous run ended — on
- * the character and scratchpad its predecessor left. The same character facts
+ * the character and workspace its predecessor left. The same character facts
  * the resume note carries, for the same reason, and the same instruction:
  * `createSession` on the recorded name reuses the character, so the model
  * must not roll another one.
@@ -312,7 +323,7 @@ export function continuedSessionNote(o: {
   const klass = o.className ?? null;
   return (
     `this session continues your earlier freeplay session ${o.from} on the same character. ` +
-    `Conversation history was not preserved; your scratchpad was. ` +
+    `${STATE_KEPT_AND_LOST} ` +
     `Your character is unchanged and was NOT deleted: name "${o.character}", ` +
     `race ${o.race}${race !== null ? ` (${race})` : ""}, class ${o.class}` +
     `${klass !== null ? ` (${klass})` : ""}.${o.seen} Do not create a different one. ` +
@@ -335,7 +346,7 @@ export function resumeSessionNote(o: {
 }): string {
   const head =
     `the runner process was restarted and this run resumed after a pause, ${o.clock}. ` +
-    `Conversation history was not preserved; your scratchpad was. `;
+    `${STATE_KEPT_AND_LOST} `;
   if (o.character === undefined) {
     return head + freshCharacterNote({ race: o.race, class: o.class });
   }

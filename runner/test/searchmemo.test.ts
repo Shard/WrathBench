@@ -14,7 +14,7 @@ import { mcpToolNames } from "../src/adapter-claude";
 import { loadRunConfig } from "../src/config";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
-import { Scratchpad } from "../src/scratchpad";
+import { Workspace } from "../src/workspace";
 import type { SandboxHost } from "../src/sandbox/host";
 
 function bundle(): Database {
@@ -53,7 +53,7 @@ function context(wiki?: Database): ToolContext {
     sandbox: {
       evalSnippet: () => Promise.resolve({ ok: true, value: "1", logs: [], durationMs: 1 }),
     } as unknown as SandboxHost,
-    scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+    workspace: new Workspace(join(dir, "workspace")),
     wiki,
     sessionLive: () => true,
     reflect: new ReflectGate(),
@@ -228,7 +228,7 @@ describe("a run configured without the reference wiki (issue #61)", () => {
     // A deletion and nothing else: the off prompt is a subsequence of the on
     // one, modulo the one paragraph that loses its parenthetical.
     expect(off.length).toBeLessThan(on.length);
-    expect(off).toContain("write_scratchpad(...) or log_status(...) in snippet code is a ReferenceError");
+    expect(off).toContain("write_file(...) or log_status(...) in snippet code is a ReferenceError");
   });
 
   test("the mcp tool grant for the claude CLI drops it too", () => {
