@@ -295,8 +295,7 @@ count toward turns-to-level like any other turn: choosing when to think is
 part of playing well, and a free turn would invite gaming. Separately, the
 model is now told in `[harness notices]` when a block-trim drops older
 conversation, so it is never silently blind to its own memory. Both are
-patch changes; the 0.6 series bump is reserved for the first semi-public
-release.
+patch changes.
 
 **An episodic log, written before each trim, read back at rest** (operator,
 2026-08-30). On the last turn before a block-trim the harness asks for a
