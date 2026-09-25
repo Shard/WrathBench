@@ -105,6 +105,48 @@ describe("sandbox evaluation", () => {
     expect(frozen.value).toBe("true");
   });
 
+  test("the prompt's launch idiom: the stop handle outlives its snippet and abort() ends the loop at its next check", async () => {
+    // prompt.ts teaches exactly this shape (prompt.test.ts pins the text); the
+    // body stands in for the prompt's `…`. The routine takes its controller's
+    // signal as an argument, so it obeys the controller it was launched with
+    // even after `job` is bound to a new one.
+    const host = makeHost();
+    await host.evalSnippet("let ticks = 0; let live = 0;");
+    const launch =
+      "const job = new AbortController(); void (async (stop) => { live++; while (!stop.aborted) { ticks++; " +
+      "await sleep(150, { wake: false }); } live--; console.log('loop ended'); })(job.signal)" +
+      ".catch((e) => console.log(String(e)));";
+
+    // The launch returns at once and with no value: the prompt promises none.
+    // Awaited, the loop would hold the snippet to its 2s timeout.
+    const started = await host.evalSnippet(launch);
+    expect(started.ok).toBe(true);
+    expect(started.timedOut).toBeUndefined();
+    expect(started.value).toBeUndefined();
+    expect(started.durationMs).toBeLessThan(1_000);
+
+    // The next snippet holds the handle, and the loop is running.
+    const handle = await host.evalSnippet("[job instanceof AbortController, job.signal.aborted, live, ticks >= 1]");
+    expect(handle.value).toBe("[ true, false, 1, true ]");
+
+    // abort() does not reject the sleep in flight — no wait takes a routine's
+    // own signal — so the loop finishes that sleep, sees the abort at its next
+    // check, and exits: the only line it prints is its own exit, never an error.
+    await host.evalSnippet("job.abort()");
+    const after = await host.evalSnippet("const was = ticks; await sleep(400, { wake: false }); return [live, ticks === was];");
+    expect(after.value).toBe("[ 0, true ]");
+    expect(after.logs.map((l) => l.text)).toEqual(["loop ended"]);
+
+    // Replacing a routine the way the prompt says — abort the old one, then
+    // launch — leaves exactly one running, even in a single snippet.
+    await host.evalSnippet(launch);
+    await host.evalSnippet(`job.abort(); ${launch}`);
+    const replaced = await host.evalSnippet("await sleep(400, { wake: false }); return live;");
+    expect(replaced.value).toBe("1");
+    await host.evalSnippet("job.abort()");
+    expect((await host.evalSnippet("await sleep(400, { wake: false }); return live;")).value).toBe("0");
+  });
+
   test("console output and errors are captured", async () => {
     const host = makeHost();
     const res = await host.evalSnippet('console.log("hello", { a: 1n }); console.warn("careful");');

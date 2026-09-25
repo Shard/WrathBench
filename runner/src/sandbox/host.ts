@@ -495,10 +495,10 @@ export class SandboxHost {
             `as the move is queued, and you poll state.self.position or the WB_MOVE_RESULT event for the ` +
             `verdict. ` +
             `Work longer than ${Math.round(this.opts.snippetTimeoutMs / 1000)}s belongs in a background ` +
-            `routine: launch it without awaiting and end the snippet with a plain value, e.g. ` +
-            `\`void (async () => { for (const p of waypoints) await sdk.moveTo(p); console.log("arrived"); })().catch((e) => console.log(String(e))); "started"\` ` +
-            `— the trailing value keeps the snippet from awaiting the promise REPL-style, so it returns at once, and ` +
-            `what the routine prints arrives with later snippet results. Code you will launch again belongs in a ` +
+            `routine: launch it without awaiting and keep a handle to stop it, e.g. ` +
+            `\`const job = new AbortController(); void (async (stop) => { for (const p of waypoints) { if (stop.aborted) return; await sdk.moveTo(p); } console.log("arrived"); })(job.signal).catch((e) => console.log(String(e)));\` ` +
+            `— the snippet returns at once with no value, what the routine prints arrives with later snippet ` +
+            `results, and job.abort() from a later snippet stops it at its next check. Code you will launch again belongs in a ` +
             `workspace file you import. Code that was not awaiting the SDK may still be running, so check ` +
             `state/events before assuming it failed.`,
           logs: ping.logs,

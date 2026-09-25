@@ -294,10 +294,26 @@ describe("persistence is taught as the workspace, never as globalThis", () => {
     expect(SYSTEM_PROMPT).toContain(
       "Top-level bindings and background routines persist in the running sandbox from one snippet to the next, until the sandbox restarts; an import binding belongs to the snippet that imported it, so import again in every snippet that uses it; workspace files are the durable store and survive a restart.",
     );
-    // The launch example is unchanged, pending its own decision.
-    expect(SYSTEM_PROMPT).toContain(
-      'void (async () => { … })().catch((e) => console.log(String(e))); "started"',
-    );
+  });
+
+  test("the launch example keeps a handle a later snippet can abort, and promises no value", () => {
+    // A live probe's model launched overlapping routines on consecutive turns
+    // because the example gave it nothing to stop the earlier one with; and the
+    // old example's trailing `"started"` never came back (a statement then a
+    // value is not one expression, so the snippet returned undefined).
+    // sandbox.test.ts runs this idiom end to end.
+    for (const p of [SYSTEM_PROMPT, CLAUDE_CODE_SYSTEM_PROMPT]) {
+      expect(p).toContain(
+        "launch a background routine as a statement and keep a handle to it in a top-level binding: const job = new AbortController(); void (async (stop) => { while (!stop.aborted) { … } })(job.signal).catch((e) => console.log(String(e))); returns at once with no value, and what the routine prints arrives with later snippet results.",
+      );
+      expect(p).toContain(
+        "A later snippet stops it with job.abort(), which the loop sees at its next check, so the call in flight (a sleep, a killTarget running to its timeout) finishes first; launching again does not stop the routine already running, so abort the old one before launching its replacement.",
+      );
+      expect(p).not.toContain('"started"');
+      // No wait takes a routine's own signal (sleep takes only { wake }, the
+      // helpers only the ambient one), so the example must not pass it to one.
+      expect(p).not.toContain("signal: job.signal");
+    }
   });
 
   test("the file tools and their limits are in the prompt's tool list", () => {

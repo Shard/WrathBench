@@ -28,7 +28,8 @@
  *
  * Top-level `const`/`let`/`var`/`function`/`class` declarations persist across
  * snippets (copied onto globalThis after each evaluation — see rewrite.ts for
- * the exact mechanics and limitations); the prompt does not teach it.
+ * the exact mechanics and limitations); the prompt states that they persist,
+ * and teaches a routine's stop handle as one, but never names the mechanism.
  *
  * Import statements name workspace files (rewrite.ts turns each into an
  * awaited dynamic import of the absolute path). This process may read the
