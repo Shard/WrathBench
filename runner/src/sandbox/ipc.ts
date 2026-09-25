@@ -100,9 +100,10 @@ export type HostToChild =
   | { t: "abort"; id: number }
   | { t: "rpc"; id: number; method: "recent_events" | "state_summary" | "death_signals"; params: { limit?: number } }
   /**
-   * The workspace changed (a write, edit or delete, from a tool or from this
-   * child's own hostcall): the next workspace import must load fresh modules.
-   * Sent before the reply to the hostcall that caused it.
+   * An importable workspace file changed (a write, edit or delete of a code or
+   * JSON file, from a tool or from this child's own hostcall): the next
+   * workspace import must load fresh modules. Edits to notes.md and other text
+   * send nothing. Sent before the reply to the hostcall that caused it.
    */
   | { t: "workspace_version"; version: number }
   | { t: "shutdown" };

@@ -344,19 +344,23 @@ Imports: a snippet's top-level import statements name workspace files
 passes through). `rewrite.ts` lifts them out of the snippet and turns each into
 an awaited dynamic import of the resolved absolute path, checking every named
 export so a missing one is an error naming the file; the bindings are the
-snippet's own and never copied back. An edited file must load fresh, and so
-must a file it imports: the host sends the child the workspace version after
-every write, edit or delete, and a Bun runtime plugin in `entry.ts` loads each
+snippet's own and never copied back. Only code and JSON files resolve
+(`isImportable` in `workspace.ts`); notes.md and other text are read, not
+imported. An edited file must load fresh, and so must a file it imports: the
+host sends the child the import version after every write, edit or delete of
+an importable file, and a Bun runtime plugin in `entry.ts` loads each
 workspace module as `<path>?v=<version>`. Bun consults the plugin's
 `onResolve` for the snippet's own dynamic import but not for the static
 imports inside the module it loads (Bun 1.4.0: a nested `./b` resolved
 natively and stayed cached across an edit), so the plugin's `onLoad` carries
 the stamp instead, rewriting a workspace module's relative imports to the
 version it was loaded at (`stampWorkspaceImports`). A version is a whole fresh
-module graph, which is why a module's own state starts over after any change,
-and why the child's memory grows with every version it imports (about 95 KB
-per edit-then-import of a five-module graph, measured); old graphs are never
-asked for again but are not freed. Query-string versioning also meets a Bun
+module graph, which is why a module's own state starts over after a code
+change, and why the child's memory grows with every version it imports (about
+95 KB per edit-then-import of a five-module graph, measured); old graphs are
+never asked for again but are not freed. That cost is why the version moves
+only when importable code does: notes.md is edited far more often than code,
+and an edit to it leaves the loaded modules in place. Query-string versioning also meets a Bun
 1.4.0 fault: now and then a freshly loaded graph loses an import binding and
 the importing module fails with "x is not defined" (7 in 40,000 graphs with no
 plugin involved; none in 20,000 graphs from plain distinct paths). The failed

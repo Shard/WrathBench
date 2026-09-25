@@ -18,8 +18,8 @@
  *    routines are gone from the result it is reading, not a turn later.
  *  - The workspace is this process's to write. The child's `files` calls
  *    arrive as hostcalls and are answered from the one `Workspace`, and every
- *    change, from a hostcall or a tool, is announced to the child as a new
- *    workspace version before anything else is said to it.
+ *    change to an importable file, from a hostcall or a tool, is announced to
+ *    the child as a new import version before anything else is said to it.
  */
 
 import { join } from "node:path";
@@ -202,9 +202,10 @@ export class SandboxHost {
 
   constructor(private readonly opts: SandboxHostOptions) {
     this.resetPending = opts.resumed === true;
-    // Every change, whoever made it, reaches the child before anything else is
-    // said to it — for a hostcall, before the reply to the call that made it.
-    opts.workspace.onChange((version) => {
+    // Every import-version bump, whoever caused it, reaches the child before
+    // anything else is said to it — for a hostcall, before the reply to the
+    // call that made it.
+    opts.workspace.onImportVersion((version) => {
       try {
         this.proc?.send({ t: "workspace_version", version } satisfies HostToChild);
       } catch {

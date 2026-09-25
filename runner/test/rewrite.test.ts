@@ -138,11 +138,18 @@ describe("import statements", () => {
     }
     expect(resolveWorkspaceImport("node:fs", ws)).toBeNull();
     expect(() => resolveWorkspaceImport("./nope", ws)).toThrow(
-      'import "./nope": no such file in the workspace (looked for nope, nope.ts, nope.tsx, nope.js, nope.mjs, nope.jsx, nope/index.ts, nope/index.js)',
+      'import "./nope": no such file in the workspace (looked for nope.ts, nope.tsx, nope.js, nope.mjs, nope.jsx, nope/index.ts, nope/index.js)',
     );
     expect(() => resolveWorkspaceImport("/etc/passwd", ws)).toThrow("imports name workspace files by relative path");
     expect(() => resolveWorkspaceImport("../x", ws)).toThrow(".. would leave the workspace");
     expect(() => resolveWorkspaceImport("./util", undefined)).toThrow("this sandbox has no workspace to import from");
+    // Text is read, not imported: its edits do not bump the import version.
+    writeFileSync(join(ws, "notes.md"), "# plan\n");
+    expect(() => resolveWorkspaceImport("./notes.md", ws)).toThrow(
+      'import "./notes.md": only code and JSON files can be imported (.ts, .tsx, .mts, .cts, .js, .jsx, .mjs, .cjs, .json); read notes.md with files.read instead',
+    );
+    writeFileSync(join(ws, "data.json"), "{}");
+    expect(resolveWorkspaceImport("./data.json", ws)).toEqual({ abs: `${ws}/data.json`, rel: "data.json" });
   });
 
   test("named, default, namespace and side-effect imports become awaited dynamic imports with checked exports", () => {

@@ -86,7 +86,7 @@ describe("snippet imports", () => {
     const { host, ws } = makeHost();
     const missing = await host.evalSnippet('import { go } from "./lib/nav";\ngo()');
     expect(missing.ok).toBe(false);
-    expect(missing.error).toContain('import "./lib/nav": no such file in the workspace (looked for lib/nav, lib/nav.ts');
+    expect(missing.error).toContain('import "./lib/nav": no such file in the workspace (looked for lib/nav.ts, lib/nav.tsx');
 
     write(ws, "lib/nav.ts", "export const walk = 1;\n");
     const noExport = await host.evalSnippet('import { go } from "./lib/nav";\ngo()');
@@ -142,6 +142,28 @@ describe("snippet imports", () => {
     const r = ws.edit("b.ts", '"one"', '"two"');
     expect(r.ok).toBe(true);
     expect((await host.evalSnippet('import { a } from "./a";\na()')).value).toBe('"a+two"');
+  });
+
+  test("a notes.md edit keeps the loaded modules; a .ts edit loads them afresh", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "counter.ts", "let n = 0;\nexport const next = () => ++n;\n");
+    const bump = 'import { next } from "./counter";\nnext()';
+    expect((await host.evalSnippet(bump)).value).toBe("1");
+    expect((await host.evalSnippet(bump)).value).toBe("2");
+    // Text changes, by tool and by snippet: the same module instance answers.
+    expect(ws.write("notes.md", "# plan\n").ok).toBe(true);
+    await host.evalSnippet('await files.edit("notes.md", "# plan", "# plan, revised")');
+    expect((await host.evalSnippet(bump)).value).toBe("3");
+    // A code change: a new module, its state started over.
+    expect(ws.edit("counter.ts", "let n = 0;", "let n = 100;").ok).toBe(true);
+    expect((await host.evalSnippet(bump)).value).toBe("101");
+  });
+
+  test("notes.md is read, not imported", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "notes.md", "# plan\n");
+    const res = await host.evalSnippet('import notes from "./notes.md";\nnotes');
+    expect(res.error).toContain('import "./notes.md": only code and JSON files can be imported');
   });
 
   test("files.write then import in one snippet sees the new code", async () => {

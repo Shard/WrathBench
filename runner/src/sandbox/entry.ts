@@ -33,11 +33,11 @@
  * Import statements name workspace files (rewrite.ts turns each into an
  * awaited dynamic import of the absolute path). This process may read the
  * workspace — its Landlock grant admits the directory read-only — and never
- * writes it. A module is loaded fresh after any workspace change: the host
- * sends the workspace version on every write, edit or delete, and the plugin
- * below stamps every workspace module path with it, so an edited file (or a
- * file it imports) is a new module on the next import rather than a cached
- * one.
+ * writes it. A module is loaded fresh after any change to an importable file:
+ * the host sends the import version on every write, edit or delete of a code
+ * or JSON file (not on notes.md or other text), and the plugin below stamps
+ * every workspace module path with it, so an edited file (or a file it
+ * imports) is a new module on the next import rather than a cached one.
  *
  * ### Network posture — stated honestly
  *
@@ -159,10 +159,11 @@ globalThis.WebSocket = GuardedWebSocket as unknown as typeof WebSocket;
 // ------------------------------------------------------- workspace modules
 
 /**
- * The workspace version this process last heard from the host. Every
+ * The import version this process last heard from the host. Every
  * workspace module is loaded as `<path>?v=<version>`, so a module registry
- * entry is per (file, version): after any write, edit or delete the next
- * import is a new module, and the old one is simply never asked for again.
+ * entry is per (file, version): after a write, edit or delete of an
+ * importable file the next import is a new module graph, and the old one is
+ * never asked for again (nor freed — which is why text edits do not bump it).
  */
 let workspaceVersion = 0;
 

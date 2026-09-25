@@ -17,6 +17,7 @@ import {
   WORKSPACE_MAX_BYTES,
   Workspace,
   carryWorkspace,
+  isImportable,
   openRunWorkspace,
   renderNotes,
   renderWorkspaceContext,
@@ -250,18 +251,53 @@ describe("workspace: delete", () => {
   });
 });
 
-describe("workspace: versions", () => {
-  test("every change bumps the version and tells the listeners; refusals do not", () => {
+describe("workspace: the import version", () => {
+  test("every change to a code file bumps it and tells the listeners; refusals do not", () => {
     const ws = fresh();
     const seen: number[] = [];
-    ws.onChange((v) => seen.push(v));
+    ws.onImportVersion((v) => seen.push(v));
     ok(ws.write("a.ts", "1"));
     ok(ws.edit("a.ts", "1", "2"));
     refused(ws.edit("a.ts", "nope", "3"));
     ok(ws.delete("a.ts"));
     refused(ws.write("../x", "y"));
     expect(seen).toEqual([1, 2, 3]);
-    expect(ws.version).toBe(3);
+    expect(ws.importVersion).toBe(3);
+  });
+
+  test("a notes.md edit does not change it; a .ts edit does", () => {
+    const ws = fresh();
+    ok(ws.write("lib/nav.ts", "export const n = 1;\n"));
+    const before = ws.importVersion;
+    ok(ws.write("notes.md", "# plan\n"));
+    ok(ws.edit("notes.md", "# plan", "# plan, revised"));
+    expect(ws.importVersion).toBe(before);
+    ok(ws.edit("lib/nav.ts", "1", "2"));
+    expect(ws.importVersion).toBe(before + 1);
+  });
+
+  test("importable means code and JSON; other text never bumps it", () => {
+    const ws = fresh();
+    for (const [path, bumps] of [
+      ["a.ts", true],
+      ["b.tsx", true],
+      ["c.js", true],
+      ["d.mjs", true],
+      ["e.json", true],
+      ["plan.md", false],
+      ["route.txt", false],
+      ["notes.md", false],
+    ] as const) {
+      expect(isImportable(path)).toBe(bumps);
+      const before = ws.importVersion;
+      ok(ws.write(path, "{}"));
+      expect(ws.importVersion).toBe(before + (bumps ? 1 : 0));
+    }
+    const before = ws.importVersion;
+    ok(ws.delete("plan.md"));
+    expect(ws.importVersion).toBe(before);
+    ok(ws.delete("e.json"));
+    expect(ws.importVersion).toBe(before + 1);
   });
 });
 

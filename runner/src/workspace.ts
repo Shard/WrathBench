@@ -55,6 +55,19 @@ export const WORKSPACE_TOTAL_SHOWN_FRACTION = 0.5;
 /** How much of a file's first line the listing shows. */
 export const LISTING_FIRST_LINE_CHARS = 120;
 
+/**
+ * The file kinds a snippet may import (sandbox/rewrite.ts refuses the rest), and
+ * so the only files whose change bumps the import version. One list for both,
+ * because an importable file whose edit did not bump the version would be
+ * served stale from the module cache.
+ */
+export const IMPORTABLE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".json"] as const;
+
+/** Whether a workspace path names a file a snippet can import. */
+export function isImportable(path: string): boolean {
+  return IMPORTABLE_EXTENSIONS.some((ext) => path.endsWith(ext));
+}
+
 /** One file as the listing shows it. */
 export interface WorkspaceEntry {
   /** Relative to the workspace, `/`-separated. */
@@ -186,7 +199,7 @@ const LEGACY_TRUNCATION_MARKER = /\n\n\[scratchpad truncated at \d+ chars\]$/;
 
 export class Workspace {
   readonly dir: string;
-  private changes = 0;
+  private importChanges = 0;
   private readonly listeners = new Set<(version: number) => void>();
 
   constructor(dir: string) {
@@ -196,20 +209,28 @@ export class Workspace {
     if (!existsSync(notes)) writeFileSync(notes, "", "utf8");
   }
 
-  /** Bumped by every successful write, edit, delete or clear. */
-  get version(): number {
-    return this.changes;
+  /**
+   * The import version: bumped by a write, edit or delete of an importable
+   * file (`isImportable`), and by anything that replaces the workspace's
+   * contents wholesale. Editing notes.md or any other text leaves it alone,
+   * because every bump makes the next snippet import load a whole new module
+   * graph, and the old one is never freed.
+   */
+  get importVersion(): number {
+    return this.importChanges;
   }
 
-  /** Called after every change with the new version; returns the unsubscribe. */
-  onChange(listener: (version: number) => void): () => void {
+  /** Called with the new import version after every bump; returns the unsubscribe. */
+  onImportVersion(listener: (version: number) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
-  private changed(): void {
-    this.changes++;
-    for (const l of this.listeners) l(this.changes);
+  /** A change to `rel` (or to the whole workspace, when absent): bump if anything importable moved. */
+  private changed(rel?: string): void {
+    if (rel !== undefined && !isImportable(rel)) return;
+    this.importChanges++;
+    for (const l of this.listeners) l(this.importChanges);
   }
 
   /**
@@ -365,7 +386,7 @@ export class Workspace {
       if (readdirSync(d).length > 0) break;
       rmdirSync(d);
     }
-    this.changed();
+    this.changed(r.rel);
     return { ok: true, text: `deleted ${r.rel} (${st.size} bytes)` };
   }
 
@@ -391,7 +412,7 @@ export class Workspace {
   seedNotesFromScratchpad(scratchpadPath: string): void {
     const text = readFileSync(scratchpadPath, "utf8").replace(LEGACY_TRUNCATION_MARKER, "");
     writeFileSync(join(this.dir, NOTES_PATH), text, "utf8");
-    this.changed();
+    this.changed(NOTES_PATH);
   }
 
   /** A parent component that exists as a file, which would make the path impossible. */
@@ -431,7 +452,7 @@ export class Workspace {
     }
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, content, "utf8");
-    this.changed();
+    this.changed(rel);
     const lines = [head];
     if (content.length > WORKSPACE_WARN_FRACTION * limit) {
       lines.push(`warning: ${rel} is ${content.length}/${limit} chars (${pct(content.length, limit)}% of its limit); a write past the limit is refused`);

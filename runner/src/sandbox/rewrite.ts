@@ -25,10 +25,12 @@
  * each becomes an awaited dynamic `import()` of the file it names in the run's
  * workspace, resolved here to an absolute path (`./x`, `./x.ts`, `x`, `x.ts`
  * and nested paths all name workspace files; a specifier with a scheme, such
- * as `node:fs`, is passed through). The bindings are local to the snippet —
+ * as `node:fs`, is passed through). Only code and JSON files resolve
+ * (`isImportable`, workspace.ts); naming notes.md or a .txt is refused. The
+ * bindings are local to the snippet —
  * never copied back — so a later snippet imports again and gets the file as it
  * is then. Freshness across edits is the sandbox's business (entry.ts stamps
- * every workspace module with the workspace version; `stampWorkspaceImports`
+ * every workspace module with the import version; `stampWorkspaceImports`
  * below carries the stamp into the files a workspace module imports itself).
  * A snippet with no import statement compiles to exactly the bytes it always
  * did.
@@ -41,6 +43,7 @@
  */
 
 import { statSync } from "node:fs";
+import { IMPORTABLE_EXTENSIONS, isImportable } from "../workspace";
 
 export interface ScanResult {
   /** Every name declared at the top level. */
@@ -700,7 +703,19 @@ export function parseTranspiledImports(js: string): ParsedImport[] {
 
 /** Extensions a workspace import may leave off, in the order they are tried. */
 const IMPORT_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".jsx"];
-const HAS_EXTENSION = /\.(?:[cm]?[jt]sx?|json|txt|md)$/;
+
+/**
+ * The candidate files for a specifier: itself when it already names an
+ * importable file, else itself with each implied extension and as a directory
+ * index. A specifier is never resolved to a non-importable file (notes.md, a
+ * .txt): its edits do not bump the import version, so an import of it would
+ * be served stale from the module cache.
+ */
+function importCandidates(base: string): string[] {
+  return isImportable(base)
+    ? [base]
+    : [...IMPORT_EXTENSIONS.map((e) => base + e), `${base}/index.ts`, `${base}/index.js`];
+}
 
 /**
  * A snippet's import specifier, resolved against the workspace: the absolute
@@ -723,12 +738,16 @@ export function resolveWorkspaceImport(
     throw new ImportError(`import ${shown}: .. would leave the workspace`);
   }
   const rel = specifier.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
-  const tried = HAS_EXTENSION.test(rel)
-    ? [rel]
-    : [rel, ...IMPORT_EXTENSIONS.map((e) => rel + e), `${rel}/index.ts`, `${rel}/index.js`];
+  const tried = importCandidates(rel);
   for (const candidate of tried) {
     const abs = `${workspace}/${candidate}`;
     if (isFile(abs)) return { abs, rel: candidate };
+  }
+  if (isFile(`${workspace}/${rel}`)) {
+    throw new ImportError(
+      `import ${shown}: only code and JSON files can be imported (${IMPORTABLE_EXTENSIONS.join(", ")}); ` +
+        `read ${rel} with files.read instead`,
+    );
   }
   throw new ImportError(`import ${shown}: no such file in the workspace (looked for ${tried.join(", ")})`);
 }
@@ -823,10 +842,9 @@ export function stampWorkspaceImports(
   for (const spec of specifiers) {
     const base = normalizeAbs(`${dir}/${spec}`);
     if (!base.startsWith(`${workspace}/`)) continue;
-    const candidates = HAS_EXTENSION.test(base)
-      ? [base]
-      : [base, ...IMPORT_EXTENSIONS.map((e) => base + e), `${base}/index.ts`, `${base}/index.js`];
-    const hit = candidates.find(isFile);
+    // A module importing a non-importable workspace file is left to Bun's own
+    // resolution, unstamped — the snippet-level refusal cannot reach it here.
+    const hit = importCandidates(base).find(isFile);
     if (hit !== undefined) stamped.set(spec, `${hit}?v=${version}`);
   }
   return source.replace(
