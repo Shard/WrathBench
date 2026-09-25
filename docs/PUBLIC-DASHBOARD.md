@@ -359,7 +359,9 @@ different XP rates than 3.3.5a.
 Neither mark is a score, neither enters the row order, and neither is on the
 page: the rail that carried them was hard to read, and one entry per category
 is not enough data to earn the space. It returns if and when there are several
-runs to state a distribution from. Nothing else reads the figures.
+runs to state a distribution from. Nothing else reads the figures. A scripted
+greedy-XP grinder and a deterministic walkthrough were considered as baselines
+and not chosen: no scripted agent is built and nothing new is run.
 
 ## The social card
 
