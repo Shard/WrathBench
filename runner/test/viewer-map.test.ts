@@ -3,7 +3,9 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
+import { Trajectory } from "../src/trajectory";
+import { localRunStore, type RunStore } from "../viewer/clickhouse";
+import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
 import { trackFrom } from "../viewer/results";
 import { readStates } from "../viewer/runs";
 import { parseTilePath, resolveTilePath } from "../viewer/tiles";
@@ -491,5 +493,116 @@ describe("readPositions", () => {
       { id: "b", states: [[NOW - 1_000, 1, 1, 1, 1, 2, 3, 0, 0]] },
     ]);
     expect(readPositions(runsDir, NOW).map((p) => p.runId)).toEqual(["b", "a"]);
+  });
+});
+
+/*
+ * The same feed with its listing taken off the derived store. The fixture is
+ * written by the runner's own writer rather than by hand, because the store is
+ * filled by the collector, and the collector reads what the runner writes.
+ */
+describe("positionsFromStore", () => {
+  const NOW = 1_700_000_000_000;
+
+  /** One run as the runner writes it, its only state sample at `stateTs`. */
+  function writeRun(
+    runsDir: string,
+    runId: string,
+    o: { stateTs: number; terminated?: boolean; reflecting?: boolean; episodic?: string },
+  ): void {
+    const dir = join(runsDir, runId);
+    let clock = NOW - 60_000;
+    const traj = new Trajectory(dir, { now: () => clock });
+    traj.writeMeta({
+      runId,
+      harnessVersion: "harness-0.5-9-gabc",
+      startedAt: clock,
+      config: { runId, driver: "openai", model: "a-model", effort: "medium", race: 3, class: 1 } as never,
+      comparability: { episode: "freeplay", harness: "wrathbench", effort: "medium" } as never,
+    });
+    traj.setCharacter(runId, `C-${runId}`);
+    clock = o.stateTs;
+    traj.recordState(runId, {
+      level: 4,
+      xp: 120,
+      map: 0,
+      x: -6240,
+      y: 380,
+      z: 380,
+      money: 71,
+      questsCompleted: 3,
+      health: 140,
+      maxHealth: 220,
+      items: [{ name: "Tough Jerky", count: 4, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 }],
+    });
+    traj.recordMove(runId, { map: 0, x: 7, y: 8, z: 9, moveId: 1 });
+    if (o.reflecting === true) traj.append({ t: "reflect_window", event: "open" });
+    if (o.terminated === true) traj.setTermination(runId, "episode-elapsed" as never, "done");
+    traj.close();
+    if (o.episodic !== undefined)
+      writeFileSync(join(dir, "episodic.jsonl"), `${JSON.stringify({ ts: o.stateTs, turn: 7, text: o.episodic })}\n`);
+  }
+
+  function corpus(): string {
+    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-map-store-"));
+    writeRun(runsDir, "live-a", { stateTs: NOW - 5_000, reflecting: true, episodic: "heading for the inn" });
+    writeRun(runsDir, "live-b", { stateTs: NOW - 1_000 });
+    writeRun(runsDir, "ended", { stateTs: NOW - 1_000, terminated: true });
+    writeRun(runsDir, "stale", { stateTs: NOW - 11 * 60_000 });
+    // Archived: the store carries it, flagged, and the feed must not draw it.
+    writeRun(join(runsDir, "archive"), "shelved", { stateTs: NOW - 1_000 });
+    return runsDir;
+  }
+
+  test("is the file walk's feed, entry for entry and in the same order", async () => {
+    const runsDir = corpus();
+    const fromStore = await positionsFromStore(localRunStore(runsDir), runsDir, NOW);
+    // Terminated, stale and archived runs are all left off; newest position first.
+    expect(fromStore.map((p) => p.runId)).toEqual(["live-b", "live-a"]);
+    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readPositions(runsDir, NOW)));
+    // The readings off the store's aggregate, and the live reads off the files.
+    expect(fromStore[1]).toMatchObject({
+      character: "C-live-a",
+      level: 4,
+      xp: 120,
+      money: 71,
+      questsCompleted: 3,
+      health: 140,
+      maxHealth: 220,
+      class: 1,
+      move: { x: 7, y: 8, z: 9 },
+      status: { turn: 7, text: "heading for the inn" },
+      reflecting: true,
+    });
+    expect(fromStore[1]!.items).toHaveLength(1);
+  });
+
+  test("the listing is the store's: a run it does not list is not opened, whatever is on disk", async () => {
+    const runsDir = corpus();
+    const inner = localRunStore(runsDir);
+    const reads = { runRows: 0, latestStates: 0 };
+    const store: RunStore = {
+      ...inner,
+      runRows: async () => {
+        reads.runRows += 1;
+        return (await inner.runRows()).filter((r) => r.run_id === "live-a");
+      },
+      latestStates: () => {
+        reads.latestStates += 1;
+        return inner.latestStates();
+      },
+    };
+    expect((await positionsFromStore(store, runsDir, NOW)).map((p) => p.runId)).toEqual(["live-a"]);
+    expect(reads).toEqual({ runRows: 1, latestStates: 1 });
+  });
+
+  test("a row the store flags archived is not drawn, even when its files would answer", async () => {
+    const runsDir = corpus();
+    const inner = localRunStore(runsDir);
+    const store: RunStore = {
+      ...inner,
+      runRows: async () => (await inner.runRows()).map((r) => (r.run_id === "live-a" ? { ...r, archived: 1 } : r)),
+    };
+    expect((await positionsFromStore(store, runsDir, NOW)).map((p) => p.runId)).toEqual(["live-b"]);
   });
 });

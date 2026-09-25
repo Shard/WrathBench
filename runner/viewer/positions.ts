@@ -8,6 +8,13 @@
  * later fills the same shape from a trajectory reader plus a time cursor. That
  * seam is the reason this file is separate from the page.
  *
+ * Which runs to ask comes from one of two listings. `positionsFromStore` takes
+ * it off the derived store (`clickhouse.ts`) the way every listing route does;
+ * `readPositions` walks the runs directory, and is what a caller with no store
+ * gets. Either way the answer per run is read from that run's own files, and
+ * built by the one function both call, so the two feeds cannot disagree about
+ * what an agent looks like.
+ *
  * Read-only, like everything else in the viewer: databases open readonly and
  * the schema is asked what it has before it is selected from, because an old
  * run directory never gains a column it did not record.
@@ -17,7 +24,8 @@ import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentPosition, CharacterStatus, MoveIntentView } from "./api-types";
+import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
+import { runRowOf, type RunStore } from "./clickhouse";
 import { listRuns, readMoves } from "./runs";
 
 /**
@@ -208,61 +216,106 @@ export function readLatestMove(runsDir: string, runId: string): MoveIntentView |
 }
 
 /**
- * Every agent worth drawing: unterminated, and standing somewhere recently.
+ * One run's entry on the map, or null when it is not worth drawing:
+ * terminated, or not standing anywhere inside the window.
  *
  * Trajectory mtime deliberately plays no part — that is the listing's notion of
  * live, keyed on a different file for a different question. Here the position's
  * own age is the whole test.
+ */
+function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number): AgentPosition | null {
+  if (run.terminationReason !== null) return null;
+  const pos = readLatestPosition(runsDir, run.runId);
+  if (pos === null) return null;
+  if (now - pos.ts > windowMs) return null;
+  return {
+    runId: run.runId,
+    character: run.character,
+    model: run.model,
+    // Off the comparability stamp, which is already public on the run row:
+    // the map names a nameless pip by its model, and the effort is the half
+    // of that name two sibling characters differ by.
+    effort: run.comparability?.effort ?? null,
+    map: pos.map,
+    x: pos.x,
+    y: pos.y,
+    ts: pos.ts,
+    level: run.level,
+    xp: run.xp,
+    money: run.money,
+    questsCompleted: run.questsCompleted,
+    items: run.items,
+    harnessVersion: run.harnessVersion,
+    // The player frame, from the same sample the pip is drawn from.
+    health: pos.health,
+    maxHealth: pos.maxHealth,
+    power: pos.power,
+    maxPower: pos.maxPower,
+    powerType: pos.powerType,
+    nextLevelXp: pos.nextLevelXp,
+    // Launch config, not a sample: the fallback tint for a run recorded
+    // before `power_type` existed.
+    class: run.class,
+    // Where it is trying to get to. Not aged here: the map decides what a
+    // stale intention looks like, the same way it decides for a pip.
+    move: readLatestMove(runsDir, run.runId),
+    // What the character last said it was doing, and whether it is thinking
+    // rather than acting right now. Neither is aged either, for the same
+    // reason: staleness is the reader's call, not the feed's.
+    status: readLatestStatus(runsDir, run.runId),
+    reflecting: readReflecting(runsDir, run.runId),
+  };
+}
+
+/** The feed over a listing: every run worth drawing, newest position first. */
+function positionsOf(runsDir: string, runs: readonly RunRow[], now: number, windowMs: number): AgentPosition[] {
+  const out: AgentPosition[] = [];
+  for (const run of runs) {
+    const p = positionOf(runsDir, run, now, windowMs);
+    if (p !== null) out.push(p);
+  }
+  out.sort((a, b) => b.ts - a.ts);
+  return out;
+}
+
+/**
+ * Every agent worth drawing, listed by walking the runs directory.
+ *
+ * `listRuns` opens every run in the tree to find the handful that are
+ * unterminated, which is the fan-out `positionsFromStore` exists to avoid. It
+ * stays as the feed for a caller that has no store.
  */
 export function readPositions(
   runsDir: string,
   now = Date.now(),
   windowMs = POSITION_WINDOW_MS,
 ): AgentPosition[] {
-  const out: AgentPosition[] = [];
-  for (const run of listRuns(runsDir, now)) {
-    if (run.terminationReason !== null) continue;
-    const pos = readLatestPosition(runsDir, run.runId);
-    if (pos === null) continue;
-    if (now - pos.ts > windowMs) continue;
-    out.push({
-      runId: run.runId,
-      character: run.character,
-      model: run.model,
-      // Off the comparability stamp, which is already public on the run row:
-      // the map names a nameless pip by its model, and the effort is the half
-      // of that name two sibling characters differ by.
-      effort: run.comparability?.effort ?? null,
-      map: pos.map,
-      x: pos.x,
-      y: pos.y,
-      ts: pos.ts,
-      level: run.level,
-      xp: run.xp,
-      money: run.money,
-      questsCompleted: run.questsCompleted,
-      items: run.items,
-      harnessVersion: run.harnessVersion,
-      // The player frame, from the same sample the pip is drawn from.
-      health: pos.health,
-      maxHealth: pos.maxHealth,
-      power: pos.power,
-      maxPower: pos.maxPower,
-      powerType: pos.powerType,
-      nextLevelXp: pos.nextLevelXp,
-      // Launch config, not a sample: the fallback tint for a run recorded
-      // before `power_type` existed.
-      class: run.class,
-      // Where it is trying to get to. Not aged here: the map decides what a
-      // stale intention looks like, the same way it decides for a pip.
-      move: readLatestMove(runsDir, run.runId),
-      // What the character last said it was doing, and whether it is thinking
-      // rather than acting right now. Neither is aged either, for the same
-      // reason: staleness is the reader's call, not the feed's.
-      status: readLatestStatus(runsDir, run.runId),
-      reflecting: readReflecting(runsDir, run.runId),
-    });
-  }
-  out.sort((a, b) => b.ts - a.ts);
-  return out;
+  return positionsOf(runsDir, listRuns(runsDir, now), now, windowMs);
+}
+
+/**
+ * Every agent worth drawing, listed off the derived store.
+ *
+ * The listing is the one `/api/runs` reads — two queries, archived runs
+ * filtered by the reader, the rows mapped by `runRowOf` and ordered as
+ * `listRuns` orders them — so no run directory is opened to learn which runs
+ * exist or have ended. What stays on files is only what is asked of the runs
+ * that have not ended: the position itself, the move, the status and the
+ * reflection window, read exactly as `readPositions` reads them, because the
+ * map's whole subject is where a character is this second and the store is a
+ * collector poll behind that.
+ *
+ * Like every listing route, a run the collector has not reached yet is not
+ * listed until it has; that is the first seconds of a run's life.
+ */
+export async function positionsFromStore(
+  store: RunStore,
+  runsDir: string,
+  now = Date.now(),
+  windowMs = POSITION_WINDOW_MS,
+): Promise<AgentPosition[]> {
+  const [rows, latest] = await Promise.all([store.runRows(), store.latestStates()]);
+  const runs = rows.filter((r) => r.archived === 0).map((r) => runRowOf(r, latest.get(r.run_id), now));
+  runs.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));
+  return positionsOf(runsDir, runs, now, windowMs);
 }
