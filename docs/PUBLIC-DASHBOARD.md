@@ -74,7 +74,7 @@ Runs as one long-lived loop (a k8s Deployment or a compose service beside the
 fleet) rather than a CronJob, because change detection wants the same
 persistent mtime/size memoisation the viewer already uses; a `--once` mode
 covers backfill and smoke tests. The per-run half of a pass is rendered and
-uploaded in batches of `WRATHBENCH_PUBLISH_BATCH` runs (default 8) rather than
+uploaded in batches of `WRATHBENCH_PUBLISH_BATCH` runs rather than
 built whole and then pushed, and each batch's runs are then released from the
 viewer handle, so what a pass holds does not grow with the runs tree; the
 ordering below is unaffected, because those batches are the run wave and the
@@ -86,10 +86,9 @@ key pair scoped to the one bucket, held only by the publisher.
 Minimap tiles are published by a second, separate script
 (`infra/publish-tiles.ts`). It is never part of a
 snapshot pass: the loop above uploads JSON only, and the tiles are
-uploaded by an explicit operator run — `--dry-run` prints the plan, `--upload`
-performs it. It reads `data/minimap/<mapId>/<row>_<col>.png` and writes
-`tiles/<mapId>/<row>_<col>.png` in the same bucket, keyed by the path the
-viewer already serves so the SPA asks for one URL in either shape. Skip
+uploaded by an explicit operator run. It writes them into the same bucket,
+keyed by the path the viewer already serves so the SPA asks for one URL in
+either shape. Skip
 by content hash, held in `tiles/manifest.json` in the bucket and written after
 the objects it names, so a re-run with nothing re-extracted uploads nothing.
 A published tile is world-readable, cacheable and indexable: there is no
@@ -98,14 +97,8 @@ covers the app hostname only. What that leaves open is a crawler directive with
 no bearing on what the site shows (`infra/cloudflare/README.md`, "Open, and the
 operator's"). The tiles are cached by a `/tiles/*` zone rule at a 1-day TTL,
 short because a re-extraction reuses the keys rather than addressing them by
-content.
-
-`VITE_WRATHBENCH_TILES_BASE` is what points the build at them, and it is a
-separate flag from the snapshot base on purpose: the upload is a separate,
-occasional act, so deriving one from the other would have a JSON pass assert
-that tiles are there. Left unset the map draws its labelled grid, exactly as
-`WRATHBENCH_VIEWER_PUBLIC=1` already makes the viewer do — a complete map view
-and the right one from a checkout that never ran the extraction.
+content. The build flag that points the map at them, and why it is a flag of
+its own, is `dashboard/README.md`'s.
 
 ### Bucket layout, atomicity, freshness
 
@@ -127,8 +120,7 @@ Upload order is per-run → aggregates → manifest last, so a reader can never
 observe a torn generation: an old manifest points at a complete old set, the
 new one at a complete new set. `live.json` sits deliberately outside the
 generation chain — for the fleet pips, freshness beats consistency. Superseded
-versions are pruned after a few cycles (the last five of each aggregate, the
-last two of each run); deletes are free.
+versions are pruned after a few cycles; deletes are free.
 
 Each aggregate carries its own content version rather than one hash over the
 whole set (GitHub issue #38), so a pass rewrites only what moved. Under a
@@ -188,13 +180,9 @@ raised.
 
 `dashboard/src/api/client.ts` already defines the one `Client` interface every
 page consumes, with injectable `fetch` and `base`. A `snapshot-client.ts`
-implements the same interface over the bucket: resolve `manifest.json`
-(memoised ~30s), fetch generation-addressed artifacts, serve `fleet()` and
-`positions()` from `live.json`, and apply the episode/harness filters
-client-side over the pre-rendered results artifact. Internal ~30s
-memoisation is what leaves `poll.ts` and every page's stated interval
-untouched — the fleet page still ticks at 5s, but ticks between snapshot
-refreshes resolve from memory. `entries()`/`raw()` reject with the same 403
+implements the same interface over the bucket. Internal memoisation is what
+leaves `poll.ts` and every page's stated interval untouched — ticks between
+snapshot refreshes resolve from memory. `raw()` rejects with the same 403
 semantics the viewer's public mode already answers, which the pages already
 handle; SSE is guarded off. Selection is a Vite build-time env, so one build
 flag produces the public bundle and the private build keeps its same-origin,
@@ -202,12 +190,12 @@ CORS-free posture (the bucket carries the project's first and only CORS
 policy, scoped to the app hostname).
 
 The public site includes the live fleet and map: pips and
-fleet state at the push cadence (5 minutes), and the map over real minimap
+fleet state at the push cadence, and the map over real minimap
 tiles. Where a tile comes from is
 `dashboard/src/lib/tiles.ts` and nowhere else — the data hostname in the public
 build, same-origin in the private viewer — so the two shapes share one path and
-neither is special-cased. Replaying a freeplay character end to end works there too: since the
-track carries the four scalars of its character — the identity, the place in the
+neither is special-cased. Replaying a freeplay character end to end works there too: the
+track carries its character — the identity, the place in the
 chain and the run ids either side — so the play bar's previous/next attempt
 links need no second request, which is what makes them work over static
 snapshot objects at all. The published `track.json` is content-addressed
@@ -218,19 +206,15 @@ too:
 
 - Fleet-heartbeat staleness must be computed against the response's own
   `now`, not the browser clock — otherwise a healthy snapshot pushed a
-  cadence ago trips the 180s fleet-dead threshold in
+  cadence ago trips the fleet-dead threshold in
   `dashboard/src/lib/fleet.ts`. This is what makes a slower cadence safe: the
   age is frozen at render time rather than growing while a reader waits. The
   map's pip dimming reads the same way, through `positionAgeMs` in
   `dashboard/src/lib/mapview.ts`.
-- A shell banner in snapshot mode says "data as of Ns ago" from the
-  artifact's `generatedAt`, turning warning-coloured when the publisher has
-  evidently stopped pushing. Three clocks exist (heartbeat 30–60s, push at
-  the publish cadence, edge TTL ≤60s) and the UI must not conflate them.
-
-Wire-type impact is two optional fields (`generatedAt`, `attribution`) on the
-response envelopes in `runner/viewer/api-types.ts`, following that file's
-optional-so-older-consumers-still-render convention.
+- A shell banner in snapshot mode states the data's age from the
+  artifact's `generatedAt`, and warns when the publisher has evidently stopped
+  pushing. Three clocks exist (the supervisor's heartbeat, the push, the edge
+  TTL) and the UI must not conflate them.
 
 ### The character page over a bucket
 
@@ -270,16 +254,11 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   *artifact* may name a tile (`runner/test/snapshot.test.ts` pins it).
 - **Entries: names and ids stay, game prose goes** (docs/DATA-AND-LEGAL.md,
   "Trajectory logs"). One window per run is published —
-  the last 200 entries, `entries.json` beside `detail.json`, in the shape the
-  run page's private path loads first — after `projectEntry` (an allowlist
-  per entry type: the `meta` entry sheds the run config, `driver` and
-  `claude_system` their paths, `pause`/`watchdog` their free-text detail) and
-  `redactGameProse` (`runner/viewer/redact-prose.ts`), which replaces the
-  prose fields enumerated from `sdk/src/protocol.ts` — quest details,
-  objectives, area and completion text, questgiver/trainer greetings, the
-  request-items and offer-reward text, gossip option text, item description,
-  page and letter text, mail body, chat message — wherever a decoded payload
-  appears in a tool result. Quest titles, item, NPC, zone and spell names and
+  the feed's tail, `entries.json` beside `detail.json` — after `projectEntry`
+  (an allowlist per entry type) and `redactGameProse`
+  (`runner/viewer/redact-prose.ts`), which replaces the prose fields enumerated
+  from `sdk/src/protocol.ts` wherever a decoded payload appears in a tool
+  result. Quest titles, item, NPC, zone and spell names and
   every id remain. The run's `scratchpad.json` ships whole beside it.
   **Residual, stated plainly**: model-authored text — turn text, snippet
   code, the scratchpad, the episodic status, console lines, and any tool
@@ -288,10 +267,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   and no live tail publicly: the window advances with the detail poll.
 - **Paths**: a container-internal prefix is made repo-relative — every
   exported projector's output crosses `scrubPathsValue`
-  (`runner/viewer/scrub-paths.ts`), which strips the runner image's
-  `/wrathbench` working directory wherever a published string carries it, so a
-  sandbox stack trace reads as `sdk/src/client.ts:123`; the model's text is
-  otherwise as written, and every other absolute path stays "Never".
+  (`runner/viewer/scrub-paths.ts`); the model's text is otherwise as written, and every other absolute path stays "Never".
 - **Names pass**: `items[].name`, a move's `target`, a position's episodic
   `status` (text and zone name) and `terminationDetail`.
 - **Still projected out**: the operator `objective`, `apiBase`, `pauseReason`
@@ -305,8 +281,7 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   shown beside them.
 - **The safe core ships whole**: the `ResultRun` layer is ids, numbers and
   model identifiers — levels, XP, areas and achievements as ids, taxi facts,
-  costs, tokens — and is what the runs, ladder, episodes, models and
-  campaigns pages are made of.
+  costs, tokens.
 
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
@@ -317,9 +292,8 @@ a bare clone like everything else.
 
 Each row's headline numbers are still maxima over a model's counted runs, and
 the page is plain about that. Beside them it shows the spread those runs
-already paid for: a rung cell reads "2/3" — how many of the runs whose records
-can answer that rung reached it, with the link still going to the first that
-did — and under the best level sits the median and range across the counted
+already paid for: per rung, how many of the runs whose records can answer that
+rung reached it, and for the best level the median and range across the counted
 runs that recorded one.
 
 ### The controls
@@ -327,26 +301,19 @@ runs that recorded one.
 Three of the four dropdowns are off the page. Race and class
 asked a question an eval episode cannot answer differently — every scored run
 is the same baseline character — and the harness select was the shell's
-series selector spelled a second time. What is above the chart:
+series selector spelled a second time. The tier and axes chips and the pareto
+front are unchanged. What else is above the chart:
 
-- The **tier** chips and the **axes** chips, unchanged, both in the URL.
-- A **filters** button opening a small popover with two native
-  `<select multiple>` boxes, **company** and **family**. Company is the model
+- **company** and **family** filters. Company is the model
   registry's own vendor (`infra/model-lineup.json`); family is the model *line*
   and is **derived from the slug** rather than looked up, because the registry's
   families are vendor-wide ("Claude" covers sonnet, opus, haiku and fable) and
-  filtering by one would be filtering by company twice. The derivation is dumb
-  and stated: drop the provider prefix, drop the free marker, drop every
-  dash-separated token carrying a digit — `claude-fable-5` → `claude-fable`,
-  `gpt-6-astra` → `gpt-astra`. Both option lists are derived from the rows on
-  screen, so neither can go stale. Values combine within a box and narrow
-  across the two, and both ride in the URL (`?company=`, `?family=`) so a
-  reading of a slice can be linked. The button carries the count of what is on.
+  filtering by one would be filtering by company twice. Both option lists are
+  derived from the rows on screen, so neither can go stale, and both ride in the
+  URL so a reading of a slice can be linked.
 - **exclude free**, the per-viewer preference it has always been — a standing
   opinion about what counts as evidence, not a slice of the field.
-- **pareto front**, unchanged, `?pareto=1`.
-- **representative efforts**, **on by default** (`?efforts=all` turns
-  it off). For a model with several effort entries it shows only the efforts on
+- **representative efforts**, **on by default**. For a model with several effort entries it shows only the efforts on
   **that model's own cost-against-xp Pareto front**: an effort that earned less
   XP *and* cost more than another effort of the same model is a knob setting,
   not a result. A model with one entry is untouched, ties are kept, and nothing
@@ -355,13 +322,8 @@ series selector spelled a second time. What is above the chart:
   page so the chart and the table cannot disagree; the axes are fixed at cost
   and XP rather than following the axes chips, or the set on screen would mean
   something different on every view. On the data measured it hides
-  five of twenty-eight entries at e90 (`claude-fable-5`, `claude-fable-5 (high)`,
-  `claude-fable-5 (none)`, `sonnet`, `sonnet (max)`) and one of eight at e360
-  (`sonnet (medium)`); it removes no table row, because the table is keyed on
+  five of twenty-eight entries at e90 and one of eight at e360; it removes no table row, because the table is keyed on
   the model and the chart on the (model, effort) pair.
-
-Hovering a pin lights its table row and hovering a row lights its pins, keyed
-on the model (`hoverKeyOf`); keyboard focus on a row does the same.
 
 ### No explanatory prose on the page
 
@@ -397,8 +359,7 @@ different XP rates than 3.3.5a.
 Neither mark is a score, neither enters the row order, and neither is on the
 page: the rail that carried them was hard to read, and one entry per category
 is not enough data to earn the space. It returns if and when there are several
-runs to state a distribution from. Nothing else reads the figures — the home
-page, the models page and the OG card never did.
+runs to state a distribution from. Nothing else reads the figures.
 
 ## The social card
 
@@ -410,11 +371,9 @@ JavaScript**, and they reject SVG. So the tags are in the static
 re-renders every pass — the live chart cannot be either.
 
 - **The picture** is `dashboard/src/lib/og.ts`, a pure string builder over the
-  same derivation the homepage's scatter uses (`homeLadderRuns`,
-  `ladderPoints`, `ladderChartLayout`, `paretoFront`), so it cannot show a
-  shape the page does not. 1200×630, an explicit dark ground because a card is
-  composited on someone else's chrome, the Pareto frontier as a step line, one
-  logo puck per entry with the frontier's ringed and the rest dimmed. Colours
+  same derivation the homepage's scatter uses, so it cannot show a shape the
+  page does not. It has an explicit dark ground because a card is composited on
+  someone else's chrome. Colours
   are literal hex and the font stack is the site's own monospace face — resvg
   has no cascade, so a `var()` would paint nothing, and a card in a different
   face than the page it links to reads as someone else's card.
@@ -428,10 +387,8 @@ re-renders every pass — the live chart cannot be either.
   cannot drift from the chart it is a picture of. The names are
   `modelDisplay`'s, the front's only: the step line is the claim the card
   makes, and a name on a dominated point spends a glyph on a point nobody is
-  being asked to read. Where two names would collide, `keepLabels` drops the
-  one that is worse on the y axis (per its spec's `better`) rather than drawing
-  them over each other, with the wordmark, the identity block and the cue
-  pre-reserved — a card is a picture nobody proofreads before it is unfurled.
+  being asked to read. Where two names would collide, `keepLabels` drops one
+  rather than drawing them over each other — a card is a picture nobody proofreads before it is unfurled.
 
 - **The render** is `infra/og-render.ts`: the drawing, the logos read off disk
   (the dashboard resolves them through `import.meta.glob`, which exists only
@@ -460,10 +417,8 @@ re-renders every pass — the live chart cannot be either.
   TTL from the zone's cache rules.
 
   `infra/render-og.ts` is the ship-time half — it writes the static asset the
-  app origin serves, prints the stamp, and `--upload` seeds `v1/og.png` so a
-  first ship does not point at an object no publisher has written yet. A
-  missing R2 key pair skips the upload with a line rather than failing the
-  ship.
+  app origin serves, and seeds `v1/og.png` so a first ship does not point at an
+  object no publisher has written yet.
 
 - **The tags** are injected into `index.html` by a Vite `transformIndexHtml`
   hook over `dashboard/src/lib/og-tags.ts`. `og:image` must be absolute, so
@@ -495,34 +450,7 @@ re-renders every pass — the live chart cannot be either.
   a `tiles/` object on the same hostname. Until a rule names it, the card at
   the edge is up to a day old rather than up to a pass old.
 
-- **`robots.txt`.** With no fetch handler the site serves nothing at that path
-  unless a file is in `dashboard/public/`, which there is, and it is
-  permissive — a disallow-all there stops an unfurl in the places that honour
-  it (Slack and Twitter do, Discord does not). The file covers the app hostname
-  only; the data hostname serves no `robots.txt`, because nothing in this
-  repository writes an object at a bucket root.
-
 The unfurl itself is the last check in `infra/cloudflare/README.md`.
-
-## The repository link
-
-The footer's GitHub link and the BibTeX `url` line on `/about` are behind
-`VITE_WRATHBENCH_REPO_URL`, the third build-time flag beside
-`VITE_WRATHBENCH_SNAPSHOT_BASE` and the card's two. Unset or empty, neither is
-rendered — a link that 404s under the project's own name is worse than no link
-on the one page a stranger reads first. Set to the repository's URL, both
-appear.
-
-`infra/deploy-dashboard.sh` reads `WRATHBENCH_REPO_URL` from `.env` the way it
-reads `WRATHBENCH_PUBLIC_ORIGIN`, but empty is not an error there: no origin
-means a broken card and stops the ship, no repo URL just means no link, so
-turning the link on is one line in `.env` and a redeploy with no repository
-edit. The value is validated as an http(s) URL and otherwise ignored, so a
-stray setting cannot put an arbitrary scheme in an anchor; the link's text is
-the last two path segments (`owner/repo`).
-
-The footer only renders in the public build (it hangs off the snapshot
-attribution), so in the private viewer this flag shows in the citation alone.
 
 ## Rejected alternatives
 
@@ -631,12 +559,10 @@ meant to be bulk-pulled.
 - The app hostname's `robots.txt` (`dashboard/public/robots.txt`) allows
   everything; it exists so link previews unfurl.
 - The data hostname's `robots.txt` (`infra/robots.ts`, PUT by the publisher at
-  start-up) allows the aggregates, the manifest, the live file, the social card
-  and the tiles, and disallows `/v1/run/` for every agent. Its content-signal
+  start-up) disallows `/v1/run/` for every agent and allows the rest. Its content-signal
   line states the terms for what is allowed: search and live answers yes,
   training no.
-- A zone rate limit on `/v1/run/` at the data hostname (sixty requests per ten
-  seconds per client, then a ten-second block) is the enforcement for agents
+- A zone rate limit on `/v1/run/` at the data hostname is the enforcement for agents
   that do not read the file. A reader paging through runs stays well under it
   (`infra/cloudflare/README.md`, step 4b).
 
@@ -663,5 +589,4 @@ arrangement is the red line in `docs/DATA-AND-LEGAL.md`: we extract and serve
 no item art — we publish the `item_template.entry` the server already gave us
 and let somebody else's service supply the picture. A reader who blocks either
 host loses the icons and keeps the panel: every cell falls back to the item's
-name in its quality colour with its stack count, which is what the plain
-`carrying:` line said before.
+name.

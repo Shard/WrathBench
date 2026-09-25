@@ -25,7 +25,7 @@ It knows about opcodes and sessions. It does not know what a quest, a rotation, 
 How it attaches to the core: a bench session is a stock `WorldSession` handed a *parked* `WorldSocket` — a real socket around the server end of a loopback TCP pair the module connects to itself, never started, never registered with a network thread, never authenticated; it exists so the session's socket checks pass. Inbound actions go through `WorldSession::QueuePacket`, the same queue the real socket feeds, and are dispatched by the stock opcode table. Outbound packets are captured by a `ServerScript::CanPacketSend` hook that returns false, so nothing is ever queued on the unflushed socket. The idle kick is reset from `WorldScript::OnUpdate`; teardown is `CMSG_LOGOUT_REQUEST` then `CloseSocket()`, which the core reaps as a client disconnect. HTTP/WS are Boost.Beast (header-only, already in the core's Boost); JSON is a small hand-rolled builder because the core's Boost build has no `Boost::json` target. Coupling surface: `WorldSession::SendPacket`, `WorldSession::Update`, the `WorldSocket` constructor.
 
 The mover (why the module owns movement and navigation detail:
-`docs/METHODOLOGY.md`, "Client fidelity"): `move_to` resolves a path once with `PathGenerator` on the world thread; only a fully normal path whose endpoint lands within 4y (2D) of the request is accepted, a straight-line request beyond ~250y is `too_far`, a partial path is subdivided once. It then sends `MSG_MOVE_START_FORWARD`, a heartbeat every ~500ms and `MSG_MOVE_STOP`, each with `MovementInfo` interpolated at the character's live run speed, into the stock movement handlers. The module answers `SMSG_TIME_SYNC_REQ` itself so the clock delta settles near zero. Arrival is declared from the server-side position (3s deadline after the stop); >15y of drift between server and interpolation ends the move as `interrupted`. Areatrigger volumes (from the client's `AreaTrigger.dbc` on the data volume) and transport bounds are tested against the mover's position on each heartbeat. The update-object decoder keeps one guid→type map per session, pruned by destroy and out-of-range; compressed updates never reach the tap because compression happens at socket write. Shapes, statuses and constants: `module/PROTOCOL.md`.
+`docs/METHODOLOGY.md`, "Client fidelity"): `move_to` resolves a path once with `PathGenerator` on the world thread and accepts only a fully normal path whose endpoint lands near the request. It then sends `MSG_MOVE_START_FORWARD`, periodic heartbeats and `MSG_MOVE_STOP`, each with `MovementInfo` interpolated at the character's live run speed, into the stock movement handlers. The module answers `SMSG_TIME_SYNC_REQ` itself so the clock delta settles near zero. Arrival is declared from the server-side position; drift between server and interpolation past a bound ends the move as `interrupted`. Areatrigger volumes (from the client's `AreaTrigger.dbc` on the data volume) and transport bounds are tested against the mover's position on each heartbeat. The update-object decoder keeps one guid→type map per session, pruned by destroy and out-of-range; compressed updates never reach the tap because compression happens at socket write. Shapes, statuses and constants: `module/PROTOCOL.md`.
 
 ### sdk/ (Bun/TypeScript, MIT)
 
@@ -35,16 +35,16 @@ The SDK is versioned. Its surface is part of the harness version.
 
 ### runner/ (Bun/TypeScript, MIT)
 
-- MCP server exposing tools to the model: run snippet, read recent events, query state summary, search reference bundle, read and write scratchpad, reflect, log status, read log.
+- MCP server exposing the model-facing tools (`runner/src/tools.ts`).
 - Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with network access only to the module, an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), and a Linux Landlock filesystem ruleset applied before exec (`runner/src/sandbox/confine.ts`) so it can read the interpreter, `runner/`, `sdk/` and `node_modules/` and nothing else — not `.env`, not the home directory. Hard per-snippet timeout.
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
 - Trajectory log: JSONL per run containing every snippet, its result, every event batch the model saw, and a periodic state line (level, zone, XP, position).
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 
-**Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip; the sandbox drains it once per snippet, and `tools.ts` renders it as a short `--- harness ---` block at the foot of that snippet's result — one line per status with a count, the hint text unchanged and nothing added to it. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` records it as part of what the model saw.
+**Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip; the sandbox drains it once per snippet, and `tools.ts` renders it as a short block at the foot of that snippet's result — one line per status with a count, the hint text unchanged and nothing added to it. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` records it as part of what the model saw.
 
-**Reflection, the episodic log, and the trim notices.** Three of the nine tools
+**Reflection, the episodic log, and the trim notices.** Three of the tools
 exist because of the message window rather than the world (docs/METHODOLOGY.md,
 "Reflection is the model's to take, and only at rest" and "An episodic log,
 written before each trim, read back at rest"). `log_status` appends one
@@ -53,7 +53,7 @@ which is append-only and therefore not the scratchpad. `reflect` returns a
 fixed, content-free review prompt while the character's `resting` flag is set —
 one reflection per rest visit — and opens a reflection window in which
 `read_log` pages that log; the window closes when the character leaves the rest
-area, on a 30-turn circuit breaker, or at the end of the run, and every
+area, on a circuit breaker, or at the end of the run, and every
 transition is a `reflect_window` record. After a sandbox restart the state
 cache is rebuilt, so `resting` is unobserved until the next update block
 carries `playerFlags` and the gate holds the last reading it was fed rather
@@ -90,39 +90,29 @@ The operator's read-only window on runs, live and finished. Split in two along
 one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
-- `runner/viewer/` serves a read-only JSON API under `/api` (run listing, run
-  detail and state series, summarised trajectory entries, the position feed, the
-  fleet supervisor's published job state), an SSE tail per run, minimap tiles
-  from `data/minimap/`, and the built SPA as static files. Every database is
+- `runner/viewer/` serves a read-only JSON API under `/api`, an SSE tail per
+  run, minimap tiles from `data/minimap/`, and the built SPA as static files. Every database is
   opened readonly, so a run being written inside the container is never
   disturbed. Bearer tokens are stripped from anything that forwards a raw
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries and tiles — the
   unprojected record and Blizzard bytes — and serves entry summaries through
   the public projection and the game-prose redactor (`runner/viewer/README.md`).
   `WRATHBENCH_VIEWER_TILES_PUBLIC=1` opts tiles alone back in for a deployment
-  whose operator has decided it may serve them (off by default, no-op outside
-  public mode, private one-hour cache and `noindex` when on); the static public
+  whose operator has decided it may serve them; the static public
   snapshot never carries a tile either way.
-- `dashboard/` is a SolidJS SPA and the only UI: a homepage explainer at `/`
-  (what the benchmark is, the loop, the tools as served by `/api/tools` so the page cannot drift
-  from the runner), fleet at `/fleet`, about at `/about` (the tiers, the
-  harness groups, how to read a score; `/episodes` redirects there), runs (the
-  per-run grain), ladder, models, run detail, and the map view — minimap
-  tiles decoded from the client's own MPQs into `data/minimap/` (gitignored),
-  drawn on plain canvas behind a position-feed interface so replay can later
-  plug a trajectory reader into the renderer that serves live runs.
-  It imports three modules from the viewer rather than copying them — the API
-  wire types, the world→tile transform and the freeplay lineage walk — so drift
-  between the two sides is a compile error. It is the only place in the repository with a dependency graph;
-  the harness itself still runs with no build step. Without a build on disk the
-  viewer serves the API as usual and answers page routes with a plain-text
-  notice naming `bun run --cwd dashboard build`; there is no fallback UI.
+- `dashboard/` is a SolidJS SPA and the only UI. The homepage shows the tools
+  as served by `/api/tools`, so the page cannot drift from the runner. The map
+  view draws minimap tiles decoded from the client's own MPQs into
+  `data/minimap/` (gitignored) on plain canvas behind a position-feed interface,
+  so replay can later plug a trajectory reader into the renderer that serves
+  live runs. It imports modules from the viewer rather than copying them, so
+  drift between the two sides is a compile error. It is the only place in the
+  repository with a dependency graph; the harness itself still runs with no
+  build step. Without a build on disk there is no fallback UI.
 - **One page per grain, and the runs have their own.** The fleet page is what
   is running *now* and links to a run without listing them; `/runs` is the runs
-  — one row per recorded run of every kind, opening on all of them newest
-  first, every header sortable, the sort and every filter in the URL, and a
-  value in a cell the link that narrows to it; `/about` is the tiers, what
-  each id fixes and how many runs sit against it, listing no runs of its own;
+  — one row per recorded run of every kind; `/about` is the tiers, listing no
+  runs of its own;
   `/ladder` is the aggregates. Runs are listed in one place and one only — a
   page that opens with most of its rows filtered away is not that place — so
   `/results` redirects to `/runs` with its query intact, and there is no
@@ -133,17 +123,9 @@ the SPA owns everything that is UI.
   freeplay character is one character across attempts, and everything the runner
   records is per attempt — so a reader could see only the session in front of
   them and the quest count was the last session's. The viewer aggregates the
-  chain at read time (`character` on `/api/run/<id>`, `runner/viewer/character.ts`)
-  and the run page leads with it: an attempts strip listing every attempt with
-  its status, level and playtime, each a link; the character's
-  level-against-cumulative-playtime line above this attempt's XP chart, drawn by
-  the same `CharacterPlot` the freeplay field uses; and the character's totals as
-  the sidebar's headline with this attempt's figures named underneath. The feed
-  stays per attempt because a trajectory is one run's, with a link at each seam.
-  The character is also a page of its own — `/character/<id>`
-  over `GET /api/character/<id>` — carrying the whole chain's curve with the
-  session boundaries marked, the totals, the live session when one runs, and
-  every attempt. It is **universal, not freeplay-only**: a scored run's character
+  chain at read time (`runner/viewer/character.ts`) and the run page leads with
+  it. The feed stays per attempt because a trajectory is one run's, with a link
+  at each seam. The character is also a page of its own, `/character/<id>`. It is **universal, not freeplay-only**: a scored run's character
   is a chain of one attempt, so no page branches on "is this freeplay" to know a
   run has a character. Navigation stays freeplay-first — freeplay rows lead to
   the character, scored rows to the run. Nothing is written back: the record is
@@ -159,10 +141,7 @@ the SPA owns everything that is UI.
   the newest series also appears under its own number, because `latest` tracks
   and a number pins. The choice lives in `?series=` so a link is shareable and
   in `localStorage` so a tab reopens where it was, URL first. A run whose stamp
-  names no series belongs to no group and appears only under `all`, and what
-  the filter removed is always stated on the page — the rule binds harder here
-  because the control doing the dropping is in the header rather than on the
-  page being read. Filtering is client-side over rows the API already carries,
+  names no series belongs to no group and appears only under `all`. Filtering is client-side over rows the API already carries,
   with `/api/info` (the route the shell already polls) naming the series that
   have runs, rather than a poller or a route parameter per control. Two pages
   are deliberately unfiltered: the fleet page is the deployed series by
@@ -170,7 +149,9 @@ the SPA owns everything that is UI.
   server-side, where a client-side filter would make the counts and the list
   disagree. This is a different dimension from the harness filter, which
   selects which *loop* owned a run; both exist and compose, which is why this
-  one is spelled `series` everywhere.
+  one is spelled `series` everywhere. The ladder offers no harness control at
+  all: there the harness is a tag on each row and a colour on each point, not a
+  partition.
 - **`infra/model-lineup.json` is the model identity catalog; the fleet config
   stays a scheduling catalog.** Every roster field in the fleet config is a scheduling
   fact and presentation has always been absent from its schema, so a cosmetic
@@ -179,23 +160,16 @@ the SPA owns everything that is UI.
   (`{ id, name, vendor, icon, match }`) keyed by model-id glob patterns rather
   than roster names, so it recognizes an id wherever it turns up: the roster,
   run history, a map position. Matching is data-driven and dumb on purpose —
-  lowercase the id, strip a trailing `:free`, take the first family whose
-  pattern matches, file order being precedence — and an id no family matches
+  the first family whose pattern matches wins, file order being precedence —
+  and an id no family matches
   gets a neutral monogram rather than a special case in code, which is the
   per-model override the harness forbids. Recognizing a new model is a data
-  edit, never a code change. The mark appears wherever a model is the row —
-  the runs table's model column, the ladder table's rungs rows, the fleet
-  page's model cells and paused list, the models page's roster names, the run
-  page's model card, the map's pips and sidebar, and the ladder scatter, whose
-  marks are logo pucks. The scatter's harness colour lives on the puck's ring
-  rather than its fill, so the legend reads as a ring and says exactly what a
-  plain dot's colour said. Logos are fetched rather than drawn:
+  edit, never a code change. The mark appears wherever a model is the row. Logos are fetched rather than drawn:
   `infra/fetch-model-logos.ts` pulls the npm tarball of the Lobe Icons package
   at the version pinned in the lineup's own `icons` block and extracts exactly
   the icons the lineup names; the SVGs are committed, because they are a few
   hundred bytes each and the dashboard has to build from a bare clone with no
-  network. The CLI prunes assets no family references and has a `--check` mode
-  so drift is detectable offline. The artwork is MIT-licensed and the brands
+  network. The artwork is MIT-licensed and the brands
   remain their owners' trademarks; provenance is in `THIRD-PARTY-NOTICES.md`.
   The pricing table's display ids and the scheduler's family test stay where
   they are — billing and scheduling facts, not presentation, and folding them
@@ -203,13 +177,11 @@ the SPA owns everything that is UI.
 - Loopback by default. Trajectories carry game-derived text, so a non-loopback
   bind fails at startup unless `WRATHBENCH_VIEWER_LAN=1` opts a trusted private
   network in (docs/DATA-AND-LEGAL.md). What a public deployment may carry is
-  docs/DATA-AND-LEGAL.md's to settle: minimap tiles are shown, and entry
-  summaries are published one window per run with game prose stripped.
+  docs/DATA-AND-LEGAL.md's to settle.
 - **Public hosting is push-based, so the lab is never an origin.**
   `infra/publish-dashboard.ts` calls the viewer's own `createApi` handler
   in-process, applies an allowlist projection, and PUTs generation-addressed
-  JSON to an R2 bucket on a timer (300s in both deployments,
-`WRATHBENCH_PUBLISH_INTERVAL_MS`), manifest last so a reader never
+  JSON to an R2 bucket on a timer, manifest last so a reader never
   observes a torn generation; every public read is then a static asset or an
   edge-cached object and no inbound path to the harness exists at all. The SPA
   builds a second time in **snapshot mode** — a build-time
@@ -322,9 +294,8 @@ With no `CLICKHOUSE_URL` the viewer builds the same rows in memory by running
 the collector's own ingestion over the runs directory — which is what a bare
 clone, `bun run viewer` on a laptop and every test get. It is the same code
 path, so a row means the same thing on both; it simply holds the answer in a
-process instead of a database, keeping only `runs`, `run_totals`, `states` and
-`moves` and dropping `turns`, `events`, `milestones` and `episodic` as they
-arrive because a read path never reads them. That is a quickstart, not a deployment:
+process instead of a database, keeping only the tables a read path reads and
+dropping the rest as they arrive. That is a quickstart, not a deployment:
 on the real corpus it does once per start what the store does once, ever.
 
 ## What is deliberately absent
