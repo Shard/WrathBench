@@ -98,7 +98,17 @@ export type HostToChild =
   | { t: "ping"; id: number }
   /** Abort the eval with this id: fires its `signal`, so SDK waits it left behind settle. */
   | { t: "abort"; id: number }
-  | { t: "rpc"; id: number; method: "recent_events" | "state_summary" | "death_signals"; params: { limit?: number } }
+  | {
+      t: "rpc";
+      id: number;
+      method: "recent_events" | "state_summary" | "death_signals" | ProgramRpcMethod;
+      params: {
+        limit?: number;
+        /** `program_deploy`: the import version to load main.ts at, and the number the deploy gets. */
+        version?: number;
+        deploy?: number;
+      };
+    }
   /**
    * An importable workspace file changed (a write, edit or delete of a code or
    * JSON file, from a tool or from this child's own hostcall): the next
@@ -170,7 +180,85 @@ export type ChildToHost =
   | { t: "pong"; id: number; logs?: LogEntry[]; note?: string; hints?: ActionHintNote[] }
   | { t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }
   | { t: "hostcall"; id: number; method: HostcallMethod; params: HostcallParams }
-  | { t: "fatal"; error: string };
+  | { t: "fatal"; error: string }
+  /**
+   * Entrypoint loop: `memory` serialized after a tick, handler or snippet that
+   * changed it — already checked against its limit and for plain JSON. The host
+   * writes it to memory.json; the child never writes the workspace.
+   */
+  | { t: "memory"; json: string };
+
+// ------------------------------------------------------ the entrypoint program
+
+/**
+ * The entrypoint loop's program calls (a probing spike), over the rpc channel:
+ * load main.ts at an import version, stop it, and drain what it did since the
+ * last drain. The drain doubles as the host's liveness check while the loop is
+ * entrypoint: a child that cannot answer it has blocked its event loop.
+ */
+export type ProgramRpcMethod = "program_deploy" | "program_unload" | "program_report";
+
+/** What a deploy answered. The previous deploy keeps running when `ok` is false. */
+export type DeployAnswer =
+  | { ok: true; deploy: number; exports: string[] }
+  | { ok: false; deploy: number; error: string };
+
+/**
+ * One error signature: which hook, the error's name, and the first stack frame
+ * inside the workspace. `count` is how many times it happened since the last
+ * report; `isNew` marks the report that carries its first occurrence in this
+ * deploy, which is the one that wakes the model.
+ */
+export interface ProgramErrorNote {
+  signature: string;
+  /** `loop()`, `on.SMSG_X`, `events.on(SMSG_X)`, `memory`, `unhandled rejection`, `load`. */
+  hook: string;
+  /** The error as the model reads it: name, message, up to four workspace frames. */
+  text: string;
+  count: number;
+  isNew: boolean;
+  /** The deploy it happened in; null for one with no program running (a snippet's memory). */
+  deploy: number | null;
+  firstTs: number;
+  lastTs: number;
+}
+
+/** `ctx.wake(reason)` calls since the last report, one row per reason. */
+export interface WakeRequestNote {
+  reason: string;
+  /** The hook that asked: `loop()`, `on.SMSG_X`. */
+  from: string;
+  count: number;
+  firstTs: number;
+  lastTs: number;
+}
+
+/** A fact the child saw happen: a level gained, a quest turned in, a death. Each once. */
+export interface ProgramMilestoneNote {
+  fact: "level" | "quest" | "death";
+  ts: number;
+  level?: number;
+  questId?: number;
+}
+
+/** Everything the program did since the last report. */
+export interface ProgramReport {
+  /** The deploy running now, or null. */
+  deploy: number | null;
+  ticks: number;
+  /** The longest tick that finished since the last report, in ms; 0 when none did. */
+  longestTickMs: number;
+  overruns: number;
+  errors: ProgramErrorNote[];
+  requests: WakeRequestNote[];
+  milestones: ProgramMilestoneNote[];
+  /** The program's console, repeats folded; snippet output never lands here. */
+  logs: LogEntry[];
+  /** Console lines printed since the last report, repeats counted, including any the buffer dropped. */
+  logLines: number;
+  /** Hint-bearing failures, drained only while no snippet is running (a snippet's result carries its own). */
+  hints: ActionHintNote[];
+}
 
 // host -> child, reply to hostcall
 export type HostcallResult = { t: "hostcall_result"; id: number; ok: boolean; value?: unknown; error?: string };

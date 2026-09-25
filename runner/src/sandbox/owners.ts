@@ -25,6 +25,23 @@
  * loads this, so its timers and listeners behave as they always have.
  */
 
+/**
+ * The abort reason of a stop the harness made — a snippet that returned, a
+ * deploy replaced or unloaded, a program call past its budget. A rejection that
+ * carries one (directly, or as an SDK `EventAbortedError`'s `reason`) is the
+ * stop working, never a fault to report.
+ */
+export class HarnessStop extends Error {
+  override name = "HarnessStop";
+}
+
+/** Whether an error is only the echo of a harness stop. */
+export function isHarnessStop(err: unknown): boolean {
+  if (err instanceof HarnessStop) return true;
+  const reason = (err as { reason?: unknown } | null)?.reason;
+  return reason instanceof HarnessStop;
+}
+
 /** One snippet evaluation, or one program deploy. */
 export class Owner {
   /** Live timers this owner created, by handle, with the kind that clears it. */
@@ -58,6 +75,14 @@ export interface OwnershipOptions<S> {
   events: OwnableEvents;
   /** A listener registered by owned code threw (or its promise rejected). */
   onHandlerError: (store: S, opcode: string, err: unknown) => void;
+  /**
+   * A context to own a call made with none, when the caller's stack runs
+   * through `marker`: a module's top-level code, which Bun evaluates outside
+   * the importer's async context. Only consulted while one is offered (a
+   * deploy's import in flight), and never for a call from outside the marked
+   * code, so SDK plumbing stays nobody's.
+   */
+  fallback?: () => { store: S; marker: string } | undefined;
 }
 
 export interface Ownership {
@@ -83,8 +108,17 @@ export function installOwnership<S>(o: OwnershipOptions<S>): Ownership {
   /** Which owner holds a live timer, so a clear by the model's own code forgets it too. */
   const holder = new Map<unknown, Owner>();
 
-  const currentOwner = (): Owner | undefined => {
+  /** The context that owns a call made now: the current one, or the offered fallback for marked code. */
+  const owningStore = (): S | undefined => {
     const s = o.store();
+    if (s !== undefined && o.ownerOf(s) !== undefined) return s;
+    const f = o.fallback?.();
+    if (f !== undefined && (new Error().stack ?? "").includes(f.marker)) return f.store;
+    return s;
+  };
+
+  const currentOwner = (): Owner | undefined => {
+    const s = owningStore();
     return s === undefined ? undefined : o.ownerOf(s);
   };
 
@@ -179,7 +213,7 @@ export function installOwnership<S>(o: OwnershipOptions<S>): Ownership {
     register: (wrapped: Handler) => Unsubscribe,
     once: boolean,
   ): Unsubscribe | undefined => {
-    const store = o.store();
+    const store = owningStore();
     const owner = store === undefined ? undefined : o.ownerOf(store);
     if (store === undefined || owner === undefined) return undefined;
     if (owner.closed) return () => {};

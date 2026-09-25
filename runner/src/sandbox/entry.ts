@@ -72,7 +72,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet, importedBindingNames, resolveWorkspaceImport, stampWorkspaceImports } from "./rewrite";
-import { installOwnership, Owner, type Ownership } from "./owners";
+import { HarnessStop, installOwnership, isHarnessStop, Owner, type Ownership } from "./owners";
+import { ProgramRuntime, programLimitsFromEnv, type ProgramClient } from "./program";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
 import type {
@@ -118,6 +119,8 @@ const WORKSPACE = WORKSPACE_ENV !== undefined && WORKSPACE_ENV.length > 0 ? WORK
  * the snippet loop, whose sandbox therefore behaves exactly as it always has.
  */
 const ENTRYPOINT = process.env["WRATHBENCH_LOOP"] === "entrypoint";
+/** The model's program (`program.ts`); constructed below in the entrypoint loop only. */
+let program: ProgramRuntime | null = null;
 
 const send = (msg: ChildToHost): void => {
   // Bun provides process.send when spawned with ipc; absent means we were run
@@ -458,8 +461,13 @@ for (const level of ["log", "info", "warn", "error", "debug"] as const) {
       .map((a) => (typeof a === "string" ? a : Bun.inspect(a, { depth: 4 })))
       .join(" ");
     // Entrypoint loop: a line printed by something a finished snippet started
-    // (its routine unwinding from the abort that ended it) belongs to no result.
-    if (!(ENTRYPOINT && evalContext.getStore()?.owner?.closed === true)) pushLog(level, text);
+    // (its routine unwinding from the abort that ended it) belongs to no result,
+    // and the program's own lines go to its console, never a snippet's result.
+    const store = ENTRYPOINT ? evalContext.getStore() : undefined;
+    if (store?.owner?.closed === true) {
+      // dropped
+    } else if (store?.source === "program" && program !== null) program.logLine(level, text);
+    else pushLog(level, text);
     realConsole[level]?.(...args);
   };
 }
@@ -529,17 +537,10 @@ client.events.on("WB_MOVE_RESULT", (e) => {
 /**
  * The abort reason a finished snippet's signal carries: it returned, so what it
  * started is stopped. A rejection carrying it is the harness's own doing and is
- * never reported as a fault.
+ * never reported as a fault (`isHarnessStop`).
  */
-class SnippetEnded extends Error {
+class SnippetEnded extends HarnessStop {
   override name = "SnippetEnded";
-}
-
-/** Whether an error is only the echo of a harness stop (a finished snippet, a replaced deploy). */
-function isHarnessStop(err: unknown): boolean {
-  if (err instanceof SnippetEnded) return true;
-  const reason = (err as { reason?: unknown } | null)?.reason;
-  return reason instanceof SnippetEnded;
 }
 
 /**
@@ -557,6 +558,7 @@ const ownership: Ownership | null = ENTRYPOINT
         const text = err instanceof Error ? renderError(err) : Bun.inspect(err, { depth: 4 }).slice(0, 1_000);
         evalContext.run(s, () => pushLog("error", `[events.on(${JSON.stringify(opcode)}) handler] ${text}`));
       },
+      fallback: () => program?.loadingOwner(),
     })
   : null;
 
@@ -845,6 +847,9 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     fn ??= new AsyncFunction(compiled.statementsBody);
     const run = fn;
     const value: unknown = await evalContext.run(store, () => run.call(globalThis));
+    // Entrypoint loop: what the snippet did to memory is saved before its
+    // result is, so the host has written memory.json by the time it answers.
+    program?.saveMemory();
     const msg: ChildToHost = {
       t: "result",
       id,
@@ -868,6 +873,7 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     }
     send(msg);
   } catch (err) {
+    program?.saveMemory();
     // An aborted eval's result is discarded host-side, and with it the one
     // thing the abort knew: how far the move it interrupted had got. The SDK
     // hangs that sentence on the error as `moveAbandon`; keep it for the pong,
@@ -957,6 +963,9 @@ let watchedReleased = false;
 let watchedGhost = false;
 
 function pushDeathSignal(signal: DeathSignal): void {
+  // Entrypoint loop: a death is also a fact that wakes the model — noted on the
+  // program's own latch, so the host's drain below stays the trajectory's.
+  if (signal.kind === "death") program?.noteDeath(signal.ts);
   deathSignals.push(signal);
   if (deathSignals.length > DEATH_SIGNAL_CAP) deathSignals.splice(0, deathSignals.length - DEATH_SIGNAL_CAP);
 }
@@ -1085,6 +1094,26 @@ function stateSnapshot(): unknown {
   return snap;
 }
 
+/** The entrypoint loop's program calls; refused in the snippet loop, whose sandbox hosts no program. */
+async function programRpc(
+  id: number,
+  method: "program_deploy" | "program_unload" | "program_report",
+  params: { version?: number; deploy?: number },
+): Promise<void> {
+  try {
+    if (program === null) throw new Error("this sandbox hosts no program: the run is on the snippet loop");
+    const value =
+      method === "program_deploy"
+        ? await program.deploy(params.version ?? workspaceVersion, params.deploy ?? 0)
+        : method === "program_unload"
+          ? (program.unload(), { ok: true })
+          : program.report();
+    send({ t: "rpc_result", id, ok: true, value });
+  } catch (err) {
+    send({ t: "rpc_result", id, ok: false, error: String(err) });
+  }
+}
+
 function handle(msg: HostToChild | HostcallResult): void {
   switch (msg.t) {
     case "eval":
@@ -1122,6 +1151,10 @@ function handle(msg: HostToChild | HostcallResult): void {
       }
       return;
     case "rpc": {
+      if (msg.method === "program_deploy" || msg.method === "program_unload" || msg.method === "program_report") {
+        void programRpc(msg.id, msg.method, msg.params);
+        return;
+      }
       try {
         const value =
           msg.method === "recent_events"
@@ -1308,13 +1341,51 @@ function reportBackgroundError(kind: string, reason: unknown): void {
 
 process.on("unhandledRejection", (reason) => {
   // Entrypoint loop: the echo of a harness stop — a finished snippet's routine
-  // rejecting on the abort that ended it — is the stop working, not a fault.
+  // rejecting on the abort that ended it — is the stop working, not a fault;
+  // and a rejection out of the program's own code is one of its errors.
   if (ENTRYPOINT && isHarnessStop(reason)) return;
+  if (program?.claimBackgroundError("unhandled rejection", reason) === true) return;
   reportBackgroundError("unhandled promise rejection", reason);
 });
 
 process.on("uncaughtException", (err) => {
+  if (ENTRYPOINT && isHarnessStop(err)) return;
+  if (program?.claimBackgroundError("uncaught exception", err) === true) return;
   reportBackgroundError("uncaught exception", err);
 });
+
+// ---------------------------------------------------------------- the program
+
+if (ENTRYPOINT && ownership !== null && WORKSPACE !== undefined) {
+  const runtime = new ProgramRuntime({
+    workspace: WORKSPACE,
+    client: client as unknown as ProgramClient,
+    sdk: client,
+    importModule: (abs) => importWorkspaceModule(abs),
+    setVersion: (v) => {
+      if (v === workspaceVersion) return;
+      workspaceVersion = v;
+      retrySalt = 0;
+    },
+    run: (store, fn) => evalContext.run(store, fn),
+    exit: (fn) => evalContext.exit(fn),
+    ownership,
+    renderHead: renderError,
+    relative: workspaceRelative,
+    send,
+    drainHints,
+    snippetsInFlight: () => evalControllers.size,
+    limits: programLimitsFromEnv(process.env),
+  });
+  program = runtime;
+  // `memory` in a snippet is the program's memory: a live object to mutate,
+  // or replace wholesale with a plain one.
+  Object.defineProperty(globalThis, "memory", {
+    get: () => runtime.memory.value,
+    set: (v: unknown) => runtime.memory.replace(v),
+    configurable: true,
+    enumerable: true,
+  });
+}
 
 send({ t: "ready" });

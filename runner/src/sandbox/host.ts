@@ -25,7 +25,20 @@
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { SNIPPET_VOCABULARY, type Workspace, type WorkspaceResult } from "../workspace";
-import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type {
+  ActionHintNote,
+  ChildToHost,
+  DeathSignal,
+  DeployAnswer,
+  EventSummary,
+  EvalResultMsg,
+  HostToChild,
+  HostcallResult,
+  LogEntry,
+  ProgramErrorNote,
+  ProgramReport,
+} from "./ipc";
+import { PROGRAM_LIMITS, PROGRAM_LIMITS_ENV, type ProgramLimits } from "./program";
 
 export interface SnippetResult {
   ok: boolean;
@@ -108,6 +121,8 @@ export interface SandboxHostOptions {
    * model's program; absent or `snippet` is the snippet loop, unchanged.
    */
   loop?: "snippet" | "entrypoint";
+  /** Entrypoint loop: the program's limits, for tests; the defaults are `PROGRAM_LIMITS`. */
+  program?: Partial<ProgramLimits>;
   entryPath?: string;
   /** Called for every notice, so the loop can log it as it happens. */
   onNotice?: (notice: HarnessNotice) => void;
@@ -229,6 +244,18 @@ export class SandboxHost {
     return this.opts.loop === "entrypoint";
   }
 
+  /** The program's limits, always set explicitly so a stray value in the operator's shell never wins. */
+  get programLimits(): ProgramLimits {
+    return { ...PROGRAM_LIMITS, ...this.opts.program };
+  }
+
+  private programEnv(): Record<string, string> {
+    const limits = this.programLimits;
+    const out: Record<string, string> = {};
+    for (const k of Object.keys(PROGRAM_LIMITS_ENV) as (keyof ProgramLimits)[]) out[PROGRAM_LIMITS_ENV[k]] = String(limits[k]);
+    return out;
+  }
+
   get entryPath(): string {
     return this.opts.entryPath ?? join(import.meta.dir, "entry.ts");
   }
@@ -289,7 +316,7 @@ export class SandboxHost {
         // sandboxChildEnv's WRATHBENCH_* forwarding — the child must bind only
         // the account this run was actually assigned, never a stray one.
         WRATHBENCH_ACCOUNT: this.opts.account ?? "",
-        ...(this.entrypoint ? { WRATHBENCH_LOOP: "entrypoint" } : {}),
+        ...(this.entrypoint ? { WRATHBENCH_LOOP: "entrypoint", ...this.programEnv() } : {}),
       }),
       stdio: ["ignore", "inherit", "pipe"],
       serialization: "json",
@@ -400,7 +427,79 @@ export class SandboxHost {
       case "fatal":
         this.notice("session_note", `sandbox reported fatal error: ${msg.error}`);
         return;
+      case "memory": {
+        // The child checked the size and the shape; the workspace checks the
+        // limits again, and a refusal (a workspace full to its total) is an
+        // error the next report carries like any of the program's own.
+        const r = this.opts.workspace.writeMemory(msg.json);
+        if (!r.ok) this.noteHostError("memory", "memory not saved: workspace full", r.error);
+        return;
+      }
     }
+  }
+
+  // ------------------------------------------------------ the entrypoint program
+
+  /** Errors the host itself raised for the program (a memory it could not write), for the next report. */
+  private readonly hostErrors = new Map<string, ProgramErrorNote>();
+  /** Signatures the host has raised before: a repeat is only counted. */
+  private readonly hostErrorsSeen = new Set<string>();
+
+  private noteHostError(hook: string, signature: string, text: string): void {
+    const now = (this.opts.now ?? Date.now)();
+    const row = this.hostErrors.get(signature);
+    if (row !== undefined) {
+      row.count++;
+      row.lastTs = now;
+      return;
+    }
+    const isNew = !this.hostErrorsSeen.has(signature);
+    this.hostErrorsSeen.add(signature);
+    this.hostErrors.set(signature, { signature, hook, text, count: 1, isNew, deploy: null, firstTs: now, lastTs: now });
+  }
+
+  /**
+   * Load main.ts at the workspace's current import version as deploy `deploy`.
+   * The previous deploy keeps running unless this one loaded; the answer says
+   * which, and why not.
+   */
+  async deployProgram(deploy: number): Promise<DeployAnswer> {
+    await this.start();
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "program_deploy", params: { version: this.opts.workspace.importVersion, deploy } },
+      this.programLimits.deployConnectMs + 60_000,
+    );
+    if (!res.ok) throw new Error(res.error ?? "program_deploy rpc failed");
+    return res.value as DeployAnswer;
+  }
+
+  /** Stop the program: its calls aborted, its timers and listeners removed. */
+  async unloadProgram(): Promise<void> {
+    if (this.proc === null) return;
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; error?: string }>(
+      { t: "rpc", id, method: "program_unload", params: {} },
+      5_000,
+    );
+    if (!res.ok) throw new Error(res.error ?? "program_unload rpc failed");
+  }
+
+  /** Drain what the program did since the last report, with the host's own errors folded in. */
+  async programReport(timeoutMs = 5_000): Promise<ProgramReport> {
+    await this.start();
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "program_report", params: {} },
+      timeoutMs,
+    );
+    if (!res.ok) throw new Error(res.error ?? "program_report rpc failed");
+    const report = res.value as ProgramReport;
+    if (this.hostErrors.size > 0) {
+      report.errors.push(...this.hostErrors.values());
+      this.hostErrors.clear();
+    }
+    return report;
   }
 
   private send(msg: HostToChild): void {
