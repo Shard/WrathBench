@@ -281,15 +281,23 @@ describe("persistence is taught as the workspace, never as globalThis", () => {
   test("the prompt teaches files and import, notes.md as memory, and what a restart loses", () => {
     expect(SYSTEM_PROMPT).toContain('import { helper } from "./lib/util"');
     expect(SYSTEM_PROMPT).toContain("notes.md in the workspace is your memory: it is shown in full every turn");
-    expect(SYSTEM_PROMPT).toContain(
-      "Background routines and top-level bindings live only in the running sandbox and are lost if the sandbox restarts; workspace files are not.",
-    );
     expect(SYSTEM_PROMPT).toContain("the next import loads every workspace module afresh");
     expect(SYSTEM_PROMPT).toContain("- files: your workspace from inside a snippet");
     expect(SYSTEM_PROMPT).not.toContain("import is not available");
     expect(SYSTEM_PROMPT).not.toContain("scratchpad");
-    // Top-level persistence still works (rewrite.ts) but is not taught.
-    expect(SYSTEM_PROMPT).not.toContain("declarations persist across snippets");
+  });
+
+  test("the persistence rule is stated whole: bindings and routines until a restart, imports per snippet, files for good", () => {
+    // A live probe's model called `farm` in the snippet after the one that
+    // imported it — "farm is not defined" — because the prompt said what a
+    // restart loses but not that an import binding lasts one snippet.
+    expect(SYSTEM_PROMPT).toContain(
+      "Top-level bindings and background routines persist in the running sandbox from one snippet to the next, until the sandbox restarts; an import binding belongs to the snippet that imported it, so import again in every snippet that uses it; workspace files are the durable store and survive a restart.",
+    );
+    // The launch example is unchanged, pending its own decision.
+    expect(SYSTEM_PROMPT).toContain(
+      'void (async () => { … })().catch((e) => console.log(String(e))); "started"',
+    );
   });
 
   test("the file tools and their limits are in the prompt's tool list", () => {
