@@ -2,11 +2,8 @@
 
 What a WrathBench result means and what would make it stop meaning that: eight
 principles, then the decisions that apply them, each a rule and its why.
-Mechanics live in the doc that owns the component (`docs/ARCHITECTURE.md`,
-`docs/CONTRACTS.md`, `docs/EPISODES.md`, `docs/RUNBOOK.md`, `docs/COSTS.md`,
-`docs/PUBLIC-DASHBOARD.md`, `module/PROTOCOL.md`, `runner/README.md`,
-`sdk/README.md`, `wiki/README.md`). A change to anything here is a change to
-what the benchmark measures — see "Changing this document".
+Mechanics live in the doc that owns the component. A change to anything here
+is a change to what the benchmark measures — see "Changing this document".
 
 ## The principles
 
@@ -82,12 +79,11 @@ the client: if it is unclear whether a client could see something, it is not
 served.
 
 **Client parity decides which layer owns a behavior.** What a client does
-locally — pathing recovery, areatriggers, time-sync, reading its own DBC files
-— the module does without an agent action, because a model reinventing it
-would measure the wrong thing. The one deliberate exception is routing "move
-to position" against the server's navmesh, because a client's human routes
-with eyes and the module has none. Nothing is inferred that the wire did not
-say.
+locally the module does without an agent action, because a model reinventing
+it would measure the wrong thing. The one deliberate exception is routing
+"move to position" against the server's navmesh, because a client's human
+routes with eyes and the module has none. Nothing is inferred that the wire
+did not say.
 
 Changing either contract moves the harness version; the rule is
 `docs/CONTRACTS.md`, "Changing the contracts".
@@ -164,10 +160,10 @@ documented asymmetry between harness groups.
 ## Episodes, lanes, and evidence
 
 **Reset is a fresh character.** Every scored episode starts with a freshly
-created level-1 character: creation is a client action, the reset is total,
-and a mid-level start would skip the state a real character has. The model
-names its own character, since nothing about the name is measured; race and
-class are the episode's, because every run is read against them.
+created level-1 character, because a mid-level start would skip the state a
+real character has. The model names it, since nothing about the name is
+measured; race and class are the episode's, because every run is read against
+them.
 
 **A knob is legitimate as a run dimension**: set per run, recorded, identical
 in shape for every model. Effort, objective, `wikiCoords`, routing and the
@@ -207,10 +203,10 @@ is absent on runs that have the wiki, so older runs stamp as they did.
 **Three lanes, separated by what a series bump does to them.** Evals (`e90`,
 `e360`) re-arm on every bump and feed the charts; probe campaigns run a
 commissioned sweep to completion and are never re-armed; freeplay never
-finishes and never counts. Each episode id is a comparability group — scores
-never mix across ids, nor across series within one — and a wrong default is
-replaced by a *new id*, never widened in place, because widening silently
-re-scopes every existing score. Definitions: `docs/EPISODES.md`.
+finishes and never counts. Each episode id is a comparability group, and a
+wrong default is replaced by a *new id*, never widened in place, because
+widening silently re-scopes every existing score. Definitions:
+`docs/EPISODES.md`.
 
 **A lapsed run is evidence only if its lane says so; everywhere else it is a
 failed attempt.** A run that pauses or goes quiet stops without a verdict, and
@@ -256,10 +252,10 @@ pair, gold — and no aggregate score.
 **The ladder shows its dispersion; its reference lines are withdrawn**
 (2026-09-16, 2026-09-18). A row's maxima are over runs already paid for, so
 the row also says how many reached each rung and the range of levels they
-spanned. An empirical ceiling and a human speedrun band were withdrawn on
-2026-09-18: one human entry per category is not enough data to earn the space.
-The figures stay in `docs/PUBLIC-DASHBOARD.md` ("The human reference") and
-return if and when there are several runs to state a distribution from.
+spanned. An empirical ceiling and a human speedrun band were withdrawn because
+one human entry per category is not enough data to earn the space; the figures
+stay in `docs/PUBLIC-DASHBOARD.md` ("The human reference") and return when
+there are several runs to state a distribution from.
 
 **A ladder belongs to a comparability group.** `probing` has none
 (2026-08-29): a campaign varies its cells on purpose, so ranking its runs ranks
@@ -302,11 +298,11 @@ number here means.
 
 **Contamination is assumed, not controlled.** Every model measured here has
 read fifteen years of walkthroughs for this content, and no probe separates
-recall from reasoning. That is survivable only because of what is claimed —
-driving a fixed toolkit toward long-horizon goals, not knowledge of an unseen
-world: knowing where Kharanos is counts as part of the model, as the standard
-library does on a coding benchmark. The names-first rule governs the
-*harness's* leakage and is not a contamination control.
+recall from reasoning. That is survivable only because the claim is driving a
+fixed toolkit, not knowledge of an unseen world: knowing where Kharanos is
+counts as part of the model, as the standard library does on a coding
+benchmark. The names-first rule governs the *harness's* leakage and is not a
+contamination control.
 
 **Most rows are one to a few runs, and that is a budget.** An entry's `n` is
 usually one and never more than three, printed beside it; one run has spread,
@@ -340,8 +336,7 @@ initiative. An edit here records a decision the operator made; work that
 would require changing or contradicting one stops and puts the question to
 the operator first. Surface, prompt, context policy, contract, or bundle-text
 changes move the harness version (minor at least; contract widenings are
-major). Scheduling and derivation changes do not bump the version but are
-still edits to this page or the owning doc, dated. Keep this document a north
-star — a rule and its why, with mechanics in the owning doc: fold a new
-decision into the section it belongs to, prune what it obsoletes, and let git
-history hold the past.
+major); scheduling and derivation changes do not, but are still dated edits
+here or in the owning doc. Keep this document a north star — a rule and its
+why, mechanics in the owning doc: fold a new decision into the section it
+belongs to, prune what it obsoletes, and let git history hold the past.
