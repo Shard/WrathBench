@@ -123,6 +123,35 @@ export class Watchdogs {
     this.sandboxRestarts = 0;
   }
 
+  /**
+   * Entrypoint loop: the program completed a tick, so the sandbox is healthy
+   * again. The reset that loop uses in place of a successful snippet: a model
+   * that runs one good snippet per wake must not keep a program that blocks on
+   * every deploy from ever tripping `snippet-runaway`.
+   */
+  noteProgramAlive(): void {
+    this.sandboxRestarts = 0;
+  }
+
+  /**
+   * Entrypoint loop: the model ended its turn (true) or was woken (false).
+   * `idle` never fires while it sleeps — the harness chose not to ask it — and
+   * its clock starts over at the wake. The fallback wake is shorter than any
+   * idle threshold today; this keeps a longer one from turning sleep into idle.
+   */
+  noteAsleep(asleep: boolean): void {
+    if (asleep) {
+      this.asleepSince ??= this.now();
+      return;
+    }
+    if (this.asleepSince !== null) {
+      this.asleepSince = null;
+      this.lastModelOutputAt = this.now();
+    }
+  }
+
+  private asleepSince: number | null = null;
+
   /** Evaluate all watchdogs. First tripped wins, in severity order. */
   check(): WatchdogVerdict | null {
     const t = this.now();
@@ -137,7 +166,7 @@ export class Watchdogs {
     if (this.cfg.episodeMs !== null && t - this.startedAt >= this.cfg.episodeMs) {
       return { reason: "episode-limit", detail: `episode wall clock ${t - this.startedAt}ms` };
     }
-    if (this.cfg.idleMs !== null && t - this.lastModelOutputAt >= this.cfg.idleMs) {
+    if (this.cfg.idleMs !== null && this.asleepSince === null && t - this.lastModelOutputAt >= this.cfg.idleMs) {
       return { reason: "idle", detail: `no model output for ${t - this.lastModelOutputAt}ms` };
     }
     if (

@@ -22,12 +22,14 @@ import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf } from "./reflect";
 import type { EpisodicLog } from "./episodic";
 import { buildSystemPrompt } from "./prompt";
 import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
-import { harnessOf } from "./config";
+import { harnessOf, loopOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
-import type { HarnessNotice, SandboxHost } from "./sandbox/host";
+import type { HarnessNotice, ProgramHostEvent, ProgramState, SandboxHost } from "./sandbox/host";
 import type { DeathSignal } from "./sandbox/ipc";
-import type { Workspace } from "./workspace";
-import type { ItemSample, Trajectory } from "./trajectory";
+import { MAIN_PATH } from "./sandbox/program";
+import { MEMORY_PATH, type Workspace } from "./workspace";
+import { WAKE_MAX_REQUESTS, WakeLog, renderWake, sleepUntilWake, stateDelta, type WakeKind } from "./wake";
+import type { EntrypointRecord, ItemSample, Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
 /**
@@ -842,9 +844,15 @@ export class ContextBuilder {
    * `events_served` trajectory record as a side effect, exactly as the loop
    * did before this was extracted.
    */
-  async build(turn: number, pendingNotices: HarnessNotice[]): Promise<string> {
+  async build(
+    turn: number,
+    pendingNotices: HarnessNotice[],
+    /** Entrypoint loop: the `[wake]` block for this request, rendered from the snapshot just taken. */
+    wake?: (snap: SnapshotLike | null) => Promise<string>,
+  ): Promise<string> {
     this.noteTurn(turn);
     const snap = await this.sampleState();
+    const wakeText = wake === undefined ? undefined : await wake(snap);
     // The reflection window's per-turn bookkeeping, in the one hook both
     // drivers share: count this turn against an open window (the breaker), then
     // write whatever transitions the gate has accumulated — the sample above
@@ -869,9 +877,148 @@ export class ContextBuilder {
       workspace: this.o.workspace.view(),
       notices: pendingNotices.splice(0, pendingNotices.length),
       turn,
+      ...(wakeText !== undefined ? { wake: wakeText } : {}),
     });
     this.o.trajectory.append({ t: "events_served", via: "context", count: events.length, events });
     return contextText;
+  }
+}
+
+/**
+ * The entrypoint loop's phases around the fixed loop (a probing spike;
+ * `loop: "entrypoint"`). A turn is still one model request; a wake is the run
+ * of requests between two sleeps. A reply with no tool call ends the wake (so
+ * does the `WAKE_MAX_REQUESTS` cap): the harness deploys main.ts if it changed
+ * and the model sleeps until the wake log says it is due (`wake.ts`). Every
+ * request of a wake carries the `[wake]` block, re-rendered, and the
+ * trajectory gains `wake`, `wake_end`, `deploy` and `program_error` records.
+ */
+export class EntrypointPhases {
+  readonly log = new WakeLog();
+  /** The wake in progress, from 1 in each process. */
+  wake = 1;
+  /** Requests made in this wake so far. */
+  requests = 0;
+  private wokeFor: WakeKind[] = ["start"];
+  private asleepMs: number | null = null;
+  /** The world when the model last ended its turn, for the block's delta line. */
+  private snapAtYield: SnapshotLike | null = null;
+  private restartsSeen: number;
+  private readonly unsubscribe: () => void;
+
+  constructor(
+    private readonly o: {
+      sandbox: SandboxHost;
+      workspace: Workspace;
+      trajectory: Trajectory;
+      watchdogs: Watchdogs;
+      builder: ContextBuilder;
+      now: () => number;
+    },
+  ) {
+    this.restartsSeen = o.sandbox.totalRestarts;
+    const subscribe = (o.sandbox as Partial<SandboxHost>).onProgramEvent;
+    this.unsubscribe =
+      typeof subscribe === "function" ? subscribe.call(o.sandbox, (e: ProgramHostEvent) => this.onProgramEvent(e)) : () => {};
+  }
+
+  private onProgramEvent(e: ProgramHostEvent): void {
+    this.log.noteHost(e, this.o.now());
+    if (e.kind === "report" && e.report.ticks > 0) this.o.watchdogs.noteProgramAlive();
+    if (e.kind === "reload") {
+      this.o.trajectory.append({
+        t: "deploy",
+        wake: this.wake,
+        deploy: e.deploy,
+        version: e.version,
+        ok: e.answer.ok,
+        action: "load",
+        reload: true,
+        ...(e.answer.ok ? {} : { error: e.answer.error }),
+      });
+    }
+  }
+
+  /** Every sandbox restart since the last look, fed to `snippet-runaway` once each. */
+  countRestarts(): void {
+    const n = this.o.sandbox.totalRestarts;
+    for (; this.restartsSeen < n; this.restartsSeen++) this.o.watchdogs.noteSandboxRestart();
+  }
+
+  /** The first wake's record, written with its first request. */
+  begin(turn: number): void {
+    this.o.trajectory.append({ t: "wake", wake: this.wake, turn, reasons: this.wokeFor, sleptMs: 0 } satisfies EntrypointRecord);
+  }
+
+  /** This request's `[wake]` block, current as of now; everything it shows stops being a reason to wake. */
+  async block(snap: SnapshotLike | null): Promise<string> {
+    const sandbox = this.o.sandbox as Partial<SandboxHost>;
+    if (typeof sandbox.programReport === "function") {
+      try {
+        this.log.noteReport(await sandbox.programReport.call(this.o.sandbox, 2_000), this.o.now());
+      } catch {
+        // a child mid-restart has nothing to add; the heartbeat carries it later
+      }
+    }
+    const state: ProgramState = sandbox.programState ?? { kind: "none" };
+    const main = this.o.workspace.read(MAIN_PATH);
+    const memory = this.o.workspace.read(MEMORY_PATH);
+    const view = this.log.view({
+      wake: this.wake,
+      request: this.requests,
+      asleepMs: this.asleepMs,
+      wokeFor: this.wokeFor,
+      program: {
+        state: state.kind,
+        ...(state.kind === "none" ? {} : { deploy: state.deploy, deployedAt: state.at }),
+        editsSinceDeploy: state.kind !== "none" && this.o.workspace.importVersion !== state.version,
+        mainExists: main.ok,
+      },
+      delta: stateDelta(this.snapAtYield, snap, this.log.facts()),
+      memory: memory.ok ? memory.text : null,
+    });
+    this.log.markShown();
+    return renderWake(view);
+  }
+
+  /**
+   * The wake is over: record it and every error signature since the last
+   * yield, take the world as it stands, then deploy what changed. The deploy's
+   * result is the first thing the next wake sees.
+   */
+  async end(reason: "yield" | "cap"): Promise<void> {
+    const t = this.o.trajectory;
+    for (const e of this.log.errorRows()) {
+      t.append({ t: "program_error", wake: this.wake, signature: e.signature, hook: e.hook, count: e.count, deploy: e.deploy } satisfies EntrypointRecord);
+    }
+    t.append({ t: "wake_end", wake: this.wake, requests: this.requests, reason } satisfies EntrypointRecord);
+    this.snapAtYield = await this.o.builder.snapshot();
+    this.log.yielded(this.o.now(), reason === "cap");
+    const deployAtYield = (this.o.sandbox as Partial<SandboxHost>).deployAtYield;
+    if (typeof deployAtYield !== "function") return;
+    const rec = await deployAtYield.call(this.o.sandbox);
+    if (rec === null) return;
+    t.append({ t: "deploy", wake: this.wake, ...rec });
+    this.log.noteDeploy(rec, this.o.now());
+  }
+
+  /** A new wake starts: why, and after how long asleep. */
+  next(reasons: WakeKind[], sleptMs: number, turn: number): void {
+    this.wake++;
+    this.requests = 0;
+    this.wokeFor = reasons;
+    this.asleepMs = sleptMs;
+    this.o.trajectory.append({ t: "wake", wake: this.wake, turn, reasons, sleptMs } satisfies EntrypointRecord);
+  }
+
+  /** The run is over: the errors not yet recorded, and the program stopped before anything else touches the session. */
+  async close(): Promise<void> {
+    this.unsubscribe();
+    for (const e of this.log.errorRows()) {
+      this.o.trajectory.append({ t: "program_error", wake: this.wake, signature: e.signature, hook: e.hook, count: e.count, deploy: e.deploy } satisfies EntrypointRecord);
+    }
+    const unload = (this.o.sandbox as Partial<SandboxHost>).unloadProgram;
+    if (typeof unload === "function") await unload.call(this.o.sandbox).catch(() => undefined);
   }
 }
 
@@ -955,6 +1102,13 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   });
 
   let turn = 0;
+  const now = o.now ?? Date.now;
+  // The entrypoint loop's phases (a probing spike); null on the snippet loop,
+  // which runs every line below exactly as it always has.
+  const entry =
+    loopOf(config) === "entrypoint"
+      ? new EntrypointPhases({ sandbox: o.sandbox, workspace: o.workspace, trajectory, watchdogs, builder, now })
+      : null;
   const toolCtx: ToolContext = {
     sandbox: o.sandbox,
     workspace: o.workspace,
@@ -1031,6 +1185,11 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
 
       // 2. state line + 3. the fixed context (context.ts)
       turn++;
+      if (entry !== null) {
+        entry.countRestarts();
+        entry.requests++;
+        if (entry.wake === 1 && entry.requests === 1) entry.begin(turn);
+      }
       // Before `build`, which is what drains the notices: history only grows at
       // the end of a turn, so this turn's cut is already decided here, and the
       // notice belongs in the very request whose window was trimmed rather than
@@ -1062,7 +1221,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         });
         lastCut = cut;
       }
-      const contextText = await builder.build(turn, pendingNotices);
+      const contextText = await builder.build(turn, pendingNotices, entry === null ? undefined : (snap) => entry.block(snap));
       // The sample above may have been the one that found the observation
       // stalled, and the pause it asked for wins before a request is written.
       const stopBuilt = stopped();
@@ -1082,7 +1241,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       ];
 
       // 4. model request
-      trajectory.append({ t: "request", turn, adapter: o.adapter.label, messages });
+      trajectory.append({ t: "request", turn, ...(entry !== null ? { wake: entry.wake } : {}), adapter: o.adapter.label, messages });
       const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
@@ -1136,6 +1295,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       trajectory.append({
         t: "response",
         turn,
+        ...(entry !== null ? { wake: entry.wake } : {}),
         message: assistant,
         // Only when the provider reported it; absent otherwise, so the viewer
         // keeps falling back to its estimate rather than reading a zero.
@@ -1202,7 +1362,14 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           // counts as a turn — nothing here exempts it.
           ...(tc.name === "reflect" ? { reflect: true } : {}),
         });
-        if (tc.name === "run_snippet") {
+        if (entry !== null) {
+          // Entrypoint loop: every restart counts once, whoever caused it and
+          // whenever; a good snippet clears the count only while no program is
+          // deployed — with one deployed, a completed tick is what clears it.
+          entry.countRestarts();
+          const programState = (o.sandbox as Partial<SandboxHost>).programState?.kind ?? "none";
+          if (tc.name === "run_snippet" && result.isError !== true && programState === "none") watchdogs.noteSnippetSuccess();
+        } else if (tc.name === "run_snippet") {
           if (o.sandbox.totalRestarts > restartsBefore) watchdogs.noteSandboxRestart();
           else if (result.isError !== true) watchdogs.noteSnippetSuccess();
         }
@@ -1212,6 +1379,36 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // 6. bookkeeping and pacing
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
+      }
+      // Entrypoint loop: a reply with no tool call ends the wake, and so does
+      // the request cap. The program keeps running, the watchdogs, the stop
+      // signal and the state ticker keep being served, and the model sleeps
+      // until the wake log says it is due.
+      if (entry !== null) {
+        const ended = outcome.turn.toolCalls.length === 0 ? "yield" : entry.requests >= WAKE_MAX_REQUESTS ? "cap" : null;
+        if (ended !== null) {
+          await entry.end(ended);
+          watchdogs.noteAsleep(true);
+          const slept = await sleepUntilWake<LoopOutcome>({
+            log: entry.log,
+            now,
+            sleep,
+            signal: o.signal,
+            onCheck: () => entry.countRestarts(),
+            check: () => {
+              const stop = stopped();
+              if (stop !== null) return stop;
+              const verdict = watchdogs.check();
+              if (verdict === null) return null;
+              trajectory.append({ t: "watchdog", ...verdict });
+              return terminate(verdict.reason, verdict.detail);
+            },
+          });
+          watchdogs.noteAsleep(false);
+          if (slept.kind === "ended") return slept.outcome;
+          entry.next(slept.reasons, slept.sleptMs, turn + 1);
+          continue;
+        }
       }
       await sleep(config.stepIntervalMs);
     }
@@ -1225,6 +1422,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     return terminate("harness-error", err instanceof Error ? `${err.name}: ${err.message}` : String(err));
   } finally {
     finished = true;
+    // Entrypoint loop: the program stops before anything after the loop
+    // touches the session (run.ts logs out through a snippet next).
+    await entry?.close();
     // A window still open when the episode ends is closed on the record rather
     // than left dangling; the gate is per-episode, so nothing outlives this.
     builder.reflect.close("run_end");

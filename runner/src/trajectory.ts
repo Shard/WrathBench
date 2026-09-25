@@ -264,6 +264,43 @@ export type MilestoneLine =
       turn?: number | undefined;
     };
 
+/**
+ * The entrypoint loop's records (a probing spike; `loop: "entrypoint"`,
+ * loop.ts `EntrypointPhases`). A turn is still one model request; a wake is
+ * the run of requests between two sleeps, and `request`/`response` records
+ * carry `wake` on this loop only. Every kind is additive: the collector keeps
+ * a kind it does not name in `raw`, and nothing reading the snippet loop's
+ * records sees a change.
+ *
+ * - `wake`: a wake began — with its first request's `turn`, why (`reasons`,
+ *   `wake.ts` `WakeKind`: start, error, load, halted, restart, requested,
+ *   milestone, fallback) and how long the model had slept (0 on the first).
+ * - `wake_end`: it ended — `requests` made, and whether by a reply without a
+ *   tool call (`yield`) or at the request cap (`cap`).
+ * - `deploy`: main.ts loaded (or failed to, with the error the model is
+ *   shown) as a wake ended, or unloaded because it was deleted; `reload: true`
+ *   marks the host bringing a deploy back after a restart it was not blamed
+ *   for. `version` is the workspace import version it loaded at.
+ * - `program_error`: one error signature and how many times it happened since
+ *   the previous `wake_end`, written as each wake ends (and at the end of the
+ *   run), so the counts sum to every occurrence exactly once.
+ */
+export type EntrypointRecord =
+  | { t: "wake"; wake: number; turn: number; reasons: string[]; sleptMs: number }
+  | { t: "wake_end"; wake: number; requests: number; reason: "yield" | "cap" }
+  | {
+      t: "deploy";
+      wake: number;
+      deploy: number;
+      version: number;
+      ok: boolean;
+      action: "load" | "unload";
+      error?: string;
+      exports?: string[];
+      reload?: true;
+    }
+  | { t: "program_error"; wake: number; signature: string; hook: string; count: number; deploy: number | null };
+
 export interface RunMeta {
   runId: string;
   harnessVersion: string;

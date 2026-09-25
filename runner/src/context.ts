@@ -584,7 +584,24 @@ export interface ContextInputs {
   notices: HarnessNotice[];
   /** Model turn number, for the model's own orientation. */
   turn: number;
+  /**
+   * The entrypoint loop's `[wake]` block (a probing spike; `wake.ts`,
+   * `renderWake`), already rendered: placed right after the goal line, before
+   * the harness notices. Absent on the snippet loop, whose message is
+   * therefore byte-identical to what it always was.
+   */
+  wake?: string | undefined;
 }
+
+/** The goal line on the snippet loop. */
+const GOAL_LINE = "Goal: survive and level as far as you can. Act via tools.";
+/**
+ * The goal line on the entrypoint loop, where a reply without a tool call is
+ * how the model ends its turn and lets its program run — "act via tools" alone
+ * would tell it the opposite of the rule it is under.
+ */
+const ENTRYPOINT_GOAL_LINE =
+  "Goal: survive and level as far as you can. Act via tools and your program; end your turn by replying without a tool call.";
 
 /**
  * The client-visible sentence for an inventory refusal, appended to the raw
@@ -612,7 +629,8 @@ export function formatEventLine(e: EventSummary): string {
 /** Pure. Same inputs, byte-identical output — tests enforce it. */
 export function assembleContext(inputs: ContextInputs): string {
   const parts: string[] = [];
-  parts.push(`[turn ${inputs.turn}] Goal: survive and level as far as you can. Act via tools.`);
+  parts.push(`[turn ${inputs.turn}] ${inputs.wake === undefined ? GOAL_LINE : ENTRYPOINT_GOAL_LINE}`);
+  if (inputs.wake !== undefined) parts.push(inputs.wake);
 
   if (inputs.notices.length > 0) {
     parts.push(

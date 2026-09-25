@@ -113,6 +113,21 @@ describe("assembleContext", () => {
     expect(text).toContain("notes.md  0 bytes\n</workspace>");
     expect(text.endsWith('<notes path="notes.md" usage="0% 0/32000">\n</notes>')).toBe(true);
   });
+
+  test("entrypoint loop: the [wake] block sits right after the goal line and before the notices, and nothing else moves", () => {
+    const wake = "[wake 3 · request 1 of this wake · asleep 5m00s · woke for: fallback]\nprogram: none";
+    const plain = assembleContext(makeInputs());
+    const woken = assembleContext({ ...makeInputs(), wake });
+    const [goal, ...rest] = woken.split("\n\n");
+    expect(goal).toBe(
+      "[turn 7] Goal: survive and level as far as you can. Act via tools and your program; end your turn by replying without a tool call.",
+    );
+    expect(rest[0]).toBe(wake);
+    expect(rest[1]!.startsWith("[harness notices]")).toBe(true);
+    // Everything after the block is the snippet loop's message, byte for byte.
+    expect(rest.slice(1).join("\n\n")).toBe(plain.split("\n\n").slice(1).join("\n\n"));
+    expect(assembleContext({ ...makeInputs(), wake })).toBe(woken);
+  });
 });
 
 describe("formatStateSummary", () => {

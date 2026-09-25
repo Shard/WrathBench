@@ -221,6 +221,20 @@ export function harnessOf(driver: Driver): Harness {
   return HARNESS_OF_DRIVER[driver];
 }
 
+/**
+ * Which agent loop the fixed harness runs. `snippet` is the loop every result
+ * is measured under: the model acts through snippets in a persistent sandbox.
+ * `entrypoint` is a probing spike: the model writes main.ts, the harness runs
+ * it, and the model is woken to revise it (`wake.ts`, `sandbox/program.ts`).
+ * Absent means `snippet`, so no run launched without the flag carries the key.
+ */
+export const LOOPS = ["snippet", "entrypoint"] as const;
+export type Loop = (typeof LOOPS)[number];
+
+export function loopOf(config: { loop?: Loop | undefined }): Loop {
+  return config.loop ?? "snippet";
+}
+
 export const runConfigSchema = z.object({
   /** Generated as `run-<timestamp>` when absent. */
   runId: z.string().min(1).optional(),
@@ -334,6 +348,12 @@ export const runConfigSchema = z.object({
    * tool exists and reports itself unavailable.
    */
   wiki: z.boolean().default(true),
+  /**
+   * The agent loop (`LOOPS`). Absent is the snippet loop; `entrypoint` is the
+   * probing spike, refused off an unscored tier and on the CLI drivers
+   * (`loopRefusal`). Identity, like the driver: a resume keeps it.
+   */
+  loop: z.enum(LOOPS).optional(),
   /**
    * An extra run: the scheduling policy launched it past the
    * model's target, for a free model with nothing else to do. It is a normal
