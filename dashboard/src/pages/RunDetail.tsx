@@ -972,6 +972,9 @@ function WorkspacePanel(props: { runId: string; live: boolean }) {
   const loadList = (): void => {
     void api.workspace(props.runId).then(
       (w) => {
+        // A 404 earlier is not final: a public tab open across a publisher
+        // deploy meets rows with no workspace pointer until the next pass.
+        setAbsent(false);
         setFiles(w.files);
         setError(undefined);
       },
