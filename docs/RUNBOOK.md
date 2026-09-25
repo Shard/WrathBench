@@ -176,7 +176,14 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
             NO character name: the model names its own at createSession, and the name it chose is
             what the run row, meta.json and the runs page carry. `character` is REFUSED by name
             here (as it is in a campaign or a cell) — a name in the config is one the harness has
-            to keep valid and unique, and an invalid one takes the whole file down. `race` and
+            to keep valid and unique, and an invalid one takes the whole file down. A fixed name
+            was actively harmful: a character name is realm-wide unique while the hygiene that
+            clears it is per-account, so a fresh attempt scheduled elsewhere met a name it could
+            not use and no way to pick another. The launch note invites a name inside the game's
+            own rule and says it is the model's for the episode; the roster's suggestion survives
+            only for a model that would rather not choose. The freshness belt does not read names:
+            it arms on every character guid hygiene listed for the account, so a model that names a
+            survivor is caught by its guid and its level, never by its spelling. `race` and
             `class` are not the model's either, but they stay: they are the episode's
             comparability dimensions. Never an account. Two scheduling axes (docs/METHODOLOGY.md, "The tier is
             the evidence budget"):
@@ -210,7 +217,13 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               OpenRouter (Cerebras, LM Studio, OpenCode Zen), `routing` takes the whole file down
               rather than sitting there doing nothing. The resolved routing is stamped into the
               run's comparability tuple and the provider that actually served it is recorded on
-              the run (docs/METHODOLOGY.md, "Routing is pinned").
+              the run (docs/METHODOLOGY.md, "Routing is pinned"). The served provider is recorded
+              rather than keyed — a fact observed minutes after launch cannot be part of what a
+              launch stamped — and with fallbacks off the two agree, which is what makes a
+              disagreement worth seeing. The field is absent, not null, on a run whose endpoint
+              has one backend (a CLI harness, Cerebras, LM Studio, OpenCode Zen): there is
+              nothing to record, and those runs stamp exactly as they did before the field
+              existed.
             `wiki` — whether this entry's runs get the reference wiki at all. Default true; set
               `false` and the run has no `search_reference` tool, the prompt does not name one,
               and no bundle is opened (issue #61). It is a
@@ -958,7 +971,11 @@ extra smoke run.
 
 The gate accounts must be their own: sharing one with an enabled job is refused
 as a config error (every per-entry account is checked), and none is ever
-`PROBE`, the ad-hoc debugging account.
+`PROBE`, the ad-hoc debugging account. Benchmark characters are never
+fixtured: the smoke-fixture tool that pre-places gate characters
+(`infra/fixtures`) writes only to smoke and probe accounts, outside the
+observation contract rather than an exception to it — the operator arranging
+the world before a run, like choosing an account.
 
 ### Changing the config shape
 
