@@ -73,7 +73,7 @@ import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet, importedBindingNames, resolveWorkspaceImport, stampWorkspaceImports } from "./rewrite";
 import { HarnessStop, installOwnership, isHarnessStop, Owner, type Ownership } from "./owners";
-import { ProgramRuntime, programLimitsFromEnv, type ProgramClient } from "./program";
+import { observeSdk, ProgramRuntime, programLimitsFromEnv, type ProgramClient } from "./program";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
 import type {
@@ -405,15 +405,17 @@ const watchedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response>
 
 /**
  * What an async context belongs to. `signal` and `deadline` are the snippet's
- * (or, in the entrypoint loop, the program call's); `source` and `owner` exist
- * only in the entrypoint loop — which buffer a console line goes to, and who
- * owns the timers and listeners started here (`owners.ts`).
+ * (or, in the entrypoint loop, the program call's); `source`, `owner` and
+ * `hook` exist only in the entrypoint loop — which buffer a console line goes
+ * to, who owns the timers and listeners started here (`owners.ts`), and which
+ * of the program's hooks a failed `sdk` call is counted under.
  */
 interface EvalStore {
   signal: AbortSignal;
   deadline?: number;
   source?: "snippet" | "program";
   owner?: Owner;
+  hook?: string;
 }
 
 /** The eval whose async context we are in, if any. Set by `evaluate`. */
@@ -522,6 +524,21 @@ const client = new WrathClient({
   deadline: currentDeadline,
   fetchImpl: watchedFetch,
 });
+
+/**
+ * The `sdk` a snippet and the program hold. On the snippet loop it is the
+ * client itself. On the entrypoint loop it is the client behind `observeSdk`:
+ * a call made from the program's async context that throws, rejects or answers
+ * `ok: false` is counted as one of the program's failures, whether or not the
+ * program catches it; a snippet's calls pass through untouched, and the
+ * harness's own reads below use the client directly.
+ */
+const modelSdk: WrathClient = ENTRYPOINT
+  ? observeSdk(client, (helper) => {
+      const store = evalContext.getStore();
+      return store?.source === "program" ? program?.watchSdkCall(store, helper) : undefined;
+    })
+  : client;
 
 // The module's verdict on a move, whoever issued it: an awaited `moveTo`
 // resolves from the same event, and this sees the ones nothing awaited.
@@ -686,7 +703,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
 }
 
 const ambient: Record<string, unknown> = {
-  sdk: client,
+  sdk: modelSdk,
   state: client.state,
   events: client.events,
   API_MD_PATH,
@@ -1360,7 +1377,7 @@ if (ENTRYPOINT && ownership !== null && WORKSPACE !== undefined) {
   const runtime = new ProgramRuntime({
     workspace: WORKSPACE,
     client: client as unknown as ProgramClient,
-    sdk: client,
+    sdk: modelSdk,
     importModule: (abs) => importWorkspaceModule(abs),
     setVersion: (v) => {
       if (v === workspaceVersion) return;

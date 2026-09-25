@@ -453,7 +453,14 @@ the spike was built on.
   `ctx.signal` and is reported once; nothing is killed for running long. A
   throw is caught and counted under a signature (hook, error name, first
   workspace frame, rendered through `workspaceRelative`); its first occurrence
-  in a deploy wakes the model, and the program keeps being called.
+  in a deploy wakes the model, and the program keeps being called. An `sdk`
+  call from the program that throws, rejects or answers `ok: false` is counted
+  the same way whether or not the program catches it — signature: hook, helper,
+  status or error name; text: the helper's own words and the workspace lines
+  of the call — because a program that catches everything otherwise stalls
+  where nothing can see it. `observeSdk` wraps the client once, at the ambient
+  boundary rather than in each helper; a snippet's calls pass through, and two
+  call sites of one helper and status share a signature.
 - **Deploy on yield** (`SandboxHost.deployAtYield`). When the model ends a
   turn, main.ts loads at the current import version if a code or JSON file
   changed, the program is halted or stopped, or nothing was tried at this
@@ -502,7 +509,8 @@ the spike was built on.
   the program's console and memory.json. A turn is still one model request.
 - **Trajectory.** `wake`, `wake_end`, `deploy` and `program_error` records,
   and `wake` on every `request` and `response` (`EntrypointRecord`,
-  `src/trajectory.ts`). Each `wake_end` carries the program's ticks, longest
+  `src/trajectory.ts`); a `program_error`'s `kind` is `failed` for an `sdk`
+  call and `thrown` for everything else. Each `wake_end` carries the program's ticks, longest
   tick, overruns, halts and restarts since the previous one, and the
   `program_error` rows written just before it count each occurrence once; a
   final `wake_end` (`run_end`) flushes the last period. Wake, deploy and

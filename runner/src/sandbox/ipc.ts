@@ -205,14 +205,22 @@ export type DeployAnswer =
 
 /**
  * One error signature: which hook, the error's name, and the first stack frame
- * inside the workspace. `count` is how many times it happened since the last
- * report; `isNew` marks the report that carries its first occurrence in this
- * deploy, which is the one that wakes the model.
+ * inside the workspace — or, for a failed `sdk` call, which hook, the helper,
+ * and the status or error name. `count` is how many times it happened since
+ * the last report; `isNew` marks the report that carries its first occurrence
+ * in this deploy, which is the one that wakes the model.
  */
 export interface ProgramErrorNote {
   signature: string;
   /** `loop()`, `on.SMSG_X`, `events.on(SMSG_X)`, `memory`, `unhandled rejection`, `load`. */
   hook: string;
+  /**
+   * `failed`: an `sdk` call from the program threw, rejected or answered
+   * `ok: false` — caught by the program or not. `thrown`: every other
+   * signature — a throw or rejection out of a hook, an overrun, a memory that
+   * could not be loaded or saved.
+   */
+  kind: "thrown" | "failed";
   /** The error as the model reads it: name, message, up to four workspace frames. */
   text: string;
   count: number;

@@ -687,7 +687,7 @@ export class SandboxHost {
     }
     const isNew = !this.hostErrorsSeen.has(signature);
     this.hostErrorsSeen.add(signature);
-    this.hostErrors.set(signature, { signature, hook, text, count: 1, isNew, deploy: null, firstTs: now, lastTs: now });
+    this.hostErrors.set(signature, { signature, hook, kind: "thrown", text, count: 1, isNew, deploy: null, firstTs: now, lastTs: now });
   }
 
   /**

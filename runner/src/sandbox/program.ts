@@ -19,6 +19,11 @@
  *    signature (hook, error name, first workspace frame); a signature's first
  *    occurrence in a deploy is marked new, and that is what wakes the model.
  *    The program keeps being called.
+ *  - SDK failures: an `sdk` call made from the program that throws, rejects or
+ *    answers `ok: false` is counted the same way, under the hook, the helper and
+ *    the status or error name — whether or not the program catches it, because
+ *    a program that catches everything otherwise fails where no one can see it
+ *    (`observeSdk`).
  *  - Memory: one plain-JSON object, `ctx.memory` (and `memory` in a snippet),
  *    serialized after every tick, handler and snippet; a change is sent to the
  *    host, which alone writes memory.json.
@@ -124,6 +129,8 @@ export interface ProgramStore {
   deadline?: number;
   source?: "snippet" | "program";
   owner?: Owner;
+  /** Which of the program's hooks this is (`loop()`, `on.SMSG_X`), or `load` for main.ts's top level. */
+  hook?: string;
 }
 
 /** The slice of the SDK client the runtime reads for its facts and its reconnect. */
@@ -143,7 +150,7 @@ export interface ProgramDeps {
   /** The workspace directory, absolute. */
   workspace: string;
   client: ProgramClient;
-  /** The ambient `sdk`, `state`, `events` — handed to `ctx` as they are. */
+  /** The ambient `sdk` (on this loop, the client behind `observeSdk`), with its `state` and `events` — handed to `ctx` as they are. */
   sdk: unknown;
   /** The sandbox's versioned workspace import. */
   importModule: (absPath: string) => Promise<unknown>;
@@ -257,6 +264,78 @@ function loadHead(err: unknown, deps: Pick<ProgramDeps, "renderHead" | "relative
 function touchesWorkspace(err: unknown, workspace: string): boolean {
   const stack = (err as { stack?: unknown } | null)?.stack;
   return typeof stack === "string" && stack.includes(`${workspace}/`);
+}
+
+// ------------------------------------------------------------ sdk failures
+
+/** How an `sdk` call from the program failed: it threw or rejected, or it answered `ok: false`. */
+export type SdkCallOutcome = { threw: unknown } | { answered: { ok: false; status?: unknown; detail?: unknown } };
+
+/** Told how one call ended, when it failed; `undefined` from the watch leaves the call unobserved. */
+export type SdkCallWatch = (helper: string) => ((outcome: SdkCallOutcome) => void) | undefined;
+
+function isFailedAnswer(v: unknown): v is { ok: false; status?: unknown; detail?: unknown } {
+  return typeof v === "object" && v !== null && (v as { ok?: unknown }).ok === false;
+}
+
+/**
+ * The `sdk` the model's code holds on the entrypoint loop: the client, behind
+ * a proxy that tells `watch` about every method call and, when the watch asks
+ * to hear, how a failed one ended — a throw, a rejection, or an answer with
+ * `ok: false` — before the caller sees it, caught or not. It sits at the one
+ * boundary every helper crosses, so no helper needs its own report.
+ *
+ * Methods run with the client itself as receiver, so the SDK's calls to its
+ * own methods are never seen twice (a `killTarget` that moves reports once, as
+ * `killTarget`), and every property that is not a method is the client's own.
+ * A promise is chained, not merely observed: the caller gets a promise that
+ * settles as the SDK's did, and one nobody handles still rejects unhandled.
+ */
+export function observeSdk<T extends object>(target: T, watch: SdkCallWatch): T {
+  const wrappers = new Map<string, { fn: (...a: unknown[]) => unknown; wrapped: (...a: unknown[]) => unknown }>();
+  return new Proxy(target, {
+    get(t, prop) {
+      const v = Reflect.get(t, prop, t) as unknown;
+      if (typeof prop !== "string" || typeof v !== "function" || prop === "constructor" || prop in Object.prototype) return v;
+      const cached = wrappers.get(prop);
+      if (cached !== undefined && cached.fn === v) return cached.wrapped;
+      const fn = v as (...a: unknown[]) => unknown;
+      const wrapped = (...args: unknown[]): unknown => {
+        const heard = watch(prop);
+        if (heard === undefined) return Reflect.apply(fn, t, args);
+        const tell = (o: SdkCallOutcome): void => {
+          try {
+            heard(o);
+          } catch {
+            // the report is the harness's; the call's own outcome stands whatever it does
+          }
+        };
+        let out: unknown;
+        try {
+          out = Reflect.apply(fn, t, args);
+        } catch (err) {
+          tell({ threw: err });
+          throw err;
+        }
+        if (typeof (out as { then?: unknown } | null)?.then === "function") {
+          return Promise.resolve(out).then(
+            (value) => {
+              if (isFailedAnswer(value)) tell({ answered: value });
+              return value;
+            },
+            (err: unknown) => {
+              tell({ threw: err });
+              throw err;
+            },
+          );
+        }
+        if (isFailedAnswer(out)) tell({ answered: out });
+        return out;
+      };
+      wrappers.set(prop, { fn, wrapped });
+      return wrapped;
+    },
+  });
 }
 
 // ------------------------------------------------------------------ memory
@@ -420,7 +499,7 @@ export class ProgramRuntime {
     const file = `${deps.workspace}/${MEMORY_PATH}`;
     this.memory = new ProgramMemory(existsSync(file) ? readFileSync(file, "utf8") : undefined);
     if (this.memory.loadError !== undefined) {
-      this.noteError(null, "memory", "memory could not be loaded", "Error", this.memory.loadError);
+      this.noteError(null, "memory", "memory could not be loaded", "thrown", this.memory.loadError);
     }
     // Registered with no async context, so it is nobody's to remove; after the
     // client's own state fold (registration order), so every read below and
@@ -463,7 +542,7 @@ export class ProgramRuntime {
     }
     const owner = new Owner(`deploy ${number}`);
     const controller = new AbortController();
-    const store: ProgramStore = { signal: controller.signal, source: "program", owner };
+    const store: ProgramStore = { signal: controller.signal, source: "program", owner, hook: "load" };
     const discard = (why: string): void => {
       controller.abort(new ProgramStopped(why));
       this.deps.ownership.close(owner);
@@ -572,7 +651,7 @@ export class ProgramRuntime {
     const controller = new AbortController();
     d.calls.add(controller);
     const started = this.now();
-    const store: ProgramStore = { signal: controller.signal, deadline: started + budgetMs, source: "program", owner: d.owner };
+    const store: ProgramStore = { signal: controller.signal, deadline: started + budgetMs, source: "program", owner: d.owner, hook };
     const timer = this.deps.ownership.real.setTimeout(() => {
       if (this.current === d) {
         this.overruns++;
@@ -580,7 +659,7 @@ export class ProgramRuntime {
           d,
           hook,
           `${hook} overran its budget`,
-          "overrun",
+          "thrown",
           `${hook} ran past its ${budgetMs} ms budget: its signal was aborted, so pending SDK waits rejected with ` +
             `EventAbortedError${isTick ? "; the next tick starts when this one settles" : ""}. Long work belongs in ` +
             `a tick, one step per tick; a walk longer than the budget is sdk.moveToAsync(target), followed on a later tick.`,
@@ -643,10 +722,51 @@ export class ProgramRuntime {
   private error(d: Deploy | null, hook: string, err: unknown): void {
     const r = renderProgramError(err, this.deps);
     const signature = r.frame === undefined ? `${hook} ${r.name}` : `${hook} ${r.name} at ${r.frame}`;
-    this.noteError(d, hook, signature, r.name, r.text);
+    this.noteError(d, hook, signature, "thrown", r.text);
   }
 
-  private noteError(d: Deploy | null, hook: string, signature: string, _name: string, text: string): void {
+  /**
+   * An `sdk` call is starting in `store`'s async context (`observeSdk`): when
+   * it comes from the running deploy, the caller's stack is taken now — the
+   * workspace line that made the call — and a failure is counted when it ends.
+   */
+  watchSdkCall(store: ProgramStore, helper: string): ((outcome: SdkCallOutcome) => void) | undefined {
+    const d = this.current;
+    if (d === null || d.retired || store.source !== "program" || store.owner !== d.owner) return undefined;
+    const site = new Error("sdk call");
+    const hook = store.hook ?? "load";
+    return (outcome) => this.sdkFailure(d, hook, helper, outcome, site);
+  }
+
+  /**
+   * One failed `sdk` call from the program, counted under the hook, the helper
+   * and the status or error name. The text says which call, how it failed and
+   * from which workspace lines — the fact, and nothing about what to do. A
+   * deploy that was replaced or unloaded took its calls with it: their aborts
+   * are the harness's, not the program's.
+   */
+  private sdkFailure(d: Deploy, hook: string, helper: string, outcome: SdkCallOutcome, site: Error): void {
+    if (this.current !== d || d.retired) return;
+    let what: string;
+    let head: string;
+    if ("threw" in outcome) {
+      const err = outcome.threw;
+      if (err instanceof ProgramStopped || (err as { reason?: unknown } | null)?.reason instanceof ProgramStopped) return;
+      what = errorName(err);
+      head = `sdk.${helper}() threw ${this.deps.renderHead(err)}`;
+    } else {
+      const { status, detail } = outcome.answered;
+      what = typeof status === "string" && status.length > 0 ? status : "ok:false";
+      const about = typeof detail === "string" && detail.length > 0 ? ` — ${this.deps.relative(detail)}` : "";
+      head = `sdk.${helper}() returned ok:false${what === "ok:false" ? "" : `, status ${JSON.stringify(what)}`}${about}`;
+    }
+    const mine = stackFrames(site, this.deps.workspace, this.deps.relative).filter((f) => f.workspace);
+    const lines = [head, ...mine.slice(0, STACK_FRAMES_SHOWN).map((f) => `    ${f.text}`)];
+    if (mine.length > STACK_FRAMES_SHOWN) lines.push(`    (${mine.length - STACK_FRAMES_SHOWN} more workspace frames)`);
+    this.noteError(d, hook, `${hook} sdk.${helper} ${what}`, "failed", lines.join("\n"));
+  }
+
+  private noteError(d: Deploy | null, hook: string, signature: string, kind: ProgramErrorNote["kind"], text: string): void {
     const seen = d?.seen ?? this.seenWithoutDeploy;
     const isNew = !seen.has(signature);
     seen.add(signature);
@@ -665,6 +785,7 @@ export class ProgramRuntime {
     this.errors.set(key, {
       signature,
       hook,
+      kind,
       text,
       count: 1,
       isNew,
@@ -697,7 +818,7 @@ export class ProgramRuntime {
       this.deps.send({ t: "memory", json: r.json });
       return;
     }
-    this.noteError(this.current, "memory", `memory not saved: ${r.kind}`, r.kind, r.error);
+    this.noteError(this.current, "memory", `memory not saved: ${r.kind}`, "thrown", r.error);
   }
 
   // -------------------------------------------------------------- facts

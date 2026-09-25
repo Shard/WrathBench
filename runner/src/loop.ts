@@ -994,7 +994,7 @@ export class EntrypointPhases {
     const t = this.o.trajectory;
     const ledger = this.log.drainLedger();
     for (const e of ledger.errors.values()) {
-      t.append({ t: "program_error", wake: this.wake, signature: e.signature, hook: e.hook, count: e.count, deploy: e.deploy } satisfies EntrypointRecord);
+      t.append({ t: "program_error", wake: this.wake, signature: e.signature, hook: e.hook, kind: e.kind, count: e.count, deploy: e.deploy } satisfies EntrypointRecord);
     }
     t.append({
       t: "wake_end",

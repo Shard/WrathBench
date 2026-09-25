@@ -247,6 +247,64 @@ describe("errors: signatures, first occurrence, and the line they came from", ()
   });
 });
 
+describe("sdk failures: counted whether or not the program catches them", () => {
+  test("a caught rejection and an ok:false answer are each a new signature once, with the workspace line of the call", async () => {
+    const { host, ws } = makeHost();
+    write(
+      ws,
+      "main.ts",
+      [
+        "export async function loop(ctx) {",
+        "  try {",
+        '    await ctx.sdk.trainerList("123");',
+        "  } catch {",
+        "    // caught, and never logged: the harness still sees it",
+        "  }",
+        '  const r = await sdk.moveTo("Nobody Stands Here");',
+        "  ctx.memory.status = r.status;",
+        "}",
+      ].join("\n"),
+    );
+    expect((await host.deployProgram(1)).ok).toBe(true);
+    const all = await reportsUntil(host, (rs) => {
+      const failed = errorsOf(rs).filter((e) => e.kind === "failed");
+      return new Set(failed.map((e) => e.signature)).size >= 2 && failed.reduce((n, e) => n + e.count, 0) >= 4;
+    });
+    const failed = errorsOf(all).filter((e) => e.kind === "failed");
+    const rejected = failed.find((e) => e.signature.startsWith("loop() sdk.trainerList "))!;
+    expect(rejected.signature).toBe("loop() sdk.trainerList WrathTransportError");
+    expect(rejected.hook).toBe("loop()");
+    expect(rejected.text.split("\n")[0]).toStartWith("sdk.trainerList() threw WrathTransportError: ");
+    expect(rejected.text).toContain("    at loop (main.ts:3:");
+    expect(rejected.text).not.toContain(ws.dir);
+    const answered = failed.find((e) => e.signature.startsWith("loop() sdk.moveTo "))!;
+    expect(answered.signature).toBe("loop() sdk.moveTo unknown_target");
+    expect(answered.text.split("\n")[0]).toBe('sdk.moveTo() returned ok:false, status "unknown_target"');
+    expect(answered.text).toContain("    at loop (main.ts:7:");
+    // First occurrence in the deploy is new, repeats are only counted; nothing reached a hook as a throw.
+    for (const sig of [rejected.signature, answered.signature]) {
+      const rows = failed.filter((e) => e.signature === sig);
+      expect(rows.filter((e) => e.isNew)).toHaveLength(1);
+      expect(rows[0]!.isNew).toBe(true);
+    }
+    expect(errorsOf(all).filter((e) => e.kind === "thrown")).toEqual([]);
+    // The program's own result is untouched by the watch.
+    expect(await memoryValue(host, "memory.status")).toBe('"unknown_target"');
+  });
+
+  test("a snippet's failed calls are its own result's, never the program's", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.n = (ctx.memory.n ?? 0) + 1;\n}\n");
+    expect((await host.deployProgram(1)).ok).toBe(true);
+    await until(async () => (Number(await memoryValue(host, "memory.n")) > 1 ? true : undefined));
+    const snippet = await host.evalSnippet('(await sdk.moveTo("Nobody Stands Here")).status');
+    expect(snippet.value).toBe('"unknown_target"');
+    await host.evalSnippet('try { await sdk.trainerList("123") } catch {}');
+    await Bun.sleep(60);
+    expect(errorsOf([await host.programReport()])).toEqual([]);
+  });
+});
+
 describe("memory", () => {
   test("a snippet's memory is saved, and a new child reads it back from memory.json", async () => {
     const { host, ws } = makeHost();

@@ -316,7 +316,16 @@ export type EntrypointRecord =
       exports?: string[];
       reload?: true;
     }
-  | { t: "program_error"; wake: number; signature: string; hook: string; count: number; deploy: number | null };
+  | {
+      t: "program_error";
+      wake: number;
+      signature: string;
+      hook: string;
+      /** `failed`: an `sdk` call from the program that threw, rejected or answered `ok: false`, caught or not; `thrown`: every other signature. */
+      kind: "thrown" | "failed";
+      count: number;
+      deploy: number | null;
+    };
 
 export interface RunMeta {
   runId: string;

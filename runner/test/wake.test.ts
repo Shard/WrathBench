@@ -42,6 +42,7 @@ function errorNote(isNew: boolean, count = 1) {
   return {
     signature: "loop() TypeError at loop (main.ts:9:17)",
     hook: "loop()",
+    kind: "thrown" as const,
     text: "TypeError: Cannot read properties of undefined (reading 'guid')\n    at pickTarget (lib/combat.ts:14:22)\n    at loop (main.ts:9:17)",
     count,
     isNew,
@@ -106,6 +107,33 @@ describe("when a sleeping model is due", () => {
     ]);
     expect(log.facts()).toEqual([{ fact: "death", ts: 0 }]);
     expect(v.console).toEqual({ lines: 1, entries: [{ level: "log", ts: 0, text: "late line" }] });
+  });
+
+  test("a failed sdk call the program caught wakes the model like a throw, once, and the ledger keeps its kind", () => {
+    const log = new WakeLog();
+    log.yielded(T0, false);
+    const failed = {
+      signature: "loop() sdk.trainerList EventTimeoutError",
+      hook: "loop()",
+      kind: "failed" as const,
+      text: "sdk.trainerList() threw EventTimeoutError: timed out after 10000ms waiting for SMSG_TRAINER_LIST\n    at doTrain (lib/brain.ts:212:15)",
+      count: 1,
+      isNew: true,
+      deploy: 3,
+      firstTs: T0 + 10_000,
+      lastTs: T0 + 10_000,
+    };
+    log.noteReport(report({ deploy: 3, errors: [failed] }), T0 + 10_000);
+    expect(log.due()).toEqual({ at: T0 + 10_000 + WAKE_COALESCE_MS, reasons: ["error"] });
+    log.noteReport(report({ deploy: 3, errors: [{ ...failed, isNew: false, count: 49, firstTs: T0 + 20_000, lastTs: T0 + 500_000 }] }), T0 + 500_000);
+    const v = log.view({ wake: 4, request: 1, asleepMs: 12_000, wokeFor: ["error"], program: { state: "running", deploy: 3, deployedAt: T0, editsSinceDeploy: false, mainExists: true }, delta: null, memory: null });
+    expect(v.errors).toEqual([expect.objectContaining({ kind: "failed", count: 50 })]);
+    expect(renderWake(v)).toContain(
+      "errors:\n- loop() sdk.trainerList() threw EventTimeoutError: timed out after 10000ms waiting for SMSG_TRAINER_LIST ×50 (first 12:31:12, last 12:39:22)\n    at doTrain (lib/brain.ts:212:15)",
+    );
+    expect([...log.drainLedger().errors.values()]).toEqual([
+      { signature: "loop() sdk.trainerList EventTimeoutError", hook: "loop()", kind: "failed", deploy: 3, count: 50 },
+    ]);
   });
 
   test("the ledger counts every occurrence once, whatever the block showed or carried", () => {
@@ -223,6 +251,7 @@ describe("the [wake] block", () => {
         {
           signature: "loop() TypeError at pickTarget (lib/combat.ts:14:22)",
           hook: "loop()",
+          kind: "thrown",
           text: "TypeError: Cannot read properties of undefined (reading 'guid')\n    at pickTarget (lib/combat.ts:14:22)\n    at loop (main.ts:9:17)",
           count: 38,
           deploy: 7,
@@ -283,6 +312,7 @@ describe("the [wake] block", () => {
     const errors = Array.from({ length: 10 }, (_, i) => ({
       signature: `loop() E${i}`,
       hook: "loop()",
+      kind: "thrown" as const,
       text: `E${i}: x`,
       count: 1,
       deploy: 7,

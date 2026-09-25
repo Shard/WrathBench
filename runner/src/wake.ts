@@ -58,10 +58,11 @@ interface Reason {
   shown: boolean;
 }
 
-/** One error signature since the yield, as the block lists it. */
+/** One error signature since the yield, as the block lists it — a throw and a failed `sdk` call alike. */
 export interface WakeErrorRow {
   signature: string;
   hook: string;
+  kind: "thrown" | "failed";
   text: string;
   count: number;
   deploy: number | null;
@@ -204,6 +205,7 @@ export class WakeLog {
         this.errors.set(key, {
           signature: e.signature,
           hook: e.hook,
+          kind: e.kind,
           text: e.text,
           count: e.count,
           deploy: e.deploy,
@@ -213,7 +215,7 @@ export class WakeLog {
       }
       const booked = this.ledger.errors.get(key);
       if (booked !== undefined) booked.count += e.count;
-      else this.ledger.errors.set(key, { signature: e.signature, hook: e.hook, deploy: e.deploy, count: e.count });
+      else this.ledger.errors.set(key, { signature: e.signature, hook: e.hook, kind: e.kind, deploy: e.deploy, count: e.count });
       if (e.isNew) this.reason("error", now);
     }
     for (const q of r.requests) {
@@ -400,7 +402,7 @@ export class WakeLog {
  * each occurrence exactly once — independent of what the block showed.
  */
 export interface WakeLedger {
-  errors: Map<string, { signature: string; hook: string; deploy: number | null; count: number }>;
+  errors: Map<string, { signature: string; hook: string; kind: "thrown" | "failed"; deploy: number | null; count: number }>;
   ticks: number;
   longestTickMs: number;
   overruns: number;

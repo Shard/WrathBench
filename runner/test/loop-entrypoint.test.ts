@@ -196,6 +196,7 @@ describe("the entrypoint loop's phases", () => {
                 {
                   signature: "loop() TypeError at loop (main.ts:9:5)",
                   hook: "loop()",
+                  kind: "thrown",
                   text: "TypeError: boom\n    at loop (main.ts:9:5)",
                   count: 4,
                   isNew: true,
@@ -222,7 +223,50 @@ describe("the entrypoint loop's phases", () => {
     expect(woken).toContain("30 ticks since you ended your turn");
     // Recorded once, as the wake it was seen in ended.
     expect(records.filter((r) => r.t === "program_error")).toEqual([
-      expect.objectContaining({ wake: 2, signature: "loop() TypeError at loop (main.ts:9:5)", count: 4, deploy: 1 }),
+      expect.objectContaining({ wake: 2, signature: "loop() TypeError at loop (main.ts:9:5)", kind: "thrown", count: 4, deploy: 1 }),
+    ]);
+  });
+
+  test("a failed sdk call the program caught wakes the model, and its program_error row says failed", async () => {
+    const adapter = new StubAdapter([
+      { content: "done", toolCalls: [] },
+      { content: "seen it", toolCalls: [] },
+    ]);
+    let fired = false;
+    const ctx = setup(adapter, {
+      onSleep: (now) => {
+        if (!fired && now >= T0 + 20_000) {
+          fired = true;
+          ctx.fake.emit({
+            kind: "report",
+            report: emptyReport({
+              deploy: 1,
+              errors: [
+                {
+                  signature: "loop() sdk.killTarget timeout",
+                  hook: "loop()",
+                  kind: "failed",
+                  text: 'sdk.killTarget() returned ok:false, status "timeout" — still up after 30s\n    at hunt (lib/brain.ts:88:21)',
+                  count: 3,
+                  isNew: true,
+                  deploy: 1,
+                  firstTs: now,
+                  lastTs: now,
+                },
+              ],
+            }),
+          });
+        }
+      },
+    });
+    await runLoop(ctx.options);
+    const records = readTrajectory(ctx.dir);
+    expect(records.filter((r) => r.t === "wake")[1]!["reasons"]).toEqual(["error"]);
+    expect(userMessage(ctx.dir, 1)).toContain(
+      '- loop() sdk.killTarget() returned ok:false, status "timeout" — still up after 30s ×3 (first 12:00:20, last 12:00:20)\n    at hunt (lib/brain.ts:88:21)',
+    );
+    expect(records.filter((r) => r.t === "program_error")).toEqual([
+      expect.objectContaining({ wake: 2, signature: "loop() sdk.killTarget timeout", hook: "loop()", kind: "failed", count: 3, deploy: 1 }),
     ]);
   });
 
@@ -298,6 +342,7 @@ describe("the entrypoint loop's phases", () => {
     const late = {
       signature: "loop() TypeError at loop (main.ts:9:5)",
       hook: "loop()",
+      kind: "thrown" as const,
       text: "TypeError: late\n    at loop (main.ts:9:5)",
       isNew: true,
       deploy: 1,
