@@ -752,7 +752,11 @@ export function importPrelude(imports: readonly ParsedImport[], workspace: strin
     const target = resolveWorkspaceImport(imp.specifier, workspace);
     const path = target === null ? imp.specifier : target.abs;
     const shown = target === null ? imp.specifier : target.rel;
-    const call = `await import(${JSON.stringify(path)}${imp.attributes !== undefined ? `, { with: ${imp.attributes} }` : ""})`;
+    // A workspace file goes through the sandbox's `__wrathbench_import__`
+    // (entry.ts), which retries the one Bun loading fault it can identify; a
+    // pass-through specifier is an ordinary dynamic import.
+    const fn = target === null ? "import" : "__wrathbench_import__";
+    const call = `await ${fn}(${JSON.stringify(path)}${imp.attributes !== undefined ? `, { with: ${imp.attributes} }` : ""})`;
     const wanted = [
       ...(imp.defaultName !== undefined ? ["default"] : []),
       ...imp.named.map(([imported]) => imported),
@@ -832,6 +836,35 @@ export function stampWorkspaceImports(
       return to === undefined ? whole : `${pre}${quote}${to}${quote}`;
     },
   );
+}
+
+/**
+ * Every local binding name a module's import statements create — `a`, `c` in
+ * `import { a, b as c } from …`, `d` in `import d from …`, `ns` in
+ * `import * as ns from …`. Over-capture is harmless (a `type` keyword, a name
+ * in a string); the one reader (entry.ts, `importWorkspaceModule`) only asks
+ * whether a "not defined" name is one of them.
+ */
+export function importedBindingNames(source: string): string[] {
+  const names: string[] = [];
+  for (const m of source.matchAll(/\bimport\s+(?!\()([^'";]*?)\s*\bfrom\s*["']/g)) {
+    let clause = m[1] ?? "";
+    const braces = /\{([^}]*)\}/.exec(clause);
+    if (braces !== null) {
+      for (const part of braces[1]!.split(",")) {
+        const p = part.trim();
+        if (p.length === 0) continue;
+        const as = /\bas\s+([A-Za-z_$][\w$]*)$/.exec(p);
+        const local = as === null ? /([A-Za-z_$][\w$]*)$/.exec(p)?.[1] : as[1];
+        if (local !== undefined) names.push(local);
+      }
+      clause = clause.replace(braces[0], " ");
+    }
+    for (const id of clause.match(/[A-Za-z_$][\w$]*/g) ?? []) {
+      if (id !== "as" && id !== "type") names.push(id);
+    }
+  }
+  return names;
 }
 
 /** `a/b/../c/./d` → `a/c/d`, for an absolute POSIX path. */

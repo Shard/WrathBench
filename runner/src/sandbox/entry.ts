@@ -70,7 +70,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
-import { compileSnippet, stampWorkspaceImports } from "./rewrite";
+import { compileSnippet, importedBindingNames, stampWorkspaceImports } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
 import type {
@@ -166,6 +166,56 @@ globalThis.WebSocket = GuardedWebSocket as unknown as typeof WebSocket;
  */
 let workspaceVersion = 0;
 
+/**
+ * A second fresh module graph at the same workspace version, taken only by
+ * `importWorkspaceModule`'s retry. Reset whenever the version moves.
+ */
+let retrySalt = 0;
+
+/** The `?v=` stamp for the next workspace import: the version, and the retry salt when there is one. */
+const versionTag = (): string => (retrySalt === 0 ? String(workspaceVersion) : `${workspaceVersion}.${retrySalt}`);
+
+/**
+ * Every binding name the workspace modules loaded at one stamp import, for
+ * `importWorkspaceModule` to tell Bun's lost binding from a module's own bug.
+ * Only the newest stamp is kept.
+ */
+let importedAtStamp: { stamp: string; names: Set<string> } = { stamp: "", names: new Set() };
+
+/**
+ * Import a workspace module for a snippet (rewrite.ts's prelude calls this for
+ * every workspace file it names).
+ *
+ * Bun 1.4.0 occasionally loses an import binding when it loads a module graph
+ * whose specifiers carry query strings: the module that imported `x` fails with
+ * "x is not defined" while its source plainly imports it. Measured with no
+ * plugin at all (7 losses in 40,000 fresh five-module graphs; none in 20,000
+ * graphs loaded from distinct plain paths), so it is the query-string
+ * versioning, not this sandbox. The failed graph stays cached at that stamp,
+ * so without this every import would fail the same way until the next
+ * workspace change. A name that a loaded workspace module really imports can
+ * never be undefined otherwise, so exactly that error — and nothing else, not
+ * a module's own reference to a name it never imported — is retried, once,
+ * as a fresh graph under a new stamp. A retried graph re-runs the top-level
+ * code of the modules that had already evaluated.
+ */
+async function importWorkspaceModule(path: string, options?: ImportCallOptions): Promise<unknown> {
+  try {
+    return await import(path, options);
+  } catch (err) {
+    const missing = err instanceof ReferenceError ? /^(\S+) is not defined$/.exec(err.message)?.[1] : undefined;
+    if (missing === undefined || importedAtStamp.stamp !== versionTag() || !importedAtStamp.names.has(missing)) throw err;
+    retrySalt++;
+    return await import(path, options);
+  }
+}
+Object.defineProperty(globalThis, "__wrathbench_import__", {
+  value: importWorkspaceModule,
+  enumerable: false,
+  configurable: false,
+  writable: false,
+});
+
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function loaderFor(path: string): "ts" | "tsx" | "js" | "jsx" {
@@ -183,7 +233,7 @@ if (WORKSPACE !== undefined) {
       // A snippet's import arrives here as the absolute path rewrite.ts
       // resolved; it leaves stamped with the current version.
       build.onResolve({ filter: new RegExp(`^${root}/`) }, (args) => ({
-        path: `${args.path.replace(/\?.*$/, "")}?v=${workspaceVersion}`,
+        path: `${args.path.replace(/\?.*$/, "")}?v=${versionTag()}`,
       }));
       // Bun does not consult `onResolve` for the static imports inside a
       // module it loads (Bun 1.4.0), so the stamp is carried by the loader:
@@ -192,9 +242,12 @@ if (WORKSPACE !== undefined) {
       build.onLoad({ filter: new RegExp(`^${root}/.*\\.[cm]?[jt]sx?(\\?.*)?$`) }, (args) => {
         const q = args.path.indexOf("?");
         const file = q === -1 ? args.path : args.path.slice(0, q);
-        const version = /[?&]v=(\d+)/.exec(q === -1 ? "" : args.path.slice(q))?.[1] ?? String(workspaceVersion);
+        const stamp = /[?&]v=([\d.]+)/.exec(q === -1 ? "" : args.path.slice(q))?.[1] ?? versionTag();
         const loader = loaderFor(file);
-        return { contents: stampWorkspaceImports(readFileSync(file, "utf8"), file, WORKSPACE, version, loader), loader };
+        const source = readFileSync(file, "utf8");
+        if (importedAtStamp.stamp !== stamp) importedAtStamp = { stamp, names: new Set() };
+        for (const name of importedBindingNames(source)) importedAtStamp.names.add(name);
+        return { contents: stampWorkspaceImports(source, file, WORKSPACE, stamp, loader), loader };
       });
     },
   });
@@ -206,7 +259,7 @@ if (WORKSPACE !== undefined) {
  */
 function workspaceRelative(text: string): string {
   if (WORKSPACE === undefined) return text;
-  return text.split(`${WORKSPACE}/`).join("").replace(/\?v=\d+/g, "");
+  return text.split(`${WORKSPACE}/`).join("").replace(/\?v=[\d.]+/g, "");
 }
 
 // ------------------------------------------------------- movement intention
@@ -974,6 +1027,7 @@ function handle(msg: HostToChild | HostcallResult): void {
       // ordered channel: a snippet that writes a file and then imports it sees
       // the new version.
       workspaceVersion = msg.version;
+      retrySalt = 0;
       return;
     case "hostcall_result": {
       const pending = hostcallPending.get(msg.id);

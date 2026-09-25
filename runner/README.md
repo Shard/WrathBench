@@ -353,7 +353,17 @@ imports inside the module it loads (Bun 1.4.0: a nested `./b` resolved
 natively and stayed cached across an edit), so the plugin's `onLoad` carries
 the stamp instead, rewriting a workspace module's relative imports to the
 version it was loaded at (`stampWorkspaceImports`). A version is a whole fresh
-module graph, which is why a module's own state starts over after any change.
+module graph, which is why a module's own state starts over after any change,
+and why the child's memory grows with every version it imports (about 95 KB
+per edit-then-import of a five-module graph, measured); old graphs are never
+asked for again but are not freed. Query-string versioning also meets a Bun
+1.4.0 fault: now and then a freshly loaded graph loses an import binding and
+the importing module fails with "x is not defined" (7 in 40,000 graphs with no
+plugin involved; none in 20,000 graphs from plain distinct paths). The failed
+graph stays cached at that version, so `importWorkspaceModule` in `entry.ts`
+retries exactly that error — a name a loaded workspace module really imports —
+once, as a fresh graph under a new stamp; a module's own reference to a name it
+never imported is its bug and is reported as it happened.
 
 Timeouts, precisely: a snippet that exceeds the per-snippet timeout is
 abandoned but the runtime survives; a snippet that blocks the event loop gets

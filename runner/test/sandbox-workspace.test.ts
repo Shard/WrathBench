@@ -110,6 +110,21 @@ describe("snippet imports", () => {
     expect(nestedMissing.error).not.toContain(ws.dir);
   });
 
+  test("a module's own undefined name is its error, reported once and never retried", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "bad.ts", 'console.log("bad.ts ran");\nexport const x = neverImported + 1;\n');
+    const res = await host.evalSnippet('import { x } from "./bad";\nx');
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("ReferenceError: neverImported is not defined");
+    // The module's top-level code ran exactly once: no second graph was loaded.
+    expect(res.logs.filter((l) => l.text === "bad.ts ran")).toHaveLength(1);
+  });
+
+  test("the import helper is not part of the ambient surface a snippet enumerates", async () => {
+    const { host } = makeHost();
+    expect((await host.evalSnippet("Object.keys(globalThis).includes('__wrathbench_import__')")).value).toBe("false");
+  });
+
   test("an absolute or escaping specifier is refused", async () => {
     const { host } = makeHost();
     expect((await host.evalSnippet('import x from "/etc/passwd";\nx')).error).toContain(

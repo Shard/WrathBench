@@ -6,6 +6,7 @@ import {
   compileSnippet,
   extractImportStatements,
   extractPatternNames,
+  importedBindingNames,
   resolveWorkspaceImport,
   scanTopLevelDeclarations,
   stampWorkspaceImports,
@@ -157,24 +158,44 @@ describe("import statements", () => {
     );
     const util = JSON.stringify(`${ws}/util.ts`);
     const two = JSON.stringify(`${ws}/lib/deep/two.ts`);
-    expect(c.statementsBody).toContain(`const __wrathbench_import_0__ = await import(${util});`);
+    expect(c.statementsBody).toContain(`const __wrathbench_import_0__ = await __wrathbench_import__(${util});`);
     expect(c.statementsBody).toContain('for (const __wrathbench_name__ of ["one","one"])');
     expect(c.statementsBody).toContain('throw new SyntaxError("util.ts has no export named " + JSON.stringify(__wrathbench_name__));');
     expect(c.statementsBody).toContain("const { one, \"one\": uno } = __wrathbench_import_0__;");
-    expect(c.statementsBody).toContain(`const __wrathbench_import_1__ = await import(${two});`);
+    expect(c.statementsBody).toContain(`const __wrathbench_import_1__ = await __wrathbench_import__(${two});`);
     expect(c.statementsBody).toContain("const dflt = __wrathbench_import_1__.default;");
     expect(c.statementsBody).toContain("const ns = __wrathbench_import_2__;");
-    expect(c.statementsBody).toContain(`await import(${util});\n`);
+    expect(c.statementsBody).toContain(`await __wrathbench_import__(${util});\n`);
     // Import bindings are the snippet's own: never copied back onto the global.
     expect(c.names).toEqual([]);
     expect(c.statementsBody).not.toContain('globalThis["one"]');
+  });
+
+  test("a pass-through specifier stays an ordinary dynamic import", () => {
+    const c = compileSnippet('import { join } from "node:path";\nreturn join("a", "b");', { workspace: ws });
+    expect(c.statementsBody).toContain('const __wrathbench_import_0__ = await import("node:path");');
+  });
+
+  test("importedBindingNames lists the local names a module's imports create", () => {
+    const src = [
+      'import { a, b as c, type T } from "./x";',
+      "import d, { e } from './y';",
+      'import * as ns from "./z";',
+      'import "./side";',
+      'const s = await import("./dyn");',
+      'export { f } from "./re";',
+    ].join("\n");
+    const names = importedBindingNames(src);
+    for (const n of ["a", "c", "T", "d", "e", "ns"]) expect(names).toContain(n);
+    expect(names).not.toContain("b");
+    expect(names).not.toContain("s");
   });
 
   test("a type-only import is dropped, as a TypeScript file drops it", () => {
     const c = compileSnippet('import type { T } from "./util";\nimport { one } from "./util";\nconst x: T = one;\nreturn x;', {
       workspace: ws,
     });
-    expect(c.statementsBody.match(/await import/g)).toHaveLength(1);
+    expect(c.statementsBody.match(/await __wrathbench_import__/g)).toHaveLength(1);
   });
 
   test("a single expression after its imports keeps its REPL value", () => {
