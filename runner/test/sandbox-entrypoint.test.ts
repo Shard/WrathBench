@@ -127,6 +127,31 @@ describe("entrypoint snippets are one-offs", () => {
     expect(res.logs.map((l) => l.text).join("\n")).toContain("handler boom");
   });
 
+  test("a snippet past its time limit is told where long work belongs on this loop, and what it started is gone", async () => {
+    const ws = new Workspace(join(mkdtempSync(join(tmpdir(), "wrathbench-sbxep-")), "workspace"), { memory: true });
+    const host = new SandboxHost({
+      moduleUrl: "http://worldserver:8086",
+      token: "test-token",
+      workspace: ws,
+      snippetTimeoutMs: 200,
+      pingGraceMs: 1_000,
+      loop: "entrypoint",
+    });
+    hosts.push(host);
+    const res = await host.evalSnippet(
+      "globalThis.ticks = 0;\nsetInterval(() => { globalThis.ticks++; }, 5);\nawait new Promise(() => {});",
+    );
+    expect(res.timedOut).toBe(true);
+    expect(res.error).toContain("snippet evaluation exceeded 200ms and was abandoned");
+    expect(res.error).toContain("the timers and event listeners it started were removed");
+    expect(res.error).toContain("belongs in your program: a tick of loop has 120s");
+    expect(res.error).toContain("sdk.moveToAsync(target)");
+    for (const phrase of ["background routine", "bindings", "globalThis"]) expect(res.error).not.toContain(phrase);
+    const a = (await host.evalSnippet("globalThis.ticks")).value;
+    await Bun.sleep(60);
+    expect((await host.evalSnippet("globalThis.ticks")).value).toBe(a);
+  });
+
   test("an import of memory.json is refused with what it is", async () => {
     const { host, ws } = makeHost();
     ws.writeMemory('{"phase":"grind"}');

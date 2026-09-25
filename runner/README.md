@@ -429,6 +429,86 @@ A `--continue-from` continuation copies the predecessor's whole workspace; a
 predecessor from before the workspace hands over its `scratchpad.md` as
 notes.md, and so does a resumed run of that age the first time it opens.
 
+## The entrypoint loop (spike)
+
+`--loop entrypoint` (config `loop`; absent is the snippet loop) is a probing
+spike of a different agent loop, Screeps-style: the model writes `main.ts` in
+its workspace, the harness runs it, and the model is woken to revise it. It is
+refused unless the episode is `probing` or `freeplay` (unscored), and on the
+claude-code and codex drivers, whose turns a wake would have to become
+(`loopRefusal`, `src/config.ts`). A run carries `loop: "entrypoint"` in its
+comparability tuple, absent otherwise (the `wiki: false` pattern), and its
+prompt hash differs. The snippet loop is unchanged byte for byte:
+`test/snippet-mode-pin.test.ts` pins its prompts, tools, context, compiler,
+config, tuple and child environment against a fixture captured from the head
+the spike was built on.
+
+```bash
+./infra/run-episode.sh --driver openai --model <id> --api-base <url> --episode probing --loop entrypoint [--objective "..."]
+```
+
+- **The program** (`src/sandbox/program.ts`, in the child). main.ts exports
+  `loop(ctx)` — a tick every second, never two at once, 120 s budget — and/or
+  an `on` map of handlers keyed by event name, 10 s each. A budget aborts
+  `ctx.signal` and is reported once; nothing is killed for running long. A
+  throw is caught and counted under a signature (hook, error name, first
+  workspace frame, rendered through `workspaceRelative`); its first occurrence
+  in a deploy wakes the model, and the program keeps being called.
+- **Deploy on yield** (`SandboxHost.deployAtYield`). When the model ends a
+  turn, main.ts loads at the current import version if a code or JSON file
+  changed, the program is halted or stopped, or nothing was tried at this
+  version; a failed load leaves the running deploy running and is not retried
+  until something changes, and a deleted main.ts unloads. On yield because
+  edits spread over several tool calls must never load half-applied, and
+  because each load is a module graph that is never freed.
+- **Ownership** (`src/sandbox/owners.ts`). Timers and event listeners belong
+  to the async context that created them: a snippet's go when it returns (its
+  signal is aborted too), a deploy's when it is replaced. Keyed on the async
+  context, never on stack frames, which Bun drops for strict-mode tail calls;
+  SDK plumbing (the socket and the timers it arms while ingesting) runs with no
+  context and is nobody's. Bun evaluates an imported module's top level outside
+  the importer's context, so while a deploy imports, a call whose stack runs
+  through the workspace is given to that deploy.
+- **Memory.** `ctx.memory` (`memory` in a snippet) is one plain-JSON object of
+  at most 32,000 characters, saved after every tick, handler and snippet; the
+  host writes `memory.json` (`Workspace.writeMemory`), which is never
+  importable, so a save never moves the import version, and which the file
+  tools refuse by name. Not "just files", because a `.json` write each tick
+  would mint a module graph every second.
+- **Heartbeat.** The host drains a program report every second, and ten
+  seconds without an answer is a blocked event loop. A snippet in flight is
+  blamed and the program comes back by itself — unless files changed since
+  its deploy, in which case it stays stopped until the yield rather than run
+  code the model has not ended its turn on; otherwise the program halts until
+  the next yield. Every restart counts toward `snippet-runaway`; on this loop
+  a completed tick clears the count, and a good snippet does only while no
+  program is deployed, so a program that blocks on every deploy still ends the
+  run.
+- **Waking** (`src/wake.ts`). A reply with no tool call, or the 20th request,
+  ends a wake. The model then sleeps until a new error signature, a failed
+  load, a halt, a restart, `ctx.wake(reason)`, a level, a quest turn-in or a
+  death — coalesced over 2 s, never sooner than 5 s after the yield — or five
+  minutes pass; a reason already shown in a request never wakes it again.
+  Asleep, the stop signal and the watchdogs are checked every second (`idle`
+  does not fire on a sleeping model) and the state ticker keeps writing rows.
+  Every request of a wake carries a `[wake]` block after the goal line,
+  rendered by the pure `renderWake`: the program's deploy and tick counts,
+  failed loads, halts, errors with their workspace frames, `ctx.wake` calls,
+  the level/xp/money/quest/death/zone delta, action hints, the last 40 lines of
+  the program's console and memory.json. A turn is still one model request.
+- **Trajectory.** `wake`, `wake_end`, `deploy` and `program_error` records,
+  and `wake` on every `request` and `response` (`EntrypointRecord`,
+  `src/trajectory.ts`).
+- **What the model is told.** A second prompt body, built from the snippet
+  body by exact replacements — a target that is not found throws at load — so
+  the SDK surface is the same bytes on both loops: "## Your program" and
+  "## Snippets" replace the REPL paragraph, "## Each wake" replaces
+  "## Each turn", and the last sentence says a turn ends with a reply without
+  a tool call. `run_snippet`'s description becomes "run once, now; nothing it
+  starts outlives it", the goal line adds "end your turn by replying without a
+  tool call", and the restart, timeout, reset and resume texts say what this
+  loop keeps. None of it names the snippet loop's bindings or routines.
+
 ## Watchdogs
 
 Named termination reasons, thresholds in one place (`src/config.ts`): `idle`

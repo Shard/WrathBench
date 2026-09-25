@@ -235,6 +235,31 @@ export function loopOf(config: { loop?: Loop | undefined }): Loop {
   return config.loop ?? "snippet";
 }
 
+/**
+ * Why a run may not use the loop it asked for, or null. The entrypoint loop is
+ * a probing spike: it runs only unscored (`probing`, `freeplay`), where it
+ * cannot enter a scored comparison, and only on the fixed loop — on the CLI
+ * drivers a wake would have to become a CLI turn, which this spike does not
+ * build. Each refusal names the limit and the relaunch that works.
+ */
+export function loopRefusal(c: { loop?: Loop | undefined; episode?: EpisodeId | undefined; driver: Driver }): string | null {
+  if (c.loop !== "entrypoint") return null;
+  if (c.driver === "claude-code" || c.driver === "codex") {
+    return (
+      `loop "entrypoint" runs only on the fixed loop (--driver openai or stub): the ${c.driver} CLI owns its own ` +
+      `turns, and mapping a wake onto one is not built in this spike — relaunch with --driver openai, or drop --loop`
+    );
+  }
+  if (c.episode === undefined || EPISODES[c.episode].scored) {
+    const on = c.episode === undefined ? "on no episode tier" : `--episode ${c.episode}, a scored tier`;
+    return (
+      `loop "entrypoint" is a probing spike and runs only unscored, under --episode probing or --episode freeplay; ` +
+      `this run is ${on} — relaunch with --episode probing, or drop --loop`
+    );
+  }
+  return null;
+}
+
 export const runConfigSchema = z.object({
   /** Generated as `run-<timestamp>` when absent. */
   runId: z.string().min(1).optional(),
@@ -611,6 +636,8 @@ export function loadRunConfig(raw: unknown): RunConfig {
   if (!config.wiki && config.wikiCoords) {
     throw new Error("wikiCoords is a setting of the reference wiki, and this run has none (wiki: false)");
   }
+  const refusal = loopRefusal(config);
+  if (refusal !== null) throw new Error(refusal);
   return config;
 }
 

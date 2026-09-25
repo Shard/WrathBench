@@ -31,7 +31,7 @@
 
 import { z } from "zod";
 import { moduleAuthHeaders } from "./module-auth";
-import { HARNESSES, episodeOverrideOf, harnessOf, type Harness, type RunConfig } from "./config";
+import { HARNESSES, episodeOverrideOf, harnessOf, loopOf, type Harness, type RunConfig } from "./config";
 import { episodeIdSchema } from "./episodes";
 import { buildSystemPrompt } from "./prompt";
 import { routingForRun, routingSchema } from "./routing";
@@ -176,6 +176,16 @@ export const comparabilitySchema = z.object({
    */
   wiki: z.literal(false).optional(),
   /**
+   * Present, and `"entrypoint"`, only on a run under the entrypoint loop (a
+   * probing spike; `config.loop`). A KEY: the model writes a program the
+   * harness runs and is woken to revise it, which is a different condition
+   * from the snippet loop by every measure, and the prompt hash already
+   * differs. ABSENT, never `"snippet"`, for the ordinary run — the `wiki: false`
+   * pattern — so every run stamped before it existed stays byte-for-byte what
+   * it stamps now.
+   */
+  loop: z.literal("entrypoint").optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -262,7 +272,7 @@ export function comparabilityOf(
   const harness = harnessOf(config.driver);
   // Rendered for THIS run's harness: the prompt's context sentence differs
   // between them, so the hash below is per-harness by design.
-  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki);
+  const prompt = buildSystemPrompt(config.objective, config.episode, harness, config.wiki, loopOf(config));
   const routing = routingForRun(config);
   return {
     harnessVersion,
@@ -291,6 +301,8 @@ export function comparabilityOf(
     // After `routing`, for that same stringified-tuple reason: a field inserted
     // ahead of it would reorder the routing of every already-stamped run.
     ...(config.wiki ? {} : { wiki: false as const }),
+    // Last again, for the same reason: absent on the snippet loop.
+    ...(loopOf(config) === "entrypoint" ? { loop: "entrypoint" as const } : {}),
   };
 }
 

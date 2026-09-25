@@ -69,12 +69,19 @@ describe("the snippet loop is unchanged", () => {
       pinned["freeplayObjectiveNoWiki"] as string,
     );
     expect(buildSystemPrompt(undefined, "e90")).toBe(pinned["e90"] as string);
+    // Naming the snippet loop explicitly is the same prompt as naming none.
+    expect(buildSystemPrompt(undefined, "probing", "wrathbench", true, "snippet")).toBe(pinned["probingNoObjective"] as string);
+    expect(buildSystemPrompt("Reach Goldshire.", "freeplay", "wrathbench", false, "snippet")).toBe(
+      pinned["freeplayObjectiveNoWiki"] as string,
+    );
   });
 
   test("the tool list, in every rendering", () => {
     expect(JSON.parse(JSON.stringify(TOOLS))).toEqual(pinned["tools"]);
     expect(JSON.parse(JSON.stringify(toolsFor({ wikiCoords: true })))).toEqual(pinned["toolsCoords"]);
     expect(JSON.parse(JSON.stringify(toolsFor({ wikiSearch: false })))).toEqual(pinned["toolsNoWiki"]);
+    expect(JSON.parse(JSON.stringify(toolsFor({ loop: "snippet" })))).toEqual(pinned["tools"]);
+    expect(JSON.parse(JSON.stringify(toolsFor({ wikiCoords: true, loop: "snippet" })))).toEqual(pinned["toolsCoords"]);
   });
 
   test("the harness strings and session notes", () => {
@@ -110,6 +117,12 @@ describe("the snippet loop is unchanged", () => {
     expect(JSON.parse(JSON.stringify(config))).toEqual(pinned["config"]);
     expect(JSON.parse(JSON.stringify(comparabilityOf(config, "harness-0.5-pin", null, null)))).toEqual(
       pinned["comparability"],
+    );
+    // `--loop snippet` is the default spelled out: the same config, the same tuple.
+    const spelled = configFromArgs([...(pinned["argv"] as string[]), "--loop", "snippet"]);
+    expect(JSON.parse(JSON.stringify(spelled))).toEqual(pinned["config"]);
+    expect(JSON.stringify(comparabilityOf(spelled, "harness-0.5-pin", null, null))).toBe(
+      JSON.stringify(comparabilityOf(config, "harness-0.5-pin", null, null)),
     );
   });
 

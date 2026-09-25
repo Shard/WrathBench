@@ -12,7 +12,7 @@
  * loop is model-agnostic and the regime it describes is the same.
  */
 
-import type { Harness } from "./config";
+import type { Harness, Loop } from "./config";
 import type { EpisodeId } from "./episodes";
 
 /**
@@ -138,15 +138,99 @@ export const TOOLS_NOT_AMBIENT = {
  * The body for one harness: the fixed text with that harness's context
  * sentence in it, and — with `wiki: false` — without the reference tool.
  */
-function bodyFor(harness: Harness, wiki = true): string {
+function bodyFor(harness: Harness, wiki = true, loop: Loop = "snippet"): string {
   // The wiki-on rendering is `BODY_HEAD` untouched, by construction rather
   // than by test: `wiki: false` is two exact deletions from it and nothing
   // else, so every run that has the reference surface hashes as it always did.
+  const base = loop === "entrypoint" ? ENTRYPOINT_BODY_HEAD : BODY_HEAD;
   const head = wiki
-    ? BODY_HEAD
-    : BODY_HEAD.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
-  return `${head} ${contextSentence(harness)} ${BODY_TAIL}`;
+    ? base
+    : base.replace(WIKI_TOOL_BULLET, "").replace(TOOLS_NOT_AMBIENT.withWiki, TOOLS_NOT_AMBIENT.withoutWiki);
+  return `${head} ${contextSentence(harness)} ${loop === "entrypoint" ? ENTRYPOINT_BODY_TAIL : BODY_TAIL}`;
 }
+
+// ---------------------------------------------------------- entrypoint loop
+
+/**
+ * The entrypoint loop's prompt (a probing spike; `loop: "entrypoint"`): a
+ * second body next to the snippet loop's, never an edit of it. It is built
+ * from `BODY_HEAD` by exact replacements of the passages that describe the
+ * snippet loop's REPL — its persistence, its background routines, "your only
+ * way to act", the per-turn section — so everything else the model is told
+ * (the SDK, the state shapes, the tools) is the same bytes on both loops. A
+ * replacement whose target is not found throws at load, so a later wording
+ * edit to the snippet body cannot leak snippet-loop text into this one.
+ */
+function replaceExactly(text: string, from: string, to: string): string {
+  const at = text.indexOf(from);
+  if (at === -1 || text.indexOf(from, at + from.length) !== -1) {
+    throw new Error(`prompt.ts: the entrypoint body's replacement target is not in the snippet body exactly once: ${from.slice(0, 80)}…`);
+  }
+  return text.slice(0, at) + to + text.slice(at + from.length);
+}
+
+/** The goal section's second paragraph, as the snippet loop has it and as the entrypoint loop does. */
+const GOAL_SNIPPET_PARAGRAPH =
+  "You do not play directly. You write TypeScript snippets that run in a persistent sandbox holding one SDK client for your game session, and you supervise the results.";
+const GOAL_ENTRYPOINT_PARAGRAPH =
+  "You do not play directly. You write a TypeScript program, main.ts in your workspace, that the harness runs continuously against one SDK client for your session; you are woken to read what happened and revise it.";
+
+/** The goal section on the entrypoint loop. */
+export const ENTRYPOINT_GOAL_SECTION = replaceExactly(GOAL_SECTION, GOAL_SNIPPET_PARAGRAPH, GOAL_ENTRYPOINT_PARAGRAPH);
+
+const ENTRYPOINT_PROGRAM_SECTIONS = `## Your program
+
+main.ts at the root of your workspace is your program. It exports loop, on, or both, and imports your other workspace files with relative paths:
+
+export async function loop(ctx) { … }   // called once per tick
+export const on = { SMSG_ATTACKSTART(e, ctx) { … }, WB_MOVE_RESULT(e, ctx) { if (e.data.status !== "arrived") ctx.wake("move " + e.data.status); } };   // keys are event names as recent_events shows them
+
+A tick starts one second after the previous one started, or as soon as it finishes if it ran longer; two ticks never run at once. Each on handler runs as its event arrives, alongside a running tick. A tick has 120 seconds and a handler 10: past that its ctx.signal is aborted, so its pending sdk waits reject with EventAbortedError, and the overrun is reported to you like an error. await inside a tick blocks nothing else: events still arrive, handlers still run, and your snippets still run. The program runs whether you are awake or not — the world does not pause.
+
+ctx carries sdk, state and events (the same objects described below), memory, signal (this call's AbortSignal), tick (ticks since this deploy, from 1), deploy (which deploy is running) and wake(reason), which asks for your attention. memory is one plain JSON object the harness keeps for you as memory.json: mutate it (ctx.memory.phase = "grind") and it is saved after every tick, handler and snippet, and loaded again when the sandbox starts. It holds at most 32000 characters of JSON and only plain values — no Map, no BigInt, no cycles; one that cannot be saved is reported as an error and the last saved memory stays. Variables in your modules start over at every deploy; memory does not.
+
+Your changes take effect when you end your turn: if a code or JSON file changed since the last deploy, the harness loads main.ts afresh and it replaces the running program, whose tick and handlers in flight are aborted and whose timers and event listeners are removed. Until then the previous deploy keeps running, so edits spread over several tool calls never load half-applied. A main.ts that fails to load (a syntax error, a missing import, neither loop nor on exported) leaves the previous deploy running and wakes you with the error; deleting main.ts stops the program. A program that throws keeps being called every tick: the first occurrence of each error wakes you, and repeats are counted.
+
+You are woken for your program's errors, a failed load, a sandbox restart, a ctx.wake call, a level gained, a quest turned in and a death — and after five minutes asleep with none of those. ctx.wake is how your program asks for you, e.g. a check-in once a minute: if (Date.now() - (ctx.memory.t ?? 0) > 60000) { ctx.memory.t = Date.now(); ctx.wake("check-in"); }
+
+## Snippets
+
+run_snippet runs TypeScript once, now: to look at the world, to try a function from your workspace before your program uses it, or to act once. await works at the top level. A single-expression snippet returns its value; otherwise use return or console.log to see results. Nothing a snippet starts outlives it: when it returns, the timers and event listeners it started are removed and its signal is aborted. What it declares is its own and ends with it, so keep what must last in memory or in a workspace file.`;
+
+/** Each passage of the snippet body the entrypoint body replaces, and with what. */
+const ENTRYPOINT_REPLACEMENTS: readonly [string, string][] = [
+  [
+    "## The snippet runtime\n\nSnippets run in one long-lived sandbox process. await works at the top level. A single-expression snippet returns its value, REPL-style; otherwise use return or console.log to see results. Background routines keep running between snippets: a setInterval, or an async function you call without awaiting, runs on after the snippet that started it returns — so work longer than one snippet's time limit belongs in one, and you stop it from a later snippet.",
+    ENTRYPOINT_PROGRAM_SECTIONS,
+  ],
+  [
+    "Top-level bindings and background routines persist in the running sandbox from one snippet to the next, until the sandbox restarts; an import binding belongs to the snippet that imported it, so import again in every snippet that uses it; workspace files are the durable store and survive a restart.",
+    "memory.json in the workspace is your program's memory: read_file shows it, and only your code changes it. Workspace files are the durable store and survive a restart.",
+  ],
+  ["safe to compose, including from a background routine.", "safe to compose, including from your program."],
+  [
+    "- signal: this snippet's AbortSignal. Aborted when the snippet is abandoned; check signal.aborted in long loops, or pass it to your own timers.",
+    "- signal: this snippet's AbortSignal. Aborted when the snippet returns or is abandoned; check signal.aborted in long loops, or pass it to your own timers.\n- memory: your program's memory, the same object as ctx.memory.",
+  ],
+  [
+    "A snippet that runs past the time limit is abandoned but the runtime survives: the snippet's ambient signal (an AbortSignal, the same one every sdk wait honors by default) is aborted, so its pending waits — moveTo, killTarget, waitForTransfer, turnInQuest, sleep — reject with EventAbortedError, a move in flight is stopped, and the result tells you so; bindings and routines started by earlier snippets are untouched. A long walk is the usual way to hit that limit — at a base run speed of 7yd/s a move of more than roughly 200y cannot finish inside one snippet — so dispatch those with await sdk.moveToAsync(target), or from a background routine, and poll state.self.position or the WB_MOVE_RESULT event instead of awaiting sdk.moveTo inline. A single-expression snippet that evaluates to a promise waits for that promise, so launch a background routine as a statement and keep a handle to it in a top-level binding: const job = new AbortController(); void (async (stop) => { while (!stop.aborted) { … } })(job.signal).catch((e) => console.log(String(e))); returns at once with no value, and what the routine prints arrives with later snippet results. A later snippet stops it with job.abort(), which the loop sees at its next check, so the call in flight (a sleep, a killTarget running to its timeout) finishes first; launching again does not stop the routine already running, so abort the old one before launching its replacement. A snippet that blocks the event loop gets the whole sandbox killed and restarted, losing every top-level binding and background routine but not your workspace — you will be told when that happens, and the first result from the new sandbox begins by saying so.",
+    "A snippet that runs past the time limit is abandoned: its signal (an AbortSignal, the same one every sdk wait honors by default) is aborted, so its pending waits — moveTo, killTarget, waitForTransfer, turnInQuest, sleep — reject with EventAbortedError, a move in flight is stopped, and the result tells you so. A long walk is the usual way to hit that limit — at a base run speed of 7yd/s a move of more than roughly 200y cannot finish inside one snippet — so a walk belongs in your program: await sdk.moveTo(target) inside loop covers roughly 840y of a tick's 120 seconds, and a longer one is dispatched with await sdk.moveToAsync(target) and followed on later ticks through state.self.position or the WB_MOVE_RESULT event. Code that blocks the event loop — a synchronous loop that never awaits — gets the whole sandbox killed and restarted; your workspace and memory.json survive it, a program that caused it stays stopped until you end your next turn, and the first snippet result from the new sandbox begins by saying so.",
+  ],
+  [
+    "- run_snippet: execute TypeScript in the sandbox. Your only way to act.",
+    "- run_snippet: run TypeScript once, now, in the sandbox — to look, to try a function from your workspace before your program uses it, or to act once; nothing it starts outlives it.",
+  ],
+  [
+    "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, the listing of your workspace, and your notes.md.",
+    "## Each wake\n\nEvery request of a wake begins with a [wake] block: why you were woken and what happened since you last ended your turn — your program's deploy, its errors with the workspace lines they came from, its ctx.wake calls, what changed for your character, its console output, and memory.json. Then come the current state summary, the most recent events, any harness notices, the listing of your workspace, and your notes.md.",
+  ],
+];
+
+const ENTRYPOINT_BODY_HEAD = ENTRYPOINT_REPLACEMENTS.reduce((text, [from, to]) => replaceExactly(text, from, to), BODY_HEAD);
+
+/** The last sentence of the entrypoint prompt: how a turn ends there, and what wakes the model. */
+const ENTRYPOINT_BODY_TAIL =
+  "End your turn by replying without a tool call; your program keeps running and you are woken for its errors, its ctx.wake calls, level-ups, quest turn-ins and deaths, and at the latest after five minutes.";
 
 /**
  * The fixed system prompt on the fixed loop, exactly as it has always read:
@@ -228,12 +312,14 @@ export function buildSystemPrompt(
   episode?: EpisodeId | undefined,
   harness: Harness = "wrathbench",
   wiki = true,
+  /** The agent loop (`config.loop`); `entrypoint` renders the second body, `snippet` is this prompt as it always was. */
+  loop: Loop = "snippet",
 ): string {
-  const parts = [GOAL_SECTION];
+  const parts = [loop === "entrypoint" ? ENTRYPOINT_GOAL_SECTION : GOAL_SECTION];
   const tier = episodeSection(episode);
   if (tier !== undefined) parts.push(tier);
   if (objective !== undefined && objective.trim().length > 0) parts.push(objectiveSection(objective.trim()));
-  parts.push(bodyFor(harness, wiki));
+  parts.push(bodyFor(harness, wiki, loop));
   return parts.join("\n\n");
 }
 
@@ -300,6 +386,14 @@ export function freshCharacterNote(o: { race: number; class: number; taken?: rea
 export const STATE_KEPT_AND_LOST =
   "Conversation history was not preserved, and neither were top-level bindings or background routines — this is a new sandbox; your workspace, notes.md included, was kept.";
 
+/** The same sentence on the entrypoint loop, where what was running is the program, and it comes back from main.ts. */
+export const STATE_KEPT_AND_LOST_ENTRYPOINT =
+  "Conversation history was not preserved, and nothing from the old sandbox is running — this is a new sandbox; your workspace, notes.md and memory.json included, was kept, and your program loads again from main.ts when you end your first turn.";
+
+function keptAndLost(loop: Loop | undefined): string {
+  return loop === "entrypoint" ? STATE_KEPT_AND_LOST_ENTRYPOINT : STATE_KEPT_AND_LOST;
+}
+
 /**
  * The continued run's session note: a freeplay character coming back under a new
  * run id — the operator disabled it, or the character's previous run ended — on
@@ -318,12 +412,14 @@ export function continuedSessionNote(o: {
   seen: string;
   raceName?: string | null;
   className?: string | null;
+  /** The run's agent loop; the entrypoint loop says what it kept in its own words. */
+  loop?: Loop | undefined;
 }): string {
   const race = o.raceName ?? null;
   const klass = o.className ?? null;
   return (
     `this session continues your earlier freeplay session ${o.from} on the same character. ` +
-    `${STATE_KEPT_AND_LOST} ` +
+    `${keptAndLost(o.loop)} ` +
     `Your character is unchanged and was NOT deleted: name "${o.character}", ` +
     `race ${o.race}${race !== null ? ` (${race})` : ""}, class ${o.class}` +
     `${klass !== null ? ` (${klass})` : ""}.${o.seen} Do not create a different one. ` +
@@ -343,10 +439,12 @@ export function resumeSessionNote(o: {
   seen: string;
   raceName?: string | null;
   className?: string | null;
+  /** The run's agent loop; the entrypoint loop says what it kept in its own words. */
+  loop?: Loop | undefined;
 }): string {
   const head =
     `the runner process was restarted and this run resumed after a pause, ${o.clock}. ` +
-    `${STATE_KEPT_AND_LOST} `;
+    `${keptAndLost(o.loop)} `;
   if (o.character === undefined) {
     return head + freshCharacterNote({ race: o.race, class: o.class });
   }

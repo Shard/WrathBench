@@ -1235,14 +1235,14 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       }
 
       const messages: ChatMessage[] = [
-        { role: "system", content: buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki) },
+        { role: "system", content: buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki, loopOf(config)) },
         ...messageWindow(history),
         { role: "user", content: contextText },
       ];
 
       // 4. model request
       trajectory.append({ t: "request", turn, ...(entry !== null ? { wake: entry.wake } : {}), adapter: o.adapter.label, messages });
-      const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
+      const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki, loop: loopOf(config) }), signal: o.signal });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
         trajectory.setPause(runId, outcome.reason, outcome.detail, watchdogs.elapsedMs());

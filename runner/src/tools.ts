@@ -15,6 +15,7 @@ import { EPISODIC_PAGE_DEFAULT, EPISODIC_PAGE_MAX, type EpisodicEntry, type Epis
 import { READ_LOG_CLOSED, restingOf, type ReflectGate } from "./reflect";
 import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
+import type { Loop } from "./config";
 import { FILE_MAX_CHARS, NOTES_MAX_CHARS, WORKSPACE_MAX_BYTES, type Workspace, type WorkspaceResult } from "./workspace";
 
 export interface ToolDef {
@@ -55,18 +56,33 @@ export const WIKI_ERA_SENTENCE =
  * reference wiki, without `search_reference` at all. `TOOLS` itself is the
  * names-first, wiki-on (default) rendering.
  */
-export function toolsFor(opts: { wikiCoords?: boolean | undefined; wikiSearch?: boolean | undefined }): ToolDef[] {
+export function toolsFor(opts: {
+  wikiCoords?: boolean | undefined;
+  wikiSearch?: boolean | undefined;
+  /** The agent loop; on the entrypoint loop run_snippet is described as the one-off it is there. */
+  loop?: Loop | undefined;
+}): ToolDef[] {
+  const base = opts.loop === "entrypoint" ? ENTRYPOINT_TOOLS : TOOLS;
   // A run configured without the reference wiki (`wiki: false`, issue #61) is
   // not handed the tool at all. Absent reads as true: the reference surface is
   // a capability every run has unless the run said otherwise.
-  if (opts.wikiSearch === false) return TOOLS.filter((t) => t.name !== "search_reference");
-  if (opts.wikiCoords !== true) return TOOLS;
-  return TOOLS.map((t) =>
+  if (opts.wikiSearch === false) return base.filter((t) => t.name !== "search_reference");
+  if (opts.wikiCoords !== true) return base;
+  return base.map((t) =>
     t.name === "search_reference"
       ? { ...t, description: t.description.replace(WIKI_COORDS_SENTENCE.withheld, WIKI_COORDS_SENTENCE.served) }
       : t,
   );
 }
+
+/**
+ * run_snippet's description on the entrypoint loop (a probing spike): the same
+ * ambient surface plus `memory`, and a snippet that is a one-off rather than
+ * "the only way to act" — the program is what acts continuously there. Every
+ * other tool reads the same on both loops, and the list is the same length.
+ */
+export const ENTRYPOINT_RUN_SNIPPET_DESCRIPTION =
+  "Run a TypeScript snippet once, now, in the game sandbox. `sdk`, `state`, `events`, `connect()`, `sleep(ms)`, `files` (your workspace), `memory` (your program's saved memory) and `signal` (aborted when this snippet returns or is abandoned) are ambient, and import statements load modules from your workspace, e.g. import { helper } from \"./lib/util\". A single expression returns its value. Nothing it starts outlives it: its timers and event listeners are removed when it returns. Your program, main.ts, is what runs continuously.";
 
 export const TOOLS: ToolDef[] = [
   {
@@ -244,6 +260,11 @@ export const TOOLS: ToolDef[] = [
     },
   },
 ];
+
+/** The tool list on the entrypoint loop: `TOOLS` with run_snippet's description replaced. */
+const ENTRYPOINT_TOOLS: ToolDef[] = TOOLS.map((t) =>
+  t.name === "run_snippet" ? { ...t, description: ENTRYPOINT_RUN_SNIPPET_DESCRIPTION } : t,
+);
 
 // Strict on purpose: the advertised inputSchema says `additionalProperties:
 // false`, and a plain z.object would silently *strip* unknown keys — a model

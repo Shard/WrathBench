@@ -58,6 +58,8 @@ import {
   episodeOverrideOf,
   isTokenEnvName,
   loadRunConfig,
+  LOOPS,
+  loopOf,
   MIN_TOKEN_LENGTH,
   newRunId,
   newSessionToken,
@@ -224,6 +226,11 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // `search_reference`, without its line in the prompt and without a bundle.
     // Identity like the rest — a resume keeps the condition it launched under.
     wiki: flag(args["wiki"]),
+    // The agent loop: `--loop entrypoint` is the probing spike (refused off an
+    // unscored tier and on the CLI drivers, `loopRefusal`); `--loop snippet` is
+    // the default spelled out, recorded as absent like the default. Identity,
+    // like the driver: a resume keeps it.
+    loop: args["loop"] === "snippet" ? undefined : typeof args["loop"] === "string" ? args["loop"] : undefined,
     // Identity as well: a resumed extra is still an extra.
     extra: flag(args["extra"]),
     // A probe campaign's identity, both or neither.
@@ -406,6 +413,10 @@ async function main(): Promise<void> {
     );
     process.exit(2);
   }
+  if (args["loop"] !== undefined && !(LOOPS as readonly unknown[]).includes(args["loop"])) {
+    console.error(`unknown --loop ${String(args["loop"])} (one of: ${LOOPS.join(", ")})`);
+    process.exit(2);
+  }
   if (args["episode"] !== undefined && !isEpisodeId(args["episode"])) {
     console.error(`unknown --episode ${String(args["episode"])} (one of: ${EPISODE_IDS.join(", ")})`);
     process.exit(2);
@@ -471,7 +482,14 @@ async function main(): Promise<void> {
     tokenRegenerated = session.regenerated;
     resumed = true;
   } else {
-    config = configFromArgs(rawArgs);
+    // A config the loader refuses (a loop off its tier, coordinates without a
+    // wiki) is a launch that did not happen: said once, exit 2, nothing written.
+    try {
+      config = configFromArgs(rawArgs);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(2);
+    }
   }
   /** The freeplay run this launch continues, once its predecessor checks out. */
   let continuation: Continuation | undefined;
@@ -549,7 +567,9 @@ async function main(): Promise<void> {
   // once and never replaced, because the sandbox child's read grant is bound
   // to it.
   const workspaceExisted = existsSync(join(runDir, "workspace"));
-  const workspace = openRunWorkspace(runDir);
+  // On the entrypoint loop memory.json is the program's memory, written by the
+  // runner alone; on the snippet loop the workspace keeps every rule it had.
+  const workspace = openRunWorkspace(runDir, { memory: loopOf(config) === "entrypoint" });
   // The episodic log lives beside the workspace and survives a pause the same
   // way: it is append-only, so a resumed run reads its own past back.
   const episodic = new EpisodicLog(join(runDir, "episodic.jsonl"));
@@ -787,6 +807,9 @@ async function main(): Promise<void> {
     resumed,
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
+    // The entrypoint loop (a probing spike): the child runs snippets as
+    // one-offs and hosts the model's program. Absent on the snippet loop.
+    ...(loopOf(config) === "entrypoint" ? { loop: "entrypoint" as const } : {}),
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
   });
   /*
@@ -1026,6 +1049,7 @@ async function main(): Promise<void> {
       seen,
       raceName: raceName(config.race),
       className: className(config.class),
+      ...(loopOf(config) === "entrypoint" ? { loop: "entrypoint" as const } : {}),
     });
   };
 
@@ -1046,6 +1070,7 @@ async function main(): Promise<void> {
       seen,
       raceName: raceName(c.race),
       className: className(c.class),
+      ...(loopOf(config) === "entrypoint" ? { loop: "entrypoint" as const } : {}),
     });
   };
 
