@@ -40,6 +40,7 @@ import {
 import { subscribeTail } from "../api/live";
 import {
   api,
+  ApiError,
   rawPath,
   SNAPSHOT_MODE,
   type ApiInfoResponse,
@@ -49,6 +50,7 @@ import {
   type ModelRowView,
   type RunDetailResponse,
   type TokenTotals,
+  type WorkspaceFileView,
 } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
@@ -59,7 +61,8 @@ import { Coins, QuestCount } from "../components/CharacterFacts";
 import { XpBar } from "../components/UnitFrame";
 import { InventoryPanel } from "../components/Inventory";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
-import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, fmtWhen, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { fileReading, isCode, openFile } from "../lib/workspace";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
@@ -932,6 +935,9 @@ export default function RunDetail() {
                     </div>
                   </Show>
 
+                  <h2 class="section">workspace</h2>
+                  <WorkspacePanel runId={run().runId} live={live()} />
+
                   <ServerFooter info={info()} run={run()} />
                 </aside>
               </div>
@@ -940,6 +946,123 @@ export default function RunDetail() {
         }}
       </Show>
     </div>
+  );
+}
+
+/**
+ * The run's workspace (runner/src/workspace.ts): the model's own files as a
+ * list to pick from, and the picked one whole — notes.md open first. The same
+ * inspector the homepage's tool list is, so it reads as one kind of surface,
+ * with a module in the inspector's code style and everything else as text.
+ *
+ * A live run's list is re-read on the summary's cadence, and the open file
+ * only when the list says it changed (`fileReading`). A 404 — a run with no
+ * workspace, or a snapshot that published none — is a statement, not an
+ * error, and is shown where the panel would be; the rest of the page never
+ * waits on any of this.
+ */
+function WorkspacePanel(props: { runId: string; live: boolean }) {
+  const [files, setFiles] = createSignal<WorkspaceFileView[] | undefined>(undefined);
+  const [absent, setAbsent] = createSignal(false);
+  const [error, setError] = createSignal<string | undefined>(undefined);
+  const [picked, setPicked] = createSignal<string | undefined>(undefined);
+  /** The open file's text as last read; kept on screen while a newer reading of the same file loads. */
+  const [shown, setShown] = createSignal<{ path: string; text: string } | undefined>(undefined);
+
+  const loadList = (): void => {
+    void api.workspace(props.runId).then(
+      (w) => {
+        setFiles(w.files);
+        setError(undefined);
+      },
+      (e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) {
+          setAbsent(true);
+          return;
+        }
+        logError("run workspace", e);
+        setError(displayError(e));
+      },
+    );
+  };
+  onMount(() => {
+    loadList();
+    if (!props.live) return;
+    // One more read after the run ends, for the files it left, then stop.
+    const timer = setInterval(() => {
+      loadList();
+      if (!props.live) clearInterval(timer);
+    }, DETAIL_POLL_MS);
+    onCleanup(() => clearInterval(timer));
+  });
+
+  const open = createMemo(() => {
+    const list = files();
+    return list === undefined ? undefined : openFile(list, picked());
+  });
+  const reading = createMemo(() => {
+    const f = open();
+    return f === undefined ? undefined : fileReading(f);
+  });
+  createEffect(
+    on(reading, (r) => {
+      const f = open();
+      if (r === undefined || f === undefined) return;
+      void api.workspaceFile(props.runId, f.path).then(
+        // A slower answer for a file the reader has already left is dropped.
+        (text) => {
+          if (reading() === r) setShown({ path: f.path, text });
+        },
+        (e: unknown) => {
+          logError("run workspace file", e);
+          setError(displayError(e));
+        },
+      );
+    }),
+  );
+
+  return (
+    <Show when={!absent()} fallback={<p class="dim">no workspace</p>}>
+      <Show when={error()}>
+        <div class="banner bad">{error()}</div>
+      </Show>
+      <Show when={files()} fallback={<p class="dim">loading…</p>}>
+        {(list) => (
+          <div class="tool-inspector">
+            <ul class="tool-list" role="tablist">
+              <For each={list()}>
+                {(f) => (
+                  <li>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={open()?.path === f.path}
+                      class={open()?.path === f.path ? "on" : ""}
+                      title={f.firstLine === "" ? `${f.bytes} bytes` : `${f.bytes} bytes — ${f.firstLine}`}
+                      onClick={() => setPicked(f.path)}
+                    >
+                      {f.path}
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <Show when={open()}>
+              {(f) => (
+                <div class="tool-detail" role="tabpanel">
+                  <div class="tool-sig" title={`${f().bytes} bytes · ${stamp(f().mtime)}`}>
+                    {f().path} <span class="dim">· {fmtWhen(f().mtime)}</span>
+                  </div>
+                  <Show when={shown()?.path === f().path ? shown() : undefined} fallback={<p class="dim">loading…</p>}>
+                    {(s) => <pre class={isCode(f().path) ? "block tool-example" : "block"}>{s().text}</pre>}
+                  </Show>
+                </div>
+              )}
+            </Show>
+          </div>
+        )}
+      </Show>
+    </Show>
   );
 }
 
