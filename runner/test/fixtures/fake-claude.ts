@@ -70,6 +70,7 @@ const record: Record<string, unknown> = {
     hasAwsBearer: Bun.env["AWS_BEARER_TOKEN_BEDROCK"] !== undefined,
     hasOauthToken: Bun.env["CLAUDE_CODE_OAUTH_TOKEN"] !== undefined,
     configDir: Bun.env["CLAUDE_CONFIG_DIR"] ?? null,
+    autoMemoryOff: Bun.env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] ?? null,
     // How `effort: "none"` reaches the CLI: a thinking budget of zero, no flag.
     maxThinkingTokens: Bun.env["MAX_THINKING_TOKENS"] ?? null,
   },

@@ -15,8 +15,8 @@
  * what a "turn" is. So this driver replaces the inner loop instead: it owns
  * one long-lived `claude` process and feeds it the harness's context message
  * once per driver turn, while every other piece of the harness — sandbox,
- * watchdogs, trajectory, scratchpad, named termination/pause reasons, the
- * fixed system prompt, the nine tools, the fixed context assembly — is the
+ * watchdogs, trajectory, workspace, named termination/pause reasons, the
+ * fixed system prompt, the eleven tools, the fixed context assembly — is the
  * same machinery the fixed loop uses.
  *
  * ## How it is wired
@@ -28,7 +28,7 @@
  *   fallback; it is not needed and would re-pay session startup every turn.)
  * - Tools reach the runner's *single* SandboxHost over a loopback TCP MCP
  *   server plus `mcp-bridge.ts` (see that file for why the bridge exists).
- *   The MCP server is `mcp.ts`'s `McpServer` over `tools.ts` — the same six
+ *   The MCP server is `mcp.ts`'s `McpServer` over `tools.ts` — the same eleven
  *   tools, the same dispatch, the same trajectory records.
  * - Billing: the child environment is constructed explicitly and every
  *   Anthropic/Bedrock/Vertex credential variable is dropped, so the CLI can
@@ -40,7 +40,7 @@
  * ## Measured scaffold gap (claude 2.1.238, verified against a local capture
  * proxy, no model calls)
  *
- * With `--tools ""` the request carries *only* our six MCP tools, named
+ * With `--tools ""` the request carries *only* our eleven MCP tools, named
  * `mcp__wrathbench__<tool>`. What remains that the fixed loop does not have:
  *
  *  1. Claude Code keeps its own conversation history across turns and applies
@@ -63,6 +63,13 @@
  *
  * That list is why `harness: "claude-code"` is in the comparability tuple, and
  * why the tool-call ceiling exists at all.
+ *
+ * Three scaffold features are switched off or bridged rather than listed: the
+ * CLI's tool search (our server is `alwaysLoad`, `claudeMcpConfig`), its
+ * automatic memory (`CLAUDE_CODE_DISABLE_AUTO_MEMORY`, `childEnv`), and the
+ * loss of the workspace block when it compacts (a SessionStart hook prints it
+ * again, `claudeSettings`). The workspace is the run's memory on every
+ * harness; the scaffold must neither hide our tools nor keep notes of its own.
  *
  * ## Winding down instead of killing mid-turn
  *
@@ -145,7 +152,7 @@ export const BILLING_ENV_EXACT = [
 /**
  * Not billing: the database. The `runner` and `fleet` services carry
  * WRATHBENCH_DB_* so the gate's smokes can stage a fixture, and this CLI is the
- * model's own process. It is launched with `--tools ""` and only our six MCP
+ * model's own process. It is launched with `--tools ""` and only our eleven MCP
  * tools, so it has no Bash or Read to dump its environment with — but the
  * credential has no business being in there either way, and the snippet sandbox
  * drops it for the same reason (sandboxChildEnv in sandbox/host.ts). Root on
@@ -176,6 +183,11 @@ const THINKING_ENV = "MAX_THINKING_TOKENS";
  * subscription; `CLAUDE_CONFIG_DIR` is redirected into the run directory so no
  * user-level settings, skills, hooks, memory or `apiKeyHelper` are read; and
  * `WRATHBENCH_DB_*` is dropped too — see `DB_ENV_PREFIX`.
+ *
+ * `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` is always set: the CLI's own automatic
+ * memory is a second, unversioned notes store the harness does not see, and
+ * the run's memory is its workspace (notes.md). The name is the one the pinned
+ * CLI reads (2.1.280); it wins over settings, and nothing else may set it.
  */
 export function childEnv(
   parent: Record<string, string | undefined>,
@@ -196,7 +208,76 @@ export function childEnv(
   out["CLAUDE_CONFIG_DIR"] = o.configDir;
   // Belt and braces: the CLI treats an empty string as unset for these.
   delete out["ANTHROPIC_API_KEY"];
-  return { ...out, ...(o.extra ?? {}) };
+  return { ...out, ...(o.extra ?? {}), [AUTO_MEMORY_ENV]: "1" };
+}
+
+/** The pinned CLI's switch for its own automatic memory; see `childEnv`. */
+export const AUTO_MEMORY_ENV = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+
+// ---------------------------------------------------------- mcp + settings
+
+/**
+ * The generated `--mcp-config`: our one server, launched through the bridge.
+ *
+ * `alwaysLoad: true` keeps every one of our tools in the prompt from the first
+ * request. The pinned CLI (2.1.280) defers MCP tools behind its own tool search
+ * unless a server says otherwise ("When true, all tools from this server are
+ * always included in the prompt and never deferred behind tool search"); a
+ * deferred tool costs the model a search round trip before its first use, and
+ * a tool list the model has to go looking for is not the fixed surface both
+ * harness groups are promised.
+ */
+export function claudeMcpConfig(o: { bunBin: string; bridgePath: string; port: number }): Record<string, unknown> {
+  return {
+    mcpServers: {
+      [MCP_SERVER_NAME]: {
+        command: o.bunBin,
+        args: [o.bridgePath, String(o.port)],
+        alwaysLoad: true,
+      },
+    },
+  };
+}
+
+/** A POSIX shell word: single-quoted, with any single quote closed, escaped and reopened. */
+function shellWord(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * The generated `--settings`: one SessionStart hook, matcher `compact`.
+ *
+ * The CLI compacts its own conversation, and the whole episode is often one
+ * CLI turn, so a compaction can drop the context message that carried the
+ * workspace listing and notes.md for the rest of the episode. After a
+ * compaction the CLI starts its session again with source `compact`, and a
+ * SessionStart hook's stdout is added to the model's context: the hook runs
+ * `workspace.ts` on the run's workspace directory, which prints the same block
+ * `assembleContext` ends every turn's message with, read at that moment. The
+ * hook only reads; the runner remains the workspace's one writer.
+ *
+ * Verified against the pinned CLI (2.1.280, no credentials, no model call):
+ * a SessionStart hook from a `--settings` file runs in `-p` stream-json mode
+ * and its stdout is collected; `compact` is one of the CLI's documented
+ * matcher values for the event (`startup`, `resume`, `clear`, `compact`,
+ * `fork`). A compaction itself needs a model call and was not observed here.
+ */
+export function claudeSettings(o: { bunBin: string; workspaceScript: string; workspaceDir: string }): Record<string, unknown> {
+  return {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "compact",
+          hooks: [
+            {
+              type: "command",
+              command: [o.bunBin, o.workspaceScript, o.workspaceDir].map(shellWord).join(" "),
+            },
+          ],
+        },
+      ],
+    },
+  };
 }
 
 // ------------------------------------------------------------- limit detect
@@ -370,6 +451,8 @@ async function* readLines(stream: ReadableStream<Uint8Array>): AsyncGenerator<st
 
 export interface ClaudeArgsOptions {
   mcpConfigPath: string;
+  /** The generated settings file (`claudeSettings`); absent only in tests of the flag set. */
+  settingsPath?: string | undefined;
   model?: string | undefined;
   /** `--effort` level, when the run declares one. `none` is env, not a flag. */
   effort?: string | undefined;
@@ -397,10 +480,10 @@ export function thinkingEnv(effort: string | undefined): Record<string, string> 
 
 /**
  * The exact flag set, in one place so the README and the tests can assert it.
- * Every flag here exists in claude 2.1.238 (`claude -p --help`); nothing is
+ * Every flag here exists in the pinned claude (`claude -p --help`); nothing is
  * invented. Notably absent: `--max-turns` (not in this CLI version — driver
  * turns are bounded by `maxTurns` in the runner instead) and
- * `--permission-mode` (`--allowed-tools` grants exactly our six, which is the
+ * `--permission-mode` (`--allowed-tools` grants exactly our eleven, which is the
  * narrower grant).
  */
 export function claudeArgs(o: ClaudeArgsOptions): string[] {
@@ -417,6 +500,10 @@ export function claudeArgs(o: ClaudeArgsOptions): string[] {
     "--mcp-config",
     o.mcpConfigPath,
     "--strict-mcp-config",
+    // The SessionStart(compact) hook that re-injects the workspace
+    // (`claudeSettings`). A flag, not a file in CLAUDE_CONFIG_DIR, so the
+    // driver record's argv says it was there.
+    ...(o.settingsPath !== undefined ? ["--settings", o.settingsPath] : []),
     // "" disables the entire built-in tool set; only MCP tools remain
     "--tools",
     "",
@@ -784,15 +871,18 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const bridgePath = new URL("./mcp-bridge.ts", import.meta.url).pathname;
   writeFileSync(
     mcpConfigPath,
+    `${JSON.stringify(claudeMcpConfig({ bunBin: process.execPath, bridgePath, port: listener.port }), null, 2)}\n`,
+    "utf8",
+  );
+  const settingsPath = resolve(o.runDir, "claude-settings.json");
+  writeFileSync(
+    settingsPath,
     `${JSON.stringify(
-      {
-        mcpServers: {
-          [MCP_SERVER_NAME]: {
-            command: process.execPath,
-            args: [bridgePath, String(listener.port)],
-          },
-        },
-      },
+      claudeSettings({
+        bunBin: process.execPath,
+        workspaceScript: new URL("./workspace.ts", import.meta.url).pathname,
+        workspaceDir: o.workspace.dir,
+      }),
       null,
       2,
     )}\n`,
@@ -808,6 +898,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const systemPrompt = buildSystemPrompt(config.objective, config.episode, harnessOf("claude-code"), config.wiki);
   const args = claudeArgs({
     mcpConfigPath,
+    settingsPath,
     systemPrompt,
     model: config.model,
     wikiSearch: config.wiki,
@@ -832,6 +923,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     cwd,
     configDir,
     mcpConfigPath,
+    settingsPath,
     mcpPort: listener.port,
     systemPromptChars: systemPrompt.length,
     ...(config.objective !== undefined ? { objective: config.objective } : {}),

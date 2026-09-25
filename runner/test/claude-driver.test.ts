@@ -9,11 +9,23 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
-import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
+import {
+  AUTO_MEMORY_ENV,
+  childEnv,
+  claudeArgs,
+  claudeMcpConfig,
+  claudeSettings,
+  detectLimit,
+  mcpToolNames,
+  runClaudeEpisode,
+  thinkingEnv,
+  toolCallLimitReached,
+} from "../src/adapter-claude";
+import { assembleContext } from "../src/context";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
-import { Workspace } from "../src/workspace";
+import { Workspace, renderWorkspaceContext } from "../src/workspace";
 import { renderTimeline } from "../src/timeline";
 import { TOOLS } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -145,7 +157,7 @@ describe("claude-code driver", () => {
     expect(record["systemPrompt"]).not.toBe(SYSTEM_PROMPT);
     expect(record["systemPrompt"]).toContain(contextSentence("claude-code"));
     expect(record["systemPrompt"]).not.toContain("trimmed aggressively");
-    // built-ins disabled; only our nine tools granted
+    // built-ins disabled; only our eleven tools granted
     expect(record["toolsFlag"]).toBe("");
     expect(record["allowedTools"]).toEqual(mcpToolNames());
     expect(record["strictMcpConfig"]).toBe(true);
@@ -159,9 +171,25 @@ describe("claude-code driver", () => {
     expect(userMessages).toHaveLength(2);
     expect(userMessages[0]).toContain("[turn 1]");
     expect(userMessages[0]).toContain("== state");
+    // ...ending, as on the fixed loop, with the workspace listing and notes.md
+    expect(userMessages[0]).toContain("<workspace>\n");
+    expect(userMessages[0]!.endsWith('<notes path="notes.md" usage="0% 0/32000">\n</notes>')).toBe(true);
 
     // the tool call went to the runner's sandbox and is in the trajectory
     const records = readTrajectory(runDir);
+    // The generated files: our server always loaded, and the compact hook named on argv.
+    const driver = records.find((r) => r.t === "driver");
+    expect(driver?.["settingsPath"]).toBe(join(runDir, "claude-settings.json"));
+    expect((driver?.["args"] as string[]).includes("--settings")).toBe(true);
+    const settings = JSON.parse(readFileSync(join(runDir, "claude-settings.json"), "utf8")) as {
+      hooks: { SessionStart: { matcher: string; hooks: { command: string }[] }[] };
+    };
+    expect(settings.hooks.SessionStart[0]!.matcher).toBe("compact");
+    expect(settings.hooks.SessionStart[0]!.hooks[0]!.command).toContain(join(runDir, "workspace"));
+    const mcp = JSON.parse(readFileSync(join(runDir, "claude-mcp.json"), "utf8")) as {
+      mcpServers: Record<string, { alwaysLoad?: boolean }>;
+    };
+    expect(mcp.mcpServers["wrathbench"]?.alwaysLoad).toBe(true);
     const types = records.map((r) => r.t);
     expect(types).toContain("snippet");
     expect(types).toContain("snippet_result");
@@ -254,6 +282,8 @@ describe("claude-code driver", () => {
     expect(env["maxThinkingTokens"]).toBe("0");
     // Still the same lane, and still no API-key credential in there.
     expect(env["hasOauthToken"]).toBe(true);
+    // The CLI's own memory is off: the workspace is the run's memory.
+    expect(env["autoMemoryOff"]).toBe("1");
     expect(env["hasAnthropicApiKey"]).toBe(false);
     expect(env["hasAwsBearer"]).toBe(false);
     // And it is run identity like any other level: one more (model, effort) row.
@@ -369,6 +399,8 @@ describe("claude-code driver", () => {
     expect(env["hasAnthropicApiKey"]).toBe(false);
     expect(env["hasAwsBearer"]).toBe(false);
     expect(env["hasOauthToken"]).toBe(true);
+    // The CLI's own memory is off: the workspace is the run's memory.
+    expect(env["autoMemoryOff"]).toBe("1");
     // config dir is scratch, inside the run directory
     expect(String(env["configDir"])).toContain("claude-config");
     trajectory.close();
@@ -665,6 +697,48 @@ describe("claude-code driver", () => {
     expect(args).toContain("--strict-mcp-config");
     expect(args).not.toContain("--max-turns");
     expect(args[args.indexOf("--tools") + 1]).toBe("");
+    expect(args).not.toContain("--settings");
+    const withSettings = claudeArgs({ mcpConfigPath: "/tmp/x.json", settingsPath: "/runs/x/claude-settings.json" });
+    expect(withSettings[withSettings.indexOf("--settings") + 1]).toBe("/runs/x/claude-settings.json");
+    // The grant is every tool the server lists: eleven of them.
+    expect(mcpToolNames()).toHaveLength(11);
+  });
+});
+
+describe("the workspace on the claude-code driver", () => {
+  test("our MCP server is always loaded, never deferred behind the CLI's tool search", () => {
+    expect(claudeMcpConfig({ bunBin: "/usr/bin/bun", bridgePath: "/r/mcp-bridge.ts", port: 4242 })).toEqual({
+      mcpServers: { wrathbench: { command: "/usr/bin/bun", args: ["/r/mcp-bridge.ts", "4242"], alwaysLoad: true } },
+    });
+  });
+
+  test("the CLI's automatic memory is off, whatever the parent environment says", () => {
+    expect(childEnv({ PATH: "/usr/bin" }, { configDir: "/c" })[AUTO_MEMORY_ENV]).toBe("1");
+    expect(childEnv({ [AUTO_MEMORY_ENV]: "0" }, { configDir: "/c", extra: { [AUTO_MEMORY_ENV]: "0" } })[AUTO_MEMORY_ENV]).toBe("1");
+  });
+
+  test("a SessionStart hook with the compact matcher reprints the workspace block, byte for byte", async () => {
+    const ws = new Workspace(join(mkdtempSync(join(tmpdir(), "wrathbench-hook-")), "work space's"));
+    ws.write("notes.md", "# plan\n- it's west\n");
+    ws.write("lib/nav.ts", "// helpers\nexport {};\n");
+    const script = join(import.meta.dir, "..", "src", "workspace.ts");
+    const settings = claudeSettings({ bunBin: process.execPath, workspaceScript: script, workspaceDir: ws.dir }) as {
+      hooks: { SessionStart: { matcher: string; hooks: { type: string; command: string }[] }[] };
+    };
+    expect(settings.hooks.SessionStart).toHaveLength(1);
+    expect(settings.hooks.SessionStart[0]!.matcher).toBe("compact");
+    const hook = settings.hooks.SessionStart[0]!.hooks[0]!;
+    expect(hook.type).toBe("command");
+    // The CLI runs the command through a shell; quoting survives a quote in the path.
+    const proc = Bun.spawn(["sh", "-c", hook.command], { stdout: "pipe", stderr: "pipe" });
+    const out = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    expect(out).toBe(`${renderWorkspaceContext(ws.view())}\n`);
+    // The same bytes the turn's context message ends with.
+    const context = assembleContext({ stateSummary: "== s ==", events: [], workspace: ws.view(), notices: [], turn: 1 });
+    expect(context.endsWith(out.trimEnd())).toBe(true);
+    // Read-only: nothing in the workspace changed.
+    expect(ws.readNotes()).toBe("# plan\n- it's west\n");
   });
 });
 
