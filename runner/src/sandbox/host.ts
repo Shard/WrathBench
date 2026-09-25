@@ -38,7 +38,7 @@ import type {
   ProgramErrorNote,
   ProgramReport,
 } from "./ipc";
-import { PROGRAM_LIMITS, PROGRAM_LIMITS_ENV, type ProgramLimits } from "./program";
+import { MAIN_PATH, PROGRAM_LIMITS, PROGRAM_LIMITS_ENV, type ProgramLimits } from "./program";
 
 export interface SnippetResult {
   ok: boolean;
@@ -123,6 +123,8 @@ export interface SandboxHostOptions {
   loop?: "snippet" | "entrypoint";
   /** Entrypoint loop: the program's limits, for tests; the defaults are `PROGRAM_LIMITS`. */
   program?: Partial<ProgramLimits>;
+  /** Entrypoint loop: the report cadence and the block grace, for tests (`PROGRAM_POLL_MS`, `BLOCK_GRACE_MS`). */
+  heartbeat?: { pollMs?: number; blockGraceMs?: number };
   entryPath?: string;
   /** Called for every notice, so the loop can log it as it happens. */
   onNotice?: (notice: HarnessNotice) => void;
@@ -199,6 +201,56 @@ export const STATE_LOSS_RECOVERY =
 export const STATE_RESET_NOTICE =
   "[state reset] this snippet ran in a new sandbox: top-level bindings and background routines from before are gone; workspace files are unchanged.";
 
+/**
+ * The entrypoint loop's versions of the two strings above (a probing spike).
+ * A snippet there leaves nothing behind, so what a restart loses is only what
+ * was running: the program, which the harness loads again itself.
+ */
+export const STATE_LOSS_RECOVERY_ENTRYPOINT =
+  "Nothing that was running in that sandbox survived it; your workspace files, notes.md and memory.json included, are unchanged. " +
+  "The game session may still exist server-side under the same token: run " +
+  "`await connect()` to resubscribe to events, then `await sdk.createSession({...})` " +
+  "— a `token_in_use` error means the session is still alive and `sdk` works as-is.";
+
+export const STATE_RESET_NOTICE_ENTRYPOINT =
+  "[state reset] this snippet ran in a new sandbox: nothing from the old one is running; workspace files and memory.json are unchanged.";
+
+/** How often the entrypoint loop's host drains the program's report — which is also its liveness check. */
+export const PROGRAM_POLL_MS = 1_000;
+/** How long a report may go unanswered before the child is taken to have blocked its event loop. */
+export const BLOCK_GRACE_MS = 10_000;
+
+/**
+ * The program as the host tracks it. `halted`: it blocked the event loop, the
+ * sandbox was restarted, and it waits for the model's next yield. `stopped`:
+ * the sandbox restarted for another reason while files had changed since the
+ * deploy, so reloading would run code the model has not yet ended its turn on.
+ */
+export type ProgramState =
+  | { kind: "none" }
+  | { kind: "running"; deploy: number; version: number; at: number }
+  | { kind: "halted"; deploy: number; version: number; at: number; since: number }
+  | { kind: "stopped"; deploy: number; version: number; at: number; since: number };
+
+/** What the host tells the loop about the program between reports. */
+export type ProgramHostEvent =
+  | { kind: "report"; report: ProgramReport }
+  | { kind: "halted"; deploy: number; at: number }
+  | { kind: "restart"; cause: "snippet" | "exit"; at: number; detail: string }
+  | { kind: "reload"; deploy: number; version: number; at: number; answer: DeployAnswer }
+  | { kind: "stopped"; deploy: number; at: number };
+
+/** One deploy the loop asked for at a yield, as the trajectory records it. */
+export interface DeployRecord {
+  deploy: number;
+  version: number;
+  ok: boolean;
+  error?: string;
+  exports?: string[];
+  /** What the deploy did to the program: loaded it, unloaded it (main.ts is gone), or failed. */
+  action: "load" | "unload";
+}
+
 export class SandboxHost {
   private proc: Subprocess | null = null;
   private markReady: () => void = () => {};
@@ -224,6 +276,23 @@ export class SandboxHost {
    * restart never carries it — the one after does.
    */
   private resetPending: boolean;
+
+  // ---- the entrypoint loop (a probing spike); all idle in the snippet loop
+  /** The program as the host knows it. */
+  programState: ProgramState = { kind: "none" };
+  /** The number the last deploy attempt was given; the next one is one more. */
+  private deploys = 0;
+  /** The import version the last deploy attempt loaded (or failed to); null before the first. */
+  private lastAttemptedVersion: number | null = null;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private beating = false;
+  /** Set by `stop()`: nothing respawns or reloads after it. */
+  private stopping = false;
+  /** Snippet evaluations in flight: a block while one runs is the snippet's. */
+  private evalsInFlight = 0;
+  /** The child was killed because a snippet blocked it: that snippet's result says so. */
+  private killedForSnippetBlock = false;
+  private readonly programListeners = new Set<(e: ProgramHostEvent) => void>();
 
   constructor(private readonly opts: SandboxHostOptions) {
     this.resetPending = opts.resumed === true;
@@ -343,9 +412,16 @@ export class SandboxHost {
               "sandbox_restarted",
               `sandbox process exited unexpectedly (${cause}).` +
                 (tail ? ` Last stderr: ${tail}\n` : " ") +
-                STATE_LOSS_RECOVERY,
+                this.lossRecovery,
             );
             this.markReady(); // never leave a start() awaiting a dead child
+            // Entrypoint loop: the program runs whether the model is awake or
+            // not, so a dead child is brought back at once and its program
+            // with it, and the loop is told (a `restart` wake).
+            if (this.entrypoint && !this.stopping) {
+              this.emitProgram({ kind: "restart", cause: "exit", at: this.nowMs(), detail: `the sandbox process exited unexpectedly (${cause})` });
+              void this.start().then(() => this.reloadAfterRestart()).catch(() => undefined);
+            }
           };
           void Promise.race([stderr.done, new Promise((r) => setTimeout(r, 100))]).then(emit);
         }
@@ -355,7 +431,163 @@ export class SandboxHost {
       },
     });
     stderr.done = this.pumpStderr(this.proc, stderr);
+    const proc = this.proc;
     await this.ready;
+    if (this.entrypoint && proc !== null && proc === this.proc) {
+      // A new child starts at import version 0; tell it the current one, so a
+      // snippet's import and the next deploy load one graph of the same files,
+      // not two.
+      try {
+        proc.send({ t: "workspace_version", version: this.opts.workspace.importVersion } satisfies HostToChild);
+      } catch {
+        // gone already; its exit is handled where exits are
+      }
+      this.startHeartbeat();
+    }
+  }
+
+  // ------------------------------------------------------ entrypoint heartbeat
+
+  /** The recovery sentence a state-loss notice ends with, for this sandbox's loop. */
+  get lossRecovery(): string {
+    return this.entrypoint ? STATE_LOSS_RECOVERY_ENTRYPOINT : STATE_LOSS_RECOVERY;
+  }
+
+  private nowMs(): number {
+    return (this.opts.now ?? Date.now)();
+  }
+
+  /** Hear about the program between reports: every report, halts, restarts, reloads. */
+  onProgramEvent(listener: (e: ProgramHostEvent) => void): () => void {
+    this.programListeners.add(listener);
+    return () => this.programListeners.delete(listener);
+  }
+
+  private emitProgram(e: ProgramHostEvent): void {
+    for (const l of this.programListeners) {
+      try {
+        l(e);
+      } catch {
+        // a listener's fault is its own
+      }
+    }
+  }
+
+  /**
+   * The report drain on a timer: what the program did reaches the loop about
+   * once a second, asleep or awake, and a child that cannot answer within the
+   * grace has blocked its event loop. Unref'd; stopped by `stop()`.
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeat !== null || this.stopping) return;
+    this.heartbeat = setInterval(() => void this.beat(), this.opts.heartbeat?.pollMs ?? PROGRAM_POLL_MS);
+    this.heartbeat.unref?.();
+  }
+
+  private async beat(): Promise<void> {
+    if (this.beating || this.stopping || this.proc === null) return;
+    this.beating = true;
+    try {
+      const report = await this.programReport(this.opts.heartbeat?.blockGraceMs ?? BLOCK_GRACE_MS);
+      this.emitProgram({ kind: "report", report });
+    } catch (err) {
+      // An exit is the exit handler's; a timeout is a blocked event loop.
+      if (err instanceof SandboxTimeoutError && !this.stopping) await this.blocked();
+    } finally {
+      this.beating = false;
+    }
+  }
+
+  /**
+   * The child stopped answering. A snippet in flight is blamed, as the snippet
+   * timeout always blamed it, and the program comes back once the new child is
+   * ready; with none in flight the program is, and it stays halted until the
+   * model's next yield. Either way the restart counts toward
+   * `snippet-runaway`.
+   */
+  private async blocked(): Promise<void> {
+    const grace = this.opts.heartbeat?.blockGraceMs ?? BLOCK_GRACE_MS;
+    if (this.evalsInFlight > 0) {
+      this.killedForSnippetBlock = true;
+      await this.restart(`a snippet blocked the event loop for ${grace}ms`);
+      this.emitProgram({ kind: "restart", cause: "snippet", at: this.nowMs(), detail: `a snippet blocked the event loop for ${grace}ms` });
+      await this.reloadAfterRestart();
+      return;
+    }
+    const s = this.programState;
+    const blamed = s.kind === "running" ? `your program (main.ts, deploy ${s.deploy})` : "code started by your program";
+    await this.restart(
+      `${blamed} blocked the event loop for ${grace}ms; it stays stopped until you end your turn, when main.ts loads again`,
+    );
+    if (s.kind === "running") {
+      this.programState = { kind: "halted", deploy: s.deploy, version: s.version, at: s.at, since: this.nowMs() };
+      this.emitProgram({ kind: "halted", deploy: s.deploy, at: this.nowMs() });
+    }
+  }
+
+  /**
+   * After a restart the program was not blamed for, load it again in the new
+   * child — the same deploy, from the files as they are — unless the files
+   * moved since it was deployed: then running them would put code the model
+   * has not ended its turn on into play, so it stays stopped until the yield.
+   */
+  private async reloadAfterRestart(): Promise<void> {
+    const s = this.programState;
+    if (s.kind !== "running" || this.stopping) return;
+    if (this.opts.workspace.importVersion !== s.version) {
+      this.programState = { kind: "stopped", deploy: s.deploy, version: s.version, at: s.at, since: this.nowMs() };
+      this.emitProgram({ kind: "stopped", deploy: s.deploy, at: this.nowMs() });
+      return;
+    }
+    let answer: DeployAnswer;
+    try {
+      answer = await this.deployProgram(s.deploy);
+    } catch (err) {
+      answer = { ok: false, deploy: s.deploy, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (!answer.ok) this.programState = { kind: "stopped", deploy: s.deploy, version: s.version, at: s.at, since: this.nowMs() };
+    this.emitProgram({ kind: "reload", deploy: s.deploy, version: s.version, at: this.nowMs(), answer });
+  }
+
+  /**
+   * What ending a turn does to the program: load main.ts when a code or JSON
+   * file changed since the last attempt, when the program is halted or
+   * stopped, or when none was ever tried at this version; unload it when
+   * main.ts is gone; otherwise nothing (null). A failed load leaves a running
+   * deploy running and is not retried until something changes.
+   */
+  async deployAtYield(): Promise<DeployRecord | null> {
+    const version = this.opts.workspace.importVersion;
+    const main = this.opts.workspace.read(MAIN_PATH);
+    const s = this.programState;
+    if (!main.ok) {
+      if (s.kind === "none") return null;
+      try {
+        await this.unloadProgram();
+      } catch {
+        // a dead child unloads nothing; the state below is the truth either way
+      }
+      this.programState = { kind: "none" };
+      this.lastAttemptedVersion = version;
+      return { deploy: s.deploy, version, ok: true, action: "unload" };
+    }
+    const due = s.kind === "halted" || s.kind === "stopped" || this.lastAttemptedVersion !== version;
+    if (!due) return null;
+    const deploy = ++this.deploys;
+    this.lastAttemptedVersion = version;
+    let answer: DeployAnswer;
+    try {
+      answer = await this.deployProgram(deploy);
+    } catch (err) {
+      answer = { ok: false, deploy, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (answer.ok) {
+      this.programState = { kind: "running", deploy, version, at: this.nowMs() };
+      return { deploy, version, ok: true, exports: answer.exports, action: "load" };
+    }
+    // The previous deploy keeps running if it was; a halted or stopped one is gone.
+    if (s.kind === "halted" || s.kind === "stopped") this.programState = { kind: "none" };
+    return { deploy, version, ok: false, error: answer.error, action: "load" };
   }
 
   /** Mirror the child's stderr to ours while keeping a tail for crash notices. */
@@ -540,8 +772,14 @@ export class SandboxHost {
     // notice belongs on the next result, the first from the new process.
     const reset = this.resetPending;
     this.resetPending = false;
-    const res = await this.evalOnce(code);
-    return reset ? { ...res, resetNotice: STATE_RESET_NOTICE } : res;
+    this.evalsInFlight++;
+    let res: SnippetResult;
+    try {
+      res = await this.evalOnce(code);
+    } finally {
+      this.evalsInFlight--;
+    }
+    return reset ? { ...res, resetNotice: this.entrypoint ? STATE_RESET_NOTICE_ENTRYPOINT : STATE_RESET_NOTICE } : res;
   }
 
   private async evalOnce(code: string): Promise<SnippetResult> {
@@ -567,10 +805,26 @@ export class SandboxHost {
       };
     } catch (err) {
       if (err instanceof SandboxExitedError) {
+        // Entrypoint loop: the heartbeat found the event loop blocked while
+        // this snippet ran, and killed the child for it.
+        if (this.killedForSnippetBlock) {
+          this.killedForSnippetBlock = false;
+          const grace = this.opts.heartbeat?.blockGraceMs ?? BLOCK_GRACE_MS;
+          return {
+            ok: false,
+            timedOut: true,
+            restarted: true,
+            error:
+              `snippet blocked the sandbox event loop for ${grace}ms; the sandbox process was killed and ` +
+              `restarted — ${this.lossRecovery} Your program loads again by itself unless files changed since its deploy.`,
+            logs: [],
+            durationMs: grace,
+          };
+        }
         return {
           ok: false,
           restarted: true,
-          error: `the sandbox process exited while this snippet was running — ${STATE_LOSS_RECOVERY}`,
+          error: `the sandbox process exited while this snippet was running — ${this.lossRecovery}`,
           logs: [],
           durationMs: 0,
         };
@@ -591,6 +845,26 @@ export class SandboxHost {
         // not started / already gone — the ping path reports that
       }
       const ping = await this.pingAlive();
+      if (ping.alive && this.entrypoint) {
+        return {
+          ok: false,
+          timedOut: true,
+          error:
+            `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned: its \`signal\` was ` +
+            `aborted, so pending SDK waits (moveTo, killTarget, waitForTransfer, …) rejected with ` +
+            `EventAbortedError and any move in flight was stopped, and the timers and event listeners it ` +
+            `started were removed. ` +
+            (ping.note !== undefined ? `${ping.note} ` : "") +
+            `Work longer than ${Math.round(this.opts.snippetTimeoutMs / 1000)}s belongs in your program: a ` +
+            `tick of loop has ${Math.round(this.programLimits.tickBudgetMs / 1000)}s, and a walk longer than ` +
+            `that is dispatched with sdk.moveToAsync(target), which returns as soon as the move is queued, and ` +
+            `followed on later ticks through state.self.position or the WB_MOVE_RESULT event. Check state/events ` +
+            `before assuming the snippet failed.`,
+          logs: ping.logs,
+          actionHints: ping.hints,
+          durationMs: this.opts.snippetTimeoutMs,
+        };
+      }
       if (ping.alive) {
         return {
           ok: false,
@@ -630,7 +904,7 @@ export class SandboxHost {
         restarted: true,
         error:
           `snippet blocked the sandbox event loop past ${this.opts.snippetTimeoutMs}ms; ` +
-          `the sandbox process was killed and restarted — ${STATE_LOSS_RECOVERY}`,
+          `the sandbox process was killed and restarted — ${this.lossRecovery}`,
         logs: [],
         durationMs: this.opts.snippetTimeoutMs,
       };
@@ -670,7 +944,7 @@ export class SandboxHost {
       }
     }
     await this.start();
-    this.notice("sandbox_restarted", `sandbox restarted (${reason}). ${STATE_LOSS_RECOVERY}`);
+    this.notice("sandbox_restarted", `sandbox restarted (${reason}). ${this.lossRecovery}`);
   }
 
   /** Recent events as JSON-safe summaries, via the child's SDK event buffer. */
@@ -717,6 +991,12 @@ export class SandboxHost {
   }
 
   async stop(): Promise<void> {
+    // Entrypoint loop: nothing reports, respawns or reloads once a stop began.
+    this.stopping = true;
+    if (this.heartbeat !== null) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = null;
+    }
     const proc = this.proc;
     this.proc = null;
     if (proc === null) return;

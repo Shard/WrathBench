@@ -14,7 +14,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SandboxHost } from "../src/sandbox/host";
+import { SandboxHost, STATE_RESET_NOTICE_ENTRYPOINT } from "../src/sandbox/host";
 import type { ProgramErrorNote, ProgramReport } from "../src/sandbox/ipc";
 import { Workspace } from "../src/workspace";
 
@@ -22,7 +22,7 @@ const hosts: SandboxHost[] = [];
 
 const FAST = { tickMs: 20, tickBudgetMs: 400, eventBudgetMs: 200, deployConnectMs: 20 };
 
-function makeHost(ws?: Workspace): { host: SandboxHost; ws: Workspace } {
+function makeHost(ws?: Workspace, heartbeat?: { pollMs?: number; blockGraceMs?: number }): { host: SandboxHost; ws: Workspace } {
   const workspace = ws ?? new Workspace(join(mkdtempSync(join(tmpdir(), "wrathbench-prog-")), "workspace"), { memory: true });
   const host = new SandboxHost({
     moduleUrl: "http://127.0.0.1:9",
@@ -32,6 +32,9 @@ function makeHost(ws?: Workspace): { host: SandboxHost; ws: Workspace } {
     pingGraceMs: 1_000,
     loop: "entrypoint",
     program: FAST,
+    // Slow enough by default that no test here races the heartbeat's drain
+    // against its own; the heartbeat tests below shorten it.
+    heartbeat: heartbeat ?? { pollMs: 60_000, blockGraceMs: 10_000 },
   });
   hosts.push(host);
   return { host, ws: workspace };
@@ -310,6 +313,126 @@ describe("deploys own what they start, and an edit waits for the next deploy", (
     expect(await memoryValue(host, "memory.n")).toBe(a);
   });
 });
+
+describe("the host: deploy at a yield, the heartbeat, halts and restarts", () => {
+  const HEARTBEAT = { pollMs: 40, blockGraceMs: 400 };
+
+  test("deployAtYield loads on a change, not otherwise; a failed load is not retried until something changes; a deleted main.ts unloads", async () => {
+    const { host, ws } = makeHost();
+    expect(await host.deployAtYield()).toBeNull();
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.gen = 1;\n}\n");
+    expect(await host.deployAtYield()).toEqual({
+      deploy: 1,
+      version: ws.importVersion,
+      ok: true,
+      exports: ["loop"],
+      action: "load",
+    });
+    expect(host.programState.kind).toBe("running");
+    // notes.md is not code: ending a turn after editing it deploys nothing.
+    ws.write("notes.md", "plan");
+    expect(await host.deployAtYield()).toBeNull();
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.gen = ;\n}\n");
+    const failed = await host.deployAtYield();
+    expect(failed?.ok).toBe(false);
+    expect(failed?.error).toContain("main.ts:2:");
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 1 });
+    expect(await host.deployAtYield()).toBeNull();
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.gen = 3;\n}\n");
+    expect((await host.deployAtYield())?.deploy).toBe(3);
+    await until(async () => ((await memoryValue(host, "memory.gen")) === "3" ? true : undefined));
+    ws.delete("main.ts");
+    expect(await host.deployAtYield()).toMatchObject({ deploy: 3, ok: true, action: "unload" });
+    expect(host.programState.kind).toBe("none");
+    expect(await host.deployAtYield()).toBeNull();
+  });
+
+  test("the heartbeat drains reports to listeners, asleep or awake", async () => {
+    const { host, ws } = makeHost(undefined, HEARTBEAT);
+    const reports: ProgramReport[] = [];
+    host.onProgramEvent((e) => {
+      if (e.kind === "report") reports.push(e.report);
+    });
+    write(ws, "main.ts", "export function loop(ctx) {}\n");
+    expect((await host.deployAtYield())?.ok).toBe(true);
+    await until(() => (reports.reduce((n, r) => n + r.ticks, 0) >= 3 ? true : undefined));
+  });
+
+  test("a program that blocks the event loop halts: the child restarts, the program waits for the yield, and the yield reloads it", async () => {
+    const { host, ws } = makeHost(undefined, HEARTBEAT);
+    const events: string[] = [];
+    host.onProgramEvent((e) => {
+      if (e.kind !== "report") events.push(e.kind);
+    });
+    write(ws, "main.ts", "export function loop(ctx) {\n  if (ctx.tick === 3) for (;;) {}\n}\n");
+    expect((await host.deployAtYield())?.ok).toBe(true);
+    await until(() => (events.includes("halted") ? true : undefined), 8_000);
+    expect(host.programState).toMatchObject({ kind: "halted", deploy: 1 });
+    expect(host.totalRestarts).toBe(1);
+    const notice = host.drainNotices().find((n) => n.kind === "sandbox_restarted")!;
+    expect(notice.text).toContain("your program (main.ts, deploy 1) blocked the event loop for 400ms");
+    expect(notice.text).toContain("it stays stopped until you end your turn");
+    expect(notice.text).not.toContain("background routine");
+    // Nothing changed, but a halted program is due at the yield.
+    const again = await host.deployAtYield();
+    expect(again).toMatchObject({ deploy: 2, ok: true });
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 2 });
+  });
+
+  test("a snippet that blocks is blamed, not the program, which comes back by itself", async () => {
+    const { host, ws } = makeHost(undefined, HEARTBEAT);
+    const events: ProgramHostEventKind[] = [];
+    host.onProgramEvent((e) => {
+      if (e.kind !== "report") events.push(e.kind);
+    });
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.n = (ctx.memory.n ?? 0) + 1;\n}\n");
+    expect((await host.deployAtYield())?.ok).toBe(true);
+    await until(async () => (Number(await memoryValue(host, "memory.n")) > 2 ? true : undefined));
+    const blocked = await host.evalSnippet("for (;;) {}");
+    expect(blocked.ok).toBe(false);
+    expect(blocked.restarted).toBe(true);
+    expect(blocked.error).toContain("snippet blocked the sandbox event loop for 400ms");
+    expect(blocked.error).toContain("memory.json included, are unchanged");
+    await until(() => (events.includes("reload") ? true : undefined));
+    expect(events).toEqual(["restart", "reload"]);
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 1 });
+    // The first result from the new child says it is new, in the entrypoint loop's words.
+    const next = await host.evalSnippet("memory.n");
+    expect(next.resetNotice).toBe(STATE_RESET_NOTICE_ENTRYPOINT);
+    const n = Number(next.value);
+    await until(async () => (Number(await memoryValue(host, "memory.n")) > n ? true : undefined));
+  });
+
+  test("a restart with files changed since the deploy leaves the program stopped until the yield", async () => {
+    const { host, ws } = makeHost(undefined, HEARTBEAT);
+    const events: ProgramHostEventKind[] = [];
+    host.onProgramEvent((e) => {
+      if (e.kind !== "report") events.push(e.kind);
+    });
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.gen = 1;\n}\n");
+    expect((await host.deployAtYield())?.ok).toBe(true);
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.gen = 2;\n}\n");
+    const crashed = await host.evalSnippet("process.exit(3)");
+    expect(crashed.restarted).toBe(true);
+    await until(() => (events.includes("stopped") ? true : undefined));
+    expect(events).toEqual(["restart", "stopped"]);
+    expect(host.programState).toMatchObject({ kind: "stopped", deploy: 1 });
+    expect((await host.deployAtYield())?.ok).toBe(true);
+    await until(async () => ((await memoryValue(host, "memory.gen")) === "2" ? true : undefined));
+  });
+
+  test("a memory the workspace has no room for is an error the next report carries", async () => {
+    const { host, ws } = makeHost();
+    for (let i = 0; i < 32; i++) write(ws, `big/${i}.txt`, "y".repeat(32_000));
+    await host.evalSnippet('memory.blob = "z".repeat(31_000);');
+    const errors = (await host.programReport()).errors;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.signature).toBe("memory not saved: workspace full");
+    expect(errors[0]!.text).toContain("over its 1048576-byte limit");
+  });
+});
+
+type ProgramHostEventKind = "report" | "halted" | "restart" | "reload" | "stopped";
 
 describe("facts the child sees", () => {
   test("a level gained, a quest turned in and a death are each reported once", async () => {
