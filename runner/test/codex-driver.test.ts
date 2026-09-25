@@ -187,6 +187,11 @@ describe("codex driver", () => {
     expect(userMessages[0]).toContain("[turn 1]");
     expect(userMessages[0]).toContain("== state");
     expect(userMessages[1]).toContain("[turn 2]");
+    // Every turn's message ends with the workspace listing and notes.md, as on the fixed loop.
+    for (const m of userMessages) {
+      expect(m).toContain("<workspace>\n");
+      expect(m.trimEnd().endsWith('<notes path="notes.md" usage="0% 0/32000">\n</notes>')).toBe(true);
+    }
 
     const records = readTrajectory(runDir);
     const types = records.map((r) => r.t);
