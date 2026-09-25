@@ -466,7 +466,7 @@ logs the character out. Nothing is corrupted. What it costs:
   ceiling. The roster emits `--watchdogs-json {"episodeMs":null}` and
   `--max-tool-calls 0` for the `idle: "unlimited"` lane, which rewrites both
   caps to `null` on the resumed run while its run id, account, character,
-  session token, trajectory and scratchpad are all the stored run's.
+  session token, trajectory and workspace are all the stored run's.
 - a preflight smoke in flight dies with the container; the gate re-runs it.
 
 If the switch is already **set** when `force` runs — the ordinary way to arrive
@@ -513,11 +513,11 @@ config, maps it back to its job (a pinned or queued job from the config,
 else a synthetic policy job with the attempt read off the run id), and spawns
 that job's roster with the paused run id first and `--resume-roster`, on the
 **same account** — the character lives there, and a fresh launch on that
-account would wipe it. `--resume` reattaches the trajectory and scratchpad,
+account would wipe it. `--resume` reattaches the trajectory and workspace,
 recreates the game session with the same character, and continues the episode
 budget; the claude-code driver cannot reattach the CLI's own conversation, so
 such a run restarts with a fresh CLI session (the same fixed prompt, the
-scratchpad, the same "runner restarted, this run resumed" notice every driver
+workspace, the same "runner restarted, this run resumed" notice every driver
 gets) and is stamped `resumedFresh: true` in meta.json. Only once every resume
 has its account does the pool fill. The same planner runs every tick, so a run
 paused by its provider (`rate-limited`, `quota-exhausted`) is resumed once its
@@ -633,7 +633,7 @@ What the supervisor does with it, per tick:
   The runner logs the character out and writes `operator-pause`; `--status`
   lists the run as `paused, not in config` while the ref stays `none`.
 - **Re-enable**, however much later: the paused run is resumed in place by the
-  ordinary resume path — same run id, account, character, scratchpad. A
+  ordinary resume path — same run id, account, character, workspace. A
   freeplay pause never goes stale — for every reader alike: while it sits it is
   listed by `--status`, it holds its model (the policy starts nothing for that
   ref, scored or not), and it is never continued from, because a continuation
@@ -645,7 +645,8 @@ What the supervisor does with it, per tick:
   `--continue-from <predecessor>`. The runner refuses it unless the launch is
   `freeplay`, the predecessor is a freeplay run on the same account and named
   a character; then hygiene keeps that character and clears the rest, the
-  predecessor's `scratchpad.md` is copied in, race and class are the
+  predecessor's workspace is copied in (or, for a predecessor from before the
+  workspace, its `scratchpad.md` as notes.md), race and class are the
   character's, and the model is told which run and character it continues
   instead of getting the naming note. The lineage is on the run record. If the
   character turns out to be gone,
@@ -688,7 +689,7 @@ What the supervisor does with it, per tick:
   the trajectories survive under `archive/`, and the scheduler still reads
   them.
   A continuation whose predecessor has been archived **stays valid** —
-  `loadContinuation` reads it from `<runs>/archive/<id>`, scratchpad and
+  `loadContinuation` reads it from `<runs>/archive/<id>`, workspace and
   all, because the character election reads archived facts too. A
   predecessor that is on disk nowhere is not fatal either: the launch drops
   the lineage (`continue-dropped`, naming the missing id) and starts fresh

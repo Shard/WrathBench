@@ -168,7 +168,7 @@ standing sandbox that never finishes. Duration separates neither pair.
   another **on the same character**: a character is durable across the
   operator's disable/re-enable and across its own endings, so the
   next attempt is launched `--continue-from` the last one — same account,
-  same character, the scratchpad carried forward — and records the lineage as
+  same character, the workspace carried forward — and records the lineage as
   `continued_from` (docs/RUNBOOK.md, "Freeplay characters are durable"). Such a run is stamped `extra: true` — an attempt, shown as an extra
   on the Models page and as a `freeplay` run on the Episodes page, never counted
   toward an `e90`/`e360` target. A new harness series re-arms the scheduled runs

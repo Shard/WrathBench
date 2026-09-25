@@ -95,10 +95,11 @@ The floor that closes that (`module/PROTOCOL.md`
   launched as.
 - **The snippet child cannot read what it was not given.** The child is
   exec'd under a Linux Landlock ruleset that allows reads only of what the
-  snippet runtime needs to run (runner/README.md, "The sandbox"); `.env`, the
-  repo root, the home directory and `/tmp` answer `EACCES` from the kernel
-  however the read is attempted, and the sandbox refuses to start rather than
-  run unconfined.
+  snippet runtime needs to run and of the run's own workspace directory, which
+  the child may read and only the runner process writes (runner/README.md,
+  "The sandbox"); `.env`, the repo root, the home directory and `/tmp` answer
+  `EACCES` from the kernel however the read is attempted, and the sandbox
+  refuses to start rather than run unconfined.
 
 The account allowlist (`WrathBench.Accounts`) gates only which accounts the
 module serves; it is not caller authentication. What this does not do: it does

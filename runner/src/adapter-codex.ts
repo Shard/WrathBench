@@ -36,7 +36,7 @@
  *
  * The prompt positional is `-`, the context message is written to stdin and
  * stdin is ended. Two reasons. argv has a per-argument ceiling (128 KiB on
- * Linux) and a turn's context — HUD, events, the whole scratchpad — can
+ * Linux) and a turn's context — HUD, events, the workspace listing and notes.md — can
  * approach it; and argv is visible in `ps`. What must NOT happen is leaving
  * stdin open: when stdin is a pipe the CLI reads it to EOF and appends it as a
  * `<stdin>` block, and an open pipe hung it for 180 s on this host (2026-09-05).
@@ -57,7 +57,7 @@
  * tool; `web_search="disabled"` removes search. What remains built in is
  * `request_user_input`, `view_image` and `apply_patch` (their config switches
  * have no effect in 0.153.4) — inert under `sandbox_mode="read-only"` in an
- * empty temp cwd. Our nine tools arrive via `mcp_servers.wrathbench.*`
+ * empty temp cwd. Our eleven tools arrive via `mcp_servers.wrathbench.*`
  * overrides on the command line (`--ignore-user-config` keeps the operator's
  * ~/.codex/config.toml — trusted projects, other MCP servers — out of the run;
  * auth still comes from CODEX_HOME). Codex presents them to the model as

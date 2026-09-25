@@ -36,8 +36,8 @@ The SDK is versioned. Its surface is part of the harness version.
 ### runner/ (Bun/TypeScript, MIT)
 
 - MCP server exposing the model-facing tools (`runner/src/tools.ts`).
-- Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with network access only to the module, an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), and a Linux Landlock filesystem ruleset applied before exec (`runner/src/sandbox/confine.ts`) so it can read the interpreter, `runner/`, `sdk/` and `node_modules/` and nothing else — not `.env`, not the home directory. Hard per-snippet timeout.
-- Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
+- Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with network access only to the module, an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), and a Linux Landlock filesystem ruleset applied before exec (`runner/src/sandbox/confine.ts`) so it can read the interpreter, `runner/`, `sdk/`, `node_modules/` and the run's workspace and nothing else — not `.env`, not the home directory — and write nowhere. Hard per-snippet timeout.
+- Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. What persists is the run's workspace (`data/runs/<id>/workspace/`, `runner/src/workspace.ts`): notes.md, shown whole in every turn's context, and the model's own TypeScript modules, which snippets import. The runner process is its only writer — the sandbox reaches it through hostcalls — so it survives a sandbox restart, a pause and resume, and a continuation, while top-level bindings and background routines live only as long as the sandbox process.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
 - Trajectory log: JSONL per run containing every snippet, its result, every event batch the model saw, and a periodic state line (level, zone, XP, position).
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
@@ -49,7 +49,7 @@ exist because of the message window rather than the world (docs/METHODOLOGY.md,
 "Reflection is the model's to take, and only at rest" and "An episodic log,
 written before each trim, read back at rest"). `log_status` appends one
 harness-stamped entry (turn, level, zone) to `data/runs/<id>/episodic.jsonl`,
-which is append-only and therefore not the scratchpad. `reflect` returns a
+which is append-only and therefore not notes.md. `reflect` returns a
 fixed, content-free review prompt while the character's `resting` flag is set —
 one reflection per rest visit — and opens a reflection window in which
 `read_log` pages that log; the window closes when the character leaves the rest

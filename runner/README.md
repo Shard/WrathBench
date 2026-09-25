@@ -36,7 +36,7 @@ bun runner/src/run.ts --driver claude-code --model opus --max-tool-calls 200
 # the same shape on the OpenAI Codex CLI (a ChatGPT subscription; lane $CODEX_HOME)
 bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high
 
-# resume a killed or paused run (same token, same scratchpad, same trajectory)
+# resume a killed or paused run (same token, same workspace, same trajectory)
 bun runner/src/run.ts --resume <run-id>
 
 # MCP over stdio for an external MCP-capable agent
@@ -95,7 +95,7 @@ Measured against claude 2.1.238 with a local capture proxy (no model calls):
 
 What is *not* a gap: with `--tools ""` the request carries only our tools,
 as `mcp__wrathbench__<tool>` — no built-in Bash/Read/Edit/Task at all. And the
-system prompt, tool implementations, sandbox, scratchpad, watchdogs, named
+system prompt, tool implementations, sandbox, workspace, watchdogs, named
 termination/pause reasons and trajectory are the same objects the fixed loop
 uses; there is no second sandbox and no second session.
 
@@ -112,7 +112,8 @@ Tools reach the runner over a loopback TCP MCP server plus `src/mcp-bridge.ts`,
 because `--mcp-config` can only launch a stdio child — running `mcp.ts` as that
 child would create a second sandbox and a second session on the same token.
 
-The flags are `claudeArgs`, all present in `claude -p --help` for 2.1.238.
+The flags are `claudeArgs`, all present in `claude -p --help` for the pinned
+CLI (`--settings` carries the compaction hook, below).
 `--verbose` is not optional: this CLI rejects `-p --output-format stream-json`
 without it. `--allowed-tools` is the whole permission story — verified against
 the real CLI (with a local capture proxy standing in for the model, so nothing
@@ -162,8 +163,36 @@ limit wording on stderr with a non-zero exit) is a **pause**
 (`quota-exhausted`) with the reset time in the detail, not a termination —
 resume with `--resume <run-id>` when the window resets. A resumed run starts a
 fresh `claude` process: the CLI's own accumulated history does not come back,
-only the scratchpad — which is the promise the harness makes anyway: the
-scratchpad, not the chat history, is the durable memory.
+only the workspace — which is the promise the harness makes anyway: the
+workspace, not the chat history, is the durable memory.
+
+### The workspace inside the CLI
+
+Three CLI features would otherwise put the scaffold between the model and the
+workspace, so each is switched off or bridged:
+
+- **Tool search.** The pinned CLI defers MCP tools behind its own search tool
+  unless the server is marked `alwaysLoad` — which ours is, in the generated
+  `claude-mcp.json` (`claudeMcpConfig`). A tool the model has to search for
+  first is not the fixed tool list both harness groups are promised.
+- **Automatic memory.** `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` is always in the
+  child's environment: the CLI's own notes would be a second, unversioned memory
+  the harness never sees.
+- **Compaction.** The whole episode is often one CLI turn, so when the CLI
+  compacts its conversation the context message that carried the listing and
+  notes.md can go with it. A SessionStart hook with the `compact` matcher, in
+  the generated `claude-settings.json` passed as `--settings`, runs
+  `src/workspace.ts` on the run's workspace and prints the same block
+  `assembleContext` ends each turn with, which the CLI adds back to the model's
+  context. That hooks from `--settings` run in `-p` stream-json mode, and that
+  `compact` is the event's matcher value, were checked against the pinned CLI;
+  a compaction itself needs a model call and has not been observed firing it.
+
+A result served over MCP is capped at `MCP_RESULT_MAX_CHARS` (48,000
+characters, `src/mcp.ts`), with the cut stated in the result and the served
+text in the trajectory. The CLI truncates past 25,000 tokens and offers an
+oversized result as a file the model has no tool to read; the cap keeps every
+result under both, and only a snippet's console output can reach it.
 
 ### Billing: subscription or nothing
 
@@ -304,15 +333,36 @@ reachable module URL is the alternative.
 ## The sandbox
 
 One long-lived Bun child process per session (`src/sandbox/entry.ts`), holding
-one SDK client. Snippets share it: top-level bindings persist
-(`src/sandbox/rewrite.ts` has the exact semantics), and `setInterval`
-routines keep running between snippets. The ambient surface is documented once,
-in the entry file's header, and told to the model in the system prompt.
+one SDK client. Snippets share it: `setInterval` routines keep running between
+snippets, and top-level bindings persist too (`src/sandbox/rewrite.ts` has the
+exact semantics), though the prompt teaches the workspace instead — a binding
+dies with the process, a file does not. The ambient surface is documented
+once, in the entry file's header, and told to the model in the system prompt.
+
+Imports: a snippet's top-level import statements name workspace files
+(`./x`, `x`, `x.ts`, nested paths; a specifier with a scheme such as `node:fs`
+passes through). `rewrite.ts` lifts them out of the snippet and turns each into
+an awaited dynamic import of the resolved absolute path, checking every named
+export so a missing one is an error naming the file; the bindings are the
+snippet's own and never copied back. An edited file must load fresh, and so
+must a file it imports: the host sends the child the workspace version after
+every write, edit or delete, and a Bun runtime plugin in `entry.ts` loads each
+workspace module as `<path>?v=<version>`. Bun consults the plugin's
+`onResolve` for the snippet's own dynamic import but not for the static
+imports inside the module it loads (Bun 1.4.0: a nested `./b` resolved
+natively and stayed cached across an edit), so the plugin's `onLoad` carries
+the stamp instead, rewriting a workspace module's relative imports to the
+version it was loaded at (`stampWorkspaceImports`). A version is a whole fresh
+module graph, which is why a module's own state starts over after any change.
 
 Timeouts, precisely: a snippet that exceeds the per-snippet timeout is
 abandoned but the runtime survives; a snippet that blocks the event loop gets
 the process killed and respawned, and the state loss is surfaced to the model
-as a harness notice. Repeats trip the `snippet-runaway` watchdog.
+as a harness notice. Repeats trip the `snippet-runaway` watchdog. The first
+snippet result from any new sandbox process — after a restart, an unexpected
+exit, or on a resumed run — begins with a one-line state-reset notice, so the
+model reads that its bindings are gone in the result it is looking at, not a
+turn later.
 
 Network posture: the real boundary is the deployment's network topology — the
 compose network, or whatever the cluster gives the runner pod — under which the
@@ -323,8 +373,38 @@ module's — best-effort hardening, not a security boundary.
 Filesystem posture: the child is exec'd under a Linux Landlock ruleset
 (`src/sandbox/confine.ts`, which holds the read allowlist), so
 `.env`, the repo root and the home directory answer `EACCES` from the kernel
-however a snippet reaches for them. It fails closed, and it covers the
-filesystem only — the network posture is the paragraph above.
+however a snippet reaches for them, and nothing anywhere is writable. The
+run's workspace is on the allowlist for reads only, so imports resolve; the
+grant binds to the directory's inode, which is why the runner creates it once
+and empties it in place rather than replacing it. It fails closed, and it
+covers the filesystem only — the network posture is the paragraph above.
+
+## The workspace
+
+`data/runs/<id>/workspace/`, owned by `src/workspace.ts`: notes.md, the
+model's memory, and whatever other files it writes — usually TypeScript
+modules its snippets import. Four tools reach it (`read_file`, `write_file`,
+`edit_file`, `delete_file`), and inside a snippet the ambient `files` object
+does the same over the IPC hostcall, answered by the same `Workspace` in the
+runner process: the child never writes the directory itself. Every turn's
+context ends with a listing (path, size, first line of every file) and then
+notes.md verbatim, so the notes need no read tool and the other files are
+seen without being loaded.
+
+Limits are 32,000 characters for notes.md and for any other file and 1 MiB for
+the whole workspace. A write or edit that would exceed one is refused with the
+size it would have had, the limit and a target, and nothing is written — the
+old scratchpad cut the text and appended a marker, which lost the end of the
+notes silently from the model's point of view. One that lands above 80% of a
+limit succeeds with a warning, and every successful write ends with a usage
+line, so the room left is visible before it runs out. `edit_file` is exact
+substring replacement with no fuzzy fallback and no argument coercion: a miss,
+or a second match without `replace_all`, is refused with the line numbers of
+every occurrence.
+
+A `--continue-from` continuation copies the predecessor's whole workspace; a
+predecessor from before the workspace hands over its `scratchpad.md` as
+notes.md, and so does a resumed run of that age the first time it opens.
 
 ## Watchdogs
 
