@@ -24,9 +24,18 @@
 
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
+import type {
+  ComparabilityView,
+  ItemSample,
+  MoveIntentView,
+  RunRow,
+  StateItemsRow,
+  StatePoint,
+  WorkspaceFileView,
+} from "./api-types";
+import { listingFirstLine, listWorkspace, NOTES_PATH } from "../src/workspace";
 import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
@@ -493,11 +502,97 @@ export function readMoves(runsDir: string, runId: string): MoveIntentView[] {
   }
 }
 
-export function readScratchpad(runsDir: string, runId: string): string | null {
-  const path = join(runsDir, runId, "scratchpad.md");
-  if (!existsSync(path)) return null;
+/**
+ * Where a run keeps the model's files: its workspace directory, or — for a run
+ * from before the workspace — its one `scratchpad.md`, which stands in as
+ * notes.md, the name the runner seeds it into when such a run is resumed or
+ * continued (`openRunWorkspace`, runner/src/workspace.ts). A workspace wins
+ * when both exist: that run was resumed onto the workspace harness, and its
+ * notes.md is the pad carried forward. Symlinks are refused at the root as
+ * they are everywhere below it.
+ */
+type WorkspaceSource = { kind: "workspace"; dir: string } | { kind: "legacy"; file: string };
+
+function workspaceSource(dir: string): WorkspaceSource | null {
+  const ws = join(dir, "workspace");
   try {
-    return readFileSync(path, "utf8");
+    if (lstatSync(ws).isDirectory()) return { kind: "workspace", dir: ws };
+  } catch {
+    // no workspace: the run predates it, or never opened one
+  }
+  const pad = join(dir, "scratchpad.md");
+  try {
+    if (lstatSync(pad).isFile()) return { kind: "legacy", file: pad };
+  } catch {
+    // no scratchpad either
+  }
+  return null;
+}
+
+/**
+ * A run's workspace listing: notes.md first, then every other file by path —
+ * the runner's own listing (`listWorkspace`, which lists only regular files
+ * reached through real directories) with each file's mtime added. Null when
+ * the run has no workspace and no scratchpad. Reads only.
+ */
+export function readWorkspace(dir: string): WorkspaceFileView[] | null {
+  const src = workspaceSource(dir);
+  if (src === null) return null;
+  try {
+    if (src.kind === "legacy") {
+      const st = statSync(src.file);
+      const text = readFileSync(src.file, "utf8");
+      return [{ path: NOTES_PATH, bytes: st.size, mtime: Math.floor(st.mtimeMs), firstLine: listingFirstLine(text) }];
+    }
+    const files: WorkspaceFileView[] = [];
+    for (const f of listWorkspace(src.dir)) {
+      // Listed only if it can be served: a name the runner would have refused
+      // (a control character) is not one the file route will answer for.
+      if (!isWorkspacePath(f.path)) continue;
+      const mtime = Math.floor(statSync(join(src.dir, ...f.path.split("/"))).mtimeMs);
+      files.push({ path: f.path, bytes: f.bytes, mtime, firstLine: f.firstLine });
+    }
+    return [...files.filter((f) => f.path === NOTES_PATH), ...files.filter((f) => f.path !== NOTES_PATH)];
+  } catch {
+    // A file the runner removed mid-listing: the next read has the settled set.
+    return null;
+  }
+}
+
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+/**
+ * Whether `path` can name a workspace file at all: relative, `/`-separated,
+ * no empty, `.` or `..` segment and no control character. The request path
+ * arrives decoded, so `..%2F` has already become `../` by the time it is here.
+ */
+export function isWorkspacePath(path: string): boolean {
+  if (path.length === 0 || CONTROL_CHARS.test(path)) return false;
+  return path.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+}
+
+/**
+ * One workspace file's text, or null when there is no such file. A path is
+ * served only when the listing would list it: every directory on the way a
+ * real directory and the file itself a regular file, all by `lstat`, so a
+ * symlink — which nothing the runner does ever makes — is never followed out
+ * of the workspace. A pre-workspace run serves its scratchpad as notes.md and
+ * nothing else.
+ */
+export function readWorkspaceFile(dir: string, path: string): string | null {
+  if (!isWorkspacePath(path)) return null;
+  const src = workspaceSource(dir);
+  if (src === null) return null;
+  try {
+    if (src.kind === "legacy") return path === NOTES_PATH ? readFileSync(src.file, "utf8") : null;
+    const segs = path.split("/");
+    let abs = src.dir;
+    for (let i = 0; i < segs.length; i++) {
+      abs = join(abs, segs[i]!);
+      const st = lstatSync(abs);
+      if (i < segs.length - 1 ? !st.isDirectory() : !st.isFile()) return null;
+    }
+    return readFileSync(abs, "utf8");
   } catch {
     return null;
   }

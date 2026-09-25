@@ -49,6 +49,8 @@ import type {
   RunsResponse,
   SnapshotEnvelope,
   TrackResponse,
+  WorkspaceArtifact,
+  WorkspaceResponse,
 } from "@viewer/api-types";
 import type { PublicFleetResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
@@ -338,7 +340,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
    * the listing is the index, and a run it does not name is a 404 in the same
    * words the viewer uses.
    */
-  async function pointer(id: string, which: "detail" | "track" | "entries" | "scratchpad"): Promise<string> {
+  async function pointer(id: string, which: "detail" | "track" | "entries" | "workspace"): Promise<string> {
     const artifact = await snap<RunsResponse>("runs.json");
     const row = artifact.runs.find((r) => r.runId === id);
     if (row === undefined) throw new ApiError(404, `no such run: ${id}`);
@@ -476,6 +478,25 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      */
     entries: async (id: string): Promise<EntriesResponse> =>
       await memo<EntriesResponse>(await pointer(id, "entries")),
+    /*
+     * The workspace is one published object — the listing with every file's
+     * text — so the listing and each file are two readings of it through the
+     * one memo. A run whose row names none (no workspace, or an older
+     * snapshot) is a 404 from `pointer`, which the page shows as unpublished.
+     */
+    workspace: async (id: string): Promise<WorkspaceResponse> => {
+      const w = await memo<WorkspaceArtifact>(await pointer(id, "workspace"));
+      return withEnvelope(
+        { files: w.files.map((f) => ({ path: f.path, bytes: f.bytes, mtime: f.mtime, firstLine: f.firstLine })) },
+        w,
+      );
+    },
+    workspaceFile: async (id: string, path: string): Promise<string> => {
+      const w = await memo<WorkspaceArtifact>(await pointer(id, "workspace"));
+      const file = w.files.find((f) => f.path === path);
+      if (file === undefined) throw new ApiError(404, `no such file in the workspace: ${path}`);
+      return file.text;
+    },
     /*
      * Raw trajectory lines are the unprojected record — the run config, the
      * whole message array, every packet — and stay in the lab.

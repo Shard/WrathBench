@@ -31,6 +31,7 @@ import {
   projectRunDetail,
   projectRuns,
   projectTrack,
+  projectWorkspaceArtifact,
 } from "../runner/viewer/public-projection";
 
 // ------------------------------------------------------------- the fake bucket
@@ -142,7 +143,7 @@ function cleanBucket(): MemorySource {
     detail: `${RUN_BASE}/detail.json`,
     track: `${RUN_BASE}/track.json`,
     entries: `${RUN_BASE}/entries.json`,
-    scratchpad: `${RUN_BASE}/scratchpad.json`,
+    workspace: `${RUN_BASE}/workspace.json`,
   };
   const info = projectInfo({
     service: "wrathbench-viewer",
@@ -233,9 +234,17 @@ function cleanBucket(): MemorySource {
   src.objects.set(`${RUN_BASE}/detail.json`, envelope(detail));
   src.objects.set(`${RUN_BASE}/track.json`, envelope(track));
   src.objects.set(`${RUN_BASE}/entries.json`, envelope(entries));
+  const notes = "plan: talk to Marshal McBride, then Kobold Camp Cleanup";
   src.objects.set(
-    `${RUN_BASE}/scratchpad.json`,
-    envelope({ text: "plan: talk to Marshal McBride, then Kobold Camp Cleanup\n" }),
+    `${RUN_BASE}/workspace.json`,
+    envelope(
+      projectWorkspaceArtifact({
+        files: [
+          { path: "notes.md", bytes: 57, mtime: 1_700_000_000_000, firstLine: notes, text: `${notes}\n` },
+          { path: "lib/camp.ts", bytes: 22, mtime: 1_700_000_000_000, firstLine: "export const camp = 1;", text: "export const camp = 1;" },
+        ],
+      }),
+    ),
   );
   return src;
 }
@@ -394,12 +403,35 @@ describe("prohibited content", () => {
   });
 
   test("a bearer value is caught even where the projection would allow the field", async () => {
-    const src = poison(cleanBucket(), `${RUN_BASE}/scratchpad.json`, (body) => {
-      body["text"] = "my key is sk-ant-oat01-AAAAAAAAAAAAAAAAAAAA and I should not have written it";
+    const src = poison(cleanBucket(), `${RUN_BASE}/workspace.json`, (body) => {
+      (body["files"] as Record<string, unknown>[])[0]!["text"] =
+        "my key is sk-ant-oat01-AAAAAAAAAAAAAAAAAAAA and I should not have written it";
     });
     const report = await verifyPublication(src);
-    // The scratchpad has no projector — the model's own file — so this is the
-    // value scan alone, and a credential is never excused as model-authored.
+    // A file's text is the model's own and the projection passes it whole, so
+    // this is the value scan alone — and a credential is never excused as
+    // model-authored.
+    expect(kinds(report.findings)).toEqual(["credential"]);
+  });
+
+  test("a key the workspace projection does not name is caught", async () => {
+    const src = poison(cleanBucket(), `${RUN_BASE}/workspace.json`, (body) => {
+      (body["files"] as Record<string, unknown>[])[1]!["abs"] = "lib/camp.ts, somewhere on the host";
+    });
+    const report = await verifyPublication(src);
+    expect(kinds(report.findings)).toEqual(["projection-drift"]);
+  });
+
+  test("a bucket last written before the workspace still has its scratchpad read back", async () => {
+    // The pointer an older publisher wrote: walked and scanned like any other
+    // object the listing names, with no projector to be a fixed point of.
+    const src = poison(cleanBucket(), "v1/snap/bbbbbbbbbbbb/runs.json", (body) => {
+      const row = (body["runs"] as Record<string, unknown>[])[0]!;
+      row["snapshot"] = { detail: `${RUN_BASE}/detail.json`, track: `${RUN_BASE}/track.json`, scratchpad: `${RUN_BASE}/scratchpad.json` };
+    });
+    src.objects.set(`${RUN_BASE}/scratchpad.json`, envelope({ text: "key sk-ant-oat01-AAAAAAAAAAAAAAAAAAAA" }));
+    const report = await verifyPublication(src);
+    expect(src.reads).toContain(`${RUN_BASE}/scratchpad.json`);
     expect(kinds(report.findings)).toEqual(["credential"]);
   });
 
@@ -467,12 +499,16 @@ describe("prohibited content", () => {
     // docs/PUBLIC-DASHBOARD.md, "The content boundary": model-authored text is
     // published as written. Counting it keeps it visible; failing on it would
     // contradict the operator's own decision.
-    const src = poison(cleanBucket(), `${RUN_BASE}/scratchpad.json`, (body) => {
-      body["text"] = "I tried to read /home/agent/notes.md and it was not there";
+    const src = poison(cleanBucket(), `${RUN_BASE}/workspace.json`, (body) => {
+      const notes = (body["files"] as Record<string, unknown>[])[0]!;
+      notes["text"] = "I tried to read /home/agent/notes.md and it was not there";
+      // The listing's copy of a file's first line is the same model text.
+      notes["firstLine"] = "I tried to read /home/agent/notes.md and it was not there";
     });
     const report = await verifyPublication(src);
     expect(report.findings).toEqual([]);
     expect(kinds(report.residual)).toEqual(["filesystem-path"]);
+    expect(report.residual.map((f) => f.at)).toEqual(["files[0].firstLine", "files[0].text"]);
     expect(describeAcceptReport(report)).toContain("residual (model-authored");
   });
 });

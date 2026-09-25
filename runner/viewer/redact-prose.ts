@@ -22,8 +22,9 @@
  *   payload of a prose-carrying opcode is replaced whole.
  *
  * What this cannot see is the residual, and docs/PUBLIC-DASHBOARD.md states
- * it: text the MODEL wrote (its turn text, snippet code, scratchpad, episodic
- * log, console.log lines) may quote game prose and is published as written.
+ * it: text the MODEL wrote (its turn text, snippet code, its workspace files —
+ * notes.md and anything a snippet saved there — the episodic log, console.log
+ * lines) may quote game prose and is published as written.
  */
 
 import type { EntrySummary } from "./api-types";

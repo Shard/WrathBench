@@ -68,6 +68,9 @@ const JSON_ROUTES = [
   `/api/run/${LIVE_RUN}`,
   `/api/run/${LIVE_RUN}/track`,
   `/api/run/${LIVE_RUN}/entries?limit=200`,
+  // The workspace listing: a run from before the workspace, and one with it.
+  `/api/run/${DEAD_RUN}/workspace`,
+  `/api/run/${LIVE_RUN}/workspace`,
   // Universal since: a character for a run with no chain at all, and
   // one for a run that has one — both cross the same projector.
   `/api/character/${DEAD_RUN}`,
@@ -112,6 +115,9 @@ describe("public mode is projected everywhere", () => {
       expect(fleet).toContain(String(POISON_PID));
       const runsBody = await (await get(handle, "/api/runs")).text();
       expect(runsBody).toContain(POISON.apiHost);
+      // The private handle serves the model's files exactly as written.
+      const module = await (await get(handle, `/api/run/${LIVE_RUN}/workspace/lib/camp.ts`)).text();
+      expect(module).toContain(CONTAINER_PATH.written);
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }
@@ -134,13 +140,29 @@ describe("public mode is projected everywhere", () => {
       expect(entries).toContain(SURVIVES.npcName);
       expect(entries).toContain(SURVIVES.snippetCode);
       expect(entries).toContain(SURVIVES.responseText);
-      // The scratchpad is the model's own notes and is served in public mode.
-      const scratchpad = await (await get(handle, `/api/run/${DEAD_RUN}/scratchpad`)).text();
-      expect(scratchpad).toContain(SURVIVES.scratchpad);
-      // ...with the container install prefix stripped, which is the one edit
-      // the boundary makes to model-authored text (operator, 2026-09-11).
-      expect(scratchpad).toContain(CONTAINER_PATH.published);
-      expect(scratchpad).not.toContain("/wrathbench/");
+      // The workspace is the model's own files and is served in public mode:
+      // a pre-workspace run's scratchpad as its notes.md, and every file of a
+      // run with a workspace...
+      const files = [
+        [DEAD_RUN, "notes.md", SURVIVES.notes],
+        [LIVE_RUN, "notes.md", SURVIVES.notes],
+        [LIVE_RUN, "lib/camp.ts", SURVIVES.module],
+      ] as const;
+      for (const [run, path, survives] of files) {
+        const text = await (await get(handle, `/api/run/${run}/workspace/${path}`)).text();
+        expect(text).toContain(survives);
+        // ...with the container install prefix stripped, which is the one edit
+        // the boundary makes to model-authored text (operator, 2026-09-11).
+        expect(text).toContain(CONTAINER_PATH.published);
+        expect(text).not.toContain("/wrathbench/");
+      }
+      const listing = (await (await get(handle, `/api/run/${LIVE_RUN}/workspace`)).json()) as {
+        files: { path: string; firstLine: string }[];
+      };
+      expect(listing.files.map((f) => [f.path, f.firstLine])).toEqual([
+        ["notes.md", SURVIVES.notes],
+        ["lib/camp.ts", SURVIVES.module],
+      ]);
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }

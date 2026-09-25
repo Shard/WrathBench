@@ -75,6 +75,7 @@ import {
   projectRuns,
   projectTools,
   projectTrack,
+  projectWorkspaceArtifact,
 } from "../runner/viewer/public-projection";
 import { REDACTED_PROSE } from "../runner/viewer/redact-prose";
 import { LOCAL_PATH_ROOTS } from "../runner/viewer/scrub-paths";
@@ -215,8 +216,8 @@ export interface AcceptReport {
    * Model-authored strings that tripped a value scan.
    *
    * Not findings. `docs/PUBLIC-DASHBOARD.md` ("The content boundary") states
-   * the residual plainly: the model's own turn text, snippet code, scratchpad
-   * and episodic log are published as written and are not filtered. A path or
+   * the residual plainly: the model's own turn text, snippet code, workspace
+   * files and episodic log are published as written and are not filtered. A path or
    * a URL the MODEL typed is therefore inside the accepted boundary, and
    * silently dropping it would hide it — so it is counted and shown, and does
    * not fail the run.
@@ -297,12 +298,14 @@ const WITHHELD_KEYS: ReadonlySet<string> = new Set([
 /**
  * Strings the model wrote, by the key they arrive under.
  *
- * `text` and `code` are the model's turn text, its snippet source, the
- * scratchpad body, an episodic line, and the tool-result text it formatted —
- * exactly the surfaces docs/PUBLIC-DASHBOARD.md calls the residual. A scan hit inside one
- * of these is reported as a residual note rather than a finding.
+ * `text` and `code` are the model's turn text, its snippet source, a
+ * workspace file's body, an episodic line, and the tool-result text it
+ * formatted; `firstLine` is a workspace file's own first line, the listing's
+ * copy of that body — exactly the surfaces docs/PUBLIC-DASHBOARD.md calls the
+ * residual. A scan hit inside one of these is reported as a residual note
+ * rather than a finding.
  */
-const MODEL_AUTHORED: ReadonlySet<string> = new Set(["text", "code"]);
+const MODEL_AUTHORED: ReadonlySet<string> = new Set(["text", "code", "firstLine"]);
 
 /** Walk every string in a parsed body, with the JSON path that reached it. */
 function walkStrings(value: unknown, at: string, visit: (path: string, key: string, s: string) => void): void {
@@ -444,8 +447,9 @@ function withoutEnvelope(body: Record<string, unknown>): Record<string, unknown>
  * Which projection a key's body must be a fixed point of.
  *
  * `null` means "no projector": the manifest is the index rather than a
- * projected response, and a scratchpad is the model's own file under one key.
- * Those still get the value scans.
+ * projected response, and a `scratchpad.json` — the one-file `{ text }` a
+ * publisher from before the workspace wrote — has none. Those still get the
+ * value scans.
  */
 function projectorFor(key: string): ((payload: Record<string, unknown>) => unknown) | null {
   const name = key.split("/").at(-1) ?? "";
@@ -460,7 +464,10 @@ function projectorFor(key: string): ((payload: Record<string, unknown>) => unkno
     if (name === "detail.json") return (p) => projectRunDetail(p as unknown as Parameters<typeof projectRunDetail>[0]);
     if (name === "track.json") return (p) => projectTrack(p as unknown as Parameters<typeof projectTrack>[0]);
     if (name === "entries.json") return (p) => projectEntries(p as unknown as Parameters<typeof projectEntries>[0]);
-    return null; // scratchpad.json: `{ text }`, the model's own file.
+    if (name === "workspace.json") {
+      return (p) => projectWorkspaceArtifact(p as unknown as Parameters<typeof projectWorkspaceArtifact>[0]);
+    }
+    return null; // scratchpad.json, from a publisher before the workspace: `{ text }`.
   }
   if (name === "info.json") return (p) => projectInfo(p as unknown as Parameters<typeof projectInfo>[0]);
   if (name === "runs.json") return (p) => projectRuns(p as unknown as Parameters<typeof projectRuns>[0]);
@@ -690,10 +697,14 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
       const snapshot = (row as Record<string, unknown>)["snapshot"];
       if (snapshot === null || typeof snapshot !== "object") continue;
       report.runsWithArtifacts += 1;
-      for (const which of ["detail", "track", "entries", "scratchpad"] as const) {
+      // `scratchpad` is the pointer a publisher from before the workspace
+      // wrote; a bucket it last wrote still carries it, and it is read back
+      // like any other object the listing names.
+      for (const which of ["detail", "track", "entries", "workspace", "scratchpad"] as const) {
         const key = (snapshot as Record<string, unknown>)[which];
-        // `entries` and `scratchpad` are optional pointers: a run with no
-        // scratchpad.md simply has none, and that is not a missing object.
+        // `entries` and `workspace` are optional pointers: a run with neither a
+        // workspace nor a scratchpad simply has none, and that is not a
+        // missing object.
         if (typeof key !== "string") continue;
         await inspect(key);
       }

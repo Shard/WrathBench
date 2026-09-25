@@ -40,6 +40,9 @@ import type {
   RunsResponse,
   TokenTotals,
   TrackResponse,
+  WorkspaceArtifact,
+  WorkspaceFileView,
+  WorkspaceResponse,
 } from "../viewer/api-types";
 import {
   PUBLIC_ATTRIBUTION,
@@ -54,6 +57,8 @@ import {
   projectRuns,
   projectEntries,
   projectTrack,
+  projectWorkspace,
+  projectWorkspaceArtifact,
 } from "../viewer/public-projection";
 import { STALL_PAUSE } from "../src/lapse";
 
@@ -1493,5 +1498,32 @@ describe("projectEntries", () => {
     for (const v of [SURVIVES.questTitle, SURVIVES.npcName, SURVIVES.spellName]) expect(text).toContain(v);
     expect(out.entries[1]).toMatchObject({ name: "search_reference", text: "[redacted]" });
     expect((out.entries[2] as { text: string }).text).toContain('"body":"[redacted]"');
+  });
+});
+
+describe("projectWorkspace and projectWorkspaceArtifact", () => {
+  const file = (path: string, firstLine: string): WorkspaceFileView =>
+    smuggle<WorkspaceFileView>({ path, bytes: 42, mtime: 1_790_000_000_000, firstLine });
+
+  test("the listing is path, size, mtime and first line; nothing smuggled passes", () => {
+    const out = projectWorkspace(
+      smuggle<WorkspaceResponse>({ files: [file("notes.md", SURVIVES.statusText), file("lib/camp.ts", "export {};")] }),
+    );
+    expect(keyPaths(out)).toEqual(allow(["files", ...under("files[]", ["path", "bytes", "mtime", "firstLine"])]));
+    assertClean(JSON.stringify(out));
+    expect(out.files.map((f) => f.path)).toEqual(["notes.md", "lib/camp.ts"]);
+    expect(out.files[0]!.firstLine).toBe(SURVIVES.statusText);
+  });
+
+  test("the artifact adds each file's whole text, as written but for the container prefix", () => {
+    const text = `talk to ${SURVIVES.npcName}\nthe stack said /wrathbench/sdk/src/client.ts:123\n`;
+    const out = projectWorkspaceArtifact(
+      smuggle<WorkspaceArtifact>({ files: [{ ...file("notes.md", `talk to ${SURVIVES.npcName}`), text }] }),
+    );
+    expect(keyPaths(out)).toEqual(allow(["files", ...under("files[]", ["path", "bytes", "mtime", "firstLine", "text"])]));
+    assertClean(JSON.stringify(out));
+    expect(out.files[0]!.text).toBe(`talk to ${SURVIVES.npcName}\nthe stack said sdk/src/client.ts:123\n`);
+    // A fixed point: the renderer projects what the public handle already did.
+    expect(projectWorkspaceArtifact(out)).toEqual(out);
   });
 });

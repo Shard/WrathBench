@@ -15,8 +15,9 @@
  * a move's `target`, a position's episodic `status` (the model's own words
  * under a zone name) and `terminationDetail` pass through; entry summaries
  * cross `projectEntry` (an allowlist per entry type) and `redactGameProse`
- * (`redact-prose.ts`, the prose fields enumerated by opcode); the scratchpad
- * is the model's own notes and ships whole.
+ * (`redact-prose.ts`, the prose fields enumerated by opcode); the workspace
+ * — notes.md and every other file the model wrote — is its own text and ships
+ * whole.
  *
  * What is still withheld, and why:
  * - Wiki text is never published: a `search_reference` tool result goes whole.
@@ -93,6 +94,9 @@ import type {
   TradeFacts,
   MoveIntentView,
   TrackResponse,
+  WorkspaceArtifact,
+  WorkspaceFileView,
+  WorkspaceResponse,
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
@@ -1041,6 +1045,32 @@ export function projectTrack(t: TrackResponse): TrackResponse {
             next: t.character.next,
           },
         }),
+  });
+}
+
+/**
+ * One workspace file's listing facts. The path and the first line are the
+ * model's own (it named the file and wrote the line); the size and mtime are
+ * the filesystem's, about a file in the run's own directory.
+ */
+function projectWorkspaceFile(f: WorkspaceFileView): WorkspaceFileView {
+  return { path: f.path, bytes: f.bytes, mtime: f.mtime, firstLine: f.firstLine };
+}
+
+/**
+ * The workspace listing. Everything in the workspace is the model's own text,
+ * published as written with the container prefix scrubbed — the treatment the
+ * scratchpad had, now applied to every file (docs/PUBLIC-DASHBOARD.md, "The
+ * content boundary").
+ */
+export function projectWorkspace(w: WorkspaceResponse): WorkspaceResponse {
+  return scrubPathsValue<WorkspaceResponse>({ files: w.files.map(projectWorkspaceFile) });
+}
+
+/** The workspace as its snapshot artifact: the listing, and each file's whole text under `text`. */
+export function projectWorkspaceArtifact(w: WorkspaceArtifact): WorkspaceArtifact {
+  return scrubPathsValue<WorkspaceArtifact>({
+    files: w.files.map((f) => ({ path: f.path, bytes: f.bytes, mtime: f.mtime, firstLine: f.firstLine, text: f.text })),
   });
 }
 

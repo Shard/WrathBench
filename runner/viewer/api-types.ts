@@ -740,17 +740,54 @@ export interface RunListRow extends RunRow {
     track: string;
     /**
      * The projected, prose-redacted tail window of the feed (`EntriesResponse`
-     * shape) and the run's scratchpad (`ScratchpadResponse`). Optional because
-     * a snapshot rendered before 2026-08-30 carries neither.
+     * shape). Optional because a snapshot rendered before 2026-08-30 carries
+     * none.
      */
     entries?: string;
-    scratchpad?: string;
+    /**
+     * The run's workspace, every file with its text (`WorkspaceArtifact`).
+     * Optional: a run with neither a workspace nor a pre-workspace scratchpad
+     * has none, and neither does a snapshot rendered before the workspace.
+     */
+    workspace?: string;
   };
 }
 
-/** The scratchpad route as a snapshot artifact: the file's text, whole. */
-export interface ScratchpadResponse {
+/**
+ * One file in a run's workspace (`data/runs/<id>/workspace/`, which only the
+ * runner writes): what the listing shows of it.
+ */
+export interface WorkspaceFileView {
+  /** Relative to the workspace, `/`-separated. */
+  path: string;
+  /** Size on disk. */
+  bytes: number;
+  /** Last modified, ms since the epoch. */
+  mtime: number;
+  /** The first line, trimmed and capped as the model's own listing shows it. */
+  firstLine: string;
+}
+
+/**
+ * `/api/run/<id>/workspace`: every file, notes.md first and the rest by path.
+ * A run from before the workspace lists its `scratchpad.md` as notes.md, the
+ * name the runner gives it when such a run is resumed or continued.
+ */
+export interface WorkspaceResponse extends SnapshotEnvelope {
+  files: WorkspaceFileView[];
+}
+
+/** One workspace file as the snapshot publishes it: the listing's facts and the whole text. */
+export interface WorkspaceArtifactFile extends WorkspaceFileView {
   text: string;
+}
+
+/**
+ * The workspace as one snapshot artifact (`workspace.json`), in the listing's
+ * order, so a static reader gets the listing and every file from one object.
+ */
+export interface WorkspaceArtifact extends SnapshotEnvelope {
+  files: WorkspaceArtifactFile[];
 }
 
 /**
@@ -1189,7 +1226,7 @@ export interface FleetResponse extends SnapshotEnvelope {
 export interface ApiInfoResponse extends SnapshotEnvelope {
   /** Harness version the viewer process was built from, when it can tell. */
   service: "wrathbench-viewer";
-  /** True when raw bodies, scratchpads and tiles are withheld (public mode). */
+  /** True when raw bodies, the live tail and tiles are withheld (public mode). */
   publicMode: boolean;
   /** True when a built dashboard is being served from disk. */
   dashboard: boolean;

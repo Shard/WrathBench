@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
@@ -50,7 +50,16 @@ function fixture(): string {
     { ts: 1200, t: "snippet", turn: 1, code: "await sdk.moveTo(1, 2, 3);" },
   ];
   writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-  writeFileSync(join(dir, "scratchpad.md"), "plan: dig a hole\n");
+  // The workspace, as the runner leaves it — plus two links it never makes,
+  // both pointing at meta.json, which carries the bearer token: a route that
+  // followed either would leak it.
+  const ws = join(dir, "workspace");
+  mkdirSync(join(ws, "lib"), { recursive: true });
+  writeFileSync(join(ws, "notes.md"), "plan: dig a hole\n- then fill it\n");
+  writeFileSync(join(ws, "lib", "util.ts"), "export const depth = 3;\n");
+  writeFileSync(join(ws, "a b%.md"), "a name that needs encoding\n");
+  symlinkSync(join(dir, "meta.json"), join(ws, "escape.md"));
+  symlinkSync(dir, join(ws, "up"));
 
   const db = new Database(join(dir, "run.sqlite"));
   db.run(
@@ -169,7 +178,13 @@ describe("no endpoint serves the bearer token", () => {
       `/api/run/${RUN_ID}/entries?from=0&limit=500`,
       `/api/run/${RUN_ID}/raw/0`,
       `/api/run/${RUN_ID}/raw/1`,
-      `/api/run/${RUN_ID}/scratchpad`,
+      `/api/run/${RUN_ID}/workspace`,
+      `/api/run/${RUN_ID}/workspace/notes.md`,
+      // Every way out of the workspace toward meta.json, which holds the token.
+      `/api/run/${RUN_ID}/workspace/escape.md`,
+      `/api/run/${RUN_ID}/workspace/up/meta.json`,
+      `/api/run/${RUN_ID}/workspace/..%2Fmeta.json`,
+      `/api/run/${RUN_ID}/workspace/lib/..%2F..%2Fmeta.json`,
     ];
     for (const p of paths) {
       const text = await body(await handle(new Request(`http://x${p}`)));
@@ -614,13 +629,97 @@ describe("routes", () => {
   });
 });
 
+describe("the workspace routes", () => {
+  const get = async (runs: string, path: string): Promise<Response> => await api(runs)(new Request(`http://x${path}`));
+
+  test("the listing puts notes.md first, then every regular file by path; links are not files", async () => {
+    const runs = fixture();
+    const res = await get(runs, `/api/run/${RUN_ID}/workspace`);
+    expect(res.status).toBe(200);
+    const { files } = (await res.json()) as { files: { path: string; bytes: number; mtime: number; firstLine: string }[] };
+    expect(files.map((f) => f.path)).toEqual(["notes.md", "a b%.md", "lib/util.ts"]);
+    expect(files[0]).toMatchObject({ bytes: 32, firstLine: "plan: dig a hole" });
+    expect(files[2]).toMatchObject({ bytes: 24, firstLine: "export const depth = 3;" });
+    for (const f of files) expect(f.mtime).toBeGreaterThan(0);
+  });
+
+  test("a file is served as text, whole, and never sniffed as anything else", async () => {
+    const runs = fixture();
+    const res = await get(runs, `/api/run/${RUN_ID}/workspace/lib/util.ts`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await res.text()).toBe("export const depth = 3;\n");
+    // Each segment is encoded on the way in and decoded by the handle.
+    const odd = await get(runs, `/api/run/${RUN_ID}/workspace/${encodeURIComponent("a b%.md")}`);
+    expect(await odd.text()).toBe("a name that needs encoding\n");
+  });
+
+  test("nothing outside the workspace is reachable: links, .. and malformed paths", async () => {
+    const runs = fixture();
+    const outcomes: Record<string, number> = {};
+    for (const p of ["escape.md", "up/meta.json", "..%2Fmeta.json", "lib/..%2F..%2Fmeta.json", "lib/.%2F..%2Fnotes.md", "", "lib/", "nope.md", "lib"]) {
+      const res = await get(runs, `/api/run/${RUN_ID}/workspace/${p}`);
+      outcomes[p] = res.status;
+      expect(`${p}: ${await res.text()}`).not.toContain(SENTINEL);
+    }
+    expect(outcomes).toEqual({
+      // A link is not a regular file, and a linked directory is not a directory.
+      "escape.md": 404,
+      "up/meta.json": 404,
+      // An encoded slash reaches the handler as `../` after decoding.
+      "..%2Fmeta.json": 400,
+      "lib/..%2F..%2Fmeta.json": 400,
+      "lib/.%2F..%2Fnotes.md": 400,
+      "": 400,
+      "lib/": 400,
+      "nope.md": 404,
+      // A directory is not a file.
+      lib: 404,
+    });
+  });
+
+  test("a run from before the workspace lists and serves its scratchpad as notes.md", async () => {
+    const runs = fixture();
+    const legacy = join(runs, "legacy-run");
+    mkdirSync(legacy);
+    writeFileSync(join(legacy, "meta.json"), JSON.stringify({ runId: "legacy-run", startedAt: 1000, config: {} }));
+    writeFileSync(join(legacy, "scratchpad.md"), "# old pad\nkept\n");
+    const listing = (await (await get(runs, "/api/run/legacy-run/workspace")).json()) as { files: { path: string; bytes: number; firstLine: string }[] };
+    expect(listing.files).toHaveLength(1);
+    expect(listing.files[0]).toMatchObject({ path: "notes.md", bytes: 15, firstLine: "# old pad" });
+    expect(await (await get(runs, "/api/run/legacy-run/workspace/notes.md")).text()).toBe("# old pad\nkept\n");
+    expect((await get(runs, "/api/run/legacy-run/workspace/scratchpad.md")).status).toBe(404);
+    // A resumed old run has both: its workspace is what it is using now.
+    const ws = join(legacy, "workspace");
+    mkdirSync(ws);
+    writeFileSync(join(ws, "notes.md"), "# carried forward\n");
+    expect(await (await get(runs, "/api/run/legacy-run/workspace/notes.md")).text()).toBe("# carried forward\n");
+  });
+
+  test("a run with neither has no workspace", async () => {
+    const runs = fixture();
+    const bare = join(runs, "bare-run");
+    mkdirSync(bare);
+    writeFileSync(join(bare, "meta.json"), JSON.stringify({ runId: "bare-run", startedAt: 1000, config: {} }));
+    expect((await get(runs, "/api/run/bare-run/workspace")).status).toBe(404);
+    expect((await get(runs, "/api/run/bare-run/workspace/notes.md")).status).toBe(404);
+  });
+
+  test("the scratchpad route is gone", async () => {
+    const runs = fixture();
+    expect((await get(runs, `/api/run/${RUN_ID}/scratchpad`)).status).toBe(404);
+  });
+});
+
 describe("public mode", () => {
-  test("withholds raw entries and tiles; serves the scratchpad and the metadata", async () => {
+  test("withholds raw entries and tiles; serves the workspace and the metadata", async () => {
     const runs = fixture();
     const handle = api(runs, true);
     expect((await handle(new Request(`http://x/api/run/${RUN_ID}/raw/0`))).status).toBe(403);
-    // The model's own notes: published as written since 2026-08-30.
-    expect((await handle(new Request(`http://x/api/run/${RUN_ID}/scratchpad`))).status).toBe(200);
+    // The model's own files: published as written since 2026-08-30.
+    expect((await handle(new Request(`http://x/api/run/${RUN_ID}/workspace`))).status).toBe(200);
+    expect((await handle(new Request(`http://x/api/run/${RUN_ID}/workspace/lib/util.ts`))).status).toBe(200);
     expect((await handle(new Request("http://x/tiles/0/43_31.png"))).status).toBe(403);
     expect((await handle(new Request("http://x/api/runs"))).status).toBe(200);
     expect((await handle(new Request(`http://x/api/run/${RUN_ID}/entries`))).status).toBe(200);

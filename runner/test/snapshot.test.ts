@@ -58,14 +58,18 @@ const SURVIVES = {
   terminationDetail: "episode limit reached near Goldshire",
   questTitle: "Kobold Camp Cleanup",
   npcName: "Marshal McBride",
-  scratchpad: "plan: talk to Marshal McBride, then Kobold Camp Cleanup",
+  /** notes.md: the dead run's pre-workspace scratchpad, and the live run's workspace file. */
+  notes: "plan: talk to Marshal McBride, then Kobold Camp Cleanup",
+  /** A module in the live run's workspace. */
+  module: "export const camp = { quest: \"Kobold Camp Cleanup\" };",
 } as const;
 
 /**
- * A container-internal path the model wrote into its own notes. The scratchpad
- * has no projector — it is text, not a body — so the scrub reaches it by hand
- * on both sides of the render (the public handle's route, and the renderer's
- * own text read); this pins the artifact the publisher would actually write.
+ * A container-internal path the model wrote into its own files. A workspace
+ * file is text, not a body, so the scrub reaches it on every side of the
+ * render (the public handle's file route, the renderer's own text read, and
+ * the artifact's projector); this pins the artifact the publisher would
+ * actually write.
  */
 const CONTAINER_PATH = {
   written: "the stack said /wrathbench/sdk/src/client.ts:123",
@@ -100,7 +104,7 @@ const TUPLE = {
 function writeRun(
   runs: string,
   runId: string,
-  opts: { terminated: boolean; stateTs: number; old: boolean; continuedFrom?: string; episode?: string },
+  opts: { terminated: boolean; stateTs: number; old: boolean; continuedFrom?: string; episode?: string; workspace?: boolean },
 ): void {
   const dir = join(runs, runId);
   mkdirSync(dir, { recursive: true });
@@ -153,7 +157,15 @@ function writeRun(
     ...(opts.terminated ? [{ ts: 2000, t: "termination", reason: "episode-limit", detail: SURVIVES.terminationDetail }] : []),
   ];
   writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-  writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.scratchpad}\n${CONTAINER_PATH.written}\n`);
+  // A run from before the workspace keeps its notes in scratchpad.md; one
+  // after it has a workspace, notes.md and a module beside it.
+  if (opts.workspace === true) {
+    mkdirSync(join(dir, "workspace", "lib"), { recursive: true });
+    writeFileSync(join(dir, "workspace", "notes.md"), `${SURVIVES.notes}\n${CONTAINER_PATH.written}\n`);
+    writeFileSync(join(dir, "workspace", "lib", "camp.ts"), `${SURVIVES.module}\n`);
+  } else {
+    writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.notes}\n${CONTAINER_PATH.written}\n`);
+  }
 
   const db = new Database(join(dir, "run.sqlite"));
   db.run(
@@ -200,7 +212,8 @@ function writeRun(
     // Cold files: the run reads dead and the render is byte-stable, which is
     // what lets the version-key test re-render and land on the same address.
     const past = new Date(Date.now() - 60 * 60_000);
-    for (const name of ["meta.json", "trajectory.jsonl", "run.sqlite", "scratchpad.md"]) {
+    const notes = opts.workspace === true ? ["workspace/notes.md", "workspace/lib/camp.ts"] : ["scratchpad.md"];
+    for (const name of ["meta.json", "trajectory.jsonl", "run.sqlite", ...notes]) {
       utimesSync(join(dir, name), past, past);
     }
   }
@@ -213,7 +226,7 @@ function fixture(withLive = true): string {
   // feed is non-empty and its character/items withholding is exercised. The
   // generation-stability test leaves it out: a live run's growing playtime is
   // data, and data is supposed to move the generation.
-  if (withLive) writeRun(runs, LIVE_RUN, { terminated: false, stateTs: Date.now(), old: false });
+  if (withLive) writeRun(runs, LIVE_RUN, { terminated: false, stateTs: Date.now(), old: false, workspace: true });
 
   writeFileSync(
     join(runs, "fleet-state.json"),
@@ -299,15 +312,17 @@ describe("renderSnapshot", () => {
       expect(out.snap[name]).toMatch(new RegExp(`^v1/snap/[0-9a-f]{12}/${name.replace(".", "\\.")}$`));
       expect(paths).toContain(out.snap[name]!);
     }
-    // Detail, track, the entries window and the scratchpad per run on disk, and nothing else.
+    // Detail, track, the entries window and the workspace per run on disk, and
+    // nothing else — one workspace object whether the run has a workspace or,
+    // from before it, only a scratchpad.
     const runPaths = paths.filter((p) => p.startsWith("v1/run/"));
     expect(runPaths).toHaveLength(8);
     for (const id of [DEAD_RUN, LIVE_RUN]) {
       expect(runPaths.filter((p) => p.startsWith(`v1/run/${id}/`)).map((p) => p.split("/").at(-1)).sort()).toEqual([
         "detail.json",
         "entries.json",
-        "scratchpad.json",
         "track.json",
+        "workspace.json",
       ]);
     }
     expect(paths).toHaveLength(2 + SNAP_NAMES.length + 8);
@@ -417,7 +432,7 @@ describe("renderSnapshot", () => {
     }
   });
 
-  test("the entries window ships the names and the scratchpad ships whole; the prose beside them is gone", async () => {
+  test("the entries window ships the names and the workspace ships whole; the prose beside them is gone", async () => {
     const runs = fixture();
     const out = await render(runs, 111);
     const entries = out.artifacts.find((a) => a.path === `v1/run/${DEAD_RUN}/` + a.path.split("/")[3] + "/entries.json");
@@ -436,13 +451,26 @@ describe("renderSnapshot", () => {
     // The `meta` entry is the skeleton plus the run's own stamps: no config.
     expect(Object.keys(body.entries[0]!).sort()).toEqual(["end", "harnessVersion", "i", "runId", "start", "t", "ts"]);
 
-    const pad = out.artifacts.find((a) => a.path.startsWith(`v1/run/${DEAD_RUN}/`) && a.path.endsWith("/scratchpad.json"));
-    expect(pad).toBeDefined();
+    const workspaceOf = (id: string): { path: string; bytes: number; mtime: number; firstLine: string; text: string }[] => {
+      const a = out.artifacts.find((x) => x.path.startsWith(`v1/run/${id}/`) && x.path.endsWith("/workspace.json"));
+      expect(a).toBeDefined();
+      const parsed = JSON.parse(a!.body) as { generatedAt?: number; attribution?: string; files: ReturnType<typeof workspaceOf> };
+      // The listing and the text, nothing else beside the envelope.
+      expect(Object.keys(parsed).sort()).toEqual(["attribution", "files", "generatedAt"]);
+      for (const f of parsed.files) expect(Object.keys(f).sort()).toEqual(["bytes", "firstLine", "mtime", "path", "text"]);
+      return parsed.files;
+    };
     // Whole, and with the container install prefix stripped: the one edit the
-    // boundary makes to model-authored text (operator, 2026-09-11).
-    expect((JSON.parse(pad!.body) as { text: string }).text).toBe(
-      `${SURVIVES.scratchpad}\n${CONTAINER_PATH.published}\n`,
-    );
+    // boundary makes to model-authored text (operator, 2026-09-11). A run from
+    // before the workspace publishes its scratchpad as notes.md...
+    const dead = workspaceOf(DEAD_RUN);
+    expect(dead.map((f) => [f.path, f.text])).toEqual([["notes.md", `${SURVIVES.notes}\n${CONTAINER_PATH.published}\n`]]);
+    // ...and a run with one publishes every file, notes.md first.
+    const liveFiles = workspaceOf(LIVE_RUN);
+    expect(liveFiles.map((f) => [f.path, f.firstLine, f.text])).toEqual([
+      ["notes.md", SURVIVES.notes, `${SURVIVES.notes}\n${CONTAINER_PATH.published}\n`],
+      ["lib/camp.ts", SURVIVES.module, `${SURVIVES.module}\n`],
+    ]);
 
     // The row's item names and the position feed's carry through too.
     const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body) as {
@@ -461,7 +489,7 @@ describe("renderSnapshot", () => {
         character: string | null;
         pauseReason: string | null;
         terminationDetail: string | null;
-        snapshot?: { detail: string; track: string; entries?: string; scratchpad?: string };
+        snapshot?: { detail: string; track: string; entries?: string; workspace?: string };
       }[];
     };
     expect(listed.runs).toHaveLength(2);
@@ -471,7 +499,7 @@ describe("renderSnapshot", () => {
     expect(dead.character).toBe(CHARACTER_NAME);
     for (const row of listed.runs) {
       expect(row.snapshot).toBeDefined();
-      for (const which of ["detail", "track", "entries", "scratchpad"] as const) {
+      for (const which of ["detail", "track", "entries", "workspace"] as const) {
         expect(row.snapshot![which]).toMatch(new RegExp(`^v1/run/${row.runId}/[0-9a-f]{12}/${which}\\.json$`));
         expect(paths.has(row.snapshot![which]!)).toBe(true);
       }
@@ -566,6 +594,26 @@ describe("renderSnapshot", () => {
     const detailOf = (r: SnapshotResult): unknown =>
       strip(r.artifacts.find((a) => a.path === deadPaths(r)[0])!.body);
     expect(detailOf(second)).toEqual(detailOf(first));
+  });
+
+  test("a workspace rewritten under an unchanged detail moves the run's version key", async () => {
+    // The key covers everything the row points at, so notes rewritten between
+    // two identical details land on a new address rather than mutating an
+    // immutable object a reader may have cached for a year.
+    const runs = fixture(false);
+    const first = await render(runs, 111);
+    const pad = join(runs, DEAD_RUN, "scratchpad.md");
+    writeFileSync(pad, "a new plan\n");
+    const past = new Date(Date.now() - 60 * 60_000);
+    utimesSync(pad, past, past);
+    const second = await render(runs, 222);
+    const keyOf = (r: SnapshotResult, name: string): string | undefined =>
+      r.artifacts.map((a) => a.path).find((p) => p.startsWith(`v1/run/${DEAD_RUN}/`) && p.endsWith(`/${name}`));
+    expect(keyOf(second, "detail.json")).not.toBe(keyOf(first, "detail.json"));
+    const text = JSON.parse(second.artifacts.find((a) => a.path === keyOf(second, "workspace.json"))!.body) as {
+      files: { text: string }[];
+    };
+    expect(text.files[0]!.text).toBe("a new plan\n");
   });
 
   test("a version key is the first 12 hex of SHA-256, whatever hashes it", () => {

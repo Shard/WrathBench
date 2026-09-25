@@ -56,6 +56,7 @@ import type {
   StatePoint,
   TokenTotals,
   TrackResponse,
+  WorkspaceResponse,
 } from "./api-types";
 import { episodeOf, resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
@@ -79,9 +80,21 @@ import {
   projectRuns,
   projectTools,
   projectTrack,
+  projectWorkspace,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
-import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
+import {
+  isValidRunId,
+  isWorkspacePath,
+  LIVE_WINDOW_MS,
+  readMoves,
+  readRun,
+  readStateItems,
+  readStates,
+  readWorkspace,
+  readWorkspaceFile,
+  runDir,
+} from "./runs";
 import {
   factOf,
   moveViewsOf,
@@ -360,10 +373,10 @@ const ACCOUNT_HELD_MS = 3 * 60_000;
 /**
  * Age of the most recently touched artefact of a run — either file, whichever.
  *
- * Deliberately narrower than `archive.ts`'s four-file version: an account is
- * held only while the run is still WRITING, and `meta.json` and `scratchpad.md`
- * are written once at launch, so counting them would keep an account held for
- * minutes after the writer died.
+ * Deliberately narrower than `archive.ts`'s wider set: an account is held only
+ * while the run is still WRITING, and `meta.json` and the workspace's notes.md
+ * are both written at launch, so counting them would keep an account held for
+ * minutes after a writer that died early.
  */
 function runActivityAge(dir: string, now: number): number | undefined {
   let newest: number | undefined;
@@ -619,8 +632,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
    *
    * Routes with no projector are not served in public mode at all: raw lines,
    * tiles and `/stream` answer `withheld()`. The one deliberate exception is
-   * `/scratchpad`, the model's own notes, published as written
-   * (docs/DATA-AND-LEGAL.md, "Trajectory logs", operator 2026-08-30).
+   * a workspace file (`/workspace/<path>`), which is text rather than a body:
+   * the model's own words, published as written (docs/DATA-AND-LEGAL.md,
+   * "Trajectory logs", operator 2026-08-30) with the path scrub applied by
+   * hand.
    */
   const pub = <T>(body: T, project: (b: T) => unknown): Response =>
     json(publicMode ? project(body) : body);
@@ -1584,15 +1599,35 @@ export function createApi(opts: ApiOptions): ApiHandle {
       });
     }
 
-    // The scratchpad is the model's own notes, published as written since
-    // 2026-08-30 (docs/DATA-AND-LEGAL.md, "Trajectory logs"); no public gate.
-    // It has no projector — it is text, not a body — so the path scrub every
-    // projector applies is applied here by hand when the handle is public.
-    if (rest === "/scratchpad") {
-      const text = readScratchpad(runsDir, runId);
-      if (text === null) return notFound("no scratchpad");
+    /*
+     * The workspace (runner/src/workspace.ts) is the model's own files —
+     * notes.md and whatever else it wrote — published as written since
+     * 2026-08-30 (docs/DATA-AND-LEGAL.md, "Trajectory logs"), so neither route
+     * has a public gate. A run from before the workspace serves its
+     * scratchpad.md as notes.md (`readWorkspace`).
+     */
+    if (rest === "/workspace") {
+      const files = readWorkspace(dir);
+      if (files === null) return notFound("no workspace");
+      const body: WorkspaceResponse = { files };
+      return pub(body, projectWorkspace);
+    }
+
+    // One file's text. It has no projector — it is text, not a body — so the
+    // path scrub every projector applies is applied here by hand when the
+    // handle is public. `nosniff`, because this is model-authored text on the
+    // viewer's own origin and must never be taken for a page.
+    if (rest.startsWith("/workspace/")) {
+      const rel = rest.slice("/workspace/".length);
+      if (!isWorkspacePath(rel)) return json({ error: `not a workspace path: ${rel}` }, 400);
+      const text = readWorkspaceFile(dir, rel);
+      if (text === null) return notFound(`no such file in the workspace: ${rel}`);
       return new Response(publicMode ? scrubPathsText(text) : text, {
-        headers: { "content-type": "text/plain; charset=utf-8" },
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        },
       });
     }
 

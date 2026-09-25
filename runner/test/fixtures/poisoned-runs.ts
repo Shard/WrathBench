@@ -68,7 +68,10 @@ export const SURVIVES = {
   npcName: "Marshal McBride",
   snippetCode: "await sdk.moveTo(1, 2, 3);",
   responseText: "I will head for the kobold camp next.",
-  scratchpad: "plan: talk to Marshal McBride, then Kobold Camp Cleanup",
+  /** notes.md: the live run's workspace file, and the dead run's pre-workspace scratchpad. */
+  notes: "plan: talk to Marshal McBride, then Kobold Camp Cleanup",
+  /** A module in the live run's workspace: the model's own code, published as written. */
+  module: "export const camp = { quest: \"Kobold Camp Cleanup\", giver: \"Marshal McBride\" };",
 } as const;
 
 /**
@@ -104,7 +107,11 @@ const TUPLE = {
   serverBuild: { build: "harness-0.5-1-gdef", startedAtMs: 12_345 },
 };
 
-function writeRun(runs: string, runId: string, opts: { terminated: boolean; stateTs: number; old: boolean }): void {
+function writeRun(
+  runs: string,
+  runId: string,
+  opts: { terminated: boolean; stateTs: number; old: boolean; workspace: boolean },
+): void {
   const dir = join(runs, runId);
   mkdirSync(dir, { recursive: true });
   const config = {
@@ -162,7 +169,15 @@ function writeRun(runs: string, runId: string, opts: { terminated: boolean; stat
       : []),
   ];
   writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-  writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.scratchpad}\n${CONTAINER_PATH.written}\n`);
+  // One run with a workspace, one from before it: both paths to the model's
+  // notes, each carrying a container path for the scrub to find.
+  if (opts.workspace) {
+    mkdirSync(join(dir, "workspace", "lib"), { recursive: true });
+    writeFileSync(join(dir, "workspace", "notes.md"), `${SURVIVES.notes}\n${CONTAINER_PATH.written}\n`);
+    writeFileSync(join(dir, "workspace", "lib", "camp.ts"), `${SURVIVES.module}\n// ${CONTAINER_PATH.written}\n`);
+  } else {
+    writeFileSync(join(dir, "scratchpad.md"), `${SURVIVES.notes}\n${CONTAINER_PATH.written}\n`);
+  }
 
   const db = new Database(join(dir, "run.sqlite"));
   db.run(
@@ -207,7 +222,7 @@ function writeRun(runs: string, runId: string, opts: { terminated: boolean; stat
 
   if (opts.old) {
     const past = new Date(Date.now() - 60 * 60_000);
-    for (const name of ["meta.json", "trajectory.jsonl", "run.sqlite", "scratchpad.md"]) {
+    for (const name of ["meta.json", "trajectory.jsonl", "run.sqlite", opts.workspace ? "workspace/notes.md" : "scratchpad.md"]) {
       utimesSync(join(dir, name), past, past);
     }
   }
@@ -216,8 +231,8 @@ function writeRun(runs: string, runId: string, opts: { terminated: boolean; stat
 /** A temp runs directory with one dead run, one live run, and a poisoned fleet state. */
 export function poisonedRunsDir(): string {
   const runs = mkdtempSync(join(tmpdir(), "poisoned-runs-"));
-  writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true });
-  writeRun(runs, LIVE_RUN, { terminated: false, stateTs: Date.now(), old: false });
+  writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true, workspace: false });
+  writeRun(runs, LIVE_RUN, { terminated: false, stateTs: Date.now(), old: false, workspace: true });
   writeFileSync(
     join(runs, "fleet-state.json"),
     JSON.stringify({

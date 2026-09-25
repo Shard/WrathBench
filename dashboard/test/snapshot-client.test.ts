@@ -38,6 +38,7 @@ import type {
   ResultsResponse,
   RunDetailResponse,
   TrackResponse,
+  WorkspaceArtifact,
 } from "../../runner/viewer/api-types";
 import { ApiError } from "../src/api/client";
 import {
@@ -196,6 +197,15 @@ const ENTRIES = {
 
 const TRACK: TrackResponse = { runId: "r1", characterName: null, model: "m", harnessVersion: "harness-0.4", points: [] };
 
+const WORKSPACE: WorkspaceArtifact = {
+  generatedAt: GENERATED_AT,
+  attribution: ATTRIBUTION,
+  files: [
+    { path: "notes.md", bytes: 12, mtime: 5, firstLine: "# the plan", text: "# the plan\nx\n" },
+    { path: "lib/camp.ts", bytes: 17, mtime: 6, firstLine: "export const a=1;", text: "export const a=1;" },
+  ],
+};
+
 /** The whole bucket a happy-path test reads, with the runs listing's pointers. */
 function fullBucket(runs: ResultRun[] = [run()]): Bucket {
   return bucket({
@@ -211,7 +221,7 @@ function fullBucket(runs: ResultRun[] = [run()]): Bucket {
             detail: "v1/run/r1/7/detail.json",
             track: "v1/run/r1/7/track.json",
             entries: "v1/run/r1/7/entries.json",
-            scratchpad: "v1/run/r1/7/scratchpad.json",
+            workspace: "v1/run/r1/7/workspace.json",
           },
         },
         // A row from a snapshot predating the entries window: detail and track only.
@@ -227,6 +237,7 @@ function fullBucket(runs: ResultRun[] = [run()]): Bucket {
     [`${BASE}/v1/run/r1/7/detail.json`]: DETAIL,
     [`${BASE}/v1/run/r1/7/track.json`]: TRACK,
     [`${BASE}/v1/run/r1/7/entries.json`]: ENTRIES,
+    [`${BASE}/v1/run/r1/7/workspace.json`]: WORKSPACE,
     [`${BASE}/v1/run/older/3/detail.json`]: { ...DETAIL, run: { runId: "older" } },
     [`${BASE}/v1/run/older/3/track.json`]: { ...TRACK, runId: "older" },
   });
@@ -584,6 +595,33 @@ describe("the entries window", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(404);
     expect(err.message).toContain("no published entries");
+  });
+});
+
+describe("the workspace", () => {
+  test("the listing and every file are read out of the one published object", async () => {
+    const b = fullBucket();
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    const listing = await c.workspace("r1");
+    // The listing's facts, in the published order, without the text.
+    expect(listing.files).toEqual([
+      { path: "notes.md", bytes: 12, mtime: 5, firstLine: "# the plan" },
+      { path: "lib/camp.ts", bytes: 17, mtime: 6, firstLine: "export const a=1;" },
+    ]);
+    expect(listing.generatedAt).toBe(GENERATED_AT);
+    expect(await c.workspaceFile("r1", "notes.md")).toBe("# the plan\nx\n");
+    expect(await c.workspaceFile("r1", "lib/camp.ts")).toBe("export const a=1;");
+    expect(b.urls.filter((u) => u.endsWith("/workspace.json"))).toHaveLength(1);
+  });
+
+  test("a file the object does not hold, and a row that names no workspace, are 404s", async () => {
+    const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
+    const missing = (await c.workspaceFile("r1", "lib/nope.ts").catch((e: unknown) => e)) as ApiError;
+    expect(missing.status).toBe(404);
+    expect(missing.message).toContain("lib/nope.ts");
+    const older = (await c.workspace("older").catch((e: unknown) => e)) as ApiError;
+    expect(older.status).toBe(404);
+    expect(older.message).toContain("no published workspace");
   });
 });
 

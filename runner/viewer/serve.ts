@@ -106,7 +106,7 @@ console.log(
     (built ? "" : "  [dashboard not built — run `bun run --cwd dashboard build`]") +
     (publicMode
       ? tilesPublic
-        ? "  [public mode: raw and scratchpads withheld; tiles served]"
-        : "  [public mode: raw, scratchpads and tiles withheld]"
+        ? "  [public mode: raw and the live tail withheld; tiles served]"
+        : "  [public mode: raw, the live tail and tiles withheld]"
       : ""),
 );

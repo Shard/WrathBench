@@ -80,6 +80,16 @@ describe("paths", () => {
     expect(s.calls[0]!.url).not.toContain("/etc/");
   });
 
+  test("a workspace path is encoded per segment, so its separators survive and nothing else does", async () => {
+    const listing = stub({ files: [] });
+    await createClient({ fetch: listing.fetch }).workspace("r 1");
+    expect(listing.calls.map((x) => x.url)).toEqual(["/api/run/r%201/workspace"]);
+    const file = stub("export const a = 1;\n");
+    const text = await createClient({ fetch: file.fetch }).workspaceFile("r 1", "lib/a b%.ts");
+    expect(file.calls.map((x) => x.url)).toEqual(["/api/run/r%201/workspace/lib/a%20b%25.ts"]);
+    expect(text).toBe("export const a = 1;\n");
+  });
+
   test("windowing passes from and limit through", async () => {
     const s = stub({ from: 0, total: 0, entries: [] });
     const c = createClient({ fetch: s.fetch });

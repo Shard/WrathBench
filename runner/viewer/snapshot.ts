@@ -17,7 +17,8 @@
  * Per run, one entries window is published: the tail (`ENTRIES_WINDOW`
  * entries), the same shape the run page's private path loads first. No
  * "load earlier" publicly — a static set would otherwise have to carry every
- * window of every run.
+ * window of every run. The run's workspace is one object too: the listing with
+ * every file's text, so a static reader needs no key per file.
  *
  * Layout (a publisher pushes these to a bucket; a static dashboard reads them):
  * - `v1/manifest.json` and `v1/live.json` are the two mutable keys, cached
@@ -58,6 +59,9 @@ import type {
   RunDetailResponse,
   RunsResponse,
   TrackResponse,
+  WorkspaceArtifact,
+  WorkspaceArtifactFile,
+  WorkspaceResponse,
 } from "./api-types";
 import {
   PUBLIC_ATTRIBUTION,
@@ -73,6 +77,7 @@ import {
   projectRunDetail,
   projectRuns,
   projectTrack,
+  projectWorkspaceArtifact,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
 
@@ -198,7 +203,7 @@ export type RunSink = (artifacts: SnapshotArtifact[]) => Promise<void>;
  * instead of returning them all at once.
  *
  * A pass over the whole runs tree otherwise holds every projected detail,
- * track, entries window and scratchpad until the last one is made, so what it
+ * track, entries window and workspace until the last one is made, so what it
  * retains grows with the tree: the artifacts themselves, and — through the
  * handle — one entry index per run, which is far the larger of the two.
  * Streaming bounds both at `batch` runs' worth, which with the scanners reading
@@ -312,6 +317,24 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     return scrubPathsText(await res.text());
   };
 
+  /**
+   * A run's workspace as its one artifact: the listing, then each file's text
+   * through the file route, projected together. Null when the run has none — a
+   * 404 on the listing, like any per-run route. A file the listing named and
+   * the runner deleted before it was read is left out rather than published
+   * empty. `id` arrives encoded; each path segment is encoded here.
+   */
+  const workspaceOf = async (id: string): Promise<WorkspaceArtifact | null> => {
+    const listing = await getIfPresent<WorkspaceResponse>(`/api/run/${id}/workspace`);
+    if (listing === null) return null;
+    const files: WorkspaceArtifactFile[] = [];
+    for (const f of listing.files) {
+      const text = await getTextIfPresent(`/api/run/${id}/workspace/${f.path.split("/").map(encodeURIComponent).join("/")}`);
+      if (text !== null) files.push({ ...f, text });
+    }
+    return projectWorkspaceArtifact({ files });
+  };
+
   return async function render(nowArg?: number, stream?: RunStream): Promise<SnapshotResult> {
     const now = nowArg ?? Date.now();
 
@@ -367,23 +390,24 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
         for (let i = next++; i < group.length; i = next++) {
           const row = group[i]!;
           const id = encodeURIComponent(row.runId);
-          const [detail, track, entries, scratchpad] = await Promise.all([
+          const [detail, track, entries, workspace] = await Promise.all([
             getIfPresent<RunDetailResponse>(`/api/run/${id}`).then((b) => (b === null ? null : projectRunDetail(b))),
             getIfPresent<TrackResponse>(`/api/run/${id}/track`).then((b) => (b === null ? null : projectTrack(b))),
             getIfPresent<EntriesResponse>(`/api/run/${id}/entries?limit=${ENTRIES_WINDOW}`).then((b) =>
               b === null ? null : projectEntries(b),
             ),
-            // A run with no scratchpad.md is a 404 here and simply has no artifact.
-            getTextIfPresent(`/api/run/${id}/scratchpad`),
+            workspaceOf(id),
           ]);
           // Any of the three JSON halves missing means the run went away
           // mid-pass; a row must never point at part of a set, so all are
           // dropped together.
           if (detail === null || track === null || entries === null) continue;
           // The version covers everything the row points at, so a window that
-          // grew or a scratchpad rewritten between two identical details still
-          // lands on a new key rather than mutating an immutable one.
-          const ver = hash12([addressable(detail), addressable(entries), scratchpad ?? ""].join("\n"));
+          // grew or a workspace file rewritten between two identical details
+          // still lands on a new key rather than mutating an immutable one.
+          const ver = hash12(
+            [addressable(detail), addressable(entries), workspace === null ? "" : JSON.stringify(workspace)].join("\n"),
+          );
           // Run ids are `isValidRunId`-safe (`[A-Za-z0-9._-]+`), so they are bucket
           // keys as-is; anything else never got a run directory to be listed from.
           const base = `v1/run/${row.runId}/${ver}`;
@@ -391,7 +415,7 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
             detail: `${base}/detail.json`,
             track: `${base}/track.json`,
             entries: `${base}/entries.json`,
-            ...(scratchpad === null ? {} : { scratchpad: `${base}/scratchpad.json` }),
+            ...(workspace === null ? {} : { workspace: `${base}/workspace.json` }),
           };
           const immutable = (path: string, body: string): SnapshotArtifact => ({
             path,
@@ -403,7 +427,7 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
             immutable(paths.detail, envelope(detail)),
             immutable(paths.track, envelope(track)),
             immutable(paths.entries!, envelope(entries)),
-            ...(paths.scratchpad === undefined ? [] : [immutable(paths.scratchpad, envelope({ text: scratchpad }))]),
+            ...(paths.workspace === undefined || workspace === null ? [] : [immutable(paths.workspace, envelope(workspace))]),
           ];
           row.snapshot = paths;
         }

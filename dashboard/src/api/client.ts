@@ -26,6 +26,7 @@ import type {
   RunDetailResponse,
   RunsResponse,
   TrackResponse,
+  WorkspaceResponse,
 } from "@viewer/api-types";
 import { createSnapshotClient, type SnapshotSource } from "./snapshot-client";
 
@@ -72,6 +73,8 @@ export type {
   CharacterView,
   TokenTotals,
   TpsFacts,
+  WorkspaceFileView,
+  WorkspaceResponse,
 } from "@viewer/api-types";
 
 /** Thrown for any non-2xx. Carries the status so a page can tell 404 from 500. */
@@ -87,6 +90,11 @@ export class ApiError extends Error {
 /** Path of one entry's raw JSONL line — shared by the fetcher and page hrefs. */
 export function rawPath(id: string, i: number): string {
   return `/api/run/${encodeURIComponent(id)}/raw/${i}`;
+}
+
+/** Path of one workspace file: each segment encoded, the separators kept. */
+export function workspaceFilePath(id: string, path: string): string {
+  return `/api/run/${encodeURIComponent(id)}/workspace/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 export interface ClientOptions {
@@ -266,6 +274,16 @@ export function createClient(opts: ClientOptions = {}) {
       const q = new URLSearchParams({ limit: String(limit) });
       if (from !== undefined) q.set("from", String(from));
       return get<EntriesResponse>(`/api/run/${encodeURIComponent(id)}/entries?${q.toString()}`);
+    },
+    /** The run's workspace listing: notes.md first, then every other file by path. */
+    workspace: (id: string): Promise<WorkspaceResponse> =>
+      get<WorkspaceResponse>(`/api/run/${encodeURIComponent(id)}/workspace`),
+    /** One workspace file's text, whole. */
+    workspaceFile: async (id: string, path: string): Promise<string> => {
+      // Not memoised: the page asks again only when the listing says the file changed.
+      const res = await f(`${opts.base ?? ""}${workspaceFilePath(id, path)}`);
+      if (!res.ok) throw new ApiError(res.status, `${path}: ${res.status}`);
+      return await res.text();
     },
     /** The raw JSONL line for one entry, secrets already stripped server-side. */
     raw: async (id: string, i: number): Promise<string> => {
