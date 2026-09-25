@@ -13,13 +13,13 @@
  * (`runner/src/archive.ts`), the account ledger on `/api/fleet`, and the live
  * map (`positions.ts`).
  *
- * The first two prefilter to the handful of runs whose files moved inside
- * their window. `readPositions` does not — it calls `listRuns` over the whole
- * tree on every poll, which is the one 1,148-file fan-out the derived store has
- * not taken away. It stays for now because the live map is the one page whose
- * whole subject is where a character is *this second*, and the store's state
- * series is a five-second poll behind; it goes when the store carries the live
- * state series, which is the same step that retires the per-run sqlite.
+ * All three prefilter: the first two to the handful of runs whose files moved
+ * inside their window, the live map to the runs the derived store lists as
+ * unterminated (`positionsFromStore`). What the map still opens per poll is
+ * one `run.sqlite` per such run, because its whole subject is where a
+ * character is *this second* and the store's state series is a five-second
+ * poll behind; that last open goes when the store carries the live state
+ * series, which is the same step that retires the per-run sqlite.
  */
 
 import type { Database } from "bun:sqlite";

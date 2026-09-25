@@ -61,7 +61,7 @@ import { episodeOf, resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
 import { modelsResponse, readFleetRoster } from "./models";
 import { modelStates, outstandingWork, type RunFact } from "../src/models";
-import { readPositions } from "./positions";
+import { positionsFromStore } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
 import { characterViewOf } from "./character";
@@ -1252,7 +1252,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const body: RunsResponse = { runs: await listWithTotals() };
       return pub(body, projectRuns);
     }
-    if (path === "/api/positions") return pub({ positions: readPositions(runsDir) }, projectPositions);
+    if (path === "/api/positions") return pub({ positions: await positionsFromStore(store, runsDir) }, projectPositions);
     if (path === "/api/episodes") return await episodesResponse();
     /* The model-facing tool list, off `TOOLS` at request time (`tools.ts`); harness text only. */
     if (path === "/api/tools") return pub(toolsResponse(), projectTools);

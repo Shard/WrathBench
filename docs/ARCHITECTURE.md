@@ -314,7 +314,8 @@ listing route answers from ClickHouse. The live-progress path — "is this run
 going right now", the supervisor's own polling of `run.sqlite`, the per-run
 trajectory tail behind `/entries` and the SSE stream — still reads files
 directly, because it asks about a process that
-is writing at this instant. Retiring the per-run sqlite is a later step and
+is writing at this instant. The live map is the half-way case: the store says
+which runs are unterminated, and only those few have their `run.sqlite` opened. Retiring the per-run sqlite is a later step and
 waits on the store carrying the live state series.
 
 With no `CLICKHOUSE_URL` the viewer builds the same rows in memory by running
