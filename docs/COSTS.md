@@ -81,9 +81,8 @@ drafted models, as a list-price estimate over the observed e90 token profile
 for the first several turns then plateau — confirmed on both lanes measured (`ox-alpha` turns 1→61:
 3,292 → 7,321 → 11,414 → 12,533 → 13,241; `qwen3.8-27b` turns 1→71: 3,466 → 10,185 → 17,955 →
 18,343): requests plateau at roughly 8–12k tokens regardless
-of episode length. The runner trims older conversation aggressively (system prompt: "the
-scratchpad is your memory, not the chat history"), so cost per turn is bounded regardless of how
-long the episode runs. `cached_tokens` on these lanes is sporadic, and the
+of episode length. The runner trims older conversation aggressively, so cost per turn is bounded
+regardless of how long the episode runs. `cached_tokens` on these lanes is sporadic, and the
 sporadicity is measured, not assumed (run
 `fleet-deepseek-flash-e90-deepseek-v4-flash-0731-20260824-a4`, 150 calls). The harness's side is
 clean: replaying every consecutive request pair from the trajectory, the serialized message array
@@ -121,8 +120,7 @@ caveat as under claude-code. There is no cost figure at all: the CLI reports non
 subscription, so a codex cost is only ever the list-price estimate over its tokens, marked
 as-if-metered. The rate for that estimate comes from the OpenRouter sync, under the vendor
 prefix the Codex CLI's own slug omits: the lane records `gpt-6-astra` and the catalogue carries
-OpenAI's published list price as `openai/gpt-6-astra` ($10/$50/$1 per million in/out/cache-read,
-verified against OpenAI's own API price list). It is the same synced row an OpenRouter
+OpenAI's published list price as `openai/gpt-6-astra`. It is the same synced row an OpenRouter
 run would read; only what it means differs, and `codexPrice` in `runner/viewer/pricing.ts` says
 so — an OpenRouter run meters the operator's balance, a codex run bills a flat ChatGPT
 subscription, so the figure there is a comparison and not a bill. It is the operator's decision:
@@ -138,9 +136,7 @@ writes. `roster-opus-20260822`: 21.85M cumulative prompt tokens, 21.7M (99.3%) c
 144k cache-write. The context grows every turn, but each turn re-reads yesterday's context off the
 cache instead of re-paying for it — and because this harness bills against a flat Claude Code
 subscription rather than metered API tokens, the operator's marginal cost is $0 regardless of how
-large that cache-read number gets. `usageRaw`/`costUsd` are only emitted by the SDK on a clean
-`claude_result` (natural turn-loop completion); a hard watchdog kill (episode-limit,
-tool-call-limit) cuts the stream before that record lands, so an as-metered $ figure exists for
-only one measured run: `fleet-nav-probe-sonnet-20260822-c2` (a full 6h e360, ended cleanly),
+large that cache-read number gets. The as-metered figure for a whole episode (§1 has when the
+CLI emits one): `fleet-nav-probe-sonnet-20260822-c2` (a full 6h e360, ended cleanly),
 `costUsd: $43.90` for 201.6M cumulative prompt tokens (201.1M cached, 99.75%), 186,646 output
 tokens, 905 turns.

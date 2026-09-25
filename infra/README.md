@@ -8,21 +8,6 @@ The same stack on Kubernetes is `infra/chart/wrathbench` (Helm), built by
 `infra/k8s-deploy.sh`. The compose stack stays the local path; nothing in it
 changes because the chart exists.
 
-| path | what |
-|---|---|
-| `compose.yml` | the stack on this box |
-| `docker/server.Dockerfile` | worldserver / authserver / db-import |
-| `docker/runner.Dockerfile` | runner, fleet, viewer, publisher — repo baked in |
-| `build-worldserver.sh` | the worldserver alone, to `:next`, for the compose deploy |
-| `build-images.sh` | all four images at one immutable `git describe` tag |
-| `deploy-worldserver.sh` | the compose deploy window |
-| `k8s-deploy.sh` | the same window on Kubernetes, and it refuses a stale pin |
-| `k8s-release.sh` | a whole release in five restartable phases |
-| `run-episode.sh` | one episode: compose, `--local`, or `--k8s` |
-| `run-fleet.ts` | the supervisor; its config is the store (`runner/src/config-store.ts`), re-read every tick |
-| `fleet.example.json` | the bootstrap a fresh deployment seeds the config store from, once; nothing else reads it |
-| `chart/wrathbench` | the Helm chart |
-
 ## Bringing the stack up
 
 From the repository root, on a fresh machine:
@@ -71,9 +56,8 @@ db  ──healthy──>  db-import  ──completed──>  bootstrap  ──co
 - **publisher** — pushes the public dashboard's JSON to object storage on a
   timer (`infra/publish-dashboard.ts --loop`), behind the `publish` profile.
   See `docs/PUBLIC-DASHBOARD.md`. Minimap tiles are not part of that loop:
-  `infra/publish-tiles.ts --dry-run | --upload` is a separate, hand-run step
-  that uploads `data/minimap` to the same bucket under `tiles/`, skipping by
-  content hash, and it is the only thing that ever puts a tile there.
+  they are a separate, hand-run upload (`docs/RUNBOOK.md`, "Public
+  dashboard").
 
 Per `docs/DATA-AND-LEGAL.md` there is no public play endpoint. Every port
 compose publishes is bound explicitly to `127.0.0.1`, for operator inspection:
@@ -96,14 +80,11 @@ what compose sets; change compose.
 `infra/bootstrap/bootstrap.ts` runs on Bun between `db-import` and the servers.
 It does two things, idempotently:
 
-1. Upserts the `auth.realmlist` row for realm 1, pointing `address` and
-   `localAddress` at the `worldserver` compose hostname on port 8085 with
-   gamebuild 12340, and deletes any other realm row.
+1. Upserts the `auth.realmlist` row for realm 1, pointing it at the
+   `worldserver` compose hostname, and deletes any other realm row.
 2. Ensures an account (`RUNNER` / `RUNNER` by default) exists with the
    configured password, computing the SRP6 salt and verifier the same way
-   `AccountMgr::CreateAccount` does and writing them into the `binary(32)`
-   columns via `UNHEX()`. It reads the row back and recomputes the verifier
-   from the stored salt as a round-trip check.
+   `AccountMgr::CreateAccount` does.
 
 The smoke probes that hold a session for minutes (`infra/smoke/module-quest.ts`)
 use a second account `PROBE` so they never contend with `RUNNER` for the
@@ -156,13 +137,8 @@ reach from the Northshire spawn.
       --scenario tram-ironforge [--wait-ms 90000] [--dry-run]
 
 `--dry-run` prints the statements it would run and touches nothing. The
-scenarios live in `infra/fixtures/scenarios.ts`; today they are
-`tram-ironforge` (level 10, 1g, standing at the Deeprun Tram portal facing the
-areatrigger), `trainer-northshire` (level 4, 50s, in front of Brother Sammuel),
-`northshire-fresh` (a reset to the level-1 human start with an empty quest log)
-and `vineyard-kill-credit` (level 1 at the Northshire vineyard edge with
-"Kobold Camp Cleanup" already in the log). Adding one is a data edit in that
-file.
+scenarios live in `infra/fixtures/scenarios.ts`, and adding one is a data edit
+in that file.
 
 The preflight gate uses fixtures too: `kill-credit.ts` starts from
 `vineyard-kill-credit` instead of playing the 783 turn-in that gates the kill
@@ -193,8 +169,8 @@ benchmark run must start from a character the agent itself created.
 
 **The `online = 0` wait.** The core reads the `characters` row on login and
 writes it back on logout, so a fixture applied under a live session is simply
-overwritten by that session's save. The tool polls `characters.online` every
-500ms (up to `--wait-ms`, default 90s) and only writes once it reads 0.
+overwritten by that session's save. The tool polls `characters.online` (up to
+`--wait-ms`) and only writes once it reads 0.
 `online = 0` is written by the logout `SaveToDB`, so it is the signal that the
 *late save has landed*, not merely that the session was asked to end — the
 module's `DELETE /session` acknowledges as soon as the logout is queued, and
@@ -219,20 +195,17 @@ keeps compose from deciding `db-import` needs a rerun against a live stack.
 
 `infra/run-roster.sh <roster.json>` runs a list of episodes one at a time
 through `run-episode.sh`. The roster JSON is a plain array; every entry is
-config and everything but `model` has a default, so a bare
-`[{ "model": ... }]` roster produces exactly the argv the flags below describe:
+config and everything but `model` has a default (`infra/run-roster.ts` is the
+schema). An unset `effort` means the provider's own default, which is not the
+same as any named level.
 
-| key | default | notes |
-| --- | --- | --- |
-| `model` | — | required, passed through verbatim |
-| `driver` | `openai` | or `claude-code` (the claude-code harness; the former spelling `claude-subscription` is refused, not translated) or `codex` (the OpenAI Codex CLI on a ChatGPT subscription; the codex harness) |
-| `account` | runner default (`RUNNER`) | one live session per account |
-| `effort` | unset | reasoning effort. `openai` sends it as `reasoning_effort`; `claude-code` as the CLI's `--effort` (`low\|medium\|high\|xhigh\|max`); `codex` as `model_reasoning_effort` (`low\|medium\|high\|xhigh\|max\|ultra`; `none`/`minimal` refused). Unset means the provider's own default, which is not the same as any named level — and it becomes part of the derived run id, so `opus` and `opus@low` are two runs |
-| `apiBase`, `apiKeyEnv` | OpenRouter, `OPENROUTER_KEY` | `openai` entries only; a claude-code or codex entry gets neither flag |
-| `tokenEnv` | driver default | the subscription lane by env var NAME: `CLAUDE_CODE_OAUTH_TOKEN[_2]` (a token) for claude-code, `CODEX_HOME[_2]` (a logged-in Codex home directory) for codex. The codex lane is a directory, so under compose it is BIND-MOUNTED — `${CODEX_HOME:?…}` on the host to `/home/bun/.codex` in `runner` and `fleet`, which is what those services set `CODEX_HOME` to (`x-codex-lane` in compose.yml). There is no default host path: compose interpolation is file-wide, so the invoking shell must export `CODEX_HOME` before ANY `docker compose -f infra/compose.yml` command, codex or not. Never copied: a second copy of `auth.json` spends the other side's refresh token |
-| `race`, `class` | Human Paladin | no name: the model names its own character at `createSession` and the run records what it chose |
-| `episodeMs` | 5400000 (90m) | |
-| `runId` | `roster-<model-slug>-<date>` | |
+The codex lane is a directory, so under compose it is BIND-MOUNTED —
+`${CODEX_HOME:?…}` on the host to `/home/bun/.codex` in `runner` and `fleet`,
+which is what those services set `CODEX_HOME` to (`x-codex-lane` in
+compose.yml). There is no default host path: compose interpolation is
+file-wide, so the invoking shell must export `CODEX_HOME` before ANY
+`docker compose -f infra/compose.yml` command, codex or not. Never copied: a
+second copy of `auth.json` spends the other side's refresh token.
 
 `--loop` restarts the roster when the list is exhausted, until `--until` or
 `--max-hours` (one of which it requires). Cycle 2 onward gets `-cN` run ids;
@@ -282,50 +255,8 @@ leaves free. Inspect the config, and you have inspected the fleet.
     ./infra/run-fleet.sh --dry-run       # print the plan
     ./infra/run-fleet.sh --status        # read-only report
 
-The config has a `roster` map — the model **catalog**: name → the per-entry
-schema the roster accepts, plus `tier` and `idle`, and never an `objective`
-(steering belongs to a campaign) — an `accounts` block (`pool`, `paid`, `local` lists), a
-`campaigns` map (probe campaigns: an objective swept over `cells` by a set of
-`models`, optionally pinned to an `account`), a `queue` of jobs (`ref`,
-`episode`, `repeat`, optional `account`, optional `enabled`), a `policy` block
-and a `preflight` block. A job's name is always `<first ref>-<episode>`, or
-`<campaign>-<cell>` for a pinned campaign. The fleet
-spawns one `run-roster` process per job it places — materialized roster at
-`data/runs/fleet-<job>-<date>.roster.json`, roster JSONL at
-`fleet-<job>-<date>.jsonl`, stdout at `fleet-<job>-<date>.log` — and
-supervises them. There is no other shape: a config that still says `lanes` or
-`accounts.pinned` is refused by name.
-
-**The tuning knob is the store.** The supervisor re-reads it every
-60 seconds:
-
-- `enabled: false` **drains** the job: the roster process is only SIGTERMed
-  once it is between episodes (no child process), so the episode in flight
-  finishes. Worst case — an episode spawning in the instant between the idle
-  check and the signal — gets run-roster's own graceful 30s-grace episode
-  termination, never a hard kill. Disable takes effect at the next episode
-  boundary.
-- `enabled: true`, or a newly added job, spawns on the next tick. A job
-  respawned the same day gets `--resume-roster` so finished runs are skipped.
-- A malformed or guard-violating edit never touches running jobs: the fleet
-  logs a complaint and keeps the last good config.
-- A job whose process exits while enabled is *finished*, not respawned; flip
-  it off and on again to re-arm it.
-
-Guards, at startup and on every re-read: two enabled jobs must not share an
-account (one live session per account), and the **roster policy** — claude
-models (`opus`/`sonnet`/`haiku`/`claude-*`) run only via the
-`claude-code` driver, that driver runs claude models only, and the `codex`
-driver carries no claude id. The
-free entries exist because OpenRouter's and OpenCode Zen's free tiers are
-pooled per upstream provider: a single sequential run per pool is both the
-polite and the effective shape — two runs on one pool just trip the same
-rate limits twice. So an openai entry on a **shared free-cloud pool**
-(`openrouter.ai` / `opencode.ai`, or no `apiBase` at all, which defaults to
-OpenRouter) must carry free model ids only — ending `-free` or `:free` — unless
-it declares `billing: "paid"` on purpose. The roster's own account-busy guard
-still runs under every job, so a job pointed at an account a hand-started run
-holds waits rather than clobbering.
+Steering it, its guards and the config shape are `docs/RUNBOOK.md`, "Steer it"
+and "Config reference".
 
 ### Local (self-hosted) models
 
@@ -352,20 +283,9 @@ Before adding a local model, prove the endpoint can drive the tool loop:
 
 It hits the endpoint directly with one tool definition and no `tool_choice`
 (mirroring the adapter), and asserts the model *elects* a tool call whose shape
-satisfies the adapter's exact contract — `id` a non-empty string, `arguments` a
-JSON string. It prints the round-trip latency and `finish_reason`, and reports a
+satisfies the adapter's exact contract. It reports a
 clear no-go if the model answers in prose or returns a shape the adapter would
 reject. No game account or module needed.
-
-`--status` reads `data/runs/fleet-state.json` plus each job's logs and
-sqlite: the supervisor's heartbeat, the gate's last result, one row per
-account with the job on it (run id, level/xp, elapsed, cooling), the models
-table with the scheduler's verdict, the paused runs it is not resuming and
-why, and which run currently holds an account even when that run
-is a hand-started roster the fleet does not manage. The dashboard's fleet page
-carries the same indicators. A job that ships `enabled: false` is a switch,
-not dead config: flip it to true when there is budget to spend on it, flip it
-back and the job stops after the episode in flight.
 
 ## The derived store
 
@@ -422,16 +342,7 @@ that has been waiting all night resumes exactly where it stopped.
 ## Where data lives
 
 `data/` is gitignored at the directory level and holds everything
-Blizzard-derived or run-specific.
-
-| path | contents | mounted as |
-| --- | --- | --- |
-| `data/client` | AzerothCore server data `dbc/ maps/ vmaps/ mmaps/` | read-only at `/azerothcore/env/dist/data` in worldserver |
-| `data/etc` | generated `.conf` files | `/azerothcore/env/dist/etc` in the servers |
-| `data/logs` | server logs | `/azerothcore/env/dist/logs` in the servers |
-| `data/wiki` | wiki dump and built bundle | `/wrathbench/data/wiki` in runner |
-| `data/runs` | trajectories and run sqlite | `/wrathbench/data/runs` in runner |
-| `data/collector` | the collector's per-file offsets; disposable | `/wrathbench/data/collector` in collector |
+Blizzard-derived or run-specific; `compose.yml` is where each piece is mounted.
 
 The MySQL data directory is the named volume `db-data`, not a bind mount.
 `docker compose down` keeps it; `docker compose down -v` throws the world away

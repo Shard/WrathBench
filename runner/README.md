@@ -49,24 +49,8 @@ bun runner/src/timeline.ts <run-id>
 bun runner/src/classify.ts <run-id> <reason> [note]
 ```
 
-Runs live under `data/runs/<run-id>/`: `trajectory.jsonl` (every model
-request/response, snippet + result, event batch served, periodic state line),
-`run.sqlite` (metadata + state rows for cross-run queries), `meta.json` (config
-for resume), `scratchpad.md`.
-
-The flags below are the rest of what `run.ts` reads off argv; each one
-overrides the default in `src/config.ts` for that run.
-
-| flag | default | what it sets |
-| --- | --- | --- |
-| `--module-url <url>` | `http://worldserver:8086` (or `$WRATHBENCH_MODULE_URL`) | where the SDK reaches the module |
-| `--runs-dir <path>` | `data/runs` | where this run's directory is written, and where `--resume` looks for one |
-| `--wiki-bundle <path>` | `data/wiki/bundle.sqlite` | the reference bundle `searchmemo` reads |
-| `--step-interval-ms <n>` | `3000` | fixed pacing between model steps — an API courtesy, not a tuning knob |
-| `--state-interval-ms <n>` | `60000` | how often a periodic state line is recorded |
-| `--snippet-timeout-ms <n>` | `30000` | per-snippet evaluation timeout; the eval is abandoned, the runtime survives |
-| `--idle-ms <n>` | `600000` | the `idle` watchdog: no model output for this long ends the episode. `0` disables it |
-| `--allow-character-delete` | off | lets episode hygiene delete a character above level 1 that no ended run on the account accounts for. Never passed by the fleet: without it such a character is kept and named to the model as taken (`src/hygiene.ts`) |
+Runs live under `data/runs/<run-id>/`. The rest of what `run.ts` reads off
+argv (`configFromArgs`) overrides the defaults in `src/config.ts` for that run.
 
 ## Drivers
 
@@ -109,7 +93,7 @@ Measured against claude 2.1.238 with a local capture proxy (no model calls):
   only *driver* turns (context injections). For this driver that is not the
   control that matters — see below.
 
-What is *not* a gap: with `--tools ""` the request carries only our nine tools,
+What is *not* a gap: with `--tools ""` the request carries only our tools,
 as `mcp__wrathbench__<tool>` — no built-in Bash/Read/Edit/Task at all. And the
 system prompt, tool implementations, sandbox, scratchpad, watchdogs, named
 termination/pause reasons and trajectory are the same objects the fixed loop
@@ -128,10 +112,7 @@ Tools reach the runner over a loopback TCP MCP server plus `src/mcp-bridge.ts`,
 because `--mcp-config` can only launch a stdio child — running `mcp.ts` as that
 child would create a second sandbox and a second session on the same token.
 
-Exact flags (all present in `claude -p --help` for 2.1.238; see `claudeArgs`):
-`-p --verbose --input-format stream-json --output-format stream-json
---system-prompt <the fixed prompt> --mcp-config <run-dir>/claude-mcp.json
---strict-mcp-config --tools "" [--model <id>] --allowed-tools mcp__wrathbench__*`.
+The flags are `claudeArgs`, all present in `claude -p --help` for 2.1.238.
 `--verbose` is not optional: this CLI rejects `-p --output-format stream-json`
 without it. `--allowed-tools` is the whole permission story — verified against
 the real CLI (with a local capture proxy standing in for the model, so nothing
@@ -260,18 +241,7 @@ and differs only where the CLI does:
   is not used. The bytes are `CODEX_SYSTEM_PROMPT`, identical to the
   claude-code render: the one per-harness sentence names "the CLI", never
   which.
-- **Exact flags** (`codexArgs`): `exec [resume <id>] --json
-  --ignore-user-config --skip-git-repo-check -m <model> --disable shell_tool
-  --disable unified_exec --disable image_generation --disable tool_suggest
-  --disable multi_agent --disable request_permissions_tool --disable apps
-  --disable plugins --disable browser_use --disable computer_use --disable
-  sleep_tool -c web_search="disabled" -c approval_policy="never"
-  -c sandbox_mode="read-only" -c model_instructions_file="…"
-  [-c model_reasoning_effort="<level>"] -c mcp_servers.wrathbench.command="<bun>"
-  -c mcp_servers.wrathbench.args=["<repo>/runner/src/mcp-bridge.ts","<port>"]
-  -c mcp_servers.wrathbench.default_tools_approval_mode="approve"
-  -c mcp_servers.wrathbench.tool_timeout_sec=300
-  -c mcp_servers.wrathbench.startup_timeout_sec=30 -`. `-s`/`-C` are exec-only
+- **Flags** are `codexArgs`. `-s`/`-C` are exec-only
   in this version, so the sandbox rides on `sandbox_mode` and the cwd (a temp
   dir, so no AGENTS.md is found) on the process; that keeps the first turn and
   a resumed one identical apart from the `resume <id>` words.
@@ -282,7 +252,7 @@ and differs only where the CLI does:
 - **MCP approval.** With `approval_policy="never"` an MCP call that needs
   approval *fails* ("MCP tool call requires approval, but approval policy is
   never" — observed); `default_tools_approval_mode="approve"` on the server is
-  what lets our nine through (`"auto"` still gates on the tool's readOnlyHint
+  what lets ours through (`"auto"` still gates on the tool's readOnlyHint
   and refused). Codex presents the tools to the model as
   `mcp__wrathbench.<tool>` and calls our server with the plain name. The CLI
   runs MCP servers inside its sandbox with a private `/tmp`, which is why the
@@ -334,13 +304,10 @@ reachable module URL is the alternative.
 ## The sandbox
 
 One long-lived Bun child process per session (`src/sandbox/entry.ts`), holding
-one SDK client. Snippets share it: top-level bindings persist (simple
-initialized declarations become real globals so routines can keep mutating
-them; functions/classes/destructurings are copied onto `globalThis` at snippet
-end — `src/sandbox/rewrite.ts` has the exact semantics), and `setInterval`
-routines keep running between snippets. Ambient surface: `sdk`, `state`,
-`events`, `connect()`, `sleep(ms)`, `scratchpad` — documented once, in the
-entry file's header, and told to the model in the system prompt.
+one SDK client. Snippets share it: top-level bindings persist
+(`src/sandbox/rewrite.ts` has the exact semantics), and `setInterval`
+routines keep running between snippets. The ambient surface is documented once,
+in the entry file's header, and told to the model in the system prompt.
 
 Timeouts, precisely: a snippet that exceeds the per-snippet timeout is
 abandoned but the runtime survives; a snippet that blocks the event loop gets
@@ -354,8 +321,7 @@ runner reaches `worldserver` and nothing else. In-process, `fetch` and
 module's — best-effort hardening, not a security boundary.
 
 Filesystem posture: the child is exec'd under a Linux Landlock ruleset
-(`src/sandbox/confine.ts`) that allows reads only of the interpreter and system
-libraries, `runner/`, `sdk/`, `node_modules/` and the workspace manifests, so
+(`src/sandbox/confine.ts`, which holds the read allowlist), so
 `.env`, the repo root and the home directory answer `EACCES` from the kernel
 however a snippet reaches for them. It fails closed, and it covers the
 filesystem only — the network posture is the paragraph above.
@@ -401,11 +367,8 @@ opportunity.
 `bun test runner` — needs one `bun install` at the repo root first: that links
 the wiki workspace package, and without it anything importing
 `@wrathbench/wiki/bundle` (searchmemo, wiki, tools) fails with a bare
-module-resolution error that reads like a missing dump but is not. The suite
-covers sandbox eval semantics against the real child process, MCP
-dispatch with fixture JSON-RPC, byte-identical context assembly, watchdogs on a
-fake clock, trajectory writer, and the claude-code driver against a
-scripted fake `claude` on PATH (`test/fixtures/fake-claude.ts`, which really
+module-resolution error that reads like a missing dump but is not. The
+claude-code driver is tested against a scripted fake `claude` on PATH (`test/fixtures/fake-claude.ts`, which really
 speaks MCP back through the bridge). No live stack, no real CLI, no
 subscription quota. The codex driver has the same arrangement
 (`test/fixtures/fake-codex.ts`, which exits per turn and honours `exec resume`,

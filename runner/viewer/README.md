@@ -97,10 +97,7 @@ directory never gains a schema it did not have.
 
 ## The run listing
 
-`/api/runs` lists every directory under `data/runs`, newest first: model,
-unscored stamp (the legacy `shakeout` key), harness tag, character, harness version, latest level, XP, money and completed
-quests from the `state` table, when it started, playtime, total tokens, and how
-it ended.
+`/api/runs` lists every directory under `data/runs`, newest first.
 
 Playtime (`playtimeMs`, on the listing rows and on `/api/run/<id>`) is *active*
 time, not the span the trajectory covers: a segment opens at the `meta` record
@@ -162,7 +159,7 @@ on disk, because a watchdog kill is the normal ending — has a
 completion total resting entirely on those snapshots, and `tokenTotals` reports
 `source: "snapshot"` for it rather than `"reported"`. It is neither an estimate
 nor a measurement: provider-reported and known to be far too low, so the run page
-labels it "snapshot — under-read" and marks the rate the same way. A run that
+labels it and its rate as under-read. A run that
 resolved its turns and was cut off mid-flight on the last one stays `reported`;
 labelling that `snapshot` over a handful of tokens would be the same mistake
 pointing the other way.
@@ -179,8 +176,7 @@ The `state` table gains signals over time and an old run directory never gains
 them retroactively, so the viewer asks each database what columns it has before
 selecting: `money` and `quests_completed` come back null where the schema
 predates them. Zero is a real reading — a broke character has 0 copper — so only
-a missing value is null, never a recorded zero. Playtime is the wall clock the
-trajectory spans, first entry to last. A run counts as **live** when it has no
+a missing value is null, never a recorded zero. A run counts as **live** when it has no
 termination reason *and* its `trajectory.jsonl` was appended to within the last
 two minutes — "no termination reason" alone is not enough, because a killed
 process never writes one.
@@ -282,8 +278,7 @@ the newest row, since a level-only sample would otherwise blink an agent off the
 map — dropped if that reading is more than ten minutes old. By design the
 renderer consumes only that array and never touches the run store, which is what
 lets a replay mode plug a trajectory reader into the same shape later. The
-coordinate transform lives on its own in `worldmap.ts` (`tile = 32 −
-coord/533.33325`, world X → tile row, world Y → tile column) with no imports,
+coordinate transform lives on its own in `worldmap.ts` with no imports,
 for the same reason, and the dashboard imports it rather than copying it.
 
 `/api/run/<id>` also carries `reflections`: the turns the run spent reflecting,
@@ -313,14 +308,8 @@ them straight from there, integers only and cached for a year since they never
 change (public mode with `WRATHBENCH_VIEWER_TILES_PUBLIC=1` sends a private
 one-hour cache instead — see "What it will not serve"). Nothing extracted yet is a normal state, not an error: a missing tile
 draws as a labelled grid square, so the map works on a machine that has never
-run the extraction. `WRATHBENCH_MINIMAP_DIR` overrides the tile root.
-
-The gated public dashboard serves the same path. `infra/publish-tiles.ts` is a
-separate, hand-run publisher step (never part of a snapshot pass) that uploads
-`data/minimap` to the R2 bucket under `tiles/<mapId>/<row>_<col>.png`; the gate
-Worker serves them to authenticated readers only, with this file's
-`TILE_PUBLIC_CACHE_CONTROL` and `TILE_PUBLIC_ROBOTS` headers. See
-`docs/PUBLIC-DASHBOARD.md`.
+run the extraction. The public site's tiles are a separate upload
+(`docs/RUNBOOK.md`, "Public dashboard").
 
 ## How it handles big files
 
@@ -338,40 +327,18 @@ once a second, so a quiet run can be told from a dead connection.
 Everything under `/api` is read-only with one exception: the config API below,
 which is the only write surface the viewer has and is not mounted at all in
 public mode. Everywhere else no route accepts a body, every database is opened
-readonly, and the runs directory is only ever listed and read.
-
-| path | what |
-| --- | --- |
-| `/api/info` | what mode the viewer is in: public, dashboard built |
-| `/api/runs` | run listing, with per-run token totals and active playtime |
-| `/api/positions` | position feed: every live agent's latest map/x/y plus a preview |
-| `/api/fleet` | the fleet supervisor's jobs, accounts, gate and heartbeat |
-| `/api/tools` | the nine model-facing tools — name, description and schema off `runner/src/tools.ts` at request time, plus one example call (tools with arguments) or one returns line (tools without); harness text only, served in public mode too |
-| `/api/run/<id>` | run row, state series, entry count, token totals, playtime, reflection windows, and — for a freeplay attempt — the whole `character` it is part of |
-| `/api/character/<id>` | one character whole: the chain, its totals, and every attempt's state samples end to end with the attempt each came from. `<id>` is any run in the chain |
-| `/api/run/<id>/entries?from=&limit=` | summarised entries (default: last 200); in public mode each entry crosses `projectEntry` and `redactGameProse` |
-| `/api/run/<id>/raw/<i>` | the raw JSONL line for one entry (withheld in public mode) |
-| `/api/run/<id>/scratchpad` | the run's scratchpad.md — the model's own notes, served in public mode too |
-| `/api/run/<id>/stream` | SSE: new entries as they are appended (withheld in public mode) |
-| `/tiles/<mapId>/<row>_<col>.png` | one minimap tile from `data/minimap/` (404 when not extracted; withheld in public mode unless `WRATHBENCH_VIEWER_TILES_PUBLIC=1`) |
-| `/api/config...` | the fleet config, read and write — see below; **not mounted in public mode** |
-| anything else | the built SPA, or the not-built notice when there is none |
+readonly, and the runs directory is only ever listed and read. The routes and
+their response shapes are `api.ts` and `api-types.ts`; anything that is not a
+route is the built SPA, or the not-built notice when there is none.
 
 ### The config API (operator-only)
 
-The fleet config lives in a sqlite store on the data volume
-(`runner/src/config-store.ts`, `$WRATHBENCH_DATA/config.sqlite`), and that
-store is the **only** fleet config: the active config is
-operational state, never committed, and `infra/fleet.example.json` is the
-one-time bootstrap a fresh deployment seeds it from. The supervisor reads the
-store on every 60s re-read, so an edit here is live one tick later with no
-restart. The UI over these endpoints is the dashboard's `/config` page
-(`dashboard/src/pages/Config.tsx`) — a roster table with tier, idle,
-billing and routing editable inline, a JSON editor per other row key, the audit
-history and an export button. Its nav link appears only on a private build
+The fleet config is the sqlite store `docs/RUNBOOK.md`, "Where the config
+lives", describes (`runner/src/config-store.ts`); an edit here is live one tick
+later with no restart. The UI over these endpoints is the dashboard's `/config`
+page (`dashboard/src/pages/Config.tsx`). Its nav link appears only on a private build
 served by a non-public viewer, which is the same condition these routes are
-mounted under. An operator can still drive the endpoints with curl or the CLI
-(`bun runner/src/config-store.ts seed|export|get|set|patch|delete|audit`).
+mounted under.
 
 A *key* is a row: `roster/<name>`, `campaigns/<name>`, `queue/<n>`, or one of
 the singletons `_notes`, `preflight`, `accounts`, `policy`.
@@ -430,15 +397,10 @@ the developer clearing it.
 
 What a public entry carries (docs/DATA-AND-LEGAL.md, "Trajectory logs"):
 names and ids stay, game prose goes. `projectEntry`
-(`public-projection.ts`) is an allowlist per entry type — the `meta` entry
-sheds the run config (api base, objective, paths), `driver` and `claude_system`
-their binaries, cwd and socket paths, `pause`/`watchdog` their free-text
-`detail`; an unlisted type ships as its skeleton. `redactGameProse`
+(`public-projection.ts`) is an allowlist per entry type; an unlisted type ships
+as its skeleton. `redactGameProse`
 (`redact-prose.ts`) then replaces the prose fields enumerated from
-`sdk/src/protocol.ts` — quest `details`/`objectives`/`areaDescription`/
-`completedText` and objective `text`, questgiver and trainer `greeting`, the
-request-items and offer-reward `text`, gossip option `text`, item
-`description`, page and item `text`, mail `body`, chat `message` — wherever a
+`sdk/src/protocol.ts` wherever a
 decoded payload turns up in a tool result: an event batch, a JSON value, a
 `recent_events` line, a string holding JSON one or two levels down; a cut
 fragment is redacted from its first prose key to the end, and a
@@ -452,10 +414,9 @@ deployment whose operator has decided it may serve them. It settles nothing —
 the flag exists so the decision can be *acted on*, not so it can be skipped —
 and it is off unless deliberately set. It also only loosens public mode: on a
 private viewer it does nothing, since tiles are served there regardless. What
-changes when it is on: the route answers instead of 403, with
-`Cache-Control: private, max-age=3600` (short, so turning the flag off is felt
-the same day) and `X-Robots-Tag: noindex`; a miss stays an uncached 404 and no
-path lists a directory. The startup banner says which of the two public shapes
+changes when it is on: the route answers instead of 403, with a short private
+cache (so turning the flag off is felt the same day) and `noindex`; a miss stays
+an uncached 404 and no path lists a directory. The startup banner says which of the two public shapes
 is running. The static public snapshot is untouched by all of this: the
 renderer builds its own public handle without the flag and asks for no tile, so
 no bucket key can be one (`runner/test/snapshot.test.ts` pins it).

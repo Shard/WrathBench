@@ -45,7 +45,8 @@ tail -f data/runs/fleet-<job>-<stamp>.log              # one job's roster stdout
 reads `data/runs/fleet-state.json`, and liveness comes from a heartbeat the
 supervisor refreshes each tick, not from a pid probe that would mean nothing
 across the namespace. A supervisor that has been gone for more than three ticks
-reports `NOT RUNNING`.
+reports `NOT RUNNING`. Finished runs get no rows there: the run directories and
+`fleet-<stamp>.jsonl` are the record.
 
 ### Where the config lives
 
@@ -61,12 +62,8 @@ either way). The store's `config_audit` table is the history: actor, note,
 and the before and after documents of every change.
 
 The one config document in git is **`infra/fleet.example.json`, the
-bootstrap**: a newcomer seeds the store from it once and gets a working board —
-the `_notes`
-vocabulary block, a small, valid, representative roster (free entries, one
-paid, one claude-code entry to show the shape), shaped-but-quiet account
-classes and policy, the preflight block, and no campaign or queue job that
-would run. Nothing else reads the example. Export (the CLI and the page)
+bootstrap**: a newcomer seeds the store from it once and gets a working board,
+with no campaign or queue job that would run. Nothing else reads the example. Export (the CLI and the page)
 renders the store to a document, for reading or for diffing against an earlier
 export — never for committing.
 
@@ -75,11 +72,9 @@ export — never for committing.
   read the same store, and so does the publisher, so the public site labels
   what the fleet is actually running.
 - An **empty** store — zero rows, or no file yet — is a legitimate state, not
-  an error: the supervisor runs an empty board and prints one clear line every
-  tick it stays empty (`config store empty — seed it: bun
-  runner/src/config-store.ts seed infra/fleet.example.json, or add entries on
-  /config`); `/api/config` answers `seeded: false`; the `/config` page shows
-  the seed instruction. Nothing crashes, nothing drains a live run because of
+  an error: the supervisor runs an empty board and prints one line naming the
+  seed command every tick it stays empty; `/api/config` answers
+  `seeded: false`; the `/config` page shows the seed instruction. Nothing crashes, nothing drains a live run because of
   it, and nothing repopulates silently.
 - A store that **cannot be opened** (locked past the busy timeout, corrupt, a
   permissions slip) is a different state and is treated the way a document
@@ -94,10 +89,7 @@ export — never for committing.
   would refuse is refused with the same sentence — and recorded in
   `config_audit` with the actor, the note, and the before and after documents.
 
-Edit it from the **viewer's `/config` page**: the roster as a table
-with tier, idle, billing and routing editable inline, a JSON editor per other
-row key — policy, accounts, and each campaign and pinned job — the audit
-history with before/after, and an export button. Every write takes a note,
+Edit it from the **viewer's `/config` page**. Every write takes a note,
 which lands in `config_audit` beside the actor. The page is operator-only: no
 nav link and nothing served on the public build or behind a public viewer,
 which is the same condition `/api/config` is mounted under.
@@ -135,8 +127,12 @@ otherwise on whichever pool account is free.
   its account when the process exits; deleting a job from the queue drains it
   the same way.
 - `"enabled": true`, or a brand-new job — spawned on the next tick (a pool job
-  when an account is free). `enabled` belongs to a JOB; on a roster entry it is
-  refused (pause a character with `idle: "none"` — "Strict keys", below).
+  when an account is free). A job respawned the same day gets
+  `--resume-roster` so finished runs are skipped. `enabled` belongs to a JOB; on
+  a roster entry it is refused (pause a character with `idle: "none"` —
+  "Strict keys", below).
+- A job whose process exits while enabled is *finished*, not respawned; flip
+  it off and on again to re-arm it.
 - A malformed edit is complained about and ignored; the last good config keeps
   running. Check it first if you like:
   `docker compose -f infra/compose.yml run --rm --no-deps fleet bun infra/run-fleet.ts --dry-run`
@@ -144,17 +140,22 @@ otherwise on whichever pool account is free.
   running code does not read, or a store it could not open).
 - While the config is rejected, **every `enabled` flag in it is inert** — including
   a later, valid-looking edit disabling a job, which the supervisor never sees
-  because it never gets past the parse. `--status` leads with a banner
-  (`!! config REJECTED since …`) and marks a pinned job's flag as
-  `(FILE, NOT in effect)` until a re-read succeeds. The banner comes from the
+  because it never gets past the parse. `--status` leads with a REJECTED
+  banner and marks a pinned job's flag as not in effect until a re-read
+  succeeds. The banner comes from the
   supervisor's own state file, not from parsing the config here: the two can be
   different versions of the code, and the supervisor's verdict is the one that
   decides what runs. Trust the banner over your own reading of the store.
 
 Two enabled jobs must not share an account, a pinned account may not be in the
 pool, and the roster policy (claude models on the claude-code driver only —
-the claude-code harness; no claude id on the codex driver; shared free pools
-carry free ids only) is enforced on every roster entry at every re-read.
+the claude-code harness — and that driver runs claude models only; no claude id
+on the codex driver; shared free pools carry free ids only, unless an entry
+declares `billing: "paid"` on purpose) is enforced on every roster entry at
+every re-read. The free-id rule exists because OpenRouter's and OpenCode Zen's
+free tiers are pooled per upstream provider: a single sequential run per pool
+is both the polite and the effective shape — two runs on one pool just trip the
+same rate limits twice.
 
 #### Config reference
 
@@ -169,9 +170,9 @@ preflight   the gate (below): enabled, account, smokes [{script, account}], time
 accounts    { pool: [...], paid: [...], local: [...] } — the account classes, each in
             preference order. Never PROBE, never SMOKE*. `pinned` is derived from the jobs and
             refused if authored.
-roster      name -> entry. The keys an entry may carry, and nothing else: model, tier, idle,
-            driver, effort, apiBase, apiKeyEnv, routing, billing, subscription, race, class,
-            watchdogs, maxToolCalls. Anything else REFUSES the entry by name ("Strict keys", below).
+roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
+            (infra/run-fleet-config.ts) and nothing else; anything else REFUSES the entry by
+            name ("Strict keys", below).
             NO character name: the model names its own at createSession, and the name it chose is
             what the run row, meta.json and the runs page carry. `character` is REFUSED by name
             here (as it is in a campaign or a cell) — a name in the config is one the harness has
@@ -224,7 +225,7 @@ roster      name -> entry. The keys an entry may carry, and nothing else: model,
             a climb.
 policy      Only where runs execute and how many at once. maxConcurrent { <rate-limit key>: n }
             caps the runs in flight per key (`concurrencyKeyOf`), counting every job on that
-            key, pinned ones included (`"claude-code": 2` today: the probe plus one sonnet).
+            key, pinned ones included.
             Optional, off when absent: `paid { maxConcurrent 1 }` — at most that many paid runs in
             flight. It is a THROTTLE, not a budget: how much a paid model runs is its tier, the
             same sentence a free model's budget is written in.
@@ -236,7 +237,7 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             `routing` — the fleet-wide default for OpenRouter entries, same shape as an entry's.
             An entry that states its own keeps it WHOLE: the two are alternatives, never merged,
             because a merged routing is one nobody wrote down. Absent means the built-in default
-            (the model author's own provider, fallbacks off), which is what the file says today.
+            (the model author's own provider, fallbacks off).
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): { <name>: { enabled, models "all"|[refs], runsPerCell,
             maxAttemptsPerCell?, cells [{ id, race?, class?, objective?, ... }], account?, objective?,
             wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing`
@@ -262,8 +263,9 @@ queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, 
 
 #### Strict keys, and how to pause a character
 
-A roster entry and a queue job each carry a **declared set of keys** (listed
-above) and nothing else. A key outside the set REFUSES that entry or job by
+A roster entry and a queue job each carry a **declared set of keys**
+(`ROSTER_ENTRY_KEYS` and `QUEUE_JOB_KEYS` in `infra/run-fleet-config.ts`) and
+nothing else. A key outside the set REFUSES that entry or job by
 name: the refusal line in `--status` says which key it was and what to write
 instead, the rest of the file stays in effect, and a live run under the refused
 entry or job is left alone — it just does not respawn. Whole-file rejection is
@@ -529,14 +531,14 @@ A run that stops without a verdict is handled by its **lane**
 (docs/METHODOLOGY.md, "Episodes, lanes, and evidence").
 
 A **scored** run (`e90`, `e360`) — and a probe campaign that did not set
-`resume: true` — does not resume. `--status` shows it on its account as
-`failed attempt: quota-exhausted: not resumed … , retry 2/3` and lists it under
-`lapsed runs the supervisor ends on its next tick`. The supervisor writes the
+`resume: true` — does not resume. `--status` shows it on its account as a
+failed attempt and lists it among the lapsed runs the supervisor ends on its
+next tick. The supervisor writes the
 termination through the runner's own writer, releases the session so the
 account and character go back, and the policy schedules a fresh attempt on the
 tick after. Three counted failures on one (model, episode, series) and the
-model is **tainted** for that episode: `--status` says
-`tainted on e90 (3 failed attempts)` and the model is blocked — not "free", so
+model is **tainted** for that episode: `--status` says so and the model is
+blocked — not "free", so
 it takes no idle work either — until `run-fleet.sh --clear-model <name>`. A
 fleet stop (`manual`) and an offline gap (`stale`) do not count toward those
 three: they are the harness's doing. Do not confuse this taint with the
@@ -570,33 +572,33 @@ the run — on this pod or any other — and a cold one means it was killed. A
 quiet trajectory proves nothing, because a run waiting on a slow provider
 writes nothing. A verdict-less run with a cold heartbeat is resumed on the next
 tick; one with no heartbeat file at all (its runner predates it) is listed as
-`offline … resuming after` until it has been silent for its own idle watchdog
+offline until it has been silent for its own idle watchdog
 plus two minutes (thirty minutes when it recorded none). `run.ts --resume`
 and the roster both refuse a run with a fresh heartbeat — exit 75, nothing
 written, the session not touched — so a resume by hand cannot land on a run
 the fleet is playing, nor the reverse.
 
 For the lanes that **do** resume — freeplay, and `campaigns.<name>.resume` —
-`--status` shows `paused (reason, Xm elapsed of Ym) — <run id> Lx xp` and a
-`paused runs not resumed` block with why:
+`--status` shows the pause on its account and a `paused runs not resumed` block
+with why:
 
 - **not in config** — the model or episode is gone from the fleet config (or the
   pinned job is disabled, or on another account). Resume it by hand
   (`infra/run-episode.sh --resume <run id>` on its account) or archive it.
-- **cooling** — a provider pause on the roster's defer ladder
-  (`1m/3m/5m/10m/15m/30m/1h/3h/6h`), indexed by how many times *that run* has
-  paused. The two-stage retry answers the mid-episode pause question: the roster retries a
-  mid-episode provider pause in place (2m/5m/10m) while its process lives;
+- **cooling** — a provider pause on the roster's defer ladder, indexed by how
+  many times *that run* has paused. The two-stage retry answers the mid-episode
+  pause question: the roster retries a mid-episode provider pause in place while
+  its process lives;
   once it gives up and exits, the supervisor takes over on the longer ladder,
   resuming in place on the same run id. Past the ladder the run is listed,
   not hammered.
 - **waiting** — its account is busy with another job or held by a
   hand-started run. A resume never moves to another account.
 
-While a run is paused its model is held: the projection reports `no: paused
-run … — resumed by the supervisor, never rescheduled` for a lane that resumes,
-and `… — ended as a failed attempt on the next tick, then reattempted fresh`
-for one that does not. Either way no second attempt starts for that model, and
+While a run is paused its model is held: on a lane that resumes the supervisor
+resumes the run and never reschedules the model, and on one that does not the
+run is ended as a failed attempt on the next tick, then reattempted fresh.
+Either way no second attempt starts for that model, and
 a paused run counts toward nothing until it finally ends.
 
 ### Freeplay characters are durable
@@ -637,10 +639,9 @@ What the supervisor does with it, per tick:
   `freeplay`, the predecessor is a freeplay run on the same account and named
   a character; then hygiene keeps that character and clears the rest, the
   predecessor's `scratchpad.md` is copied in, race and class are the
-  character's, and the model gets a "this continues run X on Bromdir, last
-  seen at level 8" note instead of the naming note. The lineage is on the run
-  record: `config.continuedFrom` in meta.json, `continued_from` on the `run`
-  row, a `continue` trajectory record. If the character turns out to be gone,
+  character's, and the model is told which run and character it continues
+  instead of getting the naming note. The lineage is on the run record. If the
+  character turns out to be gone,
   the run drops the lineage everywhere (`continue-dropped`), deletes the
   copied notes and starts fresh — a lineage the character does not back is
   the wrong record.
@@ -650,20 +651,17 @@ What the supervisor does with it, per tick:
   - the ref itself (its own live run, or its resume reserving the account):
     nothing to plan, the run is in flight;
   - another ref's **bounded** run — a scored episode, a probe, a hand-written
-    job — ends at its episode boundary, so the pick is **held**
-    (`policy <ref>: waiting — RUNNER2 is held by glm-e90 until its episode
-    boundary — holding for Bromdir (…-a11)`), never started fresh elsewhere;
+    job — ends at its episode boundary, so the pick is **held**, never
+    started fresh elsewhere;
   - another ref's **unlimited session** has no boundary to wait for, and
     waiting is the deadlock the first day of durable characters produced (two
     heads on one account: the occupant's `--keep-characters` protects the
     waiter's character, `POST /character-delete` refuses `account_in_use`,
     and the waiter holds forever). The pick starts **fresh on the free
-    account it was offered**, lineage dropped: no `--continue-from`, a
-    `continue-dropped` harness record on the new run naming the head and
-    `account_occupied_by <ref>`, a `character-dropped` event in the supervisor
-    log, and `--status` says `fresh-next`. With no free account the ref
-    simply gets no pick, and the supervisor says once why the next one will
-    be fresh.
+    account it was offered**, lineage dropped: no `--continue-from`, and the
+    drop is recorded on the new run, in the supervisor log and in `--status`.
+    With no free account the ref simply gets no pick, and the supervisor says
+    once why the next one will be fresh.
   The orphaned character stays where it is. `keepFor` derives from
   `charactersFrom`, and a head is the ref's latest **ended** freeplay run with
   a character: while the fresh session is live the old head is still the
@@ -700,22 +698,17 @@ What the supervisor does with it, per tick:
   termination — it may be minutes from being resumed, and a character is the
   one thing a resume cannot recreate. A character above level 1 that no
   *ended* run accounts for is kept too, unless the launch passes
-  `--allow-character-delete` (the fleet never does). Both are logged as
-  `hygiene: KEPT <name> (guid, level) — <why>` and recorded in the trajectory
-  as `hygiene-kept`; the model is told the name is taken. A level-1 leftover,
+  `--allow-character-delete` (the fleet never does). Both are logged and
+  recorded in the trajectory; the model is told the name is taken. A level-1 leftover,
   or a scored episode's leftover whose run ended, is cleared as always.
   Archiving a run does **not** release its character: the guard reads
   `archive/` too, so an archived run with no termination still owns its
   character (the supervisor, for its part, never resumes or continues an
   archived run). The release is a termination on the run's row.
 
-The policy line says what happened: `policy sub-opus-low: sub-opus-low freeplay
-attempt 12 (extra) (continues fleet-…-a11) on RUNNER2`, and `--status` prints
-one `character <ref>:` row per `idle: "unlimited"` ref — its head (run id,
-account, character) and the verdict: `in flight`, `continuable`, `held: <ref>
-on it until its episode boundary`, or `occupied by <ref>'s character:
-fresh-next`. Roster changes that compete for one account go in **one write,
-owner first**: the hot reload is 60 s, and two edits in sequence let a second
+The policy line says what happened, and `--status` prints one row per
+`idle: "unlimited"` ref with its head and the verdict above. Roster changes that
+compete for one account go in **one write, owner first**: the hot reload is 60 s, and two edits in sequence let a second
 character elect the account between them. A hand-written
 `freeplay` job on the same ref is the operator's own experiment and never
 continues anything. To start a character over deliberately, delete its character
@@ -725,11 +718,6 @@ re-enabling: the continuation finds nothing and starts fresh.
 Scored episodes are untouched: `--continue-from` is refused on `e90`/`e360`,
 their hygiene still clears everything but another ref's freeplay character,
 and a lapsed scored run is still a failed attempt.
-
-**Deploy:** the runner half lands on the next episode spawn; the supervisor
-half (`planContinuations`, the pause-on-drain, `--keep-characters`) needs the
-`fleet` container recreated — `./infra/fleet-update.sh graceful` once the live
-runs are at a boundary, as "Updating the live fleet" describes.
 
 ### Node disk pressure
 
@@ -779,14 +767,8 @@ the compose path, which is the local rehearsal stack and the rollback.
 ./infra/k8s-deploy.sh                          # the deploy window alone
 ```
 
-`k8s-release.sh` runs five idempotent phases — **build**, **drain**, **pin**,
-**deploy**, **resume**. `--pin-hook <command>` is how the image tag reaches
-whatever GitOps repo pins it (it is called with the tag and the SHA, and the
-script then waits until the cluster actually carries that tag); with no hook
-the phase prints the tag and polls. `--from <phase>` resumes a release that
-died. The **deploy** phase is `k8s-deploy.sh`, which is the window on its own:
-drain, wait for the rollout, run the gate smokes through the runner pod,
-resume. `infra/README.md`, "Releasing on Kubernetes", has the phase table.
+`infra/README.md`, "Releasing on Kubernetes", has the phases, the pin hook,
+and what `k8s-deploy.sh` — the deploy window on its own — refuses.
 
 #### On compose
 
@@ -801,11 +783,9 @@ window and needs nothing from you while it runs:
 ```
 
 The build script stamps the image with this checkout's
-`git describe --tags --always --dirty` (docker build-arg `WRATHBENCH_BUILD`),
-which the module serves as `/health.build` alongside `startedAtMs` and the
-image carries as the `wrathbench.build` label; the fleet gate, `run-fleet
---status`, the viewer's `/api/info` and the deploy script name the server by
-it. Commit before building so the stamp names a commit rather than `-dirty`.
+`git describe --tags --always --dirty`, and everything that names the server
+names it by that stamp. Commit before building so the stamp names a commit
+rather than `-dirty`.
 
 You do not drain anything first, you do not wait for anything, and you do not
 kill anything. If a deploy ever needs a wait loop or a `pkill` from the
@@ -818,56 +798,40 @@ is already quiet. Nothing about the script changes either way.
 
 #### What each phase means
 
-The script writes `data/runs/server-state.json` at every transition
-(`{ phase, since, build, prevBuild?, detail, pid, updatedAt }`), the viewer
-serves it as `server` on `/api/fleet`, and the Fleet page prints one banner
-line at the top: the phase in plain words, then the script's own `detail`
-sentence verbatim. The page never guesses at what the window is doing.
+The script writes `data/runs/server-state.json` at every transition, and the
+Fleet page's banner is the phase plus the script's own `detail` sentence
+verbatim. The page never guesses at what the window is doing.
 
 - **draining** — `docker compose stop fleet`. SIGTERM reaches the supervisor,
   every live run pauses (see "Stop it"), the supervisor writes its final state and
   exits. The script then waits for that state file to say no job is alive —
   the supervisor's own word, never a process listing — for at most 60s after
   `stop` returns, and fails loudly if it never does (a SIGKILL inside the
-  grace period is the only way that happens). Page: *"Deploy window since
-  18:52 — stopping the fleet for harness-0.4-52, runs are pausing: replacing
-  harness-0.4-3; 7 job(s) live — each run pauses and resumes after the
-  deploy"*. While the window is open the supervisor line reads *"fleet stopped
-  for the deploy window"* instead of *NOT RUNNING*, and a job row whose
-  process is gone reads *paused for deploy* instead of *exited*.
+  grace period is the only way that happens). While the window is open the
+  supervisor and its jobs read as stopped for the deploy, not as dead.
 - **swapping** — `:latest` is tagged `:prev` (the rollback target), `:next`
   becomes `:latest`, the worldserver is recreated (`--no-deps`: the one time
   recreation is the point) and the script waits up to 300s for `/health` to
-  answer ready. Page: *"— swapping the worldserver to harness-0.4-52: worldserver
-  recreated, waiting for /health ready (up to 300s); fleet stopped, 7 job(s)
-  paused and will resume"*.
+  answer ready.
 - **verifying** — the gate smokes (`preflight.smokes`) and then the
   deploy-only full arc (`preflight.deploySmokes`, `module-quest.ts`) run
   directly through `docker compose exec runner`, each against its budget. The
   fleet is down, so nothing else is on the smoke accounts. The detail names the
-  smoke in flight: *"— swapped to harness-0.4-52, verifying: full-arc smoke
-  infra/smoke/module-quest.ts (1 of 1) running since 18:58, 600s left of its
-  budget; fleet stopped, 7 job(s) paused and will resume"*.
+  smoke in flight.
 - **resuming** — every smoke passed; `docker compose up -d fleet`. The
   supervisor boots, re-gates on the new server identity and resumes every
   paused run on its own account before the queue or the policy gets one.
-- **running** — the window is over. The banner drops to a dim line: *"server
-  running: deployed harness-0.4-52 at 19:03, verified by 2 direct smoke(s) + 1
-  full-arc smoke(s); fleet resumed"*. The script's last line is `DEPLOYED and
+- **running** — the window is over. The script's last line is `DEPLOYED and
   verified by …`, exit 0.
 - **rolled-back** — a smoke failed on the new build. `:prev` is retagged
   `:latest`, the worldserver recreated, health waited for, and the **old** build
   is re-verified with the gate smokes; then the fleet is started on it. Exit 1.
-  Page, red: *"Deploy of harness-0.4-52 FAILED at 18:52 and was rolled back to
-  harness-0.4-3: gate smoke failed on harness-0.4-52; harness-0.4-3 verified by
-  2 direct smoke(s); fleet resumed on the old build"*.
 - **failed** — the deploy failed *and* nothing is verified: the drain never
   completed (nothing was swapped; the old server is still live), there was no
   `:prev` to roll back to, the rolled-back build would not verify either, or
   the fleet would not start. The fleet is started regardless — its own
   preflight gate blocks spawning until a build passes — and the detail says
-  which case it was. Exit 1. Page, red: *"Deploy of harness-0.4-52 FAILED at
-  18:52: …"*.
+  which case it was. Exit 1.
 
 Whatever happens after the fleet is stopped, the script's EXIT trap brings it
 back up: a deploy never leaves the fleet stopped, on any path, including an
@@ -921,11 +885,8 @@ own gate is then the only check. An enabled preflight with no `smokes`
 configured is not that: it rolls back and exits 1, because nobody asked for an
 unverified deploy.
 
-`--dry-run` prints the plan and every resolved value — which config and state
-files it will read, the next and rollback builds, the smoke list and budgets,
-whether the fleet container is running and how many jobs its state lists
-alive, whether the deploy lock is free, and which verification path it would
-take — and executes nothing. It is read-only and safe while the fleet is up.
+`--dry-run` prints the plan and every resolved value and executes nothing. It
+is read-only and safe while the fleet is up.
 
 Verification is **fail-closed**: the closing line names what verified the
 deploy (`DEPLOYED and verified by N direct smoke(s) + M full-arc smoke(s)`),
@@ -940,40 +901,15 @@ invariant on every exit path, and the exit codes.
 ### The preflight gate
 
 The supervisor smokes the server before it launches anything. The knob is the
-top-level `preflight` block of the config, hot-reloaded like the jobs:
-
-```json
-"preflight": {
-  "enabled": true,
-  "account": "SMOKE",
-  "smokes": [
-    { "script": "infra/smoke/quest-accept-status.ts", "account": "SMOKE" },
-    { "script": "infra/smoke/kill-credit.ts", "account": "SMOKE2" },
-    { "script": "infra/smoke/module-navigation.ts", "account": "SMOKE3" }
-  ],
-  "timeoutMs": 130000,
-  "deploySmokes": [{ "script": "infra/smoke/module-quest.ts", "account": "SMOKE" }],
-  "deployTimeoutMs": 600000
-}
-```
-
-There are two kinds of smoke:
+top-level `preflight` block of the config, hot-reloaded like the jobs;
+`infra/fleet.example.json` shows its shape. There are two kinds of smoke:
 
 - **`smokes` is the per-tick gate.** It runs before the first job is spawned
   and again whenever the server identity changes — which is to say on every
   worldserver recreate *and* on every restart the container does by itself.
   Entries with **distinct accounts run in parallel**; entries sharing an account
-  run in order. A bare string entry means "on `account`". The three shipped
-  smokes split the gate's claims without losing one:
-  `quest-accept-status.ts` (login, questgiver status, quest query, accept,
-  the served quest-log complete state, turn-in reward chain, XP, vendor list,
-  ~20s), `kill-credit.ts` (one kobold: attack stream, kill credit, loot
-  round trip, ~42s), and `module-navigation.ts` (the navigation status
-  vocabulary: a mesh-resolved arrival carries `meshZ`, a target far outside
-  the poly search is `target_off_mesh`, a request beyond the single-move cap
-  is `too_far`, a plain walk arrives with no `meshZ`, and every status on the
-  stream is in the documented vocabulary; ~15s, its own account so it runs
-  in parallel with the other two). All three delete the previous run's
+  run in order. A bare string entry means "on `account`". Each smoke's header
+  says what it proves. The gate smokes delete the previous run's
   character first (the CMSG_CHAR_DELETE proof) and only log out at the end,
   because a disconnected character stays in world for the core's 60s
   `WorldSession::expireTime` during which a delete is silently ignored —
@@ -1013,42 +949,6 @@ extra smoke run.
 The gate accounts must be their own: sharing one with an enabled job is refused
 as a config error (every per-entry account is checked), and none is ever
 `PROBE`, the ad-hoc debugging account.
-
-### What `--status` shows
-
-```
-./infra/run-fleet.sh --status
-```
-
-In order: the REJECTED banner when the file is not in effect; the PAUSED banner
-when `data/runs/fleet-pause.json` is set (with what the supervisor has actually
-picked up — see "Updating the live fleet"); the `!` refusal
-block when the file IS in effect but a config rule disabled something in it
-(an enabled job or campaign on a listed account, or a second one on
-an account already taken; and an entry or job carrying an
-unknown key — refused by name rather than taking the whole file down with it); the supervisor
-line (pid, where it runs, ALIVE/NOT RUNNING by heartbeat, epoch stamp); the
-gate (last result, per smoke); the **accounts** table — every account, pinned
-first then the pool in preference order, with the job on it (`name: model
-episode — run id — Lx xp, elapsed`, plus `cooling until …` when its roster is
-between episodes on the defer ladder) or `free` (with `held by run … — not
-fleet-managed` when something outside the fleet has the account, `paused (…)`
-when a paused run sits on it, or the pinned job's enabled/disabled state); the
-**models** table from the projection
-(`runner/src/models.ts`) — the series it counts against in the header, then
-per model its billing, status, counted/target per episode with best level
-(`+2sb` is two zero-response launches, archived and kept for the ladder), extras made, and `yes: …`/`no: …` for
-schedulability (runs from another series are noted, not counted);
-the concurrency cap when one is set; the `paused runs not resumed` block when
-there are any; one line `finished this session: N (ok M,
-retried K)` (processes that exited since the supervisor started; `ok` is exit
-0, `retried` counts respawns of a name already spawned this epoch); and a
-**queue** block only when the file has manual pool jobs. Finished runs get no
-rows: the run directories and `fleet-<stamp>.jsonl` are the record.
-`--dry-run` prints the same anatomy for a supervisor about to start — what
-would spawn on each account now, with the exact argv, and `HELD` lines for
-picks the paid cap, a driver cap, or an account class with no account held
-back (`no paid account configured`, `no local account configured`).
 
 ### Changing the config shape
 
@@ -1269,7 +1169,8 @@ second time to read that bucket instead of `/api`. No public request ever
 reaches the lab, so a traffic spike is Cloudflare's problem rather than the
 worldserver's, and the control surface stays exactly as unexposed as it is
 today. `docs/PUBLIC-DASHBOARD.md` is the design and the rejected alternatives;
-this section is how to stand it up.
+`infra/cloudflare/README.md` is how to stand it up and verify it, step by step
+and in order; this section is operating it once it exists.
 
 The site is openly public, and what it may carry — entry summaries and
 verbatim game text (GitHub issue #10) — is `docs/PUBLIC-DASHBOARD.md`'s. What
@@ -1285,144 +1186,12 @@ body it serves and withholds raw lines, tiles and the SSE tail, but it exists so
 the snapshot renderer can call the handle in-process; it is not an exposure
 plan.
 
-### The shape
+The publisher's R2 key pair (`S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) lives
+in the `wrathbench-env` cluster secret, and in `.env` for a hand-run pass or the
+tile upload; the deploy token (`WRATHBENCH_CF_DEPLOY_TOKEN`) lives in `.env`
+alone. Neither can do the other's job.
 
-The shape, as `docs/PUBLIC-DASHBOARD.md` designs it:
-
-| | |
-| --- | --- |
-| app | `https://wrathbench.shard.page` — Workers Static Assets, no fetch handler, no Worker invocation in the read path |
-| data | `https://wrathbench-data.shard.page` — the `wrathbench-public` R2 bucket behind its own custom domain |
-| who can read it | anyone |
-| TTLs set by | zone cache rules on `shard.page` |
-| CORS | `infra/cloudflare/r2-cors.json` — two origins, so the policy is load-bearing |
-| edge cache | yes, and load-bearing: it is what makes a spike cost ~$0 |
-
-**Standing it up** — creating the bucket, the custom
-domain, the CORS apply, the cache rules, the publish state, the tiles
-and the first deploy — is `infra/cloudflare/README.md`, step by step and in
-order. What follows here is the steady state: how the pieces are configured and
-how to operate them once they exist.
-
-Do the steps in order — each one names the hostname or credential the next
-depends on.
-### 1. The bucket
-
-An R2 bucket, `wrathbench-public`. Only projected JSON is ever uploaded, a
-fraction of what a trajectory weighs, so the free tier (10 GB stored, 10M reads,
-1M writes a month) covers the whole corpus many times over.
-
-**Leave the Public Development URL disabled** — the bucket's settings call it
-that; it is the `pub-<id>.r2.dev` hostname. The custom domain in step 2 is the
-reader's only path, and the development URL would be a second one: uncached,
-rate-limited, and outside every cache rule below, so a spike arriving there
-bills every request. Check it is off whenever you touch bucket settings, not
-just once.
-
-### 2. The data custom domain
-
-The CDN cache only fronts a bucket through a custom domain — the `r2.dev` URL is
-uncached by design. `wrathbench-data.shard.page` is attached under the bucket's
-**Settings → Custom Domains**, and Cloudflare owns the DNS record for it.
-Everything downstream names this hostname: the cache rules, the CORS policy, and
-the SPA's build-time snapshot base.
-
-One label deep, deliberately: Universal SSL covers `*.shard.page` and not
-`*.*.shard.page`, so `data.wrathbench.shard.page` would have wanted an Advanced
-Certificate.
-
-### 3. The cache rules
-
-Cloudflare does **not** cache JSON by default, and the rules also have to carry
-the TTLs themselves: Bun's S3 writer cannot send a `Cache-Control` header (the
-publisher notes this at the top of `infra/publish-dashboard.ts`), so objects
-land in the bucket without one and "respect origin" would respect nothing.
-Three rules on the `shard.page` zone, first match wins:
-
-1. `Hostname equals wrathbench-data.shard.page and URI Path is in
-   {"/v1/manifest.json", "/v1/live.json"}` — eligible for cache, edge TTL
-   **30s**, browser TTL **30s**. These are the two mutable files; worst-case
-   staleness is the push cadence plus this TTL, about 90–120s.
-2. `Hostname equals wrathbench-data.shard.page and URI Path starts with
-   "/v1/snap/" or "/v1/run/"` — eligible for cache, edge TTL **1 year**, browser
-   TTL **1 year**. These are content-addressed and never rewritten under their
-   own key, so a long TTL is safe by construction.
-3. `Hostname equals wrathbench-data.shard.page and URI Path starts with
-   "/tiles/"` — eligible for cache, edge TTL **1 day**, browser TTL **1 day**.
-   The minimap tiles. A day rather than a year because a re-extraction reuses
-   the same keys, so the TTL is how long a re-upload stays invisible; purge the
-   prefix to close that sooner.
-
-All three rules set the TTL **explicitly by path** rather than respecting an origin
-header. That is forced: no published object carries a `Cache-Control` at all
-(a readback confirmed it), because Bun's S3 writer cannot send one.
-"Respect origin TTL" would respect nothing.
-
-**A missing cache rule is the only way this costs money.** Without it every
-public request is a billed read against the bucket — roughly $7/month at 30M
-requests, versus roughly $0 with the rule. It is the first thing step 9 checks.
-
-### 4. The CORS policy
-
-The app and the data are different origins, so every fetch the SPA makes is
-cross-origin and fails in the browser without this — with nothing in the
-bucket's logs to show for it.
-
-```
-bunx wrangler r2 bucket cors set wrathbench-public --file infra/cloudflare/r2-cors.json
-```
-
-`infra/cloudflare/r2-cors.json` names `https://wrathbench.shard.page` and
-`http://localhost:5180` (the Vite dev server, so snapshot mode can be developed
-against the real bucket). It is bucket-wide, so `tiles/` is covered along with
-`v1/`, which the map needs. Origins match as exact strings, scheme included.
-
-### 5. The two credentials
-
-Least privilege, one job each, and neither can do the other's:
-
-- **R2 Object Read & Write, scoped to `wrathbench-public` alone** — the
-  publisher's, and the only Cloudflare credential that lives on the lab. It
-  hands back an access key id and secret; they are `S3_ACCESS_KEY_ID` and
-  `S3_SECRET_ACCESS_KEY` in the `wrathbench-env` cluster secret (and in `.env`
-  for a hand-run pass or the tile upload). The account holds unrelated buckets,
-  so the scoping is doing real work. It cannot deploy anything.
-- **`WRATHBENCH_CF_DEPLOY_TOKEN`** in `.env` at the repository root — an API
-  token with **Account → Workers Scripts: Edit** and **Zone → Workers Routes:
-  Edit** on `shard.page`, since the app's route is a Custom Domain the deploy
-  creates and owns. Add **Account → Workers R2 Storage: Edit** to run step 4
-  through wrangler rather than the dashboard. It never reads or writes a
-  published object. `infra/deploy-dashboard.sh` passes it to wrangler as
-  `CLOUDFLARE_API_TOKEN` for the one command, so wrangler's own name never has
-  to be exported into a shell. Unset, the script uses wrangler's own browser
-  login instead and prints which account that is before it deploys.
-
-A third, zone **Cache Purge**, is only wanted if the manifest TTL is ever
-tightened by purging the two mutable URLs after each push. That is not the
-current design — do not mint it now.
-
-All of this runs on the **free plan**: with no Worker in the read path there is
-no 100k requests/day invocation cliff to sit under at all. Workers Paid
-($5/month) is the insurance if a Worker ever enters the path. The $20/month zone "Pro" plan is the wrong SKU entirely:
-it is a zone plan and includes none of Workers, KV, D1 or R2.
-
-### 6. `robots.txt`, the social card, and what is *not* published
-
-Nothing to configure for the first two: with no fetch handler, `robots.txt` is
-whatever is in `dashboard/public/`, and what is there is permissive, so the card
-unfurls.
-
-**Minimap tiles are shown**: they sit under `tiles/` in
-the same bucket, reached through the data hostname, and rule 3 caches them. The
-build asks for them because `WRATHBENCH_TILES_BASE` is set in `.env` — which is
-a separate name from the snapshot base because the upload is a separate step
-(7a), so a deploy from a checkout without `data/minimap` leaves it unset and
-ships the labelled grid rather than a site pointing at nothing. The private
-viewer is unaffected and serves them off `data/minimap` same-origin. The data
-hostname carries no `X-Robots-Tag: noindex`; see `infra/cloudflare/README.md`,
-"Open, and the operator's".
-
-### 7. First publish, by hand
+### First publish, by hand
 
 `mkdir -p data/publish` first — it is the publisher's only writable path and
 Docker would otherwise create it as root. Then one pass:
@@ -1441,7 +1210,7 @@ Its environment is the compose service's, and the two must stay in agreement:
 | `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed |
 | `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` in the script; the chart and compose set `300000` | `--loop` cadence. Five minutes is a cost choice, not a freshness one — a pass writes ~24 objects regardless of cadence, so 60s measured ~1.2M R2 class-A ops/month against a 1M free tier and 300s is ~240k. The harness's own floor is 30–60s, so a faster push would buy little anyway |
 | `WRATHBENCH_PUBLISH_BATCH` | `8` | runs projected before the pass uploads them, drops the bodies and releases those runs' entry indexes from the viewer handle. The pass's memory dial: measured peak RSS over the 1,016-run tree is 1.08 GB at 25, 0.78 GB at 8 and 0.59 GB at 1, all inside 60–67s, against 4.4 GB without the batching. Eight matches the per-run read pool's width — smaller leaves readers idle, larger only holds more at once |
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | from step 5 | `.env`, never argv |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | the publisher's R2 key pair | `.env`, never argv |
 | `S3_BUCKET` | `wrathbench-public` | |
 | `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` | the account's R2 S3 endpoint — the S3 API, not a public hostname |
 
@@ -1453,25 +1222,9 @@ Then read the bucket back before trusting the loop with it —
 `bun infra/publish-accept.ts` walks the whole generation, and
 `--base https://wrathbench-data.shard.page` walks it again through the public
 hostname, which is the form that also exercises the custom domain and the cache
-rules. By hand, with `bunx wrangler r2 object get` or the dashboard's object
-browser:
+rules.
 
-- `v1/manifest.json` exists, and every key its `artifacts` map names is in the
-  bucket. The manifest is uploaded last precisely so this is never half true.
-  (Each aggregate sits under its own content version, so the
-  keys do not share a prefix; a manifest with no `artifacts` map is pre-#38 and
-  its `gen` prefixes the whole set.)
-- `v1/live.json` exists, and per-run objects are under `v1/run/<id>/<ver>/`.
-  (Objects carry no `Cache-Control` metadata — Bun's S3 writer cannot send
-  it — which is why the TTLs are the zone's cache rules instead. A `--base`
-  read sees the rule's header; an S3 read sees none, and that is correct.)
-- Nothing in the bucket is a raw trajectory entry, a scratchpad, or a
-  filesystem path. The projection is an allowlist, so this should be true by
-  construction — check it once anyway, because it is the legal boundary. A
-  snapshot pass writes no tile either; those arrive only from the separate
-  step below.
-
-### 7a. Minimap tiles (a separate step, never automatic)
+### Minimap tiles (a separate step, never automatic)
 
 The snapshot loop uploads JSON only. Tiles go up by hand, from a checkout with
 `data/minimap` populated by the extraction in `minimap/`, and only when the
@@ -1483,17 +1236,15 @@ bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
 bun infra/publish-tiles.ts --upload
 ```
 
-It reads only `data/minimap/<mapId>/<row>_<col>.png` and writes only
-`tiles/<mapId>/<row>_<col>.png` in the same bucket, with the same `S3_*`
-credentials as the snapshot publisher (`WRATHBENCH_MINIMAP_DIR` overrides the
-root). Both lines print uploaded / skipped / bytes. `bun ship --tiles` runs the
+It uses the same `S3_*` credentials as the snapshot publisher
+(`WRATHBENCH_MINIMAP_DIR` overrides the root). `bun ship --tiles` runs the
 same upload as part of a deploy, which is the usual way to do it after a
 re-extraction. Two things go with it: `WRATHBENCH_TILES_BASE` in `.env`, without
 which the built site asks for nothing, and — after a re-extraction, since the
-keys are reused — a purge of the `/tiles/` prefix, or rule 3's day has to pass
-before readers see the new ones.
+keys are reused — a purge of the `/tiles/` prefix, or the tiles cache rule's
+day (`infra/cloudflare/README.md`) has to pass before readers see the new ones.
 
-### 8. Start the loop, then deploy the SPA
+### Start the loop, then deploy the SPA
 
 ```
 docker compose -f infra/compose.yml up -d --no-deps publisher
@@ -1514,9 +1265,7 @@ moves through it:
 bun ship
 ```
 
-`infra/deploy-dashboard.sh` runs the dashboard tests, renders the social card,
-builds in snapshot mode, deploys, and rebuilds the private bundle for the
-viewer. The three names it needs come from `.env`:
+`infra/deploy-dashboard.sh` needs three names from `.env`:
 `WRATHBENCH_SNAPSHOT_BASE` (`https://wrathbench-data.shard.page`),
 `WRATHBENCH_PUBLIC_ORIGIN` (`https://wrathbench.shard.page`, which the card's
 absolute `og:image` is built against) and `WRATHBENCH_CF_DEPLOY_TOKEN` (or a
@@ -1535,43 +1284,12 @@ the point of its being a separate flag (`dashboard/src/lib/tiles.ts`).
 resolves to the version the lockfile names rather than whatever npm serves that
 day — the same reason every other version here is pinned.
 
-### 9. Verify
+### Verify
 
-**The cache rule first**, because it is the one misconfiguration that bills:
+`infra/cloudflare/README.md`'s verify step is the check, the cache rule first
+because it is the one misconfiguration that bills. Two readings belong to the
+steady state:
 
-```
-curl -sI https://wrathbench-data.shard.page/v1/manifest.json | grep -i 'cache-control\|cf-cache-status'
-curl -sI https://wrathbench-data.shard.page/v1/manifest.json | grep -i 'cf-cache-status'
-curl -sI https://pub-<bucket-id>.r2.dev/v1/manifest.json     | head -1
-```
-
-- The repeat says `cf-cache-status: HIT`, and the headers carry the rule's TTLs
-  (30s on the manifest, a year on a `v1/snap/<ver>/` object). A `MISS`,
-  `DYNAMIC` or `BYPASS` on the repeat means the cache rules from step 3 are not
-  in effect; fix that before anything else.
-- The `r2.dev` hostname does **not** resolve or answers `404`/error. If it
-  serves the manifest, the Public Development URL is enabled — disable it (step
-  1): it is a second address for the same objects, outside every rule above.
-
-**The generation, through the host:**
-
-```
-bun infra/publish-accept.ts --base https://wrathbench-data.shard.page
-```
-
-No credential, which is the point — it is the check a stranger could run. It
-walks every key the manifest names and every key a `runs.json` row points at,
-re-projects each body through `runner/viewer/public-projection.ts`, and scans
-for anything across the content boundary. Exit 0 with nothing missing is the
-pass.
-
-**In a browser**, at `https://wrathbench.shard.page`:
-
-- The app loads and the runs, ladder, episodes, models, campaigns, run detail,
-  fleet and map pages render, and a deep link (`/map?run=<id>`) survives a
-  refresh — that is `not_found_handling` doing its job. A CORS error in the
-  console means the app origin in step 4 does not match the hostname the
-  browser used, scheme included.
 - The staleness banner reads a plausible age: a minute or two, never hours and
   never negative. Three clocks are in play (fleet heartbeat 30–60s, push every
   five minutes, and a TTL ≤60s) and the banner reads only the last push, so
@@ -1579,9 +1297,3 @@ pass.
 - A run detail page shows its published entries window and nothing more: no
   "load earlier", no live tail, no raw line. If a raw line ever renders, stop
   the publisher — the content boundary has a hole.
-- The map draws its minimap tiles, loaded from the data hostname and `HIT`ting
-  the cache on a repeat. Bare grid squares mean a build made without
-  `WRATHBENCH_TILES_BASE`, or an upload that never ran (step 7a).
-- Pasting the URL into Discord unfurls with the title, the sentence and the
-  Pareto card. Slack and Twitter honour `robots.txt`, so they are worth a
-  second check.

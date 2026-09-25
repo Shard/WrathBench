@@ -59,9 +59,9 @@ the non-archived one wins, the copy the viewer serves. The collision is logged
 once; the files are left where they are.
 
 A trajectory is never loaded whole — the largest in the corpus is 669 MB. The
-tailer slides a 4 MB window and holds at most one line across chunks; a live
+tailer slides a window and holds at most one line across chunks; a live
 run's half-written last line is left unread, so a committed offset is always
-past a newline. Batches flush at 2,000 rows **or** 8 MB by default, whichever trips first,
+past a newline. Batches flush on rows **or** bytes, whichever trips first,
 because one line of this corpus can be megabytes on its own.
 
 ClickHouse being down is a wait, never a loss: `insert` retries with capped
@@ -132,12 +132,11 @@ take the server down with `Code: 241 (total) memory limit exceeded`.
 `infra/clickhouse/` is the fix, and it is the same files under both
 deployments — compose bind-mounts them, the Helm chart carries a verbatim inline
 copy in its ConfigMap, and `infra/clickhouse.test.ts` fails if the two drift.
-`config.d/memory.xml` hard-bounds the caches (mark 256 MiB, primary-index and
-index-mark 128 MiB, uncompressed off), cuts the background pools to 4 with the
-`merge_tree` free-slot thresholds scaled to match, gives merges a 512 MiB soft
-limit, and caps `max_concurrent_queries` at 128 (the publisher's eight-wide snapshot walk
-alone holds ~50 queries in flight; 32 refused every pass). `users.d/wrathbench-profile.xml`
-puts `max_threads` 4, `max_memory_usage` 512 MiB and `max_execution_time` 300s
+`config.d/memory.xml` hard-bounds the caches, the background pools, merge memory
+and concurrent queries (not 32 of them: the publisher's eight-wide snapshot walk
+alone holds ~50 queries in flight, and 32 refused every pass), and
+`users.d/wrathbench-profile.xml` bounds each query's threads, memory and run
+time; each value's reason sits beside it in the file. The per-query bounds are
 on the **`default` profile** — not on a named user, because the app user is
 created from `CLICKHOUSE_USER` by the image's entrypoint at first boot and
 inherits that profile.
@@ -151,12 +150,9 @@ rows / 18 GiB, `processors_profile_log` 3.3 GiB, `query_log` 2.3 GiB, against
 merges kept dying: `system.metric_log` is 1,435 columns wide and flushes a part
 every 7.5 seconds, which gave it 8,595 parts, and merging them climbed past
 3 GiB and hit the 3.6 GiB total limit every few seconds — each retry spiking the
-tracker and killing whatever query was in flight. So: the console logger drops
-to `warning`, `text_log` stays at `warning` with a 7-day TTL, `query_log` and
-`part_log` keep 7-day TTLs (they are what diagnosed this), and `trace_log`,
-`processors_profile_log`, `metric_log` and `asynchronous_metric_log` are off.
-The three that stay get daily partitions so a TTL expires whole parts instead of
-rewriting monthly ones.
+tracker and killing whatever query was in flight. So the file turns the logging
+down, keeps the log tables worth having behind a TTL, and turns the rest off;
+each table's reason sits beside it in the file.
 
 **Both halves of that file only take on a table that does not exist yet.** A TTL
 in config is applied at table creation, and `remove` does not delete a table
@@ -170,11 +166,11 @@ and leaves the removed ones gone. `TRUNCATE TABLE` is the emergency relief when
 a merge is actively killing queries — it frees the space and stops the merge
 immediately — but it does not change the table, so the drop is still owed.
 
-The numbers do not sum to the limit and are not meant to: 32 queries at 512 MiB
-each is far more than the container has. What each one buys is a bound where
+The numbers do not sum to the limit and are not meant to: the query cap times
+the per-query limit is far more than the container has. What each one buys is a bound where
 there was none, so no single cache, merge or query can reach the ceiling on its
 own, and `max_server_memory_usage` stays the backstop rather than the first
-thing hit. Both deployments now give the server 4 GiB. **On a bigger box, raise
+thing hit. **On a bigger box, raise
 the container limit first** — that alone moves the backstop — then the mark and
 primary-index caches, then `background_pool_size`, then the profile's
 `max_threads`. Raising the caches without raising the limit is how this started.
