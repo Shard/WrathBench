@@ -6,7 +6,8 @@
  *
  *   [ system prompt ]
  *   [ the message window: recent assistant / tool messages, each capped at
- *     WINDOW_MESSAGE_CHARS, cut at assistant boundaries so tool-call pairs
+ *     WINDOW_MESSAGE_CHARS (a `read_file` result excepted: it is a workspace
+ *     file, bounded by its own limit), cut at assistant boundaries so tool-call pairs
  *     stay intact ]
  *   [ one fresh user message assembled by `assembleContext`:
  *       goal line, harness notices, state summary, last EVENT_WINDOW events,
@@ -56,8 +57,20 @@ export const CONTEXT_POLICY = {
    * the window for a dozen turns, crowding out the summary it was supposed to
    * inform. The full text is always in the trajectory; the model is told how
    * much was cut so it can print less and re-run.
+   *
+   * One exemption, by tool name (`WINDOW_UNCAPPED_TOOLS`): a `read_file`
+   * result is a file the model wrote itself and asked for back, already
+   * bounded by the workspace's per-file limit, so it reaches the window whole.
+   * Snippet output and every other result keep this cap.
    */
   WINDOW_MESSAGE_CHARS: 4_000,
+  /**
+   * Tools whose results the window never caps. Their size is bounded
+   * elsewhere: `read_file` returns one workspace file, at most
+   * `FILE_MAX_CHARS` (workspace.ts) — and a file must come back as written,
+   * or the model edits against text it was never shown.
+   */
+  WINDOW_UNCAPPED_TOOLS: ["read_file"] as readonly string[],
   /** Chat / notification tail lengths inside the state summary. */
   CHAT_TAIL: 10,
   NOTIFICATION_TAIL: 5,
@@ -748,8 +761,21 @@ export function capWindowMessage(m: ChatMessage): ChatMessage {
  * the trajectory records tool results in full, so capping at push time would
  * leave the in-memory history holding different bytes than a history rebuilt
  * from the log, and the two would stop windowing identically.
+ *
+ * A tool result names only its call id, so the tool it answers is read off the
+ * assistant message that made the call — from the whole history, which keeps
+ * this a function of the history alone. A result whose tool is in
+ * `WINDOW_UNCAPPED_TOOLS` passes whole.
  */
 export function messageWindow(history: ChatMessage[]): ChatMessage[] {
   const cut = messageWindowCut(history);
-  return (cut === 0 ? history : history.slice(cut)).map(capWindowMessage);
+  const uncapped = new Set<string>();
+  for (const m of history) {
+    for (const tc of m.tool_calls ?? []) {
+      if (CONTEXT_POLICY.WINDOW_UNCAPPED_TOOLS.includes(tc.function.name)) uncapped.add(tc.id);
+    }
+  }
+  return (cut === 0 ? history : history.slice(cut)).map((m) =>
+    m.role === "tool" && m.tool_call_id !== undefined && uncapped.has(m.tool_call_id) ? m : capWindowMessage(m),
+  );
 }

@@ -399,7 +399,11 @@ does the same over the IPC hostcall, answered by the same `Workspace` in the
 runner process: the child never writes the directory itself. Every turn's
 context ends with a listing (path, size, first line of every file) and then
 notes.md verbatim, so the notes need no read tool and the other files are
-seen without being loaded.
+seen without being loaded. On the fixed loop, the message window caps each
+message at `WINDOW_MESSAGE_CHARS` (4,000 characters) — except a `read_file`
+result, which reaches the model whole: it is a file the model wrote, already
+bounded by the per-file limit, and one cut short would have the model editing
+against text it was never shown. Snippet output keeps the cap.
 
 Limits are 32,000 characters for notes.md and for any other file and 1 MiB for
 the whole workspace. A write or edit that would exceed one is refused with the

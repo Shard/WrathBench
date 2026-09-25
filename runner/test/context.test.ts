@@ -603,6 +603,30 @@ describe("messageWindow", () => {
     expect(h[1]!.content!.length).toBe(cap + 137); // the stored history is not mutated
   });
 
+  test("a read_file result survives the window whole; a snippet result of the same size is still cut", () => {
+    const text = "f".repeat(20_000);
+    const call = (id: string, name: string): ChatMessage => ({
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id, type: "function", function: { name, arguments: "{}" } }],
+    });
+    const h: ChatMessage[] = [
+      call("c1", "read_file"),
+      { role: "tool", content: text, tool_call_id: "c1" },
+      call("c2", "run_snippet"),
+      { role: "tool", content: text, tool_call_id: "c2" },
+    ];
+    const w = messageWindow(h);
+    expect(w[1]).toBe(h[1]!);
+    expect(w[1]!.content).toBe(text);
+    expect(w[3]!.content).toBe(`${"f".repeat(CONTEXT_POLICY.WINDOW_MESSAGE_CHARS)}\n…[truncated ${20_000 - CONTEXT_POLICY.WINDOW_MESSAGE_CHARS} chars]`);
+    // Keyed on the tool the call named, from the history alone: a rebuilt history windows the same.
+    expect(JSON.stringify(messageWindow(JSON.parse(JSON.stringify(h)) as ChatMessage[]))).toBe(JSON.stringify(w));
+    // Every other tool keeps the cap, a sibling file tool included.
+    const other: ChatMessage[] = [call("c3", "write_file"), { role: "tool", content: text, tool_call_id: "c3" }];
+    expect(messageWindow(other)[1]!.content!.length).toBeLessThan(text.length);
+  });
+
   test("the cap boundary is exact", () => {
     const cap = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
     const at: ChatMessage = { role: "tool", content: "y".repeat(cap), tool_call_id: "t0.0" };
