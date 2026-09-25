@@ -39,6 +39,7 @@ import {
   type AccountClass,
   accountClassOf,
   type BusyAccount,
+  byNewestStart,
   capFor,
   CLAUDE_TOTAL_KEY,
   claudeKeysFor,
@@ -47,6 +48,7 @@ import {
   inSeries,
   lastActivityOf,
   type ModelState,
+  newestStarted,
   type NextJob,
   planNextJobs,
   type RunFact,
@@ -641,7 +643,7 @@ export interface ResumePlan {
   job: FleetJob;
   account: string;
   runId: string;
-  /** How many times the run has paused; with the run id, names this resume attempt. */
+  /** The pause streak (`RunFact.pause.count`), for the line that announces the resume. */
   pauseCount: number;
   why: string;
 }
@@ -688,7 +690,7 @@ export interface PausedListing {
   reason: string;
   /** When the run paused. */
   since: number;
-  /** How many times this run has paused; what the resume cadence indexes. */
+  /** The pause streak (`RunFact.pause.count`); what the resume cadence indexes. */
   pauseCount: number;
   /** When the supervisor will try again; null when waiting on something other than time. */
   resumeAfter: number | null;
@@ -705,11 +707,13 @@ export function fmtPaused(elapsedMs: number | null, budgetMs: number | null): st
 
 /**
  * The resume cadence for a paused run. An operator-pause resumes at once —
- * the fleet stopped under it and nothing about the provider changed. A
- * provider pause resumes on the roster's own defer ladder (1m … 6h), indexed
- * by how many times THIS run has paused, which continues the cadence the
- * roster process was on before it gave up and exited; past the ladder the
- * run is listed, not hammered. Null means "now".
+ * the fleet stopped under it and nothing about the provider changed. Every
+ * other pause (`onPauseLadder`) resumes on the roster's own defer ladder
+ * (1m … 6h), indexed by the run's pause streak: the ladder pauses since the
+ * last segment of the run that made a turn. A segment that played resets it,
+ * so a freeplay run that paused nine times across weeks with good play between
+ * each keeps resuming, while one its provider has refused through the whole
+ * ladder is listed, not hammered. Null means "now".
  */
 export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
   if (pause.reason === "operator-pause") return null;
@@ -912,7 +916,10 @@ export function planResumes(opts: {
   const poolSet = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   // Archived runs are read for the ladder, never for a resume: there is no
   // directory under the runs dir for `--resume` to open.
-  const paused = opts.runs.filter((f) => f.pause !== null && f.archived !== true).sort((a, b) => b.pause!.at - a.pause!.at);
+  // Newest START first, the order the character head and the model hold read
+  // (`byNewestStart`): of two paused runs of one model, the one resumed is the
+  // one the rest of the supervisor already treats as the character's head.
+  const paused = opts.runs.filter((f) => f.pause !== null && f.archived !== true).sort(byNewestStart);
   const seenModel = new Set<string>();
   for (const f of paused) {
     const pause = f.pause!;
@@ -987,7 +994,7 @@ export function planResumes(opts: {
       continue;
     }
     if (seenModel.has(modelKey)) {
-      list("another, newer paused run of this model is ahead of it — resume by hand or archive");
+      list("a later-started paused run of this model is ahead of it — resume by hand or archive");
       continue;
     }
     seenModel.add(modelKey);
@@ -1059,7 +1066,7 @@ export function planResumes(opts: {
     if (takenJobs.has(job.name)) continue; // its roster is running; it handles its own pause
     const notBefore = resumeNotBefore(pause);
     if (notBefore === "never") {
-      list(`${pause.reason} ${pause.count} times — past the defer ladder; resume by hand when the provider is back`);
+      list(`${pause.reason}, ${pause.count} ladder pauses since it last made a turn — past the defer ladder; resume by hand when the provider is back`);
       continue;
     }
     if (notBefore !== null && now < notBefore) {
@@ -1144,7 +1151,8 @@ export function characterKey(account: string, character: string): string {
  * Matching is the projection's own (model + effort), as `affinityFrom`;
  * only freeplay runs count, only those that recorded both an account and a
  * character, and only ones that are not LIVE — a live run is the character, not
- * its predecessor. Latest start wins.
+ * its predecessor. Latest start wins (`byNewestStart`, the order the resume
+ * planner and the model hold read too).
  *
  * A PAUSED run is a head too. It used to be excluded on the argument that
  * `planResumes` owns it, and that is true while the supervisor can see it —
@@ -1168,20 +1176,23 @@ export function characterKey(account: string, character: string): string {
  */
 export function charactersFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Character> {
   const out = new Map<string, Character>();
-  const at = new Map<string, number>();
   for (const [name, e] of Object.entries(roster)) {
     if (e.idle !== "unlimited") continue;
-    for (const f of runs) {
-      if (f.episode !== "freeplay" || f.account === null || f.character === null) continue;
-      if (f.live) continue;
-      // Put away without a verdict: not a run anything resumes or continues,
-      // so not one that may displace the head that is.
-      if (f.archived === true && f.terminationReason === null) continue;
-      if (f.model !== e.model || (f.effort ?? null) !== (e.effort ?? null)) continue;
-      if ((at.get(name) ?? -1) >= f.startedAt) continue;
-      at.set(name, f.startedAt);
-      out.set(name, { runId: f.runId, account: f.account, character: f.character });
-    }
+    const head = newestStarted(
+      runs.filter(
+        (f) =>
+          f.episode === "freeplay" &&
+          f.account !== null &&
+          f.character !== null &&
+          !f.live &&
+          // Put away without a verdict: not a run anything resumes or
+          // continues, so not one that may displace the head that is.
+          !(f.archived === true && f.terminationReason === null) &&
+          f.model === e.model &&
+          (f.effort ?? null) === (e.effort ?? null),
+      ),
+    );
+    if (head !== undefined) out.set(name, { runId: head.runId, account: head.account!, character: head.character! });
   }
   return out;
 }

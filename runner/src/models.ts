@@ -61,7 +61,7 @@ import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, neverStale, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { badEvidenceReason, neverStale, OFFLINE_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
@@ -337,6 +337,23 @@ export const LADDER_MS: readonly number[] = [
 export const MODEL_RESPONSE_RECORD = "response";
 /** The trajectory record a pause writes (`Trajectory.setPause`). */
 export const PAUSE_RECORD = "pause";
+/** The trajectory record `run.ts --resume` writes: where the run's next segment starts. */
+export const RESUME_RECORD = "resume";
+
+/**
+ * Pause reasons that ride no backoff ladder: the fleet stopped under the run
+ * (`operator-pause`), or its runner died before it could write a verdict
+ * (`offline`, derived and never on disk). Both are the harness's own doing, so
+ * `resumeNotBefore` brings them back without cooling and the pause streak
+ * neither counts them nor resets on them. Every other pause — a provider's
+ * refusal, a dead login, a stalled observation — is on the ladder.
+ */
+export const LADDER_EXEMPT_PAUSES: ReadonlySet<string> = new Set(["operator-pause", OFFLINE_PAUSE]);
+
+/** Whether a pause of this reason cools on the backoff ladder and counts toward its streak. */
+export function onPauseLadder(reason: unknown): boolean {
+  return typeof reason === "string" && !LADDER_EXEMPT_PAUSES.has(reason);
+}
 
 /** Termination reasons that mean "the model never got to play" for the ladder. */
 export const NO_PROGRESS_REASONS: ReadonlySet<string> = new Set(["adapter-error"]);
@@ -499,9 +516,10 @@ export interface RunFact {
   /**
    * Set while the run is paused: `pause_reason` in run.sqlite with
    * no termination. `at` is meta.json's pause mark when present, else the
-   * trajectory's mtime; `count` is how many times this run has paused, which
-   * is what a resume cadence indexes; `episodeElapsedMs` is the clock the run
-   * will continue from (null for a pause written before the mark existed).
+   * trajectory's mtime; `count` is the pause streak — the consecutive ladder
+   * pauses since the last segment that made a turn, at least 1 — which is what
+   * the resume cadence indexes; `episodeElapsedMs` is the clock the run will
+   * continue from (null for a pause written before the mark existed).
    */
   pause: {
     reason: string;
@@ -688,6 +706,51 @@ const EMPTY = Buffer.alloc(0);
 const READ_CHUNK = 1 << 22;
 
 /**
+ * Where a pause streak stands partway through a trajectory. A segment is the
+ * stretch between two `resume` records (the first starts at byte zero):
+ * `closed` is the streak as the segments already closed left it, and `turn`
+ * and `pause` are what the open one has shown so far.
+ */
+interface StreakFold {
+  closed: number;
+  turn: boolean;
+  pause: boolean;
+}
+
+/**
+ * The pause streak with the open segment as the newest: the ladder pauses
+ * since the last segment that made a turn, that segment's own pause included.
+ * A segment with a `response` in it resets the count — its pause, when it is
+ * on the ladder, is the first of a new streak — and one with none adds its
+ * pause to the streak before it. An exempt pause (`onPauseLadder`) adds
+ * nothing and resets nothing. A segment's turns count wherever they fall in
+ * it: a runner stopped mid-turn flushes its last `response` after the pause
+ * record.
+ */
+function streakOf(s: StreakFold): number {
+  const own = s.pause ? 1 : 0;
+  return s.turn ? own : s.closed + own;
+}
+
+function foldStreak(s: StreakFold, rec: { t: string; reason?: unknown }): void {
+  if (rec.t === MODEL_RESPONSE_RECORD) s.turn = true;
+  else if (rec.t === PAUSE_RECORD) s.pause ||= onPauseLadder(rec.reason);
+  else if (rec.t === RESUME_RECORD) {
+    s.closed = streakOf(s);
+    s.turn = false;
+    s.pause = false;
+  }
+}
+
+/** What one pass over a trajectory answers. */
+export interface RecordTally {
+  /** Records of each kind asked for; a kind nothing carries is zero, never absent. */
+  counts: Map<string, number>;
+  /** The pause streak (`streakOf`), or null when the scanner was not asked to fold it. */
+  pauseStreak: number | null;
+}
+
+/**
  * Record counts for a trajectory without holding the file in memory, resumably.
  *
  * A count is monotone, so folding only the bytes appended since the last pass
@@ -700,11 +763,15 @@ const READ_CHUNK = 1 << 22;
  * seconds at a time (measured: 844ms and 895ms for the two live trajectories on
  * 2026-09-04, against ~0ms for everything else `readRunFact` does).
  *
+ * The pause streak, when asked for, is the same kind of fold: a left fold over
+ * the records in order (`foldStreak`), so resuming it from where the last pass
+ * stopped gives the same answer too.
+ *
  * A trailing half-written line is held in `pending` and re-read with the next
  * chunk rather than counted, so nothing is counted twice across a resume. A
  * file that SHRANK is not resumable at all — that is truncation or replacement
  * — and the check for it belongs to whoever holds the scanner
- * (`countRecordsCached`), which throws the scanner away and starts fresh.
+ * (`tallyRecordsCached`), which throws the scanner away and starts fresh.
  *
  * `countRecords` below is the one-shot form, with the contract it always had.
  *
@@ -718,18 +785,25 @@ const READ_CHUNK = 1 << 22;
 export class RecordCountScanner {
   readonly path: string;
   readonly kinds: readonly string[];
-  /** The prefilter, as bytes: the kind names are ASCII, so this is the same test. */
+  /** Whether this scanner folds the pause streak as well as counting. */
+  readonly pauseStreak: boolean;
+  /** The records worth parsing: the kinds counted, and the ones the streak reads. */
+  private readonly watched: ReadonlySet<string>;
+  /** The prefilter, as bytes: the record names are ASCII, so this is the same test. */
   private readonly needles: Buffer[];
   private readonly counts: Map<string, number>;
+  private readonly streak: StreakFold = { closed: 0, turn: false, pause: false };
   /** Bytes folded as complete lines; where the next scan resumes. */
   private consumed = 0;
   /** Bytes after the last newline: a record still being written, never counted. */
   private pending: Buffer = EMPTY;
 
-  constructor(path: string, kinds: readonly string[]) {
+  constructor(path: string, kinds: readonly string[], opts: { pauseStreak?: boolean } = {}) {
     this.path = path;
     this.kinds = [...kinds];
-    this.needles = this.kinds.map((k) => Buffer.from(`"${k}"`, "utf8"));
+    this.pauseStreak = opts.pauseStreak === true;
+    this.watched = new Set([...this.kinds, ...(this.pauseStreak ? [MODEL_RESPONSE_RECORD, PAUSE_RECORD, RESUME_RECORD] : [])]);
+    this.needles = [...this.watched].map((k) => Buffer.from(`"${k}"`, "utf8"));
     this.counts = new Map<string, number>(this.kinds.map((k) => [k, 0]));
   }
 
@@ -738,32 +812,33 @@ export class RecordCountScanner {
     return this.consumed + this.pending.length;
   }
 
-  /** The kind a line counts toward, or null. */
-  private kindOf(line: Buffer): string | null {
+  /** The record a line holds when it is one this scanner watches, else null. */
+  private recordOf(line: Buffer): { t: string; reason?: unknown } | null {
     if (line.length === 0) return null;
-    let text: string | null = null;
-    let rec: { t?: unknown } | null = null;
-    let torn = false;
-    for (let i = 0; i < this.kinds.length; i++) {
-      // Cheap prefilter, then the honest parse: the `t` key can sit anywhere.
-      if (!line.includes(this.needles[i]!)) continue;
-      if (rec === null && !torn) {
-        text ??= line.toString("utf8");
-        try {
-          rec = JSON.parse(text) as { t?: unknown };
-        } catch {
-          torn = true; // a torn line is not a record
-        }
-      }
-      const k = this.kinds[i]!;
-      if (rec !== null && rec.t === k) return k; // one line counts toward at most one kind
+    // Cheap prefilter, then the honest parse: the `t` key can sit anywhere.
+    if (!this.needles.some((n) => line.includes(n))) return null;
+    let rec: { t?: unknown; reason?: unknown } | null;
+    try {
+      rec = JSON.parse(line.toString("utf8")) as { t?: unknown; reason?: unknown } | null;
+    } catch {
+      return null; // a torn line is not a record
     }
-    return null;
+    const t = rec?.t;
+    return typeof t === "string" && this.watched.has(t) ? { t, reason: rec!.reason } : null;
+  }
+
+  /** One line into a set of counts and a streak: the scanner's own, or a copy of them. */
+  private apply(line: Buffer, counts: Map<string, number>, streak: StreakFold): void {
+    const rec = this.recordOf(line);
+    if (rec === null) return;
+    // Pre-seeded with exactly the kinds asked for, so a line counts toward at most one.
+    const n = counts.get(rec.t);
+    if (n !== undefined) counts.set(rec.t, n + 1);
+    if (this.pauseStreak) foldStreak(streak, rec);
   }
 
   private take(line: Buffer): void {
-    const k = this.kindOf(line);
-    if (k !== null) this.counts.set(k, (this.counts.get(k) ?? 0) + 1);
+    this.apply(line, this.counts, this.streak);
   }
 
   /** Fold a buffer of appended bytes, answering the trailing partial line. */
@@ -779,12 +854,12 @@ export class RecordCountScanner {
   }
 
   /**
-   * Read whatever has been appended since the last call and answer the counts
+   * Read whatever has been appended since the last call and answer the tally
    * so far. Null when the file cannot be read — the contract `countRecords`
    * has always had — with whatever was already folded left intact, so a later
    * call resumes rather than starting over.
    */
-  scan(): Map<string, number> | null {
+  scan(): RecordTally | null {
     let size: number;
     try {
       size = statSync(this.path).size;
@@ -831,9 +906,9 @@ export class RecordCountScanner {
    * fold them, because the next append would count those bytes twice;
    * `scanAsWhole` gives the same answer without folding.
    */
-  countOnce(): Map<string, number> | null {
-    const counts = this.scan();
-    if (counts === null) return null;
+  countOnce(): RecordTally | null {
+    const tally = this.scan();
+    if (tally === null) return null;
     if (this.pending.length > 0) {
       this.take(this.pending);
       this.consumed += this.pending.length;
@@ -850,40 +925,56 @@ export class RecordCountScanner {
    * them later does not count them twice. A torn tail does not parse and
    * counts nowhere, exactly as before.
    */
-  scanAsWhole(): Map<string, number> | null {
-    const counts = this.scan();
-    if (counts === null) return null;
-    const k = this.kindOf(this.pending);
-    if (k !== null) counts.set(k, (counts.get(k) ?? 0) + 1);
-    return counts;
+  scanAsWhole(): RecordTally | null {
+    const tally = this.scan();
+    if (tally === null || this.pending.length === 0) return tally;
+    const streak = { ...this.streak };
+    this.apply(this.pending, tally.counts, streak);
+    return { counts: tally.counts, pauseStreak: this.pauseStreak ? streakOf(streak) : null };
   }
 
   /** A copy: the caller must never hold a reference to resumable state. */
-  private snapshot(): Map<string, number> {
-    return new Map(this.counts);
+  private snapshot(): RecordTally {
+    return { counts: new Map(this.counts), pauseStreak: this.pauseStreak ? streakOf(this.streak) : null };
   }
 }
 
 /** One pass over a trajectory, counting the records of each kind named. Null when unreadable. */
 export function countRecords(path: string, kinds: readonly string[]): Map<string, number> | null {
+  return tallyRecords(path, kinds)?.counts ?? null;
+}
+
+/** `countRecords`, answering the pause streak as well when asked for it. */
+export function tallyRecords(path: string, kinds: readonly string[], opts: { pauseStreak?: boolean } = {}): RecordTally | null {
   if (!existsSync(path)) return null;
-  return new RecordCountScanner(path, kinds).countOnce();
+  return new RecordCountScanner(path, kinds, opts).countOnce();
 }
 
 /** Scanners a caller keeps between polls, keyed by trajectory path. */
 export type CountCache = Map<string, RecordCountScanner>;
 
+/** The resumable form of `countRecords` (`tallyRecordsCached`). */
+export function countRecordsCached(cache: CountCache, path: string, kinds: readonly string[]): Map<string, number> | null {
+  return tallyRecordsCached(cache, path, kinds)?.counts ?? null;
+}
+
 /**
- * The resumable form: the same counts, folding only what has been appended
+ * The resumable form: the same tally, folding only what has been appended
  * since this cache last saw the file.
  *
  * The truncation check lives here rather than inside `scan`, because a scanner
  * that has read past the end of its own file cannot answer for it at all: the
  * only safe response is a new scanner, and only the holder of the cache can
- * make one. Same for a caller that changes which kinds it asks about — the
- * counts a scanner carries are the counts of the kinds it was built with.
+ * make one. Same for a caller that changes what it asks for — the counts a
+ * scanner carries are the counts of the kinds it was built with, and it folds
+ * a streak only if it was built to.
  */
-export function countRecordsCached(cache: CountCache, path: string, kinds: readonly string[]): Map<string, number> | null {
+export function tallyRecordsCached(
+  cache: CountCache,
+  path: string,
+  kinds: readonly string[],
+  opts: { pauseStreak?: boolean } = {},
+): RecordTally | null {
   let size: number;
   try {
     size = statSync(path).size;
@@ -895,10 +986,11 @@ export function countRecordsCached(cache: CountCache, path: string, kinds: reado
   const usable =
     scanner !== undefined &&
     size >= scanner.size &&
+    scanner.pauseStreak === (opts.pauseStreak === true) &&
     scanner.kinds.length === kinds.length &&
     scanner.kinds.every((k, i) => k === kinds[i]);
   if (!usable) {
-    scanner = new RecordCountScanner(path, kinds);
+    scanner = new RecordCountScanner(path, kinds, opts);
     cache.set(path, scanner);
   }
   // `scanAsWhole`, not `scan`: the cache is an optimisation, never a different
@@ -982,11 +1074,14 @@ export function readRunFact(
       /* unreadable stat: treat as no trajectory */
     }
   }
-  const kinds = [MODEL_RESPONSE_RECORD, PAUSE_RECORD];
+  const kinds = [MODEL_RESPONSE_RECORD];
   // A caller that polls the same live run passes a scanner cache, which folds
   // only the bytes appended since its last read; everyone else reads once.
-  const counts = opts.counts === undefined ? countRecords(jsonl, kinds) : countRecordsCached(opts.counts, jsonl, kinds);
-  fact.modelResponses = counts?.get(MODEL_RESPONSE_RECORD) ?? null;
+  const tally =
+    opts.counts === undefined
+      ? tallyRecords(jsonl, kinds, { pauseStreak: true })
+      : tallyRecordsCached(opts.counts, jsonl, kinds, { pauseStreak: true });
+  fact.modelResponses = tally?.counts.get(MODEL_RESPONSE_RECORD) ?? null;
   let pauseReason: string | null = null;
 
   const dbPath = join(dir, "run.sqlite");
@@ -1028,7 +1123,10 @@ export function readRunFact(
     fact.pause = {
       reason: pauseReason,
       at: markedAt ?? mtime ?? fact.startedAt,
-      count: Math.max(1, counts?.get(PAUSE_RECORD) ?? 1),
+      // The streak, not the run's lifetime of pauses: a freeplay run lives
+      // forever, and nine pauses spread across weeks of good play are not a
+      // provider that has refused for six hours (operator, 2026-09-25).
+      count: Math.max(1, tally?.pauseStreak ?? 1),
       episodeElapsedMs: num(meta.pause?.episodeElapsedMs),
     };
   }
@@ -1318,6 +1416,25 @@ export function isStandingPause(f: Parameters<typeof isStaleRun>[0] & Pick<RunFa
   return f.pause !== null && f.archived !== true && !isStaleRun(f, now);
 }
 
+/**
+ * Newest start first — the one order for "which of a character's runs is its
+ * head". The character head (`charactersFrom`), the model hold and the resume
+ * planner all ask it, and when two runs of one character are paused at once they
+ * must name the same one: ordering the planner by pause time instead let it
+ * resume a run that was neither the character's head nor the one holding the
+ * model. Ties go to the higher run id, the order `readRunFacts` returns.
+ */
+export function byNewestStart(a: Pick<RunFact, "startedAt" | "runId">, b: Pick<RunFact, "startedAt" | "runId">): number {
+  return b.startedAt - a.startedAt || (a.runId < b.runId ? 1 : a.runId > b.runId ? -1 : 0);
+}
+
+/** The run `byNewestStart` puts first, or undefined for none. */
+export function newestStarted<T extends Pick<RunFact, "startedAt" | "runId">>(runs: readonly T[]): T | undefined {
+  let head: T | undefined;
+  for (const f of runs) if (head === undefined || byNewestStart(f, head) < 0) head = f;
+  return head;
+}
+
 /** How long a stale run has been silent, or null when it is current. */
 export function staleForMs(f: Parameters<typeof isStaleRun>[0], now: number): number | null {
   return isStaleRun(f, now) ? now - lastActivityOf(f) : null;
@@ -1510,9 +1627,9 @@ export function projectModel(
     perEpisode,
     ladder,
   };
-  // The newest standing pause holds the model — a freeplay one for as long as
-  // it sits, since it is never stale and is resumed, never rescheduled.
-  const pausedRun = [...mine].reverse().find((f) => isStandingPause(f, opts.now));
+  // The newest-started standing pause holds the model — a freeplay one for as
+  // long as it sits, since it is never stale and is resumed, never rescheduled.
+  const pausedRun = newestStarted(mine.filter((f) => isStandingPause(f, opts.now)));
   if (pausedRun !== undefined && pausedRun.pause !== null) {
     state.paused = {
       runId: pausedRun.runId,

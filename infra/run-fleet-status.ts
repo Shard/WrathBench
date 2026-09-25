@@ -84,6 +84,7 @@ import { TAINT_AFTER } from "../runner/src/lapse";
 import {
   ACCOUNT_CLASSES,
   type AccountClass,
+  byNewestStart,
   DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT,
   extrasSoFar,
   formatOutstanding,
@@ -582,7 +583,9 @@ export function printStatus(): void {
     busyAccounts: new Set([...live.values()].filter((j) => fleetUp && j.alive).map((j) => j.account.toUpperCase())),
     now: Date.now(),
   });
-  const pausedRuns = runFacts.filter((f) => isStandingPause(f, Date.now())).sort((a, b) => b.pause!.at - a.pause!.at);
+  // Newest start first, so an account's row names the paused run the resume
+  // planner would bring back (`byNewestStart`).
+  const pausedRuns = runFacts.filter((f) => isStandingPause(f, Date.now())).sort(byNewestStart);
   const resumePlan =
     config !== undefined
       ? planResumes({

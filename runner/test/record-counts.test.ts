@@ -81,8 +81,8 @@ describe("countRecords (one-shot)", () => {
     writeFileSync(p, `${JSON.stringify({ t: "response", ts: 1 })}\n`);
     const scanner = new RecordCountScanner(p, KINDS);
     const first = scanner.countOnce()!;
-    first.set("response", 999);
-    expect(scanner.scan()!.get("response")).toBe(1);
+    first.counts.set("response", 999);
+    expect(scanner.scan()!.counts.get("response")).toBe(1);
   });
 
   test("lines longer than one read chunk are not split mid-record", () => {

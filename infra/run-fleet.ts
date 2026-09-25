@@ -1076,7 +1076,10 @@ async function main(): Promise<void> {
         }
         countKey(resumed.refs, resumed.subscription);
       }
-      const key = `resume:${r.runId}:${r.pauseCount}`;
+      // Once per pause, named by its instant: the streak starts over at 1
+      // after every segment that made a turn, so it cannot tell two pauses of
+      // one run apart.
+      const key = `resume:${r.runId}:${runs.find((f) => f.runId === r.runId)?.pause?.at ?? r.pauseCount}`;
       if (!announcedPicks.has(key)) {
         announcedPicks.add(key);
         say(`resume ${name}: ${r.runId} on ${r.account} — ${r.why}`);

@@ -585,8 +585,10 @@ with why:
 - **not in config** — the model or episode is gone from the fleet config (or the
   pinned job is disabled, or on another account). Resume it by hand
   (`infra/run-episode.sh --resume <run id>` on its account) or archive it.
-- **cooling** — a provider pause on the roster's defer ladder, indexed by how
-  many times *that run* has paused. The two-stage retry answers the mid-episode
+- **cooling** — a pause on the roster's defer ladder (every reason but
+  `operator-pause` and `offline`), indexed by the run's pause streak: its
+  ladder pauses since its last segment that made a turn, so a segment that
+  played starts the count over. The two-stage retry answers the mid-episode
   pause question: the roster retries a mid-episode provider pause in place while
   its process lives;
   once it gives up and exits, the supervisor takes over on the longer ladder,
@@ -616,9 +618,11 @@ level-1 character.
 The character's identity is nothing new on disk: the ref's latest freeplay run
 that is not live and recorded an account and a character — ended **or paused**
 (`charactersFrom`; matched on model + effort like account affinity, so a
-renamed ref keeps its character). A paused head is normally resumed rather
-than continued from, and the resume reserves its account and job name before
-the policy picks;
+renamed ref keeps its character). Latest means newest **start**, the one order
+the model hold and the resume planner read too, so of two paused runs of one
+character the one resumed is the head, whichever paused last. A paused head is
+normally resumed rather than continued from, and the resume reserves its
+account and job name before the policy picks;
 it is a head so that a paused run the resume planner declines still holds the
 lineage, instead of the next attempt continuing from the ended run before it.
 What the supervisor does with it, per tick:
@@ -707,7 +711,10 @@ What the supervisor does with it, per tick:
   Archiving a run does **not** release its character: the guard reads
   `archive/` too, so an archived run with no termination still owns its
   character (the supervisor, for its part, never resumes or continues an
-  archived run). The release is a termination on the run's row.
+  archived run). The release is a termination on the run's row: to end a run
+  by hand, `bun runner/src/classify.ts <run id> manual [note]`, which refuses
+  a run with no termination and no pause (it may be live) unless given
+  `--force`.
 
 The policy line says what happened, and `--status` prints one row per
 `idle: "unlimited"` ref with its head and the verdict above. Roster changes that
