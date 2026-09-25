@@ -307,10 +307,12 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   model identifiers — levels, XP, areas and achievements as ids, taxi facts,
   costs, tokens — and is what the runs, ladder, episodes, models and
   campaigns pages are made of.
-- **Every artifact carries the attribution statement** DATA-AND-LEGAL's
-  "Scale and framing" requires (the harness runs on the AzerothCore community
-  reconstruction of 3.3.5a; nothing Blizzard-owned is distributed), rendered
-  in the shell footer.
+- **Every artifact carries the attribution line** in the shell footer: a
+  non-affiliation and trademark statement, approved verbatim by the operator
+  and pinned in `runner/viewer/public-projection.ts`. The fuller framing
+  DATA-AND-LEGAL's "Scale and framing" asks public write-ups to state (the
+  server is AzerothCore's reconstruction of 3.3.5a; what the site shows of the
+  game is Blizzard's property) lives in the About page's legal section.
 
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
