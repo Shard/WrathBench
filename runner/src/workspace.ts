@@ -68,6 +68,31 @@ export function isImportable(path: string): boolean {
   return IMPORTABLE_EXTENSIONS.some((ext) => path.endsWith(ext));
 }
 
+/**
+ * The entrypoint loop's program memory (a probing spike, `loop: "entrypoint"`):
+ * one JSON object the harness keeps for the program as `memory` and writes here
+ * after every tick, handler and snippet that changed it. Written by the runner
+ * alone (`Workspace.writeMemory`), refused to the file tools, and never
+ * importable, so a save once a second never mints a module graph. A snippet-loop
+ * workspace has no such file and no such rules.
+ */
+export const MEMORY_PATH = "memory.json";
+/** memory.json's limit, in characters of JSON. */
+export const MEMORY_MAX_CHARS = 32_000;
+
+/** What the file tools and `files` answer for a write, edit or delete of memory.json. */
+export const MEMORY_WRITE_REFUSAL =
+  'memory.json is written by the harness from `memory`; change it in code, e.g. `memory.phase = "grind"` in a snippet.';
+
+export interface WorkspaceOptions {
+  /**
+   * The entrypoint loop's rules: memory.json is the program's memory — written
+   * only through `writeMemory`, refused to write/edit/delete, and not
+   * importable. Off (the snippet loop) leaves every rule as it always was.
+   */
+  memory?: boolean;
+}
+
 /** One file as the listing shows it. */
 export interface WorkspaceEntry {
   /** Relative to the workspace, `/`-separated. */
@@ -199,10 +224,13 @@ const LEGACY_TRUNCATION_MARKER = /\n\n\[scratchpad truncated at \d+ chars\]$/;
 
 export class Workspace {
   readonly dir: string;
+  /** Whether memory.json is the program's memory (`WorkspaceOptions.memory`). */
+  readonly memory: boolean;
   private importChanges = 0;
   private readonly listeners = new Set<(version: number) => void>();
 
-  constructor(dir: string) {
+  constructor(dir: string, opts: WorkspaceOptions = {}) {
+    this.memory = opts.memory === true;
     this.dir = resolve(dir);
     mkdirSync(this.dir, { recursive: true });
     const notes = join(this.dir, NOTES_PATH);
@@ -228,9 +256,47 @@ export class Workspace {
 
   /** A change to `rel` (or to the whole workspace, when absent): bump if anything importable moved. */
   private changed(rel?: string): void {
-    if (rel !== undefined && !isImportable(rel)) return;
+    if (rel !== undefined && !this.importable(rel)) return;
     this.importChanges++;
     for (const l of this.listeners) l(this.importChanges);
+  }
+
+  /** `isImportable`, less memory.json when it is the program's memory. */
+  importable(rel: string): boolean {
+    return isImportable(rel) && !this.isMemoryFile(rel);
+  }
+
+  private isMemoryFile(rel: string): boolean {
+    return this.memory && rel === MEMORY_PATH;
+  }
+
+  /**
+   * Save the program's memory: the JSON the sandbox serialized from `memory`.
+   * The runner's own write, so none of the file tools' refusals apply, but the
+   * limits do — memory.json's own and the workspace total — and a refusal names
+   * both numbers. Deliberately not `changed()`: memory.json is not importable,
+   * and a save must never move the import version.
+   */
+  writeMemory(json: string): WorkspaceResult {
+    if (!this.memory) return { ok: false, error: "this workspace has no program memory" };
+    if (json.length > MEMORY_MAX_CHARS) {
+      return {
+        ok: false,
+        error: `memory would be ${json.length} chars of JSON, over its ${MEMORY_MAX_CHARS}-char limit; keep less in memory, or move detail to a workspace file. The last saved memory stays.`,
+      };
+    }
+    const abs = join(this.dir, MEMORY_PATH);
+    const bytes = Buffer.byteLength(json, "utf8");
+    const before = existsSync(abs) ? statSync(abs).size : 0;
+    const total = this.totalBytes() - before + bytes;
+    if (total > WORKSPACE_MAX_BYTES) {
+      return {
+        ok: false,
+        error: `the workspace would total ${total} bytes with this memory, over its ${WORKSPACE_MAX_BYTES}-byte limit; delete files to make room. The last saved memory stays.`,
+      };
+    }
+    writeFileSync(abs, json, "utf8");
+    return { ok: true, text: `saved ${MEMORY_PATH} (${json.length} chars)` };
   }
 
   /**
@@ -303,6 +369,7 @@ export class Workspace {
     const r = this.resolve(path);
     if (!r.ok) return r;
     if (typeof content !== "string") return { ok: false, error: `content must be a string, got ${typeof content}` };
+    if (this.isMemoryFile(r.rel)) return { ok: false, error: MEMORY_WRITE_REFUSAL };
     const blocked = this.blockedByFile(r.rel);
     if (blocked !== undefined) return { ok: false, error: blocked };
     if (existsSync(r.abs) && statSync(r.abs).isDirectory()) {
@@ -334,6 +401,7 @@ export class Workspace {
     if (typeof replaceAll !== "boolean") {
       return { ok: false, error: `replace_all must be true or false, got ${typeof replaceAll}` };
     }
+    if (this.isMemoryFile(r.rel)) return { ok: false, error: MEMORY_WRITE_REFUSAL };
     if (!existsSync(r.abs)) return { ok: false, error: `${r.rel} does not exist; create it with ${vocab.write}` };
     if (statSync(r.abs).isDirectory()) return { ok: false, error: `${r.rel} is a directory, not a file` };
     if (oldString.length === 0) {
@@ -377,6 +445,7 @@ export class Workspace {
     if (r.rel === NOTES_PATH) {
       return { ok: false, error: `notes.md cannot be deleted; empty it with ${vocab.write} instead` };
     }
+    if (this.isMemoryFile(r.rel)) return { ok: false, error: MEMORY_WRITE_REFUSAL };
     if (!existsSync(r.abs)) return { ok: false, error: `no such file in the workspace: ${r.rel}` };
     const st = lstatSync(r.abs);
     if (st.isDirectory()) return { ok: false, error: `${r.rel} is a directory; delete the files in it one by one` };
@@ -473,11 +542,11 @@ export class Workspace {
  * first time the run is opened (a resume onto the new harness), and the pad
  * itself is left where it was.
  */
-export function openRunWorkspace(runDir: string): Workspace {
+export function openRunWorkspace(runDir: string, opts: WorkspaceOptions = {}): Workspace {
   const dir = join(runDir, "workspace");
   const legacy = join(runDir, "scratchpad.md");
   const fresh = !existsSync(dir);
-  const ws = new Workspace(dir);
+  const ws = new Workspace(dir, opts);
   if (fresh && existsSync(legacy)) ws.seedNotesFromScratchpad(legacy);
   return ws;
 }

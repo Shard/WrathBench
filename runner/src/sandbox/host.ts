@@ -102,6 +102,12 @@ export interface SandboxHostOptions {
   resumed?: boolean;
   snippetTimeoutMs: number;
   pingGraceMs: number;
+  /**
+   * Which agent loop the run is under. `entrypoint` (a probing spike) makes the
+   * child run snippets as one-offs that own what they start, and hosts the
+   * model's program; absent or `snippet` is the snippet loop, unchanged.
+   */
+  loop?: "snippet" | "entrypoint";
   entryPath?: string;
   /** Called for every notice, so the loop can log it as it happens. */
   onNotice?: (notice: HarnessNotice) => void;
@@ -152,6 +158,10 @@ export function sandboxChildEnv(
   for (const [k, v] of Object.entries(parent)) {
     if (v === undefined || !k.startsWith("WRATHBENCH_")) continue;
     if (k.startsWith("WRATHBENCH_DB_") || k === "WRATHBENCH_MODULE_SECRET") continue;
+    // The loop is the run's, set explicitly by the host for an entrypoint run
+    // only: a stray value in the operator's shell must never switch a
+    // snippet-loop sandbox into the other loop.
+    if (k === "WRATHBENCH_LOOP") continue;
     out[k] = v;
   }
   return { ...out, ...explicit };
@@ -214,6 +224,11 @@ export class SandboxHost {
     });
   }
 
+  /** Whether this sandbox runs the entrypoint loop (`SandboxHostOptions.loop`). */
+  get entrypoint(): boolean {
+    return this.opts.loop === "entrypoint";
+  }
+
   get entryPath(): string {
     return this.opts.entryPath ?? join(import.meta.dir, "entry.ts");
   }
@@ -274,6 +289,7 @@ export class SandboxHost {
         // sandboxChildEnv's WRATHBENCH_* forwarding — the child must bind only
         // the account this run was actually assigned, never a stray one.
         WRATHBENCH_ACCOUNT: this.opts.account ?? "",
+        ...(this.entrypoint ? { WRATHBENCH_LOOP: "entrypoint" } : {}),
       }),
       stdio: ["ignore", "inherit", "pipe"],
       serialization: "json",

@@ -45,7 +45,7 @@
  */
 
 import { statSync } from "node:fs";
-import { IMPORTABLE_EXTENSIONS, isImportable } from "../workspace";
+import { IMPORTABLE_EXTENSIONS, MEMORY_PATH, isImportable } from "../workspace";
 
 export interface ScanResult {
   /** Every name declared at the top level. */
@@ -352,6 +352,21 @@ export interface CompileOptions {
    * against it; without one, a snippet that imports is refused.
    */
   workspace?: string | undefined;
+  /**
+   * Whether top-level declarations persist across snippets (the keyword strip
+   * and the copy-back above). Default true: the snippet loop's REPL. The
+   * entrypoint loop compiles with false — a snippet is a one-off whose
+   * declarations are its own and end with it, and nothing is copied anywhere.
+   */
+  persist?: boolean | undefined;
+  /** memory.json is the program's memory (entrypoint loop), and importing it is refused. */
+  memoryFile?: boolean | undefined;
+}
+
+/** How a specifier is resolved, beyond the workspace itself. */
+export interface ResolveOptions {
+  /** memory.json is the program's memory, not a module (`CompileOptions.memoryFile`). */
+  memoryFile?: boolean | undefined;
 }
 
 /** The wrapper line `compileSnippet` builds around the user's source. */
@@ -365,10 +380,11 @@ export function compileSnippet(source: string, options: CompileOptions = {}): Co
   // extract the body again. The wrapper is ours, so the first `{` and the last
   // `}` are its braces.
   const lifted = extractImportStatements(source);
+  const persist = options.persist !== false;
   if (lifted.imports.length === 0) {
     const wrapped = transpiler.transformSync(`${WRAPPER_OPEN}\n${source}\n};`);
     const js = wrapped.slice(wrapped.indexOf("{") + 1, wrapped.lastIndexOf("}"));
-    return finishCompile(routeDynamicImports(js, wrapped), "");
+    return finishCompile(routeDynamicImports(js, wrapped), "", persist);
   }
   // Imports stay outside the wrapper, where a module may declare them, so the
   // transpiler sees them used by the body and drops only the type-only and
@@ -380,16 +396,25 @@ export function compileSnippet(source: string, options: CompileOptions = {}): Co
   const open = wrapped.indexOf(WRAPPER_OPEN);
   if (open === -1) throw new Error("snippet compile: the transpiler dropped the snippet wrapper");
   const js = wrapped.slice(open + WRAPPER_OPEN.length, wrapped.lastIndexOf("}"));
-  const prelude = importPrelude(parseTranspiledImports(wrapped.slice(0, open)), options.workspace);
-  return finishCompile(routeDynamicImports(js, wrapped), prelude);
+  const prelude = importPrelude(
+    parseTranspiledImports(wrapped.slice(0, open)),
+    options.workspace,
+    options.memoryFile === true ? { memoryFile: true } : {},
+  );
+  return finishCompile(routeDynamicImports(js, wrapped), prelude, persist);
 }
 
-/** The shared tail of `compileSnippet`: persistence rewrite, copy-back, both bodies. */
-function finishCompile(js: string, prelude: string): CompiledSnippet {
+/**
+ * The shared tail of `compileSnippet`: persistence rewrite, copy-back, both
+ * bodies. Without `persist` the declarations are scanned only to decide the
+ * expression path (a declaration must never parse as an expression) and the
+ * body is the snippet as written.
+ */
+function finishCompile(js: string, prelude: string, persist: boolean): CompiledSnippet {
   const { names, copyBack, rewritten } = scanTopLevelDeclarations(js);
-  const copyBackCode = copyBack
-    .map((n) => `\n;try{ globalThis[${JSON.stringify(n)}] = ${n}; }catch(_){}`)
-    .join("");
+  const copyBackCode = persist
+    ? copyBack.map((n) => `\n;try{ globalThis[${JSON.stringify(n)}] = ${n}; }catch(_){}`).join("")
+    : "";
   // The transpiler terminates statements with `;`, which would break
   // `return ( … );` — trim trailing semicolons for the expression attempt.
   const exprJs = js.trim().replace(/;+\s*$/, "");
@@ -397,7 +422,7 @@ function finishCompile(js: string, prelude: string): CompiledSnippet {
     js,
     names,
     canTryExpression: names.length === 0 && exprJs.length > 0,
-    statementsBody: `${prelude}${rewritten}${copyBackCode}`,
+    statementsBody: `${prelude}${persist ? rewritten : js}${copyBackCode}`,
     expressionBody: `${prelude}return (\n${exprJs}\n);`,
   };
 }
@@ -776,6 +801,7 @@ function importCandidates(base: string): string[] {
 export function resolveWorkspaceImport(
   specifier: string,
   workspace: string | undefined,
+  opts: ResolveOptions = {},
 ): { abs: string; rel: string } | null {
   if (SCHEME.test(specifier)) return null;
   const shown = JSON.stringify(specifier);
@@ -789,6 +815,11 @@ export function resolveWorkspaceImport(
     throw new ImportError(`import ${shown}: .. would leave the workspace`);
   }
   const rel = specifier.replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+  if (opts.memoryFile === true && rel === MEMORY_PATH) {
+    throw new ImportError(
+      `import ${shown}: ${MEMORY_PATH} is your program's memory, not a module; use memory (ctx.memory in your program) in code, or read the file with files.read`,
+    );
+  }
   const tried = importCandidates(rel);
   for (const candidate of tried) {
     const abs = `${workspace}/${candidate}`;
@@ -816,10 +847,14 @@ function isFile(path: string): boolean {
  * statements. Every named binding is checked before it is read, so a missing
  * export is an error naming the file and the export, not a silent undefined.
  */
-export function importPrelude(imports: readonly ParsedImport[], workspace: string | undefined): string {
+export function importPrelude(
+  imports: readonly ParsedImport[],
+  workspace: string | undefined,
+  opts: ResolveOptions = {},
+): string {
   const lines: string[] = [];
   imports.forEach((imp, k) => {
-    const target = resolveWorkspaceImport(imp.specifier, workspace);
+    const target = resolveWorkspaceImport(imp.specifier, workspace, opts);
     const path = target === null ? imp.specifier : target.abs;
     const shown = target === null ? imp.specifier : target.rel;
     // A workspace file goes through the sandbox's `__wrathbench_import__`

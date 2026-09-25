@@ -265,3 +265,38 @@ describe("import statements", () => {
     expect(stampWorkspaceImports("export const a = 1;\n", file, ws, "7", "ts")).toBe("export const a = 1;\n");
   });
 });
+
+describe("the entrypoint loop's one-off snippets (persist: false)", () => {
+  const ws = mkdtempSync(join(tmpdir(), "wrathbench-rw-oneoff-"));
+  writeFileSync(join(ws, "util.ts"), "export const one = 1;\n");
+  writeFileSync(join(ws, "memory.json"), '{"phase":"grind"}');
+
+  test("declarations stay the snippet's own: no keyword strip, no copy-back", () => {
+    const src = "let x = 1; function f() { return 2 }\nconst { a } = { a: 3 };\nreturn x + f() + a;";
+    const oneOff = compileSnippet(src, { persist: false });
+    expect(oneOff.statementsBody).toBe(oneOff.js);
+    expect(oneOff.statementsBody).not.toContain("globalThis");
+    expect(oneOff.statementsBody).toContain("let x = 1");
+    // The REPL body for the same source still strips and copies back.
+    expect(compileSnippet(src, {}).statementsBody).toContain("globalThis[");
+    // A declaration still rules out the expression path, and a bare expression keeps it.
+    expect(oneOff.canTryExpression).toBe(false);
+    expect(compileSnippet("40 + 2", { persist: false }).canTryExpression).toBe(true);
+  });
+
+  test("imports resolve exactly as in the snippet loop, with the prelude kept", () => {
+    const oneOff = compileSnippet('import { one } from "./util";\nconst two = one + 1;\nreturn two;', { workspace: ws, persist: false });
+    expect(oneOff.statementsBody).toContain(`__wrathbench_import__("${ws}/util.ts")`);
+    expect(oneOff.statementsBody).toContain("const two = one + 1");
+    expect(oneOff.statementsBody).not.toContain("globalThis[");
+  });
+
+  test("memory.json is refused as an import, naming what it is and how to read it", () => {
+    expect(() => compileSnippet('import m from "./memory.json";\nm', { workspace: ws, persist: false, memoryFile: true })).toThrow(
+      "memory.json is your program's memory, not a module",
+    );
+    expect(() => resolveWorkspaceImport("memory.json", ws, { memoryFile: true })).toThrow("files.read");
+    // In the snippet loop it is an ordinary JSON file.
+    expect(resolveWorkspaceImport("memory.json", ws)?.rel).toBe("memory.json");
+  });
+});

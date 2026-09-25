@@ -72,6 +72,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet, importedBindingNames, resolveWorkspaceImport, stampWorkspaceImports } from "./rewrite";
+import { installOwnership, Owner, type Ownership } from "./owners";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
 import type {
@@ -110,6 +111,13 @@ const LOG_MAX_CHARS = 4_000;
 // Empty means none (running this file by hand): imports are then refused.
 const WORKSPACE_ENV = process.env["WRATHBENCH_WORKSPACE"];
 const WORKSPACE = WORKSPACE_ENV !== undefined && WORKSPACE_ENV.length > 0 ? WORKSPACE_ENV.replace(/\/+$/, "") : undefined;
+/**
+ * The entrypoint loop (a probing spike): the host sets this only when the run
+ * is `loop: "entrypoint"`, and never forwards a stray value from its own
+ * environment (`sandboxChildEnv`). Everything below that reads it is off in
+ * the snippet loop, whose sandbox therefore behaves exactly as it always has.
+ */
+const ENTRYPOINT = process.env["WRATHBENCH_LOOP"] === "entrypoint";
 
 const send = (msg: ChildToHost): void => {
   // Bun provides process.send when spawned with ipc; absent means we were run
@@ -211,7 +219,7 @@ async function importWorkspaceModule(specifier: string, options?: ImportCallOpti
   const path =
     WORKSPACE !== undefined && specifier.startsWith(`${WORKSPACE}/`)
       ? specifier
-      : (resolveWorkspaceImport(specifier, WORKSPACE)?.abs ?? specifier);
+      : (resolveWorkspaceImport(specifier, WORKSPACE, ENTRYPOINT ? { memoryFile: true } : {})?.abs ?? specifier);
   try {
     return await import(path, options);
   } catch (err) {
@@ -390,6 +398,24 @@ const watchedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response>
   );
 }) as typeof fetch;
 
+// ------------------------------------------------------------- eval context
+
+/**
+ * What an async context belongs to. `signal` and `deadline` are the snippet's
+ * (or, in the entrypoint loop, the program call's); `source` and `owner` exist
+ * only in the entrypoint loop — which buffer a console line goes to, and who
+ * owns the timers and listeners started here (`owners.ts`).
+ */
+interface EvalStore {
+  signal: AbortSignal;
+  deadline?: number;
+  source?: "snippet" | "program";
+  owner?: Owner;
+}
+
+/** The eval whose async context we are in, if any. Set by `evaluate`. */
+const evalContext = new AsyncLocalStorage<EvalStore>();
+
 // ------------------------------------------------------------- console tap
 
 const logBuf: LogEntry[] = [];
@@ -431,7 +457,9 @@ for (const level of ["log", "info", "warn", "error", "debug"] as const) {
     const text = args
       .map((a) => (typeof a === "string" ? a : Bun.inspect(a, { depth: 4 })))
       .join(" ");
-    pushLog(level, text);
+    // Entrypoint loop: a line printed by something a finished snippet started
+    // (its routine unwinding from the abort that ended it) belongs to no result.
+    if (!(ENTRYPOINT && evalContext.getStore()?.owner?.closed === true)) pushLog(level, text);
     realConsole[level]?.(...args);
   };
 }
@@ -452,8 +480,6 @@ function drainHints(): ActionHintNote[] {
 
 // -------------------------------------------------------- ambient snippet API
 
-/** The eval whose async context we are in, if any. Set by `evaluate`. */
-const evalContext = new AsyncLocalStorage<{ signal: AbortSignal; deadline?: number }>();
 const currentSignal = (): AbortSignal | undefined => evalContext.getStore()?.signal;
 /** When the host will abandon the snippet we are inside, if it said. */
 const currentDeadline = (): number | undefined => evalContext.getStore()?.deadline;
@@ -497,6 +523,51 @@ client.events.on("WB_MOVE_RESULT", (e) => {
     settleMoveIntent(d.moveId, d.status, typeof e.ts === "number" ? e.ts : Date.now());
   }
 });
+
+// ------------------------------------------------ ownership (entrypoint loop)
+
+/**
+ * The abort reason a finished snippet's signal carries: it returned, so what it
+ * started is stopped. A rejection carrying it is the harness's own doing and is
+ * never reported as a fault.
+ */
+class SnippetEnded extends Error {
+  override name = "SnippetEnded";
+}
+
+/** Whether an error is only the echo of a harness stop (a finished snippet, a replaced deploy). */
+function isHarnessStop(err: unknown): boolean {
+  if (err instanceof SnippetEnded) return true;
+  const reason = (err as { reason?: unknown } | null)?.reason;
+  return reason instanceof SnippetEnded;
+}
+
+/**
+ * Snippets and program deploys own the timers and listeners they start
+ * (`owners.ts`). Installed only in the entrypoint loop.
+ */
+const ownership: Ownership | null = ENTRYPOINT
+  ? installOwnership<EvalStore>({
+      store: () => evalContext.getStore(),
+      ownerOf: (s) => s.owner,
+      run: (s, fn) => evalContext.run(s, fn),
+      events: client.events as unknown as Parameters<typeof installOwnership>[0]["events"],
+      onHandlerError: (s, opcode, err) => {
+        if (isHarnessStop(err) || s.owner?.closed === true) return;
+        const text = err instanceof Error ? renderError(err) : Bun.inspect(err, { depth: 4 }).slice(0, 1_000);
+        evalContext.run(s, () => pushLog("error", `[events.on(${JSON.stringify(opcode)}) handler] ${text}`));
+      },
+    })
+  : null;
+
+/** Owners of evaluations the host abandoned, retired once the pong has carried their last words home. */
+const abandonedOwners = new Map<number, { owner: Owner; controller: AbortController }>();
+
+/** End what a snippet started: abort its signal (SDK waits settle), then clear its timers and listeners. */
+function retireSnippet(owner: Owner, controller: AbortController): void {
+  if (!controller.signal.aborted) controller.abort(new SnippetEnded("the snippet returned; what it started was stopped"));
+  ownership?.close(owner);
+}
 
 let hostcallId = 0;
 const hostcallPending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -636,7 +707,10 @@ const ambient: Record<string, unknown> = {
    */
   connect: async (): Promise<void> => {
     if (client.events.connected) return;
-    await client.events.connect();
+    // Entrypoint loop: the socket and its handshake and reconnect timers are
+    // the session's plumbing, never the calling snippet's to take down with it.
+    if (ENTRYPOINT) await evalContext.exit(() => client.events.connect());
+    else await client.events.connect();
   },
   sleep,
   /**
@@ -748,8 +822,17 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
   const started = Date.now();
   const controller = new AbortController();
   evalControllers.set(id, controller);
+  // Entrypoint loop: the snippet is a one-off. It owns what it starts, and its
+  // declarations are its own (no REPL persistence).
+  const owner = ENTRYPOINT ? new Owner(`snippet ${id}`) : undefined;
+  if (owner !== undefined) evalOwners.set(id, owner);
+  const store: EvalStore =
+    owner === undefined ? { signal: controller.signal, deadline } : { signal: controller.signal, deadline, source: "snippet", owner };
   try {
-    const compiled = compileSnippet(code, { workspace: WORKSPACE });
+    const compiled = compileSnippet(
+      code,
+      ENTRYPOINT ? { workspace: WORKSPACE, persist: false, memoryFile: true } : { workspace: WORKSPACE },
+    );
     let fn: ((...args: unknown[]) => Promise<unknown>) | null = null;
     if (compiled.canTryExpression) {
       try {
@@ -761,9 +844,7 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     }
     fn ??= new AsyncFunction(compiled.statementsBody);
     const run = fn;
-    const value: unknown = await evalContext.run({ signal: controller.signal, deadline }, () =>
-      run.call(globalThis),
-    );
+    const value: unknown = await evalContext.run(store, () => run.call(globalThis));
     const msg: ChildToHost = {
       t: "result",
       id,
@@ -808,6 +889,10 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     });
   } finally {
     evalControllers.delete(id);
+    evalOwners.delete(id);
+    // A snippet that returned (or threw) ends here; one the host abandoned is
+    // retired once the pong has carried what its abort made it print.
+    if (owner !== undefined && !abandonedOwners.has(id)) retireSnippet(owner, controller);
     const settled = abandonUnwindSettled.get(id);
     if (settled !== undefined) {
       abandonUnwindSettled.delete(id);
@@ -816,11 +901,16 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
   }
 }
 
+/** Entrypoint loop: the owner of each evaluation in flight, by id. */
+const evalOwners = new Map<number, Owner>();
+
 /** Host abandoned this eval: fire its signal. Idempotent; unknown ids are ignored. */
 function abortEval(id: number): void {
   const controller = evalControllers.get(id);
   if (controller === undefined) return;
   evalControllers.delete(id);
+  const owner = evalOwners.get(id);
+  if (owner !== undefined) abandonedOwners.set(id, { owner, controller });
   abandonUnwind = new Promise((resolve) => abandonUnwindSettled.set(id, resolve));
   controller.abort(new Error(`snippet abandoned by the harness (timeout); pending waits cancelled`));
 }
@@ -1020,6 +1110,12 @@ function handle(msg: HostToChild | HostcallResult): void {
             hints: drainHints(),
             ...(note !== undefined ? { note } : {}),
           });
+          // Entrypoint loop: an abandoned snippet's last words are home, so
+          // what it started goes now (its timers and listeners).
+          for (const [abandonedId, a] of abandonedOwners) {
+            abandonedOwners.delete(abandonedId);
+            retireSnippet(a.owner, a.controller);
+          }
         };
         if (unwinding === undefined) pong();
         else void Promise.race([unwinding, Bun.sleep(ABANDON_UNWIND_GRACE_MS)]).then(pong);
@@ -1168,7 +1264,12 @@ function reportBackgroundError(kind: string, reason: unknown): void {
   if (stat.count === 1 && immediateReports < FAULT_IMMEDIATE_CAP) {
     immediateReports++;
     realConsole.error?.(`[sandbox] ${kind}:`, text);
-    send({ t: "fatal", error: `${kind} (sandbox survived; bindings and routines intact): ${text}` });
+    send({
+      t: "fatal",
+      error: ENTRYPOINT
+        ? `${kind} (sandbox survived): ${text}`
+        : `${kind} (sandbox survived; bindings and routines intact): ${text}`,
+    });
     lastFaultNoticeAt = now;
     return;
   }
@@ -1178,12 +1279,15 @@ function reportBackgroundError(kind: string, reason: unknown): void {
     stat.escalated = true;
     rollupPending.delete(signature); // the escalation covers the backlog
     const secs = Math.max(1, Math.round((now - stat.windowStart) / 1000));
-    const escalation =
-      `background routine broken: ${signature} has faulted ${stat.count} times in the last ${secs}s. ` +
-      `The sandbox is alive and your bindings are intact, but a background routine is failing in a tight ` +
-      `loop — from your next snippet, stop it: clearInterval any timers you started, set the flags your ` +
-      `loops check so they exit, then restart the routine with a try/catch inside it. ` +
-      `Further identical faults will only be reported as periodic rollups.`;
+    const escalation = ENTRYPOINT
+      ? `repeated fault: ${signature} has faulted ${stat.count} times in the last ${secs}s. ` +
+        `The sandbox is alive; code is failing in a tight loop. ` +
+        `Further identical faults will only be reported as periodic rollups.`
+      : `background routine broken: ${signature} has faulted ${stat.count} times in the last ${secs}s. ` +
+        `The sandbox is alive and your bindings are intact, but a background routine is failing in a tight ` +
+        `loop — from your next snippet, stop it: clearInterval any timers you started, set the flags your ` +
+        `loops check so they exit, then restart the routine with a try/catch inside it. ` +
+        `Further identical faults will only be reported as periodic rollups.`;
     realConsole.error?.(`[sandbox] ${escalation}`);
     send({ t: "fatal", error: escalation });
     lastFaultNoticeAt = now;
@@ -1203,6 +1307,9 @@ function reportBackgroundError(kind: string, reason: unknown): void {
 }
 
 process.on("unhandledRejection", (reason) => {
+  // Entrypoint loop: the echo of a harness stop — a finished snippet's routine
+  // rejecting on the abort that ended it — is the stop working, not a fault.
+  if (ENTRYPOINT && isHarnessStop(reason)) return;
   reportBackgroundError("unhandled promise rejection", reason);
 });
 

@@ -11,6 +11,8 @@ import { join } from "node:path";
 import {
   FILE_MAX_CHARS,
   LISTING_FIRST_LINE_CHARS,
+  MEMORY_MAX_CHARS,
+  MEMORY_WRITE_REFUSAL,
   NOTES_MAX_CHARS,
   SNIPPET_VOCABULARY,
   WORKSPACE_LISTING_HEADER,
@@ -393,5 +395,71 @@ describe("workspace: runs before the workspace, and continuations", () => {
     ws.clear();
     expect(existsSync(ws.dir)).toBe(true);
     expect(ws.list()).toEqual([{ path: "notes.md", bytes: 0, firstLine: "" }]);
+  });
+});
+
+describe("memory.json in the entrypoint loop", () => {
+  function program(): Workspace {
+    return new Workspace(join(mkdtempSync(join(tmpdir(), "wrathbench-ws-mem-")), "workspace"), { memory: true });
+  }
+
+  test("the file tools and files refuse it by name, saying how to change it", () => {
+    const ws = program();
+    ok(ws.writeMemory('{"phase":"grind"}'));
+    for (const r of [
+      ws.write("memory.json", "{}"),
+      ws.edit("memory.json", "grind", "rest"),
+      ws.delete("memory.json"),
+      ws.write("./memory.json", "{}"),
+      ws.edit("memory.json", "grind", "rest", false, SNIPPET_VOCABULARY),
+    ]) {
+      expect(refused(r)).toBe(MEMORY_WRITE_REFUSAL);
+    }
+    expect(MEMORY_WRITE_REFUSAL).toContain('memory.phase = "grind"');
+    // read works, and the listing shows it like any other file.
+    expect(ok(ws.read("memory.json"))).toBe('{"phase":"grind"}');
+    expect(ws.list().map((f) => f.path)).toEqual(["memory.json", "notes.md"]);
+    // A memory.json below the root is an ordinary file.
+    ok(ws.write("lib/memory.json", "{}"));
+  });
+
+  test("a save never moves the import version, and memory.json is not importable", () => {
+    const ws = program();
+    const before = ws.importVersion;
+    ok(ws.writeMemory("{}"));
+    ok(ws.writeMemory('{"n":1}'));
+    expect(ws.importVersion).toBe(before);
+    expect(ws.importable("memory.json")).toBe(false);
+    expect(ws.importable("lib/memory.json")).toBe(true);
+    expect(ws.importable("main.ts")).toBe(true);
+  });
+
+  test("the limits hold: 32,000 chars of JSON, and the workspace total", () => {
+    const ws = program();
+    expect(refused(ws.writeMemory("x".repeat(MEMORY_MAX_CHARS + 1)))).toContain(
+      `memory would be ${MEMORY_MAX_CHARS + 1} chars of JSON, over its ${MEMORY_MAX_CHARS}-char limit`,
+    );
+    ok(ws.writeMemory("x".repeat(MEMORY_MAX_CHARS)));
+    ok(ws.writeMemory("{}"));
+    for (let i = 0; i < 32; i++) ok(ws.write(`big/${i}.txt`, "y".repeat(FILE_MAX_CHARS)));
+    expect(refused(ws.writeMemory("z".repeat(MEMORY_MAX_CHARS)))).toContain(`over its ${WORKSPACE_MAX_BYTES}-byte limit`);
+  });
+
+  test("a snippet-loop workspace keeps every old rule: memory.json is an ordinary JSON file there", () => {
+    const ws = fresh();
+    const before = ws.importVersion;
+    ok(ws.write("memory.json", "{}"));
+    expect(ws.importVersion).toBe(before + 1);
+    expect(ws.importable("memory.json")).toBe(true);
+    ok(ws.delete("memory.json"));
+    expect(refused(ws.writeMemory("{}"))).toBe("this workspace has no program memory");
+  });
+
+  test("a continuation carries memory.json with the rest of the workspace", () => {
+    const pred = mkdtempSync(join(tmpdir(), "wrathbench-ws-mempred-"));
+    ok(openRunWorkspace(pred, { memory: true }).writeMemory('{"kept":true}'));
+    const next = openRunWorkspace(mkdtempSync(join(tmpdir(), "wrathbench-ws-memnext-")), { memory: true });
+    expect(carryWorkspace(next, pred)).toBe(true);
+    expect(ok(next.read("memory.json"))).toBe('{"kept":true}');
   });
 });
