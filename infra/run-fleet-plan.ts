@@ -1124,7 +1124,7 @@ export function applyEnded(runs: readonly RunFact[], ended: readonly EndedRun[],
 //
 // A freeplay character is durable (operator ask, 2026-08-29): the operator
 // disables and re-enables an `idle: "unlimited"` ref at will, and the character
-// comes back to the same account, the same character and the same scratchpad
+// comes back to the same account, the same character and the same workspace
 // instead of a fresh level-1 character. Its identity is nothing new on disk:
 // the ref's latest ENDED freeplay run that recorded an account and a
 // character. A paused one is `planResumes`' (same run id); an ended one — the

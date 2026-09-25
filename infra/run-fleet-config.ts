@@ -220,7 +220,7 @@ export interface FleetJob {
   resume?: { runId: string; model: string; effort?: string | undefined };
   /**
    * Set by `planContinuations` on the `idle: "unlimited"` lane's next
-   * session: the character's previous run, whose character and scratchpad this
+   * session: the character's previous run, whose character and workspace this
    * spawn carries on (`--continue-from`). Never from the file.
    */
   continueFrom?: string;

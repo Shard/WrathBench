@@ -29,7 +29,7 @@
  * on a backoff, it is to advance to the next model and come back later. So a
  * run that pauses `rate-limited` before it got going is deferred to a retry
  * queue and the roster moves on; a run that pauses mid-episode is worth
- * resuming in place, because its character and scratchpad are live progress.
+ * resuming in place, because its character and workspace are live progress.
  *
  * Two live-world facts drive the session handling here:
  *
@@ -45,7 +45,7 @@
  *  - A fresh (non-resumed) run wipes every character on its account first
  *    (runner/src/run.ts episode hygiene). So a run deferred to the end of the
  *    roster comes back to an empty account: `--resume` restores its trajectory
- *    and scratchpad, not its level. That is the reason mid-episode pauses are
+ *    and workspace, not its level. That is the reason mid-episode pauses are
  *    retried in place *before* being deferred.
  */
 
@@ -159,7 +159,7 @@ export interface RosterSpec {
    */
   resumeOnPause?: boolean;
   /**
-   * A freeplay continuation: the run id whose character and scratchpad this
+   * A freeplay continuation: the run id whose character and workspace this
    * launch carries on (`--continue-from`). The fleet sets it on the
    * `idle: "unlimited"` lane's next session when the character's previous run
    * ended; a fresh launch only, never restated on `--resume`.
@@ -1772,7 +1772,7 @@ async function main(): Promise<void> {
         `\n        deferred spec -> per-spec backoff (${DEFER_LADDER}, escalating): skipped while cooling,` +
         `\n        then RESUMED in place on its own run id (never relaunched fresh at L1); TAINTED` +
         `\n        (dropped from the rotation) on consecutive defer ${DEFER_TAINT_AFTER}. Resume` +
-        `\n        restores trajectory + scratchpad but NOT level — a rotation-mate's fresh launch wipes` +
+        `\n        restores trajectory + workspace but NOT level — a rotation-mate's fresh launch wipes` +
         `\n        the shared account, so a resumed character is recreated at level 1.` +
         `\n        non-loop retry queue: up to ${MAX_RETRY_CYCLES} cycle(s), ${CYCLE_GAP_MS / 60_000}m gap before each (loop mode` +
         `\n        resumes in the rotation instead)` +
@@ -1885,7 +1885,7 @@ async function main(): Promise<void> {
       }
       // A deferred spec resumes its stored run id in place instead of spawning
       // a fresh L1 -cN — this is the "resume, don't recreate" Mark asked for.
-      // Honesty (§C): resume restores that run's trajectory and scratchpad, but
+      // Honesty (§C): resume restores that run's trajectory and workspace, but
       // NOT its level — a rotation-mate's fresh launch wipes every character on the
       // shared account (run.ts hygiene, which we cannot change from here), so a
       // resumed run recreates its character at level 1. For a 0-turn rate-limit
@@ -1908,7 +1908,7 @@ async function main(): Promise<void> {
           runId: target.runId,
           model: a.spec.model,
           outcome: "retry",
-          detail: `resuming in place after ${plan.reason}; resume restores trajectory + scratchpad, not level`,
+          detail: `resuming in place after ${plan.reason}; resume restores trajectory + workspace, not level`,
         });
       }
       launched++;
