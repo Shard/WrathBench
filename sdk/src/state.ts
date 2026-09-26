@@ -3298,7 +3298,8 @@ export class StateCache {
   /**
    * The nearest object in view that passes `filter`, by straight-line distance
    * from our own last observed position. `undefined` when we have no position,
-   * or nothing in view has one — never a guess.
+   * or nothing in view has one — never a guess. The answer is the raw
+   * `NearbyObject` (wrapped fields, no `distance`), not a `units()` row.
    *
    * `filter` is either a `units()` criteria object — `closest({ entry: 196 })`,
    * `closest({ name: "Deputy Willem", npc: true })` — with exactly the meaning
