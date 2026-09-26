@@ -3099,10 +3099,16 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
         ]),
     });
     const client = await inWorld(stub);
-    const result = await client.reclaimCorpse(undefined, { timeout: 500, attemptTimeout: 120 });
+    // A distance waiting cannot close is answered at once, with nothing sent,
+    // rather than after the whole default budget.
+    const started = Date.now();
+    const result = await client.reclaimCorpse();
+    expect(Date.now() - started).toBeLessThan(1000);
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
     expect(result.reason).toBe("too_far");
+    expect(result.attempts).toBe(0);
+    expect(stub.actions.filter((a) => a.action === "reclaim_corpse")).toHaveLength(0);
     expect(result.distance).toBe(387);
     expect(result.radius).toBe(39);
     expect(result.corpse?.source).toBe("corpse_query");
@@ -3110,6 +3116,23 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
     expect(result.hint).toContain("moveTo(state.self.corpse.value)");
     expect(result.hint).toContain("25% durability");
     expect(result.hint).toContain("no resurrection sickness at your level");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a ghost just past the radius is still sent the reclaim, since the core's reach adds both sizes", async () => {
+    const stub = startStub({
+      onConnect: () =>
+        deadWorld(1, [
+          corpseQuery(91, { map: 0, x: -1234.5, y: 987.25, z: 42.125 }),
+          selfArrived(92, { x: -1234.5 + 40, y: 987.25, z: 42.125 }),
+        ]),
+    });
+    const client = await inWorld(stub);
+    const pending = client.reclaimCorpse(undefined, { timeout: 4000, attemptTimeout: 1500 });
+    await untilAction(stub, "reclaim_corpse");
+    stub.push(JSON.stringify(deathReleaseCleared(93)));
+    expect((await pending).status).toBe("reclaimed");
     client.close();
     await stub.stop();
   });

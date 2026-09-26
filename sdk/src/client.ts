@@ -2208,6 +2208,14 @@ export type ReclaimCorpseReason =
 export const CORPSE_RECLAIM_RADIUS = 39;
 
 /**
+ * Yards past `CORPSE_RECLAIM_RADIUS` before `reclaimCorpse` refuses without
+ * sending. The core measures in 3D and adds both objects' sizes (the corpse's
+ * ~0.4y and the player's 1.5y combat reach) to the radius, so a straight-line
+ * 2D distance only proves the refusal once it clears those too.
+ */
+const CORPSE_RECLAIM_SLACK = 3;
+
+/**
  * The Spirit Healer's price, as a rule rather than a table: every equipped
  * item loses 25% durability, and from level 11 the character gets resurrection
  * sickness — one minute per level above 10, capped at ten minutes from level
@@ -3178,6 +3186,8 @@ export class WrathClient {
    * Refusals are silent (see `ReclaimCorpseResult`), so the loop re-sends
    * every `attemptTimeout` until the budget runs out, and the verdict is read
    * off `SMSG_DEATH_RELEASE_LOC { map: -1 }` and the character's own health.
+   * The one refusal no wait can cure — a ghost observed standing well outside
+   * the reclaim radius — is answered as `too_far` before anything is sent.
    * The ambient snippet signal aborts every wait here, as everywhere.
    *
    * Every game outcome is a value; the one throw is a refused request — a
@@ -3224,6 +3234,20 @@ export class WrathClient {
         reason: "not_dead",
         hint: `state.self.health is ${before}, so you are alive and there is nothing to reclaim`,
       };
+    }
+    // A ghost observed out of reclaim range cannot close the distance by
+    // waiting: the reclaim delay and the re-sends both assume it is standing
+    // at the corpse. Nothing is sent, and the refusal is the one the loop would
+    // have ended on — after its whole budget — with the distance and the way back.
+    const corpseAt = this.state.self.corpse?.value;
+    const here = this.state.self.position?.value;
+    if (
+      corpseAt !== undefined &&
+      here !== undefined &&
+      corpseAt.map === here.map &&
+      distance2d(here, corpseAt) > CORPSE_RECLAIM_RADIUS + CORPSE_RECLAIM_SLACK
+    ) {
+      return { ok: false, status: "not_reclaimed", ...facts(0), ...this.reclaimRefusal(0, options) };
     }
 
     // The resurrect is announced by SMSG_DEATH_RELEASE_LOC clearing the marker
