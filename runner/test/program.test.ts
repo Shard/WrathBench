@@ -542,7 +542,7 @@ describe("the host: deploy at a yield, the heartbeat, halts and restarts", () =>
     expect(host.totalRestarts).toBe(1);
     const notice = host.drainNotices().find((n) => n.kind === "sandbox_restarted")!;
     expect(notice.text).toContain("your program (main.ts, deploy 1) blocked the event loop for 400ms");
-    expect(notice.text).toContain("it stays stopped until you end your turn");
+    expect(notice.text).toContain("it stays stopped until you save a change to main.ts or a file it imports, or end your turn");
     expect(notice.text).not.toContain("background routine");
     // Nothing changed, but a halted program is due at the yield.
     const again = await host.deployAtYield();
@@ -604,6 +604,117 @@ describe("the host: deploy at a yield, the heartbeat, halts and restarts", () =>
 });
 
 type ProgramHostEventKind = "report" | "halted" | "restart" | "reload" | "stopped";
+
+describe("the host: deploy on a save", () => {
+  const HEARTBEAT = { pollMs: 40, blockGraceMs: 400 };
+
+  test("a save to main.ts or to a file it imports deploys at once; notes.md, a file outside the graph and the yield after do not", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "lib/engine.ts", "export function loop(ctx) {\n  ctx.memory.gen = 1;\n}\n");
+    // No main.ts yet: nothing imports the engine.
+    expect(await host.deployOnSave("lib/engine.ts")).toBeNull();
+    write(ws, "main.ts", 'export { loop } from "./lib/engine";\n');
+    expect(await host.deployOnSave("main.ts")).toEqual({ deploy: 1, version: ws.importVersion, ok: true, exports: ["loop"], action: "load" });
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 1 });
+    await until(async () => ((await memoryValue(host, "memory.gen")) === "1" ? true : undefined));
+    // main.ts is a re-export: the change that matters is in the module it imports.
+    write(ws, "lib/engine.ts", "export function loop(ctx) {\n  ctx.memory.gen = 2;\n}\n");
+    expect(await host.deployOnSave("lib/engine.ts")).toMatchObject({ deploy: 2, ok: true, action: "load" });
+    await until(async () => ((await memoryValue(host, "memory.gen")) === "2" ? true : undefined));
+    write(ws, "lib/scratch.ts", "export const probe = 1;\n");
+    expect(await host.deployOnSave("lib/scratch.ts")).toBeNull();
+    write(ws, "notes.md", "plan");
+    expect(await host.deployOnSave("notes.md")).toBeNull();
+    expect(host.programEdits()).toEqual({ editsSinceDeploy: false, failedDeploy: null });
+    // What the saves deployed is what the yield would have: nothing is loaded twice.
+    expect(await host.deployAtYield()).toBeNull();
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 2 });
+  });
+
+  test("a save that fails to load leaves the running deploy running, untried at the yield; the file it was missing loads it", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.gen = 1;\n  ctx.memory.n = (ctx.memory.n ?? 0) + 1;\n}\n");
+    expect((await host.deployOnSave("main.ts"))?.ok).toBe(true);
+    await until(async () => (Number(await memoryValue(host, "memory.n")) > 1 ? true : undefined));
+    // The first file of a two-file change: main.ts imports a module not written yet.
+    write(ws, "main.ts", 'import { gen } from "./lib/gen";\nexport function loop(ctx) {\n  ctx.memory.gen = gen;\n  ctx.memory.n = (ctx.memory.n ?? 0) + 1;\n}\n');
+    const failed = await host.deployOnSave("main.ts");
+    expect(failed).toMatchObject({ deploy: 2, ok: false, action: "load" });
+    expect(failed?.error).toContain("lib/gen");
+    // Nothing the next report carries: a save's failed load is not one of the program's errors.
+    expect((await host.programReport()).errors).toEqual([]);
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 1 });
+    const n = Number(await memoryValue(host, "memory.n"));
+    await until(async () => (Number(await memoryValue(host, "memory.n")) > n ? true : undefined));
+    expect(await memoryValue(host, "memory.gen")).toBe("1");
+    expect(host.programEdits()).toEqual({ editsSinceDeploy: true, failedDeploy: 2 });
+    // The yield does not try the same files again.
+    expect(await host.deployAtYield()).toBeNull();
+    // The second file: the import it was missing now resolves, so it is the program's, and loads it.
+    write(ws, "lib/gen.ts", "export const gen = 3;\n");
+    expect(await host.deployOnSave("lib/gen.ts")).toMatchObject({ deploy: 3, ok: true });
+    await until(async () => ((await memoryValue(host, "memory.gen")) === "3" ? true : undefined));
+    expect(host.programEdits()).toEqual({ editsSinceDeploy: false, failedDeploy: null });
+    // A deleted import fails to load too, and deploy 3 keeps running.
+    ws.delete("lib/gen.ts");
+    expect(await host.deployOnSave("lib/gen.ts")).toMatchObject({ deploy: 4, ok: false });
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 3 });
+    // Deleting main.ts unloads the program.
+    write(ws, "lib/gen.ts", "export const gen = 5;\n");
+    expect((await host.deployOnSave("lib/gen.ts"))?.ok).toBe(true);
+    ws.delete("main.ts");
+    expect(await host.deployOnSave("main.ts")).toMatchObject({ deploy: 5, ok: true, action: "unload" });
+    expect(host.programState.kind).toBe("none");
+  });
+
+  test("the yield loads a program no save has: never deployed in this host, or changed from a snippet since the last attempt", async () => {
+    const { host: first, ws } = makeHost();
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.gen = 1;\n}\n");
+    await first.stop();
+    // A new host on the same workspace (a resumed run): nothing was ever tried here, so the yield loads it.
+    const { host } = makeHost(ws);
+    expect(await host.deployAtYield()).toMatchObject({ deploy: 1, ok: true, action: "load" });
+    expect(await host.deployAtYield()).toBeNull();
+    // A snippet's files.write is not a save through the tools: it waits for the yield.
+    const edited = await host.evalSnippet('files.write("main.ts", "export function loop(ctx) {\\n  ctx.memory.gen = 2;\\n}\\n")');
+    expect(edited.ok).toBe(true);
+    expect(host.programEdits()).toEqual({ editsSinceDeploy: true, failedDeploy: null });
+    expect(await host.deployAtYield()).toMatchObject({ deploy: 2, ok: true });
+    await until(async () => ((await memoryValue(host, "memory.gen")) === "2" ? true : undefined));
+  });
+
+  test("a save while the program is halted loads it at once", async () => {
+    const { host, ws } = makeHost(undefined, HEARTBEAT);
+    const events: string[] = [];
+    host.onProgramEvent((e) => {
+      if (e.kind !== "report") events.push(e.kind);
+    });
+    write(ws, "main.ts", "export function loop(ctx) {\n  if (ctx.tick === 3) for (;;) {}\n}\n");
+    expect((await host.deployOnSave("main.ts"))?.ok).toBe(true);
+    await until(() => (events.includes("halted") ? true : undefined), 8_000);
+    expect(host.programState).toMatchObject({ kind: "halted", deploy: 1 });
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.fixed = true;\n}\n");
+    expect(await host.deployOnSave("main.ts")).toMatchObject({ deploy: 2, ok: true });
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 2 });
+    await until(async () => ((await memoryValue(host, "memory.fixed")) === "true" ? true : undefined));
+  });
+
+  test("a restart with only files outside the program changed brings the program back by itself", async () => {
+    const { host, ws } = makeHost(undefined, HEARTBEAT);
+    const events: ProgramHostEventKind[] = [];
+    host.onProgramEvent((e) => {
+      if (e.kind !== "report") events.push(e.kind);
+    });
+    write(ws, "main.ts", "export function loop(ctx) {\n  ctx.memory.n = (ctx.memory.n ?? 0) + 1;\n}\n");
+    expect((await host.deployOnSave("main.ts"))?.ok).toBe(true);
+    write(ws, "lib/scratch.ts", "export const probe = 1;\n");
+    const crashed = await host.evalSnippet("process.exit(3)");
+    expect(crashed.restarted).toBe(true);
+    await until(() => (events.includes("reload") ? true : undefined));
+    expect(events).toEqual(["restart", "reload"]);
+    expect(host.programState).toMatchObject({ kind: "running", deploy: 1 });
+  });
+});
 
 describe("facts the child sees", () => {
   test("a level gained, a quest turned in and a death are each reported once", async () => {

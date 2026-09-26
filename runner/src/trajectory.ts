@@ -308,6 +308,14 @@ export type EntrypointRecord =
   | {
       t: "deploy";
       wake: number;
+      /**
+       * What made it: a file tool's save of main.ts or a file it imports
+       * (`tool` and `path` name it), the end of a wake, or a sandbox restart
+       * the program was brought back from (`reload`).
+       */
+      trigger: "save" | "yield" | "restart";
+      tool?: "write_file" | "edit_file" | "delete_file";
+      path?: string;
       deploy: number;
       version: number;
       ok: boolean;

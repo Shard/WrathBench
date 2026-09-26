@@ -15,6 +15,7 @@ import {
   clock,
   duration,
   money,
+  renderSaveDeploy,
   renderWake,
   sleepUntilWake,
   stateDelta,
@@ -377,7 +378,7 @@ describe("the [wake] block", () => {
         memory: null,
       }),
     );
-    expect(text).toBe("[wake 1 · request 1 of 20 in this wake · woke for: start]\nprogram: none · write main.ts; it loads when you end your turn");
+    expect(text).toBe("[wake 1 · request 1 of 20 in this wake · woke for: start]\nprogram: none · write main.ts; it loads when you save it");
   });
 
   test("a failed load names the deploy still running, a cap is said, and the caps hold", () => {
@@ -525,6 +526,46 @@ describe("the [wake] block", () => {
     expect(shown[0]).toBe("- loop() E99: x (at 12:31:02)");
     expect(shown.slice(1, 8).map((l) => l.split(":")[0])).toEqual(["- loop() E9", "- loop() E8", "- loop() E7", "- loop() E6", "- loop() E5", "- loop() E4", "- loop() E3"]);
     expect(shown[8]).toBe("- +3 more signatures");
+  });
+
+  test("the program line says what loads at a save and what waits for the yield", () => {
+    const line = (program: WakeView["program"]): string => renderWake(view({ program })).split("\n")[1]!;
+    expect(line({ state: "running", deploy: 7, deployedAt: T0, editsSinceDeploy: true, failedDeploy: 8, mainExists: true })).toContain(
+      "· edits since deploy: yes, they failed to load as deploy 8",
+    );
+    expect(line({ state: "none", editsSinceDeploy: false, failedDeploy: 3, mainExists: true })).toBe(
+      "program: none running · main.ts failed to load as deploy 3; it loads when you save a change to it",
+    );
+    expect(line({ state: "none", editsSinceDeploy: false, mainExists: true })).toBe("program: none running · main.ts loads when you end your turn");
+    expect(line({ state: "halted", deploy: 7, editsSinceDeploy: false, mainExists: true })).toBe(
+      "program: main.ts deploy 7, halted (it blocked the event loop) · loads again when you save a change to it or end your turn",
+    );
+    expect(line({ state: "stopped", deploy: 7, editsSinceDeploy: true, mainExists: true })).toBe(
+      "program: main.ts deploy 7, stopped by a sandbox restart · loads again when you save a change to it or end your turn",
+    );
+  });
+
+  test("a save's deploy in the [wake] block's words, with its version and exports", () => {
+    const running = { kind: "running" as const, deploy: 4, version: 9, at: T0 };
+    expect(renderSaveDeploy({ deploy: 5, version: 12, ok: true, exports: ["loop", "on.WB_MOVE_RESULT"], action: "load" }, T0, { ...running, deploy: 5 })).toBe(
+      "deploy 5 loaded (12:31:02, version 12) and runs now; exports loop, on.WB_MOVE_RESULT",
+    );
+    expect(
+      renderSaveDeploy(
+        { deploy: 5, version: 12, ok: true, exports: ["on.SMSG_LEVELUP"], warnings: ["on.SMSG_LEVELUP is not an event name on the event stream, so it is never called; nearest: SMSG_LEVELUP_INFO"], action: "load" },
+        T0,
+        { ...running, deploy: 5 },
+      ),
+    ).toBe(
+      "deploy 5 loaded (12:31:02, version 12) and runs now; exports on.SMSG_LEVELUP; 1 warning:\n    on.SMSG_LEVELUP is not an event name on the event stream, so it is never called; nearest: SMSG_LEVELUP_INFO",
+    );
+    expect(renderSaveDeploy({ deploy: 5, version: 12, ok: false, error: "BuildMessage: Unexpected ; at main.ts:3:13 — const x = ;", action: "load" }, T0, running)).toBe(
+      "deploy 5 failed to load (12:31:02, version 12); deploy 4 keeps running:\n    BuildMessage: Unexpected ; at main.ts:3:13 — const x = ;",
+    );
+    expect(renderSaveDeploy({ deploy: 1, version: 3, ok: false, error: "x", action: "load" }, T0, { kind: "none" })).toContain("; no program is running:");
+    expect(renderSaveDeploy({ deploy: 4, version: 13, ok: true, action: "unload" }, T0, { kind: "none" })).toBe(
+      "deploy 4 unloaded (12:31:02): main.ts is gone, so no program runs",
+    );
   });
 
   test("formats: clock in UTC, durations, money", () => {

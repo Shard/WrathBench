@@ -10,6 +10,7 @@ import {
   resolveWorkspaceImport,
   scanTopLevelDeclarations,
   stampWorkspaceImports,
+  workspaceImportGraph,
 } from "../src/sandbox/rewrite";
 
 describe("extractPatternNames", () => {
@@ -263,6 +264,52 @@ describe("import statements", () => {
     expect(out).toContain('const s = "from \\"./nowhere\\""');
     // Nothing relative: untouched, byte for byte.
     expect(stampWorkspaceImports("export const a = 1;\n", file, ws, "7", "ts")).toBe("export const a = 1;\n");
+  });
+});
+
+describe("workspaceImportGraph: the files main.ts depends on, as the loader follows them", () => {
+  const graphOf = (files: Record<string, string>): Map<string, string | null> => {
+    const ws = mkdtempSync(join(tmpdir(), "wrathbench-rw-graph-"));
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(join(ws, path, ".."), { recursive: true });
+      writeFileSync(join(ws, path), text);
+    }
+    return workspaceImportGraph(ws, "main.ts");
+  };
+
+  test("reachable files with their text, the candidates tried before the one that resolved, and nothing else", () => {
+    const g = graphOf({
+      "main.ts": 'export { loop, on } from "./lib/engine";\n',
+      "lib/engine.ts": 'import data from "../data.json";\nimport type { T } from "./types";\nimport { util } from "./util";\nconst later = () => import("./lazy");\nexport const loop = () => util(data);\nexport const on = {};\n',
+      "lib/util.js": "export const util = (x) => x;\n",
+      "lib/lazy.ts": "export const z = 1;\n",
+      "lib/types.ts": "export type T = number;\n",
+      "data.json": "{}",
+      "lib/unused.ts": "export const u = 1;\n",
+      "notes.md": "plan",
+    });
+    expect(g.get("main.ts")).toBe('export { loop, on } from "./lib/engine";\n');
+    expect(g.get("lib/engine.ts")).toContain("util(data)");
+    expect(g.get("data.json")).toBe("{}");
+    expect(g.get("lib/lazy.ts")).toBe("export const z = 1;\n");
+    // ./util resolved to util.js: util.ts and util.tsx, tried first, would change that by existing.
+    expect(g.get("lib/util.js")).toContain("util");
+    expect(g.has("lib/util.ts")).toBe(true);
+    expect(g.get("lib/util.ts")).toBeNull();
+    expect(g.get("lib/util.tsx")).toBeNull();
+    // Tried after the one that resolved, erased as a type, or imported by nothing: not the program's.
+    expect(g.has("lib/util.mjs")).toBe(false);
+    expect(g.has("lib/types.ts")).toBe(false);
+    expect(g.has("lib/unused.ts")).toBe(false);
+    expect(g.has("notes.md")).toBe(false);
+  });
+
+  test("an import of a file not written yet names every candidate; a file that does not parse is a leaf; no main.ts is one absent key", () => {
+    const g = graphOf({ "main.ts": 'import { a } from "./lib/new";\nimport { b } from "./broken";\nexport const on = {};\n', "broken.ts": 'import { c } from "./c";\nexport const b = ;\n', "c.ts": "export const c = 1;\n" });
+    for (const path of ["lib/new.ts", "lib/new.tsx", "lib/new.js", "lib/new.mjs", "lib/new.jsx", "lib/new/index.ts", "lib/new/index.js"]) expect(g.get(path)).toBeNull();
+    expect(g.get("broken.ts")).toContain("export const b = ;");
+    expect(g.has("c.ts")).toBe(false);
+    expect([...graphOf({ "lib/engine.ts": "export const loop = () => {};\n" })]).toEqual([["main.ts", null]]);
   });
 });
 

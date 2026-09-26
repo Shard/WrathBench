@@ -36,7 +36,10 @@ describe("the entrypoint prompt", () => {
     expect(ENTRY).toContain("## Your program");
     expect(ENTRY).toContain("export async function loop(ctx) { … }");
     expect(ENTRY).toContain("A tick has 120 seconds and a handler 10");
-    expect(ENTRY).toContain("Your changes take effect when you end your turn");
+    expect(ENTRY).toContain(
+      "Your changes take effect as soon as you save them: a write_file, edit_file or delete_file that changes main.ts or a file it imports loads main.ts afresh in place of the running program, whose tick and handlers in flight are aborted and whose timers and event listeners are removed, and the tool's result says whether it loaded. Files changed from a snippet load when you end your turn.",
+    );
+    expect(ENTRY).not.toContain("Your changes take effect when you end your turn");
     expect(ENTRY).toContain("It holds at most 32000 characters of JSON");
     expect(ENTRY).toContain("## Snippets");
     expect(ENTRY).toContain("Nothing a snippet starts outlives it");

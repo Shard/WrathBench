@@ -8,7 +8,9 @@
  *  - `WakeLog`: everything since the model last ended its turn — the program's
  *    reports (ticks, errors, `ctx.wake` requests, facts, console, hints), what
  *    the host said about it (halts, restarts, reloads), and the deploy made at
- *    the yield — and which of it is a reason to wake.
+ *    the yield — and which of it is a reason to wake. A deploy made by a save
+ *    is not in it: the save's own result reports it (`renderSaveDeploy`), and a
+ *    failed one wakes no one.
  *  - `sleepUntilWake`: the sleep itself, with its timing rules — the first
  *    reason opens a `WAKE_COALESCE_MS` window so a cascade is one wake, no wake
  *    comes sooner than `MIN_SLEEP_MS` after the yield, a reason already shown
@@ -123,7 +125,10 @@ export interface WakeView {
     state: ProgramState["kind"];
     deploy?: number | undefined;
     deployedAt?: number | undefined;
+    /** main.ts or a file it imports differs from what the current deploy loaded. */
     editsSinceDeploy: boolean;
+    /** The deploy that already failed to load main.ts and its imports as they are now (the yield does not try them again). */
+    failedDeploy?: number | null | undefined;
     mainExists: boolean;
   };
   ticks: number;
@@ -269,7 +274,7 @@ export class WakeLog {
         this.host.push({
           kind: "halted",
           at: e.at,
-          detail: `your program (deploy ${e.deploy}) blocked the event loop; the sandbox restarted, and main.ts loads again when you end your turn`,
+          detail: `your program (deploy ${e.deploy}) blocked the event loop; the sandbox restarted, and main.ts loads again when you save a change to it or end your turn`,
         });
         this.ledger.halts++;
         this.reason("halted", now);
@@ -283,7 +288,7 @@ export class WakeLog {
         this.host.push({
           kind: "stopped",
           at: e.at,
-          detail: `files changed since deploy ${e.deploy}, so it was not reloaded after the restart; main.ts loads again when you end your turn`,
+          detail: `files changed since deploy ${e.deploy}, so it was not reloaded after the restart; main.ts loads again when you save a change to it or end your turn`,
         });
         return;
       case "reload":
@@ -606,18 +611,25 @@ function programLine(v: WakeView): string {
   const done = `${count(v.ticks)} tick${v.ticks === 1 ? "" : "s"} since you ended your turn${v.ticks > 0 ? `, longest ${duration(v.longestTickMs)}` : ""}`;
   const running = v.tickInFlight === null ? "" : `, tick ${count(v.tickInFlight.tick)} running for ${duration(v.tickInFlight.runningMs)}`;
   const stats = `${done}${running}, ${count(v.overruns)} overrun${v.overruns === 1 ? "" : "s"}`;
-  const edits = p.editsSinceDeploy ? "edits since deploy: yes, they load when you end your turn" : "no edits since deploy";
+  const failed = p.failedDeploy ?? null;
+  // Edits a save already tried and failed to load are not tried again at the yield; any others are.
+  const edits = !p.editsSinceDeploy
+    ? "no edits since deploy"
+    : failed !== null
+      ? `edits since deploy: yes, they failed to load as deploy ${failed}`
+      : "edits since deploy: yes, they load when you end your turn";
   switch (p.state) {
     case "none":
-      return p.mainExists
-        ? "program: none running · main.ts loads when you end your turn"
-        : "program: none · write main.ts; it loads when you end your turn";
+      if (!p.mainExists) return "program: none · write main.ts; it loads when you save it";
+      return failed !== null
+        ? `program: none running · main.ts failed to load as deploy ${failed}; it loads when you save a change to it`
+        : "program: none running · main.ts loads when you end your turn";
     case "running":
       return `program: main.ts deploy ${p.deploy ?? "?"} (${p.deployedAt === undefined ? "?" : clock(p.deployedAt)}), running · ${stats} · ${edits}`;
     case "halted":
-      return `program: main.ts deploy ${p.deploy ?? "?"}, halted (it blocked the event loop) · loads again when you end your turn`;
+      return `program: main.ts deploy ${p.deploy ?? "?"}, halted (it blocked the event loop) · loads again when you save a change to it or end your turn`;
     case "stopped":
-      return `program: main.ts deploy ${p.deploy ?? "?"}, stopped by a sandbox restart · loads again when you end your turn`;
+      return `program: main.ts deploy ${p.deploy ?? "?"}, stopped by a sandbox restart · loads again when you save a change to it or end your turn`;
   }
 }
 
@@ -675,6 +687,25 @@ function memoryBlock(memory: string | null, unchanged: boolean): string[] {
   const head = `[memory.json, ${count(memory.length)} chars]`;
   if (memory.length <= WAKE_MEMORY_CHARS) return [head, memory];
   return [head, `… (${count(memory.length - WAKE_MEMORY_CHARS)} chars before)`, memory.slice(-WAKE_MEMORY_CHARS)];
+}
+
+/**
+ * A deploy a save made, as the lines the save's tool result ends with: the
+ * [wake] block's wording for a deploy, with the version and what the program
+ * exports, so the model learns from the save itself whether its change is
+ * running. `state` is the program after the deploy. Pure.
+ */
+export function renderSaveDeploy(rec: DeployRecord, at: number, state: ProgramState): string {
+  if (rec.action === "unload") return `deploy ${rec.deploy} unloaded (${clock(at)}): main.ts is gone, so no program runs`;
+  const when = `(${clock(at)}, version ${rec.version})`;
+  if (!rec.ok) {
+    const keeps = state.kind === "running" ? `deploy ${state.deploy} keeps running` : "no program is running";
+    return [`deploy ${rec.deploy} failed to load ${when}; ${keeps}:`, ...(rec.error ?? "").split("\n").map((t) => `    ${t.trim()}`)].join("\n");
+  }
+  const exports = rec.exports !== undefined && rec.exports.length > 0 ? rec.exports.join(", ") : "an on with no handlers";
+  const w = rec.warnings ?? [];
+  const head = `deploy ${rec.deploy} loaded ${when} and runs now; exports ${exports}`;
+  return w.length === 0 ? head : [`${head}; ${w.length} warning${w.length === 1 ? "" : "s"}:`, ...w.map((t) => `    ${t}`)].join("\n");
 }
 
 /**

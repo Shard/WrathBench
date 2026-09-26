@@ -39,6 +39,7 @@ import type {
   ProgramReport,
 } from "./ipc";
 import { MAIN_PATH, PROGRAM_LIMITS, PROGRAM_LIMITS_ENV, type ProgramLimits } from "./program";
+import { workspaceImportGraph } from "./rewrite";
 
 export interface SnippetResult {
   ok: boolean;
@@ -221,10 +222,22 @@ export const PROGRAM_POLL_MS = 1_000;
 export const BLOCK_GRACE_MS = 10_000;
 
 /**
+ * main.ts's import graph as the host reads it (`workspaceImportGraph`): the
+ * workspace paths the program depends on, and one string that changes exactly
+ * when the text of one of them does, or one appears or goes.
+ */
+export interface ProgramFiles {
+  paths: ReadonlySet<string>;
+  fingerprint: string;
+  mainExists: boolean;
+}
+
+/**
  * The program as the host tracks it. `halted`: it blocked the event loop, the
- * sandbox was restarted, and it waits for the model's next yield. `stopped`:
- * the sandbox restarted for another reason while files had changed since the
- * deploy, so reloading would run code the model has not yet ended its turn on.
+ * sandbox was restarted, and it waits for the model's next save of its files
+ * or its next yield. `stopped`: the sandbox restarted for another reason while
+ * main.ts or a file it imports differed from what the deploy loaded, so
+ * reloading would run code that never loaded as a deploy.
  */
 export type ProgramState =
   | { kind: "none" }
@@ -240,7 +253,7 @@ export type ProgramHostEvent =
   | { kind: "reload"; deploy: number; version: number; at: number; answer: DeployAnswer }
   | { kind: "stopped"; deploy: number; at: number };
 
-/** One deploy the loop asked for at a yield, as the trajectory records it. */
+/** One deploy the loop asked for at a yield or a save, as the trajectory records it. */
 export interface DeployRecord {
   deploy: number;
   version: number;
@@ -284,8 +297,14 @@ export class SandboxHost {
   programState: ProgramState = { kind: "none" };
   /** The number the last deploy attempt was given; the next one is one more. */
   private deploys = 0;
-  /** The import version the last deploy attempt loaded (or failed to); null before the first. */
-  private lastAttemptedVersion: number | null = null;
+  /**
+   * The last deploy attempt: the program files it loaded or failed to
+   * (`ProgramFiles.fingerprint`), its number, and whether it loaded; null
+   * before the first. An unload is an attempt too, at the files without main.ts.
+   */
+  private attempt: { files: string; deploy: number; ok: boolean } | null = null;
+  /** The program files the current deploy (running, halted or stopped) was loaded from. */
+  private loadedFiles: string | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private beating = false;
   /** Set by `stop()`: nothing respawns or reloads after it. */
@@ -519,7 +538,7 @@ export class SandboxHost {
     const s = this.programState;
     const blamed = s.kind === "running" ? `your program (main.ts, deploy ${s.deploy})` : "code started by your program";
     await this.restart(
-      `${blamed} blocked the event loop for ${grace}ms; it stays stopped until you end your turn, when main.ts loads again`,
+      `${blamed} blocked the event loop for ${grace}ms; it stays stopped until you save a change to main.ts or a file it imports, or end your turn, when main.ts loads again`,
     );
     if (s.kind === "running") {
       this.programState = { kind: "halted", deploy: s.deploy, version: s.version, at: s.at, since: this.nowMs() };
@@ -529,54 +548,108 @@ export class SandboxHost {
 
   /**
    * After a restart the program was not blamed for, load it again in the new
-   * child — the same deploy, from the files as they are — unless the files
-   * moved since it was deployed: then running them would put code the model
-   * has not ended its turn on into play, so it stays stopped until the yield.
+   * child — the same deploy, from the files as they are — unless main.ts or a
+   * file it imports differs from what the deploy loaded: then running them
+   * would put code into play that never loaded as a deploy, so it stays
+   * stopped until a save or the yield. A deploy that starts while this one is
+   * in flight is newer and wins: this one then changes nothing and says nothing.
    */
   private async reloadAfterRestart(): Promise<void> {
     const s = this.programState;
     if (s.kind !== "running" || this.stopping) return;
-    if (this.opts.workspace.importVersion !== s.version) {
+    if (this.programFiles().fingerprint !== this.loadedFiles) {
       this.programState = { kind: "stopped", deploy: s.deploy, version: s.version, at: s.at, since: this.nowMs() };
       this.emitProgram({ kind: "stopped", deploy: s.deploy, at: this.nowMs() });
       return;
     }
+    const attempts = this.deploys;
     let answer: DeployAnswer;
     try {
       answer = await this.deployProgram(s.deploy);
     } catch (err) {
       answer = { ok: false, deploy: s.deploy, error: err instanceof Error ? err.message : String(err) };
     }
+    if (this.programState !== s || this.deploys !== attempts) return;
     if (!answer.ok) this.programState = { kind: "stopped", deploy: s.deploy, version: s.version, at: s.at, since: this.nowMs() };
     this.emitProgram({ kind: "reload", deploy: s.deploy, version: s.version, at: this.nowMs(), answer });
   }
 
+  /** main.ts's import graph as it is on disk now (`ProgramFiles`). */
+  programFiles(): ProgramFiles {
+    const graph = workspaceImportGraph(this.opts.workspace.dir, MAIN_PATH);
+    const rows = [...graph].map(([path, text]) => `${path}\u0000${text === null ? "-" : Bun.hash(text).toString(36)}`).sort();
+    return { paths: new Set(graph.keys()), fingerprint: rows.join("\n"), mainExists: graph.get(MAIN_PATH) !== null };
+  }
+
   /**
-   * What ending a turn does to the program: load main.ts when a code or JSON
-   * file changed since the last attempt, when the program is halted or
-   * stopped, or when none was ever tried at this version; unload it when
+   * How main.ts and the files it imports stand against the program, for the
+   * [wake] block: whether they differ from what the current deploy loaded, and
+   * the deploy that already failed to load them as they are (the yield does not
+   * try them again), or null.
+   */
+  programEdits(): { editsSinceDeploy: boolean; failedDeploy: number | null } {
+    const now = this.programFiles().fingerprint;
+    const a = this.attempt;
+    return {
+      editsSinceDeploy: this.programState.kind !== "none" && this.loadedFiles !== null && now !== this.loadedFiles,
+      failedDeploy: a !== null && !a.ok && a.files === now ? a.deploy : null,
+    };
+  }
+
+  /**
+   * What ending a turn does to the program: load main.ts when it or a file it
+   * imports changed since the last attempt, when the program is halted or
+   * stopped, or when none was ever tried in this sandbox host; unload it when
    * main.ts is gone; otherwise nothing (null). A failed load leaves a running
-   * deploy running and is not retried until something changes.
+   * deploy running and is not retried until those files change. A save that
+   * already deployed them (`deployOnSave`) leaves nothing for the yield to do.
    */
   async deployAtYield(): Promise<DeployRecord | null> {
-    const version = this.opts.workspace.importVersion;
-    const main = this.opts.workspace.read(MAIN_PATH);
+    const files = this.programFiles();
+    if (!files.mainExists) return this.unloadForGoneMain(files);
     const s = this.programState;
-    if (!main.ok) {
-      if (s.kind === "none") return null;
-      try {
-        await this.unloadProgram();
-      } catch {
-        // a dead child unloads nothing; the state below is the truth either way
-      }
-      this.programState = { kind: "none" };
-      this.lastAttemptedVersion = version;
-      return { deploy: s.deploy, version, ok: true, action: "unload" };
+    const due = s.kind === "halted" || s.kind === "stopped" || this.attempt?.files !== files.fingerprint;
+    return due ? this.load(files) : null;
+  }
+
+  /**
+   * What saving `path` through a file tool does to the program, called only
+   * when the save changed that file (its text, or whether it exists): load
+   * main.ts at once when `path` is main.ts or a file in its import graph
+   * (`workspaceImportGraph`, which counts a file whose creation changes what an
+   * import resolves to), unload it when the save deleted main.ts, and
+   * otherwise nothing (null). A failed load leaves a running deploy running,
+   * exactly as at a yield, and is the caller's to report: it wakes no one.
+   */
+  async deployOnSave(path: string): Promise<DeployRecord | null> {
+    const files = this.programFiles();
+    if (!files.paths.has(path)) return null;
+    if (!files.mainExists) return this.unloadForGoneMain(files);
+    return this.load(files);
+  }
+
+  /** main.ts is gone: the program stops, if one was deployed. */
+  private async unloadForGoneMain(files: ProgramFiles): Promise<DeployRecord | null> {
+    const s = this.programState;
+    if (s.kind === "none") return null;
+    try {
+      await this.unloadProgram();
+    } catch {
+      // a dead child unloads nothing; the state below is the truth either way
     }
-    const due = s.kind === "halted" || s.kind === "stopped" || this.lastAttemptedVersion !== version;
-    if (!due) return null;
+    this.programState = { kind: "none" };
+    this.loadedFiles = null;
+    this.attempt = { files: files.fingerprint, deploy: s.deploy, ok: true };
+    return { deploy: s.deploy, version: this.opts.workspace.importVersion, ok: true, action: "unload" };
+  }
+
+  /** Load main.ts as the next deploy: the one path a yield and a save share. */
+  private async load(files: ProgramFiles): Promise<DeployRecord> {
+    const version = this.opts.workspace.importVersion;
+    const s = this.programState;
     const deploy = ++this.deploys;
-    this.lastAttemptedVersion = version;
+    const attempt = { files: files.fingerprint, deploy, ok: false };
+    this.attempt = attempt;
     let answer: DeployAnswer;
     try {
       answer = await this.deployProgram(deploy);
@@ -584,11 +657,16 @@ export class SandboxHost {
       answer = { ok: false, deploy, error: err instanceof Error ? err.message : String(err) };
     }
     if (answer.ok) {
+      attempt.ok = true;
+      this.loadedFiles = files.fingerprint;
       this.programState = { kind: "running", deploy, version, at: this.nowMs() };
       return { deploy, version, ok: true, exports: answer.exports, ...(answer.warnings !== undefined ? { warnings: answer.warnings } : {}), action: "load" };
     }
     // The previous deploy keeps running if it was; a halted or stopped one is gone.
-    if (s.kind === "halted" || s.kind === "stopped") this.programState = { kind: "none" };
+    if (s.kind === "halted" || s.kind === "stopped") {
+      this.programState = { kind: "none" };
+      this.loadedFiles = null;
+    }
     return { deploy, version, ok: false, error: answer.error, action: "load" };
   }
 

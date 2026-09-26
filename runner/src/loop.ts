@@ -21,14 +21,14 @@ import {
 import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf } from "./reflect";
 import type { EpisodicLog } from "./episodic";
 import { buildSystemPrompt } from "./prompt";
-import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
+import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type SaveTool, type ToolContext } from "./tools";
 import { harnessOf, loopOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
-import type { HarnessNotice, ProgramHostEvent, ProgramState, SandboxHost } from "./sandbox/host";
+import type { DeployRecord, HarnessNotice, ProgramHostEvent, ProgramState, SandboxHost } from "./sandbox/host";
 import type { DeathSignal } from "./sandbox/ipc";
 import { MAIN_PATH } from "./sandbox/program";
 import { MEMORY_PATH, type Workspace } from "./workspace";
-import { WAKE_MAX_REQUESTS, WakeLog, renderWake, sleepUntilWake, stateDelta, type WakeKind } from "./wake";
+import { WAKE_MAX_REQUESTS, WakeLog, renderSaveDeploy, renderWake, sleepUntilWake, stateDelta, type WakeKind } from "./wake";
 import type { EntrypointRecord, ItemSample, Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
 
@@ -887,11 +887,14 @@ export class ContextBuilder {
 /**
  * The entrypoint loop's phases around the fixed loop (a probing spike;
  * `loop: "entrypoint"`). A turn is still one model request; a wake is the run
- * of requests between two sleeps. A reply with no tool call ends the wake (so
- * does the `WAKE_MAX_REQUESTS` cap): the harness deploys main.ts if it changed
- * and the model sleeps until the wake log says it is due (`wake.ts`). Every
- * request of a wake carries the `[wake]` block, re-rendered, and the
- * trajectory gains `wake`, `wake_end`, `deploy` and `program_error` records.
+ * of requests between two sleeps. A file tool that changes main.ts or a file
+ * it imports deploys it at once and says how in its result (`deployOnSave`). A
+ * reply with no tool call ends the wake (so does the `WAKE_MAX_REQUESTS` cap):
+ * the harness deploys main.ts if it is halted or changed since the last
+ * attempt, and the model sleeps until the wake log says it is due
+ * (`wake.ts`). Every request of a wake carries the `[wake]` block,
+ * re-rendered, and the trajectory gains `wake`, `wake_end`, `deploy` and
+ * `program_error` records.
  */
 export class EntrypointPhases {
   readonly log = new WakeLog();
@@ -935,6 +938,7 @@ export class EntrypointPhases {
       this.o.trajectory.append({
         t: "deploy",
         wake: this.wake,
+        trigger: "restart",
         deploy: e.deploy,
         version: e.version,
         ok: e.answer.ok,
@@ -967,6 +971,11 @@ export class EntrypointPhases {
       }
     }
     const state: ProgramState = sandbox.programState ?? { kind: "none" };
+    // Against main.ts's import graph where the host can read it; a host without it compares import versions.
+    const edits =
+      typeof sandbox.programEdits === "function"
+        ? sandbox.programEdits.call(this.o.sandbox)
+        : { editsSinceDeploy: state.kind !== "none" && this.o.workspace.importVersion !== state.version, failedDeploy: null };
     const main = this.o.workspace.read(MAIN_PATH);
     const read = this.o.workspace.read(MEMORY_PATH);
     const memory = read.ok ? read.text : null;
@@ -980,7 +989,8 @@ export class EntrypointPhases {
       program: {
         state: state.kind,
         ...(state.kind === "none" ? {} : { deploy: state.deploy, deployedAt: state.at }),
-        editsSinceDeploy: state.kind !== "none" && this.o.workspace.importVersion !== state.version,
+        editsSinceDeploy: edits.editsSinceDeploy,
+        failedDeploy: edits.failedDeploy,
         mainExists: main.ok,
       },
       delta: stateDelta(this.snapAtYield, snap, this.log.facts()),
@@ -1016,8 +1026,31 @@ export class EntrypointPhases {
   }
 
   /**
+   * A file tool changed `path`: when that is main.ts or a file it imports, the
+   * program deploys now, the `deploy` record says the save did it, and the
+   * lines returned end the save's result. A failed load is reported there and
+   * only there — never through the wake log, so it is not a reason to wake:
+   * a change spread over several files fails until its last file is saved.
+   */
+  async deployOnSave(tool: SaveTool, path: string): Promise<string | undefined> {
+    const sandbox = this.o.sandbox as Partial<SandboxHost>;
+    if (typeof sandbox.deployOnSave !== "function") return undefined;
+    let rec: DeployRecord | null;
+    try {
+      rec = await sandbox.deployOnSave.call(this.o.sandbox, path);
+    } catch (err) {
+      return `the program was not deployed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    if (rec === null) return undefined;
+    this.o.trajectory.append({ t: "deploy", wake: this.wake, trigger: "save", tool, path, ...rec } satisfies EntrypointRecord);
+    return renderSaveDeploy(rec, this.o.now(), sandbox.programState ?? { kind: "none" });
+  }
+
+  /**
    * The wake is over: record it, take the world as it stands, then deploy what
-   * changed. The deploy's result is the first thing the next wake sees.
+   * a save has not already — a halted or stopped program, or files changed
+   * since the last attempt. The deploy's result is the first thing the next
+   * wake sees.
    */
   async end(reason: "yield" | "cap"): Promise<void> {
     this.flush(reason);
@@ -1029,7 +1062,7 @@ export class EntrypointPhases {
     if (typeof deployAtYield !== "function") return;
     const rec = await deployAtYield.call(this.o.sandbox);
     if (rec === null) return;
-    this.o.trajectory.append({ t: "deploy", wake: this.wake, ...rec } satisfies EntrypointRecord);
+    this.o.trajectory.append({ t: "deploy", wake: this.wake, trigger: "yield", ...rec } satisfies EntrypointRecord);
     this.log.noteDeploy(rec, this.o.now());
   }
 
@@ -1182,6 +1215,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     episodic: o.episodic,
     turn: () => builder.currentTurn,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
+    ...(entry !== null ? { onSave: (tool: SaveTool, path: string) => entry.deployOnSave(tool, path) } : {}),
     onEventsServed: (events, folded) =>
       trajectory.append({
         t: "events_served",

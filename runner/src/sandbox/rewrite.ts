@@ -44,7 +44,7 @@
  * costs persistence of that one name.
  */
 
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { IMPORTABLE_EXTENSIONS, MEMORY_PATH, isImportable } from "../workspace";
 
 export interface ScanResult {
@@ -940,6 +940,61 @@ export function stampWorkspaceImports(
       return to === undefined ? whole : `${pre}${quote}${to}${quote}`;
     },
   );
+}
+
+/**
+ * The files an entry module's import graph depends on, as the loader follows
+ * it (`stampWorkspaceImports`, the same scan and the same candidates): every
+ * workspace file reachable from `entry` through a relative specifier, and every
+ * file whose creation would change what one of those specifiers resolves to —
+ * the candidates tried before the one that exists, or all of them when none
+ * does. Workspace-relative paths, mapped to the file's text or null when it is
+ * absent; `entry` is always a key. A file that does not scan (a syntax error)
+ * is a leaf, and a JSON file is never scanned. The entrypoint loop's host reads
+ * it to decide whether a save changed the program (`SandboxHost`).
+ */
+export function workspaceImportGraph(workspace: string, entry: string): Map<string, string | null> {
+  const root = normalizeAbs(workspace);
+  const graph = new Map<string, string | null>();
+  const queue: string[] = [];
+  const note = (abs: string): boolean => {
+    const rel = abs.slice(root.length + 1);
+    const exists = isFile(abs);
+    if (!graph.has(rel)) {
+      graph.set(rel, exists ? readFileSync(abs, "utf8") : null);
+      if (exists) queue.push(abs);
+    }
+    return exists;
+  };
+  note(normalizeAbs(`${root}/${entry}`));
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    if (!/\.[cm]?[jt]sx?$/.test(file)) continue;
+    const rel = file.slice(root.length + 1);
+    let specifiers: string[];
+    try {
+      specifiers = new Bun.Transpiler({ loader: scanLoader(file) })
+        .scanImports(graph.get(rel) ?? "")
+        .map((i) => i.path)
+        .filter((p) => p.startsWith("./") || p.startsWith("../"));
+    } catch {
+      continue;
+    }
+    const dir = file.slice(0, file.lastIndexOf("/"));
+    for (const spec of specifiers) {
+      const base = normalizeAbs(`${dir}/${spec}`);
+      if (!base.startsWith(`${root}/`)) continue;
+      for (const candidate of importCandidates(base)) if (note(candidate)) break;
+    }
+  }
+  return graph;
+}
+
+/** The transpiler loader for a workspace code file, as the sandbox's loader picks it. */
+function scanLoader(path: string): "ts" | "tsx" | "js" | "jsx" {
+  if (path.endsWith(".tsx")) return "tsx";
+  if (path.endsWith(".jsx")) return "jsx";
+  if (path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".cts")) return "ts";
+  return "js";
 }
 
 /**

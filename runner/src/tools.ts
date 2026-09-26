@@ -628,6 +628,30 @@ function fileToolResult(tool: string, r: WorkspaceResult): ToolResult {
   return r.ok ? { text: r.text } : { text: `${tool}: ${r.error}`, isError: true };
 }
 
+/** The file tools that change a file, and so may change the entrypoint loop's program (`ToolContext.onSave`). */
+export type SaveTool = "write_file" | "edit_file" | "delete_file";
+
+/**
+ * A write, edit or delete, and on the entrypoint loop what it did to the
+ * program: when the operation changed the file — its text, or whether it
+ * exists — `onSave` is told, and what it answers ends the result. A save that
+ * leaves the file as it was tells no one. Without `onSave` this is the file
+ * operation and nothing else.
+ */
+async function saveFileResult(ctx: ToolContext, tool: SaveTool, path: string, op: () => WorkspaceResult): Promise<ToolResult> {
+  if (ctx.onSave === undefined) return fileToolResult(tool, op());
+  const target = ctx.workspace.resolve(path);
+  const textOf = (rel: string): string | null => {
+    const r = ctx.workspace.read(rel);
+    return r.ok ? r.text : null;
+  };
+  const before = target.ok ? textOf(target.rel) : null;
+  const r = op();
+  if (!r.ok || !target.ok || textOf(target.rel) === before) return fileToolResult(tool, r);
+  const note = await ctx.onSave(tool, target.rel);
+  return { text: note === undefined ? r.text : `${r.text}\n${note}` };
+}
+
 export interface ToolContext {
   sandbox: SandboxHost;
   /** The run's workspace: the file tools' only target, and notes.md's home. */
@@ -666,6 +690,14 @@ export interface ToolContext {
   onEventsServed?: (events: unknown[], folded?: number) => void;
   /** Called with every episodic entry written, so the driver can log it. */
   onEpisodicEntry?: (entry: EpisodicEntry) => void;
+  /**
+   * The entrypoint loop only: a write_file, edit_file or delete_file changed
+   * the file at `path` (workspace-relative, normalised). The answer — what the
+   * save did to the program, if anything — is appended to the tool's result.
+   * Absent on the snippet loop and the MCP server, where a save is only a save.
+   * Never throws: a failure is the answer's to say.
+   */
+  onSave?: ((tool: SaveTool, path: string) => Promise<string | undefined>) | undefined;
 }
 
 export interface ToolResult {
@@ -915,15 +947,15 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
       }
       case "write_file": {
         const { path, content } = parsed.data as { path: string; content: string };
-        return fileToolResult(name, ctx.workspace.write(path, content));
+        return await saveFileResult(ctx, name, path, () => ctx.workspace.write(path, content));
       }
       case "edit_file": {
         const d = parsed.data as { path: string; old_string: string; new_string: string; replace_all: boolean };
-        return fileToolResult(name, ctx.workspace.edit(d.path, d.old_string, d.new_string, d.replace_all));
+        return await saveFileResult(ctx, name, d.path, () => ctx.workspace.edit(d.path, d.old_string, d.new_string, d.replace_all));
       }
       case "delete_file": {
         const { path } = parsed.data as { path: string };
-        return fileToolResult(name, ctx.workspace.delete(path));
+        return await saveFileResult(ctx, name, path, () => ctx.workspace.delete(path));
       }
     }
   } catch (err) {

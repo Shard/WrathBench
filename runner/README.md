@@ -466,13 +466,33 @@ the spike was built on.
   `observeSdk` wraps the client once, at the ambient boundary rather than in
   each helper; a snippet's calls pass through, and two call sites of one
   helper and status share a signature.
+- **Deploy on save** (`SandboxHost.deployOnSave`). A `write_file`,
+  `edit_file` or `delete_file` that changes a file (its text, or whether it
+  exists; the same text again changes nothing) loads main.ts at once when that
+  file is main.ts or in its import graph, and the outcome ends the tool's
+  result in the `[wake]` block's words (`renderSaveDeploy`): the deploy and
+  version, the exports and warnings, or the error and which deploy keeps
+  running. The graph is read on the host with the loader's own scan and
+  candidates (`workspaceImportGraph`): every workspace file reachable from
+  main.ts through a relative import, plus each file whose creation would
+  change what an import resolves to, so writing the module a failed load was
+  missing loads it. A file nothing imports, notes.md and memory.json never
+  deploy. A failed load leaves the running deploy running, as at a yield, and
+  is reported in that result only, never a reason to wake, because a change
+  spread over several files fails until its last file is saved; deleting
+  main.ts unloads. On save because a fix on disk that waits for the end of the
+  turn leaves a stall the model has already diagnosed running while it keeps
+  working. The costs are the ones on yield avoided: a change spread over
+  several files may load half-applied when an early file already loads, and
+  each load is a module graph that is never freed, so up to one per saving
+  request rather than one per wake.
 - **Deploy on yield** (`SandboxHost.deployAtYield`). When the model ends a
-  turn, main.ts loads at the current import version if a code or JSON file
-  changed, the program is halted or stopped, or nothing was tried at this
-  version; a failed load leaves the running deploy running and is not retried
-  until something changes, and a deleted main.ts unloads. On yield because
-  edits spread over several tool calls must never load half-applied, and
-  because each load is a module graph that is never freed. An `on` key that
+  turn, main.ts loads if the program is halted or stopped, or if main.ts's
+  import graph changed since the last attempt — a snippet's `files` calls are
+  not saves, and a host that never tried (a resumed run) has nothing to
+  compare — so files a save already deployed are never loaded twice. A failed
+  load here leaves the running deploy running, wakes the model, and is not
+  retried until those files change; a deleted main.ts unloads. An `on` key that
   is not an event name (`PROGRAM_EVENT_NAMES`: the SDK's opcodes, the
   stream's `stream_gap` and `stream_error`, and `WB_AREATRIGGER`, which the
   SDK passes through without a schema — a test holds the set to every event
@@ -497,10 +517,12 @@ the spike was built on.
   would mint a module graph every second.
 - **Heartbeat.** The host drains a program report every second, and ten
   seconds without an answer is a blocked event loop. A snippet in flight is
-  blamed and the program comes back by itself — unless files changed since
-  its deploy, in which case it stays stopped until the yield rather than run
-  code the model has not ended its turn on; otherwise the program halts until
-  the next yield. Every restart counts toward `snippet-runaway`, asleep or
+  blamed and the program comes back by itself — unless main.ts or a file it
+  imports differs from what its deploy loaded, in which case it stays stopped
+  until a save or the yield rather than run code that never loaded as a
+  deploy; otherwise the program halts until the next save of its files or the
+  next yield. A reload that a newer deploy overtakes changes nothing and says
+  nothing. Every restart counts toward `snippet-runaway`, asleep or
   awake. On this loop the count is cleared by a sleep that ends with the
   program running and no restart since the yield (or, with no program
   deployed, by a good snippet) — never by ticks alone, so a program that runs
@@ -509,7 +531,8 @@ the spike was built on.
   ends a wake. The model then sleeps until a new error signature (a throw or
   rejection out of a hook, an overrun, a memory not saved, or an `sdk` call
   that threw or rejected, caught or not — never an `ok: false` answer), a
-  failed load, a halt, a restart, `ctx.wake(reason)`, a level, a quest turn-in
+  failed load at the yield or after a restart (never one from a save), a halt,
+  a restart, `ctx.wake(reason)`, a level, a quest turn-in
   or a death — coalesced over 2 s, never sooner than 5 s after the yield — or
   five minutes pass; a reason already shown in a request never wakes it again, and
   whatever arrived after the last request was rendered (a report landing
@@ -520,7 +543,9 @@ the spike was built on.
   Every request of a wake carries a `[wake]` block after the goal line,
   headed "request N of 20 in this wake" so the cap is known before it is met,
   rendered by the pure `renderWake`: the program's deploy and tick counts
-  and the tick still running, if one is, failed loads, halts, errors with
+  and the tick still running, if one is, whether main.ts's graph has edits
+  since the deploy and whether they wait for the yield or already failed to
+  load, failed loads, halts, errors with
   their workspace frames and, apart from them, the `ok: false` outcomes (each
   list most recent first, so its cap of 8 never hides the newest), `ctx.wake`
   calls, the level/xp/money/quest/death/zone delta, action hints, the last 40 lines of
@@ -533,7 +558,9 @@ the spike was built on.
   continues the wake.
 - **Trajectory.** `wake`, `wake_end`, `deploy` and `program_error` records,
   and `wake` on every `request` and `response` (`EntrypointRecord`,
-  `src/trajectory.ts`); a `program_error`'s `kind` is `failed` for an `sdk`
+  `src/trajectory.ts`); a `deploy`'s `trigger` is `save` (with the file tool
+  and the `path` it saved), `yield`, or `restart` (a reload, also marked
+  `reload`); a `program_error`'s `kind` is `failed` for an `sdk`
   call that threw or rejected, `outcome` for one that answered `ok: false`,
   and `thrown` for everything else. Each `wake_end` carries the
   program's ticks, longest tick, overruns, halts and restarts since the
@@ -543,8 +570,10 @@ the spike was built on.
   resumed run is read per segment.
 - **What the model is told.** A second prompt body, built from the snippet
   body by exact replacements — a target that is not found throws at load — so
-  the SDK surface is the same bytes on both loops: "## Your program" and
-  "## Snippets" replace the REPL paragraph, "## Each wake" replaces
+  the SDK surface is the same bytes on both loops: "## Your program" (which
+  says a save of main.ts or a file it imports loads it at once and the tool's
+  result says how, while files changed from a snippet load at the end of the
+  turn) and "## Snippets" replace the REPL paragraph, "## Each wake" replaces
   "## Each turn", and the last sentences say a turn ends with a reply without
   a tool call, and that a reply containing any tool call continues the turn
   whatever its text says, until the request cap. `run_snippet`'s description
