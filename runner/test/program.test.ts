@@ -167,6 +167,20 @@ describe("deploy and ticks", () => {
     expect([req.reason, req.from, req.count]).toEqual(["bags full", "on.SMSG_PROBE", 1]);
   });
 
+  test("the program reads no workspace path from the environment, and its imports still resolve", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "lib/answer.ts", "export const answer = 42;\n");
+    write(
+      ws,
+      "main.ts",
+      'import { answer } from "./lib/answer.ts";\nexport function loop(ctx) {\n  ctx.memory.seen = [answer, process.env.WRATHBENCH_WORKSPACE ?? null];\n}\n',
+    );
+    expect((await host.deployProgram(1)).ok).toBe(true);
+    expect(await until(async () => ((await memoryValue(host, "memory.seen")) === "undefined" ? undefined : await memoryValue(host, "memory.seen")))).toBe(
+      "[ 42, null ]",
+    );
+  });
+
   test("the program's console goes to the report, never to a snippet's result", async () => {
     const { host, ws } = makeHost();
     write(ws, "main.ts", 'export function loop(ctx) {\n  console.log("tick from the program");\n}\n');

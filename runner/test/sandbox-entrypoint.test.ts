@@ -152,6 +152,15 @@ describe("entrypoint snippets are one-offs", () => {
     expect((await host.evalSnippet("globalThis.ticks")).value).toBe(a);
   });
 
+  test("the workspace's absolute path is not in the environment a snippet reads, and its imports still resolve", async () => {
+    const { host, ws } = makeHost();
+    const read = 'return [process.env.WRATHBENCH_WORKSPACE, Bun.env.WRATHBENCH_WORKSPACE, "WRATHBENCH_WORKSPACE" in process.env];';
+    expect((await host.evalSnippet(read)).value).toBe("[ undefined, undefined, false ]");
+    const w = ws.write("lib/answer.ts", "export const answer = 42;\n");
+    expect(w.ok).toBe(true);
+    expect((await host.evalSnippet('import { answer } from "./lib/answer.ts";\nanswer')).value).toBe("42");
+  });
+
   test("an import of memory.json is refused with what it is", async () => {
     const { host, ws } = makeHost();
     ws.writeMemory('{"phase":"grind"}');

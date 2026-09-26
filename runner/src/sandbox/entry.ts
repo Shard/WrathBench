@@ -119,6 +119,11 @@ const WORKSPACE = WORKSPACE_ENV !== undefined && WORKSPACE_ENV.length > 0 ? WORK
  * the snippet loop, whose sandbox therefore behaves exactly as it always has.
  */
 const ENTRYPOINT = process.env["WRATHBENCH_LOOP"] === "entrypoint";
+// The run's directory names the run. On the entrypoint loop WORKSPACE holds
+// it from here and the variable leaves process.env (and Bun.env) before any
+// snippet or deploy runs; /proc/self/environ still has the environment the
+// child was exec'd with. The snippet loop's environment is left as it is.
+if (ENTRYPOINT) delete process.env["WRATHBENCH_WORKSPACE"];
 /** The model's program (`program.ts`); constructed below in the entrypoint loop only. */
 let program: ProgramRuntime | null = null;
 
