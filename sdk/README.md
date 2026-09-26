@@ -116,6 +116,9 @@ wait races `SMSG_INVENTORY_CHANGE_FAILURE`: a reward that does not fit is
 answered with that failure and no completion at all, so a full bag comes back
 as `{ ok: false, status: "inventory_full", hint }` instead of burning the
 whole timeout (the quest stays in the log; free a slot and turn in again).
+`acceptQuestFrom` races the same failure after its accept: a quest that hands
+over an item is refused with it when the item does not fit, and never enters
+the log, so that is `inventory_full` too.
 
 `waitForQuestObjective` waits on the **quest log**, not on an event, because at
 the pinned commit the core sends no `SMSG_QUESTUPDATE_COMPLETE` for a kill

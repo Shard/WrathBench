@@ -1519,6 +1519,18 @@ export type QuestAcceptResult =
       readonly questId: number;
       readonly offered: readonly OfferedQuest[];
       readonly hint: string;
+    }
+  | {
+      readonly ok: false;
+      /**
+       * The quest hands over an item on accept and the server could not store
+       * it, so the quest was not added — accept again once a bag slot is free.
+       */
+      readonly status: "inventory_full";
+      readonly questId: number;
+      /** Raw `InventoryResult` code from `SMSG_INVENTORY_CHANGE_FAILURE`. */
+      readonly result: number;
+      readonly hint: string;
     };
 
 /**
@@ -5254,13 +5266,46 @@ export class WrathClient {
         if (!wanted) return { ok: false, status: "not_offered", questId, offered: offered.quests };
       }
 
+      // Raced against the quest landing in the log: a quest that gives an item
+      // on accept is refused with SMSG_INVENTORY_CHANGE_FAILURE when the item
+      // does not fit, and the quest is never added — the same answer
+      // turnInQuest reads for a reward that does not fit. Only a failure after
+      // this accept counts.
+      const sinceSeq = this.events.recent(1)[0]?.seq;
       await this.questAccept(npc, questId);
-      const quest = await this.waitForState(
-        () => this.state.quest(questId),
-        timeout,
-        `quest ${questId} to appear in the quest log after accept`,
-      );
-      return { ok: true, status: "accepted", questId, quest, title: wanted.title };
+      let quest = this.state.quest(questId);
+      let refused: InventoryChangeFailureData | undefined;
+      if (quest === undefined) {
+        await this.waitEvent(
+          (e) => {
+            quest = this.state.quest(questId);
+            if (quest !== undefined) return true;
+            if (
+              isEvent(e, "SMSG_INVENTORY_CHANGE_FAILURE") &&
+              !isDecodeError(e.data) &&
+              (sinceSeq === undefined || e.seq > sinceSeq)
+            ) {
+              refused = e.data as InventoryChangeFailureData;
+              return true;
+            }
+            return false;
+          },
+          {
+            timeout,
+            ...(sinceSeq === undefined ? {} : { sinceSeq: sinceSeq + 1 }),
+            description: `quest ${questId} to appear in the quest log after accept (or SMSG_INVENTORY_CHANGE_FAILURE)`,
+          },
+        );
+      }
+      if (quest === undefined && refused !== undefined) {
+        const named = inventoryResultText(refused.result);
+        const hint =
+          `the item this quest hands over on accept could not be stored (InventoryResult ${refused.result}` +
+          `${named ? `: ${named}` : ""}) — free a bag slot (sell or destroyItem), then accept again`;
+        this.noteActionHint("acceptQuestFrom", "inventory_full", hint);
+        return { ok: false, status: "inventory_full", questId, result: refused.result, hint };
+      }
+      return { ok: true, status: "accepted", questId, quest: quest as QuestLogEntry, title: wanted.title };
     });
   }
 

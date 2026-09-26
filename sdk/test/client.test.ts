@@ -1766,9 +1766,44 @@ describe("client: quests", () => {
     stub.push(JSON.stringify(gossipWithQuests([OTHER_QUEST_ID], 77)));
     const result = await pending;
     expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("unreachable");
-    expect(result.status).toBe("not_offered");
+    if (result.ok || result.status !== "not_offered") throw new Error(`unexpected ${result.status}`);
     expect(result.offered.map((q) => q.questId)).toEqual([OTHER_QUEST_ID]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("an accept whose item does not fit is inventory_full at once, not a timeout", async () => {
+    // The core adds nothing to the log and answers with the InventoryResult
+    // for the item the quest hands over on accept (50: bags full).
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const started = Date.now();
+    const pending = client.acceptQuestFrom(CREATURE_GUID, QUEST_ID, { timeout: 5000 });
+    await untilAction(stub, "quest_list");
+    stub.push(JSON.stringify(questGiverList([QUEST_ID], 86)));
+    await untilAction(stub, "quest_accept");
+    stub.push(JSON.stringify(inventoryChangeFailure(87, 50)));
+    const result = await pending;
+    expect(Date.now() - started).toBeLessThan(2000);
+    if (result.ok || result.status !== "inventory_full") throw new Error(`unexpected ${result.status}`);
+    expect(result).toMatchObject({ questId: QUEST_ID, result: 50 });
+    expect(result.hint).toContain("free a bag slot");
+    expect(client.state.quest(QUEST_ID)).toBeUndefined();
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "acceptQuestFrom", status: "inventory_full" });
+    client.close();
+    await stub.stop();
+  });
+
+  test("an inventory failure from before the accept is not read as its answer", async () => {
+    const stub = startStub({ onConnect: () => [...combatWorld(), JSON.stringify(inventoryChangeFailure(31, 50))] });
+    const client = await inWorld(stub);
+    await client.events.waitFor((e) => e.seq === 31, { timeout: 2000 });
+    const pending = client.acceptQuestFrom(CREATURE_GUID, QUEST_ID, { timeout: 2000 });
+    await untilAction(stub, "quest_list");
+    stub.push(JSON.stringify(questGiverList([QUEST_ID], 88)));
+    await untilAction(stub, "quest_accept");
+    stub.push(JSON.stringify({ ...(questAccepted as object), seq: 89 }));
+    expect(await pending).toMatchObject({ ok: true, status: "accepted", questId: QUEST_ID });
     client.close();
     await stub.stop();
   });

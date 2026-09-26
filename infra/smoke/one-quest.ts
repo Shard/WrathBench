@@ -57,7 +57,7 @@ try {
 
   const willem = await nearest(WILLEM, "the first questgiver", 15_000);
   const intro = await client.acceptQuestFrom(willem.guid, QUEST_INTRO);
-  if (!intro.ok) fail(`quest ${QUEST_INTRO} not offered: saw ${JSON.stringify(intro.offered)}`);
+  if (!intro.ok) fail(`quest ${QUEST_INTRO} not accepted: ${JSON.stringify(intro)}`);
   log(`accepted quest ${QUEST_INTRO} (${intro.status})`);
 
   if (!(await client.moveTo(ABBEY, { timeout: 120_000 })).ok) fail("could not walk to the abbey");
@@ -69,7 +69,7 @@ try {
   // The chain may have auto-added the kill quest during that turn-in, which is
   // why the helper reads the log before it asks.
   const kill = await client.acceptQuestFrom(mcbride.guid, QUEST_KILL);
-  if (!kill.ok) fail(`quest ${QUEST_KILL} not offered: saw ${JSON.stringify(kill.offered)}`);
+  if (!kill.ok) fail(`quest ${QUEST_KILL} not accepted: ${JSON.stringify(kill)}`);
   log(`accepted quest ${QUEST_KILL} (${kill.status})`);
 
   if (!(await client.moveTo(VINEYARDS, { timeout: 120_000 })).ok) fail("could not walk to the kobolds");
