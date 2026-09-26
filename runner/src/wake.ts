@@ -23,7 +23,7 @@
 
 import type { SnapshotLike } from "./context";
 import type { DeployRecord, ProgramHostEvent, ProgramState } from "./sandbox/host";
-import type { ActionHintNote, ProgramLogEntry, ProgramMilestoneNote, ProgramReport } from "./sandbox/ipc";
+import type { ActionHintNote, ProgramErrorNote, ProgramLogEntry, ProgramMilestoneNote, ProgramReport } from "./sandbox/ipc";
 
 /** Asleep this long with no other reason: wake anyway. */
 export const FALLBACK_WAKE_MS = 300_000;
@@ -58,11 +58,15 @@ interface Reason {
   shown: boolean;
 }
 
-/** One error signature since the yield, as the block lists it — a throw and a failed `sdk` call alike. */
+/**
+ * One error signature since the yield, as the block lists it — a throw and a
+ * failed `sdk` call under `errors:`, an `sdk` call that answered `ok: false`
+ * (`kind` outcome) under `outcomes:`.
+ */
 export interface WakeErrorRow {
   signature: string;
   hook: string;
-  kind: "thrown" | "failed";
+  kind: ProgramErrorNote["kind"];
   text: string;
   count: number;
   deploy: number | null;
@@ -127,6 +131,7 @@ export interface WakeView {
   overruns: number;
   loads: WakeLoadRow[];
   host: WakeHostRow[];
+  /** Every signature since the yield; the block splits `errors:` from `outcomes:` by `kind`. */
   errors: WakeErrorRow[];
   requests: WakeRequestRow[];
   delta: StateDelta | null;
@@ -421,7 +426,7 @@ export class WakeLog {
  * each occurrence exactly once — independent of what the block showed.
  */
 export interface WakeLedger {
-  errors: Map<string, { signature: string; hook: string; kind: "thrown" | "failed"; deploy: number | null; count: number }>;
+  errors: Map<string, { signature: string; hook: string; kind: ProgramErrorNote["kind"]; deploy: number | null; count: number }>;
   ticks: number;
   longestTickMs: number;
   overruns: number;
@@ -612,6 +617,16 @@ function errorLines(e: WakeErrorRow): string[] {
   return [`- ${prefix}${head ?? e.signature} ${when}`, ...frames.filter((f) => f.trim().length > 0).map((f) => `    ${f.trim()}`)];
 }
 
+/** A heading and its rows, most recent occurrence first, so the cap never hides the newest signature. */
+function errorBlock(heading: string, rows: readonly WakeErrorRow[]): string[] {
+  if (rows.length === 0) return [];
+  const lines = [heading];
+  const newest = [...rows].sort((a, b) => b.lastTs - a.lastTs || a.signature.localeCompare(b.signature));
+  for (const e of newest.slice(0, WAKE_ERRORS_SHOWN)) lines.push(...errorLines(e));
+  if (rows.length > WAKE_ERRORS_SHOWN) lines.push(`- +${rows.length - WAKE_ERRORS_SHOWN} more signatures`);
+  return lines;
+}
+
 function deltaLine(d: StateDelta): string {
   const parts: string[] = [];
   if (d.levelTo !== undefined) {
@@ -679,13 +694,9 @@ export function renderWake(v: WakeView): string {
     }
   }
   for (const h of v.host) lines.push(`${h.kind} ${clock(h.at)}: ${h.detail}`);
-  if (v.errors.length > 0) {
-    lines.push("errors:");
-    // Most recent occurrence first, so the cap never hides the newest signature.
-    const newest = [...v.errors].sort((a, b) => b.lastTs - a.lastTs || a.signature.localeCompare(b.signature));
-    for (const e of newest.slice(0, WAKE_ERRORS_SHOWN)) lines.push(...errorLines(e));
-    if (v.errors.length > WAKE_ERRORS_SHOWN) lines.push(`- +${v.errors.length - WAKE_ERRORS_SHOWN} more signatures`);
-  }
+  // What wakes the model, and apart from it the ok:false answers, which never do.
+  lines.push(...errorBlock("errors:", v.errors.filter((e) => e.kind !== "outcome")));
+  lines.push(...errorBlock("outcomes:", v.errors.filter((e) => e.kind === "outcome")));
   if (v.requests.length > 0) {
     lines.push(`requested: ${v.requests.map((r) => `${JSON.stringify(r.reason)} ×${count(r.count)} (${r.from})`).join("; ")}`);
   }

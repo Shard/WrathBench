@@ -41,6 +41,7 @@ describe("the entrypoint prompt", () => {
     expect(ENTRY).toContain("## Snippets");
     expect(ENTRY).toContain("Nothing a snippet starts outlives it");
     expect(ENTRY).toContain("## Each wake");
+    expect(ENTRY).toContain("its errors with the workspace lines they came from, its outcomes (sdk calls that answered ok: false, which never wake you), its ctx.wake calls");
     expect(ENTRY).toContain("- memory: your program's memory, the same object as ctx.memory.");
     expect(ENTRY.endsWith(
       "Older conversation is trimmed aggressively — notes.md is your memory, not the chat history. End your turn by replying without a tool call; your program keeps running and you are woken for its errors, its ctx.wake calls, level-ups, quest turn-ins and deaths, and at the latest after five minutes. " +

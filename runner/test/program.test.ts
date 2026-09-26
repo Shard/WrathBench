@@ -313,7 +313,7 @@ describe("on keys that are not event names", () => {
 });
 
 describe("sdk failures: counted whether or not the program catches them", () => {
-  test("a caught rejection is a new signature once, an ok:false answer is only counted, each with the workspace line of the call", async () => {
+  test("a caught rejection is a new failed signature once, an ok:false answer is an outcome only counted, each with the workspace line of the call", async () => {
     const { host, ws } = makeHost();
     write(
       ws,
@@ -332,17 +332,19 @@ describe("sdk failures: counted whether or not the program catches them", () => 
     );
     expect((await host.deployProgram(1)).ok).toBe(true);
     const all = await reportsUntil(host, (rs) => {
-      const failed = errorsOf(rs).filter((e) => e.kind === "failed");
-      return new Set(failed.map((e) => e.signature)).size >= 2 && failed.reduce((n, e) => n + e.count, 0) >= 4;
+      const sdk = errorsOf(rs).filter((e) => e.kind === "failed" || e.kind === "outcome");
+      return new Set(sdk.map((e) => e.signature)).size >= 2 && sdk.reduce((n, e) => n + e.count, 0) >= 4;
     });
     const failed = errorsOf(all).filter((e) => e.kind === "failed");
+    const outcomes = errorsOf(all).filter((e) => e.kind === "outcome");
     const rejected = failed.find((e) => e.signature.startsWith("loop() sdk.trainerList "))!;
     expect(rejected.signature).toBe("loop() sdk.trainerList WrathTransportError");
     expect(rejected.hook).toBe("loop()");
     expect(rejected.text.split("\n")[0]).toStartWith("sdk.trainerList() threw WrathTransportError: ");
     expect(rejected.text).toContain("    at loop (main.ts:3:");
     expect(rejected.text).not.toContain(ws.dir);
-    const answered = failed.find((e) => e.signature.startsWith("loop() sdk.moveTo "))!;
+    expect(failed.every((e) => e.signature === rejected.signature)).toBe(true);
+    const answered = outcomes.find((e) => e.signature.startsWith("loop() sdk.moveTo "))!;
     expect(answered.signature).toBe("loop() sdk.moveTo unknown_target");
     expect(answered.text.split("\n")[0]).toBe('sdk.moveTo() returned ok:false, status "unknown_target"');
     expect(answered.text).toContain("    at loop (main.ts:7:");
@@ -351,7 +353,7 @@ describe("sdk failures: counted whether or not the program catches them", () => 
     const rejections = failed.filter((e) => e.signature === rejected.signature);
     expect(rejections.filter((e) => e.isNew)).toHaveLength(1);
     expect(rejections[0]!.isNew).toBe(true);
-    const answers = failed.filter((e) => e.signature === answered.signature);
+    const answers = outcomes.filter((e) => e.signature === answered.signature);
     expect(answers.reduce((n, e) => n + e.count, 0)).toBeGreaterThanOrEqual(1);
     expect(answers.filter((e) => e.isNew)).toEqual([]);
     expect(errorsOf(all).filter((e) => e.kind === "thrown")).toEqual([]);

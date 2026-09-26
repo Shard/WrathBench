@@ -459,9 +459,10 @@ the spike was built on.
   program catches it — signature: hook, helper, error name; text: the helper's
   own words and the workspace lines of the call — because a program that
   catches everything otherwise stalls where nothing can see it. One that
-  answers `ok: false` is counted and shown the same way, signature ending in
-  its status, but never wakes the model: an outcome (a corpse with nothing on
-  it, a mob that walked off) is information, an exception is an error.
+  answers `ok: false` is counted the same way, signature ending in its status,
+  and shown under `outcomes:` rather than `errors:`, but never wakes the
+  model: an outcome (a corpse with nothing on it, a mob that walked off) is
+  information, an exception is an error.
   `observeSdk` wraps the client once, at the ambient boundary rather than in
   each helper; a snippet's calls pass through, and two call sites of one
   helper and status share a signature.
@@ -518,8 +519,9 @@ the spike was built on.
   Every request of a wake carries a `[wake]` block after the goal line,
   headed "request N of 20 in this wake" so the cap is known before it is met,
   rendered by the pure `renderWake`: the program's deploy and tick counts,
-  failed loads, halts, errors with their workspace frames (most recent
-  first, so the cap of 8 never hides the newest), `ctx.wake` calls,
+  failed loads, halts, errors with their workspace frames and, apart from
+  them, the `ok: false` outcomes (each list most recent first, so its cap of
+  8 never hides the newest), `ctx.wake` calls,
   the level/xp/money/quest/death/zone delta, action hints, the last 40 lines of
   the program's console and memory.json — whole up to 2,000 characters, else
   its last 2,000 after a count of what comes before (a program appends, so the
@@ -531,7 +533,8 @@ the spike was built on.
 - **Trajectory.** `wake`, `wake_end`, `deploy` and `program_error` records,
   and `wake` on every `request` and `response` (`EntrypointRecord`,
   `src/trajectory.ts`); a `program_error`'s `kind` is `failed` for an `sdk`
-  call and `thrown` for everything else. Each `wake_end` carries the
+  call that threw or rejected, `outcome` for one that answered `ok: false`,
+  and `thrown` for everything else. Each `wake_end` carries the
   program's ticks, longest tick, overruns, halts and restarts since the
   previous one, and the `program_error` rows written just before it count
   each occurrence once; a final `wake_end` (`run_end`) flushes the last

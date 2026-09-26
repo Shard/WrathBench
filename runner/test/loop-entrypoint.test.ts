@@ -227,7 +227,7 @@ describe("the entrypoint loop's phases", () => {
     ]);
   });
 
-  test("an ok:false answer the program got is shown and written as failed, and does not wake the model", async () => {
+  test("an ok:false answer the program got is shown and written as an outcome, and does not wake the model", async () => {
     const adapter = new StubAdapter([
       { content: "done", toolCalls: [] },
       { content: "seen it", toolCalls: [] },
@@ -245,7 +245,7 @@ describe("the entrypoint loop's phases", () => {
                 {
                   signature: "loop() sdk.killTarget timeout",
                   hook: "loop()",
-                  kind: "failed",
+                  kind: "outcome",
                   text: 'sdk.killTarget() returned ok:false, status "timeout" — still up after 30s\n    at hunt (lib/brain.ts:88:21)',
                   count: 3,
                   isNew: false,
@@ -264,10 +264,11 @@ describe("the entrypoint loop's phases", () => {
     // Slept on to the fallback: the answer is information, not a reason to wake.
     expect(records.filter((r) => r.t === "wake")[1]).toMatchObject({ reasons: ["fallback"], sleptMs: FALLBACK_WAKE_MS });
     expect(userMessage(ctx.dir, 1)).toContain(
-      '- loop() sdk.killTarget() returned ok:false, status "timeout" — still up after 30s ×3 (first 12:00:20, last 12:00:20)\n    at hunt (lib/brain.ts:88:21)',
+      'outcomes:\n- loop() sdk.killTarget() returned ok:false, status "timeout" — still up after 30s ×3 (first 12:00:20, last 12:00:20)\n    at hunt (lib/brain.ts:88:21)',
     );
+    expect(userMessage(ctx.dir, 1)).not.toContain("errors:");
     expect(records.filter((r) => r.t === "program_error")).toEqual([
-      expect.objectContaining({ wake: 2, signature: "loop() sdk.killTarget timeout", hook: "loop()", kind: "failed", count: 3, deploy: 1 }),
+      expect.objectContaining({ wake: 2, signature: "loop() sdk.killTarget timeout", hook: "loop()", kind: "outcome", count: 3, deploy: 1 }),
     ]);
   });
 

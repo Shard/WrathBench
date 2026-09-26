@@ -222,7 +222,7 @@ const ENTRYPOINT_REPLACEMENTS: readonly [string, string][] = [
   ],
   [
     "## Each turn\n\nEvery turn you receive the current state summary, the most recent events, any harness notices, the listing of your workspace, and your notes.md.",
-    "## Each wake\n\nEvery request of a wake begins with a [wake] block: why you were woken and what happened since you last ended your turn — your program's deploy, its errors with the workspace lines they came from, its ctx.wake calls, what changed for your character, its console output, and memory.json. Then come the current state summary, the most recent events, any harness notices, the listing of your workspace, and your notes.md.",
+    "## Each wake\n\nEvery request of a wake begins with a [wake] block: why you were woken and what happened since you last ended your turn — your program's deploy, its errors with the workspace lines they came from, its outcomes (sdk calls that answered ok: false, which never wake you), its ctx.wake calls, what changed for your character, its console output, and memory.json. Then come the current state summary, the most recent events, any harness notices, the listing of your workspace, and your notes.md.",
   ],
 ];
 

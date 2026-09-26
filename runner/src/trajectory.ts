@@ -322,8 +322,8 @@ export type EntrypointRecord =
       wake: number;
       signature: string;
       hook: string;
-      /** `failed`: an `sdk` call from the program that threw, rejected or answered `ok: false`, caught or not; `thrown`: every other signature. */
-      kind: "thrown" | "failed";
+      /** `failed`: an `sdk` call from the program that threw or rejected, caught or not; `outcome`: one that answered `ok: false`; `thrown`: every other signature. */
+      kind: "thrown" | "failed" | "outcome";
       count: number;
       deploy: number | null;
     };

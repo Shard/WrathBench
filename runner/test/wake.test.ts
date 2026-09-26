@@ -424,13 +424,13 @@ describe("the [wake] block", () => {
     expect(text).not.toContain("deploy 9 loaded");
   });
 
-  test("an ok:false answer is shown and booked, and wakes no one", () => {
+  test("an ok:false answer is shown under outcomes and booked as one, and wakes no one", () => {
     const log = new WakeLog();
     log.yielded(T0, false);
     const answered = {
       signature: "loop() sdk.lootCorpse empty",
       hook: "loop()",
-      kind: "failed" as const,
+      kind: "outcome" as const,
       text: 'sdk.lootCorpse() returned ok:false, status "empty"\n    at loot (lib/brain.ts:40:9)',
       count: 6,
       isNew: false,
@@ -441,10 +441,36 @@ describe("the [wake] block", () => {
     log.noteReport(report({ deploy: 3, errors: [answered] }), T0 + 90_000);
     expect(log.due()).toEqual({ at: T0 + FALLBACK_WAKE_MS, reasons: ["fallback"] });
     const v = log.view({ wake: 4, request: 1, asleepMs: FALLBACK_WAKE_MS, wokeFor: ["fallback"], program: { state: "running", deploy: 3, deployedAt: T0, editsSinceDeploy: false, mainExists: true }, delta: null, memory: null });
-    expect(renderWake(v)).toContain('errors:\n- loop() sdk.lootCorpse() returned ok:false, status "empty" ×6 (first 12:31:12, last 12:32:32)');
+    const text = renderWake(v);
+    expect(text).toContain('outcomes:\n- loop() sdk.lootCorpse() returned ok:false, status "empty" ×6 (first 12:31:12, last 12:32:32)');
+    expect(text).not.toContain("errors:");
     expect([...log.drainLedger().errors.values()]).toEqual([
-      { signature: "loop() sdk.lootCorpse empty", hook: "loop()", kind: "failed", deploy: 3, count: 6 },
+      { signature: "loop() sdk.lootCorpse empty", hook: "loop()", kind: "outcome", deploy: 3, count: 6 },
     ]);
+  });
+
+  test("errors and outcomes are listed apart, each newest first under a cap of its own", () => {
+    const row = (i: number, kind: "thrown" | "failed" | "outcome", lastTs: number) => ({
+      signature: `loop() ${kind} ${i}`,
+      hook: "loop()",
+      kind,
+      text: `${kind} ${i}: x`,
+      count: 1,
+      deploy: 7,
+      firstTs: T0,
+      lastTs,
+    });
+    const outcomes = Array.from({ length: 10 }, (_, i) => row(i, "outcome", T0 + 1_000 * (i + 1)));
+    const text = renderWake(view({ errors: [row(1, "thrown", T0), ...outcomes, row(2, "failed", T0 + 500)] }));
+    const errorsAt = text.indexOf("errors:\n");
+    const outcomesAt = text.indexOf("outcomes:\n");
+    expect(errorsAt).toBeGreaterThan(-1);
+    expect(outcomesAt).toBeGreaterThan(errorsAt);
+    expect(text.slice(errorsAt, outcomesAt)).toBe("errors:\n- loop() failed 2: x (at 12:31:02)\n- loop() thrown 1: x (at 12:31:02)\n");
+    const listed = text.slice(outcomesAt).split("\n").filter((l) => l.startsWith("- "));
+    expect(listed[0]).toBe("- loop() outcome 9: x (at 12:31:02)");
+    expect(listed).toHaveLength(9);
+    expect(listed[8]).toBe("- +2 more signatures");
   });
 
   test("error rows run newest first, so the cap never hides the latest signature", () => {

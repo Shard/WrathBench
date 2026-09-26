@@ -222,20 +222,22 @@ export type DeployAnswer =
  * inside the workspace — or, for a failed `sdk` call, which hook, the helper,
  * and the status or error name. `count` is how many times it happened since
  * the last report; `isNew` marks the report that carries its first occurrence
- * in this deploy, which is the one that wakes the model. An `sdk` call that
- * answered `ok: false` is never new: it is counted and shown, and wakes no one.
+ * in this deploy, which is the one that wakes the model. An `outcome` (an
+ * `sdk` call that answered `ok: false`) is never new: it is counted and shown,
+ * and wakes no one.
  */
 export interface ProgramErrorNote {
   signature: string;
   /** `loop()`, `on.SMSG_X`, `events.on(SMSG_X)`, `memory`, `unhandled rejection`, `load`. */
   hook: string;
   /**
-   * `failed`: an `sdk` call from the program threw, rejected or answered
-   * `ok: false` — caught by the program or not. `thrown`: every other
-   * signature — a throw or rejection out of a hook, an overrun, a memory that
-   * could not be loaded or saved.
+   * `failed`: an `sdk` call from the program threw or rejected — caught by the
+   * program or not. `outcome`: an `sdk` call from the program answered
+   * `ok: false`, which never wakes the model. `thrown`: every other signature
+   * — a throw or rejection out of a hook, an overrun, a memory that could not
+   * be loaded or saved.
    */
-  kind: "thrown" | "failed";
+  kind: "thrown" | "failed" | "outcome";
   /** The error as the model reads it: name, message, up to four workspace frames. */
   text: string;
   count: number;
