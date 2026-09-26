@@ -120,6 +120,14 @@ whole timeout (the quest stays in the log; free a slot and turn in again).
 over an item is refused with it when the item does not fit, and never enters
 the log, so that is `inventory_full` too.
 
+The core answers an out-of-range quest call with silence, so `questsAvailableFrom`,
+`acceptQuestFrom` and `turnInQuest` refuse locally with `too_far` and the
+distance when the cached positions put the NPC beyond any questgiver's reach.
+That reach is 5.5y plus both combat reaches, and the module does not serve the
+NPC's, so the ceiling is set by the largest questgiver in the pinned world
+rather than a typical one; nearer than that the call still goes out, and a
+silence is explained by the distance afterwards.
+
 `waitForQuestObjective` waits on the **quest log**, not on an event, because at
 the pinned commit the core sends no `SMSG_QUESTUPDATE_COMPLETE` for a kill
 objective: the only thing that reports one to a client is the completion bit in

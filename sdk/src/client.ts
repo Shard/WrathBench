@@ -1295,6 +1295,35 @@ function distanceToUnit(state: StateCache, guid: GuidArg): number | undefined {
 
 /** What the core treats as interaction range for a questgiver/trainer, in yards. */
 const INTERACT_RANGE = 5;
+
+/**
+ * The farthest a questgiver can be, by the cached positions, and still be in
+ * reach — past it a quest call is refused locally as `too_far` instead of
+ * being sent into the server's silence. The core's reach is 5.5y plus the
+ * player's 1.5y combat reach plus the NPC's own, which the module does not
+ * serve; the largest questgiver's in the pinned world is 20y (27y in all), and
+ * the rest absorbs rounding and a position that moved since its last report.
+ * A refusal this ceiling gets wrong still points the right way: moveTo the
+ * NPC lands on the same cached point, and the call then goes out.
+ */
+const QUESTGIVER_REACH_CEILING = 30;
+
+/**
+ * The yards to a questgiver when the cache proves it is out of reach, else
+ * undefined. A player is exempt: the core puts no range on a player sharing a
+ * quest.
+ */
+function questgiverOutOfReach(state: StateCache, guid: GuidArg): number | undefined {
+  if (state.nearby.get(guidKey(guid))?.objectType?.value === "player") return undefined;
+  const distance = distanceToUnit(state, guid);
+  return distance !== undefined && distance > QUESTGIVER_REACH_CEILING ? Math.round(distance) : undefined;
+}
+
+/** The `too_far` hint every quest call gives, nothing having been sent. */
+function questgiverTooFarHint(distance: number): string {
+  return `the questgiver is ${distance}y away — interact range is ~${INTERACT_RANGE}y; moveTo it first`;
+}
+
 /** `UNIT_NPC_FLAG_QUESTGIVER`. */
 const NPC_FLAG_QUESTGIVER = 0x2;
 /** `GAMEOBJECT_TYPE_QUESTGIVER`. */
@@ -1531,6 +1560,14 @@ export type QuestAcceptResult =
       /** Raw `InventoryResult` code from `SMSG_INVENTORY_CHANGE_FAILURE`. */
       readonly result: number;
       readonly hint: string;
+    }
+  | {
+      readonly ok: false;
+      /** The cached positions put the questgiver out of reach; nothing was sent. */
+      readonly status: "too_far";
+      readonly questId: number;
+      readonly distance: number;
+      readonly hint: string;
     };
 
 /**
@@ -1549,13 +1586,26 @@ function questStartedBy(state: StateCache, item: BagSlotItem | undefined): numbe
   return startQuest === undefined || startQuest === 0 ? undefined : startQuest;
 }
 
-/** `questsAvailableFrom`'s answer; `nothing_on_offer` is the marker pre-check, with nothing sent. */
+/**
+ * `questsAvailableFrom`'s answer; `nothing_on_offer` is the marker pre-check
+ * and `too_far` the range pre-check, each with nothing sent.
+ */
 export type QuestsAvailableResult =
   | { readonly ok: true; readonly quests: readonly OfferedQuest[] }
-  | { readonly ok: false; readonly status: "nothing_on_offer"; readonly quests: readonly OfferedQuest[]; readonly hint: string };
+  | { readonly ok: false; readonly status: "nothing_on_offer"; readonly quests: readonly OfferedQuest[]; readonly hint: string }
+  | {
+      readonly ok: false;
+      readonly status: "too_far";
+      readonly quests: readonly OfferedQuest[];
+      readonly distance: number;
+      readonly hint: string;
+    };
 
-/** What `questOffer` learned: the list, or the marker that made asking pointless. */
-type QuestOfferOutcome = { readonly quests: readonly OfferedQuest[] } | { readonly nothing: QuestGiverMarker; readonly hint: string };
+/** What `questOffer` learned: the list, or the marker or the distance that made asking pointless. */
+type QuestOfferOutcome =
+  | { readonly quests: readonly OfferedQuest[] }
+  | { readonly nothing: QuestGiverMarker; readonly hint: string }
+  | { readonly tooFar: number; readonly hint: string };
 
 /** The questgiver markers that say "nothing to offer" before a quest list is even asked for. */
 const OFFERS_NOTHING: ReadonlySet<QuestGiverStatusName> = new Set([
@@ -5286,6 +5336,10 @@ export class WrathClient {
           this.noteActionHint("acceptQuestFrom", "nothing_on_offer", offered.hint);
           return { ok: false, status: "nothing_on_offer", questId, offered: [], hint: offered.hint };
         }
+        if ("tooFar" in offered) {
+          this.noteActionHint("acceptQuestFrom", "too_far", offered.hint);
+          return { ok: false, status: "too_far", questId, distance: offered.tooFar, hint: offered.hint };
+        }
         wanted = offered.quests.find((q) => q.questId === questId);
         if (!wanted) return { ok: false, status: "not_offered", questId, offered: offered.quests };
       }
@@ -5355,6 +5409,10 @@ export class WrathClient {
       if ("nothing" in offered) {
         this.noteActionHint("questsAvailableFrom", "nothing_on_offer", offered.hint);
         return { ok: false, status: "nothing_on_offer", quests: [], hint: offered.hint };
+      }
+      if ("tooFar" in offered) {
+        this.noteActionHint("questsAvailableFrom", "too_far", offered.hint);
+        return { ok: false, status: "too_far", quests: [], distance: offered.tooFar, hint: offered.hint };
       }
       return { ok: true, quests: offered.quests };
     });
@@ -5712,18 +5770,15 @@ export class WrathClient {
 
       // Out-of-range quest_complete is silently ignored by the server and burns
       // the whole timeout (roster-opus-20260822 turn ~28). Fail fast only when
-      // the cache can prove the NPC is *grossly* far away — the 40y threshold
-      // leaves cached-position staleness no room to reject a legitimate call;
-      // borderline cases still get the honest timeout.
+      // the cache proves the NPC is out of reach (QUESTGIVER_REACH_CEILING);
+      // closer than that, a large NPC may still be in reach, so the call goes
+      // out and a silence gets the honest timeout.
       const distance = distanceToUnit(this.state, npcId);
-      if (distance !== undefined && distance > 40) {
-        return {
-          ok: false,
-          status: "too_far",
-          questId,
-          distance: Math.round(distance),
-          hint: `the questgiver is ${Math.round(distance)}y away — interact range is ~${INTERACT_RANGE}y; moveTo it first`,
-        };
+      const tooFar = questgiverOutOfReach(this.state, npcId);
+      if (tooFar !== undefined) {
+        const hint = questgiverTooFarHint(tooFar);
+        this.noteActionHint("turnInQuest", "too_far", hint);
+        return { ok: false, status: "too_far", questId, distance: tooFar, hint };
       }
 
       {
@@ -5913,6 +5968,10 @@ export class WrathClient {
           'Use the search_reference tool for who offers the quest you are after; state.units({ questGiver: "available" }) lists every NPC in view with a quest on offer.',
       };
     }
+    // Checked after the marker, which is the more specific answer: an NPC
+    // with nothing on offer has nothing to walk over for.
+    const tooFar = questgiverOutOfReach(this.state, npcGuid);
+    if (tooFar !== undefined) return { tooFar, hint: questgiverTooFarHint(tooFar) };
     await this.questList(npcGuid);
     const menu = await this
       .waitEvent(
