@@ -907,19 +907,25 @@ export const PROGRAM_EVENT_NAMES: ReadonlySet<string> = new Set<string>([...KNOW
 
 /** At most this many near names are an obvious match; more is a list, and none is offered. */
 const NEAR_NAMES_MAX = 3;
-/** A key's stem (after `SMSG_`, `MSG_`, `WB_`) shorter than this is too little to call a match. */
+/** A key's stem (after `SMSG_`, `MSG_`, `WB_`, underscores removed) shorter than this is too little to call a match. */
 const NEAR_STEM_MIN = 4;
 /** A key that runs past a known name by more than this many characters is not that name misspelt. */
 const NEAR_OVERRUN_MAX = 3;
 
-const eventStem = (name: string): string => name.toUpperCase().replace(/^(C?SMSG|MSG|WB)_/, "");
+/** A name after its family prefix, upper case, with no underscores: where a key and a name are compared. */
+const eventStem = (name: string): string =>
+  name
+    .toUpperCase()
+    .replace(/^(C?SMSG|MSG|WB)_/, "")
+    .replace(/_/g, "");
 
 /**
  * Known names the unknown key is the start of, or that it runs past by a
- * character or three, compared case-insensitively after the family prefix —
- * `SMSG_LEVELUP` finds `SMSG_LEVELUP_INFO`, `MOVE_RESULT` and
- * `WB_MOVE_RESULTS` find `WB_MOVE_RESULT`. Nearest first by length; empty when
- * nothing matches or when more than three do.
+ * character or three, compared after the family prefix ignoring case and
+ * underscores — `SMSG_LEVELUP` and `SMSG_LEVEL_UP_INFO` find
+ * `SMSG_LEVELUP_INFO`, `MOVE_RESULT` and `WB_MOVE_RESULTS` find
+ * `WB_MOVE_RESULT`. Nearest first by length; empty when nothing matches or
+ * when more than three do.
  */
 export function nearEventNames(key: string, known: ReadonlySet<string> = PROGRAM_EVENT_NAMES): string[] {
   const k = eventStem(key);

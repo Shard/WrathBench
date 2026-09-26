@@ -479,7 +479,8 @@ the spike was built on.
   row of module/PROTOCOL.md) loads, since dispatch is by exact name and it is
   merely never called; the deploy carries a warning naming the key and, when
   one to three names start with it (or it overruns one by up to three
-  characters), those names, shown in the next `[wake]` block.
+  characters), compared without case or underscores, those names, shown in
+  the next `[wake]` block.
 - **Ownership** (`src/sandbox/owners.ts`). Timers and event listeners belong
   to the async context that created them: a snippet's go when it returns (its
   signal is aborted too), a deploy's when it is replaced. Keyed on the async

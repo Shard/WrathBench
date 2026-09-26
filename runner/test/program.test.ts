@@ -315,9 +315,12 @@ describe("on keys that are not event names", () => {
     expect(host.programState.kind).toBe("running");
   });
 
-  test("near names: a prefix either way, any case, any family; nothing when it is a list", () => {
+  test("near names: a prefix either way, any case, any underscores, any family; nothing when it is a list", () => {
     expect(nearEventNames("SMSG_LEVELUP")).toEqual(["SMSG_LEVELUP_INFO"]);
     expect(nearEventNames("smsg_levelup_info")).toEqual(["SMSG_LEVELUP_INFO"]);
+    expect(nearEventNames("SMSG_LEVEL_UP_INFO")).toEqual(["SMSG_LEVELUP_INFO"]);
+    expect(nearEventNames("SMSG_LEVEL_UP")).toEqual(["SMSG_LEVELUP_INFO"]);
+    expect(nearEventNames("SMSG_ATTACK_START")).toEqual(["SMSG_ATTACKSTART"]);
     expect(nearEventNames("MOVE_RESULT")).toEqual(["WB_MOVE_RESULT"]);
     expect(nearEventNames("SMSG_MOVE_RESULT")).toEqual(["WB_MOVE_RESULT"]);
     expect(nearEventNames("SMSG_ATTACK")).toEqual(["SMSG_ATTACKSTOP", "SMSG_ATTACKSTART", "SMSG_ATTACKERSTATEUPDATE"]);
@@ -326,6 +329,9 @@ describe("on keys that are not event names", () => {
     expect(nearEventNames("SMSG_PROBE")).toEqual([]);
     expect(nearEventNames("*")).toEqual([]);
     expect(unknownEventWarnings(["SMSG_ATTACKSTART", "WB_MOVE_RESULT", "stream_gap", "WB_AREATRIGGER"])).toEqual([]);
+    expect(unknownEventWarnings(["SMSG_LEVEL_UP_INFO"])).toEqual([
+      "on.SMSG_LEVEL_UP_INFO is not an event name on the event stream, so it is never called; nearest: SMSG_LEVELUP_INFO",
+    ]);
   });
 
   test("every event row of module/PROTOCOL.md is an event name a handler can be keyed by", () => {
