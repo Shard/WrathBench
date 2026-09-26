@@ -161,8 +161,10 @@ exists.) Then, on the client:
 `state` (alias for `sdk.state`) is a cache folded from events. `state.self`
 (guid, name, level, position, zone and area — `{ id, name }`, the game's own
 zone/subzone as the client names them on screen, e.g. "Elwynn Forest" /
-"Northshire Valley" — health, targetGuid) and `state.nearby` (a Map
-keyed by guid) are plain properties; the members below are getters and methods.
+"Northshire Valley" — health, targetGuid, and ghost: `state.self.ghost.value`
+is true while your released spirit walks as a ghost, whose health reads 1, not
+0) and `state.nearby` (a Map keyed by guid) are plain properties; the members
+below are getters and methods.
 Observed fields are wrapped as `{ value, seq, ts }` — read `.value`. Every field
 is `undefined` until an event carried it; `undefined` means unobserved, never
 zero.
