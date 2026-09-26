@@ -188,6 +188,8 @@ interface Deploy {
   /** In-flight ticks and handlers. */
   calls: Set<AbortController>;
   tick: number;
+  /** When the tick in flight started; null between ticks. */
+  tickStartedAt: number | null;
   /** Error signatures already seen in this deploy: a repeat is only counted. */
   seen: Set<string>;
   retired: boolean;
@@ -583,6 +585,7 @@ export class ProgramRuntime {
       controller,
       calls: new Set(),
       tick: 0,
+      tickStartedAt: null,
       seen: new Set(),
       retired: false,
     };
@@ -635,7 +638,9 @@ export class ProgramRuntime {
     while (this.current === d) {
       const started = this.now();
       d.tick++;
+      d.tickStartedAt = started;
       await this.call(d, "loop()", this.deps.limits.tickBudgetMs, (ctx) => loop(ctx), true);
+      d.tickStartedAt = null;
       if (this.current !== d) return;
       const wait = Math.max(0, started + this.deps.limits.tickMs - this.now());
       await new Promise<void>((r) => this.deps.ownership.real.setTimeout(r, wait));
@@ -865,10 +870,12 @@ export class ProgramRuntime {
   /** Everything since the last report, and reset. */
   report(): ProgramReport {
     const { logs, lines } = this.log.drain();
+    const d = this.current;
     const out: ProgramReport = {
       deploy: this.deployed,
       ticks: this.ticks,
       longestTickMs: this.longestTickMs,
+      ...(d !== null && d.tickStartedAt !== null ? { tickInFlight: { tick: d.tick, runningMs: this.now() - d.tickStartedAt } } : {}),
       overruns: this.overruns,
       errors: [...this.errors.values()],
       requests: [...this.requests.values()],

@@ -173,6 +173,26 @@ describe("when a sleeping model is due", () => {
     ]);
   });
 
+  test("the tick in flight is the latest report's: it outlives the yield, and a halt or a restart ends it", () => {
+    const log = new WakeLog();
+    const program = { state: "running" as const, deploy: 1, deployedAt: T0, editsSinceDeploy: false, mainExists: true };
+    const inFlight = (): WakeView["tickInFlight"] =>
+      log.view({ wake: 2, request: 1, asleepMs: 5_000, wokeFor: ["fallback"], program, delta: null, memory: null }).tickInFlight;
+    log.noteReport(report({ tickInFlight: { tick: 3, runningMs: 1_000 } }), T0);
+    log.yielded(T0 + 500, false);
+    expect(inFlight()).toEqual({ tick: 3, runningMs: 1_000 });
+    log.noteReport(report({ tickInFlight: { tick: 3, runningMs: 70_000 } }), T0 + 69_000);
+    expect(inFlight()).toEqual({ tick: 3, runningMs: 70_000 });
+    log.noteReport(report({ ticks: 1, longestTickMs: 90_000 }), T0 + 90_000);
+    expect(inFlight()).toBeNull();
+    log.noteReport(report({ tickInFlight: { tick: 4, runningMs: 500 } }), T0 + 91_000);
+    log.noteHost({ kind: "halted", deploy: 1, at: T0 + 92_000 }, T0 + 92_000);
+    expect(inFlight()).toBeNull();
+    log.noteReport(report({ tickInFlight: { tick: 1, runningMs: 200 } }), T0 + 93_000);
+    log.noteHost({ kind: "restart", cause: "exit", detail: "the sandbox process exited", at: T0 + 94_000 }, T0 + 94_000);
+    expect(inFlight()).toBeNull();
+  });
+
   test("the ledger counts every occurrence once, whatever the block showed or carried", () => {
     const log = new WakeLog();
     log.noteReport(report({ ticks: 10, longestTickMs: 40, overruns: 1, errors: [errorNote(true, 2)] }), T0);
@@ -281,6 +301,7 @@ describe("the [wake] block", () => {
       program: { state: "running", deploy: 7, deployedAt: T0, editsSinceDeploy: false, mainExists: true },
       ticks: 243,
       longestTickMs: 31_200,
+      tickInFlight: null,
       overruns: 0,
       loads: [],
       host: [],
@@ -322,6 +343,19 @@ describe("the [wake] block", () => {
         "[memory.json, 35 chars]",
         '{"phase":"grind","target":"Kobold"}',
       ].join("\n"),
+    );
+  });
+
+  test("a tick still running is said, with its number and how long it has run; a longest is said only once a tick finished", () => {
+    const line = (over: Partial<WakeView>): string => renderWake(view(over)).split("\n")[1]!;
+    expect(line({ ticks: 0, longestTickMs: 0, tickInFlight: { tick: 1, runningMs: 70_000 } })).toBe(
+      "program: main.ts deploy 7 (12:31:02), running · 0 ticks since you ended your turn, tick 1 running for 1m10s, 0 overruns · no edits since deploy",
+    );
+    expect(line({ tickInFlight: { tick: 1_244, runningMs: 4_000 } })).toBe(
+      "program: main.ts deploy 7 (12:31:02), running · 243 ticks since you ended your turn, longest 31.2s, tick 1,244 running for 4.0s, 0 overruns · no edits since deploy",
+    );
+    expect(line({ ticks: 0, longestTickMs: 0 })).toBe(
+      "program: main.ts deploy 7 (12:31:02), running · 0 ticks since you ended your turn, 0 overruns · no edits since deploy",
     );
   });
 

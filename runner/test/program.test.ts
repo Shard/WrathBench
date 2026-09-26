@@ -122,6 +122,30 @@ describe("deploy and ticks", () => {
     expect(errors[0]!.text).toContain("sdk.moveToAsync(target)");
   });
 
+  test("a report names the tick still running, and the report after it finished names none", async () => {
+    const { host, ws } = makeHost();
+    // The first tick waits for a snippet to release it; every later tick returns at once.
+    write(
+      ws,
+      "main.ts",
+      "export async function loop(ctx) {\n  if (ctx.tick === 1) while (!ctx.memory.release) await new Promise((r) => setTimeout(r, 10));\n}\n",
+    );
+    expect((await host.deployProgram(1)).ok).toBe(true);
+    await Bun.sleep(60);
+    const running = await host.programReport();
+    expect(running.ticks).toBe(0);
+    expect(running.tickInFlight?.tick).toBe(1);
+    expect(running.tickInFlight!.runningMs).toBeGreaterThanOrEqual(40);
+    const later = await host.programReport();
+    expect(later.tickInFlight!.runningMs).toBeGreaterThanOrEqual(running.tickInFlight!.runningMs);
+    await host.evalSnippet("memory.release = true");
+    const all = await reportsUntil(host, (rs) => rs.reduce((n, r) => n + r.ticks, 0) >= 1);
+    expect(all.at(-1)!.longestTickMs).toBeGreaterThanOrEqual(40);
+    // Quick ticks are rarely caught mid-flight; when one is, it is a later tick than the first.
+    const after = await host.programReport();
+    expect(after.tickInFlight === undefined || after.tickInFlight.tick > 1).toBe(true);
+  });
+
   test("an on handler runs as its event arrives, and ctx.wake is reported with the hook that asked", async () => {
     const { host, ws } = makeHost();
     write(

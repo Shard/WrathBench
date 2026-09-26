@@ -266,6 +266,12 @@ export interface ProgramMilestoneNote {
   questId?: number;
 }
 
+/** A tick of the running deploy that has started and not yet finished. */
+export interface TickInFlight {
+  tick: number;
+  runningMs: number;
+}
+
 /** Everything the program did since the last report. */
 export interface ProgramReport {
   /** The deploy running now, or null. */
@@ -273,6 +279,12 @@ export interface ProgramReport {
   ticks: number;
   /** The longest tick that finished since the last report, in ms; 0 when none did. */
   longestTickMs: number;
+  /**
+   * The tick running as the report was taken — its `ctx.tick` and how long it
+   * had run — which `ticks` and `longestTickMs` do not count until it
+   * finishes; absent when none was.
+   */
+  tickInFlight?: TickInFlight;
   overruns: number;
   errors: ProgramErrorNote[];
   requests: WakeRequestNote[];

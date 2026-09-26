@@ -23,7 +23,7 @@
 
 import type { SnapshotLike } from "./context";
 import type { DeployRecord, ProgramHostEvent, ProgramState } from "./sandbox/host";
-import type { ActionHintNote, ProgramErrorNote, ProgramLogEntry, ProgramMilestoneNote, ProgramReport } from "./sandbox/ipc";
+import type { ActionHintNote, ProgramErrorNote, ProgramLogEntry, ProgramMilestoneNote, ProgramReport, TickInFlight } from "./sandbox/ipc";
 
 /** Asleep this long with no other reason: wake anyway. */
 export const FALLBACK_WAKE_MS = 300_000;
@@ -128,6 +128,8 @@ export interface WakeView {
   };
   ticks: number;
   longestTickMs: number;
+  /** The tick running at the latest report, which `ticks` does not count yet; null when none was. */
+  tickInFlight: TickInFlight | null;
   overruns: number;
   loads: WakeLoadRow[];
   host: WakeHostRow[];
@@ -161,6 +163,8 @@ export class WakeLog {
   private host: WakeHostRow[] = [];
   private ticks = 0;
   private longestTickMs = 0;
+  /** As the latest report found it: a tick that began before the yield is still running after it. */
+  private tickInFlight: TickInFlight | null = null;
   private overruns = 0;
   private console: ProgramLogEntry[] = [];
   private consoleLines = 0;
@@ -192,6 +196,7 @@ export class WakeLog {
   noteReport(r: ProgramReport, now: number): void {
     this.ticks += r.ticks;
     this.longestTickMs = Math.max(this.longestTickMs, r.longestTickMs);
+    this.tickInFlight = r.tickInFlight ?? null;
     this.overruns += r.overruns;
     this.ledger.ticks += r.ticks;
     this.ledger.longestTickMs = Math.max(this.ledger.longestTickMs, r.longestTickMs);
@@ -254,6 +259,8 @@ export class WakeLog {
 
   /** What the host said about the program between reports. */
   noteHost(e: ProgramHostEvent, now: number): void {
+    // The child that ran the tick is gone; the next report says what runs now.
+    if (e.kind === "halted" || e.kind === "restart" || e.kind === "stopped") this.tickInFlight = null;
     switch (e.kind) {
       case "report":
         this.noteReport(e.report, now);
@@ -405,6 +412,7 @@ export class WakeLog {
       program: o.program,
       ticks: this.ticks,
       longestTickMs: this.longestTickMs,
+      tickInFlight: this.tickInFlight === null ? null : { ...this.tickInFlight },
       overruns: this.overruns,
       loads: [...this.loads],
       host: [...this.host],
@@ -594,7 +602,10 @@ const count = (n: number): string => n.toLocaleString("en-US");
 
 function programLine(v: WakeView): string {
   const p = v.program;
-  const stats = `${count(v.ticks)} tick${v.ticks === 1 ? "" : "s"} since you ended your turn, longest ${duration(v.longestTickMs)}, ${count(v.overruns)} overrun${v.overruns === 1 ? "" : "s"}`;
+  // Ticks finished since the yield, the longest only when one did, and the one still running, which they do not count.
+  const done = `${count(v.ticks)} tick${v.ticks === 1 ? "" : "s"} since you ended your turn${v.ticks > 0 ? `, longest ${duration(v.longestTickMs)}` : ""}`;
+  const running = v.tickInFlight === null ? "" : `, tick ${count(v.tickInFlight.tick)} running for ${duration(v.tickInFlight.runningMs)}`;
+  const stats = `${done}${running}, ${count(v.overruns)} overrun${v.overruns === 1 ? "" : "s"}`;
   const edits = p.editsSinceDeploy ? "edits since deploy: yes, they load when you end your turn" : "no edits since deploy";
   switch (p.state) {
     case "none":

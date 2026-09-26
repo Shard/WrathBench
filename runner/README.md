@@ -518,11 +518,11 @@ the spike was built on.
   does not fire on a sleeping model) and the state ticker keeps writing rows.
   Every request of a wake carries a `[wake]` block after the goal line,
   headed "request N of 20 in this wake" so the cap is known before it is met,
-  rendered by the pure `renderWake`: the program's deploy and tick counts,
-  failed loads, halts, errors with their workspace frames and, apart from
-  them, the `ok: false` outcomes (each list most recent first, so its cap of
-  8 never hides the newest), `ctx.wake` calls,
-  the level/xp/money/quest/death/zone delta, action hints, the last 40 lines of
+  rendered by the pure `renderWake`: the program's deploy and tick counts
+  and the tick still running, if one is, failed loads, halts, errors with
+  their workspace frames and, apart from them, the `ok: false` outcomes (each
+  list most recent first, so its cap of 8 never hides the newest), `ctx.wake`
+  calls, the level/xp/money/quest/death/zone delta, action hints, the last 40 lines of
   the program's console and memory.json — whole up to 2,000 characters, else
   its last 2,000 after a count of what comes before (a program appends, so the
   newest entries are at the end), and one line on a later request of the wake
