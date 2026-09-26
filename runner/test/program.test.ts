@@ -156,6 +156,20 @@ describe("deploy and ticks", () => {
     expect(logs.some((t) => t.includes("from the snippet"))).toBe(false);
     expect(all.reduce((n, r) => n + r.logLines, 0)).toBeGreaterThanOrEqual(2);
   });
+
+  test("a line printed every tick is one console entry per report, its count kept apart from its text", async () => {
+    const { host, ws } = makeHost();
+    write(ws, "main.ts", 'export function loop(ctx) {\n  console.log("same line");\n}\n');
+    expect((await host.deployProgram(1)).ok).toBe(true);
+    await host.programReport();
+    // Several ticks' worth between two reports.
+    const r = await until(async () => {
+      await Bun.sleep(100);
+      const rep = await host.programReport();
+      return rep.logLines >= 2 ? rep : undefined;
+    });
+    expect(r.logs).toEqual([{ level: "log", ts: expect.any(Number), text: "same line", repeats: r.logLines }]);
+  });
 });
 
 describe("errors: signatures, first occurrence, and the line they came from", () => {

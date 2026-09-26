@@ -85,6 +85,16 @@ export interface LogEntry {
   text: string;
 }
 
+/**
+ * A line of the entrypoint program's console: `repeats` is how many times it
+ * was printed in a row (absent for once), `ts` the last of them. The count is
+ * kept apart from the text so the wake log can go on folding a line printed
+ * once per tick across the reports it spans.
+ */
+export interface ProgramLogEntry extends LogEntry {
+  repeats?: number;
+}
+
 // host -> child
 export type HostToChild =
   /**
@@ -265,8 +275,8 @@ export interface ProgramReport {
   errors: ProgramErrorNote[];
   requests: WakeRequestNote[];
   milestones: ProgramMilestoneNote[];
-  /** The program's console, repeats folded; snippet output never lands here. */
-  logs: LogEntry[];
+  /** The program's console, consecutive repeats folded into one entry; snippet output never lands here. */
+  logs: ProgramLogEntry[];
   /** Console lines printed since the last report, repeats counted, including any the buffer dropped. */
   logLines: number;
   /** Hint-bearing failures, drained only while no snippet is running (a snippet's result carries its own). */

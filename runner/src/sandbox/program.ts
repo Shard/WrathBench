@@ -48,6 +48,7 @@ import type {
   DeployAnswer,
   LogEntry,
   ProgramErrorNote,
+  ProgramLogEntry,
   ProgramMilestoneNote,
   ProgramReport,
   WakeRequestNote,
@@ -446,32 +447,33 @@ export class ProgramMemory {
 
 // ------------------------------------------------------------------ console
 
-/** The program's console between two reports: consecutive repeats folded "×N", the newest kept. */
+/**
+ * The program's console between two reports: a line printed again right after
+ * itself is one entry with a count, the newest kept. The count stays apart
+ * from the text, so the host's wake log folds a report's first line into the
+ * last one it holds and a line printed every tick stays one entry across the
+ * reports it spans.
+ */
 class ProgramLog {
-  private buf: LogEntry[] = [];
-  private last: { entry: LogEntry; base: string; repeats: number } | null = null;
+  private buf: ProgramLogEntry[] = [];
   lines = 0;
 
   push(level: LogEntry["level"], text: string, now: number): void {
     this.lines++;
     const t = text.slice(0, 4_000);
-    const l = this.last;
-    if (l !== null && this.buf[this.buf.length - 1] === l.entry && l.entry.level === level && l.base === t) {
-      l.repeats++;
-      l.entry.ts = now;
-      l.entry.text = `${t} ×${l.repeats}`;
+    const last = this.buf[this.buf.length - 1];
+    if (last !== undefined && last.level === level && last.text === t) {
+      last.repeats = (last.repeats ?? 1) + 1;
+      last.ts = now;
       return;
     }
-    const entry: LogEntry = { level, ts: now, text: t };
-    this.last = { entry, base: t, repeats: 1 };
-    this.buf.push(entry);
+    this.buf.push({ level, ts: now, text: t });
     if (this.buf.length > PROGRAM_LOG_KEEP) this.buf.splice(0, this.buf.length - PROGRAM_LOG_KEEP);
   }
 
-  drain(): { logs: LogEntry[]; lines: number } {
+  drain(): { logs: ProgramLogEntry[]; lines: number } {
     const out = { logs: this.buf, lines: this.lines };
     this.buf = [];
-    this.last = null;
     this.lines = 0;
     return out;
   }

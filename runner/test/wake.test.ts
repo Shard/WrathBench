@@ -110,6 +110,42 @@ describe("when a sleeping model is due", () => {
     expect(v.console).toEqual({ lines: 1, entries: [{ level: "log", ts: 0, text: "late line" }] });
   });
 
+  test("a line printed once per tick is one console entry however many reports it spans", () => {
+    const log = new WakeLog();
+    log.yielded(T0, false);
+    for (let i = 0; i < 12; i++) {
+      log.noteReport(report({ ticks: 1, logs: [{ level: "log", ts: T0 + i * 1_000, text: "resting" }], logLines: 1 }), T0 + i * 1_000);
+    }
+    // A different line breaks the run; the same line after it starts a new one.
+    log.noteReport(report({ logs: [{ level: "warn", ts: T0 + 30_000, text: "resting" }, { level: "log", ts: T0 + 30_000, text: "bags full", repeats: 2 }], logLines: 3 }), T0 + 30_000);
+    log.noteReport(report({ logs: [{ level: "log", ts: T0 + 31_000, text: "bags full", repeats: 3 }], logLines: 3 }), T0 + 31_000);
+    const v = log.view({ wake: 2, request: 1, asleepMs: 31_000, wokeFor: ["fallback"], program: { state: "running", deploy: 1, deployedAt: T0, editsSinceDeploy: false, mainExists: true }, delta: null, memory: null });
+    expect(v.console.entries).toEqual([
+      { level: "log", ts: T0 + 11_000, text: "resting", repeats: 12 },
+      { level: "warn", ts: T0 + 30_000, text: "resting" },
+      { level: "log", ts: T0 + 31_000, text: "bags full", repeats: 5 },
+    ]);
+    expect(renderWake(v).endsWith("[program console: 18 lines, last 3 shown, repeats folded]\nresting ×12\n[warn] resting\nbags full ×5")).toBe(true);
+    // The view is a copy: the log folding on does not change what was rendered.
+    log.noteReport(report({ logs: [{ level: "log", ts: T0 + 32_000, text: "bags full" }], logLines: 1 }), T0 + 32_000);
+    expect(v.console.entries[2]!.repeats).toBe(5);
+  });
+
+  test("repeats of the last console line shown that arrive after the render carry across the yield, and only they", () => {
+    const log = new WakeLog();
+    log.noteReport(report({ logs: [{ level: "log", ts: T0, text: "first" }, { level: "log", ts: T0, text: "tick", repeats: 4 }], logLines: 5 }), T0);
+    log.markShown();
+    log.noteReport(report({ logs: [{ level: "log", ts: T0 + 1_000, text: "tick", repeats: 2 }], logLines: 2 }), T0 + 1_000);
+    log.yielded(T0 + 1_500, false);
+    log.noteReport(report({ logs: [{ level: "log", ts: T0 + 2_000, text: "tick" }], logLines: 1 }), T0 + 2_000);
+    const v = log.view({ wake: 2, request: 1, asleepMs: 5_000, wokeFor: ["fallback"], program: { state: "running", deploy: 1, deployedAt: T0, editsSinceDeploy: false, mainExists: true }, delta: null, memory: null });
+    expect(v.console).toEqual({ lines: 3, entries: [{ level: "log", ts: T0 + 2_000, text: "tick", repeats: 3 }] });
+    // Nothing printed since the render: nothing carries.
+    log.markShown();
+    log.yielded(T0 + 3_000, false);
+    expect(log.view({ wake: 3, request: 1, asleepMs: 5_000, wokeFor: ["fallback"], program: { state: "running", deploy: 1, deployedAt: T0, editsSinceDeploy: false, mainExists: true }, delta: null, memory: null }).console).toEqual({ lines: 0, entries: [] });
+  });
+
   test("an sdk call that threw, caught by the program, wakes the model like a throw, once, and the ledger keeps its kind", () => {
     const log = new WakeLog();
     log.yielded(T0, false);
@@ -263,7 +299,7 @@ describe("the [wake] block", () => {
       requests: [{ reason: "bags full", from: "on.SMSG_INVENTORY_CHANGE_FAILURE", count: 1 }],
       delta: { levelFrom: 4, levelTo: 5, xpGained: 830, moneyDelta: 112, quests: [33], deaths: 0, zoneFrom: "Elwynn Forest", zoneTo: "Elwynn Forest" },
       hints: [],
-      console: { lines: 1_204, entries: [{ level: "log", ts: T0, text: "pulling Kobold ×3" }] },
+      console: { lines: 1_204, entries: [{ level: "log", ts: T0, text: "pulling Kobold", repeats: 3 }] },
       memory: '{"phase":"grind","target":"Kobold"}',
       memoryUnchanged: false,
       ...over,

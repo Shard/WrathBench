@@ -23,7 +23,7 @@
 
 import type { SnapshotLike } from "./context";
 import type { DeployRecord, ProgramHostEvent, ProgramState } from "./sandbox/host";
-import type { ActionHintNote, LogEntry, ProgramMilestoneNote, ProgramReport } from "./sandbox/ipc";
+import type { ActionHintNote, ProgramLogEntry, ProgramMilestoneNote, ProgramReport } from "./sandbox/ipc";
 
 /** Asleep this long with no other reason: wake anyway. */
 export const FALLBACK_WAKE_MS = 300_000;
@@ -131,7 +131,8 @@ export interface WakeView {
   requests: WakeRequestRow[];
   delta: StateDelta | null;
   hints: ActionHintNote[];
-  console: { lines: number; entries: LogEntry[] };
+  /** The program's console since the yield: a line printed again right after itself is one entry, `repeats` its count. */
+  console: { lines: number; entries: ProgramLogEntry[] };
   /** memory.json as it is on disk; null when there is none. */
   memory: string | null;
   /** memory.json is what the previous request of this wake showed: one line instead of the text. */
@@ -156,7 +157,7 @@ export class WakeLog {
   private ticks = 0;
   private longestTickMs = 0;
   private overruns = 0;
-  private console: LogEntry[] = [];
+  private console: ProgramLogEntry[] = [];
   private consoleLines = 0;
   private hints = new Map<string, ActionHintNote>();
   private capped = false;
@@ -166,16 +167,7 @@ export class WakeLog {
    * landing while the model's reply was in flight — carry into the next wake,
    * or the model would be woken for an error it is never shown.
    */
-  private shown: {
-    errors: Map<string, number>;
-    requests: Map<string, number>;
-    hints: Map<string, number>;
-    milestones: number;
-    loads: number;
-    host: number;
-    console: number;
-    consoleLines: number;
-  } = { errors: new Map(), requests: new Map(), hints: new Map(), milestones: 0, loads: 0, host: 0, console: 0, consoleLines: 0 };
+  private shown: Shown = emptyShown();
   /**
    * The trajectory's ledger, kept apart from what the block shows: every
    * occurrence counted once, drained as each wake ends (`drainLedger`).
@@ -234,7 +226,15 @@ export class WakeLog {
       this.reason("milestone", now);
     }
     this.consoleLines += r.logLines;
-    this.console.push(...r.logs);
+    // A report's first line may be the last one's repeat: the child folds
+    // within one report, and this keeps folding across them.
+    for (const e of r.logs) {
+      const last = this.console[this.console.length - 1];
+      if (last !== undefined && last.level === e.level && last.text === e.text) {
+        last.repeats = (last.repeats ?? 1) + (e.repeats ?? 1);
+        last.ts = e.ts;
+      } else this.console.push({ ...e });
+    }
     if (this.console.length > CONSOLE_KEEP) {
       const drop = this.console.length - CONSOLE_KEEP;
       this.console.splice(0, drop);
@@ -331,12 +331,16 @@ export class WakeLog {
     this.milestones = this.milestones.slice(s.milestones);
     this.loads = this.loads.slice(s.loads);
     this.host = this.host.slice(s.host);
-    this.console = this.console.slice(s.console);
+    // The last line shown may have been printed again since: those prints carry over, as one entry.
+    const tail = s.console > 0 ? this.console[s.console - 1] : undefined;
+    const unseen = tail === undefined ? 0 : (tail.repeats ?? 1) - s.consoleTail;
+    const rest = this.console.slice(s.console);
+    this.console = tail !== undefined && unseen > 0 ? [{ ...tail, repeats: unseen }, ...rest] : rest;
     this.consoleLines = Math.max(0, this.consoleLines - s.consoleLines);
     this.ticks = 0;
     this.longestTickMs = 0;
     this.overruns = 0;
-    this.shown = { errors: new Map(), requests: new Map(), hints: new Map(), milestones: 0, loads: 0, host: 0, console: 0, consoleLines: 0 };
+    this.shown = emptyShown();
   }
 
   /** When the sleeping model is due to wake, and why. */
@@ -359,6 +363,7 @@ export class WakeLog {
       loads: this.loads.length,
       host: this.host.length,
       console: this.console.length,
+      consoleTail: this.console[this.console.length - 1]?.repeats ?? 1,
       consoleLines: this.consoleLines,
     };
   }
@@ -402,7 +407,8 @@ export class WakeLog {
       requests: [...this.requests.values()],
       delta: o.delta,
       hints: [...this.hints.values()],
-      console: { lines: this.consoleLines, entries: [...this.console] },
+      // Copies: the log goes on folding repeats into its entries, and a view is data.
+      console: { lines: this.consoleLines, entries: this.console.map((e) => ({ ...e })) },
       memory: o.memory,
       memoryUnchanged: o.memoryUnchanged ?? false,
     };
@@ -421,6 +427,24 @@ export interface WakeLedger {
   overruns: number;
   halts: number;
   restarts: number;
+}
+
+/** What a rendered request showed, by position and count (`WakeLog.markShown`). */
+interface Shown {
+  errors: Map<string, number>;
+  requests: Map<string, number>;
+  hints: Map<string, number>;
+  milestones: number;
+  loads: number;
+  host: number;
+  console: number;
+  /** The repeats of the last console entry shown: later prints of that line fold into it and are not yet seen. */
+  consoleTail: number;
+  consoleLines: number;
+}
+
+function emptyShown(): Shown {
+  return { errors: new Map(), requests: new Map(), hints: new Map(), milestones: 0, loads: 0, host: 0, console: 0, consoleTail: 0, consoleLines: 0 };
 }
 
 function emptyLedger(): WakeLedger {
@@ -605,7 +629,10 @@ function deltaLine(d: StateDelta): string {
 
 function consoleBlock(c: WakeView["console"]): string[] {
   if (c.lines === 0 && c.entries.length === 0) return [];
-  let shown = c.entries.slice(-WAKE_CONSOLE_LINES).map((e) => (e.level === "log" || e.level === "info" ? e.text : `[${e.level}] ${e.text}`));
+  let shown = c.entries.slice(-WAKE_CONSOLE_LINES).map((e) => {
+    const text = e.repeats !== undefined && e.repeats > 1 ? `${e.text} ×${e.repeats}` : e.text;
+    return e.level === "log" || e.level === "info" ? text : `[${e.level}] ${text}`;
+  });
   while (shown.length > 1 && shown.join("\n").length > WAKE_CONSOLE_CHARS) shown = shown.slice(1);
   if (shown.length === 1 && shown[0]!.length > WAKE_CONSOLE_CHARS) shown = [`${shown[0]!.slice(0, WAKE_CONSOLE_CHARS - 1)}…`];
   return [`[program console: ${count(c.lines)} line${c.lines === 1 ? "" : "s"}, last ${shown.length} shown, repeats folded]`, ...shown];
