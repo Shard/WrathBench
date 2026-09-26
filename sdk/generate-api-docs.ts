@@ -171,7 +171,7 @@ const CLIENT_INTERNAL = new Set([
   "recallMoveRejection",
   "waitOwnTeleportAck",
   "reclaimRefusal",
-  "latestReclaimDelay",
+  "reclaimReadyAt",
   "resolveGossipOption",
   "petGuidOrRefuse",
   "petCommand",

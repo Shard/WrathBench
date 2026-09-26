@@ -43,7 +43,6 @@ import {
   type ActivateTaxiReplyData,
   type BindPointUpdateData,
   type CharacterDeleteResponse,
-  type CorpseReclaimDelayData,
   type CorpseQueryData,
   type CreateSessionRequest,
   type DeathReleaseLocData,
@@ -3226,12 +3225,16 @@ export class WrathClient {
    *
    * The delay is the server's own word, not a constant: `BuildPlayerRepop`
    * sends `SMSG_CORPSE_RECLAIM_DELAY { delayMs }` immediately before it resets
-   * the corpse's ghost time, so the most recent one on the stream plus its
-   * timestamp is when the reclaim becomes legal. When no such event is in the
-   * retained buffer — none was owed (the core sends nothing when the delay has
-   * already expired), or it aged out of the 500-event window — the call
-   * dispatches *immediately* rather than inventing a 30s wait, and lets the
-   * retry absorb a too-early refusal.
+   * the corpse's ghost time, and the state cache keeps the latest one as
+   * `state.self.reclaimDelay` — when the reclaim becomes legal — until the
+   * resurrect clears it. It is read from there rather than from the event
+   * buffer, which a busy stream turns over in well under the delay. When none
+   * has been observed — none was owed (the core sends nothing when the delay
+   * has already expired) — the call dispatches *immediately* rather than
+   * inventing a 30s wait, and lets the retry absorb a too-early refusal. A
+   * delay that runs past the call's budget is answered at once as
+   * `delay_not_elapsed` with the seconds left, since waiting out the budget
+   * would only end in that same answer.
    *
    * Refusals are silent (see `ReclaimCorpseResult`), so the loop re-sends
    * every `attemptTimeout` until the budget runs out, and the verdict is read
@@ -3253,9 +3256,7 @@ export class WrathClient {
 
     /** Own health as the cache last saw it: 0 = dead, 1 = a released ghost, >1 = alive. */
     const health = (): number | undefined => this.state.self.health?.value.current;
-    const delayEvent = (): { delayMs: number; ts: number } | undefined => this.latestReclaimDelay();
-    const announced = delayEvent();
-    const delayMs = announced?.delayMs;
+    const delayMs = this.state.self.reclaimDelay?.value.delayMs;
 
     // Pre-flight, so the two states that can never work are named rather than
     // burning the whole budget on a packet the core drops on sight.
@@ -3315,10 +3316,11 @@ export class WrathClient {
       for (;;) {
         this.throwIfAborted("the corpse reclaim delay");
         // Recomputed each pass: a second death mid-call moves the clock.
-        const latest = delayEvent();
-        const readyAt =
-          latest === undefined ? Date.now() : Math.min(latest.ts + latest.delayMs, Date.now() + latest.delayMs);
-        const wait = Math.min(Math.max(0, readyAt - Date.now()), Math.max(0, deadline - Date.now()));
+        const readyAt = this.reclaimReadyAt() ?? Date.now();
+        const wait = Math.max(0, readyAt - Date.now());
+        // A delay that outlasts the budget cannot be waited into a reclaim:
+        // answer now with what is left instead of sleeping to the same refusal.
+        if (wait > 0 && readyAt >= deadline) break;
         if (wait > 0) await this.sleepAborting(wait);
         if (Date.now() >= deadline) break;
 
@@ -3428,8 +3430,8 @@ export class WrathClient {
         };
       }
     }
-    const latest = this.latestReclaimDelay();
-    const left = latest === undefined ? 0 : Math.max(0, latest.ts + latest.delayMs - Date.now());
+    const readyAt = this.reclaimReadyAt();
+    const left = readyAt === undefined ? 0 : Math.max(0, readyAt - Date.now());
     if (left > 0) {
       const secondsLeft = Math.ceil(left / 1000);
       return {
@@ -3454,16 +3456,15 @@ export class WrathClient {
     };
   }
 
-  /** The most recent `SMSG_CORPSE_RECLAIM_DELAY` in the buffer: the server's word on when a reclaim becomes legal. */
-  private latestReclaimDelay(): { delayMs: number; ts: number } | undefined {
-    const events = this.events.recent();
-    for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i] as StreamEvent;
-      if (isEvent(e, "SMSG_CORPSE_RECLAIM_DELAY") && !isDecodeError(e.data)) {
-        return { delayMs: (e.data as CorpseReclaimDelayData).delayMs, ts: e.ts };
-      }
-    }
-    return undefined;
+  /**
+   * When a reclaim becomes legal (epoch ms), from the server's latest delay
+   * as the cache holds it (`state.self.reclaimDelay`); undefined when none has
+   * been observed since the last resurrect. Never later than a full delay from
+   * now, so a stamp from a clock running ahead cannot stretch the wait.
+   */
+  private reclaimReadyAt(): number | undefined {
+    const delay = this.state.self.reclaimDelay?.value;
+    return delay === undefined ? undefined : Math.min(delay.readyAt, Date.now() + delay.delayMs);
   }
 
   /** `sleep`, bounded by the ambient signal: rejects with `EventAbortedError` when the snippet is abandoned. */

@@ -3254,6 +3254,37 @@ describe("client: reclaimCorpse owns the delay and answers with a verdict", () =
     await stub.stop();
   });
 
+  test("a delay announced before the event buffer turned over still holds, and past the budget is answered at once", async () => {
+    // The delay was announced 10s ago and has 110s to run; 520 later events
+    // have pushed it out of the 500-event buffer, so only the state cache
+    // still knows it. Nothing is sent, and the default 25s budget is not spent.
+    const filler = Array.from({ length: 520 }, (_, i) => ({
+      seq: 92 + i,
+      opcode: "SMSG_NOTIFICATION",
+      opcodeId: 0x1cb,
+      ts: Date.now(),
+      data: { text: `filler ${i}` },
+    }));
+    const stub = startStub({
+      onConnect: () => deadWorld(1, [corpseReclaimDelay(120_000, 91, Date.now() - 10_000)]),
+    });
+    const client = await inWorld(stub);
+    for (const f of filler) stub.push(JSON.stringify(f));
+    await client.events.waitFor((e) => e.seq === 92 + 519, { timeout: 2000 });
+    expect(client.events.recent().some((e) => e.opcode === "SMSG_CORPSE_RECLAIM_DELAY")).toBe(false);
+    const started = Date.now();
+    const result = await client.reclaimCorpse();
+    expect(Date.now() - started).toBeLessThan(1000);
+    if (result.ok) throw new Error("unreachable");
+    expect(result).toMatchObject({ status: "not_reclaimed", reason: "delay_not_elapsed", attempts: 0, delayMs: 120_000 });
+    expect(result.secondsLeft).toBeGreaterThanOrEqual(109);
+    expect(result.secondsLeft).toBeLessThanOrEqual(110);
+    expect(result.hint).toContain("nothing was sent");
+    expect(stub.actions.filter((a) => a.action === "reclaim_corpse")).toHaveLength(0);
+    client.close();
+    await stub.stop();
+  });
+
   test("unobserved health with the dispatch out is unconfirmed, not a guess", async () => {
     const stub = startStub({ onConnect: () => frames([...loginSequence]) });
     const client = await inWorld(stub);
