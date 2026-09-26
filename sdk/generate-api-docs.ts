@@ -64,7 +64,7 @@ const CLIENT_ENDPOINTS: readonly Row[] = [
 
 /** Helpers: they wait for the game's verdict and return it as a value. */
 const CLIENT_HELPERS: readonly Row[] = [
-  { name: "moveTo", sig: "moveTo(target, options?): Promise<MoveResult>", purpose: "Walk to a point { x, y, z }, a unit, a guid, or the name of something in view (its cached position; the guid rides along so the module resolves z to the ground under the unit) and wait for the server's arrive/target_off_mesh/transferred/teleported/… verdict; a target nothing in view answers to comes back as status \"unknown_target\". An arrival aboard a tram car or boat carries onTransport { guid, entry }, and state.self.position then follows the ride (WB_RIDE_PROGRESS)." },
+  { name: "moveTo", sig: "moveTo(target, options?): Promise<MoveResult>", purpose: "Walk to a point { x, y, z }, a unit, a guid, or the name of something in view (its cached position; the guid rides along so the module resolves z to the ground under the unit) and wait for the server's arrive/target_off_mesh/transferred/teleported/… verdict; a target nothing in view answers to comes back as status \"unknown_target\". One move reaches at most 250y in a straight line (x/y) from where you stand: a farther target is refused as status \"too_far\" with nothing moved, so a longer trip is several moves. An arrival aboard a tram car or boat carries onTransport { guid, entry }, and state.self.position then follows the ride (WB_RIDE_PROGRESS)." },
   { name: "killTarget", sig: "killTarget(target: GuidOrUnit, options?): Promise<KillResult>", purpose: "Approach and auto-attack until the target or we drop; returns how the fight ended." },
   { name: "lootCorpse", sig: "lootCorpse(target: GuidOrUnit, options?): Promise<LootResult>", purpose: "Empty a corpse and report what actually entered the bags (confirmed pushes, not the window)." },
   { name: "acceptQuestFrom", sig: "acceptQuestFrom(npcGuid: GuidOrUnit, questId, options?): Promise<QuestAcceptResult>", purpose: "Take a quest from an NPC and confirm it landed in the quest log." },
@@ -108,7 +108,7 @@ const CLIENT_HELPERS: readonly Row[] = [
  */
 const CLIENT_RAW: readonly Row[] = [
   { name: "say", sig: "say(text): Promise<ActionResponse>", purpose: "Say something in local chat." },
-  { name: "moveToAsync", sig: "moveToAsync(target): Promise<MoveToResponse>", purpose: "Queue a move without waiting — the call for a walk longer than your own time budget; same targets as moveTo." },
+  { name: "moveToAsync", sig: "moveToAsync(target): Promise<MoveToResponse>", purpose: "Queue a move without waiting — the call for a walk longer than your own time budget; same targets and the same 250y single-move cap as moveTo." },
   { name: "stop", sig: "stop(): Promise<ActionResponse>", purpose: "Queue a movement stop; the in-flight moveTo resolves with status 'stopped'." },
   { name: "face", sig: "face(orientationOrPoint: number | { x, y }): Promise<FaceResponse>", purpose: "Turn in place toward an orientation (radians) or a point." },
   { name: "setTarget", sig: "setTarget(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Set the current target." },
