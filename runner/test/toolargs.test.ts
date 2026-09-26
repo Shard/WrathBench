@@ -324,6 +324,18 @@ describe("recent_events movement fold", () => {
     expect(lines[3]).toContain("(+6 ambient movement events folded into state");
   });
 
+  test("transport progress is folded like the rest of the ambient motion", async () => {
+    const events = [
+      ev(1, "WB_TRANSPORT_PROGRESS"),
+      ev(2, "SMSG_MESSAGECHAT"),
+      ev(3, "WB_TRANSPORT_PROGRESS"),
+    ];
+    const res = await callTool(streamCtx(events), "recent_events", {});
+    expect(res.text).toContain("#2 SMSG_MESSAGECHAT");
+    expect(res.text).not.toContain("WB_TRANSPORT_PROGRESS");
+    expect(res.text).toContain("(+2 ambient movement events folded into state");
+  });
+
   test("an all-movement stream says so instead of claiming no events", async () => {
     const events = Array.from({ length: 5 }, (_, i) => ev(i, "SMSG_MONSTER_MOVE"));
     const res = await callTool(streamCtx(events), "recent_events", {});

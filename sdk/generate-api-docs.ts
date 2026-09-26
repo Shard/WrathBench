@@ -471,8 +471,8 @@ the zone or subzone changes, by foot, teleport or transfer — what \`state.self
 / \`state.self.area\` are folded from),
 \`WB_RIDE_PROGRESS\` (own position while a transport carries you, ≤1/s) and
 \`WB_TRANSPORT_PROGRESS\` (\`{ guid, entry, pos, docked, progressMs, periodMs }\`
-per transport in view, ≤1/s — the same facts as the \`docked\` column of
-\`state.units()\`).
+for every transport on your map, near or not, each ≤1/s — the same facts as
+the \`docked\` column of \`state.units()\`).
 
 ${table(EVENT_ROWS)}
 

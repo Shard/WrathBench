@@ -65,8 +65,14 @@ export const CONTEXT_POLICY = {
    * still fold into the state cache, whose nearby/motion the summary reflects).
    * Measured on gate2-ox-1: SMSG_MONSTER_MOVE alone was 69% of served events
    * while combat/quest signal was 1.8% — the window exists for signal.
+   * WB_TRANSPORT_PROGRESS is the same kind of motion: every transport on the
+   * map reports once a second wherever the character stands, which came to
+   * about four-fifths of the window's characters and read to models as noise,
+   * while the cache already keeps each car's position and `docked`.
+   * Filtered, not refilled: the window is still the last EVENT_WINDOW events
+   * fetched, so it reaches no further back when more of them are ambient.
    */
-  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE)/,
+  EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS)/,
 } as const;
 
 // ------------------------------------------------------------ state summary
@@ -608,8 +614,12 @@ export function assembleContext(inputs: ContextInputs): string {
   );
   const excluded = inputs.events.length - eligible.length;
   const window = eligible.slice(-CONTEXT_POLICY.EVENT_WINDOW);
-  if (window.length === 0) {
+  if (inputs.events.length === 0) {
     parts.push("[events]\nnone yet");
+  } else if (window.length === 0) {
+    // Everything fetched was ambient: say so, rather than "none yet" over a
+    // stream that is plainly running.
+    parts.push(`[events]\nno non-movement events; ${excluded} ambient movement events folded into state only`);
   } else {
     const note = excluded > 0 ? `; ${excluded} ambient movement events folded into state only` : "";
     parts.push(
