@@ -15,7 +15,9 @@
  *   - a `PIN` below: ids we want priced whatever the roster says today.
  * An id we ask for that the catalogue does not carry is reported, never
  * invented — an unpriced model stays unpriced (`pricing.ts` says so on the run
- * page).
+ * page). Nor is a suffixless id the catalogue quotes at 0/0 written: it is
+ * reported, and a stealth preview that really is free is declared on its
+ * roster entry (`isZeroQuote`).
  *
  * One id is not asked for as written: a `codex` entry or run names the model
  * the way the Codex CLI does (`gpt-6-astra`), and the catalogue carries it

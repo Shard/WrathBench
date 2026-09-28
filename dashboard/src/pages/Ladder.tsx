@@ -145,10 +145,10 @@ export default function Ladder() {
    * `characterRows` on freeplay — so the ranking is computed over exactly the
    * rows on screen; the order itself is untouched (highest rung, XP, gold). On
    * freeplay that ordering is before the lineage walk, so a chain whose
-   * ancestor the filter drops re-roots on its survivor; billing follows the
-   * endpoint and a character is one character under one config, so a mixed
-   * chain is not a shape the fleet produces (`lib/ladder.ts` pins the
-   * behaviour anyway).
+   * ancestor the filter drops re-roots on its survivor. A mixed chain is rare
+   * but real — an entry's declared `billing` changed between two attempts of
+   * one character, say, when a stealth preview starts billing — and
+   * `lib/ladder.ts` pins the behaviour.
    *
    * "exclude free" keeps only the runs we paid for (`ResultRun.billing`,
    * `runner/src/billing.ts` — a `claude-code` subscription counts as paid
