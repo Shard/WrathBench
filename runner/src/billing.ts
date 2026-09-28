@@ -16,8 +16,7 @@
  * - the `claude-code` harness (or driver) is **paid** — a subscription is a bill;
  * - a local/LAN api base, or a run stamped `platform: "local"`, is free — the
  *   operator's own hardware;
- * - a `:free` / `-free` / `-contributor-free` slug is free, as is a suffixless
- *   id on the verified-free allowlist;
+ * - a `:free` / `-free` / `-contributor-free` slug is free;
  * - everything else is paid.
  *
  * A run that recorded no model at all still gets a verdict, because every other
@@ -26,7 +25,6 @@
  */
 
 import {
-  isAllowlistedFree,
   isContributorSlug,
   isFreeSlug,
   isLocalBase,
@@ -56,7 +54,7 @@ export function runBilling(run: BillableRun): Billing {
   if (isSubscriptionHarness(run.harness) || isSubscriptionHarness(run.driver)) return "paid";
   if (run.platform === "local" || isLocalBase(run.apiBase)) return "free";
   const model = run.model;
-  if (model !== null && (isContributorSlug(model) || isFreeSlug(model) || isAllowlistedFree(model))) {
+  if (model !== null && (isContributorSlug(model) || isFreeSlug(model))) {
     return "free";
   }
   return "paid";

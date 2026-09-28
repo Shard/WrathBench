@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { runBilling } from "../src/billing";
-import { FREE_SUFFIXLESS_ALLOWLIST, billingOf, isAllowlistedFree } from "../src/model-cost";
+import { billingOf } from "../src/model-cost";
 
 describe("runBilling", () => {
   const cases: { why: string; run: Parameters<typeof runBilling>[0]; want: "free" | "paid" }[] = [
@@ -49,7 +49,7 @@ describe("runBilling", () => {
       want: "free",
     },
     {
-      why: "a suffixless id off the allowlist — a stealth id whose free window has closed",
+      why: "a suffixless id — a stealth id reads paid, whatever it is quoted at",
       run: { model: "stealth/ox-alpha", platform: "openrouter", harness: "wrathbench" },
       want: "paid",
     },
@@ -86,14 +86,20 @@ describe("runBilling", () => {
     expect(billingOf({ model: "stealth/ox-alpha" })).toBe("paid");
   });
 
-  test("the verified-free allowlist is empty, and a member of it would read free on both sides", () => {
-    // Emptiness is the resting state: `stealth/ox-alpha` came out when its free
-    // stealth window closed. A re-add is a deliberate edit here, not drift.
-    expect(FREE_SUFFIXLESS_ALLOWLIST.size).toBe(0);
-    for (const id of FREE_SUFFIXLESS_ALLOWLIST) {
-      expect(isAllowlistedFree(id)).toBe(true);
-      expect(billingOf({ model: id })).toBe("free");
-      expect(runBilling({ model: id, platform: "openrouter", harness: "wrathbench" })).toBe("free");
-    }
+  test("a stealth id priced at zero with no free suffix: derived paid, free by the entry's override", () => {
+    // The rules read the id alone, so the operator's `billing` on the roster
+    // entry is the only way a suffixless id reads free.
+    const bunny = { model: "stealth/space-bunny-alpha" };
+    expect(billingOf(bunny)).toBe("paid");
+    expect(billingOf({ ...bunny, billing: "free" })).toBe("free");
+    // The override is the scheduler's; a stored run carries no roster entry.
+    expect(runBilling({ ...bunny, platform: "openrouter", harness: "wrathbench" })).toBe("paid");
+  });
+
+  test("an explicit billing wins over every derived rule, both ways", () => {
+    expect(billingOf({ model: "qwen/qwen3-coder:free", billing: "paid" })).toBe("paid");
+    expect(billingOf({ model: "qwen3-30b", apiBase: "http://192.168.100.20:1234/v1", billing: "paid" })).toBe("paid");
+    expect(billingOf({ model: "claude-sonnet-4-5", driver: "claude-code", billing: "paid" })).toBe("paid");
+    expect(billingOf({ model: "openai/gpt-5", billing: "free" })).toBe("free");
   });
 });

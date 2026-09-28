@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
 import { CLAUDE_PRICES, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, codexPrice, costOf, priceFor, providerPrice, runCost, syncedPrice, windowAt } from "../viewer/pricing";
-import { FREE_SUFFIXLESS_ALLOWLIST, isFreeSlug } from "../src/model-cost";
+import { isFreeSlug } from "../src/model-cost";
 import { catalogueIds, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
@@ -85,12 +85,8 @@ describe("priceFor", () => {
     expect(p?.output).toBe(0);
   });
 
-  test("the verified-free allowlist prices as free, and nothing else rides it", () => {
-    // The allowlist is empty today, so a suffixless id it does not name is
-    // priced from the synced table or not at all — never the free tier.
-    for (const id of FREE_SUFFIXLESS_ALLOWLIST) {
-      expect(priceFor({ model: id, apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" })?.id).toBe("free-tier");
-    }
+  test("a suffixless id never rides the free tier", () => {
+    // It is priced from the synced table or not at all.
     expect(priceFor({ model: "stealth/unlisted-preview", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" })).toBeNull();
   });
 

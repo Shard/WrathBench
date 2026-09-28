@@ -40,7 +40,7 @@
  * against a real `costUsd` ($43.23 computed vs $43.90 reported, within 1.5%).
  */
 
-import { isAllowlistedFree, isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
+import { isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
 import synced from "./prices.openrouter.json";
 import type { CostBreakdown, CostFigure, CostView, RunRow, TokenTotals } from "./api-types";
 
@@ -470,7 +470,7 @@ export function priceFor(run: PriceableRun, at: number | null = null): PriceRow 
   const model = run.model ?? "";
   if (isLocalBase(run.apiBase)) return LOCAL_PRICE;
   if (isContributorSlug(model)) return CONTRIBUTOR_PRICE;
-  if (isFreeSlug(model) || isAllowlistedFree(model)) return FREE_PRICE;
+  if (isFreeSlug(model)) return FREE_PRICE;
   const provider = providerPrice(run, at);
   if (provider !== null) return provider;
   const open = syncedPrice(model, at);

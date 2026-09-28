@@ -46,11 +46,8 @@
  *    account; the second job would spend the night in account_in_use).
  *  - roster policy: claude-family models (opus/sonnet/haiku/claude-*) run only
  *    via the claude-code driver, and that driver runs only claude
- *    models; the codex driver (a ChatGPT subscription) carries no claude id. Shared free-cloud pools (OpenRouter/OpenCode) carry free models
- *    only; keeping a single run in flight per provider pool is the whole point of
- *    one job per account. A local/self-hosted openai apiBase is a distinct
- *    category: exempt from the free-suffix rule (no shared pool to meter),
- *    still barred from claude-* ids.
+ *    models; the codex driver (a ChatGPT subscription) carries no claude id,
+ *    and no openai entry does, local or cloud.
  *
  * The roster's own account-busy guard still runs under every job: a job
  * pointed at an account something else is using waits, it does not clobber.
@@ -197,7 +194,6 @@ import {
 } from "../runner/src/models";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { Trajectory } from "../runner/src/trajectory";
-import { isAllowlistedFree } from "../runner/src/model-cost";
 
 // ------------------------------------------------------------ the modules
 // The supervisor is four files. This one is the entry point: arg parsing,
@@ -216,7 +212,6 @@ export * from "./run-fleet-config";
 export * from "./run-fleet-plan";
 export * from "./run-fleet-state";
 export * from "./run-fleet-status";
-export { isAllowlistedFree };
 
 /**
  * End the runs `planResumes` said to end, through the runner's own writer

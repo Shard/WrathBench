@@ -12,11 +12,11 @@
  *   the provider keeps the prompts;
  * - a LAN/loopback `apiBase` is free — the operator's own hardware;
  * - the `claude-code` driver is free — it bills a flat subscription, not tokens;
- * - a suffixless id the operator has verified free (`FREE_SUFFIXLESS_ALLOWLIST`)
- *   is free; everything else is paid.
+ * - everything else is paid, the side that never quietly overspends.
  *
  * A roster entry may override the verdict with `billing` for the case the
- * rules cannot see (a key on a paid plan for a free-looking id, say).
+ * rules cannot see: a stealth id priced at zero with no free suffix, or a key
+ * on a paid plan for a free-looking id.
  *
  * This is the SCHEDULER's verdict — "does this consume the paid concurrency
  * budget". The reader's verdict, "did we pay for this run", is `runBilling` in
@@ -27,28 +27,6 @@
 
 
 export type Billing = "free" | "paid";
-
-/**
- * Shared-free-pool model ids that are genuinely free but carry no `-free`
- * suffix. Empty today, and that is the resting state: the only case the repo
- * has ever had was a stealth model priced at 0/0 for its preview window
- * (`stealth/ox-alpha`, verified 2026-08-22, removed 2026-08-28 when the window
- * closed and OpenRouter revealed it as ZAI GLM-5.3-Flash at paid rates).
- *
- * Membership is an explicit operator assertion that an id billing nothing today
- * may be scheduled on the free account pool and spend none of the paid
- * concurrency budget — so it is worth an entry only while a real id is both
- * genuinely 0/0 and wanted on that pool, and it must come out the day the id
- * starts billing. Everything not in here is paid, which is the side that never
- * quietly overspends. The fleet's roster policy (`infra/run-fleet.ts`) reads the
- * same set, so an entry also decides whether a suffixless id may sit in the
- * roster without declaring `billing: "paid"`.
- */
-export const FREE_SUFFIXLESS_ALLOWLIST: ReadonlySet<string> = new Set<string>();
-
-export function isAllowlistedFree(model: string): boolean {
-  return FREE_SUFFIXLESS_ALLOWLIST.has(model.toLowerCase());
-}
 
 /** A `:free` (OpenRouter) or `-free` (OpenCode Zen) slug. */
 export function isFreeSlug(model: string): boolean {
@@ -95,6 +73,6 @@ export function billingOf(m: BillableModel): Billing {
   if (isLocalBase(m.apiBase)) return "free";
   // The subscription scaffolds (claude-code, codex): a flat bill, no per-token charge.
   if (m.driver === "claude-code" || m.harness === "claude-code" || m.driver === "codex" || m.harness === "codex") return "free";
-  if (isContributorSlug(m.model) || isFreeSlug(m.model) || isAllowlistedFree(m.model)) return "free";
+  if (isContributorSlug(m.model) || isFreeSlug(m.model)) return "free";
   return "paid";
 }

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
 import { isTokenEnvName, watchdogOverrideSchema } from "../runner/src/config";
-import { isAllowlistedFree, type Billing } from "../runner/src/model-cost";
+import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { campaignWork, parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
 import {
@@ -582,25 +582,6 @@ export function isClaudeFamily(model: string): boolean {
 }
 
 /**
- * True when an openai entry points at a shared free-cloud pool — OpenRouter or
- * OpenCode Zen. Those pools are what the free-suffix rule polices: their free
- * tiers are metered per upstream provider, so only free model ids belong there.
- * An absent apiBase means the run-roster default (OpenRouter), so it counts as
- * a shared pool too. A local/self-hosted OpenAI-compatible endpoint (e.g. an
- * LM Studio box on the LAN) is NOT a shared pool: it has no free tier to abuse,
- * so it is exempt from the free-suffix rule — but still bound by every other
- * roster-policy check, the claude bar included.
- */
-export function isSharedFreePool(apiBase: string | undefined): boolean {
-  if (apiBase === undefined) return true;
-  return /(^|\/\/|\.)(openrouter\.ai|opencode\.ai)(\/|:|$)/i.test(apiBase);
-}
-
-// `isAllowlistedFree` (suffixless ids the operator has verified free) lives in
-// runner/src/model-cost.ts, next to the billing verdict it feeds. The set is
-// empty today, so in practice a suffixless id needs `"billing": "paid"`.
-
-/**
  * Roster-policy and shape checks for roster entries. `where` names the
  * entry's home (`roster:<name>`) for the error message.
  */
@@ -631,26 +612,6 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     // and never a claude id (which the claude bar above already refuses).
     if (driver === "codex" && isClaudeFamily(e.model)) {
       fail(`${where}: entry ${e.model}: roster policy — the codex driver carries no claude models`);
-    }
-    // Shared free-cloud pools (OpenRouter, OpenCode Zen) carry free models
-    // only; the suffix is how we keep an entry off a paid tier, and an explicit
-    // `billing: "paid"` is how the operator opts one in on purpose. Local/self-hosted
-    // openai entries have no such pool and are exempt — but still claude-barred
-    // above.
-    if (
-      driver === "openai" &&
-      isSharedFreePool(e.apiBase) &&
-      !/(-free$|:free$)/.test(e.model) &&
-      !isAllowlistedFree(e.model) &&
-      e.billing !== "paid"
-    ) {
-      fail(
-        `${where}: entry ${e.model}: roster policy — a shared free-cloud pool ` +
-          `(OpenRouter/OpenCode) carries free models only (id must end -free or :free, ` +
-          `or be a verified-free stealth id in FREE_SUFFIXLESS_ALLOWLIST) unless the entry ` +
-          `declares "billing": "paid" — a deliberate paid model under policy.paid; ` +
-          `a local/self-hosted apiBase is exempt`,
-      );
     }
     if (e.watchdogs !== undefined) {
       const parsed = watchdogOverrideSchema.safeParse(e.watchdogs);

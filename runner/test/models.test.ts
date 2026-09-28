@@ -43,7 +43,7 @@ import {
   parsePolicyBlock,
   isOpenCodeGoBase,
 } from "../src/models";
-import { billingOf, FREE_SUFFIXLESS_ALLOWLIST } from "../src/model-cost";
+import { billingOf } from "../src/model-cost";
 import type { EpisodeId } from "../src/episodes";
 
 const NOW = 1_800_000_000_000;
@@ -199,7 +199,7 @@ describe("modelStates", () => {
     expect(by["local"]).toMatchObject({ status: "promoted", platform: "local", billing: "free" });
     expect(by["local"]!.perEpisode.e90).toMatchObject({ counted: 1, attempts: 2, extras: 1, otherSeries: 0, target: 3, bestLevel: 7 });
     expect(by["local"]).toMatchObject({ declaredTier: "t1", tier: "t2", idle: "unlimited" });
-    expect(by["ox"]!.billing).toBe("free"); // allowlisted stealth id
+    expect(by["ox"]!.billing).toBe("free"); // a `:free` slug
     expect(by["glm"]!.billing).toBe("free");
     expect(by["sonnet"]!.billing).toBe("free"); // subscription
   });
@@ -530,15 +530,15 @@ describe("paid and free", () => {
   const st = (r: Omit<RosterModel, "tier"> & { tier?: RosterModel["tier"] }, runs: RunFact[], p = policy) =>
     projectModel({ tier: "t1", ...r }, runs, p, { now: NOW });
 
-  test("billing is derived once: slug, LAN, subscription, allowlist, override", () => {
+  test("billing is derived once: slug, LAN, subscription, override", () => {
     expect(st({ name: "p", model: "vendor/big" }, []).billing).toBe("paid");
     expect(st({ name: "f", model: "vendor/big:free" }, []).billing).toBe("free");
     expect(st({ name: "c", model: "x-contributor-free", apiBase: "https://opencode.ai/zen/v1" }, []).billing).toBe("free");
     expect(st({ name: "l", model: "vendor/big", apiBase: "http://10.0.0.5:1234/v1" }, []).billing).toBe("free");
     expect(st({ name: "s", model: "opus", driver: "claude-code" }, []).billing).toBe("free");
-    // The allowlist is empty, so a suffixless id — however free it looks — is paid.
+    // A suffixless id — however free it looks — is paid unless its entry says otherwise.
     expect(st({ name: "o", model: "stealth/ox-preview" }, []).billing).toBe("paid");
-    for (const id of FREE_SUFFIXLESS_ALLOWLIST) expect(st({ name: "a", model: id }, []).billing).toBe("free");
+    expect(st({ name: "o", model: "stealth/ox-preview", billing: "free" }, []).billing).toBe("free");
     expect(st({ name: "x", model: "vendor/big:free", billing: "paid" }, []).billing).toBe("paid");
   });
 

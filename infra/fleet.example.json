@@ -33,7 +33,7 @@
     "  OpenCode Zen): one machine behind the endpoint, nothing to route between. policy.routing sets",
     "  the fleet default; an entry's own routing replaces it whole and is never merged with it.",
     "",
-    "billing — free or paid, derived (free slug / LAN / claude-code / allowlist -> free; else paid); roster.<name>.billing overrides.",
+    "billing — free or paid, derived (free slug / LAN / claude-code -> free; else paid); roster.<name>.billing overrides.",
     "  Since 0.5 it says ONLY where a run may physically execute: the account class, and the rate-limit key.",
     "  It buys a model no runs and costs it none. Trial a paid model by giving it t0, not by editing a target.",
     "",
@@ -109,7 +109,7 @@
     "sonnet": {"model": "sonnet", "driver": "claude-code", "race": 3, "class": 2, "tier": "t1"},
     "nemotron-super": {"model": "nvidia/nemotron-3-super-120b-a12b:free", "tier": "t1", "idle": "none"},
     "glm-53-flash-free": {"model": "z-ai/glm-5.3-flash:free", "tier": "t0", "idle": "none"},
-    "gemini-flash": {"model": "google/gemini-3.7-flash", "billing": "paid", "race": 1, "class": 2, "tier": "t0", "idle": "none"}
+    "gemini-flash": {"model": "google/gemini-3.7-flash", "race": 1, "class": 2, "tier": "t0", "idle": "none"}
   },
   "policy": {
     "maxConcurrent": {"claude-code": 1, "claude-code:CLAUDE_CODE_OAUTH_TOKEN": 1, "openrouter": 1},

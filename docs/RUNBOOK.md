@@ -150,9 +150,11 @@ otherwise on whichever pool account is free.
 Two enabled jobs must not share an account, a pinned account may not be in the
 pool, and the roster policy (claude models on the claude-code driver only —
 the claude-code harness — and that driver runs claude models only; no claude id
-on the codex driver; shared free pools carry free ids only, unless an entry
-declares `billing: "paid"` on purpose) is enforced on every roster entry at
-every re-read. The free-id rule exists because OpenRouter's and OpenCode Zen's
+on the codex driver) is enforced on every roster entry at every re-read.
+Billing is derived rather than policed, so no model id is refused for what it
+costs; an entry the rules put on the wrong side — a stealth id quoted at zero
+with no free suffix, say — states `billing: "free"` or `"paid"`. Free models on
+OpenRouter or OpenCode Zen share one rate-limit key per platform because those
 free tiers are pooled per upstream provider: a single sequential run per pool
 is both the polite and the effective shape — two runs on one pool just trip the
 same rate limits twice.
@@ -229,8 +231,8 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             Optional, off when absent: `paid { maxConcurrent 1 }` — at most that many paid runs in
             flight. It is a THROTTLE, not a budget: how much a paid model runs is its tier, the
             same sentence a free model's budget is written in.
-            Billing is derived per model (free slug / LAN apiBase / claude-code / allowlist ->
-            free, else paid); `roster.<name>.billing: "free"|"paid"` overrides it. Billing
+            Billing is derived per model (free slug / LAN apiBase / claude-code -> free, else
+            paid); `roster.<name>.billing: "free"|"paid"` overrides it. Billing
             says only WHERE a run may execute — the account class and the rate-limit key.
             `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
             by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.

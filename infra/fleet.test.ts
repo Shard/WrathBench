@@ -17,9 +17,7 @@ import {
   smokePath,
   tailOf,
   fillEntries,
-  isAllowlistedFree,
   isClaudeFamily,
-  isSharedFreePool,
   concurrencyKeyOfRef,
   jobArgv,
   fleetComplete,
@@ -109,7 +107,7 @@ import {
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
 } from "./run-fleet";
-import { billingOf, FREE_SUFFIXLESS_ALLOWLIST } from "../runner/src/model-cost";
+import { billingOf } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
@@ -556,7 +554,6 @@ describe("roster policy", () => {
   test("codex entries validate: OpenAI's catalogue only, never a claude id, and a lane may pin them", () => {
     expect(validateEntries("roster:x", [{ model: "gpt-6-astra", driver: "codex", effort: "high" }])).toHaveLength(1);
     expect(() => validateEntries("roster:x", [{ model: "sonnet", driver: "codex" }])).toThrow(/codex driver carries no claude models/);
-    // Not a shared free pool: no `:free` suffix demanded of a subscription lane.
     expect(validateEntries("roster:x", [{ model: "gpt-5.5", driver: "codex" }])).toHaveLength(1);
     const config = parseFleet({
       accounts: { pool: ["R"] },
@@ -602,51 +599,30 @@ describe("roster policy", () => {
     );
   });
 
-  test("a suffixless model on a shared free pool is refused unless allowlisted", () => {
-    // A paid-looking id with no free suffix on OpenRouter is a roster-policy error.
-    expect(() => validateEntries("roster:x", [{ model: "z-ai/glm-5.2" }])).toThrow(/roster policy/);
-    // A free suffix is the ordinary way through.
-    expect(() => validateEntries("roster:x", [{ model: "z-ai/glm-5.2:free" }])).not.toThrow();
-    // The allowlist is the other way through, and it is empty today (the one
-    // entry it ever had, a stealth id, started billing) — so no suffixless id
-    // gets in on it, and every member of it would.
-    expect(FREE_SUFFIXLESS_ALLOWLIST.size).toBe(0);
-    expect(isAllowlistedFree("stealth/anything-else")).toBe(false);
-    expect(() => validateEntries("roster:x", [{ model: "stealth/anything-else" }])).toThrow(/roster policy/);
-    for (const id of FREE_SUFFIXLESS_ALLOWLIST) {
-      expect(isAllowlistedFree(id)).toBe(true);
-      expect(() => validateEntries("roster:x", [{ model: id }])).not.toThrow();
+  test("a model id is never refused for its billing: the verdict is derived, and billing overrides it", () => {
+    // A suffixless id on OpenRouter validates whatever it costs; its billing
+    // is derived, not policed. A stealth id priced at zero with no free
+    // suffix is the case the override is for.
+    for (const model of ["deepseek/deepseek-v4-flash", "stealth/space-bunny-alpha", "z-ai/glm-5.2:free"]) {
+      expect(validateEntries("roster:x", [{ model }])).toHaveLength(1);
     }
-  });
-
-  test("a suffixless model on a shared pool passes when it declares billing paid", () => {
-    expect(() => validateEntries("roster:x", [{ model: "deepseek/deepseek-v4-flash" }])).toThrow(/roster policy/);
-    expect(() =>
-      validateEntries("roster:x", [{ model: "deepseek/deepseek-v4-flash", billing: "paid" }]),
-    ).not.toThrow();
-  });
-
-  test.each([
-    [undefined, true], // absent -> run-roster's OpenRouter default -> shared pool
-    ["https://openrouter.ai/api/v1", true],
-    ["https://opencode.ai/zen/v1", true],
-    ["http://192.168.100.20:1234/v1", false], // local LM Studio box on the LAN
-    ["http://localhost:1234/v1", false],
-  ] as const)("isSharedFreePool(%s) === %s", (base, expected) => {
-    expect(isSharedFreePool(base)).toBe(expected);
-  });
-
-  test("a shared free-cloud pool still requires a free model id", () => {
-    // No apiBase -> OpenRouter default -> shared pool -> suffix required.
-    expect(() => validateEntries("roster:x", [{ model: "z-ai/glm-5.2" }])).toThrow(/free models only/);
-    expect(() =>
+    expect(
       validateEntries("roster:x", [{ model: "deepseek-v4-flash", apiBase: "https://opencode.ai/zen/v1" }]),
-    ).toThrow(/free models only/);
-    // A properly suffixed model on the pool is fine.
-    expect(validateEntries("roster:x", [{ model: "z-ai/glm-5.2:free" }])).toHaveLength(1);
+    ).toHaveLength(1);
+    // Through the whole parse, so the key survives the strict-key check too.
+    const roster = (entry: Record<string, unknown>) =>
+      parseFleet({ accounts: { pool: ["R"] }, roster: { bunny: { tier: "t0", ...entry } }, policy: {} });
+    const free = roster({ model: "stealth/space-bunny-alpha", billing: "free" });
+    expect(free.refusals).toEqual([]);
+    expect(billingOf(free.roster["bunny"]!)).toBe("free");
+    expect(concurrencyKeyOfRef(free.roster, "bunny", "free")).toBe("openrouter");
+    const derived = roster({ model: "stealth/space-bunny-alpha" });
+    expect(derived.refusals).toEqual([]);
+    expect(billingOf(derived.roster["bunny"]!)).toBe("paid");
+    expect(concurrencyKeyOfRef(derived.roster, "bunny", "paid")).toBe("openai");
   });
 
-  test("a local/self-hosted openai entry is exempt from the free-suffix rule", () => {
+  test("a local/self-hosted openai entry validates", () => {
     expect(
       validateEntries("roster:x", [
         { model: "qwen/qwen3.8-27b", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" },
@@ -655,9 +631,9 @@ describe("roster policy", () => {
   });
 
   test("a claude-* id is barred on any openai entry, local or shared", () => {
-    // Shared pool.
+    // OpenRouter, the default base.
     expect(() => validateEntries("roster:x", [{ model: "anthropic/claude-3.5-sonnet:free" }])).toThrow(/roster policy/);
-    // Local entry: exempt from the free-suffix rule but never from the claude bar.
+    // A local entry is barred the same.
     expect(() =>
       validateEntries("roster:x", [{ model: "claude-4-opus", apiBase: "http://192.168.100.20:1234/v1" }]),
     ).toThrow(/roster policy/);
@@ -961,9 +937,7 @@ describe("the bootstrap example (infra/fleet.example.json)", () => {
   // which models, which classes, which tier today — is not in git and is not
   // asserted here. What is durable: the example seeds a working board, the
   // shape, and the roster policy (claude models only through the claude-code
-  // harness, the codex harness on OpenAI ids and a configured lane; shared
-  // free pools carry free ids only unless an entry declares `billing: "paid"`
-  // on purpose, under the paid policy).
+  // harness, the codex harness on OpenAI ids and a configured lane).
   const EXAMPLE = new URL("./fleet.example.json", import.meta.url).pathname;
   const rosterPolicy = (config: FleetConfig): void => {
     for (const e of Object.values(config.roster)) {
@@ -974,9 +948,6 @@ describe("the bootstrap example (infra/fleet.example.json)", () => {
       if (driver === "codex") {
         expect(isClaudeFamily(e.model)).toBe(false);
         expect(e.subscription === undefined || config.policy.subscriptions.includes(e.subscription)).toBe(true);
-      }
-      if (driver === "openai" && isSharedFreePool(e.apiBase)) {
-        expect(/(-free$|:free$)/.test(e.model) || isAllowlistedFree(e.model) || e.billing === "paid").toBe(true);
       }
     }
   };
@@ -1009,8 +980,9 @@ describe("the bootstrap example (infra/fleet.example.json)", () => {
     const config = parseFleet((await Bun.file(EXAMPLE).json()) as unknown);
     const entries = Object.values(config.roster);
     expect(entries.some((e) => e.driver === "claude-code")).toBe(true);
-    expect(entries.some((e) => e.billing === "paid")).toBe(true);
-    expect(entries.some((e) => (e.driver ?? "openai") === "openai" && e.billing !== "paid")).toBe(true);
+    // Billing as derived: the paid entry needs no `billing` key to be paid.
+    expect(entries.some((e) => billingOf(e) === "paid")).toBe(true);
+    expect(entries.some((e) => (e.driver ?? "openai") === "openai" && billingOf(e) === "free")).toBe(true);
   });
 
   test("every model's evidence budget is its tier and its idle axis, and nothing else sets a run count", async () => {

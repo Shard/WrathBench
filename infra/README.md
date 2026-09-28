@@ -262,13 +262,11 @@ and "Config reference".
 
 An openai entry may point `apiBase` at a self-hosted OpenAI-compatible endpoint
 instead of a cloud pool, for example an LM Studio box on the LAN
-(`http://192.0.2.20:1234/v1`, model `qwen/qwen3.8-27b`). A local apiBase is a distinct category in the roster policy, and its runs land
-only on the `local` account class:
+(`http://192.0.2.20:1234/v1`, model `qwen/qwen3.8-27b`). A local apiBase
+(loopback, RFC-1918 or `.local`) bills free, and its runs land only on the
+`local` account class:
 
-- **Exempt from the free-suffix rule.** There is no shared free tier to meter,
-  so the model id need not end `-free`/`:free`. The guard treats any apiBase
-  that is not an `openrouter.ai`/`opencode.ai` host as local.
-- **Still claude-barred.** No `claude-*` id ever rides an openai entry, local or
+- **Claude-barred.** No `claude-*` id ever rides an openai entry, local or
   cloud; claude runs only on the `claude-code` driver.
 - **`apiKeyEnv` names a dummy key.** LM Studio ignores the bearer value, but the
   pipeline needs the env var to exist, so `.env` carries a non-secret

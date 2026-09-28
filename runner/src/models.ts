@@ -1314,9 +1314,9 @@ export function capFor(max: Record<string, number>, key: string): number | undef
  *
  * The free branch is gated on `driver === "openai"` and reads the platform from
  * the api base alone — `platformOfBase(apiBase) ?? "openrouter"`, an absent base
- * being the OpenRouter default, mirroring `isSharedFreePool` — never from the
- * driver, so a `:free` slug pinned to `driver: "openai"` with no base still
- * lands in the openrouter key rather than escaping the cap. The `opencode.ai`
+ * being the OpenRouter default — never from the driver, so a `:free` slug
+ * pinned to `driver: "openai"` with no base still lands in the openrouter key
+ * rather than escaping the cap. The `opencode.ai`
  * host is normalized to `opencode`/`opencode-go` here and nowhere else:
  * `platformOfBase` keeps its host spelling so `run.platform` and the viewer's
  * listing stay stable against runs already on disk; the key is the one seam
