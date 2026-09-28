@@ -10,8 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { ConfigStore } from "../src/config-store";
@@ -20,12 +19,15 @@ import { RESULT_RUNS_CACHE_MS, UNBUILT_NOTICE, createApi, harnessSeriesCensus, r
 import { type RunStore, localRunStore } from "../viewer/clickhouse";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
 import { readRun } from "../viewer/runs";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const SENTINEL = "sentinel-bearer-2f9c1a";
 const RUN_ID = "fixture-run-1";
 
 function fixture(): string {
-  const root = mkdtempSync(join(tmpdir(), "viewer-api-"));
+  const root = tempDir("viewer-api-");
   const runs = join(root, "runs");
   const dir = join(runs, RUN_ID);
   mkdirSync(dir, { recursive: true });
@@ -76,7 +78,7 @@ function fixture(): string {
 
 /** A results/episodes fixture covering every scoreability boundary. */
 function scoreabilityFixture(): string {
-  const runs = mkdtempSync(join(tmpdir(), "viewer-scoreability-"));
+  const runs = tempDir("viewer-scoreability-");
   const now = Date.now();
   const comparability = comparabilityOf(configFromArgs(["--episode", "e90", "--model", "m"]), "harness-0.5");
   const write = (id: string, responses: number, terminationReason: string | null, pauseReason: string | null): void => {
@@ -192,7 +194,7 @@ describe("no endpoint serves the bearer token", () => {
  * the path a live run's liveness takes.
  */
 function pausedFixture(now: number): string {
-  const runs = mkdtempSync(join(tmpdir(), "viewer-playtime-"));
+  const runs = tempDir("viewer-playtime-");
   const write = (id: string, startedAt: number, lines: object[]): void => {
     const dir = join(runs, id);
     mkdirSync(dir, { recursive: true });
@@ -226,7 +228,7 @@ function pausedFixture(now: number): string {
  * backlog run whose only record of it is inside the trajectory.
  */
 function resolvedFixture(): string {
-  const runs = mkdtempSync(join(tmpdir(), "viewer-resolved-"));
+  const runs = tempDir("viewer-resolved-");
   const write = (id: string, meta: object, lines: object[]): void => {
     const dir = join(runs, id);
     mkdirSync(dir, { recursive: true });
@@ -294,7 +296,7 @@ describe("the resolved model id", () => {
  * one `init`, several `thinking_tokens`, and the records around them.
  */
 function thinkingFixture(): string {
-  const runs = mkdtempSync(join(tmpdir(), "viewer-thinking-"));
+  const runs = tempDir("viewer-thinking-");
   const dir = join(runs, "claude-run");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "meta.json"), JSON.stringify({ runId: "claude-run", startedAt: 1000, config: { driver: "claude-code" } }));
@@ -657,7 +659,7 @@ describe("static hosting of the dashboard", () => {
 
   test("with a build, / serves index.html and unknown paths fall through to it", async () => {
     const runs = fixture();
-    const dist = mkdtempSync(join(tmpdir(), "viewer-dist-"));
+    const dist = tempDir("viewer-dist-");
     mkdirSync(join(dist, "assets"), { recursive: true });
     writeFileSync(join(dist, "index.html"), "<html>spa</html>");
     writeFileSync(join(dist, "assets", "app-abc123.js"), "console.log(1)");
@@ -676,7 +678,7 @@ describe("static hosting of the dashboard", () => {
 
   test("a dashboard directory configured but not built serves the notice, not a 404", async () => {
     const runs = fixture();
-    const empty = mkdtempSync(join(tmpdir(), "viewer-empty-"));
+    const empty = tempDir("viewer-empty-");
     const res = await api(runs, false, empty)(new Request("http://x/"));
     expect(res.status).toBe(503);
     expect(await body(res)).toBe(UNBUILT_NOTICE);
@@ -1207,7 +1209,7 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
    * a point to serve.
    */
   function chainFixture(): string {
-    const runs = mkdtempSync(join(tmpdir(), "viewer-track-character-"));
+    const runs = tempDir("viewer-track-character-");
     const comparability = comparabilityOf(
       configFromArgs(["--episode", "freeplay", "--model", "m"]),
       "harness-0.5",
@@ -1374,7 +1376,7 @@ describe("the listing is built once per window", () => {
 
   /** One freeplay run, which is what makes the per-run routes read the listing. */
   function freeplayFixture(): string {
-    const runs = mkdtempSync(join(tmpdir(), "viewer-listing-"));
+    const runs = tempDir("viewer-listing-");
     const dir = join(runs, FREE_RUN);
     mkdirSync(dir, { recursive: true });
     const startedAt = Date.now() - 10_000;

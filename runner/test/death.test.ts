@@ -16,8 +16,6 @@
  * against a 60s sample.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
@@ -26,11 +24,14 @@ import type { DeathSignal } from "../src/sandbox/ipc";
 import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const hosts: SandboxHost[] = [];
 
 function makeHost(): SandboxHost {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-death-"));
+  const dir = tempDir("wrathbench-death-");
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",
@@ -208,7 +209,7 @@ function fakeSandbox(queue: DeathSignal[][], snapshot: Record<string, unknown> =
  * tests step the clock exactly that far rather than racing the millisecond.
  */
 function builder(queue: DeathSignal[][], snapshot: Record<string, unknown> = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-death-loop-"));
+  const dir = tempDir("wrathbench-death-loop-");
   let clock = 1_000_000;
   const config = { ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }), runId: "run-test", token: "run-test" };
   const trajectory = new Trajectory(dir);
@@ -366,7 +367,7 @@ describe("the loop writes what the child latched", () => {
       drainNotices: () => [],
       stop: () => Promise.resolve(),
     } as unknown as SandboxHost;
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-death-nodrain-"));
+    const dir = tempDir("wrathbench-death-nodrain-");
     const config = { ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }), runId: "run-test", token: "run-test" };
     const trajectory = new Trajectory(dir);
     trajectory.writeMeta({ runId: "run-test", harnessVersion: "t", startedAt: Date.now(), config });

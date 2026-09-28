@@ -5,7 +5,7 @@
  * with no `data/`.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,9 +19,12 @@ import {
   scanTiles,
   type TileStore,
 } from "./publish-tiles";
+import { tempDirs } from "./temp-dirs";
+
+const tempDir = tempDirs();
 
 function root(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "wb-tiles-"));
+  const dir = tempDir("wb-tiles-");
   for (const [rel, body] of Object.entries(files)) {
     const full = join(dir, rel);
     mkdirSync(join(full, ".."), { recursive: true });

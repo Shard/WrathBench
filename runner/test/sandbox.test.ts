@@ -3,16 +3,17 @@
  * SDK client is constructed but never connected.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const hosts: SandboxHost[] = [];
 
 function makeHost(opts: Partial<ConstructorParameters<typeof SandboxHost>[0]> = {}): SandboxHost {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-sbx-"));
+  const dir = tempDir("wrathbench-sbx-");
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",

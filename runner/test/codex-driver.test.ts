@@ -6,8 +6,7 @@
  * bridge.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   BILLING_ENV_EXACT,
@@ -32,6 +31,9 @@ import { TOOLS } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const FIXTURE = join(import.meta.dir, "fixtures", "fake-codex.ts");
 const SAMPLE = join(import.meta.dir, "fixtures", "codex-exec-sample.jsonl");
@@ -51,7 +53,7 @@ function fakeSandbox(): SandboxHost {
 
 /** A directory holding an executable `codex` that runs the fixture. */
 function fakeBinDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-fakebin-"));
+  const dir = tempDir("wrathbench-fakebin-");
   const path = join(dir, "codex");
   writeFileSync(path, `#!/bin/sh\nexec ${process.execPath} ${FIXTURE} "$@"\n`, "utf8");
   chmodSync(path, 0o755);
@@ -60,7 +62,7 @@ function fakeBinDir(): string {
 
 /** A lane directory that looks logged in: the CLI keeps its login in auth.json there. */
 function fakeCodexHome(): string {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-codex-home-"));
+  const dir = tempDir("wrathbench-codex-home-");
   writeFileSync(join(dir, "auth.json"), '{"auth_mode":"chatgpt","tokens":{"access_token":"fake"}}\n', "utf8");
   return dir;
 }
@@ -78,7 +80,7 @@ function setupEpisode(
   extraConfig: Record<string, unknown> = {},
   parentEnvExtra: Record<string, string> = {},
 ): EpisodeSetup {
-  const runDir = mkdtempSync(join(tmpdir(), "wrathbench-codex-run-"));
+  const runDir = tempDir("wrathbench-codex-run-");
   const recordPath = join(runDir, "record.json");
   const codexHome = fakeCodexHome();
   const config = {
@@ -625,7 +627,7 @@ describe("childEnv", () => {
   test("a lane looks logged in only with an auth.json in it", () => {
     const home = fakeCodexHome();
     expect(laneLooksLoggedIn(home)).toBe(true);
-    const empty = mkdtempSync(join(tmpdir(), "wrathbench-codex-empty-"));
+    const empty = tempDir("wrathbench-codex-empty-");
     mkdirSync(join(empty, "sessions"), { recursive: true });
     expect(laneLooksLoggedIn(empty)).toBe(false);
     expect(laneLooksLoggedIn(undefined)).toBe(false);
@@ -658,7 +660,7 @@ describe("driver, harness and prompt vocabulary", () => {
 
   /** Spawn run.ts against the fake CLI and return what it said. */
   async function launch(args: string[], env: Record<string, string | undefined>): Promise<{ code: number; stderr: string; dir: string }> {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-codex-refuse-"));
+    const dir = tempDir("wrathbench-codex-refuse-");
     const proc = Bun.spawn({
       cmd: [process.execPath, join(import.meta.dir, "..", "src", "run.ts"), "--driver", "codex", "--runs-dir", dir, ...args],
       // a cwd without a .env: Bun auto-loads one, and the repo's may carry lanes
@@ -677,7 +679,7 @@ describe("driver, harness and prompt vocabulary", () => {
     expect(unset.stderr).toContain("$CODEX_HOME");
     expect(unset.stderr).toContain("codex login");
 
-    const empty = mkdtempSync(join(tmpdir(), "wrathbench-codex-noauth-"));
+    const empty = tempDir("wrathbench-codex-noauth-");
     const noAuth = await launch(["--model", "gpt-5.5"], { CODEX_HOME: empty });
     expect(noAuth.code).toBe(2);
     expect(noAuth.stderr).toContain("auth.json");

@@ -10,16 +10,17 @@
  * captured from a running game (CLAUDE.md).
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const hosts: SandboxHost[] = [];
 
 function makeHost(snippetTimeoutMs = 5_000): SandboxHost {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-sleep-"));
+  const dir = tempDir("wrathbench-sleep-");
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",

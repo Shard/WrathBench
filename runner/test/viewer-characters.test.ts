@@ -9,11 +9,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLASS_NAMES, RACE_NAMES, characterLabel, className, raceName } from "../viewer/characters";
 import { readRun } from "../viewer/runs";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 describe("names resolve", () => {
   test("the ids the extras cycle actually uses", () => {
@@ -61,7 +63,7 @@ describe("names resolve", () => {
 
 describe("a run row carries its character", () => {
   function fixture(config: Record<string, unknown>): { runs: string; id: string } {
-    const runs = mkdtempSync(join(tmpdir(), "viewer-characters-"));
+    const runs = tempDir("viewer-characters-");
     const id = "run-1";
     mkdirSync(join(runs, id), { recursive: true });
     writeFileSync(join(runs, id, "meta.json"), JSON.stringify({ runId: id, startedAt: 1000, config }));

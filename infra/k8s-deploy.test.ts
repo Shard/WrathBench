@@ -26,9 +26,11 @@
  * broke the deploy script's arithmetic on 2026-08-22.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDirs } from "./temp-dirs";
+
+const tempDir = tempDirs();
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(REPO_ROOT, "infra", "k8s-deploy.sh");
@@ -131,7 +133,7 @@ interface Result {
 }
 
 function run(c: Case): Result {
-  const dir = mkdtempSync(join(tmpdir(), "wb-k8s-deploy-"));
+  const dir = tempDir("wb-k8s-deploy-");
   const bin = join(dir, "bin");
   Bun.spawnSync(["mkdir", "-p", bin]);
 

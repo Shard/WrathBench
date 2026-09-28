@@ -3,8 +3,6 @@
  * trajectory records, message-window mechanics. No live stack, no real model.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome } from "../src/adapter";
 import { parseEventFrame, StateCache } from "@wrathbench/sdk";
@@ -16,6 +14,9 @@ import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 function fakeSandbox(snapshot: Record<string, unknown> = {}): SandboxHost {
   const fake = {
@@ -37,7 +38,7 @@ function setup(
   extraConfig: Record<string, unknown> = {},
   snapshot: Record<string, unknown> = {},
 ) {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-loop-"));
+  const dir = tempDir("wrathbench-loop-");
   const config = {
     ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1, ...extraConfig }),
     runId: "run-test",
@@ -484,7 +485,7 @@ describe("runLoop", () => {
     // The ticker and the turn preamble can sample at the same moment; two
     // interleaved samples would each read the quest/zone/area high-water marks
     // before either advanced them and double-log everything in the window.
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-loop-"));
+    const dir = tempDir("wrathbench-loop-");
     const config = {
       ...loadRunConfig({ driver: "stub", stateIntervalMs: 1 }),
       runId: "run-test",

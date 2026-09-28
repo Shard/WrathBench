@@ -8,9 +8,6 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   MIN_TOKEN_LENGTH,
   loadRunConfig,
@@ -19,6 +16,9 @@ import {
   resolveSessionToken,
 } from "../src/config";
 import { Trajectory, readMeta } from "../src/trajectory";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 describe("newSessionToken", () => {
   test("is 32 hex characters", () => {
@@ -64,7 +64,7 @@ describe("resolveSessionToken", () => {
 
 describe("token persistence through meta.json", () => {
   test("a token round-trips, so --resume reattaches to the same session", () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-token-"));
+    const dir = tempDir("wrathbench-token-");
     const traj = new Trajectory(dir);
     const token = newSessionToken();
     const config = loadRunConfig({ runId: "run-t", token, driver: "stub" });
@@ -80,7 +80,7 @@ describe("token persistence through meta.json", () => {
   test("a regenerated token is persisted, so the next resume does not swap again", () => {
     // What run.ts does on resume when the stored token is a pre-hardening run
     // id: resolve, then re-write the loaded meta with only `config` replaced.
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-token-"));
+    const dir = tempDir("wrathbench-token-");
     const traj = new Trajectory(dir);
     const old = loadRunConfig({ runId: "run-old", token: "run-old", driver: "stub" });
     traj.writeMeta({ runId: "run-old", harnessVersion: "0.0.0-test", startedAt: 7, config: old });

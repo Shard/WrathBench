@@ -7,17 +7,19 @@
  * resume — the one launch that is SUPPOSED to reopen a directory — still works.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertRunDirFree } from "../src/run";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const RUN_TS = join(import.meta.dir, "..", "src", "run.ts");
 const RUN_ID = "fleet-sub-opus-low-e90-opus-low-20260917-a2";
 
 function runsDirWith(where: "live" | "archive" | "nothing"): string {
-  const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-collision-"));
+  const runsDir = tempDir("wrathbench-collision-");
   if (where === "nothing") return runsDir;
   const dir = where === "live" ? join(runsDir, RUN_ID) : join(runsDir, ARCHIVE_DIR, RUN_ID);
   mkdirSync(dir, { recursive: true });

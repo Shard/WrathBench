@@ -8,13 +8,15 @@
  * is cold, and a clean stop that removes the mark.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { loadRunConfig, newSessionToken } from "../src/config";
 import { liveOwnerOf, readRunFact, RESUME_REFUSED_EXIT } from "../src/models";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, startHeartbeat, Trajectory } from "../src/trajectory";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const RUN_TS = join(import.meta.dir, "..", "src", "run.ts");
 const RUN_ID = "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919";
@@ -39,7 +41,7 @@ function spawnRun(runsDir: string, args: string[]): ReturnType<typeof Bun.spawn>
 
 describe("the heartbeat", () => {
   test("beats at once, and a clean stop removes it", () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-beat-"));
+    const dir = tempDir("wrathbench-beat-");
     expect(heartbeatAt(dir)).toBeNull();
     const stop = startHeartbeat(dir, "host 1");
     expect(heartbeatAt(dir)).not.toBeNull();
@@ -51,7 +53,7 @@ describe("the heartbeat", () => {
 
 describe("--resume and a run's live owner", () => {
   test("a hard-killed run is refused while its heartbeat is warm, untouched by the refusal, and resumed once it is cold", async () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-owner-"));
+    const runsDir = tempDir("wrathbench-owner-");
     const script = join(runsDir, "stub.json");
     writeFileSync(script, JSON.stringify([1, 2, 3, 4, 5, 6].map((i) => ({ content: `turn ${i}`, toolCalls: [] }))));
     const dir = join(runsDir, RUN_ID);
@@ -120,7 +122,7 @@ describe("--resume and a run's live owner", () => {
   }, 90_000);
 
   test("a runner that exits on its own takes its heartbeat with it, so the next resume waits for nothing", async () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-owner-exit-"));
+    const runsDir = tempDir("wrathbench-owner-exit-");
     const script = join(runsDir, "stub.json");
     writeFileSync(script, JSON.stringify([{ content: "turn 1", toolCalls: [] }]));
     const proc = spawnRun(runsDir, [
@@ -142,7 +144,7 @@ describe("--resume and a run's live owner", () => {
   }, 40_000);
 
   test("a run with no heartbeat file keeps the old reading: a warm verdict-less trajectory is an owner, a paused one is not", () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-owner-old-"));
+    const runsDir = tempDir("wrathbench-owner-old-");
     const dir = join(runsDir, RUN_ID);
     const t = new Trajectory(dir);
     const config = loadRunConfig({

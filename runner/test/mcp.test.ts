@@ -3,8 +3,6 @@
  * sandbox is faked; the point is the protocol and the tool wiring, not eval.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer, trajectoryToolCallWriter } from "../src/mcp";
 import { EpisodicLog } from "../src/episodic";
@@ -13,6 +11,9 @@ import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import type { ToolContext } from "../src/tools";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 function fakeSandbox(): SandboxHost {
   const fake = {
@@ -39,7 +40,7 @@ function fakeSandbox(): SandboxHost {
 }
 
 function makeCtx(sandbox: SandboxHost = fakeSandbox()): { ctx: ToolContext; scratchpad: Scratchpad } {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-"));
+  const dir = tempDir("wrathbench-mcp-");
   const scratchpad = new Scratchpad(join(dir, "scratchpad.md"));
   const ctx: ToolContext = {
     sandbox,
@@ -228,7 +229,7 @@ describe("McpServer", () => {
   });
 
   test("the recorded tool-call args are the parsed object, not the raw string", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-"));
+    const dir = tempDir("wrathbench-mcp-");
     const scratchpad = new Scratchpad(join(dir, "scratchpad.md"));
     const ctx: ToolContext = {
       sandbox: fakeSandbox(),
@@ -306,7 +307,7 @@ describe("McpServer", () => {
   test("the standalone server's writer puts the dispatch time on the tool_call record", async () => {
     const { sandbox, startedAt } = slowSandbox(40);
     const { ctx } = makeCtx(sandbox);
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-mcp-traj-"));
+    const dir = tempDir("wrathbench-mcp-traj-");
     const trajectory = new Trajectory(dir);
     const server = new McpServer(ctx, { serverVersion: "test", onToolCall: trajectoryToolCallWriter(trajectory) });
     await initialized(server);

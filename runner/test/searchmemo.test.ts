@@ -3,8 +3,6 @@
  * callTool against a synthetic in-memory bundle. Every page here is invented.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { createMemoryBundle, makeWriter } from "@wrathbench/wiki/bundle";
@@ -16,6 +14,9 @@ import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost } from "../src/sandbox/host";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 function bundle(): Database {
   const db = createMemoryBundle();
@@ -48,7 +49,7 @@ function bundle(): Database {
  * object, so sharing one would leak a memo between cases.
  */
 function context(wiki?: Database): ToolContext {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-memo-"));
+  const dir = tempDir("wrathbench-memo-");
   return {
     sandbox: {
       evalSnippet: () => Promise.resolve({ ok: true, value: "1", logs: [], durationMs: 1 }),

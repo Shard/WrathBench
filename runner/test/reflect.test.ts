@@ -7,8 +7,6 @@
  * read back at rest".
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { StubAdapter } from "../src/adapter";
@@ -41,6 +39,9 @@ import { callTool, TOOLS, type ToolContext } from "../src/tools";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 /** A sandbox whose snapshot is whatever the test last set. */
 function fakeSandbox(state: { resting?: boolean; level?: number; zone?: string }): SandboxHost {
@@ -70,7 +71,7 @@ function makeCtx(state: { resting?: boolean; level?: number; zone?: string } = {
   state: typeof state;
   dir: string;
 } {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-"));
+  const dir = tempDir("wrathbench-reflect-");
   const ctx: ToolContext = {
     sandbox: fakeSandbox(state),
     scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
@@ -244,7 +245,7 @@ describe("log_status", () => {
   });
 
   test("the log is append-only across reopenings", () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-episodic-"));
+    const dir = tempDir("wrathbench-episodic-");
     const path = join(dir, "episodic.jsonl");
     new EpisodicLog(path).append({ turn: 1, text: "first" });
     new EpisodicLog(path).append({ turn: 2, text: "second" });
@@ -291,7 +292,7 @@ describe("the window-trim notices", () => {
   });
 
   test("the loop raises trim_pending before the trim and window_trimmed at it", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-trim-"));
+    const dir = tempDir("wrathbench-trim-");
     const config = {
       ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1 }),
       runId: "run-trim",
@@ -357,7 +358,7 @@ describe("the reflection window on the record", () => {
     state: { resting?: boolean },
     script: { content: string | null; toolCalls: { name: string; arguments: Record<string, unknown> }[] }[],
   ): Promise<{ dir: string; records: ReturnType<typeof readTrajectory> }> {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-run-"));
+    const dir = tempDir("wrathbench-reflect-run-");
     const config = {
       ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1 }),
       runId: "run-reflect",
@@ -401,7 +402,7 @@ describe("the reflection window on the record", () => {
 
   test("leaving the rest area closes the window through the state sample alone", async () => {
     const state = { resting: true };
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-builder-"));
+    const dir = tempDir("wrathbench-reflect-builder-");
     const config = {
       ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1 }),
       runId: "run-builder",

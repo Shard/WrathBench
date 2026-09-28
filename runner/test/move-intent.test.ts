@@ -10,8 +10,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
 import { ContextBuilder } from "../src/loop";
@@ -22,10 +21,13 @@ import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { readMoves } from "../viewer/runs";
 import { readLatestMove, readPositions } from "../viewer/positions";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 /** The snapshot the loop reads, with a `move` slot the test rewrites in place. */
 function harness(slot: { move: MoveIntentNote | null }) {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-move-"));
+  const dir = tempDir("wrathbench-move-");
   let clock = 1_000_000;
   const config = {
     ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }),
@@ -135,7 +137,7 @@ describe("the loop records what the sandbox is trying to reach", () => {
 
 /** A run directory with the rows given, and no `move` table when `moves` is undefined. */
 function runFixture(moves?: [number, number | null, number, number, number, number, string | null, string | null][]): string {
-  const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-move-runs-"));
+  const runsDir = tempDir("wrathbench-move-runs-");
   const dir = join(runsDir, "live-1");
   mkdirSync(dir);
   writeFileSync(
@@ -240,7 +242,7 @@ function startModuleStub(): { url: string; stop(): Promise<void> } {
 }
 
 function makeHost(moduleUrl: string): SandboxHost {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-move-sbx-"));
+  const dir = tempDir("wrathbench-move-sbx-");
   const host = new SandboxHost({
     moduleUrl,
     token: "test-token",

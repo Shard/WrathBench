@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platformOf, readRun } from "../viewer/runs";
@@ -25,9 +25,12 @@ import {
   tokenTotals,
   tokensPerSecond,
 } from "../viewer/tail";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 function tempFile(): string {
-  return join(mkdtempSync(join(tmpdir(), "wrathbench-viewer-")), "trajectory.jsonl");
+  return join(tempDir("wrathbench-viewer-"), "trajectory.jsonl");
 }
 
 const enc = new TextEncoder();
@@ -628,7 +631,7 @@ describe("tokensPerSecond", () => {
   });
 
   test("scanRunTotals carries the same figure off its single pass", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-tps-"));
+    const dir = tempDir("wrathbench-tps-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(
       path,
@@ -795,7 +798,7 @@ describe("tokensPerSecond", () => {
   });
 
   test("scanRunTotals and the tail agree on a claude-code run", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-claude-"));
+    const dir = tempDir("wrathbench-claude-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(
       path,
@@ -839,7 +842,7 @@ describe("tokensPerSecond", () => {
 
 describe("scanRunTotals", () => {
   test("totals a whole file and reports the wall clock it spans", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-scan-"));
+    const dir = tempDir("wrathbench-scan-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(
       path,
@@ -869,7 +872,7 @@ describe("scanRunTotals", () => {
   test("back-fills the resolved model from a claude-code run's init record", async () => {
     // The backlog case: nothing on meta.json or in the run row, and the only
     // record of which Claude this was is the CLI's own first word.
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-scan-"));
+    const dir = tempDir("wrathbench-scan-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(
       path,
@@ -895,7 +898,7 @@ describe("scanRunTotals", () => {
   });
 
   test("back-fills the served model from an openai run's response, and says nothing when none named one", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-scan-"));
+    const dir = tempDir("wrathbench-scan-");
     const path = join(dir, "trajectory.jsonl");
     const responded = (model: string | null): string =>
       JSON.stringify({
@@ -1024,7 +1027,7 @@ describe("platformOf", () => {
 
 describe("readRun", () => {
   test("reads the pause reason as stored; no platform column reads null, not a guess", () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-viewer-runs-"));
+    const runsDir = tempDir("wrathbench-viewer-runs-");
     const dir = join(runsDir, "paused-run");
     mkdirSync(dir);
     const db = new Database(join(dir, "run.sqlite"));
@@ -1046,7 +1049,7 @@ describe("readRun", () => {
   });
 
   test("the stamped platform and character columns win over the derivation", () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-viewer-cols-"));
+    const runsDir = tempDir("wrathbench-viewer-cols-");
     const dir = join(runsDir, "stamped-run");
     mkdirSync(dir);
     const db = new Database(join(dir, "run.sqlite"));
@@ -1066,7 +1069,7 @@ describe("readRun", () => {
 
   /** The `state` table grows columns; an old run directory never gets them. */
   function runWithState(columns: string, rows: unknown[][]): { runsDir: string; id: string } {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-viewer-state-"));
+    const runsDir = tempDir("wrathbench-viewer-state-");
     const id = "a-run";
     const dir = join(runsDir, id);
     mkdirSync(dir);
@@ -1119,7 +1122,7 @@ describe("zone and area milestones", () => {
     JSON.stringify({ t: "milestone", ts: 2000, kind, to: { id: to }, ...(from === undefined ? {} : { from: { id: from } }), turn: 1 });
 
   function fileWith(lines: string[]): string {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-milestone-"));
+    const dir = tempDir("wrathbench-milestone-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(path, [...lines, ""].join("\n"));
     return path;
@@ -1218,7 +1221,7 @@ describe("zone and area milestones", () => {
 
 describe("achievement and flight milestones (issue #8)", () => {
   function fileWith(lines: string[]): string {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-achievement-"));
+    const dir = tempDir("wrathbench-achievement-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(path, [...lines, ""].join("\n"));
     return path;
@@ -1292,7 +1295,7 @@ describe("achievement and flight milestones (issue #8)", () => {
 
 describe("level and death milestones", () => {
   function fileWith(lines: string[]): string {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-deaths-"));
+    const dir = tempDir("wrathbench-deaths-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(path, [...lines, ""].join("\n"));
     return path;
@@ -1400,7 +1403,7 @@ describe("level and death milestones", () => {
 
 describe("spell, talent and trade milestones", () => {
   function fileWith(lines: string[]): string {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-learning-"));
+    const dir = tempDir("wrathbench-learning-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(path, [...lines, ""].join("\n"));
     return path;
@@ -1486,7 +1489,7 @@ describe("reflection windows", () => {
     JSON.stringify({ t: "reflect_window", ts: turn, turn, event: "close", reason });
 
   function fileWith(lines: string[]): string {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-reflect-"));
+    const dir = tempDir("wrathbench-reflect-");
     const path = join(dir, "trajectory.jsonl");
     writeFileSync(path, [...lines, ""].join("\n"));
     return path;

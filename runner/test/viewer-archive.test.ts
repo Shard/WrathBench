@@ -10,8 +10,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { listRuns } from "../viewer/runs";
@@ -19,6 +18,9 @@ import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { scanRunTotals } from "../viewer/tail";
 import { archiveIfNoResponses, archiveRun, inSeries, parseRunIds, planPreSeries, planRunIds, recentFleetRunIds } from "../src/archive";
 import { readRunFacts } from "../src/models";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const OLD = 1_600_000_000; // seconds; well outside any liveness window
 
@@ -70,7 +72,7 @@ const META = { ts: 1000, t: "meta", runId: "x" };
 const RESPONSE = { ts: 1100, t: "response", turn: 1, message: { role: "assistant", content: "hi" } };
 
 function fixture(): string {
-  const runs = join(mkdtempSync(join(tmpdir(), "stillborn-")), "runs");
+  const runs = join(tempDir("stillborn-"), "runs");
   mkdirSync(runs, { recursive: true });
   // Never answered: the provider was dead on the first request.
   run(runs, "dead-on-arrival", [META, { ts: 1050, t: "termination", reason: "adapter-error" }]);
@@ -231,7 +233,7 @@ describe("the named selector", () => {
   test("a comma list, an @file and a duplicate all name the same set once", () => {
     expect(parseRunIds("a,b , c")).toEqual(["a", "b", "c"]);
     expect(parseRunIds("a,b,a")).toEqual(["a", "b"]);
-    const dir = mkdtempSync(join(tmpdir(), "runids-"));
+    const dir = tempDir("runids-");
     const file = join(dir, "ids.txt");
     writeFileSync(file, "# the dead qwen sessions\na\n\nb\n");
     expect(parseRunIds(`@${file}`)).toEqual(["a", "b"]);

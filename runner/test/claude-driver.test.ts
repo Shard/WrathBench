@@ -5,8 +5,7 @@
  * server through the loopback bridge.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
 import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
@@ -20,6 +19,9 @@ import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { harnessVersion, HARNESS_VERSION_FALLBACK } from "../src/version";
 import { Watchdogs } from "../src/watchdogs";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const FIXTURE = join(import.meta.dir, "fixtures", "fake-claude.ts");
 
@@ -38,7 +40,7 @@ function fakeSandbox(): SandboxHost {
 
 /** A directory holding an executable `claude` that runs the fixture. */
 function fakeBinDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-fakebin-"));
+  const dir = tempDir("wrathbench-fakebin-");
   const path = join(dir, "claude");
   writeFileSync(path, `#!/bin/sh\nexec ${process.execPath} ${FIXTURE} "$@"\n`, "utf8");
   chmodSync(path, 0o755);
@@ -57,7 +59,7 @@ function setupEpisode(
   extraConfig: Record<string, unknown> = {},
   parentEnvExtra: Record<string, string> = {},
 ): EpisodeSetup {
-  const runDir = mkdtempSync(join(tmpdir(), "wrathbench-claude-run-"));
+  const runDir = tempDir("wrathbench-claude-run-");
   const recordPath = join(runDir, "record.json");
   const config = {
     ...loadRunConfig({
@@ -784,7 +786,7 @@ describe("driver selection and stamping", () => {
   });
 
   test("meta, sqlite and the timeline carry the stub stamp; a claude-code run carries none", () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-stamp-"));
+    const dir = tempDir("wrathbench-stamp-");
     const config = loadRunConfig({ driver: "stub", stubScript: "x.json" });
     const trajectory = new Trajectory(dir);
     trajectory.writeMeta({
@@ -805,7 +807,7 @@ describe("driver selection and stamping", () => {
     expect(rendered).toContain("driver:     stub");
 
     // A claude-code run carries no stamp and renders as a score.
-    const cc = mkdtempSync(join(tmpdir(), "wrathbench-ccstamp-"));
+    const cc = tempDir("wrathbench-ccstamp-");
     const t2 = new Trajectory(cc);
     t2.writeMeta({
       runId: "run-cc",
@@ -821,8 +823,8 @@ describe("driver selection and stamping", () => {
 
   /** Spawn run.ts against the fake CLI, deliver `sig` mid-turn, return what it left behind. */
   async function stopMidTurn(sig: "SIGTERM" | "SIGINT"): Promise<{ dir: string; runId: string; stderr: string }> {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-"));
-    const cwd = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-cwd-"));
+    const dir = tempDir("wrathbench-sigterm-");
+    const cwd = tempDir("wrathbench-sigterm-cwd-");
     const proc = Bun.spawn({
       cmd: [
         process.execPath,
@@ -896,7 +898,7 @@ describe("driver selection and stamping", () => {
   }, 40_000);
 
   test("run.ts refuses to start the claude driver without the OAuth token", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-refuse-"));
+    const dir = tempDir("wrathbench-refuse-");
     const env = { ...process.env };
     delete env["CLAUDE_CODE_OAUTH_TOKEN"];
     const proc = Bun.spawn({
@@ -923,7 +925,7 @@ describe("driver selection and stamping", () => {
   }, 20_000);
 
   test("the refusal names the chosen subscription lane, not the default one", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-refuse-lane-"));
+    const dir = tempDir("wrathbench-refuse-lane-");
     const env = { ...process.env };
     // The DEFAULT lane is present and the chosen one is not: a run that read
     // the wrong variable would launch here instead of refusing.
@@ -954,7 +956,7 @@ describe("driver selection and stamping", () => {
   }, 20_000);
 
   test("run.ts refuses the former --adapter spelling by name, rather than ignoring it", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-refuse-adapter-"));
+    const dir = tempDir("wrathbench-refuse-adapter-");
     const proc = Bun.spawn({
       cmd: [
         process.execPath,

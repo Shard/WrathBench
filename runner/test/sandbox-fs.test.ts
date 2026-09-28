@@ -13,17 +13,18 @@
  * gives (`EACCES` when present, `ENOENT` when absent — never a read).
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..");
 const hosts: SandboxHost[] = [];
 
 function makeHost(opts: Partial<ConstructorParameters<typeof SandboxHost>[0]> = {}): SandboxHost {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-sbxfs-"));
+  const dir = tempDir("wrathbench-sbxfs-");
   const host = new SandboxHost({
     moduleUrl: "http://worldserver:8086",
     token: "test-token",

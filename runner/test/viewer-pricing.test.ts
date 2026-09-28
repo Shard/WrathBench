@@ -10,8 +10,6 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
@@ -20,6 +18,9 @@ import { isFreeSlug } from "../src/model-cost";
 import { catalogueIds, isZeroQuote, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 function tokens(t: Partial<TokenTotals>): TokenTotals {
   return {
@@ -734,7 +735,7 @@ describe("reportedCostUsd", () => {
   });
 
   test("scanRunTotals reads sessions the same way the entry path does", async () => {
-    const path = join(mkdtempSync(join(tmpdir(), "wrathbench-pricing-cum-")), "trajectory.jsonl");
+    const path = join(tempDir("wrathbench-pricing-cum-"), "trajectory.jsonl");
     writeFileSync(
       path,
       [
@@ -757,7 +758,7 @@ describe("reportedCostUsd", () => {
   });
 
   test("scanRunTotals picks it up even though the token projection drops the record", async () => {
-    const path = join(mkdtempSync(join(tmpdir(), "wrathbench-pricing-")), "trajectory.jsonl");
+    const path = join(tempDir("wrathbench-pricing-"), "trajectory.jsonl");
     writeFileSync(
       path,
       [
@@ -798,7 +799,7 @@ describe("reportedCostUsd", () => {
   });
 
   test("the tail summariser and scanRunTotals agree on a run of OpenRouter responses", async () => {
-    const path = join(mkdtempSync(join(tmpdir(), "wrathbench-pricing-")), "trajectory.jsonl");
+    const path = join(tempDir("wrathbench-pricing-"), "trajectory.jsonl");
     const lines = [
       JSON.stringify({ t: "meta", ts: 1 }),
       JSON.stringify({

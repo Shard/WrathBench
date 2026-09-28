@@ -5,22 +5,24 @@
  * validates the arguments and renders the refusal hints.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Scratchpad, SCRATCHPAD_MAX_CHARS } from "../src/scratchpad";
 import { callTool, nearestTool, normalizeToolArgs, TOOLS, type ToolContext } from "../src/tools";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import type { SandboxHost } from "../src/sandbox/host";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 function makePad(): Scratchpad {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-pad-edit-"));
+  const dir = tempDir("wrathbench-pad-edit-");
   return new Scratchpad(join(dir, "scratchpad.md"));
 }
 
 function makeCtx(scratchpad: Scratchpad): ToolContext {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-pad-ctx-"));
+  const dir = tempDir("wrathbench-pad-ctx-");
   return {
     sandbox: undefined as unknown as SandboxHost,
     scratchpad,

@@ -12,8 +12,6 @@
  * own stream.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StubAdapter } from "../src/adapter";
 import { loadRunConfig } from "../src/config";
@@ -24,10 +22,13 @@ import { SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 /** The snapshot the loop reads, with the cursor and the stream slot a test rewrites. */
 function harness(slot: { eventCount: number; lastSeq: number; connected?: boolean }, onObservationStalled?: (detail: string) => void) {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-stall-"));
+  const dir = tempDir("wrathbench-stall-");
   let clock = 1_000_000;
   const config = {
     ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }),
@@ -223,7 +224,7 @@ describe("a stalled observation asks for the pause", () => {
   });
 
   test("the fixed loop pauses as observation-stalled before it writes another request", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-stall-loop-"));
+    const dir = tempDir("wrathbench-stall-loop-");
     const config = {
       ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1_000 }),
       runId: "run-stall-loop",
@@ -292,7 +293,7 @@ afterEach(async () => {
 
 describe("sandbox child: the stream report rides the state snapshot", () => {
   test("the child says whether its own event stream is open", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-stall-child-"));
+    const dir = tempDir("wrathbench-stall-child-");
     const host = new SandboxHost({
       moduleUrl: "http://worldserver:8086",
       token: "test-token",

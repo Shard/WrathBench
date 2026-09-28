@@ -6,16 +6,18 @@
  * never calls a tool never asks for.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig, newSessionToken } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const RUN_TS = join(import.meta.dir, "..", "src", "run.ts");
 
 function pausedStubRun(elapsedMs: number): { runsDir: string; runId: string; script: string } {
-  const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-resume-"));
+  const runsDir = tempDir("wrathbench-resume-");
   const runId = "run-paused";
   const script = join(runsDir, "stub.json");
   writeFileSync(script, JSON.stringify([{ content: "hello", toolCalls: [] }, { content: "again", toolCalls: [] }]));
@@ -54,7 +56,7 @@ function pausedStubRun(elapsedMs: number): { runsDir: string; runId: string; scr
  * fleet-sub-opus-low-freeplay-opus-low-20260825-a6 was in at 410/500.
  */
 function pausedFreeplayRun(storedCap: number | null = 500): { runsDir: string; runId: string } {
-  const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-resume-freeplay-"));
+  const runsDir = tempDir("wrathbench-resume-freeplay-");
   const runId = "fleet-sub-opus-low-freeplay-opus-low-20260825-a6";
   const script = join(runsDir, "stub.json");
   writeFileSync(script, JSON.stringify([{ content: "still going", toolCalls: [] }]));

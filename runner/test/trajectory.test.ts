@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 function tempRunDir(): string {
-  return mkdtempSync(join(tmpdir(), "wrathbench-traj-"));
+  return tempDir("wrathbench-traj-");
 }
 
 describe("Trajectory", () => {

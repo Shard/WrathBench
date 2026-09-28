@@ -8,10 +8,12 @@
  * and reads what is on disk afterwards.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory, readMeta } from "../src/trajectory";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const RUN_TS = join(import.meta.dir, "..", "src", "run.ts");
 const RUN_ID = "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919";
@@ -26,7 +28,7 @@ async function until(pred: () => boolean, ms: number): Promise<void> {
 
 describe("SIGTERM writes the pause before anything else", () => {
   test("a SIGKILL right after SIGTERM still leaves run.sqlite paused and meta.json marked", async () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-"));
+    const runsDir = tempDir("wrathbench-sigterm-");
     const script = join(runsDir, "stub.json");
     // Three turns with a long step interval: the runner is asleep between
     // turns when the signal lands, exactly as a fleet run is between requests.
@@ -77,7 +79,7 @@ describe("SIGTERM writes the pause before anything else", () => {
   }, 40_000);
 
   test("the cooperative unwind that follows does not move the mark the handler wrote", async () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-sigterm-at-"));
+    const runsDir = tempDir("wrathbench-sigterm-at-");
     const script = join(runsDir, "stub.json");
     writeFileSync(script, JSON.stringify([1, 2, 3].map((i) => ({ content: `turn ${i}`, toolCalls: [] }))));
     const proc = Bun.spawn({

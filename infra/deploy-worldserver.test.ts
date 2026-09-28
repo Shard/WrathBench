@@ -12,9 +12,11 @@
  * script's arithmetic on 2026-08-22.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDirs } from "./temp-dirs";
+
+const tempDir = tempDirs();
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(REPO_ROOT, "infra", "deploy-worldserver.sh");
@@ -91,7 +93,7 @@ interface Result {
 }
 
 function runDeploy(c: Case = {}): Result {
-  const dir = mkdtempSync(join(tmpdir(), "wb-deploy-"));
+  const dir = tempDir("wb-deploy-");
   const bin = join(dir, "bin");
   Bun.spawnSync(["mkdir", "-p", bin]);
   const shim = join(bin, "docker");

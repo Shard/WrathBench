@@ -5,12 +5,14 @@
  * loaded), the re-list is refused during the core's linger.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig, newSessionToken } from "../src/config";
 import { characterOwners, clearAccountCharacters } from "../src/hygiene";
 import { Trajectory } from "../src/trajectory";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 type Reply = { status?: number; body: unknown };
 
@@ -252,7 +254,7 @@ describe("characterOwners", () => {
   }
 
   test("the newest run per name on the account decides, archived runs included, case-folded, the asking launch excluded", () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-owners-"));
+    const runsDir = tempDir("wrathbench-owners-");
     run(runsDir, "old-aurelian", { account: "RUNNER2", character: "Aurelian", startedAt: 1, ended: "idle" });
     run(runsDir, "fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919", { account: "runner2", character: "Aurelian", startedAt: 2 });
     run(runsDir, "novice-run", { account: "RUNNER2", character: "Novice", startedAt: 3, ended: "episode-limit", archived: true });

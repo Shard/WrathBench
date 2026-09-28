@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { STALL_PAUSE } from "../src/lapse";
 import { Trajectory } from "../src/trajectory";
@@ -21,6 +20,9 @@ import {
   worldToPixel,
   worldToTile,
 } from "../viewer/worldmap";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 /* ---------- coordinates ---------- */
 
@@ -141,7 +143,7 @@ describe("tile paths", () => {
   });
 
   test("resolveTilePath finds an extracted tile and only that", () => {
-    const root = mkdtempSync(join(tmpdir(), "wrathbench-tiles-"));
+    const root = tempDir("wrathbench-tiles-");
     mkdirSync(join(root, "0"));
     // Synthetic bytes: the route only streams the file and sets a content type.
     writeFileSync(join(root, "0", "43_31.png"), new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
@@ -181,7 +183,7 @@ interface FixtureRun {
 }
 
 function fixture(runs: FixtureRun[]): string {
-  const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-map-runs-"));
+  const runsDir = tempDir("wrathbench-map-runs-");
   for (const r of runs) {
     const dir = join(runsDir, r.id);
     mkdirSync(dir);
@@ -482,7 +484,7 @@ describe("readPositions", () => {
   });
 
   test("a run with no database at all is skipped", () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-map-empty-"));
+    const runsDir = tempDir("wrathbench-map-empty-");
     mkdirSync(join(runsDir, "bare"));
     expect(readPositions(runsDir, NOW)).toEqual([]);
     expect(readLatestPosition(runsDir, "bare")).toBeNull();
@@ -546,7 +548,7 @@ describe("positionsFromStore", () => {
   }
 
   function corpus(): string {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-map-store-"));
+    const runsDir = tempDir("wrathbench-map-store-");
     writeRun(runsDir, "live-a", { stateTs: NOW - 5_000, reflecting: true, episodic: "heading for the inn" });
     writeRun(runsDir, "live-b", { stateTs: NOW - 1_000 });
     writeRun(runsDir, "ended", { stateTs: NOW - 1_000, terminated: true });
@@ -601,7 +603,7 @@ describe("positionsFromStore", () => {
   test("a run paused because its observation stalled is off the map in both feeds; another pause is not", async () => {
     // A stalled run's newest rows are the last reading repeated while the
     // character went on elsewhere: fresh by the stamp, wrong by the content.
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-map-stall-"));
+    const runsDir = tempDir("wrathbench-map-stall-");
     writeRun(runsDir, "stalled", { stateTs: NOW - 1_000, paused: STALL_PAUSE });
     writeRun(runsDir, "cooling", { stateTs: NOW - 2_000, paused: "rate-limited" });
     expect(readPositions(runsDir, NOW).map((p) => p.runId)).toEqual(["cooling"]);

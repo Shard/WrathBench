@@ -112,8 +112,7 @@ import { billingOf } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import type { Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
@@ -121,6 +120,9 @@ import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/conf
 import { parseCampaigns } from "../runner/src/campaigns";
 import { backoffMs, episodeArgv, resolve } from "./run-roster";
 import { STALL_PAUSE } from "../runner/src/lapse";
+import { tempDirs } from "./temp-dirs";
+
+const tempDir = tempDirs();
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -736,7 +738,7 @@ describe("rereadFleet", () => {
    * it that it would have parsed from the document.
    */
   test("the default read is the store, and a seeded store parses to the seed's config until edited", () => {
-    const root = mkdtempSync(join(tmpdir(), "fleet-config-store-"));
+    const root = tempDir("fleet-config-store-");
     const db = join(root, "config.sqlite");
     const seed = fleetJson([{ ref: "glm", episode: "e90" }]);
 
@@ -984,7 +986,7 @@ describe("the bootstrap example (infra/fleet.example.json)", () => {
     expect(config.jobs).toEqual([]);
     expect(config.campaigns).toEqual([]);
     // And the store takes it, whole, as the one-time seed.
-    const store = new ConfigStore(join(mkdtempSync(join(tmpdir(), "fleet-example-")), "config.sqlite"));
+    const store = new ConfigStore(join(tempDir("fleet-example-"), "config.sqlite"));
     const { seeded, keys } = store.seedFromFile(EXAMPLE);
     expect(seeded).toBe(true);
     expect(keys).toBeGreaterThan(5);
@@ -2647,7 +2649,7 @@ describe("pause and resume across a fleet stop", () => {
   });
 
   test("endRuns writes the termination through the runner's own writer: manual, the detail, the pause cleared", () => {
-    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-fleet-end-"));
+    const runsDir = tempDir("wrathbench-fleet-end-");
     const runId = "fleet-ox-e90-ox-alpha-20260823";
     const t = new Trajectory(join(runsDir, runId));
     t.writeMeta({ runId, harnessVersion: "harness-0.4-1-gabc", startedAt: NOW - H, config: loadRunConfig({ runId, driver: "openai", model: "stealth/ox-alpha:free", account: "RUNNER3" }) });

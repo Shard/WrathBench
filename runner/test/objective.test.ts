@@ -7,8 +7,6 @@
  * a watchdog set to null/0 is genuinely off rather than instantly tripping.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { StubAdapter } from "../src/adapter";
@@ -29,6 +27,9 @@ import { readMeta, readTrajectory, Trajectory } from "../src/trajectory";
 import { configFromArgs } from "../src/run";
 import { readRun } from "../viewer/runs";
 import { Watchdogs } from "../src/watchdogs";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const OBJECTIVE = "Travel from your starting zone to the nearest capital city.";
 
@@ -91,7 +92,7 @@ describe("prompt rendering", () => {
     const viaClaude = args[args.indexOf("--system-prompt") + 1];
     // ...and the fixed loop's system message, for a different model entirely.
     const adapter = new StubAdapter([{ content: "noop", toolCalls: [] }]);
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-objective-"));
+    const dir = tempDir("wrathbench-objective-");
     const config = {
       ...loadRunConfig({
         driver: "stub",
@@ -134,7 +135,7 @@ describe("prompt rendering", () => {
 
 describe("meta recording", () => {
   test("meta.json and the run row carry the objective and the unscored stamp", () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-objective-meta-"));
+    const dir = tempDir("wrathbench-objective-meta-");
     const config = loadRunConfig({
       runId: "run-meta",
       driver: "claude-code",
@@ -199,7 +200,7 @@ describe("watchdog overrides", () => {
   });
 
   test("overrides are recorded in meta, so a probe's leash is readable after the fact", () => {
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-objective-wd-"));
+    const dir = tempDir("wrathbench-objective-wd-");
     const config = loadRunConfig({
       runId: "run-wd",
       watchdogs: { noXpMs: null, episodeMs: 21_600_000, idleMs: 1_200_000 },
@@ -305,7 +306,7 @@ describe("argv -> run config", () => {
 
 describe("the viewer's run row", () => {
   test("exposes the objective, so a steered run is identifiable in the listing", () => {
-    const runs = mkdtempSync(join(tmpdir(), "wrathbench-objective-viewer-"));
+    const runs = tempDir("wrathbench-objective-viewer-");
     const config = loadRunConfig({ runId: "run-view", model: "sonnet", objective: OBJECTIVE });
     const trajectory = new Trajectory(join(runs, "run-view"));
     trajectory.writeMeta({

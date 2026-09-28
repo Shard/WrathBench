@@ -4,8 +4,6 @@
  * nearest-tool suggestions.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ACTION_HINT_RENDER,
@@ -22,10 +20,13 @@ import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost } from "../src/sandbox/host";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 /** Context for calls that never reach the sandbox (validation failures) or only touch the scratchpad. */
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-tools-"));
+  const dir = tempDir("wrathbench-tools-");
   return {
     sandbox: undefined as unknown as SandboxHost,
     scratchpad: new Scratchpad(join(dir, "scratchpad.md")),

@@ -9,8 +9,6 @@
  * for fifteen hours. `connect()` now reads the stream, and reopens it.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import { loadRunConfig } from "../src/config";
@@ -20,6 +18,9 @@ import { SandboxHost as RealSandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 /**
  * A stand-in module that serves `/events`, and pushes one `WB_SESSION_STATE` to
@@ -96,7 +97,7 @@ afterEach(async () => {
 });
 
 function makeHost(moduleUrl: string): SandboxHost {
-  const dir = mkdtempSync(join(tmpdir(), "wrathbench-reopen-sbx-"));
+  const dir = tempDir("wrathbench-reopen-sbx-");
   const host = new RealSandboxHost({
     moduleUrl,
     token: "test-token",
@@ -170,7 +171,7 @@ describe("the stall detector sees the reopen", () => {
     const host = makeHost(stub.url);
     await host.evalSnippet("await connect(); await sdk.createSession({ character: 'Fenwick' });");
 
-    const dir = mkdtempSync(join(tmpdir(), "wrathbench-reopen-loop-"));
+    const dir = tempDir("wrathbench-reopen-loop-");
     let clock = 1_000_000;
     const config = {
       ...loadRunConfig({ driver: "stub", stateIntervalMs: 60_000 }),

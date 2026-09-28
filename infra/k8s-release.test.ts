@@ -19,9 +19,11 @@
  * FORCE_COLOR=3 throughout, for the same reason the sibling suites do it.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDirs } from "./temp-dirs";
+
+const tempDir = tempDirs();
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(REPO_ROOT, "infra", "k8s-release.sh");
@@ -135,7 +137,7 @@ interface Result {
 const TAG = "wb-test-0.9-1-gdeadbee";
 
 function run(c: Case): Result {
-  const dir = mkdtempSync(join(tmpdir(), "wb-k8s-release-"));
+  const dir = tempDir("wb-k8s-release-");
   const bin = join(dir, "bin");
   const tree = join(dir, "tree");
   Bun.spawnSync(["mkdir", "-p", bin, tree]);

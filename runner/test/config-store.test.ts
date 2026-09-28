@@ -11,8 +11,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   ConfigRejected,
@@ -26,11 +25,14 @@ import {
   splitFleet,
 } from "../src/config-store";
 import { parseFleet } from "../../infra/run-fleet-config";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const EXAMPLE = resolve(import.meta.dir, "..", "..", "infra", "fleet.example.json");
 
 function tempStore(): { store: ConfigStore; root: string } {
-  const root = mkdtempSync(join(tmpdir(), "config-store-"));
+  const root = tempDir("config-store-");
   return { store: new ConfigStore(join(root, "config.sqlite")), root };
 }
 
@@ -243,7 +245,7 @@ describe("seeding", () => {
 
 describe("the read seam", () => {
   test("a store that does not exist yet is EMPTY — a fresh deployment, not an error", () => {
-    const root = mkdtempSync(join(tmpdir(), "config-seam-"));
+    const root = tempDir("config-seam-");
     const db = join(root, "config.sqlite");
     expect(readFleetConfig(db)).toEqual({ status: "empty", path: db });
     expect(configStoreSeeded({ WRATHBENCH_CONFIG_DB: db })).toBe(false);
@@ -278,7 +280,7 @@ describe("the read seam", () => {
     // The distinction this seam exists for. A supervisor that read a corrupt
     // or locked store as "zero rows" would conclude every job vanished and
     // drain the board; it must instead keep its last good config and say why.
-    const root = mkdtempSync(join(tmpdir(), "config-seam-bad-"));
+    const root = tempDir("config-seam-bad-");
     const db = join(root, "config.sqlite");
     writeFileSync(db, "this is not a database");
     const r = readFleetConfig(db);
@@ -290,7 +292,7 @@ describe("the read seam", () => {
     // `rows()` swallows exactly one error — "no such table", the never-written
     // store — and nothing else, so a real failure surfaces as UNREADABLE
     // rather than as an empty roster.
-    const root = mkdtempSync(join(tmpdir(), "config-rows-bad-"));
+    const root = tempDir("config-rows-bad-");
     const db = join(root, "config.sqlite");
     writeFileSync(db, "garbage".repeat(64));
     const reader = openConfigStore(db, { readonly: true });

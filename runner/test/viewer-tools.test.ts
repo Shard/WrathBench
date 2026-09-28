@@ -5,17 +5,18 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TOOLS } from "../src/tools";
 import { createApi } from "../viewer/api";
 import { projectTools } from "../viewer/public-projection";
 import { TOOL_EXAMPLES, TOOL_RETURNS, toolsResponse } from "../viewer/tools";
 import type { ToolsResponse } from "../viewer/api-types";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 function api(): (r: Request) => Promise<Response> {
-  const runs = mkdtempSync(join(tmpdir(), "viewer-tools-"));
+  const runs = tempDir("viewer-tools-");
   return createApi({ runsDir: runs, tilesDir: join(runs, "minimap"), moduleUrl: "http://127.0.0.1:1" });
 }
 
@@ -40,7 +41,7 @@ describe("/api/tools", () => {
   });
 
   test("the route serves in public mode, and the projection passes it through whole", async () => {
-    const runs = mkdtempSync(join(tmpdir(), "viewer-tools-"));
+    const runs = tempDir("viewer-tools-");
     const handle = createApi({ runsDir: runs, tilesDir: join(runs, "minimap"), publicMode: true, moduleUrl: "http://127.0.0.1:1" });
     const res = await handle(new Request("http://x/api/tools"));
     expect(res.status).toBe(200);

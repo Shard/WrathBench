@@ -9,13 +9,15 @@
  * the module for a stub that calls no tool.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig, newSessionToken } from "../src/config";
 import { loadContinuation } from "../src/run";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const RUN_TS = join(import.meta.dir, "..", "src", "run.ts");
 
@@ -25,7 +27,7 @@ const cfgFor = (runsDir: string, from: string) =>
 
 /** An ended freeplay run on RUNNER2 that played Bromdir to level 8, notes and all. */
 function endedFreeplayRun(over: { episode?: "freeplay" | "e90"; account?: string; character?: string } = {}) {
-  const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-continue-"));
+  const runsDir = tempDir("wrathbench-continue-");
   const runId = "fleet-sub-opus-low-freeplay-opus-low-20260827-a11";
   const dir = join(runsDir, runId);
   mkdirSync(dir, { recursive: true });

@@ -15,9 +15,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createRenderer,
@@ -30,6 +29,9 @@ import {
 } from "../viewer/snapshot";
 import { createApi } from "../viewer/api";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const DEAD_RUN = "snap-run-dead";
 const LIVE_RUN = "snap-run-live";
@@ -207,7 +209,7 @@ function writeRun(
 }
 
 function fixture(withLive = true): string {
-  const runs = mkdtempSync(join(tmpdir(), "snapshot-"));
+  const runs = tempDir("snapshot-");
   writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true });
   // A live, unterminated run with a fresh position, so live.json's positions
   // feed is non-empty and its character/items withholding is exercised. The
@@ -327,7 +329,7 @@ describe("renderSnapshot", () => {
    * arrival of a successor moves the key and the new track lands beside it.
    */
   test("a published track names the attempts either side of it", async () => {
-    const runs = mkdtempSync(join(tmpdir(), "snapshot-chain-"));
+    const runs = tempDir("snapshot-chain-");
     // A freeplay chain: the root stamped freeplay, the second attempt naming it.
     writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true, episode: "freeplay" });
     writeRun(runs, LIVE_RUN, { terminated: true, stateTs: 1600, old: true, continuedFrom: DEAD_RUN, episode: "freeplay" });

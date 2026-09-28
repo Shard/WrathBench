@@ -8,17 +8,19 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { TILE_CACHE_CONTROL, TILE_PUBLIC_CACHE_CONTROL } from "../viewer/tiles";
+import { tempDirs } from "./fixtures/temp-dirs";
+
+const tempDir = tempDirs();
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 
 /** A runs directory and a tile root with one extracted tile in it. */
 function fixture(): { runsDir: string; tilesDir: string } {
-  const root = mkdtempSync(join(tmpdir(), "viewer-tiles-"));
+  const root = tempDir("viewer-tiles-");
   const runsDir = join(root, "runs");
   const tilesDir = join(root, "minimap");
   mkdirSync(runsDir);

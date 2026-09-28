@@ -19,8 +19,7 @@
  * for guid 625.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { comparabilityOf } from "../runner/src/comparability";
 import { loadRunConfig, newSessionToken } from "../runner/src/config";
@@ -28,6 +27,9 @@ import { readRunFacts, DEFAULT_POLICY } from "../runner/src/models";
 import { readTrajectory, Trajectory } from "../runner/src/trajectory";
 import type { FleetConfig, FleetRosterEntry } from "./run-fleet-config";
 import { charactersFrom, implicitPauses, keepFor, planContinuations, planResumes, planStaleRuns } from "./run-fleet-plan";
+import { tempDirs } from "./temp-dirs";
+
+const tempDir = tempDirs();
 
 const RUN_TS = join(import.meta.dir, "..", "runner", "src", "run.ts");
 const H = 3_600_000;
@@ -81,7 +83,7 @@ const config: Pick<FleetConfig, "jobs" | "roster" | "policy" | "accounts"> = {
 const held = (): string | undefined => undefined;
 
 function incidentRunsDir(): string {
-  const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-20260920-"));
+  const runsDir = tempDir("wrathbench-20260920-");
   killedFreeplayRun(runsDir, { runId: AURELIAN_RUN, model: "deepseek/deepseek-v4.1-flash", account: "RUNNER2", character: "Aurelian", level: 7, quietForMs: 9 * H + 25 * 60_000 });
   killedFreeplayRun(runsDir, { runId: NEMOTRON_RUN, model: "nvidia/nemotron-ultra", account: "RUNNER3", character: "Thessaly", level: 11, quietForMs: 12 * H + 15 * 60_000 });
   return runsDir;
