@@ -109,7 +109,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -815,6 +815,13 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     }
     process.off("exit", onProcessExit);
     listener.stop(true);
+    // The scratch cwd goes with the CLI, as in the claude driver: it holds
+    // nothing of the run's, and must never throw from the episode's finally.
+    try {
+      rmSync(cwd, { recursive: true, force: true });
+    } catch {
+      // left behind; the verdict matters more than the directory
+    }
   };
 
   const pendingNotices: HarnessNotice[] = [...(o.initialNotices ?? [])];

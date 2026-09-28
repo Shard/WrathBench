@@ -97,7 +97,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -990,6 +990,14 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     await stdoutTask.catch(() => undefined);
     await stderrTask.catch(() => undefined);
     listener.stop(true);
+    // The scratch cwd goes with the CLI: it holds nothing of the run's, and a
+    // temp dir left per episode piles up in the host's /tmp. Never allowed to
+    // throw, since this runs in the episode's finally and would replace its verdict.
+    try {
+      rmSync(cwd, { recursive: true, force: true });
+    } catch {
+      // left behind; the verdict matters more than the directory
+    }
   };
 
   const pendingNotices: HarnessNotice[] = [...(o.initialNotices ?? [])];
