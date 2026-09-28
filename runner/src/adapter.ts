@@ -295,6 +295,18 @@ const RATE_LIMIT_HINTS = /rate.?limit|too many requests/i;
 // still fail fast as an AdapterError.
 const PROVIDER_BLIP_HINTS =
   /provider returned error|upstream request failed|model is unavailable|provider_name|"server_error"|no instances available/i;
+// A slug the provider has withdrawn is a bad model id too, whatever else its
+// body says: OpenRouter answers a retired `:free` slug with 404 "This model is
+// unavailable for free. The paid version is available now - use this slug
+// instead: …", which `model is unavailable` would otherwise read as pool
+// weather, so the run paused rate-limited and climbed the defer ladder until
+// it ran out of rungs, blaming rate limiting all the way.
+const WITHDRAWN_SLUG_HINTS = /unavailable for free|use this slug instead/i;
+
+/** A transient upstream failure wrapped in a 4xx body, and not a withdrawn slug. */
+function isProviderBlip(text: string): boolean {
+  return PROVIDER_BLIP_HINTS.test(text) && !WITHDRAWN_SLUG_HINTS.test(text);
+}
 
 export class OpenAiChatAdapter implements ChatAdapter {
   readonly label: string;
@@ -479,7 +491,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
               if (budget === null || (quota && budget.reason === "rate-limited")) {
                 budget = { reason: quota ? "quota-exhausted" : "rate-limited", detail: lastError };
               }
-            } else if (PROVIDER_BLIP_HINTS.test(lastError) && budget === null) {
+            } else if (isProviderBlip(lastError) && budget === null) {
               budget = { reason: "rate-limited", detail: lastError };
             }
             continue;
@@ -526,7 +538,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
         }
       }
       const providerBlip =
-        res.status >= 400 && res.status < 500 && PROVIDER_BLIP_HINTS.test(lastError);
+        res.status >= 400 && res.status < 500 && isProviderBlip(lastError);
       if (providerBlip && budget === null) {
         budget = { reason: "rate-limited", detail: lastError };
       }

@@ -400,6 +400,36 @@ describe("OpenAiChatAdapter budget pauses", () => {
     await expect(adapterPlaying([status(404, body)]).complete(req)).rejects.toThrow(/No endpoints found/);
   });
 
+  test("a withdrawn free slug fails fast as an AdapterError, not a rate-limited pause", async () => {
+    // Verbatim from the minimax-m3-free stream: `model is unavailable` alone
+    // read it as a provider blip, so it retried, paused rate-limited and
+    // climbed the defer ladder on a slug that will never serve again.
+    const body =
+      '{"error":{"message":"This model is unavailable for free. The paid version is available now - use this slug instead: minimax/minimax-m3","code":404},"user_id":"user_x"}';
+    let calls = 0;
+    const adapter = new OpenAiChatAdapter({
+      baseUrl: "http://model.invalid/v1",
+      apiKey: "k",
+      model: "m",
+      maxAttempts: 3,
+      fetchImpl: Object.assign(
+        (): Promise<Response> => {
+          calls++;
+          return Promise.resolve(status(404, body));
+        },
+        { preconnect: () => {} },
+      ) as unknown as typeof fetch,
+      sleep: () => Promise.resolve(),
+    });
+    await expect(adapter.complete(req)).rejects.toThrow(/unavailable for free/);
+    expect(calls).toBe(1);
+  });
+
+  test("the paid-slug pointer alone is enough to fail fast", async () => {
+    const body = JSON.stringify({ error: { message: "Model is unavailable. Use this slug instead: vendor/model", code: 404 } });
+    await expect(adapterPlaying([status(404, body), status(404, body)]).complete(req)).rejects.toThrow(/HTTP 404/);
+  });
+
   test("a 2xx body carrying an error object with code 429 pauses instead of adapter-erroring", async () => {
     // The night-nemotron-1 shape: free-tier upstream returns HTTP 200 with
     // {"error": ...} and no choices; this used to terminate as a schema error.
