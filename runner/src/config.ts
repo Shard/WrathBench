@@ -341,6 +341,16 @@ export const runConfigSchema = z.object({
    * the projection can report it apart and never count it toward a target.
    */
   extra: z.boolean().default(false),
+  /**
+   * The roster entry's own `billing`, when it stated one: the operator's word
+   * on which side of the bill this run is, for the case the derivation from
+   * the model id cannot see (a stealth id quoted at zero with no free suffix).
+   * Recorded so the reader's verdict (`runner/src/billing.ts`) and the price
+   * table agree with the scheduler's. The fleet passes it for the openai driver
+   * only; a subscription driver's bill is the subscription. Absent — the usual
+   * case — means the verdict is derived.
+   */
+  billing: z.enum(["free", "paid"]).optional(),
 
   /**
    * The probe campaign that commissioned this run, and which of its cells this

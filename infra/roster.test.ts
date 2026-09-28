@@ -60,6 +60,20 @@ describe("resolve", () => {
     expect(episodeArgv(pinned, true)).not.toContain("--routing-json");
   });
 
+  test("an entry's own billing rides its own flag, on the openai driver only", () => {
+    const plain = resolve([{ model: "stealth/space-bunny-alpha" }], "20260929")[0]!;
+    expect(episodeArgv(plain, false)).not.toContain("--billing");
+    const free = resolve([{ model: "stealth/space-bunny-alpha", billing: "free" }], "20260929")[0]!;
+    const argv = episodeArgv(free, false);
+    expect(argv[argv.indexOf("--billing") + 1]).toBe("free");
+    // A resumed run restates no identity; its meta.json already has it.
+    expect(episodeArgv(free, true)).not.toContain("--billing");
+    // A subscription driver's bill is the subscription: nothing is recorded.
+    const sub = resolve([{ model: "sonnet", driver: "claude-code", billing: "paid" }], "20260929")[0]!;
+    expect(sub.billing).toBeUndefined();
+    expect(episodeArgv(sub, false)).not.toContain("--billing");
+  });
+
   test("routing on an endpoint with one backend is refused at resolve, not dropped", () => {
     expect(() =>
       resolve([{ model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1", routing: ["Cerebras"] as never }], "20260916"),

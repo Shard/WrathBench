@@ -40,6 +40,7 @@
  * against a real `costUsd` ($43.23 computed vs $43.90 reported, within 1.5%).
  */
 
+import { declaredBillingOf } from "../src/billing";
 import { isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
 import synced from "./prices.openrouter.json";
 import type { CostBreakdown, CostFigure, CostView, RunRow, TokenTotals } from "./api-types";
@@ -146,6 +147,17 @@ export const CONTRIBUTOR_PRICE: PriceRow = {
   note: "contributor tier — free; prompts and completions are shared with the provider",
 };
 
+/**
+ * An openai run whose roster entry declared `billing: "free"` — a stealth
+ * preview quoted at zero, say. It needs no price: the sync keeps no 0/0 row for
+ * a suffixless id, so the operator's word is the only thing that says free.
+ */
+export const DECLARED_FREE_PRICE: PriceRow = {
+  ...FREE_PRICE,
+  id: "declared-free",
+  note: "free by the roster entry's own billing — no list price is kept for it",
+};
+
 export const LOCAL_PRICE: PriceRow = {
   id: "local",
   ...ZERO,
@@ -198,7 +210,9 @@ export { isFreeSlug, isLocalBase } from "../src/model-cost";
  * reached for a `:free`/`-free` id — a *suffixless* id quoted at 0/0 would be
  * a paid model reading as free, which is the one shape the table must not
  * hold. `viewer-pricing.test.ts` asserts that invariant over every window in
- * the whole file.
+ * the whole file, and the sync never writes one (`mergeWindows`): a stealth id
+ * that really is free says so with its roster entry's `billing`, which the run
+ * records and `priceFor` reads.
  */
 export type SyncedRow = Pick<PriceRow, "input" | "output" | "cacheRead" | "cacheWrite">;
 
@@ -447,7 +461,7 @@ export const DELISTED_MODELS: Readonly<Record<string, string>> = {
 };
 
 /** What a run needs to carry to be priced. A subset of `RunRow`, so tests can be small. */
-export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driver" | "harness">;
+export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driver" | "harness" | "declaredBilling">;
 
 /**
  * The price row for a run, or null when we cannot name one.
@@ -458,7 +472,9 @@ export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driv
  * model only because the harness that ran it was `claude-code`, and
  * `qwen-3.8-27b` costs $0.99/Mtok only because its `apiBase` is Cerebras.
  *
- * The order is most-specific evidence first. Local base, then the free
+ * The order is most-specific evidence first. Local base, then a recorded
+ * `billing: "free"` (the operator's word; a recorded `paid` leaves the price to
+ * the rules below, which price the id), then the free
  * spellings (a `-free` slug is free on any host, so it precedes the provider
  * table), then the provider table — keyed on base *and* id, so it can never
  * fire for an OpenRouter run and cannot shadow a synced answer, while the
@@ -469,6 +485,7 @@ export type PriceableRun = Pick<RunRow, "model" | "apiBase" | "platform" | "driv
 export function priceFor(run: PriceableRun, at: number | null = null): PriceRow | null {
   const model = run.model ?? "";
   if (isLocalBase(run.apiBase)) return LOCAL_PRICE;
+  if (declaredBillingOf(run) === "free") return DECLARED_FREE_PRICE;
   if (isContributorSlug(model)) return CONTRIBUTOR_PRICE;
   if (isFreeSlug(model)) return FREE_PRICE;
   const provider = providerPrice(run, at);

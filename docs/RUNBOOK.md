@@ -153,7 +153,9 @@ the claude-code harness — and that driver runs claude models only; no claude i
 on the codex driver) is enforced on every roster entry at every re-read.
 Billing is derived rather than policed, so no model id is refused for what it
 costs; an entry the rules put on the wrong side — a stealth id quoted at zero
-with no free suffix, say — states `billing: "free"` or `"paid"`. Free models on
+with no free suffix, say — states `billing: "free"` or `"paid"`, and its runs
+carry that word to every reader. The price sync writes no zero row for a
+suffixless id, so such a preview is free only by that declaration. Free models on
 OpenRouter or OpenCode Zen share one rate-limit key per platform because those
 free tiers are pooled per upstream provider: a single sequential run per pool
 is both the polite and the effective shape — two runs on one pool just trip the
@@ -232,8 +234,10 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             flight. It is a THROTTLE, not a budget: how much a paid model runs is its tier, the
             same sentence a free model's budget is written in.
             Billing is derived per model (free slug / LAN apiBase / claude-code -> free, else
-            paid); `roster.<name>.billing: "free"|"paid"` overrides it. Billing
+            paid); `roster.<name>.billing: "free"|"paid"` overrides it. To the scheduler, billing
             says only WHERE a run may execute — the account class and the rate-limit key.
+            An openai entry's override is also recorded on each run it launches: the reader's
+            verdict (the ladders' "exclude free") follows it, and a recorded free needs no price.
             `runsPerEpisode`, `paid.runsPerEpisode` and `extras` are not 0.5 keys and are refused
             by name, as are `roster.<name>.runsPerEpisode` and `roster.<name>.tiers`.
             `routing` — the fleet-wide default for OpenRouter entries, same shape as an entry's.

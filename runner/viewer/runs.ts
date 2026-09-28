@@ -88,6 +88,7 @@ interface MetaShape {
     race?: number;
     class?: number;
     apiBase?: string;
+    billing?: string;
     objective?: string;
     campaign?: string;
     cell?: string;
@@ -265,6 +266,9 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.className = className(row.class);
     row.characterLabel = characterLabel(row.race, row.class);
     row.apiBase = str(meta.config?.apiBase);
+    // Launch config only, like `extra`: no column carries it.
+    const declared = meta.config?.billing;
+    if (declared === "free" || declared === "paid") row.declaredBilling = declared;
     /*
      * What the provider actually served, promoted onto the run mid-episode
      * (`Trajectory.recordResolved`). Read here and from the columns below;

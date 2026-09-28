@@ -52,6 +52,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readFleetConfig } from "../runner/src/config-store";
+import { isFreeSlug } from "../runner/src/model-cost";
 
 const CATALOGUE = "https://openrouter.ai/api/v1/models";
 const OUT = "runner/viewer/prices.openrouter.json";
@@ -100,6 +101,18 @@ export interface SyncedPrices {
   models: Record<string, SyncedWindow[]>;
 }
 
+/**
+ * A suffixless id the catalogue quotes at 0/0: a stealth preview, typically,
+ * free until the day it is revealed and starts billing. The table never holds
+ * one (a paid model reading as free is the failure it must not have), so the
+ * sync writes no such row; a preview that really is free is declared with its
+ * roster entry's `billing: "free"`, which the run records and the price table
+ * reads (`priceFor`).
+ */
+export function isZeroQuote(id: string, price: SyncedPrice): boolean {
+  return !isFreeSlug(id) && price.input === 0 && price.output === 0;
+}
+
 /** Whether two windows quote the same four rates. Both sides are already rounded. */
 export function sameRates(a: SyncedPrice, b: SyncedPrice): boolean {
   return a.input === b.input && a.output === b.output && a.cacheRead === b.cacheRead && a.cacheWrite === b.cacheWrite;
@@ -110,10 +123,12 @@ export function sameRates(a: SyncedPrice, b: SyncedPrice): boolean {
  * the catalogue now quotes something else.
  *
  * Pure, so the interesting behaviour is testable without a catalogue. Rules, in
- * order: an id the catalogue no longer prices is dropped (see the header); an
- * unchanged rate leaves the id's windows byte-identical; a changed rate appends
- * `{ ...fresh, from: today }`; and a change on a day that already has a window
- * replaces it, so a second sync in one day corrects rather than stacks.
+ * order: an id the catalogue no longer prices is dropped (see the header); a
+ * suffixless id quoted at 0/0 keeps the windows it had and gains none
+ * (`isZeroQuote`); an unchanged rate leaves the id's windows byte-identical; a
+ * changed rate appends `{ ...fresh, from: today }`; and a change on a day that
+ * already has a window replaces it, so a second sync in one day corrects
+ * rather than stacks.
  */
 export function mergeWindows(
   existing: Record<string, SyncedWindow[]> | undefined,
@@ -124,6 +139,10 @@ export function mergeWindows(
   for (const id of Object.keys(fresh).sort()) {
     const price = fresh[id]!;
     const prior = existing?.[id] ?? [];
+    if (isZeroQuote(id, price)) {
+      if (prior.length > 0) out[id] = prior.map((w) => ({ ...w }));
+      continue;
+    }
     const latest = prior[prior.length - 1];
     if (latest === undefined) {
       // First sighting: no `from`, so it also prices every run older than it.
@@ -250,6 +269,9 @@ export async function main(): Promise<void> {
     prior = undefined; // no file yet: every id starts on a first, undated window
   }
   const windows = mergeWindows(prior, models, today);
+  const zeroQuoted = Object.entries(models)
+    .filter(([id, price]) => isZeroQuote(id, price))
+    .map(([id]) => id);
   const appended = Object.entries(windows)
     .filter(([, ws]) => ws[ws.length - 1]?.from === today)
     .map(([id]) => id);
@@ -261,6 +283,11 @@ export async function main(): Promise<void> {
     // A rate moved. Earlier runs keep the window they billed at; only runs from
     // today forward read the new one.
     console.log(`rate changed, new window from ${today} (earlier runs keep the old rate): ${appended.join(", ")}`);
+  }
+  if (zeroQuoted.length > 0) {
+    // Not a miss: the catalogue prices these at zero, and the table keeps no
+    // zero row for a suffixless id. A run of one is free only by its entry's billing.
+    console.log(`quoted at 0/0 without a free suffix (no row written; declare billing "free" on the roster entry): ${zeroQuoted.join(", ")}`);
   }
   if (missing.length > 0) {
     // Most of these are OpenCode Zen / local ids, which OpenRouter never

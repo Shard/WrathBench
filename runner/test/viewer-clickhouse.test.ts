@@ -45,7 +45,7 @@ afterAll(() => {
 const NOW = 2_000_000;
 
 /** One run, written the way the runner writes one. */
-function writeRun(runsDir: string, runId: string): string {
+function writeRun(runsDir: string, runId: string, over: Record<string, unknown> = {}): string {
   const dir = join(runsDir, runId);
   let clock = 1_000_000;
   const traj = new Trajectory(dir, { now: () => clock++ });
@@ -66,6 +66,7 @@ function writeRun(runsDir: string, runId: string): string {
       extra: true,
       account: "RUNNER",
       watchdogs: { episodeMs: 5_400_000 },
+      ...over,
     } as never,
     comparability: { episode: "e90", harness: "wrathbench", effort: "medium" } as never,
   });
@@ -111,6 +112,17 @@ describe("a run row off the store is the run row off the files", () => {
     const fromStore = runRowOf(rows[0]!, latest.get("run-1"), NOW);
     const fromFiles = readRun(runsDir, "run-1", NOW);
     expect(JSON.stringify(fromStore)).toBe(JSON.stringify(fromFiles));
+  });
+
+  test("a run's recorded billing reads back on both paths, and a run without one carries none", async () => {
+    const dir = tmpRoot();
+    writeRun(dir, "run-declared", { billing: "free" });
+    const declaredStore = localRunStore(dir);
+    const [rows, latest] = await Promise.all([declaredStore.runRows(), declaredStore.latestStates()]);
+    const fromFiles = readRun(dir, "run-declared", NOW);
+    expect(fromFiles?.declaredBilling).toBe("free");
+    expect(JSON.stringify(runRowOf(rows[0]!, latest.get("run-declared"), NOW))).toBe(JSON.stringify(fromFiles));
+    expect(readRun(runsDir, "run-1", NOW)).not.toHaveProperty("declaredBilling");
   });
 
   test("the stored item JSON reads back whole, old-shape rows included", async () => {

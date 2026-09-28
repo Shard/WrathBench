@@ -16,9 +16,10 @@
  *
  * A roster entry may override the verdict with `billing` for the case the
  * rules cannot see: a stealth id priced at zero with no free suffix, or a key
- * on a paid plan for a free-looking id. The override is the scheduler's alone:
- * a stored run carries no roster entry, so `runBilling` and the price table
- * read that run by the rules above.
+ * on a paid plan for a free-looking id. On the openai driver the override is
+ * also recorded on each run it launches (`RunConfig.billing`), so the reader's
+ * verdict reads that run the same way and the price table prices a recorded
+ * `free` as free rather than looking the id up.
  *
  * This is the SCHEDULER's verdict — "does this consume the paid concurrency
  * budget". The reader's verdict, "did we pay for this run", is `runBilling` in

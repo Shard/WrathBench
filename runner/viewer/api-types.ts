@@ -260,6 +260,13 @@ export interface RunRow {
   /** The Claude Code CLI's own version, from the same record. Null on any other driver. */
   cliVersion: string | null;
   apiBase: string | null;
+  /**
+   * The roster entry's own `billing`, as the run recorded it at launch
+   * (`RunConfig.billing`). Absent on almost every run: billing is derived. The
+   * reader's verdict and the price table honour it on the openai driver only
+   * (`declaredBillingOf` in `runner/src/billing.ts`).
+   */
+  declaredBilling?: "free" | "paid";
   harnessVersion: string | null;
   /**
    * The stamped comparability tuple, or null for a run whose metadata predates
@@ -1625,7 +1632,8 @@ export interface ResultRun {
   expectedCost?: CostFigure | null;
   /**
    * Whether this run cost the operator money (`runner/src/billing.ts`). Derived
-   * from the model id, the api base, and the harness — a subscription counts as
+   * from the model id, the api base, and the harness, unless an openai run
+   * recorded its roster entry's own `billing` — a subscription counts as
    * paid here, which is deliberately the opposite of the scheduler's verdict in
    * `runner/src/model-cost.ts`; that one answers "does this consume the paid
    * concurrency budget". The ladder's "exclude free" toggle reads this.

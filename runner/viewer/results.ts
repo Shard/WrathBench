@@ -450,6 +450,7 @@ export function resultRunOf(
       platform: run.platform,
       harness: run.harness,
       driver: run.driver,
+      declaredBilling: run.declaredBilling ?? null,
     }),
     areas,
     achievements,

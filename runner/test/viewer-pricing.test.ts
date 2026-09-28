@@ -17,7 +17,7 @@ import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
 import { CLAUDE_PRICES, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, codexPrice, costOf, priceFor, providerPrice, runCost, syncedPrice, windowAt } from "../viewer/pricing";
 import { isFreeSlug } from "../src/model-cost";
-import { catalogueIds, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
+import { catalogueIds, isZeroQuote, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 
@@ -88,6 +88,21 @@ describe("priceFor", () => {
   test("a suffixless id never rides the free tier", () => {
     // It is priced from the synced table or not at all.
     expect(priceFor({ model: "stealth/unlisted-preview", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" })).toBeNull();
+  });
+
+  test("a run that recorded billing free needs no price, on the openai driver only", () => {
+    const bunny: PriceableRun = { model: "stealth/space-bunny-alpha", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" };
+    expect(priceFor(bunny)).toBeNull();
+    const declared = { ...bunny, declaredBilling: "free" as const };
+    expect(priceFor(declared)).toMatchObject({ id: "declared-free", input: 0, output: 0, asIfMetered: true });
+    // So its estimate is a named $0, not a blank telling the operator to sync.
+    const c = runCost({ run: declared, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 10_000 }), reportedUsd: null });
+    expect(c.expected).toMatchObject({ usd: 0, basis: "list-price", priceId: "declared-free" });
+    expect(c.expected.note).not.toContain("sync-prices");
+    // A recorded paid leaves the price to the rules, which price the id.
+    expect(priceFor({ ...bunny, model: "z-ai/glm-5.2:free", declaredBilling: "paid" })?.id).toBe("free-tier");
+    // A subscription run's bill is the subscription: a recorded free is not read.
+    expect(priceFor({ ...declared, driver: "codex", harness: "codex" })?.id).not.toBe("declared-free");
   });
 
   test("an unknown paid model has no price at all — tokens only, never a guess", () => {
@@ -335,6 +350,21 @@ describe("the hand-held provider table", () => {
     expect(mergeWindows(smuggled, catalogue, "2026-09-09")["qwen-3.8-27b"]).toBeUndefined();
     // While the hand table still answers the same run after that sync.
     expect(priceFor(cerebras)?.input).toBe(0.99);
+  });
+
+  test("the sync writes no 0/0 row for a suffixless id, and keeps what it had", () => {
+    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const paid = { input: 0.3, output: 1.2, cacheRead: 0.3, cacheWrite: 0.3 };
+    expect(isZeroQuote("stealth/space-bunny-alpha", zero)).toBe(true);
+    expect(isZeroQuote("z-ai/glm-5.2:free", zero)).toBe(false);
+    expect(isZeroQuote("stealth/space-bunny-alpha", paid)).toBe(false);
+    // A stealth preview's first sighting at zero: no row at all.
+    expect(mergeWindows({}, { "stealth/space-bunny-alpha": zero }, "2026-09-29")["stealth/space-bunny-alpha"]).toBeUndefined();
+    // A paid id quoted at zero later keeps its windows and gains none.
+    const before = { "vendor/big": [{ ...paid }] };
+    expect(mergeWindows(before, { "vendor/big": zero }, "2026-09-29")["vendor/big"]).toEqual([paid]);
+    // A free slug at zero is written as ever; `priceFor` answers it first anyway.
+    expect(mergeWindows({}, { "z-ai/glm-5.2:free": zero }, "2026-09-29")["z-ai/glm-5.2:free"]).toEqual([zero]);
   });
 });
 

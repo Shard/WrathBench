@@ -7,8 +7,9 @@
  * is `latestSeries` over the series the runs carry (the shell's selector
  * resolves the same token the same way), and "free" is `ResultRun.billing ===
  * "free"` through `filterRuns` — the runner's own billing verdict
- * (`runner/src/billing.ts`: a `:free` endpoint or local hardware is free, a
- * claude-code or codex subscription counts as paid). No model slug is inspected here.
+ * (`runner/src/billing.ts`: a `:free` endpoint, local hardware or an openai run
+ * whose roster entry declared `billing: "free"` is free, a claude-code or codex
+ * subscription counts as paid). No model slug is inspected here.
  */
 
 import type { ResultRun } from "../api/client";

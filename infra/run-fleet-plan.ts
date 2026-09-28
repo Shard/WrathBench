@@ -537,7 +537,7 @@ export function jobSpawn(
   const entries: RosterSpec[] = [];
   // A resume is its own witness too: the run was launched, so its ref is runnable.
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
-    const { tier: _tier, idle: _idle, billing: _billing, ...entry } = roster[r]!;
+    const { tier: _tier, idle: _idle, ...entry } = roster[r]!;
     // A probe keeps only what identifies the model; the campaign owns the rest.
     const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, wiki: _wk, ...credentials } = entry;
     const isProbe = probeDims !== undefined;

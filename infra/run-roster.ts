@@ -11,7 +11,7 @@
  * the config store; a hand-written roster is the ad-hoc path.
  *
  * Every entry is config: `model`, `driver` (openai | claude-code),
- * `account`, `effort`, `apiBase`/`apiKeyEnv` (openai only),
+ * `account`, `effort`, `apiBase`/`apiKeyEnv`/`billing` (openai only),
  * `race`/`class`, `episodeMs`. No name: the model names its own character and
  * the run records what it chose. Everything but `model` has a default, so the old shape — a bare
  * list of `{ "model": ... }` — still means exactly what it meant before.
@@ -187,6 +187,8 @@ export interface Resolved {
   apiKeyEnv: string;
   /** The declared routing block, or undefined for "the entry said nothing". */
   routing: RoutingSpec | undefined;
+  /** The entry's own billing (openai only), recorded on the run; undefined is derived. */
+  billing: "free" | "paid" | undefined;
   /** The subscription lane, by env var NAME; undefined is the default lane. */
   tokenEnv: string | undefined;
   runId: string;
@@ -516,6 +518,8 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // `run-roster.ts` never went through `parseFleet`, and the shorthands
       // must mean the same thing on both paths.
       routing: s.routing === undefined ? undefined : parseRouting(s.routing, `roster entry ${s.model}`),
+      // A subscription driver's bill is the subscription, so only openai records one.
+      billing: driver === "openai" ? s.billing : undefined,
       // Only the subscription drivers (claude-code, codex) have a lane to bill.
       tokenEnv: driver === "claude-code" || driver === "codex" ? s.tokenEnv : undefined,
       // Effort is part of the run's identity, so it is part of the derived id:
@@ -613,6 +617,8 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
     // the model slug, so an unstated routing produces the argv it always did
     // and every pinned roster.test expectation stays what it was.
     if (spec.routing !== undefined) argv.push("--routing-json", JSON.stringify(spec.routing));
+    // Only when the entry stated one, so every other argv is unchanged.
+    if (spec.billing !== undefined) argv.push("--billing", spec.billing);
   }
   // The subscription lane, by NAME. Emitted only when it is not the default, so
   // every argv a pre-lane roster produced is unchanged.

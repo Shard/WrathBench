@@ -483,6 +483,9 @@ export function runRowOf(r: RunTableRow, latest: LatestState | undefined, now: n
     bytes: r.trajectory_bytes === 0 ? null : r.trajectory_bytes,
     live: terminationReason === null && mtime !== null && now - mtime < LIVE_WINDOW_MS,
   };
+  // Launch config only, like `extra`, and absent unless stated — as `readRun` leaves it.
+  const declared = config["billing"];
+  if (declared === "free" || declared === "paid") row.declaredBilling = declared;
   return row;
 }
 

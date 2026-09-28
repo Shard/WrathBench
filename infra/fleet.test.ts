@@ -622,6 +622,21 @@ describe("roster policy", () => {
     expect(concurrencyKeyOfRef(derived.roster, "bunny", "paid")).toBe("openai");
   });
 
+  test("an entry's own billing rides the spawn to the run, so the reader sees what the scheduler saw", () => {
+    const config = parseFleet({
+      accounts: { pool: ["R"] },
+      roster: {
+        bunny: { tier: "t0", model: "stealth/space-bunny-alpha", billing: "free" },
+        glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
+      },
+      queue: [{ ref: "bunny", episode: "freeplay" }, { ref: "glm", episode: "freeplay" }],
+      policy: {},
+    });
+    expect(jobSpawn(config.jobs[0]!, config.roster, "R", "20260929").entries[0]).toMatchObject({ billing: "free" });
+    // An entry that stated none carries none: the run derives it, as ever.
+    expect(jobSpawn(config.jobs[1]!, config.roster, "R", "20260929").entries[0]!.billing).toBeUndefined();
+  });
+
   test("a local/self-hosted openai entry validates", () => {
     expect(
       validateEntries("roster:x", [

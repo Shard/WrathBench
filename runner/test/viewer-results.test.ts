@@ -332,6 +332,12 @@ describe("resultRunOf", () => {
     expect(e.levels).toHaveLength(2);
   });
 
+  test("the billing verdict reads the run's recorded billing, so a declared-free stealth id is free", () => {
+    const bunny = { model: "stealth/space-bunny-alpha", driver: "openai", platform: "openrouter" };
+    expect(resultRunOf(run(bunny), [], []).billing).toBe("paid");
+    expect(resultRunOf(run({ ...bunny, declaredBilling: "free" }), [], []).billing).toBe("free");
+  });
+
   test("the listing facts ride on the row, and default to null when not supplied", () => {
     const bare = resultRunOf(run({ character: "Fixturely", pauseReason: "quota-exhausted" }), [], []);
     expect(bare.character).toBe("Fixturely");

@@ -9,7 +9,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { runBilling } from "../src/billing";
+import { loadRunConfig } from "../src/config";
 import { billingOf } from "../src/model-cost";
+import { configFromArgs } from "../src/run";
 
 describe("runBilling", () => {
   const cases: { why: string; run: Parameters<typeof runBilling>[0]; want: "free" | "paid" }[] = [
@@ -92,8 +94,32 @@ describe("runBilling", () => {
     const bunny = { model: "stealth/space-bunny-alpha" };
     expect(billingOf(bunny)).toBe("paid");
     expect(billingOf({ ...bunny, billing: "free" })).toBe("free");
-    // The override is the scheduler's; a stored run carries no roster entry.
-    expect(runBilling({ ...bunny, platform: "openrouter", harness: "wrathbench" })).toBe("paid");
+    // The run records the override at launch, and the reader reads it the same way.
+    const stored = { ...bunny, platform: "openrouter", harness: "wrathbench", driver: "openai" };
+    expect(runBilling({ ...stored, declaredBilling: "free" })).toBe("free");
+    // A run that recorded none is read by the rules, exactly as before.
+    expect(runBilling(stored)).toBe("paid");
+    expect(runBilling({ ...stored, declaredBilling: null })).toBe("paid");
+  });
+
+  test("a recorded billing wins on the openai driver, both ways, and nowhere else", () => {
+    const openai = { platform: "openrouter", harness: "wrathbench", driver: "openai" };
+    expect(runBilling({ ...openai, model: "qwen/qwen3-coder:free", declaredBilling: "paid" })).toBe("paid");
+    expect(runBilling({ ...openai, model: "qwen3-30b", apiBase: "http://192.168.100.20:1234/v1", declaredBilling: "paid" })).toBe("paid");
+    // A subscription's bill is the subscription, whatever a run says.
+    expect(runBilling({ model: "sonnet", harness: "claude-code", driver: "claude-code", declaredBilling: "free" })).toBe("paid");
+    expect(runBilling({ model: "gpt-6-astra", harness: "codex", driver: "codex", declaredBilling: "free" })).toBe("paid");
+    // No driver on the record: the rules decide.
+    expect(runBilling({ model: "stealth/space-bunny-alpha", declaredBilling: "free" })).toBe("paid");
+  });
+
+  test("the runner records a launch's billing and a resume keeps it", () => {
+    expect(configFromArgs(["--model", "stealth/space-bunny-alpha", "--billing", "free"]).billing).toBe("free");
+    expect(configFromArgs(["--model", "stealth/space-bunny-alpha"]).billing).toBeUndefined();
+    expect(() => configFromArgs(["--model", "m", "--billing", "cheap"])).toThrow(/billing/);
+    // `--resume` rebuilds the config from meta.json through the same schema.
+    const launched = configFromArgs(["--model", "stealth/space-bunny-alpha", "--billing", "free"]);
+    expect(loadRunConfig(JSON.parse(JSON.stringify(launched))).billing).toBe("free");
   });
 
   test("an explicit billing wins over every derived rule, both ways", () => {

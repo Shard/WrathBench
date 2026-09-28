@@ -226,6 +226,9 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     wiki: flag(args["wiki"]),
     // Identity as well: a resumed extra is still an extra.
     extra: flag(args["extra"]),
+    // The roster entry's own billing, when it stated one; identity like the
+    // rest, so a resume keeps the side it launched on.
+    billing: typeof args["billing"] === "string" ? args["billing"] : undefined,
     // A probe campaign's identity, both or neither.
     campaign: typeof args["campaign"] === "string" ? args["campaign"] : undefined,
     cell: typeof args["cell"] === "string" ? args["cell"] : undefined,
