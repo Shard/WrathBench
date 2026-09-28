@@ -17,7 +17,8 @@
  * - a local/LAN api base, or a run stamped `platform: "local"`, is free — the
  *   operator's own hardware;
  * - a `:free` / `-free` / `-contributor-free` slug is free;
- * - everything else is paid.
+ * - everything else is paid — a roster entry's `billing` override included,
+ *   since a stored run does not carry it.
  *
  * A run that recorded no model at all still gets a verdict, because every other
  * clause can still answer; with nothing to go on it reads `paid`, which is the
