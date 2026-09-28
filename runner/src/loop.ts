@@ -105,7 +105,8 @@ export function stopRequestOf(signal: AbortSignal | undefined): StopRequest | nu
 
 export type LoopOutcome =
   | { kind: "terminated"; reason: TerminationReason; detail?: string }
-  | { kind: "paused"; reason: PauseReason; detail?: string };
+  /** `notBefore`: the provider's stated reset, when the adapter carried one (adapter.ts). */
+  | { kind: "paused"; reason: PauseReason; detail?: string; notBefore?: number };
 
 export interface ContextBuilderOptions {
   config: RunConfig & { runId: string };
@@ -1086,8 +1087,13 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
-        trajectory.setPause(runId, outcome.reason, outcome.detail, watchdogs.elapsedMs());
-        return { kind: "paused", reason: outcome.reason, detail: outcome.detail };
+        trajectory.setPause(runId, outcome.reason, outcome.detail, watchdogs.elapsedMs(), outcome.notBefore);
+        return {
+          kind: "paused",
+          reason: outcome.reason,
+          detail: outcome.detail,
+          ...(outcome.notBefore !== undefined ? { notBefore: outcome.notBefore } : {}),
+        };
       }
       watchdogs.noteModelOutput();
       const assistant: ChatMessage = {

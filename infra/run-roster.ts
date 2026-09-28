@@ -736,6 +736,12 @@ export interface DeferEntry {
    * flag first.
    */
   tainted?: boolean;
+  /**
+   * `notBefore` is the provider's own stated reset, not a rung (`resetDefer`):
+   * the spec waits for it once, the defer count is left as it was, and the
+   * non-loop retry queue leaves it to the supervisor.
+   */
+  reset?: boolean;
 }
 
 export type AttemptPlan =
@@ -821,6 +827,34 @@ export function nextDefer(
   return { runId, notBefore: now + backoffMs(defers), defers, reason };
 }
 
+/**
+ * Hold a spec until the reset its provider stated (the pause mark's
+ * `notBefore`, adapter.ts). Not a defer: the count is carried over unchanged,
+ * because a refusal the provider announced says nothing the ladder measures,
+ * and every attempt before the reset would only be refused again. Pure, like
+ * `nextDefer`.
+ */
+export function resetDefer(prev: DeferEntry | undefined, until: number, runId: string, reason: string): DeferEntry {
+  return { runId, notBefore: until, defers: prev?.defers ?? 0, reason, reset: true };
+}
+
+/**
+ * The non-loop retry queue: the deferred map, materialised, each spec resumed
+ * on the run id that paused. A tainted spec is not in it, and neither is one
+ * waiting for its provider's stated reset: a retry ten minutes on would be
+ * refused again and add a pause to the run's streak, so the process exits
+ * and the supervisor resumes the run at the reset.
+ */
+export function retryQueueOf(roster: readonly Attempt[], deferred: ReadonlyMap<string, DeferEntry>): Attempt[] {
+  const queue: Attempt[] = [];
+  for (const a of roster) {
+    const entry = deferred.get(a.spec.runId);
+    if (entry === undefined || entry.tainted === true || entry.reset === true) continue;
+    queue.push({ spec: { ...a.spec, runId: entry.runId }, resume: true });
+  }
+  return queue;
+}
+
 // ------------------------------------------------------------ defer sidecar
 //
 // Defer state has to outlive the process: a supervisor restart or a config
@@ -857,6 +891,7 @@ export function parseDefers(text: string): Map<string, DeferEntry> {
       defers: e.defers,
       reason: typeof e.reason === "string" ? e.reason : "unknown",
       ...(e.tainted === true ? { tainted: true } : {}),
+      ...(e.reset === true ? { reset: true } : {}),
     });
   }
   return out;
@@ -968,6 +1003,18 @@ function metaCharacter(runId: string): string | undefined {
   try {
     const meta = JSON.parse(readFileSync(path, "utf8")) as { config?: { character?: string } };
     return meta.config?.character;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The provider's stated reset on the run's pause mark (meta.json `pause.notBefore`), when it carried one. */
+function pauseResetOf(runId: string): number | undefined {
+  const path = join(runDir(runId), "meta.json");
+  if (!existsSync(path)) return undefined;
+  try {
+    const meta = JSON.parse(readFileSync(path, "utf8")) as { pause?: { notBefore?: unknown } };
+    return typeof meta.pause?.notBefore === "number" ? meta.pause.notBefore : undefined;
   } catch {
     return undefined;
   }
@@ -1364,7 +1411,7 @@ const RATE_PAUSES = new Set(["rate-limited", "quota-exhausted", "window-exhauste
 
 // ------------------------------------------------------------------ main
 
-interface Attempt {
+export interface Attempt {
   spec: Resolved;
   resume: boolean;
   /**
@@ -1377,11 +1424,15 @@ interface Attempt {
   doneCycle1?: boolean;
 }
 
-/** @returns true when the spec is finished with (done or given up on). */
+/**
+ * `done` when the spec is finished with (done or given up on), `defer` when it
+ * goes on the defer ladder, and the provider's stated reset when it waits for
+ * that instead.
+ */
 async function attemptSpec(
   spec: Resolved,
   opts: { resume: boolean; deadline: number | undefined; dryRun: boolean },
-): Promise<"done" | "defer"> {
+): Promise<"done" | "defer" | { resetAt: number; reason: string }> {
   let resume = opts.resume;
   // run-episode.sh's driver preflight does not run on the in-container path, and
   // its one load-bearing check is this: without the token every claude episode
@@ -1557,6 +1608,27 @@ async function attemptSpec(
       });
       await freeSession(spec, `paused ${verdict.reason}`, opts.dryRun);
       return "done";
+    }
+
+    // The provider stated when its allowance comes back (the pause mark's
+    // `notBefore`, adapter.ts). Every retry before that instant is a refusal
+    // it has already announced, and each one adds a pause to the streak the
+    // supervisor's ladder reads — the in-place retries and the retry cycles
+    // together spent a whole ladder on one daily allowance, hours before its
+    // reset. So none: the session is freed and the spec waits for the reset
+    // once, off the ladder, and the supervisor resumes it then.
+    const reset = pauseResetOf(spec.runId);
+    if (reset !== undefined && reset > Date.now()) {
+      say(`wait ${spec.model} (${spec.runId}): ${verdict.reason} until the provider's reset at ${new Date(reset).toISOString()}`);
+      record({
+        runId: spec.runId,
+        model: spec.model,
+        outcome: "deferred",
+        ...(level !== undefined ? { level } : {}),
+        detail: `${verdict.reason}; provider reset at ${new Date(reset).toISOString()}, waited for once, off the defer ladder; turns ${turns}`,
+      });
+      await freeSession(spec, `waiting for the provider reset (${verdict.reason})`, opts.dryRun);
+      return { resetAt: reset, reason: verdict.reason };
     }
 
     const early = turns < EARLY_TURN_THRESHOLD;
@@ -1782,6 +1854,8 @@ async function main(): Promise<void> {
         `\n        the shared account, so a resumed character is recreated at level 1.` +
         `\n        non-loop retry queue: up to ${MAX_RETRY_CYCLES} cycle(s), ${CYCLE_GAP_MS / 60_000}m gap before each (loop mode` +
         `\n        resumes in the rotation instead)` +
+        `\n        a pause whose provider stated its reset -> no in-place retry, no retry cycle and no defer:` +
+        `\n        the spec waits for the reset once, and the supervisor resumes it then` +
         `\n        roster log: ${logPath}`,
     );
     return;
@@ -1922,6 +1996,8 @@ async function main(): Promise<void> {
       if (res === "defer") {
         const reason = readRunRow(target.runId)?.pause_reason ?? "rate-limited";
         deferred.set(a.spec.runId, nextDefer(deferred.get(a.spec.runId), Date.now(), target.runId, reason));
+      } else if (res !== "done") {
+        deferred.set(a.spec.runId, resetDefer(deferred.get(a.spec.runId), res.resetAt, target.runId, res.reason));
       } else {
         // A completed episode clears the count: the ladder measures CONSECUTIVE
         // defers, so a model that gets one turn on the board starts over at 1m.
@@ -1948,16 +2024,10 @@ async function main(): Promise<void> {
     if (stopping || (deadline !== undefined && Date.now() >= deadline)) break;
   }
 
-  // The retry queue is the deferred map, materialised. It is only *reached* in
-  // non-loop runs (a --loop run exits this point only on stop or deadline, both
-  // of which disable the loop below); a looped run has already been resuming
-  // these in place, cycle after cycle. Resume targets the stored run id.
-  let queue: Attempt[] = [];
-  for (const a of roster) {
-    const entry = deferred.get(a.spec.runId);
-    if (entry === undefined || entry.tainted === true) continue;
-    queue.push({ spec: { ...a.spec, runId: entry.runId }, resume: true });
-  }
+  // Only *reached* in non-loop runs (a --loop run exits this point only on
+  // stop or deadline, both of which disable the loop below); a looped run has
+  // already been resuming these in place, cycle after cycle.
+  let queue = retryQueueOf(roster, deferred);
 
   for (let cycle = 1; cycle <= MAX_RETRY_CYCLES && queue.length > 0 && !stopping; cycle++) {
     if (deadline !== undefined && Date.now() >= deadline) break;
@@ -1977,6 +2047,13 @@ async function main(): Promise<void> {
       }
       const res = await attemptSpec(a.spec, { resume: true, deadline, dryRun: false });
       if (res === "defer") next.push(a);
+      else if (res !== "done") {
+        // Out of the queue, and the sidecar says why: keyed on the spec's
+        // cycle-1 id, which the queue entry no longer carries.
+        for (const [key, e] of deferred) {
+          if (e.runId === a.spec.runId) deferred.set(key, resetDefer(e, res.resetAt, a.spec.runId, res.reason));
+        }
+      }
     }
     queue = next;
   }

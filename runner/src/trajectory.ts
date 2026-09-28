@@ -346,6 +346,11 @@ export interface PauseMark {
   at: number;
   /** Episode wall clock spent across every segment up to this pause. */
   episodeElapsedMs: number;
+  /**
+   * The provider's stated reset, when the adapter carried one: the supervisor
+   * resumes at this instant, off the defer ladder (`resumeNotBefore`).
+   */
+  notBefore?: number;
 }
 
 export interface TrajectoryRecord {
@@ -782,7 +787,9 @@ export class Trajectory {
   /**
    * Record a pause. `episodeElapsedMs` rides on the record when the caller
    * knows it (run.ts does; the drivers pass what their watchdogs say) so the
-   * pause line in the trajectory reads as "paused at 41m of 90m".
+   * pause line in the trajectory reads as "paused at 41m of 90m". `notBefore`
+   * rides on it when the provider stated its reset: the pause streak reads it
+   * off this record, and a pause that carries one is not on the ladder.
    *
    * One pause per segment: a row that already carries a `pause_reason` is
    * left as it is and no second record is appended. The signal handler in
@@ -793,10 +800,16 @@ export class Trajectory {
    * segment. `--resume` clears the row (`clearPause`), so the next segment's
    * pause is recorded again.
    */
-  setPause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number): boolean {
+  setPause(runId: string, reason: PauseReason, detail?: string, episodeElapsedMs?: number, notBefore?: number): boolean {
     const row = this.db.query(`SELECT pause_reason FROM run WHERE run_id = ?`).get(runId) as { pause_reason?: unknown } | null;
     if (row !== null && typeof row.pause_reason === "string" && row.pause_reason !== "") return false;
-    this.append({ t: "pause", reason, detail, ...(episodeElapsedMs !== undefined ? { episodeElapsedMs } : {}) });
+    this.append({
+      t: "pause",
+      reason,
+      detail,
+      ...(episodeElapsedMs !== undefined ? { episodeElapsedMs } : {}),
+      ...(notBefore !== undefined ? { notBefore } : {}),
+    });
     this.db.query(`UPDATE run SET pause_reason = ? WHERE run_id = ?`).run(reason, runId);
     return true;
   }
@@ -809,7 +822,7 @@ export class Trajectory {
    * the resume cadence counts from. `meta` is the run's meta as it stands.
    */
   pauseWithMark(runId: string, mark: PauseMark, meta: RunMeta): boolean {
-    if (!this.setPause(runId, mark.reason, mark.detail, mark.episodeElapsedMs)) return false;
+    if (!this.setPause(runId, mark.reason, mark.detail, mark.episodeElapsedMs, mark.notBefore)) return false;
     this.writeMeta({ ...meta, pause: mark });
     return true;
   }

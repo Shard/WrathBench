@@ -2,7 +2,7 @@
  * The OpenAI-compatible adapter against a fake fetch. No network, no model.
  */
 import { describe, expect, test } from "bun:test";
-import { APP_TITLE, APP_URL, OpenAiChatAdapter, USER_AGENT, parseRetryAfter } from "../src/adapter";
+import { APP_TITLE, APP_URL, OpenAiChatAdapter, PROVIDER_RESET_FLOOR_MS, USER_AGENT, parseRetryAfter, statedResetOf } from "../src/adapter";
 
 function adapterReturning(body: unknown): OpenAiChatAdapter {
   return new OpenAiChatAdapter({
@@ -560,5 +560,94 @@ describe("OpenAiChatAdapter budget pauses", () => {
     await expect(adapterPlaying([status(400, "bad request")]).complete(req)).rejects.toThrow(
       /HTTP 400/,
     );
+  });
+});
+
+describe("OpenAiChatAdapter stated reset", () => {
+  const req = { messages: [], tools: [] };
+  const NOW = Date.UTC(2026, 8, 21, 16, 47);
+  const MIDNIGHT = Date.UTC(2026, 8, 22);
+
+  /** An adapter at a fixed clock, playing a scripted list of responses. */
+  function adapterAt(script: Response[]): OpenAiChatAdapter {
+    let i = 0;
+    return new OpenAiChatAdapter({
+      baseUrl: "http://model.invalid/v1",
+      apiKey: "k",
+      model: "m",
+      maxAttempts: script.length,
+      now: () => NOW,
+      fetchImpl: Object.assign(() => Promise.resolve(script[i++]!), { preconnect: () => {} }) as unknown as typeof fetch,
+      sleep: () => Promise.resolve(),
+    });
+  }
+
+  /** OpenRouter's free-tier daily refusal, shaped as the nemotron-super stream saw it. */
+  const dailyLimit = (reset: string, message = "Rate limit exceeded: free-models-per-day-high-balance. "): string =>
+    JSON.stringify({
+      error: {
+        message,
+        code: 429,
+        metadata: {
+          headers: { "X-RateLimit-Limit": "1000", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset },
+          limit_source: "openrouter_free_tier_daily",
+        },
+      },
+      user_id: "user_x",
+    });
+
+  test("a spent daily allowance pauses with its reset carried as notBefore", async () => {
+    const out = await adapterAt([status(429, dailyLimit(String(MIDNIGHT))), status(429, dailyLimit(String(MIDNIGHT)))]).complete(req);
+    expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
+    expect(out.kind === "pause" && out.notBefore).toBe(MIDNIGHT);
+  });
+
+  test("the reset is read from the whole body, not from the detail cut at 500 characters", async () => {
+    const body = dailyLimit(String(MIDNIGHT), `Rate limit exceeded: ${"x".repeat(600)}`);
+    const out = await adapterAt([status(429, body)]).complete(req);
+    expect(out.kind === "pause" && out.detail).not.toContain("X-RateLimit-Reset");
+    expect(out.kind === "pause" && out.notBefore).toBe(MIDNIGHT);
+  });
+
+  test("a response header in epoch seconds is read too", async () => {
+    const limited = new Response("slow down", { status: 429, headers: { "x-ratelimit-reset": String(MIDNIGHT / 1_000) } });
+    const out = await adapterAt([limited]).complete(req);
+    expect(out.kind === "pause" && out.notBefore).toBe(MIDNIGHT);
+  });
+
+  test("the same refusal inside a 2xx body carries its reset", async () => {
+    const out = await adapterAt([status(200, dailyLimit(String(MIDNIGHT))), status(200, dailyLimit(String(MIDNIGHT)))]).complete(req);
+    expect(out.kind === "pause" && out.notBefore).toBe(MIDNIGHT);
+  });
+
+  test("a per-minute window is not carried: the ladder keeps a saturated key from resuming every minute", async () => {
+    const out = await adapterAt([status(429, dailyLimit(String(NOW + 60_000), "Rate limit exceeded: free-models-per-min. "))]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && "notBefore" in out).toBe(false);
+    // The floor itself is carried.
+    const atFloor = await adapterAt([status(429, dailyLimit(String(NOW + PROVIDER_RESET_FLOOR_MS)))]).complete(req);
+    expect(atFloor.kind === "pause" && atFloor.notBefore).toBe(NOW + PROVIDER_RESET_FLOOR_MS);
+  });
+
+  test("a reset in the past, beyond 48 hours, or given as a delta falls back to the ladder", async () => {
+    for (const reset of [String(NOW - 60_000), String(NOW + 49 * 3_600_000), "3600", "soon"]) {
+      const out = await adapterAt([status(429, dailyLimit(reset))]).complete(req);
+      expect(out.kind).toBe("pause");
+      expect(out.kind === "pause" && "notBefore" in out).toBe(false);
+    }
+  });
+
+  test("a pause that no 429 or 402 caused carries no reset", async () => {
+    const out = await adapterAt([status(500, "boom"), status(500, "boom")]).complete(req);
+    expect(out.kind).toBe("pause");
+    expect(out.kind === "pause" && "notBefore" in out).toBe(false);
+  });
+
+  test("statedResetOf: the echoed header first, any key casing, and nothing when neither states one", () => {
+    const headers = new Headers({ "X-RateLimit-Reset": "1790000000" });
+    expect(statedResetOf(headers, { error: { metadata: { headers: { "x-ratelimit-reset": 1790035200000 } } } })).toBe(1790035200000);
+    expect(statedResetOf(headers, { error: { message: "no metadata" } })).toBe(1790000000 * 1_000);
+    expect(statedResetOf(new Headers(), "slow down")).toBeNull();
+    expect(statedResetOf(new Headers(), null)).toBeNull();
   });
 });

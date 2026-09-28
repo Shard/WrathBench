@@ -596,6 +596,21 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("a provider's stated reset rides from the adapter onto the outcome and the pause record", async () => {
+    const reset = Date.UTC(2026, 8, 22);
+    const pausing: ChatAdapter = {
+      label: "pausing",
+      complete: (_req: ChatRequest): Promise<AdapterOutcome> =>
+        Promise.resolve({ kind: "pause", reason: "quota-exhausted", detail: "429 daily", notBefore: reset }),
+    };
+    const { options, dir } = setup(pausing);
+    const outcome = await runLoop(options);
+    options.trajectory.close();
+    expect(outcome).toEqual({ kind: "paused", reason: "quota-exhausted", detail: "429 daily", notBefore: reset });
+    const pause = readTrajectory(dir).find((r) => r.t === "pause");
+    expect(pause?.["notBefore"]).toBe(reset);
+  });
+
   test("a stop request carrying a pause suspends the run as operator-pause with the clock persisted", async () => {
     const abort = new AbortController();
     let calls = 0;

@@ -806,11 +806,12 @@ async function main(): Promise<void> {
     comparability,
     ...(shakeout !== undefined ? { shakeout } : {}),
   });
-  const pauseMark = (p: { reason: PauseMark["reason"]; detail?: string | undefined }): PauseMark => ({
+  const pauseMark = (p: { reason: PauseMark["reason"]; detail?: string | undefined; notBefore?: number }): PauseMark => ({
     reason: p.reason,
     ...(p.detail !== undefined ? { detail: p.detail } : {}),
     at: Date.now(),
     episodeElapsedMs: watchdogs.elapsedMs(),
+    ...(p.notBefore !== undefined ? { notBefore: p.notBefore } : {}),
   });
   // A stopped runner must still leave a run that says what happened to it.
   // Two signals, two meanings:
@@ -1153,7 +1154,8 @@ async function main(): Promise<void> {
   }
   await sandbox.stop();
   if (outcome.kind === "paused") {
-    console.error(`[wrathbench] paused: ${outcome.reason} — resume with --resume ${config.runId}`);
+    const reset = outcome.notBefore !== undefined ? ` (provider reset at ${new Date(outcome.notBefore).toISOString()})` : "";
+    console.error(`[wrathbench] paused: ${outcome.reason}${reset} — resume with --resume ${config.runId}`);
   } else {
     // The token's lease goes with the run; a resume never follows a
     // termination, so nothing will present that secret again.

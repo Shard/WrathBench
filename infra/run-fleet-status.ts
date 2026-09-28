@@ -50,6 +50,7 @@ import {
   planResumes,
   planStaleRuns,
   planTick,
+  providerResetOf,
   type ResumePlan,
   retryNumbers,
   type Character,
@@ -638,7 +639,12 @@ export function printStatus(): void {
     const tainted = defers.find((d) => d.entry.tainted === true);
     const cooling = defers.find((d) => d.entry.tainted !== true && d.entry.notBefore > Date.now());
     if (tainted !== undefined) row.cooling = `tainted: ${tainted.spec} (${tainted.entry.defers} defers, ${tainted.entry.reason})`;
-    else if (cooling !== undefined) row.cooling = `cooling until ${new Date(cooling.entry.notBefore).toLocaleTimeString()} (${cooling.entry.reason})`;
+    else if (cooling !== undefined) {
+      row.cooling =
+        cooling.entry.reset === true
+          ? `${cooling.entry.reason}, resuming at ${new Date(cooling.entry.notBefore).toLocaleString()} (provider reset)`
+          : `cooling until ${new Date(cooling.entry.notBefore).toLocaleTimeString()} (${cooling.entry.reason})`;
+    }
     if (!alive) row.cooling = `${row.cooling !== undefined ? `${row.cooling}; ` : ""}process ${j.exitCode !== null ? `exited ${j.exitCode}` : "dead"}`;
     return row;
   };
@@ -689,10 +695,14 @@ export function printStatus(): void {
         const p = pausedHere.pause!;
         const prog = runProgress(pausedHere.runId);
         const ending = resumePlan.end.find((e) => e.runId === pausedHere.runId);
+        const reset = providerResetOf(p);
         const head =
           ending !== undefined
             ? `${formatEndedRun(ending)} — ${pausedHere.runId}`
-            : `paused (${p.reason}, ${fmtPaused(p.episodeElapsedMs, pausedHere.episodeMs)}) — ${pausedHere.runId}`;
+            : `paused (${p.reason}${reset !== undefined ? `, provider reset ${new Date(reset).toLocaleString()}` : ""}, ${fmtPaused(
+                p.episodeElapsedMs,
+                pausedHere.episodeMs,
+              )}) — ${pausedHere.runId}`;
         note =
           head +
           `${prog !== undefined ? ` L${prog.level} ${prog.xp}xp` : ""}` +

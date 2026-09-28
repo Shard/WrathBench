@@ -599,7 +599,17 @@ with why:
   its process lives;
   once it gives up and exits, the supervisor takes over on the longer ladder,
   resuming in place on the same run id. Past the ladder the run is listed,
-  not hammered. A run paused `observation-stalled` (its sandbox's event stream
+  not hammered. A provider pause whose provider said when its allowance
+  resets (OpenRouter's free-tier daily limit names the next 00:00 UTC) waits
+  for that instant instead: the roster makes no in-place retry, the
+  supervisor resumes the run at the reset, once, and the pause neither spends
+  a rung nor counts toward the streak. Every attempt before a known reset is a
+  refusal already announced, and counting them ran a freeplay stream's whole
+  ladder out hours before its daily allowance came back. Only a reset 10
+  minutes to 48 hours out is honoured: a per-minute window stays on the
+  ladder, which is what stops a saturated key resuming every few minutes
+  forever. `--status` lists such a run as `resuming at <time> (provider
+  reset)`. A run paused `observation-stalled` (its sandbox's event stream
   closed and the recorded state stopped moving) cools on the same ladder, but
   the runner releases its session and the roster advances, so the supervisor
   always brings it back, with a fresh sandbox and session.

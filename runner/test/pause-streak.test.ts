@@ -14,8 +14,8 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadRunConfig, type PauseReason } from "../src/config";
-import { LADDER_EXEMPT_PAUSES, onPauseLadder, readRunFact, readRunFacts, tallyRecords, tallyRecordsCached, type CountCache } from "../src/models";
-import { Trajectory, type RunMeta } from "../src/trajectory";
+import { LADDER_EXEMPT_PAUSES, onPauseLadder, pauseCountsOnLadder, readRunFact, readRunFacts, tallyRecords, tallyRecordsCached, type CountCache } from "../src/models";
+import { readMeta, Trajectory, type RunMeta } from "../src/trajectory";
 
 /** One segment: the turns it made, the pause that ended it, and a turn flushed after the pause. */
 interface Seg {
@@ -142,6 +142,33 @@ describe("the pause streak", () => {
         { turns: 0, pause: "rate-limited" },
       ]),
     ).toBe(2);
+  });
+
+  test("a pause whose provider stated its reset neither counts nor resets, and the fact carries the reset", () => {
+    // The 2026-09-21 shape: a daily allowance spent, each resume refused
+    // until 00:00 UTC. Counted, those refusals ran the ladder out by 18:28.
+    const runId = "stated-reset";
+    const reset = Date.UTC(2026, 8, 22);
+    writeRun(runId, [
+      { turns: 12, pause: "rate-limited" },
+      { turns: 0, pause: "rate-limited" },
+    ]);
+    const t = new Trajectory(join(runs, runId));
+    t.clearPause(runId);
+    t.append({ t: "resume" });
+    // Written the way run.ts writes it: the record and the mark together.
+    t.pauseWithMark(runId, { reason: "quota-exhausted", detail: "fixture", at: 5_000, episodeElapsedMs: 0, notBefore: reset }, readMeta(join(runs, runId))!);
+    t.close();
+    expect(readRunFact(runs, runId)!.pause).toMatchObject({ reason: "quota-exhausted", at: 5_000, count: 2, notBefore: reset });
+    expect(pauseCountsOnLadder({ reason: "quota-exhausted", notBefore: reset })).toBe(false);
+    // An older record with the reset only in its detail text is read as it always was.
+    expect(pauseCountsOnLadder({ reason: "quota-exhausted", detail: `X-RateLimit-Reset: ${reset}` } as { reason: string })).toBe(true);
+    expect(pauseCountsOnLadder({ reason: "operator-pause" })).toBe(false);
+  });
+
+  test("a pause with no stated reset leaves no notBefore on the fact", () => {
+    writeRun("no-reset", [{ turns: 4, pause: "quota-exhausted" }]);
+    expect(readRunFact(runs, "no-reset")!.pause!.notBefore).toBeUndefined();
   });
 
   test("a segment with no pause of its own (a runner killed outright) still resets on its turns", () => {

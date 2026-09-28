@@ -706,14 +706,24 @@ export function fmtPaused(elapsedMs: number | null, budgetMs: number | null): st
 }
 
 /**
+ * The reset a paused run's provider stated (`RunFact.pause.notBefore` on any
+ * pause but the derived `offline` one, whose instant is its ownerless proof),
+ * or undefined. What every reader that names the wait asks.
+ */
+export function providerResetOf(pause: NonNullable<RunFact["pause"]>): number | undefined {
+  return pause.reason === OFFLINE_PAUSE ? undefined : pause.notBefore;
+}
+
+/**
  * The resume cadence for a paused run. An operator-pause resumes at once —
- * the fleet stopped under it and nothing about the provider changed. Every
- * other pause (`onPauseLadder`) resumes on the roster's own defer ladder
- * (1m … 6h), indexed by the run's pause streak: the ladder pauses since the
- * last segment of the run that made a turn. A segment that played resets it,
- * so a freeplay run that paused nine times across weeks with good play between
- * each keeps resuming, while one its provider has refused through the whole
- * ladder is listed, not hammered. Null means "now".
+ * the fleet stopped under it and nothing about the provider changed. A pause
+ * whose provider stated when its allowance resets resumes at that instant,
+ * once. Every other pause (`onPauseLadder`) resumes on the roster's own defer
+ * ladder (1m … 6h), indexed by the run's pause streak: the ladder pauses since
+ * the last segment of the run that made a turn. A segment that played resets
+ * it, so a freeplay run that paused nine times across weeks with good play
+ * between each keeps resuming, while one its provider has refused through the
+ * whole ladder is listed, not hammered. Null means "now".
  */
 export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
   if (pause.reason === "operator-pause") return null;
@@ -722,6 +732,13 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
   // not written, so it is resumable only from the instant the run provably
   // has no live owner.
   if (pause.reason === OFFLINE_PAUSE) return pause.notBefore ?? null;
+  // The provider's stated reset (adapter.ts carries it, already bounded): any
+  // resume before it is a refusal the provider has announced, so it is waited
+  // out rather than spent as rungs. Ahead of the taint check because the pause
+  // is not on the streak (`pauseCountsOnLadder`) — the streak it would be
+  // judged by is the one before it.
+  const reset = providerResetOf(pause);
+  if (reset !== undefined) return reset;
   if (isTainted(pause.count)) return "never";
   return pause.at + backoffMs(pause.count);
 }
@@ -1070,7 +1087,11 @@ export function planResumes(opts: {
       continue;
     }
     if (notBefore !== null && now < notBefore) {
-      list(`${pause.reason}, pause ${pause.count}: resuming after ${new Date(notBefore).toLocaleTimeString()}`, notBefore);
+      const waiting =
+        providerResetOf(pause) !== undefined
+          ? `${pause.reason}, resuming at ${new Date(notBefore).toLocaleString()} (provider reset)`
+          : `${pause.reason}, pause ${pause.count}: resuming after ${new Date(notBefore).toLocaleTimeString()}`;
+      list(waiting, notBefore);
       continue;
     }
     if (takenAccounts.has(account.toUpperCase())) {
@@ -1089,7 +1110,9 @@ export function planResumes(opts: {
       account,
       runId: f.runId,
       pauseCount: pause.count,
-      why: `${pause.reason}${pause.count > 1 ? ` (pause ${pause.count})` : ""}, ${fmtPaused(pause.episodeElapsedMs, f.episodeMs)}`,
+      why: `${pause.reason}${
+        providerResetOf(pause) !== undefined ? " (provider reset passed)" : pause.count > 1 ? ` (pause ${pause.count})` : ""
+      }, ${fmtPaused(pause.episodeElapsedMs, f.episodeMs)}`,
     });
   }
   return { resume, listed, end };

@@ -56,6 +56,7 @@ import {
   formatEnded,
   endRuns,
   refOfRunId,
+  providerResetOf,
   resumeNotBefore,
   withResume,
   planQueue,
@@ -2487,6 +2488,37 @@ describe("pause and resume across a fleet stop", () => {
     expect(resumeNotBefore({ reason: "operator-pause", at, count: 10, episodeElapsedMs: 0 })).toBeNull();
     // A scored run never reaches the ladder at all: it is a failed attempt on the first pause.
     const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260823", model: "stealth/ox-alpha:free", account: "RUNNER3", pause: { reason: "rate-limited", at, count: 1, episodeElapsedMs: 0 } });
+    expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
+  });
+
+  test("a pause whose provider stated its reset resumes at that instant, once, off the ladder", () => {
+    // The nemotron-super freeplay stream on 2026-09-21: a daily allowance
+    // spent in the afternoon, the ladder run out by 18:28, the reset at 00:00 UTC.
+    const job: FleetJob = { refs: ["nav"], ref: "nav", episode: "freeplay", repeat: "loop", name: "nav-freeplay", enabled: true, account: "RUNNER", source: "pinned" };
+    const base = paused({ runId: "fleet-nav-freeplay-nemotron-20260921", model: "sonnet", account: "RUNNER", episode: "freeplay", episodeMs: null });
+    const at = NOW - 2 * 60_000;
+    const reset = NOW + 7 * H;
+    // Not a rung: the instant, whatever the streak before it — even one past the ladder.
+    expect(resumeNotBefore({ reason: "quota-exhausted", at, count: 1, episodeElapsedMs: 0, notBefore: reset })).toBe(reset);
+    expect(resumeNotBefore({ reason: "quota-exhausted", at, count: 12, episodeElapsedMs: 0, notBefore: reset })).toBe(reset);
+    const pause = { reason: "quota-exhausted", at, count: 3, episodeElapsedMs: 0, notBefore: reset };
+    // Waiting: listed as the provider's reset, with the instant --status and the fleet page show.
+    let plan = planResumes({ runs: [{ ...base, pause }], config: config([job]), running: new Map(), held, now: NOW });
+    expect(plan.resume).toEqual([]);
+    expect(plan.listed[0]!.why).toContain("quota-exhausted, resuming at");
+    expect(plan.listed[0]!.why).toContain("(provider reset)");
+    expect(plan.listed[0]!.resumeAfter).toBe(reset);
+    // At the instant: resumed in place, and the line says why it is now.
+    plan = planResumes({ runs: [{ ...base, pause }], config: config([job]), running: new Map(), held, now: reset });
+    expect(plan.resume.map((r) => [r.runId, r.account])).toEqual([[base.runId, "RUNNER"]]);
+    expect(plan.resume[0]!.why).toContain("quota-exhausted (provider reset passed)");
+    // Without one, the same pause is on the ladder exactly as before.
+    expect(resumeNotBefore({ reason: "quota-exhausted", at, count: 12, episodeElapsedMs: 0 })).toBe("never");
+    // An offline pause's instant is its ownerless proof, never a provider's reset.
+    expect(providerResetOf({ reason: "offline", at, count: 1, episodeElapsedMs: null, notBefore: reset })).toBeUndefined();
+    expect(providerResetOf(pause)).toBe(reset);
+    // A scored run is still a failed attempt on its first pause, stated reset or not.
+    const eval90 = paused({ runId: "fleet-ox-e90-stealth-ox-alpha-20260921", model: "stealth/ox-alpha:free", account: "RUNNER3", pause });
     expect(planResumes({ runs: [eval90], config: config(), running: new Map(), held, now: NOW }).end[0]).toMatchObject({ reason: "attempt-failed", counts: true });
   });
 

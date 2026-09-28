@@ -23,6 +23,17 @@
  *   `quota-exhausted` when it suggests credit/quota/billing (402 always),
  *   `rate-limited` otherwise. It is sticky across attempts: a 429 followed by
  *   a network timeout is still a pause.
+ * - A 429 or 402 that states when its allowance comes back (`X-RateLimit-Reset`,
+ *   as a response header or echoed into the error body's `metadata.headers`,
+ *   which is where OpenRouter's free-tier daily limit puts it) carries that
+ *   instant on the pause as `notBefore`, and the supervisor waits for it once
+ *   instead of spending defer-ladder rungs on refusals it was already told
+ *   about. Only a reset 10 minutes to 48 hours out is carried
+ *   (`PROVIDER_RESET_FLOOR_MS`): a nearer one is a per-minute window that the
+ *   retries above and the ladder's first rungs already ride out, and exempting
+ *   it from the ladder would let a saturated key resume every few minutes
+ *   forever; a farther one is not believed. Either way the pause falls back to
+ *   the ladder.
  * - Any other 4xx is fatal immediately (`adapter-error`): the request is
  *   malformed and retrying would burn budget on a harness bug.
  *
@@ -102,7 +113,13 @@ export interface AssistantTurn {
 
 export type AdapterOutcome =
   | { kind: "ok"; turn: AssistantTurn }
-  | { kind: "pause"; reason: "quota-exhausted" | "rate-limited"; detail: string }
+  | {
+      kind: "pause";
+      reason: "quota-exhausted" | "rate-limited";
+      detail: string;
+      /** The provider's own stated reset (`statedResetOf`), already inside the carried window. */
+      notBefore?: number;
+    }
   | { kind: "stub-complete" };
 
 export class AdapterError extends Error {
@@ -263,6 +280,52 @@ export function parseRetryAfter(value: string | null, nowMs: number): number | n
   return Math.max(0, at - nowMs);
 }
 
+/** The nearest stated reset a pause carries; see the retry policy above. */
+export const PROVIDER_RESET_FLOOR_MS = 10 * 60_000;
+/** The farthest stated reset a pause carries. */
+export const PROVIDER_RESET_CEILING_MS = 48 * 60 * 60_000;
+
+/**
+ * An `X-RateLimit-Reset` value as an epoch instant in milliseconds. OpenRouter
+ * sends milliseconds; a value below 1e12 is read as epoch seconds, so a
+ * delta-seconds value ("60") lands in 1970 and is dropped by the window check
+ * rather than misread.
+ */
+function resetInstant(value: unknown): number | null {
+  const n =
+    typeof value === "number" ? value : typeof value === "string" && /^\d+(\.\d+)?$/.test(value.trim()) ? Number(value.trim()) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1e12 ? n * 1_000 : n;
+}
+
+/**
+ * The instant a refused allowance resets, as the provider stated it: the
+ * `X-RateLimit-Reset` echoed into the error body's `metadata.headers` first —
+ * it describes the limit that actually refused — then the response header.
+ * Null when neither states one. Unvalidated: the caller decides whether the
+ * instant is inside the window a pause carries.
+ */
+export function statedResetOf(headers: Headers, body: unknown): number | null {
+  const echoed = (body as { error?: { metadata?: { headers?: unknown } } } | null)?.error?.metadata?.headers;
+  if (echoed !== null && typeof echoed === "object") {
+    for (const [k, v] of Object.entries(echoed)) {
+      if (k.toLowerCase() !== "x-ratelimit-reset") continue;
+      const at = resetInstant(v);
+      if (at !== null) return at;
+    }
+  }
+  return resetInstant(headers.get("x-ratelimit-reset"));
+}
+
+/** A body as JSON, or null: a refusal's body is often plain text ("slow down"). */
+function jsonOrNull(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The provider's request id, for a provider-side support thread. Deliberately
  * NOT `cf-ray`: OpenRouter is Cloudflare-fronted, so a ray is present on
@@ -397,6 +460,9 @@ export class OpenAiChatAdapter implements ChatAdapter {
     // consumed by the next iteration's sleep — the sleep happens at the top of
     // the loop, so honouring the header means carrying it across one iteration.
     let retryAfterMs: number | null = null;
+    // The newest reset instant a budget-shaped refusal stated; sticky like
+    // `budget`, and checked against the carried window only at the pause.
+    let statedReset: number | null = null;
     const retriesStartedAt = this.now();
     let made = 0;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
@@ -491,6 +557,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
               if (budget === null || (quota && budget.reason === "rate-limited")) {
                 budget = { reason: quota ? "quota-exhausted" : "rate-limited", detail: lastError };
               }
+              statedReset = statedResetOf(res.headers, json) ?? statedReset;
             } else if (isProviderBlip(lastError) && budget === null) {
               budget = { reason: "rate-limited", detail: lastError };
             }
@@ -536,6 +603,9 @@ export class OpenAiChatAdapter implements ChatAdapter {
         if (budget === null || (quota && budget.reason === "rate-limited")) {
           budget = { reason: quota ? "quota-exhausted" : "rate-limited", detail: lastError };
         }
+        // From the whole body, never `lastError`: that is cut at 500
+        // characters, and OpenRouter's metadata sits past the message.
+        statedReset = statedResetOf(res.headers, jsonOrNull(text)) ?? statedReset;
       }
       const providerBlip =
         res.status >= 400 && res.status < 500 && isProviderBlip(lastError);
@@ -551,7 +621,16 @@ export class OpenAiChatAdapter implements ChatAdapter {
     }
 
     // The run is suspendable and resumable, not broken.
-    if (budget !== null) return { kind: "pause", ...budget };
+    if (budget !== null) {
+      // Validated here and only here: every reader downstream (the streak,
+      // the resume cadence, the roster) takes a carried `notBefore` as given.
+      const now = this.now();
+      const notBefore =
+        statedReset !== null && statedReset >= now + PROVIDER_RESET_FLOOR_MS && statedReset <= now + PROVIDER_RESET_CEILING_MS
+          ? statedReset
+          : null;
+      return { kind: "pause", ...budget, ...(notBefore !== null ? { notBefore } : {}) };
+    }
     // Attempts exhausted on nothing but 5xx: the provider is down, not the
     // harness. Terminating here threw away a level-3 hy3 episode on five
     // consecutive 500s (fleet-free-oc-a, 2026-08-22); pausing lets the

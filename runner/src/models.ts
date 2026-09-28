@@ -355,6 +355,20 @@ export function onPauseLadder(reason: unknown): boolean {
   return typeof reason === "string" && !LADDER_EXEMPT_PAUSES.has(reason);
 }
 
+/**
+ * Whether a pause record counts toward the streak: its reason is on the
+ * ladder and its provider did not state a reset. A pause that carries the
+ * provider's `notBefore` waits for that instant once, off the ladder
+ * (`resumeNotBefore`), so it neither counts nor resets the streak — without
+ * that, a daily allowance spent at noon ran the whole ladder out on refusals
+ * the provider had already announced, hours before the reset. Only records
+ * the runner writes with a numeric `notBefore` are exempt: an older pause
+ * whose reset sits in its detail text is read exactly as it always was.
+ */
+export function pauseCountsOnLadder(rec: { reason?: unknown; notBefore?: unknown }): boolean {
+  return onPauseLadder(rec.reason) && typeof rec.notBefore !== "number";
+}
+
 /** Termination reasons that mean "the model never got to play" for the ladder. */
 export const NO_PROGRESS_REASONS: ReadonlySet<string> = new Set(["adapter-error"]);
 
@@ -526,7 +540,12 @@ export interface RunFact {
     at: number;
     count: number;
     episodeElapsedMs: number | null;
-    /** Only on the supervisor's derived `offline` pause: not resumable before this instant. */
+    /**
+     * Not resumable before this instant. On the supervisor's derived `offline`
+     * pause, when the run is provably ownerless; on any other, the provider's
+     * stated reset off the pause mark (adapter.ts), which the resume waits
+     * for once and the streak does not count (`pauseCountsOnLadder`).
+     */
     notBefore?: number;
   } | null;
   /** The game account the run was launched on; a resume must go back to it. */
@@ -722,7 +741,7 @@ interface StreakFold {
  * since the last segment that made a turn, that segment's own pause included.
  * A segment with a `response` in it resets the count — its pause, when it is
  * on the ladder, is the first of a new streak — and one with none adds its
- * pause to the streak before it. An exempt pause (`onPauseLadder`) adds
+ * pause to the streak before it. An exempt pause (`pauseCountsOnLadder`) adds
  * nothing and resets nothing. A segment's turns count wherever they fall in
  * it: a runner stopped mid-turn flushes its last `response` after the pause
  * record.
@@ -732,9 +751,9 @@ function streakOf(s: StreakFold): number {
   return s.turn ? own : s.closed + own;
 }
 
-function foldStreak(s: StreakFold, rec: { t: string; reason?: unknown }): void {
+function foldStreak(s: StreakFold, rec: { t: string; reason?: unknown; notBefore?: unknown }): void {
   if (rec.t === MODEL_RESPONSE_RECORD) s.turn = true;
-  else if (rec.t === PAUSE_RECORD) s.pause ||= onPauseLadder(rec.reason);
+  else if (rec.t === PAUSE_RECORD) s.pause ||= pauseCountsOnLadder(rec);
   else if (rec.t === RESUME_RECORD) {
     s.closed = streakOf(s);
     s.turn = false;
@@ -813,18 +832,18 @@ export class RecordCountScanner {
   }
 
   /** The record a line holds when it is one this scanner watches, else null. */
-  private recordOf(line: Buffer): { t: string; reason?: unknown } | null {
+  private recordOf(line: Buffer): { t: string; reason?: unknown; notBefore?: unknown } | null {
     if (line.length === 0) return null;
     // Cheap prefilter, then the honest parse: the `t` key can sit anywhere.
     if (!this.needles.some((n) => line.includes(n))) return null;
-    let rec: { t?: unknown; reason?: unknown } | null;
+    let rec: { t?: unknown; reason?: unknown; notBefore?: unknown } | null;
     try {
-      rec = JSON.parse(line.toString("utf8")) as { t?: unknown; reason?: unknown } | null;
+      rec = JSON.parse(line.toString("utf8")) as { t?: unknown; reason?: unknown; notBefore?: unknown } | null;
     } catch {
       return null; // a torn line is not a record
     }
     const t = rec?.t;
-    return typeof t === "string" && this.watched.has(t) ? { t, reason: rec!.reason } : null;
+    return typeof t === "string" && this.watched.has(t) ? { t, reason: rec!.reason, notBefore: rec!.notBefore } : null;
   }
 
   /** One line into a set of counts and a streak: the scanner's own, or a copy of them. */
@@ -1027,7 +1046,7 @@ export function readRunFact(
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown };
-    pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown };
+    pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown; notBefore?: unknown };
   };
   try {
     meta = JSON.parse(readFileSync(metaPath, "utf8")) as typeof meta;
@@ -1120,6 +1139,7 @@ export function readRunFact(
   // row, but a run can also be classified by hand after a pause).
   if (pauseReason !== null && fact.terminationReason === null) {
     const markedAt = num(meta.pause?.at);
+    const statedReset = num(meta.pause?.notBefore);
     fact.pause = {
       reason: pauseReason,
       at: markedAt ?? mtime ?? fact.startedAt,
@@ -1128,6 +1148,7 @@ export function readRunFact(
       // provider that has refused for six hours (operator, 2026-09-25).
       count: Math.max(1, tally?.pauseStreak ?? 1),
       episodeElapsedMs: num(meta.pause?.episodeElapsedMs),
+      ...(statedReset !== null ? { notBefore: statedReset } : {}),
     };
   }
   const beating = fact.heartbeatAt != null && now - fact.heartbeatAt < HEARTBEAT_DEAD_MS;

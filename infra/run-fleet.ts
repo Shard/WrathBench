@@ -796,7 +796,11 @@ async function main(): Promise<void> {
     const now = Date.now();
     for (const d of defers) {
       if (d.entry.tainted === true) return `${job.ref} tainted this epoch (${d.entry.defers} defers, ${d.entry.reason})`;
-      if (now < d.entry.notBefore) return `${job.ref} cooling until ${new Date(d.entry.notBefore).toLocaleTimeString()} (${d.entry.reason})`;
+      if (now < d.entry.notBefore) {
+        return d.entry.reset === true
+          ? `${job.ref} ${d.entry.reason}, resuming at ${new Date(d.entry.notBefore).toLocaleString()} (provider reset)`
+          : `${job.ref} cooling until ${new Date(d.entry.notBefore).toLocaleTimeString()} (${d.entry.reason})`;
+      }
     }
     return undefined;
   };

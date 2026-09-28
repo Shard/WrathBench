@@ -10,6 +10,9 @@ import {
   planAttempt,
   planCycle,
   planGap,
+  resetDefer,
+  resolve,
+  retryQueueOf,
   serializeDefers,
   type DeferEntry,
 } from "./run-roster";
@@ -145,6 +148,52 @@ describe("defer sidecar", () => {
     expect(parseDefers('{"version":1,"entries":{"a":{"runId":').size).toBe(0);
     expect(parseDefers('{"version":1,"entries":{"a":{"nope":true}}}').size).toBe(0);
     expect(parseDefers("null").size).toBe(0);
+  });
+});
+
+describe("a provider's stated reset", () => {
+  // The 2026-09-21 nemotron-super stream: a spent daily allowance, and the
+  // in-place retries plus the retry cycles each adding a refused pause to the
+  // streak until the ladder ran out, hours before the reset at 00:00 UTC.
+  const RESET = NOW + 7 * H;
+
+  test("holds the spec until the reset without spending a defer", () => {
+    expect(resetDefer(undefined, RESET, "roster-nemotron-20260921", "quota-exhausted")).toEqual({
+      runId: "roster-nemotron-20260921",
+      notBefore: RESET,
+      defers: 0,
+      reason: "quota-exhausted",
+      reset: true,
+    });
+    const prev: DeferEntry = { runId: "roster-nemotron-20260921", notBefore: NOW, defers: 4, reason: "rate-limited" };
+    expect(resetDefer(prev, RESET, "roster-nemotron-20260921", "quota-exhausted").defers).toBe(4);
+    // The next ordinary defer climbs from where the ladder stood, and is a rung again.
+    const after = nextDefer(resetDefer(prev, RESET, "r", "quota-exhausted"), RESET, "r", "rate-limited");
+    expect(after).toEqual({ runId: "r", notBefore: RESET + 15 * M, defers: 5, reason: "rate-limited" });
+  });
+
+  test("a loop roster skips the spec until the reset, then resumes it in place", () => {
+    const entry = resetDefer(undefined, RESET, "roster-nemotron-20260921", "quota-exhausted");
+    expect(planAttempt(entry, NOW)).toEqual({ kind: "skip", until: RESET, reason: "quota-exhausted" });
+    expect(planAttempt(entry, RESET)).toEqual({ kind: "resume", runId: "roster-nemotron-20260921", reason: "quota-exhausted" });
+  });
+
+  test("the retry queue leaves it to the supervisor", () => {
+    const [a, b] = resolve([{ model: "nvidia/nemotron-super:free" }, { model: "z-ai/glm-5.2:free" }], "20260921");
+    const roster = [
+      { spec: a!, resume: false },
+      { spec: b!, resume: false },
+    ];
+    const deferred = new Map<string, DeferEntry>([
+      [a!.runId, resetDefer(undefined, RESET, a!.runId, "quota-exhausted")],
+      [b!.runId, nextDefer(undefined, NOW, `${b!.runId}-c2`, "rate-limited")],
+    ]);
+    expect(retryQueueOf(roster, deferred).map((q) => [q.spec.runId, q.resume])).toEqual([[`${b!.runId}-c2`, true]]);
+  });
+
+  test("the sidecar round-trips the flag, so a respawned roster still knows it is a reset", () => {
+    const before = new Map<string, DeferEntry>([["roster-nemotron-20260921", resetDefer(undefined, RESET, "roster-nemotron-20260921", "quota-exhausted")]]);
+    expect(parseDefers(serializeDefers(before))).toEqual(before);
   });
 });
 
