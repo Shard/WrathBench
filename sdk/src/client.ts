@@ -1043,6 +1043,13 @@ const MOVE_LEAVES_NO_STOP: ReadonlySet<string> = new Set([
  * is. The window is short on purpose — it bounds a loop without ever standing in
  * for an answer the world could have changed, and the world is not observed from
  * here to decide that.
+ *
+ * The remembered answer is given when the window runs out, not at once: an
+ * instant answer turned the same loop into a hot loop inside the sandbox — a
+ * background routine re-asked a `drop` some 2.07M times in 35 s, ~60,000 calls
+ * a second, taking the CPU the other snippets and runs share. Answered at the
+ * window's end, a loop that re-asks runs at most once per window, and the call
+ * after it is a fresh question that goes to the wire.
  */
 const MOVE_REJECTION_MEMO_MS = 250;
 
@@ -2339,8 +2346,8 @@ export class WrathClient {
   /**
    * The last `moveTo` the server refused without moving anything, kept for
    * `MOVE_REJECTION_MEMO_MS` so an identical repeat from the same spot is
-   * answered rather than re-sent. One slot: a loop re-asks its own last
-   * question, and anything else replaces this one.
+   * answered (when the window runs out) rather than re-sent. One slot: a loop
+   * re-asks its own last question, and anything else replaces this one.
    */
   private lastMoveRejection:
     | {
@@ -3321,7 +3328,7 @@ export class WrathClient {
         // A delay that outlasts the budget cannot be waited into a reclaim:
         // answer now with what is left instead of sleeping to the same refusal.
         if (wait > 0 && readyAt >= deadline) break;
-        if (wait > 0) await this.sleepAborting(wait);
+        if (wait > 0) await this.sleepAborting(wait, "a corpse reclaim delay");
         if (Date.now() >= deadline) break;
 
         attempts++;
@@ -3467,13 +3474,16 @@ export class WrathClient {
     return delay === undefined ? undefined : Math.min(delay.readyAt, Date.now() + delay.delayMs);
   }
 
-  /** `sleep`, bounded by the ambient signal: rejects with `EventAbortedError` when the snippet is abandoned. */
-  private sleepAborting(ms: number): Promise<void> {
+  /**
+   * `sleep`, bounded by the ambient signal: rejects with `EventAbortedError`
+   * (saying it was `waitingFor` this) when the snippet is abandoned.
+   */
+  private sleepAborting(ms: number, waitingFor: string): Promise<void> {
     const signal = this.currentSignal();
     if (signal === undefined) return sleep(ms);
     return new Promise<void>((resolve, reject) => {
       if (signal.aborted) {
-        reject(new EventAbortedError(signal.reason, "a corpse reclaim delay"));
+        reject(new EventAbortedError(signal.reason, waitingFor));
         return;
       }
       const timer = setTimeout(() => {
@@ -3482,7 +3492,7 @@ export class WrathClient {
       }, ms);
       function onAbort(): void {
         clearTimeout(timer);
-        reject(new EventAbortedError(signal?.reason, "a corpse reclaim delay"));
+        reject(new EventAbortedError(signal?.reason, waitingFor));
       }
       signal.addEventListener("abort", onAbort, { once: true });
     });
@@ -4559,7 +4569,12 @@ export class WrathClient {
       // The same refusal, tallied like the call it is, and no request. The
       // `stop()` the status would otherwise send is skipped with it: the
       // remembered refusal already sent one and the character has not moved
-      // since, so a second is a second packet for the same repair.
+      // since, so a second is a second packet for the same repair. Answered
+      // when the window runs out rather than at once, so a loop that re-asks
+      // waits instead of spinning (see `MOVE_REJECTION_MEMO_MS`); the ambient
+      // signal ends the wait, and nothing is walking to stop.
+      const windowLeft = repeat.at + MOVE_REJECTION_MEMO_MS - Date.now();
+      await this.sleepAborting(windowLeft, "a repeated moveTo's remembered refusal");
       this.noteActionHint("moveTo", repeat.status, repeat.recipe, point);
       return repeat.result;
     }
@@ -4814,7 +4829,9 @@ export class WrathClient {
   private recallMoveRejection(point: MovePoint): typeof this.lastMoveRejection {
     const memo = this.lastMoveRejection;
     if (memo === null) return null;
-    if (Date.now() - memo.at > MOVE_REJECTION_MEMO_MS) {
+    // `>=`, so a remembered answer always has at least a millisecond of its
+    // window left to wait out — never an instant one.
+    if (Date.now() - memo.at >= MOVE_REJECTION_MEMO_MS) {
       this.lastMoveRejection = null;
       return null;
     }

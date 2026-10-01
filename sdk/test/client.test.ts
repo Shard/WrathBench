@@ -398,8 +398,10 @@ describe("client: movement", () => {
       expect(first.status).toBe("drop");
 
       // What the loop did: the same call again, and again, with nothing to
-      // answer it on the stream.
-      const repeats = [await client.moveTo(point), await client.moveTo({ ...point })];
+      // answer it on the stream. Both are asked inside the window (each is
+      // answered only when it runs out, so asked in sequence the second would
+      // be a fresh question).
+      const repeats = await Promise.all([client.moveTo(point), client.moveTo({ ...point })]);
       for (const r of repeats) expect(r).toEqual(first);
       expect(dispatches(stub)).toBe(1);
 
@@ -464,6 +466,77 @@ describe("client: movement", () => {
       expect((await refused(client, stub, point, "start_off_mesh", 3, 31)).status).toBe("start_off_mesh");
       expect(dispatches(stub)).toBe(3);
       await done();
+    });
+
+    test("the remembered refusal is answered when its window runs out, not at once", async () => {
+      // A 0.5 probe's background routine looped `await sdk.moveTo(point)` on a
+      // refused `drop`: answered at once from memory, it ran ~60,000 calls a
+      // second inside the sandbox. Only the timing changed: same verdict, no
+      // request, tallied as before.
+      const { stub, client, done } = await session();
+      const point = { x: 1, y: 2, z: 3 };
+      const first = await refused(client, stub, point, "drop", 1, 30);
+      const refusedAt = Date.now();
+      const repeat = await client.moveTo(point);
+      expect(Date.now() - refusedAt).toBeGreaterThanOrEqual(200);
+      expect(repeat).toEqual(first);
+      expect(dispatches(stub)).toBe(1);
+      expect(client.drainActionHints()[0]).toMatchObject({ status: "drop", count: 2 });
+      await done();
+    });
+
+    test("a naive retry loop runs at most once per window", async () => {
+      const { stub, client, done } = await session();
+      const point = { x: 1, y: 2, z: 3 };
+      // The server refuses every dispatched move the same way, as it would.
+      let answered = 0;
+      const responder = setInterval(() => {
+        while (answered < dispatches(stub)) {
+          answered++;
+          stub.push(JSON.stringify(moveResult("drop", answered, 100 + answered)));
+        }
+      }, 2);
+      try {
+        let calls = 0;
+        const until = Date.now() + 600;
+        while (Date.now() < until) {
+          const r = await client.moveTo(point, { timeout: 2000 });
+          expect(r.status).toBe("drop");
+          calls++;
+        }
+        // About one dispatch and one remembered answer per 250ms window: a
+        // handful of calls in 600ms, where the instant answer made millions.
+        expect(calls).toBeLessThanOrEqual(8);
+        expect(dispatches(stub)).toBeLessThanOrEqual(4);
+        expect(calls).toBeGreaterThan(dispatches(stub));
+      } finally {
+        clearInterval(responder);
+      }
+      await done();
+    });
+
+    test("the snippet's signal ends the wait for a remembered refusal, and nothing is sent", async () => {
+      const stub = startStub({ onConnect: () => frames(loginSequence) });
+      let current: AbortSignal | undefined;
+      const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false }, signal: () => current });
+      await client.createSession({ character: "Fenwick" });
+      const point = { x: 1, y: 2, z: 3 };
+      await refused(client, stub, point, "drop", 1, 30);
+      const sent = stub.actions.length;
+
+      const ac = new AbortController();
+      current = ac.signal;
+      const repeat = client.moveTo(point);
+      const started = Date.now();
+      setTimeout(() => ac.abort(new Error("snippet abandoned")), 20);
+      await expect(repeat).rejects.toBeInstanceOf(EventAbortedError);
+      await expect(repeat).rejects.toThrow(/remembered refusal.*snippet abandoned/);
+      expect(Date.now() - started).toBeLessThan(200);
+      await Bun.sleep(20);
+      // Nothing is walking, so there is nothing to stop.
+      expect(stub.actions.length).toBe(sent);
+      client.close();
+      await stub.stop();
     });
   });
 
