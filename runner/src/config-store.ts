@@ -38,6 +38,9 @@
  * transient: a reader keeps its last good config. The two must never be
  * confused, because "every job vanished" and "the disk hiccupped" call for
  * opposite actions.
+ *
+ * **Drafts share the file and are not config** ("The draft key space", below):
+ * `proposed/<model id>` rows that no reader of the config ever sees.
  */
 
 import { Database } from "bun:sqlite";
@@ -113,6 +116,57 @@ export class ConfigRejected extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ConfigRejected";
+  }
+}
+
+// --------------------------------------------------------- the draft key space
+
+/**
+ * Drafts: models the OpenRouter catalogue offers that the roster does not name
+ * yet (GitHub issue #66; the fetch, the estimate and the page's views are
+ * `runner/viewer/drafts.ts`). They live in this store as `proposed/<model id>`
+ * rows of the same table — the model id is the whole rest of the key, slash
+ * included (`proposed/z-ai/glm-5.3-flash:free`) — and they are NOT config:
+ *
+ * - `rows()` leaves them out, so `render`, `readFleetConfig`, `isEmpty`, the
+ *   `keys` `/api/config` lists and therefore `parseFleet` never see one. And
+ *   `renderFleet` walks only `TOP_LEVEL_KEYS`, so even a reader whose `rows()`
+ *   predates the filter — an older image on the same volume — renders them out.
+ * - `put` refuses the key (`isConfigKey`), so the generic write path cannot
+ *   reach one. `writeDrafts` and `promote` are the only writers.
+ * - Writing a draft records nothing in `config_audit` and does not move
+ *   `version()`: the history is the history of the config, and a fetch that
+ *   wrote a few hundred rows there would bury it. Promotion is a roster write
+ *   and is recorded like any other.
+ * - A reseed keeps them, so an ignored model stays ignored through
+ *   `seed --force`.
+ */
+export const PROPOSED_PREFIX = "proposed/";
+
+/** `proposed/<model id>`. */
+export function proposedKey(model: string): string {
+  return `${PROPOSED_PREFIX}${model}`;
+}
+
+/** Whether a row key is a draft's. */
+export function isProposedKey(key: string): boolean {
+  return key.startsWith(PROPOSED_PREFIX) && key.length > PROPOSED_PREFIX.length;
+}
+
+/** The SQL that keeps draft rows out of a config read. The prefix holds no GLOB metacharacter. */
+const DRAFT_ROWS = `key GLOB '${PROPOSED_PREFIX}*'`;
+
+/**
+ * A promotion refused before anything was parsed: the draft is gone
+ * (`missing`), or the roster already has the name or the model (`taken`).
+ * Distinct from `ConfigRejected`, which is the parser's own refusal.
+ */
+export class DraftRefused extends Error {
+  readonly reason: "missing" | "taken";
+  constructor(message: string, reason: "missing" | "taken") {
+    super(message);
+    this.name = "DraftRefused";
+    this.reason = reason;
   }
 }
 
@@ -281,11 +335,26 @@ export class ConfigStore {
     return this.rows().length === 0;
   }
 
+  /** The config's rows. Never a draft's ("The draft key space"). */
   rows(): ConfigRow[] {
+    return this.select(`NOT ${DRAFT_ROWS}`);
+  }
+
+  /** The draft rows, ignored ones included, by key. */
+  drafts(): ConfigRow[] {
+    return this.select(DRAFT_ROWS);
+  }
+
+  /** One draft's stored document, or undefined. */
+  draft(model: string): unknown | undefined {
+    return this.drafts().find((r) => r.key === proposedKey(model))?.value;
+  }
+
+  private select(where: string): ConfigRow[] {
     let raw: { key: string; ord: number; json: string; updated_at: number }[];
     try {
       raw = this.db
-        .query("SELECT key, ord, json, updated_at FROM config ORDER BY ord, key")
+        .query(`SELECT key, ord, json, updated_at FROM config WHERE ${where} ORDER BY ord, key`)
         .all() as { key: string; ord: number; json: string; updated_at: number }[];
     } catch (e) {
       // A store that has never been written has no tables; that is "empty",
@@ -409,6 +478,64 @@ export class ConfigStore {
     this.put(key, { ...(before as Record<string, unknown>), ...(partial as Record<string, unknown>) }, opts);
   }
 
+  /**
+   * Write and remove drafts, in one transaction. Not validated against the
+   * config and not audited: a draft is not config ("The draft key space").
+   * What a draft document holds is `drafts.ts`'s business; this only stores it.
+   */
+  writeDrafts(changes: { put?: readonly { model: string; value: unknown }[]; remove?: readonly string[] }): void {
+    this.requireWritable();
+    const at = Date.now();
+    const puts = changes.put ?? [];
+    const removes = changes.remove ?? [];
+    for (const m of [...puts.map((p) => p.model), ...removes]) {
+      if (m.length === 0) throw new ConfigRejected("a draft needs a model id");
+    }
+    const tx = this.db.transaction(() => {
+      for (const { model, value } of puts) {
+        this.db.run(
+          `INSERT INTO config (key, ord, json, updated_at) VALUES (?, 0, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
+          [proposedKey(model), JSON.stringify(value), at],
+        );
+      }
+      for (const model of removes) this.db.run("DELETE FROM config WHERE key = ?", [proposedKey(model)]);
+    });
+    tx();
+  }
+
+  /**
+   * Promote a draft into the roster as `roster/<name>`.
+   *
+   * The entry goes through `put` — the whole candidate config through
+   * `parseFleet`, an audit line with the actor and the note — and the draft row
+   * is removed in the same transaction, so a refusal leaves the draft exactly
+   * where it was and a success leaves no draft behind.
+   *
+   * Two refusals come first, because `put` would not make them: it replaces a
+   * row whole, so a name already in the roster would silently overwrite that
+   * entry; and a second entry for a model the roster already runs is a
+   * duplicate nobody asked for.
+   */
+  promote(model: string, name: string, entry: Record<string, unknown>, opts: PutOptions = {}): void {
+    this.requireWritable();
+    if (this.draft(model) === undefined) throw new DraftRefused(`no draft for ${model}`, "missing");
+    const key = `roster/${name}`;
+    const rows = this.rows();
+    if (rows.some((r) => r.key === key)) {
+      throw new DraftRefused(`${key} already exists — choose another name`, "taken");
+    }
+    const same = rows.find(
+      (r) => r.key.startsWith("roster/") && typeof r.value === "object" && r.value !== null && (r.value as { model?: unknown }).model === model,
+    );
+    if (same !== undefined) throw new DraftRefused(`${same.key} already runs ${model}`, "taken");
+    const tx = this.db.transaction(() => {
+      this.put(key, entry, opts);
+      this.db.run("DELETE FROM config WHERE key = ?", [proposedKey(model)]);
+    });
+    tx();
+  }
+
   /** Where a new row of this key's kind goes: last among its own kind. */
   private nextOrd(key: string, rows: readonly ConfigRow[]): number {
     const slash = key.indexOf("/");
@@ -423,8 +550,9 @@ export class ConfigStore {
 
   /**
    * Import a fleet config document. A no-op on a store that already has rows
-   * unless `force`, which replaces every row and records one audit line per
-   * key — the history says the store was reseeded, not that nothing happened.
+   * unless `force`, which replaces every config row and records one audit line
+   * per key — the history says the store was reseeded, not that nothing
+   * happened. Drafts are not config and survive it.
    */
   seed(doc: unknown, opts: PutOptions & { force?: boolean } = {}): { seeded: boolean; keys: number } {
     this.requireWritable();
@@ -436,7 +564,7 @@ export class ConfigStore {
     const actor = opts.actor ?? DEFAULT_ACTOR;
     const note = opts.note ?? (existing.length > 0 ? "reseed --force" : "seed");
     const tx = this.db.transaction(() => {
-      this.db.run("DELETE FROM config");
+      this.db.run(`DELETE FROM config WHERE NOT ${DRAFT_ROWS}`);
       for (const r of rows) {
         this.db.run("INSERT INTO config (key, ord, json, updated_at) VALUES (?, ?, ?, ?)", [r.key, r.ord, JSON.stringify(r.value), at]);
         const before = existing.find((e) => e.key === r.key);

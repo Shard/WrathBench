@@ -2073,3 +2073,95 @@ export interface ToolView {
 export interface ToolsResponse extends SnapshotEnvelope {
   tools: ToolView[];
 }
+
+/* ------------------------------------------------------ config drafts --- */
+
+/*
+ * The config API's draft routes (`/api/config/proposed`, `runner/viewer/drafts.ts`).
+ * Operator-only like the rest of the config API: never mounted on a public
+ * handle, so the publisher never renders one. Declared here so the page's
+ * client and the server share one shape.
+ */
+
+/** Catalogue list price, dollars per million tokens. */
+export interface DraftPriceView {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
+ * The token shape a draft's estimate is priced at: the median counted `e90`
+ * of this series on the wrathbench harness, provider-reported tokens only.
+ */
+export interface E90TokenProfileView {
+  /** The counted runs the medians are taken over; never zero (no runs, no profile). */
+  runs: number;
+  series: string | null;
+  promptTokens: number;
+  completionTokens: number;
+  /** Cache reads, a subset of the prompt; a run whose provider never said reads as 0. */
+  cacheReadTokens: number;
+}
+
+/** One draft as the page lists it. */
+export interface DraftView {
+  /** The catalogue id, which a promoted entry carries as its `model`. */
+  model: string;
+  /** The catalogue's display name. */
+  name: string | null;
+  /** When the catalogue says the model was added (epoch ms); what "newest first" sorts on. */
+  created: number | null;
+  /** When a fetch first proposed it. */
+  firstSeen: number;
+  status: "draft" | "ignored";
+  ignoredAt: number | null;
+  ignoredBy: string | null;
+  /** Derived from the slug the way the roster derives it (`billingOf`). */
+  billing: "free" | "paid";
+  /** Null when the catalogue quotes no usable price. */
+  price: DraftPriceView | null;
+  /** List price applied to the profile. Null with no price or no profile — never a guess. */
+  estimateUsd: number | null;
+  /** What a promoted entry would be routed to (`routingLabel`), with no `routing` of its own. */
+  routing: string;
+  /** A roster name for the promote form to start from. */
+  suggestedName: string;
+}
+
+/** `GET /api/config/proposed`: drafts newest first, the ignored ones apart. */
+export interface DraftsResponse {
+  drafts: DraftView[];
+  ignored: DraftView[];
+  profile: E90TokenProfileView | null;
+}
+
+/** `POST /api/config/proposed/fetch`: what one read of the catalogue changed. */
+export interface DraftFetchResponse {
+  /** Tool-calling models in the catalogue. */
+  toolModels: number;
+  /** Model ids proposed for the first time. */
+  added: string[];
+  /** Existing drafts whose name, date or price moved. */
+  refreshed: number;
+  /** Drafts dropped because the roster now runs that model. */
+  removed: string[];
+  /** Catalogue rows that did not parse and were left alone. */
+  skipped: number;
+}
+
+/** `POST /api/config/proposed/{ignore,unignore}`: where the draft now stands. */
+export interface DraftStatusResponse {
+  model: string;
+  status: "draft" | "ignored";
+}
+
+/** `POST /api/config/proposed/promote`. Race and class are optional, as on any entry. */
+export interface DraftPromoteBody {
+  model: string;
+  name: string;
+  tier: string;
+  race?: number;
+  class?: number;
+}

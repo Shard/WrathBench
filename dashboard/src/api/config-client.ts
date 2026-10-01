@@ -20,6 +20,7 @@
  * build reads a bucket. The page checks both before it renders anything.
  */
 
+import type { DraftFetchResponse, DraftPromoteBody, DraftStatusResponse, DraftsResponse } from "@viewer/api-types";
 import { headerSafe } from "../lib/config";
 
 /**
@@ -95,9 +96,9 @@ export interface ConfigClientOptions {
 async function send<T>(
   f: typeof globalThis.fetch,
   url: string,
-  init: RequestInit & { attribution?: Attribution },
+  init: RequestInit & { attribution?: Attribution; actor?: string },
 ): Promise<T> {
-  const { attribution, ...rest } = init;
+  const { attribution, actor, ...rest } = init;
   const headers: Record<string, string> = { accept: "application/json", ...(rest.body !== undefined ? { "content-type": "application/json" } : {}) };
   if (attribution !== undefined) {
     // Folded to what a header can carry: `fetch` refuses the whole request on a
@@ -105,6 +106,9 @@ async function send<T>(
     // an operator types here. See `headerSafe` in `lib/config.ts`.
     headers[ACTOR_HEADER] = headerSafe(attribution.actor);
     headers[NOTE_HEADER] = headerSafe(attribution.note);
+  } else if (actor !== undefined && actor.trim().length > 0) {
+    // Who, without why: an ignore is remembered on the draft, not in the history.
+    headers[ACTOR_HEADER] = headerSafe(actor.trim());
   }
   const res = await f(url, { ...rest, headers });
   const text = await res.text();
@@ -153,6 +157,26 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
      */
     export: (): Promise<ConfigExportResponse> =>
       send<ConfigExportResponse>(f, at("/api/config/export"), { method: "POST", body: "{}" }),
+    /** The drafts, newest first, the ignored apart. One shot, like `config()`. */
+    drafts: (): Promise<DraftsResponse> => send<DraftsResponse>(f, at("/api/config/proposed"), { method: "GET" }),
+    /** One read of the catalogue. Not a config write: no attribution, no history line. */
+    fetchDrafts: (): Promise<DraftFetchResponse> =>
+      send<DraftFetchResponse>(f, at("/api/config/proposed/fetch"), { method: "POST" }),
+    ignoreDraft: (model: string, actor?: string): Promise<DraftStatusResponse> =>
+      send<DraftStatusResponse>(f, at("/api/config/proposed/ignore"), {
+        method: "POST",
+        body: JSON.stringify({ model }),
+        ...(actor !== undefined ? { actor } : {}),
+      }),
+    unignoreDraft: (model: string, actor?: string): Promise<DraftStatusResponse> =>
+      send<DraftStatusResponse>(f, at("/api/config/proposed/unignore"), {
+        method: "POST",
+        body: JSON.stringify({ model }),
+        ...(actor !== undefined ? { actor } : {}),
+      }),
+    /** A roster write: attributed, validated by `parseFleet`, recorded in the history. */
+    promoteDraft: (body: DraftPromoteBody, attribution: Attribution): Promise<ConfigWriteResponse> =>
+      send<ConfigWriteResponse>(f, at("/api/config/proposed/promote"), { method: "POST", body: JSON.stringify(body), attribution }),
   };
 }
 

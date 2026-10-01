@@ -38,6 +38,7 @@ import { Scratchpad } from "../src/scratchpad";
 import { callTool, TOOLS, type ToolContext } from "../src/tools";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readTrajectory } from "../src/trajectory";
+import { requestsOf, userMessagesOf } from "./fixtures/requests";
 import { Watchdogs } from "../src/watchdogs";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -320,9 +321,9 @@ describe("the window-trim notices", () => {
       watchdogs: new Watchdogs(config.watchdogs),
       sleep: () => Promise.resolve(),
     });
-    const requests = readTrajectory(dir).filter((r) => r.t === "request");
-    const lastContent = (r: (typeof requests)[number]): string =>
-      (r["messages"] as { content: string }[]).slice(-1)[0]!.content;
+    // Each request as the model saw it, rebuilt from the slim records.
+    const requests = requestsOf(dir);
+    const lastContent = (r: (typeof requests)[number]): string => String(r.messages.slice(-1)[0]!.content);
     const noticeTurns = (kind: string): number[] =>
       requests.flatMap((r, i) => (lastContent(r).includes(`- ${kind}:`) ? [i] : []));
     const pending = noticeTurns("trim_pending");
@@ -440,20 +441,14 @@ describe("the reflection window on the record", () => {
       { content: null, toolCalls: [reflectCall] },
       ...Array.from({ length: REFLECT_MAX_TURNS + 2 }, () => ({ content: null, toolCalls: [noop] })),
     ];
-    const { records } = await run({ resting: true }, script);
+    const { dir, records } = await run({ resting: true }, script);
     const windows = records.filter((r) => r.t === "reflect_window");
     expect(windows.map((r) => r["event"])).toEqual(["open", "close"]);
     expect(windows[1]!["reason"]).toBe("breaker");
     // The model is told, in the assembled context of the turn after it fired.
-    const told = records.filter(
-      (r) =>
-        r.t === "request" &&
-        (r["messages"] as { content: string }[]).slice(-1)[0]!.content.includes("- reflect_ended:"),
-    );
+    const told = userMessagesOf(dir).filter((u) => u.includes("- reflect_ended:"));
     expect(told).toHaveLength(1);
-    expect((told[0]!["messages"] as { content: string }[]).slice(-1)[0]!.content).toContain(
-      REFLECT_BREAKER_NOTICE,
-    );
+    expect(told[0]!).toContain(REFLECT_BREAKER_NOTICE);
   });
 });
 

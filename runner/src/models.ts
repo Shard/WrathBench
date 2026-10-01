@@ -761,6 +761,21 @@ function foldStreak(s: StreakFold, rec: { t: string; reason?: unknown; notBefore
   }
 }
 
+/** `readSync` in its positional form: fill `buffer` from `position` on, answering the bytes read. */
+export type ReadAt = (fd: number, buffer: Buffer, offset: number, length: number, position: number) => number;
+
+/**
+ * How a scanner reads its file. Both default to what production uses; they
+ * exist so a test can make a few-kilobyte file span hundreds of reads, or make
+ * a read fail, instead of writing gigabytes to reach either.
+ */
+export interface ScanReads {
+  /** Bytes per read (`READ_CHUNK`). */
+  chunk?: number;
+  /** The read itself (`readSync`). */
+  read?: ReadAt;
+}
+
 /** What one pass over a trajectory answers. */
 export interface RecordTally {
   /** Records of each kind asked for; a kind nothing carries is zero, never absent. */
@@ -800,6 +815,12 @@ export interface RecordTally {
  * asynchronously through `Bun.file`, and this path is sync all the way up
  * through the fleet supervisor. Splitting happens on bytes, which is safe
  * because 0x0A cannot occur inside a UTF-8 multi-byte sequence.
+ *
+ * `from` starts the count at a byte other than zero, and nothing before it is
+ * read: the roster counts one attempt's turns as the records past the size the
+ * trajectory had when that attempt launched (`turnsSince`). Such a scanner is
+ * one-shot. It never goes into a `CountCache`, whose reuse check knows nothing
+ * of a starting byte and would answer its partial counts as the whole file's.
  */
 export class RecordCountScanner {
   readonly path: string;
@@ -816,19 +837,35 @@ export class RecordCountScanner {
   private consumed = 0;
   /** Bytes after the last newline: a record still being written, never counted. */
   private pending: Buffer = EMPTY;
+  private readonly chunk: number;
+  private readonly read: ReadAt;
+  /** Why the last scan answered null. */
+  private failed: unknown = undefined;
 
-  constructor(path: string, kinds: readonly string[], opts: { pauseStreak?: boolean } = {}) {
+  constructor(
+    path: string,
+    kinds: readonly string[],
+    opts: { pauseStreak?: boolean; from?: number } & ScanReads = {},
+  ) {
     this.path = path;
     this.kinds = [...kinds];
     this.pauseStreak = opts.pauseStreak === true;
     this.watched = new Set([...this.kinds, ...(this.pauseStreak ? [MODEL_RESPONSE_RECORD, PAUSE_RECORD, RESUME_RECORD] : [])]);
     this.needles = [...this.watched].map((k) => Buffer.from(`"${k}"`, "utf8"));
     this.counts = new Map<string, number>(this.kinds.map((k) => [k, 0]));
+    this.consumed = opts.from ?? 0;
+    this.chunk = opts.chunk ?? READ_CHUNK;
+    this.read = opts.read ?? readSync;
   }
 
   /** How far this scanner has read, complete lines and the partial one. */
   get size(): number {
     return this.consumed + this.pending.length;
+  }
+
+  /** Why the last scan answered null (the stat's or the read's error), for a caller that logs it; undefined after one that answered. */
+  get failure(): unknown {
+    return this.failed;
   }
 
   /** The record a line holds when it is one this scanner watches, else null. */
@@ -879,22 +916,24 @@ export class RecordCountScanner {
    * call resumes rather than starting over.
    */
   scan(): RecordTally | null {
+    this.failed = undefined;
     let size: number;
     try {
       size = statSync(this.path).size;
-    } catch {
+    } catch (e) {
+      this.failed = e;
       return null;
     }
     if (size <= this.size) return this.snapshot();
     let fd: number | null = null;
     try {
       fd = openSync(this.path, "r");
-      const chunk = Buffer.allocUnsafe(READ_CHUNK);
+      const chunk = Buffer.allocUnsafe(this.chunk);
       let carry = this.pending;
       this.pending = EMPTY;
       let pos = this.consumed + carry.length;
       while (pos < size) {
-        const n = readSync(fd, chunk, 0, Math.min(READ_CHUNK, size - pos), pos);
+        const n = this.read(fd, chunk, 0, Math.min(this.chunk, size - pos), pos);
         if (n <= 0) break;
         pos += n;
         const fresh = chunk.subarray(0, n);
@@ -903,7 +942,8 @@ export class RecordCountScanner {
         carry = rest.length === 0 ? EMPTY : Buffer.from(rest);
       }
       this.pending = carry;
-    } catch {
+    } catch (e) {
+      this.failed = e;
       return null;
     } finally {
       if (fd !== null) {

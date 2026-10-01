@@ -4,10 +4,13 @@ How cost is measured in this harness, and the rules learned measuring it. It
 carries no per-episode resource tables, pricing table or platform reliability
 counts: such a snapshot goes stale the moment a series re-arms. Cost
 surfaces belong in the UI, and the viewer has them: actual and expected cost
-on the run page, and cost columns on the run, model and fleet listings. What
-it lacks is a projected cost for a model not yet run; that is to come with
-drafted models, as a list-price estimate over the observed e90 token profile
-(GitHub issue #66).
+on the run page, and cost columns on the run, model and fleet listings. A
+model not yet run gets one projected figure, on its draft on the `/config` page
+(docs/RUNBOOK.md, "Adding a model"): the catalogue's list price applied to the
+median counted e90's tokens. It is labelled an estimate because it is the
+extrapolation from another model's token shape that the first rule below warns
+against, and it reads low for a reasoning-heavy model — by two to three times,
+the operator's figure in GitHub issue #66.
 
 ## 1. Where the data lives
 
@@ -21,6 +24,14 @@ drafted models, as a list-price estimate over the observed e90 token profile
   by backend without replaying the trajectory. Routing is pinned
   (docs/METHODOLOGY.md, "Routing is pinned"), so a cache miss attributable
   to a backend move is now something the config has to have asked for.
+- Under the openai adapter the same record also carries `usageRaw`: the
+  provider's own `usage` object as sent, kept to its numeric fields (one
+  nested level, capped in keys and key length; `runner/src/adapter.ts`), for
+  every provider alike. It is there to reconcile a bill against fields the
+  normalised block has no name for, such as DeepSeek's
+  `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` or OpenRouter's
+  `cost_details`. Nothing derived reads it, and the public projection
+  leaves it out.
 - The claude-code harness emits `usageRaw`/`costUsd` only on a clean
   `claude_result` (natural completion), so a watchdog kill would cut the stream
   before that record landed; the driver winds down instead — it records the

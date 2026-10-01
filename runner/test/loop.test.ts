@@ -732,6 +732,65 @@ describe("runLoop", () => {
     options.trajectory.close();
   });
 
+  test("the provider's raw usage lands beside the normalised block and never reaches the model", async () => {
+    const usageRaw = {
+      prompt_tokens: 1200,
+      completion_tokens: 34,
+      prompt_cache_hit_tokens: 1024,
+      prompt_cache_miss_tokens: 176,
+      completion_tokens_details: { reasoning_tokens: 12 },
+    };
+    // The same two turns with and without it: what the model is handed must
+    // not differ by a byte.
+    async function run(withRaw: boolean): Promise<{ dir: string; seen: ChatRequest[] }> {
+      const seen: ChatRequest[] = [];
+      const adapter: ChatAdapter = {
+        label: "raw-usage",
+        complete: (req): Promise<AdapterOutcome> => {
+          seen.push(structuredClone({ messages: req.messages, tools: req.tools }));
+          if (seen.length > 2) return Promise.resolve({ kind: "stub-complete" });
+          return Promise.resolve({
+            kind: "ok",
+            turn: {
+              content: "ok",
+              toolCalls: [{ id: `c${seen.length}`, name: "write_scratchpad", arguments: '{"content":"# hi"}' }],
+              usage: { prompt_tokens: 1200, completion_tokens: 34 },
+              ...(withRaw && seen.length === 1 ? { usageRaw } : {}),
+            },
+          });
+        },
+      };
+      const { dir, options } = setup(adapter);
+      await runLoop(options);
+      options.trajectory.close();
+      return { dir, seen };
+    }
+    const withRaw = await run(true);
+    const without = await run(false);
+
+    const responses = readTrajectory(withRaw.dir).filter((r) => r.t === "response");
+    expect(responses).toHaveLength(2);
+    expect(responses[0]!["usageRaw"]).toEqual(usageRaw);
+    expect(responses[0]!["usage"]).toEqual({ prompt_tokens: 1200, completion_tokens: 34 });
+    expect("usageRaw" in responses[1]!).toBe(false);
+
+    // Every request after the first carries the turn before it in history.
+    expect(withRaw.seen).toHaveLength(3);
+    expect(without.seen).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      // The trailing context message is rebuilt each turn from the clock and
+      // the world; everything before it is the history the response fed.
+      const a = withRaw.seen[i]!;
+      const b = without.seen[i]!;
+      expect(JSON.stringify(a.messages.slice(0, -1))).toBe(JSON.stringify(b.messages.slice(0, -1)));
+      expect(JSON.stringify(a.tools)).toBe(JSON.stringify(b.tools));
+      expect(JSON.stringify(a)).not.toContain("prompt_cache_hit_tokens");
+    }
+    for (const r of readTrajectory(withRaw.dir).filter((r) => r.t === "request")) {
+      expect(JSON.stringify(r)).not.toContain("prompt_cache_hit_tokens");
+    }
+  });
+
   test("a length finish is recorded and raises a provider_truncated notice next turn", async () => {
     let call = 0;
     const truncating: ChatAdapter = {
@@ -898,22 +957,31 @@ describe("prompt-cache prefix discipline", () => {
   test("serialized request N+1 extends request N byte-for-byte up to the append point, across a trim", async () => {
     // One tool call per turn -> history grows 2 messages/turn, so 30 turns
     // cross the MESSAGE_WINDOW_MAX=48 ceiling and exercise one block trim.
-    const adapter = new StubAdapter(
+    const stub = new StubAdapter(
       Array.from({ length: 30 }, (_, i) => ({
         content: `turn ${i}`,
         toolCalls: [{ name: "run_snippet", arguments: { code: `ping(${i})` } }],
       })),
     );
-    const { dir, options } = setup(adapter);
+    // Captured where the bytes leave the loop: the message array handed to
+    // the adapter, serialised on the way in.
+    const sent: string[][] = [];
+    const adapter: ChatAdapter = {
+      label: stub.label,
+      complete: (req) => {
+        sent.push(req.messages.map((m) => JSON.stringify(m)));
+        return stub.complete(req);
+      },
+    };
+    const { options } = setup(adapter);
     await runLoop(options);
-    const reqs = readTrajectory(dir).filter((r) => r.t === "request");
-    expect(reqs.length).toBe(31); // 30 scripted turns + the stub-complete turn
+    expect(sent.length).toBe(31); // 30 scripted turns + the stub-complete turn
     let trims = 0;
-    for (let i = 1; i < reqs.length; i++) {
+    for (let i = 1; i < sent.length; i++) {
       // Drop the trailing per-turn user context message: it is regenerated
       // every turn by design and is never part of the cacheable prefix.
-      const prev = (reqs[i - 1]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
-      const next = (reqs[i]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
+      const prev = sent[i - 1]!.slice(0, -1);
+      const next = sent[i]!.slice(0, -1);
       if (next.length < prev.length) {
         trims++; // the one deliberate cache miss per block (hysteretic window)
         continue;

@@ -41,7 +41,7 @@ The SDK is versioned. Its surface is part of the harness version.
 - Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with network access only to the module, an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), and a Linux Landlock filesystem ruleset applied before exec (`runner/src/sandbox/confine.ts`) so it can read the interpreter, `runner/`, `sdk/` and `node_modules/` and nothing else — not `.env`, not the home directory. Hard per-snippet timeout.
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
-- Trajectory log: JSONL per run containing every snippet, its result, every event batch the model saw, and a periodic state line (level, zone, XP, position).
+- Trajectory log: JSONL per run containing every snippet, its result, every event batch the model saw, and a periodic state line (level, zone, XP, position). A fixed-loop `request` record carries the turn's fresh user message whole and points at the rest of the prompt instead of re-logging it: the system prompt text once per process segment, and the message window as bounds over the `response` and result records already on the file, with a hash of the bytes sent. `runner/src/replay.ts` rebuilds every request from the file alone and fails on any that does not hash to what was sent; the CLI scaffolds' requests keep their own shape (`runner/README.md`, "The request record and the replay").
 - Model adapter: one OpenAI-compatible chat layer. Provider and model are run config.
 
 **Harness-delivered hints.** The SDK attaches a per-status recovery hint to a failed action result (`moveTo` `too_far`, `target_off_mesh`, `drop`, …), but that hint reaches the model only if the snippet's own code keeps it: one run took 41 `too_far` refusals in four hours while reducing every result to `.status`, and read the hint zero times. So the client also tallies each hint-bearing failure per (action, status) on a channel the snippet cannot strip, and the harness drains it into the next tool result of any kind: a snippet's result carries what its eval drained, and every other tool's result carries whatever was pending when it answered, so a hint raised by a background routine does not wait for the next snippet. `tools.ts` renders it as a short block at the foot of that result — one line per status with a count, the hint text unchanged and nothing added to it, the tool's own text above it untouched. It goes in the tool result rather than the next turn's harness-notice block because a claude-code turn is a whole CLI session: a notice there would arrive a turn late, and delivery must not cost the model a follow-up inspection. Both drivers dispatch through the same `callTool`, so both get it, and the trajectory's `snippet_result` or `tool_result` records it as part of what the model saw.
@@ -253,8 +253,10 @@ losing it costs a backfill rather than a run.
 
 The corpus was measured at 1,148 runs and 11 GB, of which 7.5 GB was
 `trajectory.jsonl` and the largest single file 669 MB. Roughly three quarters of
-those bytes are one field: `messages`, the rendered context re-logged on every
-turn. Without a store, every cold request to a listing route opens every
+those bytes were one field: `messages`, the rendered context re-logged on every
+turn. The fixed loop has since stopped re-logging it (a slim `request` keeps the
+fresh user message and points at the rest), but the trajectories written before
+that keep it. Without a store, every cold request to a listing route opens every
 `run.sqlite` over iSCSI and re-reads every trajectory to count what the
 page shows. That is what the store is for.
 

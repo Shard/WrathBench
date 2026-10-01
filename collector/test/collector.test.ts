@@ -19,7 +19,7 @@ import { OffsetStore } from "../src/offsets";
 import { memorySink } from "../src/sink";
 import { splitStatements } from "../src/schema";
 import { tailLines } from "../src/tailer";
-import { parseLine, usageOf, TURN_KINDS } from "../src/lines";
+import { parseLine, turnRow, usageOf, TURN_KINDS } from "../src/lines";
 import { retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
 import { RunTotalsScanner } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
@@ -449,6 +449,33 @@ describe("the boundary", () => {
     expect(usageOf({ usage: { cache_creation_input_tokens: 7 } }).cache_write_tokens).toBe(7);
     expect(usageOf({ usage: { cache_write_tokens: 11, cache_creation_input_tokens: 7 } }).cache_write_tokens).toBe(11);
     expect(usageOf({ usage: {} }).cache_write_tokens).toBeNull();
+  });
+
+  test("a response's raw provider usage leaves the columns alone and rides in raw", () => {
+    // The openai adapter keeps the provider's own usage object beside the
+    // normalised one; the columns read the normalised block only.
+    const rec = {
+      t: "response",
+      ts: 1,
+      turn: 1,
+      usage: { prompt_tokens: 12_000, completion_tokens: 340, cached_tokens: 11_008, reasoning_tokens: 210 },
+    };
+    const usageRaw = {
+      prompt_tokens: 99,
+      prompt_cache_hit_tokens: 11_008,
+      prompt_cache_miss_tokens: 992,
+      completion_tokens_details: { reasoning_tokens: 1 },
+    };
+    const line = JSON.stringify({ ...rec, usageRaw });
+    const parsed = parseLine(line);
+    if (!parsed.ok) throw new Error("fixture line did not parse");
+    const ctx = { runId: "r", lineNo: 1, ingestedAt: 0 };
+    const row = turnRow(ctx, parsed.rec, line);
+    const plain = turnRow(ctx, rec, JSON.stringify(rec));
+    expect({ ...row, raw: "" }).toEqual({ ...plain, raw: "" });
+    expect(row["input_tokens"]).toBe(12_000);
+    expect(row["reasoning_tokens"]).toBe(210);
+    expect(JSON.parse(String(row["raw"]))).toMatchObject({ usageRaw });
   });
 });
 

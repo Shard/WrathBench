@@ -138,6 +138,11 @@ export function turnRow(ctx: RowContext, rec: Record<string, unknown>, raw: stri
     is_error: rec["isError"] === undefined ? null : rec["isError"] === true ? 1 : 0,
     event_count: int(rec["count"]) ?? (Array.isArray(events) ? events.length : null),
     finish_reason: str(rec["finishReason"]),
+    // The record's own message array: a full request's whole prompt. A slim
+    // fixed-loop request (`runner/src/request-record.ts`) has none, and lands
+    // empty here rather than with a partial array that would read as a prompt;
+    // its fresh user message and window bounds are in `raw`, and the prompt it
+    // stood for is rebuilt by `bun runner/src/replay.ts`, not by SQL.
     messages: json(rec["messages"]),
     events: json(events),
     raw,

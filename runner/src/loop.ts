@@ -21,6 +21,7 @@ import {
 import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf } from "./reflect";
 import type { EpisodicLog } from "./episodic";
 import { buildSystemPrompt } from "./prompt";
+import { fixedLoopRequestRecord } from "./request-record";
 import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
 import { harnessOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
@@ -1001,6 +1002,12 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
    * window shrank says so in its own `[harness notices]`.
    */
   let lastCut = 0;
+  /**
+   * The system prompt text this process last wrote onto a request record.
+   * Null until the first request, so every process segment carries the text
+   * once and a replay never has to look before the segment for it.
+   */
+  let lastSystemText: string | null = null;
   // The mid-turn state clock: `build` samples once per turn, and
   // that used to be this loop's only sampling — one 485s request left an
   // 8.1-minute blackout with no state row and no XP signal. Live for the whole
@@ -1076,14 +1083,34 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         return terminate(integrity.reason, integrity.detail);
       }
 
+      const systemText = buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki);
       const messages: ChatMessage[] = [
-        { role: "system", content: buildSystemPrompt(config.objective, config.episode, harnessOf(config.driver), config.wiki) },
+        { role: "system", content: systemText },
         ...messageWindow(history),
         { role: "user", content: contextText },
       ];
 
-      // 4. model request
-      trajectory.append({ t: "request", turn, adapter: o.adapter.label, messages });
+      // 4. model request. The record keeps the fresh user message and points
+      // at the rest — the system text (written once per process, and again if
+      // it changes) and the window, which is records already on the file — with
+      // a hash of the bytes sent (`request-record.ts`). Nothing about what is
+      // sent changes: `messages` is built above exactly as before and is only read here.
+      const { record, mismatch } = fixedLoopRequestRecord({
+        turn,
+        adapter: o.adapter.label,
+        messages,
+        history,
+        from: messageWindowCut(history),
+        withSystemText: systemText !== lastSystemText,
+      });
+      trajectory.append(record as { t: string });
+      if (mismatch === null) {
+        // Only a slim record carries the text: a fallback full record has none
+        // to register, so the next slim request must carry it again.
+        lastSystemText = systemText;
+      } else {
+        trajectory.append({ t: "harness", kind: "request_replay_mismatch", turn, detail: mismatch });
+      }
       const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
@@ -1146,6 +1173,10 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // Only when the provider reported it; absent otherwise, so the viewer
         // keeps falling back to its estimate rather than reading a zero.
         ...(outcome.turn.usage !== undefined ? { usage: outcome.turn.usage } : {}),
+        // The provider's own usage object beside it, bounded to numbers, for
+        // reconciling a bill against fields the normalisation has no name for
+        // (docs/COSTS.md). Record-only: it never reaches `assistant` or history.
+        ...(outcome.turn.usageRaw !== undefined ? { usageRaw: outcome.turn.usageRaw } : {}),
         ...(typeof servedBy === "string" && servedBy.length > 0 ? { provider: servedBy } : {}),
         ...(typeof servedModel === "string" && servedModel.length > 0 ? { model: servedModel } : {}),
         ...(outcome.turn.providerRequestId !== undefined

@@ -154,9 +154,11 @@ ORDER BY (run_id, line_no);
 
 -- The turn-shaped trajectory lines: request, response, snippet,
 -- snippet_result, tool_call, tool_result, events_served. This is the big table
--- and the reason the store exists — ~75% of a trajectory's bytes are the
+-- and the reason the store exists — ~75% of a trajectory's bytes were the
 -- rendered `messages` re-logged every turn, and columnar ZSTD across turns
--- compresses that far better than gzip over the whole file.
+-- compresses that far better than gzip over the whole file. The fixed loop now
+-- writes slim requests that carry only the fresh user message and point at the
+-- rest (runner/src/request-record.ts), so on those `messages` is empty.
 CREATE TABLE IF NOT EXISTS wrathbench.turns
 (
   run_id            String,
@@ -181,7 +183,10 @@ CREATE TABLE IF NOT EXISTS wrathbench.turns
   -- How many events an `events_served` line carried.
   event_count       Nullable(Int64),
   finish_reason     String,
-  -- The rendered context of a `request`. The single largest thing in the
+  -- The rendered context of a full `request`: every claude-code and codex
+  -- request, and every fixed-loop request written before slim records. Empty
+  -- on a slim request, whose prompt is rebuilt from the file by
+  -- `bun runner/src/replay.ts`, never here. The single largest thing in the
   -- corpus, and the one column a query should name explicitly rather than
   -- reach with SELECT *.
   messages          String CODEC(ZSTD(3)),

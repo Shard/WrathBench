@@ -31,26 +31,38 @@
  */
 
 import { For, Show, createMemo, createSignal, onMount } from "solid-js";
+import type { DraftView, DraftsResponse } from "@viewer/api-types";
 import { SNAPSHOT_MODE } from "../api/client";
 import { ConfigError, configApi, type AuditRow, type ConfigResponse } from "../api/config-client";
+import { Collapsible } from "../components/Collapsible";
 import {
   BILLINGS,
+  DRAFT_FILTERS,
   EMPTY_NEW_ENTRY,
   IDLES,
   TIERS,
   auditVerb,
+  draftsShown,
   editorText,
+  estimateHint,
+  fetchSummary,
+  fmtEstimate,
+  fmtPrice,
   formOf,
   isRosterName,
   jsonEditorKeys,
   newEntryDoc,
+  promoteBody,
+  promoteFormOf,
   rosterWrite,
+  type DraftFilter,
   type EditableField,
   type NewEntryForm,
+  type PromoteForm,
   type RosterEntry,
 } from "../lib/config";
 import { SNAPSHOT_WITHHELD_TEXT } from "../lib/errors";
-import { fmtWhen } from "../lib/format";
+import { fmtWhen, stamp } from "../lib/format";
 
 /** The operator this tab writes as, remembered so it is typed once a session. */
 const ACTOR_KEY = "wrathbench.config.actor";
@@ -104,12 +116,31 @@ export default function Config() {
     setRowMessages(next);
   };
 
+  /*
+   * The drafts load on their own, so a catalogue-side failure never costs the
+   * page its config. Fetch and ignore reload only these; a promotion is a
+   * roster write and reloads everything through `write`.
+   */
+  const [drafts, setDrafts] = createSignal<DraftsResponse | undefined>(undefined);
+  const [draftsError, setDraftsError] = createSignal<unknown>(undefined);
+  const reloadDrafts = async (): Promise<void> => {
+    try {
+      setDrafts(await configApi.drafts());
+      setDraftsError(undefined);
+    } catch (e) {
+      setDraftsError(e);
+    }
+  };
+
   const reload = async (): Promise<void> => {
     try {
       const next = await configApi.config();
       setDoc(next);
       setLoadError(undefined);
-      if (next.seeded) setAudit((await configApi.audit(50)).audit);
+      if (next.seeded) {
+        setAudit((await configApi.audit(50)).audit);
+        await reloadDrafts();
+      }
     } catch (e) {
       setLoadError(e);
     }
@@ -234,6 +265,8 @@ export default function Config() {
               <RosterTable rows={roster()} write={write} messages={rowMessages()} setMessage={setRowMessage} />
 
               <AddEntry write={write} />
+
+              <Drafts body={drafts()} error={draftsError()} write={write} actor={actor} reload={reloadDrafts} />
 
               <h3 class="section">policy, accounts, campaigns, pinned jobs</h3>
               <p class="dim">
@@ -584,6 +617,261 @@ function AddEntry(props: { write: Write }) {
         <p class={message()?.startsWith("added") === true ? "ok" : "err"}>{message()}</p>
       </Show>
     </div>
+  );
+}
+
+type Notice = { ok: boolean; text: string };
+
+/**
+ * New models from the OpenRouter catalogue (`runner/viewer/drafts.ts`): fetch
+ * on demand, newest first, promote at a chosen tier or ignore. A draft is not
+ * config — nothing schedules it — so fetch and ignore take no note and leave
+ * no history line; a promotion is a roster write and goes through `write`
+ * like every other one.
+ */
+function Drafts(props: {
+  body: DraftsResponse | undefined;
+  error: unknown;
+  write: Write;
+  actor: () => string;
+  reload: () => Promise<void>;
+}) {
+  const [filter, setFilter] = createSignal<DraftFilter>("all");
+  const [busy, setBusy] = createSignal(false);
+  // Held here, not on a row: a successful promote or ignore reloads the list
+  // and rebuilds every row, and the line saying what happened must outlive that.
+  const [notice, setNotice] = createSignal<Notice | null>(null);
+  const shown = createMemo(() => draftsShown(props.body?.drafts ?? [], filter()));
+  const ignored = (): DraftView[] => props.body?.ignored ?? [];
+
+  const fetchNow = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const r = await configApi.fetchDrafts();
+      setNotice({ ok: true, text: fetchSummary(r) });
+      await props.reload();
+    } catch (e) {
+      setNotice({ ok: false, text: refusal(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unignore = async (model: string): Promise<void> => {
+    try {
+      await configApi.unignoreDraft(model, props.actor());
+      setNotice({ ok: true, text: `un-ignored ${model}` });
+      await props.reload();
+    } catch (e) {
+      setNotice({ ok: false, text: refusal(e) });
+    }
+  };
+
+  return (
+    <>
+      <h3 class="section">drafts</h3>
+      {/* One row of the site's own chips, labelled the way the ladder labels its axes. */}
+      <div class="chips">
+        <button type="button" disabled={busy()} onClick={() => void fetchNow()}>
+          {busy() ? "fetching…" : "fetch new models"}
+        </button>
+        <span class="dim">billing</span>
+        <For each={DRAFT_FILTERS}>
+          {(f) => (
+            <button type="button" class={filter() === f ? "on" : ""} onClick={() => setFilter(f)}>
+              {f}
+            </button>
+          )}
+        </For>
+        <span class="dim mono">{shown().length}</span>
+      </div>
+      <Show when={props.error !== undefined}>
+        <div class="banner bad">{refusal(props.error)}</div>
+      </Show>
+      <Show when={notice()}>{(n) => <p class={n().ok ? "ok" : "err"}>{n().text}</p>}</Show>
+      <div class="scroller">
+        <table class="configtable">
+          <thead>
+            <tr>
+              <th>model</th>
+              <th title="when the catalogue listed it">listed</th>
+              <th title="derived from the slug, as for any roster entry">billing</th>
+              <th title="catalogue list price, $ per million tokens: input / output">price</th>
+              <th title={estimateHint(props.body?.profile ?? null)}>est. e90</th>
+              <th title="what a promoted entry is routed to with no routing of its own">routing</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            <Show when={shown().length === 0}>
+              <tr>
+                <td colSpan={7} class="dim">
+                  No drafts.
+                </td>
+              </tr>
+            </Show>
+            <For each={shown()}>
+              {(d) => <DraftRow draft={d} write={props.write} actor={props.actor} reload={props.reload} notify={setNotice} />}
+            </For>
+          </tbody>
+        </table>
+      </div>
+      <Collapsible title="ignored" summary={String(ignored().length)}>
+        <table class="configtable">
+          <tbody>
+            <Show when={ignored().length === 0}>
+              <tr>
+                <td class="dim">None.</td>
+              </tr>
+            </Show>
+            <For each={ignored()}>
+              {(d) => (
+                <tr>
+                  <td class="mono" title={d.name ?? ""}>
+                    {d.model}
+                  </td>
+                  <td class="dim" title={stamp(d.ignoredAt)}>
+                    {d.ignoredBy ?? "—"} · {fmtWhen(d.ignoredAt)}
+                  </td>
+                  <td>
+                    <button type="button" onClick={() => void unignore(d.model)}>
+                      un-ignore
+                    </button>
+                  </td>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </Collapsible>
+    </>
+  );
+}
+
+function DraftRow(props: {
+  draft: DraftView;
+  write: Write;
+  actor: () => string;
+  reload: () => Promise<void>;
+  notify: (n: Notice) => void;
+}) {
+  const [form, setForm] = createSignal<PromoteForm | null>(null);
+  const [busy, setBusy] = createSignal(false);
+  const [message, setMessage] = createSignal<string | null>(null);
+  const set = (k: keyof PromoteForm, v: string): void => {
+    const f = form();
+    if (f !== null) setForm({ ...f, [k]: v });
+  };
+
+  const promote = async (): Promise<void> => {
+    const f = form();
+    if (f === null) return;
+    let body;
+    try {
+      body = promoteBody(props.draft.model, f);
+    } catch (e) {
+      setMessage(refusal(e));
+      return;
+    }
+    setBusy(true);
+    try {
+      // A refusal does not reload, so this row survives with what was typed.
+      const err = await props.write((att) => configApi.promoteDraft(body, att));
+      if (err !== null) setMessage(err);
+      else props.notify({ ok: true, text: `promoted ${props.draft.model} as roster/${body.name}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ignore = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await configApi.ignoreDraft(props.draft.model, props.actor());
+      props.notify({ ok: true, text: `ignored ${props.draft.model}` });
+      await props.reload();
+    } catch (e) {
+      setMessage(refusal(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <tr>
+        <td class="mono" title={props.draft.name ?? ""}>
+          {props.draft.model}
+        </td>
+        <td class="dim" title={stamp(props.draft.created)}>
+          {fmtWhen(props.draft.created)}
+        </td>
+        <td>{props.draft.billing}</td>
+        <td class="dim mono">{fmtPrice(props.draft.price)}</td>
+        <td class="mono">{fmtEstimate(props.draft.estimateUsd)}</td>
+        <td class="dim">{props.draft.routing}</td>
+        <td>
+          <button
+            type="button"
+            class={form() !== null ? "on" : ""}
+            disabled={busy()}
+            onClick={() => {
+              setForm(form() === null ? promoteFormOf(props.draft.suggestedName) : null);
+              setMessage(null);
+            }}
+          >
+            promote
+          </button>{" "}
+          <button type="button" disabled={busy()} onClick={() => void ignore()}>
+            ignore
+          </button>
+        </td>
+      </tr>
+      <Show when={form()}>
+        {(f) => (
+          <tr>
+            <td colSpan={7}>
+              <div class="configform">
+                <label>
+                  name
+                  <input type="text" value={f().name} onInput={(e) => set("name", e.currentTarget.value)} />
+                </label>
+                <label>
+                  tier
+                  <select onChange={(e) => set("tier", e.currentTarget.value)}>
+                    <option value="" selected={f().tier === ""}>
+                      —
+                    </option>
+                    <For each={TIERS}>{(t) => <option value={t} selected={f().tier === t}>{t}</option>}</For>
+                  </select>
+                </label>
+                <label>
+                  race
+                  <input type="text" value={f().race} onInput={(e) => set("race", e.currentTarget.value)} />
+                </label>
+                <label>
+                  class
+                  <input type="text" value={f().class} onInput={(e) => set("class", e.currentTarget.value)} />
+                </label>
+                <button type="button" disabled={busy()} onClick={() => void promote()}>
+                  promote {props.draft.model}
+                </button>
+                <button type="button" onClick={() => setForm(null)}>
+                  cancel
+                </button>
+              </div>
+            </td>
+          </tr>
+        )}
+      </Show>
+      <Show when={message() !== null}>
+        <tr>
+          <td colSpan={7} class="err">
+            {message()}
+          </td>
+        </tr>
+      </Show>
+    </>
   );
 }
 

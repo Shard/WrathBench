@@ -45,6 +45,10 @@ bun runner/src/mcp.ts [--run-id <id>] [--token <token>]
 # read a run in minutes
 bun runner/src/timeline.ts <run-id>
 
+# rebuild every fixed-loop request from the trajectory and check it against
+# the hash of what was sent; --line N prints one request rebuilt
+bun runner/src/replay.ts <run-id> [--line N]
+
 # manual classification, chiefly environment-defect
 bun runner/src/classify.ts <run-id> <reason> [note]
 ```
@@ -304,13 +308,12 @@ reachable module URL is the alternative.
 ## The context, the prompt and the scratchpad tools
 
 The context policy is `docs/METHODOLOGY.md` ("Context policy"); its encoding
-is `src/context.ts`. `assembleContext` is pure and tested byte-identical, so a
-trajectory replays into exactly the context the model saw, and a loop-level
-test pins the byte-stable prefix where the bytes leave (docs/COSTS.md
-measured that the prefix the policy promises is the prefix that goes over the
-wire). The HUD state summary is a fixed-format presentation of
-already-observed fields, never new observation; a field no event carried
-reads `unobserved`.
+is `src/context.ts`. `assembleContext` is pure and tested byte-identical, and a
+loop-level test pins the byte-stable prefix where the bytes leave the loop, at
+the adapter (docs/COSTS.md measured that the prefix the policy promises is the
+prefix that goes over the wire). The HUD state summary is a fixed-format
+presentation of already-observed fields, never new observation; a field no
+event carried reads `unobserved`.
 
 The system prompt states that this is the complete, unmodified 3.3.5a world —
 every zone, city, road, flight path, boat and tram a player could use exists
@@ -336,6 +339,66 @@ changed under 20% of the pad, which is a rewrite tax on the models least able
 to afford the output tokens; the sample does not show it fleet-wide, so this
 is the profile the evidence covers. There is no read tool: the pad is in
 every turn's context already (docs/ARCHITECTURE.md, runner section).
+
+### The request record and the replay
+
+The fixed loop's `request` record keeps only what nothing else in the
+trajectory holds, and points at the rest (`src/request-record.ts`). A request
+is `[system prompt, ...message window, fresh user message]`, and of those only
+the user message — goal line, notices, HUD, events, scratchpad — is new each
+turn. The window is a slice of messages already on the file: each assistant
+message is its `response` record's `message`, each tool message its
+`tool_result` / `snippet_result` record's `text`, with the `tool_call_id`
+read positionally off the response it answers. So the record carries:
+
+```json
+{"ts":…,"t":"request","turn":30,"adapter":"openai-compatible:…","slim":1,
+ "systemHash":"sha256:…16 hex","window":{"from":24,"to":49,"fromTurn":13,"cap":4000},
+ "user":"[turn 30] Goal: …","requestHash":"sha256:…64 hex",
+ "messageCount":27,"systemChars":15012,"promptChars":59321}
+```
+
+- `user` is the fresh user message, verbatim.
+- `window` is `[from, to)` into this process segment's history; `to` is the
+  history's length, so `to: 0` opens a segment (a resumed run starts with an
+  empty history), read off the writer's own state rather than inferred from
+  `resume` or `meta` records. `fromTurn` is the turn whose response opens the
+  window; `cap` is the per-message cap it was cut with.
+- `systemText` — the system prompt itself — rides on a segment's first request,
+  and again whenever its hash changes; `systemHash` is `promptHash()`, the
+  function the comparability tuple stamps, so it equals the run's
+  `comparability.promptHash`. The text is recorded rather than regenerated from
+  `prompt.ts` because the prompt moves on and a trajectory has to replay into
+  what *its* build sent, across any number of resumes onto newer builds.
+- `requestHash` is sha256 of `JSON.stringify(messages)` exactly as handed to
+  the adapter — the bytes of the request body's `messages`. The tool list and
+  whatever the adapter adds around the messages are outside it, as they were
+  outside the full record.
+- The counts are what a reader used to compute off the message array.
+
+The writer rebuilds each request from its own history before writing it slim,
+and if the rebuild would not reproduce the bytes it writes the whole message
+array instead (with `slimFallback` naming why) plus a `harness` record of kind
+`request_replay_mismatch`: a slim record is only written when it is known to
+replay. A build that changes how a request is put together from these parts
+writes a new `slim` version and keeps this one's rebuild.
+
+`src/replay.ts` rebuilds every slim request of a run from the trajectory alone,
+streaming the file, and checks each against `requestHash`; a mismatch is
+reported with its line, segment and turn and exits non-zero, because it is a
+harness bug or an edited record. Records that carry their whole message array
+— every fixed-loop request written before the slim shape, and every
+claude-code and codex request, whose context the CLI owns and which keep
+`messages: [user]` as before — are counted, not rebuilt. A file can hold both:
+a run that started before the slim shape and resumed after it has full records
+then slim ones, and every reader takes either (`runner/viewer/tail.ts` reads a
+slim record's stored counts, and its raw view rebuilds the request through the
+same code). Old trajectories are never rewritten.
+
+A secret the trajectory scrubs (`Trajectory.redact`) that reached a message
+fails the replay of every request whose prompt held it: the record has
+`[redacted]` where the request had the secret. That was already true of a full
+record, which could not reproduce those bytes either.
 
 ## The sandbox
 

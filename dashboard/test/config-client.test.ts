@@ -120,3 +120,45 @@ describe("refusals", () => {
     expect(err.message).toBe("502");
   });
 });
+
+describe("drafts", () => {
+  test("each draft call goes where it says; the model rides in the body, never the path", async () => {
+    const s = stub({});
+    const c = createConfigClient({ fetch: s.fetch });
+    await c.drafts();
+    await c.fetchDrafts();
+    await c.ignoreDraft("z-ai/glm-6:free", "mark");
+    await c.unignoreDraft("z-ai/glm-6:free");
+    await c.promoteDraft({ model: "z-ai/glm-6", name: "glm-6", tier: "t0" }, ATT);
+    expect(s.calls.map((x) => [x.method, x.url, x.body])).toEqual([
+      ["GET", "/api/config/proposed", undefined],
+      ["POST", "/api/config/proposed/fetch", undefined],
+      ["POST", "/api/config/proposed/ignore", JSON.stringify({ model: "z-ai/glm-6:free" })],
+      ["POST", "/api/config/proposed/unignore", JSON.stringify({ model: "z-ai/glm-6:free" })],
+      ["POST", "/api/config/proposed/promote", JSON.stringify({ model: "z-ai/glm-6", name: "glm-6", tier: "t0" })],
+    ]);
+  });
+
+  test("only a promotion is attributed with a note; a fetch carries no one, an ignore only who", async () => {
+    const s = stub({});
+    const c = createConfigClient({ fetch: s.fetch });
+    await c.fetchDrafts();
+    await c.ignoreDraft("a/b", "mark");
+    await c.promoteDraft({ model: "a/b", name: "b", tier: "t1" }, ATT);
+    const [fetched, ignored, promoted] = s.calls;
+    expect(fetched?.headers[ACTOR_HEADER]).toBeUndefined();
+    expect(fetched?.headers[NOTE_HEADER]).toBeUndefined();
+    expect(ignored?.headers[ACTOR_HEADER]).toBe("mark");
+    expect(ignored?.headers[NOTE_HEADER]).toBeUndefined();
+    expect(promoted?.headers[ACTOR_HEADER]).toBe("mark");
+    expect(promoted?.headers[NOTE_HEADER]).toBe("promote");
+  });
+
+  test("a promotion the parser refuses comes back as its sentence", async () => {
+    const sentence = "roster:claude: entry anthropic/claude-x: roster policy — claude models run only via the claude-code driver";
+    const c = createConfigClient({ fetch: stub({ error: sentence, key: "roster/claude" }, 400).fetch });
+    const err = (await c.promoteDraft({ model: "anthropic/claude-x", name: "claude", tier: "t0" }, ATT).catch((e: unknown) => e)) as ConfigError;
+    expect(err.status).toBe(400);
+    expect(err.message).toBe(sentence);
+  });
+});

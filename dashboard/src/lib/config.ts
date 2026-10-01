@@ -23,7 +23,13 @@
  * `parseFleet` and the refusal comes back verbatim; none of this second-guesses
  * it, and the one validation below (`isRosterName`) exists only because the
  * name is in the URL rather than in the body.
+ *
+ * The drafts' half — the toggle, the promote form, the estimate's labels — is
+ * at the bottom, for the same reason: what a promotion sends is decided here.
  */
+
+import type { DraftFetchResponse, DraftPriceView, DraftPromoteBody, E90TokenProfileView } from "@viewer/api-types";
+import { fmtTokens, fmtUsd } from "./format";
 
 /** The tiers a roster entry may carry. The policy names them; these are the ones the page offers. */
 export const TIERS = ["t0", "t1", "t2"] as const;
@@ -201,6 +207,83 @@ export function newEntryDoc(form: NewEntryForm): Record<string, unknown> {
     doc[key] = n;
   }
   return doc;
+}
+
+/* ------------------------------------------------------------- drafts --- */
+
+/** The review list's billing toggle. */
+export const DRAFT_FILTERS = ["all", "free", "paid"] as const;
+export type DraftFilter = (typeof DRAFT_FILTERS)[number];
+
+/** The drafts the toggle shows, in the server's order (newest first). */
+export function draftsShown<T extends { billing: "free" | "paid" }>(drafts: readonly T[], filter: DraftFilter): T[] {
+  return filter === "all" ? [...drafts] : drafts.filter((d) => d.billing === filter);
+}
+
+/** The promote form. The tier starts empty: promotion never picks one. */
+export interface PromoteForm {
+  name: string;
+  tier: string;
+  race: string;
+  class: string;
+}
+
+export function promoteFormOf(suggestedName: string): PromoteForm {
+  return { name: suggestedName, tier: "", race: "", class: "" };
+}
+
+/**
+ * The body a promotion is POSTed as, or a thrown sentence when the form cannot
+ * make one. Only what the path cannot carry and the server would otherwise
+ * refuse less clearly is checked here: a name, a chosen tier, numbers for
+ * race and class. Everything else is the parser's, verbatim.
+ */
+export function promoteBody(model: string, form: PromoteForm): DraftPromoteBody {
+  const name = form.name.trim();
+  if (!isRosterName(name)) throw new Error("a roster name is letters, digits and _ . : - (it is the row key)");
+  const tier = form.tier.trim();
+  if (tier.length === 0) throw new Error("choose a tier");
+  const body: DraftPromoteBody = { model, name, tier };
+  for (const key of ["race", "class"] as const) {
+    const v = form[key].trim();
+    if (v.length === 0) continue;
+    const n = Number(v);
+    if (!Number.isInteger(n)) throw new Error(`${key} must be a whole number`);
+    body[key] = n;
+  }
+  return body;
+}
+
+/** "~$0.42": the tilde is the label that says it is an estimate. */
+export function fmtEstimate(usd: number | null): string {
+  return usd === null ? "—" : `~${fmtUsd(usd)}`;
+}
+
+/** A per-million rate in as few digits as say it: 0.075, 0.6, 15. */
+function rate(v: number): string {
+  return String(Number(v.toPrecision(3)));
+}
+
+/** Input / output, dollars per million tokens. */
+export function fmtPrice(p: DraftPriceView | null): string {
+  return p === null ? "—" : `${rate(p.input)} / ${rate(p.output)}`;
+}
+
+/** The estimate column's tooltip: what it was priced at, and why it reads low. */
+export function estimateHint(profile: E90TokenProfileView | null): string {
+  if (profile === null) {
+    return "no estimate: no counted e90 in this series on the wrathbench harness with provider-reported tokens";
+  }
+  return (
+    `estimate: catalogue list price × the median counted e90 (${profile.runs} run${profile.runs === 1 ? "" : "s"}, ` +
+    `${profile.series ?? "every series"}: ${fmtTokens(profile.promptTokens)} prompt, ${fmtTokens(profile.completionTokens)} completion, ` +
+    `${fmtTokens(profile.cacheReadTokens)} cached). List price under-reads reasoning-heavy models 2–3× (docs/COSTS.md)`
+  );
+}
+
+/** One fetch's result, as a status line. */
+export function fetchSummary(r: DraftFetchResponse): string {
+  return `${r.added.length} new · ${r.refreshed} refreshed · ${r.removed.length} dropped · ${r.skipped} skipped · ${r.toolModels} tool-calling in the catalogue`;
 }
 
 /** What one audit row did. Null on either side is a create or a delete. */
