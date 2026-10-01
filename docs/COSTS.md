@@ -21,6 +21,14 @@ drafted models, as a list-price estimate over the observed e90 token profile
   by backend without replaying the trajectory. Routing is pinned
   (docs/METHODOLOGY.md, "Routing is pinned"), so a cache miss attributable
   to a backend move is now something the config has to have asked for.
+- Under the openai adapter the same record also carries `usageRaw`: the
+  provider's own `usage` object as sent, kept to its numeric fields (one
+  nested level, capped in keys and key length; `runner/src/adapter.ts`), for
+  every provider alike. It is there to reconcile a bill against fields the
+  normalised block has no name for, such as DeepSeek's
+  `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` or OpenRouter's
+  `cost_details`. Nothing derived reads it, and the public projection
+  leaves it out.
 - The claude-code harness emits `usageRaw`/`costUsd` only on a clean
   `claude_result` (natural completion), so a watchdog kill would cut the stream
   before that record landed; the driver winds down instead — it records the

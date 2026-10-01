@@ -1146,6 +1146,10 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         // Only when the provider reported it; absent otherwise, so the viewer
         // keeps falling back to its estimate rather than reading a zero.
         ...(outcome.turn.usage !== undefined ? { usage: outcome.turn.usage } : {}),
+        // The provider's own usage object beside it, bounded to numbers, for
+        // reconciling a bill against fields the normalisation has no name for
+        // (docs/COSTS.md). Record-only: it never reaches `assistant` or history.
+        ...(outcome.turn.usageRaw !== undefined ? { usageRaw: outcome.turn.usageRaw } : {}),
         ...(typeof servedBy === "string" && servedBy.length > 0 ? { provider: servedBy } : {}),
         ...(typeof servedModel === "string" && servedModel.length > 0 ? { model: servedModel } : {}),
         ...(outcome.turn.providerRequestId !== undefined

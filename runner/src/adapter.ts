@@ -91,10 +91,28 @@ export interface TokenUsage {
   cost?: number;
 }
 
+/**
+ * The provider's own `usage` object, kept beside the normalised `TokenUsage`
+ * and bounded to numbers (`toUsageRaw`). It exists for the fields the
+ * normalisation has no name for — DeepSeek's `prompt_cache_hit_tokens` /
+ * `prompt_cache_miss_tokens`, OpenRouter's `cost_details` — without which a
+ * bill that does not match the token price cannot be reconciled after the
+ * fact. Nothing reads it but a person doing that; every reader of usage keeps
+ * reading the normalised block.
+ */
+export type RawUsage = Record<string, number | Record<string, number>>;
+
+/** Most numeric leaves a raw usage keeps, top level and nested together. */
+export const RAW_USAGE_MAX_LEAVES = 64;
+/** Longest key a raw usage keeps; a longer one is dropped with its value. */
+export const RAW_USAGE_MAX_KEY_LENGTH = 64;
+
 export interface AssistantTurn {
   content: string | null;
   toolCalls: ToolCall[];
   usage?: TokenUsage;
+  /** The provider's `usage` as sent, bounded (`RawUsage`). Absent when it sent none. */
+  usageRaw?: RawUsage;
   /**
    * The provider's own id for the request that produced this turn, off the
    * response headers (`x-request-id` / OpenRouter's `x-openrouter-id`) or the
@@ -206,6 +224,41 @@ function toUsage(u: z.infer<typeof completionSchema>["usage"]): TokenUsage | und
   // here until 2026-08-23, which is why no run before then carries either.
   if (typeof u.cost === "number") usage.cost = u.cost;
   return Object.keys(usage).length === 0 ? undefined : usage;
+}
+
+/**
+ * The provider's `usage` as sent, bounded so that a malformed or hostile body
+ * cannot bloat a record: finite numbers only (no strings, booleans, nulls or
+ * arrays), one level of nested objects (`prompt_tokens_details`,
+ * `completion_tokens_details`, `cost_details`, …) and nothing below it, no key
+ * longer than `RAW_USAGE_MAX_KEY_LENGTH`, and at most `RAW_USAGE_MAX_LEAVES`
+ * numbers in document order. A nested object left empty is dropped, and so is
+ * the whole thing: absent, never `{}`. The same rule for every provider.
+ */
+function toUsageRaw(u: z.infer<typeof completionSchema>["usage"]): RawUsage | undefined {
+  if (u === undefined || u === null) return undefined;
+  let left = RAW_USAGE_MAX_LEAVES;
+  const keep = (k: string): boolean => k.length > 0 && k.length <= RAW_USAGE_MAX_KEY_LENGTH;
+  const leaf = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const top: [string, number | Record<string, number>][] = [];
+  for (const [k, v] of Object.entries(u)) {
+    if (left === 0) break;
+    if (!keep(k)) continue;
+    if (leaf(v)) {
+      top.push([k, v]);
+      left--;
+    } else if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+      const nested: [string, number][] = [];
+      for (const [nk, nv] of Object.entries(v as Record<string, unknown>)) {
+        if (left === 0) break;
+        if (!keep(nk) || !leaf(nv)) continue;
+        nested.push([nk, nv]);
+        left--;
+      }
+      if (nested.length > 0) top.push([k, Object.fromEntries(nested)]);
+    }
+  }
+  return top.length === 0 ? undefined : Object.fromEntries(top);
 }
 
 export interface OpenAiAdapterOptions {
@@ -569,6 +622,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
         const msg = choice.message;
         const finishReason = choice.finish_reason ?? undefined;
         const usage = toUsage(parsed.data.usage);
+        const usageRaw = toUsageRaw(parsed.data.usage);
         // Header first, body `id` as the fallback: OpenRouter puts the same
         // generation id in both, plain OpenAI only in the header.
         const bodyId = (json as { id?: unknown }).id;
@@ -586,6 +640,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
               arguments: tc.function.arguments,
             })),
             ...(usage !== undefined ? { usage } : {}),
+            ...(usageRaw !== undefined ? { usageRaw } : {}),
             raw: json,
           },
         };
