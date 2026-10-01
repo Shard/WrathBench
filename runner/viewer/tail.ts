@@ -34,6 +34,16 @@ import type {
 } from "./api-types";
 import { statSync } from "node:fs";
 import { CONTEXT_POLICY } from "../src/context";
+import {
+  HistoryRebuilder,
+  isSlimRequest,
+  messageChars,
+  rebuildSlimRequest,
+  requestStatsOf,
+  slimRequestV1,
+  systemTextMatches,
+  windowEntryIndices,
+} from "../src/request-record";
 import { MODEL_RESPONSE_RECORD } from "./archive-dir";
 
 const NEWLINE = 0x0a;
@@ -147,18 +157,6 @@ export function estimateTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
 
-/** Characters a chat message contributes to the context, tool calls included. */
-function messageChars(m: unknown): number {
-  if (m === null || typeof m !== "object") return 0;
-  const msg = m as Record<string, unknown>;
-  let n = typeof msg["role"] === "string" ? msg["role"].length : 0;
-  const content = msg["content"];
-  if (typeof content === "string") n += content.length;
-  else if (content !== undefined && content !== null) n += JSON.stringify(content).length;
-  const calls = msg["tool_calls"];
-  if (Array.isArray(calls)) n += JSON.stringify(calls).length;
-  return n;
-}
 
 /**
  * Provider-reported usage, if a driver records it. Normalised to
@@ -258,9 +256,10 @@ export function redactRawLine(line: string): string {
  * Build the display summary for one raw record.
  *
  * The two entry types that dominate the file — `request` (the whole message
- * array, growing with the conversation) and `events_served` (every packet the
- * SDK surfaced) — are reduced to counts here. Their full content is still
- * reachable one entry at a time through the raw endpoint.
+ * array on a full record, the fresh user message on a slim one) and
+ * `events_served` (every packet the SDK surfaced) — are reduced to counts here.
+ * Their full content is still reachable one entry at a time through the raw
+ * endpoint, a slim request's rebuilt.
  */
 export function summarize(rec: Record<string, unknown>, i: number, start: number, end: number): EntrySummary {
   const t = typeof rec["t"] === "string" ? (rec["t"] as string) : "unknown";
@@ -271,19 +270,19 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
 
   switch (t) {
     case "request": {
-      const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
-      const system = messages.find((m) => (m as { role?: unknown }).role === "system");
-      const sysText = typeof (system as { content?: unknown } | undefined)?.content === "string"
-        ? ((system as { content: string }).content)
-        : "";
+      // Either shape (`runner/src/request-record.ts`): a full record carries
+      // its message array and the counts are taken off it; a slim one carries
+      // the counts the writer took off the same array, so both read alike.
+      const stats = requestStatsOf(rec);
       base["adapter"] = rec["adapter"];
-      base["messageCount"] = messages.length;
-      base["systemChars"] = sysText.length;
+      base["messageCount"] = stats.messageCount;
+      base["systemChars"] = stats.systemChars;
       // The whole prompt for this turn: what the model saw as context.
-      base["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
+      base["promptChars"] = stats.promptChars;
       const usage = reportedUsage(rec);
       if (usage !== null) base["usage"] = usage;
-      base["clipped"] = messages.length > 0;
+      // A slim request's body is one click away too, rebuilt (`TrajectoryTail.raw`).
+      base["clipped"] = stats.messageCount > 0;
       return base;
     }
     case "events_served": {
@@ -1827,8 +1826,7 @@ export class RunTotalsScanner {
       const p: EntrySummary = { i: this.spanMarks.length, t, ts, start: 0, end: 0 };
       if (typeof rec["turn"] === "number") p["turn"] = rec["turn"];
       if (t === "request") {
-        const messages = Array.isArray(rec["messages"]) ? (rec["messages"] as unknown[]) : [];
-        p["promptChars"] = messages.reduce((n: number, m) => n + messageChars(m), 0);
+        p["promptChars"] = requestStatsOf(rec).promptChars;
       } else {
         p["outChars"] = messageChars(rec["message"]);
       }
@@ -1988,6 +1986,13 @@ export class TrajectoryTail {
   /** `reflect_window` transitions, for the run page's per-turn accent. */
   private readonly reflectMarks: ReflectMark[] = [];
   /**
+   * Which entry carries the system prompt text for each hash a slim request
+   * points at, so `raw` rebuilds one without walking a long segment back to
+   * its first request. Any entry carrying the text will do: the text is
+   * checked against the hash before it is used.
+   */
+  private readonly systemTextAt = new Map<string, number>();
+  /**
    * The last timestamp the FILE carries, served or not: the run page closes a
    * finished run's last segment on it, and `scanRunTotals` reads it off every
    * line. Folding it out of the served list instead would let a run whose last
@@ -2038,6 +2043,7 @@ export class TrajectoryTail {
       this.talentMarks.length = 0;
       this.tradeMarks.length = 0;
       this.reflectMarks.length = 0;
+      this.systemTextAt.clear();
       this.lastTsSeen = null;
     }
     if (size === this.size) return [];
@@ -2087,6 +2093,9 @@ export class TrajectoryTail {
           // toward everything derived from the file, and after the offset above,
           // so the byte range of every later entry — what `raw` reads — stands.
           if (!isServedEntry(rec)) continue;
+          if (rec["t"] === "request" && typeof rec["systemText"] === "string" && typeof rec["systemHash"] === "string") {
+            this.systemTextAt.set(rec["systemHash"], i);
+          }
           summary = summarize(rec, i, start, end);
         } catch {
           summary = unparseable(text, i, start, end);
@@ -2150,11 +2159,79 @@ export class TrajectoryTail {
     return reflectionWindowsFrom(this.reflectMarks);
   }
 
-  /** The raw JSON text of one entry, read back from disk. */
+  /**
+   * The raw JSON text of one entry, read back from disk.
+   *
+   * A slim request is served as what the model saw, not as the slim line:
+   * the record with `messages` rebuilt from the file through the replay's own
+   * code (`runner/src/request-record.ts`), and a `rebuilt` verdict saying
+   * whether the rebuild hashed to the bytes that were sent. A rebuild that
+   * fails says why and still serves the record; it never passes silently.
+   */
   async raw(i: number): Promise<string | null> {
     const e = this.entries[i];
     if (e === undefined) return null;
-    return redactRawLine(await Bun.file(this.path).slice(e.start, e.end).text());
+    const text = await this.lineOf(e);
+    if (e.t !== "request") return redactRawLine(text);
+    let rec: Record<string, unknown>;
+    try {
+      rec = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return redactRawLine(text);
+    }
+    if (!isSlimRequest(rec)) return redactRawLine(text);
+    const rebuilt = await this.rebuildRequest(i, rec);
+    const body = {
+      ...rec,
+      ...(rebuilt.messages !== undefined ? { messages: rebuilt.messages } : {}),
+      rebuilt: rebuilt.ok ? { verified: true } : { verified: false, error: rebuilt.error },
+    };
+    return JSON.stringify(redactSecrets(body));
+  }
+
+  private async lineOf(e: EntrySummary): Promise<string> {
+    return await Bun.file(this.path).slice(e.start, e.end).text();
+  }
+
+  /** One slim request rebuilt off the indexed file, walking back over its window only. */
+  private async rebuildRequest(
+    i: number,
+    rec: Record<string, unknown>,
+  ): Promise<{ ok: boolean; error?: string; messages?: unknown[] }> {
+    const slim = slimRequestV1(rec);
+    if (typeof slim === "string") return { ok: false, error: slim };
+    let systemText = slim.systemText;
+    if (systemText === undefined) {
+      const at = this.systemTextAt.get(slim.systemHash);
+      const holder = at === undefined ? undefined : this.entries[at];
+      if (holder !== undefined) {
+        try {
+          const text = (JSON.parse(await this.lineOf(holder)) as { systemText?: unknown }).systemText;
+          if (typeof text === "string" && systemTextMatches(text, slim.systemHash)) systemText = text;
+        } catch {
+          /* an unreadable holder is a missing text, which the rebuild names */
+        }
+      }
+    }
+    const indices = windowEntryIndices(this.entries, i, slim);
+    let window: ReturnType<HistoryRebuilder["window"]>;
+    if (typeof indices === "string") {
+      window = indices;
+    } else {
+      const history = new HistoryRebuilder();
+      for (const j of indices) {
+        try {
+          history.take(JSON.parse(await this.lineOf(this.entries[j]!)) as Record<string, unknown>);
+        } catch {
+          /* a line that will not parse leaves the window short, which the rebuild names */
+        }
+      }
+      window = history.window(0, history.length);
+    }
+    const out = rebuildSlimRequest(slim, systemText, window);
+    return out.ok
+      ? { ok: true, messages: out.messages }
+      : { ok: false, error: out.error, ...(out.messages !== undefined ? { messages: out.messages } : {}) };
   }
 }
 
