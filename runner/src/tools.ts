@@ -670,7 +670,7 @@ export function renderActionHints(hints: readonly ActionHintNote[]): string | un
     lines.push(`${h.action} ${h.status}${h.count > 1 ? ` ×${h.count}` : ""}: ${hint}`);
   }
   const rest = ordered.length - shown.length;
-  if (rest > 0) lines.push(`(+${rest} other failure ${rest === 1 ? "status" : "statuses"} this snippet)`);
+  if (rest > 0) lines.push(`(+${rest} other failure ${rest === 1 ? "status" : "statuses"} since the last result)`);
   return lines.join("\n");
 }
 
