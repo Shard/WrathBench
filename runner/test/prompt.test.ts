@@ -159,11 +159,57 @@ describe("episode sentence", () => {
     expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, "freeplay")).toBe(SYSTEM_PROMPT);
   });
-  test("e90 states the clock and the promotion bar; e360 only the clock", () => {
-    expect(episodeSection("e90")).toContain("90 minutes");
-    expect(episodeSection("e90")).toContain("level 5");
+  test("e90 states the clock, the promotion bar, and that the bar is not the end; e360 only the clock", () => {
+    // All three Sonnet 5.5 e90 runs read the bar alone as a finish line ("Level
+    // 5 is done and the promotion bar is met. I'm stopping here") and idled
+    // into the no-XP watchdog. Operator decision 2026-10-01: say, as a fact,
+    // that reaching it ends nothing — no advice, no number to chase, the bar
+    // itself unchanged.
+    expect(episodeSection("e90")).toBe(
+      "This episode lasts 90 minutes. Reaching level 5 within it is the bar for promotion to six-hour episodes. " +
+        "Reaching the bar does not end the episode: everything after it is recorded and counts exactly as what came before.",
+    );
     expect(episodeSection("e360")).toBe("This episode lasts six hours.");
     expect(episodeSection("freeplay")).toBeUndefined();
+    expect(episodeSection("probing")).toBeUndefined();
+  });
+
+  test("every rendering hashes as pinned: the e90 sentence is the only thing that moved", () => {
+    // Pinned by value, not by rebuilding from the same parts, so a change to
+    // any rendering fails here. The non-e90 rows are the hashes the prompt had
+    // before the e90 refinement: a run with no episode sentence, a steered
+    // run, and e360 are byte-identical to what they were.
+    const { promptHash } = require("../src/comparability");
+    const pinned: Record<string, Record<string, Record<string, string>>> = {
+      none: {
+        wrathbench: { on: "sha256:0f469f5c44d78148", off: "sha256:e58b334757e59b46" },
+        cli: { on: "sha256:aafbed1731633a82", off: "sha256:4ae229a4af5c62f0" },
+      },
+      e90: {
+        wrathbench: { on: "sha256:901a272a1f012b30", off: "sha256:c761b7753ebdb7b3" },
+        cli: { on: "sha256:d61bfe3f74a794fc", off: "sha256:5acb9b1cac31b980" },
+      },
+      e360: {
+        wrathbench: { on: "sha256:ad62d4526ffb8960", off: "sha256:a51de973359bc11a" },
+        cli: { on: "sha256:541491ad749c5c00", off: "sha256:444cc32c29602d83" },
+      },
+    };
+    const episodes = [
+      [undefined, "none"],
+      ["freeplay", "none"],
+      ["probing", "none"],
+      ["e90", "e90"],
+      ["e360", "e360"],
+    ] as const;
+    for (const [episode, row] of episodes) {
+      for (const harness of ["wrathbench", "claude-code", "codex"] as const) {
+        for (const wiki of [true, false]) {
+          const got = promptHash(buildSystemPrompt(undefined, episode, harness, wiki));
+          const want = pinned[row]![harness === "wrathbench" ? "wrathbench" : "cli"]![wiki ? "on" : "off"];
+          expect(`${episode}/${harness}/${wiki}: ${got}`).toBe(`${episode}/${harness}/${wiki}: ${want}`);
+        }
+      }
+    }
   });
   test("the sentence sits after the goal and before the objective block", () => {
     const p = buildSystemPrompt("walk to Ironforge", "e90");

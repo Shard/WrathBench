@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
+import type { ActionHintNote } from "../src/sandbox/ipc";
 import { Scratchpad } from "../src/scratchpad";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -81,6 +82,30 @@ describe("sandbox evaluation", () => {
     );
     expect(res.ok).toBe(false);
     expect(res.actionHints?.[0]?.status).toBe("no_mesh");
+  });
+
+  test("a background routine's hint is drained by the host for a non-snippet result, once", async () => {
+    // What lets the next tool result of any kind carry it (tools.ts): the
+    // tally leaves the child on its own rpc, not only on a snippet's result.
+    const host = makeHost();
+    // No child yet: nothing to drain, and draining does not spawn one.
+    expect(await host.drainActionHints()).toEqual([]);
+    expect((host as unknown as { proc: unknown }).proc).toBeNull();
+    const record = '(sdk as any).noteActionHint("moveTo", "drop", "steps off a ledge", { x: 1, y: 2, z: 3 })';
+    const launched = await host.evalSnippet(`setTimeout(() => ${record}, 20); "launched"`);
+    expect(launched.actionHints).toEqual([]);
+    let drained: ActionHintNote[] = [];
+    const until = Date.now() + 1_000;
+    while (drained.length === 0 && Date.now() < until) {
+      drained = await host.drainActionHints();
+      if (drained.length === 0) await Bun.sleep(10);
+    }
+    expect(drained).toEqual([
+      expect.objectContaining({ action: "moveTo", status: "drop", count: 1, hint: "steps off a ledge" }),
+    ]);
+    expect(await host.drainActionHints()).toEqual([]);
+    // And the next snippet does not repeat it either.
+    expect((await host.evalSnippet("1 + 1")).actionHints).toEqual([]);
   });
 
   test("top-level bindings persist across snippets", async () => {

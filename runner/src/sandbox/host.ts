@@ -26,9 +26,10 @@ export interface SnippetResult {
   /** A note about the completion value; see `EvalResultMsg.hint`. */
   hint?: string | undefined;
   /**
-   * Hint-bearing action failures the SDK recorded while the snippet ran. The
-   * harness renders these itself (tools.ts) because the hint inside the result
-   * object only reaches the model if the snippet's own code kept it.
+   * Hint-bearing action failures the SDK tallied since the last drain — while
+   * the snippet ran, or before it in a background routine. The harness renders
+   * these itself (tools.ts) because the hint inside the result object only
+   * reaches the model if the snippet's own code kept it.
    */
   actionHints?: ActionHintNote[] | undefined;
   logs: LogEntry[];
@@ -351,8 +352,15 @@ export class SandboxHost {
         // The budget is the host's fact, so the host states it: the child hands
         // it to the SDK, which uses it to explain a walk that never fit (see
         // ipc.ts). Wall-clock, not `opts.now` — it is compared against
-        // `Date.now()` in another process.
-        { t: "eval", id, code, deadline: Date.now() + this.opts.snippetTimeoutMs },
+        // `Date.now()` in another process. The ceiling itself rides along so
+        // an abandoned sleep's note can name it.
+        {
+          t: "eval",
+          id,
+          code,
+          deadline: Date.now() + this.opts.snippetTimeoutMs,
+          timeoutMs: this.opts.snippetTimeoutMs,
+        },
         this.opts.snippetTimeoutMs,
       );
       this.consecutiveRestarts = 0;
@@ -399,11 +407,14 @@ export class SandboxHost {
             `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned: its \`signal\` was ` +
             `aborted, so pending SDK waits (moveTo, killTarget, waitForTransfer, …) rejected with ` +
             `EventAbortedError and any move in flight was stopped. ` +
-            // What the abort itself learned, when it learned anything: today
-            // that is the distance an in-flight moveTo had covered and had
-            // left, named by the SDK and carried home on the pong. A generic
-            // "it timed out" is what the 2026-08-23 fan-out showed models
-            // failing to act on (one retried the same blocking call 5 times).
+            // What the abort itself learned, when it learned anything: the
+            // distance an in-flight moveTo had covered and had left (named by
+            // the SDK), or that an awaited sleep was asked for at least the
+            // time the snippet had left (named by the sandbox), carried home on
+            // the pong. A generic "it timed out" is what the 2026-08-23 fan-out
+            // showed models failing to act on (one retried the same blocking
+            // call 5 times), and one e360 slept `sleep(30000, { wake: false })`
+            // into a 30000ms ceiling 32 times without learning why.
             (ping.note !== undefined ? `${ping.note} ` : "") +
             `The runtime (bindings, routines, session) is still alive. ` +
             `A walk longer than this limit is dispatched, not awaited: sdk.moveToAsync(target) returns as soon ` +
@@ -499,6 +510,30 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "death_signals rpc failed");
     return (res.value ?? []) as DeathSignal[];
+  }
+
+  /**
+   * Drain the hint-bearing failures the SDK tallied since the last drain, for a
+   * tool result that is not a snippet's (`tools.ts`, `callTool`). A snippet's
+   * own result and its pong drain the tally themselves; this is what lets a
+   * hint raised by a background routine ride whichever tool result comes next
+   * instead of waiting for the next snippet.
+   *
+   * Never spawns a child: with none running there is no tally to drain, and a
+   * `search_reference` must not start a sandbox. Bounded by `pingGraceMs`, the
+   * host's measure of how long a live child takes to answer, so a child whose
+   * event loop is blocked costs a scratchpad write that long and no more.
+   */
+  async drainActionHints(): Promise<ActionHintNote[]> {
+    if (this.proc === null) return [];
+    await this.ready;
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "action_hints", params: {} },
+      this.opts.pingGraceMs,
+    );
+    if (!res.ok) throw new Error(res.error ?? "action_hints rpc failed");
+    return (res.value ?? []) as ActionHintNote[];
   }
 
   /** JSON-safe snapshot of the child's StateCache. */

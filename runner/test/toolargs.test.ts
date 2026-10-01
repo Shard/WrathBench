@@ -5,8 +5,11 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import type { Database } from "bun:sqlite";
+import { createMemoryBundle, makeWriter } from "@wrathbench/wiki/bundle";
 import {
   ACTION_HINT_RENDER,
+  appendPendingActionHints,
   callTool,
   coerceToolArgs,
   nearestTool,
@@ -19,7 +22,7 @@ import type { ActionHintNote } from "../src/sandbox/ipc";
 import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
-import type { SandboxHost } from "../src/sandbox/host";
+import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -224,6 +227,175 @@ describe("harness-delivered action hints", () => {
     expect(res.text).toContain("--- harness ---");
     expect(res.text).toContain("moveTo too_far ×2:");
     expect(res.text).toContain("Walk to an intermediate point first.");
+  });
+});
+
+/**
+ * A hint raised by a background routine used to wait in the tally for the next
+ * snippet: one freeplay run saw `moveTo drop ×4014` as a single line long after
+ * the fact. Operator decision 2026-10-01: pending hints drain into the next
+ * tool result of any kind — the same block, the same text, nothing counted.
+ */
+describe("pending action hints ride the next tool result of any kind", () => {
+  const PENDING: ActionHintNote[] = [
+    {
+      action: "moveTo",
+      status: "drop",
+      count: 4014,
+      hint: "the path from here to (12, 34) steps off a ledge the server will not walk down.",
+      ts: 2,
+    },
+    {
+      action: "moveTo",
+      status: "start_off_mesh",
+      count: 1160,
+      hint: "you are standing somewhere the navmesh does not cover.",
+      ts: 1,
+    },
+  ];
+  const BLOCK = renderActionHints(PENDING) as string;
+
+  function wiki(): Database {
+    const db = createMemoryBundle();
+    const writer = makeWriter(db, 2);
+    writer.addPage("Example Person Gamma", 0, "Example Person Gamma stands in the beta zone.");
+    writer.flush();
+    return db;
+  }
+
+  /**
+   * One context and the tally its sandbox holds. The snapshot says resting, so
+   * reflect and read_log answer with their fixed text rather than a refusal.
+   */
+  function hintCtx(opts: { resting?: boolean; wiki?: boolean } = {}): {
+    ctx: ToolContext;
+    pending: ActionHintNote[];
+    drains: () => number;
+  } {
+    const pending: ActionHintNote[] = [];
+    let drains = 0;
+    const sandbox = {
+      evalSnippet: async () => ({ ok: true, value: "1", actionHints: [], logs: [], durationMs: 1 }),
+      recentEvents: async () => [],
+      stateSnapshot: async () => ({
+        self: { resting: { value: opts.resting ?? true, seq: 1, ts: 1 }, level: { value: 5, seq: 1, ts: 1 } },
+        lastSeq: -1,
+        eventCount: 0,
+      }),
+      drainActionHints: async () => {
+        drains++;
+        return pending.splice(0, pending.length);
+      },
+    } as unknown as SandboxHost;
+    return {
+      ctx: makeCtx({ sandbox, ...(opts.wiki === true ? { wiki: wiki() } : {}) }),
+      pending,
+      drains: () => drains,
+    };
+  }
+
+  const CASES: {
+    label: string;
+    name: string;
+    args: unknown;
+    resting?: boolean;
+    wiki?: boolean;
+    setup?: (ctx: ToolContext) => Promise<unknown>;
+  }[] = [
+    { label: "recent_events", name: "recent_events", args: {} },
+    { label: "state_summary", name: "state_summary", args: {} },
+    { label: "search_reference (hits)", name: "search_reference", args: { query: "Example Person Gamma" }, wiki: true },
+    { label: "search_reference (no bundle)", name: "search_reference", args: { query: "anything" } },
+    { label: "write_scratchpad", name: "write_scratchpad", args: { content: "# plan\n- walk north" } },
+    {
+      label: "edit_scratchpad",
+      name: "edit_scratchpad",
+      args: { old: "walk north", new: "walk east" },
+      setup: (ctx) => callTool(ctx, "write_scratchpad", { content: "# plan\n- walk north" }),
+    },
+    { label: "edit_scratchpad (refused)", name: "edit_scratchpad", args: { old: "absent", new: "x" } },
+    { label: "reflect", name: "reflect", args: {} },
+    { label: "reflect (refused)", name: "reflect", args: {}, resting: false },
+    { label: "log_status", name: "log_status", args: { text: "walking north" } },
+    {
+      label: "read_log",
+      name: "read_log",
+      args: {},
+      setup: async (ctx) => {
+        await callTool(ctx, "log_status", { text: "walking north" });
+        return callTool(ctx, "reflect", {});
+      },
+    },
+    { label: "read_log (closed)", name: "read_log", args: {} },
+    { label: "an unknown tool", name: "read_scratchpad", args: {} },
+    { label: "invalid arguments", name: "write_scratchpad", args: {} },
+    { label: "run_snippet that never ran", name: "run_snippet", args: { snippet: "1", code: "2" } },
+  ];
+
+  for (const c of CASES) {
+    test(`${c.label}: its own text unchanged, the block at its foot, delivered once`, async () => {
+      const plain = hintCtx({ resting: c.resting, wiki: c.wiki });
+      const hinted = hintCtx({ resting: c.resting, wiki: c.wiki });
+      await c.setup?.(plain.ctx);
+      await c.setup?.(hinted.ctx);
+      hinted.pending.push(...PENDING);
+
+      const expected = await callTool(plain.ctx, c.name, c.args);
+      const got = await callTool(hinted.ctx, c.name, c.args);
+      expect(got.text).toBe(`${expected.text}\n${BLOCK}`);
+      expect(got.isError).toBe(expected.isError);
+      expect(hinted.pending).toEqual([]);
+
+      // Drained: the next result of the same call carries nothing extra.
+      const again = await callTool(hinted.ctx, c.name, c.args);
+      const againPlain = await callTool(plain.ctx, c.name, c.args);
+      expect(again.text).toBe(againPlain.text);
+      expect(again.text).not.toContain("--- harness ---");
+    });
+  }
+
+  test("nothing pending returns the tool's own result object untouched", async () => {
+    const { ctx } = hintCtx();
+    const res = await callTool(ctx, "reflect", {});
+    // `reflect` answers without an isError field, and that shape survives.
+    expect(res).toEqual({ text: expect.any(String) });
+    expect("isError" in res).toBe(false);
+  });
+
+  test("a snippet that ran carries its own eval's drain and leaves the tally for the next result", async () => {
+    const own: ActionHintNote = { action: "moveTo", status: "too_far", count: 1, hint: "own hint", ts: 9 };
+    const { ctx, pending, drains } = hintCtx();
+    (ctx.sandbox as unknown as { evalSnippet: () => Promise<SnippetResult> }).evalSnippet = async () => ({
+      ok: true,
+      value: "1",
+      actionHints: [own],
+      logs: [],
+      durationMs: 1,
+    });
+    pending.push(...PENDING);
+    const snippet = await callTool(ctx, "run_snippet", { code: "1" });
+    expect(snippet.text).toBe(`ok (1ms)\n=> 1\n${renderActionHints([own])}`);
+    // No second drain after the eval: one snippet result, one block.
+    expect(drains()).toBe(0);
+    expect(pending).toHaveLength(PENDING.length);
+    const next = await callTool(ctx, "state_summary", {});
+    expect(next.text.endsWith(`\n${BLOCK}`)).toBe(true);
+  });
+
+  test("a drain that fails leaves the result exactly as the tool gave it", async () => {
+    const { ctx } = hintCtx();
+    (ctx.sandbox as unknown as { drainActionHints: () => Promise<never> }).drainActionHints = () =>
+      Promise.reject(new Error("sandbox restarting"));
+    const res = await callTool(ctx, "write_scratchpad", { content: "# kept" });
+    expect(res).toEqual({ text: "written (6 chars)" });
+  });
+
+  test("appendPendingActionHints is the same delivery for a result made outside callTool", async () => {
+    const { ctx, pending } = hintCtx();
+    pending.push(...PENDING);
+    const refused = { text: "tool arguments were not valid JSON", isError: true };
+    expect(await appendPendingActionHints(ctx, refused)).toEqual({ text: `${refused.text}\n${BLOCK}`, isError: true });
+    expect(await appendPendingActionHints(ctx, refused)).toBe(refused);
   });
 });
 

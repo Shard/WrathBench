@@ -12,8 +12,18 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AdapterOutcome, ChatAdapter, ChatRequest } from "../src/adapter";
+import { loadRunConfig } from "../src/config";
 import type { ChatMessage } from "../src/context";
+import { EpisodicLog } from "../src/episodic";
+import { runLoop } from "../src/loop";
 import { Replayer, replayFile, type ReplayReport } from "../src/replay";
+import { Scratchpad } from "../src/scratchpad";
+import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
+import type { ActionHintNote } from "../src/sandbox/ipc";
+import { renderActionHints } from "../src/tools";
+import { Trajectory } from "../src/trajectory";
+import { Watchdogs } from "../src/watchdogs";
 import {
   HistoryRebuilder,
   fixedLoopRequestRecord,
@@ -215,6 +225,78 @@ describe("a tampered trajectory fails the replay where it was tampered", () => {
     expect(printed.ok).toBe(true);
     expect(printed.turn).toBe(30);
     expect(JSON.stringify(printed.messages)).toBe(run.sent[29]!);
+  });
+});
+
+describe("pending action hints on an unparseable call replay like any other result", () => {
+  // The hints ride the result of a call whose arguments were not JSON
+  // (`appendPendingActionHints` in loop.ts); the record's text and the history
+  // message the next request carries must be that one string, or the replay
+  // rebuilds a window that was never sent.
+  test("the record holds the text the window carried, and the next request rebuilds to the bytes sent", async () => {
+    const dir = tempDir("wrathbench-replay-hints-");
+    const config = { ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1 }), runId: "run-hints", token: "run-hints" };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: "run-hints", harnessVersion: "t", startedAt: 1_000, config });
+    const hint: ActionHintNote = { action: "moveTo", status: "drop", count: 7, hint: "steps off a ledge", ts: 1 };
+    const pending: ActionHintNote[] = [];
+    const sent: string[] = [];
+    let call = 0;
+    const adapter: ChatAdapter = {
+      label: "stub",
+      complete(req: ChatRequest): Promise<AdapterOutcome> {
+        sent.push(JSON.stringify(req.messages));
+        call++;
+        if (call > 2) return Promise.resolve({ kind: "stub-complete" });
+        if (call === 1) pending.push({ ...hint });
+        const args = call === 1 ? "{not json" : JSON.stringify({ code: "1" });
+        return Promise.resolve({
+          kind: "ok",
+          turn: { content: `turn ${call}`, toolCalls: [{ id: `c${call}`, name: "run_snippet", arguments: args }] },
+        });
+      },
+    };
+    const sandbox = {
+      evalSnippet: (code: string): Promise<SnippetResult> =>
+        Promise.resolve({ ok: true, value: `ran:${code}`, logs: [], durationMs: 1 }),
+      recentEvents: () => Promise.resolve([]),
+      stateSnapshot: () => Promise.resolve({ self: {}, lastSeq: -1, eventCount: 0 }),
+      drainActionHints: () => Promise.resolve(pending.splice(0, pending.length)),
+      totalRestarts: 0,
+      consecutiveRestarts: 0,
+      drainNotices: () => [],
+      stop: () => Promise.resolve(),
+    } as unknown as SandboxHost;
+    await runLoop({
+      config,
+      adapter,
+      sandbox,
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+      sleep: () => Promise.resolve(),
+    });
+    trajectory.close();
+
+    const block = renderActionHints([hint]) as string;
+    const refused = readTrajectory(dir).find((r) => r.t === "snippet_result" && r["turn"] === 1)!;
+    expect(refused["isError"]).toBe(true);
+    expect(String(refused["text"])).toStartWith("tool arguments were not valid JSON");
+    expect(String(refused["text"]).endsWith(`\n${block}`)).toBe(true);
+    // What the model was handed on the next turn carries that exact text.
+    const second = JSON.parse(sent[1]!) as ChatMessage[];
+    const toolMsg = second.find((m) => m.role === "tool" && m.tool_call_id === "c1");
+    expect(toolMsg?.content).toBe(String(refused["text"]));
+
+    const rebuilt: string[] = [];
+    const report = await replayFile(join(dir, "trajectory.jsonl"), (v, messages) => {
+      expect(v.ok).toBe(true);
+      rebuilt.push(JSON.stringify(messages));
+    });
+    expect(report.failures).toEqual([]);
+    expect(report.verified).toBe(sent.length);
+    expect(rebuilt).toEqual(sent);
   });
 });
 

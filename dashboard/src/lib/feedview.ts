@@ -30,7 +30,7 @@
  *      `provider_truncated`), and the same type carries bookkeeping with no
  *      text at all (`hygiene`, `resolved_model`, `token_regenerated`). Text is
  *      what separates the two: a record with something to say says it.
- *    - Appended to a snippet result, under a `--- harness ---` rule
+ *    - Appended to a tool result, under a `--- harness ---` rule
  *      (`runner/src/tools.ts` `renderActionHints`), deduped per (action,
  *      status) with counts: `moveTo too_far ×21: a single moveTo covers
  *      ~250y — …`. `splitNotices` lifts that block out of the result body so

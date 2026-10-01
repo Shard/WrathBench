@@ -10,7 +10,8 @@ import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
-import type { ToolContext } from "../src/tools";
+import type { ActionHintNote } from "../src/sandbox/ipc";
+import { renderActionHints, type ToolContext } from "../src/tools";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -328,6 +329,53 @@ describe("McpServer", () => {
     expect(dispatchTs).toBeLessThanOrEqual(startedAt());
     expect(callRec!.ts - dispatchTs).toBeGreaterThanOrEqual(30);
     expect(resultRec!["dispatchTs"]).toBeUndefined();
+  });
+
+  test("pending action hints ride a CLI scaffold's next tool result, and the record carries them", async () => {
+    // The CLI drivers reach the tools through this server, so this is where a
+    // background routine's hint meets claude-code and codex: on the next tool
+    // result of any kind, an unparseable call included, and in the record.
+    const pending: ActionHintNote[] = [];
+    const hint: ActionHintNote = { action: "moveTo", status: "drop", count: 2, hint: "steps off a ledge", ts: 1 };
+    const block = renderActionHints([hint]) as string;
+    const sandbox = fakeSandbox();
+    (sandbox as unknown as { drainActionHints: () => Promise<ActionHintNote[]> }).drainActionHints = async () =>
+      pending.splice(0, pending.length);
+    const { ctx } = makeCtx(sandbox);
+    const dir = tempDir("wrathbench-mcp-hints-");
+    const trajectory = new Trajectory(dir);
+    const server = new McpServer(ctx, { serverVersion: "test", onToolCall: trajectoryToolCallWriter(trajectory) });
+    await initialized(server);
+
+    pending.push({ ...hint });
+    const wrote = await call(server, {
+      jsonrpc: "2.0",
+      id: 41,
+      method: "tools/call",
+      params: { name: "write_scratchpad", arguments: { content: "# hi" } },
+    });
+    const first = wrote?.["result"] as { content: { text: string }[]; isError: boolean };
+    expect(first.content[0]!.text).toBe(`written (4 chars)\n${block}`);
+    expect(first.isError).toBe(false);
+
+    pending.push({ ...hint });
+    const broken = await call(server, {
+      jsonrpc: "2.0",
+      id: 42,
+      method: "tools/call",
+      params: { name: "write_scratchpad", arguments: "{not json" },
+    });
+    const second = broken?.["result"] as { content: { text: string }[]; isError: boolean };
+    expect(second.content[0]!.text).toContain("not valid JSON");
+    expect(second.content[0]!.text.endsWith(`\n${block}`)).toBe(true);
+    expect(second.isError).toBe(true);
+
+    trajectory.close();
+    const texts = readTrajectory(dir)
+      .filter((r) => r.t === "tool_result")
+      .map((r) => r["text"]);
+    expect(texts).toEqual([first.content[0]!.text, second.content[0]!.text]);
+    expect(pending).toEqual([]);
   });
 
   test("search_reference without a bundle reports unavailability", async () => {

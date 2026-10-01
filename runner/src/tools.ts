@@ -642,11 +642,14 @@ export const ACTION_HINT_RENDER = {
  * This is the delivery the principle asks for: the hint is already in the
  * result object, but a snippet that reduces a result to `.status` throws it
  * away before the model reads it (run a11: 41 `too_far`, hint read 0 times), so
- * the harness puts it in the snippet result itself — the one place both drivers
+ * the harness puts it in the tool result itself — the one place both drivers
  * share, and one the model's own code cannot strip. Rendered here rather than
  * in the turn's context block because a claude-code turn is a whole CLI
  * session: a context notice would arrive a turn late, which is the follow-up
- * inspection the principle forbids.
+ * inspection the principle forbids. A snippet's result carries what its eval
+ * drained; any other tool's result carries what was pending when it answered
+ * (`appendPendingActionHints`), so a background routine's hint is not held
+ * back for the next snippet.
  *
  * Nothing is added to the hint strings. Grouping is the SDK's (action, status)
  * tally, so a status that failed 21 times costs one line and a count.
@@ -671,8 +674,50 @@ export function renderActionHints(hints: readonly ActionHintNote[]): string | un
   return lines.join("\n");
 }
 
-/** Dispatch one tool call. Never throws: errors come back as `isError` text. */
+/**
+ * `result` with the pending hint block at its foot, or `result` itself when
+ * nothing is pending.
+ *
+ * Every tool result but an evaluated snippet's goes through here: a hint raised
+ * by a background routine used to wait in the tally for the next snippet, so a
+ * routine re-issuing a refused move surfaced as one `×4014` line long after the
+ * fact. Pending hints now ride whichever tool result comes next. No counter,
+ * threshold or new text: the block is `renderActionHints`' own, appended after
+ * the tool's text exactly as a snippet result carries it, and the tool's text
+ * and `isError` are untouched.
+ *
+ * Never throws. A drain that fails — the sandbox mid-restart, a child not
+ * answering in time — reads as nothing pending: delivering a hint must never
+ * cost the model the result it asked for.
+ */
+export async function appendPendingActionHints(ctx: ToolContext, result: ToolResult): Promise<ToolResult> {
+  let hints: ActionHintNote[];
+  try {
+    hints = await ctx.sandbox.drainActionHints();
+  } catch {
+    return result;
+  }
+  const block = renderActionHints(hints);
+  return block === undefined ? result : { ...result, text: `${result.text}\n${block}` };
+}
+
+/**
+ * The results of snippets that actually ran: the eval (or the pong after an
+ * abandoned one) drained the hint tally, and the result already renders it.
+ */
+const EVALUATED = new WeakSet<ToolResult>();
+
+/**
+ * Dispatch one tool call. Never throws: errors come back as `isError` text.
+ * Pending action hints ride the result (`appendPendingActionHints`), whichever
+ * tool it is; an evaluated snippet's result already carries its own.
+ */
 export async function callTool(ctx: ToolContext, name: string, args: unknown): Promise<ToolResult> {
+  const result = await runTool(ctx, name, args);
+  return EVALUATED.has(result) ? result : appendPendingActionHints(ctx, result);
+}
+
+async function runTool(ctx: ToolContext, name: string, args: unknown): Promise<ToolResult> {
   const state = episodeState(ctx);
   state.calls++;
   try {
@@ -720,7 +765,9 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
         // while swallowing 41 hints, so this is the main case, not the edge.
         const hints = renderActionHints(res.actionHints ?? []);
         if (hints !== undefined) lines.push(hints);
-        return { text: lines.join("\n"), isError: !res.ok };
+        const result = { text: lines.join("\n"), isError: !res.ok };
+        EVALUATED.add(result);
+        return result;
       }
       case "recent_events": {
         const { limit, includeMovement } = parsed.data as { limit: number; includeMovement: boolean };
