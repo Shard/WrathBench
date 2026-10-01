@@ -359,7 +359,8 @@ export function tomlString(s: string): string {
 
 /**
  * Features switched off for every run. Each is a name `codex features list`
- * knows in 0.153.4; an unknown one is a hard error at launch ("Unknown feature
+ * knows in the pinned CLI (`CODEX_VERSION` in `infra/docker/runner.Dockerfile`,
+ * re-checked at every bump); an unknown one is a hard error at launch ("Unknown feature
  * flag"), which is the point of pinning the CLI version.
  */
 export const DISABLED_FEATURES = [
@@ -392,7 +393,7 @@ export interface CodexArgsOptions {
 
 /**
  * The exact flag set, in one place so the README and the tests can assert it.
- * Every flag exists in codex-cli 0.153.4 (`codex exec --help`, `codex exec
+ * Every flag exists in the pinned codex-cli (`codex exec --help`, `codex exec
  * resume --help`); nothing is invented. `-s`/`-C` are exec-only in this
  * version, so the sandbox rides on `-c sandbox_mode` and the cwd on the
  * process, which keeps the first turn and every resumed one identical apart

@@ -216,8 +216,8 @@ default.
 
 ## The codex driver
 
-The same shape as claude-code on the OpenAI Codex CLI (`codex-cli` 0.153.4,
-pinned in `infra/docker/runner.Dockerfile`), logged in with a ChatGPT
+The same shape as claude-code on the OpenAI Codex CLI (the version
+pinned as `CODEX_VERSION` in `infra/docker/runner.Dockerfile`), logged in with a ChatGPT
 subscription. `src/adapter-codex.ts` mirrors `adapter-claude.ts` invariant for
 invariant — one `SandboxHost`, tools over the loopback MCP bridge, the tool-call
 ceiling and the watchdogs enforced at every dispatch, a wind-down instead of a
