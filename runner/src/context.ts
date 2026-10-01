@@ -739,9 +739,12 @@ export function trimExpected(history: ChatMessage[]): boolean {
 /**
  * Cap one message's content at WINDOW_MESSAGE_CHARS with a fixed suffix.
  * Deterministic: the suffix carries only the number of characters dropped.
+ *
+ * `max` is a parameter only so a replay can apply the cap a trajectory
+ * recorded rather than this build's (`request-record.ts`); the loop always
+ * takes the default.
  */
-export function capWindowMessage(m: ChatMessage): ChatMessage {
-  const max = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS;
+export function capWindowMessage(m: ChatMessage, max: number = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS): ChatMessage {
   if (typeof m.content !== "string" || m.content.length <= max) return m;
   const dropped = m.content.length - max;
   return { ...m, content: `${m.content.slice(0, max)}\n…[truncated ${dropped} chars]` };
@@ -757,5 +760,7 @@ export function capWindowMessage(m: ChatMessage): ChatMessage {
  */
 export function messageWindow(history: ChatMessage[]): ChatMessage[] {
   const cut = messageWindowCut(history);
-  return (cut === 0 ? history : history.slice(cut)).map(capWindowMessage);
+  // A lambda, not `.map(capWindowMessage)`: map's second argument is the index,
+  // which would land in the cap's `max` parameter.
+  return (cut === 0 ? history : history.slice(cut)).map((m) => capWindowMessage(m));
 }

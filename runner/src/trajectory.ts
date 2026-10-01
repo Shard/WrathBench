@@ -4,7 +4,10 @@
  *   trajectory.jsonl   every model request/response, snippet + result, event
  *                      batch served, tool call, periodic state line, watchdog
  *                      firings, termination. Append-only, one JSON object per
- *                      line, `{ t, ts, ... }`.
+ *                      line, `{ t, ts, ... }`. A fixed-loop `request` keeps
+ *                      the fresh user message and points at the rest of the
+ *                      prompt, which the file already holds
+ *                      (`request-record.ts`; `replay.ts` rebuilds it).
  *   run.sqlite         run metadata row + periodic state rows, for querying
  *                      across runs without parsing JSONL.
  *   meta.json          the run config + harness version, for `--resume`.

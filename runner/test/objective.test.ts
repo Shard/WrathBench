@@ -28,6 +28,7 @@ import { configFromArgs } from "../src/run";
 import { readRun } from "../viewer/runs";
 import { Watchdogs } from "../src/watchdogs";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { requestsOf } from "./fixtures/requests";
 
 const tempDir = tempDirs();
 
@@ -117,9 +118,9 @@ describe("prompt rendering", () => {
       watchdogs: new Watchdogs(config.watchdogs),
       sleep: () => Promise.resolve(),
     });
-    const request = readTrajectory(dir).find((r) => r.t === "request");
-    const messages = request?.["messages"] as { role: string; content: string }[];
-    const viaLoop = messages.find((m) => m.role === "system")?.content;
+    // The prompt as sent, rebuilt from the slim record and its recorded system text.
+    const messages = requestsOf(dir)[0]!.messages;
+    const viaLoop = messages.find((m) => m.role === "system")?.content as string | undefined;
     expect(viaLoop).toBe(viaClaude!);
     expect(viaLoop).toBe(buildSystemPrompt(OBJECTIVE));
     // The one thing that *is* per driver is the sentence about older

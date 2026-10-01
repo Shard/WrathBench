@@ -82,7 +82,7 @@ there is no rarely-exercised branch to be wrong.
 | `states` | one periodic state sample | `(run_id, ts, seq)` |
 | `moves` | one movement dispatch or verdict | `(run_id, ts, seq)` |
 | `milestones` | one `{"t":"milestone"}` line, typed — ad-hoc analysis only | `(run_id, line_no)` |
-| `turns` | one turn-shaped trajectory line, with `messages` | `(run_id, line_no)` |
+| `turns` | one turn-shaped trajectory line, with `messages` (empty on a slim fixed-loop request) | `(run_id, line_no)` |
 | `events` | every other trajectory line | `(run_id, line_no)` |
 | `episodic` | one `episodic.jsonl` entry — ad-hoc analysis only | `(run_id, line_no)` |
 | `run_totals` | the per-run derivations, as JSON | `run_id` |

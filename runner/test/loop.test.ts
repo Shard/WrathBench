@@ -922,22 +922,31 @@ describe("prompt-cache prefix discipline", () => {
   test("serialized request N+1 extends request N byte-for-byte up to the append point, across a trim", async () => {
     // One tool call per turn -> history grows 2 messages/turn, so 30 turns
     // cross the MESSAGE_WINDOW_MAX=48 ceiling and exercise one block trim.
-    const adapter = new StubAdapter(
+    const stub = new StubAdapter(
       Array.from({ length: 30 }, (_, i) => ({
         content: `turn ${i}`,
         toolCalls: [{ name: "run_snippet", arguments: { code: `ping(${i})` } }],
       })),
     );
-    const { dir, options } = setup(adapter);
+    // Captured where the bytes leave the loop: the message array handed to
+    // the adapter, serialised on the way in.
+    const sent: string[][] = [];
+    const adapter: ChatAdapter = {
+      label: stub.label,
+      complete: (req) => {
+        sent.push(req.messages.map((m) => JSON.stringify(m)));
+        return stub.complete(req);
+      },
+    };
+    const { options } = setup(adapter);
     await runLoop(options);
-    const reqs = readTrajectory(dir).filter((r) => r.t === "request");
-    expect(reqs.length).toBe(31); // 30 scripted turns + the stub-complete turn
+    expect(sent.length).toBe(31); // 30 scripted turns + the stub-complete turn
     let trims = 0;
-    for (let i = 1; i < reqs.length; i++) {
+    for (let i = 1; i < sent.length; i++) {
       // Drop the trailing per-turn user context message: it is regenerated
       // every turn by design and is never part of the cacheable prefix.
-      const prev = (reqs[i - 1]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
-      const next = (reqs[i]!.messages as unknown[]).slice(0, -1).map((m) => JSON.stringify(m));
+      const prev = sent[i - 1]!.slice(0, -1);
+      const next = sent[i]!.slice(0, -1);
       if (next.length < prev.length) {
         trims++; // the one deliberate cache miss per block (hysteretic window)
         continue;
