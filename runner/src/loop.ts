@@ -1103,9 +1103,12 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         from: messageWindowCut(history),
         withSystemText: systemText !== lastSystemText,
       });
-      lastSystemText = systemText;
       trajectory.append(record as { t: string });
-      if (mismatch !== null) {
+      if (mismatch === null) {
+        // Only a slim record carries the text: a fallback full record has none
+        // to register, so the next slim request must carry it again.
+        lastSystemText = systemText;
+      } else {
         trajectory.append({ t: "harness", kind: "request_replay_mismatch", turn, detail: mismatch });
       }
       const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });

@@ -21,7 +21,8 @@ import {
   requestHash,
   requestStats,
 } from "../src/request-record";
-import { readTrajectory } from "../src/trajectory";
+import { comparabilityOf } from "../src/comparability";
+import { readMeta, readTrajectory } from "../src/trajectory";
 import { SEGMENT_TURNS, slimRun, type SlimRun } from "./fixtures/slim-run";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -112,6 +113,13 @@ describe("a stub-driven run replays byte for byte", () => {
         requestStats(sent),
       );
     });
+  });
+
+  test("the system prompt's hash is the one the comparability tuple stamps", () => {
+    const meta = readMeta(run.dir)!;
+    const stamped = comparabilityOf(meta.config, "t").promptHash;
+    const requests = readTrajectory(run.dir).filter((r) => r.t === "request");
+    expect(requests.every((r) => r["systemHash"] === stamped)).toBe(true);
   });
 
   test("a slim record is a fraction of the full one it stands for", () => {
