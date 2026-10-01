@@ -1652,6 +1652,35 @@ describe("state cache: questgiver markers", () => {
     expect(row.questGiver).toBe("available");
   });
 
+  test("a login drops every marker but keeps the objects; a reattach to the same session keeps them", () => {
+    // `seq` restarts with a new session, so a marker kept from the last one
+    // could not be ordered against the new session's quest log and level.
+    const relog = (seq: number, map: number) => ({
+      seq,
+      opcode: "SMSG_LOGIN_VERIFY_WORLD",
+      opcodeId: 0x236,
+      ts: 1_700_000_000_900,
+      data: { map, x: -1234.5, y: 987.25, z: 42.125, o: 3.5 },
+    });
+    const reattach = {
+      seq: 62,
+      opcode: "WB_SESSION_STATE",
+      opcodeId: 0xff03,
+      ts: 1_700_000_000_620,
+      data: { character: "Fenwick", guid: SEED.guid, inWorld: true, map: 0, x: -1234.5, y: 987.25, z: 42.125, o: 3.5, level: 3 },
+    };
+    const kept = withWorld([questGiverStatus(CREATURE_GUID, 10, 60), reattach]);
+    expect(kept.nearby.get(CREATURE_GUID)?.questGiver?.value).toBe(10);
+
+    const c = withWorld([questGiverStatus(CREATURE_GUID, 10, 60), relog(2, 0)]);
+    expect(c.nearby.get(CREATURE_GUID)).toBeDefined();
+    expect(c.nearby.get(CREATURE_GUID)?.questGiver).toBeUndefined();
+    expect(c.units({ questGiver: "reward" })).toEqual([]);
+    // The new session's own answer folds as usual.
+    const again = withWorld([questGiverStatus(CREATURE_GUID, 10, 60), relog(2, 0), questGiverStatus(CREATURE_GUID, 8, 5)]);
+    expect(again.nearby.get(CREATURE_GUID)?.questGiver).toEqual({ value: 8, seq: 5, ts: 1_700_000_000_005 });
+  });
+
   test("the marker leaves with the object, and a replay is identical", () => {
     const frames = [questGiverStatus(CREATURE_GUID, 10, 60), creatureOutOfRange];
     const c = withWorld(frames);

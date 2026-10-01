@@ -159,11 +159,15 @@ silence is explained by the distance afterwards.
 The questgiver marker answers before the wire too. `acceptQuestFrom` and
 `questsAvailableFrom` refuse with `nothing_on_offer` when the NPC's marker says
 it offers nothing, and `turnInQuest` refuses with `not_ready` and the `marker`
-when it says nothing the NPC ends is ready (`none` or `incomplete`). The
-turn-in check trusts only a marker newer than the last change to the quest log
-or the character's level, because the client re-asks for every marker when the
-log changes and a quest just completed still reads `incomplete` until that
-answer lands; an older marker, or none, still sends.
+when it says nothing the NPC ends is ready (`none` or `incomplete`). Both
+checks trust only a marker newer than the last change to the quest log or the
+character's level, because the client re-asks for every marker when the log
+changes and the old marker stands until that answer lands: a quest just
+completed still reads `incomplete`, and an NPC just turned in to still reads
+`reward` while the next quest of its chain is already on offer. An older
+marker, or none, still sends. Event `seq` restarts with every session, so a
+login drops every marker the cache holds, and each questgiver the new session
+puts in view is asked again, as a client asks after logging in.
 
 `waitForQuestObjective` waits on the **quest log**, not on an event, because at
 the pinned commit the core sends no `SMSG_QUESTUPDATE_COMPLETE` for a kill
