@@ -537,6 +537,59 @@ describe("error rendering (2026-08 audit fixes)", () => {
   }, 15_000);
 });
 
+describe("a thrown value that is not an Error", () => {
+  // The eval's catch read the abandon notes off whatever was thrown, and that
+  // read threw on `undefined` and `null`: no result was sent, and the host
+  // reported a timeout at the snippet ceiling for a snippet that had failed at
+  // once. Each case renders as the value itself, the form a thrown string or
+  // number always had, and the runtime keeps the bindings made before it.
+  const cases: [snippet: string, rendered: string][] = [
+    ["throw undefined;", "undefined"],
+    ["throw null;", "null"],
+    ['throw "boom";', '"boom"'],
+    ["throw 42;", "42"],
+    ["await Promise.reject(undefined);", "undefined"],
+  ];
+  for (const [snippet, rendered] of cases) {
+    test(`\`${snippet}\` comes back at once as an error reading ${rendered}`, async () => {
+      const host = makeHost();
+      await host.evalSnippet("let before = 'kept';");
+      const res = await host.evalSnippet(snippet);
+      expect(res.ok).toBe(false);
+      expect(res.timedOut).toBeUndefined();
+      expect(res.error).toBe(rendered);
+      expect(res.durationMs).toBeLessThan(1_000);
+      const after = await host.evalSnippet("before");
+      expect(after.ok).toBe(true);
+      expect(after.value).toBe(JSON.stringify("kept"));
+      // A fault in the handler surfaces as an unhandled rejection after the
+      // result; the next result is ordered after it, so by now it would show.
+      expect(after.logs).toEqual([]);
+      expect(host.drainNotices()).toEqual([]);
+      expect(host.totalRestarts).toBe(0);
+    });
+  }
+
+  for (const reason of ["undefined", "null"]) {
+    test(`an abandoned snippet whose wait rejects with ${reason} reads as the timeout and nothing else`, async () => {
+      const host = makeHost({ snippetTimeoutMs: 300 });
+      await host.evalSnippet("let before = 'kept';");
+      const res = await host.evalSnippet(
+        `await new Promise((_, reject) => signal.addEventListener("abort", () => reject(${reason})));`,
+      );
+      expect(res.ok).toBe(false);
+      expect(res.timedOut).toBe(true);
+      expect(res.error).toContain("was abandoned");
+      expect(res.logs).toEqual([]);
+      const after = await host.evalSnippet("before");
+      expect(after.value).toBe(JSON.stringify("kept"));
+      expect(after.logs).toEqual([]);
+      expect(host.drainNotices()).toEqual([]);
+      expect(host.totalRestarts).toBe(0);
+    });
+  }
+});
+
 describe("background fault storm control (morning-laguna-2)", () => {
   const setEnv = (vars: Record<string, string>): (() => void) => {
     const prev = new Map<string, string | undefined>();
