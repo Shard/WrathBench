@@ -59,7 +59,7 @@ import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
-import { liveOwnerOf } from "../runner/src/models";
+import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, type ScanReads } from "../runner/src/models";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -1056,30 +1056,82 @@ function readLevel(runId: string): number | undefined {
   }
 }
 
+function trajectoryOf(runId: string): string {
+  return join(runDir(runId), "trajectory.jsonl");
+}
+
+/** A count that could not be taken, and why. Never a 0 standing in for "could not read". */
+export interface Uncounted {
+  unknown: string;
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 /**
- * Turns made by *this* attempt. A resumed run appends to the same trajectory,
- * so a whole-file count would read "one turn, twice" as a healthy two-turn run
- * and retry something that never got off the ground. Not available from sqlite
- * at all — the run table has no turn column.
+ * Where an attempt launched now starts writing: its trajectory's size, 0
+ * before the file exists, and uncounted when the file is there but will not
+ * stat.
  */
-function turnsSince(runId: string, sinceTs: number): number {
-  const path = join(runDir(runId), "trajectory.jsonl");
-  if (!existsSync(path)) return 0;
-  let n = 0;
+export function launchOffset(path: string): number | Uncounted {
   try {
-    for (const line of readFileSync(path, "utf8").split("\n")) {
-      if (line.length === 0 || !line.includes('"response"')) continue;
-      try {
-        const ev = JSON.parse(line) as { t?: string; ts?: number };
-        if (ev.t === "response" && typeof ev.ts === "number" && ev.ts >= sinceTs) n++;
-      } catch {
-        // a torn last line while the runner is still writing: ignore
-      }
-    }
-  } catch {
-    return n;
+    return statSync(path).size;
+  } catch (e) {
+    if ((e as { code?: unknown }).code === "ENOENT") return 0;
+    return { unknown: `${path} would not stat: ${errText(e)}` };
   }
-  return n;
+}
+
+/**
+ * Turns made by *this* attempt: the `response` records in the bytes the
+ * trajectory gained past `from`, its size when the attempt launched
+ * (`launchOffset`). A resumed run appends to the same trajectory, so a
+ * whole-file count would read "one turn, twice" as a healthy two-turn run and
+ * retry something that never got off the ground. Not available from sqlite at
+ * all — the run table has no turn column.
+ *
+ * Counting from a byte is the same answer the old `ts >= launch` filter gave:
+ * the file is append-only, every record is stamped as it is appended, and the
+ * live-owner guard means nothing else writes it while the attempt runs. It
+ * also means the earlier attempts' bytes are never read, so the count costs
+ * what this attempt wrote and not what the whole run has. The old whole-file
+ * read failed past ~2 GiB (Bun will not decode a string that long) and
+ * answered 0, which is early saturation, so a long freeplay stream climbed the
+ * defer ladder on every pause from then on.
+ *
+ * Uncounted, never 0, whenever the count cannot be taken: the offset was not
+ * known, the file shrank below it or vanished (truncated or replaced, which an
+ * append-only trajectory never is), or the read failed. `reads` is for tests.
+ */
+export function turnsSince(path: string, from: number | Uncounted, reads: ScanReads = {}): number | Uncounted {
+  if (typeof from !== "number") return { unknown: `the size at launch is not known (${from.unknown})` };
+  const now = launchOffset(path);
+  if (typeof now !== "number") return now;
+  if (now === from) return 0;
+  if (now < from) return { unknown: `${path} is ${now} bytes, under the ${from} it had at launch (truncated, replaced or removed)` };
+  const scanner = new RecordCountScanner(path, [MODEL_RESPONSE_RECORD], { from, ...reads });
+  // `countOnce`: the runner has exited, so a final record with no newline is
+  // whole and counts, as it did when the file was read as one string.
+  const tally = scanner.countOnce();
+  if (tally === null) return { unknown: `${path} past byte ${from} could not be read: ${errText(scanner.failure)}` };
+  return tally.counts.get(MODEL_RESPONSE_RECORD) ?? 0;
+}
+
+/**
+ * Whether a rate pause came too early in its attempt for an in-place retry to
+ * be worth it, which sends the spec to the defer ladder instead. A count that
+ * could not be taken is not early: deferring climbs a ladder that a long
+ * stream's every later pause would climb again, while an in-place retry is
+ * bounded by `RESUME_BACKOFF_MS` and then defers anyway.
+ */
+export function earlySaturation(turns: number | null): boolean {
+  return turns !== null && turns < EARLY_TURN_THRESHOLD;
+}
+
+/** `turns` for a log line or a record's detail. */
+function turnsText(turns: number | null): string {
+  return turns === null ? "unknown" : String(turns);
 }
 
 // ------------------------------------------------------------- account guard
@@ -1481,14 +1533,17 @@ async function attemptSpec(
       }
     }
     await freeSession(spec, resume ? "pre-resume hygiene" : "pre-launch hygiene", opts.dryRun);
-    const launchTs = Date.now();
+    const launchedAt = launchOffset(trajectoryOf(spec.runId));
     // The name is the model's own and is not known until it creates the
     // character, so the launch line has none to print.
     say(`launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ""}`);
     const code = await runEpisode(spec, resume);
     const verdict = classify(spec, code);
     const level = readLevel(spec.runId);
-    const turns = turnsSince(spec.runId, launchTs);
+    // Resolved again: a run archived as it exited has moved, bytes and all.
+    const counted = turnsSince(trajectoryOf(spec.runId), launchedAt);
+    const turns = typeof counted === "number" ? counted : null;
+    if (typeof counted !== "number") say(`turns of ${spec.runId} not counted: ${counted.unknown}`);
 
     if (verdict.kind === "launch-failed") {
       say(`launch-failed ${spec.runId}: ${verdict.detail}`);
@@ -1518,7 +1573,7 @@ async function attemptSpec(
         model: spec.model,
         outcome: failed ? "done-failed" : "done",
         ...(level !== undefined ? { level } : {}),
-        detail: `${verdict.reason}${verdict.detail !== undefined ? `: ${verdict.detail}` : ""}; turns ${turns}`,
+        detail: `${verdict.reason}${verdict.detail !== undefined ? `: ${verdict.detail}` : ""}; turns ${turnsText(turns)}`,
       });
       return "done";
     }
@@ -1554,7 +1609,7 @@ async function attemptSpec(
         model: spec.model,
         outcome: "done-failed",
         ...(level !== undefined ? { level } : {}),
-        detail: `${reason}: ${lapse.detail ?? verdict.reason}; turns ${turns}`,
+        detail: `${reason}: ${lapse.detail ?? verdict.reason}; turns ${turnsText(turns)}`,
       });
       return "done";
     }
@@ -1573,7 +1628,7 @@ async function attemptSpec(
         model: spec.model,
         outcome: "paused-operator",
         ...(level !== undefined ? { level } : {}),
-        detail: `operator-pause; ${stopping ? "supervisor stop" : "runner was signalled"}; resumable with --resume; turns ${turns}`,
+        detail: `operator-pause; ${stopping ? "supervisor stop" : "runner was signalled"}; resumable with --resume; turns ${turnsText(turns)}`,
       });
       return "done";
     }
@@ -1604,7 +1659,7 @@ async function attemptSpec(
         model: spec.model,
         outcome: "paused-operator",
         ...(level !== undefined ? { level } : {}),
-        detail: `${verdict.reason}; ${spec.driver} entries are not deferred; turns ${turns}`,
+        detail: `${verdict.reason}; ${spec.driver} entries are not deferred; turns ${turnsText(turns)}`,
       });
       await freeSession(spec, `paused ${verdict.reason}`, opts.dryRun);
       return "done";
@@ -1625,19 +1680,19 @@ async function attemptSpec(
         model: spec.model,
         outcome: "deferred",
         ...(level !== undefined ? { level } : {}),
-        detail: `${verdict.reason}; provider reset at ${new Date(reset).toISOString()}, waited for once, off the defer ladder; turns ${turns}`,
+        detail: `${verdict.reason}; provider reset at ${new Date(reset).toISOString()}, waited for once, off the defer ladder; turns ${turnsText(turns)}`,
       });
       await freeSession(spec, `waiting for the provider reset (${verdict.reason})`, opts.dryRun);
       return { resetAt: reset, reason: verdict.reason };
     }
 
-    const early = turns < EARLY_TURN_THRESHOLD;
+    const early = earlySaturation(turns);
     const outOfRetries = retry >= RESUME_BACKOFF_MS.length;
     if (early || outOfRetries || stopping) {
       const why = stopping
         ? "stopping"
         : early
-          ? `early saturation (${turns} turn(s) this attempt)`
+          ? `early saturation (${turnsText(turns)} turn(s) this attempt)`
           : `still ${verdict.reason} after ${retry} retries`;
       say(`defer ${spec.model} (${spec.runId}): ${why}`);
       record({
@@ -1655,7 +1710,7 @@ async function attemptSpec(
 
     const backoff = RESUME_BACKOFF_MS[retry]!;
     say(
-      `retry ${spec.runId} in ${backoff / 60_000}m (${verdict.reason} mid-episode, ${turns} turns this attempt, attempt ${retry + 1}/${RESUME_BACKOFF_MS.length})`,
+      `retry ${spec.runId} in ${backoff / 60_000}m (${verdict.reason} mid-episode, ${turnsText(turns)} turns this attempt, attempt ${retry + 1}/${RESUME_BACKOFF_MS.length})`,
     );
     record({
       runId: spec.runId,
@@ -1845,6 +1900,7 @@ async function main(): Promise<void> {
     );
     console.log(
       `\npolicy: terminated -> done | paused rate-limited/quota-exhausted with <${EARLY_TURN_THRESHOLD} turns -> defer` +
+        `\n        (turns that could not be counted are not early: the pause is retried in place)` +
         `\n        claude-code and codex entries never defer (no per-provider pools to wait on)` +
         `\n        mid-episode pause -> --resume with backoff ${RESUME_LADDER}, then defer` +
         `\n        deferred spec -> per-spec backoff (${DEFER_LADDER}, escalating): skipped while cooling,` +

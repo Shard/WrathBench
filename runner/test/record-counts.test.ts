@@ -9,7 +9,7 @@
  * asserted here against a whole-file read, which is the definition of right.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,6 +20,7 @@ import {
   readRunFact,
   readRunFacts,
   type CountCache,
+  type ReadAt,
 } from "../src/models";
 
 const KINDS = ["response", "pause"] as const;
@@ -92,6 +93,31 @@ describe("countRecords (one-shot)", () => {
     for (let i = 0; i < 40; i++) out.push(JSON.stringify({ t: i % 4 === 0 ? "response" : "events_served", ts: i, filler }));
     writeFileSync(p, `${out.join("\n")}\n`);
     expect(countRecords(p, KINDS)!.get("response")).toBe(10);
+  });
+
+  test("a starting byte skips what precedes it unread, and a failed read says why", () => {
+    const p = join(dir, "from.jsonl");
+    const before = `${lines().join("\n")}\n`;
+    writeFileSync(p, `${before}${JSON.stringify({ t: "response", ts: 9 })}\n`);
+    const from = Buffer.byteLength(before);
+    const seen: number[] = [];
+    const read: ReadAt = (fd, buf, off, len, pos) => {
+      seen.push(pos);
+      return readSync(fd, buf, off, len, pos);
+    };
+    const scanner = new RecordCountScanner(p, KINDS, { from, chunk: 5, read });
+    expect(scanner.countOnce()!.counts.get("response")).toBe(1);
+    expect(Math.min(...seen)).toBe(from);
+    expect(scanner.failure).toBeUndefined();
+
+    const boom = new Error("EIO: i/o error, read");
+    const failing = new RecordCountScanner(p, KINDS, {
+      read: () => {
+        throw boom;
+      },
+    });
+    expect(failing.countOnce()).toBeNull();
+    expect(failing.failure).toBe(boom);
   });
 });
 
