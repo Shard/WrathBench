@@ -1,0 +1,59 @@
+{
+  "data": [
+    {
+      "id": "z-ai/glm-6",
+      "canonical_slug": "z-ai/glm-6-20260920",
+      "name": "Z.AI: GLM 6",
+      "created": 1790000000,
+      "context_length": 202752,
+      "supported_parameters": ["max_tokens", "temperature", "tools", "tool_choice", "reasoning"],
+      "pricing": { "prompt": "0.0000006", "completion": "0.0000022", "input_cache_read": "0.00000011", "request": "0" }
+    },
+    {
+      "id": "z-ai/glm-6:free",
+      "name": "Z.AI: GLM 6 (free)",
+      "created": 1790000100,
+      "supported_parameters": ["tools", "tool_choice"],
+      "pricing": { "prompt": "0", "completion": "0" }
+    },
+    {
+      "id": "fixturelab/mystery-7b",
+      "name": "Fixturelab: Mystery 7B",
+      "created": 1780000000,
+      "supported_parameters": ["tools", "temperature"],
+      "pricing": { "prompt": "0.0000001", "completion": "0.0000003" }
+    },
+    {
+      "id": "fixturelab/chat-only",
+      "name": "Fixturelab: Chat Only",
+      "created": 1795000000,
+      "supported_parameters": ["temperature", "max_tokens"],
+      "pricing": { "prompt": "0.0000001", "completion": "0.0000002" }
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "name": "NVIDIA: Nemotron 3 Super (free)",
+      "created": 1770000000,
+      "supported_parameters": ["tools"],
+      "pricing": { "prompt": "0", "completion": "0" }
+    },
+    {
+      "id": "anthropic/claude-fixture-5",
+      "name": "Anthropic: Claude Fixture 5",
+      "created": 1785000000,
+      "supported_parameters": ["tools", "tool_choice"],
+      "pricing": { "prompt": "0.000003", "completion": "0.000015", "input_cache_read": "0.0000003", "input_cache_write": "0.00000375" }
+    },
+    {
+      "id": "openrouter/auto",
+      "name": "Auto Router",
+      "created": 1700000000,
+      "supported_parameters": ["tools"],
+      "pricing": { "prompt": "-1", "completion": "-1" }
+    },
+    {
+      "name": "a row with no id, which must be skipped and counted, never fatal",
+      "supported_parameters": ["tools"]
+    }
+  ]
+}
