@@ -291,6 +291,7 @@ const STATE_INTERNAL = new Set([
   "deriveGauges",
   "evictOnMapChange",
   "forget",
+  "forgetQuestGiverMarkers",
   "isSelfGuid",
   "joinName",
   "mergeFields",
