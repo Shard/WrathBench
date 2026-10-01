@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { loadRunConfig, newSessionToken } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { requestsOf } from "./fixtures/requests";
 
 const tempDir = tempDirs();
 
@@ -145,9 +146,8 @@ describe("--resume after a pause", () => {
     // beside the one the pause had preserved.
     const { runsDir, runId } = pausedStubRun(10 * 60_000);
     await resume(runsDir, runId, ["--max-turns", "1"]);
-    const records = readTrajectory(join(runsDir, runId));
-    const req = records.find((r) => r.t === "request");
-    const sent = JSON.stringify(req?.["messages"] ?? "");
+    // What the model was sent, rebuilt from the trajectory (the record is slim).
+    const sent = JSON.stringify(requestsOf(join(runsDir, runId))[0]?.messages ?? "");
     expect(sent).toContain("Navprobe");
     expect(sent).toContain("Dwarf");
     expect(sent).toContain("Paladin");
