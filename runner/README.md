@@ -348,7 +348,12 @@ in the entry file's header, and told to the model in the system prompt.
 Timeouts, precisely: a snippet that exceeds the per-snippet timeout is
 abandoned but the runtime survives; a snippet that blocks the event loop gets
 the process killed and respawned, and the state loss is surfaced to the model
-as a harness notice. Repeats trip the `snippet-runaway` watchdog.
+as a harness notice. Repeats trip the `snippet-runaway` watchdog. The abandon
+message also says what the snippet was awaiting when the abandoning wait can
+say it: how far an awaited `moveTo` had walked, or that an awaited `sleep` was
+asked for at least the time the snippet had left — with the ceiling, and that
+it could never finish inside the snippet. Neither wait is shortened or refused
+for it; the note explains.
 
 Network posture: the real boundary is the deployment's network topology — the
 compose network, or whatever the cluster gives the runner pod — under which the

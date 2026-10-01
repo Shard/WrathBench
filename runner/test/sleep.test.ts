@@ -160,6 +160,69 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     expect(outcome.value).toContain("rejected: snippet abandoned by the harness");
   });
 
+  test("an awaited sleep of the whole ceiling still times out, and the abandon message says why", async () => {
+    // One e360 run awaited sleep(30000, { wake: false }) against a 30000ms
+    // ceiling 32 times in six hours and was only ever told it timed out.
+    // Operator decision 2026-10-01: explain, never clamp — the snippet still
+    // runs out (nothing shortened the sleep), and the note names the sleep,
+    // the ceiling, and that it can never finish inside one snippet.
+    const host = makeHost(300);
+    const res = await host.evalSnippet("await sleep(300, { wake: false }); 'slept'");
+    expect(res.ok).toBe(false);
+    expect(res.timedOut).toBe(true);
+    expect(res.error).toContain(
+      "any move in flight was stopped. a sleep(300) was still waiting when this was abandoned: it was asked for " +
+        "300ms and the snippet time limit is 300ms, so a sleep that long can never finish inside one snippet. " +
+        "The runtime (bindings, routines, session) is still alive.",
+    );
+    // Longer than the ceiling reads the same way, with what was asked.
+    const longer = await host.evalSnippet("await sleep(5_000)");
+    expect(longer.timedOut).toBe(true);
+    expect(longer.error).toContain(
+      "a sleep(5000) was still waiting when this was abandoned: it was asked for 5000ms and the snippet time limit " +
+        "is 300ms, so a sleep that long can never finish inside one snippet.",
+    );
+    // Drained with the pong: a later abandon with no sleep in it says nothing of one.
+    const again = await host.evalSnippet("await new Promise(() => {})");
+    expect(again.timedOut).toBe(true);
+    expect(again.error).not.toContain("sleep(");
+  });
+
+  test("a shorter sleep started with less than it asked for left is named against this snippet only", async () => {
+    // 550ms fits a 600ms ceiling, so "can never finish inside one snippet"
+    // would be false of it; started ~100ms in, it could not finish in this one.
+    const host = makeHost(600);
+    const res = await host.evalSnippet("await sleep(100, { wake: false }); await sleep(550, { wake: false }); 'slept'");
+    expect(res.timedOut).toBe(true);
+    expect(res.error).toMatch(
+      /a sleep\(550\) was still waiting when this was abandoned: it was asked for 550ms when this snippet had \d+ms of its 600ms time limit left, so it could never finish inside this snippet\./,
+    );
+    expect(res.error).not.toContain("can never finish inside one snippet");
+  });
+
+  test("a sleep the snippet was not awaiting is never named as what ran it out", async () => {
+    const host = makeHost(300);
+    const res = await host.evalSnippet(
+      "globalThis.bg = sleep(5_000).catch((e) => e.message); await new Promise(() => {})",
+    );
+    expect(res.timedOut).toBe(true);
+    expect(res.error).not.toContain("sleep(");
+    // The background sleep still rejected, with the message it always had.
+    expect((await host.evalSnippet("await bg")).value).toContain("snippet abandoned by the harness");
+    // And one the snippet caught itself is the snippet's business, not the note's.
+    const caught = await host.evalSnippet("try { await sleep(5_000) } catch {} await new Promise(() => {})");
+    expect(caught.timedOut).toBe(true);
+    expect(caught.error).not.toContain("sleep(");
+  });
+
+  test("a sleep that fits what the snippet has left carries no note", async () => {
+    // The note is about the sleep, not about every abandon a sleep is part of.
+    const host = makeHost(300);
+    const res = await host.evalSnippet("await Promise.all([sleep(20, { wake: false }), new Promise(() => {})])");
+    expect(res.timedOut).toBe(true);
+    expect(res.error).not.toContain("sleep(");
+  });
+
   test("a bad argument is rejected with a message that says what sleep takes", async () => {
     const host = makeHost();
     const res = await host.evalSnippet("await sleep('2s')");

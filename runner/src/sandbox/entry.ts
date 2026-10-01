@@ -14,7 +14,9 @@
  *               "elapsed", or early with "attacked" (a unit started attacking
  *               us) or "died" (our health reached zero, transition only).
  *               `{ wake: false }` is a pure timer. Rejects with the abort
- *               reason if this snippet is abandoned
+ *               reason if this snippet is abandoned; an awaited sleep asked
+ *               for at least the time the snippet had left is named in the
+ *               abandon message, and is never shortened for it
  *   signal      AbortSignal for the *current* snippet; fires when the host
  *               abandons it (timeout). Every SDK wait honors it by default.
  *   scratchpad  { read(), write(content), append(text) } — the run's markdown
@@ -305,15 +307,16 @@ function drainHints(): ActionHintNote[] {
 // -------------------------------------------------------- ambient snippet API
 
 /** The eval whose async context we are in, if any. Set by `evaluate`. */
-const evalContext = new AsyncLocalStorage<{ signal: AbortSignal; deadline?: number }>();
+const evalContext = new AsyncLocalStorage<{ signal: AbortSignal; deadline?: number; timeoutMs?: number }>();
 const currentSignal = (): AbortSignal | undefined => evalContext.getStore()?.signal;
 /** When the host will abandon the snippet we are inside, if it said. */
 const currentDeadline = (): number | undefined => evalContext.getStore()?.deadline;
 /**
- * What the last abandoned eval learned as it unwound — set from an SDK error
- * that carried a `moveAbandon` sentence, drained by the liveness pong that
- * follows the abort. One slot: the host pings immediately after aborting, and
- * only the abandoned snippet is unwinding at that moment.
+ * What the last abandoned eval learned as it unwound — set from an error that
+ * carried a `moveAbandon` sentence (the SDK's, for a walk) or a `sleepAbandon`
+ * one (`sleep`'s, below), drained by the liveness pong that follows the abort.
+ * One slot: the host pings immediately after aborting, and only the abandoned
+ * snippet is unwinding at that moment.
  */
 let abandonNote: string | undefined;
 /**
@@ -375,6 +378,51 @@ const API_MD_PATH = join(import.meta.dir, "..", "..", "..", "sdk", "API.md");
 export type SleepReason = "elapsed" | "attacked" | "died";
 
 /**
+ * The abandon-note sentence for a sleep of `ms` starting now, or undefined when
+ * it fits in what its snippet has left — or when no budget is known.
+ *
+ * One e360 run awaited `sleep(30000, { wake: false })` against a 30000ms
+ * ceiling 32 times in six hours and was told only that the snippet timed out,
+ * so it never learned that the sleep itself was the reason. The note states
+ * what was asked, the ceiling, and that the sleep cannot finish inside the
+ * snippet; it says nothing about what to do instead. A sleep of the ceiling or
+ * longer can never finish inside any snippet, and the note says so; a shorter
+ * one started too late could not finish inside this one, and the note says
+ * that instead, since the first would not be true of it.
+ *
+ * A deadline already past is a budget we do not know, not a budget of zero —
+ * the same rule as the SDK's walk estimate: a background routine inherits the
+ * async context (and so the deadline) of the snippet that launched it, and that
+ * snippet's clock may have run out long ago.
+ */
+function sleepOverrunNote(ms: number): string | undefined {
+  const store = evalContext.getStore();
+  if (store?.deadline === undefined || store.timeoutMs === undefined) return undefined;
+  const left = store.deadline - Date.now();
+  if (left <= 0 || ms < left) return undefined;
+  const head = `a sleep(${ms}) was still waiting when this was abandoned: it was asked for ${ms}ms`;
+  return ms >= store.timeoutMs
+    ? `${head} and the snippet time limit is ${store.timeoutMs}ms, so a sleep that long can never finish inside one snippet.`
+    : `${head} when this snippet had ${Math.round(left)}ms of its ${store.timeoutMs}ms time limit left, so it could never finish inside this snippet.`;
+}
+
+/**
+ * The rejection for an abandoned sleep that could never have finished: a fresh
+ * error with the abort reason's name and message, so code that catches it
+ * reads exactly what it always read, carrying the note as `sleepAbandon` the
+ * way the SDK's walk carries `moveAbandon`. Fresh rather than the reason
+ * itself, which every other wait of the snippet rejects with too. `evaluate`
+ * reads the note only when this rejection is what the snippet was awaiting.
+ */
+function withSleepAbandon(reason: unknown, note: string): Error {
+  const base = reason instanceof Error ? reason : new Error(String(reason));
+  const err = new Error(base.message, { cause: reason });
+  err.name = base.name;
+  (err as { sleepAbandon?: string }).sleepAbandon = note;
+  return err;
+}
+
+/**
  * `sleep(ms)` — a timer that also wakes for the two things a sleeping snippet
  * most needs to hear about, and says which happened.
  *
@@ -395,7 +443,12 @@ export type SleepReason = "elapsed" | "attacked" | "died";
  *   - `{ wake: false }` is a pure timer for a caller that wants one.
  *
  * The ambient snippet signal still aborts it: an abandoned snippet's sleep
- * rejects rather than resolving.
+ * rejects rather than resolving. When the sleep was asked for at least the
+ * time its snippet had left as it began, the rejection also carries a sentence
+ * saying so (`sleepOverrunNote`), which the abandon message states if the
+ * rejection is what the snippet was awaiting. Nothing about the timer changes
+ * for it — the sleep runs for exactly what it was asked (docs/METHODOLOGY.md,
+ * "A deadline explains, never caps").
  */
 function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
@@ -419,6 +472,9 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
       reject(signal.reason);
       return;
     }
+    // Read as the sleep begins: "the time the snippet had left" is the time it
+    // had left when this sleep started, not when it was abandoned.
+    const overrun = sleepOverrunNote(ms);
     const selfDead = (): boolean => client.state.self.health?.value.current === 0;
     // Already dead when the sleep started: this snippet is handling that death,
     // so only a *later* one wakes it.
@@ -438,7 +494,7 @@ function sleep(ms: number, options?: { wake?: boolean }): Promise<SleepReason> {
     }
     function onAbort(): void {
       cleanup();
-      reject(signal?.reason);
+      reject(overrun === undefined ? signal?.reason : withSleepAbandon(signal?.reason, overrun));
     }
     const timer = setTimeout(() => settle("elapsed"), ms);
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -578,7 +634,7 @@ export function renderError(err: unknown): string {
 // A timed-out evaluation's late result is discarded host-side (the host
 // abandons the id), so the child always reports. What it does track is the
 // eval's AbortController, so a host `abort` can fire the snippet's signal.
-async function evaluate(id: number, code: string, deadline?: number): Promise<void> {
+async function evaluate(id: number, code: string, deadline?: number, timeoutMs?: number): Promise<void> {
   const started = Date.now();
   const controller = new AbortController();
   evalControllers.set(id, controller);
@@ -595,7 +651,7 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     }
     fn ??= new AsyncFunction(compiled.statementsBody);
     const run = fn;
-    const value: unknown = await evalContext.run({ signal: controller.signal, deadline }, () =>
+    const value: unknown = await evalContext.run({ signal: controller.signal, deadline, timeoutMs }, () =>
       run.call(globalThis),
     );
     const msg: ChildToHost = {
@@ -622,10 +678,14 @@ async function evaluate(id: number, code: string, deadline?: number): Promise<vo
     send(msg);
   } catch (err) {
     // An aborted eval's result is discarded host-side, and with it the one
-    // thing the abort knew: how far the move it interrupted had got. The SDK
-    // hangs that sentence on the error as `moveAbandon`; keep it for the pong,
-    // which is the only channel the model still sees.
-    const carried = (err as { moveAbandon?: unknown }).moveAbandon;
+    // thing the abort knew: how far the move it interrupted had got (the SDK
+    // hangs that sentence on the error as `moveAbandon`), or that the sleep it
+    // was awaiting could never have finished (`sleepAbandon`, from `sleep`).
+    // Keep it for the pong, which is the only channel the model still sees.
+    // Read off the error that reached this catch, so only a wait the snippet
+    // was awaiting can name itself as what ran the snippet out.
+    const moveAbandon = (err as { moveAbandon?: unknown }).moveAbandon;
+    const carried = typeof moveAbandon === "string" ? moveAbandon : (err as { sleepAbandon?: unknown }).sleepAbandon;
     if (controller.signal.aborted && typeof carried === "string") abandonNote = carried;
     // An aborted eval's result is discarded host-side; its logs must not go
     // with it — leave them in the buffer for the liveness pong that follows.
@@ -832,7 +892,7 @@ function stateSnapshot(): unknown {
 function handle(msg: HostToChild | HostcallResult): void {
   switch (msg.t) {
     case "eval":
-      void evaluate(msg.id, msg.code, msg.deadline);
+      void evaluate(msg.id, msg.code, msg.deadline, msg.timeoutMs);
       return;
     case "abort":
       abortEval(msg.id);

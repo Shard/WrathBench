@@ -352,8 +352,15 @@ export class SandboxHost {
         // The budget is the host's fact, so the host states it: the child hands
         // it to the SDK, which uses it to explain a walk that never fit (see
         // ipc.ts). Wall-clock, not `opts.now` — it is compared against
-        // `Date.now()` in another process.
-        { t: "eval", id, code, deadline: Date.now() + this.opts.snippetTimeoutMs },
+        // `Date.now()` in another process. The ceiling itself rides along so
+        // an abandoned sleep's note can name it.
+        {
+          t: "eval",
+          id,
+          code,
+          deadline: Date.now() + this.opts.snippetTimeoutMs,
+          timeoutMs: this.opts.snippetTimeoutMs,
+        },
         this.opts.snippetTimeoutMs,
       );
       this.consecutiveRestarts = 0;
@@ -400,11 +407,14 @@ export class SandboxHost {
             `snippet evaluation exceeded ${this.opts.snippetTimeoutMs}ms and was abandoned: its \`signal\` was ` +
             `aborted, so pending SDK waits (moveTo, killTarget, waitForTransfer, …) rejected with ` +
             `EventAbortedError and any move in flight was stopped. ` +
-            // What the abort itself learned, when it learned anything: today
-            // that is the distance an in-flight moveTo had covered and had
-            // left, named by the SDK and carried home on the pong. A generic
-            // "it timed out" is what the 2026-08-23 fan-out showed models
-            // failing to act on (one retried the same blocking call 5 times).
+            // What the abort itself learned, when it learned anything: the
+            // distance an in-flight moveTo had covered and had left (named by
+            // the SDK), or that an awaited sleep was asked for at least the
+            // time the snippet had left (named by the sandbox), carried home on
+            // the pong. A generic "it timed out" is what the 2026-08-23 fan-out
+            // showed models failing to act on (one retried the same blocking
+            // call 5 times), and one e360 slept `sleep(30000, { wake: false })`
+            // into a 30000ms ceiling 32 times without learning why.
             (ping.note !== undefined ? `${ping.note} ` : "") +
             `The runtime (bindings, routines, session) is still alive. ` +
             `A walk longer than this limit is dispatched, not awaited: sdk.moveToAsync(target) returns as soon ` +
