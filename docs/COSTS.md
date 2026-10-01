@@ -4,10 +4,13 @@ How cost is measured in this harness, and the rules learned measuring it. It
 carries no per-episode resource tables, pricing table or platform reliability
 counts: such a snapshot goes stale the moment a series re-arms. Cost
 surfaces belong in the UI, and the viewer has them: actual and expected cost
-on the run page, and cost columns on the run, model and fleet listings. What
-it lacks is a projected cost for a model not yet run; that is to come with
-drafted models, as a list-price estimate over the observed e90 token profile
-(GitHub issue #66).
+on the run page, and cost columns on the run, model and fleet listings. A
+model not yet run gets one projected figure, on its draft on the `/config` page
+(docs/RUNBOOK.md, "Adding a model"): the catalogue's list price applied to the
+median counted e90's tokens. It is labelled an estimate because it is the
+extrapolation from another model's token shape that the first rule below warns
+against, and it reads low for a reasoning-heavy model — by two to three times,
+on the measurements behind GitHub issue #66.
 
 ## 1. Where the data lives
 

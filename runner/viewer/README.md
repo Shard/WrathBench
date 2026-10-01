@@ -351,6 +351,17 @@ the singletons `_notes`, `preflight`, `accounts`, `policy`.
 | `DELETE /api/config/<key>` | remove one row |
 | `GET /api/config/audit?limit=` | the change history, newest first, with the before and after documents |
 | `POST /api/config/export` | render the store to a config document, for reading or diffing against an earlier export (never for committing); returns the text, and writes a file only when the body names a `path` |
+| `GET /api/config/proposed` | the drafts (`drafts.ts`): pending ones newest first, the ignored apart, each with its slug-derived billing, catalogue price, routing and e90 estimate, plus the token profile the estimates were priced at |
+| `POST /api/config/proposed/fetch` | one bounded read of the OpenRouter catalogue: proposes every tool-calling model the roster does not run and nobody ignored; 502 with the reason when the catalogue cannot be read |
+| `POST /api/config/proposed/ignore`, `…/unignore` | `{ model }`: remember a draft as ignored, or put it back |
+| `POST /api/config/proposed/promote` | `{ model, name, tier, race?, class? }`: write `roster/<name>` through `parseFleet` like any `PUT`, and drop the draft in the same transaction |
+
+Drafts are `proposed/<model id>` rows of the same store that no config reader
+sees (`config-store.ts`, "The draft key space"). Only a promotion is a config
+write: it alone is validated, version-moving and recorded with the actor and
+note. A fetch or an ignore is bookkeeping on rows nothing schedules, so it
+takes no note and leaves the history alone; an ignore records its actor on the
+draft. Model ids travel in bodies, never in the path.
 
 Every write renders the whole candidate config and runs it through
 `parseFleet` — the same function the supervisor refuses a bad config

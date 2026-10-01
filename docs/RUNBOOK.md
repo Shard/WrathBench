@@ -307,6 +307,49 @@ else in the roster is the policy's (below). This
 is the only shape: a file that still says `lanes` or `accounts.pinned` is
 refused by name, with the message naming the 0.4 keys.
 
+#### Adding a model
+
+New OpenRouter models arrive as **drafts**, on demand, from the `/config`
+page: nothing to run in a pod, no file to edit, no key to mount. **fetch new
+models** reads the OpenRouter catalogue once — it is public, so the call carries
+no credential, and it is bounded at 16 MB and 20 seconds — and proposes every
+tool-calling model the roster does not already run and nobody has ignored.
+Free and paid are both proposed, labelled from the slug the way the roster
+labels them; the list is newest first with a free/paid toggle. A second fetch
+adds only what is new, refreshes a pending draft's price, and never brings an
+ignored model back.
+
+A draft is not config. It is a `proposed/<model id>` row in the store, which
+`parseFleet` — and so the supervisor, `/api/models`, the ladders and the
+publisher — never reads; nothing schedules it; and a fetch or an ignore writes
+no line to the history and does not move the version, so a few hundred drafts
+cannot bury the record of what the fleet ran. An ignore is remembered by model
+id (with who ignored it) and survives a reseed; **un-ignore**, in the collapsed
+*ignored* list, undoes it.
+
+Each draft carries an estimate of one `e90`: the catalogue's list price applied
+to the median counted `e90` of this series on the wrathbench harness, from
+provider-reported tokens only — prompt, completion and cache reads, each its
+own median. It is labelled an estimate on the page because it extrapolates
+from other models' token shape (docs/COSTS.md); with no counted `e90` to take a
+profile from there is no estimate at all.
+
+**promote** writes an ordinary roster entry — `{ model, tier }`, plus `race`
+and `class` when given, else the harness defaults — through the same validation
+and the same attributed, version-checked write as any roster edit, and it is
+in the history like one. The tier has no default: promotion never picks one
+(docs/METHODOLOGY.md, "The tier is the evidence budget"). The entry states no
+`routing`, because absent is the rule — the author's own provider, fallbacks
+off, or `policy.routing` where the fleet sets one; the routing column shows
+which — no `billing`, because it is derived from the slug, and no `idle`. A
+refusal — a name or a model the roster already has, a claude id on the openai
+driver — is shown on the row, and the draft stays.
+
+Nothing calls the model first: whether a slug really answers a tool call is
+what its `t0` trial finds out. A model the catalogue does not carry — a
+claude-code or codex lane, the LAN box, Cerebras — is still added with **add a
+roster entry**. The endpoints are in `runner/viewer/README.md`.
+
 ### Stop it
 
 ```
