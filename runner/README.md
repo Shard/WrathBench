@@ -258,7 +258,8 @@ and differs only where the CLI does:
   never" — observed); `default_tools_approval_mode="approve"` on the server is
   what lets ours through (`"auto"` still gates on the tool's readOnlyHint
   and refused). Codex presents the tools to the model as
-  `mcp__wrathbench.<tool>` and calls our server with the plain name. The CLI
+  `mcp__wrathbench__<tool>` (`mcp__wrathbench.<tool>` before 0.159) and calls
+  our server with the plain name. The CLI
   runs MCP servers inside its sandbox with a private `/tmp`, which is why the
   bridge is addressed by its repository path.
 - **Effort** is `-c model_reasoning_effort=<low|medium|high|xhigh|max|ultra>`;

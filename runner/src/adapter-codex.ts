@@ -61,7 +61,8 @@
  * overrides on the command line (`--ignore-user-config` keeps the operator's
  * ~/.codex/config.toml — trusted projects, other MCP servers — out of the run;
  * auth still comes from CODEX_HOME). Codex presents them to the model as
- * `mcp__wrathbench.<tool>` and calls our server with the plain `<tool>` name.
+ * `mcp__wrathbench__<tool>` (`mcp__wrathbench.<tool>` before 0.159) and calls
+ * our server with the plain `<tool>` name.
  *
  * MCP tool calls need approval unless the server says otherwise, and with
  * `approval_policy="never"` an unapproved call FAILS ("MCP tool call requires
