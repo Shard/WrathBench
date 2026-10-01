@@ -1137,6 +1137,19 @@ function fmtXY(p: { x: number; y: number }): string {
   return `${p.x.toFixed(1)}, ${p.y.toFixed(1)}`;
 }
 
+/**
+ * How far a walk toward `point` got, from `from` to `at`: the words a timed-out
+ * or abandoned `moveTo` uses, and the ones `killTarget` keeps for an approach
+ * that ran out its clock.
+ */
+function walkProgress(from: Point3 | undefined, at: Point3 | undefined, point: { x: number; y: number }): string {
+  const covered = at !== undefined && from !== undefined ? distance2d(from, at) : undefined;
+  const remaining = at !== undefined ? distance2d(at, point) : undefined;
+  return covered !== undefined && remaining !== undefined
+    ? `~${Math.round(covered)}y covered, ~${Math.round(remaining)}y still to go to (${fmtXY(point)})`
+    : `no position was observed for it (target (${fmtXY(point)}))`;
+}
+
 export interface WaitForTransferOptions {
   /** How long to wait for `SMSG_NEW_WORLD`. Default 15000: a far teleport is a few server ticks. */
   timeout?: number;
@@ -1217,8 +1230,10 @@ export interface DeleteCharacterOptions {
 
 export interface KillTargetOptions {
   /**
-   * Give up after this long and return `status: "timeout"`. Default 25000,
-   * chosen to sit under the runner's 30s snippet cap: a call that outlives the
+   * Give up after this long and return `status: "timeout"`. The walk into
+   * melee range counts against it as well as the fight, so a far target can
+   * spend all of it walking (`reached: false` says so). Default 25000, chosen
+   * to sit under the runner's 30s snippet cap: a call that outlives the
    * snippet is abandoned mid-fight and its verdict is never seen. Raise it only
    * from a background routine, which outlives the snippet that started it.
    */
@@ -1260,6 +1275,17 @@ interface KillResultFacts {
    * for. Call `attackStop()` when you actually want to break off.
    */
   readonly attacking: boolean;
+  /**
+   * Whether the character was within `meleeRange` of the target at any point
+   * in this call, by the cached positions. `false` when it never was, and when
+   * the positions were never both observed.
+   */
+  readonly reached: boolean;
+  /**
+   * Yards to the target at exit, in x/y as `meleeRange` is measured, to 0.1y;
+   * `undefined` when either position is unobserved.
+   */
+  readonly distance: number | undefined;
   /** One line about how it ended and what state the character was left in. */
   readonly detail: string;
 }
@@ -4697,13 +4723,7 @@ export class WrathClient {
       // How far this walk got, shared by both branches below: an abort and a
       // timeout are both the absence of a verdict, and the caller needs the
       // same two facts either way.
-      const at = this.state.self.position?.value;
-      const covered = at !== undefined && from !== undefined ? distance2d(from, at) : undefined;
-      const remaining = at !== undefined ? distance2d(at, point) : undefined;
-      const progress =
-        covered !== undefined && remaining !== undefined
-          ? `~${Math.round(covered)}y covered, ~${Math.round(remaining)}y still to go to (${fmtXY(point)})`
-          : `no position was observed for it (target (${fmtXY(point)}))`;
+      const progress = walkProgress(from, this.state.self.position?.value, point);
       if (err instanceof EventTimeoutError) {
         // The timeout is not "the move failed": the character is still walking
         // and the verdict is still coming. Saying so stops the model from
@@ -5070,10 +5090,13 @@ export class WrathClient {
    *
    * The default `timeout` (25s) is deliberately under the runner's 30s snippet
    * cap so an in-snippet call returns its verdict rather than being abandoned
-   * mid-fight; a longer fight belongs in a background routine. An approach walk
-   * that outlasts the deadline — before the first swing or after it — is folded
-   * into `detail` and reported as `timeout` rather than thrown, so the outcome
-   * stays a value.
+   * mid-fight; a longer fight belongs in a background routine. The walks draw on
+   * the same deadline as the fight. An approach walk that outlasts it — before
+   * the first swing or after it — is folded into `detail`, with how far it got,
+   * and reported as `timeout` rather than thrown, so the outcome stays a value.
+   * `reached` says whether melee range was ever reached and `distance` how far
+   * the target was at the end; a `timeout` that never reached it leads `detail`
+   * with "never reached melee range" rather than describing a fight.
    *
    * Returns a value for every game outcome and throws only for a refused
    * request. The caller is expected to loot afterwards: `killTarget` does not,
@@ -5138,38 +5161,69 @@ export class WrathClient {
 
       let outcome: KillResult["status"] | undefined;
       let note = "";
+      // Whether we have been within melee range at any point in this call.
+      let reached = false;
+      /** Yards to the target now, in x/y as `meleeRange` is; records reaching it. */
+      const measure = (): number | undefined => {
+        const self = this.state.self.position?.value;
+        const at = aimAt();
+        if (self === undefined || at === undefined) return undefined;
+        const yards = distance2d(self, at);
+        if (yards <= meleeRange) reached = true;
+        return yards;
+      };
+      // How far the last walk got when it ran out the clock; cleared by a
+      // walk that ends with a verdict.
+      let unfinished: string | undefined;
       /**
        * Walk to the target, recording what the walk did. A walk that never
        * finishes is the clock running out, which the loop reports as `timeout` on
-       * its next tick — so it is folded into `note` rather than thrown out of a
-       * helper whose whole contract is a value per outcome.
+       * its next tick — so it is kept for `detail`, with how far it got, rather
+       * than thrown out of a helper whose whole contract is a value per outcome.
+       * A walk that arrives clears what an earlier one said.
        */
       const walkTo = async (at: Point3): Promise<void> => {
+        const before = this.state.self.position?.value;
         try {
           const walk = await this.moveTo(at, { timeout: Math.max(1000, deadline - Date.now()) });
-          if (!walk.ok) note = ` (approach: ${walk.status})`;
+          note = walk.ok ? "" : ` (approach: ${walk.status})`;
+          unfinished = undefined;
         } catch (e) {
           if (!(e instanceof EventTimeoutError)) throw e;
-          note = " (approach never finished)";
+          note = "";
+          unfinished = walkProgress(before, this.state.self.position?.value, at);
         }
+        measure();
       };
       const done = (status: KillResult["status"]): KillResult => {
         outcome = status;
         const armed = leavingArmed(status, options.disengage === true);
+        const distance = measure();
+        // A timeout that never came within melee range is an approach that did
+        // not finish, not a fight that did: that leads, with how far the walk
+        // got. Only when the distance is observed — unknown is not "never".
+        const neverReached = status === "timeout" && !reached && distance !== undefined;
+        const walking =
+          unfinished === undefined ? undefined : `${unfinished} when the timeout ran out; the character is still walking`;
         // A "lost" verdict on a guid the cache never held is not a target that
         // left view — it is a guid that named nothing observable. Say so.
         const base =
           status === "lost" && !sawTarget
             ? `target ${key} was never in view — a stale or mistyped guid, or a missed view update; ` +
               `get guids from state.nearbyUnits() or state.closest(...)`
-            : KILL_DETAIL[status];
+            : neverReached
+              ? `never reached melee range${walking === undefined ? "" : `: ${walking}`}`
+              : KILL_DETAIL[status];
+        const approach = walking !== undefined && !neverReached ? ` (approach never finished: ${walking})` : "";
         const facts: KillResultFacts = {
           guid: id,
           swings,
           healthPct: healthPct(),
           attacking: armed,
+          reached,
+          distance: distance === undefined ? undefined : Math.round(distance * 10) / 10,
           detail:
-            `${base}${note}; ` +
+            `${base}${approach}${note}; ` +
             (armed
               ? "still auto-attacking — call attackStop() or pass { disengage: true } to break off"
               : "auto-attack stopped"),
@@ -5184,8 +5238,8 @@ export class WrathClient {
         // Close the distance before the first swing, so it is a swing and not a
         // 25-second stare. A walk that runs out the clock is an answer too.
         const opening = aimAt();
-        const from = this.state.self.position?.value;
-        if (opening && from && distance2d(from, opening) > meleeRange) await walkTo(opening);
+        const gap = measure();
+        if (opening && gap !== undefined && gap > meleeRange) await walkTo(opening);
         const facing = aimAt();
         if (facing) await this.faceQuietly(facing);
         await this.attackStart(id);
@@ -5207,6 +5261,7 @@ export class WrathClient {
               return done("aborted_low_health");
             }
           }
+          measure();
           if (Date.now() > deadline) return done("timeout");
 
           const at = aimAt();

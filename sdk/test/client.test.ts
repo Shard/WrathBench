@@ -1540,6 +1540,61 @@ describe("client: killTarget", () => {
     expect(result.attacking).toBe(true);
     expect(result.detail).toContain("still auto-attacking");
     expect(stub.actions.map((a) => a.action)).not.toContain("attack_stop");
+    // In range the whole time (meleeRange 100 against ~35y): a fight, and the
+    // detail says so.
+    expect(result.reached).toBe(true);
+    expect(result.distance).toBeCloseTo(35.3, 1);
+    expect(result.detail).toStartWith("timed out with both alive; ");
+    client.close();
+    await stub.stop();
+  });
+
+  test("an approach that runs out the timeout reads as never reaching melee range, with how far the walk got", async () => {
+    // A DeepSeek probe read "timed out with both alive (approach never
+    // finished); still auto-attacking" as a fight it had lost: the walk had
+    // used the whole deadline and no swing was ever possible.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    // The walk's own floor is 1s, so this waits that long for a verdict that
+    // never comes, part of the way there.
+    const fight = client.killTarget(CREATURE_GUID, { timeout: 50, pollIntervalMs: 10, meleeRange: 5 });
+    await untilAction(stub, "move_to");
+    stub.push(JSON.stringify({ ...moveProgress, seq: 70 })); // ~15y walked, ~21y to go
+    const result = await fight;
+    expect(result).toMatchObject({ ok: false, status: "timeout", swings: 0, attacking: true, reached: false });
+    expect(result.distance).toBeCloseTo(20.6, 1);
+    expect(result.detail).toMatch(
+      /^never reached melee range: ~1[45]y covered, ~21y still to go to \(-1200\.0, 980\.0\) when the timeout ran out; the character is still walking; still auto-attacking/,
+    );
+    expect(result.detail).not.toContain("both alive");
+    client.close();
+    await stub.stop();
+  });
+
+  test("a walk that arrives clears what an earlier walk said, and reaching melee range is recorded", async () => {
+    // The opening walk is superseded (another caller's moveTo); the re-approach
+    // arrives and the fight is won. The old detail still said "(approach:
+    // superseded)" on the kill.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    const fight = client.killTarget(CREATURE_GUID, {
+      timeout: 5000,
+      pollIntervalMs: 10,
+      reapproachIntervalMs: 20,
+      meleeRange: 5,
+    });
+    const first = await untilAction(stub, "move_to");
+    // The superseded verdict leaves us 5.1y off: just outside melee range.
+    stub.push(JSON.stringify(moveResult("superseded", 1, 70)));
+    const second = await untilAction(stub, "move_to", first + 1);
+    const close = moveResult("arrived", 2, 71) as { data: { pos: Record<string, number> } };
+    close.data.pos = { x: -1201, y: 980, z: 42, o: 0 };
+    stub.push(JSON.stringify(close));
+    await untilAction(stub, "attack_start", second);
+    stub.push(JSON.stringify(creatureHealth(0, 72)));
+    const result = await fight;
+    expect(result).toMatchObject({ ok: true, status: "killed", reached: true, distance: 1 });
+    expect(result.detail).toBe("target died; auto-attack stopped");
     client.close();
     await stub.stop();
   });

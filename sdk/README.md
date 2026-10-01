@@ -93,7 +93,11 @@ half-fought mob is how a character dies standing still. `attacking` says which
 happened and `detail` says it in words. If the server cancels our auto-attack
 mid-fight (`SMSG_ATTACKSTOP` with the target still alive), the loop swings
 again. The default `timeout` is 25s, deliberately under the runner's 30s
-snippet cap; longer fights belong in a background routine.
+snippet cap; longer fights belong in a background routine. The walk into melee
+range draws on the same timeout, so every result also says whether melee range
+was ever reached (`reached`) and how far the target was at the end
+(`distance`), and a `timeout` that never got there leads `detail` with "never
+reached melee range" and how far the walk got, rather than reading as a fight.
 
 `lootCorpse` sends `loot_all` — the module replaying the client's auto-loot
 sequence — and returns once the window has been emptied and released. A
