@@ -2,7 +2,18 @@
  * The OpenAI-compatible adapter against a fake fetch. No network, no model.
  */
 import { describe, expect, test } from "bun:test";
-import { APP_TITLE, APP_URL, OpenAiChatAdapter, PROVIDER_RESET_FLOOR_MS, USER_AGENT, parseRetryAfter, statedResetOf } from "../src/adapter";
+import {
+  APP_TITLE,
+  APP_URL,
+  OpenAiChatAdapter,
+  PROVIDER_RESET_FLOOR_MS,
+  RAW_USAGE_MAX_KEY_LENGTH,
+  RAW_USAGE_MAX_LEAVES,
+  USER_AGENT,
+  parseRetryAfter,
+  statedResetOf,
+  type AssistantTurn,
+} from "../src/adapter";
 
 function adapterReturning(body: unknown): OpenAiChatAdapter {
   return new OpenAiChatAdapter({
@@ -342,6 +353,138 @@ describe("OpenAiChatAdapter usage", () => {
       usage: { prompt_tokens: 5, completion_tokens: null },
     }).complete({ messages: [], tools: [] });
     expect(out.kind === "ok" && out.turn.usage).toEqual({ prompt_tokens: 5 });
+  });
+});
+
+/**
+ * The provider's own usage object, kept beside the normalised one so a bill
+ * can be reconciled against fields the normalisation has no name for. Bounded
+ * to numbers; the normalised block is the same with it as without it.
+ */
+describe("OpenAiChatAdapter raw usage", () => {
+  async function turnFor(usage: unknown): Promise<AssistantTurn> {
+    const out = await adapterReturning(usage === undefined ? { choices } : { choices, usage }).complete({
+      messages: [],
+      tools: [],
+    });
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    return out.turn;
+  }
+
+  /** Every numeric leaf, nested ones included. */
+  function leaves(raw: Record<string, unknown>): number {
+    let n = 0;
+    for (const v of Object.values(raw)) n += typeof v === "number" ? 1 : Object.keys(v as object).length;
+    return n;
+  }
+
+  test("DeepSeek: its own cache fields, which the normalised block has no name for, are kept", async () => {
+    const usage = {
+      prompt_tokens: 12_000,
+      completion_tokens: 340,
+      total_tokens: 12_340,
+      prompt_tokens_details: { cached_tokens: 11_008 },
+      prompt_cache_hit_tokens: 11_008,
+      prompt_cache_miss_tokens: 992,
+      completion_tokens_details: { reasoning_tokens: 210 },
+    };
+    const turn = await turnFor(usage);
+    expect(turn.usageRaw).toEqual(usage);
+    // The normalised block is what every reader keeps reading, unchanged.
+    expect(turn.usage).toEqual({
+      prompt_tokens: 12_000,
+      completion_tokens: 340,
+      total_tokens: 12_340,
+      cached_tokens: 11_008,
+      reasoning_tokens: 210,
+    });
+  });
+
+  test("OpenRouter: nested details and cost_details kept, the boolean and the null dropped", async () => {
+    const turn = await turnFor({
+      prompt_tokens: 5_400,
+      completion_tokens: 120,
+      total_tokens: 5_520,
+      cost: 0.00213,
+      is_byok: false,
+      prompt_tokens_details: { cached_tokens: 4_800, cache_write_tokens: 300, audio_tokens: 0 },
+      cost_details: {
+        upstream_inference_cost: null,
+        upstream_inference_prompt_cost: 0.0019,
+        upstream_inference_completions_cost: 0.00023,
+      },
+      completion_tokens_details: { reasoning_tokens: 64, image_tokens: 0 },
+    });
+    expect(turn.usageRaw).toEqual({
+      prompt_tokens: 5_400,
+      completion_tokens: 120,
+      total_tokens: 5_520,
+      cost: 0.00213,
+      prompt_tokens_details: { cached_tokens: 4_800, cache_write_tokens: 300, audio_tokens: 0 },
+      cost_details: { upstream_inference_prompt_cost: 0.0019, upstream_inference_completions_cost: 0.00023 },
+      completion_tokens_details: { reasoning_tokens: 64, image_tokens: 0 },
+    });
+    expect(turn.usage).toEqual({
+      prompt_tokens: 5_400,
+      completion_tokens: 120,
+      total_tokens: 5_520,
+      cached_tokens: 4_800,
+      cache_write_tokens: 300,
+      reasoning_tokens: 64,
+      cost: 0.00213,
+    });
+  });
+
+  test("no usage, a null usage and a usage with no numbers in it all leave the field absent", async () => {
+    for (const usage of [undefined, null, {}, { note: "n/a", flags: [1], nested: { s: "x" } }]) {
+      const turn = await turnFor(usage);
+      expect("usageRaw" in turn).toBe(false);
+    }
+  });
+
+  test("a malformed, oversized usage is bounded: numbers only, one nested level, short keys, capped leaves", async () => {
+    const atLimit = "k".repeat(RAW_USAGE_MAX_KEY_LENGTH);
+    const usage: Record<string, unknown> = {
+      prompt_tokens: 10,
+      note: "x".repeat(10_000),
+      flags: [1, 2, 3],
+      ok: true,
+      gone: null,
+      [`${atLimit}k`]: 7,
+      [atLimit]: 8,
+      deep: { inner: { leaf: 1 }, kept: 2, list: [1], s: "str" },
+      prompt_tokens_details: { cached_tokens: 4, junk: "x", nested: { a: 1 } },
+      emptied: { a: "b", c: [1] },
+      ...Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`n${i}`, i])),
+    };
+    const turn = await turnFor(usage);
+    const raw = turn.usageRaw!;
+    expect(leaves(raw)).toBe(RAW_USAGE_MAX_LEAVES);
+    expect(raw).toMatchObject({
+      prompt_tokens: 10,
+      [atLimit]: 8,
+      deep: { kept: 2 },
+      prompt_tokens_details: { cached_tokens: 4 },
+      n0: 0,
+    });
+    expect(raw["deep"]).toEqual({ kept: 2 });
+    expect(raw["prompt_tokens_details"]).toEqual({ cached_tokens: 4 });
+    for (const k of ["note", "flags", "ok", "gone", `${atLimit}k`, "emptied"]) expect(raw).not.toHaveProperty(k);
+    // Four leaves before the counters, so the cap lands inside them, in order.
+    const lastKept = RAW_USAGE_MAX_LEAVES - 4 - 1;
+    expect(raw[`n${lastKept}`]).toBe(lastKept);
+    expect(raw).not.toHaveProperty(`n${lastKept + 1}`);
+    // A ceiling on the record, whatever the provider sent.
+    expect(JSON.stringify(raw).length).toBeLessThan(RAW_USAGE_MAX_LEAVES * (RAW_USAGE_MAX_KEY_LENGTH + 32));
+    // The normalised block reads only the counters it knows.
+    expect(turn.usage).toEqual({ prompt_tokens: 10, cached_tokens: 4 });
+  });
+
+  test("a non-finite number in a field the schema does not type is dropped", async () => {
+    // `1e400` parses to Infinity, which JSON.stringify would write as null.
+    const body = `{"choices":[{"message":{"content":"hi","tool_calls":[]}}],"usage":{"prompt_tokens":5,"huge":1e400}}`;
+    const out = await adapterPlaying([status(200, body)]).complete({ messages: [], tools: [] });
+    expect(out.kind === "ok" && out.turn.usageRaw).toEqual({ prompt_tokens: 5 });
   });
 });
 

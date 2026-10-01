@@ -53,8 +53,10 @@ import {
   projectRunDetail,
   projectRuns,
   projectEntries,
+  projectEntry,
   projectTrack,
 } from "../viewer/public-projection";
+import { summarize } from "../viewer/tail";
 import { STALL_PAUSE } from "../src/lapse";
 
 /* ------------------------------------------------------------- poisons --- */
@@ -1493,5 +1495,44 @@ describe("projectEntries", () => {
     for (const v of [SURVIVES.questTitle, SURVIVES.npcName, SURVIVES.spellName]) expect(text).toContain(v);
     expect(out.entries[1]).toMatchObject({ name: "search_reference", text: "[redacted]" });
     expect((out.entries[2] as { text: string }).text).toContain('"body":"[redacted]"');
+  });
+
+  /*
+   * A response record carries the provider's raw usage object (`usageRaw`)
+   * beside the normalised `usage`. It is for the operator reconciling a bill,
+   * so it stays private: the summary rebuilds `usage` from the normalised
+   * block and copies nothing else, and the allowlist would drop it anyway.
+   * Driven from the raw record through `summarize`, the path the snapshot
+   * renderer takes (`/entries`, then `projectEntries`).
+   */
+  test("a response's raw provider usage stays out of the summary and out of the public entry", () => {
+    const record = {
+      t: "response",
+      ts: 4,
+      turn: 1,
+      message: { role: "assistant", content: "on my way" },
+      usage: { prompt_tokens: 1200, completion_tokens: 34, cached_tokens: 1024, cost: 0.002 },
+      provider: "SomeBackend",
+    };
+    const usageRaw = {
+      prompt_tokens: 1200,
+      completion_tokens: 34,
+      prompt_cache_hit_tokens: 1024,
+      prompt_cache_miss_tokens: 176,
+      cost: 0.002,
+      cost_details: { upstream_inference_prompt_cost: 0.0019 },
+    };
+    const withRaw = summarize({ ...record, usageRaw }, 6, 6, 7);
+    const plain = summarize(record, 6, 6, 7);
+    expect(withRaw).not.toHaveProperty("usageRaw");
+    expect(withRaw).toEqual(plain);
+
+    const out = projectEntry(withRaw);
+    expect(out).toEqual(projectEntry(plain));
+    expect(keyPaths(out)).toEqual(
+      allow(["i", "t", "ts", "start", "end", "turn", "text", "tools", "outChars", "usage", ...under("usage", ["prompt", "completion", "cachedRead", "cost"])]),
+    );
+    const text = JSON.stringify(out);
+    for (const k of ["usageRaw", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "cost_details"]) expect(text).not.toContain(k);
   });
 });
