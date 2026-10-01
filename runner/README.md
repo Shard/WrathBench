@@ -250,9 +250,18 @@ and differs only where the CLI does:
   dir, so no AGENTS.md is found) on the process; that keeps the first turn and
   a resumed one identical apart from the `resume <id>` words.
   `--ignore-user-config` keeps the operator's `~/.codex/config.toml` out of the
-  run; auth still comes from `CODEX_HOME`. What stays built in —
-  `request_user_input`, `view_image`, `apply_patch` — has no config switch in
-  0.153.4 and is inert under read-only in an empty cwd.
+  run; auth still comes from `CODEX_HOME`. What stays built in follows
+  the model's row in the ChatGPT catalogue, not these flags. `gpt-5.5` keeps
+  `request_user_input`, `view_image`, `apply_patch` and the goal tools, inert
+  under read-only in an empty cwd. GPT-6 models (`gpt-6-astra`, `gpt-6.1-sol`,
+  `gpt-6-luna`) are also given the CLI's code mode (`functions.exec`, a
+  JavaScript runtime with timers, a store and the clock, and `functions.wait`)
+  and its collaboration tools (`spawn_agent` and the rest), with developer
+  messages describing them, a skills list and an environment block carrying
+  the date and timezone; `--disable multi_agent` does not remove them. That
+  surface is part of what a `codex` row means: each CLI scaffold is its own
+  comparability group (METHODOLOGY). Every game action still goes through our
+  MCP tools, under the tool-call ceiling and the watchdogs.
 - **MCP approval.** With `approval_policy="never"` an MCP call that needs
   approval *fails* ("MCP tool call requires approval, but approval policy is
   never" — observed); `default_tools_approval_mode="approve"` on the server is
