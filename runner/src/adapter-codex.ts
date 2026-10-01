@@ -61,7 +61,8 @@
  * overrides on the command line (`--ignore-user-config` keeps the operator's
  * ~/.codex/config.toml — trusted projects, other MCP servers — out of the run;
  * auth still comes from CODEX_HOME). Codex presents them to the model as
- * `mcp__wrathbench.<tool>` and calls our server with the plain `<tool>` name.
+ * `mcp__wrathbench__<tool>` (`mcp__wrathbench.<tool>` before 0.159) and calls
+ * our server with the plain `<tool>` name.
  *
  * MCP tool calls need approval unless the server says otherwise, and with
  * `approval_policy="never"` an unapproved call FAILS ("MCP tool call requires
@@ -359,7 +360,8 @@ export function tomlString(s: string): string {
 
 /**
  * Features switched off for every run. Each is a name `codex features list`
- * knows in 0.153.4; an unknown one is a hard error at launch ("Unknown feature
+ * knows in the pinned CLI (`CODEX_VERSION` in `infra/docker/runner.Dockerfile`,
+ * re-checked at every bump); an unknown one is a hard error at launch ("Unknown feature
  * flag"), which is the point of pinning the CLI version.
  */
 export const DISABLED_FEATURES = [
@@ -392,7 +394,7 @@ export interface CodexArgsOptions {
 
 /**
  * The exact flag set, in one place so the README and the tests can assert it.
- * Every flag exists in codex-cli 0.153.4 (`codex exec --help`, `codex exec
+ * Every flag exists in the pinned codex-cli (`codex exec --help`, `codex exec
  * resume --help`); nothing is invented. `-s`/`-C` are exec-only in this
  * version, so the sandbox rides on `-c sandbox_mode` and the cwd on the
  * process, which keeps the first turn and every resumed one identical apart

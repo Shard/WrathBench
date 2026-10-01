@@ -216,8 +216,8 @@ default.
 
 ## The codex driver
 
-The same shape as claude-code on the OpenAI Codex CLI (`codex-cli` 0.153.4,
-pinned in `infra/docker/runner.Dockerfile`), logged in with a ChatGPT
+The same shape as claude-code on the OpenAI Codex CLI (the version
+pinned as `CODEX_VERSION` in `infra/docker/runner.Dockerfile`), logged in with a ChatGPT
 subscription. `src/adapter-codex.ts` mirrors `adapter-claude.ts` invariant for
 invariant — one `SandboxHost`, tools over the loopback MCP bridge, the tool-call
 ceiling and the watchdogs enforced at every dispatch, a wind-down instead of a
@@ -258,7 +258,8 @@ and differs only where the CLI does:
   never" — observed); `default_tools_approval_mode="approve"` on the server is
   what lets ours through (`"auto"` still gates on the tool's readOnlyHint
   and refused). Codex presents the tools to the model as
-  `mcp__wrathbench.<tool>` and calls our server with the plain name. The CLI
+  `mcp__wrathbench__<tool>` (`mcp__wrathbench.<tool>` before 0.159) and calls
+  our server with the plain name. The CLI
   runs MCP servers inside its sandbox with a private `/tmp`, which is why the
   bridge is addressed by its repository path.
 - **Effort** is `-c model_reasoning_effort=<low|medium|high|xhigh|max|ultra>`;

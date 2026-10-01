@@ -54,9 +54,12 @@ ARG CLAUDE_CODE_VERSION=2.1.284
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
     && /home/bun/.local/bin/claude --version
 # The OpenAI Codex CLI for the `codex` driver (runner/README.md, Drivers),
-# PINNED: the driver's flag set, feature names and event JSONL were verified
-# against exactly this version (2026-09-05), and an unknown `--disable` name is
-# a launch error.
+# PINNED: the driver's flag set and feature names are checked against exactly
+# this version (`codex exec --help`, `codex exec resume --help`, `codex features
+# list`), and an unknown `--disable` name is a launch error. A newer model needs
+# a CLI whose bundled catalogue knows it: an older one runs it on fallback
+# metadata ("Model metadata for ... not found"). Bumping the ARG is also what
+# busts the cached layer.
 #
 # Why the platform package and not `@openai/codex`: the wrapper package ships
 # nothing but `bin/codex.js`, a shim with a `node` shebang that re-execs the
@@ -69,9 +72,10 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}
 # onto PATH is the smallest thing that produces a working `codex`, with no node,
 # no npm and no shim in the path. The whole vendor tree is kept: the binary
 # resolves its own path, so the symlink is transparent.
+ARG CODEX_VERSION=0.159.3
 RUN mkdir -p /home/bun/codex-cli \
     && cd /home/bun/codex-cli \
-    && bun add @openai/codex@0.153.4-linux-x64 \
+    && bun add "@openai/codex@${CODEX_VERSION}-linux-x64" \
     && ln -s /home/bun/codex-cli/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/bin/codex \
              /home/bun/.local/bin/codex \
     && /home/bun/.local/bin/codex --version
