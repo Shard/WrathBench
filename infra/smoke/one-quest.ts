@@ -87,8 +87,8 @@ try {
       }
     }
     const kobold = await nearest(VERMIN, "a kobold");
-    const at = pointOf(kobold)!.value;
-    await client.moveTo(at, { timeout: 60_000 });
+    // A units() row: `alive` admitted it only with a position, so x/y/z are set.
+    await client.moveTo({ x: kobold.x!, y: kobold.y!, z: kobold.z! }, { timeout: 60_000 });
     const fight = await client.killTarget(kobold.guid);
     if (!fight.ok) {
       log(`fight ended ${fight.status} after ${fight.swings} swings; picking another`);

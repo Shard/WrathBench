@@ -317,8 +317,10 @@ says out loud.
 
 The queries (`nearbyUnits`, `creaturesByEntry`, `closest`) are pure reads.
 `closest` returns `undefined` when we have no position of our own, rather than
-guessing one. They hand back the live cache entries; `snapshot()` is the frozen
-copy.
+guessing one, and otherwise the nearest object's `units()` row — the same flat
+shape, `distance` included, because models reading its sibling's rows kept
+reading `.distance` off it. `nearbyUnits` and `creaturesByEntry` hand back the
+live cache entries; `snapshot()` is the frozen copy.
 
 #### How an object in view is built
 

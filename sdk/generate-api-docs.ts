@@ -221,9 +221,9 @@ const STATE_ROWS: readonly Row[] = [
   { name: "units", sig: "state.units(filter?: UnitFilter): UnitView[]", purpose: "Scan nearby objects, nearest first; filter by entry, name (string | RegExp), type, alive, maxDistance, npc (true keeps NPCs with any npc flag, false drops them — a filter key only: rows carry roles, never an npc field), role (an NPC role word or a list: \"questGiver\", \"vendor\", \"repair\", \"trainer\", \"flightMaster\", \"innkeeper\", \"spiritHealer\", \"banker\", \"auctioneer\", …), questGiver (the observed marker name: \"available\" offers a quest, \"reward\" takes a turn-in now, \"incomplete\" ends a quest not yet done; true means any marker but \"none\"). Rows carry roles (the NPC's role words from its npc flags — what it is for, never what to do; empty for non-NPCs) and questGiver / questGiverStatus; game objects are named (\"Mailbox\", \"Subway\") and carry goType (door, chest, mailbox, transport, …), and a transport carries docked (true while the car sits at a platform)." },
   {
     name: "closest",
-    sig: "state.closest(filter?): NearbyObject | undefined",
+    sig: "state.closest(filter?): UnitView | undefined",
     purpose:
-      "The nearest object by distance, returned as the raw object nearbyUnits() gives — not a units() row: fields are wrapped (.name.value, .entry.value, .position.value; only .guid is plain) and there is no .distance; state.units(filter) gives flat rows with distance, nearest first. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, role, questGiver }) or a predicate over the raw object.",
+      "The nearest object by distance, as its units() row — the same flat object state.units(filter) returns, distance included (.name, .distance, .x; npc is a filter key, never a field) — or undefined when nothing matches or your own position is unobserved. `filter` is a units() criteria object ({ entry, name, type, alive, maxDistance, npc, role, questGiver }) or a predicate over the raw object nearbyUnits() gives.",
   },
   { name: "nearbyUnits", sig: "state.nearbyUnits(): NearbyObject[]", purpose: "The raw nearby objects (state.units gives flat plain objects instead)." },
   { name: "creaturesByEntry", sig: "state.creaturesByEntry(entry): NearbyObject[]", purpose: "Nearby creatures with a given template entry id." },
