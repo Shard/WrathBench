@@ -23,6 +23,13 @@ import {
   formatRouting,
   rosterWrite,
   EMPTY_NEW_ENTRY,
+  draftsShown,
+  estimateHint,
+  fetchSummary,
+  fmtEstimate,
+  fmtPrice,
+  promoteBody,
+  promoteFormOf,
 } from "../src/lib/config";
 
 describe("parseRouting", () => {
@@ -188,5 +195,55 @@ describe("headerSafe", () => {
 
   test("a line break cannot smuggle a second header", () => {
     expect(headerSafe("a\r\nx-evil: 1")).toBe("a x-evil: 1");
+  });
+});
+
+describe("drafts", () => {
+  const drafts = [
+    { model: "a/new:free", billing: "free" as const },
+    { model: "a/new", billing: "paid" as const },
+    { model: "b/old", billing: "paid" as const },
+  ];
+
+  test("the toggle filters on the slug-derived billing and keeps the server's newest-first order", () => {
+    expect(draftsShown(drafts, "all").map((d) => d.model)).toEqual(["a/new:free", "a/new", "b/old"]);
+    expect(draftsShown(drafts, "free").map((d) => d.model)).toEqual(["a/new:free"]);
+    expect(draftsShown(drafts, "paid").map((d) => d.model)).toEqual(["a/new", "b/old"]);
+  });
+
+  test("a promotion never picks a tier: the form starts without one and will not send without one", () => {
+    const form = promoteFormOf("glm-6");
+    expect(form).toEqual({ name: "glm-6", tier: "", race: "", class: "" });
+    expect(() => promoteBody("z-ai/glm-6", form)).toThrow(/choose a tier/);
+    expect(promoteBody("z-ai/glm-6", { ...form, tier: "t0" })).toEqual({ model: "z-ai/glm-6", name: "glm-6", tier: "t0" });
+  });
+
+  test("race and class are optional numbers, and absent when left empty", () => {
+    expect(promoteBody("m/x", { name: "x", tier: "t1", race: "3", class: " 2 " })).toEqual({ model: "m/x", name: "x", tier: "t1", race: 3, class: 2 });
+    expect(() => promoteBody("m/x", { name: "x", tier: "t1", race: "dwarf", class: "" })).toThrow(/race/);
+    expect(() => promoteBody("m/x", { name: "a/b", tier: "t1", race: "", class: "" })).toThrow(/roster name/);
+  });
+
+  test("the estimate is labelled one: a tilde on the figure, the profile and the caveat in the hint", () => {
+    expect(fmtEstimate(0.42)).toBe("~$0.420");
+    expect(fmtEstimate(0)).toBe("~$0.00");
+    expect(fmtEstimate(null)).toBe("—");
+    const hint = estimateHint({ runs: 3, series: "harness-0.5", promptTokens: 2_000_000, completionTokens: 150_000, cacheReadTokens: 900_000 });
+    expect(hint).toMatch(/^estimate: /);
+    expect(hint).toContain("3 runs, harness-0.5: 2.00M prompt, 150k completion, 900k cached");
+    expect(hint).toContain("under-reads reasoning-heavy models 2–3×");
+    expect(estimateHint(null)).toMatch(/^no estimate/);
+  });
+
+  test("a price reads as input / output per million, in as few digits as say it", () => {
+    expect(fmtPrice({ input: 0.075, output: 0.6, cacheRead: 0.01, cacheWrite: 0.075 })).toBe("0.075 / 0.6");
+    expect(fmtPrice({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 })).toBe("3 / 15");
+    expect(fmtPrice(null)).toBe("—");
+  });
+
+  test("a fetch's result reads as one status line", () => {
+    expect(fetchSummary({ toolModels: 300, added: ["a", "b"], refreshed: 4, removed: [], skipped: 1 })).toBe(
+      "2 new · 4 refreshed · 0 dropped · 1 skipped · 300 tool-calling in the catalogue",
+    );
   });
 });

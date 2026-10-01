@@ -25,12 +25,32 @@ import { existsSync } from "node:fs";
 import {
   ConfigRejected,
   ConfigStore,
+  DraftRefused,
   configDbPath,
   type AuditRow,
 } from "../src/config-store";
+import { parsePolicyBlock } from "../src/models";
+import type { RoutingSpec } from "../src/routing";
+import type { DraftFetchResponse, DraftStatusResponse, DraftsResponse, E90TokenProfileView } from "./api-types";
+import {
+  CatalogueError,
+  bodyError,
+  draftDocument,
+  draftRecordOf,
+  draftRefSchema,
+  draftsResponse,
+  promoteSchema,
+  promotedEntry,
+  readCatalogue,
+  reconcileDrafts,
+  type DraftRecord,
+} from "./drafts";
 
 /** The prefix everything here hangs off. */
 export const CONFIG_API_PREFIX = "/api/config";
+
+/** The draft routes, under the prefix (`drafts.ts`). Ids travel in bodies, never in the path. */
+export const DRAFTS_ROUTE = "proposed";
 
 /** Who to record a change as when the request does not say. */
 export const ACTOR_HEADER = "x-wrathbench-actor";
@@ -43,6 +63,13 @@ export const AUDIT_MAX = 500;
 export interface ConfigApiOptions {
   /** The store file. Defaults to the data volume's (`configDbPath`). */
   dbPath?: string;
+  /** What reads the catalogue. A test injects a fixture; the viewer uses the global fetch. */
+  fetch?: typeof globalThis.fetch;
+  /**
+   * The token profile a draft's estimate is priced at. `api.ts` builds it from
+   * the runs the viewer already serves; absent, no draft carries an estimate.
+   */
+  e90Profile?: () => Promise<E90TokenProfileView | null>;
 }
 
 export interface ConfigResponse {
@@ -96,6 +123,9 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
    * fleet config that says nothing.
    */
   const present = existsSync(dbPath);
+  if (rest === DRAFTS_ROUTE || rest.startsWith(`${DRAFTS_ROUTE}/`)) {
+    return await handleDrafts(req, method, rest.slice(DRAFTS_ROUTE.length).replace(/^\//, ""), dbPath, present, opts);
+  }
   if (!present && method !== "GET") {
     return json(
       { error: `no config store at ${dbPath} — seed it first: bun runner/src/config-store.ts seed infra/fleet.example.json` },
@@ -180,6 +210,145 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
     }
 
     return json({ error: `${method} ${path} is not a config route` }, 405);
+  } finally {
+    store.close();
+  }
+}
+
+/** Every roster entry's `model`, as written: what a fetch does not propose and a listing hides. */
+function rosterModelsOf(config: Record<string, unknown>): Set<string> {
+  const roster = config["roster"];
+  const out = new Set<string>();
+  if (typeof roster !== "object" || roster === null || Array.isArray(roster)) return out;
+  for (const e of Object.values(roster as Record<string, unknown>)) {
+    const model = typeof e === "object" && e !== null ? (e as { model?: unknown }).model : undefined;
+    if (typeof model === "string" && model.length > 0) out.add(model);
+  }
+  return out;
+}
+
+/** The fleet's `policy.routing`, which an entry with none of its own gets. */
+function policyRoutingOf(config: Record<string, unknown>): RoutingSpec | undefined {
+  try {
+    return parsePolicyBlock(config["policy"]).routing;
+  } catch {
+    return undefined; // the store refuses such a policy on write; the label falls back to the built-in rule
+  }
+}
+
+/**
+ * The draft routes (`drafts.ts`), behind the same gate as everything in this
+ * module: `api.ts` mounts it only on a handle that is not public, so a public
+ * viewer and the publisher answer 404 for all of them.
+ *
+ * - `GET proposed` — pending drafts newest first, the ignored apart, and the
+ *   e90 profile the estimates were priced at.
+ * - `POST proposed/fetch` — one read of the catalogue: proposes, refreshes,
+ *   drops what the roster now runs. 502 with the reason when the catalogue
+ *   cannot be read.
+ * - `POST proposed/ignore` and `proposed/unignore` — `{ model }`.
+ * - `POST proposed/promote` — `{ model, name, tier, race?, class? }`.
+ *
+ * Only promote writes config, so only promote goes through `parseFleet` and
+ * into the history, with the actor and note headers. Fetch and ignore are
+ * bookkeeping on rows no config reader sees; an ignore records its actor on
+ * the draft itself.
+ */
+async function handleDrafts(
+  req: Request,
+  method: string,
+  verb: string,
+  dbPath: string,
+  present: boolean,
+  opts: ConfigApiOptions,
+): Promise<Response> {
+  if (verb === "" && method === "GET") {
+    if (!present) return json({ drafts: [], ignored: [], profile: null } satisfies DraftsResponse);
+    const store = new ConfigStore(dbPath, { readonly: true });
+    let rows;
+    let config;
+    try {
+      rows = store.drafts();
+      config = store.render();
+    } finally {
+      store.close();
+    }
+    let profile: E90TokenProfileView | null = null;
+    try {
+      profile = opts.e90Profile === undefined ? null : await opts.e90Profile();
+    } catch {
+      profile = null; // no profile is no estimate — never a reason to withhold the drafts
+    }
+    return json(
+      draftsResponse({ rows, roster: rosterModelsOf(config), profile, policyRouting: policyRoutingOf(config) }) satisfies DraftsResponse,
+    );
+  }
+  const where = `${CONFIG_API_PREFIX}/${DRAFTS_ROUTE}${verb === "" ? "" : `/${verb}`}`;
+  if (method !== "POST" || !["fetch", "ignore", "unignore", "promote"].includes(verb)) {
+    return json({ error: `${method} ${where} is not a draft route` }, 405);
+  }
+  if (!present) {
+    return json({ error: `no config store at ${dbPath} — seed it first: bun runner/src/config-store.ts seed infra/fleet.example.json` }, 409);
+  }
+
+  if (verb === "fetch") {
+    // The network first, the store after: no write handle is held across the call.
+    let catalogue;
+    try {
+      catalogue = await readCatalogue(opts.fetch ?? globalThis.fetch);
+    } catch (e) {
+      if (e instanceof CatalogueError) return json({ error: e.message }, 502);
+      throw e;
+    }
+    const store = new ConfigStore(dbPath);
+    try {
+      const existing = store.drafts().flatMap((r) => draftRecordOf(r) ?? []);
+      const { put, remove, report } = reconcileDrafts({ catalogue, existing, roster: rosterModelsOf(store.render()), now: Date.now() });
+      store.writeDrafts({ put: put.map((d) => ({ model: d.model, value: draftDocument(d) })), remove });
+      return json(report satisfies DraftFetchResponse);
+    } finally {
+      store.close();
+    }
+  }
+
+  const body = await readJson(req);
+  if (body === MALFORMED) return json({ error: "request body is not JSON" }, 400);
+  const { actor, note } = actorOf(req);
+
+  if (verb === "ignore" || verb === "unignore") {
+    const parsed = draftRefSchema.safeParse(body);
+    if (!parsed.success) return json({ error: bodyError(parsed.error) }, 400);
+    const model = parsed.data.model;
+    const store = new ConfigStore(dbPath);
+    try {
+      const d = store.drafts().flatMap((r) => draftRecordOf(r) ?? []).find((x) => x.model === model);
+      if (d === undefined) return json({ error: `no draft for ${model}` }, 404);
+      const status: DraftRecord["status"] = verb === "ignore" ? "ignored" : "draft";
+      if (d.status !== status) {
+        const { ignoredAt: _at, ignoredBy: _by, ...rest } = d;
+        const next: DraftRecord = status === "ignored" ? { ...rest, status, ignoredAt: Date.now(), ignoredBy: actor } : { ...rest, status };
+        store.writeDrafts({ put: [{ model, value: draftDocument(next) }] });
+      }
+      return json({ model, status } satisfies DraftStatusResponse);
+    } finally {
+      store.close();
+    }
+  }
+
+  const parsed = promoteSchema.safeParse(body);
+  if (!parsed.success) return json({ error: bodyError(parsed.error) }, 400);
+  const key = `roster/${parsed.data.name}`;
+  const store = new ConfigStore(dbPath);
+  try {
+    try {
+      store.promote(parsed.data.model, parsed.data.name, promotedEntry(parsed.data), { actor, ...(note !== undefined ? { note } : {}) });
+    } catch (e) {
+      // The parser's refusal verbatim, as for any roster edit; the draft is untouched.
+      if (e instanceof ConfigRejected) return json({ error: e.message, key }, 400);
+      if (e instanceof DraftRefused) return json({ error: e.message, key }, e.reason === "missing" ? 404 : 409);
+      throw e;
+    }
+    return json({ key, value: store.get(key) ?? null, version: store.version() });
   } finally {
     store.close();
   }

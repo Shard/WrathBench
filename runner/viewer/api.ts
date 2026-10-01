@@ -33,6 +33,7 @@ import type {
   CampaignRowView,
   CampaignsResponse,
   CostFigure,
+  E90TokenProfileView,
   EntrySummary,
   EpisodeIdView,
   EpisodesResponse,
@@ -93,6 +94,7 @@ import {
 } from "./clickhouse";
 import { isArchiveDir } from "./archive-dir";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
+import { e90TokenProfile } from "./drafts";
 import {
   TILE_CACHE_CONTROL,
   TILE_PUBLIC_CACHE_CONTROL,
@@ -1667,6 +1669,23 @@ export function createApi(opts: ApiOptions): ApiHandle {
 
   const cachedRuns = (): { entries: number } => ({ entries: tails.size });
 
+  /**
+   * The token profile a config draft's estimate is priced at (`drafts.ts`):
+   * the scheduler's own counted-run facts, each run's harness off its row and
+   * its tokens off the same totals the listing serves. Built only when the
+   * operator's config page asks for its drafts.
+   */
+  async function e90Profile(): Promise<E90TokenProfileView | null> {
+    const now = Date.now();
+    const roster = readFleetRoster(opts.configDbPath);
+    const [facts, rows, totals] = await Promise.all([runFacts(now), runRows(now), allTotals()]);
+    const harness = new Map(rows.map((r) => [r.runId, r.harness]));
+    return e90TokenProfile(
+      facts.map((fact) => ({ fact, harness: harness.get(fact.runId) ?? null, tokens: totals.get(fact.runId)?.tokens ?? null })),
+      roster.policy,
+    );
+  }
+
   return Object.assign(async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
@@ -1678,7 +1697,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
      * It lives in `config-api.ts`; this is the whole of its presence here.
      */
     if (!publicMode && path.startsWith(CONFIG_API_PREFIX)) {
-      const res = await handleConfigRequest(req, url, path, opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {});
+      const res = await handleConfigRequest(req, url, path, {
+        ...(opts.configDbPath !== undefined ? { dbPath: opts.configDbPath } : {}),
+        e90Profile,
+      });
       if (res !== null) return res;
     }
 

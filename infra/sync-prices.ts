@@ -56,7 +56,8 @@ import { join } from "node:path";
 import { readFleetConfig } from "../runner/src/config-store";
 import { isFreeSlug } from "../runner/src/model-cost";
 
-const CATALOGUE = "https://openrouter.ai/api/v1/models";
+/** OpenRouter's model catalogue. Public: read with no key, here and by `runner/viewer/drafts.ts`. */
+export const CATALOGUE = "https://openrouter.ai/api/v1/models";
 const OUT = "runner/viewer/prices.openrouter.json";
 const RUNS = "data/runs";
 
