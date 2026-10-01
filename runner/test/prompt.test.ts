@@ -174,24 +174,24 @@ describe("episode sentence", () => {
     expect(episodeSection("probing")).toBeUndefined();
   });
 
-  test("every rendering hashes as pinned: the e90 sentence is the only thing that moved", () => {
+  test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The non-e90 rows are the hashes the prompt had
-    // before the e90 refinement: a run with no episode sentence, a steered
-    // run, and e360 are byte-identical to what they were.
+    // any rendering fails here. Two edits set these values: the e90 sentence
+    // (only the e90 rows) and the killTarget line naming `reached` and
+    // `distance`, which is in every rendering and so moved every row.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:0f469f5c44d78148", off: "sha256:e58b334757e59b46" },
-        cli: { on: "sha256:aafbed1731633a82", off: "sha256:4ae229a4af5c62f0" },
+        wrathbench: { on: "sha256:4f226f3ca177ebf5", off: "sha256:d2ab3fa3a8014863" },
+        cli: { on: "sha256:b20015c234d1b573", off: "sha256:7c9c896468553353" },
       },
       e90: {
-        wrathbench: { on: "sha256:901a272a1f012b30", off: "sha256:c761b7753ebdb7b3" },
-        cli: { on: "sha256:d61bfe3f74a794fc", off: "sha256:5acb9b1cac31b980" },
+        wrathbench: { on: "sha256:983ffccfaefa37d0", off: "sha256:a88da2761e52ba70" },
+        cli: { on: "sha256:efe8a1cda0af576e", off: "sha256:4927db40a3fc25be" },
       },
       e360: {
-        wrathbench: { on: "sha256:ad62d4526ffb8960", off: "sha256:a51de973359bc11a" },
-        cli: { on: "sha256:541491ad749c5c00", off: "sha256:444cc32c29602d83" },
+        wrathbench: { on: "sha256:75b9ea9af738a407", off: "sha256:b742c94fc57025a7" },
+        cli: { on: "sha256:22f150457dc30f6c", off: "sha256:c52bb55ce0bf72ad" },
       },
     };
     const episodes = [

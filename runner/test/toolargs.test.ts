@@ -203,7 +203,7 @@ describe("harness-delivered action hints", () => {
     );
     const lines = (renderActionHints(many) as string).split("\n");
     expect(lines.length).toBe(1 + ACTION_HINT_RENDER.MAX_GROUPS + 1);
-    expect(lines.at(-1)).toBe("(+2 other failure statuses this snippet)");
+    expect(lines.at(-1)).toBe("(+2 other failure statuses since the last result)");
     for (const l of lines.slice(1, 1 + ACTION_HINT_RENDER.MAX_GROUPS)) {
       expect(l.length).toBeLessThan(ACTION_HINT_RENDER.MAX_HINT_CHARS + 40);
       expect(l.endsWith("…")).toBe(true);
