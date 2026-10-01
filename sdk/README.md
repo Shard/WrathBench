@@ -142,6 +142,15 @@ NPC's, so the ceiling is set by the largest questgiver in the pinned world
 rather than a typical one; nearer than that the call still goes out, and a
 silence is explained by the distance afterwards.
 
+The questgiver marker answers before the wire too. `acceptQuestFrom` and
+`questsAvailableFrom` refuse with `nothing_on_offer` when the NPC's marker says
+it offers nothing, and `turnInQuest` refuses with `not_ready` and the `marker`
+when it says nothing the NPC ends is ready (`none` or `incomplete`). The
+turn-in check trusts only a marker newer than the last change to the quest log
+or the character's level, because the client re-asks for every marker when the
+log changes and a quest just completed still reads `incomplete` until that
+answer lands; an older marker, or none, still sends.
+
 `waitForQuestObjective` waits on the **quest log**, not on an event, because at
 the pinned commit the core sends no `SMSG_QUESTUPDATE_COMPLETE` for a kill
 objective: the only thing that reports one to a client is the completion bit in

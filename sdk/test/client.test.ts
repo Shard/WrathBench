@@ -4351,6 +4351,70 @@ describe("client: quest-start items and the questgiver marker pre-check (2026-08
     client.close();
     await stub.stop();
   });
+
+  test("turnInQuest at an NPC whose current marker says incomplete or none is not_ready at once, with nothing sent", async () => {
+    // Three 0.5 probes waited out the 10s timeout 4+ times a run on a turn-in
+    // the marker had already ruled out.
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questAccepted)); // seq 30: in the log, not done
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 5, 91))); // incomplete
+    await Bun.sleep(20);
+    const before = Date.now();
+    const incomplete = await client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 10_000 });
+    expect(Date.now() - before).toBeLessThan(1000);
+    expect(incomplete).toMatchObject({ ok: false, status: "not_ready", questId: QUEST_ID, marker: "incomplete" });
+    if (incomplete.ok || incomplete.status !== "not_ready") throw new Error("unreachable");
+    expect(incomplete.hint).toContain("questgiver status is `incomplete`, not `reward`");
+    expect(incomplete.hint).toContain("Nothing was sent.");
+
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 0, 92))); // none
+    await Bun.sleep(20);
+    const none = await client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 10_000 });
+    expect(none).toMatchObject({ ok: false, status: "not_ready", questId: QUEST_ID, marker: "none" });
+    if (none.ok || none.status !== "not_ready") throw new Error("unreachable");
+    expect(none.hint).toContain(`not quest ${QUEST_ID}'s ender`);
+    // Whole on the harness channel (the runner renders 320 characters).
+    for (const r of [incomplete, none]) expect(r.hint.length).toBeLessThan(320);
+
+    expect(stub.actions.map((a) => a.action)).not.toContain("quest_complete");
+    const drained = client.drainActionHints();
+    expect(drained).toHaveLength(1);
+    expect(drained[0]).toMatchObject({ action: "turnInQuest", status: "not_ready", count: 2, hint: none.hint });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a marker older than the last quest-log or level change still sends the turn-in", async () => {
+    // Completing the last objective and turning in at once is the common
+    // case: the complete bit lands before the marker refresh does, so the
+    // cached marker still reads `incomplete` for a quest that is done.
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questAccepted)); // seq 30
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 5, 91))); // incomplete
+    stub.push(JSON.stringify({ ...(questComplete as object), seq: 92 }));
+    await Bun.sleep(20);
+    expect(client.state.quest(QUEST_ID)?.complete).toBe(true);
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 2000 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 93)));
+    await untilAction(stub, "quest_choose_reward");
+    stub.push(JSON.stringify(questRewarded(QUEST_ID, 94)));
+    expect(await pending).toMatchObject({ ok: true, status: "complete", questId: QUEST_ID });
+
+    // A level change dates a `none` the same way: the server computes markers
+    // from what the character can take, and the level is part of that.
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 0, 95))); // none
+    stub.push(JSON.stringify({ ...(selfProgress as object), seq: 96 })); // level 4
+    await Bun.sleep(20);
+    const after = stub.actions.length;
+    const sent = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 150 }).catch((e: unknown) => e);
+    await untilAction(stub, "quest_complete", after);
+    expect(await sent).toBeInstanceOf(EventTimeoutError);
+    client.close();
+    await stub.stop();
+  });
 });
 
 describe("connect() closes the stream it fails to open", () => {
