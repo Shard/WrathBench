@@ -10,7 +10,7 @@ model not yet run gets one projected figure, on its draft on the `/config` page
 median counted e90's tokens. It is labelled an estimate because it is the
 extrapolation from another model's token shape that the first rule below warns
 against, and it reads low for a reasoning-heavy model — by two to three times,
-on the measurements behind GitHub issue #66.
+the operator's figure in GitHub issue #66.
 
 ## 1. Where the data lives
 
