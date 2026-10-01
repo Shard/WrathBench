@@ -54,10 +54,12 @@
  *
  * `--disable <feature>` removes the shell, unified exec, image generation, tool
  * suggestions, multi-agent, apps, plugins, browser/computer use and the sleep
- * tool; `web_search="disabled"` removes search. What remains built in is
- * `request_user_input`, `view_image` and `apply_patch` (their config switches
- * have no effect in 0.153.4) — inert under `sandbox_mode="read-only"` in an
- * empty temp cwd. Our nine tools arrive via `mcp_servers.wrathbench.*`
+ * tool; `web_search="disabled"` removes search. What remains built in follows
+ * the model's catalogue row, not these flags: `request_user_input`,
+ * `view_image`, `apply_patch` and the goal tools for `gpt-5.5` — inert under
+ * `sandbox_mode="read-only"` in an empty temp cwd — and, for GPT-6 models, the
+ * CLI's code mode (`functions.exec`, `functions.wait`) and collaboration tools
+ * as well, which no flag here removes (runner/README.md, "The codex driver"). Our nine tools arrive via `mcp_servers.wrathbench.*`
  * overrides on the command line (`--ignore-user-config` keeps the operator's
  * ~/.codex/config.toml — trusted projects, other MCP servers — out of the run;
  * auth still comes from CODEX_HOME). Codex presents them to the model as
