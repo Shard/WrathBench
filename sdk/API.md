@@ -110,10 +110,10 @@ exists.) Then, on the client:
 | `say` | `say(text): Promise<ActionResponse>` | Say something in local chat. |
 | `moveToAsync` | `moveToAsync(target): Promise<MoveToResponse>` | Queue a move without waiting — the call for a walk longer than your own time budget; same targets and the same 250y single-move cap as moveTo. |
 | `stop` | `stop(): Promise<ActionResponse>` | Queue a movement stop; the in-flight moveTo resolves with status 'stopped'. |
-| `face` | `face(orientationOrPoint: number | { x, y }): Promise<FaceResponse>` | Turn in place toward an orientation (radians) or a point. |
+| `face` | `face(orientationOrPoint: number | { x, y }): Promise<FaceResponse>` | Turn in place toward an orientation (radians, 0 = east, counter-clockwise) or a point { x, y }. Refused with code moving while a move is running. |
 | `setTarget` | `setTarget(target: GuidOrUnit): Promise<ActionResponse>` | Set the current target. |
 | `clearTarget` | `clearTarget(): Promise<ActionResponse>` | Clear the current target. |
-| `attackStart` | `attackStart(target: GuidOrUnit): Promise<ActionResponse>` | Start melee auto-attack. |
+| `attackStart` | `attackStart(target: GuidOrUnit): Promise<ActionResponse>` | Start melee auto-attack. The server swings only while you are in melee range and facing the target, and nothing turns you automatically: face() it first. killTarget does both. |
 | `attackStop` | `attackStop(): Promise<ActionResponse>` | Stop melee auto-attack. |
 | `castSpell` | `castSpell(spellId, targetGuid?: GuidOrUnit): Promise<ActionResponse>` | Cast a spell; no target means self/auto-target. |
 | `cancelCast` | `cancelCast(spellId): Promise<ActionResponse>` | Cancel a cast in progress. |
