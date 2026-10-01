@@ -2424,6 +2424,7 @@ export class StateCache {
         // Same fold for both; NEW_WORLD additionally closes a pending transfer.
         const d = event.data as WorldPosition;
         this.evictOnMapChange(d.map);
+        if (event.opcode === "SMSG_LOGIN_VERIFY_WORLD") this.forgetQuestGiverMarkers();
         this.selfMap = d.map;
         this.self.position = {
           value: { map: d.map, x: d.x, y: d.y, z: d.z, o: d.o },
@@ -3493,6 +3494,19 @@ export class StateCache {
       if (t === "item" || t === "container") continue;
       this.forget(guid);
     }
+  }
+
+  /**
+   * A login starts a new session, and `seq` restarts with it, so a questgiver
+   * marker from an earlier session cannot be ordered against the new
+   * session's quest log and level: the new self create block re-stamps those
+   * at low seqs, and the old marker would read as newer than all of them.
+   * Only the markers go — the objects stay, as a same-map login keeps them
+   * (see `evictOnMapChange`) — and the client asks for them again as each
+   * questgiver comes into view in the new session.
+   */
+  private forgetQuestGiverMarkers(): void {
+    for (const obj of this.nearby.values()) obj.questGiver = undefined;
   }
 
   private isSelfGuid(guid: GuidKey): boolean {

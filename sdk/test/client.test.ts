@@ -46,6 +46,7 @@ import {
   PLAYER_GUID,
   QUEST_ID,
   questAccepted,
+  questChained,
   questComplete,
   questGiverList,
   questGiverStatus,
@@ -606,6 +607,38 @@ describe("client: movement", () => {
     await stub.stop();
   });
 
+  test("a stopped moveTo carries a hint naming where a stop comes from, and is tallied with it", async () => {
+    // The module ends a move `stopped` only for a `stop` action, and only this
+    // run's client sends one; with no hint the README's "every failure status
+    // carries a hint" was untrue for it.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    // A few yards from the login position, so no per-call note joins the hint.
+    const point = { x: -1230, y: 987, z: 42 };
+    const pending = client.moveTo(point, { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    await client.stop();
+    stub.push(JSON.stringify(moveResult("stopped", 1, 30)));
+    const result = await pending;
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("stopped");
+    expect(result.position?.x).toBe(-1205);
+    expect(result.hint).toContain("stop() was called while it was under way");
+    expect(result.hint).toContain("a refused moveTo");
+    expect(result.hint).toContain("a snippet abandoned at its time limit");
+    expect(result.hint).toContain("The stop left nothing walking.");
+    const drained = client.drainActionHints();
+    expect(drained).toHaveLength(1);
+    expect(drained[0]).toMatchObject({ action: "moveTo", status: "stopped", count: 1, point, hint: result.hint });
+    // Whole on the harness channel (ACTION_HINT_RENDER.MAX_HINT_CHARS, 320).
+    expect(result.hint!.length).toBeLessThan(320);
+    // The caller's own stop is the only one: moveTo adds none, and remembers nothing.
+    expect(stub.actions.map((a) => a.action)).toEqual(["move_to", "stop"]);
+    client.close();
+    await stub.stop();
+  });
+
   test("a moveTo to an unknown target is recorded too, and its hint is the one the caller got", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
@@ -829,11 +862,13 @@ describe("client: movement", () => {
     if (!r4.ok || r4.status !== "arrived") throw new Error("unreachable");
     expect(r4.onTransport).toEqual({ guid: "12345", entry: 176081 });
 
-    // A status the SDK has no recipe for passes through with no hint invented.
+    // A status the SDK has no recipe for (one a later module could add)
+    // passes through with no hint invented.
     const p3 = client.moveTo({ x: -1200, y: 983, z: 42 }, { timeout: 2000 });
-    stub.push(JSON.stringify(moveResult("stopped", 4, 34)));
+    stub.push(JSON.stringify(moveResult("a_later_status", 4, 34)));
     const r3 = await p3;
     if (r3.ok) throw new Error("unreachable");
+    expect(r3.status).toBe("a_later_status");
     expect(r3.hint).toBeUndefined();
     client.close();
     await stub.stop();
@@ -4467,6 +4502,82 @@ describe("client: quest-start items and the questgiver marker pre-check (2026-08
     const sent = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 150 }).catch((e: unknown) => e);
     await untilAction(stub, "quest_complete", after);
     expect(await sent).toBeInstanceOf(EventTimeoutError);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a marker older than the last quest-log change still asks for the quest list", async () => {
+    // Right after a turn-in the NPC's marker still reads `reward` until the
+    // refreshed one lands, and the next quest of its chain is on offer by
+    // then: refusing on the old marker would refuse a quest the server offers.
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questAccepted)); // seq 30
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 10, 91))); // reward
+    // The turn-in empties the slot; no marker refresh has arrived yet.
+    stub.push(frame(92, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: SELF_GUID, fields: { quest0Id: 0 } }] }));
+    await Bun.sleep(20);
+    expect(client.state.quest(QUEST_ID)).toBeUndefined();
+
+    const accept = client.acceptQuestFrom(CREATURE_GUID, OTHER_QUEST_ID, { timeout: 2000 });
+    await untilAction(stub, "quest_list");
+    stub.push(JSON.stringify(questGiverList([OTHER_QUEST_ID], 93)));
+    await untilAction(stub, "quest_accept");
+    stub.push(JSON.stringify({ ...(questChained as object), seq: 94 }));
+    expect(await accept).toMatchObject({ ok: true, status: "accepted", questId: OTHER_QUEST_ID });
+
+    // questsAvailableFrom reads the marker the same way.
+    const after = stub.actions.length;
+    const listed = client.questsAvailableFrom(CREATURE_GUID, { timeout: 2000 });
+    await untilAction(stub, "quest_list", after);
+    stub.push(JSON.stringify(questGiverList([], 95)));
+    expect(await listed).toEqual({ ok: true, quests: [] });
+    expect(client.drainActionHints()).toEqual([]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a relog drops the old session's markers and asks again, so an old `incomplete` refuses nothing", async () => {
+    // `seq` restarts with every session, so a marker kept from the last one
+    // cannot be ordered against the new session's fields: the new self create
+    // block re-stamps the quest log and level at low seqs, and the old marker
+    // read as newer than all of them.
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questAccepted)); // seq 30
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 5, 91))); // incomplete
+    stub.push(JSON.stringify({ ...(questComplete as object), seq: 92 })); // the last objective done
+    await Bun.sleep(20);
+
+    // A relog on the same map before the marker refresh lands.
+    await client.deleteSession();
+    await client.createSession({ character: "Fenwick" });
+    const self = structuredClone(selfCreate);
+    self.seq = 4;
+    (self.data.objects[0] as { fields: Record<string, number> }).fields = {
+      ...selfCreate.data.objects[0]!.fields,
+      quest0Id: QUEST_ID,
+      quest0State: 1,
+    };
+    const giver = structuredClone(creatureCreate);
+    giver.seq = 5;
+    (giver.data.objects[0] as { fields: Record<string, number> }).fields = { ...creatureCreate.data.objects[0]!.fields, npcFlags: 2 };
+    for (const f of [...loginSequence, self, giver, { ...creatureQuery, seq: 6 }, selfArrived(7, { x: -1202, y: 980, z: 42 })]) {
+      stub.push(JSON.stringify(f));
+    }
+    await Bun.sleep(20);
+    expect(client.state.quest(QUEST_ID)?.complete).toBe(true);
+    expect(client.state.nearby.get(CREATURE_GUID)?.questGiver).toBeUndefined();
+    // The questgiver came into view in a new session: a client asks its marker.
+    const asked = await untilAction(stub, "questgiver_status_query");
+    expect(stub.actions[asked]).toMatchObject({ guid: CREATURE_GUID });
+
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 2000 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 8)));
+    await untilAction(stub, "quest_choose_reward");
+    stub.push(JSON.stringify(questRewarded(QUEST_ID, 9)));
+    expect(await pending).toMatchObject({ ok: true, status: "complete", questId: QUEST_ID });
     client.close();
     await stub.stop();
   });
