@@ -972,6 +972,10 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
   interrupted: () =>
     `the move stopped early (death, root, stun, or the server rejected the movement). Check state.self, ` +
     `then retry from where you are.`,
+  superseded: () =>
+    `a newer moveTo replaced this one and is the move walking now. It came from this run's own code: another ` +
+    `routine, a snippet, or a helper's walk (killTarget's approach). Retrying on superseded cancels that newer ` +
+    `move in turn, so two callers that both retry cancel each other forever. Let one caller own movement.`,
 };
 
 /**

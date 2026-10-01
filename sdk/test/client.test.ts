@@ -578,6 +578,34 @@ describe("client: movement", () => {
     await stub.stop();
   });
 
+  test("a superseded moveTo carries a hint and is tallied with it", async () => {
+    // Two callers that both retry on `superseded` cancel each other's moves
+    // and spin (a DeepSeek probe, ~450 requests a second); with no hint on
+    // either channel nothing told the model its own code was doing it.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    // A few yards from the login position, so no per-call note joins the hint.
+    const point = { x: -1230, y: 987, z: 42 };
+    const pending = client.moveTo(point, { timeout: 2000 });
+    stub.push(JSON.stringify(moveResult("superseded", 1, 30)));
+    const result = await pending;
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("superseded");
+    expect(result.hint).toContain("a newer moveTo replaced this one");
+    expect(result.hint).toContain("Let one caller own movement.");
+    const drained = client.drainActionHints();
+    expect(drained).toHaveLength(1);
+    expect(drained[0]).toMatchObject({ action: "moveTo", status: "superseded", count: 1, point, hint: result.hint });
+    // Whole on the harness channel: under the runner's render cap
+    // (ACTION_HINT_RENDER.MAX_HINT_CHARS, 320), so it is never cut short.
+    expect(result.hint!.length).toBeLessThan(320);
+    // Still no stop and no memory: a newer move is walking.
+    expect(stub.actions.map((a) => a.action)).toEqual(["move_to"]);
+    client.close();
+    await stub.stop();
+  });
+
   test("a moveTo to an unknown target is recorded too, and its hint is the one the caller got", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
