@@ -683,10 +683,16 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
     // was awaiting could never have finished (`sleepAbandon`, from `sleep`).
     // Keep it for the pong, which is the only channel the model still sees.
     // Read off the error that reached this catch, so only a wait the snippet
-    // was awaiting can name itself as what ran the snippet out.
-    const moveAbandon = (err as { moveAbandon?: unknown }).moveAbandon;
-    const carried = typeof moveAbandon === "string" ? moveAbandon : (err as { sleepAbandon?: unknown }).sleepAbandon;
-    if (controller.signal.aborted && typeof carried === "string") abandonNote = carried;
+    // was awaiting can name itself as what ran the snippet out. A snippet can
+    // throw anything, `undefined` and `null` included, and a read that threw
+    // here would send no result at all: the host would wait out the ceiling
+    // and report a timeout for a snippet that failed at once.
+    if (controller.signal.aborted) {
+      const thrown = err as { moveAbandon?: unknown; sleepAbandon?: unknown } | null | undefined;
+      const moveAbandon = thrown?.moveAbandon;
+      const carried = typeof moveAbandon === "string" ? moveAbandon : thrown?.sleepAbandon;
+      if (typeof carried === "string") abandonNote = carried;
+    }
     // An aborted eval's result is discarded host-side; its logs must not go
     // with it — leave them in the buffer for the liveness pong that follows.
     send({
