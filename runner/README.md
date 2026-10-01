@@ -301,6 +301,42 @@ The runner refuses to start without the chosen lane's `auth.json`, naming the
 variable. The compose `runner` image installs the CLI; `--local` with a
 reachable module URL is the alternative.
 
+## The context, the prompt and the scratchpad tools
+
+The context policy is `docs/METHODOLOGY.md` ("Context policy"); its encoding
+is `src/context.ts`. `assembleContext` is pure and tested byte-identical, so a
+trajectory replays into exactly the context the model saw, and a loop-level
+test pins the byte-stable prefix where the bytes leave (docs/COSTS.md
+measured that the prefix the policy promises is the prefix that goes over the
+wire). The HUD state summary is a fixed-format presentation of
+already-observed fields, never new observation; a field no event carried
+reads `unobserved`.
+
+The system prompt states that this is the complete, unmodified 3.3.5a world —
+every zone, city, road, flight path, boat and tram a player could use exists
+and is reachable, and nothing has been walled off for the benchmark. It names
+no destination, direction or timing, so it steers no play. Observed need: two
+opus-low freeplay runs (e360, 2026-08-26, and a11, 2026-08-29) concluded from
+local pathing failures that the starter valley was walled and wrote that into
+the scratchpad as a hard fact, spending the rest of the episode inside it,
+while fable and sonnet runs on the same build left the valley. What to do when
+a move fails stays out of the prompt: that is strategy, and it was explicitly
+rejected (operator, 2026-08-29).
+
+The scratchpad is edited, not only rewritten (operator, 2026-09-01).
+`edit_scratchpad` replaces an exact substring of the pad, taking its shape
+from the string-replace edit tool models are trained on (Claude Code's): the
+old text must match byte for byte and be unique unless the call says replace
+all, and a miss or an ambiguity is refused with what to fix rather than
+guessed at — the same refusal discipline referent resolution uses.
+`write_scratchpad` stays, because full replacement is a different operation
+and not a convenience wrapper over the edit. Observed need (issue #41): about
+28% of a high-frequency writer's rewrites (sonnet-low, 26 writes in one run)
+changed under 20% of the pad, which is a rewrite tax on the models least able
+to afford the output tokens; the sample does not show it fleet-wide, so this
+is the profile the evidence covers. There is no read tool: the pad is in
+every turn's context already (docs/ARCHITECTURE.md, runner section).
+
 ## The sandbox
 
 One long-lived Bun child process per session (`src/sandbox/entry.ts`), holding

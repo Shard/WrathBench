@@ -66,6 +66,28 @@ client implements the same `Client` interface, so no page knows which one it is
 talking to. Every page keeps the poll interval stated at its call site; a memo
 inside the client is what keeps a fast poller off the network.
 
+## The ladder's derivations
+
+The scored ladder's row ordering — highest rung, then the `(level, xp)` pair,
+then gold; missing readings sort last, never as zero — is one derivation over
+recorded signals (docs/METHODOLOGY.md, "Scoring"), versioned with the
+dashboard in `src/lib/ladder.ts`: three separate numbers, no aggregate score.
+
+The freeplay ladder is an overview of the top characters on freeplay at the
+current time, not a leaderboard (operator, 2026-08-29). It shows the whole
+active field — every freeplay run not deleted and not tainted, including
+paused and disabled characters and runs in progress — so the scored surfaces'
+"is this evidence" predicate is deliberately not what filters it; a launch
+that produced nothing is dropped and a run's state is a column rather than an
+exclusion. One row is one character across attempts: the latest attempt
+carries the character's current level and state and the lineage rides with
+it, so the same character never appears twice. The reader's own filters apply
+as on the scored tiers, "exclude free" included (operator, 2026-08-29,
+reversing an exemption made the same day): same control, same default-on, same
+predicate, over both the table and the graph. The one exemption that stands is
+the harness series, because a character is durable across series and cutting
+its older attempts would report a long-lived character as attempt 1.
+
 ## Structure
 
 ```

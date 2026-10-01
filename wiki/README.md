@@ -129,7 +129,10 @@ lives in docs/METHODOLOGY.md "The reference bundle".
   page's subject* is admitted. The id alone was 0.62 precise over an exhaustive
   151-row review (94 true, 57 false); name agreement refuses 53 and admits 95 pages,
   of which about 15 are known false admits kept by design — roughly 0.85. The server
-  is read once, offline, into a file.
+  is read once, offline, into a file, so the build stays a function of files; the
+  agent still sees wiki text and only wiki text. The honest residue is one bit per
+  admitted page — that the page's own claim checks out — which buys the agent
+  nothing a search of the page did not.
 - **A rebuild is a harness minor bump.** The reference surface changes for every lane
   at once, so runs before and after are not comparable on what the model could read.
 - **Every rule counts itself in `meta`, and the counters close.** Six admission and

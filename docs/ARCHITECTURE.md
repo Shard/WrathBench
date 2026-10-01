@@ -27,6 +27,8 @@ How it attaches to the core: a bench session is a stock `WorldSession` handed a 
 The mover (why the module owns movement and navigation detail:
 `docs/METHODOLOGY.md`, "Client fidelity"): `move_to` resolves a path once with `PathGenerator` on the world thread and accepts only a fully normal path whose endpoint lands near the request. It then sends `MSG_MOVE_START_FORWARD`, periodic heartbeats and `MSG_MOVE_STOP`, each with `MovementInfo` interpolated at the character's live run speed, into the stock movement handlers. The module answers `SMSG_TIME_SYNC_REQ` itself so the clock delta settles near zero. Arrival is declared from the server-side position; drift between server and interpolation past a bound ends the move as `interrupted`. Areatrigger volumes (from the client's `AreaTrigger.dbc` on the data volume) and transport bounds are tested against the mover's position on each heartbeat. The update-object decoder keeps one guid→type map per session, pruned by destroy and out-of-range; compressed updates never reach the tap because compression happens at socket write. Shapes, statuses and constants: `module/PROTOCOL.md`.
 
+Observation decodes the wire's own delta shape. The module serves whitelisted fields from the packets as they arrive plus the guid→type map a client keeps; the SDK owns the world model. The module sends only the cache-miss lookups needed to decode the stream at all; every other auto-query a client sends (questgiver status, quest templates) is sent by the SDK — the module sends what is needed to *read* packets, the SDK what is needed to *show* the client's screen. The same split puts areatriggers, transports, time-sync and the corpse query in the module, fired without an agent action because a client sends them without the player choosing to; there is no "enter portal" action because a client never sends one.
+
 ### sdk/ (Bun/TypeScript, MIT)
 
 The surface the model programs against. Thin typed wrappers over module actions, a typed event stream, and a small set of composed helpers that emerged from real runs (for example `moveTo`, `killTarget`, `lootNearby`, `acceptQuestFrom`). Helpers are added because a run needed them, not in anticipation.
@@ -35,7 +37,7 @@ The SDK is versioned. Its surface is part of the harness version.
 
 ### runner/ (Bun/TypeScript, MIT)
 
-- MCP server exposing the model-facing tools (`runner/src/tools.ts`).
+- MCP server exposing the model-facing tools (`runner/src/tools.ts`). The tool list is fixed and identical for every harness group. The scratchpad has a write tool and an edit tool and no read tool: the pad is injected verbatim into every turn's context already, so `read_scratchpad` was removed (2026-08-30).
 - Snippet sandbox: a persistent runtime per session so snippets share state and can leave routines running. Executes in a separate process with network access only to the module, an allowlisted environment carrying only the run's own leased session secret (never the module's port secret or a provider key), and a Linux Landlock filesystem ruleset applied before exec (`runner/src/sandbox/confine.ts`) so it can read the interpreter, `runner/`, `sdk/` and `node_modules/` and nothing else — not `.env`, not the home directory. Hard per-snippet timeout.
 - Agent loop: model-agnostic. Fixed prompt, fixed event window and state summary, fixed retry policy. Persists scratchpad and summary so a session can resume after a process failure.
 - Watchdogs: idle timeout, no-XP timeout, episode time limit, snippet runaway. Each ends the episode with a named termination reason.
@@ -109,6 +111,15 @@ the SPA owns everything that is UI.
   drift between the two sides is a compile error. It is the only place in the
   repository with a dependency graph; the harness itself still runs with no
   build step. Without a build on disk there is no fallback UI.
+- **A resolved model id is shown only where it differs.** A run is launched
+  with the string the roster named, which under the claude-code harness is
+  usually an alias the CLI resolves minutes later to a real id; the resolved id
+  is recorded on first observation and never revised (docs/METHODOLOGY.md,
+  "Episodes, lanes, and evidence"). The pages show it only where it differs
+  from what was asked for, and flag a roster model that resolved to more than
+  one id across its runs, because that drift is the thing the field exists to
+  make visible. Runs that predate the field are back-filled at read time from
+  their own trajectories and never written back.
 - **One page per grain, and the runs have their own.** The fleet page is what
   is running *now* and links to a run without listing them; `/runs` is the runs
   — one row per recorded run of every kind; `/about` is the tiers, listing no
