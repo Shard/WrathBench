@@ -976,6 +976,15 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `a newer moveTo replaced this one and is the move walking now. It came from this run's own code: another ` +
     `routine, a snippet, or a helper's walk (killTarget's approach). Retrying on superseded cancels that newer ` +
     `move in turn, so two callers that both retry cancel each other forever. Let one caller own movement.`,
+  // The module ends a move `stopped` only for a `stop` action while the move
+  // is active (module/PROTOCOL.md, "stop"), and only this run's client sends
+  // one: the caller's own `stop()`, the stop `moveTo` sends after a refusal
+  // in `MOVE_LEAVES_NO_STOP`, and the stop on a snippet's abandon. No SDK
+  // helper stops a walk as part of a flow that succeeds.
+  stopped: () =>
+    `the move ended because stop() was called while it was under way, from within this run: sdk.stop() in a ` +
+    `routine or a snippet, a refused moveTo (the SDK calls stop() after one, which ends a walk another caller ` +
+    `started meanwhile), or a snippet abandoned at its time limit. The stop left nothing walking.`,
 };
 
 /**

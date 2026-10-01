@@ -607,6 +607,38 @@ describe("client: movement", () => {
     await stub.stop();
   });
 
+  test("a stopped moveTo carries a hint naming where a stop comes from, and is tallied with it", async () => {
+    // The module ends a move `stopped` only for a `stop` action, and only this
+    // run's client sends one; with no hint the README's "every failure status
+    // carries a hint" was untrue for it.
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+    // A few yards from the login position, so no per-call note joins the hint.
+    const point = { x: -1230, y: 987, z: 42 };
+    const pending = client.moveTo(point, { timeout: 2000 });
+    await untilAction(stub, "move_to");
+    await client.stop();
+    stub.push(JSON.stringify(moveResult("stopped", 1, 30)));
+    const result = await pending;
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe("stopped");
+    expect(result.position?.x).toBe(-1205);
+    expect(result.hint).toContain("stop() was called while it was under way");
+    expect(result.hint).toContain("a refused moveTo");
+    expect(result.hint).toContain("a snippet abandoned at its time limit");
+    expect(result.hint).toContain("The stop left nothing walking.");
+    const drained = client.drainActionHints();
+    expect(drained).toHaveLength(1);
+    expect(drained[0]).toMatchObject({ action: "moveTo", status: "stopped", count: 1, point, hint: result.hint });
+    // Whole on the harness channel (ACTION_HINT_RENDER.MAX_HINT_CHARS, 320).
+    expect(result.hint!.length).toBeLessThan(320);
+    // The caller's own stop is the only one: moveTo adds none, and remembers nothing.
+    expect(stub.actions.map((a) => a.action)).toEqual(["move_to", "stop"]);
+    client.close();
+    await stub.stop();
+  });
+
   test("a moveTo to an unknown target is recorded too, and its hint is the one the caller got", async () => {
     const stub = startStub({ onConnect: () => frames(loginSequence) });
     const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
@@ -830,11 +862,13 @@ describe("client: movement", () => {
     if (!r4.ok || r4.status !== "arrived") throw new Error("unreachable");
     expect(r4.onTransport).toEqual({ guid: "12345", entry: 176081 });
 
-    // A status the SDK has no recipe for passes through with no hint invented.
+    // A status the SDK has no recipe for (one a later module could add)
+    // passes through with no hint invented.
     const p3 = client.moveTo({ x: -1200, y: 983, z: 42 }, { timeout: 2000 });
-    stub.push(JSON.stringify(moveResult("stopped", 4, 34)));
+    stub.push(JSON.stringify(moveResult("a_later_status", 4, 34)));
     const r3 = await p3;
     if (r3.ok) throw new Error("unreachable");
+    expect(r3.status).toBe("a_later_status");
     expect(r3.hint).toBeUndefined();
     client.close();
     await stub.stop();

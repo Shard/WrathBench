@@ -233,7 +233,11 @@ returns `status: "superseded"`. `stop()` returns as soon as the module has
 queued the `MSG_MOVE_STOP` — it does *not* wait for the character to halt; it is
 the in-flight `moveTo` that resolves, with `status: "stopped"`, once the stop
 has landed. Read the position off that result rather than off the cache right
-after `await client.stop()`.
+after `await client.stop()`. The module says `stopped` only for a `stop`
+action, and only the run's own client sends one — a caller's `stop()`, the
+stop `moveTo` sends after a refusal (which ends a walk another caller started
+meanwhile), and the stop on a snippet's abandon — so that is what its hint
+names.
 
 `waitForNearby` waits on the *cache*, not on one event: a named creature takes a
 create block plus the creature-query answer the module fired on first sight, so
