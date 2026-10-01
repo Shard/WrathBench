@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { openWikiBundle } from "./wiki";
 import { EpisodicLog } from "./episodic";
 import { ClosedWindowReflectGate } from "./reflect";
-import { callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
+import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
 import { leaseSessionSecret } from "./module-auth";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
@@ -111,9 +111,11 @@ export class McpServer {
         // JSON *string* (sometimes fenced); coerceToolArgs handles that.
         const raw = msg.params?.["arguments"] ?? {};
         const coerced = coerceToolArgs(name, raw);
+        // An unparseable call is still a tool result the model reads, so the
+        // pending hints ride it as they would any other (`callTool`).
         const result = coerced.ok
           ? await callTool(this.ctx, name, coerced.args)
-          : { text: coerced.error, isError: true };
+          : await appendPendingActionHints(this.ctx, { text: coerced.error, isError: true });
         const args = coerced.ok ? coerced.args : raw;
         this.opts.onToolCall?.(name, args, result, dispatchTs);
         return respond({

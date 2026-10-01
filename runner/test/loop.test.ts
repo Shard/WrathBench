@@ -12,6 +12,8 @@ import { ContextBuilder, itemSample, runLoop } from "../src/loop";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
+import type { ActionHintNote } from "../src/sandbox/ipc";
+import { renderActionHints } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -94,6 +96,39 @@ describe("runLoop", () => {
     expect(options.scratchpad.read()).toBe("# hi");
     const row = options.trajectory.runRow("run-test");
     expect(row?.["termination_reason"]).toBe("stub-complete");
+    options.trajectory.close();
+  });
+
+  test("pending action hints ride a non-snippet tool result, and the trajectory records what the model saw", async () => {
+    // A background routine's hint no longer waits for the next snippet: it
+    // rides whichever tool result comes next — here a scratchpad write, then a
+    // call whose arguments were not even JSON — and the record is that text.
+    const pending: ActionHintNote[] = [];
+    const hint: ActionHintNote = { action: "moveTo", status: "drop", count: 3, hint: "steps off a ledge", ts: 1 };
+    const block = renderActionHints([hint]) as string;
+    let n = 0;
+    const adapter: ChatAdapter = {
+      label: "raw",
+      complete: async (): Promise<AdapterOutcome> => {
+        n++;
+        if (n > 2) return { kind: "stub-complete" };
+        pending.push({ ...hint });
+        const args = n === 1 ? JSON.stringify({ content: "# hi" }) : "{broken";
+        return { kind: "ok", turn: { content: null, toolCalls: [{ id: `c${n}`, name: "write_scratchpad", arguments: args }] } };
+      },
+    };
+    const { dir, options } = setup(adapter);
+    (options.sandbox as unknown as { drainActionHints: () => Promise<ActionHintNote[]> }).drainActionHints = async () =>
+      pending.splice(0, pending.length);
+    await runLoop(options);
+    const results = readTrajectory(dir).filter((r) => r.t === "tool_result");
+    expect(results).toHaveLength(2);
+    expect(results[0]?.["text"]).toBe(`written (4 chars)\n${block}`);
+    expect(results[0]?.["isError"]).toBe(false);
+    expect(String(results[1]?.["text"])).toStartWith("tool arguments were not valid JSON");
+    expect(String(results[1]?.["text"]).endsWith(`\n${block}`)).toBe(true);
+    expect(results[1]?.["isError"]).toBe(true);
+    expect(pending).toEqual([]);
     options.trajectory.close();
   });
 

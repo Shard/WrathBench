@@ -291,10 +291,12 @@ function drainLogs(): LogEntry[] {
 }
 
 /**
- * The hint-bearing failures the SDK tallied while the last snippet ran. Drained
- * exactly once per snippet result (or per pong, for an abandoned one), so the
- * runner can render them whether or not the snippet kept the result objects.
- * Hints from a background routine ride the next snippet result.
+ * The hint-bearing failures the SDK tallied since the last drain. Drained by a
+ * snippet's result (or its pong, for an abandoned one) and by the
+ * `action_hints` rpc the host sends for every other tool result, so the runner
+ * can render them whether or not the snippet kept the result objects, and a
+ * hint raised by a background routine rides whichever tool result comes next.
+ * Each drain empties the tally, so a hint is delivered once.
  */
 function drainHints(): ActionHintNote[] {
   return client.drainActionHints();
@@ -864,7 +866,9 @@ function handle(msg: HostToChild | HostcallResult): void {
             ? recentEvents(msg.params.limit ?? 50)
             : msg.method === "death_signals"
               ? drainDeathSignals()
-              : stateSnapshot();
+              : msg.method === "action_hints"
+                ? drainHints()
+                : stateSnapshot();
         send({ t: "rpc_result", id: msg.id, ok: true, value });
       } catch (err) {
         send({ t: "rpc_result", id: msg.id, ok: false, error: String(err) });

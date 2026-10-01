@@ -26,9 +26,10 @@ export interface SnippetResult {
   /** A note about the completion value; see `EvalResultMsg.hint`. */
   hint?: string | undefined;
   /**
-   * Hint-bearing action failures the SDK recorded while the snippet ran. The
-   * harness renders these itself (tools.ts) because the hint inside the result
-   * object only reaches the model if the snippet's own code kept it.
+   * Hint-bearing action failures the SDK tallied since the last drain — while
+   * the snippet ran, or before it in a background routine. The harness renders
+   * these itself (tools.ts) because the hint inside the result object only
+   * reaches the model if the snippet's own code kept it.
    */
   actionHints?: ActionHintNote[] | undefined;
   logs: LogEntry[];
@@ -499,6 +500,30 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "death_signals rpc failed");
     return (res.value ?? []) as DeathSignal[];
+  }
+
+  /**
+   * Drain the hint-bearing failures the SDK tallied since the last drain, for a
+   * tool result that is not a snippet's (`tools.ts`, `callTool`). A snippet's
+   * own result and its pong drain the tally themselves; this is what lets a
+   * hint raised by a background routine ride whichever tool result comes next
+   * instead of waiting for the next snippet.
+   *
+   * Never spawns a child: with none running there is no tally to drain, and a
+   * `search_reference` must not start a sandbox. Bounded by `pingGraceMs`, the
+   * host's measure of how long a live child takes to answer, so a child whose
+   * event loop is blocked costs a scratchpad write that long and no more.
+   */
+  async drainActionHints(): Promise<ActionHintNote[]> {
+    if (this.proc === null) return [];
+    await this.ready;
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "action_hints", params: {} },
+      this.opts.pingGraceMs,
+    );
+    if (!res.ok) throw new Error(res.error ?? "action_hints rpc failed");
+    return (res.value ?? []) as ActionHintNote[];
   }
 
   /** JSON-safe snapshot of the child's StateCache. */

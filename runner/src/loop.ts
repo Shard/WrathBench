@@ -21,7 +21,7 @@ import {
 import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf } from "./reflect";
 import type { EpisodicLog } from "./episodic";
 import { buildSystemPrompt } from "./prompt";
-import { callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
+import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
 import { harnessOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
@@ -1193,8 +1193,12 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           trajectory.append({ t: "snippet", turn, code: normalized.code ?? "" });
         }
         const restartsBefore = o.sandbox.totalRestarts;
+        // An unparseable call is still a tool result the model reads, so the
+        // pending hints ride it as they would any other (`callTool`).
         const result =
-          argError !== null ? { text: argError, isError: true } : await callTool(toolCtx, tc.name, args);
+          argError !== null
+            ? await appendPendingActionHints(toolCtx, { text: argError, isError: true })
+            : await callTool(toolCtx, tc.name, args);
         trajectory.append({
           t: tc.name === "run_snippet" ? "snippet_result" : "tool_result",
           turn,

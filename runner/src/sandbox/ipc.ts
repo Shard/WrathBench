@@ -98,7 +98,17 @@ export type HostToChild =
   | { t: "ping"; id: number }
   /** Abort the eval with this id: fires its `signal`, so SDK waits it left behind settle. */
   | { t: "abort"; id: number }
-  | { t: "rpc"; id: number; method: "recent_events" | "state_summary" | "death_signals"; params: { limit?: number } }
+  /**
+   * `action_hints` drains the SDK's hint tally for a tool result that is not a
+   * snippet's (`SandboxHost.drainActionHints`); a snippet's own result and
+   * pong drain it themselves.
+   */
+  | {
+      t: "rpc";
+      id: number;
+      method: "recent_events" | "state_summary" | "death_signals" | "action_hints";
+      params: { limit?: number };
+    }
   | { t: "shutdown" };
 
 export interface EvalResultMsg {
