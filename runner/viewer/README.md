@@ -312,14 +312,27 @@ run the extraction. The public site's tiles are a separate upload
 
 ## How it handles big files
 
-`request` entries embed the whole model message array and `events_served`
-entries embed every packet, so nothing ships the raw file to the browser. One
-`TrajectoryTail` per run scans the JSONL forward from wherever it stopped,
-splitting on bytes (0x0A can never occur inside a UTF-8 sequence, so a write
-that lands mid-character is safe) and keeping only a small summary plus the byte
-range of each line. Big fields collapse to counts; the full JSON of any single
-entry is re-read from disk on demand behind a click. The SSE tail heartbeats
-once a second, so a quiet run can be told from a dead connection.
+`request` entries embed the model's message array (the whole of it on an older
+or CLI-scaffold record, the fresh user message on a fixed-loop slim one) and
+`events_served` entries embed every packet, so nothing ships the raw file to the
+browser. One `TrajectoryTail` per run scans the JSONL forward from wherever it
+stopped, splitting on bytes (0x0A can never occur inside a UTF-8 sequence, so a
+write that lands mid-character is safe) and keeping only a small summary plus
+the byte range of each line. Big fields collapse to counts; the full JSON of any
+single entry is re-read from disk on demand behind a click. The SSE tail
+heartbeats once a second, so a quiet run can be told from a dead connection.
+
+A request's counts (`messageCount`, `systemChars`, `promptChars`) come off its
+message array on a full record and off the fields the writer stored on a slim
+one, so a file that switches shape at a resume reads as one run. The raw view
+of a slim request is what the model saw, not the slim line: the window's
+records are read back (a walk to the response of `window.fromTurn`, no
+further), the system text is found by its hash, and the request is rebuilt
+through the replay's own code (`runner/src/request-record.ts`) and served with
+`messages` and a `rebuilt` verdict — `{ verified: true }` only when it hashes
+to the bytes that were sent, otherwise the error. Raw entries stay withheld in
+public mode, and the public projection publishes the same request fields for
+either shape and none of the slim record's own.
 
 ## Endpoints
 
