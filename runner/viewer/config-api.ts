@@ -31,7 +31,7 @@ import {
 } from "../src/config-store";
 import { parsePolicyBlock } from "../src/models";
 import type { RoutingSpec } from "../src/routing";
-import type { DraftFetchResponse, DraftsResponse, E90TokenProfileView } from "./api-types";
+import type { DraftFetchResponse, DraftStatusResponse, DraftsResponse, E90TokenProfileView } from "./api-types";
 import {
   CatalogueError,
   bodyError,
@@ -329,7 +329,7 @@ async function handleDrafts(
         const next: DraftRecord = status === "ignored" ? { ...rest, status, ignoredAt: Date.now(), ignoredBy: actor } : { ...rest, status };
         store.writeDrafts({ put: [{ model, value: draftDocument(next) }] });
       }
-      return json({ model, status });
+      return json({ model, status } satisfies DraftStatusResponse);
     } finally {
       store.close();
     }

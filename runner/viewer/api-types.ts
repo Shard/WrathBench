@@ -2151,6 +2151,12 @@ export interface DraftFetchResponse {
   skipped: number;
 }
 
+/** `POST /api/config/proposed/{ignore,unignore}`: where the draft now stands. */
+export interface DraftStatusResponse {
+  model: string;
+  status: "draft" | "ignored";
+}
+
 /** `POST /api/config/proposed/promote`. Race and class are optional, as on any entry. */
 export interface DraftPromoteBody {
   model: string;

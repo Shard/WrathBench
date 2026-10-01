@@ -73,6 +73,34 @@ describe("nothing a public reader clicks needs the live viewer", () => {
     expect(src).toContain('<Route path="/episodes" component={EpisodesRedirect} />');
   });
 
+  /*
+   * Config drafts (GitHub issue #66). The /config page is a lazy route in both
+   * builds, so its chunk ships in the public bundle; what keeps drafts out of
+   * the public site is that nothing there can reach them. The server side —
+   * a public handle 404s every draft route and the publisher renders none —
+   * is pinned in runner/test/viewer-config-drafts.test.ts.
+   */
+  test("the public build's client has no draft surface, and the page never asks for one there", () => {
+    // The client a public build reads with names no config route at all.
+    const snapshot = read("api/snapshot-client.ts");
+    expect(snapshot.includes("proposed")).toBe(false);
+    expect(snapshot.includes("/api/config")).toBe(false);
+    // The draft routes are spelled in the config client and nowhere else.
+    const spelled = sources().filter((p) => readFileSync(p, "utf8").includes("/api/config/proposed"));
+    expect(spelled.map((p) => p.slice(SRC.length + 1))).toEqual(["api/config-client.ts"]);
+    // And the one page that calls them loads nothing in the public build ...
+    const page = read("pages/Config.tsx");
+    expect(page).toMatch(/onMount\(\(\) => \{\s*if \(SNAPSHOT_MODE\) return;\s*void reload\(\);/);
+    // ... and renders the draft section only inside the private-build guard.
+    const guard = page.indexOf("when={!SNAPSHOT_MODE");
+    expect(guard).toBeGreaterThan(0);
+    expect(page.slice(guard, guard + 300)).toContain("fallback={<p class=\"dim\">{SNAPSHOT_WITHHELD_TEXT}</p>}");
+    const drafts = page.indexOf("<Drafts ");
+    expect(drafts).toBeGreaterThan(guard);
+    const callers = sources().filter((p) => /configApi\.(drafts|fetchDrafts|ignoreDraft|unignoreDraft|promoteDraft)\(/.test(readFileSync(p, "utf8")));
+    expect(callers.map((p) => p.slice(SRC.length + 1))).toEqual(["pages/Config.tsx"]);
+  });
+
   test("no page links at the API, opens a window, or offers a download", () => {
     for (const path of sources()) {
       const src = readFileSync(path, "utf8");
