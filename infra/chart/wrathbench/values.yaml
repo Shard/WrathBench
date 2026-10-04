@@ -57,9 +57,12 @@ storage:
     size: 20Gi
   # The `codex` driver's subscription lane: a logged-in Codex HOME directory
   # (auth.json plus the persisted threads), not a token — which is why it is a
-  # volume and not a Secret key. Tiny; the size is a floor, not a budget.
+  # volume and not a Secret key. The threads are what grow: the CLI keeps a
+  # rollout JSONL per thread, ~11 MB/h on a freeplay stream, and 1Gi filled
+  # mid-run (ENOSPC lost tool outputs from the thread). A dead run's rollout is
+  # never read again — the driver starts a fresh thread on resume.
   codexHome:
-    size: 1Gi
+    size: 5Gi
 
 # Existing Secret, created by the deploying cluster's HelmRelease. Keys are
 # the `.env` names.

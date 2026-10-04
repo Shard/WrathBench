@@ -36,7 +36,7 @@ storage:
   clickhouse:
     size: 20Gi
   codexHome:
-    size: 1Gi
+    size: 5Gi
 
 # An existing Secret whose keys are the `.env` names.
 envSecretName: wrathbench-env
