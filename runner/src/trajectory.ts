@@ -27,6 +27,7 @@ import { jsonLine, toJsonSafe } from "./jsonsafe";
 import type { Comparability } from "./comparability";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import { platformOf } from "./platform";
+import type { ActionNote } from "./sandbox/ipc";
 
 export interface StateLine {
   level?: number | undefined;
@@ -100,6 +101,41 @@ export interface MoveLine {
   target?: string | null | undefined;
   /** The module's verdict (`arrived`, `too_far`, `superseded`, …); absent while in flight. */
   status?: string | null | undefined;
+}
+
+/**
+ * One `{ t: "actions", ... }` record: what one snippet's async context put on
+ * the wire as `POST /action` since the last flush, with the module's answer to
+ * each (`ActionNote`, sandbox/ipc.ts) — the action log.
+ *
+ * One record per flush rather than one per action: a snippet dispatches about
+ * ten actions on average (a fight is a `set_target`, an `attack_start`, a cast
+ * per GCD and a `face` every 1.5s), and the viewer's feed is a window of the
+ * last 200 records, so a record per action would push the snippets themselves
+ * out of it. The sandbox flushes just before a snippet's result, so the usual
+ * case is one record per snippet; a background routine's dispatches between
+ * snippets flush on a 15s idle timer and carry `routine: true`.
+ *
+ * `callTs` is the `dispatchTs` the writer stamped on the snippet's `tool_call`
+ * — the join key, because the CLI drivers append the call after it ran (this
+ * record comes first) and the fixed loop before (this record comes between the
+ * snippet and its result). Absent for actions dispatched outside every
+ * snippet's context (an event callback, the SDK's client-parity queries).
+ *
+ * The record is the dispatch and the HTTP answer. A `200` is "queued"; what
+ * the game made of it arrives on the event stream, and a `move_to`'s verdict
+ * is the `move` record with the same `moveId`. Nothing here infers an outcome.
+ * `move` records are unchanged: they are the map's intention feed and the
+ * `move` table, and stay the verdict's home.
+ */
+export interface ActionsLine {
+  ts?: number | undefined;
+  turn?: number | undefined;
+  callTs?: number | undefined;
+  routine?: true | undefined;
+  actions: ActionNote[];
+  /** Dispatches past the sandbox's per-flush cap, counted by action name. */
+  dropped?: Record<string, number> | undefined;
 }
 
 /**
@@ -544,6 +580,11 @@ export class Trajectory {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(runId, m.ts ?? this.now(), m.moveId ?? null, m.map ?? null, m.x, m.y, m.z, m.target ?? null, m.status ?? null);
+  }
+
+  /** One action-log flush (`ActionsLine`). JSONL only: no reader needs it in sqlite. */
+  recordActions(a: ActionsLine): void {
+    this.append({ t: "actions", ...a });
   }
 
   /** One `milestone` record, the way `quest_complete` is written. */

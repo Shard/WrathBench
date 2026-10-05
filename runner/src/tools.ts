@@ -708,16 +708,25 @@ export async function appendPendingActionHints(ctx: ToolContext, result: ToolRes
 const EVALUATED = new WeakSet<ToolResult>();
 
 /**
+ * Who is calling, for the records a call leaves behind. `dispatchTs` is the
+ * value the caller stamps on this call's `tool_call` record: a snippet's
+ * action log carries it as `callTs`, which is how a reader joins the two.
+ */
+export interface CallOrigin {
+  dispatchTs?: number;
+}
+
+/**
  * Dispatch one tool call. Never throws: errors come back as `isError` text.
  * Pending action hints ride the result (`appendPendingActionHints`), whichever
  * tool it is; an evaluated snippet's result already carries its own.
  */
-export async function callTool(ctx: ToolContext, name: string, args: unknown): Promise<ToolResult> {
-  const result = await runTool(ctx, name, args);
+export async function callTool(ctx: ToolContext, name: string, args: unknown, origin: CallOrigin = {}): Promise<ToolResult> {
+  const result = await runTool(ctx, name, args, origin);
   return EVALUATED.has(result) ? result : appendPendingActionHints(ctx, result);
 }
 
-async function runTool(ctx: ToolContext, name: string, args: unknown): Promise<ToolResult> {
+async function runTool(ctx: ToolContext, name: string, args: unknown, origin: CallOrigin): Promise<ToolResult> {
   const state = episodeState(ctx);
   state.calls++;
   try {
@@ -751,7 +760,7 @@ async function runTool(ctx: ToolContext, name: string, args: unknown): Promise<T
     switch (name) {
       case "run_snippet": {
         const { code } = parsed.data as { code: string };
-        const res = await ctx.sandbox.evalSnippet(code);
+        const res = await ctx.sandbox.evalSnippet(code, { callTs: origin.dispatchTs, turn: ctx.turn() });
         const lines: string[] = [];
         lines.push(res.ok ? `ok (${res.durationMs}ms)` : `error (${res.durationMs}ms)`);
         if (res.value !== undefined) lines.push(`=> ${res.value}`);

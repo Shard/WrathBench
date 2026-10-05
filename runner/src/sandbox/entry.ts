@@ -63,7 +63,7 @@ import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
-import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
+import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
@@ -200,43 +200,250 @@ function noteMoveDispatch(body: unknown): MoveIntentNote | null {
   return note;
 }
 
+// --------------------------------------------------------------- action log
+
 /**
- * `guardedFetch` plus the move watch. Passed to the client explicitly rather
- * than installed globally, so a snippet's own `fetch` is not read here.
+ * Every `POST /action` the client makes, with the module's answer (`ActionNote`
+ * in ipc.ts), grouped by the snippet whose async context dispatched it and
+ * pushed to the host, which writes it to the trajectory. Record-only: nothing
+ * here is shown to the model.
+ *
+ * Bounded twice, because a routine re-issuing a call in a tight loop is a thing
+ * runs do (one compose-era session dispatched 4.4M `move_to` in six hours):
+ * consecutive identical dispatches fold into one note with a count, the way
+ * `pushLog` folds console lines, and past `ACTION_LOG_MAX` notes per batch per
+ * flush the rest are counted by action name instead of kept.
+ */
+const ACTION_LOG_MAX = 120;
+const ACTION_ARG_MAX_CHARS = 200;
+const ACTION_TEXT_MAX_CHARS = 240;
+/** How often what background routines dispatched is flushed while no snippet runs. */
+const ACTION_IDLE_FLUSH_MS = 15_000;
+/** The SDK's client-parity queries (client.ts, "client-parity queries"). */
+const CLIENT_PARITY_ACTIONS = new Set(["questgiver_status_query", "questgiver_status_multiple_query", "quest_query"]);
+
+interface PendingBatch {
+  evalId: number | null;
+  actions: ActionNote[];
+  dropped: Record<string, number>;
+}
+const actionBatches = new Map<number | null, PendingBatch>();
+
+function clipText(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…(+${s.length - max + 1})`;
+}
+
+/** The body as the log keeps it: no token (operator infra), no action name, long strings clipped. */
+function actionArgs(body: Record<string, unknown>): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (k === "token" || k === "action") continue;
+    out[k] = typeof v === "string" ? clipText(v, ACTION_ARG_MAX_CHARS) : v;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+/** A guid's name as the cache holds it: the unit in view, else a name query's answer. */
+function unitName(guid: string): string | undefined {
+  return client.state.units().find((u) => u.guid === guid)?.name ?? client.state.nameOf(guid);
+}
+
+/**
+ * Client-cache names for the ids an action carries, read before the action
+ * changes anything (a destroyed item has no slot to read afterwards). Only
+ * what the session already observed; never a lookup of its own.
+ */
+function actionNames(body: Record<string, unknown>): ActionNote["names"] {
+  const names: NonNullable<ActionNote["names"]> = {};
+  try {
+    const state = client.state;
+    const guid = typeof body["targetGuid"] === "string" ? body["targetGuid"] : body["guid"];
+    if (typeof guid === "string") {
+      const n = unitName(guid);
+      if (n !== undefined) names.target = n;
+    }
+    if (typeof body["spellId"] === "number") {
+      const n = state.spell(body["spellId"])?.name;
+      if (n !== undefined) names.spell = n;
+    }
+    let item: string | undefined;
+    if (typeof body["itemId"] === "number") item = state.items.get(body["itemId"])?.value.name;
+    else if (typeof body["itemGuid"] === "string") {
+      const g = body["itemGuid"];
+      item = state.bag().items.find((i) => i.guid === g)?.name ?? state.inventory.find((i) => i.guid === g)?.name;
+    } else if (typeof body["bag"] === "number" && typeof body["slot"] === "number") {
+      const { bag, slot } = body as { bag: number; slot: number };
+      item = state.bag().items.find((i) => i.bag === bag && i.slot === slot)?.name;
+    } else if (body["action"] === "loot_item" && typeof body["slot"] === "number") {
+      const id = state.lastLoot()?.items.find((i) => i.slot === body["slot"])?.itemId;
+      if (id !== undefined) item = state.items.get(id)?.value.name;
+    }
+    if (item !== undefined) names.item = item;
+    if (typeof body["questId"] === "number") {
+      const n = state.quests.get(body["questId"])?.value.title ?? state.quest(body["questId"])?.title;
+      if (n !== undefined) names.quest = n;
+    }
+  } catch {
+    // A name is a convenience for the reader; the dispatch is recorded without it.
+  }
+  return Object.keys(names).length === 0 ? undefined : names;
+}
+
+/** Start a note for an action about to be sent, in the dispatching snippet's context. */
+function beginAction(body: Record<string, unknown>): { note: ActionNote; evalId: number | null } {
+  const evalId = evalContext.getStore()?.evalId ?? null;
+  const action = String(body["action"]);
+  const note: ActionNote = { ts: Date.now(), action, status: 0, ms: 0 };
+  const args = actionArgs(body);
+  if (args !== undefined) note.args = args;
+  const names = actionNames(body);
+  if (names !== undefined) note.names = names;
+  if (evalId === null && CLIENT_PARITY_ACTIONS.has(action)) note.auto = true;
+  return { note, evalId };
+}
+
+/** The module's answer arrived (or never will): fold or append the finished note. */
+function finishAction(
+  pending: { note: ActionNote; evalId: number | null },
+  status: number,
+  answer: unknown,
+  failure?: string,
+): void {
+  const { note, evalId } = pending;
+  note.status = status;
+  note.ms = Date.now() - note.ts;
+  const a = answer !== null && typeof answer === "object" ? (answer as Record<string, unknown>) : {};
+  if (failure !== undefined) note.error = clipText(failure, ACTION_TEXT_MAX_CHARS);
+  else if (status < 200 || status >= 300) {
+    note.error = typeof a["error"] === "string" ? clipText(a["error"], ACTION_TEXT_MAX_CHARS) : `http_${status}`;
+  }
+  if (typeof a["hint"] === "string") note.hint = clipText(a["hint"], ACTION_TEXT_MAX_CHARS);
+  if (typeof a["moveId"] === "number") note.moveId = a["moveId"];
+  let batch = actionBatches.get(evalId);
+  if (batch === undefined) {
+    batch = { evalId, actions: [], dropped: {} };
+    actionBatches.set(evalId, batch);
+  }
+  const last = batch.actions.at(-1);
+  if (last !== undefined && sameAction(last, note)) {
+    last.count = (last.count ?? 1) + 1;
+    last.lastTs = note.ts;
+    return;
+  }
+  if (batch.actions.length >= ACTION_LOG_MAX) {
+    batch.dropped[note.action] = (batch.dropped[note.action] ?? 0) + 1;
+    return;
+  }
+  batch.actions.push(note);
+}
+
+/** Same dispatch, same answer: everything but the clocks (and a move's own id) agrees. */
+function sameAction(a: ActionNote, b: ActionNote): boolean {
+  return (
+    a.action === b.action &&
+    a.status === b.status &&
+    a.error === b.error &&
+    a.hint === b.hint &&
+    a.moveId === undefined &&
+    b.moveId === undefined &&
+    a.auto === b.auto &&
+    JSON.stringify(a.args) === JSON.stringify(b.args) &&
+    JSON.stringify(a.names) === JSON.stringify(b.names)
+  );
+}
+
+/**
+ * Push everything noted so far to the host. `finishing` is the eval whose
+ * result is about to be sent: its batch is that snippet's own; a batch whose
+ * snippet had already returned is a background routine's.
+ */
+function flushActions(finishing?: number): void {
+  if (actionBatches.size === 0) return;
+  const batches: ActionBatch[] = [];
+  for (const b of actionBatches.values()) {
+    if (b.actions.length === 0 && Object.keys(b.dropped).length === 0) continue;
+    const out: ActionBatch = { evalId: b.evalId, actions: b.actions };
+    if (b.evalId !== null && b.evalId !== finishing && !evalControllers.has(b.evalId)) out.routine = true;
+    if (Object.keys(b.dropped).length > 0) out.dropped = b.dropped;
+    batches.push(out);
+  }
+  actionBatches.clear();
+  if (batches.length > 0) send({ t: "actions", batches });
+}
+
+// Between snippets nothing else carries a routine's dispatches home. Only while
+// no snippet runs, so a snippet's own actions arrive as one batch with its result.
+setInterval(() => {
+  if (evalControllers.size === 0) flushActions();
+}, ACTION_IDLE_FLUSH_MS).unref();
+
+function isActionPost(input: FetchInput, init?: RequestInit): boolean {
+  if ((init?.method ?? "GET").toUpperCase() !== "POST") return false;
+  try {
+    const href = typeof input === "string" || input instanceof URL ? String(input) : (input as Request).url;
+    return new URL(href).pathname.endsWith("/action");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `guardedFetch` plus the move watch and the action log. Passed to the client
+ * explicitly rather than installed globally, so a snippet's own `fetch` is not
+ * read here.
  */
 const watchedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response> => {
   let note: MoveIntentNote | null = null;
+  let logged: { note: ActionNote; evalId: number | null } | null = null;
   try {
-    if (typeof init?.body === "string") note = noteMoveDispatch(JSON.parse(init.body));
+    if (typeof init?.body === "string") {
+      const body: unknown = JSON.parse(init.body);
+      note = noteMoveDispatch(body);
+      if (body !== null && typeof body === "object" && !Array.isArray(body) && isActionPost(input, init)) {
+        logged = beginAction(body as Record<string, unknown>);
+      }
+    }
   } catch {
     // Not JSON, or not ours to read: the request is untouched either way.
   }
   const res = guardedFetch(input, init);
-  if (note === null) return res;
+  if (note === null && logged === null) return res;
   return res.then(
-    (r) => {
-      // Learn the module's move id from the ack. `clone()` because the SDK
-      // still has to read the same body.
-      void r
-        .clone()
-        .json()
-        .then((j: unknown) => {
-          const id = (j as { moveId?: unknown } | null)?.moveId;
-          if (typeof id !== "number" || moveIntent !== note) return;
-          note.moveId = id;
-          const early = earlyVerdicts.get(id);
-          if (early !== undefined) {
-            earlyVerdicts.delete(id);
-            note.status = early.status;
-            note.endedAt = early.ts;
-          }
-        })
-        .catch(() => {});
-      return r;
+    async (r) => {
+      // Read the answer here, then hand the SDK an identical Response over the
+      // same text: the note is finished before the SDK's call can return, so a
+      // snippet's result never overtakes the record of its last action.
+      let text: string;
+      try {
+        text = await r.text();
+      } catch (err) {
+        if (logged !== null) finishAction(logged, r.status, null, `body: ${String(err)}`);
+        throw err;
+      }
+      let j: unknown = null;
+      try {
+        j = JSON.parse(text);
+      } catch {
+        // The SDK reports a non-JSON body itself; the log keeps the status.
+      }
+      if (logged !== null) finishAction(logged, r.status, j);
+      // Learn the module's move id from the ack.
+      const id = (j as { moveId?: unknown } | null)?.moveId;
+      if (note !== null && typeof id === "number" && moveIntent === note) {
+        note.moveId = id;
+        const early = earlyVerdicts.get(id);
+        if (early !== undefined) {
+          earlyVerdicts.delete(id);
+          note.status = early.status;
+          note.endedAt = early.ts;
+        }
+      }
+      return new Response(text, { status: r.status, statusText: r.statusText, headers: r.headers });
     },
     (err: unknown) => {
       // Nothing was dispatched, so there is no intention to draw.
-      if (moveIntent === note) moveIntent = null;
+      if (note !== null && moveIntent === note) moveIntent = null;
+      if (logged !== null) finishAction(logged, 0, null, `transport: ${String(err)}`);
       throw err;
     },
   );
@@ -306,8 +513,12 @@ function drainHints(): ActionHintNote[] {
 
 // -------------------------------------------------------- ambient snippet API
 
-/** The eval whose async context we are in, if any. Set by `evaluate`. */
-const evalContext = new AsyncLocalStorage<{ signal: AbortSignal; deadline?: number; timeoutMs?: number }>();
+/**
+ * The eval whose async context we are in, if any. Set by `evaluate`. `evalId`
+ * is the host's id for it, which the action log groups by: a routine a snippet
+ * launched shares that snippet's context, and so its id.
+ */
+const evalContext = new AsyncLocalStorage<{ evalId: number; signal: AbortSignal; deadline?: number; timeoutMs?: number }>();
 const currentSignal = (): AbortSignal | undefined => evalContext.getStore()?.signal;
 /** When the host will abandon the snippet we are inside, if it said. */
 const currentDeadline = (): number | undefined => evalContext.getStore()?.deadline;
@@ -651,7 +862,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
     }
     fn ??= new AsyncFunction(compiled.statementsBody);
     const run = fn;
-    const value: unknown = await evalContext.run({ signal: controller.signal, deadline, timeoutMs }, () =>
+    const value: unknown = await evalContext.run({ evalId: id, signal: controller.signal, deadline, timeoutMs }, () =>
       run.call(globalThis),
     );
     const msg: ChildToHost = {
@@ -675,6 +886,9 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
         "the snippet returned a function it never called — call it (await fn()) or return its " +
         "result; nothing in that function body has run.";
     }
+    // The action log first, so the host has recorded what this snippet
+    // dispatched before its tool result exists.
+    flushActions(id);
     send(msg);
   } catch (err) {
     // An aborted eval's result is discarded host-side, and with it the one
@@ -693,6 +907,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
       const carried = typeof moveAbandon === "string" ? moveAbandon : thrown?.sleepAbandon;
       if (typeof carried === "string") abandonNote = carried;
     }
+    flushActions(id);
     // An aborted eval's result is discarded host-side; its logs must not go
     // with it — leave them in the buffer for the liveness pong that follows.
     send({
@@ -913,6 +1128,7 @@ function handle(msg: HostToChild | HostcallResult): void {
         const pong = (): void => {
           const note = abandonNote;
           abandonNote = undefined;
+          flushActions();
           send({
             t: "pong",
             id: msg.id,
@@ -951,6 +1167,7 @@ function handle(msg: HostToChild | HostcallResult): void {
       return;
     }
     case "shutdown":
+      flushActions();
       try {
         client.close();
       } catch {
