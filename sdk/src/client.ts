@@ -77,6 +77,7 @@ import {
   type QuestGiverQuestListData,
   type QuestGiverQuestDetailsData,
   type QuestGiverRequestItemsData,
+  type QuestGiverOfferRewardData,
   type QuestGiverStatusData,
   type QuestGiverStatusMultipleData,
   type RawField,
@@ -120,6 +121,7 @@ import {
   type CorpseLocation,
   type NearbyObject,
   type Point3,
+  type ItemInfo,
   type QuestGiverStatusName,
   type QuestLogEntry,
   type TalentState,
@@ -627,6 +629,14 @@ const CHAR_RESPONSE_HINTS: Record<number, string> = {
 };
 
 /**
+ * What `face` takes, said once for both of its refusals: the local one for a
+ * guid or name, and the module's `missing_face_target`.
+ */
+const FACE_TAKES =
+  "face takes an orientation in radians or an { x, y } point, not a guid or a name — " +
+  "to face a unit, pass its position: sdk.face({ x: unit.x, y: unit.y }) with the unit from state.units().";
+
+/**
  * One actionable sentence per request-error code, rendered into the
  * `WrathRequestError` message. Deterministic and model-agnostic: the same
  * pattern as `CHAR_RESPONSE_HINTS`, extended to the codes live runs actually
@@ -655,7 +665,7 @@ const ERROR_CODE_HINTS: Record<string, string> = {
   missing_guid:
     "this action needs a guid argument — get one from state.nearbyUnits() or state.closest(...)",
   missing_position: "move_to needs finite x, y and z numbers",
-  missing_face_target: "face needs either an orientation in radians or an { x, y } point",
+  missing_face_target: FACE_TAKES,
   missing_token: "the request body is missing its session token — call through the sdk client methods",
   missing_character: "createSession needs a character name",
   unknown_account:
@@ -695,8 +705,9 @@ const ERROR_CODE_HINTS: Record<string, string> = {
     "the module refused use_item for that bag/slot — the item there has no on-use spell and no quest to start, " +
     "or the slot is empty or shifted (slots move after looting/selling); check state.bag()",
   opcode_not_allowed:
-    "sdk.raw() only sends the CMSG_* names on the module's allowlist (module/PROTOCOL.md, \"raw\"); " +
-    "an opcode that already has a dedicated sdk method must go through that method",
+    "sdk.raw() sends only the CMSG_* opcodes on the module's raw allowlist, and this one is not on it — " +
+    "where an sdk method sends that opcode (castSpell, questAccept, ...) call the method, otherwise it cannot be sent; " +
+    "an aura you can cancel, a mount among them, goes with sdk.raw(\"CMSG_CANCEL_AURA\", [{ u32: spellId }])",
   invalid_payload:
     "the raw payload did not reach the module as whole hex bytes — pass a field list like " +
     "[{ u32: id }, { guid: unit.guid }] and let the SDK pack it",
@@ -1715,13 +1726,30 @@ const OFFERS_NOTHING: ReadonlySet<QuestGiverStatusName> = new Set([
 ]);
 
 /**
+ * One item on a reward window's choice list: the wire's `itemId` and `count`,
+ * joined to the item's tooltip when the client cache holds it (`item`, the
+ * same `ItemInfo` as `state.items`; the module queries every reward item it
+ * sees, so it is `undefined` only when that answer has not arrived yet).
+ */
+export interface QuestRewardChoice {
+  readonly index: number;
+  readonly itemId: number;
+  readonly count: number;
+  readonly name: string | undefined;
+  readonly quality: number | undefined;
+  readonly item: ItemInfo | undefined;
+}
+
+/**
  * The outcome of a turn-in. `not_complete` is the questgiver refusing while
  * the quest log agrees the objectives are unfinished; `wrong_questgiver` is
  * the refusal when the log says complete — another NPC ends this quest;
  * `not_ready` (the NPC's marker) and `too_far` (the distance) are local
  * pre-checks, nothing was sent; `inventory_full` is the server refusing to
  * hand over the reward — the quest is still in the log and can be turned in
- * again once a bag slot is free.
+ * again once a bag slot is free; `choose_reward` is the reward window offering
+ * a choice of items when no `rewardIndex` was passed — nothing was chosen, and
+ * the quest is still in the log.
  */
 export type QuestTurnInResult =
   | {
@@ -1730,6 +1758,14 @@ export type QuestTurnInResult =
       readonly questId: number;
       readonly xp: number;
       readonly money: number;
+    }
+  | {
+      readonly ok: false;
+      readonly status: "choose_reward";
+      readonly questId: number;
+      /** The window's choice rewards; `index` is the `rewardIndex` that takes each one. */
+      readonly choices: readonly QuestRewardChoice[];
+      readonly hint: string;
     }
   | {
       readonly ok: false;
@@ -1811,13 +1847,16 @@ const TRAINER_BUY_FAIL_HINTS: Record<number, string> = {
  */
 const TAXI_REPLY_HINTS: Record<number, string> = {
   1: "the server refused the flight without a reason (ERR_TAXIUNSPECIFIEDSERVERERROR); ask again",
-  2: "no flight path connects these two nodes for this character (ERR_TAXINOSUCHPATH); pick another destination from state.lastTaxiNodes(guid).known",
+  // At the pinned core this code is sent only for a source node the server
+  // does not know; two known nodes with no direct path get no reply at all
+  // (see activateTaxi's timeout).
+  2: "the server does not know the node this flight would start from (ERR_TAXINOSUCHPATH); reopen the window with showTaxiNodes(guid) and retry",
   3: "not enough money for the fare (ERR_TAXINOTENOUGHMONEY); state.money is what you have",
   4: "too far from the flight master, or it is not a flight master (ERR_TAXITOOFARAWAY); moveTo the NPC first, then reopen the window with showTaxiNodes(guid)",
   5: "no flight master is in interaction range (ERR_TAXINOVENDORNEARBY); moveTo the NPC and retry",
   6: "this character has not visited that node (ERR_TAXINOTVISITED) — a flight master only sells routes between nodes you have discovered on foot; the destination must be in state.lastTaxiNodes(guid).known",
   7: "you are busy (ERR_TAXIPLAYERBUSY): in combat, casting, or trading; wait and retry",
-  8: "you are already mounted (ERR_TAXIPLAYERALREADYMOUNTED); dismount first",
+  8: "you are already mounted (ERR_TAXIPLAYERALREADYMOUNTED); dismount first — sdk.raw(\"CMSG_CANCEL_AURA\", [{ u32: mountSpellId }]) cancels the mount's aura",
   9: "you are shapeshifted (ERR_TAXIPLAYERSHAPESHIFTED); cancel the form first",
   10: "you are moving (ERR_TAXIPLAYERMOVING); stop(), stand still a moment, retry",
   11: "the destination is the node you are standing at (ERR_TAXISAMENODE); pick another",
@@ -2817,8 +2856,21 @@ export class WrathClient {
    * into an orientation and echoes the one it used. Rejects with
    * `WrathRequestError` code `moving` while a move is running — stop first, or
    * supersede with `moveTo`.
+   *
+   * Unlike the calls that take a target, it takes no guid or name: facing a
+   * unit is facing its position, `face({ x: unit.x, y: unit.y })`. A string
+   * is refused here with that sentence and nothing sent (the operator kept
+   * the signature and asked for the docs and the error to say how, 2026-10-05,
+   * after a run passed a guid seven times).
    */
   face(orientationOrPoint: number | { x: number; y: number }): Promise<FaceResponse> {
+    if (typeof orientationOrPoint === "string") {
+      return Promise.reject(
+        new TypeError(
+          `face(${JSON.stringify(orientationOrPoint)}): ${FACE_TAKES} Nothing was sent.`,
+        ),
+      );
+    }
     const body =
       typeof orientationOrPoint === "number"
         ? { token: this.token, action: "face", orientation: orientationOrPoint }
@@ -5708,7 +5760,7 @@ export class WrathClient {
    * window straight from the hello, so the select step is skipped when the
    * window arrives first. The result is what `state.lastTaxiNodes(guid)`
    * holds: the node this master stands at and the nodes this character has
-   * visited (the only destinations the server will accept). Nothing here
+   * visited (the only destinations the server will accept, and only one flight path away). Nothing here
    * is a route or a fare; the way to learn whether two nodes connect is to
    * ask (`activateTaxi`).
    */
@@ -5783,7 +5835,13 @@ export class WrathClient {
         (e) => isEvent(e, "SMSG_ACTIVATETAXIREPLY") && !isDecodeError(e.data) && (sinceSeq === undefined || e.seq > sinceSeq),
         {
           timeout: options.timeout ?? 10_000,
-          description: `the SMSG_ACTIVATETAXIREPLY answering activateTaxi(${id}, ${JSON.stringify(dest)})`,
+          // Player::ActivateTaxiPathTo returns without a reply when no single
+          // flight path joins the two nodes; every other refusal is answered.
+          description:
+            `the SMSG_ACTIVATETAXIREPLY answering activateTaxi(${id}, ${JSON.stringify(dest)}) — the server sends ` +
+            `no reply when no direct flight path joins ${window.current.name ?? `node ${window.current.nodeId}`} and ` +
+            `${to.name ?? `node ${to.nodeId}`}: a destination two or more hops away is dropped without an answer, ` +
+            `even when you know it. Fly to a known node one hop toward it, then take the next flight from there.`,
         },
       );
       const reply = (event.data as ActivateTaxiReplyData).reply;
@@ -5914,11 +5972,20 @@ export class WrathClient {
    * done — that refusal means another NPC ends this quest. Nothing is sent when
    * the NPC's current marker already says no turn-in is ready there
    * (`not_ready`) or the cached positions put it out of reach (`too_far`).
+   *
+   * A reward window offering two or more choice items, with no `rewardIndex`
+   * passed, is not answered: the call returns `choose_reward` with the
+   * choices, as a client's window waits for the player to pick, and a second
+   * call with the index takes it. Defaulting to the first choice hid the
+   * choice entirely (operator decision, 2026-10-05). An explicit index, or a
+   * window with one choice or none, completes as before. A completable
+   * REQUEST_ITEMS carries no reward list, so that path still takes
+   * `rewardIndex ?? 0` without seeing the choices.
    */
   async turnInQuest(
     npcGuid: GuidOrUnit,
     questId: number,
-    rewardIndex = 0,
+    rewardIndex?: number,
     options: QuestOptions = {},
   ): Promise<WithResolved<QuestTurnInResult>> {
     return this.byName(npcGuid, "turnInQuest(npcGuid, questId)", async (npcId) => {
@@ -6005,7 +6072,19 @@ export class WrathClient {
           }
           // completable REQUEST_ITEMS: fall through and choose the reward.
         }
-        await this.questChooseReward(npcId, questId, rewardIndex);
+        if (answer.opcode === "SMSG_QUESTGIVER_OFFER_REWARD" && rewardIndex === undefined) {
+          const offer = answer.data as QuestGiverOfferRewardData;
+          if (offer.choiceRewards.length >= 2) {
+            const choices = await this.rewardChoices(offer, timeout);
+            const hint =
+              `the reward window offers ${choices.length} items to choose from and no rewardIndex was passed, so ` +
+              `nothing was chosen and the quest is still in your log — call turnInQuest(npc, ${questId}, index) ` +
+              `with the index of the one you want`;
+            this.noteActionHint("turnInQuest", "choose_reward", hint);
+            return { ok: false, status: "choose_reward", questId, choices, hint };
+          }
+        }
+        await this.questChooseReward(npcId, questId, rewardIndex ?? 0);
         // Raced against the completion: a reward that does not fit answers the
         // choose with SMSG_INVENTORY_CHANGE_FAILURE and *no* completion — before
         // this race, a full bag was indistinguishable from silence and burned
@@ -6217,6 +6296,28 @@ export class WrathClient {
       level: this.state.quests.get(single.questId)?.value.level,
     };
     return { quests: [row] };
+  }
+
+  /**
+   * A reward window's choice list joined to the item tooltips. The module
+   * fires the item queries as it decodes the window, so their answers trail
+   * it by a round trip: wait for them a little (at most a second, inside the
+   * caller's timeout), then report what has arrived — a missing tooltip is
+   * `item: undefined`, never a guess.
+   */
+  private async rewardChoices(offer: QuestGiverOfferRewardData, timeout: number): Promise<QuestRewardChoice[]> {
+    const ids = offer.choiceRewards.map((c) => c.itemId);
+    await this.waitForState(
+      () => (ids.every((id) => this.state.items.has(id)) ? true : undefined),
+      Math.min(1000, timeout),
+      "the reward items' tooltips",
+    ).catch((e: unknown) => {
+      if (!(e instanceof EventTimeoutError)) throw e;
+    });
+    return offer.choiceRewards.map((c, index) => {
+      const item = this.state.items.get(c.itemId)?.value;
+      return { index, itemId: c.itemId, count: c.count, name: item?.name, quality: item?.quality, item };
+    });
   }
 
   /**

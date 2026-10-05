@@ -436,7 +436,8 @@ export interface TaxiNodeRef {
  * The flight master's window last observed for one NPC: the fold of the last
  * `SMSG_SHOWTAXINODES` for that guid. `current` is the node the master
  * stands at (what `activateTaxi` sends as the source), `known` the nodes this
- * character has visited — the only destinations the server will accept.
+ * character has visited — the only destinations the server will accept, and only one
+ * flight path from `current` (a farther one gets no reply).
  * `mask` is the taximask verbatim. Nothing here is a route or a fare.
  */
 export interface TaxiWindow {

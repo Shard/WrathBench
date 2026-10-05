@@ -1139,6 +1139,20 @@ describe("client: movement", () => {
     client.close();
     await stub.stop();
   });
+
+  test("face refuses a guid or a name locally and says to pass the unit's position", async () => {
+    const stub = startStub();
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    const sent = stub.actions.length;
+    // The signature takes a number or a point; a model passing a guid is the case under test.
+    const err = (await client.face(CREATURE_GUID as unknown as number).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(TypeError);
+    expect(err.message).toContain("not a guid or a name");
+    expect(err.message).toContain("sdk.face({ x: unit.x, y: unit.y })");
+    expect(stub.actions.length).toBe(sent);
+    client.close();
+    await stub.stop();
+  });
 });
 
 describe("client: waiting on the world", () => {
@@ -2025,6 +2039,54 @@ describe("client: quests", () => {
     await stub.stop();
   });
 
+  test("a reward window with a choice and no index returns the choices and chooses nothing", async () => {
+    const OTHER_ITEM = ITEM_ENTRY + 1;
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, undefined, { timeout: 2000 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 78, [{ itemId: ITEM_ENTRY, count: 1 }, { itemId: OTHER_ITEM, count: 2 }])));
+    // The module's item query for the first choice answers; the second's has not arrived.
+    stub.push(JSON.stringify({ ...itemQuery, seq: 79 }));
+    const result = await pending;
+    if (result.ok || result.status !== "choose_reward") throw new Error(`unexpected ${JSON.stringify(result)}`);
+    expect(result.choices.map(({ item: _item, ...rest }) => rest)).toEqual([
+      { index: 0, itemId: ITEM_ENTRY, count: 1, name: "Gritstone Charm", quality: 1 },
+      { index: 1, itemId: OTHER_ITEM, count: 2, name: undefined, quality: undefined },
+    ]);
+    expect(result.choices[0]?.item?.sellPrice).toBe(40);
+    expect(result.choices[1]?.item).toBeUndefined();
+    expect(result.hint).toContain(`turnInQuest(npc, ${QUEST_ID}, index)`);
+    expect(stub.actions.map((a) => a.action)).not.toContain("quest_choose_reward");
+    expect(client.drainActionHints()[0]).toMatchObject({ action: "turnInQuest", status: "choose_reward" });
+
+    // The second call, with the index, takes it.
+    const from = stub.actions.length;
+    const again = client.turnInQuest(CREATURE_GUID, QUEST_ID, 1, { timeout: 2000 });
+    await untilAction(stub, "quest_complete", from);
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 80, [{ itemId: ITEM_ENTRY, count: 1 }, { itemId: OTHER_ITEM, count: 2 }])));
+    const at = await untilAction(stub, "quest_choose_reward", from);
+    expect(stub.actions[at]).toMatchObject({ rewardIndex: 1 });
+    stub.push(JSON.stringify(questRewarded(QUEST_ID, 81)));
+    expect(await again).toMatchObject({ ok: true, status: "complete" });
+    client.close();
+    await stub.stop();
+  });
+
+  test("a reward window with one choice and no index completes as before", async () => {
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, undefined, { timeout: 2000 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 78)));
+    const at = await untilAction(stub, "quest_choose_reward");
+    expect(stub.actions[at]).toMatchObject({ rewardIndex: 0 });
+    stub.push(JSON.stringify(questRewarded(QUEST_ID, 79)));
+    expect(await pending).toMatchObject({ ok: true, status: "complete" });
+    client.close();
+    await stub.stop();
+  });
+
   test("a completable REQUEST_ITEMS goes straight to the reward choice", async () => {
     // Re-asking with quest_complete gets REQUEST_ITEMS again forever on
     // item-delivery quests (roster-opus-20260822): the reward is chosen
@@ -2850,6 +2912,21 @@ describe("client: flight master window and activateTaxi", () => {
     const hints = client.drainActionHints();
     expect(hints).toHaveLength(1);
     expect(hints[0]).toMatchObject({ action: "activateTaxi", status: "refused", count: 1 });
+    client.close();
+    await stub.stop();
+  });
+
+  test("activateTaxi: the silence a destination two hops away gets is explained, naming both nodes", async () => {
+    // Player::ActivateTaxiPathTo returns without a reply when no single path
+    // joins the two nodes, so ERR_TAXINOSUCHPATH never names that case.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(window(345));
+    await client.events.waitForOpcode("SMSG_SHOWTAXINODES", { timeout: 2000 });
+    const err = (await client.activateTaxi(CREATURE_GUID, 8, { timeout: 60 }).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect(err.message).toContain("no direct flight path joins Ironforge, Dun Morogh and Thelsamar, Loch Modan");
+    expect(err.message).toContain("one hop toward it");
     client.close();
     await stub.stop();
   });

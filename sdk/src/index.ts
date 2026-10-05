@@ -40,6 +40,8 @@ export type {
   MoveToOptions,
   QuestAcceptResult,
   QuestOptions,
+  QuestOfferRow,
+  QuestRewardChoice,
   QuestsAvailableResult,
   QuestTurnInResult,
   UseItemResult,
