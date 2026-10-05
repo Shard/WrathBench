@@ -318,12 +318,14 @@ Without `guid` the ground z is tried only after a `target_off_mesh`. Either way
 a target the mesh rejects at both heights is still `target_off_mesh`, and
 `meshZ` is reported relative to the z asked for.
 
-Optional `force` (boolean): walk a route that steps off a ledge instead of
-refusing it as `drop` (statuses below). A forced downward step is walked the
-way a client's character walks off an edge — a heartbeat at the edge, nothing
+Optional `force` (boolean): walk a route that steps *down* off a ledge instead
+of refusing it as `drop` (statuses below). The step is walked the way a
+client's character walks off an edge — a heartbeat at the edge, nothing
 during the fall, `MSG_MOVE_FALL_LAND` at the foot — so the server charges the
-fall through its own `Player::HandleFall`, as it would a client's; a forced
-step up sends nothing extra. The module never judges whether a fall is
+fall through its own `Player::HandleFall`, as it would a client's. `force`
+does not apply to a step *up*: a client cannot walk up a ledge the mesh calls
+a climb, and such a route is refused as `drop` (positive `dz`) whatever the
+request says. The module never judges whether a fall is
 survivable: that is a game rule, and the SDK's `moveTo` applies it from the
 facts a `drop` carries (`dz`, `safeFall`) and the character's own health
 before deciding to re-issue with `force`.
@@ -888,11 +890,12 @@ at the top of this document.
   SDK estimates the fall from `dz` and `safeFall` against the character's own
   health and re-issues with `force` unless it would take about four fifths
   of current health or more (a ghost takes no fall damage, so a corpse run is
-  never refused); a step *up* is never taken without `force`. With `force`
-  the route is walked and the fall, if any, is the server's. The same guard
-  runs per segment while walking; a ledge that slips past planning stops the
-  character at the edge with the same status and `pos` at the edge, or, on a
-  forced move, is walked with the client's fall packets.
+  never refused). With `force` a downward route is walked and the fall is the
+  server's. A step *up* (positive `dz`) is refused forced or not: no client
+  walks up a ledge. The same guard runs per segment while walking; a ledge
+  that slips past planning stops the character at the edge with the same
+  status and `pos` at the edge, or, on a forced downward one, is walked with
+  the client's fall packets.
 - `transferred` — a map transfer took the character mid-move (an areatrigger
   portal, a cross-map port); the server applies the destination itself. `pos`
   is the last old-map position; the new map and arrival point follow on

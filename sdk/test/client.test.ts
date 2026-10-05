@@ -968,7 +968,10 @@ describe("client: movement", () => {
       await stub.stop();
     });
 
-    test("a step up is never taken on its own; the hint names it and the override", async () => {
+    test("a step up is refused, forced or not, and the hint says force does not apply to climbs", async () => {
+      const climb =
+        "the route climbs a 5.0-yard step at (9.2, 19.5) that cannot be walked up, so the character stopped at " +
+        "the edge; force does not apply to climbs. Pick a destination on this level, or find the ramp/stairs.";
       const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
       const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
       await client.createSession({ character: "Fenwick" });
@@ -977,11 +980,16 @@ describe("client: movement", () => {
       const r = await p;
       expect(r.ok).toBe(false);
       expect(r.status).toBe("drop");
-      expect(r.hint).toContain(
-        "the route climbs a 5.0-yard step at (9.2, 19.5), too steep to walk up; the character stopped at the edge. " +
-          "Pick a destination on this level, find the ramp/stairs, or pass { force: true } to moveTo to try the step anyway.",
-      );
+      expect(r.hint).toContain(climb);
       expect(stub.actions.map((a) => a.action)).toEqual(["move_to", "stop"]);
+      // Forced: the module refuses the climb the same way, and the SDK neither re-issues nor offers force.
+      const p2 = client.moveTo({ x: 11, y: 20, z: 5.7 }, { timeout: 2000, force: true });
+      stub.push(JSON.stringify(dropAt(2, 31, 5)));
+      const r2 = await p2;
+      expect(r2.ok).toBe(false);
+      expect(r2.hint).toContain(climb);
+      expect(r2.hint).not.toContain("force: true");
+      expect(stub.actions.filter((a) => a.action === "move_to")).toHaveLength(2);
       client.close();
       await stub.stop();
     });

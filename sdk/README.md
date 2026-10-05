@@ -256,8 +256,9 @@ against current health. A fall that would cost less than `DROP_BLOCK_FRACTION`
 (0.8) of current health is taken — the move is re-issued with `force` and the
 arrival's `hint` says what it cost — and a ghost always is, since the dead take
 no fall damage. Otherwise the result is `drop`, the hint carries the estimate,
-and `moveTo(target, { force: true })` takes it anyway. A step the route would
-climb is never taken without `force`. The split is deliberate: the module
+and `moveTo(target, { force: true })` takes it anyway. `force` applies to drops
+only: a step the route would climb is refused forced or not, since no client
+walks up a ledge, and its hint says so. The split is deliberate: the module
 reports the ledge and walks it on request with the fall packets a client
 sends, so the server charges the fall; what a fall costs is a game rule and
 lives here.

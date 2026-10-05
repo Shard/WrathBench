@@ -838,8 +838,9 @@ export interface MoveToOptions {
    * `DROP_BLOCK_FRACTION` of current health (a ghost always; nothing under
    * `FALL_MIN_DAMAGE_DIST` yards hurts), and answers `drop` otherwise. With
    * it the ledge is walked whatever the estimate — the fall is then the
-   * server's to charge, as it would a client's — and so is a step too steep
-   * to walk up, which the mesh connects but no default takes.
+   * server's to charge, as it would a client's. It applies to drops only: a
+   * step too steep to walk up is refused forced or not, since no client walks
+   * up a ledge.
    */
   force?: boolean;
 }
@@ -1004,6 +1005,7 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `another side.`,
   drop: (p, d) => {
     const edge = d.reachedPos ?? d.pos;
+    if (d.dz !== undefined && d.dz > 0) return climbHint(d.dz, edge);
     const n = d.dz === undefined ? "several" : Math.abs(d.dz).toFixed(1);
     return (
       `the route to (${fmtXY(p)}, z ${p.z.toFixed(1)}) steps off a ledge of ${n} yards at (${fmtXY(edge)}); ` +
@@ -1063,17 +1065,22 @@ export interface DropJudgement {
   readonly note: string;
 }
 
+/** A `drop` whose step goes up: refused whatever the caller asked, since no client walks up a ledge. */
+function climbHint(dz: number, edge: { x: number; y: number }): string {
+  return (
+    `the route climbs a ${Math.abs(dz).toFixed(1)}-yard step at (${fmtXY(edge)}) that cannot be walked up, so the ` +
+    `character stopped at the edge; force does not apply to climbs. Pick a destination on this level, or find ` +
+    `the ramp/stairs.`
+  );
+}
+
 export function judgeDrop(state: StateCache, d: MoveResultData): DropJudgement {
   const edge = d.reachedPos ?? d.pos;
   const dz = d.dz ?? 0;
   const height = -dz;
   const where = `(${fmtXY(edge)})`;
   if (height <= 0) {
-    return {
-      take: false,
-      height,
-      note: `the route climbs a ${Math.abs(height).toFixed(1)}-yard step at ${where}, too steep to walk up`,
-    };
+    return { take: false, height, note: climbHint(dz, edge) };
   }
   const h = height.toFixed(1);
   if (state.self.ghost?.value === true) {
@@ -1108,12 +1115,7 @@ export function judgeDrop(state: StateCache, d: MoveResultData): DropJudgement {
 /** The `drop` hint when the SDK judged the fall and left the character at the edge. */
 export function dropRefusalHint(p: MovePoint, d: MoveResultData, j: DropJudgement): string {
   const edge = d.reachedPos ?? d.pos;
-  if (j.height <= 0) {
-    return (
-      `${j.note}; the character stopped at the edge. Pick a destination on this level, find the ` +
-      `ramp/stairs, or pass { force: true } to moveTo to try the step anyway.`
-    );
-  }
+  if (j.height <= 0) return j.note;
   return (
     `the route to (${fmtXY(p)}, z ${p.z.toFixed(1)}) steps off a ledge of ${j.height.toFixed(1)} yards at ` +
     `(${fmtXY(edge)}); ${j.note}, so the character stopped at the edge. Pass { force: true } to moveTo to take ` +

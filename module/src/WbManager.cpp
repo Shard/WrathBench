@@ -1635,12 +1635,15 @@ namespace WrathBench
         // Per-segment drop guard over the whole polyline (the main path and,
         // when spliced, the leg2 continuation): the walk is not dispatched.
         // `points` is kept so the move_path audit shows the route that fell.
-        // A forced request skips it: the ledge is walked and the fall is the
-        // server's to judge (TickMover sends the landing a client would).
-        for (size_t i = 0; !force && i + 1 < r.points.size(); ++i)
+        // A forced request walks a downward step: the fall is the server's
+        // to judge (TickMover sends the landing a client would). A step up is
+        // refused whatever the request says — a client's character cannot
+        // walk up a ledge the mesh calls a climb, and heartbeats that climb
+        // it are the server-side shortcut the contract forbids.
+        for (size_t i = 0; i + 1 < r.points.size(); ++i)
         {
             float dz = 0.0f;
-            if (IsDropSegment(r.points[i], r.points[i + 1], &dz))
+            if (IsDropSegment(r.points[i], r.points[i + 1], &dz) && (!force || dz > 0.0f))
             {
                 r.status = "drop";
                 r.hasReached = true;
@@ -3049,14 +3052,14 @@ namespace WrathBench
             // start, Player::UpdateFallInformationIfNeed), nothing is sent
             // during the fall, and the foot of the segment is reported with
             // MSG_MOVE_FALL_LAND, on which the server charges the fall
-            // (Player::HandleFall) exactly as it would a client's. A forced
-            // climb has nothing to land from and sends nothing extra.
+            // (Player::HandleFall) exactly as it would a client's. A climb is
+            // refused forced or not: no client walks up a ledge.
             if (m.segDone <= 0.0f)
             {
                 float dz = 0.0f;
                 if (IsDropSegment(a, b, &dz))
                 {
-                    if (!m.force)
+                    if (!m.force || dz > 0.0f)
                     {
                         m.curX = a.x; m.curY = a.y; m.curZ = a.z;
                         SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.curX, m.curY, m.curZ, m.curO,
