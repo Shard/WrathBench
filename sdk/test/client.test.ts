@@ -2390,6 +2390,19 @@ describe("client: questsAvailableFrom", () => {
     await stub.stop();
   });
 
+  test("a silence from an NPC marked available says no quest window came back, not that it offers something unseen", async () => {
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 8, 98))); // available
+    await client.events.waitFor((e) => e.seq === 98, { timeout: 2000 });
+    const err = (await client.questsAvailableFrom(CREATURE_GUID, { timeout: 60 }).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(EventTimeoutError);
+    expect(err.message).toContain("no quest window came back — check events.recent() for what did arrive");
+    expect(err.message).not.toContain("nothing to give");
+    client.close();
+    await stub.stop();
+  });
+
   test("silence throws rather than reporting an empty offer", async () => {
     const stub = startStub({ onConnect: () => questWorld() });
     const client = await inWorld(stub);

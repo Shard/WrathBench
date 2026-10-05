@@ -2861,7 +2861,7 @@ export class WrathClient {
    * unit is facing its position, `face({ x: unit.x, y: unit.y })`. A string
    * is refused here with that sentence and nothing sent (the operator kept
    * the signature and asked for the docs and the error to say how, 2026-10-05,
-   * after a run passed a guid seven times).
+   * after runs passed a guid and lost the call).
    */
   face(orientationOrPoint: number | { x: number; y: number }): Promise<FaceResponse> {
     if (typeof orientationOrPoint === "string") {
@@ -6208,8 +6208,8 @@ export class WrathClient {
    * (`Player::SendPreparedQuest`): `SMSG_QUESTGIVER_QUEST_DETAILS` for an
    * offer, or `_REQUEST_ITEMS` / `_OFFER_REWARD` for a quest in the log it
    * ends or one that completes on the spot. Before these were read, every such
-   * NPC timed out although the server had answered, and a run took about
-   * half its quests by hand with the raw questDetails + questAccept.
+   * NPC timed out although the server had answered, and runs fell back to
+   * the raw questDetails + questAccept.
    *
    * The list shapes match on opcode and a `sinceSeq` floor, not on the
    * event's guid: that is how `acceptQuestFrom` has always behaved, and
