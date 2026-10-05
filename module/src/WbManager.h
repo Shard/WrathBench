@@ -336,6 +336,8 @@ namespace WrathBench
             float reachedX{0}, reachedY{0}, reachedZ{0};
             bool hasDrop{false};        // drop: the vertical step the polyline takes past reachedPos
             float dropDz{0};
+            bool hasSnap{false};        // the start was off the mesh and was snapped to the nearest point
+            float snapX{0}, snapY{0}, snapZ{0};
         };
         // One pass of the cause ladder at x,y,z; reqZ is the z the agent asked
         // for (meshZ is reported relative to it).

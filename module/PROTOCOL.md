@@ -855,9 +855,15 @@ at the top of this document.
   mesh's search box (4y in 2D; z is searched ±50y, so a stale z alone never
   produces this), or it sits inside geometry. Pick a point on a road, a floor,
   or where an NPC stands.
-- `start_off_mesh` — the character itself is standing somewhere the mesh does
-  not cover (a transport deck, a bad landing). Recovery is different from
-  `target_off_mesh`: a few yards of movement, or a disembark, fixes the start.
+- `start_off_mesh` — the character is standing off the mesh and no walkable
+  mesh lies within 10y of it (a transport deck, a bad landing). A start off
+  the mesh with mesh within 10y is not a failure: the module paths from the
+  nearest mesh point and prepends the straight walk onto it from the true
+  position — what a client's character does, since only the pathfinder is
+  mesh-bound — and the walk is dispatched (audited as `op: "move_start_snap"`
+  with the point and distance); the drop guard judges that first leg like
+  any other. Recovery from the failure is different from `target_off_mesh`:
+  more than a few yards of movement, or a disembark, fixes the start.
 - `path_incomplete` — the mesh has no continuous walkable route to the
   destination. The module already tried once to subdivide (path to where the
   mesh got, then onward); `reachedPos` is how far the mesh could get, so the
@@ -1374,6 +1380,8 @@ dispatched movement packet (`op: "move_pkt"` with the opcode and position;
 `cause: "drop"` on the stop at a refused ledge, `cause: "drop_forced"` on the
 edge heartbeat and the `MSG_MOVE_FALL_LAND` of a forced one), so the packet
 sequence the "client" sent is fully reconstructable from the audit log.
+A move whose start the mesh does not cover logs `op: "move_start_snap"` with
+`from` (the true position), `to` (the nearest mesh point) and `distance`.
 Each `move_to` that reaches the mesh also logs one `op: "move_path"` record at
 dispatch — `moveId`, `status` (`"ok"` when the walk was dispatched, else the
 `WB_MOVE_RESULT` status), `pointCount`, and `points` (the resolved polyline,

@@ -1405,6 +1405,38 @@ namespace WrathBench
         return navMesh->getTileAt(tx, ty, 0) != nullptr;
     }
 
+    // The closest point on the walkable mesh to (x, y, z) within `radius`
+    // yards in 2D (and the core's own +-50y vertically), through the map's
+    // Detour query with the filter PathGenerator gives a player
+    // (NAV_GROUND | NAV_WATER | NAV_MAGMA). Detour considers at most 128
+    // polygons in the box, so in a dense interior the point found is a
+    // walkable one near the request rather than provably the nearest. False
+    // when no polygon lies in the box. Detour's axis order is (y, z, x).
+    static bool NearestMeshPoint(Player* player, float x, float y, float z, float radius, WbVec& out)
+    {
+        dtNavMeshQuery const* query = player->GetMap()->GetMapCollisionData().GetMMapData().GetNavMeshQuery();
+        if (!query)
+            return false;
+        dtQueryFilter filter;
+        filter.setIncludeFlags(NAV_GROUND | NAV_WATER | NAV_MAGMA);
+        filter.setExcludeFlags(0);
+        float point[3] = { y, z, x };
+        float extents[3] = { radius, 50.0f, radius };
+        float closest[3] = { 0.0f, 0.0f, 0.0f };
+        dtPolyRef ref = 0;
+        if (dtStatusFailed(query->findNearestPoly(point, extents, &filter, &ref, closest)) || ref == 0)
+            return false;
+        out = { closest[2], closest[0], closest[1] };
+        return true;
+    }
+
+    // How far from its own position the mover looks for walkable mesh when
+    // the character stands off it (a graveyard tile the mesh misses, a wedge
+    // after a fall, the air over a platform). 10y: a few yards past the 7y
+    // at which the core itself calls a start far from any polygon. One run
+    // spent 51 hours as a ghost on such a tile, every move refused.
+    static constexpr float START_SNAP_RADIUS = 10.0f;
+
     static bool IsCompletePath(PathType type, Movement::PointsArray const& pts)
     {
         return (type & PATHFIND_NORMAL)
@@ -1475,19 +1507,41 @@ namespace WrathBench
             return r;
         }
 
+        // The start: the character's own position when the mesh covers it,
+        // else the nearest mesh point within START_SNAP_RADIUS, with the true
+        // position prepended to the route so the first leg is the straight
+        // walk onto the mesh a client's character would make (a client is not
+        // mesh-bound; only the pathfinder is). A path from the character to
+        // itself is NORMAL exactly when the start is on the mesh; the core
+        // does not otherwise say which end of a failed path was off it.
+        float sx = player->GetPositionX(), sy = player->GetPositionY(), sz = player->GetPositionZ();
+        {
+            PathGenerator probe(player);
+            probe.CalculatePath(sx, sy, sz, false);
+            if (probe.GetPathType() & (PATHFIND_NOT_USING_PATH | PATHFIND_FARFROMPOLY_START))
+            {
+                WbVec near;
+                if (!NearestMeshPoint(player, sx, sy, sz, START_SNAP_RADIUS, near))
+                {
+                    r.status = "start_off_mesh";
+                    return r;
+                }
+                r.hasSnap = true;
+                r.snapX = near.x; r.snapY = near.y; r.snapZ = near.z;
+                sx = near.x; sy = near.y; sz = near.z;
+            }
+        }
+
         PathGenerator gen(player);
-        bool built = gen.CalculatePath(x, y, z, false);
+        bool built = gen.CalculatePath(sx, sy, sz, x, y, z, false);
         PathType type = gen.GetPathType();
         Movement::PointsArray const& pts = gen.GetPath();
 
         if (!built || (type & PATHFIND_NOT_USING_PATH))
         {
-            // No poly under one end. The core does not say which, so ask it
-            // about the start alone: a path from the character to itself is
-            // NORMAL when the start is on the mesh.
-            PathGenerator probe(player);
-            probe.CalculatePath(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), false);
-            r.status = (probe.GetPathType() & PATHFIND_NOT_USING_PATH) ? "start_off_mesh" : "target_off_mesh";
+            // The start is on the mesh (or snapped onto it), so the poly
+            // missing is under the target.
+            r.status = "target_off_mesh";
             return r;
         }
         if (type & PATHFIND_FARFROMPOLY_START)
@@ -1566,6 +1620,8 @@ namespace WrathBench
             r.status = "path_incomplete";
             return r;
         }
+        if (r.hasSnap)
+            r.points.insert(r.points.begin(), { player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() });
         // Per-segment drop guard over the whole polyline (the main path and,
         // when spliced, the leg2 continuation): the walk is not dispatched.
         // `points` is kept so the move_path audit shows the route that fell.
@@ -1768,6 +1824,12 @@ namespace WrathBench
                 if (usedGroundZ)
                     Audit(*s, "action", Json::Writer().Add("op", "move_ground_z").Add("moveId", moveId)
                         .Add("unitTarget", !guid.empty()).Add("z", (double)z).Add("groundZ", (double)groundZ).Str());
+                if (r.hasSnap)
+                    Audit(*s, "action", Json::Writer().Add("op", "move_start_snap").Add("moveId", moveId)
+                        .Raw("from", PosJson(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation()))
+                        .Raw("to", Json::Writer().Add("x", (double)r.snapX).Add("y", (double)r.snapY).Add("z", (double)r.snapZ).Str())
+                        .Add("distance", (double)std::sqrt(std::pow(r.snapX - player->GetPositionX(), 2.0f) + std::pow(r.snapY - player->GetPositionY(), 2.0f) + std::pow(r.snapZ - player->GetPositionZ(), 2.0f)))
+                        .Str());
             }
         }
         // The resolved polyline, at dispatch, so a diagnosis reads the route
