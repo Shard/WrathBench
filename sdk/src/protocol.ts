@@ -760,6 +760,8 @@ export const moveResultDataSchema = z.looseObject({
   dz: z.number().optional(),
   /** `drop` only: the requested point, echoed. */
   target: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).optional(),
+  /** `drop` only, when non-zero: the character's own fall-height reduction (Safe Fall), in yards. */
+  safeFall: z.number().optional(),
   /** Present when the character ended the move aboard a transport the server is carrying it on. */
   onTransport: z.looseObject({ guid: guidSchema, entry: z.number() }).optional(),
 });

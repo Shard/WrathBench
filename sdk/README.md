@@ -224,6 +224,20 @@ Two things still throw:
   only when it describes the SDK declining to act (`unknown_target`, `lost`)
   — never a renamed or inferred server outcome.
 
+A route that steps off a ledge comes back from the module as `drop` with the
+edge and the step. `moveTo` judges the fall before passing that on: the
+server's own fall-damage rule (free under 13.48y, then a share of max health
+rising with height, less the character's Safe Fall — `estimateFallDamage`)
+against current health. A fall that would cost less than `DROP_BLOCK_FRACTION`
+(0.8) of current health is taken — the move is re-issued with `force` and the
+arrival's `hint` says what it cost — and a ghost always is, since the dead take
+no fall damage. Otherwise the result is `drop`, the hint carries the estimate,
+and `moveTo(target, { force: true })` takes it anyway. A step the route would
+climb is never taken without `force`. The split is deliberate: the module
+reports the ledge and walks it on request with the fall packets a client
+sends, so the server charges the fall; what a fall costs is a game rule and
+lives here.
+
 A `moveTo` issued while another is running supersedes it, and the older call
 returns `status: "superseded"`. `stop()` returns as soon as the module has
 queued the `MSG_MOVE_STOP` — it does *not* wait for the character to halt; it is

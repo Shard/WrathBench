@@ -842,7 +842,11 @@ namespace WrathBench
             // ground under it before pathing, see ResolvePath); never a
             // lookup, the request still walks to x,y.
             std::string guid = req.GetString("guid");
-            PushTask([this, token, x, y, z, guid, ack]() { DoMoveTo(token, x, y, z, guid, ack); });
+            // Optional: walk a route that steps off a ledge instead of
+            // refusing it (PROTOCOL.md, `drop`). The fall then happens on the
+            // server, as it would for a client that walked off the edge.
+            bool force = req.GetBool("force");
+            PushTask([this, token, x, y, z, guid, force, ack]() { DoMoveTo(token, x, y, z, guid, force, ack); });
         }
         else if (action == "stop")
         {
@@ -1426,6 +1430,18 @@ namespace WrathBench
         return std::fabs(dz) > DROP_MIN_DZ && std::fabs(dz) > DROP_SLOPE * d2;
     }
 
+    // The character's own fall-height reduction (SPELL_AURA_SAFE_FALL, the
+    // rogue's Safe Fall and the like), in yards, served on a `drop` so the
+    // caller can estimate the fall the way Player::HandleFall will charge it.
+    // An aura on self is what the client's own buff frame shows; the number
+    // is the client's Spell.dbc reading of it. Omitted when zero.
+    static void AddSafeFall(Json::Writer& w, Player* player)
+    {
+        int32 safeFall = player->GetTotalAuraModifier(SPELL_AURA_SAFE_FALL);
+        if (safeFall > 0)
+            w.Add("safeFall", (uint32)safeFall);
+    }
+
     // Audit shape of a resolved polyline (op: move_path), capped so a 200-point
     // sweep does not flood the log; `truncated` says when the cap bit.
     static std::string PathPointsJson(std::vector<WbVec> const& pts, size_t cap = 64)
@@ -1448,7 +1464,7 @@ namespace WrathBench
     // missing tile inside NORMAL|NOT_USING_PATH; the endpoint check is 2D so
     // that a stale z in the request is the mesh's problem (meshZ), not the
     // agent's.
-    Manager::PathResolve Manager::ResolvePathAt(Player* player, float x, float y, float z, float reqZ)
+    Manager::PathResolve Manager::ResolvePathAt(Player* player, float x, float y, float z, float reqZ, bool force)
     {
         PathResolve r;
         dtNavMesh const* navMesh = player->GetMap()->GetMapCollisionData().GetMMapData().GetNavMesh();
@@ -1553,7 +1569,9 @@ namespace WrathBench
         // Per-segment drop guard over the whole polyline (the main path and,
         // when spliced, the leg2 continuation): the walk is not dispatched.
         // `points` is kept so the move_path audit shows the route that fell.
-        for (size_t i = 0; i + 1 < r.points.size(); ++i)
+        // A forced request skips it: the ledge is walked and the fall is the
+        // server's to judge (TickMover sends the landing a client would).
+        for (size_t i = 0; !force && i + 1 < r.points.size(); ++i)
         {
             float dz = 0.0f;
             if (IsDropSegment(r.points[i], r.points[i + 1], &dz))
@@ -1586,7 +1604,7 @@ namespace WrathBench
     // a `target_off_mesh` for any point. A target the mesh rejects at both its
     // own z and the ground z is still `target_off_mesh`; `meshZ` is always
     // relative to the z the agent asked for.
-    Manager::PathResolve Manager::ResolvePath(Player* player, float x, float y, float z, bool unitTarget, bool* usedGroundZ, float* groundZOut)
+    Manager::PathResolve Manager::ResolvePath(Player* player, float x, float y, float z, bool unitTarget, bool* usedGroundZ, float* groundZOut, bool force)
     {
         if (usedGroundZ) *usedGroundZ = false;
         float groundZ = player->GetMap()->GetHeight(player->GetPhaseMask(), x, y, z, true);
@@ -1597,18 +1615,18 @@ namespace WrathBench
 
         if (unitTarget && haveGround)
         {
-            PathResolve r = ResolvePathAt(player, x, y, groundZ, z);
+            PathResolve r = ResolvePathAt(player, x, y, groundZ, z, force);
             if (!isTargetOffMesh(r))
             {
                 if (usedGroundZ) *usedGroundZ = true;
                 return r;
             }
-            return ResolvePathAt(player, x, y, z, z);
+            return ResolvePathAt(player, x, y, z, z, force);
         }
-        PathResolve r = ResolvePathAt(player, x, y, z, z);
+        PathResolve r = ResolvePathAt(player, x, y, z, z, force);
         if (isTargetOffMesh(r) && haveGround)
         {
-            PathResolve r2 = ResolvePathAt(player, x, y, groundZ, z);
+            PathResolve r2 = ResolvePathAt(player, x, y, groundZ, z, force);
             if (!isTargetOffMesh(r2))
             {
                 if (usedGroundZ) *usedGroundZ = true;
@@ -1654,12 +1672,14 @@ namespace WrathBench
             w.Raw("reachedPos", Json::Writer().Add("x", (double)m.curX).Add("y", (double)m.curY).Add("z", (double)m.curZ).Str());
             w.Add("dz", (double)m.dropDz);
             w.Raw("target", Json::Writer().Add("x", (double)m.reqX).Add("y", (double)m.reqY).Add("z", (double)m.reqZ).Str());
+            if (player)
+                AddSafeFall(w, player);
         }
         m.hasDrop = false;
         EmitEvent(s, "WB_MOVE_RESULT", 0xFF01, w.Str());
     }
 
-    void Manager::DoMoveTo(std::string token, float x, float y, float z, std::string guid, std::shared_ptr<std::promise<HttpReply>> ack)
+    void Manager::DoMoveTo(std::string token, float x, float y, float z, std::string guid, bool force, std::shared_ptr<std::promise<HttpReply>> ack)
     {
         auto s = FindByToken(token);
         Player* player = CheckActionSession(s, ack);
@@ -1671,6 +1691,8 @@ namespace WrathBench
             a.Add("op", "move_to").Add("x", (double)x).Add("y", (double)y).Add("z", (double)z);
             if (!guid.empty())
                 a.Add("guid", guid);
+            if (force)
+                a.Add("force", true);
             Audit(*s, "action", a.Str());
         }
 
@@ -1742,7 +1764,7 @@ namespace WrathBench
             else
             {
                 bool usedGroundZ = false; float groundZ = z;
-                r = ResolvePath(player, x, y, z, !guid.empty(), &usedGroundZ, &groundZ);
+                r = ResolvePath(player, x, y, z, !guid.empty(), &usedGroundZ, &groundZ, force);
                 if (usedGroundZ)
                     Audit(*s, "action", Json::Writer().Add("op", "move_ground_z").Add("moveId", moveId)
                         .Add("unitTarget", !guid.empty()).Add("z", (double)z).Add("groundZ", (double)groundZ).Str());
@@ -1769,6 +1791,7 @@ namespace WrathBench
             {
                 w.Add("dz", (double)r.dropDz);
                 w.Raw("target", Json::Writer().Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Str());
+                AddSafeFall(w, player);
             }
             EmitEvent(*s, "WB_MOVE_RESULT", 0xFF01, w.Str());
             return;
@@ -1778,6 +1801,8 @@ namespace WrathBench
         m.hasMeshZ = r.hasMeshZ;
         m.reqX = x; m.reqY = y; m.reqZ = z;
         m.hasDrop = false;
+        m.force = force;
+        m.inFall = false;
 
         int64_t now = NowMs();
         m.points.clear();
@@ -2889,21 +2914,43 @@ namespace WrathBench
             // Defensive twin of ResolvePathAt's guard: a segment that would
             // step off a ledge is not walked. Stop at the segment's start (the
             // edge) and say `drop` rather than interpolate down the cliff.
+            // A forced move walks it instead, the way a client's character
+            // walks off an edge: the last packet before the fall is a
+            // heartbeat at the edge (the server records that z as the fall's
+            // start, Player::UpdateFallInformationIfNeed), nothing is sent
+            // during the fall, and the foot of the segment is reported with
+            // MSG_MOVE_FALL_LAND, on which the server charges the fall
+            // (Player::HandleFall) exactly as it would a client's. A forced
+            // climb has nothing to land from and sends nothing extra.
             if (m.segDone <= 0.0f)
             {
                 float dz = 0.0f;
                 if (IsDropSegment(a, b, &dz))
                 {
-                    m.curX = a.x; m.curY = a.y; m.curZ = a.z;
-                    SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.curX, m.curY, m.curZ, m.curO,
-                        FindTransportAt(player->GetMap(), m.curX, m.curY, m.curZ));
-                    Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_STOP")
-                        .Add("moveId", m.moveId).Add("cause", "drop").Add("dz", (double)dz)
-                        .Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
-                    m.hasDrop = true;
-                    m.dropDz = dz;
-                    FinishMove(s, "drop");
-                    return;
+                    if (!m.force)
+                    {
+                        m.curX = a.x; m.curY = a.y; m.curZ = a.z;
+                        SendMovePacket(s, player, MSG_MOVE_STOP, MOVEMENTFLAG_NONE, m.curX, m.curY, m.curZ, m.curO,
+                            FindTransportAt(player->GetMap(), m.curX, m.curY, m.curZ));
+                        Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_STOP")
+                            .Add("moveId", m.moveId).Add("cause", "drop").Add("dz", (double)dz)
+                            .Raw("pos", PosJson(m.curX, m.curY, m.curZ, m.curO)).Str());
+                        m.hasDrop = true;
+                        m.dropDz = dz;
+                        FinishMove(s, "drop");
+                        return;
+                    }
+                    if (dz < 0.0f && !m.inFall)
+                    {
+                        m.curO = Position::NormalizeOrientation(std::atan2(sy, sx));
+                        SendMovePacket(s, player, MSG_MOVE_HEARTBEAT, MOVEMENTFLAG_FORWARD, a.x, a.y, a.z, m.curO,
+                            FindTransportAt(player->GetMap(), a.x, a.y, a.z));
+                        m.lastPacketMs = nowMs;
+                        Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_HEARTBEAT")
+                            .Add("moveId", m.moveId).Add("cause", "drop_forced").Add("dz", (double)dz)
+                            .Raw("pos", PosJson(a.x, a.y, a.z, m.curO)).Str());
+                        m.inFall = true;
+                    }
                 }
             }
             float remain = segLen - m.segDone;
@@ -2921,6 +2968,21 @@ namespace WrathBench
             advance -= remain;
             ++m.seg;
             m.segDone = 0.0f;
+            if (m.inFall)
+            {
+                // The foot of the forced ledge: land there, as a client does.
+                m.inFall = false;
+                m.curX = b.x; m.curY = b.y; m.curZ = b.z;
+                SendMovePacket(s, player, MSG_MOVE_FALL_LAND, MOVEMENTFLAG_FORWARD, b.x, b.y, b.z, m.curO,
+                    FindTransportAt(player->GetMap(), b.x, b.y, b.z));
+                m.lastPacketMs = nowMs;
+                Audit(s, "action", Json::Writer().Add("op", "move_pkt").Add("opcode", "MSG_MOVE_FALL_LAND")
+                    .Add("moveId", m.moveId).Add("cause", "drop_forced")
+                    .Raw("pos", PosJson(b.x, b.y, b.z, m.curO)).Str());
+                // The server may have killed the character on landing; the
+                // next heartbeat's drift check or the death handling ends the
+                // move as `interrupted` in that case, as for any other death.
+            }
         }
 
         if (m.seg + 1 >= m.points.size())
@@ -2940,7 +3002,11 @@ namespace WrathBench
         // Heartbeat cadence, as a real client: ~500ms. Before each heartbeat,
         // verify the server actually applied the previous packets; a large gap
         // means something (root, teleport, rejection) interrupted the move.
-        if (nowMs - m.lastPacketMs >= 500)
+        // Held while a forced ledge is being fallen: the module's packets
+        // carry fallTime 0, so a heartbeat mid-fall would move the server's
+        // fall start down to the mid-air z (UpdateFallInformationIfNeed) and
+        // the landing would be charged for less than the ledge.
+        if (nowMs - m.lastPacketMs >= 500 && !m.inFall)
         {
             if (player->GetExactDist2d(m.curX, m.curY) > 15.0f)
             {

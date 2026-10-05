@@ -819,6 +819,16 @@ export interface MoveToOptions {
    * that is longer than the straight line.
    */
   timeout?: number;
+  /**
+   * Walk a route that steps off a ledge instead of refusing it. Without it,
+   * `moveTo` takes a ledge on its own only when the fall would cost less than
+   * `DROP_BLOCK_FRACTION` of current health (a ghost always; nothing under
+   * `FALL_MIN_DAMAGE_DIST` yards hurts), and answers `drop` otherwise. With
+   * it the ledge is walked whatever the estimate — the fall is then the
+   * server's to charge, as it would a client's — and so is a step too steep
+   * to walk up, which the mesh connects but no default takes.
+   */
+  force?: boolean;
 }
 
 /**
@@ -965,8 +975,8 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     const n = d.dz === undefined ? "several" : Math.abs(d.dz).toFixed(1);
     return (
       `the route to (${fmtXY(p)}, z ${p.z.toFixed(1)}) steps off a ledge of ${n} yards at (${fmtXY(edge)}); ` +
-      `the character stopped at the edge and did not take the drop. Pick a destination on this level, or ` +
-      `find the ramp/stairs that connect the two.`
+      `the character stopped at the edge and did not take the drop. Pick a destination on this level, ` +
+      `find the ramp/stairs that connect the two, or pass { force: true } to moveTo to take it anyway.`
     );
   },
   interrupted: () =>
@@ -977,6 +987,112 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
     `routine, a snippet, or a helper's walk (killTarget's approach). Retrying on superseded cancels that newer ` +
     `move in turn, so two callers that both retry cancel each other forever. Let one caller own movement.`,
 };
+
+/**
+ * The server's fall-damage rule (Player::HandleFall in the pinned core): a fall
+ * shorter than `FALL_MIN_DAMAGE_DIST` yards is free; past it the damage is
+ * `FALL_DMG_EQU_SLOPE * (height - safeFall) + FALL_DMG_EQU_INTERCEPT` of max
+ * health, capped at max health, at the world's default fall-damage rate. Safe
+ * Fall (a rogue passive and a few buffs) shortens the fall by its yards. The
+ * same constants, so the estimate is what the server will charge — barring a
+ * Feather Fall / Slow Fall buff (free) or a damage absorb, both rare and both
+ * in the character's favour.
+ */
+export const FALL_MIN_DAMAGE_DIST = 13.48;
+const FALL_DMG_EQU_SLOPE = 0.018;
+const FALL_DMG_EQU_INTERCEPT = -0.2426;
+export function estimateFallDamage(height: number, maxHealth: number, safeFall = 0): number {
+  if (!(height >= FALL_MIN_DAMAGE_DIST) || !(maxHealth > 0)) return 0;
+  const fraction = FALL_DMG_EQU_SLOPE * (height - safeFall) + FALL_DMG_EQU_INTERCEPT;
+  if (fraction <= 0) return 0;
+  return Math.min(Math.floor(fraction * maxHealth), maxHealth);
+}
+
+/**
+ * Where the default drop guard draws its line (operator decision,
+ * 2026-10-05): a ledge is taken on its own unless the estimated fall would
+ * cost this fraction of *current* health or more — that is, would leave the
+ * character at about a fifth of what it has now, or dead. A ghost is always
+ * let through: the dead take no fall damage, and a corpse run that the old
+ * guard refused (295 refusals in one run, every one a 3–5y step) was the
+ * case that moved the line.
+ */
+export const DROP_BLOCK_FRACTION = 0.8;
+
+/** The SDK's reading of a `drop` the module refused: take it, or not, and why. */
+export interface DropJudgement {
+  readonly take: boolean;
+  /** The step, downward positive; a climb is negative. */
+  readonly height: number;
+  /** Estimated damage of the fall; 0 for a ghost or a free fall; undefined when health is unobserved. */
+  readonly damage?: number;
+  readonly health?: { readonly current: number; readonly max: number };
+  /** What the judgement means, for the hint. */
+  readonly note: string;
+}
+
+export function judgeDrop(state: StateCache, d: MoveResultData): DropJudgement {
+  const edge = d.reachedPos ?? d.pos;
+  const dz = d.dz ?? 0;
+  const height = -dz;
+  const where = `(${fmtXY(edge)})`;
+  if (height <= 0) {
+    return {
+      take: false,
+      height,
+      note: `the route climbs a ${Math.abs(height).toFixed(1)}-yard step at ${where}, too steep to walk up`,
+    };
+  }
+  const h = height.toFixed(1);
+  if (state.self.ghost?.value === true) {
+    return { take: true, height, damage: 0, note: `took the ${h}-yard drop at ${where}: a ghost takes no fall damage` };
+  }
+  const health = state.self.health?.value;
+  if (health === undefined) {
+    return {
+      take: false,
+      height,
+      note: `the route drops ${h} yards at ${where}, and own health is unobserved, so the fall could not be judged`,
+    };
+  }
+  const damage = estimateFallDamage(height, health.max, d.safeFall ?? 0);
+  const take = damage < DROP_BLOCK_FRACTION * health.current;
+  if (take) {
+    const cost =
+      damage === 0
+        ? `a fall under ${FALL_MIN_DAMAGE_DIST} yards does no damage`
+        : `estimated fall damage ~${damage} of ${health.current} health`;
+    return { take, height, damage, health, note: `took the ${h}-yard drop at ${where}: ${cost}` };
+  }
+  return {
+    take,
+    height,
+    damage,
+    health,
+    note: `a fall of ${h} yards would deal about ${damage} damage against ${health.current} health`,
+  };
+}
+
+/** The `drop` hint when the SDK judged the fall and left the character at the edge. */
+export function dropRefusalHint(p: MovePoint, d: MoveResultData, j: DropJudgement): string {
+  const edge = d.reachedPos ?? d.pos;
+  if (j.height <= 0) {
+    return (
+      `${j.note}; the character stopped at the edge. Pick a destination on this level, find the ` +
+      `ramp/stairs, or pass { force: true } to moveTo to try the step anyway.`
+    );
+  }
+  return (
+    `the route to (${fmtXY(p)}, z ${p.z.toFixed(1)}) steps off a ledge of ${j.height.toFixed(1)} yards at ` +
+    `(${fmtXY(edge)}); ${j.note}, so the character stopped at the edge. Pass { force: true } to moveTo to take ` +
+    `the drop anyway, or find the ramp/stairs.`
+  );
+}
+
+/** `data.status` of a move result without widening its type at the call site. */
+function status_(d: MoveResultData): string {
+  return d.status;
+}
 
 /**
  * One (action, status) pair of hint-bearing failures, tallied for the harness.
@@ -2730,7 +2846,7 @@ export class WrathClient {
    * this is the raw tier, and there is no result object to put an answer in;
    * `moveTo` answers the same case with `status: "unknown_target"`.
    */
-  moveToAsync(target: MoveTarget): Promise<MoveToResponse> {
+  moveToAsync(target: MoveTarget, options: { force?: boolean } = {}): Promise<MoveToResponse> {
     const resolved = resolveMoveTarget(target, this.state, "moveTo");
     if ("unknown" in resolved) {
       throw new TypeError(
@@ -2738,11 +2854,13 @@ export class WrathClient {
           `instead of throwing.)`,
       );
     }
-    return this.postMoveTo(resolved.point, resolved.guid);
+    // The raw tier: no fall estimate stands in for the caller. A `drop`
+    // arrives as the event it is, and `force` is the caller's own word.
+    return this.postMoveTo(resolved.point, resolved.guid, options.force === true);
   }
 
   /** The `move_to` POST itself; `guid` is the planning hint `resolveMoveTarget` attaches to unit targets. */
-  private postMoveTo(point: MovePoint, guid?: string): Promise<MoveToResponse> {
+  private postMoveTo(point: MovePoint, guid?: string, force = false): Promise<MoveToResponse> {
     // Any dispatch supersedes a remembered refusal, whichever call made it:
     // what comes back is the verdict now.
     this.lastMoveRejection = null;
@@ -2756,6 +2874,7 @@ export class WrathClient {
         y: point.y,
         z: point.z,
         ...(guid !== undefined ? { guid } : {}),
+        ...(force ? { force: true } : {}),
       },
       moveToResponseSchema,
     );
@@ -4690,71 +4809,91 @@ export class WrathClient {
     // before the WB_MOVE_RESULT that says `transferred`, so the transfer wait
     // has to admit packets from here on, not from the result on.
     const sinceSeq = this.state.lastSeq;
-    const ack = await this.postMoveTo(point, resolved.guid);
-    // The match is the moveId within the current session epoch, and the buffer
-    // is searched: a result can land while the POST response is still in
-    // flight (an immediate `target_off_mesh` does exactly that). No `sinceSeq` bound —
-    // `seq` restarts when a token's session is recreated, so any seq-based
-    // floor can outrun the very event it is meant to admit. `moveId` alone is
-    // not enough either: the module's generator is per-session and restarts on
-    // recreate, so after a relog the buffer can hold a byte-identical stale
-    // result from the previous session (observed in night-opus-1: 8s-timeout
-    // probes "resolving" in 59ms against pre-relog payloads). The epoch,
-    // advanced on every session boundary, is what scopes the match to the
-    // session that issued this ack — and the match is *exact*, not a floor:
-    // a floor would still let a waiter left pending across a teardown/recreate
-    // resolve against a LATER session's colliding moveId (the module's
-    // generator restarts at 1 per session). A move whose session is gone has
-    // no verdict; timing out is the honest outcome.
-    let event: StreamEvent;
-    try {
-      event = await this.waitEvent(
-        (e) =>
-          isEvent(e, "WB_MOVE_RESULT") &&
-          !isDecodeError(e.data) &&
-          (e.data as MoveResultData).moveId === ack.moveId,
-        {
-          timeout: options.timeout ?? 90_000,
-          epoch,
-          description: `the WB_MOVE_RESULT for moveId ${ack.moveId} (move_to verdict)`,
-        },
-      );
-    } catch (err) {
-      // How far this walk got, shared by both branches below: an abort and a
-      // timeout are both the absence of a verdict, and the caller needs the
-      // same two facts either way.
-      const progress = walkProgress(from, this.state.self.position?.value, point);
-      if (err instanceof EventTimeoutError) {
-        // The timeout is not "the move failed": the character is still walking
-        // and the verdict is still coming. Saying so stops the model from
-        // issuing a fresh moveTo that supersedes a move about to succeed.
-        err.message =
-          `${err.message} — ${progress}; the character is still walking and this move's verdict will arrive ` +
-          `later. Mesh paths are typically 1.5–2× the straight line; use the default timeout, or ` +
-          `sdk.moveToAsync(target) and poll state.self.position.`;
+    // Dispatch and wait for the verdict; issued once, and a second time with
+    // `force` when the first answer is a `drop` the fall estimate allows.
+    const issue = async (force: boolean): Promise<StreamEvent> => {
+      const ack = await this.postMoveTo(point, resolved.guid, force);
+      // The match is the moveId within the current session epoch, and the buffer
+      // is searched: a result can land while the POST response is still in
+      // flight (an immediate `target_off_mesh` does exactly that). No `sinceSeq` bound —
+      // `seq` restarts when a token's session is recreated, so any seq-based
+      // floor can outrun the very event it is meant to admit. `moveId` alone is
+      // not enough either: the module's generator is per-session and restarts on
+      // recreate, so after a relog the buffer can hold a byte-identical stale
+      // result from the previous session (observed in night-opus-1: 8s-timeout
+      // probes "resolving" in 59ms against pre-relog payloads). The epoch,
+      // advanced on every session boundary, is what scopes the match to the
+      // session that issued this ack — and the match is *exact*, not a floor:
+      // a floor would still let a waiter left pending across a teardown/recreate
+      // resolve against a LATER session's colliding moveId (the module's
+      // generator restarts at 1 per session). A move whose session is gone has
+      // no verdict; timing out is the honest outcome.
+      let event: StreamEvent;
+      try {
+        event = await this.waitEvent(
+          (e) =>
+            isEvent(e, "WB_MOVE_RESULT") &&
+            !isDecodeError(e.data) &&
+            (e.data as MoveResultData).moveId === ack.moveId,
+          {
+            timeout: options.timeout ?? 90_000,
+            epoch,
+            description: `the WB_MOVE_RESULT for moveId ${ack.moveId} (move_to verdict)`,
+          },
+        );
+      } catch (err) {
+        // How far this walk got, shared by both branches below: an abort and a
+        // timeout are both the absence of a verdict, and the caller needs the
+        // same two facts either way.
+        const progress = walkProgress(from, this.state.self.position?.value, point);
+        if (err instanceof EventTimeoutError) {
+          // The timeout is not "the move failed": the character is still walking
+          // and the verdict is still coming. Saying so stops the model from
+          // issuing a fresh moveTo that supersedes a move about to succeed.
+          err.message =
+            `${err.message} — ${progress}; the character is still walking and this move's verdict will arrive ` +
+            `later. Mesh paths are typically 1.5–2× the straight line; use the default timeout, or ` +
+            `sdk.moveToAsync(target) and poll state.self.position.`;
+        }
+        // An abort mid-walk (the runner abandoning the snippet that issued this
+        // move) must not leave the character walking on its own: issue the
+        // existing `stop` — no game semantics beyond "stop walking" — and let
+        // the abort propagate. Its ack is not awaited: the signal holder has
+        // already moved on, and a refusal (`no_session`, …) has nothing to add.
+        if (err instanceof EventAbortedError) {
+          void this.stop().catch(() => {});
+          // The abandoning caller (the runner's snippet timeout) sees only the
+          // error, so the error is where the two facts it needs go: how far this
+          // walk got, and the call that would have survived.
+          // `moveAbandon` carries the same sentence structurally, for the sandbox
+          // to splice into its abandon notice.
+          const note =
+            `a moveTo was still walking when this was abandoned: ${progress}. A move that long does not fit one ` +
+            `snippet — issue it with sdk.moveToAsync(target), or from a background routine, and poll ` +
+            `state.self.position (or watch the WB_MOVE_RESULT event) instead of awaiting it inline.`;
+          err.message = `${err.message} — ${note}`;
+          (err as { moveAbandon?: string }).moveAbandon = note;
+        }
+        throw err;
       }
-      // An abort mid-walk (the runner abandoning the snippet that issued this
-      // move) must not leave the character walking on its own: issue the
-      // existing `stop` — no game semantics beyond "stop walking" — and let
-      // the abort propagate. Its ack is not awaited: the signal holder has
-      // already moved on, and a refusal (`no_session`, …) has nothing to add.
-      if (err instanceof EventAbortedError) {
-        void this.stop().catch(() => {});
-        // The abandoning caller (the runner's snippet timeout) sees only the
-        // error, so the error is where the two facts it needs go: how far this
-        // walk got, and the call that would have survived.
-        // `moveAbandon` carries the same sentence structurally, for the sandbox
-        // to splice into its abandon notice.
-        const note =
-          `a moveTo was still walking when this was abandoned: ${progress}. A move that long does not fit one ` +
-          `snippet — issue it with sdk.moveToAsync(target), or from a background routine, and poll ` +
-          `state.self.position (or watch the WB_MOVE_RESULT event) instead of awaiting it inline.`;
-        err.message = `${err.message} — ${note}`;
-        (err as { moveAbandon?: string }).moveAbandon = note;
+      return event;
+    };
+    let event = await issue(options.force === true);
+    let data = event.data as MoveResultData;
+    // A ledge the module refused: judge the fall from the facts it gave (the
+    // step, the character's own Safe Fall) against own health, the way the
+    // server will charge it, and take it when it would not bring the
+    // character near death. The module stays a packet bridge — it reports
+    // the ledge; what a fall costs is a game rule and lives here.
+    let dropJudgement: DropJudgement | undefined;
+    if (status_(data) === "drop" && options.force !== true) {
+      dropJudgement = judgeDrop(this.state, data);
+      if (dropJudgement.take) {
+        extras.push(dropJudgement.note);
+        event = await issue(true);
+        data = event.data as MoveResultData;
       }
-      throw err;
     }
-    const data = event.data as MoveResultData;
     const status: MoveStatus = data.status;
     const position: UnitPosition = {
       x: data.pos.x,
@@ -4854,6 +4993,7 @@ export class WrathClient {
     }
     const recipe =
       (status === "target_off_mesh" ? transportDockHint(this.state, point) : undefined) ??
+      (status === "drop" && dropJudgement !== undefined ? dropRefusalHint(point, data, dropJudgement) : undefined) ??
       MOVE_HINTS[status]?.(point, data);
     // Recorded before the call-specific notes are folded in: the recipe is what
     // the model needs and what dedupes; the notes are per-call (see ActionHint).

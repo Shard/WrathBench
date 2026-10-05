@@ -318,6 +318,16 @@ Without `guid` the ground z is tried only after a `target_off_mesh`. Either way
 a target the mesh rejects at both heights is still `target_off_mesh`, and
 `meshZ` is reported relative to the z asked for.
 
+Optional `force` (boolean): walk a route that steps off a ledge instead of
+refusing it as `drop` (statuses below). A forced downward step is walked the
+way a client's character walks off an edge — a heartbeat at the edge, nothing
+during the fall, `MSG_MOVE_FALL_LAND` at the foot — so the server charges the
+fall through its own `Player::HandleFall`, as it would a client's; a forced
+step up sends nothing extra. The module never judges whether a fall is
+survivable: that is a game rule, and the SDK's `moveTo` applies it from the
+facts a `drop` carries (`dz`, `safeFall`) and the character's own health
+before deciding to re-issue with `force`.
+
 Success `200` (means "queued and pathing", not "arrived"):
 ```json
 { "ok": true, "action": "move_to", "token": "run-abc123", "moveId": 1 }
@@ -818,7 +828,7 @@ session's own identity). Their `opcodeId`s are outside the real opcode range.
 | opcode | id | `data` fields |
 |---|---|---|
 | `WB_MOVE_PROGRESS` | 0xFF02 | `{ "moveId": <number>, "pos": { "x","y","z","o" } }` — at most 1/s while moving |
-| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` on `path_incomplete` and `drop`; `"dz": <f>, "target": { "x","y","z" }` only on `drop`; `"onTransport": { "guid": <guid-string>, "entry": <u32> }` when the character ended the move aboard a transport |
+| `WB_MOVE_RESULT` | 0xFF01 | `{ "moveId": <number>, "status": <str>, "pos": { "x","y","z","o" }, "meshZ": <f?>, "reachedPos": { "x","y","z" }? }` — `meshZ` only on `arrived` when the mesh z differed from the request; `reachedPos` on `path_incomplete` and `drop`; `"dz": <f>, "target": { "x","y","z" }` only on `drop`, plus `"safeFall": <u32>` when the character's own fall-height reduction (`SPELL_AURA_SAFE_FALL`, the client's buff frame) is non-zero; `"onTransport": { "guid": <guid-string>, "entry": <u32> }` when the character ended the move aboard a transport |
 | `WB_RIDE_PROGRESS` | 0xFF05 | `{ "transportGuid": <guid-string>, "transportEntry": <u32>, "pos": { "x","y","z","o" } }` — at most 1/s while the character rides a transport and is not walking; the server-side position the transport carried it to |
 | `WB_TRANSPORT_PROGRESS` | 0xFF06 | `{ "guid": <guid-string>, "entry": <u32>, "pos": { "x","y","z","o" }, "progressMs": <u32>, "periodMs": <u32?>, "docked": <bool?> }` — at most 1/s per session, one per transport on the character's map whose create block the session has received: the car's current position on its `TransportAnimation.dbc` path (what a client animates locally from `pathProgress`), the clock and period, and `docked` when the keyframe segment the clock is on has no displacement (the car is dwelling at a platform; absent for transports without an animation path) |
 | `WB_AREATRIGGER` | 0xFF04 | `{ "triggerId": <u32>, "moveId": <number>, "pos": { "x","y","z","o" } }` — the mover entered an `AreaTrigger.dbc` volume and sent `CMSG_AREATRIGGER` for it (see below) |
@@ -855,13 +865,21 @@ at the top of this document.
 - `drop` — the mesh's route steps off a ledge: some segment of the resolved
   polyline falls (or climbs) more than 2.0y and steeper than 1.2x its 2D
   length — a cliff, not a ramp (stairs and ramps pass; a stale z within the
-  `meshZ` band passes). A mesh path that falls is a ledge, not a route, so the
-  walk is not dispatched: `reachedPos` is the last point before the step
-  (the edge, on the character's level), `dz` is the signed vertical step the
-  route would have taken there, and `target` echoes the requested point. Pick
-  a destination on this level, or find the ramp/stairs. The same guard runs
-  per segment while walking; a ledge that slips past planning stops the
-  character at the edge with the same status and `pos` at the edge.
+  `meshZ` band passes). Without `force` the walk is not dispatched:
+  `reachedPos` is the last point before the step (the edge, on the
+  character's level), `dz` is the signed vertical step the route would have
+  taken there, `target` echoes the requested point, and `safeFall` rides when
+  non-zero. The module reports the ledge and leaves the verdict to the
+  caller: the server's fall rule (free under 13.48y, then a share of max
+  health rising with height, `Player::HandleFall`) is a game rule, so the
+  SDK estimates the fall from `dz` and `safeFall` against the character's own
+  health and re-issues with `force` unless it would take about four fifths
+  of current health or more (a ghost takes no fall damage, so a corpse run is
+  never refused); a step *up* is never taken without `force`. With `force`
+  the route is walked and the fall, if any, is the server's. The same guard
+  runs per segment while walking; a ledge that slips past planning stops the
+  character at the edge with the same status and `pos` at the edge, or, on a
+  forced move, is walked with the client's fall packets.
 - `transferred` — a map transfer took the character mid-move (an areatrigger
   portal, a cross-map port); the server applies the destination itself. `pos`
   is the last old-map position; the new map and arrival point follow on
@@ -1351,9 +1369,11 @@ dispatched and every event served is appended as:
 ground truth and the evidence the contracts held (docs/CONTRACTS.md).
 
 Synthesized movement logs one `action` record per `move_to`/`stop`/`face`
-request plus one per dispatched movement packet (`op: "move_pkt"` with the
-opcode and position), so the packet sequence the "client" sent is fully
-reconstructable from the audit log.
+request (`force: true` on the record when the request said so) plus one per
+dispatched movement packet (`op: "move_pkt"` with the opcode and position;
+`cause: "drop"` on the stop at a refused ledge, `cause: "drop_forced"` on the
+edge heartbeat and the `MSG_MOVE_FALL_LAND` of a forced one), so the packet
+sequence the "client" sent is fully reconstructable from the audit log.
 Each `move_to` that reaches the mesh also logs one `op: "move_path"` record at
 dispatch — `moveId`, `status` (`"ok"` when the walk was dispatched, else the
 `WB_MOVE_RESULT` status), `pointCount`, and `points` (the resolved polyline,
