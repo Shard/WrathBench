@@ -3192,6 +3192,16 @@ export class WrathClient {
   }
 
   /** `CMSG_QUESTGIVER_CHOOSE_REWARD`; index into `choiceRewards`, 0 when none. */
+  /**
+   * `CMSG_QUESTGIVER_REQUEST_REWARD` — the client's "Continue" on a completable
+   * `SMSG_QUESTGIVER_REQUEST_ITEMS` window; answered by OFFER_REWARD.
+   */
+  questRequestReward(target: GuidOrUnit, questId: number): Promise<WithResolved<ActionResponse>> {
+    return this.byName(target, "questRequestReward(guid, questId)", (guid) =>
+      this.action({ action: "quest_request_reward", guid, questId }),
+    );
+  }
+
   questChooseReward(target: GuidOrUnit, questId: number, rewardIndex = 0): Promise<WithResolved<ActionResponse>> {
     return this.byName(target, "questChooseReward(guid, ...)", (guid) =>
       this.action({ action: "quest_choose_reward", guid, questId, rewardIndex }),
@@ -6130,8 +6140,11 @@ export class WrathClient {
    *
    * `quest_complete` is answered either with the reward offer or with
    * `SMSG_QUESTGIVER_REQUEST_ITEMS`. A *completable* REQUEST_ITEMS is how the
-   * core answers item-delivery quests — re-asking gets the same answer forever
-   * (roster-opus-20260822), so the reward is chosen directly from there. A
+   * core answers item-delivery quests — re-asking with `quest_complete` gets
+   * the same answer forever (roster-opus-20260822); what a client does there
+   * is "Continue", `CMSG_QUESTGIVER_REQUEST_REWARD`, which the core answers
+   * with the OFFER_REWARD window (`HandleQuestgiverRequestRewardOpcode`), so
+   * the call sends that and goes on from the offer like any other turn-in. A
    * `completable: false` is the questgiver saying no: `not_complete` when the
    * quest log agrees, `wrong_questgiver` when the log says the objectives are
    * done — that refusal means another NPC ends this quest. Nothing is sent when
@@ -6143,9 +6156,9 @@ export class WrathClient {
    * choices, as a client's window waits for the player to pick, and a second
    * call with the index takes it. Defaulting to the first choice hid the
    * choice entirely (operator decision, 2026-10-05). An explicit index, or a
-   * window with one choice or none, completes as before. A completable
-   * REQUEST_ITEMS carries no reward list, so that path still takes
-   * `rewardIndex ?? 0` without seeing the choices.
+   * window with one choice or none, completes as before. Collect quests reach
+   * the same window through the request-reward step above, so their choices
+   * show too (the REQUEST_ITEMS window carries no reward list).
    */
   async turnInQuest(
     npcGuid: GuidOrUnit,
@@ -6194,7 +6207,7 @@ export class WrathClient {
       {
         const sinceSeq = this.events.recent(1)[0]?.seq;
         await this.questComplete(npcId, questId);
-        const answer = await this
+        let answer = await this
           .waitEvent(
             (e) =>
               (isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD") || isFor(e, "SMSG_QUESTGIVER_REQUEST_ITEMS")) &&
@@ -6235,9 +6248,19 @@ export class WrathClient {
               hint: "the questgiver refused and the quest log agrees the objectives are unfinished — check state.quest(questId).counts",
             };
           }
-          // completable REQUEST_ITEMS: fall through and choose the reward.
+          // Completable REQUEST_ITEMS: the client's "Continue". The core
+          // completes the quest and answers with the reward window, from
+          // which the turn-in goes on as for any other quest.
+          await this.questRequestReward(npcId, questId);
+          answer = await this.waitEvent((e) => isFor(e, "SMSG_QUESTGIVER_OFFER_REWARD"), {
+            timeout,
+            sinceSeq: answer.seq + 1,
+            description:
+              `the reward window for quest ${questId} (SMSG_QUESTGIVER_OFFER_REWARD) after its request-items ` +
+              `window said it was completable — the core stays silent when it is not`,
+          });
         }
-        if (answer.opcode === "SMSG_QUESTGIVER_OFFER_REWARD" && rewardIndex === undefined) {
+        if (rewardIndex === undefined) {
           const offer = answer.data as QuestGiverOfferRewardData;
           if (offer.choiceRewards.length >= 2) {
             const choices = await this.rewardChoices(offer, timeout);

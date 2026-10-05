@@ -230,6 +230,7 @@ export type ActionRequest =
   | { token: string; action: "quest_details"; guid: string; questId: number }
   | { token: string; action: "quest_accept"; guid: string; questId: number }
   | { token: string; action: "quest_complete"; guid: string; questId: number }
+  | { token: string; action: "quest_request_reward"; guid: string; questId: number }
   | { token: string; action: "quest_choose_reward"; guid: string; questId: number; rewardIndex: number }
   | { token: string; action: "quest_abandon"; questId: number }
   | { token: string; action: "quest_query"; questId: number }

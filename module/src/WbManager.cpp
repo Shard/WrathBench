@@ -877,7 +877,7 @@ namespace WrathBench
             static char const* kNeedsGuid[] = {
                 "set_target", "attack_start", "interact", "gossip_hello", "gossip_select",
                 "quest_list", "quest_details", "quest_accept", "quest_complete",
-                "quest_choose_reward", "loot", "loot_all", "loot_release",
+                "quest_request_reward", "quest_choose_reward", "loot", "loot_all", "loot_release",
                 "vendor_list", "buy_item", "sell_item", "repair_all",
                 "trainer_list", "trainer_buy_spell",
                 "spirit_healer_activate", "questgiver_status_query", nullptr };
@@ -905,7 +905,8 @@ namespace WrathBench
             if (action == "gossip_select" && (!req.Has("menuId") || !req.Has("optionId")))
                 return MissingParam(action, "missing_option", !req.Has("menuId") ? "menuId" : "optionId");
             if ((action == "quest_details" || action == "quest_accept" || action == "quest_complete"
-                 || action == "quest_choose_reward" || action == "quest_abandon" || action == "quest_query")
+                 || action == "quest_request_reward" || action == "quest_choose_reward"
+                 || action == "quest_abandon" || action == "quest_query")
                 && !req.Has("questId"))
                 return MissingParam(action, "missing_quest_id", "questId");
             if (action == "quest_choose_reward" && !req.Has("rewardIndex"))
@@ -2101,6 +2102,16 @@ namespace WrathBench
         {
             uint32 questId = static_cast<uint32>(req.GetInt("questId"));
             p = new WorldPacket(CMSG_QUESTGIVER_COMPLETE_QUEST, 12);
+            *p << uint64(guid) << uint32(questId);
+            auditW.Add("questId", questId);
+        }
+        else if (action == "quest_request_reward")
+        {
+            // The client's "Continue" on a completable REQUEST_ITEMS window:
+            // the handler completes the quest and answers OFFER_REWARD
+            // (WorldSession::HandleQuestgiverRequestRewardOpcode).
+            uint32 questId = static_cast<uint32>(req.GetInt("questId"));
+            p = new WorldPacket(CMSG_QUESTGIVER_REQUEST_REWARD, 12);
             *p << uint64(guid) << uint32(questId);
             auditW.Add("questId", questId);
         }

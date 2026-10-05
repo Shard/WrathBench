@@ -124,6 +124,7 @@ exists.) Then, on the client:
 | `questDetails` | `questDetails(guid: GuidOrUnit, questId): Promise<ActionResponse>` | Request a quest's text. |
 | `questAccept` | `questAccept(guid: GuidOrUnit, questId): Promise<ActionResponse>` | Accept a quest (prefer acceptQuestFrom, which confirms). |
 | `questComplete` | `questComplete(guid: GuidOrUnit, questId): Promise<ActionResponse>` | Ask to complete a quest (prefer turnInQuest, which waits). |
+| `questRequestReward` | `questRequestReward(guid: GuidOrUnit, questId): Promise<ActionResponse>` | The "Continue" on a completable request-items window: the server then completes the quest and sends the reward window (prefer turnInQuest, which does this). |
 | `questChooseReward` | `questChooseReward(guid: GuidOrUnit, questId, rewardIndex?): Promise<ActionResponse>` | Choose a quest reward by index. |
 | `questAbandon` | `questAbandon(questId): Promise<ActionResponse>` | Abandon a quest from the log. |
 | `questQuery` | `questQuery(questId): Promise<ActionResponse>` | Fetch a quest template (title, objective text, required entries/counts) into state.quests; the SDK already does this for every quest entering the log. |

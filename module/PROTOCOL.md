@@ -259,7 +259,7 @@ Dispatch one action. Supported: `say`, `move_to`, `stop`, `face` (`move_to`,
 quest/combat extension set (additive): `set_target`, `clear_target`,
 `attack_start`, `attack_stop`, `cast_spell`, `cancel_cast`, `interact`,
 `gossip_hello`, `gossip_select`, `quest_list`, `quest_details`, `quest_accept`,
-`quest_complete`, `quest_choose_reward`, `quest_abandon`, `loot`, `loot_item`,
+`quest_complete`, `quest_request_reward`, `quest_choose_reward`, `quest_abandon`, `loot`, `loot_item`,
 `loot_money`, `loot_release`, `loot_all`, `vendor_list`, `buy_item`,
 `sell_item`, `repair_all`, `equip_item`, `use_item`, `destroy_item`, `repop`,
 `reclaim_corpse`, `spirit_healer_activate` (additive), the trainer
@@ -389,7 +389,8 @@ them: `{ "ok": true, "action": "<name>", "token": ... }`.
 | `quest_list` | `guid` | `CMSG_QUESTGIVER_HELLO` | `SMSG_QUESTGIVER_QUEST_LIST` or a gossip menu follows; an NPC without the gossip flag whose menu holds one quest sends that quest's `SMSG_QUESTGIVER_QUEST_DETAILS` (or `_REQUEST_ITEMS` / `_OFFER_REWARD`) instead (`Player::SendPreparedQuest`) |
 | `quest_details` | `guid`, `questId` | `CMSG_QUESTGIVER_QUERY_QUEST` | quest text via `SMSG_QUESTGIVER_QUEST_DETAILS` |
 | `quest_accept` | `guid`, `questId` | `CMSG_QUESTGIVER_ACCEPT_QUEST` | `guid` may be a quest-start item's own guid (after `use_item` on it): the handler accepts TYPEMASK_ITEM |
-| `quest_complete` | `guid`, `questId` | `CMSG_QUESTGIVER_COMPLETE_QUEST` | server answers REQUEST_ITEMS or OFFER_REWARD |
+| `quest_complete` | `guid`, `questId` | `CMSG_QUESTGIVER_COMPLETE_QUEST` | server answers REQUEST_ITEMS (a quest with required items, `completable` saying whether they are all in hand) or OFFER_REWARD |
+| `quest_request_reward` | `guid`, `questId` | `CMSG_QUESTGIVER_REQUEST_REWARD` | the client's "Continue" on a completable REQUEST_ITEMS window: the handler completes the quest and answers OFFER_REWARD (`HandleQuestgiverRequestRewardOpcode`); silence when the quest is not completable there |
 | `quest_choose_reward` | `guid`, `questId`, `rewardIndex` | `CMSG_QUESTGIVER_CHOOSE_REWARD` | `rewardIndex` 0-based into `choiceRewards`; 0 when there is no choice |
 | `quest_abandon` | `questId` | `CMSG_QUESTLOG_REMOVE_QUEST` | module maps quest id -> log slot (client-visible via quest-log fields); `400 quest_not_in_log` |
 | `quest_query` | `questId` | `CMSG_QUEST_QUERY` | the client's template fetch for a quest in its log; `SMSG_QUEST_QUERY_RESPONSE` follows (unknown id: silence) |

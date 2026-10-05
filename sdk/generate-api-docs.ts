@@ -124,6 +124,7 @@ const CLIENT_RAW: readonly Row[] = [
   { name: "questDetails", sig: "questDetails(guid: GuidOrUnit, questId): Promise<ActionResponse>", purpose: "Request a quest's text." },
   { name: "questAccept", sig: "questAccept(guid: GuidOrUnit, questId): Promise<ActionResponse>", purpose: "Accept a quest (prefer acceptQuestFrom, which confirms)." },
   { name: "questComplete", sig: "questComplete(guid: GuidOrUnit, questId): Promise<ActionResponse>", purpose: "Ask to complete a quest (prefer turnInQuest, which waits)." },
+  { name: "questRequestReward", sig: "questRequestReward(guid: GuidOrUnit, questId): Promise<ActionResponse>", purpose: "The \"Continue\" on a completable request-items window: the server then completes the quest and sends the reward window (prefer turnInQuest, which does this)." },
   { name: "questChooseReward", sig: "questChooseReward(guid: GuidOrUnit, questId, rewardIndex?): Promise<ActionResponse>", purpose: "Choose a quest reward by index." },
   { name: "questAbandon", sig: "questAbandon(questId): Promise<ActionResponse>", purpose: "Abandon a quest from the log." },
   { name: "questQuery", sig: "questQuery(questId): Promise<ActionResponse>", purpose: "Fetch a quest template (title, objective text, required entries/counts) into state.quests; the SDK already does this for every quest entering the log." },

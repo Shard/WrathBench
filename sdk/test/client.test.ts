@@ -2327,18 +2327,54 @@ describe("client: quests", () => {
     await stub.stop();
   });
 
-  test("a completable REQUEST_ITEMS goes straight to the reward choice", async () => {
+  test("a completable REQUEST_ITEMS is answered with the client's Continue, and the reward window that follows is chosen from", async () => {
     // Re-asking with quest_complete gets REQUEST_ITEMS again forever on
-    // item-delivery quests (roster-opus-20260822): the reward is chosen
-    // directly from the completable answer.
+    // item-delivery quests (roster-opus-20260822); a client's "Continue" is
+    // CMSG_QUESTGIVER_REQUEST_REWARD, which the core answers with OFFER_REWARD.
     const stub = startStub({ onConnect: () => questWorld() });
     const client = await inWorld(stub);
     const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 2000 });
     await untilAction(stub, "quest_complete");
     stub.push(JSON.stringify(requestItems(QUEST_ID, true, 80)));
-    await untilAction(stub, "quest_choose_reward");
+    const at = await untilAction(stub, "quest_request_reward");
+    expect(stub.actions[at]).toMatchObject({ guid: CREATURE_GUID, questId: QUEST_ID });
+    expect(stub.actions.map((a) => a.action)).not.toContain("quest_choose_reward");
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 81)));
+    const chose = await untilAction(stub, "quest_choose_reward");
+    expect(stub.actions[chose]).toMatchObject({ rewardIndex: 0 });
     stub.push(JSON.stringify(questRewarded(QUEST_ID, 82)));
     expect((await pending).ok).toBe(true);
+    expect(stub.actions.map((a) => a.action)).toEqual(["quest_complete", "quest_request_reward", "quest_choose_reward"]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a collect quest's reward choices show through the same window (operator decision B, 2026-10-05)", async () => {
+    const OTHER_ITEM = ITEM_ENTRY + 1;
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, undefined, { timeout: 2000 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(requestItems(QUEST_ID, true, 80)));
+    await untilAction(stub, "quest_request_reward");
+    stub.push(JSON.stringify(offerReward(QUEST_ID, 81, [{ itemId: ITEM_ENTRY, count: 1 }, { itemId: OTHER_ITEM, count: 2 }])));
+    stub.push(JSON.stringify({ ...itemQuery, seq: 82 }));
+    const result = await pending;
+    if (result.ok || result.status !== "choose_reward") throw new Error(`unexpected ${JSON.stringify(result)}`);
+    expect(result.choices.map((c) => [c.index, c.itemId])).toEqual([[0, ITEM_ENTRY], [1, OTHER_ITEM]]);
+    expect(stub.actions.map((a) => a.action)).toEqual(["quest_complete", "quest_request_reward"]);
+    client.close();
+    await stub.stop();
+  });
+
+  test("a completable REQUEST_ITEMS whose Continue the server never answers times out naming the window", async () => {
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    const pending = client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 300 });
+    await untilAction(stub, "quest_complete");
+    stub.push(JSON.stringify(requestItems(QUEST_ID, true, 80)));
+    await untilAction(stub, "quest_request_reward");
+    await expect(pending).rejects.toThrow(/reward window for quest .* after its request-items window said it was completable/);
     client.close();
     await stub.stop();
   });
