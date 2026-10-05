@@ -811,6 +811,9 @@ export type MoveTarget = MovePoint | GuidOrUnit;
 /** Base run speed in yards per second, 3.3.5a. Used only for the ETA hint. */
 const RUN_SPEED_YPS = 7;
 
+/** How far around a refused target the module looks for walkable mesh to name (PROTOCOL.md, `target_off_mesh`). */
+export const TARGET_NEAREST_RADIUS = 20;
+
 export interface MoveToOptions {
   /**
    * How long to wait for the terminal `WB_MOVE_RESULT`. Default 90000: the
@@ -918,6 +921,7 @@ export type MoveResult =
       readonly ts?: undefined;
       readonly reachedPos?: undefined;
       readonly dz?: undefined;
+      readonly nearest?: undefined;
       /** Why the target resolved to nothing, and what to pass instead. */
       readonly hint: string;
     }
@@ -935,6 +939,11 @@ export type MoveResult =
        * steps off a ledge — the edge, on the character's level.
        */
       readonly reachedPos?: Point3;
+      /**
+       * `target_off_mesh` only: the walkable ground nearest the requested
+       * point within 20y, or `null` when none is within that.
+       */
+      readonly nearest?: Point3 | null;
       /** `drop` only: the signed vertical step the route would have taken at `reachedPos`. */
       readonly dz?: number;
       /** What the status means and what to try next. See `MOVE_HINTS`. */
@@ -956,9 +965,21 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
   no_mesh: (p) =>
     `no navmesh is loaded under you or under (${fmtXY(p)}); this is a harness data limitation, not a route ` +
     `problem. Nothing to retry here — choose a destination in a mapped area.`,
-  target_off_mesh: (p) =>
-    `(${fmtXY(p)}) is not on walkable ground within 4y (z is searched ±50y, so a wrong z alone is not the ` +
-    `cause). Pick a point on a road or floor, or where an NPC stands.`,
+  target_off_mesh: (p, d) => {
+    // The module's bounded answer about the agent's own point (operator
+    // decision, 2026-10-05): the nearest walkable mesh within 20y, or none.
+    const near =
+      d.nearest === undefined
+        ? ""
+        : d.nearest === null
+          ? `; nothing walkable lies within ${TARGET_NEAREST_RADIUS}y of it`
+          : `; the nearest walkable ground within ${TARGET_NEAREST_RADIUS}y is (${fmtXY(d.nearest)}, z ` +
+            `${d.nearest.z.toFixed(1)}), ${Math.round(distance2d(p, d.nearest))}y away`;
+    return (
+      `(${fmtXY(p)}) is not on walkable ground within 4y (z is searched ±50y, so a wrong z alone is not the ` +
+      `cause)${near}. Pick a point on a road or floor, or where an NPC stands.`
+    );
+  },
   start_off_mesh: () =>
     `the character's own position is not on the walkable mesh and no walkable ground lies within 10y of it ` +
     `(a transport deck, a ledge, a wedge of terrain the mesh misses), so no destination and no sweep of ` +
@@ -5001,12 +5022,15 @@ export class WrathClient {
     this.noteActionHint("moveTo", status, recipe, point);
     const hint = withNotes(recipe);
     const reachedPos = data.reachedPos ? { x: data.reachedPos.x, y: data.reachedPos.y, z: data.reachedPos.z } : undefined;
+    const nearest =
+      data.nearest === undefined ? undefined : data.nearest === null ? null : { x: data.nearest.x, y: data.nearest.y, z: data.nearest.z };
     const result: MoveResult = {
       ok: false,
       status,
       ...common,
       ...(reachedPos !== undefined ? { reachedPos } : {}),
       ...(data.dz !== undefined ? { dz: data.dz } : {}),
+      ...(nearest !== undefined ? { nearest } : {}),
       ...(hint !== undefined ? { hint } : {}),
     };
     if (MOVE_LEAVES_NO_STOP.has(status)) {

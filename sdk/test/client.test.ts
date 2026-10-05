@@ -639,6 +639,36 @@ describe("client: movement", () => {
     await stub.stop();
   });
 
+  test("target_off_mesh names the nearest walkable ground within 20y, or that there is none (operator decision, 2026-10-05)", async () => {
+    const stub = startStub({ onConnect: () => frames(loginSequence) });
+    const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
+    await client.createSession({ character: "Fenwick" });
+
+    const p1 = client.moveTo({ x: -5620, y: -2580, z: 369 }, { timeout: 2000 });
+    const near = moveResult("target_off_mesh", 1, 30) as { data: Record<string, unknown> };
+    near.data.nearest = { x: -5611.5, y: -2574.2, z: 366.8 };
+    stub.push(JSON.stringify(near));
+    const r1 = await p1;
+    if (r1.ok) throw new Error("unreachable");
+    expect(r1.nearest).toEqual({ x: -5611.5, y: -2574.2, z: 366.8 });
+    expect(r1.hint).toContain(
+      "(-5620.0, -2580.0) is not on walkable ground within 4y (z is searched ±50y, so a wrong z alone is not the " +
+        "cause); the nearest walkable ground within 20y is (-5611.5, -2574.2, z 366.8), 10y away. Pick a point on a " +
+        "road or floor, or where an NPC stands.",
+    );
+
+    const p2 = client.moveTo({ x: -5700, y: -2680, z: 330 }, { timeout: 2000 });
+    const none = moveResult("target_off_mesh", 2, 31) as { data: Record<string, unknown> };
+    none.data.nearest = null;
+    stub.push(JSON.stringify(none));
+    const r2 = await p2;
+    if (r2.ok) throw new Error("unreachable");
+    expect(r2.nearest).toBeNull();
+    expect(r2.hint).toContain("cause); nothing walkable lies within 20y of it. Pick a point on a road or floor");
+    client.close();
+    await stub.stop();
+  });
+
   test("a refused stop after a failed move never masks the move verdict", async () => {
     const stub = startStub({
       onConnect: () => frames(loginSequence),
@@ -669,7 +699,13 @@ describe("client: movement", () => {
     if (r1.ok) throw new Error("unreachable");
     expect(r1.hint).toContain("10.0, 20.0");
     expect(r1.hint).toContain("not on walkable ground");
+    // A module that predates `nearest` says nothing about it.
+    expect(r1.hint).toContain(
+      "(10.0, 20.0) is not on walkable ground within 4y (z is searched ±50y, so a wrong z alone is not the cause). " +
+        "Pick a point on a road or floor, or where an NPC stands.",
+    );
     expect(r1.reachedPos).toBeUndefined();
+    expect(r1.nearest).toBeUndefined();
 
     // A destination of its own per status: a repeat of a refused one inside the
     // memo window is answered from the refusal already given, not the wire.

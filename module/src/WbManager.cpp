@@ -1437,6 +1437,15 @@ namespace WrathBench
     // spent 51 hours as a ghost on such a tile, every move refused.
     static constexpr float START_SNAP_RADIUS = 10.0f;
 
+    // How far around a `target_off_mesh` point the module looks for walkable
+    // mesh to name in the result (operator decision, 2026-10-05: a bounded
+    // nearest point to the agent's own requested point, in the failure only).
+    // 20y: five times the mesh's own 4y tolerance — enough to name the road
+    // shoulder beside a guessed point, and well inside what a client sees of
+    // the ground around a click — while a sweep of such answers still only
+    // ever describes the agent's own guesses, never the map.
+    static constexpr float TARGET_NEAREST_RADIUS = 20.0f;
+
     static bool IsCompletePath(PathType type, Movement::PointsArray const& pts)
     {
         return (type & PATHFIND_NORMAL)
@@ -1668,6 +1677,22 @@ namespace WrathBench
         if (groundZOut) *groundZOut = haveGround ? groundZ : z;
 
         auto isTargetOffMesh = [](PathResolve const& r) { return r.status && std::strcmp(r.status, "target_off_mesh") == 0; };
+        // A target the mesh rejected at every height it was tried: name the
+        // walkable mesh nearest to it within TARGET_NEAREST_RADIUS, or that
+        // there is none, on the result.
+        auto withNearest = [&](PathResolve r) {
+            if (isTargetOffMesh(r))
+            {
+                r.nearestSearched = true;
+                WbVec near;
+                if (NearestMeshPoint(player, x, y, haveGround ? groundZ : z, TARGET_NEAREST_RADIUS, near))
+                {
+                    r.hasNearest = true;
+                    r.nearestX = near.x; r.nearestY = near.y; r.nearestZ = near.z;
+                }
+            }
+            return r;
+        };
 
         if (unitTarget && haveGround)
         {
@@ -1677,7 +1702,7 @@ namespace WrathBench
                 if (usedGroundZ) *usedGroundZ = true;
                 return r;
             }
-            return ResolvePathAt(player, x, y, z, z, force);
+            return withNearest(ResolvePathAt(player, x, y, z, z, force));
         }
         PathResolve r = ResolvePathAt(player, x, y, z, z, force);
         if (isTargetOffMesh(r) && haveGround)
@@ -1689,7 +1714,7 @@ namespace WrathBench
                 return r2;
             }
         }
-        return r;
+        return withNearest(r);
     }
 
     void Manager::FinishMove(BenchSession& s, char const* status)
@@ -1878,6 +1903,13 @@ namespace WrathBench
                 w.Add("dz", (double)r.dropDz);
                 w.Raw("target", Json::Writer().Add("x", (double)x).Add("y", (double)y).Add("z", (double)z).Str());
                 AddSafeFall(w, player);
+            }
+            if (r.nearestSearched)
+            {
+                if (r.hasNearest)
+                    w.Raw("nearest", Json::Writer().Add("x", (double)r.nearestX).Add("y", (double)r.nearestY).Add("z", (double)r.nearestZ).Str());
+                else
+                    w.Raw("nearest", "null");
             }
             EmitEvent(*s, "WB_MOVE_RESULT", 0xFF01, w.Str());
             return;

@@ -762,6 +762,11 @@ export const moveResultDataSchema = z.looseObject({
   target: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).optional(),
   /** `drop` only, when non-zero: the character's own fall-height reduction (Safe Fall), in yards. */
   safeFall: z.number().optional(),
+  /**
+   * `target_off_mesh` only: the walkable mesh point nearest the request within
+   * 20y, or `null` when none is. Absent from a module that predates it.
+   */
+  nearest: z.looseObject({ x: z.number(), y: z.number(), z: z.number() }).nullable().optional(),
   /** Present when the character ended the move aboard a transport the server is carrying it on. */
   onTransport: z.looseObject({ guid: guidSchema, entry: z.number() }).optional(),
 });

@@ -338,6 +338,9 @@ namespace WrathBench
             float dropDz{0};
             bool hasSnap{false};        // the start was off the mesh and was snapped to the nearest point
             float snapX{0}, snapY{0}, snapZ{0};
+            bool nearestSearched{false}; // target_off_mesh: the bounded search for mesh near the target ran
+            bool hasNearest{false};      // ... and found a point (nearestX/Y/Z)
+            float nearestX{0}, nearestY{0}, nearestZ{0};
         };
         // One pass of the cause ladder at x,y,z; reqZ is the z the agent asked
         // for (meshZ is reported relative to it).
