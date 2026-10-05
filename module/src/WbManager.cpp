@@ -4243,22 +4243,91 @@ namespace WrathBench
                 case SMSG_MESSAGECHAT:
                 {
                     name = "SMSG_MESSAGECHAT";
+                    // Layout per chat type, exactly as ChatHandler::BuildChatPacket
+                    // writes it (deps/azerothcore src/server/game/Chat/Chat.cpp
+                    // 273-351): the header (type, language, sender, flags) is
+                    // shared; what sits between it and the length-prefixed
+                    // message depends on the type. Creature speech carries the
+                    // speaker's name (a creature has no name-query path), a
+                    // channel line its channel name, and the achievement
+                    // broadcast trails an achievement id after the chat tag.
+                    // Reading every type with the player layout put the parse
+                    // inside the name bytes for creature types, so the message
+                    // came out empty and the chat tag was a letter of the name.
                     uint8 type = 0; int32 lang = 0; uint64 sender = 0; uint32 flags = 0;
                     p >> type >> lang >> sender >> flags;
-                    // For CHAT_MSG_SAY the next field is the (unused) receiver GUID.
+                    // A length-prefixed string: u32 (length including the NUL),
+                    // then the C string. Empty when the packet is shorter.
+                    auto readLenStr = [&](std::string& out) {
+                        uint32 len = 0;
+                        if (p.rpos() + 4 > p.size()) return;
+                        p >> len;
+                        if (len == 0 || p.rpos() + len > p.size()) return;
+                        out.assign((char const*)p.contents() + p.rpos(), len);
+                        if (!out.empty() && out.back() == '\0') out.pop_back();
+                        p.rpos(p.rpos() + len);
+                    };
+                    bool hasSenderName = false, hasChannel = false;
+                    std::string senderName, receiverName, channelName;
                     uint64 receiver = 0;
-                    if (p.rpos() + 8 <= p.size()) p >> receiver;
-                    uint32 msgLen = 0; if (p.rpos() + 4 <= p.size()) p >> msgLen;
-                    std::string msg;
-                    if (msgLen > 0 && p.rpos() + msgLen <= p.size())
+                    switch (type)
                     {
-                        msg.assign((char const*)p.contents() + p.rpos(), msgLen);
-                        if (!msg.empty() && msg.back() == '\0') msg.pop_back();
-                        p.rpos(p.rpos() + msgLen);
+                        case CHAT_MSG_MONSTER_SAY: case CHAT_MSG_MONSTER_PARTY: case CHAT_MSG_MONSTER_YELL:
+                        case CHAT_MSG_MONSTER_WHISPER: case CHAT_MSG_MONSTER_EMOTE:
+                        case CHAT_MSG_RAID_BOSS_EMOTE: case CHAT_MSG_RAID_BOSS_WHISPER: case CHAT_MSG_BATTLENET:
+                        {
+                            hasSenderName = true;
+                            readLenStr(senderName);
+                            if (p.rpos() + 8 <= p.size()) p >> receiver;
+                            ObjectGuid rg(receiver);
+                            if (receiver && !rg.IsPlayer() && !rg.IsPet())
+                                readLenStr(receiverName);
+                            break;
+                        }
+                        case CHAT_MSG_WHISPER_FOREIGN:
+                            hasSenderName = true;
+                            readLenStr(senderName);
+                            if (p.rpos() + 8 <= p.size()) p >> receiver;
+                            break;
+                        case CHAT_MSG_BG_SYSTEM_NEUTRAL: case CHAT_MSG_BG_SYSTEM_ALLIANCE: case CHAT_MSG_BG_SYSTEM_HORDE:
+                        {
+                            if (p.rpos() + 8 <= p.size()) p >> receiver;
+                            if (receiver && !ObjectGuid(receiver).IsPlayer())
+                                readLenStr(receiverName);
+                            break;
+                        }
+                        case CHAT_MSG_ACHIEVEMENT: case CHAT_MSG_GUILD_ACHIEVEMENT:
+                            if (p.rpos() + 8 <= p.size()) p >> receiver;
+                            break;
+                        default:
+                            // (The GM-flagged sender-name prefix rides
+                            // SMSG_GM_MESSAGECHAT, a different opcode, never this one.)
+                            if (type == CHAT_MSG_CHANNEL)
+                            {
+                                hasChannel = true;
+                                p >> channelName; // plain C string, no length prefix
+                            }
+                            if (p.rpos() + 8 <= p.size()) p >> receiver;
+                            break;
                     }
+                    std::string msg;
+                    readLenStr(msg);
                     uint8 chatTag = 0; if (p.rpos() < p.size()) p >> chatTag;
-                    w.Add("type", (uint32)type).Add("language", lang).AddGuid("senderGuid", (uint64_t)sender)
-                     .Add("message", msg).Add("chatTag", (uint32)chatTag);
+                    uint32 achievementId = 0;
+                    if ((type == CHAT_MSG_ACHIEVEMENT || type == CHAT_MSG_GUILD_ACHIEVEMENT) && p.rpos() + 4 <= p.size())
+                        p >> achievementId;
+                    w.Add("type", (uint32)type).Add("language", lang).AddGuid("senderGuid", (uint64_t)sender);
+                    if (hasSenderName)
+                        w.Add("senderName", senderName);
+                    if (receiver)
+                        w.AddGuid("receiverGuid", (uint64_t)receiver);
+                    if (!receiverName.empty())
+                        w.Add("receiverName", receiverName);
+                    if (hasChannel)
+                        w.Add("channelName", channelName);
+                    w.Add("message", msg).Add("chatTag", (uint32)chatTag);
+                    if (achievementId)
+                        w.Add("achievementId", achievementId);
                     break;
                 }
                 case SMSG_CHAR_ENUM:

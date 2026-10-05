@@ -6328,7 +6328,12 @@ function toChatEntry(seq: number, ts: number, d: ChatFields): ChatEntry {
     type: d.type,
     language: d.language,
     senderGuid: d.senderGuid,
+    ...(d.senderName !== undefined ? { senderName: d.senderName } : {}),
+    ...(d.receiverGuid !== undefined ? { receiverGuid: d.receiverGuid } : {}),
+    ...(d.receiverName !== undefined ? { receiverName: d.receiverName } : {}),
+    ...(d.channelName !== undefined ? { channelName: d.channelName } : {}),
     message: d.message,
     chatTag: d.chatTag,
+    ...(d.achievementId !== undefined ? { achievementId: d.achievementId } : {}),
   };
 }

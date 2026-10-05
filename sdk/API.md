@@ -208,7 +208,7 @@ zero.
 | `nextLevelXp` | `get state.nextLevelXp: Observed<number> | undefined` | Experience needed for the next level (read .value). |
 | `money` | `get state.money: Observed<number> | undefined` | Money in copper (read .value). |
 | `inventory` | `get state.inventory: InventoryItem[]` | All observed inventory slots by raw slot id; equipment is `slot < 19` (worn bags 19-22), bag() is the carried view. |
-| `chat` | `get state.chat: readonly ChatEntry[]` | The retained chat tail. |
+| `chat` | `get state.chat: readonly ChatEntry[]` | The retained chat tail, oldest first: { type, senderGuid, senderName?, channelName?, message, achievementId?, seq, ts }. senderName is present when the packet carried one (creature speech: an NPC's say/yell/emote/whisper); a player sender is named by state.nameOf(senderGuid). |
 | `notifications` | `get state.notifications: readonly NotificationEntry[]` | The retained notification tail. |
 | `gaps` | `get state.gaps: readonly GapRecord[]` | Observed gaps in the event stream. |
 | `anomalies` | `get state.anomalies: readonly Anomaly[]` | Things the stream said that the cache could not reconcile. |

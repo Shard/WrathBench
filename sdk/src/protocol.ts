@@ -456,12 +456,29 @@ export const nameQueryResponseDataSchema = z.looseObject({
 });
 export type NameQueryResponseData = z.infer<typeof nameQueryResponseDataSchema>;
 
+/**
+ * `SMSG_MESSAGECHAT`, decoded per chat type the way the core builds it
+ * (PROTOCOL.md). The header is shared; the optional fields are what the type's
+ * layout carried: creature speech (`CHAT_MSG_MONSTER_*`, raid boss lines) names
+ * its speaker in the packet, a channel line names its channel, and the
+ * achievement broadcast trails an achievement id.
+ */
 export const messageChatDataSchema = z.looseObject({
   type: z.number(),
   language: z.number(),
   senderGuid: guidSchema,
+  /** The speaker's name, when the layout carries one (creature speech, foreign whispers). */
+  senderName: z.string().optional(),
+  /** The addressed unit, when the packet named one (non-zero). */
+  receiverGuid: guidSchema.optional(),
+  /** The addressed unit's name, when the layout carries one (a non-player receiver). */
+  receiverName: z.string().optional(),
+  /** `CHAT_MSG_CHANNEL` only. */
+  channelName: z.string().optional(),
   message: z.string(),
   chatTag: z.number(),
+  /** `CHAT_MSG_ACHIEVEMENT` / `CHAT_MSG_GUILD_ACHIEVEMENT` only. */
+  achievementId: z.number().optional(),
 });
 export type MessageChatData = z.infer<typeof messageChatDataSchema>;
 

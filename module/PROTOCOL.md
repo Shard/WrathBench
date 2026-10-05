@@ -676,11 +676,26 @@ pinned AzerothCore commit.
 | `SMSG_MOTD` | 0x33D | `{ "lineCount": <u32>, "lines": [ <string> ] }` |
 | `SMSG_NOTIFICATION` | 0x1CB | `{ "text": <string> }` |
 | `SMSG_NAME_QUERY_RESPONSE` | 0x051 | `{ "guid": <guid-string>, "found": <bool>, "name": <string?> }` |
-| `SMSG_MESSAGECHAT` | 0x096 | `{ "type": <u8>, "language": <i32>, "senderGuid": <guid-string>, "message": <string>, "chatTag": <u8> }` |
+| `SMSG_MESSAGECHAT` | 0x096 | `{ "type": <u8>, "language": <i32>, "senderGuid": <guid-string>, "senderName": <string?>, "receiverGuid": <guid-string?>, "receiverName": <string?>, "channelName": <string?>, "message": <string>, "chatTag": <u8>, "achievementId": <u32?> }` |
 
-`SMSG_MESSAGECHAT.data` is decoded for the `CHAT_MSG_SAY`-shaped layout (the one
-the slice produces). Other chat sub-types share the opcode but vary the header;
-they will be decoded as the action set grows.
+`SMSG_MESSAGECHAT.data` is decoded per chat `type`, following the layout
+`ChatHandler::BuildChatPacket` writes for each (the core's `Chat.cpp`): the
+header (`type`, `language`, `senderGuid`, flags) is common; then creature
+speech (`CHAT_MSG_MONSTER_SAY`/`PARTY`/`YELL`/`WHISPER`/`EMOTE`, 12–16,
+`RAID_BOSS_EMOTE`/`WHISPER`, 41–42, and `BATTLENET`, 47) carries a
+length-prefixed `senderName` — a creature has no name-query path, so this is
+the only place its name rides — the receiver guid, and a `receiverName` when
+the receiver is neither a player nor a pet; `CHAT_MSG_WHISPER_FOREIGN` (8)
+carries `senderName` and the receiver guid; the battleground system types
+(36–38) the receiver guid and a `receiverName` for a non-player receiver;
+`CHAT_MSG_ACHIEVEMENT`/`GUILD_ACHIEVEMENT` (48–49) the receiver guid, and an
+`achievementId` after the chat tag; `CHAT_MSG_CHANNEL` (17) a `channelName`
+(NUL-terminated) before the receiver guid; every other type just the receiver
+guid. Then the length-prefixed `message` and `chatTag`. Optional fields are
+present only when the type's layout carried them (`receiverGuid` only when
+non-zero). The achievement broadcast's `message` is the client's raw template
+(`%s has earned the achievement $a!`); filling it is the consumer's job, as it
+is the client's.
 
 ### Movement/observation extension (additive)
 

@@ -260,7 +260,7 @@ const STATE_ROWS: readonly Row[] = [
   { name: "nextLevelXp", sig: "get state.nextLevelXp: Observed<number> | undefined", purpose: "Experience needed for the next level (read .value)." },
   { name: "money", sig: "get state.money: Observed<number> | undefined", purpose: "Money in copper (read .value)." },
   { name: "inventory", sig: "get state.inventory: InventoryItem[]", purpose: "All observed inventory slots by raw slot id; equipment is `slot < 19` (worn bags 19-22), bag() is the carried view." },
-  { name: "chat", sig: "get state.chat: readonly ChatEntry[]", purpose: "The retained chat tail." },
+  { name: "chat", sig: "get state.chat: readonly ChatEntry[]", purpose: "The retained chat tail, oldest first: { type, senderGuid, senderName?, channelName?, message, achievementId?, seq, ts }. senderName is present when the packet carried one (creature speech: an NPC's say/yell/emote/whisper); a player sender is named by state.nameOf(senderGuid)." },
   { name: "notifications", sig: "get state.notifications: readonly NotificationEntry[]", purpose: "The retained notification tail." },
   { name: "gaps", sig: "get state.gaps: readonly GapRecord[]", purpose: "Observed gaps in the event stream." },
   { name: "anomalies", sig: "get state.anomalies: readonly Anomaly[]", purpose: "Things the stream said that the cache could not reconcile." },
