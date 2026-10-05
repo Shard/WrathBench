@@ -314,8 +314,9 @@ run the extraction. The public site's tiles are a separate upload
 
 `request` entries embed the model's message array (the whole of it on an older
 or CLI-scaffold record, the fresh user message on a fixed-loop slim one) and
-`events_served` entries embed every packet, so nothing ships the raw file to the
-browser. One `TrajectoryTail` per run scans the JSONL forward from wherever it
+`events_served` entries embed packets — every one the window fetched on an
+older record, the ones the model was shown plus a `folded` count on a newer
+one — so nothing ships the raw file to the browser. One `TrajectoryTail` per run scans the JSONL forward from wherever it
 stopped, splitting on bytes (0x0A can never occur inside a UTF-8 sequence, so a
 write that lands mid-character is safe) and keeping only a small summary plus
 the byte range of each line. Big fields collapse to counts; the full JSON of any

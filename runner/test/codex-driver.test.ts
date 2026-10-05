@@ -343,6 +343,73 @@ describe("codex driver", () => {
     auth.trajectory.close();
   }, 30_000);
 
+  test("the CLI's usage is the thread total: each response carries the turn's delta, the total beside it", async () => {
+    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 3 });
+    await runCodexEpisode(options);
+    const records = readTrajectory(runDir);
+    const withUsage = records.filter((r) => r.t === "response" && r["usage"] !== undefined);
+    expect(withUsage).toHaveLength(3);
+    // Every turn spent the same, so every delta is one turn's worth...
+    for (const r of withUsage) {
+      expect(r["usage"]).toEqual({
+        prompt_tokens: 1916,
+        completion_tokens: 157,
+        total_tokens: 2073,
+        cached_tokens: 1408,
+        cache_write_tokens: 0,
+        reasoning_tokens: 128,
+      });
+    }
+    // ...while the CLI's own figure climbed, and is kept as reported.
+    expect(withUsage.map((r) => (r["usageCumulative"] as { prompt_tokens: number }).prompt_tokens)).toEqual([1916, 3832, 5748]);
+    const results = records.filter((r) => r.t === "codex_result");
+    expect(results.map((r) => (r["usage"] as { prompt_tokens: number }).prompt_tokens)).toEqual([1916, 1916, 1916]);
+    expect(results.map((r) => (r["usageRaw"] as { input_tokens: number }).input_tokens)).toEqual([1916, 3832, 5748]);
+    trajectory.close();
+  }, 30_000);
+
+  test("a thread total that goes backwards counts zero, is noted for the operator, and is the next baseline", async () => {
+    const { runDir, trajectory, options } = setupEpisode("regress", { maxTurns: 4 });
+    await runCodexEpisode(options);
+    const records = readTrajectory(runDir);
+    const prompts = records
+      .filter((r) => r.t === "response" && r["usage"] !== undefined)
+      .map((r) => (r["usage"] as { prompt_tokens: number }).prompt_tokens);
+    expect(prompts).toEqual([1916, 1916, 0, 1916]);
+    const notes = records.filter((r) => r.t === "harness" && r["kind"] === "usage_regressed");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.["turn"]).toBe(3);
+    trajectory.close();
+  }, 40_000);
+
+  test("a turn on a new thread is measured from zero, not from the old thread's total", async () => {
+    const { runDir, trajectory, options } = setupEpisode("new-thread", { maxTurns: 2 });
+    await runCodexEpisode(options);
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "codex_thread").map((r) => r["threadId"])).toEqual(["fake-thread-1", "fake-thread-2"]);
+    const prompts = records
+      .filter((r) => r.t === "response" && r["usage"] !== undefined)
+      .map((r) => (r["usage"] as { prompt_tokens: number }).prompt_tokens);
+    expect(prompts).toEqual([1916, 1916]);
+    trajectory.close();
+  }, 30_000);
+
+  test("the CLI failing to write its thread on a full disk pauses as infrastructure-failed, and the model is told nothing of it", async () => {
+    const { runDir, recordPath, trajectory, options } = setupEpisode("enospc", { maxTurns: 3 });
+    const outcome = await runCodexEpisode(options);
+    expect(outcome).toMatchObject({ kind: "paused", reason: "infrastructure-failed" });
+    expect(outcome.kind === "paused" && outcome.detail).toContain("No space left on device");
+    expect(trajectory.runRow("run-test")?.["pause_reason"]).toBe("infrastructure-failed");
+    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBeNull();
+    // One turn, then the pause: no second prompt, so nothing reached the model.
+    const messages = readRecord(recordPath)["userMessages"] as string[];
+    expect(messages).toHaveLength(1);
+    expect(messages.join("\n")).not.toContain("rollout");
+    // The CLI's own line is on the record for the operator.
+    expect(readTrajectory(runDir).some((r) => r.t === "codex_stderr" && String(r["text"]).includes("No space left"))).toBe(true);
+    trajectory.close();
+  }, 20_000);
+
   test("a usage-limit line on stderr with a non-zero exit also pauses", async () => {
     const { trajectory, options } = setupEpisode("limit-stderr", { maxTurns: 3 });
     expect(await runCodexEpisode(options)).toMatchObject({ kind: "paused", reason: "quota-exhausted" });
@@ -378,7 +445,16 @@ describe("codex driver", () => {
     expect(outcome).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
     const record = readRecord(recordPath);
     expect(record["threadArgs"]).toEqual([null, "fake-thread"]);
-    expect((record["userMessages"] as string[])[1]).toContain("ended with an error from the CLI");
+    // The model hears that the turn ended early, and nothing of the CLI's own words...
+    const notice = (record["userMessages"] as string[])[1]!;
+    expect(notice).toContain("the previous turn ended with an error from the CLI before it finished.");
+    expect(notice).not.toContain("stream disconnected");
+    // ...which are on the record for the operator.
+    expect(
+      readTrajectory(runDir).some(
+        (r) => r.t === "harness" && r["kind"] === "session_note" && String(r["text"]).includes("stream disconnected"),
+      ),
+    ).toBe(true);
     const results = readTrajectory(runDir).filter((r) => r.t === "codex_result");
     expect(results.map((r) => r["status"])).toEqual(["failed", "completed"]);
     trajectory.close();
@@ -563,6 +639,14 @@ describe("detectCodexFailure", () => {
     expect(detectCodexFailure('{"message":"stopped","codexErrorInfo":"misalignmentPolicyViolation"}')).toMatchObject({ kind: "terminate", reason: "provider-policy" });
     // the policy verdict wins over limit words in the same message
     expect(detectCodexFailure("misalignment monitor: task paused; usage limit unaffected")).toMatchObject({ reason: "provider-policy" });
+    // The CLI failing on its host: a pause for the operator, whatever else the line says.
+    expect(detectCodexFailure("ERROR codex_core::rollout: failed to record rollout items: No space left on device (os error 28)")).toMatchObject({ kind: "pause", reason: "infrastructure-failed" });
+    expect(detectCodexFailure("rollout writer failed: os error 28")).toMatchObject({ kind: "pause", reason: "infrastructure-failed" });
+    expect(detectCodexFailure("failed to resume local thread recorder: io error")).toMatchObject({ kind: "pause", reason: "infrastructure-failed" });
+    expect(detectCodexFailure("failed to initialize thread persistence: ENOSPC")).toMatchObject({ kind: "pause", reason: "infrastructure-failed" });
+    // An old thread's file cleaned up under the CLI is benign, and so is a slow model list.
+    expect(detectCodexFailure("WARN state db returned stale rollout path for thread 01a0")).toBeNull();
+    expect(detectCodexFailure("failed to refresh available models: request timed out")).toBeNull();
     expect(detectCodexFailure("stream disconnected before completion")).toBeNull();
     expect(detectCodexFailure("ordinary assistant text about limits of the sandbox")).toBeNull();
     expect(detectCodexFailure(undefined)).toBeNull();

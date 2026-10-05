@@ -62,8 +62,8 @@ import { join } from "node:path";
 import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
-import { foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
-import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
+import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
+import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
@@ -980,6 +980,14 @@ let watchedReleased = false;
  * as meaning anything when it goes off again.
  */
 let watchedGhost = false;
+/**
+ * The ghost bit as the previous event left it, undefined until first seen. A
+ * release read off the bit needs it to RISE: the bit is still set for an event
+ * or two after the resurrect's clear marker, and reading "set" as "released"
+ * there re-opened the window the resurrect had just closed — every death was
+ * written as death, release, resurrect, release, resurrect.
+ */
+let lastGhostRead: boolean | undefined;
 
 function pushDeathSignal(signal: DeathSignal): void {
   deathSignals.push(signal);
@@ -1034,9 +1042,11 @@ client.events.onAny((event) => {
     });
   }
 
-  // The release: the graveyard packet, or the ghost flag turning on.
-  if (ghost === true) watchedGhost = true;
-  if (!watchedReleased && (releasedTo || ghost === true)) {
+  // The release: the graveyard packet, or the ghost flag turning on — an
+  // edge, not a level (`lastGhostRead`).
+  const ghostRose = ghost === true && lastGhostRead !== true;
+  if (ghost !== undefined) lastGhostRead = ghost;
+  if (!watchedReleased && (releasedTo || ghostRose)) {
     watchedReleased = true;
     const grave = point(self.graveyard?.value);
     pushDeathSignal({
@@ -1046,6 +1056,10 @@ client.events.onAny((event) => {
       ...(grave === undefined ? {} : { graveyard: grave }),
     });
   }
+  // The bit counts as "seen on" only inside a window this watcher opened: the
+  // stale bit after a resurrect latched outside one would make the next
+  // death's first `ghost === false` read as a resurrect.
+  if (ghost === true && (watchedDead || watchedReleased)) watchedGhost = true;
 
   // The resurrect: the clear marker, health back above the single point a
   // released ghost carries, or the ghost flag turning off again. Read against
@@ -1061,15 +1075,65 @@ client.events.onAny((event) => {
   }
 });
 
-function recentEvents(limit: number): EventSummary[] {
-  return client.events.recent(limit).map((e) => ({
+type StreamEventOf = ReturnType<typeof client.events.recent>[number];
+
+function eventSummary(e: StreamEventOf): EventSummary {
+  return {
     seq: e.seq,
     ts: e.ts,
     opcode: e.opcode,
     data: toJsonSafe(e.data, 5),
     schemaError:
       "schemaError" in e && e.schemaError !== undefined ? String(e.schemaError) : undefined,
-  }));
+  };
+}
+
+function recentEvents(limit: number): EventSummary[] {
+  return client.events.recent(limit).map(eventSummary);
+}
+
+// ---------------------------------------------------------- context window
+
+/**
+ * The turn's event window, kept apart from the SDK's event buffer.
+ *
+ * The context shows the last `CONTEXT_POLICY.EVENT_WINDOW` events that are not
+ * ambient movement (context.ts, `EVENT_WINDOW_EXCLUDE`). The SDK buffer holds
+ * the last 500 events of every kind, and where transports report every second
+ * ambient ones are nine in ten of them, so filtering that buffer would reach
+ * back only as far as the ambient rate allowed. So the non-ambient events are
+ * ringed here as they arrive — O(1) per event, `EVENT_WINDOW` entries, the
+ * summaries built only when a turn asks — and ambient ones only counted.
+ * Each entry remembers the ambient count at its arrival, so the number folded
+ * out of the span a window covers is a subtraction. The SDK buffer and the
+ * model's own `events.recent()` are untouched.
+ *
+ * Reach: the last EVENT_WINDOW non-ambient events since this child started;
+ * a sandbox restart empties it, as it does the SDK buffer.
+ */
+const CONTEXT_EVENT_CAP = CONTEXT_POLICY.EVENT_WINDOW;
+const contextRing: { event: StreamEventOf; ambientBefore: number }[] = [];
+let contextAmbient = 0;
+let contextSignals = 0;
+
+client.events.onAny((event) => {
+  if (CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(event.opcode)) {
+    contextAmbient++;
+    return;
+  }
+  contextSignals++;
+  contextRing.push({ event, ambientBefore: contextAmbient });
+  if (contextRing.length > CONTEXT_EVENT_CAP) contextRing.shift();
+});
+
+function contextEvents(limit: number): ContextEvents {
+  const take = contextRing.slice(-Math.max(0, Math.min(limit, CONTEXT_EVENT_CAP)));
+  // The span starts at the oldest event shown when older non-ambient events
+  // were left out; when every one this child has seen is shown, it is the
+  // child's whole life, and an all-ambient stream says so rather than "none".
+  const whole = take.length === contextSignals;
+  const folded = whole || take.length === 0 ? contextAmbient : contextAmbient - take[0]!.ambientBefore;
+  return { events: take.map((r) => eventSummary(r.event)), folded };
 }
 
 /**
@@ -1146,11 +1210,13 @@ function handle(msg: HostToChild | HostcallResult): void {
         const value =
           msg.method === "recent_events"
             ? recentEvents(msg.params.limit ?? 50)
-            : msg.method === "death_signals"
-              ? drainDeathSignals()
-              : msg.method === "action_hints"
-                ? drainHints()
-                : stateSnapshot();
+            : msg.method === "context_events"
+              ? contextEvents(msg.params.limit ?? CONTEXT_EVENT_CAP)
+              : msg.method === "death_signals"
+                ? drainDeathSignals()
+                : msg.method === "action_hints"
+                  ? drainHints()
+                  : stateSnapshot();
         send({ t: "rpc_result", id: msg.id, ok: true, value });
       } catch (err) {
         send({ t: "rpc_result", id: msg.id, ok: false, error: String(err) });

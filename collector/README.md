@@ -112,6 +112,17 @@ per second over reply spans. Reimplementing those in SQL would mean two
 implementations that can disagree about a published number, so the collector
 runs *the viewer's own code* (`runner/viewer/tail.ts`, `runner/src/models.ts`)
 as it tails and stores the answer. Same code, same bytes, by construction.
+A change to that code that gives the same bytes a different answer raises
+`RUN_TOTALS_DERIVATION` in `tail.ts`, which is part of the totals signature,
+so every run is re-derived once on the next pass.
+
+**The token columns of `turns` are each line's `usage` as written.** One
+corpus shape reads wrong there: a codex `response` written before the driver
+logged per-turn deltas (no `usageCumulative` beside its `usage`) carries the
+CLI thread's running total, so summing `input_tokens` over such a run counts
+every earlier turn again on every turn. `run_totals` carries the per-turn
+figure the viewer derives for those records (`runner/src/codex-usage.ts`);
+query that, not a SQL sum, for a codex run's tokens.
 
 Archived runs are ingested too, flagged `archived = 1`. The viewer hides them
 and the fleet scheduler must see them; that filter belongs in the query, not in

@@ -21,7 +21,7 @@ import { splitStatements } from "../src/schema";
 import { tailLines } from "../src/tailer";
 import { parseLine, turnRow, usageOf, TURN_KINDS } from "../src/lines";
 import { retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
-import { RunTotalsScanner } from "../../runner/viewer/tail";
+import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
 
 const roots: string[] = [];
@@ -237,6 +237,26 @@ describe("the stored derivations are the same objects the viewer computed", () =
 });
 
 describe("resume and replay", () => {
+  test("totals stored under an older derivation are re-derived once, the file untouched", async () => {
+    const runsDir = tmpRoot();
+    writeRun(runsDir, "run-derive");
+    const { collector, sink, offsets } = collectorOver(runsDir);
+    await collector.pass();
+    expect(rowsOf(sink, "run_totals")).toHaveLength(1);
+    const sig = offsets.signature("run-derive", "totals")!;
+    expect(sig.startsWith(`d${RUN_TOTALS_DERIVATION}:`)).toBe(true);
+    // What a collector from before the revision stored: the bare (size, mtime).
+    offsets.setSignature("run-derive", "totals", sig.slice(sig.indexOf(":") + 1));
+    // A restarted collector over the same offsets: the file has not moved, the
+    // derivation has, so the totals are written again — and only once.
+    const cfg = readConfig({ runsDir, dataDir: runsDir, stateDb: ":memory:" });
+    const restarted = new Collector({ cfg, sink, offsets, log: () => {} });
+    expect((await restarted.pass()).totals).toBe(1);
+    expect(rowsOf(sink, "run_totals")).toHaveLength(2);
+    const again = new Collector({ cfg, sink, offsets, log: () => {} });
+    expect((await again.pass()).totals).toBe(0);
+  });
+
   test("a second pass over an unchanged tree sends nothing", async () => {
     const runsDir = tmpRoot();
     writeRun(runsDir, "run-b");

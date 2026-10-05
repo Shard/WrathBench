@@ -11,6 +11,7 @@ import {
   CONTEXT_POLICY,
   PLAYER_FLAGS_GHOST,
   assembleContext,
+  eventWindow,
   formatStateSummary,
   messageWindow,
   messageWindowCut,
@@ -26,7 +27,7 @@ import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, 
 import { harnessOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { DeathSignal } from "./sandbox/ipc";
+import type { ContextEvents, DeathSignal } from "./sandbox/ipc";
 import type { Scratchpad } from "./scratchpad";
 import type { ItemSample, Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
@@ -859,20 +860,39 @@ export class ContextBuilder {
       }
     }
     pendingNotices.push(...this.o.sandbox.drainNotices());
-    let events: Parameters<typeof assembleContext>[0]["events"] = [];
+    // The window: ambient movement excluded first, then the last EVENT_WINDOW
+    // of what remains (context.ts, `EVENT_WINDOW_EXCLUDE`). The child keeps
+    // those in a ring of their own; a sandbox without it (an older child, a
+    // test's fake) is read the old way, over its raw tail.
+    const sandbox = this.o.sandbox as SandboxHost & { contextEvents?: (limit: number) => Promise<ContextEvents> };
+    let fetched: ContextEvents = { events: [], folded: 0 };
     try {
-      events = await this.o.sandbox.recentEvents(CONTEXT_POLICY.EVENT_WINDOW);
+      fetched =
+        typeof sandbox.contextEvents === "function"
+          ? await sandbox.contextEvents(CONTEXT_POLICY.EVENT_WINDOW)
+          : { events: await sandbox.recentEvents(CONTEXT_POLICY.EVENT_WINDOW), folded: 0 };
     } catch {
       // sandbox mid-restart: an empty window is honest
     }
+    const { window: events, folded } = eventWindow(fetched.events, fetched.folded);
     const contextText = assembleContext({
       stateSummary: formatStateSummary(snap, { sessionLive: this.live }),
       events,
+      folded,
       scratchpad: this.o.scratchpad.read(),
       notices: pendingNotices.splice(0, pendingNotices.length),
       turn,
     });
-    this.o.trajectory.append({ t: "events_served", via: "context", count: events.length, events });
+    // What the model was shown, and how many ambient events the span folded —
+    // the same shape the recent_events tool logs. The ambient packets
+    // themselves were never shown; logging them was most of the file.
+    this.o.trajectory.append({
+      t: "events_served",
+      via: "context",
+      count: events.length,
+      events,
+      ...(folded > 0 ? { folded } : {}),
+    });
     return contextText;
   }
 }

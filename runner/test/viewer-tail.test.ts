@@ -10,6 +10,7 @@ import {
   areaFactsFrom,
   achievementFactsFrom,
   deathFactsFrom,
+  estimateTokens,
   levelUpFactsFrom,
   reflectMarkOf,
   reflectionWindowsFrom,
@@ -835,6 +836,87 @@ describe("tokensPerSecond", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("a codex run written before per-turn usage: the thread totals become per-turn deltas", async () => {
+    // The CLI reports the thread's running total on every turn. Older records
+    // carry it as `usage`; summed as written, three turns of 100 prompt tokens
+    // each read as 600. Two episodes (each a `driver` record and a new thread),
+    // one counter that went backwards, and a record the fixed driver wrote.
+    const dir = tempDir("wrathbench-codex-usage-");
+    const path = join(dir, "trajectory.jsonl");
+    const resp = (ts: number, turn: number, prompt: number, completion: number, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        t: "response", ts, turn, message: { role: "assistant", content: null },
+        usage: { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion, cached_tokens: prompt - 10 },
+        ...extra,
+      });
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        JSON.stringify({ t: "driver", ts: 1001, driver: "codex" }),
+        JSON.stringify({ t: "request", ts: 1100, turn: 1, messages: [{ role: "user", content: "x" }] }),
+        JSON.stringify({ t: "codex_thread", ts: 1101, turn: 1, threadId: "a" }),
+        resp(1200, 1, 100, 5),
+        JSON.stringify({ t: "request", ts: 1300, turn: 2, messages: [{ role: "user", content: "x" }] }),
+        resp(1400, 2, 200, 10),
+        JSON.stringify({ t: "request", ts: 1500, turn: 3, messages: [{ role: "user", content: "x" }] }),
+        resp(1600, 3, 300, 15),
+        // the thread lost a turn: its total fell; that turn counts zero
+        JSON.stringify({ t: "request", ts: 1700, turn: 4, messages: [{ role: "user", content: "x" }] }),
+        resp(1800, 4, 250, 12),
+        JSON.stringify({ t: "request", ts: 1900, turn: 5, messages: [{ role: "user", content: "x" }] }),
+        resp(2000, 5, 350, 17),
+        JSON.stringify({ t: "pause", ts: 2100 }),
+        JSON.stringify({ t: "resume", ts: 3000 }),
+        // a new episode, a new thread: measured from zero
+        JSON.stringify({ t: "driver", ts: 3001, driver: "codex" }),
+        JSON.stringify({ t: "request", ts: 3100, turn: 6, messages: [{ role: "user", content: "x" }] }),
+        JSON.stringify({ t: "codex_thread", ts: 3101, turn: 6, threadId: "b" }),
+        resp(3200, 6, 40, 2),
+        // written by the fixed driver: already the turn's own figure
+        JSON.stringify({ t: "request", ts: 3300, turn: 7, messages: [{ role: "user", content: "x" }] }),
+        resp(3400, 7, 60, 3, {
+          usageCumulative: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, cached_tokens: 90 },
+        }),
+        "",
+      ].join("\n"),
+    );
+    const totals = await scanRunTotals(path);
+    const tail = new TrajectoryTail(path);
+    const scanned = await tail.scan();
+    // 100+100+100+0+100 on thread a, 40 on thread b, 60 as written. The turn
+    // whose total fell reports no prompt of its own, so its request's chars/4
+    // estimate stands in, as for any turn nothing reported a prompt for.
+    const fell = scanned.find((e) => e.t === "request" && e["turn"] === 4)!;
+    expect(totals.tokens.promptTokens).toBe(500 + estimateTokens(Number(fell["promptChars"])));
+    expect(totals.tokens.completionTokens).toBe(5 + 5 + 5 + 0 + 5 + 2 + 3);
+    expect(totals.tokens.cacheReadTokens).toBe(90 + 100 + 100 + 0 + 100 + 30 + 50);
+    // The run page reads the same thing off its own index.
+    expect(tokenTotals(scanned)).toEqual(totals.tokens);
+    expect(tokensPerSecond(scanned)).toEqual(totals.tps);
+    const firstUsage = scanned.find((e) => e.t === "response" && e["turn"] === 2)!["usage"] as { prompt: number };
+    expect(firstUsage.prompt).toBe(100);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a claude-code or fixed-loop run's usage is never re-read as a thread total", async () => {
+    const dir = tempDir("wrathbench-not-codex-");
+    const path = join(dir, "trajectory.jsonl");
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ t: "meta", ts: 1000 }),
+        JSON.stringify({ t: "request", ts: 1100, turn: 1, messages: [{ role: "user", content: "x" }] }),
+        JSON.stringify({ t: "response", ts: 1200, turn: 1, message: { role: "assistant", content: "a" }, usage: { prompt_tokens: 100, completion_tokens: 5 } }),
+        JSON.stringify({ t: "request", ts: 1300, turn: 2, messages: [{ role: "user", content: "x" }] }),
+        JSON.stringify({ t: "response", ts: 1400, turn: 2, message: { role: "assistant", content: "b" }, usage: { prompt_tokens: 200, completion_tokens: 10 } }),
+        "",
+      ].join("\n"),
+    );
+    expect((await scanRunTotals(path)).tokens.promptTokens).toBe(300);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("an empty run has no rate at all", () => {
     expect(tokensPerSecond([])).toEqual({ overall: null, recent: null, replies: 0, recentReplies: 0 });
   });
@@ -1380,6 +1462,39 @@ describe("level and death milestones", () => {
     expect(deaths!.first!.released).toBe(false);
     expect(deaths!.first!.zone).toBe(12);
     expect(deaths!.sites).toHaveLength(2);
+  });
+
+  test("the death watcher's echoed release/resurrect pair is not counted twice", async () => {
+    // What the sandbox child wrote for every death until it read the ghost bit
+    // as an edge: death, release (with the graveyard), resurrect, then a second
+    // release and resurrect in the same drain, a millisecond apart.
+    const at = (kind: string, ts: number, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ t: "milestone", ts, kind, turn: 2, ...extra });
+    const echoed = [
+      death(4444),
+      at("release", 5000, { graveyard: { map: 0, x: 1, y: 2, z: 3 } }),
+      at("resurrect", 65_000),
+      at("release", 65_000),
+      at("resurrect", 65_001),
+    ];
+    const path = fileWith([meta, level(3, undefined, 0), ...echoed, death(90_000), at("release", 91_000), at("resurrect", 150_000)]);
+    const { deaths } = await scanRunTotals(path);
+    expect([deaths!.deaths, deaths!.releases, deaths!.resurrects]).toEqual([2, 2, 2]);
+    const tail = new TrajectoryTail(path);
+    await tail.scan();
+    expect(tail.deaths).toEqual(deaths);
+  });
+
+  test("a release long after a resurrect is a release, death recorded or not", () => {
+    const facts = deathFactsFrom(
+      [
+        { kind: "resurrect", ts: 1_000, turn: 1 },
+        { kind: "release", ts: 60_000, turn: 2 },
+        { kind: "resurrect", ts: 90_000, turn: 2 },
+      ],
+      true,
+    )!;
+    expect([facts.releases, facts.resurrects]).toEqual([1, 2]);
   });
 
   test("no mark of either kind is null; a level mark alone opens the death reading", () => {
