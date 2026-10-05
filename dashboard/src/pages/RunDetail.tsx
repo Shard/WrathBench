@@ -61,6 +61,8 @@ import { InventoryPanel } from "../components/Inventory";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
+import { actionLines, isActionsEntry, moveVerdicts, type MoveVerdict } from "../lib/actionlog";
+import type { ActionsEntry } from "@viewer/api-types";
 import { groupTurn, isReflectTool, reflectingAt } from "../lib/reflect";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import { modelsHref, rosterNameFor } from "../lib/models";
@@ -444,6 +446,8 @@ export default function RunDetail() {
    * their DOM instead of rebuilding every row per tail append.
    */
   const groups = createMemo<FeedGroup[]>((prev) => groupFeed(entries(), prev), []);
+  /** The window's `move` verdicts, for the action lines of the moves they end. */
+  const verdicts = createMemo(() => moveVerdicts(entries()));
 
   /**
    * A plain-language guess at what the session is doing, from the newest entry
@@ -459,6 +463,7 @@ export default function RunDetail() {
       case "response":
         return "reading the reply";
       case "snippet":
+      case "actions":
         return "running a snippet";
       case "snippet_result":
       case "tool_result":
@@ -622,6 +627,7 @@ export default function RunDetail() {
                       `playtimeMs` is the figure that does not.
                     */}
                     <RunStart.Provider value={() => run().startedAt}>
+                    <MoveVerdicts.Provider value={verdicts}>
                     <div class="feed">
                       {/*
                         A trajectory is one attempt's, so the feed cannot be
@@ -677,6 +683,9 @@ export default function RunDetail() {
                               if (isHarnessEntry(g.entry)) {
                                 return <NoticeRow entry={g.entry} runId={run().runId} preset={expand()} />;
                               }
+                              if (isActionsEntry(g.entry)) {
+                                return <ActionsRow entry={g.entry} runId={run().runId} preset={expand()} />;
+                              }
                               return <Entry entry={g.entry} runId={run().runId} preset={expand()} />;
                           }
                         }}
@@ -703,6 +712,7 @@ export default function RunDetail() {
                         )}
                       </Show>
                     </div>
+                    </MoveVerdicts.Provider>
                     </RunStart.Provider>
                   </Show>
                 </div>
@@ -1250,6 +1260,14 @@ const TIME_FMT = new Intl.DateTimeFormat(undefined, {
 const RunStart = createContext<() => number | null>(() => null);
 
 /**
+ * The window's move verdicts by move id (`lib/actionlog.ts`), for the one
+ * outcome an action line draws: how a `move_to` ended. A context for the same
+ * reason as `RunStart` — every action block asks the same question of the
+ * same window.
+ */
+const MoveVerdicts = createContext<() => Map<number, MoveVerdict[]>>(() => new Map());
+
+/**
  * The timestamp cell every head row ends with: how far into the run this
  * happened, with the absolute time on hover. Elapsed rather than wall clock
  * because "03:41:22" is not a question anyone reading a trajectory has, and
@@ -1413,6 +1431,9 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
           <FoldBlock text={input()} defaultOpen={expandedBy(props.preset, "call")} />
         </div>
       </Show>
+      <Show when={g().actions.length > 0}>
+        <ActionLines records={g().actions} preset={props.preset} />
+      </Show>
       <Show
         when={g().result}
         fallback={
@@ -1445,6 +1466,71 @@ function CallCard(props: { g: CallGroup; runId: string; preset: ExpandPreset; re
           );
         }}
       </Show>
+    </div>
+  );
+}
+
+/** How many action lines show before the block folds. */
+const ACTION_FOLD_LINES = 8;
+
+/**
+ * What a snippet put on the wire, one line per dispatch (`lib/actionlog.ts`).
+ * Folds like every other block, under the same preset as the code above it.
+ * A refused dispatch reads in the error colour, the SDK's own client-parity
+ * traffic dimmed; the module's hint and the timing are on the hover.
+ */
+function ActionLines(props: { records: readonly ActionsEntry[]; preset: ExpandPreset }) {
+  const verdicts = useContext(MoveVerdicts);
+  const lines = createMemo(() =>
+    props.records.flatMap((r) => actionLines(r, verdicts()).map((l) => ({ ...l, routine: r.routine === true }))),
+  );
+  const [over, setOver] = createSignal<boolean | null>(null);
+  createEffect(on(() => props.preset, () => setOver(null), { defer: true }));
+  const open = (): boolean => over() ?? expandedBy(props.preset, "call");
+  const shown = () => (open() ? lines() : lines().slice(0, ACTION_FOLD_LINES));
+  return (
+    <div class="body actions">
+      <For each={shown()}>
+        {(l) => (
+          <div class="action-line" classList={{ err: l.failed, dim: l.auto }} title={l.title}>
+            <Show when={l.routine}>
+              <span class="dim">routine · </span>
+            </Show>
+            {l.text}
+          </div>
+        )}
+      </For>
+      <Show when={lines().length > ACTION_FOLD_LINES}>
+        <button class="toggle" onClick={() => setOver(!open())}>
+          {open() ? "collapse" : `expand · ${lines().length} actions`}
+        </button>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * An action-log record no call in the window owns: its call is off the top,
+ * or it was dispatched outside every snippet (an event callback).
+ */
+function ActionsRow(props: { entry: ActionsEntry; runId: string; preset: ExpandPreset }) {
+  return (
+    <div class="entry">
+      <div class="head">
+        <span class="t">actions</span>
+        <Show when={props.entry.routine === true}>
+          <span>routine</span>
+        </Show>
+        <Show when={props.entry.turn !== undefined}>
+          <span>turn {props.entry.turn}</span>
+        </Show>
+        <span class="spacer" />
+        <When ts={props.entry.ts} />
+        <Show when={props.entry.clipped === true}>
+          <RawLink runId={props.runId} i={props.entry.i} />
+        </Show>
+      </div>
+      <ActionLines records={[props.entry]} preset={props.preset} />
     </div>
   );
 }

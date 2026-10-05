@@ -434,6 +434,10 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .entry.harness > .head { border-bottom: none; }
 .entry.harness > .head + .body { padding-top: 0; }
 
+/* The action log: what a snippet put on the wire, one short line per dispatch. */
+.entry .body.actions { padding: 6px 10px 8px; font-size: var(--fs-sm); }
+.action-line { white-space: pre-wrap; word-break: break-word; }
+
 /* A state sample reads as one line; the head IS the row. */
 .entry.state > .head, .entry.harness > .head { flex-wrap: wrap; }
 .entry.state > .head { border-bottom: none; }

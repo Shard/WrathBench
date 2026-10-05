@@ -44,6 +44,7 @@
 
 import type {
   AchievementFacts,
+  ActionNoteView,
   CharacterStatus,
   ItemSample,
   AgentPosition,
@@ -1084,6 +1085,8 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "items", "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
   ],
   move: ["moveId", "map", "x", "y", "z", "target", "status"],
+  // The notes themselves cross `projectActionNotes`, field by field.
+  actions: ["callTs", "routine", "dropped", "actions"],
   milestone: [
     "kind", "from", "to", "ids", "points", "xp", "observedTs", "position", "zone", "area", "graveyard", "released",
     "id", "name", "categoryId",
@@ -1103,6 +1106,73 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
   meta: ["runId", "harnessVersion", "startedAt", "resumedFresh"],
   driver: ["driver", "harness", "systemPromptChars"],
 };
+
+/**
+ * The action log's notes (`ActionNoteView`), rebuilt field by field. The
+ * public facts are the ones the rule already passes elsewhere: action names,
+ * ids, coordinates, the module's error codes and hints (harness text, not game
+ * text), and the client-cache names `names` carries — "names and ids stay".
+ * `args` is the request body the SDK built, copied by key against the union
+ * of the body fields `ActionRequest` (`sdk/src/protocol.ts`) declares, scalar
+ * (or array-of-scalar) values only. An action that grows a field ships without
+ * it until it is listed here. Model-authored text in it (`say`'s text, a raw
+ * payload) is the residual the content boundary already names for snippet
+ * code.
+ */
+const ACTION_NOTE_SCALARS = ["ts", "action", "status", "ms", "error", "hint", "moveId", "count", "lastTs", "auto"] as const;
+const ACTION_NAME_KEYS = ["target", "spell", "item", "quest"] as const;
+const ACTION_ARG_KEYS: ReadonlySet<string> = new Set([
+  "text", "x", "y", "z", "guid", "orientation", "spellId", "targetGuid", "menuId", "optionId", "questId",
+  "rewardIndex", "slot", "itemId", "count", "itemGuid", "bag", "talentId", "rank", "talents", "opcode", "payload",
+]);
+
+function scalarOrList(v: unknown): boolean {
+  if (v === null || ["string", "number", "boolean"].includes(typeof v)) return true;
+  return Array.isArray(v) && v.every(scalarOrList);
+}
+
+function projectActionNotes(v: unknown): ActionNoteView[] {
+  if (!Array.isArray(v)) return [];
+  const out: ActionNoteView[] = [];
+  for (const raw of v) {
+    if (raw === null || typeof raw !== "object") continue;
+    const n = raw as Record<string, unknown>;
+    const note: Record<string, unknown> = {};
+    for (const k of ACTION_NOTE_SCALARS) {
+      const x = n[k];
+      if (typeof x === "string" || typeof x === "number" || typeof x === "boolean") note[k] = x;
+    }
+    if (typeof note["action"] !== "string" || typeof note["ts"] !== "number") continue;
+    if (n["args"] !== null && typeof n["args"] === "object" && !Array.isArray(n["args"])) {
+      const args: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(n["args"] as Record<string, unknown>)) {
+        if (!ACTION_ARG_KEYS.has(k) || !scalarOrList(x)) continue;
+        args[k] = plain(x);
+      }
+      if (Object.keys(args).length > 0) note["args"] = args;
+    }
+    if (n["names"] !== null && typeof n["names"] === "object") {
+      const names: Record<string, string> = {};
+      for (const k of ACTION_NAME_KEYS) {
+        const x = (n["names"] as Record<string, unknown>)[k];
+        if (typeof x === "string") names[k] = x;
+      }
+      if (Object.keys(names).length > 0) note["names"] = names;
+    }
+    out.push(note as unknown as ActionNoteView);
+  }
+  return out;
+}
+
+/** A name → count tally, numbers only. */
+function projectCounts(v: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof x === "number" && Number.isFinite(x)) out[k] = x;
+  }
+  return out;
+}
 
 /** A JSON deep copy: the value as parsed from the file, with nothing added. */
 function plain(v: unknown): unknown {
@@ -1153,9 +1223,13 @@ export function projectEntry(e: EntrySummary): EntrySummary {
     out[k] =
       k === "items" && e.t === "state"
         ? projectItems(v as ItemSample[] | null)
-        : isComparabilityTuple(v)
-          ? projectComparability(v)
-          : plain(v);
+        : e.t === "actions" && k === "actions"
+          ? projectActionNotes(v)
+          : e.t === "actions" && k === "dropped"
+            ? projectCounts(v)
+            : isComparabilityTuple(v)
+              ? projectComparability(v)
+              : plain(v);
   }
   return scrubPathsValue<EntrySummary>(redactGameProse(out));
 }

@@ -16,6 +16,7 @@ import { type ActionsFlush, SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
 import type { ToolContext } from "../src/tools";
 import { Trajectory, readTrajectory } from "../src/trajectory";
+import { summarize } from "../viewer/tail";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -157,6 +158,25 @@ describe("the sandbox logs every action it dispatches", () => {
     const f = flushes.find((x) => x.callTs === 555)!;
     expect(f.actions.length).toBe(120);
     expect(f.dropped).toEqual({ say: 10 });
+  });
+});
+
+describe("the viewer's summary of an actions record", () => {
+  test("keeps every note whole, where the generic summary would cut the list at eight", () => {
+    const notes = Array.from({ length: 20 }, (_, i) => ({
+      ts: i,
+      action: "say",
+      args: { text: `m${i}`, token: TOKEN },
+      status: 200,
+      ms: 1,
+      names: { target: "Ordrick" },
+    }));
+    const s = summarize({ t: "actions", ts: 50, turn: 2, callTs: 40, actions: notes, dropped: { say: 3 } }, 0, 0, 10);
+    expect(s["callTs"]).toBe(40);
+    expect((s["actions"] as unknown[]).length).toBe(20);
+    expect(s["dropped"]).toEqual({ say: 3 });
+    expect((s["actions"] as Record<string, unknown>[])[19]).toMatchObject({ names: { target: "Ordrick" } });
+    expect(JSON.stringify(s)).not.toContain(TOKEN);
   });
 });
 

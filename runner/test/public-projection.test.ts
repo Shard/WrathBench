@@ -1536,3 +1536,47 @@ describe("projectEntries", () => {
     for (const k of ["usageRaw", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "cost_details"]) expect(text).not.toContain(k);
   });
 });
+
+describe("the action log in a public window", () => {
+  test("an actions record ships its notes field by field: names and ids stay, smuggled and secret keys go", () => {
+    const record = {
+      t: "actions",
+      ts: 50,
+      turn: 4,
+      callTs: 40,
+      routine: true,
+      actions: [
+        smuggle({
+          ts: 41,
+          action: "cast_spell",
+          args: smuggle({ spellId: 635, targetGuid: "9", token: POISON.smuggled, nested: { x: POISON.objective } }),
+          status: 409,
+          ms: 3,
+          error: "spell_not_known",
+          hint: "the spellbook has no spell 635",
+          names: smuggle({ spell: "Holy Light", target: SURVIVES.targetName }),
+          count: 2,
+          lastTs: 45,
+        }),
+        { ts: 46, action: "quest_query", args: { questId: 7 }, status: 200, ms: 1, auto: true, names: { quest: SURVIVES.questTitle } },
+        { action: "no_ts_is_dropped", status: 200 },
+      ],
+      dropped: { say: 10, poison: POISON.smuggled },
+      [POISON.smuggled]: 1,
+    };
+    const out = projectEntry(summarize(record, 3, 0, 10));
+    const text = JSON.stringify(out);
+    assertClean(text);
+    expect(text).toContain(SURVIVES.targetName);
+    expect(text).toContain(SURVIVES.questTitle);
+    expect(keyPaths(out)).toEqual(
+      allow([
+        "i", "t", "ts", "start", "end", "turn", "callTs", "routine", "dropped", "dropped.say", "actions",
+        ...under("actions[]", ["ts", "action", "args", "status", "ms", "error", "hint", "names", "count", "lastTs", "auto"]),
+        ...under("actions[].args", ["spellId", "targetGuid", "questId"]),
+        ...under("actions[].names", ["spell", "target", "quest"]),
+      ]),
+    );
+    expect((out["actions"] as unknown[]).length).toBe(2);
+  });
+});
