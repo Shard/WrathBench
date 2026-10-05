@@ -586,6 +586,43 @@ export interface EventsServedEntry extends EntryBase {
   folded?: number;
 }
 
+/**
+ * One dispatched action as the `actions` record carries it
+ * (`ActionNote` in `runner/src/sandbox/ipc.ts`, mirrored here because this
+ * file is the type-only contract the dashboard imports). Everything but
+ * `action`, `ts` and `status` is optional.
+ */
+export interface ActionNoteView {
+  ts: number;
+  action: string;
+  args?: Record<string, unknown>;
+  /** HTTP status; 0 when no answer came. */
+  status: number;
+  ms?: number;
+  error?: string;
+  hint?: string;
+  moveId?: number;
+  names?: { target?: string; spell?: string; item?: string; quest?: string };
+  count?: number;
+  lastTs?: number;
+  auto?: boolean;
+}
+
+/**
+ * An `actions` record: one snippet's dispatches since the last flush. `callTs`
+ * equals the owning `tool_call`'s `dispatchTs` — the join, since the writers
+ * append the two in different orders (`runner/src/trajectory.ts`,
+ * `ActionsLine`). Absent on runs written before the action log, which simply
+ * have no such records.
+ */
+export interface ActionsEntry extends EntryBase {
+  t: "actions";
+  callTs?: number;
+  routine?: boolean;
+  actions: ActionNoteView[];
+  dropped?: Record<string, number>;
+}
+
 /** Everything else: `meta`, `state`, `notice`, `termination`, future types. */
 export interface OtherEntry extends EntryBase {
   t: string;
@@ -599,6 +636,7 @@ export type FeedEntry =
   | ToolCallEntry
   | SnippetResultEntry
   | EventsServedEntry
+  | ActionsEntry
   | OtherEntry;
 
 /**

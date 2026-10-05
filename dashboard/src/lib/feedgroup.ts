@@ -38,6 +38,14 @@
  * Where turn/call/name fields exist on both sides they must agree, so a
  * result can never be glued to a stranger's call across a missing partner.
  *
+ * The action log is the exception to adjacency: an `actions` record carries
+ * the `dispatchTs` of the call whose snippet dispatched it (`callTs`), and the
+ * writers put it on opposite sides of the call — before the `tool_call` on the
+ * post-hoc appenders, between the snippet and its result on the fixed loop — so
+ * it is joined by that value, wherever in the window it sits. A record whose
+ * call is not in the window (or that no call owns: actions outside every
+ * snippet) stays a row of its own.
+ *
  * A card's duration is the result's `ts` minus the call's `dispatchTs`, which
  * every writer stamps with the moment it handed the call to the tool. That is
  * the only reading for a stamped call: the field shapes above say how records
@@ -49,6 +57,7 @@
  */
 
 import type {
+  ActionsEntry,
   EventsServedEntry,
   FeedEntry,
   RequestEntry,
@@ -83,6 +92,8 @@ export interface CallGroup {
   call: ToolCallEntry | null;
   snippet: SnippetEntry | null;
   result: SnippetResultEntry | null;
+  /** The action log of this call's snippet, joined by `callTs`; empty for runs without one. */
+  actions: ActionsEntry[];
   /**
    * `result.ts − call.dispatchTs` (see module comment). On an unstamped
    * legacy call, `result.ts − call.ts` when the shape says the call was
@@ -163,6 +174,7 @@ function snippetMatches(call: ToolCallEntry, s: SnippetEntry): boolean {
 function takeCall(
   entries: readonly FeedEntry[],
   i: number,
+  actionsByCall: ReadonlyMap<number, ActionsEntry[]>,
 ): { group: CallGroup; skipped: FeedEntry[]; next: number } {
   const first = entries[i]!;
   let call: ToolCallEntry | null = null;
@@ -206,7 +218,42 @@ function takeCall(
     }
   }
 
-  return { group: { kind: "call", call, snippet, result, durationMs: callDuration(call, result) }, skipped, next };
+  const actions = typeof call?.dispatchTs === "number" ? (actionsByCall.get(call.dispatchTs) ?? []) : [];
+  return {
+    group: { kind: "call", call, snippet, result, actions, durationMs: callDuration(call, result) },
+    // Joined records render inside the card, not before it.
+    skipped: skipped.filter((s) => !joined(s, actionsByCall)),
+    next,
+  };
+}
+
+/**
+ * The window's action-log records by the call they belong to — only for calls
+ * that are in the window, so a record whose call is off the top still renders.
+ */
+function indexActions(entries: readonly FeedEntry[]): Map<number, ActionsEntry[]> {
+  const calls = new Set<number>();
+  for (const e of entries) {
+    const ts = (e as ToolCallEntry).dispatchTs;
+    if (e.t === "tool_call" && typeof ts === "number") calls.add(ts);
+  }
+  const out = new Map<number, ActionsEntry[]>();
+  for (const e of entries) {
+    if (e.t !== "actions") continue;
+    const callTs = (e as ActionsEntry).callTs;
+    if (typeof callTs !== "number" || !calls.has(callTs)) continue;
+    const list = out.get(callTs) ?? [];
+    list.push(e as ActionsEntry);
+    out.set(callTs, list);
+  }
+  return out;
+}
+
+/** Whether an entry is an action-log record a call in the window has claimed. */
+function joined(e: FeedEntry, actionsByCall: ReadonlyMap<number, ActionsEntry[]>): boolean {
+  if (e.t !== "actions") return false;
+  const callTs = (e as ActionsEntry).callTs;
+  return typeof callTs === "number" && (actionsByCall.get(callTs)?.includes(e as ActionsEntry) ?? false);
 }
 
 /** How long a paired call took; see the module comment for the two readings. */
@@ -247,7 +294,14 @@ function sameGroup(a: FeedGroup, b: FeedGroup): boolean {
       return a.entry === (b as ResponseGroup).entry && a.latencyMs === (b as ResponseGroup).latencyMs;
     case "call": {
       const o = b as CallGroup;
-      return a.call === o.call && a.snippet === o.snippet && a.result === o.result && a.durationMs === o.durationMs;
+      return (
+        a.call === o.call &&
+        a.snippet === o.snippet &&
+        a.result === o.result &&
+        a.durationMs === o.durationMs &&
+        a.actions.length === o.actions.length &&
+        a.actions.every((x, k) => x === o.actions[k])
+      );
     }
     default:
       return a.entry === (b as PlainGroup).entry;
@@ -275,11 +329,19 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
     out.push(old !== undefined && sameGroup(g, old) ? old : g);
   };
 
+  const actionsByCall = indexActions(entries);
+
   /** ts of the last entry that fed or was the model, for response latency. */
   let lastActivityTs: number | null = null;
   let i = 0;
   while (i < entries.length) {
     const e = entries[i]!;
+
+    // Drawn inside its call's card, wherever it sits.
+    if (joined(e, actionsByCall)) {
+      i++;
+      continue;
+    }
 
     if (e.t === "events_served" && (e as EventsServedEntry).via === "context") {
       // The request these events were packed into follows immediately; only
@@ -292,7 +354,7 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
       }
       const req = entries[j];
       if (req !== undefined && req.t === "request") {
-        for (const s of between) emit({ kind: "plain", entry: s });
+        for (const s of between) if (!joined(s, actionsByCall)) emit({ kind: "plain", entry: s });
         emit({ kind: "turn", request: req as RequestEntry, events: e as EventsServedEntry });
         if (req.ts > 0) lastActivityTs = req.ts;
         i = j + 1;
@@ -325,7 +387,7 @@ export function groupFeed(entries: readonly FeedEntry[], prev: readonly FeedGrou
     }
 
     if (e.t === "tool_call" || e.t === "snippet" || isResult(e)) {
-      const taken = takeCall(entries, i);
+      const taken = takeCall(entries, i, actionsByCall);
       for (const s of taken.skipped) emit({ kind: "plain", entry: s });
       emit(taken.group);
       const r = taken.group.result;

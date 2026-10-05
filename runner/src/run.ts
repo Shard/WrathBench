@@ -785,6 +785,7 @@ async function main(): Promise<void> {
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
+    onActions: (flush) => trajectory.recordActions(flush),
   });
   /*
    * The episode clock continues from where the last segment left it: a
