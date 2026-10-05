@@ -17,7 +17,7 @@
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import type { Scratchpad } from "../scratchpad";
-import type { ActionHintNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
   ok: boolean;
@@ -37,6 +37,32 @@ export interface SnippetResult {
   timedOut?: boolean;
   /** Set when the timeout escalated to a kill: all sandbox state was lost. */
   restarted?: boolean;
+}
+
+/**
+ * Which tool call a snippet was: the caller's `dispatchTs` for it (every
+ * trajectory writer stamps the same value on its `tool_call` record) and the
+ * driver turn. The action log carries both, so a reader joins an `actions`
+ * record to its call by `callTs === dispatchTs` whatever order the writers
+ * appended them in.
+ */
+export interface EvalLink {
+  callTs?: number | undefined;
+  turn?: number | undefined;
+}
+
+/**
+ * One flush of the action log for one launching snippet, as the trajectory's
+ * `actions` record carries it (`ActionsLine` in trajectory.ts). `callTs` and
+ * `turn` are absent for actions dispatched outside every snippet, and for a
+ * snippet evaluated without a link (the run's own teardown).
+ */
+export interface ActionsFlush {
+  turn?: number;
+  callTs?: number;
+  routine?: true;
+  actions: ActionNote[];
+  dropped?: Record<string, number>;
 }
 
 export interface HarnessNotice {
@@ -83,6 +109,12 @@ export interface SandboxHostOptions {
   entryPath?: string;
   /** Called for every notice, so the loop can log it as it happens. */
   onNotice?: (notice: HarnessNotice) => void;
+  /**
+   * Called with every action-log flush the child pushes, already linked to its
+   * snippet's tool call, so the owner of the trajectory can write it. Record
+   * only: nothing in it reaches the model.
+   */
+  onActions?: (flush: ActionsFlush) => void;
   now?: () => number;
 }
 
@@ -142,6 +174,9 @@ const STATE_LOSS_RECOVERY =
   "`await connect()` to resubscribe to events, then `await sdk.createSession({...})` " +
   "— a `token_in_use` error means the session is still alive and `sdk` works as-is.";
 
+/** How many evals' links the host keeps for routines still dispatching under them. */
+const EVAL_LINKS_MAX = 256;
+
 export class SandboxHost {
   private proc: Subprocess | null = null;
   private markReady: () => void = () => {};
@@ -150,6 +185,12 @@ export class SandboxHost {
   private readonly abandonedEvals = new Set<number>();
   private ready: Promise<void> = Promise.resolve();
   private readonly notices: HarnessNotice[] = [];
+  /**
+   * The link for each recent eval, by the child's eval id. Kept past the eval
+   * itself because a routine it launched dispatches under its id for as long
+   * as the routine runs; bounded, and an id that aged out writes unlinked.
+   */
+  private readonly evalLinks = new Map<number, EvalLink>();
   /** Consecutive restarts without an intervening successful snippet. */
   consecutiveRestarts = 0;
   totalRestarts = 0;
@@ -309,6 +350,24 @@ export class SandboxHost {
       case "fatal":
         this.notice("session_note", `sandbox reported fatal error: ${msg.error}`);
         return;
+      case "actions": {
+        const sink = this.opts.onActions;
+        if (sink === undefined) return;
+        for (const b of msg.batches) {
+          const link = b.evalId === null ? undefined : this.evalLinks.get(b.evalId);
+          const flush: ActionsFlush = { actions: b.actions };
+          if (link?.turn !== undefined) flush.turn = link.turn;
+          if (link?.callTs !== undefined) flush.callTs = link.callTs;
+          if (b.routine === true) flush.routine = true;
+          if (b.dropped !== undefined) flush.dropped = b.dropped;
+          try {
+            sink(flush);
+          } catch {
+            // A record that failed to write must not take the sandbox's IPC with it.
+          }
+        }
+        return;
+      }
     }
   }
 
@@ -343,10 +402,21 @@ export class SandboxHost {
     });
   }
 
-  /** Evaluate one snippet with the configured hard timeout. */
-  async evalSnippet(code: string): Promise<SnippetResult> {
+  /**
+   * Evaluate one snippet with the configured hard timeout. `link` names the
+   * tool call it is, for the action log (`EvalLink`); it changes nothing about
+   * the evaluation.
+   */
+  async evalSnippet(code: string, link?: EvalLink): Promise<SnippetResult> {
     await this.start();
     const id = this.nextId++;
+    if (link !== undefined) {
+      this.evalLinks.set(id, link);
+      for (const key of this.evalLinks.keys()) {
+        if (this.evalLinks.size <= EVAL_LINKS_MAX) break;
+        this.evalLinks.delete(key);
+      }
+    }
     try {
       const res = await this.request<EvalResultMsg>(
         // The budget is the host's fact, so the host states it: the child hands

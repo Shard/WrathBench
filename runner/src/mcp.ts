@@ -57,6 +57,12 @@ export type OnToolCall = (
 
 export class McpServer {
   private initialized = false;
+  /**
+   * The last `dispatchTs` handed out. Strictly increasing per server, so the
+   * stamp doubles as the call's key: a snippet's `actions` record carries it as
+   * `callTs`, and two calls answered in one millisecond must not share it.
+   */
+  private lastDispatchTs = 0;
 
   constructor(
     private readonly ctx: ToolContext,
@@ -106,7 +112,9 @@ export class McpServer {
         const name = String(msg.params?.["name"] ?? "");
         // Stamped before anything runs, the argument check included, so a
         // refused call's near-zero duration is measured rather than assumed.
-        const dispatchTs = Date.now();
+        const now = Date.now();
+        const dispatchTs = now > this.lastDispatchTs ? now : this.lastDispatchTs + 1;
+        this.lastDispatchTs = dispatchTs;
         // Leniency at the transport edge: some clients send `arguments` as a
         // JSON *string* (sometimes fenced); coerceToolArgs handles that.
         const raw = msg.params?.["arguments"] ?? {};
@@ -114,7 +122,7 @@ export class McpServer {
         // An unparseable call is still a tool result the model reads, so the
         // pending hints ride it as they would any other (`callTool`).
         const result = coerced.ok
-          ? await callTool(this.ctx, name, coerced.args)
+          ? await callTool(this.ctx, name, coerced.args, { dispatchTs })
           : await appendPendingActionHints(this.ctx, { text: coerced.error, isError: true });
         const args = coerced.ok ? coerced.args : raw;
         this.opts.onToolCall?.(name, args, result, dispatchTs);
@@ -196,6 +204,7 @@ async function main(): Promise<void> {
     snippetTimeoutMs: config.snippetTimeoutMs,
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
+    onActions: (flush) => trajectory.recordActions(flush),
   });
 
   const wiki = config.wiki ? openWikiBundle(config.wikiBundle) : undefined;

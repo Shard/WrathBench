@@ -331,6 +331,17 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       base["clipped"] = c.clipped;
       return base;
     }
+    case "actions": {
+      // Kept whole: the sandbox already bounds a record (120 notes per flush,
+      // strings clipped at write), and the generic shrink below would cut the
+      // list to eight and the notes' `names` at depth three. Secret-named keys
+      // are still stripped, as everywhere a record reaches a client.
+      if (typeof rec["callTs"] === "number") base["callTs"] = rec["callTs"];
+      if (rec["routine"] === true) base["routine"] = true;
+      base["actions"] = Array.isArray(rec["actions"]) ? redactSecrets(rec["actions"]) : [];
+      if (rec["dropped"] !== null && typeof rec["dropped"] === "object") base["dropped"] = redactSecrets(rec["dropped"]);
+      return base;
+    }
     case "snippet_result":
     case "tool_result": {
       const c = clip(typeof rec["text"] === "string" ? rec["text"] : "", 8000);
