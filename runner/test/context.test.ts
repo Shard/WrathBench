@@ -114,6 +114,46 @@ describe("assembleContext", () => {
   });
 });
 
+describe("formatStateSummary: the chat tail", () => {
+  // codex-astra freeplay (2026-10): 20,150 of 20,692 HUD chat lines were a bare
+  // guid with nothing after it, because the module read creature speech with
+  // the player layout. The decode is the module's; this pins what the HUD does
+  // with what it now serves.
+  test("a speaker is named from the packet, else from the name query, else by guid", () => {
+    const text = formatStateSummary(
+      {
+        self: { name: "Benchy", guid: "1" },
+        names: { "8": { value: "Quilby" } },
+        chat: [
+          { type: 12, senderGuid: "17365880163140632581", senderName: "Grizzled Sentry", receiverGuid: "1", message: "Halt, traveller." },
+          { type: 1, senderGuid: "8", message: "hello" },
+          { type: 1, senderGuid: "9", message: "anyone there" },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("recent chat (3):\n  <Grizzled Sentry> Halt, traveller.\n  <Quilby> hello\n  <9> anyone there");
+  });
+
+  test("a channel line names its channel, and the achievement broadcast is filled as the client fills it", () => {
+    const text = formatStateSummary(
+      {
+        self: { name: "Benchy", guid: "1" },
+        names: { "8": { value: "Quilby" } },
+        chat: [
+          { type: 17, senderGuid: "8", channelName: "General", message: "anyone selling linen" },
+          { type: 48, senderGuid: "8", receiverGuid: "8", message: "%s has earned the achievement $a!", achievementId: 6 },
+          { type: 48, senderGuid: "11", receiverGuid: "11", message: "%s has earned the achievement $a!" },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(text).toContain("  [General] <Quilby> anyone selling linen");
+    expect(text).toContain("  <Quilby> Quilby has earned the achievement achievement 6!");
+    expect(text).toContain("  <11> 11 has earned the achievement an achievement!");
+  });
+});
+
 describe("formatStateSummary", () => {
   test("position names the zone and subzone first, ids and coordinates kept", () => {
     const text = formatStateSummary(

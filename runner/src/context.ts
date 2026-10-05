@@ -230,8 +230,10 @@ export interface SnapshotLike {
   trade?: { status?: unknown; ts?: unknown };
   /** The open-window fold the sandbox computes from the event stream. */
   ui?: UiOpenWindows;
-  chat?: { senderGuid?: unknown; message?: unknown }[];
+  chat?: ChatLineLike[];
   notifications?: { text?: unknown }[];
+  /** `state.names`: name-query answers by guid (`{ value, seq, ts }`), the player senders' names. */
+  names?: Record<string, { value?: unknown }>;
   gaps?: unknown[];
   lastSeq?: number;
   eventCount?: number;
@@ -241,6 +243,50 @@ export interface SnapshotLike {
    * `loop.ts` reads it.
    */
   observation?: { connected?: boolean };
+}
+
+/** One `state.chat` entry as the snapshot carries it (SDK `ChatEntry`). */
+export interface ChatLineLike {
+  type?: unknown;
+  senderGuid?: unknown;
+  senderName?: unknown;
+  receiverGuid?: unknown;
+  receiverName?: unknown;
+  channelName?: unknown;
+  message?: unknown;
+  achievementId?: unknown;
+}
+
+/** `CHAT_MSG_ACHIEVEMENT` / `CHAT_MSG_GUILD_ACHIEVEMENT` (SharedDefines.h). */
+const CHAT_MSG_ACHIEVEMENT = 0x30;
+const CHAT_MSG_GUILD_ACHIEVEMENT = 0x31;
+
+/**
+ * One chat line the way the client's chat frame would show it: the speaker's
+ * name where one is known — the packet's own (`senderName`, creature speech)
+ * or the name query's answer for a player guid — and the guid otherwise. A
+ * channel line carries its channel. The achievement broadcast arrives as the
+ * client's raw template (`%s has earned the achievement $a!`), which the
+ * client fills from the sender and `achievementId`; filled here the same way,
+ * with the id where the client would link the title (Achievement.dbc is not
+ * served for other players' achievements).
+ */
+export function formatChatLine(c: ChatLineLike, names?: Record<string, { value?: unknown }>): string {
+  const guid = c.senderGuid === undefined || c.senderGuid === null ? undefined : String(c.senderGuid);
+  const queried = guid !== undefined ? names?.[guid]?.value : undefined;
+  const name =
+    typeof c.senderName === "string" && c.senderName.length > 0
+      ? c.senderName
+      : typeof queried === "string" && queried.length > 0
+        ? queried
+        : (guid ?? "?");
+  let message = fmt(c.message, "");
+  if (c.type === CHAT_MSG_ACHIEVEMENT || c.type === CHAT_MSG_GUILD_ACHIEVEMENT) {
+    const id = typeof c.achievementId === "number" ? `achievement ${c.achievementId}` : "an achievement";
+    message = message.replace("%s", name).replace("$a", id);
+  }
+  const channel = typeof c.channelName === "string" && c.channelName.length > 0 ? `[${c.channelName}] ` : "";
+  return `  ${channel}<${name}> ${message}`;
 }
 
 function fmt(v: unknown, fallback = "unobserved"): string {
@@ -564,7 +610,7 @@ export function formatStateSummary(
   const chat = (snapshot.chat ?? []).slice(-CONTEXT_POLICY.CHAT_TAIL);
   if (chat.length > 0) {
     lines.push(`recent chat (${chat.length}):`);
-    for (const c of chat) lines.push(`  <${fmt(c.senderGuid, "?")}> ${fmt(c.message, "")}`);
+    for (const c of chat) lines.push(formatChatLine(c, snapshot.names));
   }
   const notes = (snapshot.notifications ?? []).slice(-CONTEXT_POLICY.NOTIFICATION_TAIL);
   if (notes.length > 0) {
