@@ -268,6 +268,11 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
 - **Paths**: a container-internal prefix is made repo-relative — every
   exported projector's output crosses `scrubPathsValue`
   (`runner/viewer/scrub-paths.ts`); the model's text is otherwise as written, and every other absolute path stays "Never".
+- **The action log ships** in the window: an `actions` record's notes are
+  rebuilt field by field (`projectActionNotes`), their `args` against the
+  body fields `ActionRequest` declares, and the client-cache `names` they
+  carry pass like the others; a `say` text or raw payload in `args` is
+  model-authored, the residual above.
 - **Names pass**: `items[].name`, a move's `target`, a position's episodic
   `status` (text and zone name) and `terminationDetail`.
 - **Still projected out**: the operator `objective`, `apiBase`, `pauseReason`

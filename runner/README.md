@@ -428,6 +428,17 @@ asked for at least the time the snippet had left — with the ceiling, and that
 it could never finish inside the snippet. Neither wait is shortened or refused
 for it; the note explains.
 
+The action log: the child's fetch (the one it hands the SDK client) notes
+every `POST /action` with the module's answer and the cache names for its ids,
+grouped by the snippet whose async context dispatched it, and pushes the notes
+to the host — before the snippet's result, before a pong, and on a 15s timer
+while no snippet runs. The host links them to the tool call (`EvalLink`:
+the caller's `dispatchTs` as `callTs`, and the turn) and hands them to
+`onActions`, which `run.ts` and `mcp.ts` write as `actions` records. The SDK's
+client-parity queries, fired from the event fold outside every snippet, are
+marked `auto`. Record-only; why and the size are in `docs/ARCHITECTURE.md`,
+"The action log".
+
 Network posture: the real boundary is the deployment's network topology — the
 compose network, or whatever the cluster gives the runner pod — under which the
 runner reaches `worldserver` and nothing else. In-process, `fetch` and
