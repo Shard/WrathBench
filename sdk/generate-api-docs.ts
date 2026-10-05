@@ -115,7 +115,7 @@ const CLIENT_RAW: readonly Row[] = [
   { name: "clearTarget", sig: "clearTarget(): Promise<ActionResponse>", purpose: "Clear the current target." },
   { name: "attackStart", sig: "attackStart(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Start melee auto-attack. The server swings only while you are in melee range and facing the target, and nothing turns you automatically: face its position first, face({ x: unit.x, y: unit.y }). killTarget does both." },
   { name: "attackStop", sig: "attackStop(): Promise<ActionResponse>", purpose: "Stop melee auto-attack." },
-  { name: "castSpell", sig: "castSpell(spellId, targetGuid?: GuidOrUnit): Promise<ActionResponse>", purpose: "Cast a spell; no target means self/auto-target." },
+  { name: "castSpell", sig: "castSpell(spellId, targetGuid?: GuidOrUnit): Promise<ActionResponse>", purpose: "Cast a spell; no target means self/auto-target. Returns once dispatched: the outcome is an event, SMSG_SPELL_GO, or SMSG_CAST_FAILED / SMSG_SPELL_FAILURE with result and its name as reason." },
   { name: "cancelCast", sig: "cancelCast(spellId): Promise<ActionResponse>", purpose: "Cancel a cast in progress." },
   { name: "interact", sig: "interact(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Use a gameobject — chest, door, quest object." },
   { name: "gossipHello", sig: "gossipHello(target: GuidOrUnit): Promise<ActionResponse>", purpose: "Open an NPC's gossip menu." },

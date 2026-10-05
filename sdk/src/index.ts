@@ -194,6 +194,7 @@ export {
   MOVE_OPCODES,
   MOVE_STATUSES,
   parseEventFrame,
+  spellCastResultName,
 } from "./protocol";
 export type {
   ActionRequest,

@@ -308,6 +308,16 @@ Two synthetic opcodes, lowercase so they can never collide with an `SMSG_*`:
   as a gap.
 - `stream_error` — a frame arrived that was not a readable event envelope.
 
+One field is added at decode time, never invented: the cast-failure packets
+(`SMSG_CAST_FAILED`, `SMSG_SPELL_FAILURE`, `SMSG_PET_CAST_FAILED`) keep their
+numeric `result` and gain `reason`, the pinned core's `SpellCastResult` name
+for it (`97` is `out_of_range`, `67` `not_ready`; `spellCastResultName`), or
+`undefined` for a code outside that enum. The number alone left runs decoding
+failures from memory; the name is the key the client's own failure text uses,
+so it is client-visible knowledge, like the `InventoryResult` sentences
+(operator decision, 2026-10-05). `castSpell` itself still acks the dispatch
+only: these events, or `SMSG_SPELL_GO`, are the outcome.
+
 ### State cache
 
 `client.state` is a `StateCache`: a pure fold over the stream.
