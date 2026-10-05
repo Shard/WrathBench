@@ -1811,11 +1811,35 @@ namespace WrathBench
             Transport* targetT = FindTransportAt(map, x, y, z);
             if ((startT || targetT) && player->GetExactDist2d(x, y) <= 30.0f)
             {
+                bool leaving = startT != nullptr && !targetT;
+                float endZ = z;
+                // A leg that leaves the transport ends on ordinary ground, and
+                // the ground is where a client's character ends up: its physics
+                // drop it from the deck to the platform. Without this the leg
+                // ended at whatever z was asked for — a request quoting the
+                // car-deck height left the character standing in the air 10y
+                // over the Deeprun platform, `arrived`, and off the mesh for
+                // the next move. Ground height is terrain, vmap and model
+                // geometry a client has too (as ResolvePath's z-ladder); it is
+                // reported as `meshZ`, like a mesh-corrected arrival.
+                if (leaving)
+                {
+                    float groundZ = map->GetHeight(player->GetPhaseMask(), x, y, z, true);
+                    if (groundZ > INVALID_HEIGHT && std::fabs(groundZ - z) > 1.0f)
+                    {
+                        endZ = groundZ;
+                        r.hasMeshZ = true;
+                        r.meshZ = groundZ;
+                    }
+                }
                 r.points.push_back({player->GetPositionX(), player->GetPositionY(), player->GetPositionZ()});
-                r.points.push_back({x, y, z});
-                Audit(*s, "action", Json::Writer().Add("op", "move_transport_leg")
-                    .Add("moveId", moveId)
-                    .Add("boarding", targetT != nullptr).Add("leaving", startT != nullptr && !targetT).Str());
+                r.points.push_back({x, y, endZ});
+                Json::Writer a;
+                a.Add("op", "move_transport_leg").Add("moveId", moveId)
+                    .Add("boarding", targetT != nullptr).Add("leaving", leaving);
+                if (r.hasMeshZ)
+                    a.Add("z", (double)z).Add("groundZ", (double)endZ);
+                Audit(*s, "action", a.Str());
             }
             else
             {

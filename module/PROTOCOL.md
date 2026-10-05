@@ -915,8 +915,15 @@ the mover's interpolated point lies inside a transport's model bounds (the
 synthesized packet carries the transport block. Transports have no navmesh,
 so a `move_to` within 30y whose start or destination is on one is a straight
 line (boarding or disembarking, as a client walks it); anything longer goes
-through the mesh and answers `start_off_mesh` / `target_off_mesh`. A move
-that ends aboard reports `onTransport`; while aboard and idle, the server
+through the mesh and answers `start_off_mesh` / `target_off_mesh`. A
+disembarking leg ends at the ground height under the requested x,y (terrain,
+vmap and model geometry a client has too), not at the z asked for: a
+client's character drops from the deck to the platform, and a leg left to
+end at the deck height put the character in the air over the platform and
+off the mesh for its next move. When that height differs from the request
+by more than 1y the arrival carries `meshZ`, as a mesh-corrected arrival
+does, and the `move_transport_leg` audit record carries `z` and `groundZ`. A
+move that ends aboard reports `onTransport`; while aboard and idle, the server
 moves the character and the module reports where it is as
 `WB_RIDE_PROGRESS`. No "activate transport" action exists: boarding is
 walking onto the car.
