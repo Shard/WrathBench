@@ -27,10 +27,23 @@
  *                it stop, close the turn with `turn.completed` + usage, and exit.
  *   wind-down-deaf
  *                like long-turn, but ignores refusals forever.
+ *   regress      like tools, but from the third turn on the thread total
+ *                reads as though the second turn never happened — LOWER at
+ *                the third than at the second, as after a resume that lost
+ *                turns — and grows from there.
+ *   new-thread   like tools, but every turn starts a thread of its own, even
+ *                when resumed (`WB_FAKE_THREAD_ID` + the turn number).
+ *   enospc       like tools, but stderr carries the CLI's rollout-write
+ *                failure on a full disk while the turn still completes.
+ *
+ * `turn.completed.usage` is the THREAD's running total, as the real CLI's
+ * is: each completed turn on a thread adds `PER_TURN` to it.
  *
  * Everything it saw is written to $WB_FAKE_RECORD as JSON after every event.
  * `--version` prints a version line and exits, as the real CLI does.
  */
+
+import { writeFileSync } from "node:fs";
 
 const argv = Bun.argv.slice(2);
 const mode = Bun.env["WB_FAKE_MODE"] ?? "tools";
@@ -73,7 +86,7 @@ function unToml(s: string): string {
 const cfg = overrides();
 const resumed = argv[0] === "exec" && argv[1] === "resume";
 const threadArg = resumed ? argv[2] : undefined;
-const threadId = threadArg ?? Bun.env["WB_FAKE_THREAD_ID"] ?? "fake-thread";
+const baseThreadId = threadArg ?? Bun.env["WB_FAKE_THREAD_ID"] ?? "fake-thread";
 const instructionsPath = cfg["model_instructions_file"] !== undefined ? unToml(cfg["model_instructions_file"]) : undefined;
 
 /** The record accumulates ACROSS processes: each turn is a new one. */
@@ -93,6 +106,7 @@ async function loadRecord(): Promise<Record<string, unknown>> {
     userMessages: [] as string[],
     mcpTools: [] as string[],
     toolResults: [] as unknown[],
+    threadTurns: {} as Record<string, number>,
   };
 }
 const record = await loadRecord();
@@ -127,7 +141,9 @@ record["env"] = {
 };
 
 function saveRecord(): void {
-  if (recordPath !== undefined) Bun.write(recordPath, JSON.stringify(record, null, 2));
+  // Synchronously: an async write still in flight could land after a later
+  // one, and the next turn's process reads this file back (`threadTurns`).
+  if (recordPath !== undefined) writeFileSync(recordPath, JSON.stringify(record, null, 2));
 }
 
 const out = Bun.stdout.writer();
@@ -201,11 +217,29 @@ if (mcp !== null) {
 }
 saveRecord();
 
+const turn = (record["userMessages"] as string[]).length;
+const threadId = mode === "new-thread" ? `${Bun.env["WB_FAKE_THREAD_ID"] ?? "fake-thread"}-${turn}` : baseThreadId;
 emit({ type: "thread.started", thread_id: threadId });
 emit({ type: "turn.started" });
 
-const turn = (record["userMessages"] as string[]).length;
-const USAGE = { input_tokens: 1916, cached_input_tokens: 1408, cache_write_input_tokens: 0, output_tokens: 157, reasoning_output_tokens: 128 };
+/** One turn's tokens. What `turn.completed` reports is the thread's total so far (`threadUsage`). */
+const PER_TURN = { input_tokens: 1916, cached_input_tokens: 1408, cache_write_input_tokens: 0, output_tokens: 157, reasoning_output_tokens: 128 };
+/** The thread total after this turn: every completed turn on the thread, this one included. */
+function threadUsage(): typeof PER_TURN {
+  const turns = record["threadTurns"] as Record<string, number>;
+  const n = (turns[threadId] ?? 0) + 1;
+  turns[threadId] = n;
+  saveRecord();
+  // `regress`: from the third turn on, the total reads as though the second never happened.
+  const k = mode === "regress" && n >= 3 ? n - 2 : n;
+  return {
+    input_tokens: PER_TURN.input_tokens * k,
+    cached_input_tokens: PER_TURN.cached_input_tokens * k,
+    cache_write_input_tokens: 0,
+    output_tokens: PER_TURN.output_tokens * k,
+    reasoning_output_tokens: PER_TURN.reasoning_output_tokens * k,
+  };
+}
 
 /** One MCP tool call, as the real CLI reports it: an item started, then completed. */
 async function callTool(i: number): Promise<{ isError?: boolean; content?: { text?: string }[] } | undefined> {
@@ -264,14 +298,14 @@ switch (mode) {
     break;
   }
   case "silent":
-    emit({ type: "turn.completed", usage: USAGE });
+    emit({ type: "turn.completed", usage: threadUsage() });
     saveRecord();
     process.exit(0);
   case "chatty-limit": {
     const prose =
       "I reached your bag limit, and the daily quest limit resets at midnight — usage limit reached in the inn, rate limit on the auction house.";
     emit({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: prose } });
-    emit({ type: "turn.completed", usage: USAGE });
+    emit({ type: "turn.completed", usage: threadUsage() });
     process.exit(0);
   }
   case "long-turn":
@@ -287,7 +321,7 @@ switch (mode) {
       }
       if (mode === "wind-down" && res?.isError === true && text.includes("episode is over")) {
         emit({ type: "item.completed", item: { id: "item_final", type: "agent_message", text: "stopping: the harness ended the episode" } });
-        emit({ type: "turn.completed", usage: { ...USAGE, output_tokens: 20_000 } });
+        emit({ type: "turn.completed", usage: { ...threadUsage(), output_tokens: 20_000 } });
         saveRecord();
         process.exit(0);
       }
@@ -295,6 +329,11 @@ switch (mode) {
     }
     process.exit(0);
   }
+  case "enospc":
+    process.stderr.write(
+      "2026-01-01T00:00:00Z ERROR codex_core::rollout: failed to record rollout items: No space left on device (os error 28)\n",
+    );
+    break;
   default:
     break;
 }
@@ -303,6 +342,6 @@ switch (mode) {
 emit({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: `turn ${turn}: acting` } });
 if (mcp !== null) await callTool(1);
 emit({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: `turn ${turn} done` } });
-emit({ type: "turn.completed", usage: USAGE });
+emit({ type: "turn.completed", usage: threadUsage() });
 saveRecord();
 process.exit(0);

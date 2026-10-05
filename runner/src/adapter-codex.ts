@@ -94,11 +94,15 @@
  *
  * ## What the CLI reports, and what it does not
  *
- * `turn.completed` carries the turn's usage (`input_tokens`,
- * `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`,
- * `reasoning_output_tokens`) and nothing else: no cost (a subscription has no
- * per-turn price, so cost stays absent as on the Claude lanes) and — in exec
- * mode — no rate-limit window (codex issue #14728). Exhaustion therefore shows
+ * `turn.completed` carries usage (`input_tokens`, `cached_input_tokens`,
+ * `cache_write_input_tokens`, `output_tokens`, `reasoning_output_tokens`) and
+ * nothing else. That usage is the THREAD's running total, not the turn's —
+ * `exec resume` rebuilds the thread, counts included, from its rollout — so
+ * the driver logs the turn's delta against the previous total of the same
+ * thread and keeps the total beside it (`codex-usage.ts`). No cost (a
+ * subscription has no per-turn price, so cost stays absent as on the Claude
+ * lanes) and — in exec mode — no rate-limit window (codex issue #14728).
+ * Exhaustion therefore shows
  * up only as a failed turn: `turn.failed` / `error` with a message, sometimes
  * a `codexErrorInfo` (usageLimitExceeded, rateLimitExceeded,
  * contextWindowExceeded, sessionBudgetExceeded, misalignmentPolicyViolation).
@@ -109,6 +113,10 @@
  * Astra's misalignment monitor, which can halt long agentic work and has
  * nobody to ask in exec mode) → `provider-policy`, with the message recorded
  * verbatim and NO automatic steer or override — that is the operator's call.
+ * The CLI failing on the host under it — its thread store unwritable, a full
+ * disk under `$CODEX_HOME` — is `infrastructure-failed`: a pause for the
+ * operator, never a notice to the model, which can do nothing about it and
+ * would otherwise keep playing on a thread that is silently losing turns.
  */
 
 import type { Database } from "bun:sqlite";
@@ -121,6 +129,7 @@ import { signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
+import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
@@ -225,6 +234,22 @@ const POLICY_PATTERNS = [/misalignment/i, /policy[_ ]?violation/i];
 const CONTEXT_PATTERNS = [/context[_ ]?window[_ ]?exceeded/i, /context window/i, /exceeds? the (model'?s? )?context/i];
 const USAGE_PATTERNS = [/usage[_ ]?limit/i, /hit your (usage |weekly |5-hour )?limit/i, /out of (credits|usage)/i];
 const RATE_PATTERNS = [/rate[_ ]?limit/i, /too many requests/i, /\b429\b/];
+/**
+ * The CLI failing on the host rather than at the provider: it could not write
+ * the thread's rollout under `$CODEX_HOME` (observed: a full volume, where
+ * every turn logged "failed to record rollout items ... No space left on
+ * device" and the next resume rebuilt the thread without the lost turns), or
+ * could not open its thread store at all. Matched on the CLI's own wording;
+ * "state db returned stale rollout path" is NOT here — that is the CLI noting
+ * an old thread's file was cleaned up, which is benign.
+ */
+const INFRA_PATTERNS = [
+  /no space left on device/i,
+  /\bENOSPC\b/,
+  /failed to record rollout items/i,
+  /rollout writer failed/i,
+  /failed to (initiali[sz]e|resume local) thread (persistence|recorder)/i,
+];
 const AUTH_PATTERNS = [
   /access token could not be refreshed/i,
   /refresh token was already used/i,
@@ -243,8 +268,10 @@ const AUTH_PATTERNS = [
  *
  * Order is specificity: the policy monitor and a blown context window name
  * the run's fate outright and win over the generic limit words their messages
- * may also contain; usage before rate because "rate limit" text is what a
- * spent usage window is sometimes wrapped in.
+ * may also contain; the host's own failure next, because its wording is
+ * unambiguous and nothing the provider says will clear a full disk; usage
+ * before rate because "rate limit" text is what a spent usage window is
+ * sometimes wrapped in.
  */
 export function detectCodexFailure(text: string | undefined | null): CodexFailure | null {
   if (text === undefined || text === null) return null;
@@ -253,6 +280,7 @@ export function detectCodexFailure(text: string | undefined | null): CodexFailur
   const detail = trimmed.slice(0, 600);
   if (POLICY_PATTERNS.some((p) => p.test(trimmed))) return { kind: "terminate", reason: "provider-policy", detail };
   if (CONTEXT_PATTERNS.some((p) => p.test(trimmed))) return { kind: "terminate", reason: "context-limit", detail };
+  if (INFRA_PATTERNS.some((p) => p.test(trimmed))) return { kind: "pause", reason: "infrastructure-failed", detail };
   if (USAGE_PATTERNS.some((p) => p.test(trimmed))) return { kind: "pause", reason: "quota-exhausted", detail };
   if (RATE_PATTERNS.some((p) => p.test(trimmed))) return { kind: "pause", reason: "rate-limited", detail };
   if (AUTH_PATTERNS.some((p) => p.test(trimmed))) return { kind: "pause", reason: "auth-failed", detail };
@@ -264,41 +292,9 @@ export function detectCodexFailure(text: string | undefined | null): CodexFailur
 /** Exec JSONL envelopes we act on. Loose: an unknown field must never break a run. */
 const eventSchema = z.looseObject({ type: z.string() });
 
-/**
- * The CLI's per-turn accounting in the one shape the harness reads. Codex
- * counts like OpenAI: `input_tokens` is the whole prompt with the cached part
- * as a subset, which is already the runner's `prompt_tokens` convention, so
- * nothing is summed. `cache_write_input_tokens` and `reasoning_output_tokens`
- * are kept only when present, because "unknown" and "zero" must not render
- * alike.
- */
-export interface CodexUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  cached_tokens?: number;
-  cache_write_tokens?: number;
-  reasoning_tokens?: number;
-}
-
-export function normalizeCodexUsage(raw: unknown): CodexUsage | undefined {
-  if (raw === null || typeof raw !== "object") return undefined;
-  const u = raw as Record<string, unknown>;
-  const n = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
-  const input = n(u["input_tokens"]);
-  const output = n(u["output_tokens"]);
-  const read = n(u["cached_input_tokens"]);
-  const write = n(u["cache_write_input_tokens"]);
-  const reasoning = n(u["reasoning_output_tokens"]);
-  if (input === undefined && output === undefined) return undefined;
-  const prompt = input ?? 0;
-  const completion = output ?? 0;
-  const usage: CodexUsage = { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
-  if (read !== undefined) usage.cached_tokens = read;
-  if (write !== undefined) usage.cache_write_tokens = write;
-  if (reasoning !== undefined) usage.reasoning_tokens = reasoning;
-  return usage;
-}
+// `CodexUsage` and `normalizeCodexUsage` live in `codex-usage.ts`, beside the
+// per-turn delta rule the viewer shares; re-exported for the driver's readers.
+export { normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 
 /** A parsed exec event, or null for a line that is not one. */
 export function parseCodexEvent(line: string): Record<string, unknown> | null {
@@ -835,14 +831,23 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
    * and carries that usage — counted exactly once per turn, which is what a
    * consumer summing `response` usage (viewer/tail.ts) needs. A turn with no
    * response at all still gets one entry, content null, so its tokens count.
+   *
+   * What it carries is the turn's DELTA, with the thread total the CLI
+   * reported beside it as `usageCumulative`: the CLI's figure is the thread's
+   * running total (`codex-usage.ts`), and summing it per turn read a 2,082-turn
+   * run as 1.69 trillion input tokens. `usageCumulative` is also the marker
+   * the viewer reads to tell this record from one written before the fix,
+   * whose `usage` it derives the same delta for.
    */
   let pendingResponse: (Record<string, unknown> & { t: string }) | null = null;
-  const flushPendingResponse = (usage?: CodexUsage): void => {
+  const flushPendingResponse = (usage?: { usage: CodexUsage; usageCumulative: CodexUsage }): void => {
     if (pendingResponse === null) return;
     const entry = pendingResponse;
     pendingResponse = null;
-    trajectory.append(usage !== undefined ? { ...entry, usage } : entry);
+    trajectory.append(usage !== undefined ? { ...entry, ...usage } : entry);
   };
+  /** Each thread's last reported total: the baseline its next turn's delta is taken against. */
+  const threadTotals = new Map<string, CodexUsage>();
   const pushResponse = (entry: Record<string, unknown> & { t: string }): void => {
     flushPendingResponse();
     pendingResponse = entry;
@@ -952,7 +957,6 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       })();
 
       let turnCompleted = false;
-      let usage: CodexUsage | undefined;
       let usageRaw: unknown;
       let sawOutput = false;
       let lastText = "";
@@ -1018,12 +1022,31 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
           case "turn.completed": {
             turnCompleted = true;
             usageRaw = msg["usage"];
-            usage = normalizeCodexUsage(usageRaw);
+            const cumulative = normalizeCodexUsage(usageRaw);
+            let perTurn: { usage: CodexUsage; usageCumulative: CodexUsage } | undefined;
+            if (cumulative !== undefined) {
+              const key = threadId ?? "";
+              const prev = threadTotals.get(key);
+              if (codexUsageRegressed(prev, cumulative)) {
+                // The thread lost turns (its rollout could not be written):
+                // the delta floors at zero and the next turn counts from here.
+                trajectory.append({
+                  t: "harness",
+                  kind: "usage_regressed",
+                  turn,
+                  threadId: threadId ?? null,
+                  previous: prev,
+                  reported: cumulative,
+                });
+              }
+              threadTotals.set(key, cumulative);
+              perTurn = { usage: codexUsageDelta(prev, cumulative), usageCumulative: cumulative };
+            }
             if (pendingResponse === null) {
               // No response at all this turn: an entry so the tokens count.
               pendingResponse = { t: "response", turn, message: { role: "assistant", content: null } };
             }
-            flushPendingResponse(usage);
+            flushPendingResponse(perTurn);
             trajectory.append({
               t: "codex_result",
               turn,
@@ -1032,7 +1055,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
               durationMs: Date.now() - startedAt,
               items,
               usageRaw,
-              usage,
+              ...(perTurn !== undefined ? perTurn : {}),
               text: lastText.slice(0, 2_000),
             });
             finishWindDown("result");
@@ -1090,10 +1113,18 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         if (failedTurns >= MAX_CONSECUTIVE_FAILED_TURNS) {
           return terminate("adapter-error", `codex failed ${failedTurns} turns in a row (last exit ${exitCode}): ${why}`);
         }
+        // The CLI's own words are the operator's, not the model's: they name
+        // the CLI's internals, which the model cannot act on. They go on the
+        // record; the model is told only that the turn ended early.
+        trajectory.append({
+          t: "harness",
+          kind: "session_note",
+          text: `turn ${turn} failed in the CLI (exit ${exitCode}): ${why.slice(0, 600)}`,
+        });
         pendingNotices.push({
           ts: Date.now(),
           kind: "session_note",
-          text: `the previous turn ended with an error from the CLI: ${why.slice(0, 300)}`,
+          text: "the previous turn ended with an error from the CLI before it finished.",
         });
       } else {
         failedTurns = 0;

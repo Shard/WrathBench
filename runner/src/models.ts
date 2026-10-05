@@ -346,7 +346,8 @@ export const RESUME_RECORD = "resume";
  * (`offline`, derived and never on disk). Both are the harness's own doing, so
  * `resumeNotBefore` brings them back without cooling and the pause streak
  * neither counts them nor resets on them. Every other pause — a provider's
- * refusal, a dead login, a stalled observation — is on the ladder.
+ * refusal, a dead login, a CLI failing on its host, a stalled observation —
+ * is on the ladder.
  */
 export const LADDER_EXEMPT_PAUSES: ReadonlySet<string> = new Set(["operator-pause", OFFLINE_PAUSE]);
 

@@ -33,6 +33,7 @@ import type {
   TradeMarkView,
 } from "./api-types";
 import { statSync } from "node:fs";
+import { CodexUsageCorrector } from "../src/codex-usage";
 import { CONTEXT_POLICY } from "../src/context";
 import {
   HistoryRebuilder,
@@ -297,16 +298,17 @@ export function summarize(rec: Record<string, unknown>, i: number, start: number
       base["count"] = rec["count"] ?? events.length;
       const tally = [...byOpcode.entries()].sort((a, b) => b[1] - a[1]);
       base["opcodes"] = tally.slice(0, 6).map(([op, n]) => `${op}×${n}`);
-      // How much of this batch the model never saw. The record holds the raw
-      // batch; the window it was rendered into drops ambient motion, so the
-      // operator needs the split, not just the total.
+      // How much of this batch the model never saw. An older context record
+      // holds the raw batch the window was cut from, ambient motion and all,
+      // so the operator needs the split, not just the total; a newer one holds
+      // only what was rendered and says how much it folded (`folded`, below).
       let ambient = 0;
       for (const [op, n] of tally) if (CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(op)) ambient += n;
       if (ambient > 0) base["ambient"] = ambient;
       // The tally is cut at six; an operator reading it must know when there
       // were more kinds than that, or the line reads as the whole story.
       if (tally.length > 6) base["moreOpcodes"] = tally.length - 6;
-      // Ambient movement the recent_events tool folded out of this reply.
+      // Ambient movement folded out of this reply or window, before the batch.
       if (typeof rec["folded"] === "number") base["folded"] = rec["folded"];
       base["clipped"] = events.length > 0;
       return base;
@@ -1381,6 +1383,44 @@ export function levelUpFactsFrom(marks: readonly LevelUpMark[]): LevelUpFacts | 
 }
 
 /**
+ * How close behind a `resurrect` a `release` must land to be the echo below.
+ * The echo is written in the same drain as the resurrect it follows (0–1 ms
+ * apart on every one of the 41 deaths of the run that showed it); a real
+ * release needs a death first, which is seconds of game at the very least.
+ */
+export const RELEASE_ECHO_MS = 1_000;
+
+/**
+ * The indexes of `release`/`resurrect` marks that are an echo, not a death
+ * cycle: a release within `RELEASE_ECHO_MS` after a resurrect with no death
+ * between them, and the resurrect that closes it. The sandbox's death watcher
+ * wrote one such pair after nearly every resurrect — the ghost flag still read
+ * set for an event or two after the clear marker, and re-opened the window —
+ * so a run's history reads two releases and two resurrects per death. Fixed
+ * at the source; this keeps the history it already wrote honest.
+ */
+function echoedReleaseCycles(marks: readonly DeathMark[]): Set<number> {
+  const out = new Set<number>();
+  let lastResurrect: number | null = null;
+  for (let i = 0; i < marks.length; i++) {
+    const m = marks[i]!;
+    if (m.kind === "death") {
+      lastResurrect = null;
+      continue;
+    }
+    if (m.kind === "resurrect") {
+      lastResurrect = m.ts;
+      continue;
+    }
+    if (lastResurrect === null || m.ts - lastResurrect > RELEASE_ECHO_MS || m.ts < lastResurrect) continue;
+    out.add(i);
+    const next = marks[i + 1];
+    if (next !== undefined && next.kind === "resurrect" && next.ts - m.ts <= RELEASE_ECHO_MS) out.add(i + 1);
+  }
+  return out;
+}
+
+/**
  * Derive a run's death facts.
  *
  * `sawLevelUpMark` is the liveness witness, the job `achievements_at_login` does
@@ -1403,10 +1443,11 @@ export function deathFactsFrom(marks: readonly DeathMark[], sawLevelUpMark: bool
       area: m.area,
       released: m.released,
     }));
+  const echoes = echoedReleaseCycles(marks);
   return {
     deaths: sites.length,
-    releases: marks.filter((m) => m.kind === "release").length,
-    resurrects: marks.filter((m) => m.kind === "resurrect").length,
+    releases: marks.filter((m, i) => m.kind === "release" && !echoes.has(i)).length,
+    resurrects: marks.filter((m, i) => m.kind === "resurrect" && !echoes.has(i)).length,
     first: sites[0] ?? null,
     last: sites[sites.length - 1] ?? null,
     sites,
@@ -1594,6 +1635,21 @@ export function reflectionWindowsFrom(marks: readonly ReflectMark[]): Reflection
 }
 
 /** What a run costs to list: token totals plus the wall clock the file spans. */
+/**
+ * The revision of what `RunTotalsScanner` derives from a trajectory's bytes.
+ * The collector stores the answer per run and recomputes it only when the
+ * file changes, so a change to the derivation itself — the same bytes now
+ * meaning a different total — would never reach a finished run. The
+ * collector folds this into the signature it compares (`collector/src/ingest.ts`);
+ * raising it re-derives every run once, on the next pass. Raise it with any
+ * change that alters a stored total for a file that did not change.
+ *
+ * 1: codex per-turn usage derived from the thread totals older records carry
+ *    (`CodexUsageCorrector`), and the death watcher's echoed release/resurrect
+ *    pairs no longer counted (`echoedReleaseCycles`).
+ */
+export const RUN_TOTALS_DERIVATION = 1;
+
 export interface RunTotals {
   tokens: TokenTotals;
   /** Timestamp of the first and last trajectory entry; null on an empty file. */
@@ -1705,6 +1761,13 @@ export class RunTotalsScanner {
   private costUsd: number | null = null;
   /** Cumulative-per-session, summed across sessions; see `ClaudeCostTally`. */
   private readonly claudeCost = new ClaudeCostTally();
+  /**
+   * A codex response written before the driver logged per-turn deltas carries
+   * the thread's running total; this rewrites it to the turn's share before
+   * anything below reads it. Fed every line — it needs the `driver` and
+   * `codex_thread` records the token projection otherwise drops.
+   */
+  private readonly codexUsage = new CodexUsageCorrector();
   private sawClaudeMark = false;
   private costed = 0;
   private uncosted = 0;
@@ -1756,6 +1819,7 @@ export class RunTotalsScanner {
         return; // a half-written or corrupt line costs its own tokens, nothing else
       }
       this.entries++;
+      this.codexUsage.note(rec);
       const t = typeof rec["t"] === "string" ? (rec["t"] as string) : "unknown";
       const ts = typeof rec["ts"] === "number" ? (rec["ts"] as number) : 0;
       if (ts > 0) {
@@ -1992,6 +2056,8 @@ export class TrajectoryTail {
    * checked against the hash before it is used.
    */
   private readonly systemTextAt = new Map<string, number>();
+  /** Per-turn codex usage for records written before the driver logged it; see `CodexUsageCorrector`. */
+  private readonly codexUsage = new CodexUsageCorrector();
   /**
    * The last timestamp the FILE carries, served or not: the run page closes a
    * finished run's last segment on it, and `scanRunTotals` reads it off every
@@ -2044,6 +2110,7 @@ export class TrajectoryTail {
       this.tradeMarks.length = 0;
       this.reflectMarks.length = 0;
       this.systemTextAt.clear();
+      this.codexUsage.reset();
       this.lastTsSeen = null;
     }
     if (size === this.size) return [];
@@ -2068,6 +2135,9 @@ export class TrajectoryTail {
         let summary: EntrySummary;
         try {
           const rec = JSON.parse(text) as Record<string, unknown>;
+          // Before anything reads its usage: a codex response written before
+          // the driver logged per-turn deltas carries the thread's total.
+          this.codexUsage.note(rec);
           if (rec["t"] === "milestone") {
             const ach = achievementMarkOf(rec);
             if (ach !== null) this.achievementMarks.push(ach);

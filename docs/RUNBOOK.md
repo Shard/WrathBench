@@ -668,7 +668,14 @@ with why:
   reset)`. A run paused `observation-stalled` (its sandbox's event stream
   closed and the recorded state stopped moving) cools on the same ladder, but
   the runner releases its session and the roster advances, so the supervisor
-  always brings it back, with a fresh sandbox and session.
+  always brings it back, with a fresh sandbox and session. A run paused
+  `infrastructure-failed` — a CLI scaffold failing on its host, such as the
+  codex CLI unable to write its thread under `CODEX_HOME` on a full volume —
+  takes the same path: the roster frees its session and advances, and the
+  ladder keeps resuming it, so a volume the operator has freed is picked back
+  up, and one still full climbs the ladder until it is listed. The CLI's own
+  words are in the pause detail and the run's `codex_stderr` records; the
+  model is never shown them.
 - **waiting** — its account is busy with another job or held by a
   hand-started run. A resume never moves to another account.
 

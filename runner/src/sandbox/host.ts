@@ -17,7 +17,7 @@
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import type { Scratchpad } from "../scratchpad";
-import type { ActionHintNote, ChildToHost, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { ActionHintNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
   ok: boolean;
@@ -491,6 +491,23 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "recent_events rpc failed");
     return (res.value ?? []) as EventSummary[];
+  }
+
+  /**
+   * The turn's event window, via the child's own ring of non-ambient events:
+   * the last `limit` of them (at most `CONTEXT_POLICY.EVENT_WINDOW`) and the
+   * ambient count of the span they cover. See `ContextEvents`.
+   */
+  async contextEvents(limit: number): Promise<ContextEvents> {
+    await this.start();
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "context_events", params: { limit } },
+      5_000,
+    );
+    if (!res.ok) throw new Error(res.error ?? "context_events rpc failed");
+    const v = (res.value ?? {}) as Partial<ContextEvents>;
+    return { events: v.events ?? [], folded: typeof v.folded === "number" ? v.folded : 0 };
   }
 
   /**

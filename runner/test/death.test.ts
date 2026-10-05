@@ -128,6 +128,38 @@ describe("sandbox child: the death window latched from the events", () => {
     expect(kinds).toEqual(["death", "release", "resurrect", "death", "release", "resurrect"]);
   });
 
+  test("the ghost bit still set after the clear marker is not a second release, and the next death is clean", async () => {
+    // The shape behind every death of a long freeplay run being written as
+    // death, release, resurrect, release, resurrect: the Spirit Healer's clear
+    // marker (and health back) arrive while the cached ghost bit still reads
+    // set, and only a later block clears it. Reading the bit as a level re-
+    // opened the window on the next event and closed it again when the bit
+    // went off. Then a second death, to prove nothing stale is left latched —
+    // a ghost bit remembered from the first would read the second death's
+    // first `ghost === false` as a resurrect.
+    const host = makeHost();
+    await host.evalSnippet(PRELUDE);
+    await host.evalSnippet(`
+      selfFields({ health: 0 });
+      releaseLoc(0, -6164, 336, 399);
+      selfFields({ playerFlags: 0x10, health: 1 });
+      releaseLoc(-1, 0, 0, 0);
+      selfFields({ health: 132 });
+      reclaimDelay(0);
+      selfFields({ playerFlags: 0 });
+      selfFields({ health: 0 });
+      selfFields({ health: 0, maxHealth: 186 });
+      releaseLoc(0, -6164, 336, 399);
+      selfFields({ playerFlags: 0x10, health: 1 });
+      releaseLoc(-1, 0, 0, 0);
+      selfFields({ playerFlags: 0, health: 140 });
+      "fed";
+    `);
+    const signals = await host.deathSignals();
+    expect(signals.map((s) => s.kind)).toEqual(["death", "release", "resurrect", "death", "release", "resurrect"]);
+    expect(signals.filter((s) => s.kind === "release").every((s) => s.graveyard !== undefined)).toBe(true);
+  });
+
   test("a death with the ghost flag never observed carries no `released` at all", async () => {
     const host = makeHost();
     await host.evalSnippet(PRELUDE.replace(", playerFlags: 0", ""));

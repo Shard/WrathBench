@@ -274,17 +274,32 @@ and differs only where the CLI does:
 - **Effort** is `-c model_reasoning_effort=<low|medium|high|xhigh|max|ultra>`;
   `none` and `minimal` are not Codex levels and the driver refuses them by
   name rather than mapping them.
-- **Failure vocabulary.** `turn.completed` carries usage only — no cost (a
-  subscription; cost stays absent as on the Claude lanes) and, in exec mode,
-  no rate-limit window. Exhaustion is a failed turn: `detectCodexFailure`
+- **Usage is the thread's, not the turn's.** `turn.completed` carries usage
+  only — no cost (a subscription; cost stays absent as on the Claude lanes)
+  and, in exec mode, no rate-limit window — and that usage is the thread's
+  running total: `exec resume` rebuilds the thread, counts included, from its
+  rollout. The driver logs each turn's delta against the previous total of the
+  same thread as `usage`, with the CLI's figure beside it as
+  `usageCumulative`; a total that went backwards (a resume that lost turns
+  whose rollout could not be written) counts zero and is the next baseline,
+  noted as a `usage_regressed` harness record (`src/codex-usage.ts`). Records
+  written before the driver did this carry the total as `usage`; the viewer
+  derives the same delta for them at read time.
+- **Failure vocabulary.** Exhaustion is a failed turn: `detectCodexFailure`
   maps a usage limit to the `quota-exhausted` pause, a rate limit to
   `rate-limited`, a dead login ("Your access token could not be refreshed",
   401) to `auth-failed`, a blown context window to the `context-limit`
   termination, and the provider's own policy monitor stopping the task (GPT-6
   Astra's misalignment monitor; nobody is there to approve in exec mode) to
   `provider-policy`, with the CLI's message recorded verbatim and no automatic
-  steer — the operator's call. An unclassified failed turn is a session note
-  and the thread resumes; three in a row end the run as `adapter-error`.
+  steer — the operator's call. The CLI failing on its host — "failed to record
+  rollout items", "No space left on device", a thread store it cannot open —
+  is the `infrastructure-failed` pause: the model can do nothing about it, and
+  a run that kept going would play on a thread that is silently losing turns.
+  An unclassified failed turn is a session note and the thread resumes; three
+  in a row end the run as `adapter-error`. The model's note says only that the
+  turn ended with an error from the CLI; the CLI's own words go to a `harness`
+  record for the operator.
 
 ### Billing: the lane's CODEX_HOME or nothing
 

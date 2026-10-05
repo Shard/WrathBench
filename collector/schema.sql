@@ -169,6 +169,9 @@ CREATE TABLE IF NOT EXISTS wrathbench.turns
   -- The driver's turn counter. Sparse by design: several lines share one turn
   -- and some record kinds carry none. An ordering aid, never a key.
   turn              Nullable(Int32),
+  -- The line's own `usage`, as written. A codex response from before the
+  -- driver logged per-turn deltas holds the CLI thread's running total here
+  -- (collector/README.md, "The token columns of `turns`").
   input_tokens      Nullable(Int64),
   output_tokens     Nullable(Int64),
   cache_read_tokens Nullable(Int64),

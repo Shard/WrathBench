@@ -36,7 +36,7 @@ import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
 import type { HarnessNotice } from "./sandbox/host";
 
 export const CONTEXT_POLICY = {
-  /** Last N events included in every turn's context. */
+  /** Last N non-ambient events included in every turn's context (see EVENT_WINDOW_EXCLUDE). */
   EVENT_WINDOW: 64,
   /** Max chars of one event's data rendering. */
   EVENT_DATA_CHARS: 220,
@@ -69,8 +69,21 @@ export const CONTEXT_POLICY = {
    * map reports once a second wherever the character stands, which came to
    * about four-fifths of the window's characters and read to models as noise,
    * while the cache already keeps each car's position and `docked`.
-   * Filtered, not refilled: the window is still the last EVENT_WINDOW events
-   * fetched, so it reaches no further back when more of them are ambient.
+   *
+   * Excluded first, then counted (operator decision, 2026-10-05): the window
+   * is the last EVENT_WINDOW events that are NOT ambient, however many ambient
+   * ones arrived among them, and the line above it says how many ambient
+   * events the span it covers held. It used to be the other way round — the
+   * last EVENT_WINDOW events of any kind, ambient ones then dropped — and on a
+   * continent whose transports report every second that left a median of 4
+   * events, about 2.6 seconds of play, in a window the prompt calls "the most
+   * recent events", with 17% of turns showing none at all; whatever the
+   * previous half-minute of combat, loot and quest updates had said was gone
+   * before the model's next turn. The sandbox child keeps the non-ambient
+   * events in a ring of their own (`contextEvents` in sandbox/entry.ts), so
+   * the window's reach is the last EVENT_WINDOW signal events since the
+   * child started — independent of the ambient rate, and emptied by a
+   * sandbox restart like everything else the child holds.
    */
   EVENT_WINDOW_EXCLUDE: /^(SMSG_MONSTER_MOVE|MSG_MOVE|WB_TRANSPORT_PROGRESS)/,
 } as const;
@@ -565,8 +578,14 @@ export function formatStateSummary(
 
 export interface ContextInputs {
   stateSummary: string;
-  /** Oldest first; only the last EVENT_WINDOW are rendered. */
+  /** Oldest first; ambient ones are excluded, then the last EVENT_WINDOW of the rest rendered (`eventWindow`). */
   events: EventSummary[];
+  /**
+   * Ambient events already folded out before `events` was fetched, in the span
+   * `events` covers — the sandbox's own count (`contextEvents`). Added to
+   * whatever `eventWindow` folds out of `events` itself. Absent means none.
+   */
+  folded?: number;
   scratchpad: string;
   notices: HarnessNotice[];
   /** Model turn number, for the model's own orientation. */
@@ -596,6 +615,19 @@ export function formatEventLine(e: EventSummary): string {
   return `${tag} ${e.opcode}${schema} ${compactJson(e.data, CONTEXT_POLICY.EVENT_DATA_CHARS)}${eventLineNote(e)}`;
 }
 
+/**
+ * The events a turn's context renders and how many ambient events the span
+ * they cover held: ambient opcodes excluded, then the last EVENT_WINDOW of what
+ * remains. Pure; the loop logs exactly this as the turn's `events_served`.
+ */
+export function eventWindow(events: readonly EventSummary[], folded = 0): { window: EventSummary[]; folded: number } {
+  const eligible = events.filter((e) => !CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode));
+  return {
+    window: eligible.slice(-CONTEXT_POLICY.EVENT_WINDOW),
+    folded: folded + (events.length - eligible.length),
+  };
+}
+
 /** Pure. Same inputs, byte-identical output — tests enforce it. */
 export function assembleContext(inputs: ContextInputs): string {
   const parts: string[] = [];
@@ -609,12 +641,8 @@ export function assembleContext(inputs: ContextInputs): string {
 
   parts.push(inputs.stateSummary);
 
-  const eligible = inputs.events.filter(
-    (e) => !CONTEXT_POLICY.EVENT_WINDOW_EXCLUDE.test(e.opcode),
-  );
-  const excluded = inputs.events.length - eligible.length;
-  const window = eligible.slice(-CONTEXT_POLICY.EVENT_WINDOW);
-  if (inputs.events.length === 0) {
+  const { window, folded: excluded } = eventWindow(inputs.events, inputs.folded ?? 0);
+  if (inputs.events.length === 0 && excluded === 0) {
     parts.push("[events]\nnone yet");
   } else if (window.length === 0) {
     // Everything fetched was ambient: say so, rather than "none yet" over a

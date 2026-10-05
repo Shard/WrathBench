@@ -26,7 +26,7 @@ import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { openRunDb } from "../../runner/src/rundb";
-import { RunTotalsScanner } from "../../runner/viewer/tail";
+import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
 import type { Batcher } from "./batch";
 import type { OffsetStore } from "./offsets";
@@ -384,7 +384,9 @@ export class Ingester {
     const path = join(dir, "trajectory.jsonl");
     const st = sigOf(path);
     if (st === null) return false;
-    const sig = st.sig;
+    // The derivation's revision is part of the signature: a run whose file is
+    // unchanged is still re-derived once when what the scanner derives changes.
+    const sig = `d${RUN_TOTALS_DERIVATION}:${st.sig}`;
     if (this.deps.offsets.signature(runId, "totals") === sig) return false;
 
     let scanner = this.scanners.get(runId);

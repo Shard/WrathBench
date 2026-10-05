@@ -124,10 +124,17 @@ subscription lane arguably trips it already.
 
 **codex harness (OpenAI models via the Codex CLI on a ChatGPT subscription):** the same
 regime with a different scaffold — one persisted thread, resumed per turn, compacted by the CLI on
-its own schedule. Its `turn.completed` usage is a finished count per turn (`input_tokens` with the
-cached part as a subset, `output_tokens`, `reasoning_output_tokens`), landed once on the turn's last
-`response` entry, so the sum over responses is the run's real prompt and output — no snapshot
-caveat as under claude-code. There is no cost figure at all: the CLI reports none on a
+its own schedule. Its `turn.completed` usage (`input_tokens` with the cached part as a subset,
+`output_tokens`, `reasoning_output_tokens`) is the THREAD's running total, not the turn's: a resumed
+thread is rebuilt with its counts, so the last turn of a 2,082-turn run reported 2.01B input tokens,
+and summing those totals per turn read the run as 1.69 trillion. The driver lands each turn's
+delta against the previous total of the same thread once, on the turn's last `response` entry, with
+the CLI's figure beside it as `usageCumulative`, so the sum over responses is the run's real prompt
+and output; records written before it did carry the total, and the viewer derives the same delta
+for them when it reads them (`runner/src/codex-usage.ts`). A total that fell — a resume that lost
+turns whose rollout could not be written — counts zero for that turn, so a run that had such a
+resume reads slightly low, never high. No snapshot caveat as under claude-code. There is no cost
+figure at all: the CLI reports none on a
 subscription, so a codex cost is only ever the list-price estimate over its tokens, marked
 as-if-metered. The rate for that estimate comes from the OpenRouter sync, under the vendor
 prefix the Codex CLI's own slug omits: the lane records `gpt-6-astra` and the catalogue carries
