@@ -218,7 +218,7 @@ const ACTION_LOG_MAX = 120;
 const ACTION_ARG_MAX_CHARS = 200;
 const ACTION_TEXT_MAX_CHARS = 240;
 /** How often what background routines dispatched is flushed while no snippet runs. */
-const ACTION_IDLE_FLUSH_MS = 15_000;
+const ACTION_IDLE_FLUSH_MS = 60_000;
 /** The SDK's client-parity queries (client.ts, "client-parity queries"). */
 const CLIENT_PARITY_ACTIONS = new Set(["questgiver_status_query", "questgiver_status_multiple_query", "quest_query"]);
 

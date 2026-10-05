@@ -431,7 +431,7 @@ for it; the note explains.
 The action log: the child's fetch (the one it hands the SDK client) notes
 every `POST /action` with the module's answer and the cache names for its ids,
 grouped by the snippet whose async context dispatched it, and pushes the notes
-to the host — before the snippet's result, before a pong, and on a 15s timer
+to the host — before the snippet's result, before a pong, and on a 60s timer
 while no snippet runs. The host links them to the tool call (`EvalLink`:
 the caller's `dispatchTs` as `callTs`, and the turn) and hands them to
 `onActions`, which `run.ts` and `mcp.ts` write as `actions` records. The SDK's

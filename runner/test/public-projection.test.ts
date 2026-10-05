@@ -1560,6 +1560,7 @@ describe("the action log in a public window", () => {
         }),
         { ts: 46, action: "quest_query", args: { questId: 7 }, status: 200, ms: 1, auto: true, names: { quest: SURVIVES.questTitle } },
         { action: "no_ts_is_dropped", status: 200 },
+        { ts: 47, action: "stop", status: 0, ms: 9, error: `transport: TypeError: fetch failed ${POISON.apiBase}` },
       ],
       dropped: { say: 10, poison: POISON.smuggled },
       [POISON.smuggled]: 1,
@@ -1577,6 +1578,10 @@ describe("the action log in a public window", () => {
         ...under("actions[].names", ["spell", "target", "quest"]),
       ]),
     );
-    expect((out["actions"] as unknown[]).length).toBe(2);
+    const notes = out["actions"] as Record<string, unknown>[];
+    expect(notes.length).toBe(3);
+    // A module code passes; a runtime failure string becomes a fixed token.
+    expect(notes[0]!["error"]).toBe("spell_not_known");
+    expect(notes[2]!["error"]).toBe("transport");
   });
 });

@@ -114,7 +114,7 @@ export interface MoveLine {
  * last 200 records, so a record per action would push the snippets themselves
  * out of it. The sandbox flushes just before a snippet's result, so the usual
  * case is one record per snippet; a background routine's dispatches between
- * snippets flush on a 15s idle timer and carry `routine: true`.
+ * snippets flush on a 60s idle timer and carry `routine: true`.
  *
  * `callTs` is the `dispatchTs` the writer stamped on the snippet's `tool_call`
  * — the join key, because the CLI drivers append the call after it ran (this

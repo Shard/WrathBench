@@ -1121,6 +1121,7 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
  */
 const ACTION_NOTE_SCALARS = ["ts", "action", "status", "ms", "error", "hint", "moveId", "count", "lastTs", "auto"] as const;
 const ACTION_NAME_KEYS = ["target", "spell", "item", "quest"] as const;
+const ACTION_ERROR_CODE = /^[a-z0-9_]+$/;
 const ACTION_ARG_KEYS: ReadonlySet<string> = new Set([
   "text", "x", "y", "z", "guid", "orientation", "spellId", "targetGuid", "menuId", "optionId", "questId",
   "rewardIndex", "slot", "itemId", "count", "itemGuid", "bag", "talentId", "rank", "talents", "opcode", "payload",
@@ -1143,6 +1144,10 @@ function projectActionNotes(v: unknown): ActionNoteView[] {
       if (typeof x === "string" || typeof x === "number" || typeof x === "boolean") note[k] = x;
     }
     if (typeof note["action"] !== "string" || typeof note["ts"] !== "number") continue;
+    // The module's error codes are fixed words; anything else is a runtime
+    // failure string (a fetch error can name the module host), which this
+    // build withholds like every other free-text error.
+    if (typeof note["error"] === "string" && !ACTION_ERROR_CODE.test(note["error"])) note["error"] = "transport";
     if (n["args"] !== null && typeof n["args"] === "object" && !Array.isArray(n["args"])) {
       const args: Record<string, unknown> = {};
       for (const [k, x] of Object.entries(n["args"] as Record<string, unknown>)) {
