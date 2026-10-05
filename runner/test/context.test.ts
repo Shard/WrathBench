@@ -12,6 +12,7 @@ import {
   type ChatMessage,
   type ContextInputs,
 } from "../src/context";
+import { parseEventFrame } from "@wrathbench/sdk";
 import type { EventSummary } from "../src/sandbox/ipc";
 
 function makeInputs(): ContextInputs {
@@ -366,6 +367,19 @@ describe("formatStateSummary", () => {
       { sessionLive: true },
     );
     expect(later).toContain("corpse on map 1 at (5,5), you are on map 0: reclaim within 39y after the reclaim delay");
+  });
+});
+
+describe("formatEventLine: cast failures carry the SDK's reason", () => {
+  test("a decoded SMSG_CAST_FAILED renders its result code and the name of it", () => {
+    const parsed = parseEventFrame(
+      JSON.stringify({ seq: 40, opcode: "SMSG_CAST_FAILED", opcodeId: 0x130, ts: 1, data: { spellId: 20271, result: 97 } }),
+    );
+    if (!parsed.ok) throw new Error(parsed.error);
+    const e = parsed.event;
+    const out = formatEventLine({ seq: e.seq, ts: e.ts, opcode: e.opcode, data: e.data } as EventSummary);
+    expect(out).toContain('"result":97');
+    expect(out).toContain('"reason":"out_of_range"');
   });
 });
 
