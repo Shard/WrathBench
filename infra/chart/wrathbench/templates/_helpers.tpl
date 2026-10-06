@@ -40,6 +40,40 @@ app.kubernetes.io/version: {{ .Values.image.tag | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
+{{/*
+Pod-template labels: `wrathbench.labels` minus everything that moves with the
+release.
+
+A Deployment or StatefulSet replaces its pods whenever any byte of
+spec.template changes, labels included. `helm.sh/chart` carries the chart
+version, which a git-sourced chart gets stamped with the source revision
+(`0.1.0+<sha>`, rendered `0.1.0_<sha>`), and `app.kubernetes.io/version`
+carries the image tag. In a pod template those two made EVERY upgrade replace
+EVERY pod, whether or not anything about that pod had changed — including the
+two databases, whose images are upstream pins that no release moves. For
+MySQL and ClickHouse a replacement is downtime plus a full detach and
+reattach of their volume, for nothing.
+
+So pod templates carry only labels that are constant for the life of the
+release, and a pod rolls when its OWN inputs change: its image, its env, its
+volumes, or a checksum of its own config (ClickHouse's drop-ins). Every
+workload built from the release's images still rolls on every tag bump,
+because the tag is in its image reference — it just no longer rolls a second
+time for a chart revision that did not touch it. The workload objects
+themselves keep the full `wrathbench.labels`, so which chart and tag a
+Deployment came from is still on the Deployment.
+
+Never put anything per-commit, per-version, time-based or random in here, or
+in a pod annotation; the hook Jobs are exempt, being recreated on every
+upgrade anyway. `infra/chart/stable-pod-templates.sh` (run in CI) fails if the
+database pod templates differ between two releases.
+*/}}
+{{- define "wrathbench.podLabels" -}}
+app.kubernetes.io/name: {{ include "wrathbench.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
 {{/* The immutable tag, validated. */}}
 {{- define "wrathbench.tag" -}}
 {{- $t := required "image.tag is required: the immutable tag (`git describe` of the source SHA) that this release deploys. See GitHub issue 7 — no mutable default may become the deployment source." .Values.image.tag | toString -}}

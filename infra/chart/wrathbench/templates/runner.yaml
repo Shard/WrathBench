@@ -23,7 +23,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "wrathbench.labels" . | nindent 8 }}
+        {{- include "wrathbench.podLabels" . | nindent 8 }}
         app.kubernetes.io/component: runner
         {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
       {{- with .Values.podAnnotations }}
