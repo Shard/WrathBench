@@ -347,6 +347,9 @@ publisher:
       # and the pass releasing each run's entry index.
       memory: 2Gi
 
-# Extra pod annotations/labels, if the deploying cluster wants them.
+# Extra pod annotations/labels, if the deploying cluster wants them. Constant
+# values only: they land in every pod template, so one that changes per
+# release (a timestamp, a revision) rolls every pod on every upgrade, the
+# databases included. See wrathbench.podLabels in templates/_helpers.tpl.
 podAnnotations: {}
 podLabels: {}

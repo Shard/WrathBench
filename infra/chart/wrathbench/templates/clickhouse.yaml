@@ -295,7 +295,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "wrathbench.labels" . | nindent 8 }}
+        {{- include "wrathbench.podLabels" . | nindent 8 }}
         app.kubernetes.io/component: clickhouse
         {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
       annotations:
@@ -423,7 +423,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "wrathbench.labels" . | nindent 8 }}
+        {{- include "wrathbench.podLabels" . | nindent 8 }}
         app.kubernetes.io/component: collector
         {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
       {{- with .Values.podAnnotations }}
