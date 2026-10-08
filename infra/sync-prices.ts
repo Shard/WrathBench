@@ -84,6 +84,12 @@ const PIN: readonly string[] = [
   // which the catalogue quotes list ($0.15/$0.50). A sync past that date
   // appends a window dated that day; August's runs keep the discount.
   "z-ai/glm-5.3-flash",
+  // The codex lane's models, under the vendor prefix the catalogue uses. A
+  // store-less sync (a checkout with no config store and no corpus) prices only
+  // the pins, and these sat unpriced for a week after entering the roster.
+  "openai/gpt-6-sol",
+  "openai/gpt-6-luna",
+  "openai/gpt-6.1-sol",
 ];
 
 export interface SyncedPrice {

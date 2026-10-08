@@ -350,6 +350,13 @@ what its `t0` trial finds out. A model the catalogue does not carry — a
 claude-code or codex lane, the LAN box, Cerebras — is still added with **add a
 roster entry**. The endpoints are in `runner/viewer/README.md`.
 
+A new model needs a price too, or its runs read no expected cost. `--status`
+lists every roster entry with none, and says which fix it needs: a paid
+OpenRouter or codex model is priced by `bun infra/sync-prices.ts`, a new Claude
+model by a dated row in `CLAUDE_PRICES`, a non-OpenRouter provider by one in
+`PROVIDER_PRICES` (both in `runner/viewer/pricing.ts`). The price file ships in
+the image, so either way the price reaches the viewer with the next release.
+
 ### Stop it
 
 ```

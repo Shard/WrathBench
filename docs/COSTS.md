@@ -76,7 +76,23 @@ the operator's figure in GitHub issue #66.
   truth — and the output side is worse than that measurement suggested: the
   figures are opening snapshots, so on the haiku run they undercount
   by ~300×. Per-response blocks are good for the SHAPE of context growth, never
-  for absolute $, and on the output side not even for shape.
+  for absolute $, and on the output side not even for shape. The 4× prompt
+  overshoot was measured on the retired `claude-subscription` driver, whose
+  runs stay unpriced; under the `claude-code` driver the per-response prompt
+  sums equal the CLI's own per-turn `claude_result` sums, and output comes off
+  `claude_result` (§1), which is why the expected figure can be read beside
+  the CLI's.
+- **Price a Claude run on the model the CLI served, at the 1-hour cache-write
+  rate.** The roster's `opus` and `sonnet` are aliases that changed meaning
+  with CLI pins (Opus 5.5 from 2.1.280, Sonnet 5.5 from 2.1.284); priced by
+  family, Opus 5.5 read as Opus 5, about 2× its real cost. The CLI names what
+  it served on its first line, and `CLAUDE_PRICES` in `runner/viewer/pricing.ts`
+  matches that id exactly, with dated windows like the other tables. Every
+  claude-code run writes 1-hour cache, billed at 2× input rather than the
+  5-minute 1.25×. Sonnet 5 stays at $2/$10: the announced rise to $3/$15 never
+  happened. Haiku 5.5 has no row, because Anthropic prices each call by its
+  prompt size and a run's totals cannot say which calls were which (GitHub
+  issue #122); its runs read the CLI's own figure.
 - **Cost control is external to the fleet by decision**: a tier is
   denominated in runs, dollars are the operator's reasoning. If an in-fleet
   money budget is ever wanted, it belongs beside `policy.paid.maxConcurrent`,
@@ -132,8 +148,11 @@ delta against the previous total of the same thread once, on the turn's last `re
 the CLI's figure beside it as `usageCumulative`, so the sum over responses is the run's real prompt
 and output; records written before it did carry the total, and the viewer derives the same delta
 for them when it reads them (`runner/src/codex-usage.ts`). A total that fell — a resume that lost
-turns whose rollout could not be written — counts zero for that turn, so a run that had such a
-resume reads slightly low, never high. No snapshot caveat as under claude-code. There is no cost
+turns whose rollout could not be written — counts zero for that turn and is the new baseline. The
+lost turns had already been counted when the CLI first reported them, so such a run reads above
+the CLI's own final count by the size of the drop: about 0.06% on the one run that had one (astra
+freeplay), and within about 0.1% of what was actually served. No snapshot caveat as under
+claude-code. There is no cost
 figure at all: the CLI reports none on a
 subscription, so a codex cost is only ever the list-price estimate over its tokens, marked
 as-if-metered. The rate for that estimate comes from the OpenRouter sync, under the vendor
