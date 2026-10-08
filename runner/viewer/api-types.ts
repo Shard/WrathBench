@@ -383,6 +383,13 @@ export interface ReportedUsage {
    * Present only when the provider reports it — the run's *actual* cost is the
    * sum of these, and nothing here estimates one. */
   cost?: number;
+  /**
+   * Codex only: the prompt of the turn's last API call, read by the driver
+   * from the CLI's rollout. A codex turn is many calls, so `prompt` above is a
+   * tally; this is the size of a context. Absent on records written before the
+   * driver logged it.
+   */
+  lastCall?: { prompt: number; contextWindow?: number };
 }
 
 /** Token accounting for a whole run. */
@@ -395,7 +402,14 @@ export interface TokenTotals {
    * under-read badly. See `tokenTotals` in `tail.ts`.
    */
   source: "reported" | "estimated" | "snapshot";
-  contextTokens: number;
+  /**
+   * The size of the latest prompt. Null for a codex run until a response
+   * carries its last call's prompt (`ReportedUsage.lastCall`): a codex turn's
+   * own totals are a tally of many calls, so none is shown in its place.
+   */
+  contextTokens: number | null;
+  /** The model's window, where the last call's source said (codex rollout). */
+  contextWindow?: number;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;

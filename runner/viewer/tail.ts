@@ -172,6 +172,7 @@ export function estimateTokens(chars: number): number {
  */
 function reportedUsage(rec: Record<string, unknown>): ReportedUsage | null {
   const candidates = [rec["usage"], (rec["message"] as Record<string, unknown> | undefined)?.["usage"]];
+  const last = rec["lastCall"] as Record<string, unknown> | null | undefined;
   for (const u of candidates) {
     if (u === null || u === undefined || typeof u !== "object") continue;
     const o = u as Record<string, unknown>;
@@ -190,6 +191,12 @@ function reportedUsage(rec: Record<string, unknown>): ReportedUsage | null {
       // usage opt-in (`runner/src/adapter.ts`); everyone else omits it.
       const cost = o["cost"];
       if (typeof cost === "number" && Number.isFinite(cost)) out.cost = cost;
+      const lp = last?.["prompt_tokens"];
+      if (typeof lp === "number" && Number.isFinite(lp)) {
+        out.lastCall = { prompt: lp };
+        const w = last?.["context_window"];
+        if (typeof w === "number" && Number.isFinite(w)) out.lastCall.contextWindow = w;
+      }
       return out;
     }
   }
@@ -710,6 +717,12 @@ function collapseClaudeTurns(
 export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
   let prompt = 0;
   let context = 0;
+  // Codex: a turn is a whole `codex exec`, so the figures above are tallies of
+  // many calls and "context" is the last call's prompt, when the driver logged
+  // it. Held apart so nothing else about the totals moves.
+  const codex = entries.some((e) => e.t === "driver" && e["driver"] === "codex");
+  let codexContext: number | null = null;
+  let codexWindow: number | undefined;
   let turns = 0;
   let reported = false;
   let cacheRead: number | null = null;
@@ -723,6 +736,10 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
     if (usage !== undefined && (e.t === "request" || e.t === "response")) {
       if (usage.cachedRead !== undefined) cacheRead = (cacheRead ?? 0) + usage.cachedRead;
       if (usage.cacheWrite !== undefined) cacheWrite = (cacheWrite ?? 0) + usage.cacheWrite;
+    }
+    if (e.t === "response" && usage?.lastCall !== undefined) {
+      codexContext = usage.lastCall.prompt;
+      if (usage.lastCall.contextWindow !== undefined) codexWindow = usage.lastCall.contextWindow;
     }
     if (e.t === "request") {
       if (pending !== null) prompt += pending; // a turn nothing ever reported a prompt for
@@ -765,7 +782,8 @@ export function tokenTotals(entries: readonly EntrySummary[]): TokenTotals {
 
   return {
     source: snapshot ? "snapshot" : reported ? "reported" : "estimated",
-    contextTokens: context,
+    contextTokens: codex ? codexContext : context,
+    ...(codex && codexWindow !== undefined ? { contextWindow: codexWindow } : {}),
     promptTokens: prompt,
     completionTokens: completion,
     totalTokens: prompt + completion,
@@ -1780,6 +1798,7 @@ export class RunTotalsScanner {
    */
   private readonly codexUsage = new CodexUsageCorrector();
   private sawClaudeMark = false;
+  private sawCodexMark = false;
   private costed = 0;
   private uncosted = 0;
   /*
@@ -1854,6 +1873,11 @@ export class RunTotalsScanner {
       if (!this.sawClaudeMark && (t === "claude_system" || (t === "driver" && rec["driver"] === "claude-code"))) {
         this.sawClaudeMark = true;
         this.spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: "claude-code" });
+      }
+      // The codex driver's line, for `tokenTotals`' reading of "context".
+      if (!this.sawCodexMark && t === "driver" && rec["driver"] === "codex") {
+        this.sawCodexMark = true;
+        this.spanMarks.push({ i: 0, t: "driver", ts, start: 0, end: 0, driver: "codex" });
       }
       // Same reason, one record kind further: a `milestone` is neither a request
       // nor a response, so it has to be read before the early return below. Only

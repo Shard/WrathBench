@@ -172,6 +172,7 @@ function projectTokenTotals(t: TokenTotals): TokenTotals {
   return {
     source: t.source,
     contextTokens: t.contextTokens,
+    ...(t.contextWindow !== undefined ? { contextWindow: t.contextWindow } : {}),
     promptTokens: t.promptTokens,
     completionTokens: t.completionTokens,
     totalTokens: t.totalTokens,

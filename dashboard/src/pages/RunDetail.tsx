@@ -81,7 +81,7 @@ import {
   type ExpandPreset,
 } from "../lib/feedview";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
-import { atBottom, sourceHint, sourceLabel } from "../lib/runview";
+import { atBottom, contextHint, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 
@@ -849,8 +849,8 @@ export default function RunDetail() {
                     </div>
                     <div class="card">
                       <div class="k">context / total tokens</div>
-                      <div class="v mono">
-                        {fmtTokens(tokens()?.contextTokens ?? null)} / {fmtTokens(tokens()?.totalTokens ?? null)}
+                      <div class="v mono" title={contextHint(tokens())}>
+                        {fmtTokens(tokens()?.contextTokens ?? null)} /{fmtTokens(tokens()?.totalTokens ?? null)}
                       </div>
                       <div class="sub" title={sourceHint(tokens()?.source)}>
                         {sourceLabel(tokens()?.source)} · {tokens()?.turns ?? 0} turns

@@ -378,6 +378,83 @@ describe("tokenTotals", () => {
     expect(t.totalTokens).toBe(1450);
   });
 
+  describe("codex context", () => {
+    const driver = summarize({ t: "driver", ts: 0, driver: "codex" }, 0, 0, 1);
+    const turnResponse = (i: number, prompt: number, lastCall?: Record<string, number>) =>
+      summarize(
+        {
+          t: "response",
+          ts: i,
+          message: { role: "assistant", content: "ok" },
+          usage: { prompt_tokens: prompt, completion_tokens: 10 },
+          ...(lastCall !== undefined ? { lastCall } : {}),
+        },
+        i,
+        0,
+        1,
+      );
+
+    test("is the latest response's last-call prompt, not the turn's tally, and carries the window", () => {
+      const t = tokenTotals([
+        driver,
+        req(1, 4000),
+        turnResponse(2, 63_000_000, { prompt_tokens: 200_000, context_window: 258_400 }),
+        req(3, 4000),
+        turnResponse(4, 5_000_000, { prompt_tokens: 210_000, context_window: 258_400 }),
+      ]);
+      expect(t.contextTokens).toBe(210_000);
+      expect(t.contextWindow).toBe(258_400);
+      // Nothing else moves: the prompt total is still the sum of the turns' tallies.
+      expect(t.promptTokens).toBe(68_000_000);
+    });
+
+    test("a legacy codex record with no lastCall reads null, never the old tally", () => {
+      const t = tokenTotals([driver, req(1, 4000), turnResponse(2, 63_000_000)]);
+      expect(t.contextTokens).toBeNull();
+      expect(t.contextWindow).toBeUndefined();
+      expect(t.promptTokens).toBe(63_000_000);
+    });
+
+    test("while a turn is in flight the last known figure stands, not the request's chars/4", () => {
+      const t = tokenTotals([
+        driver,
+        req(1, 4000),
+        turnResponse(2, 1_000_000, { prompt_tokens: 200_000 }),
+        req(3, 14_488),
+      ]);
+      expect(t.contextTokens).toBe(200_000);
+      expect(t.contextWindow).toBeUndefined();
+      // A fresh codex run in flight with nothing yet logged: null, not 3,622.
+      expect(tokenTotals([driver, req(1, 14_488)]).contextTokens).toBeNull();
+    });
+
+    test("other drivers are untouched by the codex rule", () => {
+      expect(tokenTotals([req(1, 4000), turnResponse(2, 1200)]).contextTokens).toBe(1200);
+    });
+
+    test("the incremental scanner reads the same figure off a trajectory file", async () => {
+      const dir = tempDir("wb-tail-codex-");
+      const path = join(dir, "trajectory.jsonl");
+      const lines = [
+        { t: "driver", ts: 1, driver: "codex" },
+        { t: "request", ts: 2, turn: 1, messages: [{ role: "user", content: "x".repeat(100) }] },
+        {
+          t: "response",
+          ts: 3,
+          turn: 1,
+          message: { role: "assistant", content: "ok" },
+          usage: { prompt_tokens: 9_000_000, completion_tokens: 10 },
+          lastCall: { prompt_tokens: 123_456, completion_tokens: 3, context_window: 258_400 },
+        },
+        { t: "request", ts: 4, turn: 2, messages: [{ role: "user", content: "x".repeat(100) }] },
+      ];
+      writeFileSync(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+      const totals = await new RunTotalsScanner(path).scanOnce();
+      expect(totals.tokens.contextTokens).toBe(123_456);
+      expect(totals.tokens.contextWindow).toBe(258_400);
+    });
+  });
+
   test("an empty run totals to zero rather than NaN", () => {
     expect(tokenTotals([])).toMatchObject({ source: "estimated", contextTokens: 0, totalTokens: 0, turns: 0 });
   });

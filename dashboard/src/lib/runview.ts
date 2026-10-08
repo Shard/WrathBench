@@ -16,6 +16,7 @@
  */
 
 import type { StatePoint } from "@viewer/api-types";
+import { fmtTokens } from "./format";
 
 /** One point on the cumulative-xp curve: sample time and reconstructed total. */
 export interface XpPoint {
@@ -122,6 +123,20 @@ export function sourceLabel(source: string | undefined): string {
   if (source === "reported") return "provider-reported";
   if (source === "snapshot") return "snapshot — under-read";
   return "estimated (chars ÷ 4)";
+}
+
+/**
+ * Hover for the context figure. Only a codex run has anything to say: its
+ * context is the last API call's prompt as the CLI's rollout recorded it, and
+ * a null one is a run that recorded none (older runs, or an unreadable rollout).
+ */
+export function contextHint(
+  tokens: { contextTokens: number | null; contextWindow?: number } | null | undefined,
+): string | undefined {
+  if (tokens === null || tokens === undefined) return undefined;
+  if (tokens.contextTokens === null) return "last API call's prompt, from the Codex CLI's rollout; this run recorded none";
+  if (tokens.contextWindow === undefined) return undefined;
+  return `last API call's prompt, from the Codex CLI's rollout; window ${fmtTokens(tokens.contextWindow)}`;
 }
 
 export function sourceHint(source: string | undefined): string {

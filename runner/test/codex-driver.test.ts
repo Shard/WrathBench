@@ -249,6 +249,49 @@ describe("codex driver", () => {
     trajectory.close();
   }, 20_000);
 
+  test("the last API call's prompt is read from the thread's rollout onto the turn's last response", async () => {
+    const thread = "01a119da-ef89-7a63-ac51-314ac6a70a52";
+    const { runDir, trajectory, options, codexHome } = setupEpisode("tools", { maxTurns: 2 }, { WB_FAKE_THREAD_ID: thread });
+    const dir = join(codexHome, "sessions", "2026", "10", "08");
+    mkdirSync(dir, { recursive: true });
+    const tc = JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: { input_tokens: 9, output_tokens: 9 },
+          last_token_usage: { input_tokens: 240_051, cached_input_tokens: 238_336, output_tokens: 128 },
+          model_context_window: 258_400,
+        },
+      },
+    });
+    writeFileSync(join(dir, `rollout-2026-10-08T04-52-21-${thread}.jsonl`), `{"type":"session_meta"}\n${tc}\n`);
+    await runCodexEpisode(options);
+    const withUsage = readTrajectory(runDir).filter((r) => r.t === "response" && r["usage"] !== undefined);
+    expect(withUsage).toHaveLength(2);
+    for (const r of withUsage) {
+      expect(r["lastCall"]).toEqual({
+        prompt_tokens: 240_051,
+        completion_tokens: 128,
+        cached_tokens: 238_336,
+        context_window: 258_400,
+      });
+    }
+    trajectory.close();
+  }, 30_000);
+
+  test("no rollout: the turn is unchanged, with no lastCall and one harness line for the run", async () => {
+    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 3 }, { WB_FAKE_THREAD_ID: "01a119da-ef89-7a63-ac51-314ac6a70a52" });
+    await runCodexEpisode(options);
+    const records = readTrajectory(runDir);
+    const withUsage = records.filter((r) => r.t === "response" && r["usage"] !== undefined);
+    expect(withUsage).toHaveLength(3);
+    for (const r of withUsage) expect(r["lastCall"]).toBeUndefined();
+    const notes = records.filter((r) => r.t === "harness" && String(r["text"]).startsWith("codex last-call figure unavailable"));
+    expect(notes).toHaveLength(1);
+    trajectory.close();
+  }, 30_000);
+
   test("a silent turn still counts its tokens, on a content-null response", async () => {
     const { runDir, trajectory, options } = setupEpisode("silent", { maxTurns: 1 });
     await runCodexEpisode(options);

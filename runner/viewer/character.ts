@@ -92,6 +92,7 @@ function mergeTokens(attempts: readonly (TokenTotals | null)[]): TokenTotals | n
   return {
     source,
     contextTokens: held[held.length - 1]!.contextTokens,
+    ...(held[held.length - 1]!.contextWindow !== undefined ? { contextWindow: held[held.length - 1]!.contextWindow! } : {}),
     promptTokens: sum(held.map((t) => t.promptTokens)) ?? 0,
     completionTokens: sum(held.map((t) => t.completionTokens)) ?? 0,
     totalTokens: sum(held.map((t) => t.totalTokens)) ?? 0,
