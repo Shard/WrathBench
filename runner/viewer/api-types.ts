@@ -450,7 +450,7 @@ export interface CostBreakdown {
  * `basis` is the field to read first:
  * - `reported` — a figure the provider itself billed: OpenRouter's per-response
  *   `usage.cost` summed over the run, or the Claude Agent SDK's
- *   `total_cost_usd`. Used verbatim.
+ *   `total_cost_usd`. Used verbatim, except for the marked `backfill` below.
  * - `list-price` — this repo's price table applied to `TokenTotals`.
  * - `none` — nothing to say, and `note` says which nothing: no price on file,
  *   no synced price, estimated tokens, or a provider that reports no cost.
@@ -473,6 +473,52 @@ export interface CostFigure {
   asOf: string | null;
   /** Always present: a blank cost states something and must say what. */
   note: string;
+  /**
+   * Present only on a claude-code `actual` with turns the CLI never reported a
+   * cost for (a killed or paused turn ends before its `claude_result` lands).
+   * `usd` above is then `reportedUsd` plus this `usd`: those turns' tokens at
+   * the run's own list row — or nothing, `usd: null`, where the model has no
+   * row and the figure reads low. Every surface that shows the figure marks it
+   * with a `*` whose hover is `note`. Operator's decision, 2026-10-08.
+   */
+  backfill?: CostBackfill;
+}
+
+/** The two parts of a backfilled claude-code actual; see `CostFigure.backfill`. */
+export interface CostBackfill {
+  /** The CLI's own `total_cost_usd`, summed over sessions. */
+  reportedUsd: number;
+  /** The list-price estimate for the unreported turns, or null when no row could price them. */
+  usd: number | null;
+  /** How many turns the CLI never reported a cost for. */
+  turns: number;
+}
+
+/**
+ * The tokens of a claude-code run that no `claude_result` covers: whatever a
+ * session's responses used after its last result (or in a session that never
+ * got one). Read off the responses' usage, so the input side is the finished
+ * count and the output side the API's opening snapshot — under-read
+ * (`tokenTotals`). See `ClaudeCostTally` in `tail.ts`.
+ */
+export interface UnreportedUsage {
+  turns: number;
+  promptTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  completionTokens: number;
+}
+
+/**
+ * How much of a run its provider-reported cost covers: responses that did and
+ * did not carry a per-call charge (OpenRouter's shape), and for a claude-code
+ * run, the tokens of the turns its CLI never reported a cost for.
+ */
+export interface CostCoverage {
+  costed: number;
+  uncosted: number;
+  /** Absent on a run with nothing unreported, and on totals derived before the field existed. */
+  unreported?: UnreportedUsage;
 }
 
 /**
@@ -881,6 +927,13 @@ export interface CharacterCost {
    * Carried so a character on a subscription does not read as a bill.
    */
   asIfMetered: boolean;
+  /**
+   * Of `actualAttempts`, how many carry a backfill (`CostFigure.backfill`):
+   * turns their CLI never reported, estimated at list price or left out. The
+   * sum wears the same `*` a single run's figure does. Absent from a viewer
+   * that predates it.
+   */
+  actualBackfilled?: number;
 }
 
 /**

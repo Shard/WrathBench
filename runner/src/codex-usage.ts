@@ -17,8 +17,10 @@
  * (a full disk), the next resume rebuilds the thread without the turns whose
  * items were lost, and the total goes DOWN. A drop is therefore read as a new
  * baseline: the turn that shows it counts zero for the fields that fell, and
- * the turn after it is measured from the lower figure. The tokens of the lost
- * turns are not recoverable from the counter; the floor is the honest reading.
+ * the turn after it is measured from the lower figure. The lost turns were
+ * already counted when the CLI first reported them, so a run that had a drop
+ * reads above the CLI's own final total by the drop's size — about 0.06% on
+ * the one run that had one — and within about 0.1% of what was served.
  *
  * Two users, one rule: the driver (`adapter-codex.ts`) writes the per-turn
  * delta as `usage` with the thread figure beside it as `usageCumulative`, and

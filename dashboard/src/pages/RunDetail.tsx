@@ -901,9 +901,11 @@ export default function RunDetail() {
                       <div class="sub" title={detail()?.cost.actual.note ?? ""}>
                         {detail()?.cost.actual.basis === "none"
                           ? "provider reports no cost for this run"
-                          : detail()?.cost.actual.asIfMetered
-                            ? "the driver's own total_cost_usd, billed to a subscription"
-                            : "the provider's own charge, summed over the run"}
+                          : detail()?.cost.actual.backfill !== undefined
+                            ? "the driver's own total_cost_usd plus unreported turns, billed to a subscription"
+                            : detail()?.cost.actual.asIfMetered
+                              ? "the driver's own total_cost_usd, billed to a subscription"
+                              : "the provider's own charge, summed over the run"}
                       </div>
                     </div>
                     <div class="card">

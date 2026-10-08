@@ -284,7 +284,7 @@ function FleetRowView(props: { row: FleetRow }) {
       */}
       <td class="right mono dim" title={tpsTitle(r().tps)}>{tpsLabel(r().tps)}</td>
       {/* The actual figure only, as the episodes page shows it; blank is "not reported", never an estimate. */}
-      <td class="right mono dim" title={r().costNote}>{r().costUsd === null ? "—" : fmtUsd(r().costUsd)}</td>
+      <td class="right mono dim" title={r().costNote}>{r().costUsd === null ? "—" : `${fmtUsd(r().costUsd)}${r().costMark}`}</td>
       <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
     </tr>
   );

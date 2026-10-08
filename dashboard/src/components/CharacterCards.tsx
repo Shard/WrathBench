@@ -10,7 +10,7 @@
 import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import type { CharacterAttempt, CharacterView } from "../api/client";
-import { fmtDuration, fmtTokens, fmtUsd, num, shortRunId } from "../lib/format";
+import { backfilledTitle, fmtDuration, fmtTokens, fmtUsd, num, shortRunId } from "../lib/format";
 import { Coins, LevelXp } from "./CharacterFacts";
 import { sourceHint, sourceLabel } from "../lib/runview";
 import { type RunStatus, statusOf, statusText, statusTitle, statusTone } from "../lib/runs";
@@ -84,7 +84,10 @@ export function CharacterTotalsCard(props: { character: CharacterView; runId?: s
       */}
       <div class="card">
         <div class="k">cost — actual</div>
-        <div class="v mono">{fmtUsd(cost().actualUsd)}</div>
+        <div class="v mono" title={backfilledTitle(cost().actualBackfilled)}>
+          {fmtUsd(cost().actualUsd)}
+          {(cost().actualBackfilled ?? 0) > 0 ? "*" : ""}
+        </div>
         <div class="sub">
           <Show
             when={cost().actualAttempts > 0}

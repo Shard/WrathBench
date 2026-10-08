@@ -48,10 +48,12 @@ const SINGLE_DASH = "2 2";
  * basis the runs had rather than only to list-price. A null basis is an entry
  * none of whose counted runs carries a price, which a cost axis never plots.
  */
-export function pricedText(p: Pick<LadderPoint, "basis" | "asIfMetered">): string {
+export function pricedText(p: Pick<LadderPoint, "basis" | "asIfMetered" | "backfilled">): string {
   if (p.basis === null) return "unpriced";
+  // The `*` of a backfilled run's own cell (`costMark`), explained in the hover's last line.
+  const star = p.backfilled === true ? "*" : "";
   const basis =
-    p.basis === "reported" ? "reported" : p.basis === "list-price" ? "list-price est." : "reported and list-price est. mixed";
+    p.basis === "reported" ? `reported${star}` : p.basis === "list-price" ? "list-price est." : `reported${star} and list-price est. mixed`;
   if (!p.asIfMetered) return basis;
   return p.basis === "mixed" ? `${basis}, some as-if-metered` : `as-if-metered (${basis})`;
 }
@@ -103,6 +105,9 @@ export function hoverText(p: LadderPoint, episode: string, view: LadderView = DE
     axisLine(p, p.x, view.x, episode),
     axisLine(p, p.y, view.y, episode),
     ...(also.length > 0 ? [`also: ${also.join(", ")}`] : []),
+    ...(p.backfilled === true && (view.x.key === "cost" || view.y.key === "cost")
+      ? ["* includes turns that ended before the CLI reported a cost, estimated at list price"]
+      : []),
   ].join("\n");
 }
 

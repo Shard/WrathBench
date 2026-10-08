@@ -82,6 +82,7 @@ import {
 import { accountHeldBy } from "./run-roster";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import { TAINT_AFTER } from "../runner/src/lapse";
+import { rosterPriceGap } from "../runner/viewer/pricing";
 import {
   ACCOUNT_CLASSES,
   type AccountClass,
@@ -209,6 +210,26 @@ export function formatRefusals(refusals: readonly ConfigRefusal[], inForce = tru
     ...refusals.map((r) => `   ${r.pin} REFUSED and left disabled: ${r.why}`),
     "   a live run under a refused pin is left alone; it just will not respawn",
   ];
+}
+
+/**
+ * Roster entries whose runs would carry no expected cost (`rosterPriceGap`).
+ * Pure.
+ *
+ * A warning line, never a refusal: the entry still runs, it just reads
+ * unpriced until a row exists. Printed because the alternative is the way the
+ * codex models went unpriced for a week in 2026-10 — nobody looks at a blank.
+ * The usual fix is `bun infra/sync-prices.ts` and a release, since the price
+ * file ships in the image; the line says which fix the model needs.
+ */
+export function formatPriceGaps(roster: Readonly<Record<string, FleetRosterEntry>>): string[] {
+  const out: string[] = [];
+  for (const [name, e] of Object.entries(roster)) {
+    const why = rosterPriceGap(e);
+    if (why !== null) out.push(`   ${name} (${e.model}): ${why}`);
+  }
+  if (out.length === 0) return [];
+  return [`! ${out.length} roster model(s) with no price — their runs will read no expected cost:`, ...out];
 }
 
 /** --status / --dry-run rendering of a gate record. Pure. */
@@ -545,6 +566,7 @@ export function printStatus(): void {
     console.log(`!! ${EMPTY_STORE_HINT}`);
   }
   for (const line of formatRefusals(config?.refusals ?? [], rejected === undefined)) console.log(line);
+  for (const line of formatPriceGaps(config?.roster ?? {})) console.log(line);
   // Liveness, honestly, from either side of a container boundary: a heartbeat
   // refreshed every tick. kill(pid, 0) is meaningless when the supervisor lives
   // in another PID namespace — it either says "no such process" for a healthy

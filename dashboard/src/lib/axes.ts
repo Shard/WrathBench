@@ -29,6 +29,8 @@ export interface RunCostReading {
   basis: "reported" | "list-price";
   /** A figure nobody paid: a free tier, local hardware, a subscription. */
   asIfMetered: boolean;
+  /** Set only on a reported figure that is partly a backfill (`CostFigure.backfill`). */
+  backfilled?: true;
 }
 
 /**
@@ -43,7 +45,9 @@ export interface RunCostReading {
  */
 export function runCostReading(r: Pick<ResultRun, "actualCost" | "expectedCost">): RunCostReading | null {
   const a = r.actualCost;
-  if (a !== null && a.basis !== "none" && a.usd !== null) return { usd: a.usd, basis: "reported", asIfMetered: a.asIfMetered };
+  if (a !== null && a.basis !== "none" && a.usd !== null) {
+    return { usd: a.usd, basis: "reported", asIfMetered: a.asIfMetered, ...(a.backfill !== undefined ? { backfilled: true as const } : {}) };
+  }
   const e = r.expectedCost;
   if (e !== null && e !== undefined && e.basis !== "none" && e.usd !== null) {
     return { usd: e.usd, basis: "list-price", asIfMetered: e.asIfMetered };

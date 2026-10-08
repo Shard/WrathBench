@@ -203,6 +203,10 @@ function projectCostFigure(c: CostFigure): CostFigure {
     asOf: c.asOf,
     // The pricing layer's own sentence ("no price on file", ...), never game text.
     note: c.note,
+    // Dollars and a turn count, so the public figure wears the same `*`.
+    ...(c.backfill !== undefined
+      ? { backfill: { reportedUsd: c.backfill.reportedUsd, usd: c.backfill.usd, turns: c.backfill.turns } }
+      : {}),
   };
 }
 
@@ -920,6 +924,7 @@ function projectCharacterTotals(t: CharacterTotals): CharacterTotals {
       expectedAttempts: t.cost.expectedAttempts,
       attempts: t.cost.attempts,
       asIfMetered: t.cost.asIfMetered,
+      ...(t.cost.actualBackfilled !== undefined ? { actualBackfilled: t.cost.actualBackfilled } : {}),
     },
     level: t.level,
     money: t.money,

@@ -219,7 +219,9 @@ What sums and what does not is the difference between a tally and a state:
   priced from the table and one neither has no honest single basis — so
   `CharacterCost` adds the dollars and states how many attempts each sum covers,
   keeping actual and expected apart as `CostView` does. `asIfMetered` rides
-  along so a subscription character does not read as a bill.
+  along so a subscription character does not read as a bill, and
+  `actualBackfilled` counts the attempts whose actual includes turns the CLI
+  never reported a cost for (docs/COSTS.md), so the sum wears the same `*`.
 - **Token source degrades to the weakest.** One `snapshot`-sourced attempt makes
   the character's total under-read, and labelling it `reported` because the other
   eleven were would hide the caveat the label exists to carry.

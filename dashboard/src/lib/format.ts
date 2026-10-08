@@ -127,6 +127,23 @@ export function fmtUsd(v: number | null | undefined): string {
 }
 
 /**
+ * The `*` a claude-code actual wears when part of it is not the CLI's own
+ * figure: turns that ended before the CLI reported their cost, estimated at
+ * list price or, with no row to price them, left out (`CostFigure.backfill`).
+ * The explanation is the figure's own `note`, which every surface already
+ * puts in the cell's title — never page text. Empty on any other figure.
+ */
+export function costMark(c: { backfill?: unknown } | null | undefined): string {
+  return c?.backfill === undefined || c.backfill === null ? "" : "*";
+}
+
+/** The hover for a character's summed actual when some attempt is backfilled (`CharacterCost.actualBackfilled`); "" otherwise. */
+export function backfilledTitle(attempts: number | undefined): string {
+  if (attempts === undefined || attempts === 0) return "";
+  return `* ${attempts} attempt${attempts === 1 ? "" : "s"} had turns end before the CLI reported a cost; those are estimated at list price, or left out where the model has none`;
+}
+
+/**
  * The one-line reading of a cost, provenance included: a bare number invites
  * the reader to take a reconstruction for an invoice.
  *
@@ -135,11 +152,13 @@ export function fmtUsd(v: number | null | undefined): string {
  * and the caller knows which one it is asking about.
  */
 export function fmtCost(
-  c: { usd: number | null; basis: string; asIfMetered: boolean; asOf: string | null } | null | undefined,
+  c: { usd: number | null; basis: string; asIfMetered: boolean; asOf: string | null; backfill?: unknown } | null | undefined,
   blank = "— (unpriced model)",
 ): string {
   if (c === undefined || c === null || c.basis === "none" || c.usd === null) return blank;
-  if (c.basis === "reported") return `${fmtUsd(c.usd)} ${c.asIfMetered ? "as-if-metered (reported)" : "reported"}`;
+  if (c.basis === "reported") {
+    return `${fmtUsd(c.usd)}${costMark(c)} ${c.asIfMetered ? "as-if-metered (reported)" : "reported"}`;
+  }
   // The date is the server's, off the price row that was actually applied: a
   // rate that lapses must not keep being announced under the old date.
   const when = c.asOf === null ? "undated" : c.asOf.slice(0, 7);

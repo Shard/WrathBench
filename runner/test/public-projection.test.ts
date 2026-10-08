@@ -574,6 +574,15 @@ describe("projectRuns", () => {
     expect(row.terminationReason).toBe("episode-limit");
   });
 
+  test("a backfilled claude-code actual crosses with its parts, so the public figure wears the same *", () => {
+    const backfill = { reportedUsd: 839.38, usd: 748.7, turns: 2 };
+    const fixture = runListRowFixture();
+    const row = { ...fixture, cost: { ...fixture.cost!, actual: { ...fixture.cost!.actual, backfill: smuggle<typeof backfill>({ ...backfill }) } } };
+    const out = projectRuns({ runs: [row] }).runs[0]!;
+    expect(out.cost?.actual.backfill).toEqual(backfill);
+    assertClean(JSON.stringify(out));
+  });
+
   test("a run that never paused stays null: the token marks paused runs only", () => {
     const input = { runs: [{ ...runListRowFixture(), pauseReason: null }] };
     expect(projectRuns(input).runs[0]!.pauseReason).toBeNull();
