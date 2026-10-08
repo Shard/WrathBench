@@ -129,6 +129,7 @@ import { signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
+import { CodexLastCallReader } from "./codex-rollout";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
@@ -840,12 +841,20 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
    * whose `usage` it derives the same delta for.
    */
   let pendingResponse: (Record<string, unknown> & { t: string }) | null = null;
-  const flushPendingResponse = (usage?: { usage: CodexUsage; usageCumulative: CodexUsage }): void => {
+  const flushPendingResponse = (usage?: Record<string, unknown>): void => {
     if (pendingResponse === null) return;
     const entry = pendingResponse;
     pendingResponse = null;
     trajectory.append(usage !== undefined ? { ...entry, ...usage } : entry);
   };
+  /**
+   * The last API call's prompt, from the CLI's rollout (`codex-rollout.ts`),
+   * which is what "context" means for this driver. Best effort: a failure is
+   * an absent `lastCall` and one harness line per run, never a slower turn.
+   */
+  const lastCalls = new CodexLastCallReader(env["CODEX_HOME"], (reason) => {
+    trajectory.append({ t: "harness", kind: "session_note", text: `codex last-call figure unavailable: ${reason}` });
+  });
   /** Each thread's last reported total: the baseline its next turn's delta is taken against. */
   const threadTotals = new Map<string, CodexUsage>();
   const pushResponse = (entry: Record<string, unknown> & { t: string }): void => {
@@ -1046,7 +1055,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
               // No response at all this turn: an entry so the tokens count.
               pendingResponse = { t: "response", turn, message: { role: "assistant", content: null } };
             }
-            flushPendingResponse(perTurn);
+            const lastCall = lastCalls.read(threadId);
+            flushPendingResponse(
+              perTurn === undefined && lastCall === undefined
+                ? undefined
+                : { ...perTurn, ...(lastCall !== undefined ? { lastCall } : {}) },
+            );
             trajectory.append({
               t: "codex_result",
               turn,

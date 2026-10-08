@@ -167,8 +167,18 @@ turns whose rollout could not be written — counts zero for that turn and is th
 lost turns had already been counted when the CLI first reported them, so such a run reads above
 the CLI's own final count by the size of the drop: about 0.06% on the one run that had one (astra
 freeplay), and within about 0.1% of what was actually served. No snapshot caveat as under
-claude-code. There is no cost
-figure at all: the CLI reports none on a
+claude-code.
+
+The run page's "context" for a codex run is the prompt of the turn's LAST API call, not the turn's
+tokens: a harness turn is a whole `codex exec` of many calls, so its own prompt total can be
+hundreds of times the window. The CLI's event stream does not carry that figure; its rollout file
+(`$CODEX_HOME/sessions/**/rollout-*-<thread_id>.jsonl`) does, in its last `token_count` event. The
+driver reads only the tail of that file when a turn completes and lands the result on the turn's last
+`response` as `lastCall` (`runner/src/codex-rollout.ts`); a failure leaves it absent and is noted once
+per run. The viewer shows the latest `lastCall` and holds it while a turn is in flight. Runs from
+before the driver logged it have none, so they show no context at all rather than the tally.
+
+There is no cost figure at all: the CLI reports none on a
 subscription, so a codex cost is only ever the list-price estimate over its tokens, marked
 as-if-metered. The rate for that estimate comes from the OpenRouter sync, under the vendor
 prefix the Codex CLI's own slug omits: the lane records `gpt-6-astra` and the catalogue carries
