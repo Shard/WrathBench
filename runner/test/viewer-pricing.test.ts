@@ -18,7 +18,7 @@ import type { PriceableRun } from "../viewer/pricing";
 import { CLAUDE_PRICES, CLAUDE_UNPRICED, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, claudePrice, codexPrice, costOf, priceFor, providerPrice, rosterPriceGap, runCost, syncedPrice, windowAt } from "../viewer/pricing";
 import { isFreeSlug } from "../src/model-cost";
 import { catalogueIds, isZeroQuote, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
-import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
+import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, tokenTotals, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -988,5 +988,156 @@ describe("reportedCostUsd", () => {
       .filter((l) => l.length > 0)
       .map((l, i) => summarize(JSON.parse(l) as Record<string, unknown>, i, 0, 0));
     expect(reportedCostUsd(viaSummarize)).toBeCloseTo(0.00082, 9);
+  });
+});
+
+describe("a claude-code actual with turns the CLI never reported a cost for", () => {
+  /*
+   * A `claude_result` lands only when a turn ends cleanly, so a turn the
+   * watchdog killed or a pause cut off is in no session's `total_cost_usd`.
+   * Operator's decision, 2026-10-08: price those turns at the run's own list
+   * row, add them, and mark the figure. The fixtures are the two runs the audit
+   * named, in miniature: the token figures are theirs.
+   */
+
+  /**
+   * A raw trajectory: per session, its responses' usage by turn, a result
+   * after the turn it closes, and the record that ended the session — a pause
+   * or the termination; none is a session still running.
+   */
+  function trajectory(
+    sessions: {
+      id: string;
+      turns: { turn: number; usage: Record<string, number> }[];
+      result?: { afterTurn: number; costUsd: number };
+      end?: "pause" | "termination";
+    }[],
+  ): Record<string, unknown>[] {
+    const out: Record<string, unknown>[] = [{ t: "meta", ts: 1 }];
+    let ts = 2;
+    for (const s of sessions) {
+      out.push({ t: "claude_system", ts: ts++, type: "system", subtype: "init", session_id: s.id, model: "claude-opus-5" });
+      for (const turn of s.turns) {
+        out.push({ t: "response", ts: ts++, turn: turn.turn, message: { content: "" }, usage: turn.usage });
+        if (s.result?.afterTurn === turn.turn) {
+          out.push({ t: "claude_result", ts: ts++, turn: turn.turn, costUsd: s.result.costUsd, sessionId: s.id, usageRaw: { output_tokens: 24_028 } });
+        }
+      }
+      if (s.end === "pause") out.push({ t: "pause", ts: ts++, reason: "operator-pause" });
+      if (s.end === "termination") out.push({ t: "termination", ts: ts++, reason: "episode-limit" });
+      if (s.end === "pause") out.push({ t: "resume", ts: ts++ });
+    }
+    return out;
+  }
+
+  /** `fleet-sub-opus-low-e90-opus-low-20260825-a2`: turn 1 reported $3.40, turn 2 was cut off at the episode limit. */
+  const opusLow = trajectory([
+    {
+      id: "s1",
+      turns: [
+        { turn: 1, usage: { prompt_tokens: 4_620_152, completion_tokens: 2_594, cached_tokens: 4_569_052, cache_write_tokens: 50_850 } },
+        { turn: 2, usage: { prompt_tokens: 11_024_920, completion_tokens: 3_181, cached_tokens: 10_978_009, cache_write_tokens: 46_655 } },
+      ],
+      result: { afterTurn: 1, costUsd: 3.396341 },
+      end: "termination",
+    },
+  ]);
+  const opusRun: PriceableRun & { startedAt: number } = {
+    ...sonnetRun,
+    model: "opus",
+    resolvedModel: "claude-opus-5",
+    startedAt: Date.parse("2026-08-25T05:00:33Z"),
+  };
+  const summarised = (recs: Record<string, unknown>[]) => recs.map((r, i) => summarize(r, i, 0, 0));
+  const costOfRun = (run: PriceableRun & { startedAt?: number }, recs: Record<string, unknown>[]) => {
+    const entries = summarised(recs);
+    return runCost({ run, tokens: tokenTotals(entries), reportedUsd: reportedCostUsd(entries), coverage: responseCostCoverage(entries) });
+  };
+
+  test("the tokens after a session's last result are the unreported part, on both read paths", async () => {
+    const unreported = { turns: 1, promptTokens: 11_024_920, cacheReadTokens: 10_978_009, cacheWriteTokens: 46_655, completionTokens: 3_181 };
+    expect(responseCostCoverage(summarised(opusLow)).unreported).toEqual(unreported);
+    const path = join(tempDir("wrathbench-backfill-"), "trajectory.jsonl");
+    writeFileSync(path, `${opusLow.map((r) => JSON.stringify(r)).join("\n")}\n`);
+    const totals = await scanRunTotals(path);
+    expect(totals.responseCost.unreported).toEqual(unreported);
+    expect(totals.reportedCostUsd).toBeCloseTo(3.396341, 9);
+  });
+
+  test("the unreported turn is priced at the run's own row and added, and the figure says both parts", () => {
+    const c = costOfRun(opusRun, opusLow);
+    // Turn 2 at Opus 5's list rates: $5.49 of cache reads, $0.47 of 1-hour writes, a floor of output.
+    expect(c.actual.backfill?.reportedUsd).toBeCloseTo(3.396341, 9);
+    expect(c.actual.backfill?.usd).toBeCloseTo(6.036, 3);
+    expect(c.actual.backfill?.turns).toBe(1);
+    expect(c.actual.usd).toBeCloseTo(9.433, 3);
+    expect(c.actual.basis).toBe("reported");
+    expect(c.actual.asIfMetered).toBe(true);
+    expect(c.actual.note).toContain("includes $6.04 estimated at claude-opus-5 list price for 1 turn that ended before the CLI reported a cost");
+    expect(c.actual.note).toContain("$3.40");
+  });
+
+  test("a turn still in flight is not unreported yet: a live run's figure is the CLI's own, unmarked", () => {
+    const live = opusLow.filter((r) => r["t"] !== "termination");
+    expect(responseCostCoverage(summarised(live)).unreported).toBeUndefined();
+    const c = costOfRun(opusRun, live);
+    expect(c.actual.usd).toBeCloseTo(3.396341, 9);
+    expect(c.actual.backfill).toBeUndefined();
+  });
+
+  test("a result that lands after the termination — the wind-down's catch — still covers its turn", () => {
+    const caught = trajectory([
+      {
+        id: "s1",
+        turns: [{ turn: 1, usage: { prompt_tokens: 4_620_152, completion_tokens: 2_594, cached_tokens: 4_569_052, cache_write_tokens: 50_850 } }],
+      },
+    ]);
+    caught.push({ t: "termination", ts: 90, reason: "idle" }, { t: "claude_result", ts: 91, turn: 1, costUsd: 3.396341, sessionId: "s1" });
+    expect(responseCostCoverage(summarised(caught)).unreported).toBeUndefined();
+  });
+
+  test("a session cut off by a pause is unreported whole; the session that reported covers itself", () => {
+    // `fleet-sub-fable-none-freeplay-claude-fable-5-none-20260829-a2`: two
+    // paused sessions with no result, then one that ended with $839.38.
+    const fable = trajectory([
+      { id: "a", turns: [{ turn: 1, usage: { prompt_tokens: 165_276_785, completion_tokens: 17_587, cached_tokens: 164_894_694, cache_write_tokens: 380_527 } }], end: "pause" },
+      { id: "b", turns: [{ turn: 1, usage: { prompt_tokens: 561_147_736, completion_tokens: 38_259, cached_tokens: 560_502_051, cache_write_tokens: 642_605 } }], end: "pause" },
+      {
+        id: "c",
+        turns: [{ turn: 1, usage: { prompt_tokens: 783_246_051, completion_tokens: 46_513, cached_tokens: 781_675_122, cache_write_tokens: 1_567_235 } }],
+        result: { afterTurn: 1, costUsd: 839.384656 },
+        end: "termination",
+      },
+    ]);
+    const run = { ...sonnetRun, model: "claude-fable-5", resolvedModel: "claude-fable-5", startedAt: Date.parse("2026-08-29T09:23:57Z") };
+    const c = costOfRun(run, fable);
+    expect(c.actual.backfill?.turns).toBe(2);
+    expect(c.actual.backfill?.usd).toBeCloseTo(748.698, 2);
+    expect(c.actual.usd).toBeCloseTo(1588.083, 2);
+  });
+
+  test("with no row to price them, nothing is added and the figure is still marked", () => {
+    const c = costOfRun({ ...opusRun, model: "claude-haiku-5-5", resolvedModel: "claude-haiku-5-5" }, opusLow);
+    expect(c.actual.usd).toBeCloseTo(3.396341, 9);
+    expect(c.actual.backfill).toEqual({ reportedUsd: c.actual.usd!, usd: null, turns: 1 });
+    expect(c.actual.note).toContain("reads low");
+  });
+
+  test("a run every session of which reported is untouched, and so is any other driver", () => {
+    const whole = opusLow.filter((r) => r["turn"] !== 2);
+    expect(responseCostCoverage(summarised(whole)).unreported).toBeUndefined();
+    const c = costOfRun(opusRun, whole);
+    expect(c.actual.usd).toBeCloseTo(3.396341, 9);
+    expect(c.actual.backfill).toBeUndefined();
+    // The retired claude-subscription driver's response sums read ~4× high; never backfilled.
+    const old = costOfRun({ ...opusRun, driver: "claude-subscription", harness: null }, opusLow);
+    expect(old.actual.usd).toBeCloseTo(3.396341, 9);
+    expect(old.actual.backfill).toBeUndefined();
+  });
+
+  test("a run with no reported figure at all gets no backfill: its whole cost is the expected one", () => {
+    const none = opusLow.filter((r) => r["t"] !== "claude_result");
+    expect(responseCostCoverage(summarised(none)).unreported).toBeUndefined();
+    expect(costOfRun(opusRun, none).actual.usd).toBeNull();
   });
 });

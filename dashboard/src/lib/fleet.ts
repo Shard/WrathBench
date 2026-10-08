@@ -14,7 +14,7 @@
  */
 
 import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView, TpsFacts } from "@viewer/api-types";
-import { fmtDuration, fmtTps, modelDisplay } from "./format";
+import { costMark, fmtDuration, fmtTps, modelDisplay } from "./format";
 import type { RunListRow } from "@viewer/api-types";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
@@ -187,6 +187,8 @@ export interface FleetRow {
   costUsd: number | null;
   /** Why the cost is blank, in the pricing layer's words; "" when there is a figure. */
   costNote: string;
+  /** `costMark` of the same figure: "*" when part of it is a backfill, else "". */
+  costMark: string;
   /** Active time in the episode, from the runs feed; null when there is no run. */
   elapsedMs: number | null;
   /**
@@ -468,6 +470,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       tps: run?.tps ?? null,
       costUsd: actualUsd(run),
       costNote: run?.cost?.actual?.note ?? "",
+      costMark: costMark(run?.cost?.actual),
       elapsedMs: run?.playtimeMs ?? null,
       budgetMs: run?.comparability?.budget.episodeMs ?? null,
       note:
@@ -503,6 +506,7 @@ export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): Fl
       tps: run?.tps ?? null,
       costUsd: actualUsd(run),
       costNote: run?.cost?.actual?.note ?? "",
+      costMark: costMark(run?.cost?.actual),
       elapsedMs: here?.elapsedMs ?? run?.playtimeMs ?? null,
       budgetMs: here?.budgetMs ?? run?.comparability?.budget.episodeMs ?? null,
       note: here !== undefined ? `${pausedLabel(here)} — ${here.why}` : a.job !== null ? `job ${a.job} holds nothing right now` : null,

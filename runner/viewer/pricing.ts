@@ -7,8 +7,11 @@
  * - **actual** — what the provider says it charged. OpenRouter reports it per
  *   response (`usage.cost`, in credits, which are dollars); the Claude Code
  *   driver reports it per session (`total_cost_usd` on a `claude_result`,
- *   `runner/src/adapter-claude.ts`). Used verbatim, never recomputed, and null
- *   whenever the provider reports nothing — which is most runs.
+ *   `runner/src/adapter-claude.ts`). Used verbatim, and null whenever the
+ *   provider reports nothing — which is most runs. The one addition: a
+ *   claude-code run's turns that ended before the CLI reported their cost are
+ *   priced at list and added, and the figure carries both parts and a `*`
+ *   wherever it is shown (`backfilled`; operator's decision, 2026-10-08).
  * - **expected** — the price table applied to the run's `TokenTotals`. A
  *   derived figure, never an invoice, and computed even when an actual exists
  *   so the two can be read against each other.
@@ -39,7 +42,7 @@
 import { declaredBillingOf } from "../src/billing";
 import { isContributorSlug, isFreeSlug, isLocalBase } from "../src/model-cost";
 import synced from "./prices.openrouter.json";
-import type { CostBreakdown, CostFigure, CostView, RunRow, TokenTotals } from "./api-types";
+import type { CostBreakdown, CostCoverage, CostFigure, CostView, RunRow, TokenTotals, UnreportedUsage } from "./api-types";
 
 /** One priced model: dollars per million tokens, with where the figure is from. */
 export interface PriceRow {
@@ -644,14 +647,20 @@ export function unpricedNote(run: PriceableRun): string {
  * same field) and the Claude Agent SDK's per-session `total_cost_usd`.
  * `tail.ts` sums whichever the run carries; this only has to say what the
  * number is, and whose.
+ *
+ * One exception to "verbatim": a claude-code run whose CLI never reported a
+ * cost for some turns (`coverage.unreported`) gets those turns backfilled, by
+ * `backfilled` below.
  */
 function actualCost(
-  run: PriceableRun,
+  run: PriceableRun & { startedAt?: number | null },
   reportedUsd: number | null,
-  coverage: { costed: number; uncosted: number } | null,
+  coverage: CostCoverage | null,
 ): CostFigure {
   if (reportedUsd === null) return none("provider reports no cost for this run");
   const claudeCode = run.harness === "claude-code" || run.driver === "claude-code";
+  const unreported = coverage?.unreported;
+  if (claudeCode && unreported !== undefined && unreported.turns > 0) return backfilled(run, reportedUsd, unreported);
   /*
    * A run whose process was replaced mid-flight (the fleet resumes rather than
    * recreates) can hold responses from before the adapter recorded the
@@ -678,6 +687,62 @@ function actualCost(
       : isProviderBase(run.apiBase)
         ? `the provider's own charge, summed over the run's responses (usage.cost, as the endpoint reports it)${partial}`
         : `the provider's own charge, summed over the run's responses (OpenRouter usage.cost, in credits)${partial}`,
+  };
+}
+
+const usdText = (v: number): string => `$${v.toFixed(2)}`;
+
+/**
+ * A claude-code actual with its unreported turns put back.
+ *
+ * The CLI reports cost only on a `claude_result`, which lands only when a turn
+ * ends cleanly, so a turn the watchdog killed or a pause cut off is in no
+ * session's `total_cost_usd` — on the fable-none freeplay run of 2026-08-29 two
+ * paused sessions left $839 standing for ~$1,588 of tokens. Operator's
+ * decision, 2026-10-08: backfill, and mark it. Those turns' tokens are priced
+ * at the run's own list row as of its start — the served-model row the
+ * expected figure uses — and added to the CLI's figure; both parts ride on
+ * `backfill` and every surface shows the sum with a `*` whose hover is the
+ * note. Where the model has no row (Haiku 5.5, tiered per request) nothing is
+ * added, and the figure is still marked, because it still reads low.
+ *
+ * The estimate is a floor: those turns' output is the API's opening snapshot,
+ * under-read (`tokenTotals`), and only their input side is a finished count.
+ */
+function backfilled(run: PriceableRun & { startedAt?: number | null }, reportedUsd: number, gap: UnreportedUsage): CostFigure {
+  const price = priceFor(run, run.startedAt ?? null);
+  const turns = gap.turns === 1 ? "1 turn that ended before the CLI reported a cost" : `${gap.turns} turns that ended before the CLI reported a cost`;
+  const estimate =
+    price === null
+      ? null
+      : breakdownTotal(
+          costOf(
+            {
+              source: "reported",
+              contextTokens: 0,
+              promptTokens: gap.promptTokens,
+              completionTokens: gap.completionTokens,
+              totalTokens: gap.promptTokens + gap.completionTokens,
+              cacheReadTokens: gap.cacheReadTokens,
+              cacheWriteTokens: gap.cacheWriteTokens,
+              turns: gap.turns,
+            },
+            price,
+          ),
+        );
+  const bill = "billed against a subscription, so not an invoice";
+  return {
+    usd: reportedUsd + (estimate ?? 0),
+    basis: "reported",
+    asIfMetered: true,
+    breakdown: null,
+    priceId: null,
+    asOf: null,
+    note:
+      estimate === null || price === null
+        ? `the CLI's own total_cost_usd, which leaves out ${turns}; the model has no list price to estimate ${gap.turns === 1 ? "it" : "them"} at, so this reads low — ${bill}`
+        : `includes ${usdText(estimate)} estimated at ${price.id} list price for ${turns} (a floor: output there is under-read); the CLI's own figure is ${usdText(reportedUsd)} — ${bill}`,
+    backfill: { reportedUsd, usd: estimate, turns: gap.turns },
   };
 }
 
@@ -737,9 +802,10 @@ export function runCost(args: {
   /** The provider's own total: OpenRouter `usage.cost` summed, or the Claude
    * SDK's `total_cost_usd`. Null when the run carries neither. */
   reportedUsd: number | null;
-  /** How many of the run's responses carried a charge, from
-   * `responseCostCoverage`. Absent where the caller does not count. */
-  coverage?: { costed: number; uncosted: number } | null;
+  /** How many of the run's responses carried a charge, and a claude-code
+   * run's unreported turns, from `responseCostCoverage`. Absent where the
+   * caller does not count. */
+  coverage?: CostCoverage | null;
 }): CostView {
   const actual = actualCost(args.run, args.reportedUsd, args.coverage ?? null);
   const expected = expectedCost(args);

@@ -59,6 +59,21 @@ the operator's figure in GitHub issue #66.
   figure per CLI session, summed across sessions. Summing every record
   triangle-counts a cumulative series: the haiku run read $69.30 that way for a
   session that charged $4.35.
+- That figure leaves out every turn that ended before its `claude_result`
+  landed: a turn cut off by a pause, or one the wind-down grace could not
+  save. Two paused sessions left one Fable freeplay run at $839 for ~$1,588 of
+  tokens. **Operator's decision, 2026-10-08:** backfill and mark it. Once a
+  session is over (a pause, the termination, or the next session starting),
+  the responses it made after its last result are priced at the run's own
+  list row (the served-model row the expected figure uses) and added to the
+  CLI's figure; a turn still in flight is not counted, so a live run is not
+  marked between results; the actual then carries both parts (`CostFigure.backfill`) and
+  every surface shows it with a `*` whose hover says how much was estimated
+  and for how many turns. The estimate is a floor, because those turns' output
+  is the opening snapshot (above). A model with no row (Haiku 5.5) gets nothing
+  added and the `*` all the same, since the figure still reads low. A run with
+  no `claude_result` at all is not backfilled: it has no reported figure to add
+  to, and its expected cost already prices every token.
 - Estimates and provider-reported actuals are different species and are never
   presented as each other (the deploy-window design draws the line; the viewer falls back to
   an estimate only where the provider reported nothing, and labels it).

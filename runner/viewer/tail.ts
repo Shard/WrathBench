@@ -15,6 +15,7 @@
 import type {
   AchievementFacts,
   AreaFacts,
+  CostCoverage,
   DeathFacts,
   DeathSite,
   EntrySummary,
@@ -31,6 +32,7 @@ import type {
   TpsFacts,
   TradeFacts,
   TradeMarkView,
+  UnreportedUsage,
 } from "./api-types";
 import { statSync } from "node:fs";
 import { CodexUsageCorrector } from "../src/codex-usage";
@@ -878,25 +880,74 @@ export function tokensPerSecond(entries: readonly EntrySummary[]): TpsFacts {
  * rather than literally the last is the same number on a monotonic series and
  * refuses to go backwards on a series that is not.
  *
- * Fed every record in order; ignores everything that is neither.
+ * It also keeps what that figure does NOT cover. A `claude_result` lands only
+ * when a turn ends cleanly, so a turn the watchdog killed or a pause cut off
+ * reaches no result and its API calls are in no session's cost: on
+ * `fleet-sub-fable-none-freeplay-claude-fable-5-none-20260829-a2` two paused
+ * sessions left $839 standing for a run whose tokens price at ~$1,588. A
+ * session's cost covers everything it used up to its latest result, so the
+ * unreported part is the responses after each session's last result —
+ * `unreported()`, which `pricing.ts` prices and adds (operator's decision,
+ * 2026-10-08).
+ *
+ * Only once the session is over, though: a turn still in flight has no result
+ * YET, and counting it would mark a live run's figure on every poll between
+ * results. A session is over at a `pause` or `termination` record, or when a
+ * `claude_system` names a different session. A result that lands after the
+ * termination — the driver's wind-down waits for one — still covers its turn.
+ *
+ * Fed every record in order — raw trajectory lines or summarised entries, both
+ * carry the response usage — and ignores everything else.
  */
 export class ClaudeCostTally {
   private readonly perSession = new Map<string, number>();
   private current = "";
+  /** Per session: what its responses used since its last result, and which turns those were. */
+  private readonly pending = new Map<
+    string,
+    { prompt: number; read: number; write: number; completion: number; turns: Set<number | null> }
+  >();
+  /** Sessions that can report nothing more: paused, terminated, or followed by another. */
+  private readonly over = new Set<string>();
 
   note(rec: Record<string, unknown>): void {
-    if (rec["t"] === "claude_system") {
+    const t = rec["t"];
+    if (t === "claude_system") {
       const id = rec["session_id"];
-      if (typeof id === "string" && id.length > 0) this.current = id;
+      if (typeof id === "string" && id.length > 0 && id !== this.current) {
+        this.over.add(this.current);
+        this.current = id;
+      }
       return;
     }
-    if (rec["t"] !== "claude_result") return;
+    if (t === "pause" || t === "termination") {
+      this.over.add(this.current);
+      return;
+    }
+    if (t === MODEL_RESPONSE_RECORD) {
+      const u = reportedUsage(rec) ?? summarisedUsage(rec["usage"]);
+      if (u === null || (u.prompt === 0 && u.completion === 0)) return;
+      let p = this.pending.get(this.current);
+      if (p === undefined) {
+        p = { prompt: 0, read: 0, write: 0, completion: 0, turns: new Set() };
+        this.pending.set(this.current, p);
+      }
+      p.prompt += u.prompt;
+      p.read += u.cachedRead ?? 0;
+      p.write += u.cacheWrite ?? 0;
+      p.completion += u.completion;
+      p.turns.add(typeof rec["turn"] === "number" ? rec["turn"] : null);
+      return;
+    }
+    if (t !== "claude_result") return;
     const own = rec["sessionId"];
     const key = typeof own === "string" && own.length > 0 ? own : this.current;
     const v = rec["costUsd"];
     if (typeof v !== "number" || !Number.isFinite(v)) return;
     const seen = this.perSession.get(key);
     this.perSession.set(key, seen === undefined ? v : Math.max(seen, v));
+    // Everything the session used so far is inside that cumulative figure.
+    this.pending.delete(key);
   }
 
   /** The run's claude-code cost, or null where no result record carried one. */
@@ -906,6 +957,33 @@ export class ClaudeCostTally {
     for (const v of this.perSession.values()) sum += v;
     return sum;
   }
+
+  /**
+   * The tokens no reported cost covers, in sessions that are over, or
+   * undefined when there are none — or when nothing was reported at all, since
+   * then there is no figure to add them to and the run's whole cost is the
+   * expected one.
+   */
+  unreported(): UnreportedUsage | undefined {
+    if (this.perSession.size === 0) return undefined;
+    const out: UnreportedUsage = { turns: 0, promptTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, completionTokens: 0 };
+    for (const [session, p] of this.pending) {
+      if (!this.over.has(session)) continue;
+      out.turns += p.turns.size;
+      out.promptTokens += p.prompt;
+      out.cacheReadTokens += p.read;
+      out.cacheWriteTokens += p.write;
+      out.completionTokens += p.completion;
+    }
+    return out.turns === 0 ? undefined : out;
+  }
+}
+
+/** A summarised entry's usage (`ReportedUsage`, already normalised), or null. */
+function summarisedUsage(u: unknown): ReportedUsage | null {
+  if (u === null || typeof u !== "object") return null;
+  const o = u as Partial<ReportedUsage>;
+  return typeof o.prompt === "number" && typeof o.completion === "number" ? (o as ReportedUsage) : null;
 }
 
 /**
@@ -954,20 +1032,23 @@ export function reportedCostUsd(entries: readonly { t: string; [k: string]: unkn
  * The counts let the cost note say so.
  *
  * `costed` is 0 for the claude-code driver whatever the run did: its figure
- * comes off `claude_result`, not off responses, so nothing here is partial.
+ * comes off `claude_result`, not off responses. Its partial case is a
+ * different shape — turns no result covers — and is carried as `unreported`
+ * (`ClaudeCostTally`).
  */
-export function responseCostCoverage(
-  entries: readonly { t: string; [k: string]: unknown }[],
-): { costed: number; uncosted: number } {
+export function responseCostCoverage(entries: readonly { t: string; [k: string]: unknown }[]): CostCoverage {
   let costed = 0;
   let uncosted = 0;
+  const claude = new ClaudeCostTally();
   for (const e of entries) {
+    claude.note(e);
     if (e.t !== MODEL_RESPONSE_RECORD) continue;
     const usage = e["usage"] as ReportedUsage | undefined;
     if (typeof usage?.cost === "number" && Number.isFinite(usage.cost)) costed++;
     else uncosted++;
   }
-  return { costed, uncosted };
+  const unreported = claude.unreported();
+  return unreported === undefined ? { costed, uncosted } : { costed, uncosted, unreported };
 }
 
 /** One stretch of a run during which the harness was actually driving. */
@@ -1658,8 +1739,10 @@ export function reflectionWindowsFrom(marks: readonly ReflectMark[]): Reflection
  * 1: codex per-turn usage derived from the thread totals older records carry
  *    (`CodexUsageCorrector`), and the death watcher's echoed release/resurrect
  *    pairs no longer counted (`echoedReleaseCycles`).
+ * 2: a claude-code run's turns its CLI never reported a cost for, as
+ *    `responseCost.unreported` (`ClaudeCostTally`).
  */
-export const RUN_TOTALS_DERIVATION = 1;
+export const RUN_TOTALS_DERIVATION = 2;
 
 export interface RunTotals {
   tokens: TokenTotals;
@@ -1687,9 +1770,9 @@ export interface RunTotals {
   /** What the provider charged: `claude_result` totals or summed
    * `response.usage.cost`; see `reportedCostUsd`. */
   reportedCostUsd: number | null;
-  /** How many responses did and did not carry a per-call charge; see
-   * `responseCostCoverage`. */
-  responseCost: { costed: number; uncosted: number };
+  /** How many responses did and did not carry a per-call charge, and a
+   * claude-code run's unreported turns; see `responseCostCoverage`. */
+  responseCost: CostCoverage;
   /** Output tokens per second, whole-run and recent; see `tokensPerSecond`. */
   tps: TpsFacts;
   /**
@@ -1977,6 +2060,14 @@ export class RunTotalsScanner {
     return this.totals();
   }
 
+  /** `responseCostCoverage`'s answer, off the same accumulators. */
+  private coverage(): CostCoverage {
+    const unreported = this.claudeCost.unreported();
+    return unreported === undefined
+      ? { costed: this.costed, uncosted: this.uncosted }
+      : { costed: this.costed, uncosted: this.uncosted, unreported };
+  }
+
   private totals(): RunTotals {
     let costUsd = this.costUsd;
     const cli = this.claudeCost.total();
@@ -1994,7 +2085,7 @@ export class RunTotalsScanner {
       modelResponses: this.modelResponses,
       segments: segmentsFrom(this.marks),
       reportedCostUsd: costUsd,
-      responseCost: { costed: this.costed, uncosted: this.uncosted },
+      responseCost: this.coverage(),
       tps: tokensPerSecond(this.spanMarks),
       areas: areaFactsFrom(this.areaMarks),
       achievements: achievementFactsFrom(this.achievementMarks),

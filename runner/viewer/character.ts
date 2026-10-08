@@ -117,6 +117,7 @@ function mergeCost(runs: readonly ResultRun[]): CharacterCost {
     expectedAttempts: expected.filter((v) => v !== null).length,
     attempts: runs.length,
     asIfMetered: runs.some((r, i) => actual[i] !== null && r.actualCost?.asIfMetered === true),
+    actualBackfilled: runs.filter((r, i) => actual[i] !== null && r.actualCost?.backfill !== undefined).length,
   };
 }
 
