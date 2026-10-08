@@ -644,6 +644,16 @@ describe("runCostReading", () => {
     // A viewer that predates `expectedCost`.
     expect(runCostReading({ actualCost: fig(null, "none") })).toBeNull();
   });
+
+  test("a backfilled actual says so, so the chart's hover can wear the run cell's *", () => {
+    const backfilled = { ...fig(9.43, "reported", true), backfill: { reportedUsd: 3.4, usd: 6.03, turns: 1 } };
+    expect(runCostReading({ actualCost: backfilled, expectedCost: fig(9.43, "list-price", true) })).toEqual({
+      usd: 9.43,
+      basis: "reported",
+      asIfMetered: true,
+      backfilled: true,
+    });
+  });
 });
 
 describe("xpEarnedOf", () => {

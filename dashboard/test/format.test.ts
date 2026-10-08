@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins } from "../src/lib/format";
+import { backfilledTitle, costMark, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -84,6 +84,18 @@ describe("fmtCost", () => {
   test("reported basis names itself, as-if-metered or not", () => {
     expect(fmtCost({ usd: 2.5, basis: "reported", asIfMetered: false, asOf: null })).toBe("$2.50 reported");
     expect(fmtCost({ usd: 2.5, basis: "reported", asIfMetered: true, asOf: null })).toBe("$2.50 as-if-metered (reported)");
+  });
+
+  test("a backfilled claude-code actual wears a * — the explanation is its note, in the title", () => {
+    const backfill = { reportedUsd: 839.38, usd: 748.7, turns: 2 };
+    expect(fmtCost({ usd: 1588.08, basis: "reported", asIfMetered: true, asOf: null, backfill })).toBe("$1588.08* as-if-metered (reported)");
+    // Marked even where nothing could be added: the figure still reads low.
+    expect(costMark({ backfill: { ...backfill, usd: null } })).toBe("*");
+    expect(costMark({})).toBe("");
+    expect(costMark(null)).toBe("");
+    expect(backfilledTitle(0)).toBe("");
+    expect(backfilledTitle(undefined)).toBe("");
+    expect(backfilledTitle(2)).toContain("2 attempts");
   });
 
   test("list-price basis carries the server's date, or says undated", () => {

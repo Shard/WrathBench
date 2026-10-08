@@ -495,6 +495,12 @@ export interface LadderPoint {
    * as-if-metered; a metered OpenRouter charge is reported and not.
    */
   asIfMetered: boolean;
+  /**
+   * Set only when some priced run's figure is partly a backfill — turns its
+   * CLI never reported a cost for (`CostFigure.backfill`); the hover marks the
+   * cost with the same `*` the run's own cell wears.
+   */
+  backfilled?: true;
   /** The harness tags among the runs, sorted — what colours the point. */
   harnesses: string[];
 }
@@ -614,6 +620,7 @@ export function ladderPoints(
       n,
       basis: bases.size === 0 ? null : bases.size > 1 ? "mixed" : bases.has("reported") ? "reported" : "list-price",
       asIfMetered: costs.some((c) => c.asIfMetered),
+      ...(costs.some((c) => c.backfilled === true) ? { backfilled: true as const } : {}),
       harnesses: [...new Set(g.runs.map((r) => r.harness ?? "—"))].sort(),
     });
   }

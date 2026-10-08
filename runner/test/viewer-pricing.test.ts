@@ -2,21 +2,23 @@
  * The run cost metric: the price table, the arithmetic over it, and the rule
  * that a reported figure always beats a reconstructed one.
  *
- * The golden case is the one run in the corpus that carries a real
+ * The golden case is the first run in the corpus that carried a real
  * `total_cost_usd` (`fleet-nav-probe-sonnet-20260822-c2`, §3 of `git show d752ef7:docs/COSTS.md` — the snapshot sections left the live doc on 2026-08-24):
- * its `usageRaw` priced at the Sonnet intro rates comes to $43.23 against a
- * reported $43.90. That is the pin that says the table's rates — and the
- * cache-read multiplier in particular — are the ones actually billing.
+ * its `usageRaw` priced at Sonnet 5's list rates comes to $43.902 against a
+ * reported $43.903 — with cache writes at the 1-hour rate. At the 5-minute
+ * rate it read $43.23, which is the evidence the writes are 1-hour ones. The
+ * sample runs below pin the other Claude rows the same way, against the CLI's
+ * own figure for each.
  */
 
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
-import { CLAUDE_PRICES, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, codexPrice, costOf, priceFor, providerPrice, runCost, syncedPrice, windowAt } from "../viewer/pricing";
+import { CLAUDE_PRICES, CLAUDE_UNPRICED, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, claudePrice, codexPrice, costOf, priceFor, providerPrice, rosterPriceGap, runCost, syncedPrice, windowAt } from "../viewer/pricing";
 import { isFreeSlug } from "../src/model-cost";
 import { catalogueIds, isZeroQuote, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
-import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, TrajectoryTail } from "../viewer/tail";
+import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, tokenTotals, TrajectoryTail } from "../viewer/tail";
 import type { TokenTotals } from "../viewer/api-types";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -36,8 +38,10 @@ function tokens(t: Partial<TokenTotals>): TokenTotals {
   };
 }
 
+/** A claude-code run on the `sonnet` alias, which the CLI served as Sonnet 5. */
 const sonnetRun: PriceableRun = {
   model: "sonnet",
+  resolvedModel: "claude-sonnet-5",
   apiBase: null,
   platform: "anthropic",
   driver: "claude-code",
@@ -60,9 +64,44 @@ describe("priceFor", () => {
     expect(p?.asOf).toBe(latest.from ?? SYNCED_PRICES.asOf);
     expect(priceFor({ ...run, model: "deepseek/deepseek-v4-pro" })).toBeNull();
   });
-  test("names a claude model through the claude-code harness", () => {
+  test("names a claude model through the claude-code harness, by the model the CLI served", () => {
     expect(priceFor(sonnetRun)?.id).toBe("claude-sonnet-5");
-    expect(priceFor({ ...sonnetRun, model: "opus" })?.id).toBe("claude-opus-5");
+    expect(priceFor({ ...sonnetRun, model: "opus", resolvedModel: "claude-opus-5" })?.id).toBe("claude-opus-5");
+    // The same alias after the CLI pin moved is a different model at a different price.
+    const opus55 = priceFor({ ...sonnetRun, model: "opus", resolvedModel: "claude-opus-5-5" })!;
+    expect(opus55.id).toBe("claude-opus-5-5");
+    expect(opus55).toMatchObject({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 8 });
+    // An exact roster id with no served model recorded prices as itself.
+    expect(priceFor({ ...sonnetRun, model: "claude-fable-5-1", resolvedModel: null })?.id).toBe("claude-fable-5-1");
+    // A dated snapshot spelling reaches the same row as the undated one.
+    expect(priceFor({ ...sonnetRun, resolvedModel: "claude-haiku-4-5-20251001" })?.input).toBe(1);
+  });
+
+  test("a claude alias with no served model recorded gets no price — which generation it was is not known", () => {
+    const run = { ...sonnetRun, resolvedModel: null };
+    expect(priceFor(run)).toBeNull();
+    const c = runCost({ run, tokens: tokens({ promptTokens: 1_000_000 }), reportedUsd: null });
+    expect(c.expected.usd).toBeNull();
+    expect(c.expected.note).toContain("alias");
+    expect(c.expected.note).toContain("never a guess");
+  });
+
+  test("Haiku 5.5 is a decided blank: tiered per request, so the CLI's own figure is the one to read", () => {
+    const run = { ...sonnetRun, model: "claude-haiku-5-5", resolvedModel: "claude-haiku-5-5" };
+    expect(claudePrice("claude-haiku-5-5")).toBeNull();
+    expect(CLAUDE_UNPRICED["claude-haiku-5-5"]).toContain("tiered per request");
+    const c = runCost({ run, tokens: tokens({ promptTokens: 53_060_733, completionTokens: 153_184, cacheReadTokens: 52_819_071, cacheWriteTokens: 240_912 }), reportedUsd: 2.83 });
+    expect(c.expected.usd).toBeNull();
+    expect(c.expected.note).toContain("tiered per request");
+    expect(c.expected.note).toContain("CLI's own figure");
+    expect(c.actual.usd).toBe(2.83);
+  });
+
+  test("a retired claude-subscription run stays unpriced, whatever it was served", () => {
+    // Its per-response prompt sums read ~4× the session's real input, so
+    // pricing it on the served id would put a bill 4× too large beside the CLI's.
+    const run: PriceableRun = { model: "sonnet", resolvedModel: "claude-sonnet-5", apiBase: null, platform: null, driver: "claude-subscription", harness: null };
+    expect(priceFor(run)).toBeNull();
   });
 
   test("a free slug is priced at zero on either platform's spelling", () => {
@@ -149,13 +188,83 @@ describe("priceFor", () => {
     expect(windowAt([], null)).toBeNull();
   });
 
-  test("the sonnet intro rate lapses: a run started after 2026-08-31 gets standard pricing", () => {
-    const intro = priceFor(sonnetRun, Date.parse("2026-08-22"))!;
-    const std = priceFor(sonnetRun, Date.parse("2026-09-15"))!;
-    expect(intro.input).toBe(2.0);
-    expect(std.input).toBe(3.0);
-    expect(std.output).toBe(15.0);
-    expect(std.note).toContain("lapsed");
+  test("Sonnet 5 stays at $2/$10 after 2026-09-01: the announced rise never happened", () => {
+    for (const day of ["2026-08-22", "2026-09-15"]) {
+      expect(priceFor(sonnetRun, Date.parse(day))).toMatchObject({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 });
+    }
+  });
+
+  test("a Claude rate that moved keeps the runs that billed at the old one: Sonnet 5.5's cache read", () => {
+    const run = { ...sonnetRun, model: "claude-sonnet-5-5", resolvedModel: "claude-sonnet-5-5" };
+    expect(priceFor(run, Date.parse("2026-09-28T12:00:00Z"))!.cacheRead).toBe(0.2);
+    expect(priceFor(run, Date.parse("2026-10-06T23:00:00Z"))!.cacheRead).toBe(0.2);
+    const moved = priceFor(run, Date.parse("2026-10-07T00:00:00Z"))!;
+    expect(moved.cacheRead).toBe(0.1);
+    expect(moved.asOf).toBe("2026-10-07");
+    expect(moved.note).toContain("in force from 2026-10-07");
+  });
+
+  /*
+   * One real run per Claude row, priced off its own token totals and read
+   * against the CLI's own `total_cost_usd` for the same run. These are the runs
+   * the 2026-10-08 audit found mispriced (Sonnet 5.5 at $3/$15, Opus 5.5 as
+   * Opus 5, Fable with no row at all); the table now agrees with the CLI on
+   * each to well under 0.1%. A Fable 5 run is the only thing that tells its row
+   * from Fable 5.1's: the two differ only in the cache-read rate.
+   */
+  const samples: { runId: string; model: string; startedAt: number; t: Partial<TokenTotals>; cliUsd: number }[] = [
+    {
+      runId: "fleet-sub-sonnet-55-e90-claude-sonnet-5-5-20260928-a3",
+      model: "claude-sonnet-5-5",
+      startedAt: 1790645492400,
+      t: { promptTokens: 190_509_050, completionTokens: 72_560, cacheReadTokens: 189_850_111, cacheWriteTokens: 657_767 },
+      cliUsd: 41.32903420000003,
+    },
+    {
+      runId: "fleet-sub-opus-55-e90-claude-opus-5-5-20260923",
+      model: "claude-opus-5-5",
+      startedAt: 1790122401264,
+      t: { promptTokens: 27_748_538, completionTokens: 87_478, cacheReadTokens: 27_578_205, cacheWriteTokens: 169_703 },
+      cliUsd: 8.625345000000003,
+    },
+    {
+      runId: "fleet-sub-fable-51-e90-claude-fable-5-1-20260919",
+      model: "claude-fable-5-1",
+      startedAt: 1789793014741,
+      t: { promptTokens: 19_211_229, completionTokens: 99_628, cacheReadTokens: 19_028_786, cacheWriteTokens: 176_009 },
+      cliUsd: 13.323116500000001,
+    },
+    {
+      runId: "fleet-sub-fable-e90-claude-fable-5-20260825-a2",
+      model: "claude-fable-5",
+      startedAt: 1787669412501,
+      t: { promptTokens: 26_651_137, completionTokens: 119_525, cacheReadTokens: 26_462_183, cacheWriteTokens: 188_416 },
+      cliUsd: 36.21347099999998,
+    },
+  ];
+  for (const s of samples) {
+    test(`${s.model} reproduces the CLI's own figure on ${s.runId}`, () => {
+      const run: PriceableRun & { startedAt: number } = { ...sonnetRun, model: s.model, resolvedModel: s.model, startedAt: s.startedAt };
+      const c = runCost({ run, tokens: tokens(s.t), reportedUsd: s.cliUsd });
+      expect(c.expected.priceId).toBe(s.model);
+      expect(Math.abs(c.expected.usd! - s.cliUsd) / s.cliUsd).toBeLessThan(0.001);
+    });
+  }
+
+  test("every Claude row is exact, dated and windowed like the other tables", () => {
+    for (const p of CLAUDE_PRICES) {
+      expect(p.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(p.windows.length).toBeGreaterThan(0);
+      expect(p.windows[0]!.from).toBeUndefined();
+      for (const id of p.ids) {
+        // Served ids, never aliases or patterns.
+        expect(id).toMatch(/^claude-[a-z]+-\d/);
+        expect(claudePrice(id)?.source).toBe("list");
+        // A Claude cache write is the 1-hour rate: twice the input rate.
+        for (const w of p.windows) expect(w.cacheWrite).toBe(w.input * 2);
+        expect(CLAUDE_UNPRICED[id]).toBeUndefined();
+      }
+    }
   });
 
   test("a suffixless id is never quoted at 0/0: a paid model reading as free is the failure the table must not hold", () => {
@@ -195,12 +304,6 @@ describe("priceFor", () => {
     }
   });
 
-  test("every row carries its own date and source, so a stale price is visible", () => {
-    for (const p of CLAUDE_PRICES) {
-      expect(p.source).toBe("list");
-      expect(p.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    }
-  });
 });
 
 describe("the hand-held provider table", () => {
@@ -420,6 +523,24 @@ describe("a codex run, priced under the vendor prefix", () => {
     expect(c.expected.note).not.toContain("never a guess");
   });
 
+  test("the gpt-6 codex models are priced, and 6.1-sol on its own row rather than 6-sol's", () => {
+    // Unpriced for a week after they joined the roster: the sync never ran.
+    for (const model of ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]) {
+      expect(priceFor({ ...astra, model })?.id).toBe(`openai/${model}`);
+    }
+    // Same input and output as 6-sol, half the cache read — and nearly all of a
+    // codex run's prompt is cache reads, so borrowing 6-sol's row would read
+    // the 6.1-sol freeplay ~63% high.
+    expect(priceFor({ ...astra, model: "gpt-6.1-sol" })!.cacheRead).toBe(0.1);
+    expect(priceFor({ ...astra, model: "gpt-6-sol" })!.cacheRead).toBe(0.2);
+  });
+
+  test("a :free id the catalogue dropped still reads free — the suffix answers before any table", () => {
+    const run: PriceableRun = { model: "nex-agi/nex-n2.5-mini:free", apiBase: null, platform: "openrouter", driver: "openai", harness: "wrathbench" };
+    expect(SYNCED_PRICES.models[run.model!]).toBeUndefined();
+    expect(priceFor(run)?.id).toBe("free-tier");
+  });
+
   test("expected cost is computed and the run carries no actual, which is the whole point", () => {
     const c = runCost({ run: astra, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 100_000, cacheReadTokens: 900_000 }), reportedUsd: null });
     expect(c.expected.basis).toBe("list-price");
@@ -507,10 +628,11 @@ describe("a sync that re-reads the catalogue", () => {
   test("a second sync on the same day corrects that day's window instead of stacking a duplicate", () => {
     const id = "z-ai/glm-5.3-flash";
     const syncDay = "2099-09-09";
-    const list = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0.15 };
+    // Rates no window holds yet, so the first sync of the day is a real move.
+    const list = { input: 0.25, output: 0.75, cacheRead: 0.05, cacheWrite: 0.25 };
     const first = mergeWindows(current, { ...catalogue, [id]: list }, syncDay);
     expect(first[id]).toHaveLength(current[id]!.length + 1);
-    const corrected = { input: 0.16, output: 0.52, cacheRead: 0.032, cacheWrite: 0.16 };
+    const corrected = { input: 0.26, output: 0.78, cacheRead: 0.052, cacheWrite: 0.26 };
     const second = mergeWindows(first, { ...catalogue, [id]: corrected }, syncDay);
     expect(second[id]).toEqual([...current[id]!, { ...corrected, from: syncDay }]);
     // And the August run still prices at the discount through both.
@@ -528,16 +650,53 @@ describe("a sync that re-reads the catalogue", () => {
   });
 });
 
+describe("the roster price check", () => {
+  /*
+   * `--status` warns for a roster entry whose runs would read no expected cost
+   * (`formatPriceGaps`), so a new model cannot sit unpriced unnoticed the way
+   * the gpt-6 codex models did for a week. A warning only: nothing here stops
+   * a launch.
+   */
+  test("every entry in infra/fleet.example.json resolves to a price", async () => {
+    const doc = (await Bun.file(join(import.meta.dir, "..", "..", "infra", "fleet.example.json")).json()) as {
+      roster: Record<string, { model: string; driver?: string; apiBase?: string; billing?: "free" | "paid" }>;
+    };
+    expect(Object.keys(doc.roster).length).toBeGreaterThan(0);
+    for (const [name, entry] of Object.entries(doc.roster)) {
+      expect({ name, gap: rosterPriceGap(entry) }).toEqual({ name, gap: null });
+    }
+  });
+
+  test("an entry with no row is flagged, with the fix it needs", () => {
+    expect(rosterPriceGap({ model: "vendor/big-paid" })).toContain("sync-prices");
+    expect(rosterPriceGap({ model: "gpt-7-unreleased", driver: "codex" })).toContain("openai/");
+    expect(rosterPriceGap({ model: "claude-opus-9", driver: "claude-code" })).toContain("CLAUDE_PRICES");
+  });
+
+  test("priced, free, local and decided-blank entries are not flagged, nor a claude alias the CLI resolves at launch", () => {
+    for (const model of ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]) {
+      expect(rosterPriceGap({ model, driver: "codex" })).toBeNull();
+    }
+    expect(rosterPriceGap({ model: "claude-sonnet-5-5", driver: "claude-code" })).toBeNull();
+    expect(rosterPriceGap({ model: "claude-haiku-5-5", driver: "claude-code" })).toBeNull();
+    expect(rosterPriceGap({ model: "sonnet", driver: "claude-code" })).toBeNull();
+    expect(rosterPriceGap({ model: "z-ai/glm-5.2:free" })).toBeNull();
+    expect(rosterPriceGap({ model: "qwen/qwen3.8-27b", apiBase: "http://192.168.100.20:1234/v1" })).toBeNull();
+    expect(rosterPriceGap({ model: "stealth/space-bunny-alpha", billing: "free" })).toBeNull();
+    expect(rosterPriceGap({ model: "stealth/ox-alpha" })).toBeNull();
+  });
+});
+
 describe("costOf", () => {
   test("cache read and write come out of the prompt: they are a subset of it", () => {
     const b = costOf(
       tokens({ promptTokens: 1_000_000, completionTokens: 0, cacheReadTokens: 600_000, cacheWriteTokens: 300_000 }),
       priceFor(sonnetRun)!,
     );
-    // 100k fresh @ $2/M, 600k read @ $0.20/M, 300k write @ $2.50/M
+    // 100k fresh @ $2/M, 600k read @ $0.20/M, 300k write @ $4/M (the 1-hour rate)
     expect(b.input).toBeCloseTo(0.2, 6);
     expect(b.cacheRead).toBeCloseTo(0.12, 6);
-    expect(b.cacheWrite).toBeCloseTo(0.75, 6);
+    expect(b.cacheWrite).toBeCloseTo(1.2, 6);
     expect(b.output).toBe(0);
   });
 
@@ -549,7 +708,7 @@ describe("costOf", () => {
     expect(b.cacheWrite).toBe(0);
   });
 
-  test("the archived COSTS.md cross-check golden case reproduces the reported figure within 2%", () => {
+  test("the archived COSTS.md cross-check golden case reproduces the reported figure to 0.01%", () => {
     // usageRaw of fleet-nav-probe-sonnet-20260822-c2, reported $43.90307.
     const t = tokens({
       promptTokens: 1_810 + 451_039 + 201_137_815,
@@ -558,8 +717,8 @@ describe("costOf", () => {
       cacheWriteTokens: 451_039,
     });
     const usd = breakdownTotal(costOf(t, priceFor(sonnetRun)!));
-    expect(usd).toBeGreaterThan(43.0);
-    expect(Math.abs(usd - 43.903071) / 43.903071).toBeLessThan(0.02);
+    // $43.902 at the 1-hour write rate; the 5-minute rate read $43.23, 1.5% low.
+    expect(Math.abs(usd - 43.903071) / 43.903071).toBeLessThan(0.0001);
   });
 });
 
@@ -635,10 +794,13 @@ describe("runCost", () => {
     expect(c.basis).toBe("list-price");
     expect(c.usd).toBeCloseTo(3.0, 6);
     expect(c.breakdown).not.toBeNull();
-    expect(c.note).toContain("COSTS.md");
+    // A claude-code estimate points at the CLI's own figure; it is no longer
+    // called an upper bound, because it agrees with that figure now.
+    expect(c.note).toContain("the CLI reported its own figure");
+    expect(c.note).not.toContain("upper bound");
     // The date rides the wire, so a display string cannot outlive the rate.
     expect(c.priceId).toBe("claude-sonnet-5");
-    expect(c.asOf).toBe("2026-08-22");
+    expect(c.asOf).toBe("2026-10-08");
   });
 
   test("an unknown model gets no cost and says why", () => {
@@ -826,5 +988,156 @@ describe("reportedCostUsd", () => {
       .filter((l) => l.length > 0)
       .map((l, i) => summarize(JSON.parse(l) as Record<string, unknown>, i, 0, 0));
     expect(reportedCostUsd(viaSummarize)).toBeCloseTo(0.00082, 9);
+  });
+});
+
+describe("a claude-code actual with turns the CLI never reported a cost for", () => {
+  /*
+   * A `claude_result` lands only when a turn ends cleanly, so a turn the
+   * watchdog killed or a pause cut off is in no session's `total_cost_usd`.
+   * Operator's decision, 2026-10-08: price those turns at the run's own list
+   * row, add them, and mark the figure. The fixtures are the two runs the audit
+   * named, in miniature: the token figures are theirs.
+   */
+
+  /**
+   * A raw trajectory: per session, its responses' usage by turn, a result
+   * after the turn it closes, and the record that ended the session — a pause
+   * or the termination; none is a session still running.
+   */
+  function trajectory(
+    sessions: {
+      id: string;
+      turns: { turn: number; usage: Record<string, number> }[];
+      result?: { afterTurn: number; costUsd: number };
+      end?: "pause" | "termination";
+    }[],
+  ): Record<string, unknown>[] {
+    const out: Record<string, unknown>[] = [{ t: "meta", ts: 1 }];
+    let ts = 2;
+    for (const s of sessions) {
+      out.push({ t: "claude_system", ts: ts++, type: "system", subtype: "init", session_id: s.id, model: "claude-opus-5" });
+      for (const turn of s.turns) {
+        out.push({ t: "response", ts: ts++, turn: turn.turn, message: { content: "" }, usage: turn.usage });
+        if (s.result?.afterTurn === turn.turn) {
+          out.push({ t: "claude_result", ts: ts++, turn: turn.turn, costUsd: s.result.costUsd, sessionId: s.id, usageRaw: { output_tokens: 24_028 } });
+        }
+      }
+      if (s.end === "pause") out.push({ t: "pause", ts: ts++, reason: "operator-pause" });
+      if (s.end === "termination") out.push({ t: "termination", ts: ts++, reason: "episode-limit" });
+      if (s.end === "pause") out.push({ t: "resume", ts: ts++ });
+    }
+    return out;
+  }
+
+  /** `fleet-sub-opus-low-e90-opus-low-20260825-a2`: turn 1 reported $3.40, turn 2 was cut off at the episode limit. */
+  const opusLow = trajectory([
+    {
+      id: "s1",
+      turns: [
+        { turn: 1, usage: { prompt_tokens: 4_620_152, completion_tokens: 2_594, cached_tokens: 4_569_052, cache_write_tokens: 50_850 } },
+        { turn: 2, usage: { prompt_tokens: 11_024_920, completion_tokens: 3_181, cached_tokens: 10_978_009, cache_write_tokens: 46_655 } },
+      ],
+      result: { afterTurn: 1, costUsd: 3.396341 },
+      end: "termination",
+    },
+  ]);
+  const opusRun: PriceableRun & { startedAt: number } = {
+    ...sonnetRun,
+    model: "opus",
+    resolvedModel: "claude-opus-5",
+    startedAt: Date.parse("2026-08-25T05:00:33Z"),
+  };
+  const summarised = (recs: Record<string, unknown>[]) => recs.map((r, i) => summarize(r, i, 0, 0));
+  const costOfRun = (run: PriceableRun & { startedAt?: number }, recs: Record<string, unknown>[]) => {
+    const entries = summarised(recs);
+    return runCost({ run, tokens: tokenTotals(entries), reportedUsd: reportedCostUsd(entries), coverage: responseCostCoverage(entries) });
+  };
+
+  test("the tokens after a session's last result are the unreported part, on both read paths", async () => {
+    const unreported = { turns: 1, promptTokens: 11_024_920, cacheReadTokens: 10_978_009, cacheWriteTokens: 46_655, completionTokens: 3_181 };
+    expect(responseCostCoverage(summarised(opusLow)).unreported).toEqual(unreported);
+    const path = join(tempDir("wrathbench-backfill-"), "trajectory.jsonl");
+    writeFileSync(path, `${opusLow.map((r) => JSON.stringify(r)).join("\n")}\n`);
+    const totals = await scanRunTotals(path);
+    expect(totals.responseCost.unreported).toEqual(unreported);
+    expect(totals.reportedCostUsd).toBeCloseTo(3.396341, 9);
+  });
+
+  test("the unreported turn is priced at the run's own row and added, and the figure says both parts", () => {
+    const c = costOfRun(opusRun, opusLow);
+    // Turn 2 at Opus 5's list rates: $5.49 of cache reads, $0.47 of 1-hour writes, a floor of output.
+    expect(c.actual.backfill?.reportedUsd).toBeCloseTo(3.396341, 9);
+    expect(c.actual.backfill?.usd).toBeCloseTo(6.036, 3);
+    expect(c.actual.backfill?.turns).toBe(1);
+    expect(c.actual.usd).toBeCloseTo(9.433, 3);
+    expect(c.actual.basis).toBe("reported");
+    expect(c.actual.asIfMetered).toBe(true);
+    expect(c.actual.note).toContain("includes $6.04 estimated at claude-opus-5 list price for 1 turn that ended before the CLI reported a cost");
+    expect(c.actual.note).toContain("$3.40");
+  });
+
+  test("a turn still in flight is not unreported yet: a live run's figure is the CLI's own, unmarked", () => {
+    const live = opusLow.filter((r) => r["t"] !== "termination");
+    expect(responseCostCoverage(summarised(live)).unreported).toBeUndefined();
+    const c = costOfRun(opusRun, live);
+    expect(c.actual.usd).toBeCloseTo(3.396341, 9);
+    expect(c.actual.backfill).toBeUndefined();
+  });
+
+  test("a result that lands after the termination — the wind-down's catch — still covers its turn", () => {
+    const caught = trajectory([
+      {
+        id: "s1",
+        turns: [{ turn: 1, usage: { prompt_tokens: 4_620_152, completion_tokens: 2_594, cached_tokens: 4_569_052, cache_write_tokens: 50_850 } }],
+      },
+    ]);
+    caught.push({ t: "termination", ts: 90, reason: "idle" }, { t: "claude_result", ts: 91, turn: 1, costUsd: 3.396341, sessionId: "s1" });
+    expect(responseCostCoverage(summarised(caught)).unreported).toBeUndefined();
+  });
+
+  test("a session cut off by a pause is unreported whole; the session that reported covers itself", () => {
+    // `fleet-sub-fable-none-freeplay-claude-fable-5-none-20260829-a2`: two
+    // paused sessions with no result, then one that ended with $839.38.
+    const fable = trajectory([
+      { id: "a", turns: [{ turn: 1, usage: { prompt_tokens: 165_276_785, completion_tokens: 17_587, cached_tokens: 164_894_694, cache_write_tokens: 380_527 } }], end: "pause" },
+      { id: "b", turns: [{ turn: 1, usage: { prompt_tokens: 561_147_736, completion_tokens: 38_259, cached_tokens: 560_502_051, cache_write_tokens: 642_605 } }], end: "pause" },
+      {
+        id: "c",
+        turns: [{ turn: 1, usage: { prompt_tokens: 783_246_051, completion_tokens: 46_513, cached_tokens: 781_675_122, cache_write_tokens: 1_567_235 } }],
+        result: { afterTurn: 1, costUsd: 839.384656 },
+        end: "termination",
+      },
+    ]);
+    const run = { ...sonnetRun, model: "claude-fable-5", resolvedModel: "claude-fable-5", startedAt: Date.parse("2026-08-29T09:23:57Z") };
+    const c = costOfRun(run, fable);
+    expect(c.actual.backfill?.turns).toBe(2);
+    expect(c.actual.backfill?.usd).toBeCloseTo(748.698, 2);
+    expect(c.actual.usd).toBeCloseTo(1588.083, 2);
+  });
+
+  test("with no row to price them, nothing is added and the figure is still marked", () => {
+    const c = costOfRun({ ...opusRun, model: "claude-haiku-5-5", resolvedModel: "claude-haiku-5-5" }, opusLow);
+    expect(c.actual.usd).toBeCloseTo(3.396341, 9);
+    expect(c.actual.backfill).toEqual({ reportedUsd: c.actual.usd!, usd: null, turns: 1 });
+    expect(c.actual.note).toContain("reads low");
+  });
+
+  test("a run every session of which reported is untouched, and so is any other driver", () => {
+    const whole = opusLow.filter((r) => r["turn"] !== 2);
+    expect(responseCostCoverage(summarised(whole)).unreported).toBeUndefined();
+    const c = costOfRun(opusRun, whole);
+    expect(c.actual.usd).toBeCloseTo(3.396341, 9);
+    expect(c.actual.backfill).toBeUndefined();
+    // The retired claude-subscription driver's response sums read ~4× high; never backfilled.
+    const old = costOfRun({ ...opusRun, driver: "claude-subscription", harness: null }, opusLow);
+    expect(old.actual.usd).toBeCloseTo(3.396341, 9);
+    expect(old.actual.backfill).toBeUndefined();
+  });
+
+  test("a run with no reported figure at all gets no backfill: its whole cost is the expected one", () => {
+    const none = opusLow.filter((r) => r["t"] !== "claude_result");
+    expect(responseCostCoverage(summarised(none)).unreported).toBeUndefined();
+    expect(costOfRun(opusRun, none).actual.usd).toBeNull();
   });
 });

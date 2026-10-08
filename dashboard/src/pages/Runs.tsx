@@ -25,7 +25,7 @@ import { api, type ResultRun, type ResultsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { useFeeds } from "../lib/feeds";
-import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { costMark, fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import {
@@ -366,7 +366,7 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
       case "cost":
         return (
           <td class="right mono dim" title={r().actualCost?.note ?? "no cost recorded for this run"}>
-            {costOf(r()) === null ? "—" : fmtUsd(costOf(r()))}
+            {costOf(r()) === null ? "—" : `${fmtUsd(costOf(r()))}${costMark(r().actualCost)}`}
           </td>
         );
     }
