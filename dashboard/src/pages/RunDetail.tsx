@@ -850,7 +850,7 @@ export default function RunDetail() {
                     <div class="card">
                       <div class="k">context / total tokens</div>
                       <div class="v mono" title={contextHint(tokens())}>
-                        {fmtTokens(tokens()?.contextTokens ?? null)} /{fmtTokens(tokens()?.totalTokens ?? null)}
+                        {fmtTokens(tokens()?.contextTokens ?? null)} / {fmtTokens(tokens()?.totalTokens ?? null)}
                       </div>
                       <div class="sub" title={sourceHint(tokens()?.source)}>
                         {sourceLabel(tokens()?.source)} · {tokens()?.turns ?? 0} turns
