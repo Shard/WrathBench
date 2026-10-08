@@ -50,7 +50,7 @@ RUN apt-get update \
 # the same uid the compose service and the Kubernetes pods run with.
 USER bun
 ENV HOME=/home/bun
-ARG CLAUDE_CODE_VERSION=2.1.284
+ARG CLAUDE_CODE_VERSION=2.1.293
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_CODE_VERSION}" \
     && /home/bun/.local/bin/claude --version
 # The OpenAI Codex CLI for the `codex` driver (runner/README.md, Drivers),
