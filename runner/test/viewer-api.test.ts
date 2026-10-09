@@ -500,7 +500,7 @@ function resumedInPlaceFixture(): { runs: string; id: string } {
 }
 
 describe("a run resumed in place", () => {
-  test("the run page serves its two sessions and its playtime without the gap", async () => {
+  test("the run page serves its two sessions, its playtime without the gap and its whole quest count", async () => {
     const { runs, id } = resumedInPlaceFixture();
     const detail = (await (await api(runs)(new Request(`http://x/api/run/${id}`))).json()) as {
       run: { questsCompleted: number | null };
@@ -513,15 +513,18 @@ describe("a run resumed in place", () => {
       { start: 5_000 + 5 * 86_400_000, end: 5_000 + 5 * 86_400_000 + 3000 },
     ]);
     expect(detail.playtimeMs).toBe(4000 + 3000);
+    expect(detail.states.map((s) => s.questsCompleted)).toEqual([1, 3, 0, 2]);
+    expect(detail.run.questsCompleted).toBe(5);
   });
 
-  test("the listing row and the character carry the same sessions", async () => {
+  test("the listing row and the character carry the same sessions and the same count", async () => {
     const { runs, id } = resumedInPlaceFixture();
     const handle = api(runs);
     const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
       runs: { runId: string; questsCompleted: number | null; sessions?: unknown[] }[];
     };
     const row = results.runs.find((r) => r.runId === id)!;
+    expect(row.questsCompleted).toBe(5);
     expect(row.sessions).toHaveLength(2);
 
     const character = (await (await handle(new Request(`http://x/api/character/${id}`))).json()) as {
@@ -529,15 +532,17 @@ describe("a run resumed in place", () => {
     };
     expect(character.character.attempts).toBe(1);
     expect(character.character.runs[0]!.sessions).toHaveLength(2);
+    expect(character.character.totals.questsCompleted).toBe(5);
   });
 
-  test("public mode serves the sessions too", async () => {
+  test("public mode serves the sessions and the per-sample count too", async () => {
     const { runs, id } = resumedInPlaceFixture();
     const detail = (await (await api(runs, true)(new Request(`http://x/api/run/${id}`))).json()) as {
       states: { questsCompleted?: number | null }[];
       sessions?: unknown[];
     };
     expect(detail.sessions).toHaveLength(2);
+    expect(detail.states.map((s) => s.questsCompleted)).toEqual([1, 3, 0, 2]);
   });
 });
 

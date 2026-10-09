@@ -206,6 +206,33 @@ export function xpEarned(states: readonly StatePoint[]): number | null {
 }
 
 /**
+ * Quests turned in over a whole run, from its samples' counts.
+ *
+ * The recorded count is the running process's `completions.length`: it starts
+ * at zero with every process, so a run resumed in place reads zero again
+ * after the resume, and a sandbox restart inside one session rebuilds the
+ * cache and does the same. The newest sample is therefore the count since
+ * the last restart, not the run's. Within one process the count only grows,
+ * so a drop marks a restart, and the run's total is the sum of each stretch's
+ * last count before a drop plus the current one. A drop, not a session
+ * boundary: a sandbox restart is not a resume and writes no mark.
+ *
+ * A lower bound by at most what a stretch completed after its last sample.
+ * Null when no sample carried a count — never 0, which is a real reading.
+ */
+export function questsAcrossRestarts(states: readonly StatePoint[]): number | null {
+  let done = 0;
+  let current: number | null = null;
+  for (const s of states) {
+    const q = s.questsCompleted;
+    if (q === null || q === undefined) continue;
+    if (current !== null && q < current) done += current;
+    current = q;
+  }
+  return current === null ? null : done + current;
+}
+
+/**
  * Whether a run is a *member* of its episode tier's comparability group.
  *
  * Membership is stamped and un-overridden, and nothing else. Per the episode
@@ -416,7 +443,10 @@ export function resultRunOf(
     xp,
     xpEarned: xpEarned(states),
     money: run.money,
-    questsCompleted: run.questsCompleted,
+    // The row's count is the newest sample's, which a resume restarts; the
+    // series can say what the whole run did. A series with no count at all
+    // (a store row older than the column) keeps the row's.
+    questsCompleted: questsAcrossRestarts(states) ?? run.questsCompleted,
     maps: mapsOf(states),
     driver: run.driver,
     character: run.character,

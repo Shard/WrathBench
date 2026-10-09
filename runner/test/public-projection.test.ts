@@ -469,7 +469,10 @@ const RUN_LIST_ROW_KEYS = [
 const STATE_KEYS = ["ts", "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "turn",
   // The player frame's numbers: public on every surface that
   // carries a state sample, as they are on the positions feed.
-  "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp"];
+  "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
+  // Already public as the run row's count; per sample it totals a run
+  // resumed in place across its restart.
+  "questsCompleted"];
 const RESULT_RUN_KEYS = [
   "runId",
   "model",

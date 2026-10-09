@@ -58,7 +58,7 @@ import type {
   TokenTotals,
   TrackResponse,
 } from "./api-types";
-import { episodeOf, resultRunOf, trackFrom } from "./results";
+import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
 import { modelsResponse, readFleetRoster } from "./models";
 import { modelStates, outstandingWork, type RunFact } from "../src/models";
@@ -1476,7 +1476,14 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const sessions = segmentsFrom(marks);
       const states = await statesOfRun(runId);
       const body: RunDetailResponse = {
-        run,
+        /*
+         * The row's quest count is the newest sample's, and the counter is the
+         * running process's: a run resumed in place reads zero after the
+         * resume. This route holds the series, so it serves the whole run's
+         * count — the figure `ResultRun.questsCompleted` carries, from the same
+         * `questsAcrossRestarts`.
+         */
+        run: { ...run, questsCompleted: questsAcrossRestarts(states) ?? run.questsCompleted },
         states,
         total: entries.length,
         tokens,

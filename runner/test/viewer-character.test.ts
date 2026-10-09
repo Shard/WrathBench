@@ -395,7 +395,7 @@ describe("characterViewOf", () => {
       chain(
         { sessions: [{ start: 0, end: 100 }], questsCompleted: 4, playtimeMs: 100 },
         {
-          // Resumed in place: two sessions under one run id.
+          // Resumed in place: two sessions under one run id, its count already summed across the restart.
           sessions: [
             { start: 1000, end: 1200 },
             { start: 500_000, end: null },

@@ -291,6 +291,12 @@ export interface RunRow {
   xp: number | null;
   /** Copper on hand, and quests turned in. Null when this run's schema predates them. */
   money: number | null;
+  /**
+   * The newest sample's quest count on a listing row. That counter is the
+   * running process's own and starts again at a resume, so `/api/run/<id>`,
+   * which holds the run's series, serves the whole run's sum instead
+   * (`questsAcrossRestarts`, as on `ResultRun.questsCompleted`).
+   */
   questsCompleted: number | null;
   /**
    * What the character wears and carries, from the newest state sample that
@@ -371,6 +377,13 @@ export interface StatePoint {
   powerType?: number | null;
   /** The XP bar's denominator, as the client shows it. */
   nextLevelXp?: number | null;
+  /**
+   * Quests turned in by the process that took the sample — it restarts at
+   * zero on a resume or a sandbox restart, which is why a run's total is
+   * summed across those restarts (`questsAcrossRestarts`). Optional for the
+   * reason the frame's numbers are.
+   */
+  questsCompleted?: number | null;
 }
 
 /** Provider-reported usage for one turn, normalised across driver shapes. */
@@ -1730,6 +1743,11 @@ export interface ResultRun {
    * recorded; zero is a real reading.
    */
   money: number | null;
+  /**
+   * Quests turned in over the whole run, summed across the counter's restarts
+   * (`questsAcrossRestarts`): the recorded count is the running process's own,
+   * so a resume or a sandbox restart starts it again at zero.
+   */
   questsCompleted: number | null;
   /** Maps the run was observed on, for the ladder's Outland/Northrend rungs. */
   maps: number[];

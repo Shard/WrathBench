@@ -236,6 +236,9 @@ function projectStatePoint(s: StatePoint): StatePoint {
     maxPower: s.maxPower ?? null,
     powerType: s.powerType ?? null,
     nextLevelXp: s.nextLevelXp ?? null,
+    // Already public as the run row's count; per sample it is what lets a run
+    // resumed in place be totalled across the restart.
+    questsCompleted: s.questsCompleted ?? null,
   };
 }
 

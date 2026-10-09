@@ -118,6 +118,16 @@ the active time before each sample, the same `activeMsUntil` a level mark's
 `playtimeMs` is — so a pause is closed and marked rather than drawn as days of
 flat line. A boundary is a recorded mark, never a gap between samples.
 
+The quest count is the one recorded figure a resume restarts. `quests_completed`
+on a state sample is the running process's own count, so it reads zero again
+after a resume and after a sandbox restart inside a session, and the newest
+sample says nothing about the run. Within a process it only grows, so where a
+route holds the run's series — `/api/run/<id>` and the results rows — the
+run's count is summed across every drop (`questsAcrossRestarts`, a lower bound
+by whatever a stretch completed after its last sample). The fleet listing and
+the map feed read the newest sample, which on a resumed run is the count since
+the resume.
+
 Tokens per second (`tps`, on the listing rows and on `/api/run/<id>`) is output
 tokens over the wall time of the model's REPLIES, never over the run's elapsed
 time, most of which the harness spends driving the game. A span opens at a
@@ -199,8 +209,8 @@ rather than a summary per entry.
 
 A durable freeplay character is one character across many attempts
 (docs/RUNBOOK.md, "Freeplay characters are durable"), and every counter the
-runner keeps is per *attempt*: `questsCompleted` is that attempt's own
-`completions.length`, the tokens and the cost are that attempt's trajectory,
+runner keeps is per *attempt*: `questsCompleted` is that attempt's count across
+its own restarts (above), the tokens and the cost are that attempt's trajectory,
 the playtime is that attempt's sessions. Answering "how many quests has this
 character done" from one attempt would give the last attempt's tally, and a
 reader would see the run one attempt at a time.

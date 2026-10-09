@@ -1,15 +1,18 @@
 /**
- * A run's sessions (`runner/viewer/sessions.ts`).
+ * A run's sessions (`runner/viewer/sessions.ts`) and the quest count across a
+ * run's restarts (`questsAcrossRestarts`).
  *
- * The case that motivated them is a freeplay run the operator paused and the
+ * The case that motivated both is a freeplay run the operator paused and the
  * fleet resumed in place days later: one run id, one trajectory, a `pause`
- * and a `resume` with a multi-day gap between them. The marks below are that
- * run's own sequence (`fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261001`), with
- * the duplicate `meta` records `run.ts` writes at a pause and at a resume.
+ * and a `resume` with a multi-day gap between them, and a quest counter that
+ * the new process started again at zero. The marks below are that run's own
+ * sequence (`fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261001`), with the
+ * duplicate `meta` records `run.ts` writes at a pause and at a resume.
  */
 
 import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../viewer/api-types";
+import { questsAcrossRestarts } from "../viewer/results";
 import { activeMsUntil, playtimeMs, segmentsFrom, sessionClock } from "../viewer/sessions";
 
 const HOUR = 3_600_000;
@@ -75,8 +78,8 @@ describe("a run resumed in place", () => {
   });
 
   test("everything but the time is the sample as served", () => {
-    const clock = sessionClock([sample(T0 + 1_000, { level: 13, xp: 4602, turn: 915 })], sessions);
-    expect(clock.points[0]).toMatchObject({ ts: 1_000, level: 13, xp: 4602, turn: 915 });
+    const clock = sessionClock([sample(T0 + 1_000, { level: 13, xp: 4602, questsCompleted: 60 })], sessions);
+    expect(clock.points[0]).toMatchObject({ ts: 1_000, level: 13, xp: 4602, questsCompleted: 60 });
   });
 });
 
@@ -99,5 +102,35 @@ describe("the session clock", () => {
   test("nothing sampled is an empty clock, not a throw", () => {
     expect(sessionClock([], undefined)).toEqual({ points: [], starts: [0], startedAt: [0] });
     expect(sessionClock([], segmentsFrom(MARKS)).points).toEqual([]);
+  });
+});
+
+describe("questsAcrossRestarts", () => {
+  /** A count per sample, at one-minute spacing. */
+  const counts = (...q: (number | null | undefined)[]): StatePoint[] =>
+    q.map((v, i) => sample(i * 60_000, v === undefined ? {} : { questsCompleted: v }));
+
+  test("a resume restarts the process's count, and the run's total keeps both halves", () => {
+    // sol-61: 60 turned in before the pause, the resumed process counts from 0.
+    expect(questsAcrossRestarts(counts(0, 12, 60, 60, 0, 0, 1, 2))).toBe(62);
+  });
+
+  test("a sandbox restart inside one session is a restart too, with no mark to find it by", () => {
+    // DeepSeek Flash: three drops, one of them a minute apart with no resume; 8 + 8 + 2 + 0.
+    expect(questsAcrossRestarts(counts(0, 8, 0, 3, 8, 0, 2, 0))).toBe(18);
+  });
+
+  test("a run that never restarted reads its newest count", () => {
+    expect(questsAcrossRestarts(counts(0, 1, 1, 4))).toBe(4);
+  });
+
+  test("an unobserved sample is skipped, not read as a restart", () => {
+    expect(questsAcrossRestarts(counts(3, null, undefined, 5))).toBe(5);
+  });
+
+  test("no count at all is null, and zero is a reading", () => {
+    expect(questsAcrossRestarts(counts(null, undefined))).toBeNull();
+    expect(questsAcrossRestarts([])).toBeNull();
+    expect(questsAcrossRestarts(counts(0, 0))).toBe(0);
   });
 });
