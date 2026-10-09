@@ -266,19 +266,20 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             An entry that states its own keeps it WHOLE: the two are alternatives, never merged,
             because a merged routing is one nobody wrote down. Absent means the built-in default
             (the model author's own provider, fallbacks off).
-campaigns   probe campaigns (docs/EPISODES.md, `probing`): { <name>: { enabled, models "all"|[refs], runsPerCell,
-            maxAttemptsPerCell?, cells [{ id, race?, class?, objective?, ... }], account?, objective?,
-            wikiCoords?, watchdogs?, maxToolCalls? } }. Every run is an unscored `probing`
-            episode; the campaign owns its whole task shape, so a catalog entry's own objective
-            or leash never leaks into one. Precedence: episode defaults < campaign < cell.
-            With `account` the campaign is PINNED to it and follows the pinned-job account rules;
-            without, the policy schedules it between the evals and the idle work. Completion is
-            DERIVED (cells x models x runsPerCell against the counted probe runs on disk) — set
-            `enabled: false` when a sweep is done and its results stay visible. A failed launch
-            is not a counted run, so a cell that always fails would be swept forever:
-            `maxAttemptsPerCell` ABANDONS a (model, cell) after that many launches, counted or
-            not. Absent means no cap. Progress is on the /campaigns page.
-queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
+campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
+            { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
+            account?, excludeUnhealthy? } }. The shape (cells, start, leash, stop level, resume,
+            attempt cap) is the checked-in definition `<id>@<version>` in runner/src/campaign-defs/;
+            a static key here is REFUSED with where it lives, and a version this checkout does not
+            define (or a closed one switched on) refuses THAT campaign by name. `version` is
+            explicit, never "latest", so a merged definition cannot re-target a sweep. Every run
+            is an unscored `probing` episode. With `account` the campaign is PINNED and follows
+            the pinned-job account rules; without, the policy schedules it between the evals and
+            the idle work, on a model that owes no eval and holds no live or paused run.
+            Completion is DERIVED per (id, version, assignment, cell) against the counted probe
+            runs on disk — set `enabled: false` when a sweep is done and its results stay
+            visible. Progress is on the /campaigns page ("Probe campaigns", below).
+queue       jobs, in priority order (never `probing`: a probe is a campaign's cell): { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
             enabled, account? } — plus `subscription` (a lane's env var NAME) and nothing else;
             any other key REFUSES the job by name ("Strict keys", below). With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always
@@ -656,7 +657,7 @@ and the roster both refuse a run with a fresh heartbeat — exit 75, nothing
 written, the session not touched — so a resume by hand cannot land on a run
 the fleet is playing, nor the reverse.
 
-For the lanes that **do** resume — freeplay, and `campaigns.<name>.resume` —
+For the lanes that **do** resume — freeplay, and a campaign whose definition says `resume` —
 `--status` shows the pause on its account and a `paused runs not resumed` block
 with why:
 
@@ -1108,6 +1109,74 @@ but does climb the ladder, so a dead provider costs at most ten launches over
 outranks the policy for a POOL account; add one to force a specific run (an
 `e360` for a model that has not climbed needs `tier: "t2"` on its roster entry
 as well). How many runs a model gets is its `tier` and nothing else.
+
+### Probe campaigns
+
+A probe is a cell of a checked-in campaign definition, and nothing else
+(`docs/EPISODES.md`, `probing`). The definition (`runner/src/campaign-defs/`)
+fixes the shape. The store row `campaigns/<id>` says which version is active,
+whether it runs, who sweeps it and how many counted runs each owes per cell.
+`/campaigns` shows one pane per version with a cells × models grid.
+
+**Assigning models to a campaign.**
+
+1. Name the roster entries in `assignments`, in priority order. Each owes
+   `runsPerCell` counted runs per cell.
+2. Enable the row.
+3. To queue more data later, raise an assignment's `runsPerCell` or append
+   another assignment.
+
+The CLI validates every write against the whole config, as the `/config` page
+does:
+
+```
+kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts \
+  set campaigns/race-probe '{"version":1,"enabled":true,"assignments":[{"model":"codex-sol-61","runsPerCell":1}]}' \
+  --actor <you> --note "race-probe@1: sol-61 x1"
+```
+
+Before you enable race-probe@1, run the start gate once, and enable it only
+when it passes. It creates, walks and takes a quest at each start no run had
+used before: Valley of Trials, Deathknell, Camp Narache, Sunstrider Isle and
+Ammen Vale. It runs on `PROBE`, never a pool account.
+
+```
+kubectl -n wrathbench exec deploy/wrathbench-runner -- bun infra/smoke/race-probe-starts.ts
+```
+
+**A hand launch** names the cell and nothing that sets its shape. The runner
+refuses `--episode probing` without a campaign, and with one it refuses
+`--objective`, `--race`/`--class`, `--wiki-coords`/`--wiki`,
+`--max-tool-calls` and the watchdog flags:
+
+```
+./infra/run-episode.sh --k8s --model <id> --campaign class-probe@2 --cell dwarf-paladin
+```
+
+A harness spike on a branch image is a campaign too. Merge its definition
+(a closed one, if it lists runs after the fact) to master first, so the viewer
+on master can attribute its runs.
+
+**Changing a campaign's shape** is a new version: add `<id>@<n+1>` in its
+module and its pin in `runner/test/campaign-defs.test.ts`, then point the
+store row's `version` at it. Never edit a published version. Its runs stay
+attributed to it, and work is counted per version, so the new version starts
+its sweep from nothing.
+
+**The rows written before definitions were checked in** (no `version`, with
+`cells`/`objective` inline) still load. Each maps onto the version that claims
+its id's unversioned runs (`nav-probe@1`, `class-probe@1`), and the inline
+shape is dropped in favour of the definition. Rewrite them to the current
+shape after the deploy that ships the definitions. Each `set` validates
+against the whole config, and the old rows still parse, so the order does not
+matter:
+
+```
+R="kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts"
+$R set campaigns/nav-probe '{"version":1,"enabled":true,"account":"SHAKEOUT","assignments":[{"model":"sonnet","runsPerCell":1}]}' --actor <you> --note "nav-probe -> checked-in definition, as it stood"
+$R set campaigns/class-probe '{"version":2,"enabled":false,"assignments":[]}' --actor <you> --note "class-probe v1 is closed history; v2 is the to-L10 sweep"
+$R set campaigns/race-probe '{"version":1,"enabled":false,"assignments":[]}' --actor <you> --note "race-probe@1, unassigned"
+```
 
 ### Ad-hoc launches still work
 
