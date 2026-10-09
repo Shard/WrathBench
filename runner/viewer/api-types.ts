@@ -177,6 +177,12 @@ export interface ComparabilityView {
    */
   wiki?: false;
   /**
+   * The Claude Code CLI's auto-compaction window (`100k`…`1M`), a key like
+   * `effort`. Absent is the CLI's own `auto`, which is also every run stamped
+   * before the field existed.
+   */
+  compactWindow?: string | null;
+  /**
    * Which reference bundle the run read, off the bundle's own `meta` table
    * An annotation: a text-changing rebuild is paired with a harness
    * minor bump, which is what actually groups. Null when the run had no bundle;

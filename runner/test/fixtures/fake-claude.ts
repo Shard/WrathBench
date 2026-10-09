@@ -25,6 +25,9 @@
  *               like long-turn, but it ignores refusals and keeps hammering
  *               tools forever, so the grace expires and the CLI is killed.
  *
+ * $WB_FAKE_COMPACT_TURN=<n> adds a `compact_boundary` envelope at the start of
+ * turn n, in any mode.
+ *
  * Everything it saw (argv, selected env, the system prompt, the MCP tool list,
  * the user messages) is written to $WB_FAKE_RECORD as JSON after every event.
  */
@@ -72,6 +75,8 @@ const record: Record<string, unknown> = {
     configDir: Bun.env["CLAUDE_CONFIG_DIR"] ?? null,
     // How `effort: "none"` reaches the CLI: a thinking budget of zero, no flag.
     maxThinkingTokens: Bun.env["MAX_THINKING_TOKENS"] ?? null,
+    // How `compactWindow` reaches the CLI: env only, no flag.
+    compactWindow: Bun.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] ?? null,
   },
   userMessages: [] as string[],
   mcpTools: [] as string[],
@@ -178,6 +183,19 @@ for await (const chunk of Bun.stdin.stream()) {
     (record["userMessages"] as string[]).push(text);
     turn++;
     saveRecord();
+
+    // The CLI compacted its history at the start of this turn, which it
+    // announces as a `compact_boundary` system envelope (the shape real runs
+    // recorded on 2.1.239).
+    if (Bun.env["WB_FAKE_COMPACT_TURN"] === String(turn)) {
+      emit({
+        type: "system",
+        subtype: "compact_boundary",
+        session_id: "fake-session",
+        uuid: "fake-compact",
+        compact_metadata: { trigger: "auto", pre_tokens: 80_412, post_tokens: 3_127, cumulative_dropped_tokens: 77_285, duration_ms: 41_000 },
+      });
+    }
 
     if (mode === "limit-exit" && turn === 1) {
       process.stderr.write("Claude AI usage limit reached|1780000000\n");

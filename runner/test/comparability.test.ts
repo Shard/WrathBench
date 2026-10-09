@@ -109,6 +109,31 @@ describe("comparabilityOf", () => {
     expect(sameComparability(c, comparabilityOf(resumed, "v"))).toBe(true);
   });
 
+  test("a compaction window is a key: 100k and auto never share a chart, and auto stamps what it always did", () => {
+    // Operator decision 2026-10-09: the claude-code window is a run dimension
+    // like effort, with the CLI's own `auto` as the default.
+    const cfg = (extra: Record<string, unknown> = {}) => loadRunConfig({ driver: "claude-code", model: "haiku", effort: "max", ...extra });
+    const auto = comparabilityOf(cfg(), "v");
+    const named = comparabilityOf(cfg({ compactWindow: "auto" }), "v");
+    const small = comparabilityOf(cfg({ compactWindow: "100k" }), "v");
+    expect(small.compactWindow).toBe("100k");
+    expect(sameComparability(auto, small)).toBe(false);
+    // Saying `auto` is saying nothing: one condition, one tuple.
+    expect(JSON.stringify(named)).toBe(JSON.stringify(auto));
+    // An auto run stamps byte-for-byte what it stamped before the field
+    // existed, so nothing in flight restamps on resume for it.
+    expect(Object.keys(auto)).not.toContain("compactWindow");
+    // The window does not touch the prompt: it is not model-visible text.
+    expect(small.promptHash).toBe(auto.promptHash);
+    // Last, after `wiki`, so no already-stamped key reorders.
+    expect(Object.keys(comparabilityOf(cfg({ compactWindow: "1M", wiki: false }), "v")).slice(-2)).toEqual(["wiki", "compactWindow"]);
+    // Through meta.json and a resume, the run comes back the same condition.
+    const resumed = loadRunConfig(JSON.parse(JSON.stringify(cfg({ compactWindow: "100K" }))));
+    expect(resumed.compactWindow).toBe("100k");
+    expect(sameComparability(small, comparabilityOf(resumed, "v"))).toBe(true);
+    expect(parseComparability(JSON.parse(JSON.stringify(small)))?.compactWindow).toBe("100k");
+  });
+
   test("the wiki bundle's identity is annotated, and a rebuild is not the same tuple", () => {
     const config = loadRunConfig({ driver: "openai", model: "m" });
     // No bundle at all: null, never an absent field on a fresh stamp.

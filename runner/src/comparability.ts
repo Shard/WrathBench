@@ -176,6 +176,20 @@ export const comparabilitySchema = z.object({
    */
   wiki: z.literal(false).optional(),
   /**
+   * The Claude Code CLI's auto-compaction window (`RunConfig.compactWindow`),
+   * canonical `100k`…`1M`. A KEY with `effort`'s standing (operator decision
+   * 2026-10-09): where the CLI compacts decides how much history the model
+   * carries and what each turn costs, so a 100k run and an `auto` run are two
+   * conditions and must not share a chart.
+   *
+   * ABSENT, never null, for `auto` — the CLI's own default, which is every
+   * run that says nothing and every run stamped before the field existed. Like
+   * `routing` and `wiki`, that keeps those tuples byte-for-byte what they were,
+   * so nothing resumes into a `comparability_restamped` for a fact that did not
+   * change. Readers expose it as `string | null`, null being `auto`.
+   */
+  compactWindow: z.string().nullable().optional(),
+  /**
    * The model id the provider said it actually served — `claude-sonnet-5` for a
    * run launched as `sonnet`.
    *
@@ -291,6 +305,8 @@ export function comparabilityOf(
     // After `routing`, for that same stringified-tuple reason: a field inserted
     // ahead of it would reorder the routing of every already-stamped run.
     ...(config.wiki ? {} : { wiki: false as const }),
+    // After `wiki`, for the same reason again; absent is the CLI's `auto`.
+    ...(config.compactWindow !== undefined ? { compactWindow: config.compactWindow } : {}),
   };
 }
 
