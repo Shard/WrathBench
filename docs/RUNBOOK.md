@@ -282,7 +282,7 @@ queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, 
             enabled, account? } — plus `subscription` (a lane's env var NAME) and nothing else;
             any other key REFUSES the job by name ("Strict keys", below). With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always
-            `<first ref>-<episode>` (run ids `fleet-<name>-<model>[-<effort>]-<stamp>`), one job
+            `<first ref>-<episode>` (run ids `fleet-<name>-<model>[-<effort>][-<compactWindow>]-<stamp>`), one job
             per (ref, episode). A pool job whose ref is not eligible for its EPISODE is skipped
             with the reason in --status; a pinned one waits the same way. A waiting manual job
             reserves the POOL only — the paid and local classes still pick, and the reservation

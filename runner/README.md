@@ -193,8 +193,9 @@ move it. The CLI's `autoCompactWindow` setting cannot either: the config dir is
 the run's own.
 
 Each compaction the CLI streams — a `system` envelope with subtype
-`compact_boundary` and `compact_metadata` (`trigger`, `pre_tokens`,
-`post_tokens`, `duration_ms`, seen on 2.1.239 runs) — stays on the trajectory
+`compact_boundary` and `compact_metadata` (`trigger`, `pre_tokens`, and when
+known `post_tokens` and `duration_ms`: recorded by 2.1.239 runs, and the same
+mapping is in the pinned 2.1.293 binary) — stays on the trajectory
 raw as `claude_system` and is also written as a `harness` record of kind
 `compaction` with `trigger`, `preTokens`, `postTokens` and `durationMs`, so a
 reader can count a run's compactions without knowing the CLI's vocabulary. It

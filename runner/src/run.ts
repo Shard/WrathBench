@@ -317,7 +317,7 @@ export function loadContinuation(
  * A fresh launch must land on a name nothing holds yet.
  *
  * The run id is a projection, not a record: the fleet builds
- * `fleet-<job>-<model>[-effort]-<stamp>[-aN]` and the attempt counter `N` is a
+ * `fleet-<job>-<model>[-effort][-compactWindow]-<stamp>[-aN]` and the attempt counter `N` is a
  * count of the run facts it can SEE. A run directory that yields no fact — a
  * missing or unparseable meta.json, no episode, no model, or a directory moved
  * or renamed by hand — is invisible to that count, so the next launch projects

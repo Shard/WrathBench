@@ -422,8 +422,9 @@ export function compactEnv(window: string | undefined): Record<string, string> {
  *
  * stream-json emits a `system` envelope with `subtype: "compact_boundary"` each
  * time the CLI summarises its history, carrying `compact_metadata` —
- * `trigger` (`auto` | `manual`), `pre_tokens`, `post_tokens`, `duration_ms`
- * (seen on 2.1.239 runs). The raw envelope is already on the trajectory as
+ * `trigger` (`auto` | `manual`), `pre_tokens`, and when known `post_tokens` and
+ * `duration_ms` (recorded by 2.1.239 runs; the same mapping is in the pinned
+ * 2.1.293 binary, where the last two are optional). The raw envelope is already on the trajectory as
  * `claude_system`; this is the same fact as a `harness` record of kind
  * `compaction`, so a reader can find every compaction of a run without knowing
  * the CLI's vocabulary. Trajectory only: no text, so the feed draws it as

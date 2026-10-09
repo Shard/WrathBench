@@ -300,6 +300,24 @@ describe("/api/models", () => {
     expect(small!.runs.map((r) => r.runId)).toEqual(["hk100-1"]);
   });
 
+  test("the store's raw spelling of a window is canonicalised before it matches runs", async () => {
+    // The store keeps the document as the operator wrote it; only `parseFleet`
+    // normalises, so the page has to read `100K` and `auto` the way runs are stamped.
+    const { runsDir, fleetPath } = fixture({
+      roster: {
+        hk: { model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "AUTO", tier: "t2" },
+        "hk-c100k": { model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "100K", tier: "t0" },
+      },
+    });
+    writeRun(runsDir, { id: "hk-1", model: "claude-haiku-5-5", effort: "max", responses: 3, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
+    writeRun(runsDir, { id: "hk100-1", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k", responses: 3, reason: "episode-limit", startedAt: NOW - 3 * HOUR, endedAt: NOW - 2 * HOUR });
+    const [auto, small] = (await models(runsDir, fleetPath)).models;
+    expect("compactWindow" in auto!).toBe(false);
+    expect(auto!.runs.map((r) => r.runId)).toEqual(["hk-1"]);
+    expect(small!.compactWindow).toBe("100k");
+    expect(small!.runs.map((r) => r.runId)).toEqual(["hk100-1"]);
+  });
+
   test("promotion and eligibility come from the projection, not the route", async () => {
     const { runsDir, fleetPath } = fixture(ROSTER);
     writeRun(runsDir, { id: "a-1", model: "vendor/alpha", responses: 5, level: 7, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });

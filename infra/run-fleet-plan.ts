@@ -1547,7 +1547,7 @@ export function nextConfigRejection(
 
 /**
  * A spawn's entries, stamped with the job's account and fleet-scoped run ids
- * (`fleet-<job>-<model-slug>[-<effort>]-<date>`) so fleet runs never share a
+ * (`fleet-<job>-<model-slug>[-<effort>][-<compactWindow>]-<date>`) so fleet runs never share a
  * run id with hand-launched rosters or with another job.
  */
 export function fillEntries(spawn: JobSpawn, stamp: string): RosterSpec[] {
