@@ -218,7 +218,7 @@ export default function Ladder() {
   const runs = createMemo(() =>
     hidden().size === 0
       ? narrowed()
-      : narrowed().filter((r) => !hidden().has(pointKey(r.model ?? "(unnamed)", r.effort))),
+      : narrowed().filter((r) => !hidden().has(pointKey(r.model ?? "(unnamed)", r.effort, r.compactWindow))),
   );
   /*
    * What the reader is pointing at, shared by the scatter and the table so

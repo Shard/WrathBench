@@ -80,7 +80,7 @@ export default function Character() {
     const model = st.model ?? "(unnamed)";
     // The line is named for the model, not the character;
     // the name rides along for the hover.
-    const label = characterSeriesLabel(model, st.effort);
+    const label = characterSeriesLabel(model, st.effort, st.compactWindow);
     const { points, endX, broke } = stitchCharacter(st.runs);
     const why = broke ?? (points.length === 0 ? "no level mark carries an active-time reading" : null);
     if (why !== null) return { series: [], omitted: [{ characterId: st.characterId, label, why }] };
@@ -160,6 +160,7 @@ export default function Character() {
                 <ModelIcon model={st().model ?? ""} />
                 <span title={st().model ?? ""}>{modelDisplay(st().model ?? "(unnamed)")}</span>
                 <Show when={st().effort}>{(e) => <> · {e()}</>}</Show>
+                <Show when={st().compactWindow}>{(w) => <> · {w()}</>}</Show>
                 <Show when={st().driver}>{(dr) => <> · {dr()}</>}</Show>
                 {/* The harness the NEWEST attempt ran under: a character can
                     outlive a patch, and the run page lists each attempt's own. */}

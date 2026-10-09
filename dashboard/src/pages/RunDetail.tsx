@@ -222,7 +222,7 @@ export default function RunDetail() {
    */
   const [roster, setRoster] = createSignal<ModelRowView[]>([]);
   const rosterName = (run: RunDetailResponse["run"]): string | null =>
-    rosterNameFor(roster(), run.model, run.comparability?.effort ?? null);
+    rosterNameFor(roster(), run.model, run.comparability?.effort ?? null, run.comparability?.compactWindow ?? null);
 
   const live = (): boolean => detail()?.run.terminationReason === null;
 
@@ -244,7 +244,7 @@ export default function RunDetail() {
       const model = d.run.model ?? "(unnamed)";
       // The line is named for the model, not the character;
       // the name rides along for the hover.
-      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null);
+      const label = characterSeriesLabel(model, d.run.comparability?.effort ?? null, d.run.comparability?.compactWindow);
       const last = st.runs[st.runs.length - 1];
       if (last === undefined) {
         return { series: [], omitted: [{ characterId: st.characterId, label, why: "no attempt served" }] };
@@ -1140,6 +1140,14 @@ function Tuple(props: { run: RunDetailResponse["run"] }) {
           </dd>
           <dt>effort</dt>
           <dd>{t().effort ?? "not sent (provider default)"}</dd>
+          <Show when={t().compactWindow}>
+            {(w) => (
+              <>
+                <dt>compact window</dt>
+                <dd>{w()}</dd>
+              </>
+            )}
+          </Show>
           <dt>episode budget</dt>
           <dd class="mono">
             {t().budget.maxTurns === null ? "unlimited turns" : `${t().budget.maxTurns} turns`} ·{" "}

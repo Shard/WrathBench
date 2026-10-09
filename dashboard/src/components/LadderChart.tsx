@@ -285,7 +285,7 @@ export function LadderChart(props: {
                 onMouseLeave={() => props.onHover?.(null)}
               >
               <a
-                href={runsHref({ model: d.point.model, effort: d.point.effort, episode: props.episode })}
+                href={runsHref({ model: d.point.model, effort: d.point.effort, compactWindow: d.point.compactWindow ?? null, episode: props.episode })}
                 onClick={(e) => {
                   if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                   e.preventDefault();

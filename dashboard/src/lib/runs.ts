@@ -15,6 +15,7 @@
  */
 
 import type { ResultRun } from "@viewer/api-types";
+import { effortLabel } from "./format";
 
 /**
  * The table, left to right, as the header prints it. Keys, not labels — the
@@ -204,7 +205,7 @@ export function sortKey(r: ResultRun, column: RunColumn): number | string | null
     case "harness":
       return r.harnessSeries === null ? (r.harnessVersion ?? null) : `${r.harnessSeries} ${r.harness ?? ""}`;
     case "effort":
-      return r.effort;
+      return effortLabel(r.effort, r.compactWindow);
     case "kind":
       return kindOf(r);
     case "episode":
@@ -256,12 +257,14 @@ export function sortRuns(runs: readonly ResultRun[], sort: RunSort): ResultRun[]
 /**
  * The narrowing a link may carry. Every one is a plain equality on a field
  * the row shows, and every one is optional: the page opens on all runs.
- * `effort` is only meaningful with `model`, because `(model, effort)` is the
- * pair the roster matches runs on (`runFilterQuery` in `lib/models.ts`).
+ * `effort` and `compactWindow` are only meaningful with `model`, because
+ * `(model, effort, compactWindow)` is what the roster matches runs on
+ * (`sameRosterIdentity` in `runner/src/models.ts`).
  */
 export interface RunFilter {
   model: string | null;
   effort: string | null;
+  compactWindow: string | null;
   episode: string | null;
   harness: string | null;
   character: string | null;
@@ -277,6 +280,7 @@ export function filterParams(params: Record<string, string | string[] | undefine
   return {
     model: str(params.model),
     effort: str(params.effort),
+    compactWindow: str(params.compactWindow),
     episode: str(params.episode),
     harness: str(params.harness),
     character: str(params.character),
@@ -304,7 +308,7 @@ export function filterLabel(f: RunFilter): string {
 export function filterRuns(runs: readonly ResultRun[], f: RunFilter): ResultRun[] {
   return runs.filter(
     (r) =>
-      (f.model === null || (r.model === f.model && (r.effort ?? null) === f.effort)) &&
+      (f.model === null || (r.model === f.model && (r.effort ?? null) === f.effort && (r.compactWindow ?? null) === f.compactWindow)) &&
       (f.episode === null || r.episode === f.episode) &&
       (f.harness === null || r.harness === f.harness) &&
       (f.character === null || r.characterLabel === f.character) &&
@@ -315,7 +319,7 @@ export function filterRuns(runs: readonly ResultRun[], f: RunFilter): ResultRun[
 /** The runs page, filtered and sorted — one spelling for every page that links here. */
 export function runsHref(f: Partial<RunFilter> & { sort?: RunSort } = {}): string {
   const q = new URLSearchParams();
-  for (const k of ["episode", "model", "effort", "harness", "character", "campaign"] as const) {
+  for (const k of ["episode", "model", "effort", "compactWindow", "harness", "character", "campaign"] as const) {
     const v = f[k];
     if (v !== undefined && v !== null && v !== "" && v !== "all") q.set(k, v);
   }

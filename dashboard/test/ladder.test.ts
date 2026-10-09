@@ -703,6 +703,21 @@ describe("ladderPoints", () => {
     expect(free.single).toBe(false);
   });
 
+  test("a claude-code compaction window is a point of its own, labelled after the effort", () => {
+    const { points } = ladderPoints([
+      priced({ runId: "a", model: "claude-haiku-5-5", effort: "max", actualCost: fig(40, "reported"), xpEarned: 900 }),
+      priced({ runId: "b", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k", actualCost: fig(8, "reported"), xpEarned: 700 }),
+    ]);
+    expect(points.map((p) => p.key).sort()).toEqual(["claude-haiku-5-5 (max · 100k)", "claude-haiku-5-5 (max)"]);
+    const small = points.find((p) => p.compactWindow === "100k")!;
+    expect(small.x).toBe(8);
+    expect(small.label).toBe("claude-haiku-5-5 (max · 100k)");
+    // `auto` prints nothing and carries no field.
+    expect("compactWindow" in points.find((p) => p.key === "claude-haiku-5-5 (max)")!).toBe(false);
+    expect(characterSeriesLabel("claude-haiku-5-5", "max", "100k")).toBe("claude-haiku-5-5 (max · 100k)");
+    expect(characterSeriesLabel("claude-haiku-5-5", "max")).toBe("claude-haiku-5-5 (max)");
+  });
+
   test("a mixed basis is named, an unpriced or unmeasured entry is omitted and said, unscored runs never enter", () => {
     const { points, omitted } = ladderPoints([
       priced({ runId: "a", model: "m", actualCost: fig(1, "reported") }),

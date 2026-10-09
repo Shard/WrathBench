@@ -25,7 +25,7 @@ import { api, type ResultRun, type ResultsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { useFeeds } from "../lib/feeds";
-import { costMark, fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
+import { costMark, effortLabel, fmtDuration, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { filterBySeries, pageSeries } from "../lib/harness";
 import { hasLineage, lineageIndex, type Lineage } from "@viewer/lineage";
 import {
@@ -86,7 +86,7 @@ export default function Runs() {
 
   const setSort = (column: RunColumn): void => setParams(sortQuery(nextSort(sort(), column)), { replace: true });
   const clear = (): void =>
-    setParams({ model: null, effort: null, episode: null, harness: null, character: null, campaign: null }, { replace: true });
+    setParams({ model: null, effort: null, compactWindow: null, episode: null, harness: null, character: null, campaign: null }, { replace: true });
   /*
    * The query a row carries to the run page, so its "← runs" comes back to this
    * exact view. The location's own search string, verbatim: the run page reads
@@ -207,6 +207,7 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
   const narrow = (patch: Record<string, string>): string => {
     const q = new URLSearchParams(props.query);
     q.delete("effort");
+    q.delete("compactWindow");
     for (const [k, v] of Object.entries(patch)) q.set(k, v);
     return `/runs?${q.toString()}`;
   };
@@ -271,7 +272,11 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
             <Show when={r().model !== null} fallback="—">
               <ModelIcon model={r().model} />
               <A
-                href={narrow(r().effort === null ? { model: r().model! } : { model: r().model!, effort: r().effort! })}
+                href={narrow({
+                  model: r().model!,
+                  ...(r().effort !== null ? { effort: r().effort! } : {}),
+                  ...(r().compactWindow != null ? { compactWindow: r().compactWindow! } : {}),
+                })}
                 title={`${r().model} — narrow to this model`}
               >
                 {modelDisplay(r().model!)}
@@ -302,7 +307,7 @@ function RunRowView(props: { row: ResultRun; query: string; lineage: Lineage | u
           </td>
         );
       case "effort":
-        return <td class="dim">{r().effort ?? "—"}</td>;
+        return <td class="dim">{effortLabel(r().effort, r().compactWindow) ?? "—"}</td>;
       case "kind":
         return (
           <td class="dim" title={r().unscored ?? ""}>

@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { backfilledTitle, costMark, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins } from "../src/lib/format";
+import { backfilledTitle, costMark, effortLabel, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtToolCallBudget, fmtTokens, fmtTps, fmtUsd, fmtWhen, modelDisplay, num, resolvedLabel, shortHarness, shortRunId, COST_BASIS_NOTE, fmtMoney, moneyCoins } from "../src/lib/format";
 
 describe("fmtItems", () => {
   const items = [
@@ -149,6 +149,17 @@ describe("num", () => {
     expect(num(undefined)).toBe("—");
     expect(num(0)).toBe("0");
     expect(num(42)).toBe("42");
+  });
+});
+
+describe("effortLabel", () => {
+  test("effort, then a set compaction window; nothing for the defaults", () => {
+    expect(effortLabel("max", "100k")).toBe("max · 100k");
+    expect(effortLabel("max", null)).toBe("max");
+    expect(effortLabel("max")).toBe("max");
+    expect(effortLabel(null, "1M")).toBe("1M");
+    expect(effortLabel(null, undefined)).toBeNull();
+    expect(effortLabel(undefined, "")).toBeNull();
   });
 });
 

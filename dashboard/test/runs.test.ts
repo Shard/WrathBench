@@ -225,4 +225,17 @@ describe("filter", () => {
     expect(runsHref({ sort: { column: "cost", dir: "desc" } })).toBe("/runs?sort=cost&dir=desc");
     expect(runsHref({ sort: DEFAULT_SORT })).toBe("/runs");
   });
+
+  test("a compaction window narrows like effort: absent under a model is the entry with none", () => {
+    const hk = [
+      run({ runId: "auto", model: "hk", effort: "max" }),
+      run({ runId: "small", model: "hk", effort: "max", compactWindow: "100k" }),
+    ];
+    expect(filterRuns(hk, filterParams({ model: "hk", effort: "max" })).map((r) => r.runId)).toEqual(["auto"]);
+    expect(filterRuns(hk, filterParams({ model: "hk", effort: "max", compactWindow: "100k" })).map((r) => r.runId)).toEqual(["small"]);
+    expect(runsHref({ model: "hk", effort: "max", compactWindow: "100k", episode: "e360" })).toBe(
+      "/runs?episode=e360&model=hk&effort=max&compactWindow=100k",
+    );
+    expect(runsHref({ model: "hk", effort: "max", compactWindow: null })).toBe("/runs?model=hk&effort=max");
+  });
 });
