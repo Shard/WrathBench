@@ -11,9 +11,9 @@
  *
  * Three rules worth stating, because they are the ones a reader trips on:
  *
- * - **The projection's key is `(model, effort)`, not the roster name.**
- *   `matchesRoster` in `runner/src/models.ts` matches runs that way, so two
- *   roster entries sharing a model string and an effort would legitimately show
+ * - **The projection's key is `(model, effort, compactWindow)`, not the roster
+ *   name.** `sameRosterIdentity` in `runner/src/models.ts` matches runs that
+ *   way, so two roster entries sharing all three would legitimately show
  *   the same runs. The rows are not deduped: that is the honest reading, and
  *   hiding it would make one of the two look idle.
  * - **Counted is spelled once.** The run ids behind a count use `isCounted`
@@ -27,6 +27,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { parseCompactWindow } from "../src/config";
 import { configDbPath, readFleetConfig } from "../src/config-store";
 import {
   DEFAULT_POLICY,
@@ -34,6 +35,7 @@ import {
   isCounted,
   parsePolicyBlock,
   policyExclusion,
+  sameRosterIdentity,
   schedulability,
   schedulableView,
   type ModelState,
@@ -71,6 +73,11 @@ const rosterEntrySchema = z
   .object({
     model: z.string().min(1),
     effort: z.string().min(1).optional(),
+    /**
+     * As the operator wrote it: the store keeps the raw document, so this is
+     * canonicalised below (`windowOf`) before anything matches runs on it.
+     */
+    compactWindow: z.string().min(1).optional(),
     driver: z.string().min(1).optional(),
     apiBase: z.string().min(1).optional(),
     billing: z.enum(["free", "paid"]).optional(),
@@ -175,6 +182,20 @@ export function currentSeries(): string | null {
 }
 
 /**
+ * A roster entry's compaction window as runs are stamped with it: canonical
+ * (`"100K"` → `"100k"`), `auto` absent. A value the parser refuses reads as
+ * absent too — the supervisor refuses that config, so no run carries it.
+ */
+function windowOf(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    return parseCompactWindow(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Read the roster out of the config store (`runner/src/config-store.ts`), the
  * only fleet config, so this page shows what the supervisor is actually
  * scheduling. An empty or absent store is `missing` — a deployment before its
@@ -208,10 +229,12 @@ export function readFleetRoster(dbPath: string = configDbPath(), series: string 
   const models: RosterModel[] = [];
   for (const [name, e] of Object.entries(parsed.roster)) {
     if (e.tier === undefined) continue;
+    const compactWindow = windowOf(e.compactWindow);
     models.push({
       name,
       model: e.model,
       ...(e.effort !== undefined ? { effort: e.effort } : {}),
+      ...(compactWindow !== undefined ? { compactWindow } : {}),
       ...(e.driver !== undefined ? { driver: e.driver } : {}),
       ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
       ...(e.billing !== undefined ? { billing: e.billing } : {}),
@@ -385,7 +408,7 @@ function runView(f: RunFact): ModelRunView {
  */
 export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: string, running: ReadonlySet<string> = new Set(), policy: SchedulingPolicy = DEFAULT_POLICY): ModelRowView {
   const mine = runs
-    .filter((f) => f.model === state.model && (f.effort ?? null) === state.effort)
+    .filter((f) => sameRosterIdentity(f, state))
     .slice()
     .sort((a, b) => b.startedAt - a.startedAt);
   const perEpisode: Partial<Record<EpisodeIdView, ModelEpisodeView>> = {};
@@ -406,6 +429,7 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
     name: state.name,
     model: state.model,
     effort: state.effort,
+    ...(state.compactWindow !== undefined ? { compactWindow: state.compactWindow } : {}),
     platform: state.platform,
     harness: state.harness,
     billing: state.billing,

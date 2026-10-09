@@ -52,6 +52,7 @@ import {
   type NextJob,
   planNextJobs,
   type RunFact,
+  sameRosterIdentity,
   type SchedulingPolicy,
   staleForMs,
   TIER_TABLE,
@@ -83,8 +84,9 @@ export interface Affinity {
 /**
  * The account each roster name last ran on, from the run facts the supervisor
  * already reads. Pure. Latest start wins; a run with no recorded account is no
- * evidence. Matching is the projection's own (model + effort), so a roster
- * entry renamed keeps its history and two entries on one model id do not.
+ * evidence. Matching is the projection's own (`sameRosterIdentity`: model,
+ * effort, compaction window), so a roster entry renamed keeps its history and
+ * two entries on one model id do not.
  */
 export function affinityFrom(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): Map<string, Affinity> {
   const out = new Map<string, Affinity>();
@@ -92,7 +94,7 @@ export function affinityFrom(runs: readonly RunFact[], roster: Record<string, Fl
   for (const [name, e] of Object.entries(roster)) {
     for (const f of runs) {
       if (f.account === null) continue;
-      if (f.model !== e.model || (f.effort ?? null) !== (e.effort ?? null)) continue;
+      if (!sameRosterIdentity(f, e)) continue;
       if ((at.get(name) ?? -1) >= f.startedAt) continue;
       at.set(name, f.startedAt);
       out.set(name, { account: f.account, character: f.character });
@@ -593,7 +595,8 @@ export function jobSpawn(
       ...(job.subscription !== undefined && (entry.driver === "claude-code" || entry.driver === "codex") ? { tokenEnv: job.subscription } : {}),
     };
     const runId =
-      `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}-${stamp}` +
+      `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}` +
+      `${base.compactWindow !== undefined ? `-${slug(base.compactWindow)}` : ""}-${stamp}` +
       (job.attempt !== undefined && job.attempt > 1 ? `-a${job.attempt}` : "");
     for (let k = 1; k <= copies; k++) {
       entries.push(k === 1 ? (job.attempt !== undefined && job.attempt > 1 ? { ...base, runId } : base) : { ...base, runId: `${runId}-r${k}` });
@@ -619,14 +622,20 @@ export function jobSpawn(
  */
 export function withResume(spawn: JobSpawn, resume: NonNullable<FleetJob["resume"]>): JobSpawn {
   const entries = [...spawn.entries];
-  const i = entries.findIndex((e) => e.model === resume.model && (e.effort ?? undefined) === (resume.effort ?? undefined));
+  const i = entries.findIndex((e) => sameRosterIdentity(e, resume));
   if (i >= 0) {
     const [hit] = entries.splice(i, 1);
     entries.unshift({ ...hit!, runId: resume.runId });
   } else if (entries.length > 0) {
     // The paused run's identity comes from its meta.json on --resume; the
     // entry only has to name the run id and a model the roster accepts.
-    entries.unshift({ ...entries[0]!, model: resume.model, ...(resume.effort !== undefined ? { effort: resume.effort } : {}), runId: resume.runId });
+    entries.unshift({
+      ...entries[0]!,
+      model: resume.model,
+      ...(resume.effort !== undefined ? { effort: resume.effort } : {}),
+      ...(resume.compactWindow !== undefined ? { compactWindow: resume.compactWindow } : {}),
+      runId: resume.runId,
+    });
   }
   return { ...spawn, entries, resumeRunId: resume.runId };
 }
@@ -667,6 +676,8 @@ export interface EndedRun {
   model: string;
   /** Part of the model's identity: opus-low and opus-high are two rows. */
   effort: string | null;
+  /** Identity too: the claude-code compaction window; absent or null is `auto`. */
+  compactWindow?: string | null;
   /** The job ref it was launched under, when the run id names one. */
   ref: string | null;
   episode: EpisodeId;
@@ -888,6 +899,7 @@ export function planStaleRuns(opts: {
       runId: f.runId,
       model: f.model,
       effort: f.effort,
+      ...(f.compactWindow != null ? { compactWindow: f.compactWindow } : {}),
       ref: refOfRunId(f.runId, f.episode, opts.refs ?? []) ?? null,
       episode: f.episode,
       reason: lapse.reason!,
@@ -961,14 +973,15 @@ export function planResumes(opts: {
       }
       continue;
     }
-    const modelKey = `${f.model}@${f.effort ?? ""}`;
+    const modelKey = `${f.model}@${f.effort ?? ""}@${f.compactWindow ?? ""}`;
     const launchedUnder = refOfRunId(f.runId, f.episode, Object.keys(config.roster));
     const current = launchedUnder === undefined ? undefined : config.roster[launchedUnder];
-    if (launchedUnder !== undefined && current !== undefined && (current.model !== f.model || (current.effort ?? null) !== (f.effort ?? null))) {
+    if (launchedUnder !== undefined && current !== undefined && !sameRosterIdentity(current, f)) {
       end.push({
         runId: f.runId,
         model: f.model,
         effort: f.effort,
+        ...(f.compactWindow != null ? { compactWindow: f.compactWindow } : {}),
         ref: launchedUnder,
         episode: f.episode,
         reason: "manual",
@@ -1001,6 +1014,7 @@ export function planResumes(opts: {
         runId: f.runId,
         model: f.model,
         effort: f.effort,
+        ...(f.compactWindow != null ? { compactWindow: f.compactWindow } : {}),
         ref: launchedUnder ?? null,
         episode: f.episode,
         reason: lapse.reason!,
@@ -1016,7 +1030,7 @@ export function planResumes(opts: {
     }
     seenModel.add(modelKey);
     const refs = Object.entries(config.roster)
-      .filter(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null))
+      .filter(([, e]) => sameRosterIdentity(e, f))
       .map(([name]) => name);
     // The ref the run id NAMES is the authority, and it is the authority on
     // BOTH paths below. Two roster entries may share a model and an effort
@@ -1106,7 +1120,15 @@ export function planResumes(opts: {
     takenAccounts.add(account.toUpperCase());
     takenJobs.add(job.name);
     resume.push({
-      job: { ...job, resume: { runId: f.runId, model: f.model, ...(f.effort !== null ? { effort: f.effort } : {}) } },
+      job: {
+        ...job,
+        resume: {
+          runId: f.runId,
+          model: f.model,
+          ...(f.effort !== null ? { effort: f.effort } : {}),
+          ...(f.compactWindow != null ? { compactWindow: f.compactWindow } : {}),
+        },
+      },
       account,
       runId: f.runId,
       pauseCount: pause.count,
@@ -1211,8 +1233,7 @@ export function charactersFrom(runs: readonly RunFact[], roster: Record<string, 
           // Put away without a verdict: not a run anything resumes or
           // continues, so not one that may displace the head that is.
           !(f.archived === true && f.terminationReason === null) &&
-          f.model === e.model &&
-          (f.effort ?? null) === (e.effort ?? null),
+          sameRosterIdentity(f, e),
       ),
     );
     if (head !== undefined) out.set(name, { runId: head.runId, account: head.account!, character: head.character! });
@@ -1474,8 +1495,8 @@ export function planNameSweeps(opts: {
  * belongs to — what "retry 2/3" counts from. The projection is the only place
  * that number is derived, so the log line and the Models page agree.
  */
-export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "effort" | "episode">): number | undefined {
-  const st = states.find((s) => s.model === e.model && s.effort === e.effort)?.perEpisode[e.episode];
+export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRun, "model" | "effort" | "compactWindow" | "episode">): number | undefined {
+  const st = states.find((s) => sameRosterIdentity(s, e))?.perEpisode[e.episode];
   return st?.failed;
 }
 
@@ -1491,7 +1512,7 @@ export function failedAttemptsFor(states: readonly ModelState[], e: Pick<EndedRu
 export function retryNumbers(ended: readonly EndedRun[], base: (e: EndedRun) => number): number[] {
   const seen = new Map<string, number>();
   return ended.map((e) => {
-    const key = `${e.model}@${e.effort ?? ""}@${e.episode}`;
+    const key = `${e.model}@${e.effort ?? ""}@${e.compactWindow ?? ""}@${e.episode}`;
     const n = base(e) + (seen.get(key) ?? 0);
     if (e.counts) seen.set(key, (seen.get(key) ?? 0) + 1);
     return n + 1;
@@ -1526,7 +1547,7 @@ export function nextConfigRejection(
 
 /**
  * A spawn's entries, stamped with the job's account and fleet-scoped run ids
- * (`fleet-<job>-<model-slug>[-<effort>]-<date>`) so fleet runs never share a
+ * (`fleet-<job>-<model-slug>[-<effort>][-<compactWindow>]-<date>`) so fleet runs never share a
  * run id with hand-launched rosters or with another job.
  */
 export function fillEntries(spawn: JobSpawn, stamp: string): RosterSpec[] {

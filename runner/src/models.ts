@@ -381,6 +381,11 @@ export interface RosterModel {
   name: string;
   model: string;
   effort?: string;
+  /**
+   * The claude-code compaction window (`RunConfig.compactWindow`); absent is
+   * the CLI's own `auto`. Part of the entry's identity, like effort.
+   */
+  compactWindow?: string;
   driver?: string;
   apiBase?: string;
   /**
@@ -493,6 +498,12 @@ export interface RunFact {
   runId: string;
   model: string;
   effort: string | null;
+  /**
+   * The claude-code compaction window the run was stamped with. Absent or null
+   * is the CLI's own `auto` — every run that set none, and every run written
+   * before the field existed.
+   */
+  compactWindow?: string | null;
   episode: EpisodeId;
   episodeOverride: boolean;
   harnessVersion: string | null;
@@ -632,6 +643,8 @@ export interface ModelState {
   name: string;
   model: string;
   effort: string | null;
+  /** The entry's claude-code compaction window; absent is the CLI's `auto`. */
+  compactWindow?: string;
   platform: string | null;
   /** The harness this entry's runs go through, from its driver; a tag, not a partition. */
   harness: Harness;
@@ -1078,6 +1091,7 @@ export function readRunFact(
     config?: {
       model?: unknown;
       effort?: unknown;
+      compactWindow?: unknown;
       extra?: unknown;
       account?: unknown;
       character?: unknown;
@@ -1086,7 +1100,7 @@ export function readRunFact(
       subscription?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
-    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown };
+    comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown; notBefore?: unknown };
   };
   try {
@@ -1098,11 +1112,14 @@ export function readRunFact(
   if (!isEpisodeId(episode)) return null;
   const model = str(meta.config?.model);
   if (model === null) return null;
+  const compactWindow = str(meta.comparability?.compactWindow) ?? str(meta.config?.compactWindow);
 
   const fact: RunFact = {
     runId,
     model,
     effort: str(meta.comparability?.effort) ?? str(meta.config?.effort),
+    // Only when set: absent is `auto`, and every older fact reads the same.
+    ...(compactWindow !== null ? { compactWindow } : {}),
     episode,
     episodeOverride: meta.comparability?.episodeOverride === true,
     harnessVersion: str(meta.harnessVersion),
@@ -1532,8 +1549,27 @@ export function isNoProgress(f: RunFact): boolean {
   return f.terminationReason !== null && NO_PROGRESS_REASONS.has(f.terminationReason);
 }
 
-function matchesRoster(f: RunFact, r: Pick<RosterModel, "model" | "effort">): boolean {
-  return f.model === r.model && (f.effort ?? null) === (r.effort ?? null);
+/** What a run and a roster entry must share for the run to be that entry's. */
+export interface RosterIdentity {
+  model: string | null;
+  effort?: string | null | undefined;
+  compactWindow?: string | null | undefined;
+}
+
+/**
+ * Whether two identities are one roster row: same model, same effort, same
+ * claude-code compaction window. Absent and null read alike (the provider's
+ * default effort, the CLI's `auto` window), so a run written before a field
+ * existed still matches the entry that never set it. Every place that maps a
+ * run back to an entry asks this, so an entry that differs from another only
+ * in its window — a 100k copy of an `auto` entry — owns its own runs.
+ */
+export function sameRosterIdentity(a: RosterIdentity, b: RosterIdentity): boolean {
+  return a.model === b.model && (a.effort ?? null) === (b.effort ?? null) && (a.compactWindow ?? null) === (b.compactWindow ?? null);
+}
+
+function matchesRoster(f: RunFact, r: Pick<RosterModel, "model" | "effort" | "compactWindow">): boolean {
+  return sameRosterIdentity(f, r);
 }
 
 /**
@@ -1549,7 +1585,7 @@ function matchesRoster(f: RunFact, r: Pick<RosterModel, "model" | "effort">): bo
  */
 export function liveSubscriptions(
   runs: readonly RunFact[],
-  roster: readonly Pick<RosterModel, "name" | "model" | "effort">[],
+  roster: readonly Pick<RosterModel, "name" | "model" | "effort" | "compactWindow">[],
 ): Map<string, string> {
   const out = new Map<string, string>();
   for (const r of roster) {
@@ -1677,6 +1713,7 @@ export function projectModel(
     name: r.name,
     model: r.model,
     effort: r.effort ?? null,
+    ...(r.compactWindow !== undefined ? { compactWindow: r.compactWindow } : {}),
     platform: platformOf(r.apiBase, r.driver),
     harness: harnessOf(driverOf(r)),
     status: "active",

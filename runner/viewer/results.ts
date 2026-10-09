@@ -420,6 +420,8 @@ export function resultRunOf(
     campaign: run.campaign,
     cell: run.cell,
     effort: run.comparability?.effort ?? null,
+    // Only when set: absent is the CLI's own `auto`, which every older row is.
+    ...(run.comparability?.compactWindow != null ? { compactWindow: run.comparability.compactWindow } : {}),
     harness: run.harness,
     promptHash: run.comparability?.promptHash ?? null,
     serverBuild: run.comparability?.serverBuild?.build ?? null,

@@ -267,6 +267,17 @@ export function resolvedLabel(
 }
 
 /**
+ * The run dimensions a model's label carries after its name: the effort, and a
+ * claude-code entry's compaction window when it set one — `max · 100k`, `max`,
+ * `100k`. Null when neither was set: absent effort is the provider's default
+ * and absent window the CLI's own `auto`, and neither is printed.
+ */
+export function effortLabel(effort: string | null | undefined, compactWindow?: string | null): string | null {
+  const parts = [effort, compactWindow].filter((p): p is string => typeof p === "string" && p.length > 0);
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/**
  * A model id as a reader wants to see it: the model's own name, without the
  * provider prefix that only says where it was bought.
  *

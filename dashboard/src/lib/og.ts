@@ -39,7 +39,7 @@
 
 import type { ResultRun } from "@viewer/api-types";
 import { COST, XP } from "./axes";
-import { modelDisplay } from "./format";
+import { effortLabel, modelDisplay } from "./format";
 import { HOME_EPISODE, homeLadderRuns } from "./homeladder";
 import { CUE_PAD, ladderChartLayout, ladderPoints, type Rect } from "./ladder";
 import { paretoFront } from "./pareto";
@@ -191,9 +191,10 @@ export function keepLabels(candidates: readonly LabelBox[], reserved: readonly R
 const esc = (t: string): string => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** The name over a frontier mark: the site's own display name, with the effort it was run at. */
-function labelOf(p: { model: string; effort: string | null }): string {
+function labelOf(p: { model: string; effort: string | null; compactWindow?: string | null }): string {
   const name = modelDisplay(p.model);
-  return p.effort === null ? name : `${name} (${p.effort})`;
+  const tag = effortLabel(p.effort, p.compactWindow);
+  return tag === null ? name : `${name} (${tag})`;
 }
 
 /**

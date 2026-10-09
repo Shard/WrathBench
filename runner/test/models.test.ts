@@ -42,6 +42,7 @@ import {
   CONCURRENCY_KEYS,
   parsePolicyBlock,
   isOpenCodeGoBase,
+  sameRosterIdentity,
 } from "../src/models";
 import { billingOf } from "../src/model-cost";
 import type { EpisodeId } from "../src/episodes";
@@ -1142,5 +1143,76 @@ describe("probe campaigns in the schedule", () => {
 
   test("no campaigns configured is the old behaviour exactly", () => {
     expect(planNextJobs([spent("a")], ["R1"], new Set(), {}).jobs).toEqual([]);
+  });
+});
+
+describe("the claude-code compaction window is part of an entry's identity", () => {
+  // Operator decision 2026-10-09: a 100k copy of an `auto` entry is its own
+  // row. Matched on model + effort alone it would inherit the auto entry's
+  // runs, read its e360 as already done, and never be scheduled.
+  const NOW3 = 1_800_000_000_000;
+  const H = 3_600_000;
+  const run = (i: number, over: Partial<RunFact> = {}): RunFact => ({
+    runId: `haiku-e360-${i}`,
+    model: "claude-haiku-5-5",
+    effort: "max",
+    episode: "e360",
+    episodeOverride: false,
+    harnessVersion: null,
+    harnessSeries: null,
+    extra: false,
+    startedAt: NOW3 - (100 - i) * H,
+    endedAt: NOW3 - (99 - i) * H,
+    terminationReason: "episode-limit",
+    modelResponses: 20,
+    bestLevel: 5,
+    live: false,
+    pause: null,
+    account: null,
+    character: null,
+    episodeMs: null,
+    campaign: null,
+    cell: null,
+    subscription: null,
+    ...over,
+  });
+  const auto: RosterModel = { name: "haiku-max", model: "claude-haiku-5-5", effort: "max", driver: "claude-code", tier: "t2" };
+  const small: RosterModel = { ...auto, name: "haiku-max-c100k", compactWindow: "100k" };
+
+  test("each entry owns only the runs stamped with its own window", () => {
+    const runs = [run(1), run(2, { compactWindow: "100k" }), run(3, { compactWindow: null })];
+    const a = projectModel(auto, runs, DEFAULT_POLICY, { now: NOW3 });
+    const s = projectModel(small, runs, DEFAULT_POLICY, { now: NOW3 });
+    // Absent and null are both `auto`: runs 1 and 3 are the auto entry's.
+    expect(a.perEpisode.e360!.attempts).toBe(2);
+    expect(s.perEpisode.e360!.attempts).toBe(1);
+    expect(s.compactWindow).toBe("100k");
+    expect(a.compactWindow).toBeUndefined();
+    // With no run of its own, the copy still owes its evidence.
+    expect(projectModel(small, [run(1)], DEFAULT_POLICY, { now: NOW3 }).perEpisode.e360?.attempts ?? 0).toBe(0);
+  });
+
+  test("a run's window is read off its tuple, then its config, and absent stays absent", () => {
+    const runsDir = mkdtempSync(join(tmpdir(), "wrathbench-window-facts-"));
+    try {
+      const write = (runId: string, meta: Record<string, unknown>) => {
+        mkdirSync(join(runsDir, runId), { recursive: true });
+        writeFileSync(join(runsDir, runId, "meta.json"), JSON.stringify({ harnessVersion: "harness-0.5-1", startedAt: NOW3, ...meta }));
+      };
+      write("run-a", { config: { model: "m", effort: "max" }, comparability: { episode: "e360", effort: "max" } });
+      write("run-b", { config: { model: "m", effort: "max", compactWindow: "100k" }, comparability: { episode: "e360", effort: "max", compactWindow: "100k" } });
+      const facts = new Map(readRunFacts(runsDir, NOW3).map((f) => [f.runId, f]));
+      expect(facts.get("run-a")!.compactWindow).toBeUndefined();
+      expect(facts.get("run-b")!.compactWindow).toBe("100k");
+    } finally {
+      rmSync(runsDir, { recursive: true, force: true });
+    }
+  });
+
+  test("sameRosterIdentity reads absent and null alike, and nothing else", () => {
+    expect(sameRosterIdentity({ model: "m", effort: "max" }, { model: "m", effort: "max", compactWindow: null })).toBe(true);
+    expect(sameRosterIdentity({ model: "m", effort: "max" }, { model: "m", effort: "max", compactWindow: "100k" })).toBe(false);
+    expect(sameRosterIdentity({ model: "m", compactWindow: "1M" }, { model: "m", compactWindow: "1M" })).toBe(true);
+    expect(sameRosterIdentity({ model: "m", effort: "low" }, { model: "m", effort: "max" })).toBe(false);
   });
 });

@@ -161,6 +161,16 @@ const DB_ENV_PREFIX = "WRATHBENCH_DB_";
 const THINKING_ENV = "MAX_THINKING_TOKENS";
 
 /**
+ * Not billing either: the CLI's auto-compaction window. The run's
+ * `compactWindow` is the only thing that may set it (`compactEnv`), for the
+ * reason `THINKING_ENV` is dropped — an operator's shell value would otherwise
+ * become a run dimension nobody recorded. The CLI also reads an
+ * `autoCompactWindow` setting, but `CLAUDE_CONFIG_DIR` is the run's own
+ * directory, so no settings file sets it, and the env wins over one anyway.
+ */
+export const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
+
+/**
  * The child environment, constructed rather than inherited.
  *
  * One credential survives, and it is the one the run's LANE names: the token in
@@ -189,6 +199,7 @@ export function childEnv(
     if (k.startsWith(DB_ENV_PREFIX)) continue;
     if (k.startsWith(DEFAULT_CLAUDE_TOKEN_ENV)) continue;
     if (k === THINKING_ENV) continue;
+    if (k === COMPACT_WINDOW_ENV) continue;
     out[k] = v;
   }
   const token = parent[o.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV];
@@ -393,6 +404,58 @@ export const NO_THINKING = "none";
 /** Env the CLI needs for an effort level, where a level is not a flag. */
 export function thinkingEnv(effort: string | undefined): Record<string, string> {
   return effort === NO_THINKING ? { [THINKING_ENV]: "0" } : {};
+}
+
+/**
+ * Env the CLI needs for the run's compaction window (`RunConfig.compactWindow`,
+ * already canonical). There is no flag for it in 2.1.293, only the env var;
+ * absent is the CLI's own `auto` and sends nothing. With `--debug` the CLI logs
+ * the window it applies as `autocompact: … effectiveWindow=…` (`auto` gave
+ * 980000 for Claude Haiku 5.5, `100k` gave 80000, compacting ~13K below that).
+ */
+export function compactEnv(window: string | undefined): Record<string, string> {
+  return window === undefined ? {} : { [COMPACT_WINDOW_ENV]: window };
+}
+
+/**
+ * The CLI's compaction marker, reduced to the harness's own record.
+ *
+ * stream-json emits a `system` envelope with `subtype: "compact_boundary"` each
+ * time the CLI summarises its history, carrying `compact_metadata` —
+ * `trigger` (`auto` | `manual`), `pre_tokens`, and when known `post_tokens` and
+ * `duration_ms` (recorded by 2.1.239 runs; the same mapping is in the pinned
+ * 2.1.293 binary, where the last two are optional). The raw envelope is already on the trajectory as
+ * `claude_system`; this is the same fact as a `harness` record of kind
+ * `compaction`, so a reader can find every compaction of a run without knowing
+ * the CLI's vocabulary. Trajectory only: no text, so the feed draws it as
+ * bookkeeping, and nothing about it reaches the model. Missing numbers read as
+ * null rather than zero. Null when the envelope is not a compaction.
+ */
+/** A type alias, not an interface, so it is assignable to `Trajectory.append`'s record. */
+export type CompactionRecord = {
+  t: "harness";
+  kind: "compaction";
+  turn: number;
+  trigger: string | null;
+  preTokens: number | null;
+  postTokens: number | null;
+  durationMs: number | null;
+};
+
+export function compactionRecord(turn: number, msg: Record<string, unknown>): CompactionRecord | null {
+  if (msg["type"] !== "system" || msg["subtype"] !== "compact_boundary") return null;
+  const raw = msg["compact_metadata"];
+  const meta = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const n = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return {
+    t: "harness",
+    kind: "compaction",
+    turn,
+    trigger: typeof meta["trigger"] === "string" ? meta["trigger"] : null,
+    preTokens: n(meta["pre_tokens"]),
+    postTokens: n(meta["post_tokens"]),
+    durationMs: n(meta["duration_ms"]),
+  };
 }
 
 /**
@@ -811,7 +874,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     ...(config.effort !== undefined ? { effort: config.effort } : {}),
   });
   const thinking = thinkingEnv(config.effort);
-  const extra = { ...thinking, ...(o.extraEnv ?? {}) };
+  const extra = { ...thinking, ...compactEnv(config.compactWindow), ...(o.extraEnv ?? {}) };
   const env = childEnv(o.env ?? process.env, {
     configDir,
     // The run's subscription lane (`RunConfig.subscription`): the CLI only ever
@@ -832,6 +895,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     mcpPort: listener.port,
     systemPromptChars: systemPrompt.length,
     ...(config.objective !== undefined ? { objective: config.objective } : {}),
+    // The one dimension that travels in env rather than `args`.
+    ...(config.compactWindow !== undefined ? { compactWindow: config.compactWindow } : {}),
   });
 
   /**
@@ -1123,6 +1188,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         switch (msg["type"]) {
           case "system": {
             trajectory.append({ t: "claude_system", turn, ...msg });
+            const compaction = compactionRecord(turn, msg);
+            if (compaction !== null) trajectory.append(compaction);
             /*
              * The CLI resolves the roster's alias (`sonnet`) to a real id
              * (`claude-sonnet-5`) at launch and names it — with its own version —

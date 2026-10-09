@@ -236,6 +236,15 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               share a chart with the runs that had it. `wikiCoords` alongside it is REFUSED:
               coordinates are a setting of a surface this entry does not have. A probe drops it
               with the other run dimensions — a campaign owns its own task shape.
+            `compactWindow` — claude-code entries ONLY: the CLI's auto-compaction window, `"auto"`
+              or 100k–1M tokens (`"100k"`, `"500k"`, `"1M"`). Absent or `"auto"` is the CLI's own
+              default, which sits near the model's whole context. Normalised on load (`"100K"` →
+              `"100k"`, `"1000k"` → `"1M"`, `"auto"` → absent); on any other driver, or out of
+              range, it takes the whole file down. A run dimension like `effort` (operator
+              decision 2026-10-09): stamped into the tuple as a KEY, part of the run id, and part
+              of what maps a run back to its entry — so a copy of an entry that differs only in
+              its window owns its own runs and its own tier budget, and pages show it after the
+              effort (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
@@ -273,7 +282,7 @@ queue       jobs, in priority order: { ref | [refs], episode e90|e360|freeplay, 
             enabled, account? } — plus `subscription` (a lane's env var NAME) and nothing else;
             any other key REFUSES the job by name ("Strict keys", below). With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always
-            `<first ref>-<episode>` (run ids `fleet-<name>-<model>[-<effort>]-<stamp>`), one job
+            `<first ref>-<episode>` (run ids `fleet-<name>-<model>[-<effort>][-<compactWindow>]-<stamp>`), one job
             per (ref, episode). A pool job whose ref is not eligible for its EPISODE is skipped
             with the reason in --status; a pinned one waits the same way. A waiting manual job
             reserves the POOL only — the paid and local classes still pick, and the reservation

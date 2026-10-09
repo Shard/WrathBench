@@ -822,6 +822,8 @@ describe("pipName", () => {
   test("before a name exists it is the short model and its effort, never the run id", () => {
     expect(pipName(at({ model: "claude-fable-5", effort: "none" }))).toBe("claude-fable-5 · none");
     expect(pipName(at({ model: "nvidia/nemotron-3-super-120b-a12b:free" }))).toBe("nemotron-3-super-120b-a12b (free)");
+    // A claude-code entry's compaction window rides after the effort.
+    expect(pipName(at({ model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" }))).toBe("claude-haiku-5-5 · max · 100k");
   });
 
   test("a feed that recorded no model at all still names the pip something", () => {

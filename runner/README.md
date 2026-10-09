@@ -169,6 +169,38 @@ fresh `claude` process: the CLI's own accumulated history does not come back,
 only the scratchpad — which is the promise the harness makes anyway: the
 scratchpad, not the chat history, is the durable memory.
 
+### The compaction window
+
+The CLI summarises its own history once the prompt nears its auto-compaction
+window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: `auto` or 100k–1M tokens in 2.1.293.
+`auto` sits near the model's whole context — with `--debug` the CLI logs
+`autocompact: … effectiveWindow=980000` for Claude Haiku 5.5 — so a long run
+replays close to a million tokens per call before anything is summarised, and
+pays for it above a model's long-prompt price tier. `100k` logs
+`effectiveWindow=80000`, and the CLI compacts about 13K below that.
+
+A roster entry (`compactWindow`, docs/RUNBOOK.md) or `--compact-window` sets it
+for a run (`RunConfig.compactWindow`); every other driver refuses it. It is a
+run dimension like effort: canonicalised to `<n>k` or `1M`, recorded in
+`meta.json` and the comparability tuple, matched on beside model and effort
+wherever a run is mapped back to its roster entry (`sameRosterIdentity`), and
+shown after the effort on the pages (`max · 100k`). Absent is the CLI's
+`auto`: nothing is sent and the tuple carries no field, so every run from
+before the field reads as `auto` and none restamps. It reaches the CLI only
+through the constructed environment (`compactEnv`); a value in the runner's own
+environment is dropped like `MAX_THINKING_TOKENS`, so nothing unrecorded can
+move it. The CLI's `autoCompactWindow` setting cannot either: the config dir is
+the run's own.
+
+Each compaction the CLI streams — a `system` envelope with subtype
+`compact_boundary` and `compact_metadata` (`trigger`, `pre_tokens`, and when
+known `post_tokens` and `duration_ms`: recorded by 2.1.239 runs, and the same
+mapping is in the pinned 2.1.293 binary) — stays on the trajectory
+raw as `claude_system` and is also written as a `harness` record of kind
+`compaction` with `trigger`, `preTokens`, `postTokens` and `durationMs`, so a
+reader can count a run's compactions without knowing the CLI's vocabulary. It
+carries no text and nothing about it reaches the model.
+
 ### Billing: subscription or nothing
 
 The child environment is constructed, not inherited. Every `ANTHROPIC_*`,

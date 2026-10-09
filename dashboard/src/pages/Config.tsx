@@ -436,6 +436,10 @@ function RosterRow(props: {
         <td class="dim">
           {String(props.entry["model"] ?? "—")}
           <Show when={typeof props.entry["effort"] === "string"}> · {String(props.entry["effort"])}</Show>
+          {/* `auto` is the CLI's own default, shown as nothing, like everywhere else. */}
+          <Show when={typeof props.entry["compactWindow"] === "string" && String(props.entry["compactWindow"]).toLowerCase() !== "auto"}>
+            {" "}· {String(props.entry["compactWindow"])}
+          </Show>
           <Show when={typeof props.entry["driver"] === "string"}>
             <div class="dim">{String(props.entry["driver"])}</div>
           </Show>

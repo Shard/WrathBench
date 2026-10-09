@@ -26,7 +26,7 @@ import {
   runMetrics,
 } from "./axes";
 import { niceTicks, scaleLinear } from "./chart";
-import { modelDisplay } from "./format";
+import { effortLabel, modelDisplay } from "./format";
 import { chainsOf } from "@viewer/lineage";
 import { OPAQUE_PAUSE_REASON, type RunStatus, statusOf as runStatusOf } from "./runs";
 
@@ -467,6 +467,8 @@ export interface LadderPoint {
   single: boolean;
   model: string;
   effort: string | null;
+  /** A claude-code entry's compaction window, when it set one: a point of its own. */
+  compactWindow?: string;
   /** The mean of the x axis's metric, over the `n` runs carrying both axes' readings. */
   x: number;
   /** The mean of the y axis's metric, over the same `n` runs. */
@@ -536,8 +538,9 @@ export function hoverKeyOf(model: string | null | undefined): string {
   return model ?? "(unnamed)";
 }
 
-export function pointKey(model: string, effort: string | null): string {
-  return effort === null ? model : `${model} (${effort})`;
+export function pointKey(model: string, effort: string | null, compactWindow?: string | null): string {
+  const tag = effortLabel(effort, compactWindow);
+  return tag === null ? model : `${model} (${tag})`;
 }
 
 /** The drawn label is the key alone; the run count lives in the hover text. */
@@ -565,12 +568,12 @@ export function ladderPoints(
   x: AxisSpec = COST,
   y: AxisSpec = XP,
 ): { points: LadderPoint[]; omitted: LadderOmission[] } {
-  const groups = new Map<string, { model: string; effort: string | null; runs: ResultRun[] }>();
+  const groups = new Map<string, { model: string; effort: string | null; compactWindow: string | null; runs: ResultRun[] }>();
   for (const r of scored(runs)) {
     const model = r.model ?? "(unnamed)";
-    const key = pointKey(model, r.effort);
+    const key = pointKey(model, r.effort, r.compactWindow);
     const g = groups.get(key);
-    if (g === undefined) groups.set(key, { model, effort: r.effort, runs: [r] });
+    if (g === undefined) groups.set(key, { model, effort: r.effort, compactWindow: r.compactWindow ?? null, runs: [r] });
     else g.runs.push(r);
   }
   const points: LadderPoint[] = [];
@@ -592,7 +595,7 @@ export function ladderPoints(
       // different runs is its own case, and named as such.
       omitted.push({
         key,
-        label: pointKey(modelDisplay(g.model), g.effort),
+        label: pointKey(modelDisplay(g.model), g.effort, g.compactWindow),
         why: !anyX ? `no ${x.label} reading` : !anyY ? `no ${y.label} reading` : `no run with both ${x.label} and ${y.label}`,
       });
       continue;
@@ -609,10 +612,11 @@ export function ladderPoints(
     const bases = new Set(costs.map((c) => c.basis));
     points.push({
       key,
-      label: pointLabel(pointKey(modelDisplay(g.model), g.effort), n),
+      label: pointLabel(pointKey(modelDisplay(g.model), g.effort, g.compactWindow), n),
       single: n === 1,
       model: g.model,
       effort: g.effort,
+      ...(g.compactWindow !== null ? { compactWindow: g.compactWindow } : {}),
       x: mean(paired.map((p) => p.xv)),
       y: mean(paired.map((p) => p.yv)),
       metrics,
@@ -1231,6 +1235,8 @@ export interface CharacterRow {
   model: string;
   /** The effort the latest attempt ran at, when it recorded one. */
   effort: string | null;
+  /** The latest attempt's claude-code compaction window, when it set one. */
+  compactWindow?: string;
   /** The latest attempt — the run whose readings this row shows. */
   latest: ResultRun;
   /** Attempts in the chain, oldest first. `attempts` is its length. */
@@ -1330,6 +1336,7 @@ export function characterRows(runs: readonly ResultRun[]): CharacterRow[] {
       characterId,
       model: run.model ?? "(unnamed)",
       effort: run.effort ?? null,
+      ...(run.compactWindow != null ? { compactWindow: run.compactWindow } : {}),
       latest: run,
       chain,
       attempts: chain.length,
@@ -1540,8 +1547,8 @@ export function stitchCharacter(attempts: readonly CharacterAttemptLike[]): Stit
  * is not in it: the question a reader brings to the
  * freeplay chart is which model is which line.
  */
-export function characterSeriesLabel(model: string, effort: string | null): string {
-  return pointKey(modelDisplay(model), effort);
+export function characterSeriesLabel(model: string, effort: string | null, compactWindow?: string | null): string {
+  return pointKey(modelDisplay(model), effort, compactWindow);
 }
 
 export function characterSeries(rows: readonly CharacterRow[], runs: readonly ResultRun[]): CharacterChartModel {
@@ -1552,7 +1559,7 @@ export function characterSeries(rows: readonly CharacterRow[], runs: readonly Re
   const startedOf = new Map(rows.map((r) => [r.characterId, r.startedAt]));
 
   for (const row of rows) {
-    const label = characterSeriesLabel(row.model, row.effort);
+    const label = characterSeriesLabel(row.model, row.effort, row.compactWindow);
     const attempts = row.chain.map((id) => byId.get(id)).filter((r): r is ResultRun => r !== undefined);
     if (attempts.length === 0) {
       omitted.push({ characterId: row.characterId, label, why: "no attempt served" });

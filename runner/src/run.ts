@@ -6,6 +6,7 @@
  *   bun runner/src/run.ts --driver stub --stub <script.json> [flags]
  *   bun runner/src/run.ts --driver claude-code --model opus  [claude-code harness]
  *   bun runner/src/run.ts --driver claude-code --model opus --token-env CLAUDE_CODE_OAUTH_TOKEN_2
+ *   bun runner/src/run.ts --driver claude-code --model haiku --effort max --compact-window 100k
  *   bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high  [codex harness; lane $CODEX_HOME]
  *   bun runner/src/run.ts --driver codex --model gpt-5.5 --token-env CODEX_HOME_2
  *   bun runner/src/run.ts --resume <run-id>
@@ -210,6 +211,9 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // Identity, like model and driver: a resumed run keeps the effort it was
     // launched with, so --effort is not an override on --resume.
     effort: typeof args["effort"] === "string" ? args["effort"] : undefined,
+    // The Claude Code CLI's auto-compaction window (claude-code only); identity
+    // like effort, so --compact-window is not an override on --resume either.
+    compactWindow: typeof args["compact-window"] === "string" ? args["compact-window"] : undefined,
     // Which backend may serve this run, as the fleet entry declared it. JSON
     // because it is a small object and argv is not a place to spell one out
     // flag at a time; identity like the rest, so a resume keeps it.
@@ -313,7 +317,7 @@ export function loadContinuation(
  * A fresh launch must land on a name nothing holds yet.
  *
  * The run id is a projection, not a record: the fleet builds
- * `fleet-<job>-<model>[-effort]-<stamp>[-aN]` and the attempt counter `N` is a
+ * `fleet-<job>-<model>[-effort][-compactWindow]-<stamp>[-aN]` and the attempt counter `N` is a
  * count of the run facts it can SEE. A run directory that yields no fact — a
  * missing or unparseable meta.json, no episode, no model, or a directory moved
  * or renamed by hand — is invisible to that count, so the next launch projects

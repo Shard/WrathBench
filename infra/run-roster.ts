@@ -54,7 +54,7 @@ import { openRunDb } from "../runner/src/rundb";
 // overrides (runner/src/config.ts). Importing it keeps roster, fleet and
 // runner validating the same shape instead of three hand-rolled copies.
 import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
@@ -81,6 +81,12 @@ export interface RosterSpec {
   account?: string;
   /** Reasoning effort. Omitted -> the provider's own default, not a level. */
   effort?: string;
+  /**
+   * `claude-code` only: the CLI's auto-compaction window, `auto` or 100k–1M
+   * tokens (`parseCompactWindow`). Omitted or `auto` -> the CLI's own default.
+   * Part of the run's identity like effort (operator decision 2026-10-09).
+   */
+  compactWindow?: string;
   apiBase?: string;
   apiKeyEnv?: string;
   /**
@@ -183,6 +189,8 @@ export interface Resolved {
   driver: Driver;
   account: string | undefined;
   effort: string | undefined;
+  /** Canonical (`100k`…`1M`); undefined is the CLI's own `auto`. */
+  compactWindow: string | undefined;
   apiBase: string;
   apiKeyEnv: string;
   /** The declared routing block, or undefined for "the entry said nothing". */
@@ -491,6 +499,19 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
     if (s.wiki === false && s.wikiCoords === true) {
       throw new Error(`roster entry ${s.model}: wikiCoords needs the reference wiki, and this entry has wiki: false`);
     }
+    // Canonicalised here too, for a hand-written roster that never went
+    // through `parseFleet`; refused off claude-code, never ignored.
+    let compactWindow: string | undefined;
+    if (s.compactWindow !== undefined) {
+      if (driver !== "claude-code") {
+        throw new Error(`roster entry ${s.model}: compactWindow is the Claude Code CLI's auto-compaction window — the ${driver} driver has none`);
+      }
+      try {
+        compactWindow = parseCompactWindow(s.compactWindow);
+      } catch (err) {
+        throw new Error(`roster entry ${s.model}: ${(err as Error).message}`);
+      }
+    }
     if (s.tokenEnv !== undefined && !isTokenEnvName(s.tokenEnv)) {
       // A NAME, never a token: the value would end up in argv, and argv is
       // visible in `ps` to anything sharing the container.
@@ -512,6 +533,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       driver,
       account: s.account,
       effort: s.effort,
+      compactWindow,
       apiBase,
       apiKeyEnv: s.apiKeyEnv ?? DEFAULT_API_KEY_ENV,
       // Normalised here too: a hand-written roster passed straight to
@@ -525,7 +547,9 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // Effort is part of the run's identity, so it is part of the derived id:
       // opus at low and opus at high are two rows in the matrix, and a shared
       // run id would make them one run appended to twice.
-      runId: s.runId ?? `roster-${slug(s.model)}${s.effort !== undefined ? `-${slug(s.effort)}` : ""}-${stamp}`,
+      runId:
+        s.runId ??
+        `roster-${slug(s.model)}${s.effort !== undefined ? `-${slug(s.effort)}` : ""}${compactWindow !== undefined ? `-${slug(compactWindow)}` : ""}-${stamp}`,
       race: s.race ?? 1,
       class: s.class ?? 2,
       // Precedence, fixed and tested: `watchdogs.episodeMs` wins over the
@@ -607,7 +631,7 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // unknown flags through to `bun runner/src/run.ts` verbatim, so the two heads
   // are interchangeable and only one of them needs docker.
   const head = opts.container === true ? ["bun", RUNNER_ENTRY] : [EPISODE_SH];
-  // Identity — driver, model, account, effort, objective, wiki, race/class,
+  // Identity — driver, model, account, effort, compactWindow, objective, wiki, race/class,
   // episode, campaign/cell — is the resumed run's own and is never restated.
   if (resume) return [...head, "--resume", spec.runId, ...leashArgv(spec)];
   const argv = [...head, "--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
@@ -625,6 +649,8 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.tokenEnv !== undefined) argv.push("--token-env", spec.tokenEnv);
   if (spec.account !== undefined) argv.push("--account", spec.account);
   if (spec.effort !== undefined) argv.push("--effort", spec.effort);
+  // Only when the entry set one, so every argv an `auto` entry produced is unchanged.
+  if (spec.compactWindow !== undefined) argv.push("--compact-window", spec.compactWindow);
   // A freeplay character's lineage and the other refs' characters on this
   // account: launch inputs, so a fresh launch only (a resume keeps the stored
   // identity and the account's hygiene does not run).
@@ -1865,7 +1891,9 @@ async function main(): Promise<void> {
       const cycle1 = a.doneCycle1 === true ? " [cycle 1 skipped (already terminated, or its run id is taken) — launches fresh from cycle 2 under --loop]" : "";
       const identity = a.resume
         ? `   identity  from ${join(RUNS_DIR, s.runId, "meta.json")} (character ${metaCharacter(s.runId) ?? "unknown"})`
-        : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}\n` +
+        : `   driver    ${s.driver}, account ${s.account ?? "RUNNER (runner default)"}, effort ${s.effort ?? "unset (provider default)"}` +
+          (s.compactWindow !== undefined ? `, compact window ${s.compactWindow}` : "") +
+          "\n" +
           `   character named by the model at createSession; race ${s.race}, class ${s.class} fixed\n` +
           endpoint +
           `   episodeMs ${s.episodeMs === null ? "disabled (no wall clock)" : `${s.episodeMs} (${s.episodeMs / 60_000}m)`}` +

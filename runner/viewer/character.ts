@@ -328,6 +328,9 @@ export function characterViewOf(runId: string, all: readonly ResultRun[]): Chara
     // proved. Same `latest` rule the standing totals use.
     model: latest(runs.map((r) => r.model)),
     effort: latest(runs.map((r) => r.effort)),
+    // The newest attempt's own, flat: absent means `auto`, so the newest that
+    // SET one would mislabel a character that went back to the CLI default.
+    ...(runs.at(-1)?.compactWindow != null ? { compactWindow: runs.at(-1)!.compactWindow } : {}),
     driver: latest(runs.map((r) => r.driver ?? null)),
     harnessVersion: latest(runs.map((r) => r.harnessVersion)),
     name: latest(runs.map((r) => r.character)),

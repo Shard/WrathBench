@@ -8,8 +8,8 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { comparabilityOf } from "../src/comparability";
-import { childEnv, claudeArgs, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
-import { STUB_STAMP, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
+import { childEnv, claudeArgs, compactEnv, compactionRecord, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
+import { STUB_STAMP, isUnscoredDriver, loadRunConfig, parseCompactWindow, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
@@ -272,6 +272,49 @@ describe("claude-code driver", () => {
     expect(other["effort"]).toBe("high");
     expect((other["env"] as Record<string, unknown>)["maxThinkingTokens"]).toBeNull();
     high.trajectory.close();
+  }, 30_000);
+
+  test("a compaction window reaches the CLI as env only; absent sends nothing, a shell value never leaks", async () => {
+    // A stray operator value in the runner's own environment.
+    const windowed = setupEpisode("tools", { maxTurns: 1, effort: "max", compactWindow: "100K" }, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500k" });
+    await runClaudeEpisode(windowed.options);
+    const record = readRecord(windowed.recordPath);
+    const env = record["env"] as Record<string, unknown>;
+    // The run's canonical value, not the shell's, and no flag on the line.
+    expect(env["compactWindow"]).toBe("100k");
+    expect(record["argv"] as string[]).not.toContain("100k");
+    expect(record["effort"]).toBe("max");
+    // Still the scrubbed environment: no API-key credential rides along.
+    expect(env["hasAnthropicApiKey"]).toBe(false);
+    expect(env["hasAnthropicAuthToken"]).toBe(false);
+    expect(env["hasOauthToken"]).toBe(true);
+    // Run identity, like effort: meta.json and the run row carry it.
+    expect(readMeta(windowed.runDir)?.config.compactWindow).toBe("100k");
+    expect(JSON.parse(String(windowed.trajectory.runRow("run-test")?.["config_json"])).compactWindow).toBe("100k");
+    windowed.trajectory.close();
+
+    const plain = setupEpisode("tools", { maxTurns: 1 }, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500k" });
+    await runClaudeEpisode(plain.options);
+    expect((readRecord(plain.recordPath)["env"] as Record<string, unknown>)["compactWindow"]).toBeNull();
+    expect(plain.options.config.compactWindow).toBeUndefined();
+    plain.trajectory.close();
+  }, 30_000);
+
+  test("a CLI compaction is a harness record on the trajectory, and nothing the model sees", async () => {
+    const { recordPath, trajectory, runDir, options } = setupEpisode("tools", { maxTurns: 2 }, { WB_FAKE_COMPACT_TURN: "2" });
+    await runClaudeEpisode(options);
+    trajectory.close();
+    const entries = readTrajectory(runDir);
+    const compactions = entries.filter((e) => e["t"] === "harness" && e["kind"] === "compaction");
+    expect(compactions).toHaveLength(1);
+    expect(compactions[0]).toMatchObject({ turn: 2, trigger: "auto", preTokens: 80_412, postTokens: 3_127, durationMs: 41_000 });
+    // Bookkeeping, not a notice: no text for the feed to shout.
+    expect(compactions[0]!["text"]).toBeUndefined();
+    // The raw envelope is still kept beside it.
+    expect(entries.some((e) => e["t"] === "claude_system" && e["subtype"] === "compact_boundary")).toBe(true);
+    // Nothing of it reached the model on the following turn.
+    const sent = readRecord(recordPath)["userMessages"] as string[];
+    expect(sent.some((m) => /compact/i.test(m))).toBe(false);
   }, 30_000);
 
   test("the CLI's init word is promoted onto the run: meta.json, the tuple and the run row", async () => {
@@ -732,6 +775,49 @@ describe("childEnv", () => {
     expect(thinkingEnv(undefined)).toEqual({});
   });
 
+  test("the compaction window comes from the run's config, never from the shell, and the scrub still holds", () => {
+    const parent = {
+      PATH: "/usr/bin",
+      ANTHROPIC_API_KEY: "sk-ant-secret",
+      ANTHROPIC_BASE_URL: "https://example.invalid",
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500k",
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+    };
+    const set = childEnv(parent, { configDir: "/c", extra: { ...thinkingEnv("max"), ...compactEnv("100k") } });
+    expect(set["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]).toBe("100k");
+    expect(Object.keys(set).filter((k) => k.startsWith("ANTHROPIC_"))).toEqual([]);
+    expect(set["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("oauth");
+    // Absent is the CLI's own `auto`: the variable is not there at all.
+    const unset = childEnv(parent, { configDir: "/c", extra: compactEnv(undefined) });
+    expect(unset["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]).toBeUndefined();
+    expect(Object.keys(unset).filter((k) => k.startsWith("ANTHROPIC_"))).toEqual([]);
+    expect(compactEnv(undefined)).toEqual({});
+    expect(compactEnv("1M")).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1M" });
+  });
+
+  test("compactionRecord reads the CLI's marker defensively and ignores every other envelope", () => {
+    expect(compactionRecord(3, { type: "system", subtype: "init" })).toBeNull();
+    expect(compactionRecord(3, { type: "assistant", subtype: "compact_boundary" })).toBeNull();
+    expect(
+      compactionRecord(3, {
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto", pre_tokens: 934_427, post_tokens: 2_910, duration_ms: 69_917 },
+      }),
+    ).toEqual({ t: "harness", kind: "compaction", turn: 3, trigger: "auto", preTokens: 934_427, postTokens: 2_910, durationMs: 69_917 });
+    // An older or leaner envelope: what is missing reads as null, never zero.
+    expect(compactionRecord(1, { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 5 } })).toEqual({
+      t: "harness",
+      kind: "compaction",
+      turn: 1,
+      trigger: "manual",
+      preTokens: 5,
+      postTokens: null,
+      durationMs: null,
+    });
+    expect(compactionRecord(1, { type: "system", subtype: "compact_boundary" })).toMatchObject({ trigger: null, preTokens: null });
+  });
+
   test("a second subscription lane arrives under the one name the CLI knows", () => {
     const parent = {
       PATH: "/usr/bin",
@@ -783,6 +869,32 @@ describe("driver selection and stamping", () => {
     // Absent is not a level: it is the provider's own default.
     expect(loadRunConfig({}).effort).toBeUndefined();
     expect(() => loadRunConfig({ effort: "off" })).toThrow();
+  });
+
+  test("a compaction window parses to one canonical spelling, `auto` is absent, and out-of-range values are refused", () => {
+    const cc = (compactWindow: unknown) => loadRunConfig({ driver: "claude-code", compactWindow }).compactWindow;
+    expect(cc("100k")).toBe("100k");
+    expect(cc("100K")).toBe("100k");
+    expect(cc(" 250k ")).toBe("250k");
+    expect(cc("1M")).toBe("1M");
+    expect(cc("1m")).toBe("1M");
+    expect(cc("1000k")).toBe("1M");
+    // `auto` is the CLI's own default, which is what saying nothing means.
+    expect(cc("auto")).toBeUndefined();
+    expect(cc("AUTO")).toBeUndefined();
+    expect(loadRunConfig({ driver: "claude-code" }).compactWindow).toBeUndefined();
+    for (const bad of ["99k", "1001k", "2M", "0M", "100000", "100", "100kb", "1.5M", ""]) {
+      expect(() => cc(bad)).toThrow(/compactWindow must be .*auto.* or 100k–1M tokens/);
+    }
+    expect(() => cc(100_000)).toThrow();
+    expect(parseCompactWindow("500k")).toBe("500k");
+    // The CLI's window, so every other driver refuses it rather than recording
+    // a dimension nothing applied.
+    for (const driver of ["openai", "codex", "stub"]) {
+      expect(() => loadRunConfig({ driver, compactWindow: "100k" })).toThrow(/Claude Code CLI's auto-compaction window/);
+      // `auto` is nothing to refuse.
+      expect(loadRunConfig({ driver, compactWindow: "auto" }).compactWindow).toBeUndefined();
+    }
   });
 
   test("meta, sqlite and the timeline carry the stub stamp; a claude-code run carries none", () => {

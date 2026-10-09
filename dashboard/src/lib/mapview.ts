@@ -14,7 +14,7 @@
 
 import type { AgentPosition } from "@viewer/api-types";
 import { GRID, TILE_PX, TILE_SIZE, tileToWorld, worldToPixel } from "@viewer/worldmap";
-import { modelDisplay } from "./format";
+import { effortLabel, modelDisplay } from "./format";
 
 export const MIN_SCALE = 0.01;
 export const MAX_SCALE = 8;
@@ -444,10 +444,12 @@ export function emptySideNote(count: number, replaying: boolean, map: number): s
  * by the effort rather than reading as the same character twice. The run id
  * stays in the hover, which is where an id belongs.
  */
-export function pipName(p: Pick<AgentPosition, "runId" | "character" | "model"> & { effort?: string | null }): string {
+export function pipName(
+  p: Pick<AgentPosition, "runId" | "character" | "model"> & { effort?: string | null; compactWindow?: string | null },
+): string {
   if (p.character !== null && p.character.length > 0) return p.character;
   if (p.model === null || p.model.length === 0) return p.runId;
   const model = modelDisplay(p.model);
-  const effort = p.effort ?? null;
-  return effort === null || effort.length === 0 ? model : `${model} · ${effort}`;
+  const tag = effortLabel(p.effort, p.compactWindow);
+  return tag === null ? model : `${model} · ${tag}`;
 }

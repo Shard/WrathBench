@@ -20,7 +20,7 @@ import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 import { SNAPSHOT_MODE, api, type ModelRowView, type ModelsResponse } from "../api/client";
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
-import { fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
+import { effortLabel, fmtCost, fmtDuration, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
 import { EPISODE_COLUMNS, MODEL_COLUMNS, columnClass, compareModelRows, countedOf, extrasOf, freeplayOf, highestTierOf, isPromoted, noteOf, resolvedSummary, schedulableOf, statusClass, tierOf, tierTitle } from "../lib/models";
 import { characterRows } from "../lib/ladder";
 import { LevelXp } from "../components/CharacterFacts";
@@ -182,7 +182,7 @@ export default function Models() {
                         </Show>
                         <div class="dim" title={row.model}>
                           {modelDisplay(row.model)}
-                          <Show when={row.effort !== null}> · {row.effort}</Show>
+                          <Show when={effortLabel(row.effort, row.compactWindow)}>{(l) => <> · {l()}</>}</Show>
                         </div>
                         {/* The row stays grouped by the roster's model string —
                             that is the unit the scheduler counts in — and this
@@ -218,7 +218,7 @@ export default function Models() {
                             <td class="right mono">
                               <Show when={row.eligible.includes(t)} fallback={<span class="dim">—</span>}>
                                 <A
-                                  href={runsHref({ model: row.model, effort: row.effort, episode: t })}
+                                  href={runsHref({ model: row.model, effort: row.effort, compactWindow: row.compactWindow ?? null, episode: t })}
                                 >
                                   {countedOf(st())}
                                 </A>

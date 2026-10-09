@@ -159,6 +159,8 @@ function projectComparability(c: ComparabilityView): ComparabilityView {
     objective: c.objective,
     ...(c.wikiCoords !== undefined ? { wikiCoords: c.wikiCoords } : {}),
     ...(c.wiki === false ? { wiki: false as const } : {}),
+    // A run dimension like effort, and a harness setting, never the world's.
+    ...(c.compactWindow != null ? { compactWindow: c.compactWindow } : {}),
     // `wikiBundle` is withheld: its `source` names the operator's local dump
     // file, and no public page reads the annotation.
     ...(c.episode !== undefined ? { episode: c.episode } : {}),
@@ -414,6 +416,7 @@ function projectResultRun(r: ResultRun): ResultRun {
     campaign: r.campaign,
     cell: r.cell,
     effort: r.effort,
+    ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
     harness: r.harness,
     promptHash: r.promptHash,
     serverBuild: r.serverBuild,
@@ -515,6 +518,7 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         model: a.model,
         // Already public on the run row it comes from (`comparability.effort`).
         effort: a.effort ?? null,
+        ...(a.compactWindow != null ? { compactWindow: a.compactWindow } : {}),
         map: a.map,
         x: a.x,
         y: a.y,
@@ -690,6 +694,7 @@ function projectModelRow(row: ModelRowView): ModelRowView {
     name: row.name,
     model: row.model,
     effort: row.effort,
+    ...(row.compactWindow != null ? { compactWindow: row.compactWindow } : {}),
     platform: row.platform,
     harness: row.harness,
     billing: row.billing,
@@ -958,6 +963,7 @@ function projectCharacter(s: CharacterView): CharacterView {
     // (`projectResultRun`), so passing it through opens no door.
     model: s.model,
     effort: s.effort,
+    ...(s.compactWindow != null ? { compactWindow: s.compactWindow } : {}),
     driver: s.driver,
     harnessVersion: s.harnessVersion,
     name: s.name,
@@ -1112,7 +1118,7 @@ const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
   quest_complete: ["questId"],
   episodic: ["level", "zone", "text"],
   character: ["character"],
-  harness: ["kind", "cleared", "model", "cliVersion", "text", "leashChanged", "before", "after"],
+  harness: ["kind", "cleared", "model", "cliVersion", "text", "leashChanged", "before", "after", "trigger", "preTokens", "postTokens", "durationMs"],
   reflect_window: ["event", "reason"],
   termination: ["reason", "detail"],
   pause: ["reason", "episodeElapsedMs"],

@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
-import { isTokenEnvName, watchdogOverrideSchema } from "../runner/src/config";
+import { isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { campaignWork, parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
@@ -26,6 +26,7 @@ import {
   pinnedRefs as pinnedRefsOf,
   policyExclusion as policyExclusionOf,
   policyRefs as policyRefsOf,
+  sameRosterIdentity,
   type AccountClass,
   type IdleMode,
   type ModelState,
@@ -215,9 +216,9 @@ export interface FleetJob {
   /**
    * Set by `planResumes`: this job's spawn resumes the paused run
    * named here, on the account it was on, before anything fresh is launched.
-   * `model`/`effort` pick the entry that carries the run id.
+   * `model`/`effort`/`compactWindow` pick the entry that carries the run id.
    */
-  resume?: { runId: string; model: string; effort?: string | undefined };
+  resume?: { runId: string; model: string; effort?: string | undefined; compactWindow?: string | undefined };
   /**
    * Set by `planContinuations` on the `idle: "unlimited"` lane's next
    * session: the character's previous run, whose character and scratchpad this
@@ -511,8 +512,8 @@ export function unpinnedCampaigns(config: Pick<FleetConfig, "campaigns">): Campa
 /**
  * Every probe run on disk, in the shape `campaignWork` reads them: `ref` is the
  * roster name whose credentials the run used. Recovered by matching the
- * fact's model and effort against the roster the way `matchesRoster`
- * (models.ts, not exported) does — over every roster entry, catalog-only ones
+ * fact's identity against the roster with `sameRosterIdentity` (models.ts),
+ * the projection's own predicate — over every roster entry, catalog-only ones
  * included, since a campaign may name a model that carries no tier.
  *
  * Failed launches come through too, carrying `counted: false`. The fan-out
@@ -528,7 +529,7 @@ export function probeRunsOf(runs: readonly RunFact[], roster: Record<string, Fle
   // history on every tick, to learn nothing about the runs that are not
   // campaign work.
   return runs.filter((f) => f.campaign !== null).map((f) => {
-    const match = entries.find(([, e]) => e.model === f.model && (e.effort ?? null) === (f.effort ?? null));
+    const match = entries.find(([, e]) => sameRosterIdentity(e, f));
     return { campaign: f.campaign, cell: f.cell, ref: match?.[0] ?? null, counted: isCounted(f) };
   });
 }
@@ -636,6 +637,25 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
     if (e.wiki === false && e.wikiCoords === true) {
       fail(`${where}: entry ${e.model}: wikiCoords needs the reference wiki, and this entry has wiki: false`);
     }
+    // The Claude Code CLI's auto-compaction window (operator decision
+    // 2026-10-09): a run dimension like effort, settable on any claude-code
+    // entry and refused on every other driver, whose CLI or API has no such
+    // window to set. NORMALISED like routing: one canonical spelling for every
+    // reader, and `auto` — the CLI's own default — is the absent field, so it
+    // can never make a second identity for the same condition.
+    if (e.compactWindow !== undefined) {
+      if (driver !== "claude-code") {
+        fail(`${where}: entry ${e.model}: compactWindow is the Claude Code CLI's auto-compaction window — the ${driver} driver has none`);
+      }
+      let window: string | undefined;
+      try {
+        window = parseCompactWindow(e.compactWindow);
+      } catch (err) {
+        fail(`${where}: entry ${e.model}: ${(err as Error).message}`);
+      }
+      if (window === undefined) delete e.compactWindow;
+      else e.compactWindow = window;
+    }
     // Which backend may serve this entry (operator decision 2026-09-16,
     // runner/src/routing.ts). Refused — never ignored — on an endpoint with
     // one machine behind it: an operator who wrote a routing block on a
@@ -727,7 +747,7 @@ export function parsePreflight(raw: unknown): FleetPreflight {
 export const ROSTER_ENTRY_KEYS = [
   "model", "tier", "idle", "driver", "effort", "apiBase", "apiKeyEnv",
   "billing", "subscription", "race", "class", "watchdogs", "maxToolCalls",
-  "routing", "wiki",
+  "routing", "wiki", "compactWindow",
 ] as const;
 
 export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "subscription"] as const;
@@ -1065,6 +1085,7 @@ export function rosterModels(roster: Record<string, FleetRosterEntry>): RosterMo
             name,
             model: e.model,
             ...(e.effort !== undefined ? { effort: e.effort } : {}),
+            ...(e.compactWindow !== undefined ? { compactWindow: e.compactWindow } : {}),
             ...(e.driver !== undefined ? { driver: e.driver } : {}),
             ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
             tier: e.tier,

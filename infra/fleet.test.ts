@@ -300,6 +300,73 @@ describe("parseFleet", () => {
     ).toThrow(/routing has unknown key `only`/);
   });
 
+  // The claude-code compaction window (operator decision 2026-10-09): a run
+  // dimension like effort, on any claude-code entry and nowhere else.
+  test("a claude-code entry may name its compaction window, canonicalised, and `auto` is the absent field", () => {
+    const config = parseFleet(
+      fleetJson([{ ref: "hk", episode: "e360" }], {
+        roster: {
+          hk: { tier: "t2", model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "100K" },
+          hkAuto: { tier: "t0", model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "auto" },
+          hkM: { tier: "t0", model: "claude-haiku-5-5", driver: "claude-code", compactWindow: "1000k" },
+        },
+      }),
+    );
+    expect(config.refusals).toEqual([]);
+    expect(config.roster["hk"]!.compactWindow).toBe("100k");
+    expect("compactWindow" in config.roster["hkAuto"]!).toBe(false);
+    expect(config.roster["hkM"]!.compactWindow).toBe("1M");
+    expect(rosterModels(config.roster).find((m) => m.name === "hk")).toMatchObject({ compactWindow: "100k", effort: "max" });
+    // The spawn carries the window to the roster (whose argv test is in
+    // roster.test.ts), and the window names itself in the run id.
+    const spawned = jobSpawn({ ...config.jobs[0]!, attempt: 2 }, config.roster, "RUNNER", "20261009").entries[0]!;
+    expect(spawned.compactWindow).toBe("100k");
+    expect(spawned.runId).toBe("fleet-hk-e360-claude-haiku-5-5-max-100k-20261009-a2");
+    // An entry without one spawns exactly the id it always did.
+    const plain = parseFleet(fleetJson([{ ref: "son", episode: "e90" }]));
+    const plainSpawn = jobSpawn({ ...plain.jobs[0]!, attempt: 2 }, plain.roster, "RUNNER", "20261009").entries[0]!;
+    expect(plainSpawn.runId).toBe("fleet-son-e90-sonnet-20261009-a2");
+    expect("compactWindow" in plainSpawn).toBe(false);
+  });
+
+  test("runs map back to the entry with their own window: affinity, probe refs and resumes", () => {
+    const config = parseFleet(
+      fleetJson([], {
+        roster: {
+          hk: { tier: "t2", model: "claude-haiku-5-5", driver: "claude-code", effort: "max" },
+          hk100: { tier: "t0", model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "100k" },
+        },
+      }),
+    );
+    const base = { model: "claude-haiku-5-5", effort: "max", episode: "e360" as const, episodeOverride: false, harnessVersion: null, harnessSeries: null, extra: false, endedAt: null, terminationReason: null, modelResponses: 3, bestLevel: 2, live: false, pause: null, character: null, episodeMs: null, campaign: null, cell: null, subscription: null };
+    const runs: RunFact[] = [
+      { ...base, runId: "a", startedAt: 1, account: "RUNNER" },
+      { ...base, runId: "b", startedAt: 2, account: "RUNNER2", compactWindow: "100k", campaign: "c", cell: "x" },
+    ];
+    const affinity = affinityFrom(runs, config.roster);
+    expect(affinity.get("hk")?.account).toBe("RUNNER");
+    expect(affinity.get("hk100")?.account).toBe("RUNNER2");
+    expect(probeRunsOf(runs, config.roster)).toEqual([{ campaign: "c", cell: "x", ref: "hk100", counted: false }]);
+    // A resume picks the spawn entry with the paused run's window.
+    const spawned: JobSpawn = spawn({ entries: [{ model: "claude-haiku-5-5", effort: "max" }, { model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" }] });
+    const resumed = withResume(spawned, { runId: "b", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" });
+    expect(resumed.entries[0]).toMatchObject({ runId: "b", compactWindow: "100k" });
+  });
+
+  test("a compaction window off claude-code, or out of range, takes the file down by name", () => {
+    expect(() =>
+      parseFleet(fleetJson([], { roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", compactWindow: "100k" } } })),
+    ).toThrow(/compactWindow is the Claude Code CLI's auto-compaction window — the openai driver has none/);
+    expect(() =>
+      parseFleet(fleetJson([], { roster: { cx: { tier: "t1", model: "gpt-6-astra", driver: "codex", compactWindow: "100k" } } })),
+    ).toThrow(/the codex driver has none/);
+    for (const bad of ["50k", "2M", "100000", "big"]) {
+      expect(() =>
+        parseFleet(fleetJson([], { roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", compactWindow: bad } } })),
+      ).toThrow(/compactWindow must be "auto" or 100k–1M tokens/);
+    }
+  });
+
   test("policy.routing is the fleet default, and an entry's own routing wins", () => {
     const config = parseFleet(
       fleetJson([], {

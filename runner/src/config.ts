@@ -234,6 +234,38 @@ export function harnessOf(driver: Driver): Harness {
   return HARNESS_OF_DRIVER[driver];
 }
 
+/**
+ * The Claude Code CLI's auto-compaction window, as a run dimension
+ * (`RunConfig.compactWindow`): `auto` or 100k–1M tokens, which is the range
+ * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` accepts in the pinned CLI (2.1.293: "Expected
+ * 'auto' or 100k–1M tokens"). One canonical spelling per value — `<n>k`, and
+ * `1M` for a million — so a roster's `100K` and `100k` are one condition, and
+ * `auto` (any case) is `undefined`: the CLI's own default is what a run that
+ * says nothing gets, so naming it must not make a second tuple for it. Throws
+ * with the reason on anything else.
+ */
+export function parseCompactWindow(raw: unknown): string | undefined {
+  const why = `compactWindow must be "auto" or 100k–1M tokens (e.g. "100k", "500k", "1M"), got ${JSON.stringify(raw)}`;
+  if (typeof raw !== "string") throw new Error(why);
+  const v = raw.trim();
+  if (v.toLowerCase() === "auto") return undefined;
+  const m = /^(\d+)([kKmM])$/.exec(v);
+  if (m === null) throw new Error(why);
+  const k = Number(m[1]) * (m[2]!.toLowerCase() === "m" ? 1000 : 1);
+  if (k < 100 || k > 1000) throw new Error(why);
+  return k === 1000 ? "1M" : `${k}k`;
+}
+
+/** zod at the boundary for `parseCompactWindow`: canonical string, or undefined for `auto`. */
+const compactWindowSchema = z.string().transform((v, ctx) => {
+  try {
+    return parseCompactWindow(v);
+  } catch (err) {
+    ctx.addIssue({ code: "custom", message: (err as Error).message });
+    return z.NEVER;
+  }
+});
+
 export const runConfigSchema = z.object({
   /** Generated as `run-<timestamp>` when absent. */
   runId: z.string().min(1).optional(),
@@ -428,6 +460,17 @@ export const runConfigSchema = z.object({
    */
   effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
   /**
+   * The Claude Code CLI's auto-compaction window (`parseCompactWindow`):
+   * canonical `100k`…`1M`, set per roster entry and recorded like `effort`, so
+   * `haiku at max · 100k` and `haiku at max` are two comparable rows
+   * (operator decision 2026-10-09). `claude-code` only — `loadRunConfig`
+   * refuses it on any other driver. Absent is the CLI's own `auto`: nothing is
+   * sent, and the tuple carries no field. The driver passes it as
+   * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the CLI's environment
+   * (`compactEnv`, adapter-claude.ts). Identity, like effort: a resume keeps it.
+   */
+  compactWindow: compactWindowSchema.optional(),
+  /**
    * Which backend the aggregator may route this run to, as the fleet config
    * declared it (`routing.ts`) — the DECLARED block, not the resolved one, so
    * a resumed run re-derives against the same rules rather than freezing a
@@ -613,6 +656,11 @@ export function loadRunConfig(raw: unknown): RunConfig {
   // surface is a config that cannot mean what it says.
   if (!config.wiki && config.wikiCoords) {
     throw new Error("wikiCoords is a setting of the reference wiki, and this run has none (wiki: false)");
+  }
+  // Refused, never ignored: the window is the Claude Code CLI's, and a run on
+  // another driver would record a dimension nothing applied.
+  if (config.compactWindow !== undefined && config.driver !== "claude-code") {
+    throw new Error(`compactWindow is the Claude Code CLI's auto-compaction window — driver ${config.driver} has none`);
   }
   return config;
 }

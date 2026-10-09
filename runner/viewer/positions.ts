@@ -241,6 +241,8 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
     // the map names a nameless pip by its model, and the effort is the half
     // of that name two sibling characters differ by.
     effort: run.comparability?.effort ?? null,
+    // The other half of a claude-code entry's name, when it set one.
+    ...(run.comparability?.compactWindow != null ? { compactWindow: run.comparability.compactWindow } : {}),
     map: pos.map,
     x: pos.x,
     y: pos.y,

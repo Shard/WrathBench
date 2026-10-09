@@ -39,12 +39,15 @@ interface Synth {
   endedAt: number;
   /** The id the CLI's init record named, for the back-fill. */
   resolved?: string;
+  /** The claude-code compaction window, stamped like effort; absent is `auto`. */
+  compactWindow?: string;
 }
 
 function writeRun(runsDir: string, r: Synth): void {
   const dir = join(runsDir, r.id);
   mkdirSync(dir, { recursive: true });
-  const config = { model: r.model, token: SENTINEL, ...(r.effort !== undefined ? { effort: r.effort } : {}) };
+  const window = r.compactWindow !== undefined ? { compactWindow: r.compactWindow } : {};
+  const config = { model: r.model, token: SENTINEL, ...(r.effort !== undefined ? { effort: r.effort } : {}), ...window };
   writeFileSync(
     join(dir, "meta.json"),
     JSON.stringify({
@@ -53,7 +56,7 @@ function writeRun(runsDir: string, r: Synth): void {
       harnessVersion: r.harnessVersion ?? `harness-${currentSeries() ?? "0.0"}-test`,
       startedAt: r.startedAt,
       config,
-      comparability: { effort: r.effort ?? null, episode: r.episode ?? "e90" },
+      comparability: { effort: r.effort ?? null, episode: r.episode ?? "e90", ...window },
     }),
   );
   const lines: string[] = [`{"t":"meta","ts":${r.startedAt}}`];
@@ -278,6 +281,41 @@ describe("/api/models", () => {
     expect(beta.platform).toBe("openrouter");
     expect(beta.runs).toEqual([]);
     expect(beta.lastError).toBeNull();
+  });
+
+  test("a compaction window separates two otherwise identical claude-code rows", async () => {
+    const { runsDir, fleetPath } = fixture({
+      roster: {
+        hk: { model: "claude-haiku-5-5", driver: "claude-code", effort: "max", tier: "t2" },
+        "hk-c100k": { model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "100k", tier: "t0" },
+      },
+    });
+    writeRun(runsDir, { id: "hk-1", model: "claude-haiku-5-5", effort: "max", responses: 3, level: 5, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
+    writeRun(runsDir, { id: "hk100-1", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k", responses: 3, level: 4, reason: "episode-limit", startedAt: NOW - 3 * HOUR, endedAt: NOW - 2 * HOUR });
+    const body = await models(runsDir, fleetPath);
+    const [auto, small] = body.models;
+    expect(auto!.runs.map((r) => r.runId)).toEqual(["hk-1"]);
+    expect("compactWindow" in auto!).toBe(false);
+    expect(small!.compactWindow).toBe("100k");
+    expect(small!.runs.map((r) => r.runId)).toEqual(["hk100-1"]);
+  });
+
+  test("the store's raw spelling of a window is canonicalised before it matches runs", async () => {
+    // The store keeps the document as the operator wrote it; only `parseFleet`
+    // normalises, so the page has to read `100K` and `auto` the way runs are stamped.
+    const { runsDir, fleetPath } = fixture({
+      roster: {
+        hk: { model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "AUTO", tier: "t2" },
+        "hk-c100k": { model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "100K", tier: "t0" },
+      },
+    });
+    writeRun(runsDir, { id: "hk-1", model: "claude-haiku-5-5", effort: "max", responses: 3, reason: "episode-limit", startedAt: NOW - 5 * HOUR, endedAt: NOW - 4 * HOUR });
+    writeRun(runsDir, { id: "hk100-1", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k", responses: 3, reason: "episode-limit", startedAt: NOW - 3 * HOUR, endedAt: NOW - 2 * HOUR });
+    const [auto, small] = (await models(runsDir, fleetPath)).models;
+    expect("compactWindow" in auto!).toBe(false);
+    expect(auto!.runs.map((r) => r.runId)).toEqual(["hk-1"]);
+    expect(small!.compactWindow).toBe("100k");
+    expect(small!.runs.map((r) => r.runId)).toEqual(["hk100-1"]);
   });
 
   test("promotion and eligibility come from the projection, not the route", async () => {
