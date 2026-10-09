@@ -53,6 +53,7 @@ import {
 import { HarnessTag } from "../components/HarnessTag";
 import { ModelIcon } from "../components/ModelIcon";
 import { XpChart } from "../components/XpChart";
+import { ChartCard } from "../components/ChartCard";
 import { CharacterPlot } from "../components/CharacterChart";
 import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards";
 import { Coins, QuestCount } from "../components/CharacterFacts";
@@ -554,32 +555,6 @@ export default function RunDetail() {
                 )}
               </Show>
 
-              {/*
-                For a character, the character's whole climb comes first: level
-                against cumulative active playtime, stitched across the
-                attempts, the same line the freeplay field draws. The per-attempt
-                XP chart stays below it — this session's shape is still worth
-                seeing, it is just not the run.
-              */}
-              <Show when={characterPlot()}>
-                {(plot) => (
-                  <>
-                    <h2 class="section">the character, across {d().character?.attempts} attempts</h2>
-                    <CharacterPlot series={plot().series} omitted={plot().omitted} single />
-                    <h2 class="section">this attempt</h2>
-                  </>
-                )}
-              </Show>
-
-              {/* Cumulative XP with level bands — full page width, above both columns. */}
-              <XpChart
-                states={d().states}
-                startedAt={run().startedAt}
-                endedAt={run().endedAt}
-                episodeMs={run().comparability?.budget.episodeMs ?? null}
-                now={now()}
-              />
-
               <div class="runview-cols">
                 {/* Left column: the feed is its own scroll container (autoscroll pins it). */}
                 <div class="runview-logs" ref={logEl} onScroll={onLogScroll}>
@@ -806,6 +781,47 @@ export default function RunDetail() {
                         </div>
                       </Show>
                     </div>
+                    {/*
+                      The charts live in the sidebar, under the model, so the
+                      feed keeps the page's height: cumulative XP with level
+                      bands, drawn compact, and the full drawing a click away —
+                      with, for a character, its climb across every attempt.
+                    */}
+                    <ChartCard
+                      label="xp"
+                      compact={
+                        <XpChart
+                          compact
+                          states={d().states}
+                          startedAt={run().startedAt}
+                          endedAt={run().endedAt}
+                          episodeMs={run().comparability?.budget.episodeMs ?? null}
+                          now={now()}
+                        />
+                      }
+                    >
+                      <h2 class="section">this attempt</h2>
+                      <XpChart
+                        states={d().states}
+                        startedAt={run().startedAt}
+                        endedAt={run().endedAt}
+                        episodeMs={run().comparability?.budget.episodeMs ?? null}
+                        now={now()}
+                      />
+                      {/*
+                        Level against cumulative active playtime, stitched
+                        across the attempts: the same line the freeplay field
+                        draws, so a character reads the same on both pages.
+                      */}
+                      <Show when={characterPlot()}>
+                        {(plot) => (
+                          <>
+                            <h2 class="section">the character, across {d().character?.attempts} attempts</h2>
+                            <CharacterPlot series={plot().series} omitted={plot().omitted} single />
+                          </>
+                        )}
+                      </Show>
+                    </ChartCard>
                     <div class="card">
                       <div class="k">character</div>
                       <div class="v">
