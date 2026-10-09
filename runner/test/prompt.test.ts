@@ -51,6 +51,19 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     expect(SYSTEM_PROMPT).toContain("turnInQuest/acceptQuestFrom over the raw quest actions");
   });
 
+  test("every duration option names its unit, and killTarget's default is not in seconds", () => {
+    // Recent 90-minute runs passed seconds-sized values (4-40) to
+    // killTarget's timeout, which is milliseconds, and got status "timeout"
+    // at once; the prompt said "default 25s" and never named the unit.
+    expect(SYSTEM_PROMPT).toContain("sdk.killTarget(guid, { timeout: ms, disengage, abortBelowHealthPct })");
+    expect(SYSTEM_PROMPT).toContain("the timeout (default 25000 = 25s,");
+    expect(SYSTEM_PROMPT).toContain("sdk.waitForChat(textOrPredicate, { timeout: ms })");
+    expect(SYSTEM_PROMPT).toContain("sdk.waitForQuestObjective(questId, { timeout: ms })");
+    expect(SYSTEM_PROMPT).toContain("waitForOpcode(opcode, { timeout: ms })");
+    expect(SYSTEM_PROMPT).not.toContain("{ timeout }");
+    expect(SYSTEM_PROMPT).not.toContain("default 25s");
+  });
+
   test("the events surface names off(), the removal models reach for", () => {
     // ox-alpha took 21 uncaught `events.off is not a function` exceptions in
     // one run, each one killing a background routine.
@@ -176,23 +189,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the castSpell
-    // sentence saying the call returns on dispatch and the outcome arrives as
-    // an event (operator decision, 2026-10-05); it is in every rendering, so
-    // it moved every row.
+    // any rendering fails here. The last edit to move them is the duration
+    // options naming their unit, { timeout: ms } and killTarget's default as
+    // 25000 = 25s (operator direction, 2026-10-09); it is in every rendering,
+    // so it moved every row.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:cdfd456fad129901", off: "sha256:40276dc1bb73a609" },
-        cli: { on: "sha256:04995a439bcf5a8a", off: "sha256:48807e57328117e3" },
+        wrathbench: { on: "sha256:eba9ed401756461c", off: "sha256:46bd8fc274513e97" },
+        cli: { on: "sha256:b5fcb864a4ae2403", off: "sha256:48d3c8608261f310" },
       },
       e90: {
-        wrathbench: { on: "sha256:4bda0f008ccc6b72", off: "sha256:820a33faa621a4b6" },
-        cli: { on: "sha256:7f5bb236a93a2a3e", off: "sha256:473f88bf8e8f8f85" },
+        wrathbench: { on: "sha256:db4b5f4b9a1e510a", off: "sha256:db98c501694db53e" },
+        cli: { on: "sha256:b15f92c9847fc25f", off: "sha256:3fc841b0fd395ba5" },
       },
       e360: {
-        wrathbench: { on: "sha256:885ef8abe4349463", off: "sha256:b338b9d9a7c4527e" },
-        cli: { on: "sha256:19408b9edde79e24", off: "sha256:ea32269254498826" },
+        wrathbench: { on: "sha256:7d8eafa02e19a7a9", off: "sha256:fa74ddcde68e9eb3" },
+        cli: { on: "sha256:d28c88d5ef22642b", off: "sha256:3728471e6146b008" },
       },
     };
     const episodes = [
