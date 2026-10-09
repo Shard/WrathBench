@@ -8,6 +8,10 @@
  *                   first observed progress value — a session that never forms
  *                   is `idle`'s problem, not this one's.
  *   episode-limit   wall clock since episode start exceeds episodeMs.
+ *   level-target    a probe campaign's stopping rule: the first observed level
+ *                   at or above the definition's `stopAtLevel`. Not a failure:
+ *                   the measurement the campaign was commissioned for has been
+ *                   taken, and the rest of the clock would buy nothing.
  *   snippet-runaway maxSandboxRestarts consecutive sandbox kills without an
  *                   intervening successful snippet.
  *
@@ -45,6 +49,9 @@ export class Watchdogs {
    */
   private fresh: { staleGuids: ReadonlySet<string>; checked: boolean } | null = null;
   private stale: string | null = null;
+  /** The level that met `stopAtLevel`, once one has been observed. */
+  private targetReached: number | null = null;
+  private readonly stopAtLevel: number | null;
 
   /**
    * `elapsedBeforeMs` is the episode clock a paused run had already spent:
@@ -56,9 +63,11 @@ export class Watchdogs {
     private readonly cfg: WatchdogConfig,
     private readonly now: () => number = Date.now,
     elapsedBeforeMs = 0,
+    opts: { stopAtLevel?: number | null } = {},
   ) {
     this.startedAt = this.now() - Math.max(0, elapsedBeforeMs);
     this.lastModelOutputAt = this.now();
+    this.stopAtLevel = opts.stopAtLevel ?? null;
   }
 
   /** Episode wall clock spent so far, including what earlier segments spent. */
@@ -74,6 +83,11 @@ export class Watchdogs {
   /** A state observation arrived. Progress = lexicographic (level, xp). */
   noteProgress(level: number | undefined, xp: number | undefined): void {
     if (level === undefined && xp === undefined) return;
+    // The server's own level, as the state sample read it: the stopping rule
+    // reads what the world says, never the model's account of it.
+    if (this.stopAtLevel !== null && this.targetReached === null && level !== undefined && level >= this.stopAtLevel) {
+      this.targetReached = level;
+    }
     const current = { level: level ?? 0, xp: xp ?? 0 };
     if (
       this.lastProgress === null ||
@@ -128,6 +142,11 @@ export class Watchdogs {
     const t = this.now();
     // Integrity first: nothing this run does afterwards is a result.
     if (this.stale !== null) return { reason: "stale-character", detail: this.stale };
+    // The stopping rule before every other watchdog: a run that reached its
+    // target in the same tick its clock ran out ended because it got there.
+    if (this.targetReached !== null) {
+      return { reason: "level-target", detail: `level ${this.targetReached} observed (target ${this.stopAtLevel})` };
+    }
     if (this.sandboxRestarts >= this.cfg.maxSandboxRestarts) {
       return {
         reason: "snippet-runaway",

@@ -112,12 +112,13 @@ export const EPISODES = {
     objectiveAllowed: true,
     scored: false,
     summary:
-      "The probe-campaign episode: a commissioned run under a campaign's own objective, " +
-      "cell and clock. Unscored, and never a target — a campaign is run once to completion and a " +
+      "The probe-campaign episode: a commissioned run that exists only as a cell of a checked-in, " +
+      "versioned campaign definition, which fixes its start, clock, watchdogs and stopping rule. " +
+      "Unscored, and never a target — a campaign is run once to completion and a " +
       "harness bump does not re-arm it, which is exactly what separates a probe from an eval. The " +
-      "ninety minutes here is the default a campaign inherits when it names no clock of its own, " +
-      "not a rule the episode enforces; the no-XP watchdog is off because a probe may spend its whole " +
-      "budget walking somewhere in order to find out what happens there. Exploration, not evidence.",
+      "ninety minutes here is only a fallback, since every definition names its own clock; the no-XP " +
+      "watchdog is off because a probe may spend its whole budget walking somewhere in order to find " +
+      "out what happens there. Exploration, not evidence.",
   },
   freeplay: {
     id: "freeplay",

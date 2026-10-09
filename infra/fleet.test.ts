@@ -208,14 +208,14 @@ describe("parseFleet", () => {
     // under a refused pin apart from one the operator parked: that is `jobs`.
     const config = parseFleet(
       fleetJson([{ ref: "glm", episode: "e90", account: "S" }], {
-        campaigns: { probe1: { cells: [{ id: "c1" }, { id: "c2" }], account: "s" } },
+        campaigns: { "nav-probe": { version: 1, account: "s", assignments: [{ model: "son" }] } },
       }),
     );
-    expect(config.refusals[0]!.jobs).toEqual(["probe1-c1", "probe1-c2"]);
+    expect(config.refusals[0]!.jobs).toEqual(["nav-probe-coldridge"]);
     // What the tick does with them: the live probe survives the diff.
-    const live = { running: new Set(["probe1-c1"]), draining: new Set<string>(), finished: new Set<string>() };
+    const live = { running: new Set(["nav-probe-coldridge"]), draining: new Set<string>(), finished: new Set<string>() };
     const drain = diffJobs(pinnedJobs(config).map((j) => ({ ...j, refs: j.refs })) as never, live).drain;
-    expect(drain).toEqual(["probe1-c1"]);
+    expect(drain).toEqual(["nav-probe-coldridge"]);
     const refused = new Set(config.refusals.flatMap((r) => r.jobs));
     expect(drain.filter((n) => !refused.has(n))).toEqual([]);
   });
@@ -341,12 +341,12 @@ describe("parseFleet", () => {
     const base = { model: "claude-haiku-5-5", effort: "max", episode: "e360" as const, episodeOverride: false, harnessVersion: null, harnessSeries: null, extra: false, endedAt: null, terminationReason: null, modelResponses: 3, bestLevel: 2, live: false, pause: null, character: null, episodeMs: null, campaign: null, cell: null, subscription: null };
     const runs: RunFact[] = [
       { ...base, runId: "a", startedAt: 1, account: "RUNNER" },
-      { ...base, runId: "b", startedAt: 2, account: "RUNNER2", compactWindow: "100k", campaign: "c", cell: "x" },
+      { ...base, runId: "b", startedAt: 2, account: "RUNNER2", compactWindow: "100k", campaign: "race-probe", campaignVersion: 1, cell: "orc-warrior" },
     ];
     const affinity = affinityFrom(runs, config.roster);
     expect(affinity.get("hk")?.account).toBe("RUNNER");
     expect(affinity.get("hk100")?.account).toBe("RUNNER2");
-    expect(probeRunsOf(runs, config.roster)).toEqual([{ campaign: "c", cell: "x", ref: "hk100", counted: false }]);
+    expect(probeRunsOf(runs, config.roster)).toEqual([{ campaign: "race-probe", version: 1, cell: "orc-warrior", ref: "hk100", counted: false }]);
     // A resume picks the spawn entry with the paused run's window.
     const spawned: JobSpawn = spawn({ entries: [{ model: "claude-haiku-5-5", effort: "max" }, { model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" }] });
     const resumed = withResume(spawned, { runId: "b", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" });
@@ -417,56 +417,103 @@ describe("parseFleet", () => {
 });
 
 describe("campaigns: probe sweeps as the third lane", () => {
-  test("a campaigns section parses", () => {
-    const config = parseFleet(fleetJson([], { campaigns: { probe1: { cells: [{ id: "c1" }] } } }));
+  test("a campaigns row names a checked-in version and the assignments that sweep it", () => {
+    const config = parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, assignments: [{ model: "glm", runsPerCell: 2 }] } } }));
     expect(config.campaigns).toHaveLength(1);
-    expect(config.campaigns[0]).toMatchObject({ name: "probe1", enabled: true, models: "all", runsPerCell: 1 });
-    expect(config.campaigns[0]!.cells).toEqual([{ id: "c1" }]);
+    expect(config.campaigns[0]).toMatchObject({ name: "race-probe", version: 1, enabled: true, assignments: [{ model: "glm", runsPerCell: 2 }] });
+    // The cells are the definition's, never the row's.
+    expect(config.campaigns[0]!.cells.map((c) => c.id)).toEqual([
+      "human-warrior", "dwarf-warrior", "gnome-warrior", "nightelf-warrior", "draenei-warrior",
+      "orc-warrior", "troll-warrior", "undead-warrior", "tauren-warrior", "bloodelf-rogue",
+    ]);
   });
 
-  test("a bad campaign is refused with a useful message", () => {
-    expect(() => parseFleet(fleetJson([], { campaigns: { probe1: { cells: [] } } }))).toThrow(/campaigns:/);
+  test("a row stating any of a definition's keys refuses the config with where the key lives", () => {
+    expect(() => parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, cells: [{ id: "c1" }] } } }))).toThrow(
+      /campaigns: campaign race-probe: cells is the definition's, not the store's/,
+    );
+    expect(() => parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, objective: "x" } } }))).toThrow(/runner\/src\/campaign-defs/);
+  });
+
+  test("a version this checkout does not define is refused by name, not the file", () => {
+    const config = parseFleet(
+      fleetJson([{ ref: "glm", episode: "e90" }], { campaigns: { "race-probe": { version: 4, assignments: [{ model: "glm" }] } } }),
+    );
+    expect(config.campaigns).toEqual([]);
+    expect(config.jobs).toHaveLength(1);
+    expect(config.refusals[0]).toMatchObject({ pin: "campaign race-probe" });
+    expect(config.refusals[0]!.why).toContain("race-probe@4 has no definition");
+  });
+
+  test("the live store's pre-definition rows load: nav-probe onto nav-probe@1, class-probe onto closed v1", () => {
+    // As the store held them when definitions moved into git, before the
+    // operator rewrites them: the deploy must not need the store edited first.
+    const config = parseFleet(
+      fleetJson([], {
+        accounts: { pool: ["RUNNER"] },
+        roster: { sonnet: { tier: "t1", model: "sonnet", driver: "claude-code" } },
+        campaigns: {
+          "nav-probe": {
+            enabled: true,
+            account: "SHAKEOUT",
+            models: ["sonnet"],
+            objective: "Travel from Coldridge Valley to Ironforge…",
+            watchdogs: { episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 },
+            maxToolCalls: 2500,
+            wikiCoords: true,
+            runsPerCell: 1,
+            cells: [{ id: "coldridge", race: 3, class: 2 }],
+          },
+          "class-probe": { enabled: false, models: ["muse-spark"], resume: true, maxAttemptsPerCell: 3, runsPerCell: 1, cells: [{ id: "human-warrior", race: 1, class: 1 }] },
+        },
+      }),
+    );
+    expect(config.refusals).toEqual([]);
+    expect(config.campaigns.map((c) => [c.name, c.version, c.enabled, c.migrated])).toEqual([
+      ["nav-probe", 1, true, true],
+      ["class-probe", 1, false, true],
+    ]);
+    // nav-probe's one run was stamped with no version; it is nav-probe@1's, so
+    // the migrated row owes nothing and launches nothing.
+    const navRun = { campaign: "nav-probe", version: 1, cell: "coldridge", ref: "sonnet", counted: true };
+    expect(pinnedCampaignJobs(config, [navRun])).toEqual([]);
   });
 
   test("a pinned campaign sharing an account with an enabled job is refused, not the file", () => {
     // Jobs come before campaigns in the pin order, so the job keeps the account.
     const config = parseFleet(
       fleetJson([{ ref: "glm", episode: "e90", account: "S" }], {
-        campaigns: { probe1: { cells: [{ id: "c1" }], account: "s" } },
+        campaigns: { "nav-probe": { version: 1, account: "s", assignments: [{ model: "son" }] } },
       }),
     );
     expect(config.jobs[0]!.enabled).toBe(true);
     expect(config.campaigns[0]!.enabled).toBe(false);
     // A campaign's `jobs` are one per declared cell — what a live probe runs under.
-    expect(config.refusals[0]).toMatchObject({ pin: "campaign probe1", jobs: ["probe1-c1"] });
+    expect(config.refusals[0]).toMatchObject({ pin: "campaign nav-probe", jobs: ["nav-probe-coldridge"] });
     expect(config.refusals[0]!.why).toMatch(/^account s is already glm-e90's/);
   });
 
   test("a disabled pinned campaign may park on a listed account", () => {
-    const config = parseFleet(fleetJson([], { campaigns: { probe1: { cells: [{ id: "c1" }], account: "RUNNER", enabled: false } } }));
-    expect(config.campaigns[0]).toMatchObject({ name: "probe1", enabled: false, account: "RUNNER" });
+    const config = parseFleet(fleetJson([], { campaigns: { "nav-probe": { version: 1, account: "RUNNER", enabled: false } } }));
+    expect(config.campaigns[0]).toMatchObject({ name: "nav-probe", enabled: false, account: "RUNNER" });
   });
 
   test("a pinned campaign is NOT passed to the scheduler while an unpinned enabled one is", () => {
     const config = parseFleet(
       fleetJson([], {
         campaigns: {
-          pinned1: { cells: [{ id: "c1" }], account: "CAMPACCT" },
-          free1: { cells: [{ id: "c1" }] },
+          "nav-probe": { version: 1, account: "CAMPACCT", assignments: [{ model: "son" }] },
+          "race-probe": { version: 1, assignments: [{ model: "glm" }] },
         },
       }),
     );
-    expect(config.campaigns.map((c) => c.name)).toEqual(["pinned1", "free1"]);
-    expect(unpinnedCampaigns(config).map((c) => c.name)).toEqual(["free1"]);
+    expect(config.campaigns.map((c) => c.name)).toEqual(["nav-probe", "race-probe"]);
+    expect(unpinnedCampaigns(config).map((c) => c.name)).toEqual(["race-probe"]);
   });
 
   test("a pinned campaign becomes a job on its own account, one cell at a time", () => {
     const config = parseFleet(
-      fleetJson([], {
-        campaigns: {
-          nav: { cells: [{ id: "coldridge" }, { id: "loch" }], account: "SHAKEOUT", models: ["son"], objective: "walk" },
-        },
-      }),
+      fleetJson([], { campaigns: { "class-probe": { version: 2, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }),
     );
     const jobs = pinnedCampaignJobs(config, []);
     // One job, not one per cell: an account runs a single live session, so
@@ -477,80 +524,71 @@ describe("campaigns: probe sweeps as the third lane", () => {
       episode: "probing",
       account: "SHAKEOUT",
       enabled: true,
-      probe: { campaign: "nav", cell: "coldridge" },
+      probe: { campaign: "class-probe", version: 2, cell: "dwarf-warrior" },
     });
   });
 
   test("a pinned campaign whose cells are all done offers no job", () => {
-    const config = parseFleet(
-      fleetJson([], { campaigns: { nav: { cells: [{ id: "coldridge" }], account: "SHAKEOUT", models: ["son"] } } }),
-    );
-    expect(pinnedCampaignJobs(config, [{ campaign: "nav", cell: "coldridge", ref: "son", counted: true }])).toEqual([]);
+    const config = parseFleet(fleetJson([], { campaigns: { "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
+    expect(pinnedCampaignJobs(config, [{ campaign: "nav-probe", version: 1, cell: "coldridge", ref: "son", counted: true }])).toEqual([]);
   });
 
   test("an unpinned campaign is never built into a job here", () => {
-    const config = parseFleet(fleetJson([], { campaigns: { free1: { cells: [{ id: "c1" }] } } }));
+    const config = parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, assignments: [{ model: "glm" }] } } }));
     expect(pinnedCampaignJobs(config, [])).toEqual([]);
   });
 
-  test("a probe spawn carries the campaign and drops the catalog entry's own task shape", () => {
-    // The load-bearing precedence rule: the campaign owns the task, the entry
-    // owns only the credentials. An entry that happens to carry an objective
-    // must not smuggle it into a sweep that named its own.
+  test("a probe spawn carries the definition's shape and drops the catalog entry's own", () => {
+    // The load-bearing precedence rule: the definition owns the task, the entry
+    // owns only the credentials. An entry's own ceiling must not leak into a
+    // sweep whose definition names its own.
     const config = parseFleet(
       fleetJson([], {
         roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", maxToolCalls: 99 } },
-        campaigns: {
-          nav: {
-            cells: [{ id: "coldridge", race: 3, class: 2 }],
-            account: "SHAKEOUT",
-            models: ["son"],
-            objective: "walk to Ironforge",
-            maxToolCalls: 2500,
-            wikiCoords: true,
-          },
-        },
+        campaigns: { "race-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } },
       }),
     );
     const job = pinnedCampaignJobs(config, [])[0]!;
-    const spawn = jobSpawn(job, config.roster, "SHAKEOUT", "20260824", undefined, config.campaigns);
+    const spawn = jobSpawn(job, config.roster, "SHAKEOUT", "20261010", undefined, config.campaigns);
     expect(spawn.entries[0]).toMatchObject({
       model: "sonnet",
       episode: "probing",
-      campaign: "nav",
-      cell: "coldridge",
-      objective: "walk to Ironforge",
-      maxToolCalls: 2500,
-      race: 3,
-      class: 2,
+      campaign: "race-probe@1",
+      cell: "human-warrior",
+      ref: "son",
+      maxToolCalls: 24_000,
+      race: 1,
+      class: 1,
+      resumeOnPause: true,
     });
-    // The entry asked for a 99-call ceiling; the campaign's 2500 stands, and
-    // the entry's number does not leak in. A campaign is the whole authority on
-    // its task shape, and coordinates come from it rather than from the catalog
-    // (which may no longer ask for them at all).
-    expect(spawn.entries[0]!.wikiCoords).toBe(true);
-    expect(spawn.entries[0]!.maxToolCalls).toBe(2500);
+    expect(spawn.entries[0]!.watchdogs).toMatchObject({ episodeMs: 43_200_000, idleMs: 1_200_000, noXpMs: null });
+    expect(spawn.entries[0]!.objective).toBeUndefined();
+  });
+
+  test("a probe's argv is its identity alone: the runner takes the shape from the definition", () => {
+    // `--campaign` refuses every flag that would set part of the shape, so the
+    // roster must emit none of them on a fresh launch.
+    const config = parseFleet(
+      fleetJson([], { campaigns: { "race-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }),
+    );
+    const job = pinnedCampaignJobs(config, [])[0]!;
+    const [spec] = resolve(jobSpawn(job, config.roster, "SHAKEOUT", "20261010", undefined, config.campaigns).entries, "20261010");
+    const argv = episodeArgv(spec!, false);
+    expect(argv.slice(argv.indexOf("--episode"))).toEqual(["--episode", "probing", "--campaign", "race-probe@1", "--cell", "human-warrior", "--ref", "son"]);
+    for (const f of ["--objective", "--race", "--class", "--wiki-coords", "--wiki", "--max-tool-calls", "--episode-ms", "--watchdogs-json"]) {
+      expect(argv).not.toContain(f);
+    }
   });
 
   test("two cells of one campaign are two job names, so nothing collides", () => {
-    // The job name is what run ids, log paths and the defer sidecar hang off,
-    // so the cell has to be in it — otherwise a whole sweep accumulates under
-    // one name and no run id says which cell it was.
-    const config = parseFleet(
-      fleetJson([], {
-        campaigns: { nav: { cells: [{ id: "coldridge" }, { id: "loch" }], account: "SHAKEOUT", models: ["son"] } },
-      }),
-    );
-    const first = pinnedCampaignJobs(config, [])[0]!;
-    const second = pinnedCampaignJobs(config, [{ campaign: "nav", cell: "coldridge", ref: "son", counted: true }])[0]!;
-    expect(first.name).toBe("nav-coldridge");
-    expect(second.name).toBe("nav-loch");
-    expect(policyJob({ name: "son", episode: "probing", account: "R1", attempt: 1, why: "w", probe: { campaign: "nav", cell: "loch" } }).name).toBe(
-      "son-nav-loch",
-    );
+    const config = parseFleet(fleetJson([], { campaigns: { "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
+    expect(pinnedCampaignJobs(config, [])[0]!.name).toBe("nav-probe-coldridge");
+    expect(
+      policyJob({ name: "son", episode: "probing", account: "R1", attempt: 1, why: "w", probe: { campaign: "race-probe", version: 1, cell: "orc-warrior" } }).name,
+    ).toBe("son-race-probe-orc-warrior");
   });
 
-  test("probeRunsOf recovers the roster ref from model+effort, and nulls it when nothing matches", () => {
+  test("probeRunsOf reads the stamped ref and version, else the roster match and the claiming version", () => {
     const roster: Record<string, FleetRosterEntry> = {
       glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
     };
@@ -573,23 +611,33 @@ describe("campaigns: probe sweeps as the third lane", () => {
       account: null,
       character: null,
       episodeMs: null,
-      campaign: "probe1",
-      cell: "c1",
+      campaign: "class-probe",
+      cell: "dwarf-rogue",
       subscription: null,
       ...over,
     });
-    const matched = fact({});
+    // An old run: no version, no ref stamped — class-probe@1 claims it, the roster names it.
+    const old = fact({});
     const unmatched = fact({ runId: "r2", model: "unknown/model" });
     // A run that never produced a response is not counted — but it IS an
     // attempt, so it comes through carrying `counted: false`. That is what
-    // `maxAttemptsPerCell` reads, and filtering it out here is what let a cell
-    // that could never produce a counted run be relaunched indefinitely.
+    // `maxAttemptsPerCell` reads.
     const stillborn = fact({ runId: "r3", modelResponses: 0 });
-    expect(probeRunsOf([matched, unmatched, stillborn], roster)).toEqual([
-      { campaign: "probe1", cell: "c1", ref: "glm", counted: true },
-      { campaign: "probe1", cell: "c1", ref: null, counted: true },
-      { campaign: "probe1", cell: "c1", ref: "glm", counted: false },
+    // A new run stamps both, and the stamp wins over the roster match.
+    const stamped = fact({ runId: "r4", campaignVersion: 2, ref: "glm-assigned" });
+    // An id nothing claims keeps no version, so it counts toward nothing.
+    const adhoc = fact({ runId: "r5", campaign: "adhoc" });
+    expect(probeRunsOf([old, unmatched, stillborn, stamped, adhoc], roster)).toEqual([
+      { campaign: "class-probe", version: 1, cell: "dwarf-rogue", ref: "glm", counted: true },
+      { campaign: "class-probe", version: 1, cell: "dwarf-rogue", ref: null, counted: true },
+      { campaign: "class-probe", version: 1, cell: "dwarf-rogue", ref: "glm", counted: false },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm-assigned", counted: true },
+      { campaign: "adhoc", version: null, cell: "dwarf-rogue", ref: "glm", counted: true },
     ]);
+  });
+
+  test("a probe is never a queue job", () => {
+    expect(() => parseFleet(fleetJson([{ ref: "glm", episode: "probing" }]))).toThrow(/a probe is a campaign's cell, never a queue job/);
   });
 });
 
@@ -659,14 +707,9 @@ describe("roster policy", () => {
     });
     expect(() => parseFleet(entry("Fleetsonnlo"))).toThrow(/character is not a key/);
     expect(() => parseFleet(entry("Fleetsonnetlo"))).toThrow(/the model names its own character/);
-    // A cell may not carry one either, and it is refused by name rather than
-    // as a generic unrecognized key.
-    expect(() =>
-      parseCampaigns({ probe: { cells: [{ id: "coldridge", character: "Navprobe" }] } }),
-    ).toThrow(/cell coldridge: character is not a key/);
-    expect(() => parseCampaigns({ probe: { character: "Navprobe", cells: [{ id: "coldridge" }] } })).toThrow(
-      /campaign probe: character is not a key/,
-    );
+    // Nor may a campaign row: a cell is the checked-in definition's, and the
+    // store row's strict shape refuses the key outright.
+    expect(() => parseCampaigns({ "nav-probe": { version: 1, character: "Navprobe" } })).toThrow(/campaign nav-probe/);
   });
 
   test("a model id is never refused for its billing: the verdict is derived, and billing overrides it", () => {
@@ -1145,31 +1188,25 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
       },
       policy: { maxConcurrent: { "claude-code": 2 } },
       campaigns: {
-        probe: {
-          account: "SHAKEOUT",
-          models: ["son"],
-          objective: "walk to Ironforge",
-          wikiCoords: true,
-          watchdogs: { episodeMs: 21_600_000 },
-          cells: [{ id: "ironforge" }],
-        },
+        "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] },
       },
       queue: [{ ref: "glm", episode: "e90", repeat: 2 }],
     });
-    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "campaign probe" });
+    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "campaign nav-probe" });
     expect(config.maxConcurrent).toEqual({ "claude-code": 2 });
     expect(config.jobs.map((j) => [j.name, j.source])).toEqual([["glm-e90", "queue"]]);
-    // The campaign materialises with its own dimensions over the episode's.
+    // The campaign materialises with its definition's dimensions over the episode's.
     const job = pinnedCampaignJobs(config, [])[0]!;
     const l = jobSpawn(job, config.roster, "SHAKEOUT", "20260101", undefined, config.campaigns);
-    expect(l).toMatchObject({ name: "probe-ironforge", account: "SHAKEOUT" });
+    expect(l).toMatchObject({ name: "nav-probe-coldridge", account: "SHAKEOUT" });
     expect(fillEntries(l, "20260101")[0]).toMatchObject({
-      runId: "fleet-probe-ironforge-sonnet-20260101",
-      objective: "walk to Ironforge",
+      runId: "fleet-nav-probe-coldridge-sonnet-20260101",
+      objective: expect.stringContaining("Travel from Coldridge Valley"),
       wikiCoords: true,
       episode: "probing",
-      campaign: "probe",
-      cell: "ironforge",
+      campaign: "nav-probe@1",
+      cell: "coldridge",
+      ref: "son",
       watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null },
     });
     // Both entries are in the policy: a campaign borrows a model rather than
@@ -1495,7 +1532,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
       },
       policy: { maxConcurrent: { "claude-code": 2 } },
-      campaigns: { probe: { account: "SHAKEOUT", models: ["son"], objective: "x", cells: [{ id: "c1" }] } },
+      campaigns: { "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } },
     });
     const states = modelStatesOf(rosterModels(config.roster));
     const plan = planTick(config, states, () => undefined, "20260101");
@@ -1503,7 +1540,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     // `--status` and `--dry-run` read this planner, and a probe the supervisor
     // would spawn but its own report never mentions is the disagreement this
     // whole shape exists to prevent.
-    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["probe-c1", "SHAKEOUT"]]);
+    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["nav-probe-coldridge", "SHAKEOUT"]]);
     expect(plan.queue.assign).toEqual([]);
     // The campaign holds `son`, so the second claude-code run is `sonlo` —
     // and the cap counts the probe's run wherever it was scheduled from.
@@ -2251,6 +2288,57 @@ describe("pause and resume across a fleet stop", () => {
     const off = planResumes({ runs: [run], config: config([{ ...job, enabled: false }]), running: new Map(), held, now: NOW });
     expect(off.resume).toEqual([]);
     expect(off.listed[0]?.why).toContain("job nav-freeplay is disabled");
+  });
+
+  test("a paused probe whose definition says resume comes back under the job it was spawned as, pool or pinned", () => {
+    // A twelve-hour race-probe cell paused by a fleet restart used to be
+    // listed "not in config", and the paused run then held its model out of
+    // every lane until someone resumed it by hand.
+    const pausedProbe = (over: Partial<RunFact> & { runId: string; account: string }): RunFact =>
+      paused({
+        model: "z-ai/glm-5.2:free",
+        episode: "probing",
+        episodeMs: 12 * H,
+        campaign: "race-probe",
+        campaignVersion: 1,
+        cell: "orc-warrior",
+        ref: "glm",
+        pause: { reason: "operator-pause", at: NOW - 3 * H, count: 1, episodeElapsedMs: 9 * H },
+        ...over,
+      });
+    // Pool: the policy's own pick, named the way `policyJob` named it, attempt off the run id.
+    const pool = { ...config(), campaigns: parseCampaigns({ "race-probe": { version: 1, assignments: [{ model: "glm" }] } }).campaigns };
+    const run = pausedProbe({ runId: "fleet-glm-race-probe-orc-warrior-z-ai-glm-5-2-free-20261010-a2", account: "RUNNER3" });
+    const plan = planResumes({ runs: [run], config: pool, running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.listed).toEqual([]);
+    expect(plan.resume.map((r) => [r.job.name, r.job.source, r.job.attempt, r.account, r.runId])).toEqual([
+      ["glm-race-probe-orc-warrior", "policy", 2, "RUNNER3", run.runId],
+    ]);
+    expect(plan.resume[0]!.job.probe).toEqual({ campaign: "race-probe", version: 1, cell: "orc-warrior" });
+    // The spawn resumes that run and restates the definition's own leash, never the probing default's.
+    const spawn = jobSpawn(plan.resume[0]!.job, roster, "RUNNER3", "20261010", undefined, pool.campaigns);
+    const resumeArgv = episodeArgv(resolve(fillEntries(spawn, "20261010"), "20261010")[0]!, true);
+    expect(resumeArgv.slice(1, 3)).toEqual(["--resume", run.runId]);
+    expect(resumeArgv).toContain("43200000");
+    // Pinned: the name `pinnedCampaignJobs` gives the cell, on the campaign's account.
+    const pinned = {
+      ...config(),
+      campaigns: parseCampaigns({ "class-probe": { version: 2, account: "SHAKEOUT", assignments: [{ model: "glm" }] } }).campaigns,
+    };
+    const onShakeout = pausedProbe({ runId: "fleet-class-probe-dwarf-rogue-z-ai-glm-5-2-free-20261010", account: "SHAKEOUT", campaign: "class-probe", campaignVersion: 2, cell: "dwarf-rogue" });
+    expect(planResumes({ runs: [onShakeout], config: pinned, running: new Map(), held, now: NOW }).resume.map((r) => [r.job.name, r.job.source, r.account])).toEqual([
+      ["class-probe-dwarf-rogue", "pinned", "SHAKEOUT"],
+    ]);
+    // A definition that does not resume ends the run as a failed attempt instead.
+    const nav = { ...config(), campaigns: parseCampaigns({ "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "nav" }] } }).campaigns };
+    const navRun = pausedProbe({ runId: "fleet-nav-probe-coldridge-sonnet-20261010", model: "sonnet", account: "SHAKEOUT", campaign: "nav-probe", cell: "coldridge", ref: "nav" });
+    const ended = planResumes({ runs: [navRun], config: nav, running: new Map(), held, now: NOW });
+    expect(ended.resume).toEqual([]);
+    expect(ended.end).toHaveLength(1);
+    // A disabled campaign keeps its paused run, listed with the reason.
+    const off = { ...pool, campaigns: pool.campaigns.map((c) => ({ ...c, enabled: false })) };
+    expect(planResumes({ runs: [run], config: off, running: new Map(), held, now: NOW }).listed[0]?.why).toContain("campaign race-probe is disabled");
   });
 
   test("a policy freeplay run paused by a fleet restart resumes under a synthetic policy job — same account, same run id", () => {
@@ -3256,14 +3344,21 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     // whether waiting on it buys anything. The campaign's
     // opt-in is the supervisor's to answer: the script must not re-derive it
     // from a config the supervisor may not be running.
-    const campaigns = [
-      { name: "class-probe", resume: true },
-      { name: "nav-probe" },
-    ] as unknown as Campaign[];
-    const probe = (campaign: string) => ({ source: "policy" as const, episode: "probing" as const, probe: { campaign, cell: "gnome-mage" } });
+    // `resume` is the definition's: class-probe@2 resumes, nav-probe@1 does not.
+    const campaigns = parseCampaigns({
+      "class-probe": { version: 2, enabled: false },
+      "nav-probe": { version: 1, enabled: false },
+    }).campaigns;
+    const probe = (campaign: string, version = campaign === "class-probe" ? 2 : 1) => ({
+      source: "policy" as const,
+      episode: "probing" as const,
+      probe: { campaign, version, cell: "gnome-mage" },
+    });
     expect(resumesInPlace(policyFreeplay("opuslo", 12), campaigns)).toBe(true);
     expect(resumesInPlace(probe("class-probe"), campaigns)).toBe(true);
     expect(resumesInPlace(probe("nav-probe"), campaigns)).toBe(false);
+    // The run's own version decides: a v1 class-probe run (closed history) never resumes.
+    expect(resumesInPlace(probe("class-probe", 1), campaigns)).toBe(false);
     // The campaign was deleted from the file: nothing to resume under.
     expect(resumesInPlace(probe("class-probe"), [])).toBe(false);
     expect(resumesInPlace(probe("class-probe"), undefined)).toBe(false);

@@ -207,8 +207,10 @@ is absent on runs that have the wiki, so older runs stamp as they did.
 commissioned sweep to completion and are never re-armed; freeplay never
 finishes and never counts. Each episode id is a comparability group, and a
 wrong default is replaced by a *new id*, never widened in place, because
-widening silently re-scopes every existing score. Definitions:
-`docs/EPISODES.md`.
+widening silently re-scopes every existing score. A probe exists only as a cell
+of a versioned campaign definition checked into git, and a changed definition is
+a new version, never an edit in place, for the same reason (2026-10-09).
+Definitions: `docs/EPISODES.md`.
 
 **A lapsed run is evidence only if its lane says so; everywhere else it is a
 failed attempt.** A run that pauses or goes quiet stops without a verdict, and

@@ -145,3 +145,43 @@ describe("Watchdogs fresh-character precondition", () => {
     expect(w.check()).toBeNull();
   });
 });
+
+describe("level-target: a probe campaign's stopping rule", () => {
+  test("ends the run on the first observed level at or above stopAtLevel, and not before", () => {
+    const c = clock();
+    const w = new Watchdogs(cfg, c.now, 0, { stopAtLevel: 10 });
+    w.noteProgress(9, 6_400);
+    w.noteModelOutput();
+    expect(w.check()).toBeNull();
+    w.noteProgress(10, 30);
+    const v = w.check();
+    expect(v?.reason).toBe("level-target");
+    expect(v?.detail).toContain("level 10");
+    // It stays ended: a later sample cannot un-reach the target.
+    w.noteProgress(10, 400);
+    expect(w.check()?.reason).toBe("level-target");
+  });
+
+  test("outranks the clock: a run that got there in the tick its time ran out ended because it got there", () => {
+    const c = clock();
+    const w = new Watchdogs(cfg, c.now, 0, { stopAtLevel: 10 });
+    c.tick(60_000);
+    w.noteModelOutput();
+    w.noteProgress(11, 0);
+    expect(w.check()?.reason).toBe("level-target");
+  });
+
+  test("off unless asked for: no stop level, no stop", () => {
+    const w = new Watchdogs(cfg, clock().now);
+    w.noteModelOutput();
+    w.noteProgress(80, 0);
+    expect(w.check()).toBeNull();
+  });
+
+  test("an xp-only reading never trips it", () => {
+    const w = new Watchdogs(cfg, clock().now, 0, { stopAtLevel: 10 });
+    w.noteModelOutput();
+    w.noteProgress(undefined, 99_999);
+    expect(w.check()).toBeNull();
+  });
+});

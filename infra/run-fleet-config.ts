@@ -13,6 +13,7 @@ import { isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../r
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { campaignWork, parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
+import { unversionedOwner } from "../runner/src/campaign-defs";
 import {
   ACCOUNT_CLASSES,
   claudeKeysFor,
@@ -239,11 +240,12 @@ export interface FleetJob {
    */
   continueDropped?: { runId: string; reason: string };
   /**
-   * Set when this job is a probe campaign's work: which campaign
-   * commissioned it and which cell it is. The campaign's own dimensions are
-   * looked up from the config at spawn time; only the identity travels here.
+   * Set when this job is a probe campaign's work: which campaign and version
+   * commissioned it and which cell it is. The cell's shape comes from the
+   * checked-in definition — the runner resolves it from `--campaign
+   * <id>@<version> --cell <id>` — so only the identity travels here.
    */
-  probe?: { campaign: string; cell: string };
+  probe?: { campaign: string; version: number; cell: string };
   /**
    * The Claude subscription LANE this job's claude-code entries run on, by env
    * var NAME (`policy.subscriptions`). Set by the scheduler — the first lane
@@ -479,7 +481,7 @@ export function pinnedCampaignJobs(
       account: c.account,
       enabled: true,
       source: "pinned",
-      probe: { campaign: c.name, cell: next.cell.id },
+      probe: { campaign: c.name, version: c.version, cell: next.cell.id },
     });
   }
   return out;
@@ -529,8 +531,15 @@ export function probeRunsOf(runs: readonly RunFact[], roster: Record<string, Fle
   // history on every tick, to learn nothing about the runs that are not
   // campaign work.
   return runs.filter((f) => f.campaign !== null).map((f) => {
-    const match = entries.find(([, e]) => sameRosterIdentity(e, f));
-    return { campaign: f.campaign, cell: f.cell, ref: match?.[0] ?? null, counted: isCounted(f) };
+    // The roster name the run recorded, when the fleet stamped one; a run from
+    // before that is matched on the entry's whole identity — model, effort and
+    // the claude-code compaction window — the way every other run is.
+    const ref = f.ref ?? entries.find(([, e]) => sameRosterIdentity(e, f))?.[0] ?? null;
+    // A run stamped before definitions were versioned belongs to the version
+    // that claims the id's unversioned runs — and to no other, so a newer
+    // version reusing a cell id is never credited with it.
+    const version = f.campaignVersion ?? unversionedOwner(f.campaign!)?.version ?? null;
+    return { campaign: f.campaign, version, cell: f.cell, ref, counted: isCounted(f) };
   });
 }
 
@@ -791,7 +800,7 @@ function refJobNames(name: string, jobs: readonly FleetJob[], campaigns: readonl
   const names = new Set<string>(jobs.filter((j) => j.refs.includes(name)).map((j) => j.name));
   for (const ep of EPISODE_IDS) names.add(`${name}-${ep}`);
   for (const c of campaigns) {
-    if (c.models !== "all" && !c.models.includes(name)) continue;
+    if (!c.assignments.some((a) => a.model === name)) continue;
     for (const cell of c.cells) names.add(`${name}-${c.name}-${cell.id}`);
   }
   return [...names];
@@ -819,8 +828,9 @@ export function parseFleet(raw: unknown): FleetConfig {
   const accounts = parseAccounts(o.accounts);
   const roster = parseRoster(o.roster);
   let campaigns: Campaign[];
+  let refusedCampaigns: ReturnType<typeof parseCampaigns>["refused"];
   try {
-    campaigns = parseCampaigns(o.campaigns);
+    ({ campaigns, refused: refusedCampaigns } = parseCampaigns(o.campaigns));
   } catch (err) {
     fail(`campaigns: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -836,6 +846,13 @@ export function parseFleet(raw: unknown): FleetConfig {
   const strictJobKeys = new Map<string, string[]>();
   for (const job of parseQueue(o.queue, roster, strictJobKeys)) add(job);
   const refusals: ConfigRefusal[] = [];
+  // A campaign row the parser read but will not schedule — a version this
+  // checkout has no definition for, a closed definition switched on — is left
+  // out by name, so one row cannot take the rest of the config down. Its cells
+  // are listed so a run still live under it is spared, as a pin's are.
+  for (const r of refusedCampaigns) {
+    refusals.push({ pin: `campaign ${r.name}`, why: r.why, jobs: r.cells.map((cell) => `${r.name}-${cell}`) });
+  }
   // Strict keys BEFORE the account rules, deliberately: a job the harness
   // cannot read must not win an account off a well-formed one. A refused job
   // is disabled, and a disabled pin is already allowed to park anywhere.
@@ -1031,7 +1048,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     // campaign opts in. An entry saying `resume` meant something specific by
     // it, so it is refused rather than ignored.
     if (rest["resume"] !== undefined) {
-      fail(`roster ${name}: an entry must not carry resume — resuming is the lane's rule; a probe campaign opts in with campaigns.<name>.resume`);
+      fail(`roster ${name}: an entry must not carry resume — resuming is the lane's rule; a probe campaign opts in through its checked-in definition's resume`);
     }
     // Required, with no exception left to make: every entry is now something
     // the policy can schedule, so an absent tier is always a mistake.
@@ -1190,6 +1207,12 @@ function parseQueue(
     const ref = (refs as string[]).join("+");
     if (typeof j.episode !== "string" || !(EPISODE_IDS as readonly string[]).includes(j.episode)) {
       fail(`queue ${ref}: episode must be one of ${EPISODE_IDS.join("|")}`);
+    }
+    // A probe exists only as a cell of a checked-in campaign definition
+    // (operator decision, 2026-10-09): a queue job naming `probing` would launch
+    // one with no campaign, no cell and no definition to say what it was for.
+    if (j.episode === "probing") {
+      fail(`queue ${ref}: a probe is a campaign's cell, never a queue job — add an assignment to campaigns/<id> instead`);
     }
     // `resume` on a job means nothing: whether a lapsed run comes back is the
     // lane's rule, and the only opt-in is a campaign's. The key is

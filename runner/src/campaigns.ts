@@ -1,171 +1,253 @@
 /**
- * Probe campaigns: the commissioned middle lane.
+ * Probe campaigns: the commissioned middle lane, as the fleet schedules it.
  *
- * A campaign is an objective swept over a set of **cells** by a set of models.
- * It is commissioned, runs to completion, and is then switched off — which is
- * the whole of what separates it from an eval. Evals are re-armed by a harness
- * series bump and accumulate evidence per series; a campaign is never re-armed,
- * because it carries no target to un-meet (`probing` is unscored, so
- * `targetFor` is structurally zero for it — see `episodes.ts`).
+ * A campaign is a checked-in definition swept by a set of models. The two
+ * halves live apart (operator decision, 2026-10-09):
  *
- * Three properties are worth stating, because each replaced a mechanism rather
+ * - **Static, in git** (`runner/src/campaign-defs/`): the question, the cells,
+ *   the start, the leash, what ends a run and what counts as a cell done. A
+ *   published version is never edited; a change is a new version.
+ * - **Dynamic, in the config store** (`campaigns/<id>`, parsed here): which
+ *   version is active, whether it is enabled, which roster entries sweep it and
+ *   how many counted runs each owes per cell, the account it is pinned to, and
+ *   whether an unhealthy model is skipped. Nothing static is accepted here —
+ *   a row that names a cell or an objective is refused by name and pointed at
+ *   the definition, so each fact has exactly one place.
+ *
+ * Three properties carried over, each of which replaced a mechanism rather
  * than adding one:
  *
- * - **The roster is a catalog again.** Before this, a probe was a roster entry
- *   carrying an `objective` plus a pinned job pointing at it, which meant the
- *   roster held two kinds of thing and every scored surface needed a branch to
- *   tell them apart. A campaign names roster entries for their credentials and
- *   supplies the task shape itself, so `objective` never enters the catalog.
- * - **Completion is derived, never recorded.** Remaining work is
- *   `runsPerCell` minus the counted probe runs already on disk for that
- *   (campaign, cell, model) — and, when the campaign sets
- *   `maxAttemptsPerCell`, nothing at all once that many launches have been
- *   made, so a cell that only ever fails is abandoned instead of swept
- *   forever. Nothing is written back, so deleting a campaign from the config
- *   cannot orphan a bookkeeping file, and re-adding it resumes exactly where
- *   it stopped.
+ * - **The roster is a catalog.** An assignment names a roster entry for its
+ *   credentials, model and effort; the definition supplies the task shape, so
+ *   `objective` never enters the catalog.
+ * - **Completion is derived, never recorded.** Remaining work is an
+ *   assignment's `runsPerCell` minus the counted probe runs already on disk for
+ *   that (campaign, version, roster name, cell) — and nothing at all once the
+ *   definition's `maxAttemptsPerCell` launches have been made, so a cell that
+ *   only ever fails is abandoned instead of swept forever. Counting is per
+ *   VERSION: a newer version that reuses a cell id is never credited with an
+ *   older version's runs.
  * - **A finished campaign is not archived.** `enabled: false` stops the
- *   scheduling; the results stay visible. Directory-moving (`archiveRun`) hides
- *   a run from every viewer surface unconditionally, which is the opposite of
- *   what a completed campaign wants.
- *
- * A cell is deliberately open-ended: the class-probe campaign's cells are
- * race/class pairs, and a later dungeon campaign's cell is a dungeon. Only
- * `id` is required, and it is what the run records, so the fan-out does not
- * care what a cell means.
+ *   scheduling; the results stay visible, and the definition keeps them
+ *   attributed even after the store row is gone.
  */
 
 import { z } from "zod";
+import {
+  CAMPAIGN_NAME,
+  campaignDef,
+  campaignRef,
+  unversionedOwner,
+  type CampaignCellDef,
+  type CampaignDef,
+  type OpenCampaignDef,
+} from "./campaign-defs";
 
-/** The watchdog overrides a campaign or a cell may set, in the config's own spelling. */
-const watchdogsSchema = z
+/** One roster entry sweeping a campaign, and how many counted runs per cell it owes. */
+export const campaignAssignmentSchema = z
   .object({
-    idleMs: z.number().int().positive().nullable().optional(),
-    noXpMs: z.number().int().positive().nullable().optional(),
-    episodeMs: z.number().int().positive().nullable().optional(),
+    /** A roster name: the catalog entry whose model, effort and credentials the runs use. */
+    model: z.string().min(1),
+    runsPerCell: z.number().int().positive().default(1),
   })
   .strict();
+export type CampaignAssignment = z.infer<typeof campaignAssignmentSchema>;
 
-/** Names a run and a config entry both have to survive: safe in a run id and a path. */
-const NAME = /^[A-Za-z0-9._-]+$/;
-
-/**
- * The run dimensions a campaign sets, and a cell may then override. Every one
- * of them is recorded on the run like any other dimension; none of them is a
- * comparability claim, because `probing` is unscored.
- */
-const dimensionsSchema = {
-  objective: z.string().min(1).max(4000).optional(),
-  wikiCoords: z.boolean().optional(),
-  watchdogs: watchdogsSchema.optional(),
-  maxToolCalls: z.number().int().positive().optional(),
-  /** The starting character, as the client's own race/class ids. */
-  race: z.number().int().positive().optional(),
-  class: z.number().int().positive().optional(),
-};
-
-export const campaignCellSchema = z
-  .object({ id: z.string().min(1).max(64).regex(NAME), ...dimensionsSchema })
-  .strict();
-
-export const campaignSchema = z
+/** A `campaigns/<id>` row, as the store holds it today. */
+export const campaignRowSchema = z
   .object({
+    /** Which checked-in version is active. Explicit, never "latest": a merged definition must not re-target a sweep. */
+    version: z.number().int().positive(),
     enabled: z.boolean().default(true),
+    /** In priority order: the sweep spreads across them breadth-first. */
+    assignments: z.array(campaignAssignmentSchema).default([]),
     /**
-     * Which catalog entries sweep this campaign. `"all"` is every roster name,
-     * which is NOT the same question `rosterModels` answers — that one filters
-     * to entries with a tier, i.e. eval eligibility. A campaign borrows
-     * credentials, so a catalog-only entry (no tier) is a legitimate member.
+     * Pin the whole campaign to one account. Absent or null: it draws from each
+     * model's own account class like anything else. A pinned campaign follows
+     * the pinned-job account rules.
      */
-    models: z.union([z.literal("all"), z.array(z.string().min(1)).min(1)]).default("all"),
+    account: z.string().min(1).nullable().optional(),
     /**
      * Skip a model the projection considers unhealthy (retired, or cooling on
-     * the defer ladder). Default true: a campaign is exploration, and burning
-     * its cells against a dead endpoint produces no observation.
+     * the defer ladder). Default true: burning a cell against a dead endpoint
+     * produces no observation.
      */
     excludeUnhealthy: z.boolean().default(true),
-    /** Counted probe runs wanted per (model, cell). */
-    runsPerCell: z.number().int().positive().default(1),
-    /**
-     * Give up on a (model, cell) after this many LAUNCHES, counted or not.
-     * Absent means never: the cell is swept until it produces its counted
-     * runs. A cell whose launches keep failing — a model that cannot start,
-     * a class the harness trips over, a provider that rate-limits every
-     * attempt into `attempt-failed` — otherwise re-sweeps forever, because
-     * completion is derived from counted runs alone and the fan-out always
-     * re-picks the first incomplete cell. The cap is the campaign saying how
-     * much evidence of "this does not work" is enough.
-     */
-    maxAttemptsPerCell: z.number().int().positive().optional(),
-    /**
-     * Resume a run of this campaign that pauses, instead of ending it as a
-     * failed attempt and sweeping the cell again. Default false,
-     * like the scored lanes: a probe that paused for two hours is usually
-     * better re-run than continued, and a campaign that genuinely wants
-     * continuity — a long dungeon crawl, a travel probe — says so here. Only
-     * `freeplay` resumes without asking.
-     */
-    resume: z.boolean().default(false),
-    cells: z.array(campaignCellSchema).min(1),
-    /**
-     * Pin the whole campaign to one account. Absent means it draws from the
-     * model's own account class like anything else. A pinned campaign is how a
-     * probe that needs a specific character or a specific box is expressed —
-     * and it is subject to the same rule as a pinned job: the account must not
-     * also be listed in a schedulable class.
-     */
-    account: z.string().min(1).optional(),
-    ...dimensionsSchema,
   })
   .strict();
 
-export type CampaignCell = z.infer<typeof campaignCellSchema>;
-export type CampaignSpec = z.infer<typeof campaignSchema>;
+/**
+ * The keys that belong to a definition, not a store row. Refused by name on a
+ * row that states a `version`, so an operator who writes one is told where it
+ * lives rather than getting a generic "unrecognized key".
+ */
+export const STATIC_CAMPAIGN_KEYS = [
+  "cells",
+  "objective",
+  "watchdogs",
+  "maxToolCalls",
+  "wikiCoords",
+  "wiki",
+  "race",
+  "class",
+  "resume",
+  "maxAttemptsPerCell",
+  "stopAtLevel",
+  "budget",
+] as const;
 
-/** One campaign, with the name it is keyed by — what everything downstream passes around. */
-export interface Campaign extends CampaignSpec {
+/** One campaign as everything downstream passes it around: the store row joined to its definition. */
+export interface Campaign {
+  /** The campaign id — the store row's key and the definition's `id`. */
   name: string;
+  version: number;
+  def: CampaignDef;
+  enabled: boolean;
+  assignments: CampaignAssignment[];
+  account?: string;
+  excludeUnhealthy: boolean;
+  /** The definition's cells, here because every planner walks them. */
+  cells: readonly CampaignCellDef[];
+  /** The definition's resume rule (false on a closed definition, which launches nothing). */
+  resume: boolean;
+  /** The definition's attempt cap, when it set one. */
+  maxAttemptsPerCell?: number;
+  /** Set when the row was read in the pre-definition shape and mapped onto its v1. */
+  migrated?: true;
 }
 
-export const campaignsSchema = z.record(z.string().regex(NAME), campaignSchema);
+/** A campaign row the parser could read but will not schedule, and why. */
+export interface CampaignRowRefusal {
+  name: string;
+  why: string;
+  /** The cell ids it would have spawned under, so a live run under it is spared. */
+  cells: string[];
+}
+
+function joined(name: string, def: CampaignDef, row: z.infer<typeof campaignRowSchema>, migrated: boolean): Campaign {
+  return {
+    name,
+    version: def.version,
+    def,
+    enabled: row.enabled,
+    assignments: row.assignments,
+    ...(row.account !== undefined && row.account !== null ? { account: row.account } : {}),
+    excludeUnhealthy: row.excludeUnhealthy,
+    cells: def.cells,
+    resume: def.status === "open" ? def.resume : false,
+    ...(def.status === "open" && def.maxAttemptsPerCell !== null ? { maxAttemptsPerCell: def.maxAttemptsPerCell } : {}),
+    ...(migrated ? { migrated: true as const } : {}),
+  };
+}
+
+/**
+ * A row in the shape campaigns had before definitions were checked in: no
+ * `version`, and the task shape (`cells`, `objective`, …) inline. Mapped onto
+ * the version that claims the id's unversioned runs, so a store written before
+ * this change loads on the first boot after it and the operator can rewrite
+ * the rows at leisure. The inline shape is DROPPED, not merged — the checked-in
+ * definition is the shape — and `models` becomes one assignment per name at
+ * the old `runsPerCell`. `"all"` maps to no assignments: it meant every catalog
+ * entry, which is not a list anyone chose.
+ */
+function migrateLegacyRow(name: string, raw: Record<string, unknown>): z.infer<typeof campaignRowSchema> & { version: number } {
+  const owner = unversionedOwner(name);
+  if (owner === undefined) {
+    throw new LegacyRowError(
+      `the pre-definition shape (no version) and no checked-in definition claims "${name}" — write { version, enabled, assignments } naming a definition in runner/src/campaign-defs/`,
+    );
+  }
+  const runsPerCell = typeof raw["runsPerCell"] === "number" && Number.isInteger(raw["runsPerCell"]) && raw["runsPerCell"] > 0 ? raw["runsPerCell"] : 1;
+  const models = Array.isArray(raw["models"]) ? raw["models"].filter((m): m is string => typeof m === "string" && m.length > 0) : [];
+  return campaignRowSchema.parse({
+    version: owner.version,
+    ...(typeof raw["enabled"] === "boolean" ? { enabled: raw["enabled"] } : {}),
+    assignments: models.map((model) => ({ model, runsPerCell })),
+    ...(typeof raw["account"] === "string" && raw["account"].length > 0 ? { account: raw["account"] } : {}),
+    ...(typeof raw["excludeUnhealthy"] === "boolean" ? { excludeUnhealthy: raw["excludeUnhealthy"] } : {}),
+  }) as z.infer<typeof campaignRowSchema> & { version: number };
+}
+
+class LegacyRowError extends Error {}
 
 /**
  * Parse the `campaigns` block, in declaration order.
  *
  * Order is load-bearing: it is the last tie-break when two campaigns both want
  * the same free account, so an operator can say which sweep matters by where
- * they put it in the file.
+ * they put it.
+ *
+ * Two kinds of failure, kept apart. A row the parser cannot READ — not an
+ * object, an unknown key, a static key on a versioned row — throws, as every
+ * shape error in the fleet config does, so a store write that would produce it
+ * is refused on the spot. A row it can read but will not SCHEDULE — a version
+ * this checkout has no definition for, a closed definition switched on, an old
+ * row nothing claims — is refused by name and left out, so one campaign that
+ * names a version an older image does not know cannot take the rest of the
+ * config down.
  */
-export function parseCampaigns(raw: unknown): Campaign[] {
-  if (raw === undefined) return [];
-  // The retired key, refused by name rather than as a generic "unrecognized
-  // key": `character` used to be a cell dimension back when a name travelled
-  // with a launch. The model names its own character and the run records what
-  // it chose, so there is nothing for a cell to set.
-  if (typeof raw === "object" && raw !== null) {
-    for (const [name, spec] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof spec !== "object" || spec === null) continue;
-      const c = spec as { character?: unknown; cells?: unknown };
-      if (c.character !== undefined) {
-        throw new Error(`campaign ${name}: character is not a key — the model names its own character`);
+export function parseCampaigns(raw: unknown): { campaigns: Campaign[]; refused: CampaignRowRefusal[] } {
+  if (raw === undefined) return { campaigns: [], refused: [] };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("campaigns must be an object of { <id>: { version, enabled, assignments, … } }");
+  }
+  const campaigns: Campaign[] = [];
+  const refused: CampaignRowRefusal[] = [];
+  for (const [name, spec] of Object.entries(raw as Record<string, unknown>)) {
+    if (!CAMPAIGN_NAME.test(name)) throw new Error(`campaign ${name}: the id must match ${CAMPAIGN_NAME}`);
+    if (typeof spec !== "object" || spec === null || Array.isArray(spec)) {
+      throw new Error(`campaign ${name}: a row is an object { version, enabled, assignments, account?, excludeUnhealthy? }`);
+    }
+    const o = spec as Record<string, unknown>;
+    let row: z.infer<typeof campaignRowSchema>;
+    let migrated = false;
+    if (o["version"] === undefined) {
+      try {
+        row = migrateLegacyRow(name, o);
+      } catch (err) {
+        if (!(err instanceof LegacyRowError)) throw err;
+        refused.push({ name, why: err.message, cells: [] });
+        continue;
       }
-      if (Array.isArray(c.cells)) {
-        for (const cell of c.cells as { id?: unknown; character?: unknown }[]) {
-          if (cell !== null && typeof cell === "object" && cell.character !== undefined) {
-            throw new Error(
-              `campaign ${name}: cell ${String(cell.id ?? "?")}: character is not a key — the model names its own character`,
-            );
-          }
-        }
+      migrated = true;
+    } else {
+      const statics = STATIC_CAMPAIGN_KEYS.filter((k) => o[k] !== undefined);
+      if (statics.length > 0) {
+        throw new Error(
+          `campaign ${name}: ${statics.join(", ")} ${statics.length === 1 ? "is" : "are"} the definition's, not the store's — ` +
+            `the shape of ${name}@${String(o["version"])} lives in runner/src/campaign-defs/ and a change to it is a new version`,
+        );
+      }
+      if (o["models"] !== undefined || o["runsPerCell"] !== undefined) {
+        throw new Error(`campaign ${name}: models and runsPerCell are now assignments: [{ model: "<roster name>", runsPerCell: n }]`);
+      }
+      try {
+        row = campaignRowSchema.parse(o);
+      } catch (err) {
+        throw new Error(`campaign ${name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    const def = campaignDef(name, row.version);
+    if (def === undefined) {
+      refused.push({ name, why: `${name}@${row.version} has no definition in this checkout (runner/src/campaign-defs/)`, cells: [] });
+      continue;
+    }
+    if (def.status === "closed" && row.enabled) {
+      refused.push({
+        name,
+        why: `${campaignRef(def)} is closed — it attributes past runs and launches nothing; set enabled: false or name an open version`,
+        cells: def.cells.map((c) => c.id),
+      });
+      continue;
+    }
+    campaigns.push(joined(name, def, row, migrated));
   }
-  const parsed = campaignsSchema.parse(raw);
-  return Object.entries(parsed).map(([name, spec]) => ({ name, ...spec }));
+  return { campaigns, refused };
 }
 
 /**
- * The models a campaign sweeps, resolved against the catalog.
+ * The assignments a campaign sweeps, resolved against the catalog, in the
+ * campaign's own priority order.
  *
  * `eligible` answers "is this model worth launching at all" and is asked only
  * when `excludeUnhealthy` is set. It takes a name that may not be in the
@@ -173,21 +255,36 @@ export function parseCampaigns(raw: unknown): Campaign[] {
  * entry must default to eligible rather than being silently dropped: absence
  * from the projection means "never eval-scheduled", not "unhealthy".
  */
+export function campaignAssignments(
+  c: Campaign,
+  catalog: readonly string[],
+  eligible?: (name: string) => boolean,
+): CampaignAssignment[] {
+  const named = c.assignments.filter((a) => catalog.includes(a.model));
+  if (!c.excludeUnhealthy || eligible === undefined) return named;
+  return named.filter((a) => eligible(a.model));
+}
+
+/** The roster names a campaign sweeps (`campaignAssignments`, names only). */
 export function campaignModels(
   c: Campaign,
   catalog: readonly string[],
   eligible?: (name: string) => boolean,
 ): string[] {
-  const named = c.models === "all" ? [...catalog] : c.models.filter((m) => catalog.includes(m));
-  if (!c.excludeUnhealthy || eligible === undefined) return named;
-  return named.filter((m) => eligible(m));
+  return campaignAssignments(c, catalog, eligible).map((a) => a.model);
 }
 
 /** A probe run already on disk, as the fan-out reads it. */
 export interface ProbeRun {
   campaign: string | null;
+  /**
+   * The definition version the run belongs to: its stamp, or — for a run
+   * stamped before versions existed — the version that claims the id's
+   * unversioned runs. Null when neither says.
+   */
+  version: number | null;
   cell: string | null;
-  /** Roster name this run was launched as, when it recorded one. */
+  /** Roster name this run was launched as, when it can be told. */
   ref: string | null;
   /**
    * Whether the run counts toward `runsPerCell` (`isCounted`). Every campaign
@@ -198,40 +295,43 @@ export interface ProbeRun {
   counted: boolean;
 }
 
-/** One (campaign, model, cell) with work left on it. */
+/** One (campaign, assignment, cell) with work left on it. */
 export interface CampaignWork {
   campaign: string;
+  version: number;
   /** Roster name — the catalog entry whose credentials the run uses. */
   model: string;
-  cell: CampaignCell;
+  cell: CampaignCellDef;
   /** Counted probe runs already done for this triple. */
   done: number;
-  /** `runsPerCell`: how many are wanted. */
+  /** The assignment's `runsPerCell`: how many are wanted. */
   want: number;
   /** Launches already made for this triple, counted or not. */
   attempts: number;
-  /** `maxAttemptsPerCell`, when the campaign set one. */
+  /** The definition's `maxAttemptsPerCell`, when it set one. */
   maxAttempts?: number;
   /** Declaration order of the campaign, for tie-breaks. */
   order: number;
 }
 
 /**
- * Every (campaign, model, cell) that still owes runs, in sweep order.
+ * Every (campaign, assignment, cell) that still owes runs, in sweep order.
  *
  * Sweep order spreads across models before it finishes any one of them: a
  * campaign that has touched every model once has told us more than one that
  * has finished a single model's cells, and a sweep that is going to be
  * interrupted (by an operator, a harness bump, a dead key) should be
  * interrupted holding breadth. So the first sort key is how much this model has
- * already done in this campaign, and cells are only ordered within that.
+ * already done in this campaign, then the campaign's declaration order, then
+ * the assignment's priority, and cells only within that.
  *
  * Two tallies, over the same runs, asked different questions. `done` and the
  * sweep order count only what `isCounted` counts, so "how much of this campaign
  * exists" keeps its meaning and a stillborn or operator-cut probe still re-runs.
  * `attempts` counts every launch the cell has had, and is what
  * `maxAttemptsPerCell` reads: a cell whose launches keep failing is abandoned
- * rather than swept forever.
+ * rather than swept forever. Both are keyed on (campaign, version, roster
+ * name, cell).
  */
 export function campaignWork(
   campaigns: readonly Campaign[],
@@ -239,60 +339,62 @@ export function campaignWork(
   probeRuns: readonly ProbeRun[],
   eligible?: (name: string) => boolean,
 ): CampaignWork[] {
-  const key = (campaign: string, model: string, cell: string): string => `${campaign}\u0000${model}\u0000${cell}`;
+  const key = (campaign: string, version: number, model: string, cell: string): string =>
+    `${campaign}\u0000${version}\u0000${model}\u0000${cell}`;
   const tally = new Map<string, number>();
   const attempted = new Map<string, number>();
-  for (const r of probeRuns) {
-    if (r.campaign === null || r.cell === null || r.ref === null) continue;
-    const k = key(r.campaign, r.ref, r.cell);
-    attempted.set(k, (attempted.get(k) ?? 0) + 1);
-    if (r.counted) tally.set(k, (tally.get(k) ?? 0) + 1);
-  }
   const perModel = new Map<string, number>();
   for (const r of probeRuns) {
-    if (r.campaign === null || r.ref === null || !r.counted) continue;
-    const k = `${r.campaign}\u0000${r.ref}`;
-    perModel.set(k, (perModel.get(k) ?? 0) + 1);
+    if (r.campaign === null || r.version === null || r.cell === null || r.ref === null) continue;
+    const k = key(r.campaign, r.version, r.ref, r.cell);
+    attempted.set(k, (attempted.get(k) ?? 0) + 1);
+    if (!r.counted) continue;
+    tally.set(k, (tally.get(k) ?? 0) + 1);
+    const m = `${r.campaign}\u0000${r.version}\u0000${r.ref}`;
+    perModel.set(m, (perModel.get(m) ?? 0) + 1);
   }
   const out: CampaignWork[] = [];
-  // Declaration order of each cell, recorded while we already have the index.
-  // The comparator below runs O(n log n) times, so anything it searches for is
-  // searched for repeatedly; this is the one thing here that was.
+  // Declaration order of each cell and priority of each assignment, recorded
+  // while we already have the index: the comparator runs O(n log n) times.
   const cellAt = new Map<string, number>();
+  const assignmentAt = new Map<string, number>();
   campaigns.forEach((c, order) => {
-    if (!c.enabled) return;
-    for (const model of campaignModels(c, catalog, eligible)) {
+    if (!c.enabled || c.def.status !== "open") return;
+    campaignAssignments(c, catalog, eligible).forEach((a, aIdx) => {
+      assignmentAt.set(`${c.name}\u0000${c.version}\u0000${a.model}`, aIdx);
       c.cells.forEach((cell, cellIdx) => {
-        const k = key(c.name, model, cell.id);
+        const k = key(c.name, c.version, a.model, cell.id);
         const done = tally.get(k) ?? 0;
-        if (done >= c.runsPerCell) return;
+        if (done >= a.runsPerCell) return;
         // Abandoned: the cell has had its launches and still owes counted runs.
         // Skipped exactly the way a finished cell is, so `campaignComplete`,
         // the pinned-campaign job and the policy loop all inherit it without
         // any of them learning a second word for "nothing left here".
         const attempts = attempted.get(k) ?? 0;
         if (c.maxAttemptsPerCell !== undefined && attempts >= c.maxAttemptsPerCell) return;
-        cellAt.set(`${c.name}\u0000${cell.id}`, cellIdx);
+        cellAt.set(`${c.name}\u0000${c.version}\u0000${cell.id}`, cellIdx);
         out.push({
           campaign: c.name,
-          model,
+          version: c.version,
+          model: a.model,
           cell,
           done,
-          want: c.runsPerCell,
+          want: a.runsPerCell,
           attempts,
           ...(c.maxAttemptsPerCell !== undefined ? { maxAttempts: c.maxAttemptsPerCell } : {}),
           order,
         });
       });
-    }
+    });
   });
-  const modelOrder = (w: CampaignWork): number => perModel.get(`${w.campaign}\u0000${w.model}`) ?? 0;
-  const cellIndex = (w: CampaignWork): number => cellAt.get(`${w.campaign}\u0000${w.cell.id}`) ?? 0;
+  const modelOrder = (w: CampaignWork): number => perModel.get(`${w.campaign}\u0000${w.version}\u0000${w.model}`) ?? 0;
+  const assignmentIndex = (w: CampaignWork): number => assignmentAt.get(`${w.campaign}\u0000${w.version}\u0000${w.model}`) ?? 0;
+  const cellIndex = (w: CampaignWork): number => cellAt.get(`${w.campaign}\u0000${w.version}\u0000${w.cell.id}`) ?? 0;
   return out.sort(
     (a, b) =>
       modelOrder(a) - modelOrder(b) ||
       a.order - b.order ||
-      catalog.indexOf(a.model) - catalog.indexOf(b.model) ||
+      assignmentIndex(a) - assignmentIndex(b) ||
       cellIndex(a) - cellIndex(b),
   );
 }
@@ -300,8 +402,8 @@ export function campaignWork(
 /**
  * Whether a campaign has nothing left to do — done or abandoned, since a cell
  * past its attempt cap is not work either. Derived, and deliberately not a
- * state anyone writes: a campaign whose config entry is edited (a cell added, a
- * model added) simply stops being complete, with no record to reconcile.
+ * state anyone writes: a campaign whose row gains an assignment simply stops
+ * being complete, with no record to reconcile.
  */
 export function campaignComplete(
   c: Campaign,
@@ -309,28 +411,36 @@ export function campaignComplete(
   probeRuns: readonly ProbeRun[],
   eligible?: (name: string) => boolean,
 ): boolean {
-  return campaignWork([c], catalog, probeRuns, eligible).length === 0;
+  return campaignWork([{ ...c, enabled: true }], catalog, probeRuns, eligible).length === 0;
 }
 
-/** The run dimensions a work item launches under: the campaign's, then the cell's. */
-export function workDimensions(c: Campaign, cell: CampaignCell): {
+/**
+ * The run dimensions a cell of an open definition launches under. One
+ * function for both sides of a launch: the runner fills a fresh probe's config
+ * from it, and the fleet plans with the same numbers (the ceiling for ETAs and
+ * drains), so the two cannot disagree about what a probe was given.
+ */
+export function cellDimensions(
+  def: OpenCampaignDef,
+  cell: CampaignCellDef,
+): {
+  race: number;
+  class: number;
+  watchdogs: { idleMs: number; noXpMs: number | null; episodeMs: number };
+  maxToolCalls: number;
+  wikiCoords: boolean;
+  wiki: boolean;
   objective?: string;
-  wikiCoords?: boolean;
-  watchdogs?: z.infer<typeof watchdogsSchema>;
-  maxToolCalls?: number;
-  race?: number;
-  class?: number;
+  stopAtLevel?: number;
 } {
-  const pick = <K extends keyof CampaignCell & keyof CampaignSpec>(k: K): CampaignCell[K] | CampaignSpec[K] | undefined =>
-    cell[k] !== undefined ? cell[k] : c[k];
-  const out: Record<string, unknown> = {};
-  for (const k of ["objective", "wikiCoords", "maxToolCalls", "race", "class"] as const) {
-    const v = pick(k);
-    if (v !== undefined) out[k] = v;
-  }
-  // Watchdogs merge rather than replace: a cell that lengthens the clock should
-  // not silently re-enable a watchdog the campaign turned off.
-  const w = { ...(c.watchdogs ?? {}), ...(cell.watchdogs ?? {}) };
-  if (Object.keys(w).length > 0) out["watchdogs"] = w;
-  return out as ReturnType<typeof workDimensions>;
+  return {
+    race: cell.race,
+    class: cell.class,
+    watchdogs: { idleMs: def.budget.idleMs, noXpMs: def.budget.noXpMs, episodeMs: def.budget.episodeMs },
+    maxToolCalls: def.budget.maxToolCalls,
+    wikiCoords: def.wikiCoords,
+    wiki: def.wiki,
+    ...(def.objective !== null ? { objective: def.objective } : {}),
+    ...(def.stopAtLevel !== null ? { stopAtLevel: def.stopAtLevel } : {}),
+  };
 }

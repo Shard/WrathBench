@@ -30,7 +30,8 @@ import {
   unpinnedCampaigns,
 } from "./run-fleet-config";
 import { backoffMs, isTainted, type RosterSpec, slug } from "./run-roster";
-import { type Campaign, type ProbeRun, workDimensions } from "../runner/src/campaigns";
+import { cellDimensions, type Campaign, type ProbeRun } from "../runner/src/campaigns";
+import { campaignDef, campaignRef, unversionedOwner } from "../runner/src/campaign-defs";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, resumesOnPause, staleAfterMs } from "../runner/src/lapse";
@@ -519,22 +520,33 @@ export function jobSpawn(
 ): JobSpawn {
   const dims = episodeDimensions(job.episode);
   /*
-   * A probe's task shape comes from its campaign and nothing else.
+   * A probe's task shape comes from its checked-in definition and nothing else.
    * The catalog entry supplies credentials and a model, so its own `objective`,
-   * `watchdogs`, `maxToolCalls`, `wikiCoords` and `wiki` are dropped rather than merged:
-   * a campaign that says "no objective" must not inherit one from whichever
-   * entry it borrowed, or two cells of one sweep would be running different
-   * experiments. Precedence is episode table < campaign < cell, which is what
-   * `workDimensions` already resolves.
+   * `watchdogs`, `maxToolCalls`, `wikiCoords` and `wiki` are dropped rather than
+   * merged: a definition that says "no objective" must not inherit one from
+   * whichever entry it borrowed. The runner resolves the cell's shape itself
+   * from `--campaign <id>@<version> --cell <id>` and refuses any flag that
+   * would set part of it; the numbers are carried on the spec only so the
+   * fleet plans with what the run will be given (its ceiling, for ETAs and
+   * drains) and a resume restates the same leash.
    */
-  const campaign = job.probe === undefined ? undefined : campaigns.find((c) => c.name === job.probe!.campaign);
-  const cell = campaign?.cells.find((x) => x.id === job.probe!.cell);
-  const allProbeDims = campaign !== undefined && cell !== undefined ? workDimensions(campaign, cell) : undefined;
-  // Watchdogs are merged into their own key below, so they are held apart here:
-  // spreading them with the rest would replace that merge with the campaign's
-  // partial override and silently drop the episode's idle and no-XP thresholds.
+  const probeDef = job.probe === undefined ? undefined : campaignDef(job.probe.campaign, job.probe.version);
+  const probeCell = probeDef?.status === "open" ? probeDef.cells.find((x) => x.id === job.probe!.cell) : undefined;
+  const allProbeDims = probeDef?.status === "open" && probeCell !== undefined ? cellDimensions(probeDef, probeCell) : undefined;
+  const campaign = job.probe === undefined ? undefined : campaigns.find((c) => c.name === job.probe!.campaign && c.version === job.probe!.version);
+  // Watchdogs are merged into their own key below, so they are held apart here.
   const probeWatchdogs = allProbeDims?.watchdogs;
-  const probeDims = allProbeDims === undefined ? undefined : (({ watchdogs: _w, ...rest }) => rest)(allProbeDims);
+  const probeDims =
+    allProbeDims === undefined
+      ? undefined
+      : {
+          race: allProbeDims.race,
+          class: allProbeDims.class,
+          maxToolCalls: allProbeDims.maxToolCalls,
+          wikiCoords: allProbeDims.wikiCoords,
+          wiki: allProbeDims.wiki,
+          ...(allProbeDims.objective !== undefined ? { objective: allProbeDims.objective } : {}),
+        };
   const copies = job.repeat === "loop" ? 1 : job.repeat;
   const entries: RosterSpec[] = [];
   // A resume is its own witness too: the run was launched, so its ref is runnable.
@@ -542,7 +554,7 @@ export function jobSpawn(
     const { tier: _tier, idle: _idle, ...entry } = roster[r]!;
     // A probe keeps only what identifies the model; the campaign owns the rest.
     const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, wiki: _wk, ...credentials } = entry;
-    const isProbe = probeDims !== undefined;
+    const isProbe = job.probe !== undefined;
     const spec: RosterSpec = isProbe ? credentials : entry;
     // The entry's own leash, kept only when the entry is the authority on it.
     const own = isProbe ? {} : { watchdogs: entry.watchdogs, maxToolCalls: entry.maxToolCalls };
@@ -573,12 +585,14 @@ export function jobSpawn(
       watchdogs: { ...dims.watchdogs, ...(own.watchdogs ?? {}), ...(probeWatchdogs ?? {}) },
       ...(own.maxToolCalls !== undefined ? { maxToolCalls: own.maxToolCalls } : {}),
       ...(probeDims ?? {}),
-      ...(job.probe !== undefined ? { campaign: job.probe.campaign, cell: job.probe.cell } : {}),
+      // The probe's identity, as the runner takes it: `id@version`, the cell,
+      // and the roster name the run is launched as.
+      ...(job.probe !== undefined ? { campaign: campaignRef({ id: job.probe.campaign, version: job.probe.version }), cell: job.probe.cell, ref: r } : {}),
       // Whether a pause is resumed at all, decided by the lane and travelling
       // with the spec so the roster process needs no config of its own.
       // Scored evals never resume; freeplay always does; a probe
       // campaign opts in.
-      resumeOnPause: resumesOnPause(job.episode, campaign?.resume),
+      resumeOnPause: resumesOnPause(job.episode, campaign?.resume ?? (probeDef?.status === "open" ? probeDef.resume : undefined)),
       // An extra run is stamped as one; a scored-tier extra also rolls the
       // policy's race/class, where a freeplay extra keeps the entry's own.
       ...(isExtraJob(job) ? { extra: true } : {}),
@@ -755,14 +769,25 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
 }
 
 /**
- * Whether the campaign that commissioned a run asked to be resumed
- * (`campaigns.<name>.resume`, default false). A run with no campaign, or one
- * whose campaign has since been deleted from the file, is not resumed: the
- * config is the only place that opt-in can come from.
+ * Whether the campaign that commissioned a run asked to be resumed (its
+ * checked-in definition's `resume` — the run's own version's when it stamped
+ * one). A run with no campaign, or one whose campaign has no store row any
+ * more, is not resumed: a campaign nobody is running has nobody to resume it.
  */
-export function campaignResumeOf(campaigns: readonly Campaign[] | undefined, campaign: string | null): boolean {
+export function campaignResumeOf(
+  campaigns: readonly Campaign[] | undefined,
+  campaign: string | null,
+  /** The run's own definition version, when it stamped one; null reads the active row's. */
+  version: number | null = null,
+): boolean {
   if (campaign === null || campaigns === undefined) return false;
-  return campaigns.find((c) => c.name === campaign)?.resume === true;
+  const c = campaigns.find((x) => x.name === campaign);
+  if (c === undefined) return false;
+  // `resume` is the definition's: the one the run was launched under decides,
+  // and a run stamped before versions is the claiming version's.
+  const v = version ?? unversionedOwner(campaign)?.version ?? null;
+  const def = v !== null ? campaignDef(campaign, v) : c.def;
+  return def !== undefined && def.status === "open" && def.resume;
 }
 
 /** The quiet a run with no heartbeat and no recorded idle watchdog must show before it reads as ownerless. */
@@ -836,7 +861,7 @@ export function implicitPauses(opts: {
     if (f.archived === true) return f;
     if (!f.runId.startsWith("fleet-") || running.has(f.runId)) return f;
     if (f.account !== null && busy.has(f.account.toUpperCase())) return f;
-    if (!resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign))) return f;
+    if (!resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign, f.campaignVersion ?? null))) return f;
     // Stamped either way — a run that is waiting out its proof still holds its
     // model, its account's character and the head, or the policy would start
     // the next attempt over it — but resumed only once the proof is in.
@@ -890,7 +915,7 @@ export function planStaleRuns(opts: {
     if (gap === null) continue;
     const lapse = classifyLapse({
       episode: f.episode,
-      campaignResume: campaignResumeOf(opts.campaigns, f.campaign),
+      campaignResume: campaignResumeOf(opts.campaigns, f.campaign, f.campaignVersion ?? null),
       pause: null,
       staleForMs: gap,
     });
@@ -997,7 +1022,7 @@ export function planResumes(opts: {
     // and a campaign resumes only if it asked to.
     const lapse = classifyLapse({
       episode: f.episode,
-      campaignResume: campaignResumeOf(config.campaigns, f.campaign),
+      campaignResume: campaignResumeOf(config.campaigns, f.campaign, f.campaignVersion ?? null),
       pause,
       staleForMs: staleForMs(f, now),
     });
@@ -1057,6 +1082,48 @@ export function planResumes(opts: {
       }
       job = fromFile;
       account = fromFile.account ?? f.account;
+    } else if (f.episode === "probing") {
+      // A probe whose definition asked to resume (the lapse rule above already
+      // said so) comes back under the job it was spawned as, rebuilt from the
+      // run's own stamp: the campaign, its version and the cell. Without this a
+      // supervisor restart stranded a paused probe as "not in config", and the
+      // paused run then held its model out of every lane until someone resumed
+      // it by hand — on a twelve-hour cell, the most expensive way to lose one.
+      const c = f.campaign === null ? undefined : config.campaigns?.find((x) => x.name === f.campaign);
+      const version = f.campaignVersion ?? (f.campaign === null ? undefined : unversionedOwner(f.campaign)?.version) ?? null;
+      const ref = f.ref !== undefined && f.ref !== null && config.roster[f.ref] !== undefined ? f.ref : candidates[0];
+      if (c === undefined || version === null || f.cell === null || ref === undefined) {
+        list("paused probe whose campaign, version, cell or roster entry the config no longer names — resume by hand or archive");
+        continue;
+      }
+      if (!c.enabled) {
+        list(`campaign ${c.name} is disabled — enable it to resume, or resume by hand`);
+        continue;
+      }
+      const probe = { campaign: c.name, version, cell: f.cell };
+      if (c.account !== undefined) {
+        if (f.account !== null && c.account.toUpperCase() !== f.account.toUpperCase()) {
+          list(`campaign ${c.name} is pinned to ${c.account}, the run was on ${f.account} — resume by hand`);
+          continue;
+        }
+        // The name `pinnedCampaignJobs` gives the cell's job.
+        job = { refs: [ref], ref, episode: "probing", repeat: 1, name: `${c.name}-${f.cell}`, account: c.account, enabled: true, source: "pinned", probe };
+        account = c.account;
+      } else {
+        // The name `policyJob` gives a probe pick, and the attempt its run id carries.
+        const m = /-a(\d+)(?:-r\d+)?$/.exec(f.runId);
+        job = {
+          refs: [ref],
+          ref,
+          episode: "probing",
+          repeat: 1,
+          name: `${ref}-${c.name}-${f.cell}`,
+          enabled: true,
+          source: "policy",
+          attempt: m !== null ? Number(m[1]) : 1,
+          probe,
+        };
+      }
     } else {
       // Only the ref the run was launched under decides whether it may come
       // back — under its own job name, which is what the run id, the log path
@@ -1426,7 +1493,7 @@ export function policyJobDropped(
  * restart — same run id, account and character — rather than spending its
  * attempt. Two kinds do: the freeplay character (`pausesOnDrain`, resumed in
  * place however long it sat) and a probe campaign that asked to be
- * resumed (`campaigns.<name>.resume`). Everything else — every scored e90 or
+ * resumed (its definition's `resume`). Everything else — every scored e90 or
  * e360 — is ended `manual` on the next boot and must be waited out on its own
  * clock.
  *
@@ -1438,7 +1505,7 @@ export function policyJobDropped(
 export function resumesInPlace(job: Pick<FleetJob, "source" | "episode" | "probe"> | undefined, campaigns: readonly Campaign[] | undefined): boolean {
   if (job === undefined) return false;
   if (pausesOnDrain(job)) return true;
-  return job.probe !== undefined && campaignResumeOf(campaigns, job.probe.campaign);
+  return job.probe !== undefined && campaignResumeOf(campaigns, job.probe.campaign, job.probe.version);
 }
 
 /**

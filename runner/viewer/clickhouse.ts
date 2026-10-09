@@ -38,7 +38,7 @@ import { harnessOfRun, parseComparability } from "../src/comparability";
 import { platformOf } from "../src/platform";
 import type { RunFact } from "../src/models";
 import type { RunTotals } from "./tail";
-import { LIVE_WINDOW_MS, itemSamplesOf } from "./runs";
+import { LIVE_WINDOW_MS, campaignFieldsOf, itemSamplesOf } from "./runs";
 
 // ------------------------------------------------------------- the row shapes
 
@@ -452,8 +452,7 @@ export function runRowOf(r: RunTableRow, latest: LatestState | undefined, now: n
     // Campaign, cell and extra live only in the launch config; no column ever
     // carried them and `readRun` read them from meta.json exactly here.
     objective: str(r.objective),
-    campaign: str(config["campaign"]),
-    cell: str(config["cell"]),
+    ...campaignFieldsOf(r.run_id, str(config["campaign"]), num(config["campaignVersion"]), str(config["cell"])),
     extra: config["extra"] === true,
     comparability,
     character: str(r.character),

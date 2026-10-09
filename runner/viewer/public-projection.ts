@@ -612,14 +612,23 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
     campaigns: c.campaigns.map(
       (row: CampaignRowView): PublicCampaignRowView => ({
         campaign: row.campaign,
+        version: row.version,
+        definition:
+          row.definition === null
+            ? null
+            : {
+                status: row.definition.status,
+                question: row.definition.question,
+                stopAtLevel: row.definition.stopAtLevel,
+                episodeMs: row.definition.episodeMs,
+              },
         config:
           row.config === null
             ? null
             : {
                 enabled: row.config.enabled,
-                runsPerCell: row.config.runsPerCell,
-                cells: [...row.config.cells],
-                models: row.config.models,
+                assignments: row.config.assignments.map((a) => ({ model: a.model, runsPerCell: a.runsPerCell })),
+                want: row.config.want,
                 complete: row.config.complete,
               },
         runs: row.runs,
@@ -628,10 +637,42 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
         cells: row.cells.map((cell) => ({
           cell: cell.cell,
           declared: cell.declared,
+          race: cell.race,
+          class: cell.class,
+          characterLabel: cell.characterLabel,
+          note: cell.note,
           runs: cell.runs,
           models: [...cell.models],
           bestLevel: cell.bestLevel,
+          mismatched: cell.mismatched,
         })),
+        columns: row.columns.map((col) => ({
+          key: col.key,
+          model: col.model,
+          effort: col.effort,
+          compactWindow: col.compactWindow,
+          harness: col.harness,
+          series: col.series,
+          assignment: col.assignment,
+        })),
+        grid: row.grid.map((line) =>
+          line.map((sq) =>
+            sq === null
+              ? null
+              : {
+                  runs: sq.runs,
+                  live: sq.live,
+                  counted: sq.counted,
+                  reached: sq.reached,
+                  minutesToTarget:
+                    sq.minutesToTarget === null
+                      ? null
+                      : { min: sq.minutesToTarget.min, median: sq.minutesToTarget.median, max: sq.minutesToTarget.max },
+                  bestLevel: sq.bestLevel,
+                  mismatched: sq.mismatched,
+                },
+          ),
+        ),
         newestRunId: row.newestRunId,
         newestAt: row.newestAt,
       }),

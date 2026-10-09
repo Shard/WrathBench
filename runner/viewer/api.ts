@@ -59,9 +59,9 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
-import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
+import { campaignsView } from "./campaigns";
 import { modelsResponse, readFleetRoster } from "./models";
-import { modelStates, outstandingWork, sameRosterIdentity, type RunFact } from "../src/models";
+import { modelStates, outstandingWork, type RunFact } from "../src/models";
 import { positionsFromStore } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
@@ -1056,144 +1056,26 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   /**
-   * The probe lane, grouped by what commissioned each run.
+   * The probe lane, grouped by campaign version (`campaignsView`).
    *
-   * Built from the RUN DIRECTORY and only annotated from the config, which is
-   * the property that matters: a campaign that has been completed, switched off
-   * and deleted from the file still has a row here, because its runs are what
-   * happened. A row with runs and no `config` is a finished campaign, not an
-   * error — and a cell the config no longer declares is still shown, because
-   * pretending a run did not happen is worse than showing one that no longer
-   * has a home.
+   * Built from the RUN DIRECTORY and only annotated from the checked-in
+   * definitions and the store, which is the property that matters: a campaign
+   * that has been completed, switched off and dropped from the store still has
+   * a row here, because its runs are what happened. `counted` is the
+   * scheduler's own `isCounted` over a result row — never `unscored`, which is
+   * non-null for every probe.
    */
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
-    const probes = all.filter((r) => r.campaign !== null);
     const roster = readFleetRoster(opts.configDbPath);
-    const declared = new Map(roster.campaigns.map((c) => [c.name, c]));
-    const names = [
-      // Config order first, so the file's own priority is what the page shows;
-      // then any campaign only the runs remember.
-      ...roster.campaigns.map((c) => c.name),
-      ...[...new Set(probes.map((r) => r.campaign!))].filter((n) => !declared.has(n)),
-    ];
-    const catalog = roster.models.map((m) => m.name);
-    const rows: CampaignRowView[] = names.map((name) => {
-      const mine = probes.filter((r) => r.campaign === name);
-      const c = declared.get(name);
-      const cellIds = [
-        ...(c?.cells.map((x) => x.id) ?? []),
-        ...[...new Set(mine.map((r) => r.cell).filter((x): x is string => x !== null))].filter(
-          (id) => c === undefined || !c.cells.some((x) => x.id === id),
-        ),
-      ];
-      const newest = mine.reduce<ResultRun | null>((a, b) => ((a?.startedAt ?? 0) >= (b.startedAt ?? 0) ? a : b), null);
-      const ended = mine.filter((r) => r.terminationReason !== null);
-      // The scheduler's own reading of a finished probe, shared by the
-      // `complete` flag and the `runs` count below so the two cannot disagree.
-      const probeRuns = ended.map((r) => ({
-        campaign: r.campaign,
-        cell: r.cell,
-        ref: refOf(roster, r),
-        counted: !r.extra && !r.episodeOverride && taintOf(r) === null,
-      }));
-      return {
-        campaign: name,
-        config:
-          c === undefined
-            ? null
-            : {
-                enabled: c.enabled,
-                runsPerCell: c.runsPerCell,
-                cells: c.cells.map((x) => x.id),
-                // No `eligible` predicate, deliberately: the scheduler passes
-                // one (`verdict !== "blocked"`) so it does not launch a cell
-                // against a dead endpoint, but `blocked` also covers `running`
-                // and `paused`, which are properties of this second, not of the
-                // sweep. Wired here, a model's count and the complete flag
-                // below would flicker with the live board on every poll. This
-                // page answers what the config asked for, so it counts every
-                // named model — health is the fleet strip's question.
-                models: campaignModels(c, catalog).length,
-                // Ended runs only, which is deliberately NOT the question the
-                // scheduler asks. The scheduler counts a live probe as done so
-                // it does not launch the same cell twice; a page must not
-                // announce a sweep complete while one of its runs could still
-                // end `manual` and re-open the cell.
-                //
-                // `counted` mirrors `isCounted` over the fields a result row
-                // has. It cannot be `unscored`, which is non-null for every
-                // probe (`probing` is an unscored episode) — and it must not
-                // be a blanket `true`, because that is what made this page
-                // report a cell swept while the scheduler was still relaunching
-                // it. `attempts` (`maxAttemptsPerCell`) reads every row here
-                // either way.
-                complete: campaignComplete(c, catalog, probeRuns),
-                account: c.account ?? null,
-              },
-        runs: countedProbeRuns(c, catalog, probeRuns),
-        live: mine.filter((r) => r.terminationReason === null).length,
-        models: [...new Set(mine.map((r) => r.model).filter((m): m is string => m !== null))].sort(),
-        cells: cellIds.map((cell) => {
-          const runs = mine.filter((r) => r.cell === cell);
-          const levels = runs.map((r) => r.maxLevel).filter((l): l is number => l !== null);
-          return {
-            cell,
-            declared: c !== undefined && c.cells.some((x) => x.id === cell),
-            runs: runs.length,
-            models: [...new Set(runs.map((r) => r.model).filter((m): m is string => m !== null))].sort(),
-            bestLevel: levels.length > 0 ? Math.max(...levels) : null,
-          };
-        }),
-        newestRunId: newest?.runId ?? null,
-        newestAt: newest?.startedAt ?? null,
-      };
-    });
+    const view = campaignsView(all, roster, (r) => !r.extra && !r.episodeOverride && taintOf(r) === null);
     const body: CampaignsResponse = {
-      campaigns: rows,
-      orphans: all.filter((r) => r.episode === "probing" && r.campaign === null).length,
+      campaigns: view.campaigns,
+      orphans: view.orphans,
       configPath: roster.path,
       now: Date.now(),
     };
     return pub(body, projectCampaigns);
-  }
-
-  /**
-   * The numerator of the page's `runs/want` progress, where `want` is
-   * `cells × runsPerCell × models`: the same `counted` runs `campaignComplete`
-   * credits, on a declared cell, by a model the sweep names, and never more per
-   * (model, cell) than the cell asks for. Every ended run — failed attempts,
-   * re-sweeps, models since dropped from the campaign — read 73/8 on a sweep
-   * the scheduler still owed cells on. Without a config there is no `want`, so
-   * the count is every counted run.
-   */
-  function countedProbeRuns(
-    c: Campaign | undefined,
-    catalog: readonly string[],
-    probeRuns: readonly { cell: string | null; ref: string | null; counted: boolean }[],
-  ): number {
-    const counted = probeRuns.filter((r) => r.counted);
-    if (c === undefined) return counted.length;
-    const models = new Set(campaignModels(c, catalog));
-    const cells = new Set(c.cells.map((x) => x.id));
-    const tally = new Map<string, number>();
-    for (const r of counted) {
-      if (r.ref === null || r.cell === null || !models.has(r.ref) || !cells.has(r.cell)) continue;
-      const k = `${r.ref}\u0000${r.cell}`;
-      tally.set(k, Math.min(c.runsPerCell, (tally.get(k) ?? 0) + 1));
-    }
-    let n = 0;
-    for (const v of tally.values()) n += v;
-    return n;
-  }
-
-  /** The roster name a probe run used, for the completion count. */
-  function refOf(
-    roster: { models: readonly { name: string; model: string; effort?: string | undefined; compactWindow?: string | undefined }[] },
-    r: ResultRun,
-  ): string | null {
-    const hit = roster.models.find((m) => sameRosterIdentity(m, r));
-    return hit?.name ?? null;
   }
 
   async function listWithTotals(): Promise<RunListRow[]> {

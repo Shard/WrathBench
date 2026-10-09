@@ -63,8 +63,8 @@ describe("the table", () => {
     expect(EPISODES.freeplay).toMatchObject({
       minutes: null, noXpMinutes: null, objectiveAllowed: true, scored: false,
     });
-    // probing's ninety minutes is the default a campaign inherits when it names
-    // no clock, not a leash the tier enforces — which is why it pins no ceiling
+    // probing's ninety minutes is only a fallback (every campaign definition
+    // names its own clock), not a leash the tier enforces — which is why it pins no ceiling
     // and why `matchesTier` never reads a probe run as overridden.
     expect(EPISODES.probing).toMatchObject({
       minutes: 90, idleMinutes: 20, noXpMinutes: null, toolCalls: null,

@@ -155,8 +155,8 @@ export function neverStale(episode: string | null | undefined): boolean {
 }
 
 /**
- * Whether a lane resumes a lapsed run. `resume` is the campaign key an
- * operator writes (`campaigns.<name>.resume`); `resumeOnPause` is the same
+ * Whether a lane resumes a lapsed run. `resume` is what a probe's checked-in
+ * campaign definition states (`runner/src/campaign-defs/`); `resumeOnPause` is the same
  * answer travelling on a roster spec. An episode the table does not know —
  * a hand-written roster with no `--episode` — keeps the original resume
  * behaviour.

@@ -76,6 +76,10 @@ export const TERMINATION_REASONS = [
   "idle", // watchdog: no model output
   "no-xp", // watchdog: no XP/level progress in the window
   "episode-limit", // watchdog: wall clock
+  // A probe campaign's stopping rule: the first server-observed level at or
+  // above the definition's `stopAtLevel`. The measurement is taken; the rest of
+  // the clock would buy nothing. A verdict, so it counts like `episode-limit`.
+  "level-target",
   "snippet-runaway", // watchdog: sandbox kept getting killed for blocking
   "turn-limit", // config maxTurns reached (smoke/dev runs)
   "tool-call-limit", // config maxToolCallsPerEpisode reached (bounds an external scaffold's inner loop)
@@ -412,6 +416,28 @@ export const runConfigSchema = z.object({
    */
   campaign: z.string().min(1).max(64).optional(),
   cell: z.string().min(1).max(64).optional(),
+  /**
+   * Which checked-in version of the campaign this run is a cell of, and that
+   * definition's content hash at launch (`runner/src/campaign-defs/`). Stamped
+   * on every probe launched since definitions were versioned; absent on older
+   * runs, which a reader attributes by the definition's own legacy rule and
+   * never by writing these back. Recorded, not compared: `probing` has no
+   * comparability group for them to key.
+   */
+  campaignVersion: z.number().int().positive().optional(),
+  campaignHash: z.string().min(1).max(80).optional(),
+  /**
+   * The roster name the fleet launched this run as. Recorded on campaign runs
+   * so a sweep's remaining work is counted against the assignment that made
+   * the run, rather than re-derived by matching model and effort against
+   * whatever the roster says today.
+   */
+  ref: z.string().min(1).max(64).optional(),
+  /**
+   * End the run on the first server-observed level at or above this
+   * (`level-target`). Set only from a campaign definition's `stopAtLevel`.
+   */
+  stopAtLevel: z.number().int().min(2).max(80).optional(),
 
   /**
    * The episode tier this run was launched under (`runner/src/episodes.ts`).
