@@ -2203,9 +2203,9 @@ describe("client: quests", () => {
   // details (a single-quest hello, or CMSG_QUESTGIVER_QUERY_QUEST) and sends
   // the details at once; the quest-log field rides the map's next object
   // flush, a few world ticks later on a continent. Asking again inside that
-  // gap gets a menu without the quest. Live, at Kaltunk, Undertaker Mordo and
-  // Megelon (orc, undead and draenei starts), questsAvailableFrom then
-  // acceptQuestFrom at once came back not_offered with an empty menu.
+  // gap gets a menu without the quest. Live, at the orc, undead and draenei
+  // starts, questsAvailableFrom then acceptQuestFrom at once came back
+  // not_offered with an empty menu.
   /** The menu a non-gossip NPC answers the hello with once its one quest is taken: no options, no quests. */
   const emptyMenu = (seq: number) => ({
     seq,
