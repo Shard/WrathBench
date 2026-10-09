@@ -65,7 +65,9 @@ reaches the model. The harness is a tag on every row, never a partition;
 nothing about a CLI harness unscores a run, and `stub` never scores because it
 is not a model. **Each CLI scaffold is its own comparability group**
 (2026-09-05): each contains a *different* unversioned summarizer, which is the
-whole reason a scaffold is tagged apart from `wrathbench`.
+whole reason a scaffold is tagged apart from `wrathbench`. The claude-code
+compaction window is a recorded run dimension like effort, with the CLI's own
+`auto` as the default (2026-10-09).
 
 ## Client fidelity
 
