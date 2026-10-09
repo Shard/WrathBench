@@ -19,7 +19,7 @@
  * visible at all.
  */
 
-import type { FleetResponse, RunListRow } from "@viewer/api-types";
+import type { CampaignColumnView, CampaignRowView, CampaignSquareView, FleetResponse, RunListRow } from "@viewer/api-types";
 import { fleetRows, type FleetRow, type FleetRowState } from "./fleet";
 
 /** One live run of a campaign, as a pane lists it. */
@@ -42,6 +42,15 @@ export interface CampaignRunRow {
   attempt: number | null;
 }
 
+/**
+ * The key a campaign VERSION's pane is filed under: `race-probe@1`, or
+ * `name@?` for a campaign no definition claims a version of. One spelling for
+ * the panes, the live rows and the costs, so the three always line up.
+ */
+export function campaignRowKey(campaign: string, version: number | null | undefined): string {
+  return `${campaign}@${version ?? "?"}`;
+}
+
 /** The shape `rowProgress` reads, so a campaign row reuses the fleet's ETA maths. */
 export function progressOf(row: CampaignRunRow): Pick<FleetRow, "state" | "episode" | "elapsedMs" | "budgetMs"> | null {
   if (row.state === null) return null;
@@ -52,7 +61,7 @@ export function progressOf(row: CampaignRunRow): Pick<FleetRow, "state" | "episo
 }
 
 /**
- * Every live run, grouped by the campaign that commissioned it.
+ * Every live run, grouped by the campaign version it belongs to (`campaignRowKey`).
  *
  * `fleet` is optional and may be a response with `present: false` — the fleet
  * has never run on this machine, or has not been polled yet — in which case
@@ -91,8 +100,9 @@ export function campaignLiveRuns(
       account: job?.account ?? null,
       attempt: job?.attempt ?? null,
     };
-    const list = out.get(run.campaign);
-    if (list === undefined) out.set(run.campaign, [row]);
+    const key = campaignRowKey(run.campaign, run.campaignVersion);
+    const list = out.get(key);
+    if (list === undefined) out.set(key, [row]);
     else list.push(row);
   }
   for (const list of out.values()) {
@@ -130,10 +140,11 @@ export function campaignCosts(runs: readonly RunListRow[]): Map<string, Campaign
   const out = new Map<string, CampaignCost>();
   for (const run of runs) {
     if (run.campaign === null) continue;
-    let c = out.get(run.campaign);
+    const key = campaignRowKey(run.campaign, run.campaignVersion);
+    let c = out.get(key);
     if (c === undefined) {
       c = { actualUsd: null, reported: 0, asIfMetered: 0, runs: 0 };
-      out.set(run.campaign, c);
+      out.set(key, c);
     }
     c.runs += 1;
     const actual = run.cost?.actual ?? null;
@@ -146,4 +157,88 @@ export function campaignCosts(runs: readonly RunListRow[]): Map<string, Campaign
     c.actualUsd = (c.actualUsd ?? 0) + actual.usd;
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ the grid */
+
+/**
+ * A campaign version's state word and its class, from the row alone. A
+ * finished sweep reads quieter than a running one (same green, faded), so the
+ * vivid word on the page always means something is happening there.
+ */
+export function campaignState(row: CampaignRowView): { label: string; cls: string } {
+  if (row.definition === null) return { label: "retired", cls: "dim" };
+  if (row.definition.status === "closed") return { label: "closed", cls: "dim" };
+  if (row.config === null || row.config.want === 0) return { label: "unassigned", cls: "dim" };
+  if (row.config.complete) return { label: "complete", cls: "ok-muted" };
+  if (!row.config.enabled) return { label: "off", cls: "warn" };
+  return { label: "sweeping", cls: "ok" };
+}
+
+/** `3/19 runs` when the store row says what it wants; `5 runs` when nothing does. */
+export function campaignCoverage(row: CampaignRowView): string {
+  const plural = (n: number): string => (n === 1 ? "run" : "runs");
+  if (row.config === null || row.config.want === 0) return `${row.runs} ${plural(row.runs)}`;
+  return `${row.runs}/${row.config.want} ${plural(row.config.want)}`;
+}
+
+/** A grid column's heading: the model as the rest of the dashboard shows it, its effort and its compaction window. */
+export function columnLabel(col: CampaignColumnView, display: (model: string) => string): string {
+  return [display(col.model), col.effort, col.compactWindow].filter((x): x is string => x !== null && x !== undefined).join(" ");
+}
+
+/** Its hover: the identity the column keys on, and the assignment that owns it. */
+export function columnTitle(col: CampaignColumnView): string {
+  return [
+    col.model,
+    col.effort === null ? null : `effort ${col.effort}`,
+    col.compactWindow === null || col.compactWindow === undefined ? null : `compact window ${col.compactWindow}`,
+    col.harness,
+    col.series === null ? null : `series ${col.series}`,
+    col.assignment === null ? "not assigned" : `assigned as ${col.assignment}`,
+  ]
+    .filter((x): x is string => x !== null)
+    .join(" · ");
+}
+
+/**
+ * What one cell × model square says, as text. With a stop level: counted runs
+ * that reached it out of counted runs, then the median minutes of play to it.
+ * Without one: the best level. `*` marks a square holding a run whose recorded
+ * start is not the cell's declared one.
+ */
+export function squareText(sq: CampaignSquareView | null, target: number | null): string {
+  if (sq === null) return "";
+  const mark = sq.mismatched > 0 ? "*" : "";
+  if (sq.runs === 0 && sq.live === 0) return "·";
+  if (sq.runs === 0) return "live";
+  if (target !== null) {
+    const head = `${sq.reached ?? 0}/${sq.counted}`;
+    return sq.minutesToTarget === null ? `${head}${mark}` : `${head} ${sq.minutesToTarget.median}m${mark}`;
+  }
+  return sq.bestLevel === null ? `—${mark}` : `L${sq.bestLevel}${mark}`;
+}
+
+/** The square's hover: every number it rests on, one line. */
+export function squareTitle(sq: CampaignSquareView | null, target: number | null): string {
+  if (sq === null) return "not assigned";
+  if (sq.runs === 0 && sq.live === 0) return "assigned, not run yet";
+  const parts: string[] = [];
+  if (target !== null) parts.push(`${sq.reached ?? 0} of ${sq.counted} counted ${sq.counted === 1 ? "run" : "runs"} reached L${target}`);
+  if (sq.minutesToTarget !== null) {
+    const m = sq.minutesToTarget;
+    parts.push(`${m.min}/${m.median}/${m.max} min to L${target} (min/median/max)`);
+  }
+  if (sq.bestLevel !== null) parts.push(`best L${sq.bestLevel}`);
+  if (sq.runs > sq.counted) parts.push(`${sq.runs - sq.counted} not counted`);
+  if (sq.live > 0) parts.push(`${sq.live} live`);
+  if (sq.mismatched > 0) parts.push(`${sq.mismatched} ran as another start`);
+  return parts.join(" · ");
+}
+
+/** The class a square's text takes: green once the target was reached, dim while nothing counts yet. */
+export function squareClass(sq: CampaignSquareView | null, target: number | null): string {
+  if (sq === null || sq.counted === 0) return "right mono dim";
+  if (target !== null && (sq.reached ?? 0) > 0) return "right mono ok";
+  return "right mono";
 }

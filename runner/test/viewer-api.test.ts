@@ -115,7 +115,7 @@ function campaignizeScoreabilityFixture(runs: string): string {
     const meta = JSON.parse(readFileSync(path, "utf8")) as { config: Record<string, unknown> };
     writeFileSync(
       path,
-      JSON.stringify({ ...meta, config: { ...meta.config, campaign: "scoreability", cell: "cell" } }),
+      JSON.stringify({ ...meta, config: { ...meta.config, campaign: "nav-probe", campaignVersion: 1, cell: "coldridge" } }),
     );
   }
   const fleetPath = join(runs, "config.sqlite");
@@ -124,7 +124,7 @@ function campaignizeScoreabilityFixture(runs: string): string {
     accounts: { pool: ["RUNNER"] },
     roster: { m: { model: "m:free", tier: "t1" } },
     campaigns: {
-      scoreability: { enabled: true, models: ["m"], runsPerCell: 1, cells: [{ id: "cell" }] },
+      "nav-probe": { version: 1, enabled: true, assignments: [{ model: "m", runsPerCell: 1 }] },
     },
   });
   store.close();
@@ -615,14 +615,14 @@ describe("scoreability projection", () => {
           cells: { cell: string; runs: number; models: string[] }[];
         }[];
       };
-      const row = body.campaigns.find((campaign) => campaign.campaign === "scoreability")!;
+      const row = body.campaigns.find((campaign) => campaign.campaign === "nav-probe")!;
       // `runs` is the counted numerator: the ended environment-defect row reaches
       // campaignComplete as counted:false through the production taintOf path and
       // so counts for nothing here either; the live row remains visible separately.
-      expect(row).toMatchObject({ campaign: "scoreability", runs: 0, live: 1 });
+      expect(row).toMatchObject({ campaign: "nav-probe", runs: 0, live: 1 });
       expect(row.config).toMatchObject({ complete: false });
       expect(row.cells).toHaveLength(1);
-      expect(row.cells).toMatchObject([{ cell: "cell", runs: 2, models: ["m"] }]);
+      expect(row.cells).toMatchObject([{ cell: "coldridge", runs: 2, models: ["m"] }]);
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }

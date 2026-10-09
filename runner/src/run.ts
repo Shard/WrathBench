@@ -46,6 +46,7 @@ import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
 import { leaseSessionSecret, releaseSessionSecret } from "./module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
+import { CampaignLaunchError, campaignLaunch } from "./campaign-launch";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
@@ -185,6 +186,11 @@ function watchdogOverrides(v: string | boolean | undefined): WatchdogOverride {
  */
 export function configFromArgs(argv: string[]): RunConfig & { runId: string; token: string } {
   const args = parseArgs(argv);
+  // A probe's shape comes from its checked-in campaign definition and nothing
+  // else (`campaign-launch.ts`): resolved first, so a refused launch fails
+  // before anything is built, and spread last, so nothing below can override
+  // what the definition says.
+  const probe = campaignLaunch(args);
   const runId = typeof args["run-id"] === "string" ? args["run-id"] : newRunId();
   const c = loadRunConfig({
     runId,
@@ -233,9 +239,6 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
     // The roster entry's own billing, when it stated one; identity like the
     // rest, so a resume keeps the side it launched on.
     billing: typeof args["billing"] === "string" ? args["billing"] : undefined,
-    // A probe campaign's identity, both or neither.
-    campaign: typeof args["campaign"] === "string" ? args["campaign"] : undefined,
-    cell: typeof args["cell"] === "string" ? args["cell"] : undefined,
     // A freeplay continuation: the run id whose character and scratchpad this
     // launch carries on. Validated against the predecessor in `main`.
     continuedFrom: typeof args["continue-from"] === "string" ? args["continue-from"] : undefined,
@@ -253,6 +256,10 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
       ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"]) } : {}),
       ...watchdogOverrides(args["watchdogs-json"]),
     },
+    // A probe campaign's identity and the cell's whole shape, from the
+    // definition: campaign, version, hash, cell, race/class, leash, wiki,
+    // objective and stopping rule.
+    ...(probe ?? {}),
   });
   return { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
 }
@@ -478,7 +485,13 @@ async function main(): Promise<void> {
     tokenRegenerated = session.regenerated;
     resumed = true;
   } else {
-    config = configFromArgs(rawArgs);
+    try {
+      config = configFromArgs(rawArgs);
+    } catch (err) {
+      if (!(err instanceof CampaignLaunchError)) throw err;
+      console.error(err.message);
+      process.exit(2);
+    }
   }
   /** The freeplay run this launch continues, once its predecessor checks out. */
   let continuation: Continuation | undefined;
@@ -798,7 +811,7 @@ async function main(): Promise<void> {
    * underneath it. A pause written before the mark existed resumes at zero.
    */
   const elapsedBeforeMs = resumedPause?.episodeElapsedMs ?? 0;
-  const watchdogs = new Watchdogs(config.watchdogs, Date.now, elapsedBeforeMs);
+  const watchdogs = new Watchdogs(config.watchdogs, Date.now, elapsedBeforeMs, { stopAtLevel: config.stopAtLevel ?? null });
   if (resumed && elapsedBeforeMs > 0) {
     console.error(`[wrathbench] episode clock resumes at ${Math.round(elapsedBeforeMs / 60_000)}m`);
   }

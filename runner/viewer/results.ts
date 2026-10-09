@@ -419,6 +419,8 @@ export function resultRunOf(
     characterLabel: run.characterLabel,
     campaign: run.campaign,
     cell: run.cell,
+    ...(run.campaignVersion !== undefined ? { campaignVersion: run.campaignVersion } : {}),
+    ...(run.campaignSource !== undefined ? { campaignSource: run.campaignSource } : {}),
     effort: run.comparability?.effort ?? null,
     // Only when set: absent is the CLI's own `auto`, which every older row is.
     ...(run.comparability?.compactWindow != null ? { compactWindow: run.comparability.compactWindow } : {}),

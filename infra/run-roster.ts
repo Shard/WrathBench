@@ -149,17 +149,23 @@ export interface RosterSpec {
    */
   episode?: string;
   /**
-   * The probe campaign that commissioned this entry and which of its cells it
-   * is. Passed to the runner as `--campaign` / `--cell` and recorded
-   * on the run, which is what a campaign's remaining work is counted from and
-   * what keeps its results grouped after its config entry is deleted.
+   * The probe campaign that commissioned this entry, as `<id>@<version>`, and
+   * which of its cells it is. Passed to the runner as `--campaign` / `--cell`;
+   * the runner takes the cell's whole shape from the checked-in definition and
+   * refuses any flag that would set part of it, so a campaign spec's argv
+   * carries no objective, race/class, wiki or leash flag on a fresh launch.
    */
   campaign?: string;
   cell?: string;
   /**
+   * The roster name a campaign run is launched as (`--ref`), recorded on the
+   * run so the sweep counts its work against the assignment that made it.
+   */
+  ref?: string;
+  /**
    * Whether a run of this entry that pauses is resumed. The fleet
    * writes it from the lane: `freeplay` yes, a probe campaign only if it asked
-   * (`campaigns.<name>.resume`), a scored eval never. Absent falls back to
+   * (its checked-in definition's `resume`), a scored eval never. Absent falls back to
    * `resumesOnPause(episode)`, so a hand-written roster with no episode keeps
    * the lane's behaviour.
    */
@@ -215,6 +221,7 @@ export interface Resolved {
   episode: string | undefined;
   campaign: string | undefined;
   cell: string | undefined;
+  ref: string | undefined;
   /** Resolved once here, so no caller has to remember the fallback. */
   resumeOnPause: boolean;
   continueFrom: string | undefined;
@@ -569,6 +576,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       episode: s.episode,
       campaign: s.campaign,
       cell: s.cell,
+      ref: s.ref,
       resumeOnPause: s.resumeOnPause ?? resumesOnPause(s.episode),
       continueFrom: s.continueFrom,
       keepCharacters: s.keepCharacters ?? [],
@@ -659,6 +667,16 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.continueDropped !== undefined) {
     argv.push("--continue-dropped", spec.continueDropped.runId, "--continue-dropped-reason", spec.continueDropped.reason);
   }
+  // A probe campaign's cell names its own shape: the runner resolves it from
+  // the checked-in definition and refuses every flag that would set part of it
+  // (objective, race/class, wiki, leash). So a campaign spec's argv is its
+  // identity and nothing else.
+  if (spec.campaign !== undefined) {
+    argv.push("--episode", spec.episode ?? "probing", "--campaign", spec.campaign);
+    if (spec.cell !== undefined) argv.push("--cell", spec.cell);
+    if (spec.ref !== undefined) argv.push("--ref", spec.ref);
+    return argv;
+  }
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
   // Explicit value rather than a bare flag, so the runner's argv parser never
   // has to guess whether the next token is this flag's value.
@@ -671,11 +689,6 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // runner's argv parser ignores flags it does not know, so this is safe to
   // emit before the runner learns it.
   if (spec.episode !== undefined) argv.push("--episode", spec.episode);
-  // A probe's identity. Recorded on the run rather than derived: the
-  // scheduler counts these to know what a sweep still owes, and they are what
-  // keeps a campaign's results grouped once its config entry is gone.
-  if (spec.campaign !== undefined) argv.push("--campaign", spec.campaign);
-  if (spec.cell !== undefined) argv.push("--cell", spec.cell);
   // Race and class only: the name is the model's, and the runner records it.
   argv.push("--race", String(spec.race), "--class", String(spec.class));
   return [...argv, ...leashArgv(spec)];

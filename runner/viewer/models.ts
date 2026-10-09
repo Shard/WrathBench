@@ -266,7 +266,9 @@ export function readFleetRoster(dbPath: string = configDbPath(), series: string 
   };
   let campaigns: Campaign[] = [];
   try {
-    campaigns = parseCampaigns(parsed.campaigns);
+    // A row refused by name (no definition for its version, a closed one
+    // switched on) is left out exactly as the supervisor leaves it out.
+    campaigns = parseCampaigns(parsed.campaigns).campaigns;
   } catch {
     // See `campaigns` on RosterRead: unreadable reads as absent.
   }

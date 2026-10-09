@@ -297,10 +297,11 @@ describe("argv -> run config", () => {
   test("a ceiling that was given stays a number, and an absent one is still the 500-call guard", () => {
     // Disabling it is the policy freeplay lane's business (docs/EPISODES.md).
     // Every other launch keeps the runaway guard it has always had, including
-    // an arbitrary freeplay or probe job that names no ceiling of its own.
+    // an arbitrary freeplay job that names no ceiling of its own. A probe's
+    // ceiling is its campaign definition's, never a default.
     expect(configFromArgs(["--model", "m", "--max-tool-calls", "250"]).maxToolCallsPerEpisode).toBe(250);
     expect(configFromArgs(["--model", "m"]).maxToolCallsPerEpisode).toBe(500);
-    expect(configFromArgs(["--episode", "probing"]).maxToolCallsPerEpisode).toBe(500);
+    expect(configFromArgs(["--model", "m", "--campaign", "nav-probe@1", "--cell", "coldridge"]).maxToolCallsPerEpisode).toBe(2500);
     expect(configFromArgs(["--episode", "freeplay"]).maxToolCallsPerEpisode).toBe(500);
   });
 });

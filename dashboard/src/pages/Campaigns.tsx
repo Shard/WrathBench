@@ -2,17 +2,33 @@
  * Probe campaigns: the commissioned middle lane.
  *
  * Everything here is unscored by construction, so this page reports coverage
- * rather than performance — which cells have been swept, by how many models,
- * and what is left. There are no numbers to rank and none are offered; the
- * question a probe answers is "what happens when", and the answer is in the
- * runs.
+ * rather than performance — which cells have been swept, by which models, and
+ * what is left. One pane per campaign VERSION (a checked-in definition), with
+ * a cells × models grid: whether each square reached the definition's stop
+ * level and how many minutes of play it took. The grid is read, never ranked:
+ * cells keep the definition's order and columns the assignments' order, and
+ * nothing is sorted by a result (`probing` has no comparability group).
  */
 
 import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import { api, type CampaignRowView, type CampaignsResponse } from "../api/client";
 import { Collapsible } from "../components/Collapsible";
-import { campaignCosts, campaignLiveRuns, progressOf, type CampaignCost, type CampaignRunRow } from "../lib/campaigns";
+import {
+  campaignCosts,
+  campaignCoverage,
+  campaignLiveRuns,
+  campaignRowKey,
+  campaignState,
+  columnLabel,
+  columnTitle,
+  progressOf,
+  squareClass,
+  squareText,
+  squareTitle,
+  type CampaignCost,
+  type CampaignRunRow,
+} from "../lib/campaigns";
 import { useFeeds } from "../lib/feeds";
 import { progressLabel, progressTitle, rowProgress, rowStateLabel, runHref } from "../lib/fleet";
 import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
@@ -23,7 +39,7 @@ import { InfoHint } from "../components/InfoHint";
 
 /** What a campaign is, and why nothing here reaches a chart. */
 const CAMPAIGNS_NOTE =
-  "Commissioned exploration: objective-driven runs that probe ad-hoc scenarios. Every run is an unscored probe episode (see the about page), so nothing here reaches a chart or a target.";
+  "Commissioned sweeps of a checked-in campaign definition, one pane per version; every run is an unscored probe episode (see the about page), so nothing here reaches a chart or a target.";
 
 /** Campaign progress moves when a probe ends, which is a ~90-minute event. */
 const POLL_MS = 60_000;
@@ -36,13 +52,6 @@ const POLL_MS = 60_000;
  * run page is.
  */
 const RUNS_POLL_MS = 10_000;
-
-/** Cells done out of cells wanted, when the config still says what was wanted. */
-function coverage(row: CampaignRowView): string {
-  if (row.config === null) return `${row.cells.length} ${plural(row.cells.length, "cell")} run`;
-  const want = row.config.cells.length * row.config.runsPerCell * row.config.models;
-  return `${row.runs}/${want} ${plural(want, "run")}`;
-}
 
 /** `1 cell` / `3 cells`. The `(s)` form is a note to self and this page is read. */
 function plural(n: number, word: string): string {
@@ -61,15 +70,6 @@ function costTitle(c: CampaignCost): string {
   return `what the providers reported billing, summed over the runs that reported a charge, out of every run recorded against this campaign (live and failed included)${excluded}`;
 }
 
-function stateOf(row: CampaignRowView): { label: string; cls: string } {
-  if (row.config === null) return { label: "retired", cls: "dim" };
-  // A finished sweep reads quieter than a running one: same green, faded, so
-  // the vivid one on the page always means "something is happening here".
-  if (row.config.complete) return { label: "complete", cls: "ok-muted" };
-  if (!row.config.enabled) return { label: "off", cls: "warn" };
-  return { label: "sweeping", cls: "ok" };
-}
-
 export default function Campaigns() {
   const feed = poll(() => api.campaigns(), POLL_MS);
   // Every run on disk, read for the live rows inside the panes: the campaigns
@@ -83,8 +83,9 @@ export default function Campaigns() {
   const live = (): Map<string, CampaignRunRow[]> => campaignLiveRuns(fleet.latest, runs.latest ?? []);
   // Undefined until the runs feed lands, so a pane shows no figure rather than a
   // "0 of 0" that only means the feed is still in flight.
-  const cost = (campaign: string): CampaignCost | undefined =>
-    runs.latest === undefined ? undefined : campaignCosts(runs.latest).get(campaign);
+  const cost = (key: string): CampaignCost | undefined =>
+    runs.latest === undefined ? undefined : campaignCosts(runs.latest).get(key);
+  const keyOf = (row: CampaignRowView): string => campaignRowKey(row.campaign, row.version);
 
   return (
     <div class="page">
@@ -102,19 +103,15 @@ export default function Campaigns() {
 
       <Show when={body() !== undefined} fallback={<p class="dim">loading…</p>}>
         <Show when={rows().length === 0}>
-          <p class="dim">
-            No campaigns and no probe runs
-            <Show when={body()!.configPath !== null}> — {body()!.configPath} names none</Show>.
-          </p>
+          <p class="dim">no campaigns</p>
         </Show>
 
         <For each={rows()}>
           {(row) => (
             /*
-              One pane per campaign, closed until asked for: a sweep's cell table
-              is a detail, and the page's question — which sweeps exist and how far
-              along they are — is answered by the headings alone. The state word and
-              the coverage counts stay in the header row for that reason.
+              One pane per campaign version, closed until asked for: the grid is
+              a detail, and the page's question — which sweeps exist and how far
+              along they are — is answered by the headings alone.
 
               The storage key is not a nicety here. `poll()` hands back fresh objects
               every tick and `<For>` is keyed on reference, so without it every open
@@ -123,14 +120,15 @@ export default function Campaigns() {
             <Collapsible
               title={
                 <>
-                  {row.campaign} <span class={stateOf(row).cls}>{stateOf(row).label}</span>
+                  <span title={row.definition?.question ?? ""}>{keyOf(row)}</span>{" "}
+                  <span class={campaignState(row).cls}>{campaignState(row).label}</span>
                 </>
               }
               summary={
                 <>
-                  {coverage(row)}
+                  {campaignCoverage(row)}
                   <Show when={row.live > 0}> · {row.live} live</Show>
-                  <Show when={cost(row.campaign)}>
+                  <Show when={cost(keyOf(row))}>
                     {(c) => (
                       <>
                         {" · "}
@@ -140,59 +138,34 @@ export default function Campaigns() {
                       </>
                     )}
                   </Show>
-                  {/* The account NAME is operator detail and is being taken
-                      out of the public projection; that it is pinned at all is
-                      the fact a reader of this page needs. */}
-                  <Show when={row.config?.account != null}> · pinned to a dedicated account</Show>
+                  {/* The account NAME is operator detail and is kept out of the
+                      public projection; that it is pinned at all is the fact a
+                      reader of this page needs. */}
+                  <Show when={row.config?.account != null}> · pinned</Show>
+                  <Show when={row.newestRunId !== null}>
+                    {" · "}
+                    <A href={`/run/${encodeURIComponent(row.newestRunId!)}`} title={row.newestRunId!}>
+                      newest {fmtWhen(row.newestAt)}
+                    </A>
+                  </Show>
                 </>
               }
-              storageKey={`wrathbench.campaigns.${row.campaign}`}
+              storageKey={`wrathbench.campaigns.${keyOf(row)}`}
             >
-              <p class="dim">
-                <Show
-                  when={row.config !== null}
-                  fallback={
-                    /* Not an error: see the module comment. The runs are the record. */
-                    <>
-                      No config entry names this campaign any more, so there is nothing to compare
-                      its runs against. They are still its results.
-                    </>
-                  }
-                >
-                  {row.config!.models} {plural(row.config!.models, "model")} ×{" "}
-                  {row.config!.cells.length} {plural(row.config!.cells.length, "cell")} ×{" "}
-                  {row.config!.runsPerCell} {plural(row.config!.runsPerCell, "run")} per cell.
-                </Show>
-                <Show when={row.newestRunId !== null}>
-                  {" "}
-                  Newest:{" "}
-                  <A href={`/run/${encodeURIComponent(row.newestRunId!)}`}>{row.newestRunId}</A>{" "}
-                  ({fmtWhen(row.newestAt)}).
-                </Show>
-              </p>
-
               {/*
                 What is running right now, listed the way the fleet page lists
                 the same rows — same state badge, same lvl/xp and elapsed cells,
                 same click-through — because it is the same job seen from the
                 campaign's side rather than the supervisor's. The rows are
                 joined client-side (lib/campaigns); nothing here re-derives a
-                fleet row.
-              */}
-              {/*
-                Both feeds, not just the runs one: the live rows are a join of
-                the runs feed with the shared fleet feed, and with the fleet
-                still in flight the join is legitimately empty — which would
-                have read as "No live runs" rather than "not known yet".
+                fleet row. Both feeds, not just the runs one: with the fleet
+                still in flight the join is legitimately empty.
               */}
               <Show
                 when={runs.latest !== undefined && fleet.latest !== undefined}
                 fallback={<p class="dim">live runs: loading…</p>}
               >
-                <Show
-                  when={(live().get(row.campaign) ?? []).length > 0}
-                  fallback={<p class="dim">No live runs.</p>}
-                >
+                <Show when={(live().get(keyOf(row)) ?? []).length > 0}>
                   <div class="scroller">
                     <table>
                       <thead>
@@ -207,47 +180,69 @@ export default function Campaigns() {
                         </tr>
                       </thead>
                       <tbody>
-                        <For each={live().get(row.campaign) ?? []}>{(r) => <LiveRunRow row={r} />}</For>
+                        <For each={live().get(keyOf(row)) ?? []}>{(r) => <LiveRunRow row={r} />}</For>
                       </tbody>
                     </table>
                   </div>
                 </Show>
               </Show>
 
+              {/*
+                The grid: cells as rows in the definition's order, model
+                identities as columns in the assignments' order. A square reads
+                reached/counted and the median minutes of play to the stop
+                level; a definition with no stop level shows the best level.
+              */}
               <div class="scroller">
                 <table>
                   <thead>
                     <tr>
                       <th>cell</th>
+                      <th>start</th>
                       <th class="right">runs</th>
-                      <th class="right" title="the best level any run of this cell reached — a coverage signal, never a score">
-                        best level
-                      </th>
-                      <th>models</th>
+                      <th class="right" title="best level any run of this cell reached">best</th>
+                      <For each={row.columns}>
+                        {(col) => (
+                          <th class="right" title={columnTitle(col)}>
+                            {columnLabel(col, modelDisplay)}
+                          </th>
+                        )}
+                      </For>
                     </tr>
                   </thead>
                   <tbody>
                     <For each={row.cells}>
-                      {(c) => (
+                      {(c, i) => (
                         <tr>
                           <td>
                             {c.cell}
-                            {/* A cell the config dropped after runs happened: shown,
-                                because pretending the run did not happen is worse. */}
                             <Show when={!c.declared}>
                               {" "}
-                              <span class="dim" title="no longer declared by the config">
+                              <span class="dim" title="not a cell of this definition">
                                 (undeclared)
                               </span>
+                            </Show>
+                          </td>
+                          <td class="dim" title={c.note ?? ""}>
+                            {c.characterLabel ?? "—"}
+                            <Show when={c.note !== null}>
+                              <span class="dim">*</span>
                             </Show>
                           </td>
                           <td class={`right mono ${c.runs === 0 ? "dim" : ""}`}>{c.runs}</td>
                           <td class="right mono dim">
                             <LevelXp level={c.bestLevel} xp={null} compact />
                           </td>
-                          <td class="dim" title={c.models.join(", ")}>
-                            {c.models.length > 0 ? c.models.map(modelDisplay).join(", ") : "—"}
-                          </td>
+                          <For each={row.grid[i()] ?? []}>
+                            {(sq) => (
+                              <td
+                                class={squareClass(sq, row.definition?.stopAtLevel ?? null)}
+                                title={squareTitle(sq, row.definition?.stopAtLevel ?? null)}
+                              >
+                                {squareText(sq, row.definition?.stopAtLevel ?? null)}
+                              </td>
+                            )}
+                          </For>
                         </tr>
                       )}
                     </For>
@@ -259,9 +254,8 @@ export default function Campaigns() {
         </For>
 
         <Show when={body()!.orphans > 0}>
-          <p class="banner warn">
-            {body()!.orphans} probe {plural(body()!.orphans, "run")} recorded no campaign, so they
-            are excluded from the coverage counts above.
+          <p class="banner warn" title="probe runs no campaign claims, left out of every count above">
+            {body()!.orphans} unattributed probe {plural(body()!.orphans, "run")}
           </p>
         </Show>
       </Show>

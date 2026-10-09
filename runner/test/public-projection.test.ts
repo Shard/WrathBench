@@ -962,23 +962,51 @@ describe("projectEpisodes", () => {
 });
 
 describe("projectCampaigns", () => {
-  test("emits exactly the allowlist; the config path is withheld", () => {
+  test("emits exactly the allowlist; the config path and the pinned account are withheld", () => {
     const input: CampaignsResponse = smuggle<CampaignsResponse>({
       campaigns: [
         smuggle({
-          campaign: "sweep-1",
+          campaign: "race-probe",
+          version: 1,
+          definition: smuggle({ status: "open" as const, question: "q", stopAtLevel: 10, episodeMs: 43_200_000 }),
           config: smuggle({
             enabled: true,
-            runsPerCell: 2,
-            cells: ["cell-a"],
-            models: 3,
+            assignments: [smuggle({ model: "codex-sol-61", runsPerCell: 1 })],
+            want: 10,
             complete: false,
             account: "PROBE",
           }),
           runs: 4,
           live: 1,
           models: ["test/model"],
-          cells: [smuggle({ cell: "cell-a", declared: true, runs: 4, models: ["test/model"], bestLevel: 5 })],
+          cells: [
+            smuggle({
+              cell: "orc-warrior",
+              declared: true,
+              race: 2,
+              class: 1,
+              characterLabel: "Orc Warrior",
+              note: null,
+              runs: 4,
+              models: ["test/model"],
+              bestLevel: 10,
+              mismatched: 0,
+            }),
+          ],
+          columns: [smuggle({ key: "k", model: "test/model", effort: null, compactWindow: null, harness: "codex", series: "0.5", assignment: "codex-sol-61" })],
+          grid: [
+            [
+              smuggle({
+                runs: 4,
+                live: 0,
+                counted: 4,
+                reached: 3,
+                minutesToTarget: smuggle({ min: 287, median: 301, max: 350 }),
+                bestLevel: 10,
+                mismatched: 0,
+              }),
+            ],
+          ],
           newestRunId: "fixture-run-1",
           newestAt: 1000,
         }),
@@ -993,13 +1021,29 @@ describe("projectCampaigns", () => {
         "campaigns",
         ...under("campaigns[]", [
           "campaign",
+          "version",
+          "definition",
+          ...under("definition", ["status", "question", "stopAtLevel", "episodeMs"]),
           "config",
-          ...under("config", ["enabled", "runsPerCell", "cells", "models", "complete"]),
+          ...under("config", ["enabled", "assignments", ...under("assignments[]", ["model", "runsPerCell"]), "want", "complete"]),
           "runs",
           "live",
           "models",
           "cells",
-          ...under("cells[]", ["cell", "declared", "runs", "models", "bestLevel"]),
+          ...under("cells[]", ["cell", "declared", "race", "class", "characterLabel", "note", "runs", "models", "bestLevel", "mismatched"]),
+          "columns",
+          ...under("columns[]", ["key", "model", "effort", "compactWindow", "harness", "series", "assignment"]),
+          "grid",
+          ...under("grid[][]", [
+            "runs",
+            "live",
+            "counted",
+            "reached",
+            "minutesToTarget",
+            ...under("minutesToTarget", ["min", "median", "max"]),
+            "bestLevel",
+            "mismatched",
+          ]),
           "newestRunId",
           "newestAt",
         ]),

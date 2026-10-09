@@ -31,6 +31,7 @@ import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
 import { platformOf as sharedPlatformOf } from "../src/platform";
+import { attributeCampaign } from "../src/campaign-defs";
 
 /**
  * A run counts as live when it has not terminated and its trajectory grew
@@ -92,6 +93,7 @@ interface MetaShape {
     objective?: string;
     campaign?: string;
     cell?: string;
+    campaignVersion?: number;
     continuedFrom?: string;
   };
 }
@@ -105,6 +107,23 @@ interface MetaShape {
  */
 export function platformOf(apiBase: string | null, driver: string | null): string | null {
   return sharedPlatformOf(apiBase, driver);
+}
+
+/**
+ * A run's campaign, cell, version and how it was placed — read, never written
+ * back (`attributeCampaign`). One helper for both row builders (this file's
+ * and the store's `runRowOf`), so the two listings cannot attribute a run
+ * differently.
+ */
+export function campaignFieldsOf(
+  runId: string,
+  campaign: string | null,
+  campaignVersion: number | null,
+  cell: string | null,
+): Pick<RunRow, "campaign" | "cell" | "campaignVersion" | "campaignSource"> {
+  const a = attributeCampaign({ runId, campaign, campaignVersion, cell });
+  if (a === null) return { campaign: null, cell: null, campaignVersion: null, campaignSource: null };
+  return { campaign: a.campaign, cell: a.cell, campaignVersion: a.version, campaignSource: a.source };
 }
 
 function readMetaSafe(dir: string): MetaShape | null {
@@ -207,8 +226,12 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     harness: null,
     shakeout: null,
     objective: null,
+    // In the order `campaignFieldsOf` writes them, so this row and the store's
+    // `runRowOf` serialise field for field alike.
     campaign: null,
     cell: null,
+    campaignVersion: null,
+    campaignSource: null,
     extra: false,
     comparability: null,
     character: null,
@@ -245,8 +268,6 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     row.shakeout = str(meta.shakeout);
     row.model = str(meta.config?.model);
     row.objective = str(meta.config?.objective);
-    row.campaign = str(meta.config?.campaign);
-    row.cell = str(meta.config?.cell);
     row.extra = meta.config?.extra === true;
     // The freeplay character this launch continues. Read from meta first and from
     // the run row below, the same order every other config-and-column fact
@@ -284,6 +305,9 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
      */
     row.comparability = parseComparability(meta.comparability) as ComparabilityView | null;
   }
+  // Attributed whether or not the meta was readable: a closed definition names
+  // its members by run id, which needs nothing from the run but its id.
+  Object.assign(row, campaignFieldsOf(runId, str(meta?.config?.campaign), num(meta?.config?.campaignVersion), str(meta?.config?.cell)));
 
   const jsonl = join(dir, "trajectory.jsonl");
   if (existsSync(jsonl)) {
