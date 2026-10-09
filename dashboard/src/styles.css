@@ -610,6 +610,23 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .xpchart { width: 100%; height: auto; display: block; margin: 4px 0 12px;
            background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 .xpchart.empty { height: auto; padding: 14px 12px; font-size: var(--fs-sm); }
+/* The compact drawing inside a sidebar card: the card is its frame. */
+.xpchart.compact { margin: 4px 0 0; background: none; border: 0; border-radius: 0; }
+
+/*
+ * A chart as a sidebar card (components/ChartCard.tsx): a button that reads as
+ * one more `.card`, opening the full drawing in a modal `<dialog>`. The body
+ * carries the padding so a click on the dialog's own box is the backdrop's.
+ */
+.chart-card { display: block; width: 100%; text-align: left; }
+.chart-card .k { display: block; }
+.chart-dialog { width: min(1100px, calc(100vw - 32px)); max-width: none; max-height: calc(100vh - 32px);
+                padding: 0; color: var(--fg); background: var(--bg);
+                border: 1px solid var(--line); border-radius: 6px; }
+.chart-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.chart-dialog-body { position: relative; padding: 12px 16px; }
+.chart-dialog-body > h2.section:first-of-type { margin-top: 0; }
+.chart-dialog-close { position: absolute; top: 10px; right: 16px; }
 
 /* The ladder's scatter: viewBox-scaled, never wider than the page. */
 .ladderchart { width: 100%; max-width: 100%; height: auto; display: block; margin: 4px 0 6px;

@@ -26,9 +26,14 @@ function tickLabel(ms: number): string {
   return `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
-/** The shared width, and a height of its own: this is a strip under a run's log, not a plot of its own. */
-const VB_H = 200;
-const M = { top: 12, right: 14, bottom: 24, left: 48 };
+/**
+ * Two sizes of one drawing. The full one takes the shared width and a strip's
+ * height. The compact one is a sidebar card: a viewBox near the card's own
+ * pixel width, so the tick text stays legible scaled down, and only the labels
+ * that orient a reader — the first and last level, the two ends of the axis.
+ */
+const FULL = { w: VB_W, h: 200, m: { top: 12, right: 14, bottom: 24, left: 48 }, ticks: 5, tickY: 15 };
+const COMPACT = { w: 300, h: 100, m: { top: 6, right: 6, bottom: 16, left: 26 }, ticks: 1, tickY: 13 };
 
 export function XpChart(props: {
   states: readonly StatePoint[];
@@ -43,7 +48,11 @@ export function XpChart(props: {
    * sessions with nothing marking where they met reads as one long climb.
    */
   seams?: readonly { at: number; label: string }[];
+  /** The sidebar card's size: fewer labels, and no frame of its own (the card is the frame). */
+  compact?: boolean;
 }) {
+  const size = props.compact === true ? COMPACT : FULL;
+  const M = size.m;
   const model = createMemo(() =>
     xpChartModel(props.states, {
       startedAt: props.startedAt,
@@ -53,7 +62,7 @@ export function XpChart(props: {
     }),
   );
 
-  const plot = { x0: M.left, x1: VB_W - M.right, y0: VB_H - M.bottom, y1: M.top };
+  const plot = { x0: M.left, x1: size.w - M.right, y0: size.h - M.bottom, y1: M.top };
   const px = (ts: number): number => scaleLinear([model().t0, model().t1], [plot.x0, plot.x1])(ts);
   const py = (cum: number): number => scaleLinear([0, model().yMax], [plot.y0, plot.y1])(cum);
 
@@ -63,25 +72,42 @@ export function XpChart(props: {
       .join(" "),
   );
 
-  /* A handful of evenly spaced time ticks across the window. */
+  /* Evenly spaced time ticks across the window: a handful, or just the two ends. */
   const ticks = createMemo(() => {
     const m = model();
-    const n = 5;
+    const n = size.ticks;
     return Array.from({ length: n + 1 }, (_, i) => {
       const ts = m.t0 + ((m.t1 - m.t0) * i) / n;
-      return { ts, label: tickLabel(ts - m.t0) };
+      // The last tick ends at the plot's edge rather than centring on it, which
+      // pushed "21h 37m" out of the viewBox; the compact axis's first tick
+      // starts at the other edge for the same reason.
+      const anchor: "start" | "middle" | "end" = i === n ? "end" : n > 1 ? "middle" : "start";
+      return { ts, label: tickLabel(ts - m.t0), anchor };
     });
   });
+
+  /* Which bands carry a label: every one, or only the first and the last. */
+  const labelled = (i: number): boolean => props.compact !== true || i === 0 || i === model().bands.length - 1;
 
   return (
     <Show
       when={model().points.length >= 2}
       fallback={
-        <div class="xpchart empty dim">no xp recorded yet — the chart appears once the run reports progress</div>
+        // A span in the compact card, which is a button and takes phrasing content only.
+        props.compact === true ? (
+          <span class="sub">no xp yet</span>
+        ) : (
+          <div class="xpchart empty dim">no xp recorded yet — the chart appears once the run reports progress</div>
+        )
       }
     >
       {/* No preserveAspectRatio="none": stretching the viewBox to a fixed CSS height crushes the tick text. */}
-      <svg class="xpchart" viewBox={`0 0 ${VB_W} ${VB_H}`} role="img" aria-label="cumulative xp with level bands">
+      <svg
+        class={props.compact === true ? "xpchart compact" : "xpchart"}
+        viewBox={`0 0 ${size.w} ${size.h}`}
+        role="img"
+        aria-label="cumulative xp with level bands"
+      >
         <title>cumulative xp over time, level bands on the y-axis</title>
         {/* Axes */}
         <line x1={plot.x0} y1={plot.y0} x2={plot.x1} y2={plot.y0} stroke="var(--line)" />
@@ -89,12 +115,14 @@ export function XpChart(props: {
 
         {/* Level bands: a gridline at the cumulative xp where each level began. */}
         <For each={model().bands}>
-          {(b) => (
+          {(b, i) => (
             <>
               <line x1={plot.x0} y1={py(b.cum)} x2={plot.x1} y2={py(b.cum)} stroke="var(--gridline)" stroke-dasharray="3 3" />
-              <text x={plot.x0 - 6} y={py(b.cum) + 3} text-anchor="end" font-size="11" fill="var(--dim)">
-                L{b.level}
-              </text>
+              <Show when={labelled(i())}>
+                <text x={plot.x0 - 6} y={py(b.cum) + 3} text-anchor="end" font-size="11" fill="var(--dim)">
+                  L{b.level}
+                </text>
+              </Show>
             </>
           )}
         </For>
@@ -102,7 +130,7 @@ export function XpChart(props: {
         {/* Time ticks along the bottom. */}
         <For each={ticks()}>
           {(t) => (
-            <text x={px(t.ts)} y={plot.y0 + 15} text-anchor="middle" font-size="11" fill="var(--dim)">
+            <text x={px(t.ts)} y={plot.y0 + size.tickY} text-anchor={t.anchor} font-size="11" fill="var(--dim)">
               {t.label}
             </text>
           )}
