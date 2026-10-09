@@ -451,6 +451,101 @@ describe("playtime", () => {
   });
 });
 
+/**
+ * A run paused and resumed in place days later, the way the fleet resumes a
+ * paused freeplay run: one run id, one trajectory, a `pause` and a `resume`
+ * with the gap between them, the duplicate `meta` records `run.ts` writes at
+ * each, and a quest counter the resumed process starts again at zero.
+ */
+function resumedInPlaceFixture(): { runs: string; id: string } {
+  const runs = tempDir("viewer-resumed-");
+  const id = "resumed-in-place";
+  const dir = join(runs, id);
+  mkdirSync(dir, { recursive: true });
+  const DAY = 86_400_000;
+  const resume = 5_000 + 5 * DAY;
+  writeFileSync(join(dir, "meta.json"), JSON.stringify({ runId: id, startedAt: 1000, config: {} }));
+  const lines = [
+    { ts: 1000, t: "meta", runId: id },
+    // A model reply, or the launch would be stillborn and have no character.
+    { ts: 1500, t: "response", turn: 1, message: { role: "assistant", content: "hello" } },
+    { ts: 2000, t: "state", level: 2 },
+    { ts: 5000, t: "pause", reason: "operator-pause" },
+    { ts: 5005, t: "meta", runId: id },
+    { ts: resume, t: "resume", after: "operator-pause" },
+    { ts: resume + 6, t: "meta", runId: id },
+    { ts: resume + 3000, t: "termination", reason: "operator" },
+  ];
+  writeFileSync(join(dir, "trajectory.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  const db = new Database(join(dir, "run.sqlite"));
+  db.run(
+    `CREATE TABLE run (run_id TEXT, model TEXT, driver TEXT, shakeout TEXT,
+       harness_version TEXT, started_at INTEGER, ended_at INTEGER, termination_reason TEXT,
+       termination_detail TEXT, pause_reason TEXT, config_json TEXT)`,
+  );
+  db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
+    id, "test/model", "openai", null, "harness-test", 1000, resume + 3000, "operator", null, null, "{}",
+  ]);
+  db.run(
+    `CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER, map INTEGER,
+       x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, money INTEGER,
+       quests_completed INTEGER)`,
+  );
+  // Three quests before the pause; the resumed process counts two of its own from zero.
+  for (const [ts, q] of [[2000, 1], [4000, 3], [resume + 1000, 0], [resume + 2000, 2]] as const) {
+    db.run(`INSERT INTO state VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [id, ts, 2, 100, 0, 0, 0, 0, 1, 1, 50, q]);
+  }
+  db.close();
+  return { runs, id };
+}
+
+describe("a run resumed in place", () => {
+  test("the run page serves its two sessions, its playtime without the gap and its whole quest count", async () => {
+    const { runs, id } = resumedInPlaceFixture();
+    const detail = (await (await api(runs)(new Request(`http://x/api/run/${id}`))).json()) as {
+      run: { questsCompleted: number | null };
+      states: { questsCompleted?: number | null }[];
+      sessions?: { start: number; end: number | null }[];
+      playtimeMs: number | null;
+    };
+    expect(detail.sessions).toEqual([
+      { start: 1000, end: 5000 },
+      { start: 5_000 + 5 * 86_400_000, end: 5_000 + 5 * 86_400_000 + 3000 },
+    ]);
+    expect(detail.playtimeMs).toBe(4000 + 3000);
+    expect(detail.states.map((s) => s.questsCompleted)).toEqual([1, 3, 0, 2]);
+    expect(detail.run.questsCompleted).toBe(5);
+  });
+
+  test("the listing row and the character carry the same sessions and the same count", async () => {
+    const { runs, id } = resumedInPlaceFixture();
+    const handle = api(runs);
+    const results = (await (await handle(new Request("http://x/api/results?episode=all"))).json()) as {
+      runs: { runId: string; questsCompleted: number | null; sessions?: unknown[] }[];
+    };
+    const row = results.runs.find((r) => r.runId === id)!;
+    expect(row.questsCompleted).toBe(5);
+    expect(row.sessions).toHaveLength(2);
+
+    const character = (await (await handle(new Request(`http://x/api/character/${id}`))).json()) as {
+      character: { attempts: number; runs: { sessions?: unknown[] }[]; totals: { questsCompleted: number | null } };
+    };
+    expect(character.character.attempts).toBe(1);
+    expect(character.character.runs[0]!.sessions).toHaveLength(2);
+    expect(character.character.totals.questsCompleted).toBe(5);
+  });
+
+  test("public mode serves the sessions and the per-sample count too", async () => {
+    const { runs, id } = resumedInPlaceFixture();
+    const detail = (await (await api(runs, true)(new Request(`http://x/api/run/${id}`))).json()) as {
+      states: { questsCompleted?: number | null }[];
+      sessions?: unknown[];
+    };
+    expect(detail.sessions).toHaveLength(2);
+    expect(detail.states.map((s) => s.questsCompleted)).toEqual([1, 3, 0, 2]);
+  });
+});
+
 describe("scoreability projection", () => {
   test("results keep every invalid historical row visible but episodes exclude all tainted members", async () => {
     const runs = scoreabilityFixture();

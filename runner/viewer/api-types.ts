@@ -291,6 +291,12 @@ export interface RunRow {
   xp: number | null;
   /** Copper on hand, and quests turned in. Null when this run's schema predates them. */
   money: number | null;
+  /**
+   * The newest sample's quest count on a listing row. That counter is the
+   * running process's own and starts again at a resume, so `/api/run/<id>`,
+   * which holds the run's series, serves the whole run's sum instead
+   * (`questsAcrossRestarts`, as on `ResultRun.questsCompleted`).
+   */
   questsCompleted: number | null;
   /**
    * What the character wears and carries, from the newest state sample that
@@ -371,6 +377,13 @@ export interface StatePoint {
   powerType?: number | null;
   /** The XP bar's denominator, as the client shows it. */
   nextLevelXp?: number | null;
+  /**
+   * Quests turned in by the process that took the sample — it restarts at
+   * zero on a resume or a sandbox restart, which is why a run's total is
+   * summed across those restarts (`questsAcrossRestarts`). Optional for the
+   * reason the frame's numbers are.
+   */
+  questsCompleted?: number | null;
 }
 
 /** Provider-reported usage for one turn, normalised across driver shapes. */
@@ -914,6 +927,12 @@ export interface CharacterAttempt {
    * draw the character's stitched level series without fetching every attempt.
    */
   levels: LevelMark[];
+  /**
+   * The attempt's sessions (`ResultRun.sessions`), so the character page can
+   * lay every sample on one session clock and mark each resume as well as
+   * each new attempt. Optional for the reason it is on `ResultRun`.
+   */
+  sessions?: ActiveSegment[];
 }
 
 /**
@@ -1037,6 +1056,18 @@ export interface CharacterView {
   totals: CharacterTotals;
 }
 
+/**
+ * One session: a stretch of a run during which the harness was actually
+ * driving, from its first `meta` or a `resume` to a `pause` or the
+ * `termination` (`runner/viewer/sessions.ts`, which owns the derivation). A
+ * run resumed in place days later is two of these under one run id.
+ */
+export interface ActiveSegment {
+  start: number;
+  /** Null while the segment is still open — the run had not paused or ended. */
+  end: number | null;
+}
+
 export interface RunDetailResponse extends SnapshotEnvelope {
   run: RunRow;
   states: StatePoint[];
@@ -1046,6 +1077,13 @@ export interface RunDetailResponse extends SnapshotEnvelope {
   cost: CostView;
   /** Cumulative active time; see `RunListRow.playtimeMs`. */
   playtimeMs: number | null;
+  /**
+   * The run's sessions, oldest first — the segments `playtimeMs` sums, read
+   * off the same marks. The run page lays its samples on them so a pause is
+   * closed rather than drawn. Optional: a snapshot published before the field
+   * has none, and the page then draws the wall clock as it always did.
+   */
+  sessions?: ActiveSegment[];
   /**
    * Achievements and flights from this run's milestone records,
    * accumulated by the same incremental tail the entry feed rides, so a live
@@ -1705,6 +1743,11 @@ export interface ResultRun {
    * recorded; zero is a real reading.
    */
   money: number | null;
+  /**
+   * Quests turned in over the whole run, summed across the counter's restarts
+   * (`questsAcrossRestarts`): the recorded count is the running process's own,
+   * so a resume or a sandbox restart starts it again at zero.
+   */
   questsCompleted: number | null;
   /** Maps the run was observed on, for the ladder's Outland/Northrend rungs. */
   maps: number[];
@@ -1717,6 +1760,12 @@ export interface ResultRun {
   character: string | null;
   /** Cumulative active time; the same figure `RunListRow.playtimeMs` carries. */
   playtimeMs: number | null;
+  /**
+   * The sessions that playtime sums (`RunDetailResponse.sessions`). Optional:
+   * a viewer or snapshot that predates the field omits it, and a reader then
+   * treats the run as one session.
+   */
+  sessions?: ActiveSegment[];
   /** The run's token totals, or null when the trajectory could not be read. */
   tokens: TokenTotals | null;
   /**

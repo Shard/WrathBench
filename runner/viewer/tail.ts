@@ -48,6 +48,7 @@ import {
   windowEntryIndices,
 } from "../src/request-record";
 import { MODEL_RESPONSE_RECORD } from "./archive-dir";
+import { SEGMENT_MARKS, segmentsFrom, type ActiveSegment, type SegmentMark } from "./sessions";
 
 const NEWLINE = 0x0a;
 
@@ -1067,98 +1068,6 @@ export function responseCostCoverage(entries: readonly { t: string; [k: string]:
   }
   const unreported = claude.unreported();
   return unreported === undefined ? { costed, uncosted } : { costed, uncosted, unreported };
-}
-
-/** One stretch of a run during which the harness was actually driving. */
-export interface ActiveSegment {
-  start: number;
-  /** Null while the segment is still open — the run had not paused or ended. */
-  end: number | null;
-}
-
-/** The record kinds that open or close an active segment. */
-export const SEGMENT_MARKS = new Set(["meta", "resume", "pause", "termination"]);
-
-/** The trajectory records that open and close an active segment. */
-export interface SegmentMark {
-  t: string;
-  ts: number;
-}
-
-/**
- * Split a run into the stretches it was actually being driven.
- *
- * A run's wall clock span is not its playtime: `--resume` picks a run up hours
- * after a rate limit paused it, and the gap belongs to nobody. A segment opens
- * at `meta` (the first launch) and at each `resume`, and closes at each `pause`
- * or `termination`. The last segment stays open when the run neither paused nor
- * ended — `playtimeMs` decides what to close it at.
- *
- * Only the FIRST `meta` opens a segment. `writeMeta` appends a `meta` record
- * every time it is called, and run.ts calls it mid-file for two reasons that
- * must not count as driving: a resume that regenerates the session token
- * (which follows the `resume` mark and would otherwise open a duplicate), and
- * the pause mark itself, written milliseconds after the `pause` record (commit
- * 08cd691). That second case is what over-read every paused run at 100%+ of
- * its budget on the fleet page until 2026-08-25: pause closed the segment and
- * the pause-mark `meta` reopened it, so the whole quota wait counted as
- * playtime. Reopening after a pause is `resume`'s job alone.
- *
- * A trajectory whose first record is neither `meta` nor `resume` — an older or
- * truncated file — opens its first segment at that record, so playtime degrades
- * to the old span rather than to zero.
- */
-export function segmentsFrom(marks: readonly SegmentMark[]): ActiveSegment[] {
-  const out: ActiveSegment[] = [];
-  let open: number | null = null;
-  for (const m of marks) {
-    if (m.ts <= 0) continue;
-    if (m.t === "resume") {
-      if (open === null) open = m.ts;
-    } else if (m.t === "meta") {
-      if (open === null && out.length === 0) open = m.ts;
-    } else if (m.t === "pause" || m.t === "termination") {
-      if (open !== null) {
-        out.push({ start: open, end: m.ts });
-        open = null;
-      }
-    } else if (open === null && out.length === 0) {
-      open = m.ts;
-    }
-  }
-  if (open !== null) out.push({ start: open, end: null });
-  return out;
-}
-
-/**
- * Cumulative active time: the sum of the segments, with an open one closed at
- * `now` for a live run and at the last entry otherwise.
- *
- * A run that is paused right now has no open segment, so a fresh mtime (the
- * sqlite file still being touched) cannot make the current pause count.
- *
- * Close to, but not the same as, what the `episode-limit` watchdog measures.
- * `Watchdogs` is constructed fresh in each worker process, but since 08cd691
- * run.ts passes `elapsedBeforeMs` from the persisted `episodeElapsedMs`, so the
- * episode clock CARRIES ACROSS A PAUSE rather than resetting on every resume
- * (this comment said otherwise until). Both clocks now exclude paused
- * time and differ only in how they accumulate it: the watchdog rewinds one
- * start point by the elapsed total, this sums the observed active segments. So
- * the two track each other, and neither is a subset of the other — a run that
- * died without recording its elapsed time resumes the watchdog at zero while
- * the segments here still remember the earlier work.
- */
-export function playtimeMs(
-  segments: readonly ActiveSegment[],
-  opts: { lastTs: number | null; live: boolean; now: number },
-): number | null {
-  if (segments.length === 0) return null;
-  let total = 0;
-  for (const seg of segments) {
-    const end = seg.end ?? (opts.live ? opts.now : (opts.lastTs ?? seg.start));
-    total += Math.max(0, end - seg.start);
-  }
-  return total;
 }
 
 /* --------------------------------------------------- the resolved model id */

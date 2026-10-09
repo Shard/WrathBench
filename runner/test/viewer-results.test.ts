@@ -9,8 +9,8 @@
 
 import { describe, expect, test } from "bun:test";
 import type { RunRow, StatePoint } from "../viewer/api-types";
+import { activeMsUntil } from "../viewer/sessions";
 import {
-  activeMsUntil,
   resultRunOf,
   levelMarks,
   mapsOf,
@@ -375,6 +375,23 @@ describe("resultRunOf", () => {
     ], []);
     expect(e.xpEarned).toBe(350);
     expect(resultRunOf(run(), [], []).xpEarned).toBeNull();
+  });
+
+  test("quests are the whole run's across a resume, and the sessions ride on the row", () => {
+    const sessions = [
+      { start: 0, end: 5000 },
+      { start: 900_000, end: null },
+    ];
+    const e = resultRunOf(run({ questsCompleted: 1 }), [
+      state({ ts: 1000, questsCompleted: 2 }),
+      state({ ts: 4000, questsCompleted: 60 }),
+      state({ ts: 901_000, questsCompleted: 0 }),
+      state({ ts: 902_000, questsCompleted: 1 }),
+    ], sessions);
+    expect(e.questsCompleted).toBe(61);
+    expect(e.sessions).toEqual(sessions);
+    // A series that carried no count keeps the row's own reading.
+    expect(resultRunOf(run({ questsCompleted: 3 }), [state({ ts: 1000 })], []).questsCompleted).toBe(3);
   });
 
   test("falls back to the run's own level when no sample carried one", () => {

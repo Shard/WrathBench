@@ -389,6 +389,29 @@ describe("characterViewOf", () => {
     expect(view?.previous).toBe("a1");
   });
 
+  test("each attempt carries its own sessions, so a chain's seams and a resume inside it both reach the page", () => {
+    const view = characterViewOf(
+      "a2",
+      chain(
+        { sessions: [{ start: 0, end: 100 }], questsCompleted: 4, playtimeMs: 100 },
+        {
+          // Resumed in place: two sessions under one run id, its count already summed across the restart.
+          sessions: [
+            { start: 1000, end: 1200 },
+            { start: 500_000, end: null },
+          ],
+          questsCompleted: 6,
+          playtimeMs: 300,
+        },
+        {},
+      ),
+    )!;
+    expect(view.runs.map((r) => r.sessions?.length)).toEqual([1, 2, undefined]);
+    expect(view.attempts).toBe(3);
+    expect(view.totals.questsCompleted).toBe(10);
+    expect(view.totals.playtimeMs).toBe(400);
+  });
+
   test("call counts sum over the attempts that recorded them", () => {
     const view = characterViewOf(
       "a2",

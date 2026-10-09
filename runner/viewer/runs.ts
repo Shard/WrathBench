@@ -418,6 +418,7 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
       maxPower: num(r["max_power"]),
       powerType: num(r["power_type"]),
       nextLevelXp: num(r["next_level_xp"]),
+      questsCompleted: num(r["quests_completed"]),
     }));
   } catch {
     return [];

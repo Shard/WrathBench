@@ -333,6 +333,7 @@ function resultsFixture(): ResultsResponse {
         maps: [0, 1],
         character: CHARACTER_NAME,
         playtimeMs: 1000,
+        sessions: [smuggle({ start: 1000, end: 2000 }), smuggle({ start: 9000, end: null })],
         tokens: tokensFixture(),
         actualCost: costFigureFixture(),
         expectedCost: costFigureFixture(),
@@ -468,7 +469,10 @@ const RUN_LIST_ROW_KEYS = [
 const STATE_KEYS = ["ts", "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "turn",
   // The player frame's numbers: public on every surface that
   // carries a state sample, as they are on the positions feed.
-  "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp"];
+  "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
+  // Already public as the run row's count; per sample it totals a run
+  // resumed in place across its restart.
+  "questsCompleted"];
 const RESULT_RUN_KEYS = [
   "runId",
   "model",
@@ -515,6 +519,9 @@ const RESULT_RUN_KEYS = [
   "maps",
   "character",
   "playtimeMs",
+  // Two timestamps per session, on the clock every row already carries.
+  "sessions",
+  ...under("sessions[]", ["start", "end"]),
   "tokens",
   ...under("tokens", TOKENS_KEYS),
   "actualCost",
@@ -636,6 +643,7 @@ describe("projectRunDetail", () => {
       tokens: tokensFixture(),
       cost: costViewFixture(),
       playtimeMs: 1000,
+      sessions: [smuggle({ start: 1000, end: 2000 }), smuggle({ start: 9000, end: null })],
       achievements: { earned: 2, points: 20, ids: [6, 12] },
       taxi: { flights: 1 },
       tps: { overall: 12.5, recent: 20, replies: 4, recentReplies: 2 },
@@ -654,6 +662,8 @@ describe("projectRunDetail", () => {
         "cost",
         ...under("cost", COST_VIEW_KEYS),
         "playtimeMs",
+        "sessions",
+        ...under("sessions[]", ["start", "end"]),
         "achievements",
         ...under("achievements", ["earned", "points", "ids"]),
         "taxi",

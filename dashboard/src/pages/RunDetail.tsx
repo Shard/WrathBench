@@ -82,7 +82,7 @@ import {
   type ExpandPreset,
 } from "../lib/feedview";
 import { readBoolPref, writeBoolPref } from "../lib/prefs";
-import { atBottom, contextHint, sourceHint, sourceLabel } from "../lib/runview";
+import { atBottom, contextHint, runChartInput, sourceHint, sourceLabel } from "../lib/runview";
 import { displayError, logError } from "../lib/errors";
 import { statusOf, statusText, statusTitle } from "../lib/runs";
 
@@ -486,6 +486,12 @@ export default function RunDetail() {
           const run = (): RunDetailResponse["run"] => d().run;
           /* Playtime is the API's: cumulative active time, paused stretches out. */
           const playtime = (): number | null => d().playtimeMs ?? null;
+          /*
+           * The XP chart on the session clock: the same active time the
+           * playtime sums, so a run resumed in place days later reads as its
+           * sessions with a seam at each resume (`runChartInput`).
+           */
+          const chart = createMemo(() => runChartInput(d().states, run(), d().sessions, playtime(), now()));
           return (
             <>
               <h1 class="section">
@@ -727,7 +733,7 @@ export default function RunDetail() {
 
                   {/*
                     For a character, the character's totals are the headline and
-                    this session's are the footnote — the whole complaint was a
+                    this attempt's are the footnote — the whole complaint was a
                     page that answered "how many quests" with one attempt's
                     tally. The cards below keep the run's own figures, under a
                     heading that says which they are.
@@ -792,21 +798,23 @@ export default function RunDetail() {
                       compact={
                         <XpChart
                           compact
-                          states={d().states}
-                          startedAt={run().startedAt}
-                          endedAt={run().endedAt}
+                          states={chart().states}
+                          startedAt={chart().startedAt}
+                          endedAt={chart().endedAt}
                           episodeMs={run().comparability?.budget.episodeMs ?? null}
-                          now={now()}
+                          now={chart().now}
+                          seams={chart().seams}
                         />
                       }
                     >
                       <h2 class="section">this attempt</h2>
                       <XpChart
-                        states={d().states}
-                        startedAt={run().startedAt}
-                        endedAt={run().endedAt}
+                        states={chart().states}
+                        startedAt={chart().startedAt}
+                        endedAt={chart().endedAt}
                         episodeMs={run().comparability?.budget.episodeMs ?? null}
-                        now={now()}
+                        now={chart().now}
+                        seams={chart().seams}
                       />
                       {/*
                         Level against cumulative active playtime, stitched
@@ -886,6 +894,8 @@ export default function RunDetail() {
                       <div class="k">playtime</div>
                       <div class="v mono">{fmtDuration(playtime())}</div>
                       <div class="sub" title={stamp(run().startedAt)}>
+                        {/* A run resumed in place is more than one session; one is the norm and goes unsaid. */}
+                        <Show when={(d().sessions?.length ?? 1) > 1}>{d().sessions?.length} sessions · </Show>
                         {total()} entries
                       </div>
                     </div>

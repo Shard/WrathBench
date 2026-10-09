@@ -42,10 +42,11 @@ export function XpChart(props: {
   episodeMs: number | null;
   now: number;
   /**
-   * Session boundaries, in the same units as the samples' `ts`.
-   * A run's own chart has none — a run is one session. A character's chart
-   * draws one per attempt after the first, because a curve laid across twelve
-   * sessions with nothing marking where they met reads as one long climb.
+   * Session boundaries, in the same units as the samples' `ts`
+   * (`@viewer/sessions`): one per resume on a run's own chart, and on a
+   * character's one per resume and per attempt after the first, because a
+   * curve laid across twelve sessions with nothing marking where they met
+   * reads as one long climb.
    */
   seams?: readonly { at: number; label: string }[];
   /** The sidebar card's size: fewer labels, and no frame of its own (the card is the frame). */
@@ -136,9 +137,9 @@ export function XpChart(props: {
           )}
         </For>
 
-        {/* Session boundaries, when the caller has any: where one attempt's
-            last sample met the next attempt's first. Drawn under the curve so
-            the curve stays the thing being read. */}
+        {/* Session boundaries, when the caller has any: where a pause was
+            closed, or one attempt met the next. Drawn under the curve so the
+            curve stays the thing being read. */}
         <For each={props.seams ?? []}>
           {(seam) => (
             <Show when={seam.at > model().t0 && seam.at < model().t1}>

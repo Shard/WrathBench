@@ -58,7 +58,7 @@ import type {
   TokenTotals,
   TrackResponse,
 } from "./api-types";
-import { episodeOf, resultRunOf, trackFrom } from "./results";
+import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
 import { modelsResponse, readFleetRoster } from "./models";
 import { modelStates, outstandingWork, type RunFact } from "../src/models";
@@ -101,14 +101,12 @@ import {
   TILE_PUBLIC_ROBOTS,
   resolveTilePath,
 } from "./tiles";
+import { SEGMENT_MARKS, playtimeMs, segmentsFrom } from "./sessions";
 import {
-  SEGMENT_MARKS,
   TrajectoryTail,
-  playtimeMs,
   reportedCostUsd,
   responseCostCoverage,
   RunTotalsScanner,
-  segmentsFrom,
   tokenTotals,
   tokensPerSecond,
   type RunTotals,
@@ -1475,9 +1473,18 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * degenerate view asks `/api/character/<id>` for it.
        */
       const character = whole !== null && whole.attempts > 1 ? whole : null;
+      const sessions = segmentsFrom(marks);
+      const states = await statesOfRun(runId);
       const body: RunDetailResponse = {
-        run,
-        states: await statesOfRun(runId),
+        /*
+         * The row's quest count is the newest sample's, and the counter is the
+         * running process's: a run resumed in place reads zero after the
+         * resume. This route holds the series, so it serves the whole run's
+         * count — the figure `ResultRun.questsCompleted` carries, from the same
+         * `questsAcrossRestarts`.
+         */
+        run: { ...run, questsCompleted: questsAcrossRestarts(states) ?? run.questsCompleted },
+        states,
         total: entries.length,
         tokens,
         cost: runCost({
@@ -1486,7 +1493,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
           reportedUsd: reportedCostUsd(entries),
           coverage: responseCostCoverage(entries),
         }),
-        playtimeMs: playtimeMs(segmentsFrom(marks), { lastTs, live: run.live, now: Date.now() }),
+        playtimeMs: playtimeMs(sessions, { lastTs, live: run.live, now: Date.now() }),
+        // The segments that figure sums, so the page's charts close the same
+        // pauses the playtime does (`sessions.ts`).
+        sessions,
         // Same incremental path as tokens and cost: the tail accumulates the
         // milestone marks as it indexes, so a live run's line grows with it.
         achievements: tail.achievements,

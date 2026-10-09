@@ -538,6 +538,7 @@ export function statePointOf(r: StatePointRow): StatePoint {
     maxPower: r.max_power,
     powerType: r.power_type,
     nextLevelXp: r.next_level_xp,
+    questsCompleted: r.quests_completed,
   };
 }
 

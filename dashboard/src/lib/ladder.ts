@@ -1364,9 +1364,10 @@ export function characterRows(runs: readonly ResultRun[]): CharacterRow[] {
  * **The axis is cumulative active playtime, not wall clock and not turns.**
  * The scored ladders' own graph (`components/LadderChart`) has no time axis at
  * all — it is a cost/xp scatter — so the family member this borrows from is the
- * run page's `XpChart`, whose x is elapsed wall clock bounded by the episode
- * deadline. That bound is exactly what a freeplay character does not have, and
- * the three reasons the axis changes with it:
+ * run page's `XpChart`, whose x is the run's session clock (`@viewer/sessions`:
+ * the same active time) bounded by the episode deadline. That bound is exactly
+ * what a freeplay character does not have, and the three reasons the axis is
+ * active time and nothing else:
  *
  * - a freeplay character is unbounded and spends days paused between attempts, so
  *   wall clock would draw the operator's calendar rather than the character's
