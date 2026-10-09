@@ -1082,6 +1082,48 @@ export function planResumes(opts: {
       }
       job = fromFile;
       account = fromFile.account ?? f.account;
+    } else if (f.episode === "probing") {
+      // A probe whose definition asked to resume (the lapse rule above already
+      // said so) comes back under the job it was spawned as, rebuilt from the
+      // run's own stamp: the campaign, its version and the cell. Without this a
+      // supervisor restart stranded a paused probe as "not in config", and the
+      // paused run then held its model out of every lane until someone resumed
+      // it by hand — on a twelve-hour cell, the most expensive way to lose one.
+      const c = f.campaign === null ? undefined : config.campaigns?.find((x) => x.name === f.campaign);
+      const version = f.campaignVersion ?? (f.campaign === null ? undefined : unversionedOwner(f.campaign)?.version) ?? null;
+      const ref = f.ref !== undefined && f.ref !== null && config.roster[f.ref] !== undefined ? f.ref : candidates[0];
+      if (c === undefined || version === null || f.cell === null || ref === undefined) {
+        list("paused probe whose campaign, version, cell or roster entry the config no longer names — resume by hand or archive");
+        continue;
+      }
+      if (!c.enabled) {
+        list(`campaign ${c.name} is disabled — enable it to resume, or resume by hand`);
+        continue;
+      }
+      const probe = { campaign: c.name, version, cell: f.cell };
+      if (c.account !== undefined) {
+        if (f.account !== null && c.account.toUpperCase() !== f.account.toUpperCase()) {
+          list(`campaign ${c.name} is pinned to ${c.account}, the run was on ${f.account} — resume by hand`);
+          continue;
+        }
+        // The name `pinnedCampaignJobs` gives the cell's job.
+        job = { refs: [ref], ref, episode: "probing", repeat: 1, name: `${c.name}-${f.cell}`, account: c.account, enabled: true, source: "pinned", probe };
+        account = c.account;
+      } else {
+        // The name `policyJob` gives a probe pick, and the attempt its run id carries.
+        const m = /-a(\d+)(?:-r\d+)?$/.exec(f.runId);
+        job = {
+          refs: [ref],
+          ref,
+          episode: "probing",
+          repeat: 1,
+          name: `${ref}-${c.name}-${f.cell}`,
+          enabled: true,
+          source: "policy",
+          attempt: m !== null ? Number(m[1]) : 1,
+          probe,
+        };
+      }
     } else {
       // Only the ref the run was launched under decides whether it may come
       // back — under its own job name, which is what the run id, the log path

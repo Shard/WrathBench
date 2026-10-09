@@ -2290,6 +2290,57 @@ describe("pause and resume across a fleet stop", () => {
     expect(off.listed[0]?.why).toContain("job nav-freeplay is disabled");
   });
 
+  test("a paused probe whose definition says resume comes back under the job it was spawned as, pool or pinned", () => {
+    // A twelve-hour race-probe cell paused by a fleet restart used to be
+    // listed "not in config", and the paused run then held its model out of
+    // every lane until someone resumed it by hand.
+    const pausedProbe = (over: Partial<RunFact> & { runId: string; account: string }): RunFact =>
+      paused({
+        model: "z-ai/glm-5.2:free",
+        episode: "probing",
+        episodeMs: 12 * H,
+        campaign: "race-probe",
+        campaignVersion: 1,
+        cell: "orc-warrior",
+        ref: "glm",
+        pause: { reason: "operator-pause", at: NOW - 3 * H, count: 1, episodeElapsedMs: 9 * H },
+        ...over,
+      });
+    // Pool: the policy's own pick, named the way `policyJob` named it, attempt off the run id.
+    const pool = { ...config(), campaigns: parseCampaigns({ "race-probe": { version: 1, assignments: [{ model: "glm" }] } }).campaigns };
+    const run = pausedProbe({ runId: "fleet-glm-race-probe-orc-warrior-z-ai-glm-5-2-free-20261010-a2", account: "RUNNER3" });
+    const plan = planResumes({ runs: [run], config: pool, running: new Map(), held, now: NOW });
+    expect(plan.end).toEqual([]);
+    expect(plan.listed).toEqual([]);
+    expect(plan.resume.map((r) => [r.job.name, r.job.source, r.job.attempt, r.account, r.runId])).toEqual([
+      ["glm-race-probe-orc-warrior", "policy", 2, "RUNNER3", run.runId],
+    ]);
+    expect(plan.resume[0]!.job.probe).toEqual({ campaign: "race-probe", version: 1, cell: "orc-warrior" });
+    // The spawn resumes that run and restates the definition's own leash, never the probing default's.
+    const spawn = jobSpawn(plan.resume[0]!.job, roster, "RUNNER3", "20261010", undefined, pool.campaigns);
+    const resumeArgv = episodeArgv(resolve(fillEntries(spawn, "20261010"), "20261010")[0]!, true);
+    expect(resumeArgv.slice(1, 3)).toEqual(["--resume", run.runId]);
+    expect(resumeArgv).toContain("43200000");
+    // Pinned: the name `pinnedCampaignJobs` gives the cell, on the campaign's account.
+    const pinned = {
+      ...config(),
+      campaigns: parseCampaigns({ "class-probe": { version: 2, account: "SHAKEOUT", assignments: [{ model: "glm" }] } }).campaigns,
+    };
+    const onShakeout = pausedProbe({ runId: "fleet-class-probe-dwarf-rogue-z-ai-glm-5-2-free-20261010", account: "SHAKEOUT", campaign: "class-probe", campaignVersion: 2, cell: "dwarf-rogue" });
+    expect(planResumes({ runs: [onShakeout], config: pinned, running: new Map(), held, now: NOW }).resume.map((r) => [r.job.name, r.job.source, r.account])).toEqual([
+      ["class-probe-dwarf-rogue", "pinned", "SHAKEOUT"],
+    ]);
+    // A definition that does not resume ends the run as a failed attempt instead.
+    const nav = { ...config(), campaigns: parseCampaigns({ "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "nav" }] } }).campaigns };
+    const navRun = pausedProbe({ runId: "fleet-nav-probe-coldridge-sonnet-20261010", model: "sonnet", account: "SHAKEOUT", campaign: "nav-probe", cell: "coldridge", ref: "nav" });
+    const ended = planResumes({ runs: [navRun], config: nav, running: new Map(), held, now: NOW });
+    expect(ended.resume).toEqual([]);
+    expect(ended.end).toHaveLength(1);
+    // A disabled campaign keeps its paused run, listed with the reason.
+    const off = { ...pool, campaigns: pool.campaigns.map((c) => ({ ...c, enabled: false })) };
+    expect(planResumes({ runs: [run], config: off, running: new Map(), held, now: NOW }).listed[0]?.why).toContain("campaign race-probe is disabled");
+  });
+
   test("a policy freeplay run paused by a fleet restart resumes under a synthetic policy job — same account, same run id", () => {
     // 2026-08-25 live: fleet-sub-opus-low-freeplay-opus-low-20260825-a6 was
     // operator-paused by a forced fleet restart, listed as "not in config",
