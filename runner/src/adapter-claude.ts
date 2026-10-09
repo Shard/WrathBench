@@ -430,7 +430,18 @@ export function compactEnv(window: string | undefined): Record<string, string> {
  * bookkeeping, and nothing about it reaches the model. Missing numbers read as
  * null rather than zero. Null when the envelope is not a compaction.
  */
-export function compactionRecord(turn: number, msg: Record<string, unknown>): Record<string, unknown> | null {
+/** A type alias, not an interface, so it is assignable to `Trajectory.append`'s record. */
+export type CompactionRecord = {
+  t: "harness";
+  kind: "compaction";
+  turn: number;
+  trigger: string | null;
+  preTokens: number | null;
+  postTokens: number | null;
+  durationMs: number | null;
+};
+
+export function compactionRecord(turn: number, msg: Record<string, unknown>): CompactionRecord | null {
   if (msg["type"] !== "system" || msg["subtype"] !== "compact_boundary") return null;
   const raw = msg["compact_metadata"];
   const meta = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
