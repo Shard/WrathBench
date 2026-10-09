@@ -772,6 +772,8 @@ export interface AgentPosition {
    * recorded" rather than inventing one.
    */
   effort?: string | null;
+  /** The claude-code compaction window off the same stamp; absent is `auto`. */
+  compactWindow?: string | null;
   map: number;
   x: number;
   y: number;
@@ -1041,6 +1043,8 @@ export interface CharacterView {
    */
   model: string | null;
   effort: string | null;
+  /** The claude-code compaction window, off the newest attempt that set one; absent is `auto`. */
+  compactWindow?: string | null;
   driver: string | null;
   harnessVersion: string | null;
   /** The in-game character name, and its race/class label. */
@@ -1678,6 +1682,11 @@ export interface ResultRun {
   campaign: string | null;
   cell: string | null;
   effort: string | null;
+  /**
+   * The claude-code compaction window, off the comparability stamp. A key like
+   * `effort`; absent is the CLI's own `auto`, which every older run is.
+   */
+  compactWindow?: string | null;
   /** The harness tag. A tag on the row, not a partition. */
   harness: HarnessView | null;
   promptHash: string | null;
@@ -2113,6 +2122,8 @@ export interface ModelRowView {
   name: string;
   model: string;
   effort: string | null;
+  /** The entry's claude-code compaction window; absent is the CLI's own `auto`. */
+  compactWindow?: string | null;
   platform: string | null;
   /** The harness this roster entry's runs go through, from its driver. */
   harness: HarnessView;

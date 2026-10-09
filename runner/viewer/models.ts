@@ -11,9 +11,9 @@
  *
  * Three rules worth stating, because they are the ones a reader trips on:
  *
- * - **The projection's key is `(model, effort)`, not the roster name.**
- *   `matchesRoster` in `runner/src/models.ts` matches runs that way, so two
- *   roster entries sharing a model string and an effort would legitimately show
+ * - **The projection's key is `(model, effort, compactWindow)`, not the roster
+ *   name.** `sameRosterIdentity` in `runner/src/models.ts` matches runs that
+ *   way, so two roster entries sharing all three would legitimately show
  *   the same runs. The rows are not deduped: that is the honest reading, and
  *   hiding it would make one of the two look idle.
  * - **Counted is spelled once.** The run ids behind a count use `isCounted`
@@ -34,6 +34,7 @@ import {
   isCounted,
   parsePolicyBlock,
   policyExclusion,
+  sameRosterIdentity,
   schedulability,
   schedulableView,
   type ModelState,
@@ -71,6 +72,8 @@ const rosterEntrySchema = z
   .object({
     model: z.string().min(1),
     effort: z.string().min(1).optional(),
+    /** Canonical already: the supervisor's `parseFleet` normalised it. */
+    compactWindow: z.string().min(1).optional(),
     driver: z.string().min(1).optional(),
     apiBase: z.string().min(1).optional(),
     billing: z.enum(["free", "paid"]).optional(),
@@ -212,6 +215,7 @@ export function readFleetRoster(dbPath: string = configDbPath(), series: string 
       name,
       model: e.model,
       ...(e.effort !== undefined ? { effort: e.effort } : {}),
+      ...(e.compactWindow !== undefined ? { compactWindow: e.compactWindow } : {}),
       ...(e.driver !== undefined ? { driver: e.driver } : {}),
       ...(e.apiBase !== undefined ? { apiBase: e.apiBase } : {}),
       ...(e.billing !== undefined ? { billing: e.billing } : {}),
@@ -385,7 +389,7 @@ function runView(f: RunFact): ModelRunView {
  */
 export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: string, running: ReadonlySet<string> = new Set(), policy: SchedulingPolicy = DEFAULT_POLICY): ModelRowView {
   const mine = runs
-    .filter((f) => f.model === state.model && (f.effort ?? null) === state.effort)
+    .filter((f) => sameRosterIdentity(f, state))
     .slice()
     .sort((a, b) => b.startedAt - a.startedAt);
   const perEpisode: Partial<Record<EpisodeIdView, ModelEpisodeView>> = {};
@@ -406,6 +410,7 @@ export function rowOf(state: ModelState, runs: readonly RunFact[], runsDir: stri
     name: state.name,
     model: state.model,
     effort: state.effort,
+    ...(state.compactWindow !== undefined ? { compactWindow: state.compactWindow } : {}),
     platform: state.platform,
     harness: state.harness,
     billing: state.billing,

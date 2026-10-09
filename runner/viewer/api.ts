@@ -61,7 +61,7 @@ import type {
 import { episodeOf, questsAcrossRestarts, resultRunOf, trackFrom } from "./results";
 import { type Campaign, campaignComplete, campaignModels } from "../src/campaigns";
 import { modelsResponse, readFleetRoster } from "./models";
-import { modelStates, outstandingWork, type RunFact } from "../src/models";
+import { modelStates, outstandingWork, sameRosterIdentity, type RunFact } from "../src/models";
 import { positionsFromStore } from "./positions";
 import { toolsResponse } from "./tools";
 import { runCost } from "./pricing";
@@ -1188,8 +1188,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   /** The roster name a probe run used, for the completion count. */
-  function refOf(roster: { models: readonly { name: string; model: string; effort?: string | undefined }[] }, r: ResultRun): string | null {
-    const hit = roster.models.find((m) => m.model === r.model && (m.effort ?? null) === (r.effort ?? null));
+  function refOf(
+    roster: { models: readonly { name: string; model: string; effort?: string | undefined; compactWindow?: string | undefined }[] },
+    r: ResultRun,
+  ): string | null {
+    const hit = roster.models.find((m) => sameRosterIdentity(m, r));
     return hit?.name ?? null;
   }
 

@@ -184,6 +184,8 @@ function comparabilityFixture(): ComparabilityView {
     wikiCoords: true,
     // Off, so the projection has a value to carry (issue #61).
     wiki: false,
+    // Set, so the projection has a value to carry (a run dimension like effort).
+    compactWindow: "100k",
     // The dump filename must not survive projection.
     wikiBundle: { schemaVersion: "1", builtAt: "2026-08-01", source: POISON.wikiSource, eraCutoff: "2010-09-01" },
     episode: "e90",
@@ -308,6 +310,7 @@ function resultsFixture(): ResultsResponse {
         campaign: "sweep-1",
         cell: "cell-a",
         effort: "high",
+        compactWindow: "100k",
         harness: "wrathbench",
         promptHash: "sha256:0123456789abcdef",
         serverBuild: "harness-0.5-1-gdef",
@@ -369,6 +372,7 @@ const COMPARABILITY_KEYS = [
   "objective",
   "wikiCoords",
   "wiki",
+  "compactWindow",
   // no wikiBundle: withheld (its `source` is the operator's dump filename)
   "episode",
   "episodeOverride",
@@ -493,6 +497,7 @@ const RESULT_RUN_KEYS = [
   "campaign",
   "cell",
   "effort",
+  "compactWindow",
   "harness",
   "promptHash",
   "serverBuild",
