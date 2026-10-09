@@ -30,7 +30,7 @@ import { CharacterPlot } from "../components/CharacterChart";
 import { ModelIcon } from "../components/ModelIcon";
 import { UnitFrame } from "../components/UnitFrame";
 import { XpChart } from "../components/XpChart";
-import { characterSessionSeries } from "../lib/character";
+import { characterSessionSeries, sessionCount } from "../lib/character";
 import { displayError } from "../lib/errors";
 import { fmtAge, fmtDuration, modelDisplay, num, shortHarness, shortRunId, stamp } from "../lib/format";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
@@ -107,19 +107,27 @@ export default function Character() {
   });
 
   /**
-   * The state samples on one cumulative-session-time axis, with a seam per
-   * attempt after the first (`lib/character.ts`). This is the finer of the two
-   * curves — every sample rather than every ding — and the coarser one above
-   * is the comparable one, which is why the captions say which is which.
+   * The state samples on the session clock, with a seam at every resume and
+   * every attempt after the first (`lib/character.ts`). The finer of the two
+   * curves — every sample rather than every ding — on the same active-time
+   * axis as the coarser one above.
    */
   const series = createMemo(() => {
     const d = feed.latest;
-    return d === undefined ? null : characterSessionSeries(d.states);
+    return d === undefined ? null : characterSessionSeries(d.states, d.character.runs);
   });
 
   const seams = createMemo(() =>
-    (series()?.seams ?? []).map((s) => ({ at: s.at, label: `attempt ${s.attempt} begins (${shortRunId(s.runId)})` })),
+    (series()?.seams ?? []).map((s) => ({
+      at: s.at,
+      label: s.newAttempt
+        ? `attempt ${s.attempt} begins (${shortRunId(s.runId)})`
+        : `session ${s.session} · attempt ${s.attempt} resumed ${stamp(s.startedAt)}`,
+    })),
   );
+
+  /** Every session the character has played, across its attempts. */
+  const sessions = (): number => sessionCount(view()?.runs ?? []);
 
   /** The newest sample the character has: its standing right now. */
   const standing = () => {
@@ -171,12 +179,14 @@ export default function Character() {
                 </span>
                 {" · "}
                 {st().attempts} {st().attempts === 1 ? "attempt" : "attempts"}
+                {/* Said only where it differs: an attempt resumed in place is more than one session. */}
+                <Show when={sessions() !== st().attempts}> · {sessions()} sessions</Show>
               </div>
             </div>
 
-            {/* The live session, when one runs. The run page owns the feed and
+            {/* The live attempt, when one runs. The run page owns the feed and
                 the turn-by-turn detail; what belongs here is only "is it
-                playing, and where has it got to" — with a link to the session
+                playing, and where has it got to" — with a link to the attempt
                 for everything else. */}
             <Show when={isLive() ? latest() : undefined}>
               {(l) => (
@@ -198,7 +208,7 @@ export default function Character() {
                     powerType={(standing()?.powerType ?? undefined) as PowerType | undefined}
                   />
                   <div class="sub dim">
-                    this session: {fmtDuration(l().playtimeMs)} played · {num(l().questsCompleted)} quests
+                    this attempt: {fmtDuration(l().playtimeMs)} played · {num(l().questsCompleted)} quests
                     <Show when={standing()}>
                       {/* `fmtAge` takes an age, not a timestamp, and says "ago"
                           itself. The clock is this browser's, which is the same
@@ -236,8 +246,7 @@ export default function Character() {
                     <InfoHint
                       label="about this chart"
                       text={[
-                        `Cumulative xp against session time, every state sample, laid end to end across ${st().attempts} ${st().attempts === 1 ? "session" : "sessions"} with the boundaries dashed. The days a character spends paused between sessions are closed rather than drawn.`,
-                        "This is not the axis above: that one is pause-corrected active playtime, the figure a run is compared on, and this one is sample-to-sample elapsed time inside a session.",
+                        "Cumulative xp against active playtime, every state sample, with pauses closed and each resume or new attempt dashed.",
                         s().states.length < 2 ? "Nothing to draw yet: this character has fewer than two published samples." : "",
                       ]
                         .filter((l) => l.length > 0)
@@ -271,6 +280,7 @@ export default function Character() {
                     <th>started</th>
                     <th class="right">level</th>
                     <th class="right">quests</th>
+                    <th class="right">sessions</th>
                     <th class="right">playtime</th>
                   </tr>
                 </thead>
@@ -294,6 +304,7 @@ export default function Character() {
                           <LevelXp level={a.level} xp={null} compact />
                         </td>
                         <td class="right mono dim">{num(a.questsCompleted)}</td>
+                        <td class="right mono dim">{a.sessions === undefined ? "—" : a.sessions.length}</td>
                         <td class="right mono dim">{fmtDuration(a.playtimeMs)}</td>
                       </tr>
                     )}

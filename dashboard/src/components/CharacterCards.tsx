@@ -2,7 +2,7 @@
  * A character's own furniture: the totals card and the attempt strip.
  *
  * Both are drawn on two pages — the run page, where they say "the character
- * this session belongs to", and the character page, where they are the page.
+ * this attempt belongs to", and the character page, where they are the page.
  * They live here rather than on either so the two cannot drift into showing a
  * reader two different accounts of one character.
  */
@@ -24,7 +24,7 @@ import { type RunStatus, statusOf, statusText, statusTitle, statusTone } from ".
  *
  * `runId` is the attempt the reader is ON, and is what makes this card two
  * cards. Given one, each figure names that attempt's own underneath, because a
- * reader on one session's page must never confuse its quests with the
+ * reader on one attempt's page must never confuse its quests with the
  * character's. The character page passes none: there is no attempt to be
  * confused with, and a row reading "this attempt: —" would be a footnote about
  * nothing.
@@ -142,7 +142,7 @@ export function CharacterTotalsCard(props: { character: CharacterView; runId?: s
  *
  * This is the thing a durable freeplay run did not have: a reader landing on
  * one attempt could see the run id either side of it and nothing else, so
- * "the run" was only ever visible one session at a time. Each attempt is a
+ * "the run" was only ever visible one attempt at a time. Each attempt is a
  * link, the one being read is marked, and each carries the three facts that
  * say what happened in it — what state it ended in, how far the character got,
  * and how long it played. The figures are the attempt's own; the totals are in

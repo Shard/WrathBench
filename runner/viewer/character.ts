@@ -223,6 +223,8 @@ function attemptOf(r: ResultRun): CharacterAttempt {
     deaths: r.deaths?.deaths ?? null,
     flights: r.taxi?.flights ?? null,
     levels: r.levels,
+    // Absent rather than empty from a row that does not answer, as on the row.
+    ...(r.sessions === undefined ? {} : { sessions: r.sessions }),
   };
 }
 

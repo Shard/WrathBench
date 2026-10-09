@@ -9,8 +9,8 @@
 
 import { describe, expect, test } from "bun:test";
 import type { RunRow, StatePoint } from "../viewer/api-types";
+import { activeMsUntil } from "../viewer/sessions";
 import {
-  activeMsUntil,
   resultRunOf,
   levelMarks,
   mapsOf,
@@ -375,6 +375,14 @@ describe("resultRunOf", () => {
     ], []);
     expect(e.xpEarned).toBe(350);
     expect(resultRunOf(run(), [], []).xpEarned).toBeNull();
+  });
+
+  test("the sessions ride on the row", () => {
+    const sessions = [
+      { start: 0, end: 5000 },
+      { start: 900_000, end: null },
+    ];
+    expect(resultRunOf(run(), [state({ ts: 1000 })], sessions).sessions).toEqual(sessions);
   });
 
   test("falls back to the run's own level when no sample carried one", () => {

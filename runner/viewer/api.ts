@@ -101,14 +101,12 @@ import {
   TILE_PUBLIC_ROBOTS,
   resolveTilePath,
 } from "./tiles";
+import { SEGMENT_MARKS, playtimeMs, segmentsFrom } from "./sessions";
 import {
-  SEGMENT_MARKS,
   TrajectoryTail,
-  playtimeMs,
   reportedCostUsd,
   responseCostCoverage,
   RunTotalsScanner,
-  segmentsFrom,
   tokenTotals,
   tokensPerSecond,
   type RunTotals,
@@ -1475,9 +1473,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
        * degenerate view asks `/api/character/<id>` for it.
        */
       const character = whole !== null && whole.attempts > 1 ? whole : null;
+      const sessions = segmentsFrom(marks);
+      const states = await statesOfRun(runId);
       const body: RunDetailResponse = {
         run,
-        states: await statesOfRun(runId),
+        states,
         total: entries.length,
         tokens,
         cost: runCost({
@@ -1486,7 +1486,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
           reportedUsd: reportedCostUsd(entries),
           coverage: responseCostCoverage(entries),
         }),
-        playtimeMs: playtimeMs(segmentsFrom(marks), { lastTs, live: run.live, now: Date.now() }),
+        playtimeMs: playtimeMs(sessions, { lastTs, live: run.live, now: Date.now() }),
+        // The segments that figure sums, so the page's charts close the same
+        // pauses the playtime does (`sessions.ts`).
+        sessions,
         // Same incremental path as tokens and cost: the tail accumulates the
         // milestone marks as it indexes, so a live run's line grows with it.
         achievements: tail.achievements,

@@ -108,6 +108,16 @@ table and the run page cannot disagree. Note that this is not the
 `episode-limit` watchdog's clock, which is per-process uptime since the current
 resume and so never sees paused time.
 
+Those segments are the run's **sessions** (`sessions.ts`, the one definition the
+viewer and the dashboard share over `@viewer/*`). A run is one session or more:
+a paused freeplay run is resumed in place by the fleet, however much later, so
+one run id can hold two sessions days apart. `/api/run/<id>` serves them as
+`sessions`, the results rows and a character's attempts carry them too, and
+every chart that plots samples against time plots them on the session clock —
+the active time before each sample, the same `activeMsUntil` a level mark's
+`playtimeMs` is — so a pause is closed and marked rather than drawn as days of
+flat line. A boundary is a recorded mark, never a gap between samples.
+
 Tokens per second (`tps`, on the listing rows and on `/api/run/<id>`) is output
 tokens over the wall time of the model's REPLIES, never over the run's elapsed
 time, most of which the harness spends driving the game. A span opens at a
@@ -189,10 +199,10 @@ rather than a summary per entry.
 
 A durable freeplay character is one character across many attempts
 (docs/RUNBOOK.md, "Freeplay characters are durable"), and every counter the
-runner keeps is per *attempt*: `questsCompleted` is that session's own
-`completions.length`, the tokens and the cost are that attempt's trajectory, the
-playtime is that attempt's active segments. Answering "how many quests has this
-character done" from one attempt would give the last session's tally, and a
+runner keeps is per *attempt*: `questsCompleted` is that attempt's own
+`completions.length`, the tokens and the cost are that attempt's trajectory,
+the playtime is that attempt's sessions. Answering "how many quests has this
+character done" from one attempt would give the last attempt's tally, and a
 reader would see the run one attempt at a time.
 
 `/api/run/<id>` carries a `character` (`character.ts`) for a run with lineage: the
@@ -245,9 +255,10 @@ and a reader who wants the degenerate view asks for it:
 
 `GET /api/character/<id>` serves one character whole: the view, plus every
 attempt's state samples laid end to end with the attempt each came from. That
-pairing is the only thing that finds a session boundary — a relaunch can follow
+pairing is the only thing that finds an attempt boundary — a relaunch can follow
 a logout by a second — which is why it is on the wire rather than left to the
-page. The id may be any run in the chain, not only the head, and the series
+page; a resume inside an attempt comes off that attempt's `sessions` in the
+view. The id may be any run in the chain, not only the head, and the series
 reads the same store-then-sqlite path `/api/run/<id>` reads its own states
 through. Public mode serves it, projected by the run detail's own projectors
 applied across the chain.

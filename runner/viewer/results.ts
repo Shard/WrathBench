@@ -42,26 +42,7 @@ import type {
   TradeFacts,
 } from "./api-types";
 import { itemSamplesOf } from "./runs";
-import type { ActiveSegment } from "./tail";
-
-/**
- * Active time from the run's start up to `ts`.
- *
- * `playtimeMs` answers "how much in total"; this answers "how much by then",
- * which is the one a level mark needs. A segment that has not closed is charged
- * only up to the cursor, and a segment that opened after it contributes
- * nothing.
- */
-export function activeMsUntil(segments: readonly ActiveSegment[], ts: number): number | null {
-  if (segments.length === 0) return null;
-  let total = 0;
-  for (const seg of segments) {
-    if (seg.start > ts) continue;
-    const end = Math.min(seg.end ?? ts, ts);
-    total += Math.max(0, end - seg.start);
-  }
-  return total;
-}
+import { activeMsUntil, type ActiveSegment } from "./sessions";
 
 /**
  * Whether a run's recorded turn indices can be read as one series.
@@ -440,6 +421,7 @@ export function resultRunOf(
     driver: run.driver,
     character: run.character,
     playtimeMs: listing?.playtimeMs ?? null,
+    sessions: [...segments],
     tokens: listing?.tokens ?? null,
     actualCost: listing?.actualCost ?? null,
     expectedCost: listing?.expectedCost ?? null,

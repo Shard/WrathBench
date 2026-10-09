@@ -15,8 +15,9 @@
  * these reconstructed offsets, so the curve and the bands agree by construction.
  */
 
-import type { StatePoint } from "@viewer/api-types";
-import { fmtTokens } from "./format";
+import type { ActiveSegment, StatePoint } from "@viewer/api-types";
+import { activeMsUntil, sessionClock } from "@viewer/sessions";
+import { fmtTokens, stamp } from "./format";
 
 /** One point on the cumulative-xp curve: sample time and reconstructed total. */
 export interface XpPoint {
@@ -94,6 +95,52 @@ export function xpChartModel(
   const t1 = Math.max(capped, start + 1);
   const yMax = Math.max(1, ...points.map((p) => p.cum));
   return { points, bands, t0: start, t1, yMax };
+}
+
+/** What `XpChart` is drawn from: the samples, their window, and the seams. */
+export interface RunChartInput {
+  states: StatePoint[];
+  startedAt: number | null;
+  endedAt: number | null;
+  now: number;
+  seams: { at: number; label: string }[];
+}
+
+/**
+ * A run's samples on its session clock (`@viewer/sessions`), for `XpChart`.
+ *
+ * The x axis is the run's active time: a run paused and resumed in place —
+ * days later, for a freeplay character — is drawn as its sessions laid end to
+ * end with a seam at each resume, rather than as a curve squashed against the
+ * left edge of a week of flat line. The window closes where the playtime
+ * card's figure does: the session clock at `now` while the run is live, its
+ * served playtime once it is not. The episode deadline applies unchanged,
+ * since the episode clock is active time too.
+ *
+ * A run served without sessions (a snapshot that predates the field) is drawn
+ * on the wall clock from its start, as every run used to be.
+ */
+export function runChartInput(
+  states: readonly StatePoint[],
+  run: { startedAt: number | null; endedAt: number | null; live: boolean },
+  sessions: readonly ActiveSegment[] | undefined,
+  playtime: number | null,
+  now: number,
+): RunChartInput {
+  if (sessions === undefined || sessions.length === 0) {
+    return { states: [...states], startedAt: run.startedAt, endedAt: run.endedAt, now, seams: [] };
+  }
+  const clock = sessionClock(states, sessions);
+  const active = activeMsUntil(sessions, now) ?? 0;
+  return {
+    states: clock.points,
+    startedAt: 0,
+    endedAt: run.live ? null : (playtime ?? active),
+    now: active,
+    seams: clock.starts
+      .slice(1)
+      .map((at, i) => ({ at, label: `session ${i + 2} · resumed ${stamp(clock.startedAt[i + 1]!)}` })),
+  };
 }
 
 /**

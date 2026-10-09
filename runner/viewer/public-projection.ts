@@ -44,6 +44,7 @@
 
 import type {
   AchievementFacts,
+  ActiveSegment,
   ActionNoteView,
   CharacterStatus,
   ItemSample,
@@ -238,6 +239,11 @@ function projectStatePoint(s: StatePoint): StatePoint {
   };
 }
 
+/** A run's sessions: two timestamps each, the same clock every row already carries. */
+function projectSessions(s: readonly ActiveSegment[]): ActiveSegment[] {
+  return s.map((x) => ({ start: x.start, end: x.end }));
+}
+
 function projectAchievements(a: AchievementFacts): AchievementFacts {
   return { earned: a.earned, points: a.points, ids: [...a.ids] };
 }
@@ -430,6 +436,7 @@ function projectResultRun(r: ResultRun): ResultRun {
     maps: [...r.maps],
     character: r.character,
     playtimeMs: r.playtimeMs,
+    ...(r.sessions !== undefined ? { sessions: projectSessions(r.sessions) } : {}),
     tokens: r.tokens === null ? null : projectTokenTotals(r.tokens),
     actualCost: r.actualCost === null ? null : projectCostFigure(r.actualCost),
     ...(r.expectedCost !== undefined
@@ -906,6 +913,7 @@ function projectCharacterAttempt(a: CharacterAttempt): CharacterAttempt {
     expectedCost: a.expectedCost === null ? null : projectCostFigure(a.expectedCost),
     flights: a.flights,
     levels: a.levels.map(projectLevelMark),
+    ...(a.sessions !== undefined ? { sessions: projectSessions(a.sessions) } : {}),
   };
 }
 
@@ -986,6 +994,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
     tokens: projectTokenTotals(d.tokens),
     cost: projectCostView(d.cost),
     playtimeMs: d.playtimeMs,
+    ...(d.sessions !== undefined ? { sessions: projectSessions(d.sessions) } : {}),
     ...(d.achievements !== undefined
       ? { achievements: d.achievements === null ? null : projectAchievements(d.achievements) }
       : {}),

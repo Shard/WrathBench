@@ -4,9 +4,9 @@ import { appendFileSync, mkdirSync, rmSync, truncateSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platformOf, readRun } from "../viewer/runs";
+import { playtimeMs, segmentsFrom } from "../viewer/sessions";
 import {
   TrajectoryTail,
-  playtimeMs,
   areaFactsFrom,
   achievementFactsFrom,
   deathFactsFrom,
@@ -20,7 +20,6 @@ import {
   tradeFactsFrom,
   RunTotalsScanner,
   scanRunTotals,
-  segmentsFrom,
   splitLines,
   summarize,
   tokenTotals,

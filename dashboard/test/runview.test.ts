@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../../runner/viewer/api-types";
-import { atBottom, xpChartModel } from "../src/lib/runview";
+import { atBottom, runChartInput, xpChartModel } from "../src/lib/runview";
 
 function s(ts: number, level: number | null, xp: number | null): StatePoint {
   return { ts, level, xp, map: null, x: null, y: null, z: null, eventCount: null, lastSeq: null, turn: null };
@@ -102,5 +102,53 @@ describe("atBottom", () => {
   });
   test("a non-overflowing container is always at the bottom", () => {
     expect(atBottom(0, 200, 200)).toBe(true);
+  });
+});
+
+describe("runChartInput", () => {
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+  const T0 = 1_000_000;
+  const PAUSE = T0 + 20 * HOUR;
+  const RESUME = PAUSE + 5 * DAY;
+  const sessions = [
+    { start: T0, end: PAUSE },
+    { start: RESUME, end: null },
+  ];
+  const states = [s(T0 + 1000, 1, 0), s(PAUSE - 1000, 13, 4602), s(RESUME + 1000, 13, 4602)];
+
+  test("a run resumed in place is drawn on active time with a seam at the resume", () => {
+    const now = RESUME + HOUR;
+    const c = runChartInput(states, { startedAt: T0, endedAt: null, live: true }, sessions, null, now);
+    expect(c.states.map((p) => p.ts)).toEqual([1000, 20 * HOUR - 1000, 20 * HOUR + 1000]);
+    expect(c.startedAt).toBe(0);
+    expect(c.endedAt).toBeNull();
+    // Live: the window runs to the session clock's now, 21 hours, not six days.
+    expect(c.now).toBe(21 * HOUR);
+    expect(c.seams.map((x) => x.at)).toEqual([20 * HOUR]);
+    expect(c.seams[0]!.label.startsWith("session 2 · resumed ")).toBe(true);
+    const m = xpChartModel(c.states, { startedAt: c.startedAt, endedAt: c.endedAt, episodeMs: null, now: c.now });
+    // No episode budget: the axis ends at the last sample, twenty hours in — not six days.
+    expect(m.t1 - m.t0).toBe(20 * HOUR + 1000);
+  });
+
+  test("a run no longer live closes its window at its served playtime", () => {
+    const c = runChartInput(states, { startedAt: T0, endedAt: null, live: false }, sessions, 20 * HOUR + 5000, RESUME + DAY);
+    expect(c.endedAt).toBe(20 * HOUR + 5000);
+  });
+
+  test("a run of one session reads as it always did, ninety minutes for an e90", () => {
+    const one = [{ start: 0, end: 90 * 60_000 }];
+    const c = runChartInput([s(60_000, 1, 0), s(80 * 60_000, 5, 10)], { startedAt: 0, endedAt: 90 * 60_000, live: false }, one, 90 * 60_000, 10 * DAY);
+    expect(c.seams).toEqual([]);
+    const m = xpChartModel(c.states, { startedAt: c.startedAt, endedAt: c.endedAt, episodeMs: 90 * 60_000, now: c.now });
+    expect([m.t0, m.t1]).toEqual([0, 90 * 60_000]);
+  });
+
+  test("a run served without sessions keeps the wall clock", () => {
+    const c = runChartInput(states, { startedAt: T0, endedAt: null, live: true }, undefined, null, RESUME + HOUR);
+    expect(c.states).toEqual(states);
+    expect([c.startedAt, c.endedAt, c.now]).toEqual([T0, null, RESUME + HOUR]);
+    expect(c.seams).toEqual([]);
   });
 });
