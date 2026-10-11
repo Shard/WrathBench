@@ -266,6 +266,10 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             An entry that states its own keeps it WHOLE: the two are alternatives, never merged,
             because a merged routing is one nobody wrote down. Absent means the built-in default
             (the model author's own provider, fallbacks off).
+            `runPods` — `"off"` (default) or `"probes"`: where a probe-campaign episode executes.
+            `probes` runs every probing episode as its own pod on the cluster, on the arm's image
+            ("Run pods", below). Anything else is refused. Off the cluster the setting changes
+            nothing except that an arm with a pinned image is refused rather than run on master.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
             account?, excludeUnhealthy? } }. The shape (cells, start, leash, stop level, resume,
@@ -1178,6 +1182,101 @@ $R set campaigns/class-probe '{"version":2,"enabled":false,"assignments":[]}' --
 $R set campaigns/race-probe '{"version":1,"enabled":false,"assignments":[]}' --actor <you> --note "race-probe@1, unassigned"
 ```
 
+### Run pods
+
+A probe-campaign arm may name its own container image — a branch build, or a
+harness that is not this repository — and an image cannot be a child process
+of the fleet pod. So on the cluster a probing episode can run as **its own
+pod**, created by the roster from the chart's template and watched until it
+ends (`infra/run-pod.ts`; the contract both sides honour is
+`docs/ARCHITECTURE.md`, "Launching a run: the run contract"). Scored lanes
+stay child processes until a campaign has proven the launcher.
+
+**The switch.** `policy.runPods` in the config store, `"off"` by default:
+
+```
+R="kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts"
+$R patch policy '{"runPods":"probes"}' --actor <you> --note "run pods on for probes"
+$R patch policy '{"runPods":"off"}'    --actor <you> --note "run pods off"
+```
+
+It reaches a job at its next roster spawn (the supervisor hands it to
+`run-roster` as `--run-pods`), so a roster already mid-episode keeps the mode it
+started under. With it on, every probing episode — image-less arms too, so
+arms compare on one execution path — is a pod; an arm with an image is refused
+with the reason when the switch is off or the supervisor is not on the cluster,
+never run on master's code instead.
+
+**What the chart provides** (`templates/run-pods.yaml`): the fleet's
+ServiceAccount and a Role over pods in the release namespace only; the pod
+template, rendered from the same helpers as the fleet pod and mounted into it;
+and the launcher's settings. Two values matter at deploy time:
+
+- `runPods.allowedImages` — the image *repositories* an arm may name, matched
+  on the part before the tag or digest, exactly or as a path prefix. Empty
+  means the release runner alone (`<image.registry>/wrathbench-runner`). Add
+  the repository PR builds are pushed to (`ghcr.io/shard/wrathbench-runner`).
+  An image outside the list, untagged, or `:latest` is refused before a pod
+  exists.
+- `runPods.imagePullSecrets` — pull Secret names for run pods, on top of what
+  the node already authenticates to; the cluster repo creates the Secret for a
+  private package and the chart references it by name.
+
+A run pod gets the module secret and the one credential its driver bills (its
+lane's `CLAUDE_CODE_OAUTH_TOKEN*`, its `apiKeyEnv`, or the mounted codex home),
+the runs and wiki volumes, and no config store, no database variables and no
+`ANTHROPIC_*` variable — `infra/run-pod.test.ts` asserts the last on the
+rendered template and on the env builder. Its harness stamp is the arm's image
+tag, never master's; a digest-only pin stamps
+`<repository basename>@sha256:<12 hex>`. The launcher writes
+`runs/<id>/image.json` (`ref`, `digest`, `pod`, `node`, `startedAt`) when the
+container starts, and a resume relaunches that digest whatever the arm says now.
+
+**Lifecycle.** Each pod carries an ownerReference to the fleet pod, so a fleet
+stop or crash deletes its run pods with the pod's 90s grace — the same
+SIGTERM → `operator-pause` an episode gets from its roster. A roster's SIGTERM
+deletes its pod with that grace and waits for it to be gone; the supervisor's
+drain counts a roster's run pod as an episode in flight (beside its /proc
+scan); `infra/k8s-deploy.sh` waits for zero run pods after the fleet pod is
+gone and before the worldserver is touched, and fails the window closed naming
+the run if one outlives the budget; `infra/fleet-update.sh status` lists them.
+A pod that will not pull (`ImagePullBackOff`), cannot be scheduled for five
+minutes, stays Pending for fifteen, or is evicted ends the attempt as
+`launch-failed` with the kubelet's reason in the roster's log, never as a hang.
+The pod's log is followed into the job log as a child's stderr was, and the
+finished pod is deleted.
+
+**Debugging one.** Pods are labelled `app.kubernetes.io/component=run`, with
+the run id in the annotation `wrathbench.shard.page/run-id` (the label
+`wrathbench.shard.page/run` is its hash: a run id can exceed 63 characters) and
+the owning roster's pid in `wrathbench.shard.page/roster-pid`.
+
+```
+kubectl -n wrathbench get pods -l app.kubernetes.io/component=run -o wide
+kubectl -n wrathbench describe pod <name>          # pull errors, scheduling, the image digest
+kubectl -n wrathbench logs <name>                  # run.ts's own lines; also in the job log
+kubectl -n wrathbench get cm wrathbench-run-pod-template -o jsonpath='{.data.pod\.json}'
+```
+
+**A branch runner image.** PR heads and master commits are built by a GitHub
+Actions workflow and pushed to GHCR as
+`ghcr.io/shard/wrathbench-runner:harness-0.5-<n>-g<sha>[-pr<N>]`; a definition
+usually pins the digest. By hand, from a clean checkout of the branch:
+
+```
+./infra/build-images.sh --only runner --push --registry ghcr.io/shard
+```
+
+The tag is `git describe` of the branch's head, so it still names series 0.5
+and a run stamped with it groups with the series; `--allow-dirty` tags are
+refused for push, and `latest` is refused everywhere.
+
+**First proof.** One short probe on `PROBE`: publish a one-arm definition,
+assign a model, set `runPods` to `probes`, and watch `fleet-update.sh status`
+and the job log for `run pod … created`, `… running on <node>: <image> is
+sha256:…`, and the roster's verdict. Expect the first pull of a new image to
+take minutes; the account is held through it by `image.json` and the heartbeat.
+
 ### Ad-hoc launches still work
 
 Nothing about the host path changed. One episode:
@@ -1299,6 +1398,11 @@ job needs the token of the lane it was scheduled on there (`claude setup-token`)
 subscription; without it the roster refuses the episode with a `launch-failed`
 row naming that variable, rather than burning a session.
 
+A run pod ("Run pods", above) gets the module secret and only the credential
+its driver bills — its lane's token, its `apiKeyEnv`, or the mounted codex
+home — by Secret reference in the chart's template; the launcher strips the
+rest, and no `ANTHROPIC_*` variable can reach one.
+
 `WRATHBENCH_MODULE_SECRET` — the module's **port secret** (module/PROTOCOL.md,
 "Authentication"). Every request to the worldserver's control
 port, `GET /health` included, must carry it (or a session secret leased with
@@ -1337,7 +1441,10 @@ Every episode is stamped with `git describe --tags --always --dirty`, computed
 at launch. On the host `run-episode.sh` does it; in the container `run-roster`
 does it, using the `git` in the runner image against the bind-mounted `.git`.
 A dirty tree stamps `-dirty` either way — that is the point, and it is why the
-stamp is not a file written once at `up` time.
+stamp is not a file written once at `up` time. On the cluster the stamp is the
+image tag the chart passes (`WRATHBENCH_HARNESS_VERSION`), and an episode
+running as its own pod on an arm's image is stamped with *that* image's tag,
+never the fleet's ("Run pods", above).
 
 ## Public dashboard
 
