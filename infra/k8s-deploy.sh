@@ -194,6 +194,17 @@ fleet_pods() {
   "${KUBECTL[@]}" get pods -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=fleet" \
     -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}' 2>/dev/null | strip_ansi | tr -d '\r' || true
 }
+# The RUN pods: one per probe-campaign episode the fleet launched as its own
+# pod (infra/run-pod.ts; `component=run`, with the run id in an annotation).
+# Each carries an ownerReference to the fleet pod, so scaling the fleet to 0
+# deletes them too — but deletion is a grace period (90s, in which run.ts
+# writes its pause record) and the garbage collector runs AFTER the owner is
+# gone, so "no fleet pod" does not yet mean "no run pod". A live run pod holds
+# a module session and a game account exactly as a fleet child did.
+run_pods() {
+  "${KUBECTL[@]}" get pods -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=run" \
+    -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{.metadata.annotations.wrathbench\.shard\.page/run-id}{"\n"}{end}' 2>/dev/null | strip_ansi | tr -d '\r' || true
+}
 
 # ------------------------------------------------------------- the pin check
 #
@@ -314,6 +325,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "  worldserver image  $(deployed_tag) (Flux owns this; this script never changes it)"
   say "  fleet replicas     $(fleet_replicas)"
   say "  fleet pods         $(p="$(fleet_pods)"; if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — the drain would not have to wait for one"; fi)"
+  say "  run pods           $(p="$(run_pods)"; if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — no episode is running as its own pod"; fi)"
   resolve_tag_check
   case "${TAG_CHECK}" in
     ok) say "  pin check          OK — ${TAG_CHECK_WHY}" ;;
@@ -477,6 +489,34 @@ while :; do
   sleep 2
 done
 say "drained: no fleet pod remains, so nothing else holds the smoke accounts"
+
+# And the run pods, for the same reason and with the same budget: a run pod is
+# an episode, with a module session and a game account, and the worldserver
+# must never be rolled or smoked under one. Each was deleted with its 90s grace
+# by its roster, or will be by the garbage collector now that its owner is gone;
+# this is the wait for that to have happened. Unconditional, like the fleet pod
+# wait, because a run pod outliving its fleet pod is exactly the case.
+say "waiting for every RUN pod to go away (each is an episode with a live session; up to ${DRAIN_WAIT_S}s)"
+run_deadline=$(( $(date +%s) + DRAIN_WAIT_S ))
+run_polls=0
+while :; do
+  run_pod_lines="$(run_pods)"
+  run_polls=$(( run_polls + 1 ))
+  if [[ -z "${run_pod_lines//[[:space:]]/}" ]]; then
+    [[ "${run_polls}" -eq 1 ]] && say "  (no run pod on the first look — nothing to wait for)"
+    break
+  fi
+  if [[ "$(date +%s)" -ge "${run_deadline}" ]]; then
+    run_names=""
+    while IFS= read -r l; do
+      [[ -n "${l//[[:space:]]/}" ]] || continue
+      run_names="${run_names}${run_names:+, }${l}"
+    done <<< "${run_pod_lines}"
+    fail_closed "a run pod is still there ${DRAIN_WAIT_S}s after the fleet pod went away: ${run_names} — it holds a game session, and the worldserver must not be touched under a live run. Read: ${KUBECTL[*]} get pods -l app.kubernetes.io/component=run"
+  fi
+  sleep 2
+done
+say "drained: no run pod remains"
 
 # ------------------------------------------------------------------ 2. wait
 CURRENT_PHASE=waiting

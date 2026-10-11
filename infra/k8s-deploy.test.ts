@@ -79,6 +79,19 @@ case "\${cmd}" in
     esac
     ;;
   get)
+    if [[ "\${raw}" == *"component=run"* ]]; then
+      # The RUN pods (infra/run-pod.ts): FAKE_RUN_POD_POLLS reads still list one.
+      n=0
+      [[ -f "\${FAKE_LOG}.runpodcount" ]] && n="$(cat "\${FAKE_LOG}.runpodcount")"
+      n=$(( n + 1 ))
+      printf '%s' "\${n}" > "\${FAKE_LOG}.runpodcount"
+      log "get run-pods"
+      polls="\${FAKE_RUN_POD_POLLS:-0}"
+      if [[ "\${polls}" == "-1" || "\${n}" -le "\${polls}" ]]; then
+        printf 'wrathbench-run-xyz12 Running fleet-race-probe-1-orc-warrior-sonnet-20260101\\n'
+      fi
+      exit 0
+    fi
     if [[ "\${raw}" == *"get pods"* ]]; then
       n=0
       [[ -f "\${FAKE_LOG}.podcount" ]] && n="$(cat "\${FAKE_LOG}.podcount")"
@@ -121,6 +134,8 @@ interface Case {
   args?: string[];
   /** How many `get pods` reads still report a pod; -1 never stops reporting one. */
   podPolls?: number;
+  /** The same for the RUN pods (`component=run`). */
+  runPodPolls?: number;
   replicas?: number;
   drainWaitS?: number;
   smokeRc?: number;
@@ -160,6 +175,7 @@ function run(c: Case): Result {
         FAKE_LOG: log,
         FAKE_TAG: TAG,
         FAKE_POD_POLLS: String(c.podPolls ?? 0),
+        FAKE_RUN_POD_POLLS: String(c.runPodPolls ?? 0),
         FAKE_REPLICAS: String(c.replicas ?? 1),
         ...(c.smokeRc !== undefined ? { FAKE_SMOKE_RC: String(c.smokeRc) } : {}),
         FAKE_PREFLIGHT: preflightJson,
@@ -240,5 +256,37 @@ describe("k8s-deploy.sh draining", () => {
     expect(firstIndex(r, "smoke ")).toBe(-1);
     // And the invariant the header promises still holds — the fleet came back.
     expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+  });
+
+  // A run pod (infra/run-pod.ts) is an episode with a game session, owned by
+  // the fleet pod and deleted with a 90s grace once that pod is gone. The
+  // worldserver is rolled and smoked only once none remains.
+  test("run pods are waited out after the fleet pod and before the worldserver is touched", () => {
+    const r = run({ podPolls: 1, runPodPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("waiting for every RUN pod to go away");
+    expect(r.out).toContain("drained: no run pod remains");
+    const lastRunPoll = lastIndex(r, "get run-pods");
+    expect(r.calls.filter((l) => l === "get run-pods").length).toBeGreaterThanOrEqual(2);
+    // After the fleet pod wait, before the worldserver rollout wait and the smoke.
+    expect(lastRunPoll).toBeGreaterThan(lastIndex(r, "get pods"));
+    expect(lastRunPoll).toBeLessThan(r.calls.findIndex((l) => l.startsWith("rollout status") && l.includes("worldserver")));
+    expect(lastRunPoll).toBeLessThan(firstIndex(r, "smoke "));
+  }, 20_000);
+
+  test("a run pod that never goes away fails the window closed, naming its run", () => {
+    const r = run({ podPolls: 0, runPodPolls: -1, drainWaitS: 1 });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("fleet-race-probe-1-orc-warrior-sonnet-20260101");
+    expect(r.out).toContain("must not be touched under a live run");
+    expect(firstIndex(r, "smoke ")).toBe(-1);
+    expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+  });
+
+  test("--dry-run lists the run pods beside the fleet pods", () => {
+    const r = run({ args: ["--dry-run"], runPodPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("run pods");
+    expect(r.out).toContain("wrathbench-run-xyz12 Running");
   });
 });
