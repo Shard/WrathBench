@@ -31,7 +31,6 @@ import { characterLabel, className, raceName } from "./characters";
 import { isArchiveDir } from "./archive-dir";
 import { harnessOfRun, parseComparability } from "../src/comparability";
 import { platformOf as sharedPlatformOf } from "../src/platform";
-import { attributeCampaign } from "../src/campaign-defs";
 
 /**
  * A run counts as live when it has not terminated and its trajectory grew
@@ -110,20 +109,27 @@ export function platformOf(apiBase: string | null, driver: string | null): strin
 }
 
 /**
- * A run's campaign, cell, version and how it was placed — read, never written
- * back (`attributeCampaign`). One helper for both row builders (this file's
- * and the store's `runRowOf`), so the two listings cannot attribute a run
+ * A run's campaign stamps, off its launch config: the campaign, cell and
+ * version, the arm, the roster name it was launched as, and the image a run
+ * pod was asked for. Read as recorded and never inferred — a run from before a
+ * stamp existed simply has none. One helper for both row builders (this
+ * file's and the store's `runRowOf`), so the two listings cannot read a run
  * differently.
  */
 export function campaignFieldsOf(
-  runId: string,
-  campaign: string | null,
-  campaignVersion: number | null,
-  cell: string | null,
-): Pick<RunRow, "campaign" | "cell" | "campaignVersion" | "campaignSource"> {
-  const a = attributeCampaign({ runId, campaign, campaignVersion, cell });
-  if (a === null) return { campaign: null, cell: null, campaignVersion: null, campaignSource: null };
-  return { campaign: a.campaign, cell: a.cell, campaignVersion: a.version, campaignSource: a.source };
+  config: Readonly<Record<string, unknown>> | null | undefined,
+): Pick<RunRow, "campaign" | "cell" | "campaignVersion" | "arm" | "ref" | "image"> {
+  const s = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+  const campaign = s(config?.["campaign"]);
+  const version = config?.["campaignVersion"];
+  return {
+    campaign,
+    cell: campaign === null ? null : s(config?.["cell"]),
+    campaignVersion: campaign !== null && typeof version === "number" && Number.isInteger(version) ? version : null,
+    arm: campaign === null ? null : s(config?.["arm"]),
+    ref: s(config?.["ref"]),
+    image: s(config?.["image"]),
+  };
 }
 
 function readMetaSafe(dir: string): MetaShape | null {
@@ -231,7 +237,9 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
     campaign: null,
     cell: null,
     campaignVersion: null,
-    campaignSource: null,
+    arm: null,
+    ref: null,
+    image: null,
     extra: false,
     comparability: null,
     character: null,
@@ -307,7 +315,7 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
   }
   // Attributed whether or not the meta was readable: a closed definition names
   // its members by run id, which needs nothing from the run but its id.
-  Object.assign(row, campaignFieldsOf(runId, str(meta?.config?.campaign), num(meta?.config?.campaignVersion), str(meta?.config?.cell)));
+  Object.assign(row, campaignFieldsOf(meta?.config as Record<string, unknown> | undefined));
 
   const jsonl = join(dir, "trajectory.jsonl");
   if (existsSync(jsonl)) {

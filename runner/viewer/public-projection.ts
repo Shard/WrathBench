@@ -51,7 +51,8 @@ import type {
   AgentPosition,
   ApiInfoResponse,
   AreaFacts,
-  CampaignRowView,
+  ArmSummary,
+  CampaignView,
   CampaignsResponse,
   ComparabilityView,
   CostFigure,
@@ -95,6 +96,7 @@ import type {
   TradeFacts,
   MoveIntentView,
   TrackResponse,
+  Square,
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
@@ -342,6 +344,11 @@ function projectRunRow(r: RunRow): RunRow {
     objective: null,
     campaign: r.campaign,
     cell: r.cell,
+    // The version and arm a probe was stamped with: without them a public
+    // row cannot be matched to the campaign pane it belongs to. The roster
+    // name and the image a pod asked for stay off a public row.
+    ...(r.campaignVersion !== undefined ? { campaignVersion: r.campaignVersion } : {}),
+    ...(r.arm !== undefined ? { arm: r.arm } : {}),
     extra: r.extra,
     character: r.character,
     race: r.race,
@@ -415,6 +422,8 @@ function projectResultRun(r: ResultRun): ResultRun {
     characterLabel: r.characterLabel,
     campaign: r.campaign,
     cell: r.cell,
+    ...(r.campaignVersion !== undefined ? { campaignVersion: r.campaignVersion } : {}),
+    ...(r.arm !== undefined ? { arm: r.arm } : {}),
     effort: r.effort,
     ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
     harness: r.harness,
@@ -599,88 +608,140 @@ export function projectTools(t: ToolsResponse): ToolsResponse {
   });
 }
 
-/** A campaign row whose config names no account: the pin is the lab's, the class the reader's. */
-export type PublicCampaignRowView = Omit<CampaignRowView, "config"> & {
-  config: Omit<NonNullable<CampaignRowView["config"]>, "account"> | null;
+/** A campaign whose config names no account: the pin is the lab's, the class the reader's. */
+export type PublicCampaignView = Omit<CampaignView, "config"> & {
+  config: (Omit<NonNullable<CampaignView["config"]>, "account">) | null;
 };
 export interface PublicCampaignsResponse extends Omit<CampaignsResponse, "campaigns"> {
-  campaigns: PublicCampaignRowView[];
+  campaigns: PublicCampaignView[];
 }
 
+/**
+ * An image reference without its registry host: `harbor.lab/wb/runner:t@sha256:…`
+ * reads `wb/runner:t@sha256:…`. The tag and digest are what a reader needs to
+ * name the build; the host is topology. A first path component is a host when
+ * it holds a dot or a port, or is `localhost` — the reference grammar's own rule.
+ */
+export function publicImageRef(ref: string | null): string | null {
+  if (ref === null) return null;
+  const slash = ref.indexOf("/");
+  if (slash < 0) return ref;
+  const head = ref.slice(0, slash);
+  return head.includes(".") || head.includes(":") || head === "localhost" ? ref.slice(slash + 1) : ref;
+}
+
+function projectSquare(sq: Square): Square {
+  return {
+    column: sq.column,
+    runs: sq.runs,
+    counted: sq.counted,
+    reached: sq.reached,
+    live: sq.live,
+    minutesToStop: sq.minutesToStop === null ? null : { min: sq.minutesToStop.min, median: sq.minutesToStop.median, max: sq.minutesToStop.max },
+    bestLevel: sq.bestLevel,
+    costUsd: sq.costUsd,
+    mismatchedStart: sq.mismatchedStart,
+    builds: [...sq.builds],
+    runIds: [...sq.runIds],
+    ...(sq.want !== undefined ? { want: sq.want } : {}),
+    ...(sq.settled !== undefined ? { settled: sq.settled } : {}),
+    ...(sq.refused !== undefined ? { refused: sq.refused } : {}),
+  };
+}
+
+function projectArmSummary(a: ArmSummary): ArmSummary {
+  return {
+    arm: a.arm,
+    runs: a.runs,
+    reached: a.reached,
+    medianMinutesToStop: a.medianMinutesToStop,
+    medianTurnsToStop: a.medianTurnsToStop,
+    medianCostToStop: a.medianCostToStop,
+    medianPromptTokensToStop: a.medianPromptTokensToStop,
+    // Reason ids and counts; a value that is not a count is not carried.
+    terminations: Object.fromEntries(Object.entries(a.terminations).filter(([, n]) => typeof n === "number")),
+    builds: [...a.builds],
+    ...(a.costAsIfMetered !== undefined ? { costAsIfMetered: a.costAsIfMetered } : {}),
+  };
+}
+
+/**
+ * The campaigns page, public. Kept: everything that says what a campaign asks
+ * and what its runs did — the definition, its provenance, the arms, the grid,
+ * the comparison and the refusals (store keys and reasons). Withheld: the
+ * pinned account, the objective's text (free prose that can quote the world,
+ * as on a run row; `shape.objective` reads null), and the registry host of an
+ * arm's image.
+ */
 export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse {
   return scrubPathsValue<PublicCampaignsResponse>({
+    now: c.now,
     campaigns: c.campaigns.map(
-      (row: CampaignRowView): PublicCampaignRowView => ({
-        campaign: row.campaign,
-        version: row.version,
-        definition:
-          row.definition === null
+      (v: CampaignView): PublicCampaignView => ({
+        id: v.id,
+        version: v.version,
+        key: v.key,
+        hash: v.hash,
+        source:
+          v.source === null
             ? null
-            : {
-                status: row.definition.status,
-                question: row.definition.question,
-                stopAtLevel: row.definition.stopAtLevel,
-                episodeMs: row.definition.episodeMs,
-              },
-        config:
-          row.config === null
-            ? null
-            : {
-                enabled: row.config.enabled,
-                assignments: row.config.assignments.map((a) => ({ model: a.model, runsPerCell: a.runsPerCell })),
-                want: row.config.want,
-                complete: row.config.complete,
-              },
-        runs: row.runs,
-        live: row.live,
-        models: [...row.models],
-        cells: row.cells.map((cell) => ({
-          cell: cell.cell,
-          declared: cell.declared,
-          race: cell.race,
-          class: cell.class,
-          characterLabel: cell.characterLabel,
-          note: cell.note,
-          runs: cell.runs,
-          models: [...cell.models],
-          bestLevel: cell.bestLevel,
-          mismatched: cell.mismatched,
+            : { commit: v.source.commit, path: v.source.path, ...(v.source.branch !== undefined ? { branch: [...v.source.branch] } : {}) },
+        publishedAt: v.publishedAt,
+        question: v.question,
+        ...(v.note !== undefined ? { note: v.note } : {}),
+        shape: {
+          objective: null,
+          stopAtLevel: v.shape.stopAtLevel,
+          episodeMs: v.shape.episodeMs,
+          idleMs: v.shape.idleMs,
+          noXpMs: v.shape.noXpMs,
+          maxToolCalls: v.shape.maxToolCalls,
+          wiki: v.shape.wiki,
+          wikiCoords: v.shape.wikiCoords,
+          resume: v.shape.resume,
+          maxAttemptsPerCell: v.shape.maxAttemptsPerCell,
+        },
+        cells: v.cells.map((cell) => ({ id: cell.id, race: cell.race, class: cell.class, ...(cell.note !== undefined ? { note: cell.note } : {}) })),
+        arms: v.arms.map((a) => ({
+          id: a.id,
+          ...(a.note !== undefined ? { note: a.note } : {}),
+          image: publicImageRef(a.image),
+          command: a.command === null ? null : [...a.command],
+          args: [...a.args],
         })),
-        columns: row.columns.map((col) => ({
+        config:
+          v.config === null
+            ? null
+            : {
+                enabled: v.config.enabled,
+                assignments: v.config.assignments.map((a) => ({
+                  ref: a.ref,
+                  model: a.model,
+                  effort: a.effort,
+                  compactWindow: a.compactWindow,
+                  harness: a.harness,
+                  runsPerCell: a.runsPerCell,
+                })),
+              },
+        state: v.state,
+        progress: { want: v.progress.want, done: v.progress.done, attempted: v.progress.attempted, capped: v.progress.capped, live: v.progress.live },
+        columns: v.columns.map((col) => ({
           key: col.key,
+          ref: col.ref,
+          arm: col.arm,
           model: col.model,
           effort: col.effort,
           compactWindow: col.compactWindow,
           harness: col.harness,
-          series: col.series,
-          assignment: col.assignment,
         })),
-        grid: row.grid.map((line) =>
-          line.map((sq) =>
-            sq === null
-              ? null
-              : {
-                  runs: sq.runs,
-                  live: sq.live,
-                  counted: sq.counted,
-                  reached: sq.reached,
-                  minutesToTarget:
-                    sq.minutesToTarget === null
-                      ? null
-                      : { min: sq.minutesToTarget.min, median: sq.minutesToTarget.median, max: sq.minutesToTarget.max },
-                  bestLevel: sq.bestLevel,
-                  mismatched: sq.mismatched,
-                },
-          ),
-        ),
-        newestRunId: row.newestRunId,
-        newestAt: row.newestAt,
+        grid: v.grid.map((line) => ({ cell: line.cell, squares: line.squares.map(projectSquare) })),
+        comparison: v.comparison.map((cmp) => ({ ref: cmp.ref, arms: cmp.arms.map(projectArmSummary) })),
+        costUsd: v.costUsd,
+        newestRunId: v.newestRunId,
+        newestAt: v.newestAt,
       }),
     ),
-    orphans: c.orphans,
-    // A local path; the public page has no missing-config to explain with it.
-    configPath: null,
-    now: c.now,
+    refused: c.refused.map((r) => ({ key: r.key, reason: r.reason })),
   });
 }
 

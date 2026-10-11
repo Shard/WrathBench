@@ -420,7 +420,9 @@ export function resultRunOf(
     campaign: run.campaign,
     cell: run.cell,
     ...(run.campaignVersion !== undefined ? { campaignVersion: run.campaignVersion } : {}),
-    ...(run.campaignSource !== undefined ? { campaignSource: run.campaignSource } : {}),
+    ...(run.arm !== undefined ? { arm: run.arm } : {}),
+    ...(run.ref !== undefined ? { ref: run.ref } : {}),
+    ...(run.image !== undefined ? { image: run.image } : {}),
     effort: run.comparability?.effort ?? null,
     // Only when set: absent is the CLI's own `auto`, which every older row is.
     ...(run.comparability?.compactWindow != null ? { compactWindow: run.comparability.compactWindow } : {}),

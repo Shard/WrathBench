@@ -166,7 +166,7 @@ const INFO: ApiInfoResponse = {
 };
 
 const EPISODES: EpisodesResponse = { episodes: [], untiered: 0, now: GENERATED_AT };
-const CAMPAIGNS: CampaignsResponse = { campaigns: [], orphans: 0, configPath: null, now: GENERATED_AT };
+const CAMPAIGNS: CampaignsResponse = { campaigns: [], refused: [], now: GENERATED_AT };
 const MODELS: ModelsResponse = {
   models: [],
   roster: { path: null, shape: "roster", count: 0, excluded: [] },

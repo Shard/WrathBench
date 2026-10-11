@@ -12,7 +12,7 @@
 
 import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
-import { api, type CampaignRowView, type CampaignsResponse } from "../api/client";
+import { api, type CampaignRowView, type LegacyCampaignsResponse } from "../api/client";
 import { Collapsible } from "../components/Collapsible";
 import {
   campaignCosts,
@@ -78,7 +78,8 @@ export default function Campaigns() {
   // the shared fleet feed, joined by run id in lib/campaigns.
   const runs = poll(() => api.runs().then((r) => r.runs), RUNS_POLL_MS);
   const { fleet } = useFeeds();
-  const body = (): CampaignsResponse | undefined => feed.latest;
+  // The pre-v3 page over the v3 response, until the v3 page replaces it.
+  const body = (): LegacyCampaignsResponse | undefined => feed.latest as unknown as LegacyCampaignsResponse | undefined;
   const rows = (): CampaignRowView[] => body()?.campaigns ?? [];
   const live = (): Map<string, CampaignRunRow[]> => campaignLiveRuns(fleet.latest, runs.latest ?? []);
   // Undefined until the runs feed lands, so a pane shows no figure rather than a

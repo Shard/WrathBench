@@ -1,270 +1,277 @@
 /**
- * `/api/campaigns`, built: the probe lane grouped by campaign VERSION, each
- * annotated with its checked-in definition and its store row, with the
- * cells × models grid the page draws.
+ * `/api/campaigns`, built: every published campaign version with its store
+ * row, the cells × (assignment × arm) grid of what has run, and the arm
+ * comparison per assignment.
  *
- * Built from the RUN DIRECTORY and only annotated from the definitions and the
- * store, which is the property that matters: a version that has been completed,
- * switched off and dropped from the store still has a row, because its runs
- * are what happened and its definition still attributes them. A row whose
- * campaign no definition claims is shown too — pretending a run did not happen
- * is worse than showing one with no home.
+ * The published definitions say what exists; the run directory says what
+ * happened. A run belongs to a square only by its own stamps — campaign,
+ * version, cell, the roster name it was launched as and the arm — so a run
+ * from before arms belongs to none and stays on the runs pages. Progress and
+ * state come from `campaignSquares`, the same tally the scheduler derives its
+ * work from, so "complete" and the numbers beside it cannot disagree.
  *
  * The grid is a reading, never a ranking (docs/METHODOLOGY.md: `probing` has
- * no comparability group). A column is one model identity — model, effort,
- * harness tag and harness series — so a square never pools runs a ladder row
- * would keep apart; cells keep the definition's order and columns keep the
- * assignments' order, and nothing is sorted by a result.
+ * no comparability group): cells keep the definition's order, columns the
+ * assignments' and the arms', and nothing is sorted by a result.
  *
  * Pure over its inputs, so the page's numbers are testable without a server.
  */
 
-import { CAMPAIGN_DEFS, cellOf, startMismatch, type CampaignDef } from "../src/campaign-defs";
-import { campaignComplete, type Campaign, type ProbeRun } from "../src/campaigns";
-import { sameRosterIdentity } from "../src/models";
-import type {
-  CampaignCellView,
-  CampaignColumnView,
-  CampaignRowView,
-  CampaignSquareView,
-  ResultRun,
-} from "./api-types";
-import { characterLabel } from "./characters";
+import { cellOf, startMismatch, type CampaignArm } from "../src/campaign-def";
+import {
+  armArg,
+  campaignProgress,
+  campaignSquares,
+  type Campaign,
+  type CampaignRefusal,
+  type CampaignSquare,
+  type ProbeRun,
+  type PublishedCampaign,
+} from "../src/campaigns";
+import { harnessOfRun } from "../src/comparability";
+import type { ArmSummary, CampaignView, ResultRun, Square } from "./api-types";
 
-/**
- * The roster as this builder needs it: names for assignments, and each entry's
- * identity — model, effort, claude-code compaction window — to map a run back
- * to one (`sameRosterIdentity`, the rule every other run→entry match uses).
- */
+/** The roster and the campaign blocks, as this builder needs them (`RosterRead`). */
 export interface CampaignsRoster {
   campaigns: readonly Campaign[];
-  models: readonly { name: string; model: string; effort?: string | undefined; compactWindow?: string | undefined }[];
+  campaignDefs: readonly PublishedCampaign[];
+  campaignRefusals: readonly CampaignRefusal[];
+  models: readonly { name: string; model: string; effort?: string | undefined; compactWindow?: string | undefined; driver?: string | undefined }[];
 }
 
 /** The page's whole body, minus the envelope `api.ts` adds. */
 export interface CampaignsView {
-  campaigns: CampaignRowView[];
-  orphans: number;
+  campaigns: CampaignView[];
+  refused: { key: string; reason: string }[];
 }
 
-/** The lower of two middles on an even count: a minute some run actually took, never an interpolation. */
-function median(xs: readonly number[]): number {
+/** The lower of two middles on an even count: a value some run actually had, never an interpolation. */
+function median(xs: readonly number[]): number | null {
+  if (xs.length === 0) return null;
   const s = [...xs].sort((a, b) => a - b);
   return s[Math.floor((s.length - 1) / 2)]!;
 }
 
-/** Minutes of play to the first observed level at or above `target`, or null when the run never got there. */
-function minutesTo(r: ResultRun, target: number): number | null {
-  const mark = r.levels.find((l) => l.level >= target);
-  if (mark === undefined || mark.playtimeMs === null) return null;
-  return Math.round(mark.playtimeMs / 60_000);
+/** The first level mark at or above the stop level, or undefined when the run never got there. */
+function markAt(r: ResultRun, target: number | null): ResultRun["levels"][number] | undefined {
+  return target === null ? undefined : r.levels.find((l) => l.level >= target);
 }
 
-function rowKey(campaign: string, version: number | null): string {
-  return `${campaign}@${version ?? "?"}`;
+function minutesTo(r: ResultRun, target: number | null): number | null {
+  const mark = markAt(r, target);
+  return mark === undefined || mark.playtimeMs === null ? null : Math.round(mark.playtimeMs / 60_000);
 }
 
-function columnKey(r: { model: string; effort: string | null; compactWindow: string | null; harness: string | null; series: string | null }): string {
-  return [r.model, r.effort ?? "", r.compactWindow ?? "", r.harness ?? "", r.series ?? ""].join("\u0000");
+/** What a provider billed for a run: a reported figure, never a list price, never as-if-metered. */
+function billedUsd(r: ResultRun): number | null {
+  const a = r.actualCost;
+  return a !== null && a.basis === "reported" && !a.asIfMetered && a.usd !== null ? a.usd : null;
 }
 
-/** A result row's column identity. */
-function identityOf(r: ResultRun & { model: string }): { model: string; effort: string | null; compactWindow: string | null; harness: string | null; series: string | null } {
-  return { model: r.model, effort: r.effort ?? null, compactWindow: r.compactWindow ?? null, harness: r.harness ?? null, series: r.harnessSeries ?? null };
+function sumOrNull(xs: readonly (number | null)[]): number | null {
+  const got = xs.filter((x): x is number => x !== null);
+  return got.length === 0 ? null : got.reduce((a, b) => a + b, 0);
+}
+
+/** A run's build, as the grid names it: its harness version. */
+function buildsOf(rs: readonly ResultRun[]): string[] {
+  return [...new Set(rs.map((r) => r.harnessVersion).filter((v): v is string => v !== null))].sort();
+}
+
+function columnKey(ref: string, arm: string): string {
+  return `${ref}/${arm}`;
 }
 
 /**
- * Every campaign version with runs, a definition or a store row, in page
- * order: store rows first (the operator's own priority), then every other
- * checked-in version in registry order, then any campaign only the runs
- * remember.
+ * Every published campaign version, in page order: the versions the store
+ * rows name, in the rows' order, then every other published version by id
+ * and version.
  */
 export function campaignsView(
   all: readonly ResultRun[],
   roster: CampaignsRoster,
-  /** Whether a run counts toward its cell — the scheduler's own `isCounted`, over a result row. */
+  /** Whether an ended run counts toward its square — the scheduler's own `isCounted`, over a result row. */
   counted: (r: ResultRun) => boolean,
-  defs: readonly CampaignDef[] = CAMPAIGN_DEFS,
 ): CampaignsView {
-  const probes = all.filter((r) => r.campaign !== null);
   const catalog = roster.models.map((m) => m.name);
-  const refOf = (r: ResultRun): string | null => roster.models.find((m) => sameRosterIdentity(m, r))?.name ?? null;
+  const entryOf = (ref: string): CampaignsRoster["models"][number] | undefined => roster.models.find((m) => m.name === ref);
+  const probes = all.filter((r) => r.campaign !== null);
 
-  const order: { campaign: string; version: number | null }[] = [];
-  const seen = new Set<string>();
-  const add = (campaign: string, version: number | null): void => {
-    const k = rowKey(campaign, version);
-    if (seen.has(k)) return;
-    seen.add(k);
-    order.push({ campaign, version });
-  };
-  for (const c of roster.campaigns) add(c.name, c.version);
-  for (const d of defs) add(d.id, d.version);
-  for (const r of probes) add(r.campaign!, r.campaignVersion ?? null);
+  const order: PublishedCampaign[] = [];
+  for (const c of roster.campaigns) if (!order.includes(c.published)) order.push(c.published);
+  const rest = roster.campaignDefs
+    .filter((d) => !order.some((o) => o.ref === d.ref))
+    .sort((a, b) => a.def.id.localeCompare(b.def.id) || a.def.version - b.def.version);
+  order.push(...rest);
 
-  const rows = order.map(({ campaign, version }): CampaignRowView => {
-    const def = version === null ? undefined : defs.find((d) => d.id === campaign && d.version === version);
-    const c = roster.campaigns.find((x) => x.name === campaign && x.version === version);
-    const mine = probes.filter((r) => r.campaign === campaign && (r.campaignVersion ?? null) === version);
-    const ended = mine.filter((r) => r.terminationReason !== null);
-    const probeRuns: ProbeRun[] = ended.map((r) => ({
+  const campaigns = order.map((pub): CampaignView => {
+    const def = pub.def;
+    const target = def.stopAtLevel;
+    const row = roster.campaigns.find((c) => c.name === def.id && c.version === def.version);
+    const mine = probes.filter((r) => r.campaign === def.id && (r.campaignVersion ?? null) === def.version);
+    const isLive = (r: ResultRun): boolean => r.terminationReason === null;
+    const probeRuns: ProbeRun[] = mine.map((r) => ({
       campaign: r.campaign,
       version: r.campaignVersion ?? null,
       cell: r.cell,
-      ref: refOf(r),
-      counted: counted(r),
+      ref: r.ref ?? null,
+      arm: r.arm ?? null,
+      counted: !isLive(r) && counted(r),
+      live: isLive(r),
     }));
-    const declared = def?.cells ?? [];
-    const cellIds = [
-      ...declared.map((x) => x.id),
-      ...[...new Set(mine.map((r) => r.cell).filter((x): x is string => x !== null))].filter((id) => !declared.some((x) => x.id === id)),
-    ];
+    const squares: CampaignSquare[] = row === undefined ? [] : campaignSquares(row, catalog, probeRuns);
+    const progress = campaignProgress(squares);
 
-    // Columns: every model identity that ran it, in the order the store row
-    // assigns them where it does, first run otherwise; then each assignment
-    // that has not run yet, so the grid shows what is owed as well as done.
-    const assignmentOf = (id: { model: string; effort: string | null; compactWindow: string | null }): string | null =>
-      c?.assignments.find((a) => {
-        const e = roster.models.find((m) => m.name === a.model);
-        return e !== undefined && sameRosterIdentity(e, id);
-      })?.model ?? null;
-    const columns: CampaignColumnView[] = [];
+    // Columns: every assignment the row names (and the roster still holds) ×
+    // every arm, then any (ref, arm) only the runs remember — an assignment
+    // since removed, or a row since moved to another version — so a version's
+    // history stays readable after its sweep moves on.
+    const refs: string[] = [...new Set(squares.map((s) => s.ref))];
     for (const r of [...mine].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
-      if (r.model === null) continue;
-      const col = identityOf(r as ResultRun & { model: string });
-      const key = columnKey(col);
-      if (columns.some((x) => x.key === key)) continue;
-      columns.push({ key, ...col, assignment: assignmentOf(col) });
+      if (r.ref != null && r.arm != null && def.arms.some((a) => a.id === r.arm) && !refs.includes(r.ref)) refs.push(r.ref);
     }
-    for (const a of c?.assignments ?? []) {
-      if (columns.some((x) => x.assignment === a.model)) continue;
-      const e = roster.models.find((m) => m.name === a.model);
-      if (e === undefined) continue;
-      const col = { model: e.model, effort: e.effort ?? null, compactWindow: e.compactWindow ?? null, harness: null, series: null };
-      columns.push({ key: columnKey(col), ...col, assignment: a.model });
-    }
-    const assignmentIndex = (col: CampaignColumnView): number => {
-      const i = c?.assignments.findIndex((a) => a.model === col.assignment) ?? -1;
-      return i < 0 ? Number.MAX_SAFE_INTEGER : i;
-    };
-    // Stable: unassigned columns keep their first-run order behind the assigned ones.
-    columns.sort((a, b) => assignmentIndex(a) - assignmentIndex(b));
+    const columns: CampaignView["columns"] = refs.flatMap((ref) =>
+      def.arms.map((arm) => {
+        const e = entryOf(ref);
+        const armWindow = armArg(arm, "compact-window");
+        return {
+          key: columnKey(ref, arm.id),
+          ref,
+          arm: arm.id,
+          model: e?.model ?? mine.find((r) => r.ref === ref)?.model ?? ref,
+          effort: e?.effort ?? null,
+          compactWindow: armWindow !== undefined ? (armWindow.toLowerCase() === "auto" ? null : armWindow) : (e?.compactWindow ?? null),
+          harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? "openai" }),
+        };
+      }),
+    );
 
-    const target = def?.status === "open" ? def.stopAtLevel : null;
-    const cells: CampaignCellView[] = [];
-    const grid: (CampaignSquareView | null)[][] = [];
-    for (const id of cellIds) {
-      const decl = def === undefined ? undefined : cellOf(def, id);
-      const runs = mine.filter((r) => r.cell === id);
-      const mismatchedOf = (rs: readonly ResultRun[]): number =>
-        rs.filter((r) => startMismatch(decl, { race: r.race, class: r.class })).length;
+    const squareOf = (cellId: string, ref: string, arm: CampaignArm): Square => {
+      const runs = mine.filter((r) => r.cell === cellId && r.ref === ref && r.arm === arm.id);
+      const ended = runs.filter((r) => !isLive(r));
+      const good = ended.filter(counted);
+      const minutes = good.map((r) => minutesTo(r, target)).filter((m): m is number => m !== null);
       const levels = runs.map((r) => r.maxLevel).filter((l): l is number => l !== null);
-      cells.push({
-        cell: id,
-        declared: decl !== undefined,
-        race: decl?.race ?? null,
-        class: decl?.class ?? null,
-        characterLabel: decl === undefined ? null : characterLabel(decl.race, decl.class),
-        note: decl?.note ?? null,
-        runs: runs.length,
-        models: [...new Set(runs.map((r) => r.model).filter((m): m is string => m !== null))].sort(),
+      const decl = cellOf(def, cellId);
+      const tally = squares.find((s) => s.cell.id === cellId && s.ref === ref && s.arm.id === arm.id);
+      return {
+        column: columnKey(ref, arm.id),
+        runs: ended.length,
+        counted: good.length,
+        reached: target === null ? 0 : good.filter((r) => (r.maxLevel ?? 0) >= target).length,
+        live: runs.length - ended.length,
+        minutesToStop: minutes.length === 0 ? null : { min: Math.min(...minutes), median: median(minutes)!, max: Math.max(...minutes) },
         bestLevel: levels.length > 0 ? Math.max(...levels) : null,
-        mismatched: mismatchedOf(runs),
-      });
-      grid.push(
-        columns.map((col): CampaignSquareView | null => {
-          const sq = runs.filter((r) => r.model !== null && columnKey(identityOf(r as ResultRun & { model: string })) === col.key);
-          if (sq.length === 0) return col.assignment !== null && decl !== undefined ? EMPTY_SQUARE(target) : null;
-          const done = sq.filter((r) => r.terminationReason !== null);
-          const good = done.filter(counted);
-          const minutes = target === null ? [] : good.map((r) => minutesTo(r, target)).filter((m): m is number => m !== null);
-          const lv = sq.map((r) => r.maxLevel).filter((l): l is number => l !== null);
-          return {
-            runs: done.length,
-            live: sq.length - done.length,
-            counted: good.length,
-            reached: target === null ? null : good.filter((r) => (r.maxLevel ?? 0) >= target).length,
-            minutesToTarget: minutes.length === 0 ? null : { min: Math.min(...minutes), median: median(minutes), max: Math.max(...minutes) },
-            bestLevel: lv.length > 0 ? Math.max(...lv) : null,
-            mismatched: mismatchedOf(sq),
-          };
-        }),
-      );
-    }
+        costUsd: sumOrNull(runs.map(billedUsd)),
+        mismatchedStart: runs.filter((r) => startMismatch(decl, { race: r.race, class: r.class })).length,
+        builds: buildsOf(runs),
+        runIds: [...runs].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0)).map((r) => r.runId),
+        want: tally?.want ?? 0,
+        settled: tally?.settled ?? null,
+        refused: tally?.refused ?? null,
+      };
+    };
+    const grid = def.cells.map((cell) => ({
+      cell: cell.id,
+      squares: columns.map((col) => squareOf(cell.id, col.ref, def.arms.find((a) => a.id === col.arm)!)),
+    }));
 
+    const comparison = refs.map((ref) => ({
+      ref,
+      arms: def.arms.map((arm): ArmSummary => {
+        const runs = mine.filter((r) => r.ref === ref && r.arm === arm.id);
+        const ended = runs.filter((r) => !isLive(r));
+        const reached = ended.filter((r) => counted(r) && target !== null && (r.maxLevel ?? 0) >= target);
+        const costs = reached
+          .map((r) => r.actualCost)
+          .filter((a): a is NonNullable<ResultRun["actualCost"]> => a !== null && a.basis === "reported" && a.usd !== null);
+        const terminations: Record<string, number> = {};
+        for (const r of ended) terminations[r.terminationReason!] = (terminations[r.terminationReason!] ?? 0) + 1;
+        return {
+          arm: arm.id,
+          runs: ended.length,
+          reached: reached.length,
+          medianMinutesToStop: median(reached.map((r) => minutesTo(r, target)).filter((m): m is number => m !== null)),
+          medianTurnsToStop: median(reached.map((r) => markAt(r, target)?.turn ?? null).filter((t): t is number => t !== null)),
+          medianCostToStop: median(costs.map((a) => a.usd!)),
+          medianPromptTokensToStop: median(reached.map((r) => r.tokens?.promptTokens ?? null).filter((t): t is number => t !== null)),
+          terminations,
+          builds: buildsOf(runs),
+          costAsIfMetered: costs.filter((a) => a.asIfMetered).length,
+        };
+      }),
+    }));
+
+    const assigned = row === undefined ? [] : row.assignments.filter((a) => catalog.includes(a.model));
+    const owed = squares.some((s) => s.settled === null);
+    const state: CampaignView["state"] =
+      progress.live > 0 || mine.some(isLive)
+        ? "running"
+        : row === undefined || assigned.length === 0
+          ? "unassigned"
+          : !owed
+            ? "complete"
+            : row.enabled
+              ? "queued"
+              : "disabled";
     const newest = mine.reduce<ResultRun | null>((a, b) => ((a?.startedAt ?? 0) >= (b.startedAt ?? 0) ? a : b), null);
     return {
-      campaign,
-      version,
-      definition:
-        def === undefined
-          ? null
-          : {
-              status: def.status,
-              question: def.question,
-              stopAtLevel: def.status === "open" ? def.stopAtLevel : null,
-              episodeMs: def.status === "open" ? def.budget.episodeMs : null,
-            },
+      id: def.id,
+      version: def.version,
+      key: pub.ref,
+      hash: pub.hash,
+      source: { commit: pub.source.commit, path: pub.source.path, branch: [...pub.source.branch] },
+      publishedAt: pub.publishedAt,
+      question: def.question,
+      note: def.note ?? null,
+      shape: {
+        objective: def.objective,
+        stopAtLevel: def.stopAtLevel,
+        episodeMs: def.budget.episodeMs,
+        idleMs: def.budget.idleMs,
+        noXpMs: def.budget.noXpMs,
+        maxToolCalls: def.budget.maxToolCalls,
+        wiki: def.wiki,
+        wikiCoords: def.wikiCoords,
+        resume: def.resume,
+        maxAttemptsPerCell: def.maxAttemptsPerCell,
+      },
+      cells: def.cells.map((c) => ({ id: c.id, race: c.race, class: c.class, ...(c.note !== undefined ? { note: c.note } : {}) })),
+      arms: def.arms.map((a) => ({
+        id: a.id,
+        ...(a.note !== undefined ? { note: a.note } : {}),
+        image: a.image ?? null,
+        command: a.command ?? null,
+        args: [...(a.args ?? [])],
+      })),
       config:
-        c === undefined
+        row === undefined
           ? null
           : {
-              enabled: c.enabled,
-              assignments: c.assignments.map((a) => ({ model: a.model, runsPerCell: a.runsPerCell })),
-              want: c.cells.length * c.assignments.filter((a) => catalog.includes(a.model)).reduce((n, a) => n + a.runsPerCell, 0),
-              // Ended runs only, which is deliberately NOT the question the
-              // scheduler asks: it counts a live probe as done so it does not
-              // launch the same cell twice, but a page must not announce a
-              // sweep complete while one of its runs could still end `manual`
-              // and re-open the cell. No `eligible` predicate either: `blocked`
-              // also covers running and paused, which are facts about this
-              // second, not about the sweep.
-              complete: campaignComplete(c, catalog, probeRuns),
-              account: c.account ?? null,
+              enabled: row.enabled,
+              account: row.account ?? null,
+              assignments: row.assignments.map((a) => {
+                const e = entryOf(a.model);
+                return {
+                  ref: a.model,
+                  model: e?.model ?? a.model,
+                  effort: e?.effort ?? null,
+                  compactWindow: e?.compactWindow ?? null,
+                  harness: e === undefined ? null : harnessOfRun({ driver: e.driver ?? "openai" }),
+                  runsPerCell: a.runsPerCell,
+                };
+              }),
             },
-      runs: cappedCounted(c, catalog, probeRuns),
-      live: mine.length - ended.length,
-      models: [...new Set(mine.map((r) => r.model).filter((m): m is string => m !== null))].sort(),
-      cells,
+      state,
+      progress,
       columns,
       grid,
+      comparison,
+      costUsd: sumOrNull(mine.map(billedUsd)),
       newestRunId: newest?.runId ?? null,
       newestAt: newest?.startedAt ?? null,
     };
   });
 
-  return {
-    // A version with no runs, no store row and nothing assigned is a
-    // definition nobody has commissioned yet; it still gets its row, so the
-    // page lists every campaign a launch could name.
-    campaigns: rows,
-    orphans: all.filter((r) => r.episode === "probing" && r.campaign === null).length,
-  };
-}
-
-/** An assigned cell nothing has run yet: owed, not empty. */
-function EMPTY_SQUARE(target: number | null): CampaignSquareView {
-  return { runs: 0, live: 0, counted: 0, reached: target === null ? null : 0, minutesToTarget: null, bestLevel: null, mismatched: 0 };
-}
-
-/**
- * The numerator of the page's `runs/want`: the counted runs `campaignComplete`
- * credits — on a declared cell, by an assignment the row names, never more per
- * (assignment, cell) than it asks for. Without a store row there is no `want`,
- * so the count is every counted run.
- */
-function cappedCounted(c: Campaign | undefined, catalog: readonly string[], probeRuns: readonly ProbeRun[]): number {
-  const counted = probeRuns.filter((r) => r.counted);
-  if (c === undefined) return counted.length;
-  const wants = new Map(c.assignments.filter((a) => catalog.includes(a.model)).map((a) => [a.model, a.runsPerCell]));
-  const cells = new Set(c.cells.map((x) => x.id));
-  const tally = new Map<string, number>();
-  for (const r of counted) {
-    if (r.ref === null || r.cell === null || !wants.has(r.ref) || !cells.has(r.cell)) continue;
-    const k = `${r.ref}\u0000${r.cell}`;
-    tally.set(k, Math.min(wants.get(r.ref)!, (tally.get(k) ?? 0) + 1));
-  }
-  let n = 0;
-  for (const v of tally.values()) n += v;
-  return n;
+  return { campaigns, refused: roster.campaignRefusals.map((r) => ({ key: r.key, reason: r.reason })) };
 }

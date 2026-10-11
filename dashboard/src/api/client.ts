@@ -45,6 +45,7 @@ export type {
   ToolsResponse,
   ToolView,
   CampaignRowView,
+  LegacyCampaignsResponse,
   ResultsResponse,
   ResultRun,
   LevelMark,
