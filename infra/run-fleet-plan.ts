@@ -1196,6 +1196,13 @@ export function planResumes(opts: {
         list(`campaign ${c.name} is disabled — enable it to resume, or resume by hand`);
         continue;
       }
+      // A pinned arm runs only in a run pod. With them off the launcher would
+      // refuse the resume before the run moved, the pause would stand, and the
+      // next tick would try again: it waits, listed, for the switch.
+      if ((file.arm.image !== undefined || file.arm.command !== undefined) && config.policy.runPods !== "probes") {
+        list(`arm ${file.arm.id} pins ${file.arm.image !== undefined ? "an image" : "a command"} and runs only in a run pod; policy.runPods is ${JSON.stringify(config.policy.runPods)} — it resumes once that is "probes"`);
+        continue;
+      }
       const probe = { campaign: file.campaign, version: file.version, cell: file.cell.id, arm: file.arm.id };
       if (c.account !== undefined) {
         if (f.account !== null && c.account.toUpperCase() !== f.account.toUpperCase()) {

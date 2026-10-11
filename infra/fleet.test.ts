@@ -2613,6 +2613,16 @@ describe("pause and resume across a fleet stop", () => {
     const armless = planResumes({ runs: [{ ...preRelease, campaignVersion: 2 }], config: { ...config(), campaigns: j2.campaigns }, running: new Map(), held, now: NOW });
     expect(armless.resume).toEqual([]);
     expect(armless.listed[0]?.why).toContain("has 2 arms; name one");
+    // A run on a pinned arm waits, listed, while run pods are off: the launcher
+    // would refuse the resume before the run moved, and the pause would stand.
+    const onArm = { ...preRelease, campaignVersion: 2, arm: "a" };
+    const podsOff = { ...config(), campaigns: j2.campaigns };
+    const waiting = planResumes({ runs: [onArm], config: podsOff, running: new Map(), held, now: NOW });
+    expect(waiting.resume).toEqual([]);
+    expect(waiting.end).toEqual([]);
+    expect(waiting.listed[0]?.why).toContain('arm a pins an image and runs only in a run pod; policy.runPods is "off"');
+    const podsOn = { ...podsOff, policy: { ...podsOff.policy, runPods: "probes" as const } };
+    expect(planResumes({ runs: [onArm], config: podsOn, running: new Map(), held, now: NOW }).resume.map((r) => r.job.probe?.arm)).toEqual(["a"]);
   });
 
   test("only a probe a run pod ran resumes across harness series, and only while run pods are on", () => {

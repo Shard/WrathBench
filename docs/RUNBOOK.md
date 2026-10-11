@@ -1263,9 +1263,10 @@ tag, never master's; a digest-only pin stamps
 `runs/<id>/image.json` (`ref`, `digest`, `pod`, `node`, `startedAt`) when the
 container starts, and a resume in a pod relaunches that digest whatever the arm
 says now. That holds only while `runPods` is `probes`: switched off, a paused
-probe resumes as a child process on the release, so the supervisor exempts a
-probe from the harness-series gate only when it has an `image.json` and the
-switch is on.
+probe on an image-less arm resumes as a child process on the release, one on
+a pinned arm waits, listed, until the switch is back on, and the supervisor
+exempts a probe from the harness-series gate only when it has an `image.json`
+and the switch is on.
 
 **Lifecycle.** Each pod carries an ownerReference to the fleet pod, so a fleet
 stop or crash deletes its run pods with the pod's 90s grace — the same
