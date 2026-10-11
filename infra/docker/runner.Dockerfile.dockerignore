@@ -20,19 +20,17 @@ minimap/node_modules
 module
 .env
 
-# Everything .gitignore keeps out of git stays out of the image. The branch-image
-# workflow builds from a clean checkout, where none of this exists; a local
-# build-images.sh builds from the working checkout, and dockerignore patterns
-# are anchored at the context root where .gitignore's match at any depth, so
-# without these an env backup, the agent worktrees under .claude/ or wrangler
-# state beside the tree would be copied into /wrathbench. An untracked file
-# that .gitignore does not name still is: build releases from a tidy checkout.
+# Everything .gitignore keeps out of git stays out of the image. build-images.sh
+# builds from a git archive of the commit, and the branch-image workflow from a
+# clean checkout, so none of this exists there; these lines are for a hand-run
+# `docker build` from a working checkout. Dockerignore patterns are anchored at
+# the context root where .gitignore's match at any depth, hence the `**/`.
 **/data
 **/node_modules
 **/.env
 **/.env.*
-.claude
-.wrangler
+**/.claude
+**/.wrangler
 infra/fleet.json
 dashboard/public/og.png
 **/*.log

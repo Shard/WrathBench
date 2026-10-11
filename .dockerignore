@@ -18,4 +18,9 @@ minimap
 infra/chart
 # Claude Code worktrees: whole checkouts with their node_modules, sent to the
 # daemon on every server build for nothing.
-.claude
+**/.claude
+# Env files never go to the daemon, at any depth. build-images.sh builds from a
+# git archive, where there are none; a hand-run `docker build .` from a
+# checkout is what this is for.
+**/.env
+**/.env.*

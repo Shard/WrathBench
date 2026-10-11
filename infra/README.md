@@ -358,7 +358,7 @@ Five phases, run in order, each one idempotent and each one restartable with
 
 | phase | what |
 |---|---|
-| `build` | `build-images.sh --push` at `git describe` of this tree; refuses a dirty one |
+| `build` | `build-images.sh --push` at `git describe` of this tree, built from a `git archive` of that commit and scanned by `image-guard.sh` before the push; refuses a dirty tree |
 | `drain` | `fleet-update.sh drain` — the pause switch stays set for the whole window |
 | `pin` | place the pin, then **wait until the cluster actually carries the tag** |
 | `deploy` | `k8s-deploy.sh` — the gate smokes, then the fleet comes back |
