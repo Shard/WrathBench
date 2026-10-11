@@ -126,7 +126,8 @@ interface Pending {
 /**
  * The environment the sandbox child is spawned with — an explicit allowlist,
  * not the runner's inherited env. The model authors the snippets and is the
- * untrusted party (entry.ts's network guard is topology, not a secret gate);
+ * untrusted party (the confinement bounds where it reaches, not what it reads
+ * from its own environment);
  * its exfiltration channel is the snippet result stream that flows back into
  * its own context. Inheriting `process.env` therefore leaks every provider
  * credential present in the runner (OPENROUTER_KEY, OPENCODE_KEY,
@@ -248,13 +249,18 @@ export class SandboxHost {
     // allowlist. Pointing the flag at /dev/null disables that load (verified on
     // Bun 1.4.0), making the child's env exactly `sandboxChildEnv`.
     //
-    // The child is exec'd through confine.ts, which applies a Landlock
-    // filesystem ruleset first: the snippet process can then
-    // read the interpreter, runner/, sdk/ and node_modules/ and nothing else —
-    // not `.env` by any path, not $HOME, not /tmp — and the wrapper exits
-    // instead of exec'ing when the kernel or container refuses the ruleset.
-    // The IPC channel and stdio are inherited descriptors and survive the exec.
-    this.proc = Bun.spawn(["bun", this.confinePath, "bun", "--env-file=/dev/null", this.entryPath], {
+    // The child is exec'd through confine.ts, which applies a Landlock ruleset
+    // first: the snippet process can then read the interpreter, runner/, sdk/
+    // and node_modules/ and nothing else — not `.env` by any path, not $HOME,
+    // not /tmp — can open TCP connections only to the module URL's port, bind
+    // nothing, execute no binary but bun itself, and (on a kernel with scopes)
+    // signal nothing outside its own process tree; the wrapper exits instead
+    // of exec'ing when the kernel or container refuses the ruleset. The wrapper
+    // gets the same `--env-file=/dev/null` as the child because it reads
+    // WRATHBENCH_MODULE_URL for the port, and that must be this value and not
+    // an autoloaded `.env`'s. The IPC channel and stdio are inherited
+    // descriptors and survive the exec.
+    this.proc = Bun.spawn(["bun", "--env-file=/dev/null", this.confinePath, "bun", "--env-file=/dev/null", this.entryPath], {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
         WRATHBENCH_TOKEN: this.opts.token,
