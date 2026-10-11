@@ -377,7 +377,10 @@ served by a non-public viewer, which is the same condition these routes are
 mounted under.
 
 A *key* is a row: `roster/<name>`, `campaigns/<name>`, `queue/<n>`, or one of
-the singletons `_notes`, `preflight`, `accounts`, `policy`.
+the singletons `_notes`, `preflight`, `accounts`, `policy`. Published campaign
+definitions (`campaign-defs/<id>@<version>`) are rows too, listed and readable
+here, but every write route refuses them with a 400: only
+`runner/src/campaign-publish.ts` writes one, once.
 
 | path | what |
 | --- | --- |

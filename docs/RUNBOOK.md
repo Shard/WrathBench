@@ -198,7 +198,7 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               not a number edited into one entry. On EVERY entry: the roster is a model catalog,
               so there is no unscheduled entry to make an exception for.
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
-              under `models` and supplies its own task shape.
+              in an assignment and supplies its own task shape.
             `idle` — what it does with an account once its tier is spent. `none` (default, and
               what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
               with no episode wall clock — the idle watchdog is what ends it). Never bought by
@@ -270,19 +270,23 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             `probes` runs every probing episode as its own pod on the cluster, on the arm's image
             ("Run pods", below). Anything else is refused. Off the cluster the setting changes
             nothing except that an arm with a pinned image is refused rather than run on master.
+campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
+            publishedAt }. Written ONLY by runner/src/campaign-publish.ts and never changed: `set`,
+            `patch`, `delete`, the /config page and a reseed all refuse the prefix, and a second
+            publish with a different hash is refused ("Probe campaigns", below).
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
-            account?, excludeUnhealthy? } }. The shape (cells, start, leash, stop level, resume,
-            attempt cap) is the checked-in definition `<id>@<version>` in runner/src/campaign-defs/;
-            a static key here is REFUSED with where it lives, and a version this checkout does not
-            define (or a closed one switched on) refuses THAT campaign by name. `version` is
-            explicit, never "latest", so a merged definition cannot re-target a sweep. Every run
-            is an unscored `probing` episode. With `account` the campaign is PINNED and follows
+            account?, excludeUnhealthy? } }, strict. The shape (cells, arms, start, leash, stop
+            level, resume, attempt cap) is the published definition `<id>@<version>`; a row naming
+            a version nobody published is refused by name and the rest of the config stands.
+            `version` is explicit, never "latest", so a new publish cannot re-target a sweep. Every
+            run is an unscored `probing` episode. With `account` the campaign is PINNED and follows
             the pinned-job account rules; without, the policy schedules it between the evals and
-            the idle work, on a model that owes no eval and holds no live or paused run.
-            Completion is DERIVED per (id, version, assignment, cell) against the counted probe
-            runs on disk — set `enabled: false` when a sweep is done and its results stay
-            visible. Progress is on the /campaigns page ("Probe campaigns", below).
+            the idle work, on a model that owes no eval and holds no live or paused run. Either
+            way `excludeUnhealthy` skips a retired or cooling model. Completion is DERIVED per
+            (id, version, assignment, arm, cell) against the counted probe runs on disk — set
+            `enabled: false` when a sweep is done and its results stay visible. Progress is on the
+            /campaigns page ("Probe campaigns", below).
 queue       jobs, in priority order (never `probing`: a probe is a campaign's cell): { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
             enabled, account? } — plus `subscription` (a lane's env var NAME) and nothing else;
             any other key REFUSES the job by name ("Strict keys", below). With `account` the job is PINNED to it and never the policy's;
@@ -1116,19 +1120,44 @@ as well). How many runs a model gets is its `tier` and nothing else.
 
 ### Probe campaigns
 
-A probe is a cell of a checked-in campaign definition, and nothing else
-(`docs/EPISODES.md`, `probing`). The definition (`runner/src/campaign-defs/`)
-fixes the shape. The store row `campaigns/<id>` says which version is active,
-whether it runs, who sweeps it and how many counted runs each owes per cell.
-`/campaigns` shows one pane per version with a cells × models grid.
+A probe is a cell of a published campaign definition, and nothing else
+(`docs/EPISODES.md`, `probing`). The definition is a JSON file,
+`runner/campaigns/<id>@<version>.json`, published into the config store; it
+fixes the cells, the arms and the shape. The store row `campaigns/<id>` says
+which version is active, whether it runs, who sweeps it and how many counted
+runs each owes per square. `/campaigns` lists every published version;
+`/campaigns/<id>/<version>` shows its arms, grid and arm comparison.
+
+**Adding or changing a campaign** needs no release:
+
+1. Write `runner/campaigns/<id>@<version>.json`. A change to a published one
+   is a new file with the next version; never edit a published version. `bun
+   test` checks every file parses and is named for what it holds.
+2. Commit it and push it to any branch on origin. A pull request can carry
+   its own campaign beside the code its arms test.
+3. Publish it from a checkout that has the commit:
+
+```
+bun runner/src/campaign-publish.ts runner/campaigns/<id>@<version>.json --k8s --actor <you> --note "<why>"
+bun runner/src/campaign-publish.ts runner/campaigns/<id>@<version>.json --dry-run   # check and print, write nothing
+```
+
+The CLI fetches origin, refuses a file that is untracked or modified or whose
+last commit no origin branch holds, and pipes the publication into the runner
+pod's store (`config-store.ts publish -`; without `--k8s` it writes the local
+store). Publishing the same definition again is a no-op; publishing a
+different one under a published `id@version` is refused. Which commits may
+publish is `PUBLISH_RULE` in `campaign-publish.ts`: any origin branch today,
+`origin-master` to tighten it.
 
 **Assigning models to a campaign.**
 
 1. Name the roster entries in `assignments`, in priority order. Each owes
-   `runsPerCell` counted runs per cell.
+   `runsPerCell` counted runs per square, and a square is one (cell, arm).
 2. Enable the row.
 3. To queue more data later, raise an assignment's `runsPerCell` or append
-   another assignment.
+   another assignment. To move to a new version, point `version` at it; work
+   is counted per version, so the new one starts from nothing.
 
 The CLI validates every write against the whole config, as the `/config` page
 does:
@@ -1139,6 +1168,22 @@ kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-sto
   --actor <you> --note "race-probe@1: sol-61 x1"
 ```
 
+A row naming a version nobody has published is accepted by the store and
+refused by name on read: `--status` lists it, the campaigns page shows it
+under refused, and nothing launches until the version is published.
+
+**Arms.** An arm with no `image` runs the release image; a definition with
+more than one arm must pin every arm's image, by tag or `@sha256:` digest
+(never `:latest`). A pinned arm runs only in a run pod ("Run pods", below):
+with `policy.runPods` off, or off the cluster, its launches are refused rather
+than run on the release image. An arm image must be a build that has
+`--campaign-file` and refuses unknown flags — anything older ignores the
+campaign file it is given. An arm's `args` come after the supervisor's own
+and may not restate a shape flag or a supervisor flag; `--compact-window` is
+the exception. Assign an arm that sets the window only roster entries on the
+claude-code driver that set none themselves: any other pair is refused before
+it launches, and listed as `<id>@<v>:<ref>:<arm>`.
+
 Before you enable race-probe@1, run the start gate once, and enable it only
 when it passes. It creates, walks and takes a quest at each start no run had
 used before: Valley of Trials, Deathknell, Camp Narache, Sunstrider Isle and
@@ -1148,38 +1193,17 @@ Ammen Vale. It runs on `PROBE`, never a pool account.
 kubectl -n wrathbench exec deploy/wrathbench-runner -- bun infra/smoke/race-probe-starts.ts
 ```
 
-**A hand launch** names the cell and nothing that sets its shape. The runner
-refuses `--episode probing` without a campaign, and with one it refuses
-`--objective`, `--race`/`--class`, `--wiki-coords`/`--wiki`,
-`--max-tool-calls` and the watchdog flags:
+**A hand launch** names the square and nothing that sets its shape.
+`run-episode.sh` writes the run's `campaign.json` from the published
+definition (in the runner pod with `--k8s`) and launches `run.ts` with
+`--campaign-file`; the runner refuses `--episode probing` without one, and
+with one it refuses `--objective`, `--race`/`--class`,
+`--wiki-coords`/`--wiki`, `--max-tool-calls` and the watchdog flags. `--arm`
+may be left out when the definition has one arm; an arm that pins an image or
+a command cannot be hand-launched.
 
 ```
 ./infra/run-episode.sh --k8s --model <id> --campaign class-probe@2 --cell dwarf-paladin
-```
-
-A harness spike on a branch image is a campaign too. Merge its definition
-(a closed one, if it lists runs after the fact) to master first, so the viewer
-on master can attribute its runs.
-
-**Changing a campaign's shape** is a new version: add `<id>@<n+1>` in its
-module and its pin in `runner/test/campaign-defs.test.ts`, then point the
-store row's `version` at it. Never edit a published version. Its runs stay
-attributed to it, and work is counted per version, so the new version starts
-its sweep from nothing.
-
-**The rows written before definitions were checked in** (no `version`, with
-`cells`/`objective` inline) still load. Each maps onto the version that claims
-its id's unversioned runs (`nav-probe@1`, `class-probe@1`), and the inline
-shape is dropped in favour of the definition. Rewrite them to the current
-shape after the deploy that ships the definitions. Each `set` validates
-against the whole config, and the old rows still parse, so the order does not
-matter:
-
-```
-R="kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts"
-$R set campaigns/nav-probe '{"version":1,"enabled":true,"account":"SHAKEOUT","assignments":[{"model":"sonnet","runsPerCell":1}]}' --actor <you> --note "nav-probe -> checked-in definition, as it stood"
-$R set campaigns/class-probe '{"version":2,"enabled":false,"assignments":[]}' --actor <you> --note "class-probe v1 is closed history; v2 is the to-L10 sweep"
-$R set campaigns/race-probe '{"version":1,"enabled":false,"assignments":[]}' --actor <you> --note "race-probe@1, unassigned"
 ```
 
 ### Run pods

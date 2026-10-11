@@ -92,53 +92,98 @@ because that would silently re-scope every score already carrying this label.
 
 ## `probing` — the probe-campaign episode
 
-A probe exists only as a cell of a checked-in, versioned campaign definition
-(operator decision, 2026-10-09). A campaign has two halves:
+A probe exists only as a cell of a published, versioned campaign definition
+(operator decision, 2026-10-09). A campaign is a matrix: **cells** (the start:
+race and class) × **arms** (the harness: image, command, args) ×
+**assignments** (the models). Every square is one (cell, arm, assignment) run
+target. A campaign has two halves:
 
-- **The definition, in git** (`runner/src/campaign-defs/`, one module per
-  campaign id, every version kept). This is the static half: the question the
-  sweep answers, its cells (each a race and class), the objective if there is
-  one, the stopping rule, the clock and watchdogs, the tool-call guard,
-  `wikiCoords`/`wiki`, whether a paused run resumes, and the attempt cap that
-  says when a cell is abandoned.
-  - **A published version is never edited.** `runner/test/campaign-defs.test.ts`
-    pins every `id@version`'s content hash, so a change to a definition fails
-    the suite until it becomes a new version. A cell whose meaning changes under
-    the same id re-scopes every run already recorded against it.
-    class-probe's `nightelf-hunter` cell did exactly that: it was class 4
-    (Rogue) for its first three runs and was then corrected to class 3 in
-    place.
-  - **Closed** versions are history: they attribute past runs and launch
-    nothing.
+- **The definition, as data** (`runner/campaigns/<id>@<version>.json`,
+  validated by `runner/src/campaign-def.ts`). This is the static half: the
+  question, the cells, the arms, the objective if there is one, the stopping
+  rule, the clock and watchdogs, the tool-call guard, `wikiCoords`/`wiki`,
+  whether a paused run resumes, and the attempt cap that says when a square is
+  abandoned.
 - **The store row** (`campaigns/<id>`, `docs/RUNBOOK.md`). This is the
   dynamic half: which version is active, whether it is enabled, which roster
-  entries sweep it and how many counted runs each owes per cell, the account
+  entries sweep it and how many counted runs each owes per square, the account
   it is pinned to, and whether an unhealthy model is skipped.
 
-The rule is enforced at both places a probe can come from:
+**Publishing.** A definition reaches the fleet by being published
+(`runner/src/campaign-publish.ts`), with no release. The CLI validates the
+file, computes its content hash, and checks provenance: the file is committed
+and unmodified, and its last commit is on a branch on origin. Today's rule is
+any origin branch, so a pull request can carry its own campaign next to the
+code its arms test (operator, 2026-10-11); `PUBLISH_RULE` is one constant and
+can be tightened to origin/master. It then writes `campaign-defs/<id>@<version>`
+into the config store as `{definition, hash, source: {commit, path, branch},
+publishedAt}`, where `branch` records which origin branches held the commit
+and is informational only.
 
-- **The runner, on every fresh launch** (`runner/src/campaign-launch.ts`).
-  - `--episode probing` needs `--campaign <id>@<version> --cell <id>`, naming
-    an open definition in this checkout and one of its cells.
-  - `--campaign` implies `probing`, and with any other episode it is refused.
-  - With `--campaign`, the run's shape comes from the definition alone. Every
-    flag that would set part of it is refused: `--objective`, `--race`,
-    `--class`, `--wiki-coords`, `--wiki`, `--max-tool-calls` and the watchdog
-    flags. A different shape is a new version.
-  - The run is stamped with the campaign id, `campaignVersion`, the
-    definition's `campaignHash` and the cell. A fleet launch also stamps
-    `ref`, the roster name it ran as.
-  - A `--resume` reloads the run's own stored config and is not checked, so
-    every run from before the rule still loads.
-- **The fleet.** A queue job naming `probing` is refused, so a probe is never
-  a queue job.
+- **A published version is never edited.** The store refuses a second publish
+  of the same key with a different hash, and no generic write path (the
+  config CLI's `set`/`patch`/`delete`, the `/config` page, a reseed) can touch
+  the prefix. A cell whose meaning changes under the same id re-scopes every
+  run already recorded against it: class-probe's `nightelf-hunter` cell did
+  exactly that before definitions were versioned. A change is a new version.
+- **A row naming an unpublished version is refused** by its store key, and the
+  rest of the config stands. So is a published row that no longer checks out.
 
-What the fleet's argv carries for a probe is its identity alone:
-`--episode probing --campaign <id>@<version> --cell <id> --ref <name>`.
+**Arms.** An arm is `{id, note?, image?, command?, args?}`, and a definition
+has at least one; a sweep that tests nothing harness-side has one arm
+`{ "id": "base" }`.
+
+- `image` absent runs the fleet's release image at launch. Present, it names
+  a build: a tag, a `@sha256:` digest, or both — never an untagged ref or
+  `:latest`. Which registries a run pod may pull from is the launcher's rule
+  (`docs/RUNBOOK.md`, "Run pods").
+- **A definition with more than one arm pins every arm's image.** Harness
+  drift between builds is as large as a model difference, so the arms of a
+  comparison are always named builds. A single-arm sweep may float.
+- `command` absent runs this repository's runner. Present, it is the
+  container command, so a harness that is not this repository's can be
+  launched if it honours the run contract (`docs/ARCHITECTURE.md`).
+- `args` are appended after the supervisor's own argv. They may not name a
+  shape flag or any flag the supervisor sets; the compaction window
+  (`--compact-window`) is the one exception, because varying it is what such
+  an arm is for (operator, 2026-10-11). An arm that sets the window cannot run
+  an assignment whose roster entry sets one too, nor one off the claude-code
+  driver: the planner refuses that (assignment, arm) pair before any launch,
+  under the key `<id>@<v>:<ref>:<arm>`, because a launch that fails spends an
+  attempt.
+
+**The launch rule.** Before a probe starts, the launcher writes
+`runs/<id>/campaign.json` (`runner/src/campaign-file.ts`): the campaign, its
+version and hash, its provenance, the cell, the arm and the whole definition.
+`run.ts` takes `--campaign-file <path>` as its only campaign input
+(`runner/src/campaign-launch.ts`):
+
+- `--episode probing` needs it, and it implies `probing`.
+- The run's shape comes from the file alone. Every flag that would set part of
+  it is refused: `--objective`, `--race`, `--class`, `--wiki-coords`,
+  `--wiki`, `--max-tool-calls` and the watchdog flags.
+- A file that disagrees with itself (its hash, its cell or its arm not the
+  definition's own) is refused, and so is an arm that pins an image in a
+  process its launcher did not start in an image (`WRATHBENCH_RUN_IMAGE`
+  unset).
+- `run.ts` refuses any flag it does not read and any flag given twice, so a
+  typo in an arm's args fails the launch instead of running the base harness
+  under the arm's name.
+- The run is stamped with the campaign, `campaignVersion`, `campaignHash`, the
+  cell and the `arm`; a fleet launch also stamps `ref`, the roster name it ran
+  as, and a run pod `image`, the reference it was asked to run.
+
+The fleet's argv for a probe is its identity, then the arm's args:
+`--episode probing --campaign-file data/runs/<id>/campaign.json --ref <name> …`.
+A directory holding only launch files (`campaign.json`, a run pod's
+`image.json`) is not a run: the next fresh launch onto that id overwrites
+them. A hand launch goes through `infra/run-episode.sh --campaign <id>@<v>
+--cell <id> [--arm <id>]`, which writes the same file from the store where the
+store is; it refuses an arm that pins an image or a command, which only the
+fleet can launch in a run pod.
 
 - **Duration.** The definition's. The ninety minutes in the episode table is a
-  fallback no launch reaches any more, because every open definition states
-  its own clock.
+  fallback no launch reaches, because every definition states its own clock.
 - **Start state.** A fresh level-1 character of the cell's race and class.
 - **Objective.** Allowed, and set only by the definition. The to-level-10
   campaigns carry none: the standing goal already drives levelling, and naming
@@ -156,13 +201,21 @@ What the fleet's argv carries for a probe is its identity alone:
   - It is a verdict and counts like `episode-limit`. The measurement is taken,
     and the rest of the clock would buy nothing.
 - **Ends.** Anything, including `manual`.
-- **Done.** An (assignment, cell) is done when it holds the assignment's
-  `runsPerCell` counted runs, or abandoned once it has had the definition's
-  `maxAttemptsPerCell` launches.
-  - Both are counted per (campaign, version, roster name, cell). A newer
-    version that reuses a cell id is never credited with an older version's
-    runs.
+- **Done.** A square is done when it holds the assignment's `runsPerCell`
+  counted runs, or capped once it has had the definition's
+  `maxAttemptsPerCell` launches with nothing still in flight.
+  - Both are counted per (campaign, version, roster name, arm, cell), by the
+    run's own stamps and nothing inferred. A newer version that reuses a cell
+    id is never credited with an older version's runs.
+  - One tally serves the scheduler and the campaigns page
+    (`campaignSquares`), so "complete" is exactly "done plus capped equals
+    wanted".
   - Completion is derived from the runs on disk, never recorded.
+- **Resuming.** A paused probe whose definition says resume comes back under
+  the job it was spawned as, rebuilt from its own `campaign.json`: its arm,
+  and through the launcher the image digest it recorded. A probe with a
+  campaign file is therefore not gated on the harness series this supervisor
+  runs.
 - **Scoring.** **Unscored, always** — the `scored: false` flag is what excludes
   it from the Ladder and every chart, through the same predicate that excludes
   `freeplay`. It still appears in the runs table, which lists every
@@ -182,32 +235,20 @@ What the fleet's argv carries for a probe is its identity alone:
   carry no comparability claim. That is why a probe run is never reported as
   "overridden": there is no group for it to have fallen out of.
 
-**Reading old runs.** A run is attributed at read time and never rewritten
-(`attributeCampaign`). Three rules apply, in order:
-
-1. The run's own stamp.
-2. A run stamped with an id but no version belongs to the version whose
-   definition claims such runs: class-probe@1 and nav-probe@1. This is only for
-   reading and for that version's own work, never for counting a newer
-   version's.
-3. A run that recorded no campaign at all is placed by a closed definition
-   that lists it by run id. These are the nine runs of the next-minor loop
-   spike, hand-launched with `--episode probing` before the rule existed, now
-   loop-spike@1's.
-
-Every placed run says which rule placed it (`campaignSource`). A run whose
+**Old runs.** A run from before arms carries no `arm` (and the oldest no
+version or roster name), so it belongs to no square. It keeps its stamps and
+stays on the runs pages; it is simply not on the campaigns page. A run whose
 recorded race or class is not its cell's declared start is flagged, never
 relabelled.
 
-**The campaigns page.** It shows one pane per version, with a cells × models
-grid. Each square gives the counted runs that reached the stop level, the
-median minutes of play to it, and the best level. Columns follow the
-assignments' order and never pool two harness series, and nothing is sorted by
-a result: `probing` has no comparability group (`docs/METHODOLOGY.md`).
+**The campaigns page.** An index of published versions (state, progress, live,
+cost, refused store rows), and a page per version with its arms, a cells ×
+(assignment × arm) grid and an arm comparison per assignment. Nothing is
+sorted by a result: `probing` has no comparability group.
 
-**The to-level-10 campaigns.** Both share one shape
-(`runner/src/campaign-defs/shapes.ts`): `e360`'s leash with a 12-hour play
-ceiling, stop at level 10, resume on pause, three attempts per cell.
+**The to-level-10 campaigns.** Both share one shape: `e360`'s leash with a
+12-hour play ceiling, stop at level 10, resume on pause, three attempts per
+square, and one arm on the release image.
 
 - **race-probe@1** holds the class at Warrior and takes each of the ten races
   from its own start. A Blood Elf cannot be a warrior in 3.3.5a, so that cell
