@@ -4,8 +4,7 @@ The operator viewer (runner/viewer/serve.ts).
 
 This is the ONE Ingress in the chart, and it is LAN-only: `ingress.host` is
 the canonical name (first rule, the one dashboards link) and `ingress.extraHosts`
-are aliases served by the same router — a deploying cluster puts the LAN-DNS name
-first and the legacy mDNS `.local` name second. TLS is the cluster's default
+are any aliases served by the same router, after it. TLS is the cluster's default
 certificate unless `ingress.issuer` names a ClusterIssuer, in which case the
 chart renders a per-host Certificate covering every host. The viewer is operator-only
 and running it Internet-facing is unsupported: it reads the runs directory,

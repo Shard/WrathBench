@@ -360,9 +360,10 @@ viewer:
   ingress:
     enabled: true
     # Canonical name: first rule host, the one NOTES.txt and dashboard tiles
-    # link. Aliases the same router should answer for (a legacy mDNS name, say)
+    # link. A placeholder here, as in values.example.yaml: the deploying
+    # cluster sets its own LAN name. Aliases the same router should answer for
     # go in extraHosts, in order, after it.
-    host: wrathbench.local
+    host: wrathbench.example.com
     extraHosts: []
     className: traefik
     # ClusterIssuer for a chart-managed per-host certificate covering host +
