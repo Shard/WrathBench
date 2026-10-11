@@ -8,6 +8,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   classAccountsOf,
   type ConfigRefusal,
@@ -80,6 +81,8 @@ import {
   type StateJob,
 } from "./run-fleet-state";
 import { accountHeldBy } from "./run-roster";
+import { runCampaignFile } from "../runner/src/campaign-file";
+import type { CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import { TAINT_AFTER } from "../runner/src/lapse";
 import { rosterPriceGap } from "../runner/viewer/pricing";
@@ -210,6 +213,18 @@ export function formatRefusals(refusals: readonly ConfigRefusal[], inForce = tru
     ...refusals.map((r) => `   ${r.pin} REFUSED and left disabled: ${r.why}`),
     "   a live run under a refused pin is left alone; it just will not respawn",
   ];
+}
+
+/**
+ * The campaign refusals that are not a pin's: a published definition that no
+ * longer checks out, and an (assignment, arm) pair that cannot launch as
+ * configured. A refused row is already a refused pin above. The same list the
+ * campaigns page shows under `refused`.
+ */
+export function formatCampaignRefusals(refusals: readonly CampaignRefusal[]): string[] {
+  const own = refusals.filter((r) => r.campaign === undefined);
+  if (own.length === 0) return [];
+  return [`! ${own.length} campaign square(s) or definition(s) refused — nothing is launched for them:`, ...own.map((r) => `   ${r.key}: ${r.reason}`)];
 }
 
 /**
@@ -566,6 +581,7 @@ export function printStatus(): void {
     console.log(`!! ${EMPTY_STORE_HINT}`);
   }
   for (const line of formatRefusals(config?.refusals ?? [], rejected === undefined)) console.log(line);
+  for (const line of formatCampaignRefusals(config?.campaignRefusals ?? [])) console.log(line);
   for (const line of formatPriceGaps(config?.roster ?? {})) console.log(line);
   // Liveness, honestly, from either side of a container boundary: a heartbeat
   // refreshed every tick. kill(pid, 0) is meaningless when the supervisor lives
@@ -617,6 +633,7 @@ export function printStatus(): void {
           running: new Map([...live].filter(([, j]) => fleetUp).map(([name, j]) => [name, j.account])),
           held: (a) => accountHeldBy(a, ""),
           now: Date.now(),
+          campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
         })
       : { resume: [], listed: [], end: [] };
   /**
@@ -857,7 +874,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   const runs = implicitPauses({ runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }), campaigns: config.campaigns, now: Date.now() });
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
-  const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now() });
+  const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now(), campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)) });
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.
   const plan = planTick(
@@ -866,7 +883,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     held,
     stampToday,
     resumes.resume,
-    probeRunsOf(runs, config.roster),
+    probeRunsOf(runs),
     affinityOf(affinityFrom(runs, config.roster)),
     liveSubscriptions(runs, rosterModels(config.roster)),
   );

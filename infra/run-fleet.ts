@@ -81,6 +81,7 @@ import {
   classPoolsOf,
   concurrencyKeyOfRef,
   eligibleFrom,
+  healthyFrom,
   type FleetConfig,
   type FleetJob,
   type FleetPreflight,
@@ -178,6 +179,7 @@ import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-f
 import { accountHeldBy, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
 import { rosterHasRunPod } from "./run-pod";
+import { runCampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import {
@@ -918,8 +920,8 @@ async function main(): Promise<void> {
     // Pinned jobs: from the file, on their own accounts — plus a pinned
     // campaign's next cell, which is a pinned job in everything but where it
     // was written down.
-    const probes = probeRunsOf(runs, cfg.roster);
-    campaignJobs = pinnedCampaignJobs(cfg, probes);
+    const probes = probeRunsOf(runs);
+    campaignJobs = pinnedCampaignJobs(cfg, probes, healthyFrom(states));
     for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
@@ -1009,7 +1011,7 @@ async function main(): Promise<void> {
     // spawn; a pool job's resume reserves its account like an assignment.
     const runningMap = new Map<string, string>(assigned);
     for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
-    const resumes = planResumes({ runs, config: cfg, running: runningMap, held, now: Date.now() });
+    const resumes = planResumes({ runs, config: cfg, running: runningMap, held, now: Date.now(), campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)) });
     lastPaused = resumes.listed;
     // Runs nothing came back for are ended on every tick, boot
     // included: the host slept, or the fleet was down past the run's own

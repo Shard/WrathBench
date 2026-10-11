@@ -112,7 +112,7 @@ export const EPISODES = {
     objectiveAllowed: true,
     scored: false,
     summary:
-      "The probe-campaign episode: a commissioned run that exists only as a cell of a checked-in, " +
+      "The probe-campaign episode: a commissioned run that exists only as a cell of a published, " +
       "versioned campaign definition, which fixes its start, clock, watchdogs and stopping rule. " +
       "Unscored, and never a target — a campaign is run once to completion and a " +
       "harness bump does not re-arm it, which is exactly what separates a probe from an eval. The " +

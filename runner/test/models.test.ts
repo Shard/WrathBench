@@ -47,7 +47,8 @@ import {
 import { billingOf } from "../src/model-cost";
 import type { EpisodeId } from "../src/episodes";
 import type { Campaign } from "../src/campaigns";
-import type { OpenCampaignDef } from "../src/campaign-defs";
+import type { ProbeRun } from "../src/campaigns";
+import { definition, joined } from "./fixtures/campaigns";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -1021,36 +1022,22 @@ describe("probe campaigns in the schedule", () => {
   const owing = (name: string): ModelState =>
     projectModel({ name, model: name, tier: "t1" }, [], DEFAULT_POLICY, { now: NOW2 });
 
-  const def: OpenCampaignDef = {
-    id: "class-probe",
-    version: 2,
-    status: "open",
-    question: "q",
-    cells: [
-      { id: "human-warrior", race: 1, class: 1 },
-      { id: "dwarf-rogue", race: 3, class: 4 },
+  const campaign: Campaign = joined(
+    [
+      definition({
+        id: "class-probe",
+        version: 2,
+        cells: [
+          { id: "human-warrior", race: 1, class: 1 },
+          { id: "dwarf-rogue", race: 3, class: 4 },
+        ],
+        resume: false,
+        maxAttemptsPerCell: null,
+      }),
     ],
-    objective: null,
-    stopAtLevel: 10,
-    budget: { episodeMs: 43_200_000, idleMs: 1_200_000, noXpMs: null, maxToolCalls: 24_000 },
-    wikiCoords: false,
-    wiki: true,
-    resume: false,
-    maxAttemptsPerCell: null,
-  };
-  const campaign: Campaign = {
-    name: "class-probe",
-    version: 2,
-    def,
-    enabled: true,
-    assignments: [
-      { model: "a", runsPerCell: 1 },
-      { model: "b", runsPerCell: 1 },
-    ],
-    excludeUnhealthy: true,
-    resume: false,
-    cells: def.cells,
-  };
+    { "class-probe": { version: 2, assignments: [{ model: "a" }, { model: "b" }] } },
+  ).campaigns[0]!;
+  const probeRun = (cell: string): ProbeRun => ({ campaign: "class-probe", version: 2, cell, ref: "a", arm: "base", counted: true, live: false });
 
   test("a model that owes evidence is never given probe work", () => {
     // The whole priority rule, in one assertion: evals outrank probes, and the
@@ -1068,9 +1055,9 @@ describe("probe campaigns in the schedule", () => {
       name: "a",
       episode: "probing",
       account: "R1",
-      probe: { campaign: "class-probe", version: 2, cell: "human-warrior" },
+      probe: { campaign: "class-probe", version: 2, cell: "human-warrior", arm: "base" },
     });
-    expect(plan.jobs[0]!.why).toContain("campaign class-probe@2 cell human-warrior (0/1)");
+    expect(plan.jobs[0]!.why).toContain("campaign class-probe@2 cell human-warrior arm base (0/1)");
   });
 
   test("an eval outranks a probe for the same free account", () => {
@@ -1115,16 +1102,13 @@ describe("probe campaigns in the schedule", () => {
   });
 
   test("a completed cell is not re-run, and the next cell is taken instead", () => {
-    const probeRuns = [{ campaign: "class-probe", version: 2, cell: "human-warrior", ref: "a", counted: true }];
+    const probeRuns = [probeRun("human-warrior")];
     const plan = planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign], probeRuns });
-    expect(plan.jobs[0]!.probe).toEqual({ campaign: "class-probe", version: 2, cell: "dwarf-rogue" });
+    expect(plan.jobs[0]!.probe).toEqual({ campaign: "class-probe", version: 2, cell: "dwarf-rogue", arm: "base" });
   });
 
   test("a campaign with every cell done schedules nothing at all", () => {
-    const probeRuns = [
-      { campaign: "class-probe", version: 2, cell: "human-warrior", ref: "a", counted: true },
-      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "a", counted: true },
-    ];
+    const probeRuns = [probeRun("human-warrior"), probeRun("dwarf-rogue")];
     expect(planNextJobs([spent("a")], ["R1"], new Set(), { campaigns: [campaign], probeRuns }).jobs).toEqual([]);
   });
 

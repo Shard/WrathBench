@@ -19,6 +19,7 @@ import {
   type FleetConfig,
   type FleetJob,
   type FleetRosterEntry,
+  healthyFrom,
   type JobSpawn,
   keysOfIn,
   pinnedCampaignJobs,
@@ -30,8 +31,16 @@ import {
   unpinnedCampaigns,
 } from "./run-fleet-config";
 import { backoffMs, isTainted, type RosterSpec, slug } from "./run-roster";
-import { cellDimensions, type Campaign, type ProbeRun } from "../runner/src/campaigns";
-import { campaignDef, campaignRef, unversionedOwner } from "../runner/src/campaign-defs";
+import {
+  armArg,
+  pinnedCampaignJobName,
+  policyCampaignJobName,
+  type Campaign,
+  type ProbeRun,
+  type PublishedCampaign,
+} from "../runner/src/campaigns";
+import { cellDimensions } from "../runner/src/campaign-def";
+import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
 import { isScoredEpisode } from "../runner/src/episodes";
 import { classifyLapse, OFFLINE_PAUSE, resumesOnPause, staleAfterMs } from "../runner/src/lapse";
@@ -252,10 +261,14 @@ export function policyJob(pick: NextJob): FleetJob {
     ref: pick.name,
     episode: pick.episode,
     repeat: 1,
-    // A probe names its cell: the job name is what run ids, log paths and the
-    // defer sidecar hang off, so without it every cell of one sweep would
-    // accumulate under one name and a run id would not say which cell it was.
-    name: pick.probe !== undefined ? `${pick.name}-${pick.probe.campaign}-${pick.probe.cell}` : `${pick.name}-${pick.episode}`,
+    // A probe names its square: the job name is what run ids, log paths and
+    // the defer sidecar hang off, so without it every cell and arm of one
+    // sweep would accumulate under one name and a run id would not say which
+    // square it was.
+    name:
+      pick.probe !== undefined
+        ? policyCampaignJobName(pick.name, pick.probe.campaign, pick.probe.cell, pick.probe.arm)
+        : `${pick.name}-${pick.episode}`,
     enabled: true,
     source: "policy",
     attempt: pick.attempt,
@@ -520,20 +533,25 @@ export function jobSpawn(
 ): JobSpawn {
   const dims = episodeDimensions(job.episode);
   /*
-   * A probe's task shape comes from its checked-in definition and nothing else.
-   * The catalog entry supplies credentials and a model, so its own `objective`,
+   * A probe's task shape comes from its campaign file and nothing else. The
+   * catalog entry supplies credentials and a model, so its own `objective`,
    * `watchdogs`, `maxToolCalls`, `wikiCoords` and `wiki` are dropped rather than
    * merged: a definition that says "no objective" must not inherit one from
-   * whichever entry it borrowed. The runner resolves the cell's shape itself
-   * from `--campaign <id>@<version> --cell <id>` and refuses any flag that
-   * would set part of it; the numbers are carried on the spec only so the
-   * fleet plans with what the run will be given (its ceiling, for ETAs and
-   * drains) and a resume restates the same leash.
+   * whichever entry it borrowed. A fresh probe's file is built here from the
+   * published definition and travels on the spec for the roster to write as
+   * `runs/<id>/campaign.json`; a resumed probe brings the run's own file
+   * (`planResumes`). The runner reads its shape from that file and refuses any
+   * flag that would set part of it; the numbers are carried on the spec only
+   * so the fleet plans with what the run will be given (its ceiling, for ETAs
+   * and drains) and a resume restates the same leash.
    */
-  const probeDef = job.probe === undefined ? undefined : campaignDef(job.probe.campaign, job.probe.version);
-  const probeCell = probeDef?.status === "open" ? probeDef.cells.find((x) => x.id === job.probe!.cell) : undefined;
-  const allProbeDims = probeDef?.status === "open" && probeCell !== undefined ? cellDimensions(probeDef, probeCell) : undefined;
   const campaign = job.probe === undefined ? undefined : campaigns.find((c) => c.name === job.probe!.campaign && c.version === job.probe!.version);
+  const probeFile: CampaignFile | undefined =
+    job.probe === undefined ? undefined : job.campaignFile ?? (campaign === undefined ? undefined : campaignFileOf(campaign.published, job.probe.cell, job.probe.arm));
+  if (job.probe !== undefined && probeFile === undefined) {
+    fail(`job ${job.name}: ${job.probe.campaign}@${job.probe.version} is not a published campaign this config names`);
+  }
+  const allProbeDims = probeFile === undefined ? undefined : cellDimensions(probeFile.definition, probeFile.cell);
   // Watchdogs are merged into their own key below, so they are held apart here.
   const probeWatchdogs = allProbeDims?.watchdogs;
   const probeDims =
@@ -585,14 +603,22 @@ export function jobSpawn(
       watchdogs: { ...dims.watchdogs, ...(own.watchdogs ?? {}), ...(probeWatchdogs ?? {}) },
       ...(own.maxToolCalls !== undefined ? { maxToolCalls: own.maxToolCalls } : {}),
       ...(probeDims ?? {}),
-      // The probe's identity, as the runner takes it: `id@version`, the cell,
-      // and the roster name the run is launched as.
-      ...(job.probe !== undefined ? { campaign: campaignRef({ id: job.probe.campaign, version: job.probe.version }), cell: job.probe.cell, ref: r } : {}),
+      // The probe's whole campaign file, which the roster writes beside the run
+      // before launching it; the roster name the run is launched as; and where
+      // it executes — its own pod, on the arm's image and command, or the
+      // release image when the arm pins none (`RosterSpec.launch`).
+      ...(probeFile !== undefined
+        ? {
+            campaignFile: probeFile,
+            ref: r,
+            launch: { pod: true as const, image: probeFile.arm.image ?? null, command: probeFile.arm.command ?? null },
+          }
+        : {}),
       // Whether a pause is resumed at all, decided by the lane and travelling
       // with the spec so the roster process needs no config of its own.
-      // Scored evals never resume; freeplay always does; a probe
-      // campaign opts in.
-      resumeOnPause: resumesOnPause(job.episode, campaign?.resume ?? (probeDef?.status === "open" ? probeDef.resume : undefined)),
+      // Scored evals never resume; freeplay always does; a probe opts in
+      // through its own definition.
+      resumeOnPause: resumesOnPause(job.episode, probeFile?.definition.resume),
       // An extra run is stamped as one; a scored-tier extra also rolls the
       // policy's race/class, where a freeplay extra keeps the entry's own.
       ...(isExtraJob(job) ? { extra: true } : {}),
@@ -769,25 +795,22 @@ export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | 
 }
 
 /**
- * Whether the campaign that commissioned a run asked to be resumed (its
- * checked-in definition's `resume` — the run's own version's when it stamped
- * one). A run with no campaign, or one whose campaign has no store row any
- * more, is not resumed: a campaign nobody is running has nobody to resume it.
+ * Whether the campaign that commissioned a run asked to be resumed: the
+ * `resume` of the published version the run was stamped with, which may be
+ * an older one than the row names now. A run with no campaign or no version,
+ * or one whose campaign has no store row any more, is not resumed: a campaign
+ * nobody is running has nobody to resume it.
  */
 export function campaignResumeOf(
   campaigns: readonly Campaign[] | undefined,
   campaign: string | null,
-  /** The run's own definition version, when it stamped one; null reads the active row's. */
-  version: number | null = null,
+  /** The run's own definition version. */
+  version: number | null,
 ): boolean {
-  if (campaign === null || campaigns === undefined) return false;
+  if (campaign === null || version === null || campaigns === undefined) return false;
   const c = campaigns.find((x) => x.name === campaign);
   if (c === undefined) return false;
-  // `resume` is the definition's: the one the run was launched under decides,
-  // and a run stamped before versions is the claiming version's.
-  const v = version ?? unversionedOwner(campaign)?.version ?? null;
-  const def = v !== null ? campaignDef(campaign, v) : c.def;
-  return def !== undefined && def.status === "open" && def.resume;
+  return c.versions.find((p) => p.def.version === version)?.def.resume === true;
 }
 
 /** The quiet a run with no heartbeat and no recorded idle watchdog must show before it reads as ownerless. */
@@ -957,8 +980,15 @@ export function planResumes(opts: {
   running: ReadonlyMap<string, string>;
   held: (account: string) => string | undefined;
   now: number;
+  /**
+   * A run's own `campaign.json` (`runCampaignFile`), or null when it has none.
+   * A paused probe is rebuilt from it, arm included; absent reads every run
+   * as having none.
+   */
+  campaignFileOf?: (runId: string) => CampaignFile | null;
 }): { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] } {
   const { config, now } = opts;
+  const campaignFileOf = opts.campaignFileOf ?? ((): CampaignFile | null => null);
   const resume: ResumePlan[] = [];
   const listed: PausedListing[] = [];
   const end: EndedRun[] = [];
@@ -990,7 +1020,14 @@ export function planResumes(opts: {
     // on; a cold one stays out of the listing, as it always was. Cold by the
     // wall clock, not by `isStaleRun`: a freeplay run is never stale, and this
     // is a listing of another supervisor's runs, not a decision about one.
-    if (!inSeries(f, config.policy)) {
+    //
+    // A probe with its own campaign.json is exempt: it resumes on the image it
+    // recorded (the launcher relaunches that digest), not on this
+    // supervisor's, so the harness running now is beside the point. Only such
+    // a probe — one from before campaign files has no arm to come back on and
+    // keeps the gate.
+    const file = f.episode === "probing" && f.campaign !== null ? campaignFileOf(f.runId) : null;
+    if (file === null && !inSeries(f, config.policy)) {
       if (now - lastActivityOf(f) <= staleAfterMs(f.episodeMs)) {
         list(
           `paused under harness series ${f.harnessSeries ?? "unversioned"}, this supervisor runs ${config.policy.series ?? "no series"} — resume by hand (--resume ${f.runId}) or archive`,
@@ -998,7 +1035,11 @@ export function planResumes(opts: {
       }
       continue;
     }
-    const modelKey = `${f.model}@${f.effort ?? ""}@${f.compactWindow ?? ""}`;
+    // One character per model: an arm's own compaction window is not a
+    // different model, so it does not make a second paused run of one entry
+    // resumable beside the first.
+    const windowKey = file !== null && armArg(file.arm, "compact-window") !== undefined ? "" : (f.compactWindow ?? "");
+    const modelKey = `${f.model}@${f.effort ?? ""}@${windowKey}`;
     const launchedUnder = refOfRunId(f.runId, f.episode, Object.keys(config.roster));
     const current = launchedUnder === undefined ? undefined : config.roster[launchedUnder];
     if (launchedUnder !== undefined && current !== undefined && !sameRosterIdentity(current, f)) {
@@ -1085,29 +1126,41 @@ export function planResumes(opts: {
     } else if (f.episode === "probing") {
       // A probe whose definition asked to resume (the lapse rule above already
       // said so) comes back under the job it was spawned as, rebuilt from the
-      // run's own stamp: the campaign, its version and the cell. Without this a
-      // supervisor restart stranded a paused probe as "not in config", and the
-      // paused run then held its model out of every lane until someone resumed
-      // it by hand — on a twelve-hour cell, the most expensive way to lose one.
-      const c = f.campaign === null ? undefined : config.campaigns?.find((x) => x.name === f.campaign);
-      const version = f.campaignVersion ?? (f.campaign === null ? undefined : unversionedOwner(f.campaign)?.version) ?? null;
-      const ref = f.ref !== undefined && f.ref !== null && config.roster[f.ref] !== undefined ? f.ref : candidates[0];
-      if (c === undefined || version === null || f.cell === null || ref === undefined) {
-        list("paused probe whose campaign, version, cell or roster entry the config no longer names — resume by hand or archive");
+      // run's own campaign.json: the campaign, its version, the cell and the
+      // arm, and the roster name it stamped. The spawn carries that file, so
+      // the run resumes on its own arm whatever has been published since.
+      // Without this a supervisor restart stranded a paused probe as "not in
+      // config", and the paused run then held its model out of every lane
+      // until someone resumed it by hand — on a twelve-hour cell, the most
+      // expensive way to lose one.
+      const c = file === null ? undefined : config.campaigns?.find((x) => x.name === file.campaign);
+      const ref = f.ref ?? undefined;
+      if (file === null || c === undefined || ref === undefined || config.roster[ref] === undefined) {
+        list("paused probe with no campaign.json, or whose campaign row or roster entry the config no longer names — resume by hand or archive");
         continue;
       }
       if (!c.enabled) {
         list(`campaign ${c.name} is disabled — enable it to resume, or resume by hand`);
         continue;
       }
-      const probe = { campaign: c.name, version, cell: f.cell };
+      const probe = { campaign: file.campaign, version: file.version, cell: file.cell.id, arm: file.arm.id };
       if (c.account !== undefined) {
         if (f.account !== null && c.account.toUpperCase() !== f.account.toUpperCase()) {
           list(`campaign ${c.name} is pinned to ${c.account}, the run was on ${f.account} — resume by hand`);
           continue;
         }
-        // The name `pinnedCampaignJobs` gives the cell's job.
-        job = { refs: [ref], ref, episode: "probing", repeat: 1, name: `${c.name}-${f.cell}`, account: c.account, enabled: true, source: "pinned", probe };
+        job = {
+          refs: [ref],
+          ref,
+          episode: "probing",
+          repeat: 1,
+          name: pinnedCampaignJobName(file.campaign, file.cell.id, file.arm.id),
+          account: c.account,
+          enabled: true,
+          source: "pinned",
+          probe,
+          campaignFile: file,
+        };
         account = c.account;
       } else {
         // The name `policyJob` gives a probe pick, and the attempt its run id carries.
@@ -1117,11 +1170,12 @@ export function planResumes(opts: {
           ref,
           episode: "probing",
           repeat: 1,
-          name: `${ref}-${c.name}-${f.cell}`,
+          name: policyCampaignJobName(ref, file.campaign, file.cell.id, file.arm.id),
           enabled: true,
           source: "policy",
           attempt: m !== null ? Number(m[1]) : 1,
           probe,
+          campaignFile: file,
         };
       }
     } else {
@@ -1193,7 +1247,8 @@ export function planResumes(opts: {
           runId: f.runId,
           model: f.model,
           ...(f.effort !== null ? { effort: f.effort } : {}),
-          ...(f.compactWindow != null ? { compactWindow: f.compactWindow } : {}),
+          // The entry's identity, which an arm's own window is not part of.
+          ...(f.compactWindow != null && windowKey !== "" ? { compactWindow: f.compactWindow } : {}),
         },
       },
       account,
@@ -1919,7 +1974,7 @@ export function planTick(
   // live loop would spawn but this planner never mentions is exactly the kind
   // of quiet disagreement between the supervisor and its own report that has
   // cost a night before.
-  const pinned = [...pinnedJobs(config), ...pinnedCampaignJobs(config, probeRuns)]
+  const pinned = [...pinnedJobs(config), ...pinnedCampaignJobs(config, probeRuns, healthyFrom(states))]
     .filter((j) => j.enabled && !resumed.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
     .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
   // Resumes hold their accounts and their refs ahead of everything fresh.

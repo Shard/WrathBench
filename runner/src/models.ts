@@ -60,7 +60,7 @@ import { openRunDb } from "./rundb";
 import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
-import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
+import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { platformOfBase } from "./platform";
@@ -272,7 +272,7 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   }
   if (o.resume !== undefined) {
     throw new Error(
-      "policy.resume is not a key — whether a lapsed run resumes is the lane's rule: scored evals never do, freeplay always does, a probe campaign opts in through its checked-in definition's resume",
+      "policy.resume is not a key — whether a lapsed run resumes is the lane's rule: scored evals never do, freeplay always does, a probe campaign opts in through its published definition's resume",
     );
   }
   if (o.maxConcurrent !== undefined) {
@@ -603,14 +603,15 @@ export interface RunFact {
   campaign: string | null;
   cell: string | null;
   /**
-   * The campaign definition version the run stamped, and the roster name the
-   * fleet launched it as — both absent on a run from before they were
-   * recorded (`probeRunsOf` reads such a run by the definitions' legacy rule
-   * and by model/effort matching). Optional so a fact built by hand need not
-   * spell them.
+   * The campaign definition version the run stamped, the roster name the
+   * fleet launched it as, and the campaign arm it ran — absent on a run from
+   * before each was recorded, which then belongs to no campaign square
+   * (`probeRunsOf` reads stamps only). Optional so a fact built by hand need
+   * not spell them.
    */
   campaignVersion?: number | null;
   ref?: string | null;
+  arm?: string | null;
   /**
    * The Claude subscription lane this run bills, as the env var NAME holding
    * its token (`RunConfig.subscription`); null on anything that is not a
@@ -725,11 +726,11 @@ export interface NextJob {
   /** An extra run past the target (free models only), with the character it rolls. */
   extra?: StartingCharacter;
   /**
-   * Set on a probe pick: which campaign and version commissioned it and which
-   * cell it is. The cell's shape is the checked-in definition's; only the
+   * Set on a probe pick: which campaign and version commissioned it, and which
+   * cell and arm it is. The shape is the published definition's; only the
    * identity travels on the pick.
    */
-  probe?: { campaign: string; version: number; cell: string };
+  probe?: ProbeIdentity;
 }
 
 /** A pick the policy would have made but held back, with the reason — what `--dry-run` explains. */
@@ -1131,6 +1132,7 @@ export function readRunFact(
       cell?: unknown;
       campaignVersion?: unknown;
       ref?: unknown;
+      arm?: unknown;
       subscription?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
@@ -1175,6 +1177,7 @@ export function readRunFact(
     cell: str(meta.config?.cell),
     campaignVersion: num(meta.config?.campaignVersion),
     ref: str(meta.config?.ref),
+    arm: str(meta.config?.arm),
     subscription: str(meta.config?.subscription),
   };
 
@@ -2177,8 +2180,8 @@ export function planNextJobs(
       episode: "probing",
       account,
       attempt: (st?.attempts ?? 0) + 1,
-      why: `campaign ${w.campaign}@${w.version} cell ${w.cell.id} (${w.done}/${w.want}${w.maxAttempts !== undefined ? `, attempt ${w.attempts + 1}/${w.maxAttempts}` : ""})`,
-      probe: { campaign: w.campaign, version: w.version, cell: w.cell.id },
+      why: `campaign ${w.campaign}@${w.version} cell ${w.cell.id} arm ${w.arm.id} (${w.done}/${w.want}${w.maxAttempts !== undefined ? `, attempt ${w.attempts + 1}/${w.maxAttempts}` : ""})`,
+      probe: { campaign: w.campaign, version: w.version, cell: w.cell.id, arm: w.arm.id },
     });
   }
   // Idle work: lowest priority, only for accounts nothing else wanted, and only
