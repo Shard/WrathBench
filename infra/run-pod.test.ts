@@ -12,7 +12,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { harnessSeries } from "../runner/src/comparability";
 import { chooseLauncher, EPISODE_TERM_GRACE_MS, parseLaunchSpec, type EpisodeLaunch } from "./episode-launcher";
-import { K8sClient, type Pod, type PodEnvVar, type PodStatus } from "./k8s-client";
+import { K8sClient, K8sError, type Pod, type PodEnvVar, type PodStatus } from "./k8s-client";
+import { rosterEpisodeInFlight } from "./run-fleet-state";
 import {
   buildRunPod,
   harnessStampOf,
@@ -98,6 +99,8 @@ class FakeApi {
     this.pods.delete(pod.metadata.name!);
   };
   rejectCreate: string | undefined;
+  /** Answers a pod LIST in place of the store: a refusal, an error, a stall. */
+  listAnswer: (() => Response | Promise<Response>) | undefined;
   private counter = 0;
   private readonly server;
 
@@ -120,6 +123,7 @@ class FakeApi {
           return Response.json(pod, { status: 201 });
         }
         if (req.method === "GET" && name === undefined) {
+          if (this.listAnswer !== undefined) return await this.listAnswer();
           const selector = url.searchParams.get("labelSelector") ?? "";
           const want = selector.split(",").filter(Boolean).map((kv) => kv.split("=") as [string, string]);
           const items = [...this.pods.values()].filter((p) => want.every(([k, v]) => p.metadata.labels?.[k] === v));
@@ -608,6 +612,61 @@ describe("PodLauncher against a fake API", () => {
       api.setStatus(api.only().metadata.name!, terminated(0, `x@${DIGEST}`));
       await h.exited;
       expect(await rosterHasRunPod(api.client, 4242)).toBe(false);
+    } finally {
+      api.stop();
+    }
+  });
+
+  // The drain asks this every tick for every draining pod roster. A 403 or a
+  // 404 is an API this fleet could not have made a pod through, so a definite
+  // no; anything else that is not an answer is left for the caller to read as
+  // "in flight", and a stall is cut short rather than holding the tick.
+  test("rosterHasRunPod reads 403 and 404 as no pod, and throws on a 5xx or a stall", async () => {
+    const api = new FakeApi();
+    try {
+      api.listAnswer = () => status(403, "Forbidden", 'pods is forbidden: cannot list resource "pods"');
+      expect(await rosterHasRunPod(api.client, 4242)).toBe(false);
+      api.listAnswer = () => status(404, "NotFound", "the server could not find the requested resource");
+      expect(await rosterHasRunPod(api.client, 4242)).toBe(false);
+      api.listAnswer = () => status(503, "ServiceUnavailable", "etcd leader changed");
+      const err = await rosterHasRunPod(api.client, 4242).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(K8sError);
+      expect((err as K8sError).status).toBe(503);
+      api.listAnswer = async () => {
+        await Bun.sleep(2_000);
+        return Response.json({ kind: "PodList", items: [] });
+      };
+      const started = Date.now();
+      expect(await rosterHasRunPod(api.client, 4242, { timeoutMs: 100 }).then(() => "answered", () => "threw")).toBe("threw");
+      expect(Date.now() - started).toBeLessThan(1_500);
+    } finally {
+      api.stop();
+    }
+  });
+
+  test("the drain asks the API only of a roster spawned with --run-pods", async () => {
+    const asked: number[] = [];
+    const hasRunPod = async (pid: number): Promise<boolean> => {
+      asked.push(pid);
+      return true;
+    };
+    // Pods off: between episodes is between episodes, with no API call at all.
+    expect(await rosterEpisodeInFlight({ pid: 11, runPods: false }, { hasLiveChild: () => false, hasRunPod })).toBe(false);
+    expect(asked).toEqual([]);
+    // A live child answers before anything is asked, pods on or off.
+    expect(await rosterEpisodeInFlight({ pid: 12, runPods: true }, { hasLiveChild: () => true, hasRunPod })).toBe(true);
+    expect(asked).toEqual([]);
+    // Pods on and no child: the API decides, and a 403 behind it is no pod.
+    expect(await rosterEpisodeInFlight({ pid: 13, runPods: true }, { hasLiveChild: () => false, hasRunPod })).toBe(true);
+    expect(asked).toEqual([13]);
+    const api = new FakeApi();
+    try {
+      api.listAnswer = () => status(403, "Forbidden", "no");
+      const viaApi = (pid: number): Promise<boolean> => rosterHasRunPod(api.client, pid, { timeoutMs: 1_000 });
+      expect(await rosterEpisodeInFlight({ pid: 14, runPods: true }, { hasLiveChild: () => false, hasRunPod: viaApi })).toBe(false);
+      expect(api.requests.filter((r) => r.startsWith("GET /api/v1/namespaces/wrathbench/pods?"))).toHaveLength(1);
+      await rosterEpisodeInFlight({ pid: 15, runPods: false }, { hasLiveChild: () => false, hasRunPod: viaApi });
+      expect(api.requests.filter((r) => r.startsWith("GET /api/v1/namespaces/wrathbench/pods?"))).toHaveLength(1);
     } finally {
       api.stop();
     }

@@ -202,6 +202,24 @@ export function hasLiveChild(pid: number): boolean {
   return false;
 }
 
+/**
+ * Whether a draining roster still has an episode in flight, so its SIGTERM
+ * waits for the episode boundary. A child process answers for itself (the
+ * /proc scan). A run pod is asked of the API only for a roster the fleet
+ * spawned with `--run-pods` (`jobArgv`): any other roster can have no pod,
+ * and asking for it would cost every drain tick an API round trip per roster
+ * — and, while the API did not answer, read a roster sitting between episodes
+ * as mid-episode, so it was never stopped.
+ */
+export async function rosterEpisodeInFlight(
+  roster: { pid: number; runPods: boolean },
+  probe: { hasLiveChild: (pid: number) => boolean; hasRunPod: (pid: number) => Promise<boolean> },
+): Promise<boolean> {
+  if (probe.hasLiveChild(roster.pid)) return true;
+  if (!roster.runPods) return false;
+  return await probe.hasRunPod(roster.pid);
+}
+
 export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);

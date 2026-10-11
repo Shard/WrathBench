@@ -1265,7 +1265,9 @@ stop or crash deletes its run pods with the pod's 90s grace — the same
 SIGTERM → `operator-pause` an episode gets from its roster. A roster's SIGTERM
 deletes its pod with that grace and waits for it to be gone; the supervisor's
 drain counts a roster's run pod as an episode in flight (beside its /proc
-scan); `infra/k8s-deploy.sh` waits for zero run pods after the fleet pod is
+scan), asking the API only of a roster it spawned with `--run-pods`, where a
+403 or 404 is no pod and a timeout or 5xx is a pod still there;
+`infra/k8s-deploy.sh` waits for zero run pods after the fleet pod is
 gone and before the worldserver is touched, and fails the window closed naming
 the run if one outlives the budget — or if the pods cannot be listed for that
 long, because a failed read is not an empty one; `infra/fleet-update.sh status`

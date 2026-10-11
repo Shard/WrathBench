@@ -151,8 +151,8 @@ export class K8sClient {
     return fetch(url, init);
   }
 
-  private async json<T>(method: string, url: string, body?: unknown): Promise<T> {
-    const r = await this.request(method, url, body, AbortSignal.timeout(30_000));
+  private async json<T>(method: string, url: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
+    const r = await this.request(method, url, body, AbortSignal.timeout(timeoutMs));
     const text = await r.text();
     if (!r.ok) {
       let reason = r.statusText;
@@ -183,8 +183,9 @@ export class K8sClient {
     }
   }
 
-  async listPods(labelSelector: string): Promise<Pod[]> {
-    const r = await this.json<{ items?: Pod[] }>("GET", this.podsUrl(`?labelSelector=${encodeURIComponent(labelSelector)}`));
+  /** `timeoutMs` bounds the whole request (30s by default); a caller on a tick passes a shorter one. */
+  async listPods(labelSelector: string, opts: { timeoutMs?: number } = {}): Promise<Pod[]> {
+    const r = await this.json<{ items?: Pod[] }>("GET", this.podsUrl(`?labelSelector=${encodeURIComponent(labelSelector)}`), undefined, opts.timeoutMs);
     return r.items ?? [];
   }
 

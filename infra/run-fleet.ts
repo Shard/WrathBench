@@ -154,6 +154,7 @@ import {
   deployLockFree,
   type FleetState,
   hasLiveChild,
+  rosterEpisodeInFlight,
   jobArgv,
   jobDefers,
   jobJsonlPath,
@@ -178,7 +179,7 @@ import {
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
 import { accountHeldBy, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
-import { rosterHasRunPod } from "./run-pod";
+import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
@@ -457,6 +458,12 @@ interface JobProc {
   job?: FleetJob;
   /** The run ids this process's roster was materialized with (`fillEntries`). */
   runIds: string[];
+  /**
+   * Whether its roster was spawned with `--run-pods`, read off the argv it was
+   * given: only such a roster can have an episode running as a pod, whatever
+   * the setting says now.
+   */
+  runPods: boolean;
   proc: ReturnType<typeof Bun.spawn>;
   pid: number;
   spawnedAt: number;
@@ -1322,7 +1329,17 @@ async function main(): Promise<void> {
     const pj =
       pending.get(spawn.name) ??
       [...pinnedJobs(config), ...campaignJobs].find((j) => j.name === spawn.name);
-    const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), runIds: entries.map((e) => e.runId).filter((id): id is string => id !== undefined), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
+    const lp: JobProc = {
+      spawn,
+      ...(pj !== undefined ? { job: pj } : {}),
+      runIds: entries.map((e) => e.runId).filter((id): id is string => id !== undefined),
+      runPods: argv.includes("--run-pods"),
+      proc,
+      pid: proc.pid,
+      spawnedAt: Date.now(),
+      exited: false,
+      exitCode: null,
+    };
     void proc.exited.then((code) => {
       lp.exited = true;
       lp.exitCode = code;
@@ -1351,16 +1368,18 @@ async function main(): Promise<void> {
 
   /**
    * A roster whose episode is a run pod has no child process, so the /proc scan
-   * alone would SIGTERM it mid-episode. Asked only on the cluster; an API that
-   * does not answer reads as "in flight", because the cost of a wrong SIGTERM
-   * (a paused run, a spent scored attempt) outweighs a drain that waits a tick.
+   * alone would SIGTERM it mid-episode. Asked only for a roster spawned with
+   * `--run-pods` (`rosterEpisodeInFlight`) and only on the cluster, with a short
+   * timeout. A 403 or 404 is a definite "no pod" (`rosterHasRunPod`); a timeout
+   * or a 5xx reads as "in flight", complained about once, because the cost of
+   * a wrong SIGTERM (a paused run) outweighs a drain that waits a tick.
    */
   let podsApiComplained = false;
   const rosterHasLivePod = async (pid: number): Promise<boolean> => {
     const client = K8sClient.inCluster();
     if (client === null) return false;
     try {
-      const live = await rosterHasRunPod(client, pid);
+      const live = await rosterHasRunPod(client, pid, { timeoutMs: DRAIN_POD_QUERY_TIMEOUT_MS });
       podsApiComplained = false;
       return live;
     } catch (e) {
@@ -1629,7 +1648,7 @@ async function main(): Promise<void> {
       const now = pausesOnDrain(liveJobs.get(name));
       if (now && pauseSignalled.has(name)) continue;
       if (now) pauseSignalled.add(name);
-      if (now || !(hasLiveChild(p.pid) || (await rosterHasLivePod(p.pid)))) {
+      if (now || !(await rosterEpisodeInFlight(p, { hasLiveChild, hasRunPod: rosterHasLivePod }))) {
         try {
           process.kill(p.pid, "SIGTERM");
         } catch {

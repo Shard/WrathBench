@@ -32,7 +32,7 @@ import { join } from "node:path";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV } from "../runner/src/config";
 import type { EpisodeExit, EpisodeHandle, EpisodeLaunch, EpisodeLauncher } from "./episode-launcher";
 import { EPISODE_TERM_GRACE_MS, refusedEpisode } from "./episode-launcher";
-import { digestOf, K8sClient, type Pod, type PodEnvVar } from "./k8s-client";
+import { digestOf, K8sClient, K8sError, type Pod, type PodEnvVar } from "./k8s-client";
 
 // ------------------------------------------------------------------ names
 
@@ -563,12 +563,26 @@ export function loadPodLauncher(opts: { rosterPid: number; env?: Record<string, 
   return new PodLauncher({ client, template, allowedImages: settings.allowedImages, imagePullSecrets: settings.imagePullSecrets, owner, rosterPid: opts.rosterPid });
 }
 
+/** How long the drain waits for the pod list on a tick: one roster's answer must not stall the others. */
+export const DRAIN_POD_QUERY_TIMEOUT_MS = 5_000;
+
 /**
  * Whether a roster process still has an episode running as a pod — the
  * supervisor's drain asks this beside its /proc scan, because a roster between
  * episodes and a roster whose episode is a pod both have no child process.
+ *
+ * A 403 or a 404 is a definite no: an API that will not let this fleet list
+ * pods, or has no such resource, is one this fleet could not have created a
+ * run pod through. Anything else that is not an answer — a timeout, a 5xx, a
+ * refused connection — throws, and the caller reads that as "in flight".
  */
-export async function rosterHasRunPod(client: K8sClient, rosterPid: number): Promise<boolean> {
-  const pods = await client.listPods(`app.kubernetes.io/component=${RUN_POD_COMPONENT},${ROSTER_PID_LABEL}=${rosterPid}`);
+export async function rosterHasRunPod(client: K8sClient, rosterPid: number, opts: { timeoutMs?: number } = {}): Promise<boolean> {
+  let pods: Pod[];
+  try {
+    pods = await client.listPods(`app.kubernetes.io/component=${RUN_POD_COMPONENT},${ROSTER_PID_LABEL}=${rosterPid}`, opts);
+  } catch (e) {
+    if (e instanceof K8sError && (e.status === 403 || e.status === 404)) return false;
+    throw e;
+  }
   return pods.some((p) => p.status?.phase !== "Succeeded" && p.status?.phase !== "Failed");
 }
