@@ -30,9 +30,9 @@
  *   server plus `mcp-bridge.ts` (see that file for why the bridge exists).
  *   The MCP server is `mcp.ts`'s `McpServer` over `tools.ts` — the same six
  *   tools, the same dispatch, the same trajectory records.
- * - Billing: the child environment is constructed explicitly and every
- *   Anthropic/Bedrock/Vertex credential variable is dropped, so the CLI can
- *   only bill the subscription this run was scheduled on — its LANE, named by
+ * - Billing: the child environment is an allowlist (`childEnv`) holding no
+ *   Anthropic/Bedrock/Vertex credential and no other secret of the runner's,
+ *   so the CLI can only bill the subscription this run was scheduled on — its LANE, named by
  *   `RunConfig.subscription` and copied onto `CLAUDE_CODE_OAUTH_TOKEN` — or
  *   refuse. It can never silently fall back to API-key credits, and it never
  *   sees another lane's token.
@@ -106,7 +106,7 @@ import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type
 import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import { toolsFor, type ToolContext } from "./tools";
-import { signalGroup } from "./adapter-shared";
+import { cliBaseEnv, signalGroup } from "./adapter-shared";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -129,84 +129,56 @@ export function mcpToolNames(opts: { wikiSearch?: boolean | undefined } = {}): s
 // ------------------------------------------------------------------ billing
 
 /**
- * Credential variables that would let the CLI bill something other than the
- * subscription. Dropped by prefix so a new `ANTHROPIC_*` knob cannot appear
- * behind our back.
- */
-export const BILLING_ENV_PREFIXES = ["ANTHROPIC_", "AWS_", "GOOGLE_", "GCLOUD_", "CLOUDSDK_"];
-export const BILLING_ENV_EXACT = [
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
-  "CLAUDE_CODE_SKIP_VERTEX_AUTH",
-  "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
-];
-
-/**
- * Not billing: the database. The `runner` and `fleet` services carry
- * WRATHBENCH_DB_* so the gate's smokes can stage a fixture, and this CLI is the
- * model's own process. It is launched with `--tools ""` and only our six MCP
- * tools, so it has no Bash or Read to dump its environment with — but the
- * credential has no business being in there either way, and the snippet sandbox
- * drops it for the same reason (sandboxChildEnv in sandbox/host.ts). Root on
- * acore_characters is the server-side shortcut docs/CONTRACTS.md forbids.
- */
-const DB_ENV_PREFIX = "WRATHBENCH_DB_";
-
-/**
- * Not billing either: the CLI's thinking budget. The run's `effort` is the only
- * thing that may set it (`thinkingEnv`), so an operator's shell variable cannot
- * silently become a run dimension nobody recorded.
+ * The CLI's thinking budget. The run's `effort` is the only thing that may set
+ * it (`thinkingEnv`), so an operator's shell variable cannot silently become a
+ * run dimension nobody recorded — it is not in the child's environment unless
+ * the run put it there.
  */
 const THINKING_ENV = "MAX_THINKING_TOKENS";
 
 /**
- * Not billing either: the CLI's auto-compaction window. The run's
- * `compactWindow` is the only thing that may set it (`compactEnv`), for the
- * reason `THINKING_ENV` is dropped — an operator's shell value would otherwise
- * become a run dimension nobody recorded. The CLI also reads an
- * `autoCompactWindow` setting, but `CLAUDE_CONFIG_DIR` is the run's own
- * directory, so no settings file sets it, and the env wins over one anyway.
+ * The CLI's auto-compaction window. The run's `compactWindow` is the only thing
+ * that may set it (`compactEnv`), for the reason `THINKING_ENV` is the run's:
+ * an operator's shell value would otherwise become a run dimension nobody
+ * recorded. The CLI also reads an `autoCompactWindow` setting, but
+ * `CLAUDE_CONFIG_DIR` is the run's own directory, so no settings file sets it,
+ * and the env wins over one anyway.
  */
 export const COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 
 /**
- * The child environment, constructed rather than inherited.
+ * The child environment: an allowlist, never the runner's own.
  *
- * One credential survives, and it is the one the run's LANE names: the token in
- * `$<tokenEnv>` is copied onto `CLAUDE_CODE_OAUTH_TOKEN`, the only name the CLI
- * knows. Every other `CLAUDE_CODE_OAUTH_TOKEN*` variable is dropped by prefix,
- * so a second subscription's token (`..._2`) is never in the child's
- * environment at all — a run bills the subscription it was scheduled on, and
- * cannot see, let alone spend, the other one. The prefix also covers a third
- * lane arriving later without another edit here.
+ * `cliBaseEnv` (adapter-shared.ts) is the plumbing — PATH, HOME, temp, locale,
+ * terminal. On top of it exactly three things, all explicit:
  *
- * The CLI reports `apiKeySource: "ANTHROPIC_API_KEY"` whenever that variable is
- * set, so leaving it in place would spend API credits instead of the
- * subscription; `CLAUDE_CONFIG_DIR` is redirected into the run directory so no
- * user-level settings, skills, hooks, memory or `apiKeyHelper` are read; and
- * `WRATHBENCH_DB_*` is dropped too — see `DB_ENV_PREFIX`.
+ * - The run's LANE credential: the token in `$<tokenEnv>`, copied onto
+ *   `CLAUDE_CODE_OAUTH_TOKEN`, the only name the CLI knows. No other
+ *   subscription's token is in the child at all — a run bills the subscription
+ *   it was scheduled on and cannot see, let alone spend, another — and no
+ *   `ANTHROPIC_*`, Bedrock or Vertex variable either, so the CLI bills the
+ *   subscription or refuses; it never falls back to API credits (it reports
+ *   `apiKeySource: "ANTHROPIC_API_KEY"` whenever that variable is set).
+ * - `CLAUDE_CONFIG_DIR`, the run's own directory, so no user-level settings,
+ *   skills, hooks, memory or `apiKeyHelper` are read.
+ * - `extra`: the run-controlled knobs (`thinkingEnv`, `compactEnv`) and, in
+ *   tests only, the fake CLI's own variables.
+ *
+ * Everything else the runner holds stays out: the other providers' keys, the
+ * module's port secret, the database and derived-store passwords. The CLI runs
+ * with `--tools ""` and only our MCP tools, so it has no Bash or Read to dump
+ * its environment with — but none of those has any business in the model's own
+ * process either way. The MCP bridge it launches needs nothing from here
+ * (`CLI_BASE_ENV`), so the MCP config carries no `env` block.
  */
 export function childEnv(
   parent: Record<string, string | undefined>,
   o: { configDir: string; tokenEnv?: string; extra?: Record<string, string> },
 ): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(parent)) {
-    if (v === undefined) continue;
-    if (BILLING_ENV_PREFIXES.some((p) => k.startsWith(p))) continue;
-    if (BILLING_ENV_EXACT.includes(k)) continue;
-    if (k.startsWith(DB_ENV_PREFIX)) continue;
-    if (k.startsWith(DEFAULT_CLAUDE_TOKEN_ENV)) continue;
-    if (k === THINKING_ENV) continue;
-    if (k === COMPACT_WINDOW_ENV) continue;
-    out[k] = v;
-  }
+  const out = cliBaseEnv(parent);
   const token = parent[o.tokenEnv ?? DEFAULT_CLAUDE_TOKEN_ENV];
   if (token !== undefined && token.length > 0) out[DEFAULT_CLAUDE_TOKEN_ENV] = token;
   out["CLAUDE_CONFIG_DIR"] = o.configDir;
-  // Belt and braces: the CLI treats an empty string as unset for these.
-  delete out["ANTHROPIC_API_KEY"];
   return { ...out, ...(o.extra ?? {}) };
 }
 

@@ -78,6 +78,9 @@ const record: Record<string, unknown> = {
     // How `compactWindow` reaches the CLI: env only, no flag.
     compactWindow: Bun.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] ?? null,
   },
+  // Every variable name the CLI was given — and so what the MCP bridge it
+  // launches inherits. Names only, never values.
+  envKeys: Object.keys(Bun.env).sort(),
   userMessages: [] as string[],
   mcpTools: [] as string[],
   toolResults: [] as unknown[],
