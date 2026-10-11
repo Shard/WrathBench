@@ -14,7 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CampaignView } from "../src/api/campaign-types";
+import type { CampaignView, Square } from "../../runner/viewer/api-types";
 import {
   argvText,
   armRowText,
@@ -34,8 +34,10 @@ import {
   medianTitle,
   progressText,
   progressTitle,
+  refusalsFor,
   selectedSquare,
   shortImage,
+  sourceText,
   squareClass,
   squareHref,
   squareText,
@@ -188,14 +190,13 @@ describe("the grid", () => {
 describe("a square", () => {
   const rows = gridRows(WAKE);
   const [reached, several, short, live] = rows[0]!.squares;
-  const mismatched = rows[1]!.squares[0]!;
-  const owed = rows[1]!.squares[1]!;
+  const [mismatched, capped, owed, refused] = rows[1]!.squares as [Square, Square, Square, Square];
 
   test("with a stop level it reads reached/counted and the median minutes to it", () => {
     expect(squareText(reached!, 5)).toBe("1/1 41m");
     expect(squareClass(reached!, 5)).toBe("right mono ok");
     expect(squareTitle(reached!, 5)).toBe(
-      "1 of 1 counted run reached L5 · 41/41/41 min to L5 (min/median/max) · best L5 · $1.25\nbuild 0.5-920-gaaaaaaa",
+      "1 of 1 counted run reached L5 · 41/41/41 min to L5 (min/median/max) · best L5 · $1.25 billed · 1 counted run wanted\nbuild 0.5-920-gaaaaaaa",
     );
   });
 
@@ -221,9 +222,32 @@ describe("a square", () => {
     expect(squareTitle(mismatched, 5)).toContain("1 ran as another start");
   });
 
+  test("a square that spent its attempts without a counted run says capped, and is still a way into its runs", () => {
+    expect(squareText(capped, 5)).toBe("capped");
+    expect(squareClass(capped, 5)).toBe("right mono dim");
+    expect(squareTitle(capped, 5)).toBe(
+      "0 of 0 counted runs reached L5 · best L3 · 2 not counted · capped: its attempts are spent without the counted runs it wanted · 1 counted run wanted\nbuild 0.5-921-gbbbbbbb",
+    );
+    expect(squareHref(WAKE, "south", capped)).toBe("/campaigns/wake-probe/1?cell=south&column=sonnet-low%7Cwake");
+    // Capped with a counted run short of its want keeps its figure.
+    expect(squareText({ ...capped, counted: 1 }, 5)).toBe("0/1");
+  });
+
+  test("a refused pair's square says refused, with the reason first in its hover", () => {
+    expect(squareText(refused, 5)).toBe("refused");
+    expect(squareClass(refused, 5)).toBe("right mono err");
+    expect(squareTitle(refused, 5)).toBe("refused: compact window 100k clashes with the arm's --compact-window 50k");
+    // One that ran before the refusal keeps its figures, and the hover leads with why.
+    const ran = { ...refused, runs: 1, counted: 1, reached: 1, bestLevel: 5 };
+    expect(squareText(ran, 5)).toBe("1/1");
+    expect(squareClass(ran, 5)).toBe("right mono ok");
+    expect(squareTitle(ran, 5).split("\n")[0]).toBe("refused: compact window 100k clashes with the arm's --compact-window 50k");
+  });
+
   test("owed, gap, and no-stop-level squares", () => {
     expect(squareText(owed, 5)).toBe("·");
-    expect(squareTitle(owed, 5)).toBe("owed, not run yet");
+    expect(squareTitle(owed, 5)).toBe("owed: 1 counted run wanted");
+    expect(squareTitle(square("x"), 5)).toBe("owed, not run yet");
     expect(squareText(null, 5)).toBe("");
     expect(squareClass(null, 5)).toBe("right mono dim");
     expect(squareText(square("x", { runs: 1, counted: 1, bestLevel: 7 }), null)).toBe("L7");
@@ -256,11 +280,11 @@ describe("where a square leads", () => {
   });
 
   test("no run is nowhere, and a query naming no such square selects nothing", () => {
-    expect(squareHref(WAKE, "south", rows[1]!.squares[1]!)).toBeNull();
+    expect(squareHref(WAKE, "south", rows[1]!.squares[2]!)).toBeNull();
     expect(squareHref(WAKE, "east", null)).toBeNull();
     expect(selectedSquare(WAKE, undefined, undefined)).toBeNull();
     expect(selectedSquare(WAKE, "north", "nope")).toBeNull();
-    expect(selectedSquare(WAKE, "south", "sonnet-low|wake")).toBeNull();
+    expect(selectedSquare(WAKE, "south", "flash|control")).toBeNull();
   });
 });
 
@@ -272,12 +296,15 @@ describe("the arm comparison", () => {
       reached: "2",
       minutes: "47m",
       turns: "213",
-      cost: "$1.10",
+      cost: "$1.10*",
+      costTitle: "* 2 of the figures behind this median are a subscription's as-if-metered cost, which nobody was billed",
       promptTokens: "1.84M",
       terminations: "level-target 2",
       builds: "0.5-920-gaaaaaaa",
     });
     expect(armRowText(wake!).terminations).toBe("adapter-error 1 · level-target 1");
+    // A metered arm's median carries no mark.
+    expect([armRowText(wake!).cost, armRowText(wake!).costTitle]).toEqual(["$0.900", ""]);
   });
 
   test("an arm with no runs reads dashes, not zeros dressed as medians", () => {
@@ -287,6 +314,7 @@ describe("the arm comparison", () => {
       minutes: "—",
       turns: "—",
       cost: "—",
+      costTitle: "",
       promptTokens: "—",
       terminations: "—",
       builds: "—",
@@ -306,6 +334,32 @@ describe("the arm comparison", () => {
   test("the median headings say what they are over", () => {
     expect(medianTitle("turns", 5)).toBe("median turns to L5, over the runs that reached it");
     expect(medianTitle("turns", null)).toBe("median turns: this campaign sets no stop level");
+  });
+});
+
+describe("refusals and the definition's source", () => {
+  test("a campaign's page lists its own pairs, its definition and its id's store row, nothing else", () => {
+    const body = {
+      refused: [
+        ...CAMPAIGNS.refused,
+        { key: "campaign-defs/wake-probe@1", reason: "hash mismatch" },
+        { key: "campaigns/wake-probe", reason: "unknown key" },
+        { key: "wake-probe@10:flash:wake", reason: "another version" },
+        { key: "campaign-defs/wake-probe@10", reason: "another version" },
+      ],
+    };
+    expect(refusalsFor(body, WAKE).map((r) => r.key)).toEqual([
+      "wake-probe@1:flash:wake",
+      "campaign-defs/wake-probe@1",
+      "campaigns/wake-probe",
+    ]);
+    expect(refusalsFor(CAMPAIGNS, SIDE)).toEqual([]);
+  });
+
+  test("the source reads path, short commit and the branches that held it", () => {
+    expect(sourceText(WAKE.source)).toBe("runner/campaigns/wake-probe@1.json @ 01234567 (master)");
+    expect(sourceText({ commit: "abcdef0123", path: "p.json" })).toBe("p.json @ abcdef01");
+    expect(sourceText(null)).toBe("—");
   });
 });
 

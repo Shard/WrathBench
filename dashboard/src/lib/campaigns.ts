@@ -16,7 +16,7 @@
  */
 
 import { characterLabel } from "@viewer/characters";
-import type { ArmSummary, CampaignsResponse, CampaignView, Square } from "../api/campaign-types";
+import type { ArmSummary, CampaignsResponse, CampaignView, Square } from "@viewer/api-types";
 import { effortLabel, fmtDuration, fmtTokens, fmtUsd, modelDisplay, shortHarness } from "./format";
 
 export type CampaignState = CampaignView["state"];
@@ -101,8 +101,12 @@ export function progressTitle(p: Progress): string {
   return parts.join(" · ");
 }
 
-/** The cost figure's hover. Its basis is the API's own (`costUsd`); nothing here re-sums it. */
-export const COST_TITLE = "cost of this campaign's runs, as /api/campaigns sums it";
+/**
+ * The cost figure's hover. The API sums what providers billed and nothing
+ * else, so the hover says which figures are left out; nothing here re-sums it.
+ */
+export const COST_TITLE =
+  "what the providers billed for this campaign's runs: reported charges only, never a list-price estimate or a subscription's as-if-metered figure; a dash when no run reported a charge";
 
 /* ------------------------------------------------------------ text helpers */
 
@@ -240,11 +244,18 @@ export function gridRows(c: Pick<CampaignView, "cells" | "columns" | "grid">): G
  * says nothing, because its live marker already does. `*` marks a run whose
  * recorded start is not the cell's.
  *
+ * Two settled states say so in words, because neither is owed any more and
+ * a figure would read as a sweep still going: `refused` is a pair that cannot
+ * launch as configured and has not run, `capped` a square that spent its
+ * attempts without a counted run.
+ *
  * `runs` is the square's ended runs, counted or not, and `live` the ones in
- * flight — the split the grid has always read.
+ * flight.
  */
 export function squareText(sq: Square | null, stop: number | null): string {
   if (sq === null) return "";
+  if (isRefused(sq) && sq.runs === 0 && sq.live === 0) return "refused";
+  if (sq.settled === "capped" && sq.counted === 0) return "capped";
   if (sq.runs === 0) return sq.live > 0 ? "" : "·";
   const mark = sq.mismatchedStart > 0 ? "*" : "";
   if (stop !== null) {
@@ -254,10 +265,20 @@ export function squareText(sq: Square | null, stop: number | null): string {
   return sq.bestLevel === null ? `—${mark}` : `L${sq.bestLevel}${mark}`;
 }
 
-/** The square's hover: every number it rests on, then its builds. */
+/** Whether a square's (assignment, arm) pair is refused before launch. */
+function isRefused(sq: Square): sq is Square & { refused: string } {
+  return typeof sq.refused === "string";
+}
+
+/** The square's hover: a refusal first, then every number it rests on, then its builds. */
 export function squareTitle(sq: Square | null, stop: number | null): string {
   if (sq === null) return "no square served for this column";
-  if (sq.runs === 0 && sq.live === 0) return "owed, not run yet";
+  const refusal = isRefused(sq) ? `refused: ${sq.refused}` : null;
+  const wanted = sq.want === undefined ? null : `${sq.want} counted ${sq.want === 1 ? "run" : "runs"} wanted`;
+  if (sq.runs === 0 && sq.live === 0 && sq.settled !== "capped") {
+    const owed = refusal === null ? (wanted === null ? "owed, not run yet" : `owed: ${wanted}`) : null;
+    return [refusal, owed].filter((x): x is string => x !== null).join("\n");
+  }
   const parts: string[] = [];
   if (stop !== null) parts.push(`${sq.reached} of ${plural(sq.counted, "counted run")} reached L${stop}`);
   if (sq.minutesToStop !== null) {
@@ -268,14 +289,17 @@ export function squareTitle(sq: Square | null, stop: number | null): string {
   if (sq.runs > sq.counted) parts.push(`${sq.runs - sq.counted} not counted`);
   if (sq.live > 0) parts.push(`${sq.live} live`);
   if (sq.mismatchedStart > 0) parts.push(`${sq.mismatchedStart} ran as another start`);
-  if (sq.costUsd !== null) parts.push(fmtUsd(sq.costUsd));
-  const lines = [parts.join(" · ")];
+  if (sq.costUsd !== null) parts.push(`${fmtUsd(sq.costUsd)} billed`);
+  if (sq.settled === "capped") parts.push("capped: its attempts are spent without the counted runs it wanted");
+  if (wanted !== null) parts.push(wanted);
+  const lines = refusal === null ? [parts.join(" · ")] : [refusal, parts.join(" · ")];
   if (sq.builds.length > 0) lines.push(`${sq.builds.length === 1 ? "build" : "builds"} ${sq.builds.map(shortHarness).join(", ")}`);
   return lines.join("\n");
 }
 
-/** A square's class: green once its stop level was reached, dim while nothing counts. */
+/** A square's class: green once its stop level was reached, the error colour while refused with nothing run, dim while nothing counts. */
 export function squareClass(sq: Square | null, stop: number | null): string {
+  if (sq !== null && isRefused(sq) && sq.runs === 0 && sq.live === 0) return "right mono err";
   if (sq === null || sq.counted === 0) return "right mono dim";
   if (stop !== null && sq.reached > 0) return "right mono ok";
   return "right mono";
@@ -328,6 +352,8 @@ export interface ArmRowText {
   minutes: string;
   turns: string;
   cost: string;
+  /** Says how many of the figures behind the median are a subscription's as-if-metered one; "" when none are. */
+  costTitle: string;
   promptTokens: string;
   terminations: string;
   builds: string;
@@ -340,7 +366,14 @@ export function armRowText(a: ArmSummary): ArmRowText {
     reached: String(a.reached),
     minutes: a.medianMinutesToStop === null ? "—" : `${Math.round(a.medianMinutesToStop)}m`,
     turns: whole(a.medianTurnsToStop),
-    cost: fmtUsd(a.medianCostToStop),
+    // Unlike the campaign's billed total, the median takes a subscription's
+    // as-if-metered figure (the only cost such an arm has), and is marked when
+    // it did: the same `*` a partly reconstructed cost wears elsewhere.
+    cost: `${fmtUsd(a.medianCostToStop)}${(a.costAsIfMetered ?? 0) > 0 && a.medianCostToStop !== null ? "*" : ""}`,
+    costTitle:
+      (a.costAsIfMetered ?? 0) > 0
+        ? `* ${a.costAsIfMetered} of the figures behind this median ${a.costAsIfMetered === 1 ? "is" : "are"} a subscription's as-if-metered cost, which nobody was billed`
+        : "",
     promptTokens: a.medianPromptTokensToStop === null ? "—" : fmtTokens(a.medianPromptTokensToStop),
     terminations: terminationMix(a.terminations),
     builds: buildsText(a.builds),
@@ -352,6 +385,24 @@ export function medianTitle(what: string, stop: number | null): string {
   return stop === null
     ? `median ${what}: this campaign sets no stop level`
     : `median ${what} to L${stop}, over the runs that reached it`;
+}
+
+/**
+ * The refusals that belong to one campaign version: its pairs
+ * (`<id>@<v>:<ref>:<arm>`), its definition (`campaign-defs/<id>@<v>`) and the
+ * store row for its id (`campaigns/<id>`), which names some version of it.
+ */
+export function refusalsFor(body: Pick<CampaignsResponse, "refused">, c: Pick<CampaignView, "id" | "key">): CampaignsResponse["refused"] {
+  return (body.refused ?? []).filter(
+    (r) => r.key.startsWith(`${c.key}:`) || r.key === `campaign-defs/${c.key}` || r.key === `campaigns/${c.id}`,
+  );
+}
+
+/** Where a definition was published from: path, short commit, and the branches that held it. */
+export function sourceText(source: CampaignView["source"]): string {
+  if (source === null) return "—";
+  const branches = source.branch !== undefined && source.branch.length > 0 ? ` (${source.branch.join(", ")})` : "";
+  return `${source.path} @ ${source.commit.slice(0, 8)}${branches}`;
 }
 
 /* ------------------------------------------------------------------ shape */

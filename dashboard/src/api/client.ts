@@ -16,6 +16,7 @@ import type {
   EntriesResponse,
   EpisodeIdView,
   EpisodesResponse,
+  CampaignsResponse,
   ToolsResponse,
   ResultsResponse,
   FleetResponse,
@@ -26,7 +27,6 @@ import type {
   RunsResponse,
   TrackResponse,
 } from "@viewer/api-types";
-import type { CampaignsResponse } from "./campaign-types";
 import { createSnapshotClient, type SnapshotSource } from "./snapshot-client";
 
 export type {
@@ -41,6 +41,10 @@ export type {
   EpisodeIdView,
   EpisodeTierView,
   EpisodesResponse,
+  ArmSummary,
+  CampaignsResponse,
+  CampaignView,
+  Square,
   ToolsResponse,
   ToolView,
   ResultsResponse,
@@ -71,7 +75,6 @@ export type {
   TokenTotals,
   TpsFacts,
 } from "@viewer/api-types";
-export type { ArmSummary, CampaignsResponse, CampaignView, Square } from "./campaign-types";
 
 /** Thrown for any non-2xx. Carries the status so a page can tell 404 from 500. */
 export class ApiError extends Error {

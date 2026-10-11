@@ -40,7 +40,9 @@ import {
   progressText,
   progressTitle,
   selectedSquare,
+  refusalsFor,
   shortImage,
+  sourceText,
   squareClass,
   squareHref,
   squareText,
@@ -122,33 +124,44 @@ function Index(props: { body: CampaignsResponse | undefined }) {
               </table>
             </div>
 
-            <Show when={refused().length > 0}>
-              <h2 class="section">refused</h2>
-              <div class="scroller">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>store row</th>
-                      <th>reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <For each={refused()}>
-                      {(r) => (
-                        <tr>
-                          <td>{r.key}</td>
-                          <td class="err">{r.reason}</td>
-                        </tr>
-                      )}
-                    </For>
-                  </tbody>
-                </table>
-              </div>
-            </Show>
+            <Refused rows={refused()} />
           </>
         )}
       </Show>
     </>
+  );
+}
+
+/**
+ * What the viewer read and did not use, with why: a store row, a published
+ * definition, or an (assignment, arm) pair that cannot launch as configured.
+ * Nothing when there is nothing.
+ */
+function Refused(props: { rows: CampaignsResponse["refused"] }) {
+  return (
+    <Show when={props.rows.length > 0}>
+      <h2 class="section">refused</h2>
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              <th>key</th>
+              <th>reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={props.rows}>
+              {(r) => (
+                <tr>
+                  <td>{r.key}</td>
+                  <td class="err">{r.reason}</td>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
+    </Show>
   );
 }
 
@@ -227,12 +240,12 @@ function Campaign(props: { body: CampaignsResponse | undefined; id: string; vers
         </>
       }
     >
-      {(c) => <CampaignBody c={c()} />}
+      {(c) => <CampaignBody c={c()} refused={refusalsFor(props.body!, c())} />}
     </Show>
   );
 }
 
-function CampaignBody(props: { c: CampaignView }) {
+function CampaignBody(props: { c: CampaignView; refused: CampaignsResponse["refused"] }) {
   const c = (): CampaignView => props.c;
   const stop = (): number | null => c().shape.stopAtLevel;
   const [search] = useSearchParams<{ cell?: string; column?: string }>();
@@ -250,6 +263,14 @@ function CampaignBody(props: { c: CampaignView }) {
       <dl class="tuple">
         <dt>question</dt>
         <dd>{c().question}</dd>
+        <Show when={c().note}>
+          {(note) => (
+            <>
+              <dt>note</dt>
+              <dd>{note()}</dd>
+            </>
+          )}
+        </Show>
         <dt>progress</dt>
         <dd class="mono" title={progressTitle(c().progress)}>
           <ProgressFigure c={c()} />
@@ -283,7 +304,7 @@ function CampaignBody(props: { c: CampaignView }) {
             {(s) => (
               <span title={s().commit}>
                 {" · "}
-                {s().path} @ {s().commit.slice(0, 8)}
+                {sourceText(s())}
               </span>
             )}
           </Show>
@@ -399,7 +420,9 @@ function CampaignBody(props: { c: CampaignView }) {
                           <td class="right mono">{t.reached}</td>
                           <td class="right mono">{t.minutes}</td>
                           <td class="right mono">{t.turns}</td>
-                          <td class="right mono">{t.cost}</td>
+                          <td class="right mono" title={t.costTitle}>
+                            {t.cost}
+                          </td>
                           <td class="right mono">{t.promptTokens}</td>
                           <td class="dim">{t.terminations}</td>
                           <td class="dim" title={a.builds.join("\n")}>
@@ -415,6 +438,8 @@ function CampaignBody(props: { c: CampaignView }) {
           </table>
         </div>
       </Show>
+
+      <Refused rows={props.refused} />
     </>
   );
 }

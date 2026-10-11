@@ -150,6 +150,7 @@ describe("the campaigns page", () => {
       expect(text(rows[0]!)).toContain("$3.40");
       expect(text(rows[1]!)).toContain("unassigned");
       expect(text(tables[1]!)).toContain("campaigns/old-probe");
+      expect(text(tables[1]!)).toContain("wake-probe@1:flash:wake");
       expect(text(tables[1]!)).toContain("not published");
       // No caption paragraphs: the only text outside a table is the heading.
       expect(all("p")).toHaveLength(0);
@@ -157,8 +158,10 @@ describe("the campaigns page", () => {
       // One campaign: shape, arms, grid, comparison.
       await go("/campaigns/wake-probe/1");
       expect(text(mount.querySelector("h1"))).toBe("wake-probe@1 running");
-      expect(all("h2.section").map((h) => h.textContent)).toEqual(["arms", "grid", "arm comparison"]);
-      const [arms, grid, comparison] = all("table");
+      expect(all("h2.section").map((h) => h.textContent)).toEqual(["arms", "grid", "arm comparison", "refused"]);
+      const [arms, grid, comparison, refusedHere] = all("table");
+      // Only this campaign's refusals: its pair, not another campaign's store row.
+      expect([...refusedHere!.querySelectorAll("tbody td:first-child")].map((td) => td.textContent)).toEqual(["wake-probe@1:flash:wake"]);
       expect(text(arms!.querySelector("tbody tr:nth-child(2)"))).toContain("runner@sha256:0123456789ab");
 
       // The grid's two header rows: each assignment over its two arms, then the arms.
@@ -183,7 +186,8 @@ describe("the campaigns page", () => {
       const several = north[3]!.querySelector("a")!.getAttribute("href")!;
       expect(several).toBe("/campaigns/wake-probe/1?cell=north&column=sonnet-low%7Cwake");
       // Matched by key: `south` was served out of order.
-      expect([...body[1]!.querySelectorAll("td")].map((td) => td.textContent)).toEqual(["south", "Orc Warrior", "1/1 52m*", "·", "·", "·"]);
+      expect([...body[1]!.querySelectorAll("td")].map((td) => td.textContent)).toEqual(["south", "Orc Warrior", "1/1 52m*", "capped", "·", "refused"]);
+      expect([...body[1]!.querySelectorAll("td")][5]!.getAttribute("class")).toBe("right mono err");
       // A cell with no row is four gaps, and its note marks it.
       expect([...body[2]!.querySelectorAll("td")].map((td) => td.textContent)).toEqual(["east*", "Blood Elf Rogue", "", "", "", ""]);
 
@@ -198,7 +202,7 @@ describe("the campaigns page", () => {
         "2",
         "47m",
         "213",
-        "$1.10",
+        "$1.10*",
         "1.84M",
       ]);
       expect([...cmp[1]!.querySelectorAll("td")].map((td) => td.textContent).slice(0, 2)).toEqual(["wake", "2"]);

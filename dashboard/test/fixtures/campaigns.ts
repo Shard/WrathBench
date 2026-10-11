@@ -4,15 +4,17 @@
  * Two campaigns. `wake-probe@1` is the shape the page exists for: two arms (a
  * control build and a branch build with one extra flag) × two assignments ×
  * three cells, part-way through — one square live, one with several runs, one
- * whose run started as another start, one owed. `side-probe@2` is published
- * with no store row (`config: null`), which is what an unassigned campaign
- * looks like before anyone writes the row. One store row is refused.
+ * whose run started as another start, one capped, one owed, and one whose
+ * (assignment, arm) pair is refused since the row changed. `side-probe@2` is
+ * published with no store row (`config: null`), which is what an unassigned
+ * campaign looks like before anyone writes the row. A store row and the
+ * refused pair are in `refused`.
  *
  * Everything is invented: the ids, the image refs, the build stamps. Typed,
  * so a renamed field breaks the typecheck rather than quietly testing nothing.
  */
 
-import type { CampaignsResponse, CampaignView, Square } from "../../src/api/campaign-types";
+import type { CampaignsResponse, CampaignView, Square } from "../../../runner/viewer/api-types";
 
 export const NOW = Date.UTC(2026, 9, 11, 12, 0, 0);
 
@@ -42,8 +44,9 @@ const WAKE: CampaignView = {
   version: 1,
   key: "wake-probe@1",
   hash: "f00dfeedcafe0123456789abcdef",
-  source: { commit: "0123456789abcdef0123456789abcdef01234567", path: "runner/campaigns/wake-probe@1.json" },
+  source: { commit: "0123456789abcdef0123456789abcdef01234567", path: "runner/campaigns/wake-probe@1.json", branch: ["master"] },
   publishedAt: NOW - 2 * 3_600_000,
+  note: "both arms pinned to named builds",
   question:
     "Does waking the model on game events instead of a fixed re-prompt reach level 5 with fewer prompt tokens, without slowing the climb?",
   shape: {
@@ -94,6 +97,8 @@ const WAKE: CampaignView = {
           minutesToStop: { min: 41, median: 41, max: 41 },
           bestLevel: 5,
           costUsd: 1.25,
+          want: 1,
+          settled: "done",
           builds: ["harness-0.5-920-gaaaaaaa"],
           runIds: ["fleet-wake-probe-north-sonnet-low-20261011"],
         }),
@@ -115,7 +120,8 @@ const WAKE: CampaignView = {
       cell: "south",
       // Served out of column order on purpose: the page matches by key.
       squares: [
-        square("flash|wake"),
+        // Refused since the north run launched: the row now clashes with the arm's args.
+        square("flash|wake", { want: 1, settled: null, refused: "compact window 100k clashes with the arm's --compact-window 50k" }),
         square("sonnet-low|control", {
           runs: 1,
           counted: 1,
@@ -126,8 +132,16 @@ const WAKE: CampaignView = {
           builds: ["harness-0.5-920-gaaaaaaa"],
           runIds: ["fleet-wake-probe-south-sonnet-low-20261011"],
         }),
-        square("sonnet-low|wake"),
-        square("flash|control"),
+        square("sonnet-low|wake", {
+          runs: 2,
+          counted: 0,
+          bestLevel: 3,
+          want: 1,
+          settled: "capped",
+          builds: ["harness-0.5-921-gbbbbbbb"],
+          runIds: ["fleet-wake-probe-south-sonnet-low-20261011-a1", "fleet-wake-probe-south-sonnet-low-20261011-a2"],
+        }),
+        square("flash|control", { want: 1, settled: null }),
       ],
     },
     // `east` has no row at all: every square of it is a gap, not a shift.
@@ -146,6 +160,7 @@ const WAKE: CampaignView = {
           medianPromptTokensToStop: 1_840_000,
           terminations: { "episode-limit": 0, "level-target": 2 },
           builds: ["harness-0.5-920-gaaaaaaa"],
+          costAsIfMetered: 2,
         },
         {
           arm: "wake",
@@ -229,5 +244,8 @@ const SIDE: CampaignView = {
 export const CAMPAIGNS: CampaignsResponse = {
   now: NOW,
   campaigns: [WAKE, SIDE],
-  refused: [{ key: "campaigns/old-probe", reason: "names old-probe@3, which is not published" }],
+  refused: [
+    { key: "campaigns/old-probe", reason: "names old-probe@3, which is not published" },
+    { key: "wake-probe@1:flash:wake", reason: "compact window 100k clashes with the arm's --compact-window 50k" },
+  ],
 };
