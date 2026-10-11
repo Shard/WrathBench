@@ -40,6 +40,7 @@ import {
   DRAFT_FILTERS,
   EMPTY_NEW_ENTRY,
   IDLES,
+  READ_ONLY_TITLE,
   TIERS,
   auditVerb,
   draftsShown,
@@ -49,6 +50,7 @@ import {
   fmtEstimate,
   fmtPrice,
   formOf,
+  isReadOnlyKey,
   isRosterName,
   jsonEditorKeys,
   newEntryDoc,
@@ -906,12 +908,28 @@ function JsonEditor(props: { rowKey: string; value: Record<string, unknown>; wri
     setMessage(err ?? "saved");
   };
 
+  // A published campaign definition is listed and shown, never offered a
+  // save: the API refuses every write to it (`isReadOnlyKey`).
+  const readOnly = (): boolean => isReadOnlyKey(props.rowKey);
+
   return (
     <div class="jsoneditor">
-      <button type="button" class={open() ? "on" : ""} onClick={() => setOpen(!open())}>
+      <button
+        type="button"
+        class={open() ? "on" : ""}
+        title={readOnly() ? READ_ONLY_TITLE : undefined}
+        onClick={() => setOpen(!open())}
+      >
         {open() ? "▾" : "▸"} {props.rowKey}
+        <Show when={readOnly()}>
+          {" "}
+          <span class="dim">read-only</span>
+        </Show>
       </button>
-      <Show when={open()}>
+      <Show when={open() && readOnly()}>
+        <pre class="mono scroller">{editorText(current())}</pre>
+      </Show>
+      <Show when={open() && !readOnly()}>
         <textarea rows={16} value={text()} onInput={(e) => setText(e.currentTarget.value)} spellcheck={false} />
         <div>
           <button type="button" onClick={() => void save()}>

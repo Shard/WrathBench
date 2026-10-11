@@ -16,6 +16,7 @@ import {
   auditVerb,
   formOf,
   headerSafe,
+  isReadOnlyKey,
   isRosterName,
   jsonEditorKeys,
   newEntryDoc,
@@ -164,6 +165,15 @@ describe("jsonEditorKeys", () => {
 
   test("the roster's own rows are excluded — the table is their editor", () => {
     expect(jsonEditorKeys(["roster", "roster/a"])).toEqual([]);
+  });
+
+  test("published campaign definitions are listed, and read-only: the API refuses a write to them", () => {
+    const keys = ["campaign-defs/wake-probe@1", "campaigns/wake-probe", "policy"];
+    expect(jsonEditorKeys(keys)).toEqual(keys);
+    expect(keys.map(isReadOnlyKey)).toEqual([true, false, false]);
+    expect(isReadOnlyKey("campaign-defs")).toBe(true);
+    expect(isReadOnlyKey("campaigns")).toBe(false);
+    expect(isReadOnlyKey("campaign-definitions")).toBe(false);
   });
 });
 

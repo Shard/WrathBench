@@ -308,6 +308,21 @@ export function jsonEditorKeys(keys: readonly string[]): string[] {
 }
 
 /**
+ * Whether a row key is listed but not writable here: the published campaign
+ * definitions (`campaign-defs`, `campaign-defs/<id>@<version>`). They are
+ * write-once and reach the store only through the publish CLI, so the config
+ * API answers a write to them with a 400 — an editor would offer a save that
+ * can only fail. They are shown, read-only.
+ */
+export function isReadOnlyKey(key: string): boolean {
+  return key === "campaign-defs" || key.startsWith("campaign-defs/");
+}
+
+/** The hover on a read-only row: why there is no save. */
+export const READ_ONLY_TITLE =
+  "a published campaign definition: write-once, written only by the publish CLI (runner/src/campaign-publish.ts); the store refuses edits from here";
+
+/**
  * The typographic characters this repository's prose is full of, and the ASCII
  * a header can carry instead.
  */
