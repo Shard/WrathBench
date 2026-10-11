@@ -64,6 +64,16 @@ storage:
   codexHome:
     size: 5Gi
 
+# The WrathBench images live in a PRIVATE registry project (operator decision
+# 2026-10-11), so every pod built from them — fleet, runner, viewer, publisher,
+# collector, worldserver, authserver, the bootstrap and db-import Jobs, and
+# every run pod — needs a pull Secret, named here. The deploying cluster
+# creates the Secret (kubernetes.io/dockerconfigjson) and names it in its
+# HelmRelease; the chart only references it. Empty renders nothing, for a
+# public registry. The MySQL and ClickHouse pods pull upstream public images
+# and are deliberately left out.
+imagePullSecrets: []
+
 # Existing Secret, created by the deploying cluster's HelmRelease. Keys are
 # the `.env` names.
 # The chart never templates a secret value and never puts one on a command
@@ -96,7 +106,8 @@ modelKeys:
 # list there would let an edit point the key anywhere. Empty means this
 # deployment has no self-hosted model, and a roster entry naming that key is
 # refused. Rendered as WRATHBENCH_LOCAL_MODEL_HOSTS on every pod that parses
-# the fleet config, so they all reach the same verdict.
+# the fleet config, so they all reach the same verdict, and on every run pod,
+# whose run.ts checks the pair again before it reads the key.
 localModelHosts: []
 
 # There is no fleet config value and no ConfigMap: the fleet config is the
@@ -242,6 +253,34 @@ fleet:
   # is a backstop against a runaway child, set far enough above the working set
   # that hitting it means something is wrong; the pod is EVICTED when it is
   # exceeded, and that costs every live run.
+  tmpSizeLimit: 2Gi
+
+# Run pods: a probe-campaign episode as its own pod, on the arm's image
+# (templates/run-pods.yaml, docs/RUNBOOK.md "Run pods"). Rendered always;
+# nothing is created until the fleet setting `policy.runPods` is "probes".
+runPods:
+  # Image REPOSITORIES an arm may name, matched on the part before the tag or
+  # digest, exactly or as a path prefix. Empty means the release runner alone:
+  # `<image.registry>/<image.names.runner>`. A cluster whose PR builds land
+  # elsewhere lists that repository too (e.g. ghcr.io/shard/wrathbench-runner);
+  # anything else, an untagged ref, or `:latest` is refused before a pod exists.
+  allowedImages: []
+  # Pull Secrets for run pods only, by name, on top of the chart-wide
+  # `imagePullSecrets` above (the two lists are merged, once each). For a
+  # repository in `allowedImages` that the chart-wide Secret cannot pull — a
+  # GHCR token for a private package, say. The deploying cluster creates the
+  # Secret; the chart only references it.
+  imagePullSecrets: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+      ephemeral-storage: 256Mi
+    limits:
+      # One run.ts with its snippet sandbox and, for the CLI drivers, one CLI
+      # child — the share of the fleet's 6Gi that one episode takes.
+      memory: 4Gi
+  # As the fleet's /tmp, for one episode.
   tmpSizeLimit: 2Gi
 
 # The `codex` driver's ChatGPT-subscription lane (runner/README.md, Drivers).

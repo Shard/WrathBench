@@ -1,49 +1,50 @@
 /**
  * Probe campaigns: the commissioned middle lane, as the fleet schedules it.
  *
- * A campaign is a checked-in definition swept by a set of models. The two
- * halves live apart (operator decision, 2026-10-09):
+ * A campaign is a published definition swept by a set of models. The two
+ * halves live apart:
  *
- * - **Static, in git** (`runner/src/campaign-defs/`): the question, the cells,
- *   the start, the leash, what ends a run and what counts as a cell done. A
- *   published version is never edited; a change is a new version.
- * - **Dynamic, in the config store** (`campaigns/<id>`, parsed here): which
- *   version is active, whether it is enabled, which roster entries sweep it and
- *   how many counted runs each owes per cell, the account it is pinned to, and
- *   whether an unhealthy model is skipped. Nothing static is accepted here —
- *   a row that names a cell or an objective is refused by name and pointed at
- *   the definition, so each fact has exactly one place.
+ * - **Static, published** (`campaign-defs/<id>@<version>`, written only by
+ *   `campaign-publish.ts` from `runner/campaigns/<id>@<version>.json`): the
+ *   question, the cells, the arms, the leash, what ends a run and what counts
+ *   as a square done. Write-once: a change is a new version.
+ * - **Dynamic, a store row** (`campaigns/<id>`, parsed here): which version is
+ *   active, whether it is enabled, which roster entries sweep it and how many
+ *   counted runs each owes per square, the account it is pinned to, and
+ *   whether an unhealthy model is skipped.
  *
- * Three properties carried over, each of which replaced a mechanism rather
- * than adding one:
+ * Three properties, each of which replaced a mechanism rather than adding one:
  *
  * - **The roster is a catalog.** An assignment names a roster entry for its
- *   credentials, model and effort; the definition supplies the task shape, so
- *   `objective` never enters the catalog.
- * - **Completion is derived, never recorded.** Remaining work is an
- *   assignment's `runsPerCell` minus the counted probe runs already on disk for
- *   that (campaign, version, roster name, cell) — and nothing at all once the
- *   definition's `maxAttemptsPerCell` launches have been made, so a cell that
- *   only ever fails is abandoned instead of swept forever. Counting is per
- *   VERSION: a newer version that reuses a cell id is never credited with an
- *   older version's runs.
+ *   credentials, model and effort; the definition supplies the task shape.
+ * - **Completion is derived, never recorded.** A square is one (assignment,
+ *   arm, cell); what it still owes is its `runsPerCell` minus the counted
+ *   probe runs on disk stamped with that campaign, version, roster name, arm
+ *   and cell — and nothing at all once the definition's `maxAttemptsPerCell`
+ *   launches have been made, so a square that only ever fails is abandoned
+ *   instead of swept forever. Counting is per VERSION. `campaignSquares` is
+ *   the one tally, read by the scheduler and the campaigns page alike.
  * - **A finished campaign is not archived.** `enabled: false` stops the
- *   scheduling; the results stay visible, and the definition keeps them
- *   attributed even after the store row is gone.
+ *   scheduling; the results stay visible while the definition is published.
  */
 
 import { z } from "zod";
+import type { RunPodsMode } from "./models";
 import {
   CAMPAIGN_NAME,
-  campaignDef,
+  campaignDefKey,
+  campaignHash,
   campaignRef,
-  unversionedOwner,
-  type CampaignCellDef,
-  type CampaignDef,
-  type OpenCampaignDef,
-} from "./campaign-defs";
+  issuesOf,
+  parseCampaignRef,
+  publishedCampaignSchema,
+  type CampaignArm,
+  type CampaignCell,
+  type CampaignDefinition,
+  type CampaignSource,
+} from "./campaign-def";
 
-/** One roster entry sweeping a campaign, and how many counted runs per cell it owes. */
+/** One roster entry sweeping a campaign, and how many counted runs per square it owes. */
 export const campaignAssignmentSchema = z
   .object({
     /** A roster name: the catalog entry whose model, effort and credentials the runs use. */
@@ -53,10 +54,10 @@ export const campaignAssignmentSchema = z
   .strict();
 export type CampaignAssignment = z.infer<typeof campaignAssignmentSchema>;
 
-/** A `campaigns/<id>` row, as the store holds it today. */
+/** A `campaigns/<id>` row. */
 export const campaignRowSchema = z
   .object({
-    /** Which checked-in version is active. Explicit, never "latest": a merged definition must not re-target a sweep. */
+    /** Which published version is active. Explicit, never "latest": a new publish must not re-target a sweep. */
     version: z.number().int().positive(),
     enabled: z.boolean().default(true),
     /** In priority order: the sweep spreads across them breadth-first. */
@@ -69,180 +70,311 @@ export const campaignRowSchema = z
     account: z.string().min(1).nullable().optional(),
     /**
      * Skip a model the projection considers unhealthy (retired, or cooling on
-     * the defer ladder). Default true: burning a cell against a dead endpoint
-     * produces no observation.
+     * the defer ladder). Default true: burning a square against a dead
+     * endpoint produces no observation.
      */
     excludeUnhealthy: z.boolean().default(true),
   })
   .strict();
 
-/**
- * The keys that belong to a definition, not a store row. Refused by name on a
- * row that states a `version`, so an operator who writes one is told where it
- * lives rather than getting a generic "unrecognized key".
- */
-export const STATIC_CAMPAIGN_KEYS = [
-  "cells",
-  "objective",
-  "watchdogs",
-  "maxToolCalls",
-  "wikiCoords",
-  "wiki",
-  "race",
-  "class",
-  "resume",
-  "maxAttemptsPerCell",
-  "stopAtLevel",
-  "budget",
-] as const;
+/** A definition as the store holds it, read and checked. */
+export interface PublishedCampaign {
+  /** `race-probe@1`. */
+  ref: string;
+  def: CampaignDefinition;
+  hash: string;
+  source: CampaignSource;
+  publishedAt: number;
+}
 
-/** One campaign as everything downstream passes it around: the store row joined to its definition. */
+/** One campaign as everything downstream passes it around: the store row joined to its published definition. */
 export interface Campaign {
   /** The campaign id — the store row's key and the definition's `id`. */
   name: string;
   version: number;
-  def: CampaignDef;
+  published: PublishedCampaign;
+  /** Every published version of this id, the active one included: a paused run follows its own. */
+  versions: PublishedCampaign[];
+  def: CampaignDefinition;
   enabled: boolean;
   assignments: CampaignAssignment[];
   account?: string;
   excludeUnhealthy: boolean;
-  /** The definition's cells, here because every planner walks them. */
-  cells: readonly CampaignCellDef[];
-  /** The definition's resume rule (false on a closed definition, which launches nothing). */
+  /** The definition's cells and arms, here because every planner walks them. */
+  cells: readonly CampaignCell[];
+  arms: readonly CampaignArm[];
   resume: boolean;
   /** The definition's attempt cap, when it set one. */
   maxAttemptsPerCell?: number;
-  /** Set when the row was read in the pre-definition shape and mapped onto its v1. */
-  migrated?: true;
-}
-
-/** A campaign row the parser could read but will not schedule, and why. */
-export interface CampaignRowRefusal {
-  name: string;
-  why: string;
-  /** The cell ids it would have spawned under, so a live run under it is spared. */
-  cells: string[];
-}
-
-function joined(name: string, def: CampaignDef, row: z.infer<typeof campaignRowSchema>, migrated: boolean): Campaign {
-  return {
-    name,
-    version: def.version,
-    def,
-    enabled: row.enabled,
-    assignments: row.assignments,
-    ...(row.account !== undefined && row.account !== null ? { account: row.account } : {}),
-    excludeUnhealthy: row.excludeUnhealthy,
-    cells: def.cells,
-    resume: def.status === "open" ? def.resume : false,
-    ...(def.status === "open" && def.maxAttemptsPerCell !== null ? { maxAttemptsPerCell: def.maxAttemptsPerCell } : {}),
-    ...(migrated ? { migrated: true as const } : {}),
-  };
+  /**
+   * (assignment, arm) pairs that cannot launch as configured, found before
+   * any launch (`campaignPairRefusals`): their squares stay in the grid and
+   * are never scheduled. Empty when the roster was not consulted.
+   */
+  refusedPairs: { ref: string; arm: string; reason: string }[];
 }
 
 /**
- * A row in the shape campaigns had before definitions were checked in: no
- * `version`, and the task shape (`cells`, `objective`, …) inline. Mapped onto
- * the version that claims the id's unversioned runs, so a store written before
- * this change loads on the first boot after it and the operator can rewrite
- * the rows at leisure. The inline shape is DROPPED, not merged — the checked-in
- * definition is the shape — and `models` becomes one assignment per name at
- * the old `runsPerCell`. `"all"` maps to no assignments: it meant every catalog
- * entry, which is not a list anyone chose.
+ * A store row, a published definition or an (assignment, arm) pair the
+ * parser could read but will not use, and why. Carried to `--status` and to
+ * `/api/campaigns`; never dropped.
  */
-function migrateLegacyRow(name: string, raw: Record<string, unknown>): z.infer<typeof campaignRowSchema> & { version: number } {
-  const owner = unversionedOwner(name);
-  if (owner === undefined) {
-    throw new LegacyRowError(
-      `the pre-definition shape (no version) and no checked-in definition claims "${name}" — write { version, enabled, assignments } naming a definition in runner/src/campaign-defs/`,
-    );
-  }
-  const runsPerCell = typeof raw["runsPerCell"] === "number" && Number.isInteger(raw["runsPerCell"]) && raw["runsPerCell"] > 0 ? raw["runsPerCell"] : 1;
-  const models = Array.isArray(raw["models"]) ? raw["models"].filter((m): m is string => typeof m === "string" && m.length > 0) : [];
-  return campaignRowSchema.parse({
-    version: owner.version,
-    ...(typeof raw["enabled"] === "boolean" ? { enabled: raw["enabled"] } : {}),
-    assignments: models.map((model) => ({ model, runsPerCell })),
-    ...(typeof raw["account"] === "string" && raw["account"].length > 0 ? { account: raw["account"] } : {}),
-    ...(typeof raw["excludeUnhealthy"] === "boolean" ? { excludeUnhealthy: raw["excludeUnhealthy"] } : {}),
-  }) as z.infer<typeof campaignRowSchema> & { version: number };
+export interface CampaignRefusal {
+  /**
+   * The store key (`campaigns/<id>`, `campaign-defs/<id>@<version>`), or
+   * `<id>@<version>:<ref>:<arm>` for a pair.
+   */
+  key: string;
+  reason: string;
+  /** For a row: the campaign id, so its pin is refused and named. */
+  campaign?: string;
 }
 
-class LegacyRowError extends Error {}
+/** The value an arm's args give a flag, or undefined when they do not name it. */
+export function armArg(arm: CampaignArm, flag: string): string | undefined {
+  const args = arm.args ?? [];
+  const i = args.indexOf(`--${flag}`);
+  if (i < 0) return undefined;
+  const v = args[i + 1];
+  return v === undefined || v.startsWith("--") ? "true" : v;
+}
+
+/** What the pair check needs of a roster entry. */
+export interface PairRosterEntry {
+  driver?: string | undefined;
+  compactWindow?: string | undefined;
+  /**
+   * The fleet parser's refusal of the whole entry (`FleetRosterEntry.refused`:
+   * a key it does not read, a provider key towards a host the provider table
+   * does not pair it with, a subscription the policy does not list).
+   */
+  refused?: string | undefined;
+}
 
 /**
- * Parse the `campaigns` block, in declaration order.
+ * Where the fleet can launch an arm, as far as the reader knows: the fleet
+ * setting `policy.runPods`, and whether the supervisor is on the cluster.
+ * `onCluster` is known only to the supervisor itself; a reader that cannot
+ * tell (the viewer, `--status`, the store's validator) leaves it out, and
+ * nothing is refused on that ground.
+ */
+export interface PairLaunchContext {
+  runPods: RunPodsMode;
+  onCluster?: boolean;
+}
+
+/**
+ * The (assignment, arm) pairs of a campaign that would fail at launch, said
+ * before one is made: a failed launch spends an attempt, and three spend the
+ * square.
+ *
+ * - **A pinned arm with nowhere to run.** An arm that names an `image` or a
+ *   `command` runs only in a run pod, so while `policy.runPods` is not
+ *   `probes`, or the supervisor is not on the cluster, every pair of it is
+ *   refused: parked and shown, never launched, and back the tick the setting
+ *   allows it. The launcher would refuse each launch anyway (`chooseLauncher`)
+ *   — and before the run existed, so nothing counted the attempt.
+ * - **The compaction window**, which an arm may vary (operator, 2026-10-11):
+ *   an arm that sets `--compact-window` cannot run an assignment whose roster
+ *   entry sets one too (the run would get the flag twice), nor one off the
+ *   claude-code driver (no other harness has the window).
+ * - **A refused roster entry.** Every pair of an assignment whose entry the
+ *   parser refused: nothing schedules that entry, so its squares are parked
+ *   here rather than offered. Otherwise a pinned campaign's next square could
+ *   be one the planner then gates on the entry, every tick, and the
+ *   campaign's other assignments would never get the account. The reason
+ *   names the entry and not its refusal, which can name a host and goes to
+ *   the public page; the refusal itself is the config's (`refusals`).
+ *
+ * One entry per pair, its reasons joined.
+ */
+export function campaignPairRefusals(
+  c: Pick<Campaign, "name" | "version" | "assignments" | "arms">,
+  roster: Readonly<Record<string, PairRosterEntry>>,
+  launch?: PairLaunchContext,
+): { ref: string; arm: string; reason: string }[] {
+  const out: { ref: string; arm: string; reason: string }[] = [];
+  for (const a of c.assignments) {
+    const entry = roster[a.model];
+    if (entry === undefined) continue;
+    for (const arm of c.arms) {
+      const reasons: string[] = [];
+      if (entry.refused !== undefined) reasons.push(`roster entry ${a.model} is refused, so nothing schedules it`);
+      const pins = arm.image !== undefined ? `image ${arm.image}` : arm.command !== undefined ? `command ${arm.command.join(" ")}` : undefined;
+      if (pins !== undefined && launch !== undefined) {
+        if (launch.runPods !== "probes") {
+          reasons.push(`arm ${arm.id} pins ${pins}, which runs only in a run pod, and policy.runPods is ${JSON.stringify(launch.runPods)} — set it to "probes" to launch it`);
+        } else if (launch.onCluster === false) {
+          reasons.push(`arm ${arm.id} pins ${pins}, which runs only in a run pod, and this supervisor is not on the cluster`);
+        }
+      }
+      const window = armArg(arm, "compact-window");
+      if (window !== undefined) {
+        const driver = entry.driver ?? "openai";
+        if (driver !== "claude-code") {
+          reasons.push(`arm ${arm.id} sets --compact-window ${window}, and ${a.model} runs on the ${driver} driver, which has no compaction window`);
+        } else if (entry.compactWindow !== undefined) {
+          reasons.push(`arm ${arm.id} sets --compact-window ${window}, and roster entry ${a.model} already sets compactWindow ${entry.compactWindow} — assign an entry with no window`);
+        }
+      }
+      if (reasons.length > 0) out.push({ ref: a.model, arm: arm.id, reason: reasons.join("; ") });
+    }
+  }
+  return out;
+}
+
+/** The key a pair refusal is filed under in `refused[]`. */
+export function pairRefusalKey(c: Pick<Campaign, "name" | "version">, ref: string, arm: string): string {
+  return `${c.name}@${c.version}:${ref}:${arm}`;
+}
+
+/**
+ * Parse the `campaign-defs` block: every published definition, checked again
+ * on read. A row that no longer parses, or whose stored hash is not its
+ * definition's, is refused by key and left out — a definition can only reach
+ * the store through a publish that checked both, so either is a store edited
+ * by hand or a schema that moved, and neither may take the rest of the config
+ * down.
+ */
+export function parseCampaignDefinitions(raw: unknown): { definitions: PublishedCampaign[]; refused: CampaignRefusal[] } {
+  if (raw === undefined) return { definitions: [], refused: [] };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { definitions: [], refused: [{ key: "campaign-defs", reason: 'campaign-defs must be an object of { "<id>@<version>": { definition, hash, source, publishedAt } }' }] };
+  }
+  const definitions: PublishedCampaign[] = [];
+  const refused: CampaignRefusal[] = [];
+  for (const [ref, doc] of Object.entries(raw as Record<string, unknown>)) {
+    const key = `campaign-defs/${ref}`;
+    const parsed = publishedCampaignSchema.safeParse(doc);
+    if (!parsed.success) {
+      refused.push({ key, reason: `not a published definition: ${issuesOf(parsed.error)}` });
+      continue;
+    }
+    const p = parsed.data;
+    if (campaignRef(p.definition) !== ref) {
+      refused.push({ key, reason: `holds ${campaignRef(p.definition)}, not ${ref}` });
+      continue;
+    }
+    const hash = campaignHash(p.definition);
+    if (hash !== p.hash) {
+      refused.push({ key, reason: `its definition hashes to ${hash}, but it was published as ${p.hash} — edited after publication` });
+      continue;
+    }
+    definitions.push({ ref, def: p.definition, hash: p.hash, source: p.source, publishedAt: p.publishedAt });
+  }
+  return { definitions, refused };
+}
+
+/**
+ * Why a `campaigns/<name>` row does not read, or null when it does: the id
+ * and the strict row schema. One check for the reader, which refuses such a
+ * row by key, and the store's write path, which refuses to write one.
+ */
+export function campaignRowProblem(name: string, spec: unknown): string | null {
+  if (!CAMPAIGN_NAME.test(name)) return `campaign ${name}: the id must match ${CAMPAIGN_NAME}`;
+  const parsed = campaignRowSchema.safeParse(spec);
+  if (parsed.success) return null;
+  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, excludeUnhealthy? }`;
+}
+
+/**
+ * Parse the `campaigns` block, in declaration order, against the published
+ * definitions.
  *
  * Order is load-bearing: it is the last tie-break when two campaigns both want
  * the same free account, so an operator can say which sweep matters by where
  * they put it.
  *
- * Two kinds of failure, kept apart. A row the parser cannot READ — not an
- * object, an unknown key, a static key on a versioned row — throws, as every
- * shape error in the fleet config does, so a store write that would produce it
- * is refused on the spot. A row it can read but will not SCHEDULE — a version
- * this checkout has no definition for, a closed definition switched on, an old
- * row nothing claims — is refused by name and left out, so one campaign that
- * names a version an older image does not know cannot take the rest of the
- * config down.
+ * Nothing here throws. A row the parser cannot read (no version, an unknown
+ * key, a bad value, a bad id) and a row it can read but will not schedule (a
+ * version nobody has published) are both refused by key and left out, and the
+ * rest of the config — every other campaign, the roster, the policy — loads as
+ * if the row were not there: one bad campaign row must never empty the board.
+ * The store still refuses to WRITE a row that does not read
+ * (`campaignRowProblem`), so a malformed row can only be one written before
+ * this shape, by an older image, or past the store.
  */
-export function parseCampaigns(raw: unknown): { campaigns: Campaign[]; refused: CampaignRowRefusal[] } {
+export function parseCampaigns(
+  raw: unknown,
+  definitions: readonly PublishedCampaign[],
+): { campaigns: Campaign[]; refused: CampaignRefusal[] } {
   if (raw === undefined) return { campaigns: [], refused: [] };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new Error("campaigns must be an object of { <id>: { version, enabled, assignments, … } }");
+    return { campaigns: [], refused: [{ key: "campaigns", reason: "campaigns must be an object of { <id>: { version, enabled, assignments, … } }" }] };
   }
   const campaigns: Campaign[] = [];
-  const refused: CampaignRowRefusal[] = [];
+  const refused: CampaignRefusal[] = [];
   for (const [name, spec] of Object.entries(raw as Record<string, unknown>)) {
-    if (!CAMPAIGN_NAME.test(name)) throw new Error(`campaign ${name}: the id must match ${CAMPAIGN_NAME}`);
-    if (typeof spec !== "object" || spec === null || Array.isArray(spec)) {
-      throw new Error(`campaign ${name}: a row is an object { version, enabled, assignments, account?, excludeUnhealthy? }`);
-    }
-    const o = spec as Record<string, unknown>;
-    let row: z.infer<typeof campaignRowSchema>;
-    let migrated = false;
-    if (o["version"] === undefined) {
-      try {
-        row = migrateLegacyRow(name, o);
-      } catch (err) {
-        if (!(err instanceof LegacyRowError)) throw err;
-        refused.push({ name, why: err.message, cells: [] });
-        continue;
-      }
-      migrated = true;
-    } else {
-      const statics = STATIC_CAMPAIGN_KEYS.filter((k) => o[k] !== undefined);
-      if (statics.length > 0) {
-        throw new Error(
-          `campaign ${name}: ${statics.join(", ")} ${statics.length === 1 ? "is" : "are"} the definition's, not the store's — ` +
-            `the shape of ${name}@${String(o["version"])} lives in runner/src/campaign-defs/ and a change to it is a new version`,
-        );
-      }
-      if (o["models"] !== undefined || o["runsPerCell"] !== undefined) {
-        throw new Error(`campaign ${name}: models and runsPerCell are now assignments: [{ model: "<roster name>", runsPerCell: n }]`);
-      }
-      try {
-        row = campaignRowSchema.parse(o);
-      } catch (err) {
-        throw new Error(`campaign ${name}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    const def = campaignDef(name, row.version);
-    if (def === undefined) {
-      refused.push({ name, why: `${name}@${row.version} has no definition in this checkout (runner/src/campaign-defs/)`, cells: [] });
+    const problem = campaignRowProblem(name, spec);
+    if (problem !== null) {
+      refused.push({ key: `campaigns/${name}`, campaign: name, reason: problem });
       continue;
     }
-    if (def.status === "closed" && row.enabled) {
-      refused.push({
-        name,
-        why: `${campaignRef(def)} is closed — it attributes past runs and launches nothing; set enabled: false or name an open version`,
-        cells: def.cells.map((c) => c.id),
-      });
+    const row = campaignRowSchema.parse(spec);
+    const ref = campaignRef({ id: name, version: row.version });
+    const published = definitions.find((d) => d.ref === ref);
+    if (published === undefined) {
+      refused.push({ key: `campaigns/${name}`, campaign: name, reason: `${ref} is not published (${campaignDefKey({ id: name, version: row.version })} is absent) — publish it with runner/src/campaign-publish.ts` });
       continue;
     }
-    campaigns.push(joined(name, def, row, migrated));
+    const def = published.def;
+    campaigns.push({
+      name,
+      version: def.version,
+      published,
+      versions: definitions.filter((d) => d.def.id === name),
+      def,
+      enabled: row.enabled,
+      assignments: row.assignments,
+      ...(row.account !== undefined && row.account !== null ? { account: row.account } : {}),
+      excludeUnhealthy: row.excludeUnhealthy,
+      cells: def.cells,
+      arms: def.arms,
+      resume: def.resume,
+      ...(def.maxAttemptsPerCell !== null ? { maxAttemptsPerCell: def.maxAttemptsPerCell } : {}),
+      refusedPairs: [],
+    });
   }
   return { campaigns, refused };
+}
+
+/**
+ * Set each campaign's `refusedPairs` against the roster, and against where the
+ * fleet can launch when that is given, and return them as `refused[]` entries.
+ */
+export function applyPairRefusals(
+  campaigns: readonly Campaign[],
+  roster: Readonly<Record<string, PairRosterEntry>>,
+  launch?: PairLaunchContext,
+): CampaignRefusal[] {
+  const pairs: CampaignRefusal[] = [];
+  for (const camp of campaigns) {
+    camp.refusedPairs = campaignPairRefusals(camp, roster, launch);
+    for (const p of camp.refusedPairs) pairs.push({ key: pairRefusalKey(camp, p.ref, p.arm), reason: p.reason });
+  }
+  return pairs;
+}
+
+/**
+ * Both blocks at once, as every reader of the config wants them, with each
+ * campaign's pair refusals found against the roster when one is given, and
+ * against where the fleet can launch when that is given too.
+ */
+export function parseCampaignBlocks(
+  rawDefs: unknown,
+  rawRows: unknown,
+  roster?: Readonly<Record<string, PairRosterEntry>>,
+  launch?: PairLaunchContext,
+): { definitions: PublishedCampaign[]; campaigns: Campaign[]; refused: CampaignRefusal[] } {
+  const d = parseCampaignDefinitions(rawDefs);
+  const c = parseCampaigns(rawRows, d.definitions);
+  const pairs = roster === undefined ? [] : applyPairRefusals(c.campaigns, roster, launch);
+  return { definitions: d.definitions, campaigns: c.campaigns, refused: [...d.refused, ...c.refused, ...pairs] };
+}
+
+/** Look a published definition up by `id@version`. */
+export function publishedOf(definitions: readonly PublishedCampaign[], ref: string): PublishedCampaign | undefined {
+  return parseCampaignRef(ref) === null ? undefined : definitions.find((d) => d.ref === ref);
 }
 
 /**
@@ -265,48 +397,166 @@ export function campaignAssignments(
   return named.filter((a) => eligible(a.model));
 }
 
-/** The roster names a campaign sweeps (`campaignAssignments`, names only). */
-export function campaignModels(
-  c: Campaign,
-  catalog: readonly string[],
-  eligible?: (name: string) => boolean,
-): string[] {
-  return campaignAssignments(c, catalog, eligible).map((a) => a.model);
+/** Which square a probe job is: travels on a pick, a job and a resume. */
+export interface ProbeIdentity {
+  campaign: string;
+  version: number;
+  cell: string;
+  arm: string;
 }
 
-/** A probe run already on disk, as the fan-out reads it. */
+/**
+ * The job a pinned campaign's square spawns under: `<campaign>-<cell>-<arm>`.
+ * A job name is what run ids, log paths and the defer sidecar hang off, so it
+ * names the whole square; the version is not in it because one row names one
+ * version at a time.
+ */
+export function pinnedCampaignJobName(campaign: string, cell: string, arm: string): string {
+  return `${campaign}-${cell}-${arm}`;
+}
+
+/** The job a policy pick of a square spawns under: `<ref>-<campaign>-<cell>-<arm>`. */
+export function policyCampaignJobName(ref: string, campaign: string, cell: string, arm: string): string {
+  return `${ref}-${campaign}-${cell}-${arm}`;
+}
+
+/** A probe run on disk, as the tally reads it: its stamps and nothing inferred. */
 export interface ProbeRun {
   campaign: string | null;
-  /**
-   * The definition version the run belongs to: its stamp, or — for a run
-   * stamped before versions existed — the version that claims the id's
-   * unversioned runs. Null when neither says.
-   */
   version: number | null;
   cell: string | null;
-  /** Roster name this run was launched as, when it can be told. */
+  /** The roster name the fleet launched it as (`config.ref`). */
   ref: string | null;
+  /** The arm it ran (`config.arm`). A run with none predates arms and belongs to no square. */
+  arm: string | null;
   /**
    * Whether the run counts toward `runsPerCell` (`isCounted`). Every campaign
    * run is passed in, counted or not, because a launch that failed is still
-   * evidence the cell was tried — which is the only thing that can stop a
-   * failing cell being swept forever.
+   * evidence the square was tried — the only thing that can stop a failing
+   * square being swept forever.
    */
   counted: boolean;
+  /** Still in flight: an attempt that may yet count. */
+  live: boolean;
 }
 
-/** One (campaign, assignment, cell) with work left on it. */
+/** One (assignment, arm, cell) of a campaign, and what is on disk for it. */
+export interface CampaignSquare {
+  campaign: string;
+  version: number;
+  /** Roster name — the catalog entry whose credentials the runs use. */
+  ref: string;
+  arm: CampaignArm;
+  cell: CampaignCell;
+  /** The assignment's `runsPerCell`. */
+  want: number;
+  /** Counted runs, uncapped. */
+  done: number;
+  /** Launches, counted or not, live included. */
+  attempts: number;
+  live: number;
+  /**
+   * `done`: it has its runs. `capped`: it had its launches without them and
+   * nothing is in flight, so no more are coming. Null: still owed.
+   */
+  settled: "done" | "capped" | null;
+  /** Why its (assignment, arm) pair cannot launch (`campaignPairRefusals`); null when it can. Never scheduled while set. */
+  refused: string | null;
+}
+
+function squareKey(campaign: string, version: number, ref: string, arm: string, cell: string): string {
+  return `${campaign}\u0000${version}\u0000${ref}\u0000${arm}\u0000${cell}`;
+}
+
+/**
+ * Every square of one campaign, in assignment × cell × arm order, with its
+ * tally. The ONE count: the scheduler derives its work from it and the
+ * campaigns page its progress and its state, so "complete" and the numbers
+ * beside it can never disagree. A run belongs to a square only by its own
+ * stamps — campaign, version, roster name, arm and cell — never by matching
+ * its model against whatever the roster says today.
+ *
+ * Over every assignment the catalog names, healthy or not: eligibility is a
+ * fact about this tick, not about the sweep (`campaignWork` applies it).
+ */
+export function campaignSquares(c: Campaign, catalog: readonly string[], probeRuns: readonly ProbeRun[]): CampaignSquare[] {
+  const tally = new Map<string, { done: number; attempts: number; live: number }>();
+  for (const r of probeRuns) {
+    if (r.campaign !== c.name || r.version !== c.version || r.cell === null || r.ref === null || r.arm === null) continue;
+    const k = squareKey(r.campaign, r.version, r.ref, r.arm, r.cell);
+    const t = tally.get(k) ?? { done: 0, attempts: 0, live: 0 };
+    t.attempts++;
+    if (r.live) t.live++;
+    if (r.counted) t.done++;
+    tally.set(k, t);
+  }
+  const out: CampaignSquare[] = [];
+  for (const a of campaignAssignments(c, catalog)) {
+    for (const cell of c.cells) {
+      for (const arm of c.arms) {
+        const t = tally.get(squareKey(c.name, c.version, a.model, arm.id, cell.id)) ?? { done: 0, attempts: 0, live: 0 };
+        const capped = c.maxAttemptsPerCell !== undefined && t.attempts >= c.maxAttemptsPerCell;
+        out.push({
+          campaign: c.name,
+          version: c.version,
+          ref: a.model,
+          arm,
+          cell,
+          want: a.runsPerCell,
+          done: t.done,
+          attempts: t.attempts,
+          live: t.live,
+          settled: t.done >= a.runsPerCell ? "done" : capped && t.live === 0 ? "capped" : null,
+          refused: c.refusedPairs.find((p) => p.ref === a.model && p.arm === arm.id)?.reason ?? null,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** What a campaign's squares add up to, as the page states it. */
+export interface CampaignProgress {
+  /** cells × arms × Σ runsPerCell, over the assignments the catalog names. */
+  want: number;
+  /** Counted runs, never more per square than it wants. */
+  done: number;
+  /** Launches, counted or not, live included. */
+  attempted: number;
+  /** Runs wanted on squares abandoned at the attempt cap: never coming, so `done + capped === want` exactly when every square is settled. */
+  capped: number;
+  live: number;
+}
+
+export function campaignProgress(squares: readonly CampaignSquare[]): CampaignProgress {
+  let want = 0;
+  let done = 0;
+  let attempted = 0;
+  let capped = 0;
+  let live = 0;
+  for (const s of squares) {
+    want += s.want;
+    done += Math.min(s.done, s.want);
+    attempted += s.attempts;
+    if (s.settled === "capped") capped += s.want - Math.min(s.done, s.want);
+    live += s.live;
+  }
+  return { want, done, attempted, capped, live };
+}
+
+/** One square with work left on it, as the scheduler takes it. */
 export interface CampaignWork {
   campaign: string;
   version: number;
   /** Roster name — the catalog entry whose credentials the run uses. */
   model: string;
-  cell: CampaignCellDef;
-  /** Counted probe runs already done for this triple. */
+  arm: CampaignArm;
+  cell: CampaignCell;
+  /** Counted probe runs already done for this square. */
   done: number;
   /** The assignment's `runsPerCell`: how many are wanted. */
   want: number;
-  /** Launches already made for this triple, counted or not. */
+  /** Launches already made for this square, counted or not. */
   attempts: number;
   /** The definition's `maxAttemptsPerCell`, when it set one. */
   maxAttempts?: number;
@@ -315,7 +565,8 @@ export interface CampaignWork {
 }
 
 /**
- * Every (campaign, assignment, cell) that still owes runs, in sweep order.
+ * Every square that still owes runs, across the enabled campaigns, in sweep
+ * order.
  *
  * Sweep order spreads across models before it finishes any one of them: a
  * campaign that has touched every model once has told us more than one that
@@ -323,15 +574,14 @@ export interface CampaignWork {
  * interrupted (by an operator, a harness bump, a dead key) should be
  * interrupted holding breadth. So the first sort key is how much this model has
  * already done in this campaign, then the campaign's declaration order, then
- * the assignment's priority, and cells only within that.
+ * the assignment's priority; within one assignment the arm that has done
+ * least goes first, so a comparison's arms advance together, then cells and
+ * arms in declaration order.
  *
- * Two tallies, over the same runs, asked different questions. `done` and the
- * sweep order count only what `isCounted` counts, so "how much of this campaign
- * exists" keeps its meaning and a stillborn or operator-cut probe still re-runs.
- * `attempts` counts every launch the cell has had, and is what
- * `maxAttemptsPerCell` reads: a cell whose launches keep failing is abandoned
- * rather than swept forever. Both are keyed on (campaign, version, roster
- * name, cell).
+ * A square is work while it is short of its counted runs and has not had its
+ * `maxAttemptsPerCell` launches — a live launch counts toward the cap, so a
+ * square at its cap is never launched again while its last attempt plays —
+ * and while its (assignment, arm) pair is not refused.
  */
 export function campaignWork(
   campaigns: readonly Campaign[],
@@ -339,108 +589,51 @@ export function campaignWork(
   probeRuns: readonly ProbeRun[],
   eligible?: (name: string) => boolean,
 ): CampaignWork[] {
-  const key = (campaign: string, version: number, model: string, cell: string): string =>
-    `${campaign}\u0000${version}\u0000${model}\u0000${cell}`;
-  const tally = new Map<string, number>();
-  const attempted = new Map<string, number>();
-  const perModel = new Map<string, number>();
-  for (const r of probeRuns) {
-    if (r.campaign === null || r.version === null || r.cell === null || r.ref === null) continue;
-    const k = key(r.campaign, r.version, r.ref, r.cell);
-    attempted.set(k, (attempted.get(k) ?? 0) + 1);
-    if (!r.counted) continue;
-    tally.set(k, (tally.get(k) ?? 0) + 1);
-    const m = `${r.campaign}\u0000${r.version}\u0000${r.ref}`;
-    perModel.set(m, (perModel.get(m) ?? 0) + 1);
-  }
-  const out: CampaignWork[] = [];
-  // Declaration order of each cell and priority of each assignment, recorded
-  // while we already have the index: the comparator runs O(n log n) times.
-  const cellAt = new Map<string, number>();
-  const assignmentAt = new Map<string, number>();
+  const out: (CampaignWork & { modelDone: number; armDone: number; aIdx: number; cIdx: number; armIdx: number })[] = [];
   campaigns.forEach((c, order) => {
-    if (!c.enabled || c.def.status !== "open") return;
-    campaignAssignments(c, catalog, eligible).forEach((a, aIdx) => {
-      assignmentAt.set(`${c.name}\u0000${c.version}\u0000${a.model}`, aIdx);
-      c.cells.forEach((cell, cellIdx) => {
-        const k = key(c.name, c.version, a.model, cell.id);
-        const done = tally.get(k) ?? 0;
-        if (done >= a.runsPerCell) return;
-        // Abandoned: the cell has had its launches and still owes counted runs.
-        // Skipped exactly the way a finished cell is, so `campaignComplete`,
-        // the pinned-campaign job and the policy loop all inherit it without
-        // any of them learning a second word for "nothing left here".
-        const attempts = attempted.get(k) ?? 0;
-        if (c.maxAttemptsPerCell !== undefined && attempts >= c.maxAttemptsPerCell) return;
-        cellAt.set(`${c.name}\u0000${c.version}\u0000${cell.id}`, cellIdx);
-        out.push({
-          campaign: c.name,
-          version: c.version,
-          model: a.model,
-          cell,
-          done,
-          want: a.runsPerCell,
-          attempts,
-          ...(c.maxAttemptsPerCell !== undefined ? { maxAttempts: c.maxAttemptsPerCell } : {}),
-          order,
-        });
+    if (!c.enabled) return;
+    const healthy = new Set(campaignAssignments(c, catalog, eligible).map((a) => a.model));
+    const squares = campaignSquares(c, catalog, probeRuns);
+    const modelDone = new Map<string, number>();
+    const armDone = new Map<string, number>();
+    for (const s of squares) {
+      modelDone.set(s.ref, (modelDone.get(s.ref) ?? 0) + s.done);
+      armDone.set(`${s.ref}\u0000${s.arm.id}`, (armDone.get(`${s.ref}\u0000${s.arm.id}`) ?? 0) + s.done);
+    }
+    const assignmentIdx = new Map(c.assignments.map((a, i) => [a.model, i]));
+    for (const s of squares) {
+      if (!healthy.has(s.ref)) continue;
+      if (s.refused !== null) continue;
+      if (s.done >= s.want) continue;
+      if (c.maxAttemptsPerCell !== undefined && s.attempts >= c.maxAttemptsPerCell) continue;
+      out.push({
+        campaign: c.name,
+        version: c.version,
+        model: s.ref,
+        arm: s.arm,
+        cell: s.cell,
+        done: s.done,
+        want: s.want,
+        attempts: s.attempts,
+        ...(c.maxAttemptsPerCell !== undefined ? { maxAttempts: c.maxAttemptsPerCell } : {}),
+        order,
+        modelDone: modelDone.get(s.ref) ?? 0,
+        armDone: armDone.get(`${s.ref}\u0000${s.arm.id}`) ?? 0,
+        aIdx: assignmentIdx.get(s.ref) ?? 0,
+        cIdx: c.cells.indexOf(s.cell),
+        armIdx: c.arms.indexOf(s.arm),
       });
-    });
+    }
   });
-  const modelOrder = (w: CampaignWork): number => perModel.get(`${w.campaign}\u0000${w.version}\u0000${w.model}`) ?? 0;
-  const assignmentIndex = (w: CampaignWork): number => assignmentAt.get(`${w.campaign}\u0000${w.version}\u0000${w.model}`) ?? 0;
-  const cellIndex = (w: CampaignWork): number => cellAt.get(`${w.campaign}\u0000${w.version}\u0000${w.cell.id}`) ?? 0;
-  return out.sort(
-    (a, b) =>
-      modelOrder(a) - modelOrder(b) ||
-      a.order - b.order ||
-      assignmentIndex(a) - assignmentIndex(b) ||
-      cellIndex(a) - cellIndex(b),
-  );
-}
-
-/**
- * Whether a campaign has nothing left to do — done or abandoned, since a cell
- * past its attempt cap is not work either. Derived, and deliberately not a
- * state anyone writes: a campaign whose row gains an assignment simply stops
- * being complete, with no record to reconcile.
- */
-export function campaignComplete(
-  c: Campaign,
-  catalog: readonly string[],
-  probeRuns: readonly ProbeRun[],
-  eligible?: (name: string) => boolean,
-): boolean {
-  return campaignWork([{ ...c, enabled: true }], catalog, probeRuns, eligible).length === 0;
-}
-
-/**
- * The run dimensions a cell of an open definition launches under. One
- * function for both sides of a launch: the runner fills a fresh probe's config
- * from it, and the fleet plans with the same numbers (the ceiling for ETAs and
- * drains), so the two cannot disagree about what a probe was given.
- */
-export function cellDimensions(
-  def: OpenCampaignDef,
-  cell: CampaignCellDef,
-): {
-  race: number;
-  class: number;
-  watchdogs: { idleMs: number; noXpMs: number | null; episodeMs: number };
-  maxToolCalls: number;
-  wikiCoords: boolean;
-  wiki: boolean;
-  objective?: string;
-  stopAtLevel?: number;
-} {
-  return {
-    race: cell.race,
-    class: cell.class,
-    watchdogs: { idleMs: def.budget.idleMs, noXpMs: def.budget.noXpMs, episodeMs: def.budget.episodeMs },
-    maxToolCalls: def.budget.maxToolCalls,
-    wikiCoords: def.wikiCoords,
-    wiki: def.wiki,
-    ...(def.objective !== null ? { objective: def.objective } : {}),
-    ...(def.stopAtLevel !== null ? { stopAtLevel: def.stopAtLevel } : {}),
-  };
+  return out
+    .sort(
+      (a, b) =>
+        a.modelDone - b.modelDone ||
+        a.order - b.order ||
+        a.aIdx - b.aIdx ||
+        a.armDone - b.armDone ||
+        a.cIdx - b.cIdx ||
+        a.armIdx - b.armIdx,
+    )
+    .map(({ modelDone: _m, armDone: _a, aIdx: _i, cIdx: _c, armIdx: _r, ...w }) => w);
 }

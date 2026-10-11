@@ -1,13 +1,14 @@
 /**
- * `/api/campaigns`: the probe lane, grouped by what commissioned each run.
+ * `/api/campaigns`, end to end: a seeded config store holding published
+ * definitions and rows, a runs directory holding probe runs, and the response
+ * the page builds against (`CampaignsResponse`).
  *
- * The property under test is the one the design rests on: this page is built
- * from the RUN DIRECTORY and only annotated from the checked-in definitions and
- * the store, so a campaign that was completed, switched off and dropped from
- * the store still has a row — and so does one no definition claims. Runs are
- * attributed at read time and never rewritten: the nine hand-launched spike
- * probes become loop-spike@1's, class-probe's unversioned runs become v1's,
- * and a run that was not its cell's start is flagged rather than relabelled.
+ * What is under test here is the seam, not the arithmetic
+ * (`viewer-campaign-grid.test.ts` has that): the published definitions come
+ * from the store as the supervisor reads them, every refusal reaches
+ * `refused[]` rather than being swallowed, a run reaches its square by its own
+ * stamps, and a run from before arms leaves the page while staying on the
+ * runs listing with its stamps intact.
  */
 
 import { describe, expect, test, afterEach } from "bun:test";
@@ -18,6 +19,7 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { ConfigStore, splitFleet } from "../src/config-store";
 import type { CampaignsResponse, RunsResponse } from "../viewer/api-types";
+import { checkedIn, defsBlock, definition, seedPublished } from "./fixtures/campaigns";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -28,24 +30,17 @@ interface Probe {
   runId: string;
   model?: string;
   campaign: string | null;
-  /** Stamped on runs launched since definitions were versioned; absent on older ones. */
   campaignVersion?: number;
   cell: string | null;
+  arm?: string;
+  ref?: string;
   race?: number;
   class?: number;
   level?: number;
   ended?: boolean;
-  /** `pause_reason` on an unended run: what makes its model unhealthy. */
-  paused?: string;
 }
 
-
-/**
- * Seed a store with a document AS WRITTEN, past the validator: these fixtures
- * are the viewer's own loose roster shapes (a `character`, a tierless entry)
- * that `parseFleet` would refuse, and what is under test is how the page
- * labels them, not whether the supervisor would take them.
- */
+/** Seed a store with a document AS WRITTEN, past the validator, for the shapes the validator would refuse. */
 function seedRaw(dbPath: string, doc: unknown): void {
   const store = new ConfigStore(dbPath);
   const at = Date.now();
@@ -55,8 +50,8 @@ function seedRaw(dbPath: string, doc: unknown): void {
   store.close();
 }
 
-/** A runs directory holding probe runs, and optionally a seeded config store beside it. */
-function fixture(probes: Probe[], fleet?: unknown): { runs: string; fleetPath: string | undefined } {
+/** A runs directory holding probe runs, and a config store beside it. */
+function fixture(probes: Probe[], fleet?: unknown, raw = false): { runs: string; fleetPath: string | undefined } {
   const root = mkdtempSync(join(tmpdir(), "wb-camp-"));
   dirs.push(root);
   const runs = join(root, "runs");
@@ -70,6 +65,8 @@ function fixture(probes: Probe[], fleet?: unknown): { runs: string; fleetPath: s
       ...(p.campaign !== null ? { campaign: p.campaign } : {}),
       ...(p.campaignVersion !== undefined ? { campaignVersion: p.campaignVersion } : {}),
       ...(p.cell !== null ? { cell: p.cell } : {}),
+      ...(p.arm !== undefined ? { arm: p.arm } : {}),
+      ...(p.ref !== undefined ? { ref: p.ref } : {}),
       ...(p.race !== undefined ? { race: p.race } : {}),
       ...(p.class !== undefined ? { class: p.class } : {}),
     };
@@ -80,26 +77,16 @@ function fixture(probes: Probe[], fleet?: unknown): { runs: string; fleetPath: s
         harnessVersion: "harness-test",
         startedAt: 1000,
         config,
-        // A real tuple: `comparabilitySchema` is all-or-nothing, and a partial
-        // stamp parses to null — which would make every run here untiered and
-        // quietly hide whether the orphan check works at all.
         comparability: {
           harnessVersion: "harness-test",
           promptHash: "abc",
           promptChars: 10,
           harness: "wrathbench",
           effort: null,
-          objective: p.campaign !== null,
+          objective: false,
           episode: "probing",
           serverBuild: null,
-          budget: {
-            maxTurns: null,
-            maxToolCalls: 3000,
-            idleMs: 1_200_000,
-            noXpMs: null,
-            episodeMs: 5_400_000,
-            maxSandboxRestarts: 3,
-          },
+          budget: { maxTurns: null, maxToolCalls: 3000, idleMs: 1_200_000, noXpMs: null, episodeMs: 5_400_000, maxSandboxRestarts: 3 },
         },
       }),
     );
@@ -118,236 +105,150 @@ function fixture(probes: Probe[], fleet?: unknown): { runs: string; fleetPath: s
     );
     db.run(`INSERT INTO run VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
       p.runId, config.model, "openai", null, "harness-test", 1000,
-      p.ended === false ? null : 2000, p.ended === false ? null : "episode-limit", p.paused ?? null, null,
+      p.ended === false ? null : 2000, p.ended === false ? null : "episode-limit", null, null,
       JSON.stringify(config),
     ]);
     db.run(`CREATE TABLE state (run_id TEXT, ts INTEGER, level INTEGER, xp INTEGER, map INTEGER,
        x REAL, y REAL, z REAL, event_count INTEGER, last_seq INTEGER, money INTEGER, quests_completed INTEGER)`);
-    db.run(`INSERT INTO state VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [
-      p.runId, 1500, p.level ?? 2, 100, 0, 0, 0, 0, 1, 1, 0, 0,
-    ]);
+    db.run(`INSERT INTO state VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [p.runId, 1500, p.level ?? 2, 100, 0, 0, 0, 0, 1, 1, 0, 0]);
     db.close();
   }
   let fleetPath: string | undefined;
   if (fleet !== undefined) {
     fleetPath = join(root, "config.sqlite");
-    seedRaw(fleetPath, fleet);
+    if (raw) seedRaw(fleetPath, fleet);
+    else {
+      const store = new ConfigStore(fleetPath);
+      seedPublished(store, fleet);
+      store.close();
+    }
   }
   return { runs, fleetPath };
 }
 
-async function campaigns(probes: Probe[], fleet?: unknown): Promise<CampaignsResponse> {
-  const { runs, fleetPath } = fixture(probes, fleet);
-  const handle = createApi({
-    runsDir: runs,
-    tilesDir: join(runs, "..", "minimap"),
-    publicMode: false,
+function handleFor(f: { runs: string; fleetPath: string | undefined }, publicMode = false): ReturnType<typeof createApi> {
+  return createApi({
+    runsDir: f.runs,
+    tilesDir: join(f.runs, "..", "minimap"),
+    publicMode,
     moduleUrl: "http://127.0.0.1:1",
-    ...(fleetPath !== undefined ? { configDbPath: fleetPath } : {}),
+    ...(f.fleetPath !== undefined ? { configDbPath: f.fleetPath } : {}),
   });
-  const res = await handle(new Request("http://x/api/campaigns"));
+}
+
+async function campaigns(probes: Probe[], fleet?: unknown, raw = false): Promise<CampaignsResponse> {
+  const res = await handleFor(fixture(probes, fleet, raw))(new Request("http://x/api/campaigns"));
   expect(res.status).toBe(200);
   return (await res.json()) as CampaignsResponse;
 }
 
-/** The same fixture's `/api/runs`, for what the listing says about one run. */
-async function runsOf(probes: Probe[]): Promise<RunsResponse> {
-  const { runs } = fixture(probes);
-  const handle = createApi({ runsDir: runs, tilesDir: join(runs, "..", "minimap"), publicMode: false, moduleUrl: "http://127.0.0.1:1" });
-  const res = await handle(new Request("http://x/api/runs"));
-  return (await res.json()) as RunsResponse;
-}
-
-const row = (body: CampaignsResponse, key: string) => body.campaigns.find((c) => `${c.campaign}@${c.version ?? "?"}` === key)!;
-
+const race = checkedIn("race-probe@1");
 const CONFIG = {
   accounts: { pool: ["RUNNER"] },
   roster: { m: { tier: "t1", model: "test/model" } },
-  campaigns: {
-    "race-probe": { version: 1, assignments: [{ model: "m", runsPerCell: 1 }] },
-  },
+  "campaign-defs": defsBlock(race),
+  campaigns: { "race-probe": { version: 1, assignments: [{ model: "m", runsPerCell: 1 }] } },
 };
 
+const stamped = (runId: string, over: Partial<Probe> = {}): Probe => ({
+  runId,
+  campaign: "race-probe",
+  campaignVersion: 1,
+  cell: "orc-warrior",
+  arm: "base",
+  ref: "m",
+  race: 2,
+  class: 1,
+  ...over,
+});
+
 describe("/api/campaigns", () => {
-  test("every checked-in version has a row, store rows first, then the registry's order", async () => {
+  test("serves { now, campaigns, refused }: one entry per published version, from the store", async () => {
     const body = await campaigns([], CONFIG);
-    expect(body.campaigns.map((c) => `${c.campaign}@${c.version}`)).toEqual([
-      "race-probe@1",
-      "class-probe@2",
-      "class-probe@1",
-      "nav-probe@1",
-      "loop-spike@1",
-    ]);
-    expect(row(body, "class-probe@1").definition).toMatchObject({ status: "closed", stopAtLevel: null, episodeMs: null });
-    expect(row(body, "race-probe@1").definition).toMatchObject({ status: "open", stopAtLevel: 10, episodeMs: 43_200_000 });
+    expect(Object.keys(body).sort()).toEqual(["campaigns", "now", "refused"]);
+    expect(body.refused).toEqual([]);
+    expect(body.campaigns.map((c) => `${c.key}:${c.state}`)).toEqual(["race-probe@1:queued"]);
+    const c = body.campaigns[0]!;
+    expect(c.hash).toBe(defsBlock(race)["race-probe@1"]!.hash);
+    expect(c.cells).toHaveLength(10);
+    expect(c.progress.want).toBe(10);
   });
 
-  test("a store row reports what was asked for beside what happened", async () => {
-    const body = await campaigns(
-      [{ runId: "r1", campaign: "race-probe", campaignVersion: 1, cell: "orc-warrior", race: 2, class: 1, level: 4 }],
-      CONFIG,
-    );
-    const r = row(body, "race-probe@1");
-    expect(r.runs).toBe(1);
-    expect(r.config).toMatchObject({ enabled: true, assignments: [{ model: "m", runsPerCell: 1 }], want: 10, complete: false, account: null });
-    const orc = r.cells.find((c) => c.cell === "orc-warrior")!;
-    expect(orc).toMatchObject({ declared: true, race: 2, class: 1, characterLabel: "Orc Warrior", runs: 1, bestLevel: 4, mismatched: 0 });
-    expect(r.cells.find((c) => c.cell === "bloodelf-rogue")!.note).toContain("cannot be a warrior");
+  test("a run reaches its square by its stamps; one from before arms is not on the page", async () => {
+    const body = await campaigns([stamped("fleet-a"), stamped("legacy", { arm: undefined, ref: undefined }), stamped("live", { ended: false, cell: "dwarf-warrior", race: 3 })], CONFIG);
+    const c = body.campaigns[0]!;
+    const ids = c.grid.flatMap((g) => g.squares.flatMap((s) => s.runIds));
+    expect(ids.sort()).toEqual(["fleet-a", "live"]);
+    expect(c.grid.find((g) => g.cell === "orc-warrior")!.squares[0]).toMatchObject({ column: "m/base", runs: 1, counted: 1 });
+    expect(c.state).toBe("running");
+    expect(c.newestRunId).not.toBeNull();
   });
 
-  test("the grid: a column per model identity, a square per cell, the assignment's owed cells marked", async () => {
-    const body = await campaigns(
-      [{ runId: "r1", campaign: "race-probe", campaignVersion: 1, cell: "orc-warrior", race: 2, class: 1, level: 4 }],
-      CONFIG,
-    );
-    const r = row(body, "race-probe@1");
-    expect(r.columns).toHaveLength(1);
-    expect(r.columns[0]).toMatchObject({ model: "test/model", effort: null, harness: "wrathbench", series: null, assignment: "m" });
-    const at = (cell: string) => r.grid[r.cells.findIndex((c) => c.cell === cell)]![0];
-    // Not at the stop level: counted, not reached, best level shown.
-    expect(at("orc-warrior")).toMatchObject({ runs: 1, live: 0, counted: 1, reached: 0, minutesToTarget: null, bestLevel: 4 });
-    // Assigned and not run yet: owed, not empty.
-    expect(at("human-warrior")).toEqual({ runs: 0, live: 0, counted: 0, reached: 0, minutesToTarget: null, bestLevel: null, mismatched: 0 });
+  test("a row naming an unpublished version reaches refused[] by its key", async () => {
+    const body = await campaigns([], { ...CONFIG, campaigns: { ...CONFIG.campaigns, "nav-probe": { version: 1, enabled: true, account: "SHAKEOUT", assignments: [{ model: "m" }] } } });
+    expect(body.refused).toEqual([{ key: "campaigns/nav-probe", reason: expect.stringContaining("nav-probe@1 is not published") }]);
+    expect(body.campaigns.map((c) => c.key)).toEqual(["race-probe@1"]);
   });
 
-  test("completion is derived per version, so a newer version is not done by an older one's runs", async () => {
-    // class-probe@1's runs were stamped with no version; @2 reuses dwarf-rogue.
-    const body = await campaigns(
-      [
-        { runId: "old", campaign: "class-probe", cell: "dwarf-rogue", race: 3, class: 4 },
-        { runId: "new", campaign: "class-probe", campaignVersion: 2, cell: "dwarf-warrior", race: 3, class: 1 },
+  test("a row that does not read is refused by its key, and the published versions are still served", async () => {
+    const body = await campaigns([], { ...CONFIG, campaigns: { "race-probe": { enabled: true, models: ["m"], cells: [] } } }, true);
+    expect(body.refused).toEqual([{ key: "campaigns/race-probe", reason: expect.stringContaining("campaign race-probe") }]);
+    expect(body.campaigns.map((c) => `${c.key}:${c.state}`)).toEqual(["race-probe@1:unassigned"]);
+  });
+
+  test("a pinned arm's pairs reach refused[] while run pods are off, and leave once they are on", async () => {
+    const pinned = definition({
+      id: "pin-probe",
+      cells: [{ id: "c", race: 1, class: 1 }],
+      arms: [
+        { id: "a", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-1" },
+        { id: "b", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-2" },
       ],
-      { ...CONFIG, campaigns: { "class-probe": { version: 2, assignments: [{ model: "m" }] } } },
-    );
-    const v2 = row(body, "class-probe@2");
-    expect(v2.runs).toBe(1);
-    expect(v2.cells.find((c) => c.cell === "dwarf-rogue")!.runs).toBe(0);
-    expect(row(body, "class-probe@1").cells.find((c) => c.cell === "dwarf-rogue")!.runs).toBe(1);
-  });
-
-  test("class-probe v1's runs are read as v1, and a run that was not its cell's start says so", async () => {
-    // The three nightelf-hunter runs launched as Night Elf Rogues before the
-    // cell's class was corrected under the same id: shown, flagged, never relabelled.
-    const body = await campaigns([
-      { runId: "a48", campaign: "class-probe", cell: "nightelf-hunter", race: 4, class: 4, level: 3 },
-      { runId: "a47", campaign: "class-probe", cell: "dwarf-paladin", race: 3, class: 2, level: 2 },
-    ]);
-    const v1 = row(body, "class-probe@1");
-    expect(v1.config).toBeNull();
-    const hunter = v1.cells.find((c) => c.cell === "nightelf-hunter")!;
-    expect(hunter).toMatchObject({ characterLabel: "Night Elf Hunter", runs: 1, mismatched: 1 });
-    expect(v1.cells.find((c) => c.cell === "dwarf-paladin")!.mismatched).toBe(0);
-    expect(v1.grid[v1.cells.indexOf(hunter)]![0]).toMatchObject({ mismatched: 1, reached: null });
-    // And the listing says how it was placed.
-    const listing = await runsOf([{ runId: "a48", campaign: "class-probe", cell: "nightelf-hunter", race: 4, class: 4 }]);
-    expect(listing.runs[0]).toMatchObject({ campaign: "class-probe", campaignVersion: 1, cell: "nightelf-hunter", campaignSource: "unversioned" });
-  });
-
-  test("the nine hand-launched spike probes are loop-spike@1's at read time, and no longer orphans", async () => {
-    const nine = [
-      "probe-workspace-20260925",
-      "probe-spike-20260925-1",
-      "probe-spike-20260926-2b",
-      "probe-spike-20260926-3",
-      "probe-spike-20260926-5",
-      "probe-ref05-20260926",
-      "probe-05fix-20260926-1",
-      "probe-05fix-20260926-2",
-      "probe-05fix-20260926-3",
-    ];
-    const probes: Probe[] = nine.map((runId) => ({ runId, campaign: null, cell: null, race: 1, class: 2, level: 5 }));
-    const body = await campaigns(probes);
-    expect(body.orphans).toBe(0);
-    const spike = row(body, "loop-spike@1");
-    expect(spike.cells.map((c) => [c.cell, c.runs])).toEqual([
-      ["workspace", 1],
-      ["entrypoint", 4],
-      ["reference-0.5", 1],
-      ["0.5-fixes", 3],
-    ]);
-    // Read, never written: the listing names the rule that placed each one.
-    const listing = await runsOf(probes);
-    for (const r of listing.runs) expect(r).toMatchObject({ campaign: "loop-spike", campaignVersion: 1, campaignSource: "listed" });
-  });
-
-  test("a probing run nothing claims is an orphan, counted and not invented into a row", async () => {
-    const body = await campaigns([{ runId: "r1", campaign: null, cell: null }], CONFIG);
-    expect(body.orphans).toBe(1);
-    expect(body.campaigns.every((c) => c.runs === 0)).toBe(true);
-  });
-
-  test("a campaign no definition claims keeps its row, because its runs happened", async () => {
-    const body = await campaigns([{ runId: "r1", campaign: "retired-sweep", cell: "cell-a", level: 6 }], CONFIG);
-    const r = row(body, "retired-sweep@?");
-    expect(r).toMatchObject({ version: null, definition: null, config: null, runs: 1 });
-    expect(r.cells).toEqual([
-      { cell: "cell-a", declared: false, race: null, class: null, characterLabel: null, note: null, runs: 1, models: ["test/model"], bestLevel: 6, mismatched: 0 },
-    ]);
-  });
-
-  test("a cell the definition does not declare is still shown, after the declared ones", async () => {
-    const body = await campaigns(
-      [{ runId: "r1", campaign: "nav-probe", campaignVersion: 1, cell: "loch-modan" }],
-      CONFIG,
-    );
-    const nav = row(body, "nav-probe@1");
-    expect(nav.cells.map((c) => [c.cell, c.declared])).toEqual([
-      ["coldridge", true],
-      ["loch-modan", false],
-    ]);
-  });
-
-  test("a live probe is counted apart, and does not make a sweep complete", async () => {
-    const body = await campaigns(
-      [
-        { runId: "r1", campaign: "nav-probe", campaignVersion: 1, cell: "coldridge", ended: false },
-      ],
-      { ...CONFIG, campaigns: { "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "m" }] } } },
-    );
-    const nav = row(body, "nav-probe@1");
-    expect(nav).toMatchObject({ runs: 0, live: 1 });
-    expect(nav.config!.complete).toBe(false);
-    expect(nav.grid[0]![0]).toMatchObject({ runs: 0, live: 1 });
-  });
-
-  test("`runs` is the progress numerator: counted runs on declared cells by assigned models, capped per cell", async () => {
-    const body = await campaigns(
-      [
-        { runId: "r1", campaign: "nav-probe", campaignVersion: 1, cell: "coldridge" },
-        { runId: "r2", campaign: "nav-probe", campaignVersion: 1, cell: "coldridge" },
-        { runId: "r3", campaign: "nav-probe", campaignVersion: 1, cell: "coldridge", model: "other/model" },
-        { runId: "r4", campaign: "nav-probe", campaignVersion: 1, cell: "gone-cell" },
-      ],
-      { ...CONFIG, campaigns: { "nav-probe": { version: 1, enabled: false, assignments: [{ model: "m" }] } } },
-    );
-    const nav = row(body, "nav-probe@1");
-    expect(nav.runs).toBe(1);
-    expect(nav.config!.complete).toBe(true);
-    expect(nav.cells.map((c) => [c.cell, c.runs])).toEqual([
-      ["coldridge", 3],
-      ["gone-cell", 1],
-    ]);
-    // Two model identities ran it: the assigned one first, then the other.
-    expect(nav.columns.map((c) => [c.model, c.assignment])).toEqual([
-      ["test/model", "m"],
-      ["other/model", null],
-    ]);
-  });
-
-  test("the live store's pre-definition rows still annotate their versions", async () => {
-    const body = await campaigns([], {
-      ...CONFIG,
-      campaigns: {
-        "nav-probe": { enabled: true, account: "SHAKEOUT", models: ["m"], runsPerCell: 1, cells: [{ id: "coldridge", race: 3, class: 2 }] },
-      },
     });
-    expect(row(body, "nav-probe@1").config).toMatchObject({ enabled: true, account: "SHAKEOUT", assignments: [{ model: "m", runsPerCell: 1 }], want: 1 });
+    const doc = (policy: Record<string, unknown>): unknown => ({
+      ...CONFIG,
+      policy,
+      "campaign-defs": defsBlock(race, pinned),
+      campaigns: { "pin-probe": { version: 1, assignments: [{ model: "m", runsPerCell: 1 }] } },
+    });
+    const off = await campaigns([], doc({}));
+    expect(off.refused.map((r) => r.key)).toEqual(["pin-probe@1:m:a", "pin-probe@1:m:b"]);
+    expect(off.refused[0]!.reason).toContain('policy.runPods is "off"');
+    const view = off.campaigns.find((c) => c.key === "pin-probe@1")!;
+    expect(view.grid[0]!.squares.every((q) => q.refused?.includes("run pod") === true)).toBe(true);
+    const on = await campaigns([], doc({ runPods: "probes" }));
+    expect(on.refused).toEqual([]);
   });
 
-  test("an empty config store still serves the runs", async () => {
-    const body = await campaigns([{ runId: "r1", campaign: "adhoc", cell: "c" }]);
-    expect(body.configPath).toMatch(/config\.sqlite$/);
-    expect(row(body, "adhoc@?").config).toBeNull();
-    expect(body.campaigns.every((c) => c.config === null)).toBe(true);
+  test("an empty config store serves no campaigns and no refusals", async () => {
+    const body = await campaigns([stamped("r1")]);
+    expect(body).toMatchObject({ campaigns: [], refused: [] });
+  });
+});
+
+describe("/api/runs keeps every stamp, on and off the page", () => {
+  test("version, arm and roster name are read as recorded; a run from before arms keeps its campaign", async () => {
+    const f = fixture([stamped("fleet-a"), stamped("legacy", { arm: undefined, ref: undefined, campaignVersion: undefined })]);
+    const res = await handleFor(f)(new Request("http://x/api/runs"));
+    const runs = ((await res.json()) as RunsResponse).runs;
+    expect(runs.find((r) => r.runId === "fleet-a")).toMatchObject({ campaign: "race-probe", campaignVersion: 1, cell: "orc-warrior", arm: "base", ref: "m" });
+    expect(runs.find((r) => r.runId === "legacy")).toMatchObject({ campaign: "race-probe", campaignVersion: null, arm: null, ref: null });
+  });
+
+  test("a directory holding only launch files is a launch that never became a run: not listed", async () => {
+    const f = fixture([stamped("fleet-a")]);
+    const launchOnly = join(f.runs, "fleet-m-race-probe-orc-warrior-base-test-model-20261011");
+    mkdirSync(launchOnly, { recursive: true });
+    writeFileSync(join(launchOnly, "campaign.json"), "{}");
+    const res = await handleFor(f)(new Request("http://x/api/runs"));
+    expect(((await res.json()) as RunsResponse).runs.map((r) => r.runId)).toEqual(["fleet-a"]);
+  });
+
+  test("the public listing carries the version and the arm, and not the roster name", async () => {
+    const f = fixture([stamped("fleet-a")]);
+    const res = await handleFor(f, true)(new Request("http://x/api/runs"));
+    const row = ((await res.json()) as RunsResponse).runs.find((r) => r.runId === "fleet-a")!;
+    expect(row).toMatchObject({ campaign: "race-probe", campaignVersion: 1, arm: "base" });
+    expect(row.ref).toBeUndefined();
   });
 });

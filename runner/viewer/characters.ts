@@ -13,8 +13,10 @@
  * ("not recorded", never back-labeled), while an id no table knows renders as
  * its own number rather than being dropped or guessed into a neighbour.
  *
- * Import-free, like `api-types.ts`, so the dashboard could bundle it — though
- * today it does not need to: the composed label travels on the wire.
+ * Import-free, like `api-types.ts`, because the dashboard bundles it
+ * (`@viewer/characters`): the campaigns page labels a cell's race and class
+ * from the ids `/api/campaigns` serves, where a run row carries the composed
+ * label on the wire.
  */
 
 export const RACE_NAMES: Readonly<Record<number, string>> = {

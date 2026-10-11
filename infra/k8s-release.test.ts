@@ -70,8 +70,8 @@ case "\${1:-}" in
       (( n > \${FAKE_TAG_FLIP_AFTER:-3} )) || tag="\${FAKE_TAG_BEFORE}"
     fi
     case "\${obj}" in
-      *worldserver) printf 'reg.example/library/wrathbench-worldserver:%s' "\${tag}" ;;
-      *) printf 'reg.example/library/wrathbench-runner:%s' "\${tag}" ;;
+      *worldserver) printf 'reg.example/wrathbench/wrathbench-worldserver:%s' "\${tag}" ;;
+      *) printf 'reg.example/wrathbench/wrathbench-runner:%s' "\${tag}" ;;
     esac
     exit 0
     ;;
@@ -431,9 +431,9 @@ describe("k8s-release.sh", () => {
   });
 
   test("--registry is passed to the build and nothing else", () => {
-    const r = run({ args: ["--registry", "reg.example/library"] });
+    const r = run({ args: ["--registry", "reg.example/wrathbench"] });
     expect(r.exitCode).toBe(0);
-    expect(r.calls.find((l) => l.startsWith("build-images"))).toContain("--registry reg.example/library");
+    expect(r.calls.find((l) => l.startsWith("build-images"))).toContain("--registry reg.example/wrathbench");
   });
 
   test("--no-smoke reaches the deploy window", () => {

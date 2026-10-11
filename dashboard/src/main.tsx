@@ -67,6 +67,8 @@ render(
       <Route path="/episodes" component={EpisodesRedirect} />
       <Route path="/models" component={Models} />
       <Route path="/campaigns" component={Campaigns} />
+      {/* One campaign version: the index row's own page. */}
+      <Route path="/campaigns/:id/:version" component={Campaigns} />
       <Route path="/config" component={Config} />
       <Route path="*" component={NotFound} />
     </Router>

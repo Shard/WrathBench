@@ -10,6 +10,12 @@
  *   bun runner/src/run.ts --driver codex --model gpt-6-astra --effort high  [codex harness; lane $CODEX_HOME]
  *   bun runner/src/run.ts --driver codex --model gpt-5.5 --token-env CODEX_HOME_2
  *   bun runner/src/run.ts --resume <run-id>
+ *   bun runner/src/run.ts --driver openai --model <id> --campaign-file data/runs/<id>/campaign.json --run-id <id>
+ *
+ * Every flag is one `run-flags.ts` lists; anything else fails the launch
+ * (exit 2), so a typo in a campaign arm's args cannot run the base harness
+ * under the arm's name. A probe takes its whole shape from its campaign file
+ * (`campaign-launch.ts`).
  *
  * Two run dimensions are recorded and never model-specific:
  * `--objective "<text>"` renders one delimited operator objective into the
@@ -46,7 +52,9 @@ import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
 import { leaseRunSecret, releaseSessionSecret } from "./module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
-import { CampaignLaunchError, campaignLaunch } from "./campaign-launch";
+import { CampaignLaunchError, RUN_IMAGE_ENV, campaignLaunch } from "./campaign-launch";
+import { holdsOnlyLaunchFiles } from "./campaign-file";
+import { RunArgsError, parseRunArgs } from "./run-flags";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
@@ -81,22 +89,6 @@ import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } fr
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
 import { className, raceName } from "../viewer/characters";
-
-function parseArgs(argv: string[]): Record<string, string | boolean> {
-  const out: Record<string, string | boolean> = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (!arg.startsWith("--")) continue;
-    const key = arg.slice(2);
-    const next = argv[i + 1];
-    if (next === undefined || next.startsWith("--")) out[key] = true;
-    else {
-      out[key] = next;
-      i++;
-    }
-  }
-  return out;
-}
 
 /**
  * A boolean flag: bare `--wiki-coords` or `--wiki-coords true|1|yes` is on,
@@ -185,13 +177,19 @@ function watchdogOverrides(v: string | boolean | undefined): WatchdogOverride {
  * hours early for the wrong reason, which is exactly what the roster's
  * generated argv must be pinned against.
  */
-export function configFromArgs(argv: string[]): RunConfig & { runId: string; token: string } {
-  const args = parseArgs(argv);
-  // A probe's shape comes from its checked-in campaign definition and nothing
-  // else (`campaign-launch.ts`): resolved first, so a refused launch fails
-  // before anything is built, and spread last, so nothing below can override
-  // what the definition says.
-  const probe = campaignLaunch(args);
+export function configFromArgs(
+  argv: string[],
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): RunConfig & { runId: string; token: string } {
+  const args = parseRunArgs(argv);
+  // A probe's shape comes from its campaign file and nothing else
+  // (`campaign-launch.ts`): resolved first, so a refused launch fails before
+  // anything is built, and spread last, so nothing below can override what
+  // the definition says.
+  const probe = campaignLaunch(args, env);
+  // The image a run pod's launcher asked for, recorded so the run names its
+  // build without a reader having to trust the harness version alone.
+  const runImage = env[RUN_IMAGE_ENV];
   const runId = typeof args["run-id"] === "string" ? args["run-id"] : newRunId();
   const c = loadRunConfig({
     runId,
@@ -257,9 +255,10 @@ export function configFromArgs(argv: string[]): RunConfig & { runId: string; tok
       ...(num(args["episode-ms"]) !== undefined ? { episodeMs: num(args["episode-ms"]) } : {}),
       ...watchdogOverrides(args["watchdogs-json"]),
     },
+    ...(runImage !== undefined && runImage.length > 0 ? { image: runImage } : {}),
     // A probe campaign's identity and the cell's whole shape, from the
-    // definition: campaign, version, hash, cell, race/class, leash, wiki,
-    // objective and stopping rule.
+    // campaign file: campaign, version, hash, cell, arm, race/class, leash,
+    // wiki, objective and stopping rule.
     ...(probe ?? {}),
   });
   return { ...c, runId: c.runId ?? runId, token: c.token ?? newSessionToken() };
@@ -345,7 +344,9 @@ export function loadContinuation(
  */
 export function assertRunDirFree(runsDir: string, runId: string): void {
   for (const dir of [join(runsDir, runId), join(runsDir, ARCHIVE_DIR, runId)]) {
-    if (!existsSync(dir)) continue;
+    // A directory holding only what a launcher wrote ahead of the run (its
+    // campaign.json, a run pod's image.json) is this launch's, not a run.
+    if (holdsOnlyLaunchFiles(dir)) continue;
     throw new Error(
       `run id already on disk: ${dir}\n` +
         "  the attempt counter projected an id that exists — that run left no readable fact, so it was not counted\n" +
@@ -378,7 +379,14 @@ function lastStateIn(dir: string, runId: string): { level?: number; xp?: number 
 
 async function main(): Promise<void> {
   const rawArgs = Bun.argv.slice(2);
-  const args = parseArgs(rawArgs);
+  let args: Record<string, string | boolean>;
+  try {
+    args = parseRunArgs(rawArgs);
+  } catch (err) {
+    if (!(err instanceof RunArgsError)) throw err;
+    console.error(err.message);
+    process.exit(2);
+  }
   const resumeId = typeof args["resume"] === "string" ? args["resume"] : undefined;
   /**
    * `--keep-characters a,b`: names on this account that belong to another

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CHILD_TERM_GRACE_MS, episodeArgv, forCycle, harnessVersion, inContainer, planFreshLaunch, resolve, type RosterSpec } from "./run-roster";
+import { CHILD_TERM_GRACE_MS, episodeArgv, episodeFlags, forCycle, harnessVersion, inContainer, planFreshLaunch, resolve, type RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -196,6 +196,22 @@ describe("episodeArgv", () => {
     expect(inside[0]).toBe("bun");
     expect(inside[1]).toMatch(/runner\/src\/run\.ts$/);
     expect(inside.slice(2)).toEqual(host.slice(1));
+  });
+
+  test("the flags alone are what a run pod's container gets: every argv is a head plus them", () => {
+    const [s] = resolve([{ model: "z-ai/glm-5.2:free" }], "20260101");
+    expect(episodeArgv(s!, false, { container: true }).slice(2)).toEqual(episodeFlags(s!, false));
+    expect(episodeArgv(s!, true).slice(1)).toEqual(episodeFlags(s!, true));
+    expect(episodeFlags(s!, false)[0]).toBe("--driver");
+  });
+
+  test("the launch seam rides the spec through resolve, validated, and adds nothing to argv", () => {
+    const launch = { pod: true as const, image: "ghcr.io/shard/wrathbench-runner:harness-0.5-940-gabc1234-pr12", command: null };
+    const [plain, pod] = resolve([{ model: "sonnet", driver: "claude-code" }, { model: "sonnet", driver: "claude-code", launch }], "20260101");
+    expect(plain!.launch).toBeUndefined();
+    expect(pod!.launch).toEqual(launch);
+    expect(episodeFlags(pod!, false)).toEqual(episodeFlags(plain!, false));
+    expect(() => resolve([{ model: "sonnet", driver: "claude-code", launch: { pod: true, image: 7 } } as unknown as RosterSpec], "20260101")).toThrow(/launch.image/);
   });
 
   test("inContainer reads the explicit flag, never a docker sniff", () => {

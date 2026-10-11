@@ -30,7 +30,6 @@ import { HARNESSES } from "../src/config";
 import { badEvidenceReason } from "../src/lapse";
 import type {
   ApiInfoResponse,
-  CampaignRowView,
   CampaignsResponse,
   CostFigure,
   E90TokenProfileView,
@@ -1057,25 +1056,20 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   /**
-   * The probe lane, grouped by campaign version (`campaignsView`).
+   * The probe lane, one entry per published campaign version
+   * (`campaignsView`), with every refusal the campaign parser made.
    *
-   * Built from the RUN DIRECTORY and only annotated from the checked-in
-   * definitions and the store, which is the property that matters: a campaign
-   * that has been completed, switched off and dropped from the store still has
-   * a row here, because its runs are what happened. `counted` is the
-   * scheduler's own `isCounted` over a result row — never `unscored`, which is
-   * non-null for every probe.
+   * The published definitions and the store row come from the config store,
+   * read exactly as the supervisor reads them; the runs from the run
+   * directory, matched by their own stamps. `counted` is the scheduler's own
+   * `isCounted` over a result row — never `unscored`, which is non-null for
+   * every probe.
    */
   async function campaignsResponse(): Promise<Response> {
     const all = await resultRuns();
     const roster = readFleetRoster(opts.configDbPath);
     const view = campaignsView(all, roster, (r) => !r.extra && !r.episodeOverride && taintOf(r) === null);
-    const body: CampaignsResponse = {
-      campaigns: view.campaigns,
-      orphans: view.orphans,
-      configPath: roster.path,
-      now: Date.now(),
-    };
+    const body: CampaignsResponse = { now: Date.now(), campaigns: view.campaigns, refused: view.refused };
     return pub(body, projectCampaigns);
   }
 

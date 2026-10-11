@@ -233,6 +233,108 @@ The worldserver image (`infra/docker/server.Dockerfile`) is a close adaptation o
 7. SDK surfaces it as a typed event; the snippet or the model reacts.
 8. Runner appends the snippet, result, and events to the trajectory.
 
+## Launching a run: the run contract
+
+The supervisor (`infra/run-fleet.ts`, one `infra/run-roster.ts` per job) and
+the thing it launches (`runner/src/run.ts`) talk only through argv, a few
+environment variables and the files under `data/runs/<id>/`. That is the
+contract; it is what lets a probe-campaign arm run a different container image
+— a branch build, or a harness that is not this repository at all — without
+the supervisor knowing anything about its insides. `infra/episode-launcher.ts`
+is the one interface a roster starts an episode through, with two
+implementations: today's child process, and a Kubernetes pod
+(`infra/run-pod.ts`) created from the chart's template. Everything the roster
+does around an episode — session hygiene, classification, retries, the defer
+ladder, lane accounting — reads the files below and never the handle, so it is
+the same for both.
+
+**What the supervisor passes.** The flags `episodeFlags` builds
+(`infra/run-roster.ts`): on a fresh launch `--driver`, `--model`, `--run-id`,
+the driver's credentials by env var *name* (`--api-key-env`, `--token-env`),
+`--account`, `--effort`, `--compact-window`, the lane's leash
+(`--episode-ms`, `--max-tool-calls`, `--watchdogs-json`), and for a probe
+`--episode probing --campaign-file <runs/id/campaign.json> --ref <name>`
+followed by the arm's own args verbatim; on a resume only `--resume <id>` and
+the leash, because identity is the stored run's. `campaign.json` is written
+before the launch and is the whole shape the run follows: campaign, version,
+hash, source, cell, arm and the definition itself (`runner/src/campaign-file.ts`). The environment carries
+`WRATHBENCH_HARNESS_VERSION` (the image's tag — an arm's own, never master's
+when the arm pinned one; a digest-only pin stamps
+`<repository basename>@sha256:<12 hex>`, which names no series),
+`WRATHBENCH_RUN_IMAGE` (the image as requested, when the episode is a pod),
+`WRATHBENCH_MODULE_URL`, `WRATHBENCH_RUNS_DIR`, `WRATHBENCH_IN_CONTAINER=1`,
+`WRATHBENCH_LOCAL_MODEL_HOSTS` (the self-hosted hosts the provider table pairs
+with `LMSTUDIO_KEY`, which run.ts checks the key and base against before it
+reads the key), the module port secret, and the one credential the driver
+bills: its lane's `CLAUDE_CODE_OAUTH_TOKEN*` for claude-code, its `apiKeyEnv`
+for openai, the mounted `CODEX_HOME` for codex. Nothing else: no database variables, no config
+store, and no `ANTHROPIC_*` variable ever (claude-code is subscription-only;
+the pod env builder refuses to build a pod that would carry one). The run
+directory is on a shared volume. Before the run starts it holds at most launch
+files — a probe's `campaign.json`, a pod's `image.json` — and a directory
+holding only those is not a run: a fresh launch onto it proceeds and
+overwrites them, where anything else there refuses the launch.
+
+**What it reads back** (`readRunFact`, `runner/src/models.ts`, is the
+reference reader). `meta.json`: `harnessVersion`, `startedAt`,
+`config.{model, effort, compactWindow, account, character, token, campaign,
+campaignVersion, cell, arm, ref, subscription, extra, watchdogs}`,
+`comparability.{episode, episodeOverride, effort, compactWindow}` and, while
+paused, `pause.{reason, at, episodeElapsedMs, notBefore}`. `run.sqlite`: the
+`run` row (`started_at`, `ended_at`, `termination_reason`,
+`termination_detail`, `pause_reason`) is how the roster classifies an exit —
+a termination is done, a pause is resumable or a failed attempt by the lane's
+rule, neither is "unknown", and no row at all is a failed launch (for a
+fleet probe, the roster then writes a stub run terminated `launch-failed`, so
+the attempt counts toward its square's cap); the `state`
+table's `level` is the level it reports. `heartbeat`, one small file rewritten
+every 20 seconds and removed on a clean exit, is the only proof of a live
+owner: a resume onto a run with a fresh one is refused, and an account is held
+by a run whose heartbeat is fresh however quiet its trajectory. The
+trajectory's `response` records count the attempt's turns. A pod also leaves
+`image.json` (`ref`, `digest`, `pod`, `node`, `startedAt`), written by the
+launcher when the container starts, and a resume in a pod relaunches that
+digest whatever the arm says now; a resume while run pods are off is a child
+process on the release, so only a probe with `image.json` and run pods on is
+exempt from the harness-series gate.
+
+**Signals and exit codes.** SIGTERM is the supervisor's: the run writes its
+`operator-pause` row synchronously, then unwinds, and exits within 60 seconds;
+the launcher gives it 90 (`EPISODE_TERM_GRACE_MS`, the pod's
+`terminationGracePeriodSeconds`), inside the fleet pod's 180. SIGINT is an
+operator's cut and ends the run `manual`. Exit 2 is a refusal before anything
+was written (an unknown or repeated flag, a campaign file that does not hold
+together, a missing credential, a run id already on disk); 75 is
+a resume refused because the run has a live owner; 130 is a signalled exit.
+Any other code is read through the run row, never on its own.
+
+**A harness that is not this runner** is launched the same way: an arm names
+`image` and `command`, the pod runs that command with the flags above as its
+args and the volumes, env and secrets of a run pod, and is judged by the files
+it leaves. It has to accept the flags it is given (or refuse with exit 2), keep
+a heartbeat, write `meta.json` and the `run` row, pause on SIGTERM within the
+grace, and record its own turns as `response` records if it wants them
+counted. To land in its campaign square it stamps `config.{campaign,
+campaignVersion, cell, arm}` from its `campaign.json` and `config.ref` from
+`--ref`; a campaign's work is counted by those stamps and nothing else. A
+runner image older than `--campaign-file` and the strict flag parser cannot
+be an arm: it would ignore the file it is given. The viewer and the collector read the same files, so a run that
+honours the contract appears everywhere a run appears.
+
+**Run pods.** An episode is a pod only when the fleet setting `policy.runPods`
+is `probes`, the supervisor is on the cluster, and the planner put `launch` on
+the spec — which it does for every probing job, image-less arms included, so
+arms compare on one execution path; scored lanes stay child processes until a
+campaign has proven the launcher. An arm that pins an image or a command off
+the cluster or with the switch off is a refused pair, never scheduled and
+never run on master's code instead. The pod carries an
+ownerReference to the fleet pod, so a fleet stop or crash deletes its run pods
+with the same grace; the fleet's drain counts a roster's run pod as an episode
+in flight, and `infra/k8s-deploy.sh` waits for zero run pods before the
+worldserver is touched. Images are admitted by repository
+(`runPods.allowedImages` in the chart), tagged or digest-pinned, never
+`latest`. Operations: `docs/RUNBOOK.md`, "Run pods".
+
 ## Reset
 
 Every episode starts with a freshly created character at level 1 in its starting zone. Character creation is a client action the module supports. Character snapshots (DB save and restore for mid-level starts) are deferred.

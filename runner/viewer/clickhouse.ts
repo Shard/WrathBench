@@ -452,7 +452,7 @@ export function runRowOf(r: RunTableRow, latest: LatestState | undefined, now: n
     // Campaign, cell and extra live only in the launch config; no column ever
     // carried them and `readRun` read them from meta.json exactly here.
     objective: str(r.objective),
-    ...campaignFieldsOf(r.run_id, str(config["campaign"]), num(config["campaignVersion"]), str(config["cell"])),
+    ...campaignFieldsOf(config),
     extra: config["extra"] === true,
     comparability,
     character: str(r.character),

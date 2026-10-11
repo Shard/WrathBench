@@ -198,7 +198,7 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               not a number edited into one entry. On EVERY entry: the roster is a model catalog,
               so there is no unscheduled entry to make an exception for.
             `objective` and `wikiCoords` — REFUSED. Steering is a campaign, which names this entry
-              under `models` and supplies its own task shape.
+              in an assignment and supplies its own task shape.
             `idle` — what it does with an account once its tier is spent. `none` (default, and
               what a paid model wants) or `unlimited` (one continuous freeplay session at a time,
               with no episode wall clock — the idle watchdog is what ends it). Never bought by
@@ -273,19 +273,30 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             An entry that states its own keeps it WHOLE: the two are alternatives, never merged,
             because a merged routing is one nobody wrote down. Absent means the built-in default
             (the model author's own provider, fallbacks off).
+            `runPods` — `"off"` (default) or `"probes"`: where a probe-campaign episode executes.
+            `probes` runs every probing episode as its own pod on the cluster, on the arm's image
+            ("Run pods", below). Anything else is refused. While it is not `probes`, or off the
+            cluster, an arm that pins an image or a command is a refused pair, never run on master.
+campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
+            publishedAt }. Written ONLY by runner/src/campaign-publish.ts and never changed: `set`,
+            `patch`, `delete`, the /config page and a reseed all refuse the prefix, and a second
+            publish with a different hash is refused ("Probe campaigns", below). A seeded document
+            may carry them only exactly as the store holds them (an export, restored), so a
+            fresh store gets its definitions by publishing them, then seeding the rest.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
-            account?, excludeUnhealthy? } }. The shape (cells, start, leash, stop level, resume,
-            attempt cap) is the checked-in definition `<id>@<version>` in runner/src/campaign-defs/;
-            a static key here is REFUSED with where it lives, and a version this checkout does not
-            define (or a closed one switched on) refuses THAT campaign by name. `version` is
-            explicit, never "latest", so a merged definition cannot re-target a sweep. Every run
-            is an unscored `probing` episode. With `account` the campaign is PINNED and follows
+            account?, excludeUnhealthy? } }, strict. The shape (cells, arms, start, leash, stop
+            level, resume, attempt cap) is the published definition `<id>@<version>`. A row the store
+            will not write (no version, an unknown key) or one naming a version nobody published is
+            refused by name on read, alone: the roster, the policy and every other campaign load.
+            `version` is explicit, never "latest", so a new publish cannot re-target a sweep. Every
+            run is an unscored `probing` episode. With `account` the campaign is PINNED and follows
             the pinned-job account rules; without, the policy schedules it between the evals and
-            the idle work, on a model that owes no eval and holds no live or paused run.
-            Completion is DERIVED per (id, version, assignment, cell) against the counted probe
-            runs on disk — set `enabled: false` when a sweep is done and its results stay
-            visible. Progress is on the /campaigns page ("Probe campaigns", below).
+            the idle work, on a model that owes no eval and holds no live or paused run. Either
+            way `excludeUnhealthy` skips a retired or cooling model. Completion is DERIVED per
+            (id, version, assignment, arm, cell) against the counted probe runs on disk — set
+            `enabled: false` when a sweep is done and its results stay visible. Progress is on the
+            /campaigns page ("Probe campaigns", below).
 queue       jobs, in priority order (never `probing`: a probe is a campaign's cell): { ref | [refs], episode e90|e360|freeplay, repeat n|"loop",
             enabled, account? } — plus `subscription` (a lane's env var NAME) and nothing else;
             any other key REFUSES the job by name ("Strict keys", below). With `account` the job is PINNED to it and never the policy's;
@@ -1170,19 +1181,44 @@ as well). How many runs a model gets is its `tier` and nothing else.
 
 ### Probe campaigns
 
-A probe is a cell of a checked-in campaign definition, and nothing else
-(`docs/EPISODES.md`, `probing`). The definition (`runner/src/campaign-defs/`)
-fixes the shape. The store row `campaigns/<id>` says which version is active,
-whether it runs, who sweeps it and how many counted runs each owes per cell.
-`/campaigns` shows one pane per version with a cells × models grid.
+A probe is a cell of a published campaign definition, and nothing else
+(`docs/EPISODES.md`, `probing`). The definition is a JSON file,
+`runner/campaigns/<id>@<version>.json`, published into the config store; it
+fixes the cells, the arms and the shape. The store row `campaigns/<id>` says
+which version is active, whether it runs, who sweeps it and how many counted
+runs each owes per square. `/campaigns` lists every published version;
+`/campaigns/<id>/<version>` shows its arms, grid and arm comparison.
+
+**Adding or changing a campaign** needs no release:
+
+1. Write `runner/campaigns/<id>@<version>.json`. A change to a published one
+   is a new file with the next version; never edit a published version. `bun
+   test` checks every file parses and is named for what it holds.
+2. Commit it and push it to any branch on origin. A pull request can carry
+   its own campaign beside the code its arms test.
+3. Publish it from a checkout that has the commit:
+
+```
+bun runner/src/campaign-publish.ts runner/campaigns/<id>@<version>.json --k8s --actor <you> --note "<why>"
+bun runner/src/campaign-publish.ts runner/campaigns/<id>@<version>.json --dry-run   # check and print, write nothing
+```
+
+The CLI fetches origin, refuses a file that is untracked or modified or whose
+last commit no origin branch holds, and pipes the publication into the runner
+pod's store (`config-store.ts publish -`; without `--k8s` it writes the local
+store). Publishing the same definition again is a no-op; publishing a
+different one under a published `id@version` is refused. Which commits may
+publish is `PUBLISH_RULE` in `campaign-publish.ts`: any origin branch today,
+`origin-master` to tighten it.
 
 **Assigning models to a campaign.**
 
 1. Name the roster entries in `assignments`, in priority order. Each owes
-   `runsPerCell` counted runs per cell.
+   `runsPerCell` counted runs per square, and a square is one (cell, arm).
 2. Enable the row.
 3. To queue more data later, raise an assignment's `runsPerCell` or append
-   another assignment.
+   another assignment. To move to a new version, point `version` at it; work
+   is counted per version, so the new one starts from nothing.
 
 The CLI validates every write against the whole config, as the `/config` page
 does:
@@ -1193,6 +1229,28 @@ kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-sto
   --actor <you> --note "race-probe@1: sol-61 x1"
 ```
 
+A row naming a version nobody has published is accepted by the store and
+refused by name on read: `--status` lists it, the campaigns page shows it
+under refused, and nothing launches until the version is published.
+
+**Arms.** An arm with no `image` runs the release image; a definition with
+more than one arm must pin every arm's image, by tag or `@sha256:` digest
+(never `:latest`). A pinned arm (an `image` or a `command`) runs only in a run
+pod ("Run pods", below): with `policy.runPods` off, or off the cluster, every
+(assignment, arm) pair of it is refused before any launch and listed as
+`<id>@<v>:<ref>:<arm>`, never run on the release image, and it schedules again
+once the switch is on. An arm image must be a build that has
+`--campaign-file` and refuses unknown flags — anything older ignores the
+campaign file it is given. An arm's `args` come after the supervisor's own
+and may not restate a shape flag or a supervisor flag; `--compact-window` is
+the exception. Assign an arm that sets the window only roster entries on the
+claude-code driver that set none themselves: any other pair is refused before
+it launches, and listed as `<id>@<v>:<ref>:<arm>`. So is every pair of an
+assignment whose roster entry the fleet refuses (an unknown key, a provider
+key towards a host the provider table does not pair it with, a subscription
+the policy does not list): the campaign sweeps its other assignments, and the
+entry's own refusal, with its reason, is under `--status`'s refused pins.
+
 Before you enable race-probe@1, run the start gate once, and enable it only
 when it passes. It creates, walks and takes a quest at each start no run had
 used before: Valley of Trials, Deathknell, Camp Narache, Sunstrider Isle and
@@ -1202,39 +1260,138 @@ Ammen Vale. It runs on `PROBE`, never a pool account.
 kubectl -n wrathbench exec deploy/wrathbench-runner -- bun infra/smoke/race-probe-starts.ts
 ```
 
-**A hand launch** names the cell and nothing that sets its shape. The runner
-refuses `--episode probing` without a campaign, and with one it refuses
-`--objective`, `--race`/`--class`, `--wiki-coords`/`--wiki`,
-`--max-tool-calls` and the watchdog flags:
+**A hand launch** names the square and nothing that sets its shape.
+`run-episode.sh` writes the run's `campaign.json` from the published
+definition (in the runner pod with `--k8s`) and launches `run.ts` with
+`--campaign-file`; the runner refuses `--episode probing` without one, and
+with one it refuses `--objective`, `--race`/`--class`,
+`--wiki-coords`/`--wiki`, `--max-tool-calls` and the watchdog flags. `--arm`
+may be left out when the definition has one arm; an arm that pins an image or
+a command cannot be hand-launched.
 
 ```
 ./infra/run-episode.sh --k8s --model <id> --campaign class-probe@2 --cell dwarf-paladin
 ```
 
-A harness spike on a branch image is a campaign too. Merge its definition
-(a closed one, if it lists runs after the fact) to master first, so the viewer
-on master can attribute its runs.
+### Run pods
 
-**Changing a campaign's shape** is a new version: add `<id>@<n+1>` in its
-module and its pin in `runner/test/campaign-defs.test.ts`, then point the
-store row's `version` at it. Never edit a published version. Its runs stay
-attributed to it, and work is counted per version, so the new version starts
-its sweep from nothing.
+A probe-campaign arm may name its own container image — a branch build, or a
+harness that is not this repository — and an image cannot be a child process
+of the fleet pod. So on the cluster a probing episode can run as **its own
+pod**, created by the roster from the chart's template and watched until it
+ends (`infra/run-pod.ts`; the contract both sides honour is
+`docs/ARCHITECTURE.md`, "Launching a run: the run contract"). Scored lanes
+stay child processes until a campaign has proven the launcher.
 
-**The rows written before definitions were checked in** (no `version`, with
-`cells`/`objective` inline) still load. Each maps onto the version that claims
-its id's unversioned runs (`nav-probe@1`, `class-probe@1`), and the inline
-shape is dropped in favour of the definition. Rewrite them to the current
-shape after the deploy that ships the definitions. Each `set` validates
-against the whole config, and the old rows still parse, so the order does not
-matter:
+**The switch.** `policy.runPods` in the config store, `"off"` by default:
 
 ```
 R="kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts"
-$R set campaigns/nav-probe '{"version":1,"enabled":true,"account":"SHAKEOUT","assignments":[{"model":"sonnet","runsPerCell":1}]}' --actor <you> --note "nav-probe -> checked-in definition, as it stood"
-$R set campaigns/class-probe '{"version":2,"enabled":false,"assignments":[]}' --actor <you> --note "class-probe v1 is closed history; v2 is the to-L10 sweep"
-$R set campaigns/race-probe '{"version":1,"enabled":false,"assignments":[]}' --actor <you> --note "race-probe@1, unassigned"
+$R patch policy '{"runPods":"probes"}' --actor <you> --note "run pods on for probes"
+$R patch policy '{"runPods":"off"}'    --actor <you> --note "run pods off"
 ```
+
+It reaches a job at its next roster spawn (the supervisor hands it to
+`run-roster` as `--run-pods`), so a roster already mid-episode keeps the mode it
+started under. With it on, every probing episode — image-less arms too, so
+arms compare on one execution path — is a pod; an arm with an image or a
+command is a refused pair when the switch is off or the supervisor is not on
+the cluster — parked and shown on the campaigns page, never launched on
+master's code instead.
+
+**What the chart provides** (`templates/run-pods.yaml`): the fleet's
+ServiceAccount and a Role over pods in the release namespace only; the pod
+template, rendered from the same helpers as the fleet pod and mounted into it;
+and the launcher's settings. Two values matter at deploy time:
+
+- `runPods.allowedImages` — the image *repositories* an arm may name, matched
+  on the part before the tag or digest, exactly or as a path prefix. Empty
+  means the release runner alone (`<image.registry>/wrathbench-runner`). Add
+  the repository PR builds are pushed to (`ghcr.io/shard/wrathbench-runner`).
+  An image outside the list, untagged, or `:latest` is refused before a pod
+  exists.
+- `runPods.imagePullSecrets` — pull Secret names for run pods only, merged
+  once each with the chart-wide `imagePullSecrets` every WrathBench pod carries
+  ("Secrets", below); for a repository in `allowedImages` the chart-wide Secret
+  cannot pull. The cluster repo creates the Secret and the chart names it.
+
+A run pod gets the module secret and the one credential its driver bills (its
+lane's `CLAUDE_CODE_OAUTH_TOKEN*`, its `apiKeyEnv`, or the mounted codex home),
+`WRATHBENCH_LOCAL_MODEL_HOSTS` from the chart's `localModelHosts` (run.ts
+checks an openai entry's key and base against the provider table again, and a
+pod without the hosts would refuse every self-hosted entry the fleet accepted),
+the runs and wiki volumes, and no config store, no database variables and no
+`ANTHROPIC_*` variable — `infra/run-pod.test.ts` asserts the last on the
+rendered template and on the env builder. Its harness stamp is the arm's image
+tag, never master's; a digest-only pin stamps
+`<repository basename>@sha256:<12 hex>`. The launcher writes
+`runs/<id>/image.json` (`ref`, `digest`, `pod`, `node`, `startedAt`) when the
+container starts, and a resume in a pod relaunches that digest whatever the arm
+says now. That holds only while `runPods` is `probes`: switched off, a paused
+probe on an image-less arm resumes as a child process on the release, one on
+a pinned arm waits, listed, until the switch is back on, and the supervisor
+exempts a probe from the harness-series gate only when it has an `image.json`
+and the switch is on.
+
+**Lifecycle.** Each pod carries an ownerReference to the fleet pod, so a fleet
+stop or crash deletes its run pods with the pod's 90s grace — the same
+SIGTERM → `operator-pause` an episode gets from its roster. A roster's SIGTERM
+deletes its pod with that grace and waits for it to be gone; the supervisor's
+drain counts a roster's run pod as an episode in flight (beside its /proc
+scan), asking the API only of a roster it spawned with `--run-pods`, where a
+403 or 404 is no pod and a timeout or 5xx is a pod still there;
+`infra/k8s-deploy.sh` waits for zero run pods after the fleet pod is
+gone and before the worldserver is touched, and fails the window closed naming
+the run if one outlives the budget — or if the pods cannot be listed for that
+long, because a failed read is not an empty one; `infra/fleet-update.sh status`
+lists them.
+A pod that will not pull (`ImagePullBackOff`), cannot be scheduled for five
+minutes, stays Pending for fifteen, or is evicted ends the attempt as
+`launch-failed` with the kubelet's reason in the roster's log, never as a hang.
+So does an image the allow-list refuses, a pod the API will not create, and a
+run.ts that refuses its flags. Each leaves a stub run terminated `launch-failed`
+with that reason, which counts toward the definition's `maxAttemptsPerCell`:
+a square that cannot launch settles as capped instead of being picked again
+every tick.
+The pod's log is followed into the job log as a child's stderr was, and the
+finished pod is deleted.
+
+**Debugging one.** Pods are labelled `app.kubernetes.io/component=run`, with
+the run id in the annotation `wrathbench.shard.page/run-id` (the label
+`wrathbench.shard.page/run` is its hash: a run id can exceed 63 characters) and
+the owning roster's pid in `wrathbench.shard.page/roster-pid`.
+
+```
+kubectl -n wrathbench get pods -l app.kubernetes.io/component=run -o wide
+kubectl -n wrathbench describe pod <name>          # pull errors, scheduling, the image digest
+kubectl -n wrathbench logs <name>                  # run.ts's own lines; also in the job log
+kubectl -n wrathbench get cm wrathbench-run-pod-template -o jsonpath='{.data.pod\.json}'
+```
+
+**A branch runner image.** PR heads and master commits are built by a GitHub
+Actions workflow and pushed to GHCR as
+`ghcr.io/shard/wrathbench-runner:harness-0.5-<n>-g<sha>[-pr<N>]`; a definition
+usually pins the digest. By hand, from a clean checkout of the branch, or
+naming the branch's head from any clean checkout:
+
+```
+./infra/build-images.sh --only runner --push --registry ghcr.io/shard
+./infra/build-images.sh --only runner --push --registry ghcr.io/shard \
+  --commit <sha> --tag "$(git describe --tags --always <sha>)"
+```
+
+Like a release ("Deploy window", above), the image is built from a `git
+archive` of that commit, never from the working tree, so an uncommitted edit is
+never in it, and `infra/image-guard.sh` checks it before the push. The tag is
+`git describe` of the commit, so it still names series 0.5 and a run stamped
+with it groups with the series; `--allow-dirty` tags are refused for push, and
+`latest` is refused everywhere.
+
+**First proof.** One short probe on `PROBE`: publish a one-arm definition,
+assign a model, set `runPods` to `probes`, and watch `fleet-update.sh status`
+and the job log for `run pod … created`, `… running on <node>: <image> is
+sha256:…`, and the roster's verdict. Expect the first pull of a new image to
+take minutes; the account is held through it by `image.json` and the heartbeat.
 
 ### Ad-hoc launches still work
 
@@ -1368,6 +1525,21 @@ credential it bills. The per-run session secret the child authenticates with
 is registered for redaction the moment it is leased, so a snippet that prints
 its environment writes `[redacted]` into the trajectory.
 
+A run pod's environment is in "Run pods", above: the launcher keeps only the
+module secret and its driver's one credential.
+
+**The images are private.** WrathBench's images live in a private Harbor
+project (`harbor.nusphere.shard.page/wrathbench`, operator decision
+2026-10-11), so every pod built from them — fleet, runner, viewer, publisher,
+collector, worldserver, authserver, the bootstrap and db-import Jobs, and every
+run pod — pulls with a Secret the cluster owns (`wrathbench-harbor-pull`, a
+`kubernetes.io/dockerconfigjson`), named in the chart's `imagePullSecrets`
+value from the HelmRelease. The chart never holds the credential. The MySQL and
+ClickHouse pods pull upstream public images and carry none. Run pods add
+`runPods.imagePullSecrets` for a repository the Harbor Secret cannot pull.
+`runPods.allowedImages` defaults to `<image.registry>/wrathbench-runner`, so
+the move of the registry project moves the allow-list with it.
+
 `WRATHBENCH_MODULE_SECRET` — the module's **port secret** (module/PROTOCOL.md,
 "Authentication"). Every request to the worldserver's control
 port, `GET /health` included, must carry it (or a session secret leased with
@@ -1407,7 +1579,10 @@ Every episode is stamped with `git describe --tags --always --dirty`, computed
 at launch. On the host `run-episode.sh` does it; in the container `run-roster`
 does it, using the `git` in the runner image against the bind-mounted `.git`.
 A dirty tree stamps `-dirty` either way — that is the point, and it is why the
-stamp is not a file written once at `up` time.
+stamp is not a file written once at `up` time. On the cluster the stamp is the
+image tag the chart passes (`WRATHBENCH_HARNESS_VERSION`), and an episode
+running as its own pod on an arm's image is stamped with *that* image's tag,
+never the fleet's ("Run pods", above).
 
 ## Public dashboard
 

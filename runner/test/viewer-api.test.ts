@@ -20,6 +20,8 @@ import { type RunStore, localRunStore } from "../viewer/clickhouse";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
 import { readRun } from "../viewer/runs";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { defsBlock, definition, seedPublished } from "./fixtures/campaigns";
+import type { CampaignsResponse } from "../viewer/api-types";
 
 const tempDir = tempDirs();
 
@@ -115,16 +117,17 @@ function campaignizeScoreabilityFixture(runs: string): string {
     const meta = JSON.parse(readFileSync(path, "utf8")) as { config: Record<string, unknown> };
     writeFileSync(
       path,
-      JSON.stringify({ ...meta, config: { ...meta.config, campaign: "nav-probe", campaignVersion: 1, cell: "coldridge" } }),
+      JSON.stringify({ ...meta, config: { ...meta.config, campaign: "solo", campaignVersion: 1, cell: "coldridge", arm: "base", ref: "m" } }),
     );
   }
   const fleetPath = join(runs, "config.sqlite");
   const store = new ConfigStore(fleetPath);
-  store.seed({
+  seedPublished(store, {
     accounts: { pool: ["RUNNER"] },
     roster: { m: { model: "m:free", tier: "t1" } },
+    "campaign-defs": defsBlock(definition({ id: "solo", cells: [{ id: "coldridge", race: 3, class: 2 }] })),
     campaigns: {
-      "nav-probe": { version: 1, enabled: true, assignments: [{ model: "m", runsPerCell: 1 }] },
+      solo: { version: 1, enabled: true, assignments: [{ model: "m", runsPerCell: 1 }] },
     },
   });
   store.close();
@@ -606,23 +609,16 @@ describe("scoreability projection", () => {
       });
       const res = await handle(new Request("http://x/api/campaigns"));
       expect(res.status).toBe(200);
-      const body = (await res.json()) as {
-        campaigns: {
-          campaign: string;
-          runs: number;
-          live: number;
-          config: { complete: boolean } | null;
-          cells: { cell: string; runs: number; models: string[] }[];
-        }[];
-      };
-      const row = body.campaigns.find((campaign) => campaign.campaign === "nav-probe")!;
-      // `runs` is the counted numerator: the ended environment-defect row reaches
-      // campaignComplete as counted:false through the production taintOf path and
-      // so counts for nothing here either; the live row remains visible separately.
-      expect(row).toMatchObject({ campaign: "nav-probe", runs: 0, live: 1 });
-      expect(row.config).toMatchObject({ complete: false });
-      expect(row.cells).toHaveLength(1);
-      expect(row.cells).toMatchObject([{ cell: "coldridge", runs: 2, models: ["m"] }]);
+      const body = (await res.json()) as CampaignsResponse;
+      const c = body.campaigns.find((x) => x.id === "solo")!;
+      // The ended environment-defect run reaches the tally as counted:false
+      // through the production taintOf path and so settles nothing; the live
+      // run is in flight, apart from `runs`, and keeps the campaign running.
+      expect(c.progress).toMatchObject({ want: 1, done: 0, live: 1 });
+      expect(c.state).toBe("running");
+      expect(c.grid).toHaveLength(1);
+      expect(c.grid[0]!.squares[0]).toMatchObject({ column: "m/base", runs: 1, counted: 0, live: 1, settled: null });
+      expect(c.grid[0]!.squares[0]!.runIds.sort()).toEqual(["environment-defect", "live-response"]);
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }

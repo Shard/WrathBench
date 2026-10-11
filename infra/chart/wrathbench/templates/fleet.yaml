@@ -51,6 +51,11 @@ spec:
       {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
+      # The one pod with a token: the run-pod launcher creates, watches and
+      # deletes pods in this namespace (templates/run-pods.yaml holds the Role).
+      serviceAccountName: {{ include "wrathbench.fullname" . }}-fleet
+      automountServiceAccountToken: true
       terminationGracePeriodSeconds: 180
       containers:
         - name: fleet
@@ -67,6 +72,24 @@ spec:
             - name: WRATHBENCH_IN_CONTAINER
               value: "1"
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
+            # This pod's own identity, for the ownerReference every run pod
+            # carries: a fleet stop or crash then deletes its run pods, and each
+            # gets the same SIGTERM → operator-pause it gets from the roster.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            # The rendered run-pod template and the launcher's allow-list,
+            # mounted below. Read by infra/run-pod.ts when a probing job asks
+            # for a pod; absent, such a launch is refused with the reason.
+            - name: WRATHBENCH_RUN_POD_TEMPLATE
+              value: /etc/wrathbench/run-pod/pod.json
+            - name: WRATHBENCH_RUN_POD_LAUNCHER
+              value: /etc/wrathbench/run-pod/launcher.json
             # For the preflight gate's fixture staging (infra/fixtures/apply.ts
             # writes acore_characters directly). A benchmark episode cannot
             # reach these: sandboxChildEnv forwards the snippet child a named
@@ -110,6 +133,9 @@ spec:
             # the console it would be a worse marker than the one it replaces.
             - name: tmp
               mountPath: /tmp
+            - name: run-pod
+              mountPath: /etc/wrathbench/run-pod
+              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -124,4 +150,7 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.fleet.tmpSizeLimit }}
+        - name: run-pod
+          configMap:
+            name: {{ include "wrathbench.fullname" . }}-run-pod-template
 {{- end }}

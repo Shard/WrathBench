@@ -104,21 +104,27 @@ import {
   unpinnedCampaigns,
   pinnedCampaignJobs,
   probeRunsOf,
+  healthyFrom,
   tripsBreaker,
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
-import type { Campaign } from "../runner/src/campaigns";
+import { campaignSquares, campaignWork, type Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
 import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/config-store";
 import { parseCampaigns } from "../runner/src/campaigns";
-import { backoffMs, episodeArgv, resolve } from "./run-roster";
+import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
+import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
+import { backoffMs, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
+import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
+import { isCounted, readRunFacts } from "../runner/src/models";
+import { listRuns } from "../runner/viewer/runs";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";
 
@@ -132,9 +138,9 @@ const tempDir = tempDirs();
  */
 const LAN_ENV = { WRATHBENCH_LOCAL_MODEL_HOSTS: "10.0.0.1:1234, 192.168.100.20:1234" };
 
-/** `parseFleet` under that deployment unless a test states another. */
-const parseFleet = (raw: unknown, env: Record<string, string | undefined> = LAN_ENV): ReturnType<typeof parseFleetIn> =>
-  parseFleetIn(raw, env);
+/** `parseFleet` under that deployment unless a test states another `env`. */
+const parseFleet = (raw: unknown, opts: Parameters<typeof parseFleetIn>[1] = {}): ReturnType<typeof parseFleetIn> =>
+  parseFleetIn(raw, { env: LAN_ENV, ...opts });
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -153,12 +159,41 @@ function spawn(over: Partial<JobSpawn> = {}): JobSpawn {
   };
 }
 
-/** A minimal 0.4 file: a roster, a pool, and the jobs given. */
+const ROSTER_BASE = {
+  glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
+  son: { tier: "t1", model: "sonnet", driver: "claude-code" },
+  ox: { tier: "t1", model: "stealth/ox-alpha:free" },
+};
+
+/** A one-cell, non-resuming campaign the pinned-campaign tests sweep. */
+const SOLO = definition({
+  id: "solo-probe",
+  objective: "Travel to Ironforge and keep a log.",
+  stopAtLevel: null,
+  wikiCoords: true,
+  resume: false,
+  maxAttemptsPerCell: null,
+  budget: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null, maxToolCalls: 2500 },
+  cells: [{ id: "coldridge", race: 3, class: 2 }],
+});
+/** Two pinned arms on one image, one of which sets the compaction window. */
+const WINDOWS = definition({
+  id: "window-probe",
+  arms: [
+    { id: "auto", image: "registry.example/wb/runner:harness-0.5-931" },
+    { id: "w200k", image: "registry.example/wb/runner:harness-0.5-931", args: ["--compact-window", "200k"] },
+  ],
+});
+/** Every config document these tests write carries the published definitions a row may name. */
+const FLEET_DEFS = defsBlock(checkedIn("race-probe@1"), checkedIn("class-probe@2"), SOLO, WINDOWS);
+
+/** A minimal 0.4 file: a roster, a pool, the published definitions, and the jobs given. */
 function fleetJson(queue: unknown[], over: Record<string, unknown> = {}): unknown {
   return {
     _notes: ["n"],
     accounts: { pool: ["RUNNER", "RUNNER2"] },
-    roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free" }, son: { tier: "t1", model: "sonnet", driver: "claude-code" }, ox: { tier: "t1", model: "stealth/ox-alpha:free" } },
+    roster: ROSTER_BASE,
+    "campaign-defs": FLEET_DEFS,
     queue,
     ...over,
   };
@@ -220,14 +255,14 @@ describe("parseFleet", () => {
     // under a refused pin apart from one the operator parked: that is `jobs`.
     const config = parseFleet(
       fleetJson([{ ref: "glm", episode: "e90", account: "S" }], {
-        campaigns: { "nav-probe": { version: 1, account: "s", assignments: [{ model: "son" }] } },
+        campaigns: { "solo-probe": { version: 1, account: "s", assignments: [{ model: "son" }] } },
       }),
     );
-    expect(config.refusals[0]!.jobs).toEqual(["nav-probe-coldridge"]);
+    expect(config.refusals[0]!.jobs).toEqual(["solo-probe-coldridge-base"]);
     // What the tick does with them: the live probe survives the diff.
-    const live = { running: new Set(["nav-probe-coldridge"]), draining: new Set<string>(), finished: new Set<string>() };
+    const live = { running: new Set(["solo-probe-coldridge-base"]), draining: new Set<string>(), finished: new Set<string>() };
     const drain = diffJobs(pinnedJobs(config).map((j) => ({ ...j, refs: j.refs })) as never, live).drain;
-    expect(drain).toEqual(["nav-probe-coldridge"]);
+    expect(drain).toEqual(["solo-probe-coldridge-base"]);
     const refused = new Set(config.refusals.flatMap((r) => r.jobs));
     expect(drain.filter((n) => !refused.has(n))).toEqual([]);
   });
@@ -291,7 +326,7 @@ describe("parseFleet", () => {
           other: { tier: "t1", model: "vendor/f", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "SOME_OTHER_KEY" },
         },
       }),
-      {},
+      { env: {} },
     );
     expect(config.refusals.map((r) => r.pin).sort()).toEqual(
       ["roster alike", "roster away", "roster bare", "roster lane", "roster mod", "roster other", "roster plain"],
@@ -324,19 +359,19 @@ describe("parseFleet", () => {
       // Claude-code and codex entries send no key at all, so nothing to pair.
       son: { tier: "t1", model: "sonnet", driver: "claude-code" },
     };
-    expect(parseFleet(fleetJson([], { roster }), LAN_ENV).refusals).toEqual([]);
+    expect(parseFleet(fleetJson([], { roster }), { env: LAN_ENV }).refusals).toEqual([]);
     // No self-hosted host configured: the LAN entry alone is refused.
-    const none = parseFleet(fleetJson([], { roster }), {});
+    const none = parseFleet(fleetJson([], { roster }), { env: {} });
     expect(none.refusals.map((r) => r.pin)).toEqual(["roster lan"]);
     expect(none.refusals[0]!.why).toMatch(/names no self-hosted model host \(WRATHBENCH_LOCAL_MODEL_HOSTS\)/);
     // A host the deployment does not name, or the right host on another port.
     for (const apiBase of ["http://192.168.100.21:1234/v1", "http://192.168.100.20:9999/v1"]) {
-      const moved = parseFleet(fleetJson([], { roster: { lan: { ...roster.lan, apiBase } } }), LAN_ENV);
+      const moved = parseFleet(fleetJson([], { roster: { lan: { ...roster.lan, apiBase } } }), { env: LAN_ENV });
       expect(moved.refusals[0]!.why).toMatch(/may be sent only to a host WRATHBENCH_LOCAL_MODEL_HOSTS lists/);
     }
     // A host listed without a port allows any port on it.
     expect(parseFleet(fleetJson([], { roster: { lan: { ...roster.lan, apiBase: "http://192.168.100.20:9999/v1" } } }), {
-      WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20",
+      env: { WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20" },
     }).refusals).toEqual([]);
   });
 
@@ -410,7 +445,7 @@ describe("parseFleet", () => {
     expect("compactWindow" in plainSpawn).toBe(false);
   });
 
-  test("runs map back to the entry with their own window: affinity, probe refs and resumes", () => {
+  test("runs map back to the entry with their own window: affinity and resumes", () => {
     const config = parseFleet(
       fleetJson([], {
         roster: {
@@ -427,7 +462,9 @@ describe("parseFleet", () => {
     const affinity = affinityFrom(runs, config.roster);
     expect(affinity.get("hk")?.account).toBe("RUNNER");
     expect(affinity.get("hk100")?.account).toBe("RUNNER2");
-    expect(probeRunsOf(runs, config.roster)).toEqual([{ campaign: "race-probe", version: 1, cell: "orc-warrior", ref: "hk100", counted: false }]);
+    // A probe is matched by its stamps alone: a run that recorded no roster
+    // name and no arm is in no campaign square, whatever entry it resembles.
+    expect(probeRunsOf(runs)).toEqual([{ campaign: "race-probe", version: 1, cell: "orc-warrior", ref: null, arm: null, counted: false, live: false }]);
     // A resume picks the spawn entry with the paused run's window.
     const spawned: JobSpawn = spawn({ entries: [{ model: "claude-haiku-5-5", effort: "max" }, { model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" }] });
     const resumed = withResume(spawned, { runId: "b", model: "claude-haiku-5-5", effort: "max", compactWindow: "100k" });
@@ -498,120 +535,237 @@ describe("parseFleet", () => {
 });
 
 describe("campaigns: probe sweeps as the third lane", () => {
-  test("a campaigns row names a checked-in version and the assignments that sweep it", () => {
+  test("a campaigns row names a published version and the assignments that sweep it", () => {
     const config = parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, assignments: [{ model: "glm", runsPerCell: 2 }] } } }));
     expect(config.campaigns).toHaveLength(1);
     expect(config.campaigns[0]).toMatchObject({ name: "race-probe", version: 1, enabled: true, assignments: [{ model: "glm", runsPerCell: 2 }] });
-    // The cells are the definition's, never the row's.
+    // The cells and arms are the published definition's, never the row's.
     expect(config.campaigns[0]!.cells.map((c) => c.id)).toEqual([
       "human-warrior", "dwarf-warrior", "gnome-warrior", "nightelf-warrior", "draenei-warrior",
       "orc-warrior", "troll-warrior", "undead-warrior", "tauren-warrior", "bloodelf-rogue",
     ]);
+    expect(config.campaigns[0]!.arms.map((a) => a.id)).toEqual(["base"]);
+    expect(config.campaignDefs.map((d) => d.ref).sort()).toEqual(["class-probe@2", "race-probe@1", "solo-probe@1", "window-probe@1"]);
   });
 
-  test("a row stating any of a definition's keys refuses the config with where the key lives", () => {
-    expect(() => parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, cells: [{ id: "c1" }] } } }))).toThrow(
-      /campaigns: campaign race-probe: cells is the definition's, not the store's/,
+  test("one bad campaign row is refused by key and the rest of the config plans normally: roster, scored lanes, the good campaign", () => {
+    // A row with no version (the pre-definition shape), one with an unknown
+    // key, and a stored definition that no longer parses, beside a good
+    // pinned campaign and a scored roster entry. Before, any of them took the
+    // whole config down, and a fresh boot ran an empty board.
+    const config = parseFleet(
+      fleetJson([], {
+        accounts: { pool: ["RUNNER", "RUNNER2"] },
+        "campaign-defs": { ...FLEET_DEFS, "broken@1": { definition: { id: "broken" } } },
+        campaigns: {
+          "nav-probe": { enabled: true, account: "SHAKEOUT", models: ["son"], cells: [{ id: "coldridge", race: 3, class: 2 }] },
+          "race-probe": { version: 1, objective: "x" },
+          "solo-probe": { version: 1, account: "SOLO", assignments: [{ model: "son" }] },
+        },
+      }),
     );
-    expect(() => parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, objective: "x" } } }))).toThrow(/runner\/src\/campaign-defs/);
+    expect(config.campaignRefusals.map((r) => r.key)).toEqual(["campaign-defs/broken@1", "campaigns/nav-probe", "campaigns/race-probe"]);
+    expect(config.campaignRefusals[1]!.reason).toContain("version");
+    expect(config.refusals.map((r) => r.pin)).toEqual(["campaign nav-probe", "campaign race-probe"]);
+    expect(config.campaigns.map((c) => c.name)).toEqual(["solo-probe"]);
+    expect(Object.keys(config.roster)).toEqual(["glm", "son", "ox"]);
+    // The board: the good campaign's square on its account, and the scored
+    // lanes filling the pool as if the bad rows were not there.
+    const plan = planTick(config, modelStatesOf(rosterModels(config.roster)), () => undefined, "20261011");
+    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["solo-probe-coldridge-base", "SOLO"]]);
+    expect(plan.policy.map((p) => [p.job.ref, p.job.episode, p.account])).toEqual([
+      ["glm", "e90", "RUNNER"],
+      ["ox", "e90", "RUNNER2"],
+    ]);
   });
 
-  test("a version this checkout does not define is refused by name, not the file", () => {
+  test("a version nobody published is refused by name, not the file, and listed by its store key", () => {
     const config = parseFleet(
       fleetJson([{ ref: "glm", episode: "e90" }], { campaigns: { "race-probe": { version: 4, assignments: [{ model: "glm" }] } } }),
     );
     expect(config.campaigns).toEqual([]);
     expect(config.jobs).toHaveLength(1);
     expect(config.refusals[0]).toMatchObject({ pin: "campaign race-probe" });
-    expect(config.refusals[0]!.why).toContain("race-probe@4 has no definition");
+    expect(config.refusals[0]!.why).toContain("race-probe@4 is not published");
+    expect(config.campaignRefusals.map((r) => r.key)).toEqual(["campaigns/race-probe"]);
   });
 
-  test("the live store's pre-definition rows load: nav-probe onto nav-probe@1, class-probe onto closed v1", () => {
-    // As the store held them when definitions moved into git, before the
-    // operator rewrites them: the deploy must not need the store edited first.
+  test("a pair that cannot launch is refused before any launch, keyed so the page can show it", () => {
     const config = parseFleet(
       fleetJson([], {
-        accounts: { pool: ["RUNNER"] },
-        roster: { sonnet: { tier: "t1", model: "sonnet", driver: "claude-code" } },
-        campaigns: {
-          "nav-probe": {
-            enabled: true,
-            account: "SHAKEOUT",
-            models: ["sonnet"],
-            objective: "Travel from Coldridge Valley to Ironforge…",
-            watchdogs: { episodeMs: 21_600_000, noXpMs: null, idleMs: 1_200_000 },
-            maxToolCalls: 2500,
-            wikiCoords: true,
-            runsPerCell: 1,
-            cells: [{ id: "coldridge", race: 3, class: 2 }],
-          },
-          "class-probe": { enabled: false, models: ["muse-spark"], resume: true, maxAttemptsPerCell: 3, runsPerCell: 1, cells: [{ id: "human-warrior", race: 1, class: 1 }] },
-        },
+        roster: { ...ROSTER_BASE, son100: { tier: "t1", model: "sonnet", driver: "claude-code", compactWindow: "100k" } },
+        // Run pods on, so the pinned arms themselves can launch and only the window decides.
+        policy: { runPods: "probes" },
+        campaigns: { "window-probe": { version: 1, assignments: [{ model: "son" }, { model: "son100" }, { model: "glm" }] } },
       }),
     );
+    expect(config.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:son100:w200k", "window-probe@1:glm:w200k"]);
+    // Not a pin refusal: the rest of the campaign schedules.
     expect(config.refusals).toEqual([]);
-    expect(config.campaigns.map((c) => [c.name, c.version, c.enabled, c.migrated])).toEqual([
-      ["nav-probe", 1, true, true],
-      ["class-probe", 1, false, true],
-    ]);
-    // nav-probe's one run was stamped with no version; it is nav-probe@1's, so
-    // the migrated row owes nothing and launches nothing.
-    const navRun = { campaign: "nav-probe", version: 1, cell: "coldridge", ref: "sonnet", counted: true };
-    expect(pinnedCampaignJobs(config, [navRun])).toEqual([]);
+    expect(config.campaigns[0]!.refusedPairs.map((p) => `${p.ref}:${p.arm}`)).toEqual(["son100:w200k", "glm:w200k"]);
+  });
+
+  test("a pinned arm is a refused pair while run pods are off or the fleet is off the cluster: parked and shown, never launched", () => {
+    // Such an arm runs only in a run pod. The launcher refused each launch
+    // before the run existed, so nothing counted the attempt and the square
+    // was re-picked every tick; now the planner never picks it.
+    const doc = (policy: Record<string, unknown>, account?: string): unknown =>
+      fleetJson([], {
+        policy,
+        campaigns: { "window-probe": { version: 1, ...(account !== undefined ? { account } : {}), assignments: [{ model: "son" }] } },
+      });
+    const off = parseFleet(doc({}));
+    expect(off.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:son:auto", "window-probe@1:son:w200k"]);
+    expect(off.campaignRefusals[0]!.reason).toContain('policy.runPods is "off"');
+    expect(off.campaignRefusals[0]!.reason).toContain("image registry.example/wb/runner:harness-0.5-931");
+    expect(off.refusals).toEqual([]);
+    // Parked: neither the policy's fan-out nor a pinned campaign offers a square of it.
+    expect(campaignWork(off.campaigns, Object.keys(off.roster), [])).toEqual([]);
+    expect(pinnedCampaignJobs(parseFleet(doc({}, "SHAKEOUT")), [])).toEqual([]);
+    // Shown: the tally keeps every square, each carrying the reason.
+    const squares = campaignSquares(off.campaigns[0]!, Object.keys(off.roster), []);
+    expect(squares.length).toBe(4);
+    expect(squares.every((q) => q.refused?.includes("run pod") === true)).toBe(true);
+    // Switched on, they schedule — unless the supervisor knows it is off the cluster.
+    const on = parseFleet(doc({ runPods: "probes" }));
+    expect(on.campaignRefusals).toEqual([]);
+    expect(campaignWork(on.campaigns, Object.keys(on.roster), []).length).toBe(4);
+    const host = parseFleet(doc({ runPods: "probes" }), { onCluster: false });
+    expect(host.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:son:auto", "window-probe@1:son:w200k"]);
+    expect(host.campaignRefusals[0]!.reason).toContain("not on the cluster");
+    expect(parseFleet(doc({ runPods: "probes" }), { onCluster: true }).campaignRefusals).toEqual([]);
+    // An arm with no image or command floats on the release and is never refused for it.
+    expect(parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, assignments: [{ model: "glm" }] } } })).campaignRefusals).toEqual([]);
+    // A command alone pins the arm just the same.
+    const cmd = definition({ id: "cmd-probe", arms: [{ id: "ext", command: ["/app/harness"] }] });
+    const withCmd = parseFleet(fleetJson([], { "campaign-defs": defsBlock(cmd), campaigns: { "cmd-probe": { version: 1, assignments: [{ model: "glm" }] } } }));
+    expect(withCmd.campaignRefusals.map((r) => r.key)).toEqual(["cmd-probe@1:glm:ext"]);
+    expect(withCmd.campaignRefusals[0]!.reason).toContain("command /app/harness");
+    // A pair refused on both grounds says both, once.
+    const both = parseFleet(fleetJson([], { campaigns: { "window-probe": { version: 1, assignments: [{ model: "glm" }] } } }));
+    expect(both.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:glm:auto", "window-probe@1:glm:w200k"]);
+    expect(both.campaignRefusals[1]!.reason).toMatch(/runs only in a run pod.*; arm w200k sets --compact-window 200k/);
+  });
+
+  test("an assignment whose roster entry is refused is a refused pair on every arm: a pinned campaign moves past it and the policy never offers it", () => {
+    // The roster's refusals (a provider key towards a host the table does not
+    // pair it with, here) are settled before the pairs are: otherwise the
+    // refused entry's square was a pinned campaign's next square on every
+    // tick, gated by the planner, and the campaign's other assignment never
+    // got the account.
+    const roster = { ...ROSTER_BASE, away: { tier: "t1", model: "vendor/away", apiBase: "https://collector.example/v1", apiKeyEnv: "OPENROUTER_KEY" } };
+    const doc = (account?: string): unknown =>
+      fleetJson([], {
+        roster,
+        campaigns: { "race-probe": { version: 1, ...(account !== undefined ? { account } : {}), assignments: [{ model: "away" }, { model: "glm" }] } },
+      });
+    const pinned = parseFleet(doc("SHAKEOUT"), { env: {} });
+    // Refused as the entry, by name, with the whole why; the file stands.
+    expect(pinned.refusals.map((r) => r.pin)).toEqual(["roster away"]);
+    expect(pinned.refusals[0]!.why).toMatch(/OPENROUTER_KEY is OpenRouter's key .* not collector.example/);
+    expect(pinned.campaigns.map((c) => [c.name, c.enabled])).toEqual([["race-probe", true]]);
+    // And as each of its pairs, keyed for the page. The pair reason names the
+    // entry, never the host: it reaches the public campaigns page.
+    const race = pinned.campaigns[0]!;
+    expect(race.refusedPairs.map((p) => `${p.ref}:${p.arm}`)).toEqual(race.arms.map((a) => `away:${a.id}`));
+    expect(pinned.campaignRefusals.map((r) => r.key)).toEqual(race.arms.map((a) => `race-probe@1:away:${a.id}`));
+    expect(pinned.campaignRefusals.every((r) => r.reason === "roster entry away is refused, so nothing schedules it")).toBe(true);
+    // Shown: away's squares stay in the tally, each refused; glm's are owed.
+    const squares = campaignSquares(race, Object.keys(pinned.roster), []);
+    expect(squares.filter((q) => q.ref === "away").every((q) => q.refused !== null)).toBe(true);
+    expect(squares.filter((q) => q.ref === "glm").every((q) => q.refused === null)).toBe(true);
+    // Parked: the pinned campaign's job is glm's square, not away's.
+    expect(pinnedCampaignJobs(pinned, []).map((j) => [j.ref, j.probe?.cell])).toEqual([["glm", race.cells[0]!.id]]);
+    // Unpinned, the fan-out offers glm's squares only, even over a catalog that names away.
+    const policy = parseFleet(doc(), { env: {} });
+    expect(new Set(campaignWork(policy.campaigns, Object.keys(policy.roster), []).map((w) => w.model))).toEqual(new Set(["glm"]));
+    // A pair refused on more than one ground says each, the entry first.
+    const windows = parseFleet(
+      fleetJson([], { roster, policy: { runPods: "probes" }, campaigns: { "window-probe": { version: 1, assignments: [{ model: "away" }, { model: "son" }] } } }),
+      { env: {} },
+    );
+    expect(windows.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:away:auto", "window-probe@1:away:w200k"]);
+    expect(windows.campaignRefusals[1]!.reason).toMatch(/^roster entry away is refused, so nothing schedules it; arm w200k sets --compact-window 200k/);
+    // The deployment that pairs the key with that host has nothing to refuse.
+    const lan = { ...ROSTER_BASE, away: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" } };
+    const listed = parseFleet(fleetJson([], { roster: lan, campaigns: { "race-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "away" }, { model: "glm" }] } } }), { env: LAN_ENV });
+    expect(listed.refusals).toEqual([]);
+    expect(listed.campaignRefusals).toEqual([]);
+    expect(pinnedCampaignJobs(listed, []).map((j) => j.ref)).toEqual(["away"]);
   });
 
   test("a pinned campaign sharing an account with an enabled job is refused, not the file", () => {
     // Jobs come before campaigns in the pin order, so the job keeps the account.
     const config = parseFleet(
       fleetJson([{ ref: "glm", episode: "e90", account: "S" }], {
-        campaigns: { "nav-probe": { version: 1, account: "s", assignments: [{ model: "son" }] } },
+        campaigns: { "solo-probe": { version: 1, account: "s", assignments: [{ model: "son" }] } },
       }),
     );
     expect(config.jobs[0]!.enabled).toBe(true);
     expect(config.campaigns[0]!.enabled).toBe(false);
-    // A campaign's `jobs` are one per declared cell — what a live probe runs under.
-    expect(config.refusals[0]).toMatchObject({ pin: "campaign nav-probe", jobs: ["nav-probe-coldridge"] });
+    // A campaign's `jobs` are one per (cell, arm) — what a live probe runs under.
+    expect(config.refusals[0]).toMatchObject({ pin: "campaign solo-probe", jobs: ["solo-probe-coldridge-base"] });
     expect(config.refusals[0]!.why).toMatch(/^account s is already glm-e90's/);
   });
 
   test("a disabled pinned campaign may park on a listed account", () => {
-    const config = parseFleet(fleetJson([], { campaigns: { "nav-probe": { version: 1, account: "RUNNER", enabled: false } } }));
-    expect(config.campaigns[0]).toMatchObject({ name: "nav-probe", enabled: false, account: "RUNNER" });
+    const config = parseFleet(fleetJson([], { campaigns: { "solo-probe": { version: 1, account: "RUNNER", enabled: false } } }));
+    expect(config.campaigns[0]).toMatchObject({ name: "solo-probe", enabled: false, account: "RUNNER" });
   });
 
   test("a pinned campaign is NOT passed to the scheduler while an unpinned enabled one is", () => {
     const config = parseFleet(
       fleetJson([], {
         campaigns: {
-          "nav-probe": { version: 1, account: "CAMPACCT", assignments: [{ model: "son" }] },
+          "solo-probe": { version: 1, account: "CAMPACCT", assignments: [{ model: "son" }] },
           "race-probe": { version: 1, assignments: [{ model: "glm" }] },
         },
       }),
     );
-    expect(config.campaigns.map((c) => c.name)).toEqual(["nav-probe", "race-probe"]);
+    expect(config.campaigns.map((c) => c.name)).toEqual(["solo-probe", "race-probe"]);
     expect(unpinnedCampaigns(config).map((c) => c.name)).toEqual(["race-probe"]);
   });
 
-  test("a pinned campaign becomes a job on its own account, one cell at a time", () => {
+  test("a pinned campaign becomes a job on its own account, one square at a time", () => {
     const config = parseFleet(
       fleetJson([], { campaigns: { "class-probe": { version: 2, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }),
     );
     const jobs = pinnedCampaignJobs(config, []);
-    // One job, not one per cell: an account runs a single live session, so
+    // One job, not one per square: an account runs a single live session, so
     // offering it the whole sweep would only queue behind itself.
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({
+      name: "class-probe-dwarf-warrior-base",
       ref: "son",
       episode: "probing",
       account: "SHAKEOUT",
       enabled: true,
-      probe: { campaign: "class-probe", version: 2, cell: "dwarf-warrior" },
+      probe: { campaign: "class-probe", version: 2, cell: "dwarf-warrior", arm: "base" },
     });
   });
 
-  test("a pinned campaign whose cells are all done offers no job", () => {
-    const config = parseFleet(fleetJson([], { campaigns: { "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
-    expect(pinnedCampaignJobs(config, [{ campaign: "nav-probe", version: 1, cell: "coldridge", ref: "son", counted: true }])).toEqual([]);
+  test("a pinned campaign honours excludeUnhealthy, as the policy's picks do", () => {
+    const config = parseFleet(
+      fleetJson([], { campaigns: { "class-probe": { version: 2, account: "SHAKEOUT", assignments: [{ model: "son" }, { model: "glm" }] } } }),
+    );
+    const healthy = (n: string): boolean => n !== "son";
+    expect(pinnedCampaignJobs(config, [], healthy)[0]).toMatchObject({ ref: "glm" });
+    const all = parseFleet(
+      fleetJson([], {
+        campaigns: { "class-probe": { version: 2, account: "SHAKEOUT", excludeUnhealthy: false, assignments: [{ model: "son" }, { model: "glm" }] } },
+      }),
+    );
+    expect(pinnedCampaignJobs(all, [], healthy)[0]).toMatchObject({ ref: "son" });
+    // The health question is retired or cooling, never "running": the model
+    // running here is usually this campaign's own live probe.
+    const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(config.roster), policy: config.policy, runs: [] });
+    expect(states.every((s) => healthyFrom(states)(s.name))).toBe(true);
+  });
+
+  test("a pinned campaign whose squares are all done offers no job", () => {
+    const config = parseFleet(fleetJson([], { campaigns: { "solo-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
+    const done = { campaign: "solo-probe", version: 1, cell: "coldridge", ref: "son", arm: "base", counted: true, live: false };
+    expect(pinnedCampaignJobs(config, [done])).toEqual([]);
   });
 
   test("an unpinned campaign is never built into a job here", () => {
@@ -619,13 +773,13 @@ describe("campaigns: probe sweeps as the third lane", () => {
     expect(pinnedCampaignJobs(config, [])).toEqual([]);
   });
 
-  test("a probe spawn carries the definition's shape and drops the catalog entry's own", () => {
+  test("a probe spawn carries its campaign file and the launch seam, and drops the catalog entry's own shape", () => {
     // The load-bearing precedence rule: the definition owns the task, the entry
     // owns only the credentials. An entry's own ceiling must not leak into a
     // sweep whose definition names its own.
     const config = parseFleet(
       fleetJson([], {
-        roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", maxToolCalls: 99 } },
+        roster: { ...ROSTER_BASE, son: { tier: "t1", model: "sonnet", driver: "claude-code", maxToolCalls: 99 } },
         campaigns: { "race-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } },
       }),
     );
@@ -634,45 +788,49 @@ describe("campaigns: probe sweeps as the third lane", () => {
     expect(spawn.entries[0]).toMatchObject({
       model: "sonnet",
       episode: "probing",
-      campaign: "race-probe@1",
-      cell: "human-warrior",
       ref: "son",
       maxToolCalls: 24_000,
       race: 1,
       class: 1,
       resumeOnPause: true,
+      launch: { pod: true, image: null, command: null },
     });
+    expect(spawn.entries[0]!.campaignFile).toMatchObject({ campaign: "race-probe", version: 1, cell: { id: "human-warrior" }, arm: { id: "base" } });
     expect(spawn.entries[0]!.watchdogs).toMatchObject({ episodeMs: 43_200_000, idleMs: 1_200_000, noXpMs: null });
     expect(spawn.entries[0]!.objective).toBeUndefined();
   });
 
-  test("a probe's argv is its identity alone: the runner takes the shape from the definition", () => {
-    // `--campaign` refuses every flag that would set part of the shape, so the
-    // roster must emit none of them on a fresh launch.
+  test("an arm's image and command reach the launch seam exactly; its args reach the argv after the supervisor's", () => {
+    const config = parseFleet(fleetJson([], { policy: { runPods: "probes" }, campaigns: { "window-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
+    const job: FleetJob = { ...pinnedCampaignJobs(config, [])[0]!, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "w200k" }, name: "window-probe-a-w200k" };
+    const entry = jobSpawn(job, config.roster, "SHAKEOUT", "20261010", undefined, config.campaigns).entries[0]!;
+    expect(entry.launch).toEqual({ pod: true, image: "registry.example/wb/runner:harness-0.5-931", command: null });
+    const argv = episodeArgv(resolve([entry], "20261010")[0]!, false);
+    expect(argv.slice(-2)).toEqual(["--compact-window", "200k"]);
+  });
+
+  test("a probe's argv is its identity and its campaign file: the runner takes the shape from the file", () => {
     const config = parseFleet(
       fleetJson([], { campaigns: { "race-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }),
     );
     const job = pinnedCampaignJobs(config, [])[0]!;
     const [spec] = resolve(jobSpawn(job, config.roster, "SHAKEOUT", "20261010", undefined, config.campaigns).entries, "20261010");
     const argv = episodeArgv(spec!, false);
-    expect(argv.slice(argv.indexOf("--episode"))).toEqual(["--episode", "probing", "--campaign", "race-probe@1", "--cell", "human-warrior", "--ref", "son"]);
-    for (const f of ["--objective", "--race", "--class", "--wiki-coords", "--wiki", "--max-tool-calls", "--episode-ms", "--watchdogs-json"]) {
+    expect(argv.slice(argv.indexOf("--episode"))).toEqual(["--episode", "probing", "--campaign-file", `data/runs/${spec!.runId}/campaign.json`, "--ref", "son"]);
+    for (const f of ["--objective", "--race", "--class", "--wiki-coords", "--wiki", "--max-tool-calls", "--episode-ms", "--watchdogs-json", "--campaign", "--cell"]) {
       expect(argv).not.toContain(f);
     }
   });
 
-  test("two cells of one campaign are two job names, so nothing collides", () => {
-    const config = parseFleet(fleetJson([], { campaigns: { "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
-    expect(pinnedCampaignJobs(config, [])[0]!.name).toBe("nav-probe-coldridge");
+  test("every square of one campaign is its own job name, so nothing collides", () => {
+    const config = parseFleet(fleetJson([], { campaigns: { "solo-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
+    expect(pinnedCampaignJobs(config, [])[0]!.name).toBe("solo-probe-coldridge-base");
     expect(
-      policyJob({ name: "son", episode: "probing", account: "R1", attempt: 1, why: "w", probe: { campaign: "race-probe", version: 1, cell: "orc-warrior" } }).name,
-    ).toBe("son-race-probe-orc-warrior");
+      policyJob({ name: "son", episode: "probing", account: "R1", attempt: 1, why: "w", probe: { campaign: "race-probe", version: 1, cell: "orc-warrior", arm: "base" } }).name,
+    ).toBe("son-race-probe-orc-warrior-base");
   });
 
-  test("probeRunsOf reads the stamped ref and version, else the roster match and the claiming version", () => {
-    const roster: Record<string, FleetRosterEntry> = {
-      glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" },
-    };
+  test("probeRunsOf reads the run's own stamps and infers nothing", () => {
     const fact = (over: Partial<RunFact>): RunFact => ({
       runId: "r",
       model: "z-ai/glm-5.2:free",
@@ -697,23 +855,20 @@ describe("campaigns: probe sweeps as the third lane", () => {
       subscription: null,
       ...over,
     });
-    // An old run: no version, no ref stamped — class-probe@1 claims it, the roster names it.
+    // An old run with no version, ref or arm: carried through with nulls, so it belongs to no square.
     const old = fact({});
-    const unmatched = fact({ runId: "r2", model: "unknown/model" });
     // A run that never produced a response is not counted — but it IS an
     // attempt, so it comes through carrying `counted: false`. That is what
     // `maxAttemptsPerCell` reads.
-    const stillborn = fact({ runId: "r3", modelResponses: 0 });
-    // A new run stamps both, and the stamp wins over the roster match.
-    const stamped = fact({ runId: "r4", campaignVersion: 2, ref: "glm-assigned" });
-    // An id nothing claims keeps no version, so it counts toward nothing.
-    const adhoc = fact({ runId: "r5", campaign: "adhoc" });
-    expect(probeRunsOf([old, unmatched, stillborn, stamped, adhoc], roster)).toEqual([
-      { campaign: "class-probe", version: 1, cell: "dwarf-rogue", ref: "glm", counted: true },
-      { campaign: "class-probe", version: 1, cell: "dwarf-rogue", ref: null, counted: true },
-      { campaign: "class-probe", version: 1, cell: "dwarf-rogue", ref: "glm", counted: false },
-      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm-assigned", counted: true },
-      { campaign: "adhoc", version: null, cell: "dwarf-rogue", ref: "glm", counted: true },
+    const stillborn = fact({ runId: "r3", modelResponses: 0, campaignVersion: 2, ref: "glm", arm: "base" });
+    const stamped = fact({ runId: "r4", campaignVersion: 2, ref: "glm", arm: "base" });
+    const pausedRun = fact({ runId: "r5", campaignVersion: 2, ref: "glm", arm: "base", terminationReason: null, pause: { reason: "operator-pause", at: 1, count: 1, episodeElapsedMs: 1 } });
+    const notAProbe = fact({ runId: "r6", campaign: null, episode: "e90" });
+    expect(probeRunsOf([old, stillborn, stamped, pausedRun, notAProbe])).toEqual([
+      { campaign: "class-probe", version: null, cell: "dwarf-rogue", ref: null, arm: null, counted: true, live: false },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: false },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: true, live: false },
+      { campaign: "class-probe", version: 2, cell: "dwarf-rogue", ref: "glm", arm: "base", counted: false, live: true },
     ]);
   });
 
@@ -788,9 +943,9 @@ describe("roster policy", () => {
     });
     expect(() => parseFleet(entry("Fleetsonnlo"))).toThrow(/character is not a key/);
     expect(() => parseFleet(entry("Fleetsonnetlo"))).toThrow(/the model names its own character/);
-    // Nor may a campaign row: a cell is the checked-in definition's, and the
+    // Nor may a campaign row: a cell is the published definition's, and the
     // store row's strict shape refuses the key outright.
-    expect(() => parseCampaigns({ "nav-probe": { version: 1, character: "Navprobe" } })).toThrow(/campaign nav-probe/);
+    expect(parseCampaigns({ "solo-probe": { version: 1, character: "Soloprobe" } }, []).refused[0]!.reason).toMatch(/campaign solo-probe/);
   });
 
   test("a model id is never refused for its billing: the verdict is derived, and billing overrides it", () => {
@@ -936,7 +1091,8 @@ describe("rereadFleet", () => {
     expect(rereadFleet(good, () => readFleetConfig(db)).empty).toBe(true);
 
     const store = new ConfigStore(db);
-    store.seed(seed);
+    // Its campaign definitions published first: a seed writes none.
+    seedPublished(store, seed);
     expect(rereadFleet(good, () => readFleetConfig(db)).config).toEqual(good);
     store.patch("roster/glm", { tier: "t2" }, { actor: "mark" });
     store.close();
@@ -991,6 +1147,13 @@ describe("jobArgv", () => {
   test("a loop job with no stop condition loops forever — the fleet-service shape", () => {
     // The supervisor has no deadline; steering is the config store.
     expect(jobArgv(spawn({ loop: true }), { stamp: "20260822", until: undefined })).not.toContain("--until");
+  });
+
+  test("the run-pods setting reaches the roster only when it is on, so a pre-pod argv is unchanged", () => {
+    expect(jobArgv(spawn(), { stamp: "20260822", until: undefined })).not.toContain("--run-pods");
+    expect(jobArgv(spawn(), { stamp: "20260822", until: undefined, runPods: "off" })).not.toContain("--run-pods");
+    const argv = jobArgv(spawn(), { stamp: "20260822", until: undefined, runPods: "probes" });
+    expect(argv[argv.indexOf("--run-pods") + 1]).toBe("probes");
   });
 });
 
@@ -1241,7 +1404,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
   });
 
   test("the job shape: a job with an account is pinned, the rest are the pool's", () => {
-    const config = parseFleet(nextShape(), LAN_ENV);
+    const config = parseFleet(nextShape(), { env: LAN_ENV });
     expect(pinnedJobs(config).map((j) => [j.name, j.account])).toEqual([["nav-probe-freeplay", "SHAKEOUT"]]);
     expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe-freeplay" });
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3"]);
@@ -1268,25 +1431,25 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
       },
       policy: { maxConcurrent: { "claude-code": 2 } },
+      "campaign-defs": FLEET_DEFS,
       campaigns: {
-        "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] },
+        "solo-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] },
       },
       queue: [{ ref: "glm", episode: "e90", repeat: 2 }],
     });
-    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "campaign nav-probe" });
+    expect(config.accounts.pinned).toEqual({ SHAKEOUT: "campaign solo-probe" });
     expect(config.maxConcurrent).toEqual({ "claude-code": 2 });
     expect(config.jobs.map((j) => [j.name, j.source])).toEqual([["glm-e90", "queue"]]);
     // The campaign materialises with its definition's dimensions over the episode's.
     const job = pinnedCampaignJobs(config, [])[0]!;
     const l = jobSpawn(job, config.roster, "SHAKEOUT", "20260101", undefined, config.campaigns);
-    expect(l).toMatchObject({ name: "nav-probe-coldridge", account: "SHAKEOUT" });
+    expect(l).toMatchObject({ name: "solo-probe-coldridge-base", account: "SHAKEOUT" });
     expect(fillEntries(l, "20260101")[0]).toMatchObject({
-      runId: "fleet-nav-probe-coldridge-sonnet-20260101",
-      objective: expect.stringContaining("Travel from Coldridge Valley"),
+      runId: "fleet-solo-probe-coldridge-base-sonnet-20260101",
+      objective: "Travel to Ironforge and keep a log.",
       wikiCoords: true,
       episode: "probing",
-      campaign: "nav-probe@1",
-      cell: "coldridge",
+      campaignFile: { campaign: "solo-probe", version: 1, cell: { id: "coldridge" }, arm: { id: "base" } },
       ref: "son",
       watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null },
     });
@@ -1357,6 +1520,11 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     expect(() => parseFleet(nextShape({ policy: { paid: { runsPerEpisode: { e90: 3 } } } }))).toThrow(/policy.paid.runsPerEpisode is not a 0.5 key/);
     // What the policy block still carries: where runs execute, and how many.
     expect(parseFleet(nextShape({ policy: { paid: { maxConcurrent: 2 } } })).policy.paid).toEqual({ maxConcurrent: 2 });
+    // Where a probe EXECUTES is in the same sentence: off by default, strict.
+    expect(parseFleet(nextShape({})).policy.runPods).toBe("off");
+    expect(parseFleet(nextShape({ policy: { runPods: "probes" } })).policy.runPods).toBe("probes");
+    expect(() => parseFleet(nextShape({ policy: { runPods: "all" } }))).toThrow(/policy.runPods must be one of "off", "probes"/);
+    expect(() => parseFleet(nextShape({ policy: { runPods: true } }))).toThrow(/policy.runPods must be one of/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }] }))).toThrow(/share the name/);
     // The roster policy applies to every entry.
     expect(() => parseFleet(nextShape({ roster: { bad: { tier: "t1", model: "sonnet" } }, queue: [] }))).toThrow(/roster policy/);
@@ -1613,15 +1781,16 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
       },
       policy: { maxConcurrent: { "claude-code": 2 } },
-      campaigns: { "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } },
+      "campaign-defs": FLEET_DEFS,
+      campaigns: { "solo-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } },
     });
     const states = modelStatesOf(rosterModels(config.roster));
     const plan = planTick(config, states, () => undefined, "20260101");
-    // The campaign's pinned cell shows up HERE, not only in the live loop:
+    // The campaign's pinned square shows up HERE, not only in the live loop:
     // `--status` and `--dry-run` read this planner, and a probe the supervisor
     // would spawn but its own report never mentions is the disagreement this
     // whole shape exists to prevent.
-    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["nav-probe-coldridge", "SHAKEOUT"]]);
+    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["solo-probe-coldridge-base", "SHAKEOUT"]]);
     expect(plan.queue.assign).toEqual([]);
     // The campaign holds `son`, so the second claude-code run is `sonlo` —
     // and the cap counts the probe's run wherever it was scheduled from.
@@ -1941,7 +2110,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       },
       policy: { paid: {} },
     };
-    const config = parseFleet(raw, LAN_ENV);
+    const config = parseFleet(raw, { env: LAN_ENV });
     const states = modelStatesOf(rosterModels(config.roster), [], NOW, config.policy);
     const args = {
       states,
@@ -2015,7 +2184,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       },
       policy: { paid: {} },
     };
-    const config = parseFleet(raw, LAN_ENV);
+    const config = parseFleet(raw, { env: LAN_ENV });
     // The paid block is a throttle and nothing else now: no targets in it.
     expect(config.policy.paid).toEqual({ maxConcurrent: 1 });
     expect(rosterModels(config.roster).find((m) => m.name === "forced")!.billing).toBe("paid");
@@ -2231,7 +2400,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
       },
       policy: {},
     };
-    const config = parseFleet(raw, LAN_ENV);
+    const config = parseFleet(raw, { env: LAN_ENV });
     expect(config.roster["local"]!.idle).toBe("unlimited");
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, local: { ...raw.roster.local, idle: "e90" } } })).toThrow(/idle must be one of/);
 
@@ -2287,6 +2456,79 @@ describe("scheduling policy: defer ladder and retirement", () => {
     const next = planTick(config, afterStates, () => undefined, "20260101").policy.find((p) => p.account === "LOCALBOX")!;
     expect(next.job).toMatchObject({ name: "local-freeplay", attempt: 2 });
     expect(jobSpawn(next.job, config.roster, "LOCALBOX", "20260101").entries[0]!.runId).toContain("-a2");
+  });
+});
+
+describe("a probe launch that failed before the run existed", () => {
+  // The launcher refused it (an image outside the allow-list, a pod the API
+  // would not create), the pod never ran, or run.ts refused its flags: the
+  // directory held only campaign.json, which is not a run, so no attempt was
+  // counted and the scheduler re-picked the square every tick. The roster now
+  // leaves a counted stub, and the attempt cap engages.
+  const NOW = 1_800_000_000_000;
+  const roster: Record<string, FleetRosterEntry> = { glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" } };
+  const solo = definition({ id: "solo", cells: [{ id: "coldridge", race: 3, class: 2 }], maxAttemptsPerCell: 3 });
+  const j = joined([solo], { solo: { version: 1, assignments: [{ model: "glm" }] } });
+
+  test("leaves a counted launch-failed stub, so maxAttemptsPerCell stops the loop on fresh run ids", () => {
+    const runs = tempDir("fleet-launch-failed-");
+    const catalog = Object.keys(roster);
+    const ids: string[] = [];
+    for (let tick = 0; tick < 5; tick++) {
+      const facts = readRunFacts(runs, NOW, { includeArchived: true });
+      const work = campaignWork(j.campaigns, catalog, probeRunsOf(facts));
+      if (work.length === 0) break;
+      // The pick the policy makes: the attempt number off the probing bucket.
+      const state = modelStatesOf(rosterModels(roster), facts, NOW).find((st) => st.name === "glm")!;
+      const attempt = (state.perEpisode.probing?.attempts ?? 0) + 1;
+      const job = policyJob({ name: "glm", episode: "probing", account: "RUNNER3", attempt, why: "w", probe: { campaign: "solo", version: 1, cell: "coldridge", arm: "base" } });
+      const [spec] = resolve(fillEntries(jobSpawn(job, roster, "RUNNER3", "20261011", undefined, j.campaigns), "20261011"), "20261011");
+      // Every attempt lands on a run id nothing is on yet.
+      expect(holdsOnlyLaunchFiles(join(runs, spec!.runId))).toBe(true);
+      writeLaunchFailure(join(runs, spec!.runId), spec!, "arm image refused: outside the allowed repositories", { harnessVersion: "harness-0.5-950-gabc1234", now: NOW + tick });
+      ids.push(spec!.runId);
+    }
+    expect(ids).toEqual([
+      "fleet-glm-solo-coldridge-base-glm-5-2-20261011",
+      "fleet-glm-solo-coldridge-base-glm-5-2-20261011-a2",
+      "fleet-glm-solo-coldridge-base-glm-5-2-20261011-a3",
+    ]);
+    const facts = readRunFacts(runs, NOW, { includeArchived: true });
+    // Each reads as a finished attempt that is no evidence: no turns, no play time, not live, not paused.
+    for (const f of facts) {
+      expect(f).toMatchObject({ episode: "probing", terminationReason: "launch-failed", live: false, pause: null, modelResponses: null, campaign: "solo", campaignVersion: 1, cell: "coldridge", ref: "glm", arm: "base" });
+      expect(isCounted(f)).toBe(false);
+    }
+    // The square is settled as capped, and offers no more work.
+    const [square] = campaignSquares(j.campaigns[0]!, catalog, probeRunsOf(facts));
+    expect(square).toMatchObject({ attempts: 3, done: 0, settled: "capped" });
+    // Nothing for the resume planner or the stale sweep to pick up.
+    expect(implicitPauses({ runs: facts, campaigns: j.campaigns, now: NOW + 3_600_000 }).every((f) => f.pause === null)).toBe(true);
+    // And the model is not cooled for it: a launch that never ran says nothing
+    // about its provider, so it neither climbs the defer ladder nor blocks the model.
+    const state = modelStatesOf(rosterModels(roster), facts, NOW).find((st) => st.name === "glm")!;
+    expect(state.cooling).toBeUndefined();
+    expect(state.perEpisode.probing?.attempts).toBe(3);
+    expect(schedulability(state).verdict).not.toBe("blocked");
+    // The viewer lists each as the failed attempt it is, with no play time behind it.
+    const rows = listRuns(runs, NOW);
+    expect(rows.map((r) => r.terminationReason)).toEqual(["launch-failed", "launch-failed", "launch-failed"]);
+    expect(rows[0]!.terminationDetail).toContain("outside the allowed repositories");
+  });
+
+  test("a stub never lands on a run that wrote its own meta.json, and its stamps are the roster entry's", () => {
+    const runs = tempDir("fleet-launch-failed-");
+    const job = policyJob({ name: "glm", episode: "probing", account: "RUNNER3", attempt: 1, why: "w", probe: { campaign: "solo", version: 1, cell: "coldridge", arm: "base" } });
+    const [spec] = resolve(fillEntries(jobSpawn(job, roster, "RUNNER3", "20261011", undefined, j.campaigns), "20261011"), "20261011");
+    const dir = join(runs, spec!.runId);
+    writeLaunchFailure(dir, spec!, "pod never scheduled", { harnessVersion: "harness-0.5-950-gabc1234", now: NOW });
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { harnessVersion: string; config: Record<string, unknown>; comparability: Record<string, unknown> };
+    expect(meta.harnessVersion).toBe("harness-0.5-950-gabc1234");
+    expect(meta.config).toMatchObject({ model: "z-ai/glm-5.2:free", account: "RUNNER3", episode: "probing", campaign: "solo", campaignVersion: 1, campaignHash: j.definitions[0]!.hash, cell: "coldridge", arm: "base", ref: "glm", race: 3, class: 2 });
+    expect(meta.comparability).toEqual({ harnessVersion: "harness-0.5-950-gabc1234", episode: "probing", effort: null });
+    // No trajectory: it played no turn.
+    expect(holdsOnlyLaunchFiles(dir)).toBe(false);
+    expect(readdirSync(dir).sort()).toEqual(["meta.json", "run.sqlite"]);
   });
 });
 
@@ -2351,7 +2593,7 @@ describe("pause and resume across a fleet stop", () => {
     // The tick still holds the model this pass — the pause fact is only gone
     // once the termination is written — and gives it a fresh attempt after.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
     const tick = planTick(cfg, states, held, "20260823", plan.resume);
     expect(tick.policy.map((p) => p.job.ref)).toEqual(["ox", "nav"]); // glm is held by its paused run for one more tick
   });
@@ -2371,7 +2613,7 @@ describe("pause and resume across a fleet stop", () => {
     expect(off.listed[0]?.why).toContain("job nav-freeplay is disabled");
   });
 
-  test("a paused probe whose definition says resume comes back under the job it was spawned as, pool or pinned", () => {
+  test("a paused probe comes back under the job it was spawned as, rebuilt from its own campaign.json, pool or pinned", () => {
     // A twelve-hour race-probe cell paused by a fleet restart used to be
     // listed "not in config", and the paused run then held its model out of
     // every lane until someone resumed it by hand.
@@ -2384,42 +2626,175 @@ describe("pause and resume across a fleet stop", () => {
         campaignVersion: 1,
         cell: "orc-warrior",
         ref: "glm",
+        arm: "base",
         pause: { reason: "operator-pause", at: NOW - 3 * H, count: 1, episodeElapsedMs: 9 * H },
         ...over,
       });
+    const race = checkedIn("race-probe@1");
+    const files = new Map<string, CampaignFile>();
+    const fileOf = (runId: string): CampaignFile | null => files.get(runId) ?? null;
     // Pool: the policy's own pick, named the way `policyJob` named it, attempt off the run id.
-    const pool = { ...config(), campaigns: parseCampaigns({ "race-probe": { version: 1, assignments: [{ model: "glm" }] } }).campaigns };
-    const run = pausedProbe({ runId: "fleet-glm-race-probe-orc-warrior-z-ai-glm-5-2-free-20261010-a2", account: "RUNNER3" });
-    const plan = planResumes({ runs: [run], config: pool, running: new Map(), held, now: NOW });
+    const poolJoin = joined([race], { "race-probe": { version: 1, assignments: [{ model: "glm" }] } });
+    const pool = { ...config(), campaigns: poolJoin.campaigns };
+    const run = pausedProbe({ runId: "fleet-glm-race-probe-orc-warrior-base-z-ai-glm-5-2-free-20261010-a2", account: "RUNNER3" });
+    files.set(run.runId, campaignFileOf(poolJoin.definitions[0]!, "orc-warrior", "base"));
+    const plan = planResumes({ runs: [run], config: pool, running: new Map(), held, now: NOW, campaignFileOf: fileOf });
     expect(plan.end).toEqual([]);
     expect(plan.listed).toEqual([]);
     expect(plan.resume.map((r) => [r.job.name, r.job.source, r.job.attempt, r.account, r.runId])).toEqual([
-      ["glm-race-probe-orc-warrior", "policy", 2, "RUNNER3", run.runId],
+      ["glm-race-probe-orc-warrior-base", "policy", 2, "RUNNER3", run.runId],
     ]);
-    expect(plan.resume[0]!.job.probe).toEqual({ campaign: "race-probe", version: 1, cell: "orc-warrior" });
-    // The spawn resumes that run and restates the definition's own leash, never the probing default's.
+    expect(plan.resume[0]!.job.probe).toEqual({ campaign: "race-probe", version: 1, cell: "orc-warrior", arm: "base" });
+    expect(plan.resume[0]!.job.campaignFile).toBe(files.get(run.runId));
+    // The spawn resumes that run on its own arm's launch seam, and restates the definition's own leash.
     const spawn = jobSpawn(plan.resume[0]!.job, roster, "RUNNER3", "20261010", undefined, pool.campaigns);
+    expect(spawn.entries[0]!.launch).toEqual({ pod: true, image: null, command: null });
     const resumeArgv = episodeArgv(resolve(fillEntries(spawn, "20261010"), "20261010")[0]!, true);
     expect(resumeArgv.slice(1, 3)).toEqual(["--resume", run.runId]);
     expect(resumeArgv).toContain("43200000");
-    // Pinned: the name `pinnedCampaignJobs` gives the cell, on the campaign's account.
-    const pinned = {
-      ...config(),
-      campaigns: parseCampaigns({ "class-probe": { version: 2, account: "SHAKEOUT", assignments: [{ model: "glm" }] } }).campaigns,
-    };
-    const onShakeout = pausedProbe({ runId: "fleet-class-probe-dwarf-rogue-z-ai-glm-5-2-free-20261010", account: "SHAKEOUT", campaign: "class-probe", campaignVersion: 2, cell: "dwarf-rogue" });
-    expect(planResumes({ runs: [onShakeout], config: pinned, running: new Map(), held, now: NOW }).resume.map((r) => [r.job.name, r.job.source, r.account])).toEqual([
-      ["class-probe-dwarf-rogue", "pinned", "SHAKEOUT"],
+    expect(resumeArgv).not.toContain("--campaign-file");
+    // Pinned: the name `pinnedCampaignJobs` gives the square, on the campaign's account.
+    const classProbe = checkedIn("class-probe@2");
+    const pinnedJoin = joined([classProbe], { "class-probe": { version: 2, account: "SHAKEOUT", assignments: [{ model: "glm" }] } });
+    const pinned = { ...config(), campaigns: pinnedJoin.campaigns };
+    const onShakeout = pausedProbe({ runId: "fleet-class-probe-dwarf-rogue-base-z-ai-glm-5-2-free-20261010", account: "SHAKEOUT", campaign: "class-probe", campaignVersion: 2, cell: "dwarf-rogue" });
+    files.set(onShakeout.runId, campaignFileOf(pinnedJoin.definitions[0]!, "dwarf-rogue"));
+    expect(planResumes({ runs: [onShakeout], config: pinned, running: new Map(), held, now: NOW, campaignFileOf: fileOf }).resume.map((r) => [r.job.name, r.job.source, r.account])).toEqual([
+      ["class-probe-dwarf-rogue-base", "pinned", "SHAKEOUT"],
     ]);
     // A definition that does not resume ends the run as a failed attempt instead.
-    const nav = { ...config(), campaigns: parseCampaigns({ "nav-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "nav" }] } }).campaigns };
-    const navRun = pausedProbe({ runId: "fleet-nav-probe-coldridge-sonnet-20261010", model: "sonnet", account: "SHAKEOUT", campaign: "nav-probe", cell: "coldridge", ref: "nav" });
-    const ended = planResumes({ runs: [navRun], config: nav, running: new Map(), held, now: NOW });
+    const solo = definition({ id: "solo", resume: false, cells: [{ id: "coldridge", race: 3, class: 2 }] });
+    const soloJoin = joined([solo], { solo: { version: 1, account: "SHAKEOUT", assignments: [{ model: "nav" }] } });
+    const soloRun = pausedProbe({ runId: "fleet-solo-coldridge-base-sonnet-20261010", model: "sonnet", account: "SHAKEOUT", campaign: "solo", cell: "coldridge", ref: "nav" });
+    files.set(soloRun.runId, campaignFileOf(soloJoin.definitions[0]!, "coldridge"));
+    const ended = planResumes({ runs: [soloRun], config: { ...config(), campaigns: soloJoin.campaigns }, running: new Map(), held, now: NOW, campaignFileOf: fileOf });
     expect(ended.resume).toEqual([]);
     expect(ended.end).toHaveLength(1);
     // A disabled campaign keeps its paused run, listed with the reason.
     const off = { ...pool, campaigns: pool.campaigns.map((c) => ({ ...c, enabled: false })) };
-    expect(planResumes({ runs: [run], config: off, running: new Map(), held, now: NOW }).listed[0]?.why).toContain("campaign race-probe is disabled");
+    expect(planResumes({ runs: [run], config: off, running: new Map(), held, now: NOW, campaignFileOf: fileOf }).listed[0]?.why).toContain("campaign race-probe is disabled");
+    // A run with its own file comes back on it and nothing is written.
+    expect(plan.resume[0]!.writeCampaignFile).toBeUndefined();
+  });
+
+  test("a probe paused before campaign files resumes on a file rebuilt from the published definition its stamps name", () => {
+    // A probe paused across the release that brought campaign files has none,
+    // and used to be listed "resume by hand" — while the paused run kept its
+    // model out of every scored lane.
+    const race = checkedIn("race-probe@1");
+    const j = joined([race], { "race-probe": { version: 1, assignments: [{ model: "glm" }] } });
+    const cfg = { ...config(), campaigns: j.campaigns };
+    const preRelease = paused({
+      runId: "fleet-glm-race-probe-orc-warrior-z-ai-glm-5-2-free-20261009-a3",
+      model: "z-ai/glm-5.2:free",
+      account: "RUNNER3",
+      episode: "probing",
+      episodeMs: 12 * H,
+      campaign: "race-probe",
+      campaignVersion: 1,
+      cell: "orc-warrior",
+      ref: "glm",
+      // Stamped before arms existed.
+      arm: null,
+      pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: 5 * H },
+    });
+    const plan = planResumes({ runs: [preRelease], config: cfg, running: new Map(), held, now: NOW });
+    expect(plan.listed).toEqual([]);
+    expect(plan.end).toEqual([]);
+    expect(plan.resume).toHaveLength(1);
+    const r = plan.resume[0]!;
+    const expected = campaignFileOf(j.definitions[0]!, "orc-warrior");
+    expect(r.writeCampaignFile).toEqual(expected);
+    expect(r.job.campaignFile).toEqual(expected);
+    expect(r.job.name).toBe("glm-race-probe-orc-warrior-base");
+    expect(r.job.attempt).toBe(3);
+    expect(r.job.probe).toEqual({ campaign: "race-probe", version: 1, cell: "orc-warrior", arm: "base" });
+    expect(r.why).toContain("campaign.json rebuilt from the published race-probe@1");
+    // What the supervisor writes reads back as the run's own file, so the next
+    // pause of this run is planned from disk like any other.
+    const dir = join(tempDir("fleet-rebuilt-"), preRelease.runId);
+    writeCampaignFile(dir, r.writeCampaignFile!);
+    expect(runCampaignFile(dir)).toEqual(expected);
+    const again = planResumes({ runs: [preRelease], config: cfg, running: new Map(), held, now: NOW, campaignFileOf: () => runCampaignFile(dir) });
+    expect(again.resume[0]!.writeCampaignFile).toBeUndefined();
+    expect(again.resume[0]!.job.name).toBe(r.job.name);
+    // The run's own arm stamp is honoured when it has one.
+    expect(planResumes({ runs: [{ ...preRelease, arm: "base" }], config: cfg, running: new Map(), held, now: NOW }).resume[0]!.writeCampaignFile?.arm.id).toBe("base");
+
+    // A version nobody published (a legacy stamp) has no definition to say
+    // "resume", so nothing is rebuilt for it: the lane's rule decides, as it
+    // did before — a fleet run is ended as a failed attempt that is not the
+    // model's, a hand-launched one is listed for the operator.
+    const legacy = { ...preRelease, campaignVersion: 7 };
+    const legacyPlan = planResumes({ runs: [legacy], config: cfg, running: new Map(), held, now: NOW });
+    expect(legacyPlan.resume).toEqual([]);
+    expect(legacyPlan.end).toMatchObject([{ runId: legacy.runId, reason: "manual", counts: false }]);
+    const byHand = { ...legacy, runId: "run-20261009-120000" };
+    const byHandPlan = planResumes({ runs: [byHand], config: cfg, running: new Map(), held, now: NOW });
+    expect(byHandPlan.resume).toEqual([]);
+    expect(byHandPlan.listed[0]?.why).toContain("resume by hand");
+    // A published version that asks to resume, but whose cell or arm the run's
+    // stamps cannot name: listed with the reason, nothing guessed.
+    expect(planResumes({ runs: [{ ...preRelease, cell: "gone-cell" }], config: cfg, running: new Map(), held, now: NOW }).listed[0]?.why).toContain("gone-cell is not a cell");
+    const twoArms = definition({ id: "race-probe", version: 2, cells: [{ id: "orc-warrior", race: 2, class: 1 }], arms: [{ id: "a", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-1" }, { id: "b", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-2" }] });
+    const j2 = joined([twoArms], { "race-probe": { version: 2, assignments: [{ model: "glm" }] } });
+    const armless = planResumes({ runs: [{ ...preRelease, campaignVersion: 2 }], config: { ...config(), campaigns: j2.campaigns }, running: new Map(), held, now: NOW });
+    expect(armless.resume).toEqual([]);
+    expect(armless.listed[0]?.why).toContain("has 2 arms; name one");
+    // A run on a pinned arm waits, listed, while run pods are off: the launcher
+    // would refuse the resume before the run moved, and the pause would stand.
+    const onArm = { ...preRelease, campaignVersion: 2, arm: "a" };
+    const podsOff = { ...config(), campaigns: j2.campaigns };
+    const waiting = planResumes({ runs: [onArm], config: podsOff, running: new Map(), held, now: NOW });
+    expect(waiting.resume).toEqual([]);
+    expect(waiting.end).toEqual([]);
+    expect(waiting.listed[0]?.why).toContain('arm a pins an image and runs only in a run pod; policy.runPods is "off"');
+    const podsOn = { ...podsOff, policy: { ...podsOff.policy, runPods: "probes" as const } };
+    expect(planResumes({ runs: [onArm], config: podsOn, running: new Map(), held, now: NOW }).resume.map((r) => r.job.probe?.arm)).toEqual(["a"]);
+  });
+
+  test("only a probe a run pod ran resumes across harness series, and only while run pods are on", () => {
+    // A pod's image.json is what pins a resume to the build it started on.
+    // campaign.json alone pins nothing: with run pods off, or for a probe that
+    // ran as a child process, the resume would run on this supervisor's build,
+    // so such a probe is another series' run as it always was — listed, and
+    // never ended by this supervisor.
+    const race = checkedIn("race-probe@1");
+    const j = joined([race], { "race-probe": { version: 1, assignments: [{ model: "glm" }] } });
+    const run = paused({
+      runId: "fleet-glm-race-probe-orc-warrior-base-z-ai-glm-5-2-free-20261010",
+      model: "z-ai/glm-5.2:free",
+      account: "RUNNER3",
+      episode: "probing",
+      episodeMs: 12 * H,
+      campaign: "race-probe",
+      campaignVersion: 1,
+      cell: "orc-warrior",
+      ref: "glm",
+      arm: "base",
+      harnessVersion: "harness-0.4-900",
+      harnessSeries: "0.4",
+      pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: H },
+    });
+    const cfg = { ...config(), policy: { ...config().policy, series: "0.5", runPods: "probes" as const }, campaigns: j.campaigns };
+    const file = campaignFileOf(j.definitions[0]!, "orc-warrior");
+    const withImage = { campaignFileOf: () => file, hasImageRecord: (id: string) => id === run.runId };
+    expect(planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW, ...withImage }).resume).toHaveLength(1);
+    const gatedWhy = (p: ReturnType<typeof planResumes>): string | undefined => {
+      expect(p.resume).toEqual([]);
+      expect(p.end).toEqual([]);
+      return p.listed[0]?.why;
+    };
+    // campaign.json and no image.json: the gate holds.
+    expect(gatedWhy(planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW, campaignFileOf: () => file }))).toContain("paused under harness series 0.4");
+    // image.json, but run pods are off now: the resume would be a child process on this build.
+    const podsOff = { ...cfg, policy: { ...cfg.policy, runPods: "off" as const } };
+    expect(gatedWhy(planResumes({ runs: [run], config: podsOff, running: new Map(), held, now: NOW, ...withImage }))).toContain("paused under harness series 0.4");
+    // Neither file: the gate holds, as it always did.
+    expect(gatedWhy(planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW }))).toContain("paused under harness series 0.4");
+    // A scored run with an image.json beside it is no exception: only probes are.
+    const e90 = { ...run, episode: "e90" as const, campaign: null, campaignVersion: null, cell: null, arm: null, runId: "fleet-glm-e90-z-ai-glm-5-2-free-20261010" };
+    expect(gatedWhy(planResumes({ runs: [e90], config: cfg, running: new Map(), held, now: NOW, hasImageRecord: () => true }))).toContain("paused under harness series 0.4");
   });
 
   test("a policy freeplay run paused by a fleet restart resumes under a synthetic policy job — same account, same run id", () => {
@@ -2680,7 +3055,7 @@ describe("pause and resume across a fleet stop", () => {
     expect(planResumes({ runs: [mine], config: config(), running: new Map(), held, now: NOW }).end).toHaveLength(1);
     // And the account it sits on is free for the policy: a not-in-config run holds nothing.
     const states = modelStatesOf(rosterModels(roster), [run], NOW);
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
     expect(planTick(cfg, states, held, "20260823", plan.resume).policy.map((p) => p.account)).toEqual(["RUNNER3", "RUNNER4"]);
   });
 
@@ -2816,7 +3191,7 @@ describe("pause and resume across a fleet stop", () => {
       pause: { reason: "quota-exhausted", at: NOW - 60_000, count: 1, episodeElapsedMs: 12 * 60_000 },
     });
     const runs = [ended(1), ended(2), third];
-    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], maxConcurrent: {}, refusals: [] };
+    const cfg: FleetConfig = { ...config(), notes: [], preflight: DEFAULT_PREFLIGHT, campaigns: [], campaignDefs: [], campaignRefusals: [], maxConcurrent: {}, refusals: [] };
     const plan = planResumes({ runs, config: cfg, running: new Map(), held, now: NOW });
     expect(plan.end).toHaveLength(1);
     expect(retryNumbers(plan.end, (e) => failedAttemptsFor(modelStatesOf(rosterModels(roster), runs, NOW), e) ?? 0)).toEqual([3]);
@@ -3425,20 +3800,22 @@ describe("freeplay characters are durable (operator ask, 2026-08-29)", () => {
     // whether waiting on it buys anything. The campaign's
     // opt-in is the supervisor's to answer: the script must not re-derive it
     // from a config the supervisor may not be running.
-    // `resume` is the definition's: class-probe@2 resumes, nav-probe@1 does not.
-    const campaigns = parseCampaigns({
+    // `resume` is the run's own published version's: class-probe@2 resumes,
+    // the one-cell solo@1 does not, and neither does a version nobody published.
+    const solo = definition({ id: "solo", resume: false });
+    const campaigns = joined([checkedIn("class-probe@2"), solo], {
       "class-probe": { version: 2, enabled: false },
-      "nav-probe": { version: 1, enabled: false },
+      solo: { version: 1, enabled: false },
     }).campaigns;
     const probe = (campaign: string, version = campaign === "class-probe" ? 2 : 1) => ({
       source: "policy" as const,
       episode: "probing" as const,
-      probe: { campaign, version, cell: "gnome-mage" },
+      probe: { campaign, version, cell: "gnome-mage", arm: "base" },
     });
     expect(resumesInPlace(policyFreeplay("opuslo", 12), campaigns)).toBe(true);
     expect(resumesInPlace(probe("class-probe"), campaigns)).toBe(true);
-    expect(resumesInPlace(probe("nav-probe"), campaigns)).toBe(false);
-    // The run's own version decides: a v1 class-probe run (closed history) never resumes.
+    expect(resumesInPlace(probe("solo"), campaigns)).toBe(false);
+    // The run's own version decides: a class-probe@1 run (never published) never resumes.
     expect(resumesInPlace(probe("class-probe", 1), campaigns)).toBe(false);
     // The campaign was deleted from the file: nothing to resume under.
     expect(resumesInPlace(probe("class-probe"), [])).toBe(false);

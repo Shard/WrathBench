@@ -60,7 +60,7 @@ import { openRunDb } from "./rundb";
 import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
-import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
+import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
 import { hostOfBase, platformOfBase } from "./platform";
@@ -207,6 +207,27 @@ export interface SchedulingPolicy {
    * merged routing is one nobody wrote down.
    */
   routing?: RoutingSpec;
+  /**
+   * Where a probe-campaign episode executes: `off`, a child process of the
+   * fleet like every other lane; `probes`, its own pod on the cluster, created
+   * from the chart's template and able to run an arm's own image
+   * (infra/episode-launcher.ts, docs/RUNBOOK.md "Run pods"). The same species
+   * as the rest of this block — where a run may physically execute — and the
+   * dark switch the launcher ships behind: off by default, and off the cluster
+   * it changes nothing but turns an arm with a pinned image into a refusal.
+   */
+  runPods: RunPodsMode;
+}
+
+export const RUN_PODS_MODES = ["off", "probes"] as const;
+export type RunPodsMode = (typeof RUN_PODS_MODES)[number];
+
+export function parseRunPodsMode(raw: unknown, where: string): RunPodsMode {
+  if (raw === undefined) return "off";
+  if (typeof raw !== "string" || !(RUN_PODS_MODES as readonly string[]).includes(raw)) {
+    throw new Error(`${where} must be one of ${RUN_PODS_MODES.map((m) => JSON.stringify(m)).join(", ")} — "probes" runs every probe-campaign episode in its own pod on the cluster`);
+  }
+  return raw as RunPodsMode;
 }
 
 /** The paid default once `policy.paid` is present: one paid run in flight. */
@@ -217,6 +238,7 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
   series: null,
   paid: null,
   subscriptions: [DEFAULT_CLAUDE_TOKEN_ENV],
+  runPods: "off",
 };
 
 /**
@@ -239,8 +261,9 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   const base = { ...DEFAULT_POLICY, series, maxConcurrent: {} as Record<string, number> };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown };
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown; runPods?: unknown };
   const out = { ...base };
+  out.runPods = parseRunPodsMode(o.runPods, "policy.runPods");
   if (o.runsPerEpisode !== undefined) {
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
   }
@@ -249,7 +272,7 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   }
   if (o.resume !== undefined) {
     throw new Error(
-      "policy.resume is not a key — whether a lapsed run resumes is the lane's rule: scored evals never do, freeplay always does, a probe campaign opts in through its checked-in definition's resume",
+      "policy.resume is not a key — whether a lapsed run resumes is the lane's rule: scored evals never do, freeplay always does, a probe campaign opts in through its published definition's resume",
     );
   }
   if (o.maxConcurrent !== undefined) {
@@ -580,14 +603,15 @@ export interface RunFact {
   campaign: string | null;
   cell: string | null;
   /**
-   * The campaign definition version the run stamped, and the roster name the
-   * fleet launched it as — both absent on a run from before they were
-   * recorded (`probeRunsOf` reads such a run by the definitions' legacy rule
-   * and by model/effort matching). Optional so a fact built by hand need not
-   * spell them.
+   * The campaign definition version the run stamped, the roster name the
+   * fleet launched it as, and the campaign arm it ran — absent on a run from
+   * before each was recorded, which then belongs to no campaign square
+   * (`probeRunsOf` reads stamps only). Optional so a fact built by hand need
+   * not spell them.
    */
   campaignVersion?: number | null;
   ref?: string | null;
+  arm?: string | null;
   /**
    * The Claude subscription lane this run bills, as the env var NAME holding
    * its token (`RunConfig.subscription`); null on anything that is not a
@@ -702,11 +726,11 @@ export interface NextJob {
   /** An extra run past the target (free models only), with the character it rolls. */
   extra?: StartingCharacter;
   /**
-   * Set on a probe pick: which campaign and version commissioned it and which
-   * cell it is. The cell's shape is the checked-in definition's; only the
+   * Set on a probe pick: which campaign and version commissioned it, and which
+   * cell and arm it is. The shape is the published definition's; only the
    * identity travels on the pick.
    */
-  probe?: { campaign: string; version: number; cell: string };
+  probe?: ProbeIdentity;
 }
 
 /** A pick the policy would have made but held back, with the reason — what `--dry-run` explains. */
@@ -1108,6 +1132,7 @@ export function readRunFact(
       cell?: unknown;
       campaignVersion?: unknown;
       ref?: unknown;
+      arm?: unknown;
       subscription?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
@@ -1152,6 +1177,7 @@ export function readRunFact(
     cell: str(meta.config?.cell),
     campaignVersion: num(meta.config?.campaignVersion),
     ref: str(meta.config?.ref),
+    arm: str(meta.config?.arm),
     subscription: str(meta.config?.subscription),
   };
 
@@ -1704,8 +1730,12 @@ export function projectModel(
   // The ladder: trailing consecutive no-progress attempts, newest last, after the clear.
   let ladder = 0;
   let lastFail: RunFact | undefined;
-  // A paused run is neither rung nor reset: it is skipped on the walk.
-  const finished = mine.filter((f) => !f.live && f.pause === null && f.endedAt !== null && (opts.clearedAt === undefined || f.endedAt > opts.clearedAt));
+  // A paused run is neither rung nor reset: it is skipped on the walk. So is a
+  // launch that never became a run (`launch-failed`): it says nothing about
+  // the provider, so it neither cools the model nor forgives its streak.
+  const finished = mine.filter(
+    (f) => !f.live && f.pause === null && f.endedAt !== null && f.terminationReason !== "launch-failed" && (opts.clearedAt === undefined || f.endedAt > opts.clearedAt),
+  );
   for (let i = finished.length - 1; i >= 0; i--) {
     const f = finished[i]!;
     if (!isNoProgress(f)) break;
@@ -2145,8 +2175,8 @@ export function planNextJobs(
       episode: "probing",
       account,
       attempt: (st?.attempts ?? 0) + 1,
-      why: `campaign ${w.campaign}@${w.version} cell ${w.cell.id} (${w.done}/${w.want}${w.maxAttempts !== undefined ? `, attempt ${w.attempts + 1}/${w.maxAttempts}` : ""})`,
-      probe: { campaign: w.campaign, version: w.version, cell: w.cell.id },
+      why: `campaign ${w.campaign}@${w.version} cell ${w.cell.id} arm ${w.arm.id} (${w.done}/${w.want}${w.maxAttempts !== undefined ? `, attempt ${w.attempts + 1}/${w.maxAttempts}` : ""})`,
+      probe: { campaign: w.campaign, version: w.version, cell: w.cell.id, arm: w.arm.id },
     });
   }
   // Idle work: lowest priority, only for accounts nothing else wanted, and only

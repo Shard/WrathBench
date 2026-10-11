@@ -2,9 +2,10 @@
  * A disclosure pane: a heading you click to slide the content in and out.
  *
  * For the lists that are worth having on the page but not worth reading every
- * time — paused runs on the fleet page, a campaign's cell table. The heading
- * carries the count so the collapsed state still answers "is there anything in
- * there", which is the only question a closed pane has to answer.
+ * time — paused and ended runs on the fleet page, the config page's ignored
+ * drafts. The heading carries the count so the collapsed state still answers "is
+ * there anything in there", which is the only question a closed pane has to
+ * answer.
  *
  * Three things it does not do, deliberately:
  *
@@ -13,9 +14,9 @@
  *   0fr→1fr over a clipped inner box) and `inert` is what keeps a closed pane's
  *   links out of the tab order.
  * - It does not own the open state beyond the pane. `storageKey` is how a pane
- *   survives its own remount, which on the campaigns page happens every poll
- *   tick — `poll()` hands back fresh objects and `<For>` is keyed on reference,
- *   so an expanded pane would otherwise snap shut once a minute.
+ *   survives its own remount — a pane inside a `<For>` over polled objects is
+ *   rebuilt whenever its row changes, since `<For>` is keyed on reference — and
+ *   how it stays the way the reader left it across visits.
  * - It does not fetch, and it does not know what it wraps.
  */
 

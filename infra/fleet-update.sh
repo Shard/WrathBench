@@ -283,6 +283,14 @@ fleet_pods() {
   "${KUBECTL[@]}" get pods -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=fleet" \
     -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}' 2>/dev/null | strip_ansi | tr -d '\r' || true
 }
+# The episodes running as their own pods (infra/run-pod.ts, `component=run`),
+# named with the run id each carries. Shown by `status`; the drain itself still
+# reads the state file, because a roster waiting on a pod is an alive job row
+# and the pod is gone when that row is.
+run_pods() {
+  "${KUBECTL[@]}" get pods -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=run" \
+    -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{.metadata.annotations.wrathbench\.shard\.page/run-id}{"\n"}{end}' 2>/dev/null | strip_ansi | tr -d '\r' || true
+}
 
 # ------------------------------------------------------------------- writes
 set_switch() {
@@ -386,6 +394,13 @@ print_status() {
     while IFS= read -r l; do [[ -n "${l//[[:space:]]/}" ]] && say "  pod ${l}"; done <<< "${pods}"
   else
     say "  no fleet pod"
+  fi
+  pods="$(run_pods)"
+  if [[ -n "${pods//[[:space:]]/}" ]]; then
+    say "run pods       (episodes running as their own pod; name, phase, run id)"
+    while IFS= read -r l; do [[ -n "${l//[[:space:]]/}" ]] && say "  ${l}"; done <<< "${pods}"
+  else
+    say "run pods       none"
   fi
 }
 

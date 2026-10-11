@@ -102,6 +102,14 @@ export const TERMINATION_REASONS = [
   // way out (codex `contextWindowExceeded`). The fixed loop cannot hit this —
   // its window is rebuilt every turn — so it only ever names a CLI harness.
   "context-limit",
+  // A probe launch that failed before the run wrote anything: the launcher
+  // refused it (an image outside the allow-list, a pod the API would not
+  // create), the pod never ran (a pull that failed, never scheduled, evicted),
+  // or run.ts refused its flags. The run never existed, so the roster writes
+  // this on a stub of it (infra/run-roster.ts, `writeLaunchFailure`) — the
+  // record that the square was tried, without which the scheduler re-picked
+  // it every tick. Never the model's: no turn was played.
+  "launch-failed",
 ] as const;
 export type TerminationReason = (typeof TERMINATION_REASONS)[number];
 
@@ -417,15 +425,19 @@ export const runConfigSchema = z.object({
   campaign: z.string().min(1).max(64).optional(),
   cell: z.string().min(1).max(64).optional(),
   /**
-   * Which checked-in version of the campaign this run is a cell of, and that
-   * definition's content hash at launch (`runner/src/campaign-defs/`). Stamped
-   * on every probe launched since definitions were versioned; absent on older
-   * runs, which a reader attributes by the definition's own legacy rule and
-   * never by writing these back. Recorded, not compared: `probing` has no
+   * Which published version of the campaign this run is a cell of, and that
+   * definition's content hash (`runner/src/campaign-def.ts`), both from the
+   * run's `campaign.json`. Recorded, not compared: `probing` has no
    * comparability group for them to key.
    */
   campaignVersion: z.number().int().positive().optional(),
   campaignHash: z.string().min(1).max(80).optional(),
+  /**
+   * The campaign arm this run is: which harness build, command and extra argv
+   * the definition paired with the cell. A campaign's work is counted per
+   * (assignment, arm, cell), by this stamp and nothing inferred.
+   */
+  arm: z.string().min(1).max(64).optional(),
   /**
    * The roster name the fleet launched this run as. Recorded on campaign runs
    * so a sweep's remaining work is counted against the assignment that made
@@ -434,8 +446,15 @@ export const runConfigSchema = z.object({
    */
   ref: z.string().min(1).max(64).optional(),
   /**
+   * The image reference the launcher asked for (`WRATHBENCH_RUN_IMAGE`), when
+   * the run was started in a pod of its own. The digest it resolved to is the
+   * launcher's record (`image.json` beside the run). Absent on a child-process
+   * launch, which runs the fleet's own image.
+   */
+  image: z.string().min(1).max(512).optional(),
+  /**
    * End the run on the first server-observed level at or above this
-   * (`level-target`). Set only from a campaign definition's `stopAtLevel`.
+   * (`level-target`). Set only from a campaign file's `stopAtLevel`.
    */
   stopAtLevel: z.number().int().min(2).max(80).optional(),
 

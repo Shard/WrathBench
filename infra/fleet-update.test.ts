@@ -68,7 +68,10 @@ case "\${cmd}" in
     log "\${raw}"
     [[ "\${FAKE_DEPLOY_MISSING:-0}" == "1" ]] && exit 1
     replicas="$(cat "\${FAKE_REPLICAS_FILE}")"
-    if [[ "\${raw}" == *"pods"* ]]; then
+    if [[ "\${raw}" == *"component=run"* ]]; then
+      # Run pods (infra/run-pod.ts): none in this fake cluster.
+      :
+    elif [[ "\${raw}" == *"pods"* ]]; then
       if [[ "\${FAKE_PODS_LINGER:-0}" == "1" ]]; then printf 'wrathbench-fleet-abc123 Terminating\\n'
       elif [[ "\${replicas}" != "0" ]]; then printf 'wrathbench-fleet-abc123 Running\\n'; fi
     elif [[ "\${raw}" == *"readyReplicas"* ]]; then

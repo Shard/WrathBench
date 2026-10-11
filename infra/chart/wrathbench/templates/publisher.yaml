@@ -47,6 +47,9 @@ spec:
       {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
+      # Only the fleet pod holds an API token (templates/run-pods.yaml).
+      automountServiceAccountToken: false
       # An interrupted pass is safe by construction — the manifest is uploaded
       # last, so a torn generation is never pointed at — but 30s lets a pass in
       # flight finish rather than be killed mid-upload.

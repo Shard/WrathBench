@@ -107,9 +107,10 @@ surprise, and nothing server-side may follow them into the browser bundle.
 
 `bun test` from the repo root runs them with everything else. They cover the
 pure layer — view maths and pip placement, the API client's paths, encoding and
-error mapping — plus a focused shared-axis component regression. That regression
-uses the small `happy-dom` harness to mount the Solid `<For>` loops and update
-retained SVG ticks in place; the rest of the suite does not need a DOM.
+error mapping — plus a few focused component checks: the shared chart axis, the
+map's play bar across a route swap, and the campaigns page across its routes.
+Those use the small `happy-dom` harness to mount the components through Vite;
+the rest of the suite does not need a DOM.
 
 ## Conventions
 

@@ -63,123 +63,169 @@ export interface EpisodeTierView {
   summary: string;
 }
 
-/** How a run came to belong to a campaign (`runner/src/campaign-defs`, `attributeCampaign`). */
-export type CampaignSourceView = "stamped" | "unversioned" | "listed";
-
 /**
- * One probe campaign as `/api/campaigns` serves it.
+ * `/api/campaigns`: every published probe campaign version, its store row,
+ * and the cells × (assignment × arm) grid of what has run.
  *
- * Built from the RUN DIRECTORY, not from the config, which is the whole point:
- * a campaign that has been completed, switched off and deleted from the file
- * still has a row here, because its runs are what happened. `config` is the
- * config's side of the story when the entry is still present, and null when it
- * is not — a row with runs and no config is a finished campaign, not an error.
+ * Built from the published definitions (`campaign-defs/*` in the config
+ * store) and annotated from the run directory: a version is listed while it is
+ * published, whether or not a row names it, and its runs are the ones stamped
+ * with its campaign, version, roster name and arm. A run from before arms
+ * existed belongs to no square and is not here; it is on the runs pages.
  */
-export interface CampaignRowView {
-  campaign: string;
-  /** The definition version this row is; null for a campaign id no checked-in definition claims a version of. */
-  version: number | null;
-  /** The checked-in definition, when this checkout has one for the version. */
-  definition: {
-    status: "open" | "closed";
-    question: string;
-    /** The level a run of it stops at (`level-target`), or null when it sets none. */
+export interface CampaignsResponse extends SnapshotEnvelope {
+  now: number;
+  campaigns: CampaignView[];
+  /**
+   * Store rows, published definitions and (assignment, arm) pairs read but not
+   * used, and why: `campaigns/<id>`, `campaign-defs/<id>@<v>`, or
+   * `<id>@<v>:<ref>:<arm>` for a pair that cannot launch as configured.
+   */
+  refused: { key: string; reason: string }[];
+}
+
+/** One published campaign version. */
+export interface CampaignView {
+  id: string;
+  version: number;
+  /** `id@version`. */
+  key: string;
+  /** The definition's content hash, which every run of it is stamped with. */
+  hash: string;
+  /** Where it was published from: the commit, the path, and the origin branches that held the commit then. */
+  source: { commit: string; path: string; branch?: string[] } | null;
+  publishedAt: number | null;
+  question: string;
+  /** The definition's own note: why it is shaped the way it is. */
+  note?: string | null;
+  shape: {
+    objective: string | null;
     stopAtLevel: number | null;
-    /** The ceiling on the play clock, or null on a closed definition (its runs' own budgets apply). */
-    episodeMs: number | null;
-  } | null;
-  /** The store row, when it names this version: the dynamic half. */
+    episodeMs: number;
+    idleMs: number;
+    noXpMs: number | null;
+    maxToolCalls: number;
+    wiki: boolean;
+    wikiCoords: boolean;
+    resume: boolean;
+    maxAttemptsPerCell: number | null;
+  };
+  cells: { id: string; race: number; class: number; note?: string }[];
+  arms: { id: string; note?: string; image: string | null; command: string[] | null; args: string[] }[];
+  /** The store row naming this version; null when it is published and no row names it. */
   config: {
     enabled: boolean;
-    /** Roster names sweeping it, in priority order, with the counted runs each owes per cell. */
-    assignments: { model: string; runsPerCell: number }[];
-    /** Counted runs the assignments want in all: cells × Σ runsPerCell, over assignments still in the catalog. */
-    want: number;
-    /** Whether every (assignment, cell) has its runs or is abandoned: derived, never recorded. */
-    complete: boolean;
-    /** The account it is pinned to, or null when it draws from the pool. */
     account: string | null;
+    assignments: {
+      ref: string;
+      model: string;
+      effort: string | null;
+      compactWindow: string | null;
+      harness: string | null;
+      runsPerCell: number;
+    }[];
   } | null;
-  /** Counted probe runs recorded against this version — capped per (assignment, cell) when the store row says what it wants. */
-  runs: number;
-  /** Runs still in flight. */
-  live: number;
-  /** Distinct models that have run a cell of it. */
-  models: string[];
-  /** Per cell, what has happened — including a cell the definition does not declare. */
-  cells: CampaignCellView[];
   /**
-   * The grid's columns: one per model identity that ran it (model, effort,
-   * harness tag, harness series), then each assignment that has not run yet.
-   * A grid for reading, never a ranking: `probing` has no comparability group.
+   * `running`: a run is in flight. `queued`: enabled with work left.
+   * `complete`: every square settled and nothing in flight. `disabled`: the row
+   * is switched off with work left. `unassigned`: no row, or a row naming no
+   * assignment the roster still holds.
    */
-  columns: CampaignColumnView[];
-  /** `grid[i][j]` is `cells[i]` × `columns[j]`; null where nothing ran and nothing is assigned. */
-  grid: (CampaignSquareView | null)[][];
+  state: "running" | "queued" | "complete" | "disabled" | "unassigned";
+  /**
+   * In RUNS, all five: `want` is cells × arms × Σ runsPerCell over the
+   * assignments the roster still holds; `done` the counted runs, never more per
+   * square than it wants; `capped` the runs wanted on squares abandoned at
+   * the attempt cap, which are never coming — so `done + capped === want`
+   * exactly when every square is settled; `attempted` every launch, counted
+   * or not, live included; `live` the runs in flight.
+   */
+  progress: { want: number; done: number; attempted: number; capped: number; live: number };
+  /**
+   * One per assignment × arm, assignments in the row's priority order and arms
+   * in the definition's. `compactWindow` is the effective window: the arm's
+   * when its args set one, else the roster entry's.
+   */
+  columns: {
+    key: string;
+    ref: string;
+    arm: string;
+    model: string;
+    effort: string | null;
+    compactWindow: string | null;
+    harness: string | null;
+  }[];
+  /** One row per cell, in the definition's order; squares in `columns` order. */
+  grid: { cell: string; squares: Square[] }[];
+  /** Per assignment, one summary per arm: the arms side by side. */
+  comparison: { ref: string; arms: ArmSummary[] }[];
+  /**
+   * What the providers BILLED for every run of this version: the reported
+   * figure (`actualCost` with a `reported` basis), never a list-price estimate,
+   * and never a subscription's as-if-metered figure, which nobody was charged.
+   * Null when no run reported a charge, which is not the claim $0 makes.
+   */
+  costUsd: number | null;
   newestRunId: string | null;
   newestAt: number | null;
 }
 
-/** One cell of a campaign version, as the page lists it. */
-export interface CampaignCellView {
-  cell: string;
-  /** False when the definition does not declare this cell but runs of it exist. */
-  declared: boolean;
-  /** The start the definition declares, or null on an undeclared cell. */
-  race: number | null;
-  class: number | null;
-  /** "Dwarf Warrior" for the declared start. */
-  characterLabel: string | null;
-  /** The definition's note on the cell (a substitute class, a calibration cell). */
-  note: string | null;
+/** One cell × (assignment × arm) square. */
+export interface Square {
+  /** The `columns[].key` this square sits under. */
+  column: string;
+  /** Ended runs, counted or not. A run in flight is in `live`, not here. */
   runs: number;
-  models: string[];
-  /** Best level any run of this cell reached, or null. */
+  /** Ended runs that count toward the square. */
+  counted: number;
+  /** Counted runs that reached the definition's stop level; 0 when it sets none. */
+  reached: number;
+  live: number;
+  /** Minutes of play to the stop level over the counted runs that reached it; null when none did. */
+  minutesToStop: { min: number; median: number; max: number } | null;
+  /** Best level any run of the square reached. */
   bestLevel: number | null;
+  /** Billed cost of the square's runs, on `CampaignView.costUsd`'s basis. */
+  costUsd: number | null;
   /** Runs whose recorded race/class is not the cell's declared start. */
-  mismatched: number;
+  mismatchedStart: number;
+  /** Distinct builds the square's runs ran on: their harness versions. */
+  builds: string[];
+  /** Every run of the square, live ones included, oldest first. */
+  runIds: string[];
+  /** The assignment's `runsPerCell`. */
+  want?: number;
+  /** `done`: it has its counted runs. `capped`: it had its launches without them. Null: still owed. */
+  settled?: "done" | "capped" | null;
+  /** Why its (assignment, arm) pair cannot launch, or null when it can. */
+  refused?: string | null;
 }
 
-/** A grid column: one model identity. */
-export interface CampaignColumnView {
-  key: string;
-  model: string;
-  effort: string | null;
-  /** The claude-code compaction window; null is the CLI's own `auto`. Part of the identity, like effort. */
-  compactWindow: string | null;
-  harness: string | null;
-  /** The harness series its runs were stamped under; null for an assignment that has not run. */
-  series: string | null;
-  /** The roster name assigned to it, when the store row names one that matches. */
-  assignment: string | null;
-}
-
-/** One cell × model square. */
-export interface CampaignSquareView {
+/** One arm of one assignment, summarised to the definition's stop level. */
+export interface ArmSummary {
+  arm: string;
   /** Ended runs, counted or not. */
   runs: number;
-  /** Runs in flight. */
-  live: number;
-  /** Runs that count toward the cell. */
-  counted: number;
-  /** Counted runs that reached the definition's stop level; null when it sets none. */
-  reached: number | null;
-  /** Minutes of play to the stop level over the counted runs that reached it; null when none did. */
-  minutesToTarget: { min: number; median: number; max: number } | null;
-  /** Best level any of these runs reached. */
-  bestLevel: number | null;
-  /** Runs whose recorded start is not the cell's declared one. */
-  mismatched: number;
-}
-
-/** `/api/campaigns`: the probe lane, grouped by what commissioned each run. */
-export interface CampaignsResponse extends SnapshotEnvelope {
-  campaigns: CampaignRowView[];
-  /** Probe runs no campaign claims — no stamp and no definition naming them: a launch that should not exist. */
-  orphans: number;
-  /** Where the fleet config was read from, so a missing `config` can be explained. */
-  configPath: string | null;
-  now: number;
+  /** Counted runs that reached the stop level; the medians are over these. */
+  reached: number;
+  medianMinutesToStop: number | null;
+  /** Turns at the first observation of the stop level. */
+  medianTurnsToStop: number | null;
+  /**
+   * The provider's reported cost of a run that reached the stop level — the
+   * run ended there (`level-target`), so its total is its cost to the stop.
+   * Unlike `costUsd`, a subscription's as-if-metered figure is included,
+   * because it is the only cost a subscription arm has; `costAsIfMetered`
+   * says how many of the figures were that.
+   */
+  medianCostToStop: number | null;
+  /** Prompt tokens of a run that reached the stop level, over the whole run for the same reason. */
+  medianPromptTokensToStop: number | null;
+  /** How the ended runs ended, by termination reason. */
+  terminations: Record<string, number>;
+  builds: string[];
+  /** Of the figures behind `medianCostToStop`, how many are a subscription's as-if-metered one. */
+  costAsIfMetered?: number;
 }
 
 /** `/api/episodes`: the table, plus how many runs are tagged against each tier. */
@@ -293,21 +339,20 @@ export interface RunRow {
   /** The operator objective this run was steered with, or null. */
   objective: string | null;
   /**
-   * The probe campaign this run belongs to and which of its cells it is, or
-   * null on anything else. Read off the run's own config, which
-   * is what lets a campaign's results outlive the deletion of its config entry:
-   * this page is built from the run directory, not from the roster. Attributed
-   * at READ time (`attributeCampaign`): a run stamped before definitions were
-   * versioned gets the version that claims such runs, and a run that recorded
-   * no campaign at all may be named by a closed definition. Nothing is written
-   * back; `campaignSource` says which rule placed it.
+   * The probe campaign this run was launched as a cell of, or null on anything
+   * else: its own stamps, read off the run's config and never inferred, which
+   * is what lets a campaign's results outlive the deletion of its store row.
    */
   campaign: string | null;
   cell: string | null;
-  /** The definition version, stamped or read; null when neither says. Absent from a viewer that predates versions. */
+  /** The definition version it was stamped with; null when it recorded none. Absent from a viewer that predates versions. */
   campaignVersion?: number | null;
-  /** How the run came to belong to `campaign`: its own stamp, a version read for an unversioned stamp, or a closed definition's member list. */
-  campaignSource?: CampaignSourceView | null;
+  /** The campaign arm it ran; null on a run from before arms. */
+  arm?: string | null;
+  /** The roster name the fleet launched a campaign run as; null when it recorded none. */
+  ref?: string | null;
+  /** The image a run pod was asked to run (`WRATHBENCH_RUN_IMAGE`); null on a child-process launch. */
+  image?: string | null;
   /** An extra run: past the policy target, scored like any other, never counted by the fleet. */
   extra: boolean;
   character: string | null;
@@ -1748,15 +1793,16 @@ export interface ResultRun {
   /** "Dwarf Hunter", or null when neither id was recorded. */
   characterLabel: string | null;
   /**
-   * The probe campaign this run belongs to and its cell, or
-   * null. A grouping key for the campaigns page and nothing else: a probe is
-   * unscored, so these never reach a chart. Attributed at read time, as on
-   * `RunRow`.
+   * The probe campaign this run was launched as a cell of, and its stamps, as
+   * on `RunRow`. A grouping key for the campaigns page and nothing else: a
+   * probe is unscored, so these never reach a chart.
    */
   campaign: string | null;
   cell: string | null;
   campaignVersion?: number | null;
-  campaignSource?: CampaignSourceView | null;
+  arm?: string | null;
+  ref?: string | null;
+  image?: string | null;
   effort: string | null;
   /**
    * The claude-code compaction window, off the comparability stamp. A key like

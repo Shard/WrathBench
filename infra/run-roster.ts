@@ -61,8 +61,24 @@ import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, type ScanReads } from "../runner/src/models";
+import { CAMPAIGN_FILE, holdsOnlyLaunchFiles, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  chooseLauncher,
+  EPISODE_TERM_GRACE_MS,
+  parseLaunchSpec,
+  parseRunPodsMode,
+  ProcessLauncher,
+  refusedEpisode,
+  type EpisodeExit,
+  type EpisodeHandle,
+  type EpisodeLauncher,
+  type LaunchSpec,
+  type RunPodsMode,
+} from "./episode-launcher";
+import { K8sClient } from "./k8s-client";
+import { harnessStampOf, IMAGE_RECORD_FILE, loadPodLauncher, parseImageRef } from "./run-pod";
 
 // ------------------------------------------------------------------ types
 
@@ -150,14 +166,15 @@ export interface RosterSpec {
    */
   episode?: string;
   /**
-   * The probe campaign that commissioned this entry, as `<id>@<version>`, and
-   * which of its cells it is. Passed to the runner as `--campaign` / `--cell`;
-   * the runner takes the cell's whole shape from the checked-in definition and
-   * refuses any flag that would set part of it, so a campaign spec's argv
+   * A probe's campaign file (`runner/src/campaign-file.ts`): the published
+   * definition, the cell and the arm this run is. The roster writes it to
+   * `runs/<runId>/campaign.json` before a fresh launch and passes the runner
+   * `--campaign-file` to it; the runner takes the run's whole shape from it
+   * and refuses any flag that would set part of it, so a campaign spec's argv
    * carries no objective, race/class, wiki or leash flag on a fresh launch.
+   * The arm's own args come last.
    */
-  campaign?: string;
-  cell?: string;
+  campaignFile?: CampaignFile;
   /**
    * The roster name a campaign run is launched as (`--ref`), recorded on the
    * run so the sweep counts its work against the assignment that made it.
@@ -166,7 +183,7 @@ export interface RosterSpec {
   /**
    * Whether a run of this entry that pauses is resumed. The fleet
    * writes it from the lane: `freeplay` yes, a probe campaign only if it asked
-   * (its checked-in definition's `resume`), a scored eval never. Absent falls back to
+   * (its published definition's `resume`), a scored eval never. Absent falls back to
    * `resumesOnPause(episode)`, so a hand-written roster with no episode keeps
    * the lane's behaviour.
    */
@@ -189,6 +206,15 @@ export interface RosterSpec {
    * elsewhere (`--continue-dropped`, `--continue-dropped-reason`). Record only.
    */
   continueDropped?: { runId: string; reason: string };
+  /**
+   * How the episode is executed: as its own pod, on `image` (null = the
+   * release image) with `command` (null = this repository's runner). The
+   * planner sets it on every probing job so arms compare on one execution
+   * path; absent means a child process, which every other lane still is.
+   * Honoured only where the fleet setting `policy.runPods` and the cluster
+   * allow (`chooseLauncher`); an arm with an image is refused elsewhere.
+   */
+  launch?: LaunchSpec;
 }
 
 export interface Resolved {
@@ -220,14 +246,15 @@ export interface Resolved {
   wiki: boolean;
   extra: boolean;
   episode: string | undefined;
-  campaign: string | undefined;
-  cell: string | undefined;
+  /** Checked against itself (`parseCampaignFile`): the roster file is a boundary. */
+  campaignFile: CampaignFile | undefined;
   ref: string | undefined;
   /** Resolved once here, so no caller has to remember the fallback. */
   resumeOnPause: boolean;
   continueFrom: string | undefined;
   keepCharacters: string[];
   continueDropped: { runId: string; reason: string } | undefined;
+  launch: LaunchSpec | undefined;
 }
 
 type Outcome =
@@ -270,13 +297,10 @@ const MAX_RETRY_CYCLES = 2;
 const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
 /**
- * SIGTERM → SIGKILL grace for the episode child. The runner pauses on SIGTERM
- * (pause, not terminate): it abandons the request in flight, tears down a CLI child, writes
- * the pause record and releases the session; its own backstop fires at 60s.
- * This must outlast that, and stay inside the fleet container's 180s
- * `stop_grace_period` with room for the supervisor's own reap.
+ * SIGTERM → SIGKILL grace for the episode, child process or pod alike; the
+ * number and its reasoning live with the launcher (`EPISODE_TERM_GRACE_MS`).
  */
-export const CHILD_TERM_GRACE_MS = 90_000;
+export const CHILD_TERM_GRACE_MS = EPISODE_TERM_GRACE_MS;
 const RUNS_DIR = "data/runs";
 /** A trajectory touched more recently than this belongs to a live process. */
 const LIVE_TRAJECTORY_MS = 3 * 60_000;
@@ -359,6 +383,7 @@ function parseArgs(argv: string[]): {
   freeTokens: string[];
   date: string | undefined;
   log: string | undefined;
+  runPods: RunPodsMode;
 } {
   let roster: string | undefined;
   let dryRun = false;
@@ -368,6 +393,7 @@ function parseArgs(argv: string[]): {
   let maxHours: number | undefined;
   let log: string | undefined;
   let date: string | undefined;
+  let runPods: RunPodsMode = "off";
   const skip: string[] = [];
   const freeTokens: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -375,6 +401,9 @@ function parseArgs(argv: string[]): {
     switch (a) {
       case "--dry-run":
         dryRun = true;
+        break;
+      case "--run-pods":
+        runPods = parseRunPodsMode(argv[++i], "--run-pods");
         break;
       case "--loop":
         loop = true;
@@ -420,7 +449,7 @@ function parseArgs(argv: string[]): {
         roster = a;
     }
   }
-  return { roster, dryRun, loop, resumeRoster, until, maxHours, skip, freeTokens, date, log };
+  return { roster, dryRun, loop, resumeRoster, until, maxHours, skip, freeTokens, date, log, runPods };
 }
 
 function usage(): void {
@@ -443,6 +472,9 @@ function usage(): void {
       "                       derived run ids change and every model relaunches from scratch",
       "  --dry-run            print the plan and the exact argv per episode; launch nothing",
       "  --log <path>         roster JSONL (default data/runs/roster-<YYYYMMDD>.jsonl)",
+      "  --run-pods off|probes  the fleet setting policy.runPods as the supervisor read it: with",
+      "                       `probes`, on the cluster, an entry carrying `launch` runs as its own pod",
+      "                       (docs/RUNBOOK.md, \"Run pods\"). Default off: every episode is a child process",
       "",
       `  backoff: a spec that defers (pool saturated) cools for ${DEFER_LADDER} on`,
       `           consecutive defers, then is TAINTED — dropped from the rotation for the rest of`,
@@ -573,13 +605,13 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       wiki: s.wiki !== false,
       extra: s.extra === true,
       episode: s.episode,
-      campaign: s.campaign,
-      cell: s.cell,
+      campaignFile: s.campaignFile === undefined ? undefined : parseCampaignFile(s.campaignFile, `roster entry ${s.model}: campaignFile`),
       ref: s.ref,
       resumeOnPause: s.resumeOnPause ?? resumesOnPause(s.episode),
       continueFrom: s.continueFrom,
       keepCharacters: s.keepCharacters ?? [],
       continueDropped: s.continueDropped,
+      launch: s.launch === undefined ? undefined : parseLaunchSpec(s.launch, `roster entry ${s.model}`),
     });
   }
   return out;
@@ -633,15 +665,36 @@ function leashArgv(spec: Resolved): string[] {
   return argv;
 }
 
+/**
+ * Where a probe's campaign file lives, as the runner is told it: relative to
+ * the repository root every launch path runs from (the roster's cwd, the
+ * runner container's and a run pod's workdir), so one spelling serves them all.
+ */
+export function campaignFilePath(runId: string): string {
+  return join(RUNS_DIR, runId, CAMPAIGN_FILE);
+}
+
 export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?: boolean } = {}): string[] {
   // Everything after the launcher is identical: run-episode.sh passes its
   // unknown flags through to `bun runner/src/run.ts` verbatim, so the two heads
   // are interchangeable and only one of them needs docker.
   const head = opts.container === true ? ["bun", RUNNER_ENTRY] : [EPISODE_SH];
+  return [...head, ...episodeFlags(spec, resume)];
+}
+
+/**
+ * run.ts's own flags, with no launcher head: what a run pod's container is
+ * given as `args` after its command (infra/run-pod.ts), and the tail of every
+ * child-process argv above. Every flag here is one `run.ts` reads
+ * (`runner/src/run-flags.ts`, `SUPERVISOR_FLAGS`), and `run-argv.test.ts`
+ * runs every lane's output through the runner's own parser.
+ */
+export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // Identity — driver, model, account, effort, compactWindow, objective, wiki, race/class,
-  // episode, campaign/cell — is the resumed run's own and is never restated.
-  if (resume) return [...head, "--resume", spec.runId, ...leashArgv(spec)];
-  const argv = [...head, "--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
+  // episode, the campaign file — is the resumed run's own and is never restated;
+  // nor are an arm's args, which the run stored with the rest of its config.
+  if (resume) return ["--resume", spec.runId, ...leashArgv(spec)];
+  const argv = ["--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
   if (spec.driver === "openai") {
     argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
     // Only when the entry stated one: the runner derives the same default from
@@ -666,15 +719,15 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   if (spec.continueDropped !== undefined) {
     argv.push("--continue-dropped", spec.continueDropped.runId, "--continue-dropped-reason", spec.continueDropped.reason);
   }
-  // A probe campaign's cell names its own shape: the runner resolves it from
-  // the checked-in definition and refuses every flag that would set part of it
-  // (objective, race/class, wiki, leash). So a campaign spec's argv is its
-  // identity and nothing else.
-  if (spec.campaign !== undefined) {
-    argv.push("--episode", spec.episode ?? "probing", "--campaign", spec.campaign);
-    if (spec.cell !== undefined) argv.push("--cell", spec.cell);
+  // A probe's campaign file names its whole shape: the runner reads it and
+  // refuses every flag that would set part of it (objective, race/class, wiki,
+  // leash). So a probe's argv is its identity, then the arm's own args — after
+  // the supervisor's, opaque here, and checked against the reserved flags when
+  // the definition was published.
+  if (spec.campaignFile !== undefined) {
+    argv.push("--episode", "probing", "--campaign-file", campaignFilePath(spec.runId));
     if (spec.ref !== undefined) argv.push("--ref", spec.ref);
-    return argv;
+    return [...argv, ...(spec.campaignFile.arm.args ?? [])];
   }
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
   // Explicit value rather than a bare flag, so the runner's argv parser never
@@ -684,9 +737,7 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // pre-#61 roster produced is unchanged.
   if (!spec.wiki) argv.push("--wiki", "false");
   if (spec.extra) argv.push("--extra", "true");
-  // The tier id rides its own flag (a string, never interpreted here); the
-  // runner's argv parser ignores flags it does not know, so this is safe to
-  // emit before the runner learns it.
+  // The tier id rides its own flag (a string, never interpreted here).
   if (spec.episode !== undefined) argv.push("--episode", spec.episode);
   // Race and class only: the name is the model's, and the runner records it.
   argv.push("--race", String(spec.race), "--class", String(spec.class));
@@ -1205,10 +1256,18 @@ function accountOfRun(runId: string): string | undefined {
   }
 }
 
-/** Age of the most recently touched artefact of a run, whichever it is. */
+/**
+ * Age of the most recently touched artefact of a run, whichever it is. The
+ * heartbeat counts (runner/src/trajectory.ts, rewritten every 20s while
+ * run.ts lives and removed on exit): a run waiting on a slow provider writes
+ * neither its trajectory nor its database for longer than LIVE_TRAJECTORY_MS
+ * and still holds its account. So does `image.json`, which the pod launcher
+ * writes the moment a run pod's container starts — before run.ts has opened
+ * anything — so a booting pod is live from its first second.
+ */
 function activityAgeMs(runId: string): number | undefined {
   let newest: number | undefined;
-  for (const name of ["trajectory.jsonl", "run.sqlite"]) {
+  for (const name of ["trajectory.jsonl", "run.sqlite", "heartbeat", IMAGE_RECORD_FILE]) {
     try {
       const m = statSync(join(runDir(runId), name)).mtimeMs;
       if (newest === undefined || m > newest) newest = m;
@@ -1314,9 +1373,15 @@ function record(entry: {
 // ------------------------------------------------------------------ process
 
 let stopping = false;
-let child: ReturnType<typeof Bun.spawn> | undefined;
+/** The episode in flight — a child process or a run pod — behind one handle. */
+let episode: EpisodeHandle | undefined;
 let childRunId: string | undefined;
 const wakeups: (() => void)[] = [];
+/** `--run-pods`, as the supervisor read the fleet setting; off for a hand-run roster. */
+let runPodsMode: RunPodsMode = "off";
+const processLauncher = new ProcessLauncher({ cwd: REPO_ROOT });
+/** Built once per roster process when a pod is first wanted; a string says why there is none. */
+let podLauncher: EpisodeLauncher | { error: string } | undefined;
 
 /**
  * Signal the runner *inside* the container.
@@ -1352,19 +1417,17 @@ function requestStop(sig: string): void {
   stopping = true;
   say(`${sig}: no further episodes will be launched`);
   for (const w of wakeups.splice(0)) w();
-  if (child !== undefined) {
-    const c = child;
+  if (episode !== undefined) {
+    const e = episode;
     const id = childRunId;
-    say(`${sig}: pausing the running episode — the runner pauses as operator-pause on SIGTERM (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
-    c.kill("SIGTERM");
+    say(`${sig}: pausing the running episode (${e.describe()}) — the runner pauses as operator-pause on SIGTERM (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
+    // SIGTERM now, SIGKILL at the grace for a child; a pod is deleted with
+    // the same grace and the kubelet does the killing. runEpisode is awaiting
+    // the same handle, so nothing here waits.
+    void e.stop(CHILD_TERM_GRACE_MS);
     if (id !== undefined) signalInContainer(id, "TERM");
     setTimeout(() => {
       if (id !== undefined) signalInContainer(id, "KILL");
-      try {
-        c.kill("SIGKILL");
-      } catch {
-        // already gone
-      }
     }, CHILD_TERM_GRACE_MS).unref();
   }
 }
@@ -1384,23 +1447,43 @@ async function nap(ms: number, deadline: number | undefined, why: string): Promi
   });
 }
 
-async function runEpisode(spec: Resolved, resume: boolean): Promise<number> {
-  const argv = episodeArgv(spec, resume, { container: CONTAINER });
+/**
+ * Which launcher this episode gets (`chooseLauncher`), built on first use. The
+ * pod launcher needs the chart's mounted template and the pod's own
+ * ServiceAccount; without either, a spec that wanted a pod is refused with the
+ * reason rather than run as a process it was not planned for.
+ */
+function launcherFor(spec: Resolved): EpisodeLauncher | { refused: string } {
+  const choice = chooseLauncher({ runPods: runPodsMode, onCluster: CONTAINER && K8sClient.inCluster() !== null, launch: spec.launch });
+  if (choice.kind === "refused") return { refused: choice.reason };
+  if (choice.kind === "process") return processLauncher;
+  podLauncher ??= loadPodLauncher({ rosterPid: process.pid });
+  if ("error" in podLauncher) return { refused: `run pod wanted for ${spec.runId} but no launcher: ${podLauncher.error}` };
+  return podLauncher;
+}
+
+async function runEpisode(spec: Resolved, resume: boolean): Promise<EpisodeExit> {
+  const launcher = launcherFor(spec);
+  if ("refused" in launcher) return refusedEpisode(launcher.refused).exited;
   childRunId = spec.runId;
-  child = Bun.spawn(argv, {
-    cwd: REPO_ROOT,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit", // the runner's operator lines all go to stderr
-    // On the host run-episode.sh stamps this; in the container we are the
-    // launcher, so we stamp it. Secrets still never travel via argv or env
-    // from here: Bun loads /wrathbench/.env in the child itself.
-    ...(CONTAINER ? { env: { ...process.env, WRATHBENCH_HARNESS_VERSION: harnessVersion() } } : {}),
+  // On the host run-episode.sh stamps the version; in the container we are the
+  // launcher, so we stamp it. Secrets still never travel via argv or env from
+  // here: Bun loads /wrathbench/.env in a child itself, and a pod gets its own
+  // from the chart's Secret references.
+  episode = await launcher.start({
+    spec,
+    resume,
+    runDir: join(REPO_ROOT, RUNS_DIR, spec.runId),
+    argv: episodeArgv(spec, resume, { container: CONTAINER }),
+    args: episodeFlags(spec, resume),
+    env: CONTAINER ? { WRATHBENCH_HARNESS_VERSION: harnessVersion() } : {},
+    log: say,
   });
-  const code = await child.exited;
-  child = undefined;
+  if (launcher.kind === "pod") say(`episode ${spec.runId} runs as ${episode.describe()}`);
+  const exit = await episode.exited;
+  episode = undefined;
   childRunId = undefined;
-  return code;
+  return exit;
 }
 
 /**
@@ -1477,10 +1560,14 @@ type Verdict =
   | { kind: "paused"; reason: string }
   | { kind: "unknown"; detail: string };
 
-function classify(spec: Resolved, exitCode: number): Verdict {
+function classify(spec: Resolved, exit: EpisodeExit): Verdict {
   const row = readRunRow(spec.runId);
+  // The launcher's own reason first, when it had one: an image that would not
+  // pull or a pod never scheduled leaves no run row, and "exit 1, no
+  // run.sqlite" would be all the operator got.
+  const why = exit.failure !== undefined ? `${exit.failure}; ` : "";
   if (row === undefined) {
-    return { kind: "launch-failed", detail: `exit ${exitCode}, no run.sqlite for ${spec.runId}` };
+    return { kind: "launch-failed", detail: `${why}exit ${exit.code}, no run.sqlite for ${spec.runId}` };
   }
   // Termination first: `--resume` clears the pause row, but checking in this
   // order is correct either way.
@@ -1494,7 +1581,85 @@ function classify(spec: Resolved, exitCode: number): Verdict {
   if (row.pause_reason !== null && row.pause_reason !== "") {
     return { kind: "paused", reason: row.pause_reason };
   }
-  return { kind: "unknown", detail: `exit ${exitCode}, run row has neither termination nor pause` };
+  return { kind: "unknown", detail: `${why}exit ${exit.code}, run row has neither termination nor pause` };
+}
+
+/**
+ * Leave a counted record of a fresh probe launch that failed before the run
+ * wrote anything — the launcher refused it, the pod never ran, or run.ts
+ * refused its flags — so the square shows it was tried.
+ *
+ * Without one the directory held only launch files, which is not a run: no
+ * fact, no attempt, so `maxAttemptsPerCell` never engaged and the scheduler
+ * re-picked the square every tick. The stub is the smallest run the readers
+ * count (`readRunFact`): a `meta.json` with the stamps the run would have
+ * written — the roster entry's identity, so the probing attempt counter moves
+ * on to a fresh run id, and the campaign, version, cell, arm and ref, so it
+ * lands in its square — and a `run` row terminated `launch-failed` with the
+ * reason. No trajectory: it played no turn, so it is no model's evidence, no
+ * rung on the defer ladder, and no play time on any page. It is left where it
+ * is rather than archived, because the campaigns page reads only the runs
+ * directory and must count the attempt the scheduler counts.
+ *
+ * The run row first and `meta.json` last, so a write cut short never leaves a
+ * stamped run with no verdict for the resume planner to mistake for one that
+ * went offline.
+ */
+export function writeLaunchFailure(runDir: string, spec: Resolved, detail: string, opts: { harnessVersion: string; now?: number }): void {
+  const file = spec.campaignFile;
+  if (file === undefined) throw new Error(`${spec.runId}: only a probe launch leaves a launch-failed stub`);
+  const now = opts.now ?? Date.now();
+  const config = {
+    runId: spec.runId,
+    driver: spec.driver,
+    model: spec.model,
+    ...(spec.effort !== undefined ? { effort: spec.effort } : {}),
+    ...(spec.compactWindow !== undefined ? { compactWindow: spec.compactWindow } : {}),
+    ...(spec.account !== undefined ? { account: spec.account } : {}),
+    episode: "probing",
+    campaign: file.campaign,
+    campaignVersion: file.version,
+    campaignHash: file.hash,
+    cell: file.cell.id,
+    arm: file.arm.id,
+    ...(spec.ref !== undefined ? { ref: spec.ref } : {}),
+    race: file.cell.race,
+    class: file.cell.class,
+    ...(spec.launch?.image != null ? { image: spec.launch.image } : {}),
+  };
+  mkdirSync(runDir, { recursive: true });
+  // The run store's own schema, and nothing appended: no trajectory.
+  new Trajectory(runDir).close();
+  const db = openRunDb(join(runDir, "run.sqlite"));
+  try {
+    db.query(
+      `INSERT INTO run (run_id, harness_version, started_at, ended_at, driver, model, termination_reason, termination_detail, config_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING`,
+    ).run(spec.runId, opts.harnessVersion, now, now, spec.driver, spec.model, "launch-failed", detail, JSON.stringify(config));
+  } finally {
+    db.close();
+  }
+  const meta = {
+    runId: spec.runId,
+    harnessVersion: opts.harnessVersion,
+    startedAt: now,
+    config,
+    comparability: {
+      harnessVersion: opts.harnessVersion,
+      episode: "probing",
+      effort: spec.effort ?? null,
+      ...(spec.compactWindow !== undefined ? { compactWindow: spec.compactWindow } : {}),
+    },
+  };
+  writeFileSync(join(runDir, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
+}
+
+/** The build a launch-failed stub names: the arm's pinned image's stamp, or this roster's own. */
+function launchStamp(spec: Resolved): string {
+  const image = spec.launch?.image ?? null;
+  if (image === null) return harnessVersion();
+  const parsed = parseImageRef(image);
+  return "error" in parsed ? image : harnessStampOf(parsed);
 }
 
 const RATE_PAUSES = new Set(["rate-limited", "quota-exhausted", "window-exhausted"]);
@@ -1575,8 +1740,12 @@ async function attemptSpec(
     // The name is the model's own and is not known until it creates the
     // character, so the launch line has none to print.
     say(`launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ""}`);
-    const code = await runEpisode(spec, resume);
-    const verdict = classify(spec, code);
+    // A fresh probe's campaign file goes beside the run before the run exists:
+    // the runner reads its whole shape from it, and a run pod needs no store.
+    // A resume keeps the file the run launched with.
+    if (!resume && spec.campaignFile !== undefined && !opts.dryRun) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), spec.campaignFile);
+    const exit = await runEpisode(spec, resume);
+    const verdict = classify(spec, exit);
     const level = readLevel(spec.runId);
     // Resolved again: a run archived as it exited has moved, bytes and all.
     const counted = turnsSince(trajectoryOf(spec.runId), launchedAt);
@@ -1586,6 +1755,19 @@ async function attemptSpec(
     if (verdict.kind === "launch-failed") {
       say(`launch-failed ${spec.runId}: ${verdict.detail}`);
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail: verdict.detail });
+      // A fresh probe that never became a run still spent an attempt on its
+      // square: the stub is that attempt on disk (`writeLaunchFailure`). Never
+      // on a resume, never over a run that wrote its own meta.json, never for
+      // another lane.
+      const dir = join(REPO_ROOT, RUNS_DIR, spec.runId);
+      if (!resume && spec.campaignFile !== undefined && !opts.dryRun && !existsSync(join(dir, "meta.json"))) {
+        try {
+          writeLaunchFailure(dir, spec, verdict.detail, { harnessVersion: launchStamp(spec) });
+          say(`launch-failed ${spec.runId}: recorded as a launch-failed attempt on ${spec.campaignFile.campaign}@${spec.campaignFile.version} ${spec.campaignFile.cell.id}/${spec.campaignFile.arm.id}`);
+        } catch (e) {
+          say(`launch-failed ${spec.runId}: could not record the attempt — ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       return "done";
     }
     if (verdict.kind === "unknown") {
@@ -1826,6 +2008,7 @@ async function main(): Promise<void> {
     say("--loop with no --until/--max-hours: looping until stopped (SIGTERM/SIGINT, or the job is disabled)");
   }
   logPath = args.log ?? join(REPO_ROOT, RUNS_DIR, `roster-${stampToday}.jsonl`);
+  runPodsMode = args.runPods;
 
   let pending: Attempt[] = [];
   for (const spec of specs) {
@@ -1857,7 +2040,9 @@ async function main(): Promise<void> {
     }
     const fresh = planFreshLaunch({
       runId: spec.runId,
-      dirExists: existsSync(runDir(spec.runId)),
+      // Launch files alone (a campaign.json a failed launch left) are not a
+      // run: the next launch onto that id overwrites them, as the runner does.
+      dirExists: !holdsOnlyLaunchFiles(runDir(spec.runId)),
       resumeRoster: args.resumeRoster === true,
     });
     if (fresh.kind === "skip") {
@@ -1914,8 +2099,16 @@ async function main(): Promise<void> {
           (s.wiki ? "" : `\n   NO reference wiki: no search_reference tool, and the prompt does not name it`) +
           (watchdogsJson(s) !== undefined ? `\n   watchdogs ${watchdogsJson(s)}` : "") +
           (s.maxToolCalls !== undefined ? `\n   maxTools  ${s.maxToolCalls}` : "");
+      const launch =
+        s.launch === undefined
+          ? ""
+          : (() => {
+              const choice = chooseLauncher({ runPods: runPodsMode, onCluster: CONTAINER && K8sClient.inCluster() !== null, launch: s.launch });
+              const how = choice.kind === "refused" ? `REFUSED — ${choice.reason}` : choice.kind === "pod" ? `run pod, image ${s.launch.image ?? "(release)"}, command ${s.launch.command?.join(" ") ?? "(this runner)"}` : `child process (image-less arm; policy.runPods ${runPodsMode})`;
+              return `\n   launch    ${how}`;
+            })();
       console.log(
-        `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session with ${s.runId}'s stored token ${CONTAINER ? "(direct fetch to the module)" : "via docker compose exec -T runner"}\n   argv      ${episodeArgv(s, a.resume, { container: CONTAINER }).join(" ")}`,
+        `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}${launch}\n   pre-launch: DELETE /session with ${s.runId}'s stored token ${CONTAINER ? "(direct fetch to the module)" : "via docker compose exec -T runner"}\n   argv      ${episodeArgv(s, a.resume, { container: CONTAINER }).join(" ")}`,
       );
     }
     if (args.freeTokens.length > 0) {

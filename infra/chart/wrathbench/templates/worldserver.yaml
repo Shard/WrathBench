@@ -57,6 +57,7 @@ spec:
       {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
       # The world takes minutes to load and holds live sessions; give it room
       # to write its final state.
       terminationGracePeriodSeconds: 120

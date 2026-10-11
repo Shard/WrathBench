@@ -259,6 +259,13 @@ leaves free. Inspect the config, and you have inspected the fleet.
 Steering it, its guards and the config shape are `docs/RUNBOOK.md`, "Steer it"
 and "Config reference".
 
+An episode is started through one interface (`infra/episode-launcher.ts`):
+a child process of the roster, or — on the cluster, for a probe-campaign arm,
+behind the `policy.runPods` setting — its own pod on the arm's image
+(`infra/run-pod.ts`, the chart's `templates/run-pods.yaml`). The contract both
+sides honour is `docs/ARCHITECTURE.md`, "Launching a run: the run contract";
+operating it is `docs/RUNBOOK.md`, "Run pods".
+
 ### Local (self-hosted) models
 
 An openai entry may point `apiBase` at a self-hosted OpenAI-compatible endpoint

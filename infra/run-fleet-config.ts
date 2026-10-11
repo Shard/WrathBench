@@ -12,9 +12,20 @@ import { harnessSeries } from "../runner/src/comparability";
 import { isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
-import { apiKeyRefusal, DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
-import { campaignWork, parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
-import { unversionedOwner } from "../runner/src/campaign-defs";
+import { rosterKeyRefusal } from "../runner/src/providers";
+import {
+  applyPairRefusals,
+  campaignWork,
+  parseCampaignBlocks,
+  pinnedCampaignJobName,
+  policyCampaignJobName,
+  type Campaign,
+  type CampaignRefusal,
+  type ProbeIdentity,
+  type ProbeRun,
+  type PublishedCampaign,
+} from "../runner/src/campaigns";
+import type { CampaignFile } from "../runner/src/campaign-file";
 import {
   ACCOUNT_CLASSES,
   claudeKeysFor,
@@ -28,7 +39,6 @@ import {
   pinnedRefs as pinnedRefsOf,
   policyExclusion as policyExclusionOf,
   policyRefs as policyRefsOf,
-  sameRosterIdentity,
   type AccountClass,
   type IdleMode,
   type ModelState,
@@ -145,13 +155,12 @@ export type EpisodeId = (typeof EPISODE_IDS)[number];
 
 /**
  * A roster entry as named in the `roster` map: the exact per-entry schema plus
- * its scheduling axes. `tier` is the whole answer to how much this
- * model runs, and it is required — except on a steered entry (one carrying an
- * `objective`), which is outside the policy and has no budget to state, where
- * it is refused instead. `idle` says what the model does with an account once
- * its tier is spent; absent is `none`. An entry may carry the run dimensions
- * (`objective`, `watchdogs`, `maxToolCalls`, `wikiCoords`, `wiki`): a probe with an
- * objective is a roster entry like any other, referenced by a pinned job.
+ * its scheduling axes. The roster is a catalog: `tier` is the whole answer to
+ * how much this model runs, and it is required on every entry. `idle` says
+ * what the model does with an account once its tier is spent; absent is
+ * `none`. An entry never steers — `objective`, `wikiCoords` and `resume` are
+ * refused, because steering is a probe campaign's, which borrows an entry by
+ * naming it in an assignment and supplies the whole task shape itself.
  */
 export interface FleetRosterEntry extends RosterSpec {
   /** Required: the roster is a pure catalog, so there is no such thing as an entry outside the policy. */
@@ -242,11 +251,18 @@ export interface FleetJob {
   continueDropped?: { runId: string; reason: string };
   /**
    * Set when this job is a probe campaign's work: which campaign and version
-   * commissioned it and which cell it is. The cell's shape comes from the
-   * checked-in definition — the runner resolves it from `--campaign
-   * <id>@<version> --cell <id>` — so only the identity travels here.
+   * commissioned it, and which cell and arm it is. Only the identity travels
+   * here; the spawn builds the run's `campaign.json` from the published
+   * definition (or, on a resume, the run keeps its own).
    */
-  probe?: { campaign: string; version: number; cell: string };
+  probe?: ProbeIdentity;
+  /**
+   * Set by `planResumes` on a paused probe's job: the run's own
+   * `campaign.json`, which its spawn carries instead of building one from the
+   * store, so the run comes back on its own arm whatever has been published
+   * since. Never from the file.
+   */
+  campaignFile?: CampaignFile;
   /**
    * The Claude subscription LANE this job's claude-code entries run on, by env
    * var NAME (`policy.subscriptions`). Set by the scheduler — the first lane
@@ -290,8 +306,16 @@ export interface FleetConfig {
   roster: Record<string, FleetRosterEntry>;
   /** Every job the file names, pinned and pool, in file order. */
   jobs: FleetJob[];
-  /** The `campaigns` block, in declaration order; empty when the file has none. */
+  /** The `campaigns` block joined to its published definitions, in declaration order; empty when the file has none. */
   campaigns: Campaign[];
+  /** Every published campaign definition (`campaign-defs`), whether a row names it or not. */
+  campaignDefs: PublishedCampaign[];
+  /**
+   * Campaign rows and published definitions read but not used, by store key
+   * (a version nobody published, a definition that no longer checks out).
+   * Carried to `--status` and `/api/campaigns`.
+   */
+  campaignRefusals: CampaignRefusal[];
   /**
    * Pins refused at parse time, one line each. The rest of the file
    * IS in effect — that is the whole point of a refusal over a `fail()`. Empty
@@ -352,7 +376,7 @@ interface Pin {
   enabled: boolean;
   /**
    * Every job name this pin can spawn under. A job is itself; a campaign is one
-   * job per declared cell (`pinnedCampaignJobs` names them `<campaign>-<cell>`).
+   * job per (cell, arm) (`pinnedCampaignJobName`: `<campaign>-<cell>-<arm>`).
    * The tick uses these to tell a run that is live under a REFUSED pin apart
    * from one the operator deliberately disabled — the first must not be drained.
    */
@@ -374,7 +398,7 @@ function pinsOf(jobs: readonly FleetJob[], campaigns: readonly Campaign[]): Pin[
       get account() { return c.account; },
       get enabled() { return c.enabled; },
       set enabled(v: boolean) { c.enabled = v; },
-      jobNames: c.cells.map((cell) => `${c.name}-${cell.id}`),
+      jobNames: c.cells.flatMap((cell) => c.arms.map((arm) => pinnedCampaignJobName(c.name, cell.id, arm.id))),
     })),
   ];
 }
@@ -462,27 +486,34 @@ export function pinnedJobs(config: Pick<FleetConfig, "jobs">): FleetJob[] {
  * offering it the whole sweep at once would only queue behind itself. A
  * campaign with nothing left returns nothing, and the caller's usual
  * disabled-stand-in path drains whatever was on the account.
+ *
+ * `healthy` is `excludeUnhealthy`'s question — retired or cooling on the defer
+ * ladder (`healthyFrom`) — asked exactly as the policy's campaign loop asks it
+ * of its own picks. Not the policy's whole `blocked` verdict: that also covers
+ * a model that is running, and the model running here is usually this
+ * campaign's own live probe, whose job must keep its name until it ends.
  */
 export function pinnedCampaignJobs(
   config: Pick<FleetConfig, "campaigns" | "roster">,
   probeRuns: readonly ProbeRun[],
+  healthy?: (name: string) => boolean,
 ): FleetJob[] {
   const catalog = Object.keys(config.roster);
   const out: FleetJob[] = [];
   for (const c of config.campaigns) {
     if (c.account === undefined || !c.enabled) continue;
-    const next = campaignWork([c], catalog, probeRuns)[0];
+    const next = campaignWork([c], catalog, probeRuns, healthy)[0];
     if (next === undefined) continue;
     out.push({
       refs: [next.model],
       ref: next.model,
       episode: "probing",
       repeat: 1,
-      name: `${c.name}-${next.cell.id}`,
+      name: pinnedCampaignJobName(c.name, next.cell.id, next.arm.id),
       account: c.account,
       enabled: true,
       source: "pinned",
-      probe: { campaign: c.name, version: c.version, cell: next.cell.id },
+      probe: { campaign: c.name, version: c.version, cell: next.cell.id, arm: next.arm.id },
     });
   }
   return out;
@@ -513,11 +544,10 @@ export function unpinnedCampaigns(config: Pick<FleetConfig, "campaigns">): Campa
 }
 
 /**
- * Every probe run on disk, in the shape `campaignWork` reads them: `ref` is the
- * roster name whose credentials the run used. Recovered by matching the
- * fact's identity against the roster with `sameRosterIdentity` (models.ts),
- * the projection's own predicate — over every roster entry, catalog-only ones
- * included, since a campaign may name a model that carries no tier.
+ * Every probe run on disk, in the shape `campaignSquares` reads them: the
+ * run's own stamps — campaign, version, cell, the roster name it was launched
+ * as and the arm — and nothing inferred. A run missing any of them predates
+ * arms and belongs to no square; it stays on the runs pages.
  *
  * Failed launches come through too, carrying `counted: false`. The fan-out
  * needs both questions answered: `runsPerCell` is about counted runs, and
@@ -525,23 +555,32 @@ export function unpinnedCampaigns(config: Pick<FleetConfig, "campaigns">): Campa
  * did — is exactly how a cell that could never produce a counted run was
  * re-picked thirty-seven times.
  */
-export function probeRunsOf(runs: readonly RunFact[], roster: Record<string, FleetRosterEntry>): ProbeRun[] {
-  const entries = Object.entries(roster);
-  // Probe runs only. Every run would be correct — `campaignWork` ignores a null
-  // campaign — but it would also walk the roster once per run in the whole
-  // history on every tick, to learn nothing about the runs that are not
-  // campaign work.
-  return runs.filter((f) => f.campaign !== null).map((f) => {
-    // The roster name the run recorded, when the fleet stamped one; a run from
-    // before that is matched on the entry's whole identity — model, effort and
-    // the claude-code compaction window — the way every other run is.
-    const ref = f.ref ?? entries.find(([, e]) => sameRosterIdentity(e, f))?.[0] ?? null;
-    // A run stamped before definitions were versioned belongs to the version
-    // that claims the id's unversioned runs — and to no other, so a newer
-    // version reusing a cell id is never credited with it.
-    const version = f.campaignVersion ?? unversionedOwner(f.campaign!)?.version ?? null;
-    return { campaign: f.campaign, version, cell: f.cell, ref, counted: isCounted(f) };
-  });
+export function probeRunsOf(runs: readonly RunFact[]): ProbeRun[] {
+  return runs
+    .filter((f) => f.campaign !== null)
+    .map((f) => ({
+      campaign: f.campaign,
+      version: f.campaignVersion ?? null,
+      cell: f.cell,
+      ref: f.ref ?? null,
+      arm: f.arm ?? null,
+      counted: isCounted(f),
+      live: f.live || f.pause !== null,
+    }));
+}
+
+/**
+ * `excludeUnhealthy`'s question over the projection: a model is unhealthy
+ * when it is retired or cooling on the defer ladder. A name the projection
+ * does not hold (a catalog-only entry) is healthy — absence means "never
+ * eval-scheduled", not "unhealthy".
+ */
+export function healthyFrom(states: readonly ModelState[]): (name: string) => boolean {
+  const byName = new Map(states.map((s) => [s.name, s]));
+  return (name) => {
+    const s = byName.get(name);
+    return s === undefined || (s.retired === undefined && s.cooling === undefined);
+  };
 }
 
 /**
@@ -563,8 +602,8 @@ export function episodeDimensions(id: EpisodeId): Pick<RosterSpec, "episode" | "
     case "e360":
       return { episode: id, watchdogs: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: 12000 };
     case "probing":
-      // The campaign's own clock wins over this; ninety minutes is what a
-      // campaign that names none inherits (`EPISODES.probing`).
+      // Never what a probe runs under: every probe spawn carries its campaign
+      // file, whose budget replaces these (`jobSpawn`). Kept so the switch is total.
       return { episode: id, watchdogs: { episodeMs: 5_400_000, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: undefined };
     case "freeplay":
       return { episode: id, watchdogs: { episodeMs: null, idleMs: 1_200_000, noXpMs: null }, maxToolCalls: null };
@@ -792,9 +831,9 @@ function strictKeyWhy(kind: "roster entry" | "queue job", keys: readonly string[
 /**
  * Every job name a roster entry could spawn under: the file's own jobs that
  * reference it, the policy's `<ref>-<episode>`, and a campaign's
- * `<ref>-<campaign>-<cell>`. This is what a refusal of the ENTRY has to carry
- * for the tick to spare a live run under it — the same value an account-rule
- * refusal carries for a pin. A refusal suppresses scheduling; it
+ * `<ref>-<campaign>-<cell>-<arm>`. This is what a refusal of the ENTRY has to
+ * carry for the tick to spare a live run under it — the same value an
+ * account-rule refusal carries for a pin. A refusal suppresses scheduling; it
  * never drains.
  */
 function refJobNames(name: string, jobs: readonly FleetJob[], campaigns: readonly Campaign[]): string[] {
@@ -802,38 +841,31 @@ function refJobNames(name: string, jobs: readonly FleetJob[], campaigns: readonl
   for (const ep of EPISODE_IDS) names.add(`${name}-${ep}`);
   for (const c of campaigns) {
     if (!c.assignments.some((a) => a.model === name)) continue;
-    for (const cell of c.cells) names.add(`${name}-${c.name}-${cell.id}`);
+    for (const cell of c.cells) for (const arm of c.arms) names.add(policyCampaignJobName(name, c.name, cell.id, arm.id));
   }
   return [...names];
 }
 
-/** Parse + validate a fleet config. Throws with a config-error message. */
-/**
- * Why a roster entry's `apiKeyEnv` may not be sent to its `apiBase`
- * (`runner/src/providers.ts`), or null when the pairing holds. The defaults
- * are the runner's: no base is OpenRouter and no key name is `OPENROUTER_KEY`,
- * so an entry stating only a non-OpenRouter base is refused — it would send
- * the OpenRouter key there. Only the openai driver sends a key; the CLI
- * drivers are given no `--api-key-env` at all (`episodeArgv`).
- *
- * `env` is where the self-hosted hosts are read from (deploy-time config),
- * injected so a test states the deployment it means.
- */
-export function rosterKeyRefusal(
-  e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown },
-  env: Record<string, string | undefined> = process.env,
-): string | null {
-  if ((e.driver ?? "openai") !== "openai") return null;
-  if (e.apiKeyEnv !== undefined && typeof e.apiKeyEnv !== "string") return "apiKeyEnv must be the NAME of the env var holding the key";
-  if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
-  return apiKeyRefusal(e.apiKeyEnv ?? DEFAULT_API_KEY_ENV, e.apiBase ?? DEFAULT_API_BASE, env);
+/** What `parseFleet` is told that the document cannot say. */
+export interface ParseFleetOptions {
+  /**
+   * The supervisor's own knowledge of where it runs, which only it has:
+   * given, an arm that pins an image or a command is refused as a pair off
+   * the cluster too (`campaignPairRefusals`). Every other reader leaves it
+   * out, and gets the refusals `policy.runPods` alone implies.
+   */
+  onCluster?: boolean;
+  /**
+   * Where the deploy-time self-hosted model hosts are read from
+   * (`rosterKeyRefusal`): the process's own unless given, so a test states
+   * the deployment it means. Every other verdict is the document's alone.
+   */
+  env?: Record<string, string | undefined>;
 }
 
-/**
- * `env` is read for one thing, the deploy-time self-hosted model hosts
- * (`rosterKeyRefusal`); every other verdict is the document's alone.
- */
-export function parseFleet(raw: unknown, env: Record<string, string | undefined> = process.env): FleetConfig {
+/** Parse + validate a fleet config. Throws with a config-error message. */
+export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetConfig {
+  const env = opts.env ?? process.env;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail("fleet config must be a JSON object");
   }
@@ -846,6 +878,7 @@ export function parseFleet(raw: unknown, env: Record<string, string | undefined>
     queue?: unknown;
     policy?: unknown;
     campaigns?: unknown;
+    "campaign-defs"?: unknown;
   };
   if (o.lanes !== undefined) {
     fail("fleet config: `lanes` is not a 0.4 key — a job goes in `queue` ({ ref, episode, repeat, account? }) over a `roster` map (see docs/RUNBOOK.md)");
@@ -853,13 +886,13 @@ export function parseFleet(raw: unknown, env: Record<string, string | undefined>
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
   const roster = parseRoster(o.roster);
-  let campaigns: Campaign[];
-  let refusedCampaigns: ReturnType<typeof parseCampaigns>["refused"];
-  try {
-    ({ campaigns, refused: refusedCampaigns } = parseCampaigns(o.campaigns));
-  } catch (err) {
-    fail(`campaigns: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  const { policy, maxConcurrent } = parsePolicy(o.policy);
+  // Never throws: a campaign row or a published definition that does not read
+  // is refused by key below, and the roster, the policy and every other
+  // campaign load as if it were not there. One bad row must not empty the board.
+  // The (assignment, arm) pair refusals come last, once the roster's own
+  // refusals are settled (`applyPairRefusals` below).
+  const { campaigns, definitions: campaignDefs, refused: blockRefusals } = parseCampaignBlocks(o["campaign-defs"], o.campaigns);
   const jobs: FleetJob[] = [];
   const names = new Set<string>();
   const add = (job: FleetJob): void => {
@@ -872,12 +905,12 @@ export function parseFleet(raw: unknown, env: Record<string, string | undefined>
   const strictJobKeys = new Map<string, string[]>();
   for (const job of parseQueue(o.queue, roster, strictJobKeys)) add(job);
   const refusals: ConfigRefusal[] = [];
-  // A campaign row the parser read but will not schedule — a version this
-  // checkout has no definition for, a closed definition switched on — is left
-  // out by name, so one row cannot take the rest of the config down. Its cells
-  // are listed so a run still live under it is spared, as a pin's are.
-  for (const r of refusedCampaigns) {
-    refusals.push({ pin: `campaign ${r.name}`, why: r.why, jobs: r.cells.map((cell) => `${r.name}-${cell}`) });
+  // A campaign row refused by key — one that does not read, or names a
+  // version nobody has published — is left out by name, so one row cannot take the rest of
+  // the config down. It is also a pin refusal, so `--status` and the
+  // supervisor log say it in the same place a refused pin is said.
+  for (const r of blockRefusals) {
+    if (r.campaign !== undefined) refusals.push({ pin: `campaign ${r.campaign}`, why: r.reason, jobs: [] });
   }
   // Strict keys BEFORE the account rules, deliberately: a job the harness
   // cannot read must not win an account off a well-formed one. A refused job
@@ -925,7 +958,6 @@ export function parseFleet(raw: unknown, env: Record<string, string | undefined>
   if (jobs.some((j) => j.enabled && j.account === undefined) && accounts.pool.length === 0) {
     fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
   }
-  const { policy, maxConcurrent } = parsePolicy(o.policy);
   // `policy.routing` is the fleet-wide default, applied HERE rather than at
   // launch so that `--status`, the spawned argv and the run's own config all
   // say the same thing an operator can read off one line. An entry that states
@@ -987,7 +1019,18 @@ export function parseFleet(raw: unknown, env: Record<string, string | undefined>
       jobs: refJobNames(name, jobs, campaigns),
     });
   }
-  return { notes, preflight, accounts, roster, jobs, campaigns, policy, maxConcurrent, refusals };
+  // Last, against the roster as refused: a campaign's (assignment, arm) pair
+  // that would fail at launch — an entry refused above, an arm with nowhere
+  // to run (`policy.runPods`, `onCluster`), a doubled compaction window — is
+  // parked and shown on its squares, never offered to a planner.
+  const campaignRefusals = [
+    ...blockRefusals,
+    ...applyPairRefusals(campaigns, roster, {
+      runPods: policy.runPods,
+      ...(opts.onCluster !== undefined ? { onCluster: opts.onCluster } : {}),
+    }),
+  ];
+  return { notes, preflight, accounts, roster, jobs, campaigns, campaignDefs, campaignRefusals, policy, maxConcurrent, refusals };
 }
 
 function parseAccounts(raw: unknown): FleetAccounts {
@@ -1079,7 +1122,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     // objective is what used to make the roster two kinds of thing, and every
     // scored surface then needed a branch to tell them apart.
     if (rest["objective"] !== undefined) {
-      fail(`roster ${name}: an entry must not carry an objective — steering is a campaign now (see docs/EPISODES.md), which names this entry under "models"`);
+      fail(`roster ${name}: an entry must not carry an objective — steering is a probe campaign's (see docs/EPISODES.md), which names this entry in an assignment`);
     }
     if (rest["wikiCoords"] !== undefined) {
       fail(`roster ${name}: an entry must not carry wikiCoords — coordinates are for a steered run, so they belong to the campaign that asks for them`);
@@ -1089,7 +1132,7 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
     // campaign opts in. An entry saying `resume` meant something specific by
     // it, so it is refused rather than ignored.
     if (rest["resume"] !== undefined) {
-      fail(`roster ${name}: an entry must not carry resume — resuming is the lane's rule; a probe campaign opts in through its checked-in definition's resume`);
+      fail(`roster ${name}: an entry must not carry resume — resuming is the lane's rule; a probe campaign opts in through its published definition's resume`);
     }
     // Required, with no exception left to make: every entry is now something
     // the policy can schedule, so an absent tier is always a mistake.
@@ -1249,7 +1292,7 @@ function parseQueue(
     if (typeof j.episode !== "string" || !(EPISODE_IDS as readonly string[]).includes(j.episode)) {
       fail(`queue ${ref}: episode must be one of ${EPISODE_IDS.join("|")}`);
     }
-    // A probe exists only as a cell of a checked-in campaign definition
+    // A probe exists only as a cell of a published campaign definition
     // (operator decision, 2026-10-09): a queue job naming `probing` would launch
     // one with no campaign, no cell and no definition to say what it was for.
     if (j.episode === "probing") {

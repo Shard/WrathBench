@@ -6,12 +6,20 @@
 #   ./infra/run-episode.sh --resume <run-id>
 #   ./infra/run-episode.sh --model <id> --local           # outside the container
 #   ./infra/run-episode.sh --model <id> --k8s             # into the runner pod
+#   ./infra/run-episode.sh --model <id> --campaign <id>@<v> --cell <id> [--arm <id>]   # a probe
 #
 # Anything else is passed through to `bun runner/src/run.ts` verbatim, e.g.
 # --max-turns <n> (driver turns) or --max-tool-calls <n> (tool calls/episode).
+# run.ts refuses a flag it does not know.
 #
 # What this script adds over calling the runner directly:
 #
+#  - A probe by hand: --campaign/--cell/--arm are this script's. It writes the
+#    run's campaign.json from the published definition in the config store
+#    (runner/src/campaign-file.ts, run where the store is: here with --local,
+#    in the runner pod with --k8s, in the runner container otherwise) and
+#    launches run.ts with --campaign-file, the one campaign input run.ts takes
+#    — the same file a fleet launch gets.
 #  - `WRATHBENCH_HARNESS_VERSION` is computed on the HOST (`git describe`) and
 #    handed to the runner, which has the repo mounted but no git. Without it
 #    every containerised trajectory would be stamped "unversioned".
@@ -37,7 +45,7 @@ K8S_NAMESPACE="${WRATHBENCH_K8S_NAMESPACE:-wrathbench}"
 K8S_RELEASE="${WRATHBENCH_K8S_RELEASE:-wrathbench}"
 
 usage() {
-  sed -n '3,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ---------------------------------------------------------------- arguments
@@ -51,10 +59,39 @@ LOCAL=0
 # actually use, and names it when it is missing. Empty means "the driver's
 # default": CLAUDE_CODE_OAUTH_TOKEN for claude-code, CODEX_HOME for codex.
 TOKEN_ENV=""
+# A hand probe: the campaign, cell and arm name the campaign file to write;
+# the run id and runs dir, when given, are where it goes (and still reach run.ts).
+CAMPAIGN=""
+CELL=""
+ARM=""
+RUN_ID=""
+RUNS_DIR=""
 PASSTHROUGH=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --campaign)
+      CAMPAIGN="${2:-}"
+      shift 2
+      ;;
+    --cell)
+      CELL="${2:-}"
+      shift 2
+      ;;
+    --arm)
+      ARM="${2:-}"
+      shift 2
+      ;;
+    --run-id)
+      RUN_ID="${2:-}"
+      PASSTHROUGH+=("--run-id" "${2:-}")
+      shift 2
+      ;;
+    --runs-dir)
+      RUNS_DIR="${2:-}"
+      PASSTHROUGH+=("--runs-dir" "${2:-}")
+      shift 2
+      ;;
     --driver)
       DRIVER="${2:-}"
       PASSTHROUGH+=("--driver" "${2:-}")
@@ -105,6 +142,19 @@ done
 if [ -z "${RESUME}" ] && [ -z "${MODEL}" ] && [ "${DRIVER}" != "stub" ]; then
   echo "run-episode.sh: --model <id> is required (or --resume <run-id>)" >&2
   usage >&2
+  exit 2
+fi
+
+if [ -n "${CAMPAIGN}" ] && [ -z "${CELL}" ]; then
+  echo "run-episode.sh: --campaign <id>@<version> needs --cell <id> (and --arm <id> when the definition has more than one)" >&2
+  exit 2
+fi
+if [ -z "${CAMPAIGN}" ] && { [ -n "${CELL}" ] || [ -n "${ARM}" ]; }; then
+  echo "run-episode.sh: --cell and --arm name a square of a campaign; pass --campaign <id>@<version> with them" >&2
+  exit 2
+fi
+if [ -n "${CAMPAIGN}" ] && [ -n "${RESUME}" ]; then
+  echo "run-episode.sh: a resumed probe keeps its own campaign.json; drop --campaign" >&2
   exit 2
 fi
 
@@ -288,20 +338,32 @@ fi
 
 # ------------------------------------------------------------------ launch
 
+# Where `bun` runs: here, in the runner pod, or in the runner container. One
+# prefix for the campaign file and the run, so both see the same store and the
+# same runs directory.
 if [ "${LOCAL}" -eq 1 ]; then
   cd "${REPO_ROOT}"
-  exec bun runner/src/run.ts "${PASSTHROUGH[@]}"
-fi
-
-if [ "${K8S}" -eq 1 ]; then
+  IN_RUNNER=()
+elif [ "${K8S}" -eq 1 ]; then
   # The pod has no .git, so the stamp cannot be recomputed there; the chart
   # already sets WRATHBENCH_HARNESS_VERSION from the image tag, which is the
   # honest marker for a baked-in repo. Passing the workstation's `git describe`
   # would claim a revision the pod is not running.
-  exec kubectl -n "${K8S_NAMESPACE}" exec -i "deployment/${K8S_RELEASE}-runner" \
-    -- bun runner/src/run.ts "${PASSTHROUGH[@]}"
+  IN_RUNNER=(kubectl -n "${K8S_NAMESPACE}" exec -i "deployment/${K8S_RELEASE}-runner" --)
+else
+  IN_RUNNER=(docker compose -f "${COMPOSE_FILE}" exec -T -e "WRATHBENCH_HARNESS_VERSION=${WRATHBENCH_HARNESS_VERSION}" "${SERVICE}")
 fi
 
-exec docker compose -f "${COMPOSE_FILE}" exec -T \
-  -e "WRATHBENCH_HARNESS_VERSION=${WRATHBENCH_HARNESS_VERSION}" \
-  "${SERVICE}" bun runner/src/run.ts "${PASSTHROUGH[@]}"
+if [ -n "${CAMPAIGN}" ]; then
+  FILE_ARGS=(--campaign "${CAMPAIGN}" --cell "${CELL}")
+  [ -z "${ARM}" ] || FILE_ARGS+=(--arm "${ARM}")
+  [ -z "${RUN_ID}" ] || FILE_ARGS+=(--run-id "${RUN_ID}")
+  [ -z "${RUNS_DIR}" ] || FILE_ARGS+=(--runs-dir "${RUNS_DIR}")
+  WRITTEN="$("${IN_RUNNER[@]}" bun runner/src/campaign-file.ts "${FILE_ARGS[@]}")" || exit 2
+  read -r WRITTEN_ID WRITTEN_PATH <<<"${WRITTEN}"
+  [ -n "${RUN_ID}" ] || PASSTHROUGH+=(--run-id "${WRITTEN_ID}")
+  PASSTHROUGH+=(--campaign-file "${WRITTEN_PATH}")
+  echo "run-episode.sh: ${CAMPAIGN} cell ${CELL}${ARM:+ arm ${ARM}} as ${WRITTEN_ID} (${WRITTEN_PATH})" >&2
+fi
+
+exec "${IN_RUNNER[@]}" bun runner/src/run.ts "${PASSTHROUGH[@]}"

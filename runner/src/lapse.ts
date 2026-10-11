@@ -94,6 +94,8 @@ export const NOT_THE_MODELS_FAULT: ReadonlySet<string> = new Set([
   // A transport failure ends the episode early with the model's clock unspent;
   // the evidence is tainted, not weak (operator, 2026-08-30).
   "adapter-error",
+  // A probe launch that never became a run: no turn was played.
+  "launch-failed",
   ...ATTEMPT_FAILURE_REASONS,
 ]);
 
@@ -155,8 +157,8 @@ export function neverStale(episode: string | null | undefined): boolean {
 }
 
 /**
- * Whether a lane resumes a lapsed run. `resume` is what a probe's checked-in
- * campaign definition states (`runner/src/campaign-defs/`); `resumeOnPause` is the same
+ * Whether a lane resumes a lapsed run. `resume` is what a probe's published
+ * campaign definition states (`runner/src/campaign-def.ts`); `resumeOnPause` is the same
  * answer travelling on a roster spec. An episode the table does not know —
  * a hand-written roster with no `--episode` — keeps the original resume
  * behaviour.

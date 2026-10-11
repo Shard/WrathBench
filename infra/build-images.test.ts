@@ -210,10 +210,10 @@ describe("build-images.sh builds from git, never the working tree", () => {
     expect(r.leftovers).toEqual([]);
   });
 
-  test("the default registry is harbor.local/library, and the image guard runs on what was built", () => {
+  test("the default registry is harbor.local/wrathbench, and the image guard runs on what was built", () => {
     const { tree, sha } = makeRepo();
     const r = run(tree, ["--only", "runner"]);
-    const ref = `harbor.local/library/wrathbench-runner:${sha.slice(0, 7)}`;
+    const ref = `harbor.local/wrathbench/wrathbench-runner:${sha.slice(0, 7)}`;
     expect(builds(r)[0]).toContain(`-t ${ref}`);
     expect(r.calls).toContain(`docker create ${ref} true`);
     expect(r.calls).toContain("docker export fake-container");

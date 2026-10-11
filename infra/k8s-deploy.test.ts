@@ -14,7 +14,7 @@
  * gone says the supervisor's own session is gone.
  *
  * So the property pinned here is exactly that one: no smoke may run while a
- * fleet pod is still listed, the wait is unconditional (a fleet already at 0
+ * fleet pod (or a run pod) is still listed, or while a read of them fails, the wait is unconditional (a fleet already at 0
  * does no state-file wait at all, and "already at 0" says nothing about a pod
  * in its grace), and a pod that outlives the budget fails the window CLOSED
  * with the pod named rather than smoking on top of it.
@@ -56,6 +56,9 @@ const TAG = "wb-test-0.9-1-gdeadbee";
  *
  *   FAKE_POD_POLLS   how many `get pods` reads still report a fleet pod
  *                    (-1 = forever, which is the pod that outlives the budget)
+ *   FAKE_POD_FAILS   how many fleet-pod reads fail first, kubectl exiting 1
+ *                    with a complaint on stderr (-1 = every one); the same
+ *                    for the run pods is FAKE_RUN_POD_FAILS
  *   FAKE_REPLICAS    what the fleet Deployment reports for .spec.replicas
  *   FAKE_SMOKE_RC    the exit code every smoke returns
  *   FAKE_PREFLIGHT   the file `config-store.ts get preflight` answers with —
@@ -99,7 +102,38 @@ case "\${cmd}" in
     esac
     ;;
   get)
+    if [[ "\${raw}" == *"component=run"* ]]; then
+      f=0
+      [[ -f "\${FAKE_LOG}.runpodfail" ]] && f="$(cat "\${FAKE_LOG}.runpodfail")"
+      fails="\${FAKE_RUN_POD_FAILS:-0}"
+      if [[ "\${fails}" == "-1" || "\${f}" -lt "\${fails}" ]]; then
+        printf '%s' "$(( f + 1 ))" > "\${FAKE_LOG}.runpodfail"
+        log "get run-pods failed"
+        echo "Unable to connect to the server: net/http: TLS handshake timeout" >&2
+        exit 1
+      fi
+      # The RUN pods (infra/run-pod.ts): FAKE_RUN_POD_POLLS reads still list one.
+      n=0
+      [[ -f "\${FAKE_LOG}.runpodcount" ]] && n="$(cat "\${FAKE_LOG}.runpodcount")"
+      n=$(( n + 1 ))
+      printf '%s' "\${n}" > "\${FAKE_LOG}.runpodcount"
+      log "get run-pods"
+      polls="\${FAKE_RUN_POD_POLLS:-0}"
+      if [[ "\${polls}" == "-1" || "\${n}" -le "\${polls}" ]]; then
+        printf 'wrathbench-run-xyz12 Running fleet-race-probe-1-orc-warrior-sonnet-20260101\\n'
+      fi
+      exit 0
+    fi
     if [[ "\${raw}" == *"get pods"* ]]; then
+      f=0
+      [[ -f "\${FAKE_LOG}.podfail" ]] && f="$(cat "\${FAKE_LOG}.podfail")"
+      fails="\${FAKE_POD_FAILS:-0}"
+      if [[ "\${fails}" == "-1" || "\${f}" -lt "\${fails}" ]]; then
+        printf '%s' "$(( f + 1 ))" > "\${FAKE_LOG}.podfail"
+        log "get pods failed"
+        echo "Error from server (InternalError): an error on the server has prevented the request from succeeding" >&2
+        exit 1
+      fi
       n=0
       [[ -f "\${FAKE_LOG}.podcount" ]] && n="$(cat "\${FAKE_LOG}.podcount")"
       n=$(( n + 1 ))
@@ -117,7 +151,7 @@ case "\${cmd}" in
       exit 0
     fi
     log "get image"
-    printf 'reg.example/library/wrathbench-worldserver:%s' "\${FAKE_TAG}"
+    printf 'reg.example/wrathbench/wrathbench-worldserver:%s' "\${FAKE_TAG}"
     exit 0
     ;;
   scale) log "\${raw}"; exit 0 ;;
@@ -141,6 +175,12 @@ interface Case {
   args?: string[];
   /** How many `get pods` reads still report a pod; -1 never stops reporting one. */
   podPolls?: number;
+  /** The same for the RUN pods (`component=run`). */
+  runPodPolls?: number;
+  /** How many fleet-pod reads fail before one answers; -1 fails every one. */
+  podFails?: number;
+  /** The same for the run pods. */
+  runPodFails?: number;
   replicas?: number;
   drainWaitS?: number;
   smokeRc?: number;
@@ -190,6 +230,9 @@ function run(c: Case): Result {
         FAKE_LOG: log,
         FAKE_TAG: TAG,
         FAKE_POD_POLLS: String(c.podPolls ?? 0),
+        FAKE_RUN_POD_POLLS: String(c.runPodPolls ?? 0),
+        FAKE_POD_FAILS: String(c.podFails ?? 0),
+        FAKE_RUN_POD_FAILS: String(c.runPodFails ?? 0),
         FAKE_REPLICAS: String(c.replicas ?? 1),
         ...(c.smokeRc !== undefined ? { FAKE_SMOKE_RC: String(c.smokeRc) } : {}),
         FAKE_PREFLIGHT: preflightJson,
@@ -274,6 +317,90 @@ describe("k8s-deploy.sh draining", () => {
     expect(firstIndex(r, "smoke ")).toBe(-1);
     // And the invariant the header promises still holds — the fleet came back.
     expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+  });
+
+  // A run pod (infra/run-pod.ts) is an episode with a game session, owned by
+  // the fleet pod and deleted with a 90s grace once that pod is gone. The
+  // worldserver is rolled and smoked only once none remains.
+  test("run pods are waited out after the fleet pod and before the worldserver is touched", () => {
+    const r = run({ podPolls: 1, runPodPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("waiting for every RUN pod to go away");
+    expect(r.out).toContain("drained: no run pod remains");
+    const lastRunPoll = lastIndex(r, "get run-pods");
+    expect(r.calls.filter((l) => l === "get run-pods").length).toBeGreaterThanOrEqual(2);
+    // After the fleet pod wait, before the worldserver rollout wait and the smoke.
+    expect(lastRunPoll).toBeGreaterThan(lastIndex(r, "get pods"));
+    expect(lastRunPoll).toBeLessThan(r.calls.findIndex((l) => l.startsWith("rollout status") && l.includes("worldserver")));
+    expect(lastRunPoll).toBeLessThan(firstIndex(r, "smoke "));
+  }, 20_000);
+
+  test("a run pod that never goes away fails the window closed, naming its run", () => {
+    const r = run({ podPolls: 0, runPodPolls: -1, drainWaitS: 1 });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("fleet-race-probe-1-orc-warrior-sonnet-20260101");
+    expect(r.out).toContain("must not be touched under a live run");
+    expect(firstIndex(r, "smoke ")).toBe(-1);
+    expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+  });
+
+  test("--dry-run lists the run pods beside the fleet pods", () => {
+    const r = run({ args: ["--dry-run"], runPodPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("run pods");
+    expect(r.out).toContain("wrathbench-run-xyz12 Running");
+  });
+
+  // A kubectl that fails is not a cluster with no pods. The readers used to
+  // swallow the error and print nothing, which the wait read as "gone" on its
+  // first look — so one transient API error ended the drain at once.
+  test("a run-pod read that fails is retried inside the budget, never taken as none", () => {
+    const r = run({ podPolls: 0, runPodFails: 2, runPodPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("could not list the run pods (kubectl exit 1: Unable to connect to the server");
+    expect(r.out).toContain("drained: no run pod remains");
+    // Two failed reads, then one that still lists the pod, then the empty one.
+    const reads = r.calls.filter((l) => l.startsWith("get run-pods"));
+    expect(reads.slice(0, 3)).toEqual(["get run-pods failed", "get run-pods failed", "get run-pods"]);
+    expect(reads.length).toBe(4);
+    expect(lastIndex(r, "get run-pods")).toBeLessThan(firstIndex(r, "smoke "));
+  }, 20_000);
+
+  test("a run-pod read that keeps failing fails the window closed before the worldserver is touched", () => {
+    const r = run({ podPolls: 0, runPodFails: -1, drainWaitS: 3 });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("could not list the run pods within 3s");
+    expect(r.out).toContain("a failed read is not an empty one");
+    expect(r.out).not.toContain("drained: no run pod remains");
+    expect(r.calls.some((l) => l.startsWith("rollout status") && l.includes("worldserver"))).toBe(false);
+    expect(firstIndex(r, "smoke ")).toBe(-1);
+    expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+  }, 20_000);
+
+  test("a fleet-pod read that keeps failing fails the window closed too", () => {
+    const r = run({ podFails: -1, drainWaitS: 3 });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("could not list the fleet pods within 3s");
+    expect(r.out).toContain("an error on the server has prevented the request");
+    expect(r.out).not.toContain("drained: no fleet pod remains");
+    expect(firstIndex(r, "get run-pods")).toBe(-1);
+    expect(firstIndex(r, "smoke ")).toBe(-1);
+  }, 20_000);
+
+  test("a fleet-pod read that fails once is retried, and the pod it then sees is waited out", () => {
+    const r = run({ podFails: 1, podPolls: 1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("could not list the fleet pods");
+    expect(r.out).toContain("drained: no fleet pod remains");
+    expect(r.calls.filter((l) => l.startsWith("get pods"))).toEqual(["get pods failed", "get pods", "get pods"]);
+  }, 20_000);
+
+  test("--dry-run says a failed read is one, not none", () => {
+    const r = run({ args: ["--dry-run"], podFails: -1, runPodFails: -1 });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("fleet pods         COULD NOT READ (kubectl exit 1:");
+    expect(r.out).toContain("run pods           COULD NOT READ (kubectl exit 1:");
+    expect(r.out).not.toContain("none — no episode is running as its own pod");
   });
 });
 

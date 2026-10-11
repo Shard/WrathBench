@@ -50,7 +50,8 @@ import {
 } from "../src/models";
 import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
-import { parseCampaigns, type Campaign } from "../src/campaigns";
+import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../src/campaigns";
+import { rosterKeyRefusal } from "../src/providers";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { redactSecrets } from "./tail";
@@ -131,6 +132,7 @@ const fleetRosterSchema = z
     policy: z.unknown().optional(),
     accounts: fleetAccountsSchema.optional(),
     campaigns: z.unknown().optional(),
+    "campaign-defs": z.unknown().optional(),
   })
   .loose();
 
@@ -168,12 +170,20 @@ export interface RosterRead {
   /** `accounts.pool` / `.paid` / `.local` as counts: the ETA's concurrency. */
   accounts: ClassAccountCounts;
   /**
-   * The `campaigns` block, or empty when the file names none or names
-   * them unreadably. The viewer reports what a file says and never adjudicates
-   * it — a campaigns block the supervisor would refuse simply reads as absent
-   * here rather than taking the whole roster down with it.
+   * The `campaigns` block joined to its published definitions, or empty when
+   * the store names none or names them unreadably — a campaigns block that
+   * cannot be read does not take the whole roster down with it, and it is
+   * named in `campaignRefusals` rather than dropped.
    */
   campaigns: Campaign[];
+  /** Every published campaign definition (`campaign-defs`), named by a row or not. */
+  campaignDefs: PublishedCampaign[];
+  /**
+   * Everything the campaign parser read and would not use, by store key, as
+   * the supervisor reads it (`parseCampaignBlocks`); an unreadable block is
+   * one refusal keyed `campaigns`. The campaigns page shows every one.
+   */
+  campaignRefusals: CampaignRefusal[];
 }
 
 /** The series this viewer runs from — what the projection counts against. */
@@ -202,11 +212,17 @@ function windowOf(raw: string | undefined): string | undefined {
  * seed, labelled rather than thrown. A store that cannot be read, or a config
  * without a `roster` map, is `unreadable` — the same posture `readFleet` takes
  * to a missing `fleet-state.json`: say it is not usable, do not synthesise
- * what it would have said. `path` is the store's.
+ * what it would have said. `path` is the store's. `env` is where the
+ * deploy-time self-hosted model hosts are read from (`rosterKeyRefusal`), the
+ * same variable every pod that parses the store is given.
  */
-export function readFleetRoster(dbPath: string = configDbPath(), series: string | null = currentSeries()): RosterRead {
+export function readFleetRoster(
+  dbPath: string = configDbPath(),
+  series: string | null = currentSeries(),
+  env: Record<string, string | undefined> = process.env,
+): RosterRead {
   const defaults: SchedulingPolicy = { ...DEFAULT_POLICY, series };
-  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], count: 0, accounts: {}, campaigns: [] };
+  const empty = { models: [], policy: defaults, maxConcurrent: {}, excluded: [], count: 0, accounts: {}, campaigns: [], campaignDefs: [], campaignRefusals: [] };
   const read = readFleetConfig(dbPath);
   const path = read.path;
   if (read.status === "empty") return { ...empty, shape: "missing", path };
@@ -265,14 +281,43 @@ export function readFleetRoster(dbPath: string = configDbPath(), series: string 
     local: parsed.accounts?.local?.length ?? 0,
   };
   let campaigns: Campaign[] = [];
+  let campaignDefs: PublishedCampaign[] = [];
+  let campaignRefusals: CampaignRefusal[] = [];
   try {
-    // A row refused by name (no definition for its version, a closed one
-    // switched on) is left out exactly as the supervisor leaves it out.
-    campaigns = parseCampaigns(parsed.campaigns).campaigns;
-  } catch {
-    // See `campaigns` on RosterRead: unreadable reads as absent.
+    // What the supervisor reads, refusals and all: a row naming an
+    // unpublished version, a definition that no longer checks out, an
+    // (assignment, arm) pair that cannot launch. Carried to the page, never
+    // swallowed.
+    // An entry whose provider key the table would not send to its base is
+    // refused by the supervisor and scheduled by nothing, so its squares are
+    // refused here too (`campaignPairRefusals`), not shown as owed work.
+    const pairs = Object.fromEntries(
+      Object.entries(parsed.roster).map(([n, e]) => {
+        const refused = rosterKeyRefusal(e, env) ?? undefined;
+        return [n, { driver: e.driver, compactWindow: e.compactWindow, ...(refused !== undefined ? { refused } : {}) }];
+      }),
+    );
+    // Where an arm can launch, as far as this reader knows: the setting, and
+    // not the cluster, which only the supervisor can tell.
+    ({ campaigns, definitions: campaignDefs, refused: campaignRefusals } = parseCampaignBlocks(parsed["campaign-defs"], parsed.campaigns, pairs, { runPods: policy.runPods }));
+  } catch (err) {
+    // A block the supervisor could not read at all: one refusal, so the page
+    // says so instead of showing no campaigns.
+    campaignRefusals = [{ key: "campaigns", reason: err instanceof Error ? err.message : String(err) }];
   }
-  return { models, shape: "roster", path, policy, maxConcurrent, excluded, count: Object.keys(parsed.roster).length, accounts, campaigns };
+  return {
+    models,
+    shape: "roster",
+    path,
+    policy,
+    maxConcurrent,
+    excluded,
+    count: Object.keys(parsed.roster).length,
+    accounts,
+    campaigns,
+    campaignDefs,
+    campaignRefusals,
+  };
 }
 
 // ------------------------------------------------------------- run facts

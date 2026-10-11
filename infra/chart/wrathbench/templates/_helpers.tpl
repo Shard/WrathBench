@@ -120,6 +120,23 @@ seccompProfile:
   type: RuntimeDefault
 {{- end -}}
 
+{{/*
+The pull Secrets every WrathBench-image pod carries. The images live in a
+private Harbor project (operator decision 2026-10-11), and the deploying
+cluster owns the Secret; the chart only names it. Empty renders nothing, which
+is what a public registry wants. The database pods are not included: MySQL and
+ClickHouse are upstream public images, and templates/_helpers.tpl's rule that
+their pod templates never move with the release stands.
+*/}}
+{{- define "wrathbench.imagePullSecrets" -}}
+{{- with .Values.imagePullSecrets }}
+imagePullSecrets:
+{{- range . }}
+  - name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "wrathbench.containerSecurityContext" -}}
 allowPrivilegeEscalation: false
 capabilities:
@@ -214,15 +231,34 @@ model key at all. */}}
 {{- end }}
 {{- end -}}
 
-{{/* The harness stamp on every trajectory. One string with the image tag and
-the worldserver's /health build, so a run says which revision produced it. */}}
-{{- define "wrathbench.harnessEnv" -}}
+{{/* What one EPISODE needs from its environment: the harness stamp on every
+trajectory (one string with the image tag, so a run says which revision
+produced it), the module, the runs directory, and the self-hosted model
+hosts. This is the whole of what run.ts reads from the chart, so it is also
+the env of a run pod (templates/run-pods.yaml), where the launcher overwrites
+the stamp with the arm's own image tag. The config store is deliberately NOT
+here: run.ts never opens it, and a run pod mounts no config. */}}
+{{- define "wrathbench.runEnv" -}}
 - name: WRATHBENCH_HARNESS_VERSION
   value: {{ include "wrathbench.tag" . | quote }}
 - name: WRATHBENCH_MODULE_URL
   value: "http://worldserver:8086"
 - name: WRATHBENCH_RUNS_DIR
   value: /wrathbench/data/runs
+{{- /* The self-hosted model hosts the provider table pairs with LMSTUDIO_KEY
+       (runner/src/providers.ts). In the run env, so through harnessEnv every
+       pod that parses the store gets it too: each must reach the same verdict
+       on an entry — the viewer refusing a write the supervisor would accept,
+       or the reverse, is the disagreement the store exists to rule out — and
+       run.ts, in a run pod as in the fleet's child, checks the pair again
+       before it reads the key. A plain value, so the launcher keeps it. */}}
+- name: WRATHBENCH_LOCAL_MODEL_HOSTS
+  value: {{ join "," (.Values.localModelHosts | default list) | quote }}
+{{- end -}}
+
+{{/* The run env plus the config store: every long-lived pod that reads the fleet config. */}}
+{{- define "wrathbench.harnessEnv" -}}
+{{ include "wrathbench.runEnv" . }}
 {{- /* The config store (docs/RUNBOOK.md "Where the config lives"), the
        only fleet config. Set here and not per pod because every pod that
        reads config must read the SAME file: the supervisor re-reads it, the
@@ -235,13 +271,6 @@ the worldserver's /health build, so a run says which revision produced it. */}}
        read into an error. */}}
 - name: WRATHBENCH_CONFIG_DB
   value: /wrathbench/data/config/config.sqlite
-{{- /* The self-hosted model hosts the provider table pairs with LMSTUDIO_KEY
-       (runner/src/providers.ts). Here, beside the store's path, because every
-       pod that parses the store must reach the same verdict on an entry: the
-       viewer refusing a write the supervisor would accept, or the reverse,
-       is the disagreement the store exists to rule out. */}}
-- name: WRATHBENCH_LOCAL_MODEL_HOSTS
-  value: {{ join "," (.Values.localModelHosts | default list) | quote }}
 {{- end -}}
 
 {{/*

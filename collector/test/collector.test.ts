@@ -373,6 +373,18 @@ describe("archived runs", () => {
   });
 });
 
+describe("a launch that never became a run", () => {
+  test("a directory holding only launch files (campaign.json, image.json) is not ingested", () => {
+    const runsDir = tmpRoot();
+    writeRun(runsDir, "run-real");
+    const launchOnly = join(runsDir, "fleet-probe-orc-warrior-base-m-20261011");
+    Bun.spawnSync(["mkdir", "-p", launchOnly]);
+    writeFileSync(join(launchOnly, "campaign.json"), "{}");
+    writeFileSync(join(launchOnly, "image.json"), "{}");
+    expect(listRunDirs(runsDir).map((d) => d.runId)).toEqual(["run-real"]);
+  });
+});
+
 describe("a run id that exists twice", () => {
   /*
    * `data/runs/<id>/` and `data/runs/archive/<id>/` can both hold a run, and

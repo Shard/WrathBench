@@ -81,6 +81,7 @@ import {
   classPoolsOf,
   concurrencyKeyOfRef,
   eligibleFrom,
+  healthyFrom,
   type FleetConfig,
   type FleetJob,
   type FleetPreflight,
@@ -153,6 +154,8 @@ import {
   deployLockFree,
   type FleetState,
   hasLiveChild,
+  rosterEpisodeInFlight,
+  runHasImageRecord,
   jobArgv,
   jobDefers,
   jobJsonlPath,
@@ -176,8 +179,11 @@ import {
 } from "./run-fleet-state";
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
 import { accountHeldBy, releaseRunSession } from "./run-roster";
+import { K8sClient } from "./k8s-client";
+import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
+import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
-import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
+import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
 import {
   capFor,
   CLAUDE_TOTAL_KEY,
@@ -453,6 +459,12 @@ interface JobProc {
   job?: FleetJob;
   /** The run ids this process's roster was materialized with (`fillEntries`). */
   runIds: string[];
+  /**
+   * Whether its roster was spawned with `--run-pods`, read off the argv it was
+   * given: only such a roster can have an episode running as a pod, whatever
+   * the setting says now.
+   */
+  runPods: boolean;
   proc: ReturnType<typeof Bun.spawn>;
   pid: number;
   spawnedAt: number;
@@ -724,7 +736,11 @@ async function main(): Promise<void> {
    * not to start — nothing is running yet, so there is nothing to protect by
    * exiting, and a supervisor that is up retries every tick by itself.
    */
-  const boot = rereadFleet(parseFleet({}));
+  // Where this supervisor runs, which only it knows: an arm that pins an image
+  // or a command is refused as a pair off the cluster (`campaignPairRefusals`).
+  // The same test the roster's launcher choice makes.
+  const parseOpts = { onCluster: CONTAINER && K8sClient.inCluster() !== null };
+  const boot = rereadFleet(parseFleet({}, parseOpts), readFleetConfig, parseOpts);
   let config = boot.config;
   let wasEmpty = boot.empty === true;
   configRejected = nextConfigRejection(undefined, { error: boot.error, mtime: storeMtime(configPath) }, Date.now());
@@ -916,8 +932,8 @@ async function main(): Promise<void> {
     // Pinned jobs: from the file, on their own accounts — plus a pinned
     // campaign's next cell, which is a pinned job in everything but where it
     // was written down.
-    const probes = probeRunsOf(runs, cfg.roster);
-    campaignJobs = pinnedCampaignJobs(cfg, probes);
+    const probes = probeRunsOf(runs);
+    campaignJobs = pinnedCampaignJobs(cfg, probes, healthyFrom(states));
     for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
@@ -1007,7 +1023,15 @@ async function main(): Promise<void> {
     // spawn; a pool job's resume reserves its account like an assignment.
     const runningMap = new Map<string, string>(assigned);
     for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
-    const resumes = planResumes({ runs, config: cfg, running: runningMap, held, now: Date.now() });
+    const resumes = planResumes({
+      runs,
+      config: cfg,
+      running: runningMap,
+      held,
+      now: Date.now(),
+      campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
+      hasImageRecord: (id) => runHasImageRecord(id),
+    });
     lastPaused = resumes.listed;
     // Runs nothing came back for are ended on every tick, boot
     // included: the host slept, or the fleet was down past the run's own
@@ -1054,6 +1078,19 @@ async function main(): Promise<void> {
     for (const r of resumes.resume) {
       const name = r.job.name;
       if (sets.running.has(name)) continue;
+      // A probe paused before campaign files existed comes back with one
+      // rebuilt from its published definition (`pausedProbeFile`); it goes
+      // beside the run before the spawn, so the run carries it from here on.
+      // Never over a file the run already has.
+      if (r.writeCampaignFile !== undefined && runCampaignFile(join(RUNS_DIR, r.runId)) === null) {
+        try {
+          writeCampaignFile(join(RUNS_DIR, r.runId), r.writeCampaignFile);
+          say(`resume ${name}: wrote ${r.runId}/campaign.json from the published ${r.writeCampaignFile.campaign}@${r.writeCampaignFile.version} (the run predates campaign files)`);
+        } catch (e) {
+          say(`resume ${name}: could not write ${r.runId}/campaign.json — ${e instanceof Error ? e.message : String(e)}; not resuming it this tick`);
+          continue;
+        }
+      }
       // A resumed run goes back to the subscription it started on: the runner
       // rebuilds its config from meta.json, and the lane is in it. Stamped on
       // the spawn too so the count and the state file agree with the run.
@@ -1297,7 +1334,7 @@ async function main(): Promise<void> {
     // A respawn (job toggled off then on again the same day) resumes the
     // materialized roster instead of relaunching finished runs from scratch.
     const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
-    const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster });
+    const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster, runPods: config.policy.runPods });
     const stdoutLog = jobLogPath(spawn.name, stampToday);
     // O_APPEND, not Bun.file(): a BunFile sink starts at offset 0, so a
     // respawned job used to overwrite the head of its own log and leave the
@@ -1318,7 +1355,17 @@ async function main(): Promise<void> {
     const pj =
       pending.get(spawn.name) ??
       [...pinnedJobs(config), ...campaignJobs].find((j) => j.name === spawn.name);
-    const lp: JobProc = { spawn, ...(pj !== undefined ? { job: pj } : {}), runIds: entries.map((e) => e.runId).filter((id): id is string => id !== undefined), proc, pid: proc.pid, spawnedAt: Date.now(), exited: false, exitCode: null };
+    const lp: JobProc = {
+      spawn,
+      ...(pj !== undefined ? { job: pj } : {}),
+      runIds: entries.map((e) => e.runId).filter((id): id is string => id !== undefined),
+      runPods: argv.includes("--run-pods"),
+      proc,
+      pid: proc.pid,
+      spawnedAt: Date.now(),
+      exited: false,
+      exitCode: null,
+    };
     void proc.exited.then((code) => {
       lp.exited = true;
       lp.exitCode = code;
@@ -1343,6 +1390,31 @@ async function main(): Promise<void> {
     const how = spawn.resumeRunId !== undefined ? `, resuming ${spawn.resumeRunId}` : resumeRoster ? ", --resume-roster" : "";
     say(`job ${spawn.name}: spawned pid ${proc.pid} (account ${spawn.account}${how}) -> ${stdoutLog}`);
     record({ job: spawn.name, event: "spawned", detail: `pid ${proc.pid}${how}; account ${spawn.account}` });
+  };
+
+  /**
+   * A roster whose episode is a run pod has no child process, so the /proc scan
+   * alone would SIGTERM it mid-episode. Asked only for a roster spawned with
+   * `--run-pods` (`rosterEpisodeInFlight`) and only on the cluster, with a short
+   * timeout. A 403 or 404 is a definite "no pod" (`rosterHasRunPod`); a timeout
+   * or a 5xx reads as "in flight", complained about once, because the cost of
+   * a wrong SIGTERM (a paused run) outweighs a drain that waits a tick.
+   */
+  let podsApiComplained = false;
+  const rosterHasLivePod = async (pid: number): Promise<boolean> => {
+    const client = K8sClient.inCluster();
+    if (client === null) return false;
+    try {
+      const live = await rosterHasRunPod(client, pid, { timeoutMs: DRAIN_POD_QUERY_TIMEOUT_MS });
+      podsApiComplained = false;
+      return live;
+    } catch (e) {
+      if (!podsApiComplained) {
+        podsApiComplained = true;
+        say(`run pods: the Kubernetes API did not answer (${e instanceof Error ? e.message : String(e)}) — treating every draining roster as mid-episode until it does`);
+      }
+      return true;
+    }
   };
 
   let wakeTick: (() => void) | undefined;
@@ -1512,7 +1584,7 @@ async function main(): Promise<void> {
     // unapplied, which is the failure this whole path exists to make loud.
     // The store file's mtime is only recorded, to dedupe the complaint.
     const mtime = storeMtime(configPath);
-    const { config: next, error, empty } = rereadFleet(config);
+    const { config: next, error, empty } = rereadFleet(config, readFleetConfig, parseOpts);
     const wasRejected = configRejected;
     configRejected = nextConfigRejection(wasRejected, { error, mtime }, Date.now());
     if (error !== undefined) {
@@ -1593,16 +1665,16 @@ async function main(): Promise<void> {
       say(`job ${name}: ${why} — ${how}`);
       record({ job: name, event: "draining", detail: why });
     }
-    // Drains: only SIGTERM a roster with no episode child. Delivered BEFORE the
-    // gate, which can sit inside a smoke for minutes: an operator parking a job
-    // must never wait on the gate for their SIGTERM.
+    // Drains: only SIGTERM a roster with no episode in flight. Delivered BEFORE
+    // the gate, which can sit inside a smoke for minutes: an operator parking a
+    // job must never wait on the gate for their SIGTERM.
     for (const name of [...sets.draining]) {
       const p = procs.get(name);
       if (p === undefined || p.exited) continue;
       const now = pausesOnDrain(liveJobs.get(name));
       if (now && pauseSignalled.has(name)) continue;
       if (now) pauseSignalled.add(name);
-      if (now || !hasLiveChild(p.pid)) {
+      if (now || !(await rosterEpisodeInFlight(p, { hasLiveChild, hasRunPod: rosterHasLivePod }))) {
         try {
           process.kill(p.pid, "SIGTERM");
         } catch {

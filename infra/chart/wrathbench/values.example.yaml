@@ -38,6 +38,11 @@ storage:
   codexHome:
     size: 5Gi
 
+# The images live in a PRIVATE registry project; every WrathBench-image pod
+# (and every run pod) pulls with this Secret, which the cluster creates.
+imagePullSecrets:
+  - wrathbench-harbor-pull
+
 # An existing Secret whose keys are the `.env` names.
 envSecretName: wrathbench-env
 
@@ -130,6 +135,24 @@ fleet:
       ephemeral-storage: 256Mi
     limits:
       memory: 6Gi
+  tmpSizeLimit: 2Gi
+
+runPods:
+  # Repositories an arm may name; empty = the release runner alone.
+  allowedImages:
+    - registry.example.com/wrathbench/wrathbench-runner
+    - ghcr.io/example/wrathbench-runner
+  # A pull Secret the cluster created for the second repository, added to the
+  # chart-wide list on run pods only.
+  imagePullSecrets:
+    - ghcr-pull
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+      ephemeral-storage: 256Mi
+    limits:
+      memory: 4Gi
   tmpSizeLimit: 2Gi
 
 codex:

@@ -34,11 +34,13 @@ import {
 } from "./run-fleet-plan";
 import { type DeferEntry, deferSidecarPath, parseDefers } from "./run-roster";
 import { type Campaign } from "../runner/src/campaigns";
+import { IMAGE_RECORD_FILE } from "./run-pod";
 import {
   type ModelsSidecar,
   type ModelState,
   modelStates,
   type RunFact,
+  type RunPodsMode,
   type StartingCharacter,
 } from "../runner/src/models";
 
@@ -94,12 +96,14 @@ export function statesAfterSweep(
 export function rereadFleet(
   lastGood: FleetConfig,
   read: () => FleetRead = readFleetConfig,
+  /** The supervisor's own knowledge of where it runs (`parseFleet`). */
+  parse: { onCluster?: boolean } = {},
 ): { config: FleetConfig; error?: string; empty?: boolean } {
   const r = read();
-  if (r.status === "empty") return { config: parseFleet({}), empty: true };
+  if (r.status === "empty") return { config: parseFleet({}, parse), empty: true };
   if (r.status === "unreadable") return { config: lastGood, error: `config store ${r.path} could not be read: ${r.error}` };
   try {
-    return { config: parseFleet(JSON.parse(r.text)) };
+    return { config: parseFleet(JSON.parse(r.text), parse) };
   } catch (e) {
     return { config: lastGood, error: e instanceof Error ? e.message : String(e) };
   }
@@ -140,7 +144,7 @@ export function jobLogPath(job: string, stamp: string): string {
  */
 export function jobArgv(
   spawn: JobSpawn,
-  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean },
+  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean; runPods?: RunPodsMode },
 ): string[] {
   const argv = [
     ROSTER_SH,
@@ -152,6 +156,11 @@ export function jobArgv(
   ];
   if (spawn.loop) argv.push("--loop");
   if (opts.until !== undefined) argv.push("--until", opts.until);
+  // The fleet setting as this tick read it, handed to the roster that will act
+  // on it. Only when on, so every argv a pre-pod config produced is unchanged;
+  // a roster started under `probes` keeps it for its life, as it keeps its
+  // stamp — the switch reaches a running job at its next spawn.
+  if (opts.runPods !== undefined && opts.runPods !== "off") argv.push("--run-pods", opts.runPods);
   // A resume spawn always reattaches: the roster must find the paused run's
   // row and --resume it rather than launch the id fresh.
   if (opts.resumeRoster === true || spawn.resumeRunId !== undefined) argv.push("--resume-roster");
@@ -171,6 +180,15 @@ export function readPauseSidecar(runsDir: string = RUNS_DIR): FleetPause | undef
 /** Resolve a configured smoke path against the repo. */
 export function smokePath(script: string, root: string = REPO_ROOT): string {
   return isAbsolute(script) ? script : join(root, script);
+}
+
+/**
+ * Whether a run's directory holds a run pod's `image.json` — the digest a
+ * resume relaunches, and so `planResumes`' only reason to resume a probe
+ * across harness series.
+ */
+export function runHasImageRecord(runId: string, runsDir: string = RUNS_DIR): boolean {
+  return existsSync(join(runsDir, runId, IMAGE_RECORD_FILE));
 }
 
 /** Does this pid have a live child (an episode in flight)? /proc scan. */
@@ -194,6 +212,24 @@ export function hasLiveChild(pid: number): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Whether a draining roster still has an episode in flight, so its SIGTERM
+ * waits for the episode boundary. A child process answers for itself (the
+ * /proc scan). A run pod is asked of the API only for a roster the fleet
+ * spawned with `--run-pods` (`jobArgv`): any other roster can have no pod,
+ * and asking for it would cost every drain tick an API round trip per roster
+ * — and, while the API did not answer, read a roster sitting between episodes
+ * as mid-episode, so it was never stopped.
+ */
+export async function rosterEpisodeInFlight(
+  roster: { pid: number; runPods: boolean },
+  probe: { hasLiveChild: (pid: number) => boolean; hasRunPod: (pid: number) => Promise<boolean> },
+): Promise<boolean> {
+  if (probe.hasLiveChild(roster.pid)) return true;
+  if (!roster.runPods) return false;
+  return await probe.hasRunPod(roster.pid);
 }
 
 export function pidAlive(pid: number): boolean {

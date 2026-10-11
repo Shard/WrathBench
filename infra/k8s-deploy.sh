@@ -196,14 +196,54 @@ deployed_tag() {
 fleet_replicas() {
   "${KUBECTL[@]}" get "${FLEET_DEPLOY}" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0
 }
+# Pods by label selector, one line per pod in the jsonpath's shape. Prints the
+# lines and returns 0 — empty output is "there are none" — or, when kubectl
+# itself fails, prints its complaint and returns 1, so a failed read can never
+# pass for an empty one (a transient API error used to end a drain wait at
+# once). kubectl's stderr stays out of the parsed lines: it warns on success
+# too. Call it as the condition of an `if`: under errexit and the ERR trap a
+# bare assignment from a failing reader would end the script.
+read_pods() {
+  local selector="$1" format="$2" out errf rc=0
+  errf="$(mktemp)"
+  out="$("${KUBECTL[@]}" get pods -l "${selector}" -o "${format}" 2>"${errf}")" || rc=$?
+  if [[ "${rc}" -ne 0 ]]; then
+    printf 'kubectl exit %s: %s' "${rc}" "$(strip_ansi < "${errf}" | tr -d '\r' | tr '\n' ' ' | sed 's/ *$//')"
+    rm -f "${errf}"
+    return 1
+  fi
+  rm -f "${errf}"
+  printf '%s\n' "${out}" | strip_ansi | tr -d '\r'
+}
 # The fleet's PODS, by the same selector the chart puts in the Deployment's
 # `selector.matchLabels` (instance is .Release.Name, component is `fleet`), so
 # this reads the same objects the scale acts on. One line per pod, "<name>
 # <phase>", empty when there is none — which is the whole signal the drain
-# waits for. Identical to fleet-update.sh's reader of the same name.
+# waits for. fleet-update.sh has a reader of the same name and selector, which
+# only lists.
 fleet_pods() {
-  "${KUBECTL[@]}" get pods -l "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=fleet" \
-    -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}' 2>/dev/null | strip_ansi | tr -d '\r' || true
+  read_pods "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=fleet" \
+    'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}'
+}
+# The RUN pods: one per probe-campaign episode the fleet launched as its own
+# pod (infra/run-pod.ts; `component=run`, with the run id in an annotation).
+# Each carries an ownerReference to the fleet pod, so scaling the fleet to 0
+# deletes them too — but deletion is a grace period (90s, in which run.ts
+# writes its pause record) and the garbage collector runs AFTER the owner is
+# gone, so "no fleet pod" does not yet mean "no run pod". A live run pod holds
+# a module session and a game account exactly as a fleet child did.
+run_pods() {
+  read_pods "app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=run" \
+    'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{.metadata.annotations.wrathbench\.shard\.page/run-id}{"\n"}{end}'
+}
+# "a, b" out of a reader's lines, for a refusal.
+joined_lines() {
+  local l out=""
+  while IFS= read -r l; do
+    [[ -n "${l//[[:space:]]/}" ]] || continue
+    out="${out}${out:+, }${l}"
+  done <<< "$1"
+  printf '%s' "${out}"
 }
 
 # ------------------------------------------------------------- the pin check
@@ -350,7 +390,8 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "  fleet config       the config store, via ${RUNNER_DEPLOY} (config-store.ts get preflight)"
   say "  worldserver image  $(deployed_tag) (Flux owns this; this script never changes it)"
   say "  fleet replicas     $(fleet_replicas)"
-  say "  fleet pods         $(p="$(fleet_pods)"; if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — the drain would not have to wait for one"; fi)"
+  say "  fleet pods         $(if p="$(fleet_pods)"; then if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — the drain would not have to wait for one"; fi; else echo "COULD NOT READ (${p}) — the drain would retry, then fail closed"; fi)"
+  say "  run pods           $(if p="$(run_pods)"; then if [[ -n "${p//[[:space:]]/}" ]]; then echo "${p//$'\n'/; }" | sed 's/; $//'; else echo "none — no episode is running as its own pod"; fi; else echo "COULD NOT READ (${p}) — the drain would retry, then fail closed"; fi)"
   resolve_tag_check
   case "${TAG_CHECK}" in
     ok) say "  pin check          OK — ${TAG_CHECK_WHY}" ;;
@@ -538,28 +579,63 @@ fi
 say "waiting for the fleet POD to go away (its 180s grace is where pause records are written, and where the supervisor's own preflight session is released; up to ${DRAIN_WAIT_S}s)"
 pod_deadline=$(( $(date +%s) + DRAIN_WAIT_S ))
 pod_polls=0
+pod_read_fails=0
 while :; do
-  fleet_pod_lines="$(fleet_pods)"
-  pod_polls=$(( pod_polls + 1 ))
-  if [[ -z "${fleet_pod_lines//[[:space:]]/}" ]]; then
-    # An empty list and a failed read look the same here (the reader swallows
-    # its errors), so a wait that never waited is worth one line: if the chart
-    # ever renames the component label, this is where it would go silently
-    # fail-open, and the log would otherwise read like a clean drain.
-    [[ "${pod_polls}" -eq 1 ]] && say "  (no pod matched app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=fleet on the first look — nothing to wait for)"
-    break
-  fi
-  if [[ "$(date +%s)" -ge "${pod_deadline}" ]]; then
-    pod_names=""
-    while IFS= read -r l; do
-      [[ -n "${l//[[:space:]]/}" ]] || continue
-      pod_names="${pod_names}${pod_names:+, }${l}"
-    done <<< "${fleet_pod_lines}"
-    fail_closed "the fleet pod is still there ${DRAIN_WAIT_S}s after scaling to 0: ${pod_names} — it may still hold the ${PREFLIGHT_ACCOUNT} session its own preflight opened, and a smoke run now answers 409 account_owned_by_other_token (2026-09-17). Read: ${KUBECTL[*]} describe ${FLEET_DEPLOY}"
+  if fleet_pod_lines="$(fleet_pods)"; then
+    pod_polls=$(( pod_polls + 1 ))
+    if [[ -z "${fleet_pod_lines//[[:space:]]/}" ]]; then
+      # A wait that never waited is worth one line: if the chart ever renames
+      # the component label, this is where it would go silently fail-open, and
+      # the log would otherwise read like a clean drain.
+      [[ "${pod_polls}" -eq 1 ]] && say "  (no pod matched app.kubernetes.io/instance=${RELEASE},app.kubernetes.io/component=fleet on the first look — nothing to wait for)"
+      break
+    fi
+    if [[ "$(date +%s)" -ge "${pod_deadline}" ]]; then
+      fail_closed "the fleet pod is still there ${DRAIN_WAIT_S}s after scaling to 0: $(joined_lines "${fleet_pod_lines}") — it may still hold the ${PREFLIGHT_ACCOUNT} session its own preflight opened, and a smoke run now answers 409 account_owned_by_other_token (2026-09-17). Read: ${KUBECTL[*]} describe ${FLEET_DEPLOY}"
+    fi
+  else
+    # A failed read is not an empty list: it is retried inside the same
+    # budget, and never taken as "the fleet pod is gone".
+    pod_read_fails=$(( pod_read_fails + 1 ))
+    [[ "${pod_read_fails}" -eq 1 ]] && say "  could not list the fleet pods (${fleet_pod_lines}) — retrying until the drain budget runs out"
+    if [[ "$(date +%s)" -ge "${pod_deadline}" ]]; then
+      fail_closed "could not list the fleet pods within ${DRAIN_WAIT_S}s (${pod_read_fails} failed read(s), last: ${fleet_pod_lines}) — a failed read is not an empty one, so the window will not assume the fleet pod is gone. Read: ${KUBECTL[*]} get pods -l app.kubernetes.io/component=fleet"
+    fi
   fi
   sleep 2
 done
 say "drained: no fleet pod remains, so nothing else holds the smoke accounts"
+
+# And the run pods, for the same reason and with the same budget: a run pod is
+# an episode, with a module session and a game account, and the worldserver
+# must never be rolled or smoked under one. Each was deleted with its 90s grace
+# by its roster, or will be by the garbage collector now that its owner is gone;
+# this is the wait for that to have happened. Unconditional, like the fleet pod
+# wait, because a run pod outliving its fleet pod is exactly the case.
+say "waiting for every RUN pod to go away (each is an episode with a live session; up to ${DRAIN_WAIT_S}s)"
+run_deadline=$(( $(date +%s) + DRAIN_WAIT_S ))
+run_polls=0
+run_read_fails=0
+while :; do
+  if run_pod_lines="$(run_pods)"; then
+    run_polls=$(( run_polls + 1 ))
+    if [[ -z "${run_pod_lines//[[:space:]]/}" ]]; then
+      [[ "${run_polls}" -eq 1 ]] && say "  (no run pod on the first look — nothing to wait for)"
+      break
+    fi
+    if [[ "$(date +%s)" -ge "${run_deadline}" ]]; then
+      fail_closed "a run pod is still there ${DRAIN_WAIT_S}s after the fleet pod went away: $(joined_lines "${run_pod_lines}") — it holds a game session, and the worldserver must not be touched under a live run. Read: ${KUBECTL[*]} get pods -l app.kubernetes.io/component=run"
+    fi
+  else
+    run_read_fails=$(( run_read_fails + 1 ))
+    [[ "${run_read_fails}" -eq 1 ]] && say "  could not list the run pods (${run_pod_lines}) — retrying until the drain budget runs out"
+    if [[ "$(date +%s)" -ge "${run_deadline}" ]]; then
+      fail_closed "could not list the run pods within ${DRAIN_WAIT_S}s (${run_read_fails} failed read(s), last: ${run_pod_lines}) — a failed read is not an empty one, and the worldserver must not be touched under a run pod nobody could see. Read: ${KUBECTL[*]} get pods -l app.kubernetes.io/component=run"
+    fi
+  fi
+  sleep 2
+done
+say "drained: no run pod remains"
 
 # ------------------------------------------------------------------ 2. wait
 CURRENT_PHASE=waiting

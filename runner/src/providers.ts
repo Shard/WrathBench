@@ -137,3 +137,26 @@ export function apiKeyRefusal(
   }
   return null;
 }
+
+/**
+ * Why a roster entry's `apiKeyEnv` may not be sent to its `apiBase`
+ * (the table above), or null when the pairing holds. The defaults
+ * are the runner's: no base is OpenRouter and no key name is `OPENROUTER_KEY`,
+ * so an entry stating only a non-OpenRouter base is refused — it would send
+ * the OpenRouter key there. Only the openai driver sends a key; the CLI
+ * drivers are given no `--api-key-env` at all (`episodeArgv` in
+ * `infra/run-roster.ts`). Every reader of a roster entry asks this: the fleet
+ * parser, the store's write path, and the viewer's campaign squares.
+ *
+ * `env` is where the self-hosted hosts are read from (deploy-time config),
+ * injected so a test states the deployment it means.
+ */
+export function rosterKeyRefusal(
+  e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown },
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  if ((e.driver ?? "openai") !== "openai") return null;
+  if (e.apiKeyEnv !== undefined && typeof e.apiKeyEnv !== "string") return "apiKeyEnv must be the NAME of the env var holding the key";
+  if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
+  return apiKeyRefusal(e.apiKeyEnv ?? DEFAULT_API_KEY_ENV, e.apiBase ?? DEFAULT_API_BASE, env);
+}
