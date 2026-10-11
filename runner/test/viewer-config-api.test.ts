@@ -196,22 +196,20 @@ describe("audit and export", () => {
 
   test("POST /api/config/export renders the config document's exact shape", async () => {
     const { handle } = fixture();
-    const body = (await (await handle(req("/api/config/export", { method: "POST", body: "{}" }))).json()) as {
-      path: string | null;
-      text: string;
-    };
-    expect(body.path).toBeNull();
-    expect(JSON.parse(body.text)).toEqual(CONFIG);
+    const body = (await (await handle(req("/api/config/export", { method: "POST", body: "{}" }))).json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["bytes", "text"]);
+    expect(JSON.parse(body["text"] as string)).toEqual(CONFIG);
   });
 
-  test("export writes a file only when the request names one", async () => {
+  test("export writes no file for a request: a body naming a path is refused and nothing lands there", async () => {
     const { handle } = fixture();
     const root = mkdtempSync(join(tmpdir(), "config-api-export-"));
     roots.push(root);
     const out = join(root, "fleet-export.json");
     const res = await handle(req("/api/config/export", { method: "POST", body: JSON.stringify({ path: out }) }));
-    expect(res.status).toBe(200);
-    expect(JSON.parse(await Bun.file(out).text())).toEqual(CONFIG);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/export writes no file/);
+    expect(await Bun.file(out).exists()).toBe(false);
   });
 
   test("a method the route does not take is a 405, not a silent success", async () => {

@@ -77,7 +77,6 @@ export interface ConfigAuditResponse {
 }
 
 export interface ConfigExportResponse {
-  path: string | null;
   bytes: number;
   text: string;
 }
@@ -151,9 +150,8 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
     remove: (key: string, attribution: Attribution): Promise<ConfigWriteResponse> =>
       send<ConfigWriteResponse>(f, rowUrl(key), { method: "DELETE", attribution }),
     /**
-     * Render the store to fleet.json's shape and hand back the text. The body
-     * is `{}` on purpose: a `path` in it makes the server WRITE a file, and on
-     * the cluster that file is a Flux-managed copy nothing reads.
+     * Render the store to fleet.json's shape and hand back the text. The
+     * server writes no file for a request; the page shows and copies the text.
      */
     export: (): Promise<ConfigExportResponse> =>
       send<ConfigExportResponse>(f, at("/api/config/export"), { method: "POST", body: "{}" }),

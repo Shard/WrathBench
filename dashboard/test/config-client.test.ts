@@ -6,7 +6,7 @@
  * `parseFleet` would refuse the file with, and `client.ts`'s `getJson` glues
  * the URL onto it — the status comes with it so the page can tell a refusal
  * from a missing store, the attribution rides as headers, and the export body
- * never names a path (a path makes the server write a file).
+ * never names a path (the server writes no file and refuses one).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -63,8 +63,8 @@ describe("paths and methods", () => {
     ]);
   });
 
-  test("the export body never names a path — a path makes the SERVER write a file", async () => {
-    const s = stub({ path: null, bytes: 3, text: "{}\n" });
+  test("the export body never names a path — the server writes no file and refuses one", async () => {
+    const s = stub({ bytes: 3, text: "{}\n" });
     const c = createConfigClient({ fetch: s.fetch });
     await c.export();
     expect(s.calls[0]?.body).toBe("{}");

@@ -387,7 +387,7 @@ the singletons `_notes`, `preflight`, `accounts`, `policy`.
 | `PATCH /api/config/<key>` | shallow-merge into one row |
 | `DELETE /api/config/<key>` | remove one row |
 | `GET /api/config/audit?limit=` | the change history, newest first, with the before and after documents |
-| `POST /api/config/export` | render the store to a config document, for reading or diffing against an earlier export (never for committing); returns the text, and writes a file only when the body names a `path` |
+| `POST /api/config/export` | render the store to a config document, for reading or diffing against an earlier export (never for committing); returns `{ bytes, text }` and writes no file — a body naming a `path` is a 400 (the operator's CLI, `config-store.ts export [file]`, writes locally) |
 | `GET /api/config/proposed` | the drafts (`drafts.ts`): pending ones newest first, the ignored apart, each with its slug-derived billing, catalogue price, routing and e90 estimate, plus the token profile the estimates were priced at |
 | `POST /api/config/proposed/fetch` | one bounded read of the OpenRouter catalogue: proposes every tool-calling model the roster does not run and nobody ignored; 502 with the reason when the catalogue cannot be read |
 | `POST /api/config/proposed/ignore`, `…/unignore` | `{ model }`: remember a draft as ignored, or put it back |

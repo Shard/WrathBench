@@ -85,6 +85,12 @@ export interface ConfigResponse {
   seeded: boolean;
 }
 
+/** `POST export`: the rendered document. Never a file on the viewer's side. */
+export interface ConfigExportResponse {
+  bytes: number;
+  text: string;
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -163,17 +169,19 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
       /*
        * Export renders the store to a config document and hands it back, for
        * reading or diffing — never for committing: the active config is
-       * operational state, not source (2026-09-18). It writes a file only when
-       * the request names one, deliberately; nothing reads such a file.
+       * operational state, not source (2026-09-18). The document is the
+       * response and nothing else: the viewer writes no file for a request,
+       * because a path taken from a request is a write anywhere the viewer's
+       * user can write. A body still naming one is refused, so a caller that
+       * expected a file learns it got none. The operator's CLI
+       * (`config-store.ts export [file]`) writes locally, off the network.
        */
       const body = await readJson(req);
-      const to = typeof body === "object" && body !== null && !Array.isArray(body) ? (body as { path?: unknown }).path : undefined;
-      const text = `${JSON.stringify(store.render(), null, 2)}\n`;
-      if (typeof to === "string" && to.length > 0) {
-        await Bun.write(to, text);
-        return json({ path: to, bytes: text.length, text });
+      if (typeof body === "object" && body !== null && !Array.isArray(body) && (body as { path?: unknown }).path !== undefined) {
+        return json({ error: "export writes no file — the document is the response body; save it from there" }, 400);
       }
-      return json({ path: null, bytes: text.length, text });
+      const text = `${JSON.stringify(store.render(), null, 2)}\n`;
+      return json({ bytes: text.length, text } satisfies ConfigExportResponse);
     }
 
     if (rest === "" || rest === "audit" || rest === "export") {
