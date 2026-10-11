@@ -145,7 +145,7 @@ describe("the campaigns page", () => {
       expect(rows.map((r) => r.querySelector("td")?.textContent)).toEqual(["wake-probe@1", "side-probe@2"]);
       expect(rows[0]!.querySelector("a")?.getAttribute("href")).toBe("/campaigns/wake-probe/1");
       expect(text(rows[0]!)).toContain("running");
-      expect(text(rows[0]!)).toContain("5/12 · 1 live");
+      expect(text(rows[0]!)).toContain("5/12 · 1 capped · 1 live");
       expect(rows[0]!.querySelector(".dot.live")).not.toBeNull();
       expect(text(rows[0]!)).toContain("$3.40");
       expect(text(rows[1]!)).toContain("unassigned");

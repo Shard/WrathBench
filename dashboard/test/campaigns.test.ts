@@ -78,11 +78,18 @@ describe("state", () => {
 });
 
 describe("progress", () => {
-  test("done of wanted, with the attempts, the capped squares and the live runs in the hover", () => {
-    expect(progressText(WAKE.progress)).toBe("5/12");
+  test("done of wanted and what the cap settled, with the attempts and the live runs in the hover", () => {
+    expect(progressText(WAKE.progress)).toBe("5/12 · 1 capped");
     expect(progressTitle(WAKE.progress)).toBe(
-      "5 of 12 counted runs done · 7 attempted · 1 square settled by the attempt cap · 1 live",
+      "5 of 12 counted runs done · 7 attempted · 1 capped: settled by the attempt cap without the runs owed · 1 live",
     );
+    expect(progressText({ ...WAKE.progress, capped: 0 })).toBe("5/12");
+  });
+
+  test("a complete campaign short of its count says what the cap settled, so it does not read as stalled", () => {
+    const done: CampaignView = { ...WAKE, state: "complete", progress: { want: 12, done: 10, attempted: 14, capped: 2, live: 0 } };
+    expect(stateClass(done.state)).toBe("ok-muted");
+    expect(progressText(done.progress)).toBe("10/12 · 2 capped");
   });
 
   test("a campaign that wants nothing shows a dash, not 0/0", () => {

@@ -81,16 +81,22 @@ export function stateTitle(state: CampaignState): string {
   }
 }
 
-/** `12/40`, or the bare count when nothing is wanted (an unassigned campaign). */
+/**
+ * `12/40`, or the bare count when nothing is wanted (an unassigned campaign).
+ * What the attempt cap settled is named beside it: a capped square is settled
+ * without its counted runs, so a complete campaign can read `10/12`, and
+ * without the `· 2 capped` that would look like a stalled one.
+ */
 export function progressText(p: Progress): string {
-  if (p.want === 0) return p.done === 0 ? "—" : String(p.done);
-  return `${p.done}/${p.want}`;
+  const capped = p.capped > 0 ? ` · ${p.capped} capped` : "";
+  if (p.want === 0) return p.done === 0 ? `—${capped}` : `${p.done}${capped}`;
+  return `${p.done}/${p.want}${capped}`;
 }
 
 /** Every number the progress figure rests on, one line. */
 export function progressTitle(p: Progress): string {
   const parts = [`${p.done} of ${plural(p.want, "counted run")} done`, `${p.attempted} attempted`];
-  if (p.capped > 0) parts.push(`${plural(p.capped, "square")} settled by the attempt cap`);
+  if (p.capped > 0) parts.push(`${p.capped} capped: settled by the attempt cap without the runs owed`);
   if (p.live > 0) parts.push(`${p.live} live`);
   return parts.join(" · ");
 }
