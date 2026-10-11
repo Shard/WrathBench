@@ -18,6 +18,8 @@
 #               nothing else is on the smoke accounts.
 #   resuming    scale the fleet back to 1. The supervisor re-gates on the new
 #               identity and resumes every paused run before it fills the pool.
+#               With --keep-paused the pause switch is left SET instead, so the
+#               fleet comes back up and schedules and resumes nothing.
 #
 # WHAT THIS SCRIPT DOES NOT DO: change the image tag. Flux owns that. The
 # deploy is "the cluster repo's HelmRelease now names tag X"; this script is the
@@ -40,7 +42,14 @@
 # different tag to require;
 # `--allow-tag-mismatch` is the deliberate override and says so in the log.
 #
+# --KEEP-PAUSED. For a change the gate smokes cannot vouch for (the CLI
+# drivers' environment, the snippet sandbox): the fleet still comes back up on
+# every exit path, but the pause switch is set before the drain if it was not
+# already and is never cleared, so no paused run resumes onto the new build
+# until the operator has smoked it and run `fleet-update.sh resume`.
+#
 #   ./infra/k8s-deploy.sh                 # drain, wait, smoke, resume
+#   ./infra/k8s-deploy.sh --keep-paused   # drain, wait, smoke, fleet up PAUSED
 #   ./infra/k8s-deploy.sh --dry-run       # resolved values only; change nothing
 #   ./infra/k8s-deploy.sh --no-smoke      # window WITHOUT verification (honest,
 #                                         # and it says so)
@@ -61,6 +70,7 @@ DRY_RUN=0
 TREE_TAG="$(git -C "${REPO_ROOT}" describe --tags --always 2>/dev/null || true)"
 EXPECT_TAG="${WRATHBENCH_EXPECT_TAG:-}"
 ALLOW_TAG_MISMATCH=0
+KEEP_PAUSED=0
 # The pause switch `fleet-update.sh drain` leaves set, as the PODS see it. Same
 # file, same meaning; overridable only so the tests can point a stubbed kubectl
 # at a fixture directory.
@@ -76,7 +86,8 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --expect-tag) EXPECT_TAG="$2"; shift 2 ;;
     --allow-tag-mismatch) ALLOW_TAG_MISMATCH=1; shift ;;
-    -h|--help) sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --keep-paused) KEEP_PAUSED=1; shift ;;
+    -h|--help) sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "k8s-deploy: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -276,6 +287,32 @@ pause_switch_set() {
 clear_pause_switch() {
   in_runner rm -f "${PAUSE_JSON}" >/dev/null 2>&1
 }
+# The same file and the same shape `fleet-update.sh drain` writes
+# ({"paused":true,"why":...,"at":...}, tmp then rename), and read back before
+# it is believed: --keep-paused promises a fleet that comes up holding.
+set_pause_switch() {
+  local why="$1"
+  in_runner env NO_COLOR=1 FORCE_COLOR=0 TERM=dumb bun -e '
+    const [p, why] = process.argv.slice(1);
+    await Bun.write(p + ".tmp", JSON.stringify({ paused: true, why, at: Date.now() }, null, 2) + "\n");
+    const { renameSync } = await import("node:fs"); renameSync(p + ".tmp", p);
+  ' "${PAUSE_JSON}" "${why}" >/dev/null 2>&1 && pause_switch_set
+}
+# What to run once the fleet is up and holding. Printed last, on every exit
+# path that brought the fleet up under --keep-paused, because it is the only
+# thing that puts the fleet back to work.
+print_keep_paused_next() {
+  local k8s_flags=""
+  [[ "${NAMESPACE}" == "wrathbench" && "${RELEASE}" == "wrathbench" ]] || k8s_flags=" --namespace ${NAMESPACE} --release ${RELEASE}"
+  say "--keep-paused: the fleet is UP and the pause switch is SET (${PAUSE_JSON}): nothing is"
+  say "  scheduled and no paused run resumes. Next, one short real run per driver on PROBE"
+  say "  (or SHAKEOUT), with no --episode so it is unscored:"
+  say "    ./infra/run-episode.sh --k8s --account PROBE --driver claude-code --model <id> --max-tool-calls 20"
+  say "    ./infra/run-episode.sh --k8s --account PROBE --driver codex --model <id> --max-tool-calls 20"
+  say "    ./infra/run-episode.sh --k8s --account PROBE --driver openai --model <id> --max-turns 5"
+  say "  then put the fleet back to work:"
+  say "    ./infra/fleet-update.sh resume${k8s_flags}"
+}
 
 # ------------------------------------------------------------- server state
 # data/runs/server-state.json is what the viewer's /api/fleet serves as
@@ -319,7 +356,13 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
     ok) say "  pin check          OK — ${TAG_CHECK_WHY}" ;;
     *)  say "  pin check          WOULD REFUSE — ${TAG_CHECK_WHY}$(if [[ "${ALLOW_TAG_MISMATCH}" -eq 1 ]]; then echo " (but --allow-tag-mismatch was given, so it would run)"; fi)" ;;
   esac
-  say "  pause switch       $(if pause_switch_set; then echo "SET (${PAUSE_JSON}) — the resume phase would clear it"; else echo "not set (${PAUSE_JSON})"; fi)"
+  if [[ "${KEEP_PAUSED}" -eq 1 ]]; then
+    say "  pause switch       $(if pause_switch_set; then echo "SET (${PAUSE_JSON}) — --keep-paused: the resume phase would LEAVE it set"; else echo "not set (${PAUSE_JSON}) — --keep-paused: it would be SET before the drain and left set"; fi)"
+    say "  resume phase       --keep-paused: scale the fleet to 1 with the switch SET — nothing scheduled, no paused run resumed, until \`fleet-update.sh resume\`"
+  else
+    say "  pause switch       $(if pause_switch_set; then echo "SET (${PAUSE_JSON}) — the resume phase would clear it"; else echo "not set (${PAUSE_JSON})"; fi)"
+    say "  resume phase       scale the fleet to 1 and, once verified, clear any switch; paused runs resume on the new build (--keep-paused holds them)"
+  fi
   say "  jobs alive         $(alive_jobs) (per the runner pod's view of fleet-state.json)"
   say "  health wait        ${HEALTH_WAIT_S}s"
   say "  drain wait         ${DRAIN_WAIT_S}s after the fleet scales to 0"
@@ -336,6 +379,24 @@ fi
 # deploy did.
 enforce_tag_check
 
+# ------------------------------------------------------- --keep-paused, armed
+# Before the drain, not on the way out: the EXIT trap brings the fleet up on
+# every path, so a switch written there could fail AFTER the fleet was already
+# coming back unpaused onto a build nobody has smoked. Written here, a failed
+# write refuses while nothing has been touched; and every later exit path —
+# verified, failed, interrupted — then finds the switch already set.
+SWITCH_SET_BY_WINDOW=0
+if [[ "${KEEP_PAUSED}" -eq 1 ]]; then
+  if pause_switch_set; then
+    say "--keep-paused: the pause switch is already SET (${PAUSE_JSON}); this window leaves it set"
+  elif set_pause_switch "k8s-deploy --keep-paused, $(date '+%Y-%m-%d %H:%M'): smoke the new build with one short real run per driver, then fleet-update.sh resume"; then
+    SWITCH_SET_BY_WINDOW=1
+    say "--keep-paused: pause switch SET (${PAUSE_JSON}) before the drain; this window never clears it"
+  else
+    die "--keep-paused: could not set the pause switch ${PAUSE_JSON} through ${RUNNER_DEPLOY}. Nothing was drained. Without it the fleet would come back and resume every paused run on this build, which is what --keep-paused exists to prevent."
+  fi
+fi
+
 # ------------------------------------------------------------ invariants
 FLEET_STOPPED=0
 FLEET_RESTARTED=0
@@ -346,7 +407,11 @@ FINAL_PHASE=""
 bring_fleet_up() {
   [[ "${FLEET_RESTARTED}" -eq 1 ]] && return 0
   FLEET_RESTARTED=1
-  say "scaling the fleet back to 1 (paused runs resume; the supervisor re-gates on the server identity)"
+  if [[ "${KEEP_PAUSED}" -eq 1 ]]; then
+    say "scaling the fleet back to 1 with the pause switch SET (--keep-paused): the supervisor re-gates on the server identity and resumes nothing"
+  else
+    say "scaling the fleet back to 1 (paused runs resume; the supervisor re-gates on the server identity)"
+  fi
   "${KUBECTL[@]}" scale "${FLEET_DEPLOY}" --replicas=1
 }
 resume_pause_switch() {
@@ -368,9 +433,9 @@ on_exit() {
   fi
   # Only the resume phase clears the switch. A failed window deliberately does
   # not: the fleet is up but gated, and an operator who reverts the tag wants
-  # the switch exactly where the drain left it.
+  # the switch exactly where the drain left it. --keep-paused never clears it.
   case "${FINAL_PHASE}" in
-    running|unverified) resume_pause_switch ;;
+    running|unverified) [[ "${KEEP_PAUSED}" -eq 1 ]] || resume_pause_switch ;;
     failed)
       if pause_switch_set; then
         say "the pause switch is STILL SET (${PAUSE_JSON}) — deliberately, because this window FAILED."
@@ -378,11 +443,22 @@ on_exit() {
       fi
       ;;
   esac
+  local held=""
+  [[ "${KEEP_PAUSED}" -eq 1 ]] && held="; fleet up but HELD PAUSED (--keep-paused) until fleet-update.sh resume"
   case "${FINAL_PHASE}" in
-    running) write_phase running "deployed ${NEW_BUILD} at $(hhmm), verified by ${VERIFIED_BY}; fleet resumed" ;;
-    unverified) write_phase running "deployed ${NEW_BUILD} at $(hhmm) UNVERIFIED (--no-smoke); the fleet's own gate is the only check" ;;
+    running) write_phase running "deployed ${NEW_BUILD} at $(hhmm), verified by ${VERIFIED_BY}$(if [[ -n "${held}" ]]; then echo "${held}"; else echo "; fleet resumed"; fi)" ;;
+    unverified) write_phase running "deployed ${NEW_BUILD} at $(hhmm) UNVERIFIED (--no-smoke); the fleet's own gate is the only check${held}" ;;
     failed) write_phase failed "${FAIL_WHY}; fleet started anyway — its gate blocks spawning until a build passes. Rollback is reverting image.tag in the cluster repo." ;;
   esac
+  # Last, so it is what the operator reads. A failed window has already said
+  # the switch is still set and that the fix is a revert, not a smoke.
+  if [[ "${KEEP_PAUSED}" -eq 1 && ( "${FLEET_STOPPED}" -eq 1 || -n "${FINAL_PHASE}" ) ]]; then
+    if ! pause_switch_set; then
+      say "WARNING: --keep-paused, but the pause switch ${PAUSE_JSON} does NOT read back as set. The fleet is up and may be resuming paused runs on this build. Stop that with: ./infra/fleet-update.sh drain"
+    elif [[ "${FINAL_PHASE}" == "running" || "${FINAL_PHASE}" == "unverified" ]]; then
+      print_keep_paused_next
+    fi
+  fi
   exit "${rc}"
 }
 trap on_exit EXIT
@@ -403,8 +479,10 @@ CURRENT_PHASE=draining
 START_REPLICAS="$(fleet_replicas)"
 START_SWITCH=no
 if pause_switch_set; then START_SWITCH=yes; fi
-say "at the start: ${FLEET_DEPLOY} is at ${START_REPLICAS} replica(s), pause switch $(if [[ "${START_SWITCH}" == "yes" ]]; then echo "SET"; else echo "not set"; fi)"
-if [[ "${START_SWITCH}" == "yes" && "${START_REPLICAS}" != "0" ]]; then
+say "at the start: ${FLEET_DEPLOY} is at ${START_REPLICAS} replica(s), pause switch $(if [[ "${SWITCH_SET_BY_WINDOW}" -eq 1 ]]; then echo "SET (just now, by --keep-paused)"; elif [[ "${START_SWITCH}" == "yes" ]]; then echo "SET"; else echo "not set"; fi)"
+# The note is about a switch a `drain` left behind; one this window set a
+# moment ago says nothing about a Helm upgrade.
+if [[ "${START_SWITCH}" == "yes" && "${START_REPLICAS}" != "0" && "${SWITCH_SET_BY_WINDOW}" -eq 0 ]]; then
   say "  NOTE: a Helm upgrade resets the fleet Deployment to 1 replica even under a held"
   say "  pause switch, so a \`fleet-update.sh drain\` that left it at 0 does NOT mean it is"
   say "  still 0 by the time the chart has rolled (2026-09-16). Nothing was scheduled — the"
@@ -413,8 +491,13 @@ fi
 if [[ "${START_REPLICAS}" != "0" ]]; then
   n_alive="$(alive_jobs)"
   [[ "${n_alive}" =~ ^[0-9]+$ ]] || n_alive=0
-  PAUSED_NOTE="${n_alive} job(s) paused and will resume"
-  write_phase draining "${n_alive} job(s) live — each run pauses and resumes after the deploy"
+  if [[ "${KEEP_PAUSED}" -eq 1 ]]; then
+    PAUSED_NOTE="${n_alive} job(s) paused, held until fleet-update.sh resume (--keep-paused)"
+    write_phase draining "${n_alive} job(s) live — each run pauses, and resumes only after fleet-update.sh resume (--keep-paused)"
+  else
+    PAUSED_NOTE="${n_alive} job(s) paused and will resume"
+    write_phase draining "${n_alive} job(s) live — each run pauses and resumes after the deploy"
+  fi
   FLEET_STOPPED=1
   "${KUBECTL[@]}" scale "${FLEET_DEPLOY}" --replicas=0
   # Blocks up to terminationGracePeriodSeconds (180s): SIGTERM -> supervisor ->
@@ -557,6 +640,10 @@ trap - ERR
 
 # ---------------------------------------------------------------- 4. resume
 FINAL_PHASE=running
-write_phase resuming "verified by ${VERIFIED_BY}; the supervisor re-gates on the new identity and resumes every paused run before it fills the pool"
+if [[ "${KEEP_PAUSED}" -eq 1 ]]; then
+  write_phase resuming "verified by ${VERIFIED_BY}; the fleet comes back with the pause switch SET (--keep-paused) — it re-gates and resumes nothing until fleet-update.sh resume"
+else
+  write_phase resuming "verified by ${VERIFIED_BY}; the supervisor re-gates on the new identity and resumes every paused run before it fills the pool"
+fi
 say "DEPLOYED and verified by ${VERIFIED_BY}."
 exit 0

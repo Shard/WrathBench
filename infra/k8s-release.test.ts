@@ -441,6 +441,44 @@ describe("k8s-release.sh", () => {
     expect(r.calls.find((l) => l.startsWith("k8s-deploy "))).toContain("--no-smoke");
   });
 
+  test("--keep-paused reaches the deploy window and skips the resume phase, saying so", () => {
+    // The release whose new build the gate smokes cannot vouch for: the fleet
+    // comes back holding, and clearing the switch is the operator's, after a
+    // real smoke. A resume here would undo the deploy's --keep-paused.
+    const r = run({ args: ["--keep-paused"] });
+    expect(r.exitCode).toBe(0);
+    expect(phases(r)).toEqual(["build-images --push", "fleet-update drain", "k8s-deploy --namespace"]);
+    expect(r.calls.find((l) => l.startsWith("k8s-deploy "))).toContain("--keep-paused");
+    expect(r.calls.filter((l) => l.startsWith("fleet-update resume"))).toEqual([]);
+    expect(r.out).toContain("=== resume: SKIPPED (--keep-paused)");
+    expect(r.out).toContain("Phases run: build drain pin deploy.");
+    // The last thing it says is what to run next.
+    expect(r.out.trimEnd().split("\n").at(-1)).toContain("./infra/fleet-update.sh resume");
+  });
+
+  test("--keep-paused with --from deploy still skips the resume", () => {
+    const r = run({ args: ["--keep-paused", "--from", "deploy"] });
+    expect(r.exitCode).toBe(0);
+    expect(phases(r)).toEqual(["k8s-deploy --namespace"]);
+  });
+
+  test("--from resume --keep-paused would run nothing, so it is refused", () => {
+    const r = run({ args: ["--keep-paused", "--from", "resume"] });
+    expect(r.exitCode).toBe(2);
+    expect(r.out).toContain("would run nothing");
+    expect(phases(r)).toEqual([]);
+  });
+
+  test("--dry-run --keep-paused shows the choice: the deploy flag, and no resume", () => {
+    const r = run({ args: ["--dry-run", "--keep-paused"] });
+    expect(r.exitCode).toBe(0);
+    expect(phases(r)).toEqual([]);
+    const plan = r.out.split("\n").filter((l) => l.includes("would "));
+    expect(plan.map((l) => l.replace(/^.*would /, "").split(" ")[0])).toEqual(["build", "drain", "pin", "wait", "deploy"]);
+    expect(plan.find((l) => l.includes("would deploy"))).toContain("--keep-paused");
+    expect(r.out).toContain("skip resume  --keep-paused");
+  });
+
   test("--help prints the header and no shell", () => {
     // `sed -n '2,Np'` over the header is easy to get one line wrong, and
     // nothing else in this suite runs that path.

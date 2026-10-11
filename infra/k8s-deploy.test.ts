@@ -22,12 +22,18 @@
  * The EXIT trap always scales the fleet back to 1, so assertions are about the
  * relative ORDER of entries in the call log, never about the last one.
  *
+ * --keep-paused is pinned here too, because it is a property of the same exit
+ * paths: the fleet still comes back on every one of them, and the pause switch
+ * must already be set by then and never be cleared, or every paused run
+ * resumes onto a build nobody has smoked.
+ *
  * FORCE_COLOR=3 throughout: that is what colourised a number into a pipe and
  * broke the deploy script's arithmetic on 2026-08-22.
  */
 import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parsePauseSidecar } from "./run-fleet-plan";
 import { tempDirs } from "./temp-dirs";
 
 const tempDir = tempDirs();
@@ -39,10 +45,14 @@ const TAG = "wb-test-0.9-1-gdeadbee";
 /**
  * A `kubectl` with no cluster behind it.
  *
- * `exec` is NOT run locally the way fleet-update.test.ts runs it: this script
- * bakes `/wrathbench/data/runs/fleet-state.json` and the module URL into its
- * `bun -e` sources, so the payload is matched by substring and answered
- * directly — no jobs alive, /health ready, a build string, no pause switch.
+ * `exec` is mostly NOT run locally the way fleet-update.test.ts runs it: this
+ * script bakes `/wrathbench/data/runs/fleet-state.json` and the module URL into
+ * its `bun -e` sources, so the payload is matched by substring and answered
+ * directly — no jobs alive, /health ready, a build string. The PAUSE SWITCH is
+ * the exception: its path follows WRATHBENCH_FLEET_RUNS_DIR, so a payload that
+ * names `$FAKE_RUNS/fleet-pause.json` (the check, the write, the rm) runs here
+ * for real against a fixture directory, and the file the script wrote is what
+ * the test reads back.
  *
  *   FAKE_POD_POLLS   how many `get pods` reads still report a fleet pod
  *                    (-1 = forever, which is the pod that outlives the budget)
@@ -50,6 +60,8 @@ const TAG = "wb-test-0.9-1-gdeadbee";
  *   FAKE_SMOKE_RC    the exit code every smoke returns
  *   FAKE_PREFLIGHT   the file `config-store.ts get preflight` answers with —
  *                    the store's preflight block, read through the runner pod
+ *   FAKE_RUNS        the runs directory the pause switch lives in
+ *   FAKE_SWITCH_WRITE_FAIL  the switch write exits 1 without writing
  */
 const KUBECTL_SHIM = `#!/usr/bin/env bash
 log() { printf '%s\\n' "$1" >> "\${FAKE_LOG}"; }
@@ -64,6 +76,14 @@ case "\${cmd}" in
     shift || true
     payload="$*"
     case "\${payload}" in
+      *"\${FAKE_RUNS}/fleet-pause.json"*)
+        case "\${payload}" in
+          *"[ -f"*) log "exec pause_switch" ;;
+          *"rm -f"*) log "exec clear_switch" ;;
+          *) log "exec set_switch"; [[ "\${FAKE_SWITCH_WRITE_FAIL:-0}" == "1" ]] && exit 1 ;;
+        esac
+        exec "$@"
+        ;;
       *MODULE_ACCOUNT=*)
         acct="\${payload#*MODULE_ACCOUNT=}"; acct="\${acct%% *}"
         log "smoke \${acct} \${payload##* }"
@@ -124,12 +144,17 @@ interface Case {
   replicas?: number;
   drainWaitS?: number;
   smokeRc?: number;
+  /** The pause switch file's text before the window starts; absent when undefined. */
+  switchBefore?: string;
+  switchWriteFails?: boolean;
 }
 
 interface Result {
   exitCode: number;
   out: string;
   calls: string[];
+  /** The pause switch file's text after the run, or undefined when there is none. */
+  switchAfter: string | undefined;
 }
 
 function run(c: Case): Result {
@@ -145,6 +170,11 @@ function run(c: Case): Result {
 
   const preflightJson = join(dir, "preflight.json");
   writeFileSync(preflightJson, JSON.stringify(PREFLIGHT, null, 2));
+
+  const runs = join(dir, "runs");
+  Bun.spawnSync(["mkdir", "-p", runs]);
+  const pauseJson = join(runs, "fleet-pause.json");
+  if (c.switchBefore !== undefined) writeFileSync(pauseJson, c.switchBefore);
 
   const proc = Bun.spawnSync(
     // --expect-tag, because the pin check runs before anything is drained and
@@ -163,6 +193,9 @@ function run(c: Case): Result {
         FAKE_REPLICAS: String(c.replicas ?? 1),
         ...(c.smokeRc !== undefined ? { FAKE_SMOKE_RC: String(c.smokeRc) } : {}),
         FAKE_PREFLIGHT: preflightJson,
+        FAKE_RUNS: runs,
+        ...(c.switchWriteFails === true ? { FAKE_SWITCH_WRITE_FAIL: "1" } : {}),
+        WRATHBENCH_FLEET_RUNS_DIR: runs,
         WRATHBENCH_DEPLOY_DRAIN_WAIT_S: String(c.drainWaitS ?? 30),
         WRATHBENCH_DEPLOY_HEALTH_WAIT_S: "10",
       },
@@ -176,6 +209,7 @@ function run(c: Case): Result {
     exitCode: proc.exitCode ?? -1,
     out: `${proc.stdout.toString()}${proc.stderr.toString()}`,
     calls: readFileSync(log, "utf8").split("\n").filter(Boolean),
+    switchAfter: existsSync(pauseJson) ? readFileSync(pauseJson, "utf8") : undefined,
   };
 }
 
@@ -240,5 +274,113 @@ describe("k8s-deploy.sh draining", () => {
     expect(firstIndex(r, "smoke ")).toBe(-1);
     // And the invariant the header promises still holds — the fleet came back.
     expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+  });
+});
+
+describe("k8s-deploy.sh --keep-paused", () => {
+  /** What `fleet-update.sh drain` leaves behind, in the shape it writes. */
+  const DRAIN_SWITCH = `${JSON.stringify({ paused: true, why: "drain supervisor update, 2026-10-11 09:00", at: 1 }, null, 2)}\n`;
+
+  test("sets the switch before the drain, never clears it, and still brings the fleet back", () => {
+    const r = run({ args: ["--keep-paused"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).not.toContain("arithmetic syntax error");
+
+    // Written before anything is drained, so no exit path can bring the fleet
+    // up without it — and so before the scale-up, which is the promise.
+    const set = firstIndex(r, "exec set_switch");
+    expect(set).toBeGreaterThan(-1);
+    expect(set).toBeLessThan(firstIndex(r, "scale deployment/wrathbench-fleet --replicas=0"));
+    expect(set).toBeLessThan(lastIndex(r, "scale deployment/wrathbench-fleet --replicas=1"));
+    expect(firstIndex(r, "exec clear_switch")).toBe(-1);
+
+    // The fleet-up invariant is untouched: it came back, after the smoke.
+    expect(lastIndex(r, "scale deployment/wrathbench-fleet --replicas=1")).toBeGreaterThan(firstIndex(r, "smoke "));
+
+    // The same file and shape `fleet-update.sh drain` writes — the supervisor's
+    // own parser reads it as a pause.
+    expect(r.switchAfter).toBeDefined();
+    const pause = parsePauseSidecar(r.switchAfter!);
+    expect(pause).toBeDefined();
+    expect(pause!.why).toContain("--keep-paused");
+    expect(pause!.why).toContain("fleet-update.sh resume");
+
+    // It ends by saying what to run next, after the verification line.
+    expect(r.out).toContain("DEPLOYED and verified by");
+    expect(r.out.lastIndexOf("./infra/fleet-update.sh resume")).toBeGreaterThan(r.out.indexOf("DEPLOYED and verified by"));
+    expect(r.out).toContain("./infra/run-episode.sh --k8s --account PROBE --driver claude-code");
+    expect(r.out).toContain("--driver codex");
+    expect(r.out).not.toContain("pause switch CLEARED");
+    // A switch set a moment ago is not the one a Helm upgrade raced.
+    expect(r.out).toContain("SET (just now, by --keep-paused)");
+    expect(r.out).not.toContain("a Helm upgrade resets the fleet Deployment");
+    expect(r.out).toContain("resumes only after fleet-update.sh resume");
+  });
+
+  test("a switch the drain left set is left exactly as it was", () => {
+    const r = run({ args: ["--keep-paused"], switchBefore: DRAIN_SWITCH });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("already SET");
+    expect(firstIndex(r, "exec set_switch")).toBe(-1);
+    expect(firstIndex(r, "exec clear_switch")).toBe(-1);
+    expect(r.switchAfter).toBe(DRAIN_SWITCH);
+    expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+  });
+
+  test("without it, the resume phase clears a set switch — the default this flag opts out of", () => {
+    const r = run({ switchBefore: DRAIN_SWITCH });
+    expect(r.exitCode).toBe(0);
+    expect(firstIndex(r, "exec set_switch")).toBe(-1);
+    expect(firstIndex(r, "exec clear_switch")).toBeGreaterThan(firstIndex(r, "smoke "));
+    expect(r.switchAfter).toBeUndefined();
+    expect(r.out).toContain("pause switch CLEARED");
+    expect(r.out).not.toContain("run-episode.sh --k8s");
+  });
+
+  test("a failed window still brings the fleet up, with the switch still set", () => {
+    const r = run({ args: ["--keep-paused"], smokeRc: 1 });
+    expect(r.exitCode).toBe(1);
+    expect(r.calls.some((l) => l.includes("--replicas=1"))).toBe(true);
+    expect(firstIndex(r, "exec clear_switch")).toBe(-1);
+    expect(parsePauseSidecar(r.switchAfter ?? "")).toBeDefined();
+    expect(r.out).toContain("STILL SET");
+    // The fix for a failed window is a revert, not a smoke of the build that failed.
+    expect(r.out).not.toContain("run-episode.sh --k8s");
+  });
+
+  test("a switch that cannot be written refuses before anything is drained", () => {
+    const r = run({ args: ["--keep-paused"], switchWriteFails: true });
+    expect(r.exitCode).toBe(1);
+    expect(r.out).toContain("could not set the pause switch");
+    expect(r.out).toContain("Nothing was drained");
+    expect(r.calls.some((l) => l.includes("--replicas="))).toBe(false);
+    expect(firstIndex(r, "smoke ")).toBe(-1);
+    expect(r.switchAfter).toBeUndefined();
+  });
+
+  test("--dry-run shows the choice and writes nothing", () => {
+    const unset = run({ args: ["--dry-run", "--keep-paused"] });
+    expect(unset.exitCode).toBe(0);
+    expect(unset.out).toContain("--keep-paused: it would be SET before the drain and left set");
+    expect(unset.out).toContain("resume phase       --keep-paused");
+    expect(firstIndex(unset, "exec set_switch")).toBe(-1);
+    expect(unset.switchAfter).toBeUndefined();
+    expect(unset.calls.some((l) => l.includes("--replicas="))).toBe(false);
+
+    const set = run({ args: ["--dry-run", "--keep-paused"], switchBefore: DRAIN_SWITCH });
+    expect(set.out).toContain("--keep-paused: the resume phase would LEAVE it set");
+    expect(set.switchAfter).toBe(DRAIN_SWITCH);
+
+    const plain = run({ args: ["--dry-run"], switchBefore: DRAIN_SWITCH });
+    expect(plain.out).toContain("the resume phase would clear it");
+    expect(firstIndex(plain, "exec clear_switch")).toBe(-1);
+  });
+
+  test("--help prints the whole header and no shell", () => {
+    const r = run({ args: ["--help"] });
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain("--keep-paused");
+    expect(r.out).toContain("--namespace wrathbench --release wrathbench");
+    expect(r.out).not.toContain("set -Eeuo");
   });
 });

@@ -363,7 +363,7 @@ Five phases, run in order, each one idempotent and each one restartable with
 | `drain` | `fleet-update.sh drain` — the pause switch stays set for the whole window |
 | `pin` | place the pin, then **wait until the cluster actually carries the tag** |
 | `deploy` | `k8s-deploy.sh` — the gate smokes, then the fleet comes back |
-| `resume` | `fleet-update.sh resume` |
+| `resume` | `fleet-update.sh resume`; skipped, and said so, under `--keep-paused` |
 
 **The pin is a hook, because how a pin is placed is yours.** This repo knows the
 tag and what the chart does with it; it does not know whether your GitOps repo
@@ -393,7 +393,11 @@ image.
 is not on this tree's tag — `--expect-tag <tag>` requires a different one and
 `--allow-tag-mismatch` is the deliberate override. It also clears the pause
 switch a `drain` left set when it reaches its resume phase, and says so; a
-failed window deliberately leaves it set.
+failed window deliberately leaves it set. `--keep-paused` (on either script)
+leaves it set on every path, setting it before the drain if nothing had, so the
+fleet comes back up resuming nothing until the operator has smoked the build
+with real runs (docs/RUNBOOK.md, "Deploying a harness change that needs a real
+smoke first").
 
 ## Verifying without a full boot
 

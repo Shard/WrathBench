@@ -902,6 +902,38 @@ contents. The run stops and the refused image loses its tag. A refusal means
 the commit or a Dockerfile step put that file in the image, so fix it there.
 Don't widen the allow-list in the guard to get past it.
 
+#### Deploying a harness change that needs a real smoke first
+
+The gate smokes drive the module with a scripted client. They never start the
+Claude Code or Codex CLI and never run a model's snippet, so a change to what
+those touch, such as the environment the CLIs start with or the snippet
+sandbox's confinement, passes them untested. The default resume phase would
+then put every paused run straight onto that build. Release such a change held:
+
+```
+./infra/k8s-release.sh --pin-hook ~/bin/place-wrathbench-pin --keep-paused
+./infra/run-episode.sh --k8s --account PROBE --driver claude-code --model <id> --max-tool-calls 20
+./infra/run-episode.sh --k8s --account PROBE --driver codex --model <id> --max-tool-calls 20
+./infra/run-episode.sh --k8s --account PROBE --driver openai --model <id> --max-turns 5
+./infra/fleet-update.sh resume
+```
+
+`--keep-paused` reaches `k8s-deploy.sh`, which sets the pause switch before its
+drain if nothing has, scales the fleet back to 1 on every exit path as always,
+and never clears the switch. The release skips its own resume phase and says
+so. The supervisor comes up and schedules nothing, and that includes resuming a
+paused run, because a resume is a spawn like any other and the switch disables
+every spawn. Then smoke one short real run per driver on PROBE (or SHAKEOUT),
+with no `--episode` so that it is unscored, and `--token-env` for a second
+subscription lane. The CLI drivers have no turn limit, so `--max-tool-calls`
+bounds them. Read each trajectory as far as a logged-in CLI and a snippet that
+reached the module. A run that hits its limit costs the model nothing, but one
+that dies before the model answers, or on an adapter error, is a rung on that
+model's cooling ladder, and `run-fleet.sh --clear-model` forgives it. Only then run `fleet-update.sh resume`. Keep the window short,
+because a provider-paused run is not resumed while the switch is set and can go
+stale, which counts (see "Graceful" above). If a smoke fails, nothing scheduled
+has run on that build: revert the pin, and resume once a build passes.
+
 #### On compose
 
 Two scripts, from the host; the deploy is **one command** that owns the whole
