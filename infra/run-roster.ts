@@ -57,6 +57,7 @@ import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema, type WatchdogOverride } from "../runner/src/config";
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
+import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, type ScanReads } from "../runner/src/models";
@@ -269,8 +270,6 @@ type Outcome =
   | "tainted"
   | "budget-stop";
 
-const DEFAULT_API_BASE = "https://openrouter.ai/api/v1";
-const DEFAULT_API_KEY_ENV = "OPENROUTER_KEY";
 const DEFAULT_EPISODE_MS = 5_400_000; // 90 minutes
 // Two ladders, deliberately different shapes.
 //

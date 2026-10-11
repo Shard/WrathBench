@@ -139,6 +139,9 @@ record["env"] = {
   hasAwsBearer: Bun.env["AWS_BEARER_TOKEN_BEDROCK"] !== undefined,
   hasDbPassword: Bun.env["WRATHBENCH_DB_PASSWORD"] !== undefined,
 };
+// Every variable name the CLI was given — and so what the MCP bridge it
+// launches inherits. Names only, never values.
+record["envKeys"] = Object.keys(Bun.env).sort();
 
 function saveRecord(): void {
   // Synchronously: an async write still in flight could land after a later

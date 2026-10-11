@@ -5,8 +5,9 @@
  * whole point of the API is that a rejected edit carries the sentence
  * `parseFleet` would refuse the file with, and `client.ts`'s `getJson` glues
  * the URL onto it — the status comes with it so the page can tell a refusal
- * from a missing store, the attribution rides as headers, and the export body
- * never names a path (a path makes the server write a file).
+ * from a missing store, the attribution rides as headers, every write says
+ * JSON (the viewer's cross-site write guard), and the export body never names
+ * a path (the server writes no file and refuses one).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -63,11 +64,37 @@ describe("paths and methods", () => {
     ]);
   });
 
-  test("the export body never names a path — a path makes the SERVER write a file", async () => {
-    const s = stub({ path: null, bytes: 3, text: "{}\n" });
+  test("the export body never names a path — the server writes no file and refuses one", async () => {
+    const s = stub({ bytes: 3, text: "{}\n" });
     const c = createConfigClient({ fetch: s.fetch });
     await c.export();
     expect(s.calls[0]?.body).toBe("{}");
+  });
+
+  test("every write says JSON, with a body or without — the viewer refuses an unsafe method that does not", async () => {
+    const s = stub({ key: "roster/a", value: null, version: 1 });
+    const c = createConfigClient({ fetch: s.fetch });
+    await c.patch("roster/a", { tier: "t1" }, ATT);
+    await c.put("policy", {}, ATT);
+    await c.remove("roster/a", ATT);
+    await c.export();
+    await c.fetchDrafts();
+    await c.ignoreDraft("vendor/x");
+    await c.unignoreDraft("vendor/x");
+    await c.promoteDraft({ model: "vendor/x", name: "x", tier: "t0" }, ATT);
+    expect(s.calls.map((x) => [x.method, x.headers["content-type"]])).toEqual([
+      ["PATCH", "application/json"],
+      ["PUT", "application/json"],
+      ["DELETE", "application/json"],
+      ["POST", "application/json"],
+      ["POST", "application/json"],
+      ["POST", "application/json"],
+      ["POST", "application/json"],
+      ["POST", "application/json"],
+    ]);
+    // A read stays a plain GET: nothing to guard, and no reason to preflight.
+    await c.config();
+    expect(s.calls.at(-1)?.headers["content-type"]).toBeUndefined();
   });
 });
 

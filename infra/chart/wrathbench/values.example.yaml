@@ -52,7 +52,11 @@ modelKeys:
   - OPENROUTER_KEY
   - OPENCODE_KEY
   - CEREBRAS_KEY
+  - DEEPSEEK_KEY
   - LMSTUDIO_KEY
+
+# Self-hosted model servers LMSTUDIO_KEY may be sent to (`host` or `host:port`).
+localModelHosts: []
 
 realm:
   id: 1

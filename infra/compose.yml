@@ -296,8 +296,9 @@ services:
     # infra/fixtures/apply.ts, which writes acore_characters directly. Carrying
     # the four vars here is what makes that invocation need no `-e` flags. An
     # episode exec'd into this container cannot pass them on: sandboxChildEnv
-    # (runner/src/sandbox/host.ts) drops WRATHBENCH_DB_* from the snippet
-    # child's env, the same protection the `fleet` service relies on.
+    # (runner/src/sandbox/host.ts) forwards the snippet child a named list of
+    # variables and none of these, the same protection the `fleet` service
+    # relies on.
     environment:
       <<: *wb-db
       # The codex lane inside the container (see x-codex-lane above).
@@ -348,8 +349,8 @@ services:
       # For the preflight gate's fixture staging: kill-credit.ts starts from the
       # `vineyard-kill-credit` scenario, and `infra/fixtures/apply.ts` writes the
       # characters DB directly. The supervisor itself never touches the DB.
-      # A benchmark episode cannot reach these: the snippet sandbox drops every
-      # WRATHBENCH_DB_* var before spawning the child (runner/src/sandbox/host.ts
+      # A benchmark episode cannot reach these: the snippet sandbox forwards its
+      # child a named list of variables and none of these (runner/src/sandbox/host.ts
       # sandboxChildEnv), which is what keeps a model off the database on this
       # service and on `runner` alike.
       <<: *wb-db

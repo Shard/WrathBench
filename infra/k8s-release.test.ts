@@ -228,6 +228,13 @@ describe("k8s-release.sh", () => {
     expect(r.out).toContain(`RELEASED ${TAG}`);
   });
 
+  test("the build is handed the commit the tag describes, so a commit landing mid-release changes nothing", () => {
+    const r = run({});
+    expect(r.calls.find((l) => l.startsWith("build-images "))).toBe(`build-images --push --tag ${TAG} --commit ${r.sha}`);
+    const dry = run({ args: ["--dry-run"] });
+    expect(dry.out).toContain(`--push --tag ${TAG} --commit ${dry.sha}`);
+  });
+
   test("the deploy window is handed the tag, so it refuses on its own if the pin slips", () => {
     const r = run({});
     const deploy = r.calls.find((l) => l.startsWith("k8s-deploy "));

@@ -168,6 +168,14 @@ describe("the request body", () => {
     expect(isOpenRouterBase("https://openrouter.ai/api/v1")).toBe(true);
     expect(isOpenRouterBase("https://api.cerebras.ai/v1")).toBe(false);
     expect(isOpenRouterBase(undefined)).toBe(false);
+    // The parsed hostname, exactly: lookalikes, paths and unparseable strings are not OpenRouter.
+    expect(isOpenRouterBase("https://OpenRouter.ai/api/v1")).toBe(true);
+    expect(isOpenRouterBase("https://openrouter.ai.example.com/api/v1")).toBe(false);
+    expect(isOpenRouterBase("https://evil-openrouter.ai/api/v1")).toBe(false);
+    expect(isOpenRouterBase("https://notopenrouter.ai/api/v1")).toBe(false);
+    expect(isOpenRouterBase("https://collector.example/openrouter.ai/v1")).toBe(false);
+    expect(isOpenRouterBase("https://user@collector.example/?u=openrouter.ai")).toBe(false);
+    expect(isOpenRouterBase("openrouter.ai/api/v1")).toBe(false);
   });
 
   test("routingLabel says who and whether it may move", () => {

@@ -203,15 +203,20 @@ carries no text and nothing about it reaches the model.
 
 ### Billing: subscription or nothing
 
-The child environment is constructed, not inherited. Every `ANTHROPIC_*`,
-`AWS_*`, `GOOGLE_*`, `GCLOUD_*`, `CLOUDSDK_*` variable and the Bedrock/Vertex
-switches are dropped, and so is every `CLAUDE_CODE_OAUTH_TOKEN*` variable —
-the one the run's own lane names is then copied back onto
-`CLAUDE_CODE_OAUTH_TOKEN`, the only name the CLI knows. So the CLI sees exactly
-one credential, the subscription it was scheduled on: it bills that or it
-refuses, it can never fall back to API credits, and it never sees another
-subscription's token. (The CLI reports `apiKeySource: "ANTHROPIC_API_KEY"`
-whenever that variable is set, which is exactly the fallback being prevented.)
+The child environment is an allowlist, not the runner's own (`childEnv`): the
+plumbing a process needs (`CLI_BASE_ENV` in `src/adapter-shared.ts` — PATH,
+HOME, temp, locale, terminal, and proxy/CA variables when the deployment sets
+them), `CLAUDE_CONFIG_DIR`, the run-controlled knobs, and one credential — the
+token the run's own lane names, copied onto `CLAUDE_CODE_OAUTH_TOKEN`, the only
+name the CLI knows. No `ANTHROPIC_*`, Bedrock or Vertex variable, no other
+subscription's token, no other provider's key, no module secret and no
+database or derived-store password reaches it. So the CLI bills the
+subscription it was scheduled on or refuses; it can never fall back to API
+credits. (The CLI reports `apiKeySource: "ANTHROPIC_API_KEY"` whenever that
+variable is set, which is exactly the fallback being prevented.) The MCP
+bridge the CLI launches inherits that environment and reads nothing from it —
+it gets the runner's port on argv, and the MCP server it reaches lives in the
+runner process — so the MCP config carries no `env` block.
 There is no CLI flag that pins the auth source, so this is done with the
 environment. For the same reason `CLAUDE_CONFIG_DIR` is redirected to
 `<run-dir>/claude-config` — a user-level settings file could reintroduce a key
@@ -338,10 +343,13 @@ and differs only where the CLI does:
 The CLI's auth precedence is `CODEX_API_KEY`, then `CODEX_ACCESS_TOKEN`, then
 the ChatGPT login persisted in `$CODEX_HOME/auth.json`; `OPENAI_API_KEY` is
 not read for auth but is the `openai` driver's credential. So the child
-environment drops every `OPENAI_*` and `CODEX_*` variable and the whole
-Anthropic/Bedrock/Vertex set the claude driver drops, then sets one thing back:
-`CODEX_HOME`, to the directory named by the run's lane (`config.subscription`,
-an env var whose VALUE is a Codex home; default `CODEX_HOME`). The directory
+environment is the same kind of allowlist as the claude driver's: the plumbing
+(`CLI_BASE_ENV`) and one credential, `CODEX_HOME`, set to the directory named
+by the run's lane (`config.subscription`, an env var whose VALUE is a Codex
+home; default `CODEX_HOME`). No `OPENAI_*` or other `CODEX_*` variable, no
+Claude token and none of the runner's other secrets reach it — which matters
+twice over here, because the CLI writes snapshots of its environment under
+`$CODEX_HOME/shell_snapshots`, on the lane's volume. The directory
 is never copied per run and `auth.json` is never read or logged: a copied
 refresh token is spent by whichever process refreshes first and the other side
 then fails with "refresh token was already used" (seen on this host). One

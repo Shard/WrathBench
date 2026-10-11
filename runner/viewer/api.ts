@@ -93,6 +93,7 @@ import {
 } from "./clickhouse";
 import { isArchiveDir } from "./archive-dir";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
+import { writeGuard } from "./write-guard";
 import { e90TokenProfile } from "./drafts";
 import {
   TILE_CACHE_CONTROL,
@@ -1578,6 +1579,18 @@ export function createApi(opts: ApiOptions): ApiHandle {
   return Object.assign(async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
+
+    /*
+     * Every unsafe method, on every path, must come from the viewer's own pages
+     * (`write-guard.ts`): JSON, from this host, not cross-site. Only on a handle
+     * that is not public — a public one has no write route at all, and answers
+     * every one with the 404 below rather than a refusal that would say one
+     * exists.
+     */
+    if (!publicMode) {
+      const refused = writeGuard(req);
+      if (refused !== null) return refused;
+    }
 
     /*
      * The config API: read and edit the fleet config. Operator-only,

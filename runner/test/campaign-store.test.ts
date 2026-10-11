@@ -87,8 +87,13 @@ describe("the generic write paths", () => {
     const root = tempDir("wb-campaign-api-");
     const handle = createApi({ runsDir: join(root, "runs"), tilesDir: join(root, "tiles"), configDbPath: path });
     for (const method of ["PUT", "PATCH", "DELETE"] as const) {
+      const body = method === "DELETE" ? {} : { body: JSON.stringify({ hash: "x" }) };
+      // The write guard stands in front of these rows as of every other: a
+      // write that is not JSON is refused before the store is asked.
+      const bare = await handle(new Request("http://x/api/config/campaign-defs/probe@1", { method, ...body }));
+      expect([method, bare!.status]).toEqual([method, 415]);
       const res = await handle(
-        new Request("http://x/api/config/campaign-defs/probe@1", { method, ...(method === "DELETE" ? {} : { body: JSON.stringify({ hash: "x" }) }) }),
+        new Request("http://x/api/config/campaign-defs/probe@1", { method, headers: { "content-type": "application/json" }, ...body }),
       );
       expect([method, res!.status]).toEqual([method, 400]);
       expect(((await res!.json()) as { error: string }).error).toContain("written once");

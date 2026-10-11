@@ -10,7 +10,8 @@
 # image that never changed. So the middle is scripted too, and the one part of
 # it that is not the same anywhere — HOW a pin is placed — is a hook.
 #
-#   build    ./infra/build-images.sh --push, on a clean tree
+#   build    ./infra/build-images.sh --push, on a clean tree, from a git
+#            archive of the commit (never the working tree), image-guarded
 #   drain    ./infra/fleet-update.sh drain — the pause switch stays set
 #   pin      --pin-hook, or printed instructions; then WAIT until the cluster
 #            actually carries this tree's tag and every rollout is complete
@@ -200,7 +201,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
     say "  cluster now ${d}: $(tags_of "${d}")$(if carries_tag "${d}" "${TAG}"; then echo "  (already ${TAG})"; else echo "  (not ${TAG})"; fi)"
   done
   say "  fleet now   ${FLEET_DEPLOY}: $(if exists "${FLEET_DEPLOY}"; then "${KUBECTL[@]}" get "${FLEET_DEPLOY}" -o jsonpath='{.spec.replicas}' 2>/dev/null | strip_ansi; echo " replica(s)"; else echo "not found"; fi)"
-  wants_phase build && say "  would build  ${BUILD_IMAGES} --push --tag ${TAG}$(if [[ -n "${REGISTRY}" ]]; then echo " --registry ${REGISTRY}"; fi)  (refusing a dirty tree)"
+  wants_phase build && say "  would build  ${BUILD_IMAGES} --push --tag ${TAG} --commit ${SHA}$(if [[ -n "${REGISTRY}" ]]; then echo " --registry ${REGISTRY}"; fi)  (refusing a dirty tree)"
   wants_phase drain && say "  would drain  ${FLEET_UPDATE} drain --namespace ${NAMESPACE} --release ${RELEASE}"
   if wants_phase pin; then
     if [[ -n "${PIN_HOOK}" ]]; then
@@ -224,9 +225,11 @@ fi
 phase_build() {
   say "=== build: ${BUILD_IMAGES} --push at ${TAG}"
   if tree_dirty; then
-    fail "the working tree has uncommitted changes. ${TAG} would name a commit that does not contain what is in the images, which is a pin that points at nothing. Commit, then re-run."
+    fail "the working tree has uncommitted changes. The images are built from commit ${SHA}, so those changes would not be in the release ${TAG} names. Commit, then re-run."
   fi
-  local args=(--push --tag "${TAG}")
+  # --commit as well as --tag: the images are built from a git archive of the
+  # very commit the tag describes, even if the checkout moves on mid-release.
+  local args=(--push --tag "${TAG}" --commit "${SHA}")
   [[ -n "${REGISTRY}" ]] && args+=(--registry "${REGISTRY}")
   # Idempotent by construction: docker reuses its layers and a push of a digest
   # the registry already has is a no-op.

@@ -3,8 +3,9 @@
  * SDK client is constructed but never connected.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SandboxHost } from "../src/sandbox/host";
+import { SANDBOX_FORWARDED_ENV, SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
 import type { ActionHintNote } from "../src/sandbox/ipc";
 import { Scratchpad } from "../src/scratchpad";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -269,12 +270,20 @@ describe("sandbox evaluation", () => {
     // value into test output.
     process.env["WB_CANARY_SECRET"] = "canary-do-not-leak-42";
     process.env["OPENROUTER_KEY"] = "sk-or-must-not-leak";
-    // WRATHBENCH_DB_PASSWORD is the one credential the WRATHBENCH_* prefix
-    // forwarding would otherwise admit: the `runner` and `fleet` services carry
-    // it so the gate's smokes can stage a fixture, and an episode is a child of
-    // one of those. Root on acore_characters would let a snippet write its own
-    // level — the server-side shortcut docs/CONTRACTS.md forbids.
-    process.env["WRATHBENCH_DB_PASSWORD"] = "must-not-leak";
+    // WRATHBENCH_-spelled credentials: the `runner` and `fleet` services carry
+    // the database ones so the gate's smokes can stage a fixture, and wherever
+    // Bun autoloads a `.env` every WRATHBENCH_ value in it is in the runner's
+    // environment. The child forwards a NAMED list, never the prefix.
+    const prefixed = {
+      WRATHBENCH_DB_PASSWORD: "fake-db-password",
+      WRATHBENCH_SOMETHING_SECRET: "fake-something-secret",
+      WRATHBENCH_R2_SECRET_ACCESS_KEY: "fake-r2-secret",
+      WRATHBENCH_R2_ACCESS_KEY_ID: "fake-r2-key-id",
+      WRATHBENCH_ACCOUNT_PASSWORD: "fake-account-password",
+      WRATHBENCH_CF_DEPLOY_TOKEN: "fake-cf-token",
+      WRATHBENCH_CLICKHOUSE_PASSWORD: "fake-clickhouse-password",
+    };
+    Object.assign(process.env, prefixed);
     try {
       const host = makeHost();
       const res = await host.evalSnippet('Object.keys(process.env).sort().join(",")');
@@ -290,19 +299,80 @@ describe("sandbox evaluation", () => {
       // child re-importing a `.env` from its own cwd at startup (Bun auto-loads
       // it unless spawned with --env-file=/dev/null) — the path that leaked the
       // repo-root provider keys when the suite ran from the repo root.
-      const admitted = (k: string): boolean =>
-        k === "PATH" || k === "HOME" || k === "TMPDIR" || k.startsWith("WRATHBENCH_");
-      expect(keys.filter((k) => !admitted(k))).toEqual([]);
+      const admitted = new Set([
+        ...SANDBOX_FORWARDED_ENV,
+        "WRATHBENCH_MODULE_URL",
+        "WRATHBENCH_TOKEN",
+        "WRATHBENCH_SECRET",
+        "WRATHBENCH_ACCOUNT",
+      ]);
+      expect(keys.filter((k) => !admitted.has(k))).toEqual([]);
       expect(keys).not.toContain("WB_CANARY_SECRET");
       expect(keys).not.toContain("OPENROUTER_KEY");
       expect(keys).not.toContain("OPENCODE_KEY");
       expect(keys).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
-      expect(keys.filter((k) => k.startsWith("WRATHBENCH_DB_"))).toEqual([]);
+      for (const k of Object.keys(prefixed)) expect(keys).not.toContain(k);
     } finally {
       delete process.env["WB_CANARY_SECRET"];
       delete process.env["OPENROUTER_KEY"];
-      delete process.env["WRATHBENCH_DB_PASSWORD"];
+      for (const k of Object.keys(prefixed)) delete process.env[k];
     }
+  });
+
+  test("sandboxChildEnv forwards the named variables and nothing else under the prefix", () => {
+    const parent = {
+      PATH: "/usr/bin",
+      HOME: "/home/bun",
+      TMPDIR: "/tmp",
+      WRATHBENCH_FAULT_WINDOW_MS: "1000",
+      WRATHBENCH_FAULT_ROLLUP_MS: "2000",
+      WRATHBENCH_FAULT_ESCALATION_THRESHOLD: "3",
+      WRATHBENCH_FAULT_IMMEDIATE_CAP: "4",
+      // A knob-shaped name that entry.ts does not read is not forwarded either.
+      WRATHBENCH_FAULT_SOMETHING_NEW: "5",
+      WRATHBENCH_SOMETHING_SECRET: "fake-something-secret",
+      WRATHBENCH_R2_SECRET_ACCESS_KEY: "fake-r2-secret",
+      WRATHBENCH_ACCOUNT_PASSWORD: "fake-account-password",
+      WRATHBENCH_CF_DEPLOY_TOKEN: "fake-cf-token",
+      WRATHBENCH_MODULE_SECRET: "fake-port-secret",
+      WRATHBENCH_DB_PASSWORD: "fake-db-password",
+      // Stray copies of the explicit four, from an operator's shell.
+      WRATHBENCH_ACCOUNT: "STRAY",
+      WRATHBENCH_SECRET: "stray-secret",
+      WRATHBENCH_TOKEN: "stray-token",
+      WRATHBENCH_MODULE_URL: "http://stray:1",
+      OPENROUTER_KEY: "fake-openrouter-key",
+    };
+    const env = sandboxChildEnv(parent, {
+      WRATHBENCH_MODULE_URL: "http://worldserver:8086",
+      WRATHBENCH_TOKEN: "t",
+      WRATHBENCH_SECRET: "leased",
+      WRATHBENCH_ACCOUNT: "RUNNER",
+    });
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/home/bun",
+      TMPDIR: "/tmp",
+      WRATHBENCH_FAULT_WINDOW_MS: "1000",
+      WRATHBENCH_FAULT_ROLLUP_MS: "2000",
+      WRATHBENCH_FAULT_ESCALATION_THRESHOLD: "3",
+      WRATHBENCH_FAULT_IMMEDIATE_CAP: "4",
+      WRATHBENCH_MODULE_URL: "http://worldserver:8086",
+      WRATHBENCH_TOKEN: "t",
+      WRATHBENCH_SECRET: "leased",
+      WRATHBENCH_ACCOUNT: "RUNNER",
+    });
+  });
+
+  test("the named list is what the child actually reads", () => {
+    // Every env read in the sandbox entry is a name the host forwards or sets,
+    // so a knob added to entry.ts without a line here fails rather than
+    // silently reading its default in production.
+    const entry = readFileSync(join(import.meta.dir, "..", "src", "sandbox", "entry.ts"), "utf8");
+    const read = [...entry.matchAll(/process\.env\["([A-Z0-9_]+)"\]/g)].map((m) => m[1]!);
+    const provided = new Set([...SANDBOX_FORWARDED_ENV, "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "WRATHBENCH_SECRET", "WRATHBENCH_ACCOUNT"]);
+    expect(read.length).toBeGreaterThan(0);
+    expect(read.filter((k) => !provided.has(k))).toEqual([]);
   });
 
   test("a snippet can read the generated API.md at the ambient path", async () => {

@@ -245,6 +245,13 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               of what maps a run back to its entry — so a copy of an entry that differs only in
               its window owns its own runs and its own tier budget, and pages show it after the
               effort (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
+            `apiBase` / `apiKeyEnv` — openai entries: the endpoint, and the NAME of the env var
+              holding its key (absent: OpenRouter and `OPENROUTER_KEY`). The pair must be one the
+              provider table holds (`KEY_PROVIDERS`, runner/src/providers.ts): each key goes only
+              to its own provider's host over https, and `LMSTUDIO_KEY` only to a host the
+              deployment lists in `WRATHBENCH_LOCAL_MODEL_HOSTS` (chart: `localModelHosts`). Any
+              other pairing REFUSES the entry by name, a write through the store is a 400, and
+              run.ts refuses to start one. A new provider is a row in that table, not config.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of
@@ -887,6 +894,25 @@ the compose path, which is the local rehearsal stack and the rollback.
 `infra/README.md`, "Releasing on Kubernetes", has the phases, the pin hook,
 and what `k8s-deploy.sh` — the deploy window on its own — refuses.
 
+The images are built from the commit, never from the working tree.
+`build-images.sh` unpacks a `git archive` of the commit into a temporary
+directory and builds there, so nothing untracked or ignored in your checkout
+can reach an image, whatever the ignore files say. The server images take
+AzerothCore the same way, from the submodule commit that the commit pins, and
+take only the paths `server.Dockerfile` copies. The submodule therefore has to
+be initialised in the checkout you build from. Uncommitted edits are never in an
+image, which is why a dirty tree is refused. `--allow-dirty` builds the commit
+anyway, but its `-dirty` tag is never pushed. `k8s-release.sh` hands the build
+the exact commit its tag describes.
+
+Each image then goes through `infra/image-guard.sh` before anything is pushed.
+The guard lists the image's filesystem and refuses one that holds a
+secret-shaped path (env files, keys, credential and token files, agent or
+wrangler state, sqlite stores) or client data. It names the paths, never their
+contents. The run stops and the refused image loses its tag. A refusal means
+the commit or a Dockerfile step put that file in the image, so fix it there.
+Don't widen the allow-list in the guard to get past it.
+
 #### On compose
 
 Two scripts, from the host; the deploy is **one command** that owns the whole
@@ -1443,6 +1469,22 @@ job needs the token of the lane it was scheduled on there (`claude setup-token`)
 subscription; without it the roster refuses the episode with a `launch-failed`
 row naming that variable, rather than burning a session.
 
+Where a secret may travel from the runner is fixed in code, not config. A
+provider key goes only to its own provider's host (`KEY_PROVIDERS` in
+`runner/src/providers.ts`; the self-hosted key only to the deployment's
+`WRATHBENCH_LOCAL_MODEL_HOSTS`). No child inherits the runner's environment:
+the snippet child gets a named list (`sandboxChildEnv`), and each CLI driver an
+allowlist of its own (`childEnv` in `adapter-claude.ts` and
+`adapter-codex.ts`) — the plumbing a process needs to run plus the one lane
+credential it bills. The per-run session secret the child authenticates with
+is registered for redaction the moment it is leased, so a snippet that prints
+its environment writes `[redacted]` into the trajectory.
+
+A run pod ("Run pods", above) gets the module secret and only the credential
+its driver bills — its lane's token, its `apiKeyEnv`, or the mounted codex
+home — by Secret reference in the chart's template; the launcher strips the
+rest, and no `ANTHROPIC_*` variable can reach one.
+
 **The images are private.** WrathBench's images live in a private Harbor
 project (`harbor.nusphere.shard.page/wrathbench`, operator decision
 2026-10-11), so every pod built from them — fleet, runner, viewer, publisher,
@@ -1455,11 +1497,6 @@ ClickHouse pods pull upstream public images and carry none. Run pods add
 `runPods.allowedImages` defaults to `<image.registry>/wrathbench-runner`, so
 the move of the registry project moves the allow-list with it.
 
-A run pod ("Run pods", above) gets the module secret and only the credential
-its driver bills — its lane's token, its `apiKeyEnv`, or the mounted codex
-home — by Secret reference in the chart's template; the launcher strips the
-rest, and no `ANTHROPIC_*` variable can reach one.
-
 `WRATHBENCH_MODULE_SECRET` — the module's **port secret** (module/PROTOCOL.md,
 "Authentication"). Every request to the worldserver's control
 port, `GET /health` included, must carry it (or a session secret leased with
@@ -1471,8 +1508,9 @@ shorter than 32 characters — refuses to listen at all and says so at ERROR in
 - the **runner and fleet** services, through Bun's `.env` autoload: the run
   host presents it for hygiene, `/health` and `POST /lease`, then hands the
   snippet child only the per-run session secret the lease returned. The
-  child's environment never carries the port secret (`sandboxChildEnv` drops
-  it) — a snippet that could read it could list and delete on any account;
+  child's environment never carries the port secret (`sandboxChildEnv`
+  forwards a named list without it) — a snippet that could read it could list
+  and delete on any account;
 - the **smokes** (`infra/smoke/lib/auth.ts`), exec'd in the runner container,
   and the deploy script's `/health` probes, which run there too;
 - the **worldserver**, as `AC_WRATH_BENCH_SECRET`. Compose interpolates that

@@ -50,7 +50,7 @@ import { openRunDb } from "./rundb";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
-import { leaseSessionSecret, releaseSessionSecret } from "./module-auth";
+import { leaseRunSecret, releaseSessionSecret } from "./module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { CampaignLaunchError, RUN_IMAGE_ENV, campaignLaunch } from "./campaign-launch";
 import { holdsOnlyLaunchFiles } from "./campaign-file";
@@ -59,6 +59,7 @@ import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
 import { openWikiBundle, wikiBundleMeta } from "./wiki";
 import { OpenAiChatAdapter, StubAdapter, type ChatAdapter } from "./adapter";
 import { parseRouting, routingForRun, type RoutingSpec } from "./routing";
+import { apiKeyRefusal } from "./providers";
 import { runClaudeEpisode } from "./adapter-claude";
 import { codexEffortRefusal, laneLooksLoggedIn, runCodexEpisode } from "./adapter-codex";
 import {
@@ -652,8 +653,17 @@ async function main(): Promise<void> {
     }
     config = { ...config, subscription: laneEnv };
   } else {
-    const apiKey = process.env[config.apiKeyEnv];
     const apiBase = config.apiBase ?? process.env["OPENAI_BASE_URL"];
+    // Before the variable is even read: a key name and a base are config, and
+    // the pair may only be one the provider table holds (runner/src/providers.ts).
+    // The fleet refuses such an entry at parse and the store refuses the write;
+    // this is the last place a run could still send one, so it refuses to start.
+    const keyRefusal = apiBase === undefined ? null : apiKeyRefusal(config.apiKeyEnv, apiBase);
+    if (keyRefusal !== null) {
+      console.error(`openai driver refuses to start: ${keyRefusal}`);
+      process.exit(2);
+    }
+    const apiKey = process.env[config.apiKeyEnv];
     if (config.model === undefined || apiKey === undefined || apiBase === undefined) {
       console.error(
         `openai driver needs --model, --api-base (or OPENAI_BASE_URL), and $${config.apiKeyEnv} set`,
@@ -668,6 +678,7 @@ async function main(): Promise<void> {
     adapter = new OpenAiChatAdapter({
       baseUrl: apiBase,
       apiKey,
+      apiKeyEnv: config.apiKeyEnv,
       model: config.model,
       ...(config.effort !== undefined ? { effort: config.effort } : {}),
       ...(routing !== null ? { routing } : {}),
@@ -796,9 +807,11 @@ async function main(): Promise<void> {
    * run's account and yields the session secret the child authenticates with
    * (module/PROTOCOL.md, "Authentication"). The host keeps the port secret;
    * the child gets only this. A resume re-leases the stored token, which
-   * rotates the secret and keeps the character binding.
+   * rotates the secret and keeps the character binding. The secret is on the
+   * trajectory's redaction list before the child exists (`leaseRunSecret`): a
+   * snippet can print its own environment.
    */
-  const lease = await leaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account });
+  const lease = await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account }, trajectory);
   if (lease.secret === undefined) console.error(`[wrathbench] ${lease.note}`);
 
   const sandbox = new SandboxHost({

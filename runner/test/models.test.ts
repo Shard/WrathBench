@@ -875,6 +875,10 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
     expect(isOpenCodeGoBase("https://opencode.ai/zen/v1")).toBe(false);
     expect(isOpenCodeGoBase("https://openrouter.ai/zen/go/v1")).toBe(false);
     expect(isOpenCodeGoBase(undefined)).toBe(false);
+    // The host exactly: a lookalike or an unparseable string is not that surface.
+    expect(isOpenCodeGoBase("https://opencode.ai.example.com/zen/go/v1")).toBe(false);
+    expect(isOpenCodeGoBase("https://notopencode.ai/zen/go/v1")).toBe(false);
+    expect(isOpenCodeGoBase("opencode.ai/zen/go/v1")).toBe(false);
     // A go slug on the claude-code or stub driver keeps its driver key.
     expect(key({ driver: "stub", apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).toBe("stub");
   });

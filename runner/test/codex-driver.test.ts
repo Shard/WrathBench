@@ -9,7 +9,6 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BILLING_ENV_EXACT,
   CODEX_EFFORTS,
   DISABLED_FEATURES,
   childEnv,
@@ -124,9 +123,22 @@ function setupEpisode(
         AWS_BEARER_TOKEN_BEDROCK: "must-not-be-used",
         CLAUDE_CODE_OAUTH_TOKEN: "must-not-be-used",
         WRATHBENCH_DB_PASSWORD: "must-not-leak",
+        // and the rest of what a runner holds, none of which the CLI may see
+        OPENROUTER_KEY: "fake-openrouter-key",
+        OPENCODE_KEY: "fake-opencode-key",
+        CEREBRAS_KEY: "fake-cerebras-key",
+        WRATHBENCH_MODULE_SECRET: "fake-module-port-secret",
+        WRATHBENCH_CLICKHOUSE_PASSWORD: "fake-clickhouse-password",
+        CLICKHOUSE_PASSWORD: "fake-clickhouse-password",
+        S3_SECRET_ACCESS_KEY: "fake-s3-secret",
+        ...Object.fromEntries(Object.entries(parentEnvExtra).filter(([k]) => !k.startsWith("WB_FAKE_"))),
+      },
+      // The fake's own settings ride the test hook: the driver gives the CLI
+      // an allowlisted environment, so nothing of the parent's would carry them.
+      extraEnv: {
         WB_FAKE_MODE: mode,
         WB_FAKE_RECORD: recordPath,
-        ...parentEnvExtra,
+        ...Object.fromEntries(Object.entries(parentEnvExtra).filter(([k]) => k.startsWith("WB_FAKE_"))),
       },
     },
   };
@@ -330,6 +342,13 @@ describe("codex driver", () => {
     expect(env["hasOauthToken"]).toBe(false);
     expect(env["hasAwsBearer"]).toBe(false);
     expect(env["hasDbPassword"]).toBe(false);
+    // And by name, everything the CLI (and so the MCP bridge it launches, and
+    // the shell snapshots it writes under CODEX_HOME) was given: no provider
+    // key, no secret, no password, nothing of the harness's.
+    const envKeys = readRecord(recordPath)["envKeys"] as string[];
+    expect(envKeys).toContain("CODEX_HOME");
+    expect(envKeys.filter((k) => /_KEY$|SECRET|PASSWORD|TOKEN|^ANTHROPIC_|^OPENAI_|^WRATHBENCH_/.test(k))).toEqual([]);
+    expect(envKeys.filter((k) => k.startsWith("CODEX_") && k !== "CODEX_HOME")).toEqual([]);
     trajectory.close();
   }, 20_000);
 
@@ -698,11 +717,14 @@ describe("detectCodexFailure", () => {
 });
 
 describe("childEnv", () => {
-  test("drops every OPENAI_ and CODEX_ variable and every cloud credential; keeps only the lane's CODEX_HOME", () => {
+  test("is an allowlist: the plumbing and the lane's CODEX_HOME — and out of a parent full of secrets, nothing else", () => {
     const env = childEnv(
       {
         PATH: "/usr/bin",
         HOME: "/home/u",
+        TMPDIR: "/tmp",
+        LANG: "C.UTF-8",
+        LC_CTYPE: "C.UTF-8",
         CODEX_HOME: "/home/u/.codex",
         CODEX_HOME_2: "/home/u/.codex-2",
         CODEX_API_KEY: "outranks the login",
@@ -716,30 +738,23 @@ describe("childEnv", () => {
         CLAUDE_CODE_USE_BEDROCK: "1",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth",
         CLAUDE_CODE_OAUTH_TOKEN_2: "oauth-2",
-        WRATHBENCH_DB_PASSWORD: "must-not-leak",
-        WRATHBENCH_TOKEN: "keep",
-        OPENROUTER_KEY: "keep",
-        UNRELATED: "keep",
+        OPENROUTER_KEY: "fake-openrouter-key",
+        OPENCODE_KEY: "fake-opencode-key",
+        CEREBRAS_KEY: "fake-cerebras-key",
+        DEEPSEEK_KEY: "fake-deepseek-key",
+        LMSTUDIO_KEY: "fake-lmstudio-key",
+        WRATHBENCH_MODULE_SECRET: "fake-port-secret",
+        WRATHBENCH_DB_PASSWORD: "fake-db-password",
+        WRATHBENCH_CLICKHOUSE_PASSWORD: "fake-ch-password",
+        CLICKHOUSE_PASSWORD: "fake-ch-password",
+        S3_SECRET_ACCESS_KEY: "fake-s3-secret",
+        WRATHBENCH_TOKEN: "fake-session-token",
+        UNRELATED: "x",
       },
       {},
     );
-    for (const k of ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL"]) {
-      expect(BILLING_ENV_EXACT).toContain(k);
-      expect(env[k]).toBeUndefined();
-    }
-    expect(env["CODEX_HOME_2"]).toBeUndefined();
-    expect(env["OPENAI_ORG_ID"]).toBeUndefined();
-    expect(env["ANTHROPIC_API_KEY"]).toBeUndefined();
-    expect(env["AWS_BEARER_TOKEN_BEDROCK"]).toBeUndefined();
-    expect(env["GOOGLE_APPLICATION_CREDENTIALS"]).toBeUndefined();
-    expect(env["CLAUDE_CODE_USE_BEDROCK"]).toBeUndefined();
-    expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBeUndefined();
-    expect(env["CLAUDE_CODE_OAUTH_TOKEN_2"]).toBeUndefined();
-    expect(env["WRATHBENCH_DB_PASSWORD"]).toBeUndefined();
+    expect(Object.keys(env).sort()).toEqual(["CODEX_HOME", "HOME", "LANG", "LC_CTYPE", "PATH", "TMPDIR"]);
     expect(env["CODEX_HOME"]).toBe("/home/u/.codex");
-    expect(env["WRATHBENCH_TOKEN"]).toBe("keep");
-    expect(env["OPENROUTER_KEY"]).toBe("keep");
-    expect(env["UNRELATED"]).toBe("keep");
     expect(env["HOME"]).toBe("/home/u");
   });
 
