@@ -559,6 +559,11 @@ export class OpenAiChatAdapter implements ChatAdapter {
           method: "POST",
           headers: this.headers,
           body,
+          // Never followed. A followed redirect re-sends the request — the
+          // bearer included — to wherever the Location says, which is exactly
+          // the host check (runner/src/providers.ts) the key was cleared by
+          // being skipped. A provider that redirects is refused below.
+          redirect: "manual",
           signal:
             req.signal !== undefined
               ? AbortSignal.any([AbortSignal.timeout(this.requestTimeoutMs), req.signal])
@@ -569,6 +574,13 @@ export class OpenAiChatAdapter implements ChatAdapter {
         lastError = `network error: ${err instanceof Error ? err.message : String(err)}`;
         lastStatus = undefined;
         continue;
+      }
+      if ((res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
+        // Terminal, not retried: the base is wrong (a scheme or path the
+        // provider moves), and no number of attempts makes it right.
+        throw new AdapterError(
+          `model API answered with a redirect (HTTP ${res.status}) — not followed, so the key is never re-sent to another URL; fix the apiBase`,
+        );
       }
       const requestId = requestIdOf(res);
       if (requestId !== undefined) lastRequestId = requestId;
