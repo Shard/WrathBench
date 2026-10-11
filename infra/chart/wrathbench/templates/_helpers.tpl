@@ -130,9 +130,9 @@ capabilities:
 The database connection env every WrathBench-side tool needs (bootstrap,
 fixtures, the smokes that stage a fixture). The password comes from the
 Secret by reference; it is never templated into a manifest and never reaches
-argv. The snippet sandbox strips every WRATHBENCH_DB_* var before spawning the
-child (runner/src/sandbox/host.ts sandboxChildEnv), which is what keeps a model
-off the database on the fleet and runner pods alike.
+argv. The snippet sandbox forwards only a named list of variables to its child
+(runner/src/sandbox/host.ts sandboxChildEnv), and none of these is on it, which
+is what keeps a model off the database on the fleet and runner pods alike.
 */}}
 {{- define "wrathbench.dbEnv" -}}
 - name: WRATHBENCH_DB_HOST
@@ -177,16 +177,12 @@ Secret does that at least as well, while the snippet child is protected by
 three independent things that do not depend on the file — sandboxChildEnv's
 allowlist, `bun --env-file=/dev/null`, and the Landlock ruleset.
 
-NAMED KEYS, NOT `envFrom` ON THE WHOLE SECRET, and the difference matters.
-sandboxChildEnv forwards every `WRATHBENCH_*` variable to the snippet child
-except `WRATHBENCH_DB_*` and the module secret — that allowlist is written
-against what the fleet process actually holds. `envFrom` would hand the pod
-`WRATHBENCH_ACCOUNT_PASSWORD` (which the compose fleet never has: it is not in
-`.env`, only on the bootstrap service), and the allowlist would forward it
-straight into a model's sandbox. Enumerating is what keeps the pod's
-environment the same shape the allowlist was designed for.
-
-The model keys themselves are not `WRATHBENCH_*`, so the child never sees them.
+NAMED KEYS, NOT `envFrom` ON THE WHOLE SECRET. Every child the runner starts
+gets an allowlist rather than this environment (sandboxChildEnv's named list
+for the snippet child, each CLI driver's childEnv), so nothing here reaches a
+model's process; enumerating keeps the pods' own environment to what they use
+as well — `envFrom` would hand the fleet `WRATHBENCH_ACCOUNT_PASSWORD` and every
+other key in the Secret, which nothing on these pods reads.
 */}}
 {{- define "wrathbench.harnessSecretEnv" -}}
 - name: WRATHBENCH_MODULE_SECRET
@@ -239,6 +235,13 @@ the worldserver's /health build, so a run says which revision produced it. */}}
        read into an error. */}}
 - name: WRATHBENCH_CONFIG_DB
   value: /wrathbench/data/config/config.sqlite
+{{- /* The self-hosted model hosts the provider table pairs with LMSTUDIO_KEY
+       (runner/src/providers.ts). Here, beside the store's path, because every
+       pod that parses the store must reach the same verdict on an entry: the
+       viewer refusing a write the supervisor would accept, or the reverse,
+       is the disagreement the store exists to rule out. */}}
+- name: WRATHBENCH_LOCAL_MODEL_HOSTS
+  value: {{ join "," (.Values.localModelHosts | default list) | quote }}
 {{- end -}}
 
 {{/*

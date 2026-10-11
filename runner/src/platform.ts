@@ -18,24 +18,44 @@
 import { isLocalBase } from "./model-cost";
 
 /**
+ * The lowercased hostname of an api base, or null when there is none or it
+ * does not parse as a URL.
+ *
+ * Every "is this base provider X" question is asked of this and answered by
+ * equality — never by searching the string, where `openrouter.ai.example.com`,
+ * `evil-openrouter.ai` or a path segment would all pass for OpenRouter. The
+ * provider table (`providers.ts`) decides where a key may go the same way.
+ */
+export function hostOfBase(apiBase: string | null | undefined): string | null {
+  if (apiBase === null || apiBase === undefined || apiBase === "") return null;
+  try {
+    const host = new URL(apiBase).hostname.toLowerCase();
+    return host.length > 0 ? host : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The platforms a hostname is labelled with, matched exactly. Anything else is its own host. */
+const NAMED_HOSTS: Readonly<Record<string, string>> = {
+  "openrouter.ai": "openrouter",
+  "api.anthropic.com": "anthropic",
+  "api.openai.com": "openai",
+};
+
+/**
  * The platform an api base names, or null when there is no api base.
  *
- * A base that does not parse as a URL still tells us something, so the raw
- * string is matched rather than discarded.
+ * Known hosts are matched exactly (`NAMED_HOSTS`); any other host labels
+ * itself, without a leading `api.`. A base that does not parse as a URL still
+ * labels itself the same way, but is never taken for a named platform.
  */
 export function platformOfBase(apiBase: string | null | undefined): string | null {
   if (apiBase === null || apiBase === undefined || apiBase === "") return null;
   if (isLocalBase(apiBase)) return "local";
-  let host = apiBase;
-  try {
-    host = new URL(apiBase).hostname;
-  } catch {
-    /* a malformed base still tells us something; fall through with the raw string */
-  }
-  if (host.includes("openrouter.ai")) return "openrouter";
-  if (host.includes("api.anthropic.com")) return "anthropic";
-  if (host.includes("api.openai.com")) return "openai";
-  return host.replace(/^api\./, "");
+  const host = hostOfBase(apiBase);
+  if (host === null) return apiBase.replace(/^api\./, "");
+  return NAMED_HOSTS[host] ?? host.replace(/^api\./, "");
 }
 
 /** The api base's answer, or the driver's name when a run carried no base. */

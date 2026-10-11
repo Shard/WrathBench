@@ -69,8 +69,8 @@ spec:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
             # For the preflight gate's fixture staging (infra/fixtures/apply.ts
             # writes acore_characters directly). A benchmark episode cannot
-            # reach these: sandboxChildEnv drops every WRATHBENCH_DB_* var
-            # before spawning the snippet child.
+            # reach these: sandboxChildEnv forwards the snippet child a named
+            # list of variables, and none of these is on it.
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
             {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
             {{- if .Values.codex.enabled }}

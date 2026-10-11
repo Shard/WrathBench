@@ -63,7 +63,7 @@ import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, ty
 import { campaignWork, type Campaign, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
-import { platformOfBase } from "./platform";
+import { hostOfBase, platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { HEARTBEAT_DEAD_MS, heartbeatAt, heartbeatOwner } from "./trajectory";
@@ -1319,21 +1319,12 @@ export const OPENCODE_GO_KEY = "opencode-go";
  * Whether an api base points at that surface. The path is what distinguishes
  * it — `https://opencode.ai/zen/go/v1` against `https://opencode.ai/zen/v1` —
  * so this reads the base itself rather than `platformOfBase`, which answers
- * with a hostname. A base that does not parse as a URL is still matched as a
- * raw string, as `platformOfBase` does.
+ * with a hostname. The host is matched exactly (`hostOfBase`), never by
+ * substring, and a base that does not parse is not this surface.
  */
 export function isOpenCodeGoBase(apiBase: string | null | undefined): boolean {
-  if (apiBase === null || apiBase === undefined || apiBase === "") return false;
-  let host = apiBase;
-  let path = apiBase;
-  try {
-    const u = new URL(apiBase);
-    host = u.hostname;
-    path = u.pathname;
-  } catch {
-    /* a malformed base still tells us something; fall through with the raw string */
-  }
-  return host.includes("opencode.ai") && /(^|\/)zen\/go(\/|$)/.test(path);
+  if (hostOfBase(apiBase) !== "opencode.ai") return false;
+  return /(^|\/)zen\/go(\/|$)/.test(new URL(apiBase!).pathname);
 }
 
 /**

@@ -19,7 +19,7 @@ import { openWikiBundle } from "./wiki";
 import { EpisodicLog } from "./episodic";
 import { ClosedWindowReflectGate } from "./reflect";
 import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
-import { leaseSessionSecret } from "./module-auth";
+import { leaseRunSecret } from "./module-auth";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory } from "./trajectory";
@@ -191,8 +191,9 @@ async function main(): Promise<void> {
   trajectory.writeMeta({ runId, harnessVersion: harnessVersion(), startedAt: Date.now(), config });
 
   // The session secret for this token (module/PROTOCOL.md, "Authentication");
-  // the operator's port secret stays in this process.
-  const lease = await leaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token ?? token, account: config.account });
+  // the operator's port secret stays in this process. Registered for
+  // redaction as it is leased: the child holds it, and a snippet can print it.
+  const lease = await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token ?? token, account: config.account }, trajectory);
   if (lease.secret === undefined) console.error(`[wrathbench-mcp] ${lease.note}`);
 
   const sandbox = new SandboxHost({

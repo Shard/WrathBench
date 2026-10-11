@@ -178,6 +178,53 @@ describe("writes", () => {
     store.close();
   });
 
+  test("a roster write that would send a key anywhere but its own provider is refused outright, and nothing is written", () => {
+    const root = tempDir("config-store-keys-");
+    const store = new ConfigStore(join(root, "config.sqlite"), { env: {} });
+    store.seed(fixtureConfig());
+    const refusals: [unknown, RegExp][] = [
+      // Any variable the runner holds, named as the key.
+      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" }, /harness or infrastructure credential/],
+      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" }, /harness or infrastructure credential/],
+      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "CLICKHOUSE_PASSWORD" }, /harness or infrastructure credential/],
+      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "S3_SECRET_ACCESS_KEY" }, /harness or infrastructure credential/],
+      [{ tier: "t1", model: "vendor/x", apiKeyEnv: "ANTHROPIC_API_KEY" }, /harness or infrastructure credential/],
+      // A real key, to a host its provider does not own.
+      [{ tier: "t1", model: "vendor/x", apiBase: "https://collector.example/v1", apiKeyEnv: "OPENROUTER_KEY" }, /may be sent only to openrouter.ai/],
+      [{ tier: "t1", model: "vendor/x", apiBase: "https://collector.example/v1", apiKeyEnv: "CEREBRAS_KEY" }, /may be sent only to api.cerebras.ai/],
+      // The self-hosted key, on a deployment that names no self-hosted host.
+      [{ tier: "t1", model: "vendor/x", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" }, /names no self-hosted model host/],
+    ];
+    for (const [value, why] of refusals) {
+      expect(() => store.put("roster/sneak", value)).toThrow(ConfigRejected);
+      expect(() => store.put("roster/sneak", value)).toThrow(why);
+    }
+    // A PATCH that changes only the key name of an existing entry is the same write.
+    expect(() => store.patch("roster/glm", { apiKeyEnv: "WRATHBENCH_MODULE_SECRET" })).toThrow(/harness or infrastructure credential/);
+    expect(store.get("roster/sneak")).toBeUndefined();
+    expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
+    expect(store.audit().filter((a) => a.key === "roster/sneak")).toEqual([]);
+    // Every pairing the table holds is a write like any other.
+    store.put("roster/cb", { tier: "t1", model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_KEY" });
+    store.put("roster/ds", { tier: "t1", model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_KEY" });
+    expect(store.get("roster/cb")).toMatchObject({ apiKeyEnv: "CEREBRAS_KEY" });
+    store.close();
+    // And the self-hosted key, where the deployment names that host.
+    const lan = new ConfigStore(join(root, "config.sqlite"), { env: { WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20:1234" } });
+    lan.put("roster/box", { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" });
+    expect(lan.get("roster/box")).toMatchObject({ apiKeyEnv: "LMSTUDIO_KEY" });
+    lan.close();
+  });
+
+  test("a seed carrying a pairing the table refuses is refused whole, and nothing is imported", () => {
+    const root = tempDir("config-store-keys-seed-");
+    const store = new ConfigStore(join(root, "config.sqlite"), { env: {} });
+    const bad = fixtureConfig({ roster: { glm: { tier: "t1", model: "z-ai/glm-5.2:free", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" } } });
+    expect(() => store.seed(bad)).toThrow(/roster\/glm: apiKeyEnv WRATHBENCH_MODULE_SECRET names a harness or infrastructure credential/);
+    expect(store.isEmpty()).toBe(true);
+    store.close();
+  });
+
   test("patch merges, put replaces, delete removes", () => {
     const { store } = tempStore();
     store.seed(fixtureConfig());

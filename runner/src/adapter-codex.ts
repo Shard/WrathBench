@@ -80,9 +80,9 @@
  * The CLI's auth precedence is CODEX_API_KEY, then CODEX_ACCESS_TOKEN, then the
  * persisted ChatGPT login in `$CODEX_HOME/auth.json`; OPENAI_API_KEY is not
  * read for auth (telemetry only) but is the `openai` driver's credential and
- * OPENAI_BASE_URL its endpoint. So the child environment drops every
- * `OPENAI_*` and `CODEX_*` variable and the whole Anthropic/Bedrock/Vertex set
- * the claude driver drops, then sets exactly one thing back: `CODEX_HOME`, to
+ * OPENAI_BASE_URL its endpoint. So the child environment is an allowlist
+ * (`childEnv`): the plumbing a process needs to run, and exactly one
+ * credential — `CODEX_HOME`, set to
  * the directory the run's LANE names (`RunConfig.subscription`, an env var
  * whose VALUE is a CODEX_HOME path; default `CODEX_HOME`). One directory per
  * lane, shared by that lane's runs, never copied per run — a copied auth.json
@@ -125,7 +125,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { MCP_SERVER_NAME, toolCallLimitReached } from "./adapter-claude";
-import { signalGroup } from "./adapter-shared";
+import { cliBaseEnv, signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
@@ -164,56 +164,33 @@ export function codexEffortRefusal(effort: string | undefined): string | null {
 // ------------------------------------------------------------------ billing
 
 /**
- * Variable prefixes that would let the CLI authenticate or bill anything but
- * the lane, or belong to another driver. `CODEX_` covers CODEX_API_KEY and
- * CODEX_ACCESS_TOKEN (the CLI's two overrides of the persisted login) and
- * every CODEX_HOME* lane variable; the chosen lane's directory is put back
- * under the one name the CLI reads. `OPENAI_` is not an auth source for the
- * CLI but is the `openai` driver's key and base URL, dropped so the two
- * drivers can never bleed into each other. The Anthropic/cloud set is the
- * claude driver's list, kept so a run under this driver is exactly as blind to
- * those credentials as a run under that one.
- */
-export const BILLING_ENV_PREFIXES = ["OPENAI_", "CODEX_", "ANTHROPIC_", "AWS_", "GOOGLE_", "GCLOUD_", "CLOUDSDK_", "CLAUDE_CODE_OAUTH_TOKEN"];
-/** Named for readers and tests; every one is already covered by a prefix above. */
-export const BILLING_ENV_EXACT = [
-  "CODEX_API_KEY",
-  "CODEX_ACCESS_TOKEN",
-  "OPENAI_API_KEY",
-  "OPENAI_BASE_URL",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
-  "CLAUDE_CODE_SKIP_VERTEX_AUTH",
-  "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
-];
-
-/** Not billing: the database. Same reason as the claude driver's `DB_ENV_PREFIX`. */
-const DB_ENV_PREFIX = "WRATHBENCH_DB_";
-
-/**
- * The child environment, constructed rather than inherited.
+ * The child environment: an allowlist, never the runner's own.
  *
- * One credential survives, and it is the one the run's LANE names: the
- * directory in `$<laneEnv>` becomes `CODEX_HOME`, the only name the CLI reads.
- * Every other `CODEX_*` variable is gone, so a second lane's directory
- * (`CODEX_HOME_2`) is not in the child's environment at all, and neither is
- * an API key that would outrank the ChatGPT login. An unset lane leaves
- * `CODEX_HOME` unset: the CLI then has no login to bill and refuses, which is
- * what `run.ts` checks for before it gets this far.
+ * `cliBaseEnv` (adapter-shared.ts) is the plumbing — PATH, HOME, temp, locale,
+ * terminal. On top of it, explicitly, the run's LANE: the directory in
+ * `$<laneEnv>` becomes `CODEX_HOME`, the only name the CLI reads, and the one
+ * thing it authenticates with (the ChatGPT login in its `auth.json`). Then
+ * `extra`, which only a test sets.
+ *
+ * So no `CODEX_API_KEY` or `CODEX_ACCESS_TOKEN` (the CLI's two overrides of the
+ * persisted login) and no second lane's directory (`CODEX_HOME_2`) reach it;
+ * no `OPENAI_*` either, which is the `openai` driver's key and base URL; and
+ * nothing else the runner holds — the other providers' keys, the Claude lanes'
+ * tokens, the module's port secret, the database and derived-store passwords.
+ * That matters beyond the process itself: the CLI writes snapshots of its
+ * environment under `$CODEX_HOME/shell_snapshots`, on the lane's volume, so
+ * whatever it inherits is also written to disk.
+ *
+ * An unset lane leaves `CODEX_HOME` unset: the CLI then has no login to bill
+ * and refuses, which is what `run.ts` checks for before it gets this far. The
+ * MCP bridge the CLI launches needs nothing from here (`CLI_BASE_ENV`), so the
+ * `mcp_servers` overrides carry no `env`.
  */
 export function childEnv(
   parent: Record<string, string | undefined>,
   o: { laneEnv?: string; extra?: Record<string, string> },
 ): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(parent)) {
-    if (v === undefined) continue;
-    if (BILLING_ENV_PREFIXES.some((p) => k.startsWith(p))) continue;
-    if (BILLING_ENV_EXACT.includes(k)) continue;
-    if (k.startsWith(DB_ENV_PREFIX)) continue;
-    out[k] = v;
-  }
+  const out = cliBaseEnv(parent);
   const home = parent[o.laneEnv ?? DEFAULT_CODEX_HOME_ENV];
   if (home !== undefined && home.length > 0) out[DEFAULT_CODEX_HOME_ENV] = home;
   return { ...out, ...(o.extra ?? {}) };

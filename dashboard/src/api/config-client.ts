@@ -77,7 +77,6 @@ export interface ConfigAuditResponse {
 }
 
 export interface ConfigExportResponse {
-  path: string | null;
   bytes: number;
   text: string;
 }
@@ -99,7 +98,11 @@ async function send<T>(
   init: RequestInit & { attribution?: Attribution; actor?: string },
 ): Promise<T> {
   const { attribution, actor, ...rest } = init;
-  const headers: Record<string, string> = { accept: "application/json", ...(rest.body !== undefined ? { "content-type": "application/json" } : {}) };
+  // Every write says JSON, a body or not (DELETE, the draft fetch): the viewer
+  // refuses an unsafe method without it, which is what keeps another site's
+  // form or `text/plain` POST from writing here (runner/viewer/write-guard.ts).
+  const write = (rest.method ?? "GET").toUpperCase() !== "GET";
+  const headers: Record<string, string> = { accept: "application/json", ...(write || rest.body !== undefined ? { "content-type": "application/json" } : {}) };
   if (attribution !== undefined) {
     // Folded to what a header can carry: `fetch` refuses the whole request on a
     // code point above U+00FF, and an em dash in a note is the likeliest thing
@@ -151,9 +154,8 @@ export function createConfigClient(opts: ConfigClientOptions = {}) {
     remove: (key: string, attribution: Attribution): Promise<ConfigWriteResponse> =>
       send<ConfigWriteResponse>(f, rowUrl(key), { method: "DELETE", attribution }),
     /**
-     * Render the store to fleet.json's shape and hand back the text. The body
-     * is `{}` on purpose: a `path` in it makes the server WRITE a file, and on
-     * the cluster that file is a Flux-managed copy nothing reads.
+     * Render the store to fleet.json's shape and hand back the text. The
+     * server writes no file for a request; the page shows and copies the text.
      */
     export: (): Promise<ConfigExportResponse> =>
       send<ConfigExportResponse>(f, at("/api/config/export"), { method: "POST", body: "{}" }),

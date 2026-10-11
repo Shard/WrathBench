@@ -38,11 +38,17 @@ function fakeSandbox(): SandboxHost {
   } as unknown as SandboxHost;
 }
 
-/** A directory holding an executable `claude` that runs the fixture. */
-function fakeBinDir(): string {
+/**
+ * A directory holding an executable `claude` that runs the fixture. `fakeEnv`
+ * is baked into the wrapper: the driver hands the CLI an allowlisted
+ * environment, so a fake's own settings cannot ride the runner's — they are
+ * set on the CLI's side, the way `extraEnv` sets them for a direct episode.
+ */
+function fakeBinDir(fakeEnv: Record<string, string> = {}): string {
   const dir = tempDir("wrathbench-fakebin-");
   const path = join(dir, "claude");
-  writeFileSync(path, `#!/bin/sh\nexec ${process.execPath} ${FIXTURE} "$@"\n`, "utf8");
+  const assigns = Object.entries(fakeEnv).map(([k, v]) => `${k}=${JSON.stringify(v)} `).join("");
+  writeFileSync(path, `#!/bin/sh\n${assigns}exec ${process.execPath} ${FIXTURE} "$@"\n`, "utf8");
   chmodSync(path, 0o755);
   return dir;
 }
@@ -95,17 +101,41 @@ function setupEpisode(
       env: {
         PATH: `${fakeBinDir()}:${process.env["PATH"] ?? ""}`,
         HOME: process.env["HOME"] ?? "/tmp",
-        // a key that must NOT reach the child
-        ANTHROPIC_API_KEY: "sk-ant-must-not-be-used",
-        AWS_BEARER_TOKEN_BEDROCK: "must-not-be-used",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth-token-for-tests",
+        // a runner environment full of things that must NOT reach the child
+        ...FAKE_RUNNER_SECRETS,
+        ...Object.fromEntries(Object.entries(parentEnvExtra).filter(([k]) => !k.startsWith("WB_FAKE_"))),
+      },
+      // The fake's own settings ride the test hook: the driver gives the CLI
+      // an allowlisted environment, so nothing of the parent's would carry them.
+      extraEnv: {
         WB_FAKE_MODE: mode,
         WB_FAKE_RECORD: recordPath,
-        ...parentEnvExtra,
+        ...Object.fromEntries(Object.entries(parentEnvExtra).filter(([k]) => k.startsWith("WB_FAKE_"))),
       },
     },
   };
 }
+
+/**
+ * Obviously fake values for every kind of secret a runner's environment holds
+ * besides the lane token: none may reach the CLI or what it launches.
+ */
+const FAKE_RUNNER_SECRETS: Record<string, string> = {
+  ANTHROPIC_API_KEY: "sk-ant-must-not-be-used",
+  ANTHROPIC_AUTH_TOKEN: "fake-anthropic-token",
+  AWS_BEARER_TOKEN_BEDROCK: "must-not-be-used",
+  CLAUDE_CODE_OAUTH_TOKEN_2: "fake-second-lane-token",
+  OPENROUTER_KEY: "fake-openrouter-key",
+  OPENCODE_KEY: "fake-opencode-key",
+  CEREBRAS_KEY: "fake-cerebras-key",
+  WRATHBENCH_MODULE_SECRET: "fake-module-port-secret",
+  WRATHBENCH_DB_PASSWORD: "fake-db-password",
+  WRATHBENCH_CLICKHOUSE_PASSWORD: "fake-clickhouse-password",
+  CLICKHOUSE_PASSWORD: "fake-clickhouse-password",
+  S3_SECRET_ACCESS_KEY: "fake-s3-secret",
+  CODEX_HOME: "/fake/codex/home",
+};
 
 /**
  * Whether a pid is gone, polled: a group SIGKILL reaches the grandchild a beat
@@ -154,8 +184,18 @@ describe("claude-code driver", () => {
     expect(record["inputFormat"]).toBe("stream-json");
     expect(record["outputFormat"]).toBe("stream-json");
     expect(record["model"]).toBe("opus");
-    // our MCP server really answered tools/list over the loopback bridge
+    // our MCP server really answered tools/list over the loopback bridge —
+    // launched from the CLI's allowlisted environment, which is all it inherits
     expect(record["mcpTools"]).toEqual(TOOLS.map((t) => t.name));
+    // Out of a runner environment full of secrets, the CLI (and so the bridge)
+    // saw the lane token under its one name and none of the rest.
+    const envKeys = record["envKeys"] as string[];
+    expect(envKeys).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(envKeys.filter((k) => k in FAKE_RUNNER_SECRETS)).toEqual([]);
+    expect(envKeys.filter((k) => /_KEY$|SECRET|PASSWORD|^ANTHROPIC_|^WRATHBENCH_|^CODEX_/.test(k))).toEqual([]);
+    // The MCP server entry is the bridge and its port, with no env of its own to carry.
+    const mcpConfig = JSON.parse(readFileSync(join(runDir, "claude-mcp.json"), "utf8")) as { mcpServers: Record<string, Record<string, unknown>> };
+    expect(Object.keys(mcpConfig.mcpServers["wrathbench"]!).sort()).toEqual(["args", "command"]);
     // the context message is the harness's, assembled by the fixed context machinery
     const userMessages = record["userMessages"] as string[];
     expect(userMessages).toHaveLength(2);
@@ -330,7 +370,7 @@ describe("claude-code driver", () => {
     });
     await runClaudeEpisode({
       ...options,
-      extraEnv: { WB_FAKE_RESOLVED_MODEL: "claude-opus-5", WB_FAKE_CLI_VERSION: "2.1.239" },
+      extraEnv: { ...options.extraEnv, WB_FAKE_RESOLVED_MODEL: "claude-opus-5", WB_FAKE_CLI_VERSION: "2.1.239" },
     });
 
     // The run asked for the alias and was served an id: that is the fact no
@@ -727,10 +767,15 @@ describe("detectLimit", () => {
 });
 
 describe("childEnv", () => {
-  test("drops every billing credential and keeps the subscription token", () => {
+  test("is an allowlist: the plumbing, the lane token under its one name, the config dir — and out of a parent full of secrets, nothing else", () => {
     const env = childEnv(
       {
         PATH: "/usr/bin",
+        HOME: "/home/bun",
+        TMPDIR: "/tmp",
+        LANG: "C.UTF-8",
+        LC_ALL: "C.UTF-8",
+        TERM: "xterm",
         ANTHROPIC_API_KEY: "sk-ant-secret",
         ANTHROPIC_AUTH_TOKEN: "t",
         ANTHROPIC_BASE_URL: "https://example.invalid",
@@ -739,28 +784,30 @@ describe("childEnv", () => {
         CLAUDE_CODE_USE_BEDROCK: "1",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth",
         CLAUDE_CODE_OAUTH_TOKEN_2: "other-subscription",
-        // Not a billing credential, dropped for a different reason: the runner
-        // and fleet services carry it for the gate's fixture staging, and root
-        // on acore_characters is the shortcut docs/CONTRACTS.md forbids.
-        WRATHBENCH_DB_PASSWORD: "must-not-leak",
-        WRATHBENCH_TOKEN: "keep",
-        UNRELATED: "keep",
+        MAX_THINKING_TOKENS: "31999",
+        OPENROUTER_KEY: "fake-openrouter-key",
+        OPENCODE_KEY: "fake-opencode-key",
+        CEREBRAS_KEY: "fake-cerebras-key",
+        DEEPSEEK_KEY: "fake-deepseek-key",
+        LMSTUDIO_KEY: "fake-lmstudio-key",
+        OPENAI_API_KEY: "fake-openai-key",
+        CODEX_HOME: "/fake/codex",
+        WRATHBENCH_MODULE_SECRET: "fake-port-secret",
+        WRATHBENCH_DB_PASSWORD: "fake-db-password",
+        WRATHBENCH_CLICKHOUSE_PASSWORD: "fake-ch-password",
+        CLICKHOUSE_PASSWORD: "fake-ch-password",
+        S3_SECRET_ACCESS_KEY: "fake-s3-secret",
+        WRATHBENCH_TOKEN: "fake-session-token",
+        UNRELATED: "x",
       },
       { configDir: "/runs/x/claude-config" },
     );
-    expect(env["ANTHROPIC_API_KEY"]).toBeUndefined();
-    expect(env["ANTHROPIC_AUTH_TOKEN"]).toBeUndefined();
-    expect(env["ANTHROPIC_BASE_URL"]).toBeUndefined();
-    expect(env["AWS_BEARER_TOKEN_BEDROCK"]).toBeUndefined();
-    expect(env["GOOGLE_APPLICATION_CREDENTIALS"]).toBeUndefined();
-    expect(env["CLAUDE_CODE_USE_BEDROCK"]).toBeUndefined();
+    expect(Object.keys(env).sort()).toEqual(
+      ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR"],
+    );
     expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("oauth");
-    // The other subscription's token is not in the child's environment at all.
-    expect(env["CLAUDE_CODE_OAUTH_TOKEN_2"]).toBeUndefined();
-    expect(env["WRATHBENCH_DB_PASSWORD"]).toBeUndefined();
-    expect(env["WRATHBENCH_TOKEN"]).toBe("keep");
-    expect(env["UNRELATED"]).toBe("keep");
     expect(env["CLAUDE_CONFIG_DIR"]).toBe("/runs/x/claude-config");
+    expect(env["PATH"]).toBe("/usr/bin");
   });
 
   test("the thinking budget comes from the run's effort, never from the shell", () => {
@@ -828,8 +875,8 @@ describe("childEnv", () => {
     const env = childEnv(parent, { configDir: "/runs/x/claude-config", tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" });
     expect(env["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("second-subscription");
     expect(env["CLAUDE_CODE_OAUTH_TOKEN_2"]).toBeUndefined();
-    // Nothing about the lane changes the rest of the environment.
-    expect(env["OPENROUTER_KEY"]).toBe("not-a-claude-credential");
+    // Another provider's key is no more the CLI's on this lane than on the other.
+    expect(env["OPENROUTER_KEY"]).toBeUndefined();
     // And the default lane still means the default variable.
     expect(childEnv(parent, { configDir: "/c" })["CLAUDE_CODE_OAUTH_TOKEN"]).toBe("first-subscription");
   });
@@ -956,10 +1003,11 @@ describe("driver selection and stamping", () => {
       ],
       cwd,
       env: {
-        PATH: `${fakeBinDir()}:${process.env["PATH"] ?? ""}`,
+        // The fake's mode is set on the CLI's side: run.ts hands the CLI an
+        // allowlisted environment, so a variable here would not reach it.
+        PATH: `${fakeBinDir({ WB_FAKE_MODE: "long-turn" })}:${process.env["PATH"] ?? ""}`,
         HOME: process.env["HOME"] ?? "/tmp",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth-token-for-tests",
-        WB_FAKE_MODE: "long-turn",
       },
       stdout: "pipe",
       stderr: "pipe",

@@ -794,3 +794,64 @@ describe("OpenAiChatAdapter stated reset", () => {
     expect(statedResetOf(new Headers(), null)).toBeNull();
   });
 });
+
+describe("redirects", () => {
+  test("a provider redirect is refused and never followed: the key does not reach the Location", async () => {
+    // Two real local servers: the "provider" answers with a redirect, and the
+    // redirect target records anything that reaches it.
+    const reached: (string | null)[] = [];
+    const target = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (r) => {
+        reached.push(r.headers.get("authorization"));
+        return new Response(JSON.stringify({ choices }), { status: 200 });
+      },
+    });
+    try {
+      for (const code of [301, 302, 307, 308]) {
+        const provider = Bun.serve({
+          port: 0,
+          hostname: "127.0.0.1",
+          fetch: () => new Response(null, { status: code, headers: { location: `http://127.0.0.1:${target.port}/v1/chat/completions` } }),
+        });
+        try {
+          const adapter = new OpenAiChatAdapter({
+            baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+            apiKey: "fake-key-for-redirect-test",
+            model: "m",
+            maxAttempts: 3,
+            sleep: () => Promise.resolve(),
+          });
+          await expect(adapter.complete({ messages: [], tools: [] })).rejects.toThrow(
+            new RegExp(`answered with a redirect \\(HTTP ${code}\\) — not followed`),
+          );
+        } finally {
+          await provider.stop(true);
+        }
+      }
+    } finally {
+      await target.stop(true);
+    }
+    expect(reached).toEqual([]);
+  });
+
+  test("the request is sent with redirect: manual", async () => {
+    let mode: RequestInit["redirect"];
+    const adapter = new OpenAiChatAdapter({
+      baseUrl: "http://model.invalid/v1",
+      apiKey: "k",
+      model: "m",
+      fetchImpl: Object.assign(
+        (_url: string, init: RequestInit): Promise<Response> => {
+          mode = init.redirect;
+          return Promise.resolve(new Response(JSON.stringify({ choices }), { status: 200 }));
+        },
+        { preconnect: () => {} },
+      ) as unknown as typeof fetch,
+      sleep: () => Promise.resolve(),
+    });
+    await adapter.complete({ messages: [], tools: [] });
+    expect(mode).toBe("manual");
+  });
+});

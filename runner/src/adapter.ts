@@ -44,6 +44,7 @@
 import { z } from "zod";
 import type { ChatMessage } from "./context";
 import { isOpenRouterBase, providerBodyOf, type RoutingSpec } from "./routing";
+import { apiKeyRefusal } from "./providers";
 import type { ToolDef } from "./tools";
 
 export interface ChatRequest {
@@ -264,6 +265,14 @@ function toUsageRaw(u: z.infer<typeof completionSchema>["usage"]): RawUsage | un
 export interface OpenAiAdapterOptions {
   baseUrl: string;
   apiKey: string;
+  /**
+   * The env var `apiKey` was read from. When given, the adapter refuses to be
+   * built unless the provider table allows that key towards `baseUrl`
+   * (runner/src/providers.ts) — the last check before the key is attached to
+   * a request. `run.ts` always passes it; a test that builds the adapter
+   * around a fake key and a fake host leaves it out.
+   */
+  apiKeyEnv?: string;
   model: string;
   /**
    * Reasoning effort, sent as `reasoning_effort`. Omitted when absent.
@@ -444,6 +453,10 @@ export class OpenAiChatAdapter implements ChatAdapter {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.now = opts.now ?? Date.now;
     const env = opts.env ?? process.env;
+    if (opts.apiKeyEnv !== undefined) {
+      const refusal = apiKeyRefusal(opts.apiKeyEnv, opts.baseUrl, env);
+      if (refusal !== null) throw new Error(`refusing to send the key: ${refusal}`);
+    }
     const fromEnv = env["WRATHBENCH_APP_URL"];
     const configured = opts.appUrl ?? fromEnv;
     // A stray newline or control character in the env var would make `fetch`
@@ -487,7 +500,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
       // OpenRouter-only accounting opt-in: returns cache and cost detail in
       // `usage`. Observability, not behavior — but gated to the one host that
       // documents it, since a strict OpenAI-compat server may 400 on unknowns.
-      ...(this.opts.baseUrl.includes("openrouter.ai") ? { usage: { include: true } } : {}),
+      ...(isOpenRouterBase(this.opts.baseUrl) ? { usage: { include: true } } : {}),
       // Which backend may serve this (operator decision 2026-09-16, see
       // `routing.ts`). Host-gated like the usage opt-in: an aggregator is the
       // only thing with a choice to make, and a direct endpoint would 400 on
@@ -546,6 +559,11 @@ export class OpenAiChatAdapter implements ChatAdapter {
           method: "POST",
           headers: this.headers,
           body,
+          // Never followed. A followed redirect re-sends the request — the
+          // bearer included — to wherever the Location says, which is exactly
+          // the host check (runner/src/providers.ts) the key was cleared by
+          // being skipped. A provider that redirects is refused below.
+          redirect: "manual",
           signal:
             req.signal !== undefined
               ? AbortSignal.any([AbortSignal.timeout(this.requestTimeoutMs), req.signal])
@@ -556,6 +574,13 @@ export class OpenAiChatAdapter implements ChatAdapter {
         lastError = `network error: ${err instanceof Error ? err.message : String(err)}`;
         lastStatus = undefined;
         continue;
+      }
+      if ((res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
+        // Terminal, not retried: the base is wrong (a scheme or path the
+        // provider moves), and no number of attempts makes it right.
+        throw new AdapterError(
+          `model API answered with a redirect (HTTP ${res.status}) — not followed, so the key is never re-sent to another URL; fix the apiBase`,
+        );
       }
       const requestId = requestIdOf(res);
       if (requestId !== undefined) lastRequestId = requestId;

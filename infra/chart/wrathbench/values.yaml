@@ -76,15 +76,28 @@ envSecretName: wrathbench-env
 # the pod. Adding a provider is one line here and one key in that Secret.
 #
 # Enumerated rather than `envFrom` on the whole Secret on purpose — see the
-# note in templates/_helpers.tpl; `envFrom` would put WRATHBENCH_ACCOUNT_PASSWORD
-# in reach of the snippet sandbox's WRATHBENCH_* forwarding.
+# note in templates/_helpers.tpl: the pods carry only the keys they use.
+#
+# Which of these a roster entry may name as `apiKeyEnv`, and the hosts each
+# may be sent to, is code: the provider table in runner/src/providers.ts. A
+# new provider is a row there and a line here.
 modelKeys:
   - CLAUDE_CODE_OAUTH_TOKEN
   - CLAUDE_CODE_OAUTH_TOKEN_2
   - OPENROUTER_KEY
   - OPENCODE_KEY
   - CEREBRAS_KEY
+  - DEEPSEEK_KEY
   - LMSTUDIO_KEY
+
+# The self-hosted model servers `LMSTUDIO_KEY` may be sent to, as `host` or
+# `host:port` (e.g. `192.0.2.20:1234`). Deployment config rather than fleet
+# config on purpose: the config store is edited from the viewer, and a host
+# list there would let an edit point the key anywhere. Empty means this
+# deployment has no self-hosted model, and a roster entry naming that key is
+# refused. Rendered as WRATHBENCH_LOCAL_MODEL_HOSTS on every pod that parses
+# the fleet config, so they all reach the same verdict.
+localModelHosts: []
 
 # There is no fleet config value and no ConfigMap: the fleet config is the
 # sqlite store on the data PVC (WRATHBENCH_CONFIG_DB, templates/_helpers.tpl),

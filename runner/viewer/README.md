@@ -387,7 +387,7 @@ the singletons `_notes`, `preflight`, `accounts`, `policy`.
 | `PATCH /api/config/<key>` | shallow-merge into one row |
 | `DELETE /api/config/<key>` | remove one row |
 | `GET /api/config/audit?limit=` | the change history, newest first, with the before and after documents |
-| `POST /api/config/export` | render the store to a config document, for reading or diffing against an earlier export (never for committing); returns the text, and writes a file only when the body names a `path` |
+| `POST /api/config/export` | render the store to a config document, for reading or diffing against an earlier export (never for committing); returns `{ bytes, text }` and writes no file — a body naming a `path` is a 400 (the operator's CLI, `config-store.ts export [file]`, writes locally) |
 | `GET /api/config/proposed` | the drafts (`drafts.ts`): pending ones newest first, the ignored apart, each with its slug-derived billing, catalogue price, routing and e90 estimate, plus the token profile the estimates were priced at |
 | `POST /api/config/proposed/fetch` | one bounded read of the OpenRouter catalogue: proposes every tool-calling model the roster does not run and nobody ignored; 502 with the reason when the catalogue cannot be read |
 | `POST /api/config/proposed/ignore`, `…/unignore` | `{ model }`: remember a draft as ignored, or put it back |
@@ -409,6 +409,23 @@ and `x-wrathbench-note` name who changed what and why; the actor defaults to
 LAN behind `WRATHBENCH_VIEWER_LAN`), so "not public" is the whole of the
 authorisation — which is why a public handle answers 404 rather than the 403
 it gives for a withheld read route.
+
+What stops a web page on another site from writing through a LAN browser is
+`write-guard.ts`, in front of every route on a private handle: any method but
+GET, HEAD and OPTIONS must be `Content-Type: application/json` (a cross-site
+page can only send that after a CORS preflight, which the viewer never
+grants), must not carry `Sec-Fetch-Site: cross-site`, and, when it carries an
+`Origin`, must come from the viewer's own host — compared by host and port,
+not scheme, because behind the TLS ingress the browser's origin is https and
+the request the viewer sees is http. A refusal is a 415 or a 403 before any
+route runs. The dashboard sends every write as JSON, bodyless ones included.
+It is not authentication: a non-browser client is not what it guards, and DNS
+rebinding, where the attacking page shares the viewer's origin, needs a Host
+allowlist or a login in front of the viewer.
+
+A roster write is also held to the provider table (`runner/src/providers.ts`):
+an `apiKeyEnv` that is not a listed provider key, or a key sent towards a host
+its provider does not own, is a 400 and nothing is stored.
 
 Two things the page has to work around, and they are properties of this API
 rather than of the page. There is **no if-version and no conflict detection**:

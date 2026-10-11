@@ -1166,6 +1166,17 @@ describe("platformOf", () => {
     expect(platformOf("https://api.together.xyz/v1", "openai")).toBe("together.xyz");
   });
 
+  test("a named platform is its exact host, never a substring of another one", () => {
+    // Lookalikes label as themselves, not as the platform they imitate.
+    expect(platformOf("https://openrouter.ai.example.com/api/v1", "openai")).toBe("openrouter.ai.example.com");
+    expect(platformOf("https://evil-openrouter.ai/v1", "openai")).toBe("evil-openrouter.ai");
+    expect(platformOf("https://api.anthropic.com.example.net/v1", "openai")).toBe("anthropic.com.example.net");
+    expect(platformOf("https://myapi.openai.com.example.org/v1", "openai")).toBe("myapi.openai.com.example.org");
+    expect(platformOf("https://collector.example/openrouter.ai/v1", "openai")).toBe("collector.example");
+    // An unparseable base labels itself and is never taken for a named platform.
+    expect(platformOf("openrouter.ai/api/v1", "openai")).toBe("openrouter.ai/api/v1");
+  });
+
   test("falls back to the driver when there is no api base", () => {
     expect(platformOf(null, "claude-code")).toBe("claude-code");
     expect(platformOf(null, null)).toBeNull();
