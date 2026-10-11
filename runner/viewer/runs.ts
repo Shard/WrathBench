@@ -24,6 +24,7 @@
 
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "../src/rundb";
+import { holdsOnlyLaunchFiles } from "../src/launch-files";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ComparabilityView, ItemSample, MoveIntentView, RunRow, StateItemsRow, StatePoint } from "./api-types";
@@ -413,7 +414,8 @@ export function readRun(runsDir: string, runId: string, now = Date.now()): RunRo
 export function listRuns(runsDir: string, now = Date.now()): RunRow[] {
   if (!existsSync(runsDir)) return [];
   const ids = readdirSync(runsDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && isValidRunId(d.name) && !isArchiveDir(d.name))
+    // A directory holding only launch files is a launch that never became a run.
+    .filter((d) => d.isDirectory() && isValidRunId(d.name) && !isArchiveDir(d.name) && !holdsOnlyLaunchFiles(join(runsDir, d.name)))
     .map((d) => d.name);
   const rows = ids.map((id) => readRun(runsDir, id, now));
   rows.sort((a, b) => (b.startedAt ?? b.mtime ?? 0) - (a.startedAt ?? a.mtime ?? 0));

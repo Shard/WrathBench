@@ -13,7 +13,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignFileOf, writeCampaignFile } from "../src/campaign-file";
 import { CampaignLaunchError, PROBE_SHAPE_FLAGS } from "../src/campaign-launch";
-import { loadRunConfig } from "../src/config";
+import { episodeOverrideOf, loadRunConfig } from "../src/config";
 import { configFromArgs } from "../src/run";
 import { checkedIn, definition, joined } from "./fixtures/campaigns";
 import { tempDirs } from "./fixtures/temp-dirs";
@@ -134,6 +134,10 @@ describe("the shape a campaign file hands the run", () => {
     expect(c.objective).toBeUndefined();
     // Not launched by a pod: no image stamp.
     expect(c.image).toBeUndefined();
+    // The campaign's twelve-hour leash is not an override of the probing
+    // tier's ninety minutes — an unscored tier has no budget to depart from —
+    // so a probe that ends well is a counted run, and its square can settle.
+    expect(episodeOverrideOf(c)).toBe(false);
   });
 
   test("--episode probing may be spelled out; the result is the same launch", () => {

@@ -18,7 +18,8 @@
  * launch onto it overwrites the file. Anything else in it is a run.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { holdsOnlyLaunchFiles } from "./launch-files";
 import { join } from "node:path";
 import { z } from "zod";
 import {
@@ -37,15 +38,10 @@ import {
 } from "./campaign-def";
 import type { PublishedCampaign } from "./campaigns";
 
-/** The file a probe's run directory holds. */
+/** The file a probe's run directory holds; one of the `LAUNCH_FILES`. */
 export const CAMPAIGN_FILE = "campaign.json";
 
-/**
- * Files a launcher writes into a run directory before the run itself exists:
- * this module's `campaign.json` and the pod launcher's `image.json` (the image
- * a run pod resolved to). A directory holding only these is not a run.
- */
-export const LAUNCH_FILES: readonly string[] = [CAMPAIGN_FILE, "image.json"];
+export { LAUNCH_FILES, holdsOnlyLaunchFiles } from "./launch-files";
 
 export const campaignFileSchema = z
   .object({
@@ -154,16 +150,6 @@ export function writeCampaignFile(runDir: string, file: CampaignFile): string {
   const path = join(runDir, CAMPAIGN_FILE);
   writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`);
   return path;
-}
-
-/** Whether a directory is absent or holds nothing but launch files — free for a fresh launch. */
-export function holdsOnlyLaunchFiles(dir: string): boolean {
-  if (!existsSync(dir)) return true;
-  try {
-    return readdirSync(dir).every((name) => LAUNCH_FILES.includes(name));
-  } catch {
-    return false;
-  }
 }
 
 // --------------------------------------------------------------------- CLI

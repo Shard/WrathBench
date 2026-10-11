@@ -210,6 +210,15 @@ describe("/api/runs keeps every stamp, on and off the page", () => {
     expect(runs.find((r) => r.runId === "legacy")).toMatchObject({ campaign: "race-probe", campaignVersion: null, arm: null, ref: null });
   });
 
+  test("a directory holding only launch files is a launch that never became a run: not listed", async () => {
+    const f = fixture([stamped("fleet-a")]);
+    const launchOnly = join(f.runs, "fleet-m-race-probe-orc-warrior-base-test-model-20261011");
+    mkdirSync(launchOnly, { recursive: true });
+    writeFileSync(join(launchOnly, "campaign.json"), "{}");
+    const res = await handleFor(f)(new Request("http://x/api/runs"));
+    expect(((await res.json()) as RunsResponse).runs.map((r) => r.runId)).toEqual(["fleet-a"]);
+  });
+
   test("the public listing carries the version and the arm, and not the roster name", async () => {
     const f = fixture([stamped("fleet-a")]);
     const res = await handleFor(f, true)(new Request("http://x/api/runs"));

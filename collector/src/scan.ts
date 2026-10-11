@@ -12,6 +12,7 @@ import { readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { ARCHIVE_DIR } from "../../runner/viewer/archive-dir";
 import { isValidRunId } from "../../runner/viewer/runs";
+import { holdsOnlyLaunchFiles } from "../../runner/src/launch-files";
 
 export interface RunDirEntry {
   runId: string;
@@ -98,6 +99,8 @@ export function listRunDirs(
       continue;
     }
     const dir = join(runsDir, d.name);
+    // A launch that never became a run leaves only its launch files; nothing to ingest.
+    if (holdsOnlyLaunchFiles(dir)) continue;
     out.push({ runId: d.name, dir, archived: false, sig: signature(dir) });
   }
   // The whole top level first, then the archive: readdir order must not decide
