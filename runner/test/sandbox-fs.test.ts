@@ -1,9 +1,10 @@
 /**
- * The snippet child's filesystem confinement (part 3): the
- * child is exec'd under a Landlock ruleset by `runner/src/sandbox/confine.ts`,
- * so a snippet cannot read `.env` — or anything else outside the interpreter,
- * `runner/`, `sdk/` and `node_modules/` — by any path or API. Against the real
- * child process, no game stack.
+ * The snippet child's filesystem confinement: the child is exec'd under a
+ * Landlock ruleset by `runner/src/sandbox/confine.ts`, so a snippet cannot
+ * read `.env` — or anything else outside the interpreter, `runner/`, `sdk/`
+ * and `node_modules/` — by any path or API. Against the real child process, no
+ * game stack. The network, exec and scope halves of the same ruleset are in
+ * sandbox-net.test.ts; the ruleset itself is pinned in sandbox-confine.test.ts.
  *
  * Positive controls first: the child came up, can import its SDK, and can read
  * a file the allowlist admits, so an `EACCES` below is the ruleset and not a
@@ -76,18 +77,19 @@ describe("sandbox filesystem confinement", () => {
     expect((await host.evalSnippet(readCode("/tmp"))).value).toBe('"EACCES"');
   });
 
-  test("the refusal is the kernel's, not the module's: Bun.file and a child process hit it too", async () => {
+  test("the refusal is the kernel's, not the module's: Bun.file hits it, and a `cat` cannot even start", async () => {
     const host = makeHost();
     const bunFile = await host.evalSnippet(
       `try { await Bun.file(${JSON.stringify(join(REPO_ROOT, "LICENSE"))}).text(); return "READ"; } catch (e) { return e.code ?? String(e); }`,
     );
     expect(bunFile.value).toBe('"EACCES"');
-    // A spawned `cat` inherits the ruleset.
+    // No binary but bun itself is executable under the ruleset
+    // (sandbox-net.test.ts has the exec cases), so the spawn is refused before
+    // `cat` could try the read.
     const cat = await host.evalSnippet(
-      `const p = Bun.spawn(["cat", ${JSON.stringify(join(REPO_ROOT, "LICENSE"))}], { stdout: "pipe", stderr: "pipe" }); await p.exited; return p.exitCode;`,
+      `try { Bun.spawn(["cat", ${JSON.stringify(join(REPO_ROOT, "LICENSE"))}], { stdout: "pipe", stderr: "pipe" }); return "SPAWNED"; } catch (e) { return e.code ?? String(e); }`,
     );
-    expect(cat.ok).toBe(true);
-    expect(cat.value).not.toBe("0");
+    expect(cat.value).toBe('"EACCES"');
   });
 
   test("the child's environment carries the leased session secret and never the port secret", async () => {
