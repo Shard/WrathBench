@@ -128,6 +128,23 @@ fleet:
       memory: 6Gi
   tmpSizeLimit: 2Gi
 
+runPods:
+  # Repositories an arm may name; empty = the release runner alone.
+  allowedImages:
+    - registry.example.com/wrathbench/wrathbench-runner
+    - ghcr.io/example/wrathbench-runner
+  # A pull Secret the cluster created for the second repository.
+  imagePullSecrets:
+    - ghcr-pull
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+      ephemeral-storage: 256Mi
+    limits:
+      memory: 4Gi
+  tmpSizeLimit: 2Gi
+
 codex:
   enabled: false
 

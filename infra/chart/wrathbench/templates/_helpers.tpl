@@ -218,15 +218,25 @@ model key at all. */}}
 {{- end }}
 {{- end -}}
 
-{{/* The harness stamp on every trajectory. One string with the image tag and
-the worldserver's /health build, so a run says which revision produced it. */}}
-{{- define "wrathbench.harnessEnv" -}}
+{{/* What one EPISODE needs from its environment: the harness stamp on every
+trajectory (one string with the image tag, so a run says which revision
+produced it), the module, the runs directory. This is the whole of what
+run.ts reads from the chart, so it is also the env of a run pod
+(templates/run-pods.yaml), where the launcher overwrites the stamp with the
+arm's own image tag. The config store is deliberately NOT here: run.ts never
+opens it, and a run pod mounts no config. */}}
+{{- define "wrathbench.runEnv" -}}
 - name: WRATHBENCH_HARNESS_VERSION
   value: {{ include "wrathbench.tag" . | quote }}
 - name: WRATHBENCH_MODULE_URL
   value: "http://worldserver:8086"
 - name: WRATHBENCH_RUNS_DIR
   value: /wrathbench/data/runs
+{{- end -}}
+
+{{/* The run env plus the config store: every long-lived pod that reads the fleet config. */}}
+{{- define "wrathbench.harnessEnv" -}}
+{{ include "wrathbench.runEnv" . }}
 {{- /* The config store (docs/RUNBOOK.md "Where the config lives"), the
        only fleet config. Set here and not per pod because every pod that
        reads config must read the SAME file: the supervisor re-reads it, the

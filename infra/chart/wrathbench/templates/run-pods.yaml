@@ -1,0 +1,170 @@
+{{- /* The template as YAML, so it reads like the fleet pod beside it; rendered
+       to JSON below because the launcher parses JSON and nothing else. */}}
+{{- define "wrathbench.runPodTemplate" -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  # The run id can exceed 63 characters; the launcher labels the pod with its
+  # hash and annotates it with the id.
+  generateName: {{ include "wrathbench.fullname" . }}-run-
+  labels:
+    app.kubernetes.io/name: {{ include "wrathbench.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: run
+    {{- with .Values.podLabels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with .Values.podAnnotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # An episode runs once; the roster decides what happens next, never the kubelet.
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- with .Values.priorityClassName }}
+  priorityClassName: {{ . }}
+  {{- end }}
+  nodeSelector: {{ toYaml .Values.nodeSelector | nindent 4 }}
+  securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 4 }}
+  # run-roster's episode grace; the launcher sets the same number on each pod.
+  terminationGracePeriodSeconds: 90
+  {{- if .Values.runPods.imagePullSecrets }}
+  imagePullSecrets:
+    {{- range .Values.runPods.imagePullSecrets }}
+    - name: {{ . }}
+    {{- end }}
+  {{- end }}
+  containers:
+    - name: run
+      image: {{ include "wrathbench.image.runner" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 8 }}
+      workingDir: /wrathbench
+      # The entrypoint PREFIX for this repository's runner: the launcher appends
+      # `bun runner/src/run.ts` and the run's flags. An arm with its own
+      # `command` replaces the whole thing, tini included.
+      command: ["/usr/bin/tini", "--"]
+      env:
+        - name: WRATHBENCH_IN_CONTAINER
+          value: "1"
+        {{- include "wrathbench.runEnv" . | nindent 8 }}
+        {{- include "wrathbench.harnessSecretEnv" . | nindent 8 }}
+        {{- if .Values.codex.enabled }}
+        - name: CODEX_HOME
+          value: /home/bun/.codex
+        {{- end }}
+      resources: {{ toYaml .Values.runPods.resources | nindent 8 }}
+      volumeMounts:
+        - name: data
+          mountPath: /wrathbench/data/runs
+          subPath: runs
+        - name: data
+          mountPath: /wrathbench/data/wiki
+          subPath: wiki
+        {{- if .Values.codex.enabled }}
+        # Kept by the launcher for the codex driver only.
+        - name: codex-home
+          mountPath: /home/bun/.codex
+        {{- end }}
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: {{ include "wrathbench.fullname" . }}-data
+    {{- if .Values.codex.enabled }}
+    - name: codex-home
+      persistentVolumeClaim:
+        claimName: {{ include "wrathbench.fullname" . }}-codex-home
+    {{- end }}
+    - name: tmp
+      emptyDir:
+        sizeLimit: {{ .Values.runPods.tmpSizeLimit }}
+{{- end -}}
+{{- if .Values.fleet.enabled }}
+{{/*
+Run pods: one probe-campaign episode as its own pod (infra/run-pod.ts,
+docs/RUNBOOK.md "Run pods"). Three objects:
+
+  - the ServiceAccount the fleet pod runs as, with a Role over pods in THIS
+    namespace only (create, read, list, watch, delete; read a pod's log) and
+    nothing else — the launcher's whole vocabulary. No other pod in the chart
+    mounts a token (`automountServiceAccountToken: false`), so a model's
+    snippet sandbox, which runs inside the fleet pod today, is still the only
+    thing between a model and this token: the sandbox's env allowlist does not
+    forward it and its Landlock ruleset cannot read the projected volume.
+
+  - the run-pod TEMPLATE, rendered here from the same helpers the fleet pod is
+    built from and mounted into it as JSON. Cluster specifics (volumes,
+    nodeSelector, security context and seccomp, tini, pull secrets, the
+    enumerated Secret references, resources) stay in the chart; the launcher
+    fills in only image, command, args, env stamps and labels, and strips every
+    credential the episode's driver does not bill. The template carries the
+    release image, which is what an arm with no image of its own runs.
+
+    What a run pod does NOT get, deliberately: the config store (run.ts never
+    opens it), the database env (fixture staging is the fleet's), and any
+    ANTHROPIC_* variable (claude-code is subscription-only; infra/run-pod.ts
+    refuses to build a pod carrying one, and infra/run-pod.test.ts asserts it
+    on this rendering).
+
+  - the launcher's settings: which image repositories an arm may name. The
+    release runner's repository by default; a deploying cluster adds the
+    registry its PR builds are pushed to. An image outside the list, untagged,
+    or `:latest` is refused before a pod exists, so a store write cannot run an
+    arbitrary image with the fleet's tokens.
+
+The launcher ships dark: nothing here creates a pod until the fleet setting
+`policy.runPods` is "probes".
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-fleet
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-run-pods
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-run-pods
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "wrathbench.fullname" . }}-run-pods
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "wrathbench.fullname" . }}-fleet
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-run-pod-template
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+data:
+  pod.json: |
+    {{- include "wrathbench.runPodTemplate" . | fromYaml | toPrettyJson | nindent 4 }}
+  launcher.json: |
+    {{- dict "allowedImages" (default (list (printf "%s/%s" (include "wrathbench.registry" .) .Values.image.names.runner)) .Values.runPods.allowedImages) "imagePullSecrets" (default (list) .Values.runPods.imagePullSecrets) | toPrettyJson | nindent 4 }}
+{{- end }}

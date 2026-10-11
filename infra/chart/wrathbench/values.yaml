@@ -231,6 +231,32 @@ fleet:
   # exceeded, and that costs every live run.
   tmpSizeLimit: 2Gi
 
+# Run pods: a probe-campaign episode as its own pod, on the arm's image
+# (templates/run-pods.yaml, docs/RUNBOOK.md "Run pods"). Rendered always;
+# nothing is created until the fleet setting `policy.runPods` is "probes".
+runPods:
+  # Image REPOSITORIES an arm may name, matched on the part before the tag or
+  # digest, exactly or as a path prefix. Empty means the release runner alone:
+  # `<image.registry>/<image.names.runner>`. A cluster whose PR builds land
+  # elsewhere lists that repository too (e.g. ghcr.io/shard/wrathbench-runner);
+  # anything else, an untagged ref, or `:latest` is refused before a pod exists.
+  allowedImages: []
+  # Pull Secrets for run pods only, by name, on top of whatever the node already
+  # authenticates to. The deploying cluster creates the Secret (a GHCR token for
+  # a private package, say); the chart only references it.
+  imagePullSecrets: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+      ephemeral-storage: 256Mi
+    limits:
+      # One run.ts with its snippet sandbox and, for the CLI drivers, one CLI
+      # child — the share of the fleet's 6Gi that one episode takes.
+      memory: 4Gi
+  # As the fleet's /tmp, for one episode.
+  tmpSizeLimit: 2Gi
+
 # The `codex` driver's ChatGPT-subscription lane (runner/README.md, Drivers).
 # The CLI refreshes the token in place, so the lane is MOUNTED, never copied: a
 # second live copy invalidates the first ("refresh token was already used").
