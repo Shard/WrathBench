@@ -51,7 +51,8 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { parseFleet, rosterKeyRefusal } from "../../infra/run-fleet-config";
+import { parseFleet } from "../../infra/run-fleet-config";
+import { rosterKeyRefusal } from "./providers";
 import {
   CAMPAIGN_DEFS_PREFIX,
   campaignDefKey,

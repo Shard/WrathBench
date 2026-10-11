@@ -12,8 +12,9 @@ import { harnessSeries } from "../runner/src/comparability";
 import { isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
-import { apiKeyRefusal, DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
+import { rosterKeyRefusal } from "../runner/src/providers";
 import {
+  applyPairRefusals,
   campaignWork,
   parseCampaignBlocks,
   pinnedCampaignJobName,
@@ -845,27 +846,6 @@ function refJobNames(name: string, jobs: readonly FleetJob[], campaigns: readonl
   return [...names];
 }
 
-/**
- * Why a roster entry's `apiKeyEnv` may not be sent to its `apiBase`
- * (`runner/src/providers.ts`), or null when the pairing holds. The defaults
- * are the runner's: no base is OpenRouter and no key name is `OPENROUTER_KEY`,
- * so an entry stating only a non-OpenRouter base is refused — it would send
- * the OpenRouter key there. Only the openai driver sends a key; the CLI
- * drivers are given no `--api-key-env` at all (`episodeArgv`).
- *
- * `env` is where the self-hosted hosts are read from (deploy-time config),
- * injected so a test states the deployment it means.
- */
-export function rosterKeyRefusal(
-  e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown },
-  env: Record<string, string | undefined> = process.env,
-): string | null {
-  if ((e.driver ?? "openai") !== "openai") return null;
-  if (e.apiKeyEnv !== undefined && typeof e.apiKeyEnv !== "string") return "apiKeyEnv must be the NAME of the env var holding the key";
-  if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
-  return apiKeyRefusal(e.apiKeyEnv ?? DEFAULT_API_KEY_ENV, e.apiBase ?? DEFAULT_API_BASE, env);
-}
-
 /** What `parseFleet` is told that the document cannot say. */
 export interface ParseFleetOptions {
   /**
@@ -906,16 +886,13 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
   const roster = parseRoster(o.roster);
-  // Before the campaigns: where an arm can launch (`policy.runPods`) is part of
-  // whether a campaign's (assignment, arm) pair is refused.
   const { policy, maxConcurrent } = parsePolicy(o.policy);
   // Never throws: a campaign row or a published definition that does not read
   // is refused by key below, and the roster, the policy and every other
   // campaign load as if it were not there. One bad row must not empty the board.
-  const { campaigns, definitions: campaignDefs, refused: campaignRefusals } = parseCampaignBlocks(o["campaign-defs"], o.campaigns, roster, {
-    runPods: policy.runPods,
-    ...(opts.onCluster !== undefined ? { onCluster: opts.onCluster } : {}),
-  });
+  // The (assignment, arm) pair refusals come last, once the roster's own
+  // refusals are settled (`applyPairRefusals` below).
+  const { campaigns, definitions: campaignDefs, refused: blockRefusals } = parseCampaignBlocks(o["campaign-defs"], o.campaigns);
   const jobs: FleetJob[] = [];
   const names = new Set<string>();
   const add = (job: FleetJob): void => {
@@ -932,7 +909,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   // version nobody has published — is left out by name, so one row cannot take the rest of
   // the config down. It is also a pin refusal, so `--status` and the
   // supervisor log say it in the same place a refused pin is said.
-  for (const r of campaignRefusals) {
+  for (const r of blockRefusals) {
     if (r.campaign !== undefined) refusals.push({ pin: `campaign ${r.campaign}`, why: r.reason, jobs: [] });
   }
   // Strict keys BEFORE the account rules, deliberately: a job the harness
@@ -1042,6 +1019,17 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
       jobs: refJobNames(name, jobs, campaigns),
     });
   }
+  // Last, against the roster as refused: a campaign's (assignment, arm) pair
+  // that would fail at launch — an entry refused above, an arm with nowhere
+  // to run (`policy.runPods`, `onCluster`), a doubled compaction window — is
+  // parked and shown on its squares, never offered to a planner.
+  const campaignRefusals = [
+    ...blockRefusals,
+    ...applyPairRefusals(campaigns, roster, {
+      runPods: policy.runPods,
+      ...(opts.onCluster !== undefined ? { onCluster: opts.onCluster } : {}),
+    }),
+  ];
   return { notes, preflight, accounts, roster, jobs, campaigns, campaignDefs, campaignRefusals, policy, maxConcurrent, refusals };
 }
 

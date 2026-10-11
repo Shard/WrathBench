@@ -10,6 +10,8 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { readFleetRoster } from "../viewer/models";
+import { campaignsView } from "../viewer/campaigns";
+import { projectCampaigns } from "../viewer/public-projection";
 import { ConfigRejected, ConfigStore, readFleetConfig } from "../src/config-store";
 import { parseFleet } from "../../infra/run-fleet-config";
 import { definition, publication } from "./fixtures/campaigns";
@@ -117,6 +119,48 @@ describe("the generic write paths", () => {
     expect(roster.campaigns.map((c) => c.name)).toEqual(["probe"]);
     expect(roster.campaignRefusals.map((r) => r.key)).toEqual(["campaigns/legacy"]);
     expect(roster.models.find((m) => m.name === "glm")?.tier).toBe("t2");
+  });
+
+  test("an assigned entry the provider table now refuses is refused by every reader: the supervisor, the store's next write of it, and the campaign squares", () => {
+    // Written while the deployment listed the self-hosted host; read after it
+    // stopped listing it (WRATHBENCH_LOCAL_MODEL_HOSTS, the chart's
+    // localModelHosts). Each reader states the deployment it means.
+    const LAN = { WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20:1234" };
+    const lan = { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" };
+    const path = join(tempDir("wb-campaign-provider-"), "config.sqlite");
+    const then = new ConfigStore(path, { env: LAN });
+    then.seed({ ...CONFIG, roster: { ...CONFIG.roster, lan } }, { actor: "fixture" });
+    then.publishDefinition(publication(def));
+    then.put("campaigns/probe", { version: 1, assignments: [{ model: "lan" }, { model: "glm" }] });
+    then.close();
+    const now = new ConfigStore(path, { env: {} });
+    // The store will not write that pairing again, and an edit elsewhere still goes through.
+    expect(() => now.put("roster/lan2", lan)).toThrow(/names no self-hosted model host/);
+    now.patch("roster/glm", { tier: "t2" });
+    now.close();
+    const read = readFleetConfig(path);
+    if (read.status !== "ok") throw new Error(read.status);
+    const config = parseFleet(JSON.parse(read.text), { env: {} });
+    expect(config.refusals.map((r) => r.pin)).toEqual(["roster lan"]);
+    const arms = def.arms.map((a) => a.id);
+    expect(config.campaigns[0]!.refusedPairs.map((p) => `${p.ref}:${p.arm}`)).toEqual(arms.map((a) => `lan:${a}`));
+    // The page reads the same verdict off the store: lan's squares refused, glm's owed.
+    const roster = readFleetRoster(path, null, {});
+    expect(roster.campaignRefusals.map((r) => r.key)).toEqual(arms.map((a) => `probe@1:lan:${a}`));
+    const view = campaignsView([], roster, () => true);
+    const probe = view.campaigns.find((c) => c.id === "probe")!;
+    const squares = probe.grid.flatMap((line) => line.squares);
+    const lanSquares = squares.filter((q) => q.column.startsWith("lan/"));
+    expect(lanSquares.length).toBe(def.cells.length * arms.length);
+    expect(lanSquares.every((q) => q.refused === "roster entry lan is refused, so nothing schedules it")).toBe(true);
+    expect(squares.filter((q) => q.column.startsWith("glm/")).every((q) => q.refused === null)).toBe(true);
+    // The public page says the entry is refused and never where its key would have gone.
+    const pub = JSON.stringify(projectCampaigns({ now: 0, campaigns: view.campaigns, refused: view.refused }));
+    expect(pub).toContain("roster entry lan is refused");
+    expect(pub).not.toContain("192.168.100.20");
+    // Under the deployment that lists the host, nothing is refused.
+    expect(readFleetRoster(path, null, LAN).campaignRefusals).toEqual([]);
+    expect(parseFleet(JSON.parse(read.text), { env: LAN }).refusals).toEqual([]);
   });
 
   test("a row naming an unpublished version is accepted by the store and refused by name on read", () => {

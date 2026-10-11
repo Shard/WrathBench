@@ -1213,7 +1213,11 @@ campaign file it is given. An arm's `args` come after the supervisor's own
 and may not restate a shape flag or a supervisor flag; `--compact-window` is
 the exception. Assign an arm that sets the window only roster entries on the
 claude-code driver that set none themselves: any other pair is refused before
-it launches, and listed as `<id>@<v>:<ref>:<arm>`.
+it launches, and listed as `<id>@<v>:<ref>:<arm>`. So is every pair of an
+assignment whose roster entry the fleet refuses (an unknown key, a provider
+key towards a host the provider table does not pair it with, a subscription
+the policy does not list): the campaign sweeps its other assignments, and the
+entry's own refusal, with its reason, is under `--status`'s refused pins.
 
 Before you enable race-probe@1, run the start gate once, and enable it only
 when it passes. It creates, walks and takes a quest at each start no run had

@@ -647,6 +647,53 @@ describe("campaigns: probe sweeps as the third lane", () => {
     expect(both.campaignRefusals[1]!.reason).toMatch(/runs only in a run pod.*; arm w200k sets --compact-window 200k/);
   });
 
+  test("an assignment whose roster entry is refused is a refused pair on every arm: a pinned campaign moves past it and the policy never offers it", () => {
+    // The roster's refusals (a provider key towards a host the table does not
+    // pair it with, here) are settled before the pairs are: otherwise the
+    // refused entry's square was a pinned campaign's next square on every
+    // tick, gated by the planner, and the campaign's other assignment never
+    // got the account.
+    const roster = { ...ROSTER_BASE, away: { tier: "t1", model: "vendor/away", apiBase: "https://collector.example/v1", apiKeyEnv: "OPENROUTER_KEY" } };
+    const doc = (account?: string): unknown =>
+      fleetJson([], {
+        roster,
+        campaigns: { "race-probe": { version: 1, ...(account !== undefined ? { account } : {}), assignments: [{ model: "away" }, { model: "glm" }] } },
+      });
+    const pinned = parseFleet(doc("SHAKEOUT"), { env: {} });
+    // Refused as the entry, by name, with the whole why; the file stands.
+    expect(pinned.refusals.map((r) => r.pin)).toEqual(["roster away"]);
+    expect(pinned.refusals[0]!.why).toMatch(/OPENROUTER_KEY is OpenRouter's key .* not collector.example/);
+    expect(pinned.campaigns.map((c) => [c.name, c.enabled])).toEqual([["race-probe", true]]);
+    // And as each of its pairs, keyed for the page. The pair reason names the
+    // entry, never the host: it reaches the public campaigns page.
+    const race = pinned.campaigns[0]!;
+    expect(race.refusedPairs.map((p) => `${p.ref}:${p.arm}`)).toEqual(race.arms.map((a) => `away:${a.id}`));
+    expect(pinned.campaignRefusals.map((r) => r.key)).toEqual(race.arms.map((a) => `race-probe@1:away:${a.id}`));
+    expect(pinned.campaignRefusals.every((r) => r.reason === "roster entry away is refused, so nothing schedules it")).toBe(true);
+    // Shown: away's squares stay in the tally, each refused; glm's are owed.
+    const squares = campaignSquares(race, Object.keys(pinned.roster), []);
+    expect(squares.filter((q) => q.ref === "away").every((q) => q.refused !== null)).toBe(true);
+    expect(squares.filter((q) => q.ref === "glm").every((q) => q.refused === null)).toBe(true);
+    // Parked: the pinned campaign's job is glm's square, not away's.
+    expect(pinnedCampaignJobs(pinned, []).map((j) => [j.ref, j.probe?.cell])).toEqual([["glm", race.cells[0]!.id]]);
+    // Unpinned, the fan-out offers glm's squares only, even over a catalog that names away.
+    const policy = parseFleet(doc(), { env: {} });
+    expect(new Set(campaignWork(policy.campaigns, Object.keys(policy.roster), []).map((w) => w.model))).toEqual(new Set(["glm"]));
+    // A pair refused on more than one ground says each, the entry first.
+    const windows = parseFleet(
+      fleetJson([], { roster, policy: { runPods: "probes" }, campaigns: { "window-probe": { version: 1, assignments: [{ model: "away" }, { model: "son" }] } } }),
+      { env: {} },
+    );
+    expect(windows.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:away:auto", "window-probe@1:away:w200k"]);
+    expect(windows.campaignRefusals[1]!.reason).toMatch(/^roster entry away is refused, so nothing schedules it; arm w200k sets --compact-window 200k/);
+    // The deployment that pairs the key with that host has nothing to refuse.
+    const lan = { ...ROSTER_BASE, away: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" } };
+    const listed = parseFleet(fleetJson([], { roster: lan, campaigns: { "race-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "away" }, { model: "glm" }] } } }), { env: LAN_ENV });
+    expect(listed.refusals).toEqual([]);
+    expect(listed.campaignRefusals).toEqual([]);
+    expect(pinnedCampaignJobs(listed, []).map((j) => j.ref)).toEqual(["away"]);
+  });
+
   test("a pinned campaign sharing an account with an enabled job is refused, not the file", () => {
     // Jobs come before campaigns in the pin order, so the job keeps the account.
     const config = parseFleet(

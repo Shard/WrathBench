@@ -143,6 +143,12 @@ export function armArg(arm: CampaignArm, flag: string): string | undefined {
 export interface PairRosterEntry {
   driver?: string | undefined;
   compactWindow?: string | undefined;
+  /**
+   * The fleet parser's refusal of the whole entry (`FleetRosterEntry.refused`:
+   * a key it does not read, a provider key towards a host the provider table
+   * does not pair it with, a subscription the policy does not list).
+   */
+  refused?: string | undefined;
 }
 
 /**
@@ -172,6 +178,13 @@ export interface PairLaunchContext {
  *   an arm that sets `--compact-window` cannot run an assignment whose roster
  *   entry sets one too (the run would get the flag twice), nor one off the
  *   claude-code driver (no other harness has the window).
+ * - **A refused roster entry.** Every pair of an assignment whose entry the
+ *   parser refused: nothing schedules that entry, so its squares are parked
+ *   here rather than offered. Otherwise a pinned campaign's next square could
+ *   be one the planner then gates on the entry, every tick, and the
+ *   campaign's other assignments would never get the account. The reason
+ *   names the entry and not its refusal, which can name a host and goes to
+ *   the public page; the refusal itself is the config's (`refusals`).
  *
  * One entry per pair, its reasons joined.
  */
@@ -186,6 +199,7 @@ export function campaignPairRefusals(
     if (entry === undefined) continue;
     for (const arm of c.arms) {
       const reasons: string[] = [];
+      if (entry.refused !== undefined) reasons.push(`roster entry ${a.model} is refused, so nothing schedules it`);
       const pins = arm.image !== undefined ? `image ${arm.image}` : arm.command !== undefined ? `command ${arm.command.join(" ")}` : undefined;
       if (pins !== undefined && launch !== undefined) {
         if (launch.runPods !== "probes") {
@@ -325,6 +339,23 @@ export function parseCampaigns(
 }
 
 /**
+ * Set each campaign's `refusedPairs` against the roster, and against where the
+ * fleet can launch when that is given, and return them as `refused[]` entries.
+ */
+export function applyPairRefusals(
+  campaigns: readonly Campaign[],
+  roster: Readonly<Record<string, PairRosterEntry>>,
+  launch?: PairLaunchContext,
+): CampaignRefusal[] {
+  const pairs: CampaignRefusal[] = [];
+  for (const camp of campaigns) {
+    camp.refusedPairs = campaignPairRefusals(camp, roster, launch);
+    for (const p of camp.refusedPairs) pairs.push({ key: pairRefusalKey(camp, p.ref, p.arm), reason: p.reason });
+  }
+  return pairs;
+}
+
+/**
  * Both blocks at once, as every reader of the config wants them, with each
  * campaign's pair refusals found against the roster when one is given, and
  * against where the fleet can launch when that is given too.
@@ -337,13 +368,7 @@ export function parseCampaignBlocks(
 ): { definitions: PublishedCampaign[]; campaigns: Campaign[]; refused: CampaignRefusal[] } {
   const d = parseCampaignDefinitions(rawDefs);
   const c = parseCampaigns(rawRows, d.definitions);
-  const pairs: CampaignRefusal[] = [];
-  if (roster !== undefined) {
-    for (const camp of c.campaigns) {
-      camp.refusedPairs = campaignPairRefusals(camp, roster, launch);
-      for (const p of camp.refusedPairs) pairs.push({ key: pairRefusalKey(camp, p.ref, p.arm), reason: p.reason });
-    }
-  }
+  const pairs = roster === undefined ? [] : applyPairRefusals(c.campaigns, roster, launch);
   return { definitions: d.definitions, campaigns: c.campaigns, refused: [...d.refused, ...c.refused, ...pairs] };
 }
 
