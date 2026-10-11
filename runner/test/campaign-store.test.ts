@@ -2,7 +2,8 @@
  * Published campaign definitions in the config store: written once, only by
  * a publish, read by every reader through the same document, and out of
  * reach of every generic write path — the CLI's set/patch/delete, the
- * viewer's /config routes and a reseed.
+ * viewer's /config routes and a seed, which accepts a definition only exactly
+ * as it is already stored.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -124,29 +125,47 @@ describe("the generic write paths", () => {
 });
 
 describe("a reseed", () => {
-  test("keeps published definitions, and a document that carries one is held to write-once", () => {
+  test("keeps published definitions, and accepts one in the document only exactly as it is stored", () => {
     const { s } = store();
     s.publishDefinition(publication(def));
     s.seed({ ...CONFIG, roster: { glm: { tier: "t2", model: "z-ai/glm-5.2:free" } } }, { force: true });
     expect(s.get("campaign-defs/probe@1")).toEqual(publication(def));
-    // An export carries them back unchanged: accepted.
+    // An export carries them back unchanged: accepted, and nothing is written for them.
+    const before = s.audit(1000).filter((a) => a.key.startsWith("campaign-defs/")).length;
     s.seed(s.render(), { force: true });
     expect(s.get("campaign-defs/probe@1")).toEqual(publication(def));
+    expect(s.audit(1000).filter((a) => a.key.startsWith("campaign-defs/")).length).toBe(before);
     // A document that would change one: refused, and nothing is replaced.
     const changed = { ...s.render(), "campaign-defs": { "probe@1": publication(definition({ id: "probe", question: "changed" })) } };
     expect(() => s.seed(changed, { force: true })).toThrow(/never changed/);
+    // Even a different publishedAt is a different row: identical means identical.
+    const restamped = { ...s.render(), "campaign-defs": { "probe@1": publication(def, 1) } };
+    expect(() => s.seed(restamped, { force: true })).toThrow(/never changed/);
     expect((s.get("roster/glm") as { tier: string }).tier).toBe("t2");
     s.close();
   });
 
-  test("restores a definition a fresh store does not hold, checked as a publish checks it", () => {
-    const path = join(tempDir("wb-campaign-reseed-"), "config.sqlite");
-    const s = new ConfigStore(path);
-    s.seed({ ...CONFIG, "campaign-defs": { "probe@1": publication(def) } });
-    expect(s.get("campaign-defs/probe@1")).toEqual(publication(def));
+  test("never publishes: a definition the store does not hold is refused, valid or not, and the store is untouched", () => {
     const fresh = new ConfigStore(join(tempDir("wb-campaign-reseed-"), "config.sqlite"));
+    expect(() => fresh.seed({ ...CONFIG, "campaign-defs": { "probe@1": publication(def) } })).toThrow(/does not publish campaign definitions.*campaign-publish/);
     expect(() => fresh.seed({ ...CONFIG, "campaign-defs": { "probe@1": { ...publication(def), hash: "sha256:0000000000000000" } } })).toThrow(ConfigRejected);
-    s.close();
+    expect(fresh.isEmpty()).toBe(true);
+    // The same on a seeded store under --force: a second definition rides in nowhere.
+    const { s } = store();
+    s.publishDefinition(publication(def));
+    const other = definition({ id: "other" });
+    expect(() => s.seed({ ...s.render(), "campaign-defs": { ...defsOf(s), "other@1": publication(other) } }, { force: true })).toThrow(/does not publish/);
+    expect(s.get("campaign-defs/other@1")).toBeUndefined();
+    // Published, the same document seeds.
+    s.publishDefinition(publication(other));
+    s.seed({ ...s.render() }, { force: true });
+    expect(s.get("campaign-defs/other@1")).toEqual(publication(other));
     fresh.close();
+    s.close();
   });
 });
+
+/** The `campaign-defs` block a store renders. */
+function defsOf(s: ConfigStore): Record<string, unknown> {
+  return (s.render()["campaign-defs"] ?? {}) as Record<string, unknown>;
+}

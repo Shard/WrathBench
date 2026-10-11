@@ -120,7 +120,7 @@ import { loadRunConfig } from "../runner/src/config";
 import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/config-store";
 import { parseCampaigns } from "../runner/src/campaigns";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
-import { checkedIn, defsBlock, definition, joined } from "../runner/test/fixtures/campaigns";
+import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
 import { backoffMs, episodeArgv, resolve } from "./run-roster";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";
@@ -916,7 +916,8 @@ describe("rereadFleet", () => {
     expect(rereadFleet(good, () => readFleetConfig(db)).empty).toBe(true);
 
     const store = new ConfigStore(db);
-    store.seed(seed);
+    // Its campaign definitions published first: a seed writes none.
+    seedPublished(store, seed);
     expect(rereadFleet(good, () => readFleetConfig(db)).config).toEqual(good);
     store.patch("roster/glm", { tier: "t2" }, { actor: "mark" });
     store.close();

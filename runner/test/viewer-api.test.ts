@@ -20,7 +20,7 @@ import { type RunStore, localRunStore } from "../viewer/clickhouse";
 import { redactRawLine, redactSecrets } from "../viewer/tail";
 import { readRun } from "../viewer/runs";
 import { tempDirs } from "./fixtures/temp-dirs";
-import { defsBlock, definition } from "./fixtures/campaigns";
+import { defsBlock, definition, seedPublished } from "./fixtures/campaigns";
 import type { CampaignsResponse } from "../viewer/api-types";
 
 const tempDir = tempDirs();
@@ -122,7 +122,7 @@ function campaignizeScoreabilityFixture(runs: string): string {
   }
   const fleetPath = join(runs, "config.sqlite");
   const store = new ConfigStore(fleetPath);
-  store.seed({
+  seedPublished(store, {
     accounts: { pool: ["RUNNER"] },
     roster: { m: { model: "m:free", tier: "t1" } },
     "campaign-defs": defsBlock(definition({ id: "solo", cells: [{ id: "coldridge", race: 3, class: 2 }] })),

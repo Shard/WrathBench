@@ -273,7 +273,9 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
             publishedAt }. Written ONLY by runner/src/campaign-publish.ts and never changed: `set`,
             `patch`, `delete`, the /config page and a reseed all refuse the prefix, and a second
-            publish with a different hash is refused ("Probe campaigns", below).
+            publish with a different hash is refused ("Probe campaigns", below). A seeded document
+            may carry them only exactly as the store holds them (an export, restored), so a
+            fresh store gets its definitions by publishing them, then seeding the rest.
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
             account?, excludeUnhealthy? } }, strict. The shape (cells, arms, start, leash, stop

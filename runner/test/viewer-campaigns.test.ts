@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { ConfigStore, splitFleet } from "../src/config-store";
 import type { CampaignsResponse, RunsResponse } from "../viewer/api-types";
-import { checkedIn, defsBlock } from "./fixtures/campaigns";
+import { checkedIn, defsBlock, seedPublished } from "./fixtures/campaigns";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -119,7 +119,7 @@ function fixture(probes: Probe[], fleet?: unknown, raw = false): { runs: string;
     if (raw) seedRaw(fleetPath, fleet);
     else {
       const store = new ConfigStore(fleetPath);
-      store.seed(fleet);
+      seedPublished(store, fleet as Record<string, unknown>);
       store.close();
     }
   }

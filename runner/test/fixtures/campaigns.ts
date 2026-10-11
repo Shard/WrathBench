@@ -9,6 +9,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignDefinitionSchema, campaignHash, campaignRef, type CampaignDefinition, type PublishedCampaignDoc } from "../../src/campaign-def";
 import { parseCampaignBlocks, type Campaign, type PairRosterEntry, type PublishedCampaign } from "../../src/campaigns";
+import type { ConfigStore } from "../../src/config-store";
 
 export const CAMPAIGNS_DIR = join(import.meta.dir, "..", "..", "campaigns");
 
@@ -67,4 +68,15 @@ export function joined(
 ): { campaigns: Campaign[]; definitions: PublishedCampaign[] } {
   const r = parseCampaignBlocks(defsBlock(...defs), rows, roster);
   return { campaigns: r.campaigns, definitions: r.definitions };
+}
+
+/**
+ * Seed a store with a config document the way a deployment gets one: its
+ * `campaign-defs` block published first, then the document seeded. A seed
+ * writes no definition, and accepts one only as the store already holds it.
+ */
+export function seedPublished(store: Pick<ConfigStore, "publishDefinition" | "seed">, doc: Record<string, unknown>): void {
+  const defs = (doc["campaign-defs"] ?? {}) as Record<string, unknown>;
+  for (const pub of Object.values(defs)) store.publishDefinition(pub);
+  store.seed(doc);
 }

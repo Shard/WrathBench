@@ -56,6 +56,7 @@ import {
   CAMPAIGN_DEFS_PREFIX,
   campaignDefKey,
   campaignHash,
+  canonicalJson,
   issuesOf,
   publishedCampaignSchema,
   type PublishedCampaignDoc,
@@ -121,10 +122,12 @@ export function isConfigKey(key: string): boolean {
  *   `set`/`patch`/`delete` and the viewer's `/config` routes) refuses the
  *   prefix: a hand-written row would carry no provenance, and a delete
  *   followed by a re-publish would defeat write-once.
- * - **A reseed keeps them.** `seed --force` replaces the rest of the config
- *   and leaves these, and a seeded document that carries some goes through
- *   the same write-once check, so restoring an export reproduces them and
- *   cannot change one.
+ * - **A seed never writes one.** `seed --force` replaces the rest of the
+ *   config and leaves these. A seeded document may carry them only as they
+ *   are already stored — an export of this store, restored for a rollback —
+ *   and those are a no-op; a definition the store does not hold, or holds
+ *   differently, is refused with a pointer to the publish CLI. So publishing
+ *   is the one writer, and a fresh store gets its definitions by publishing.
  */
 export function isPublishedKey(key: string): boolean {
   return key === "campaign-defs" || key.startsWith(CAMPAIGN_DEFS_PREFIX);
@@ -659,8 +662,10 @@ export class ConfigStore {
    * unless `force`, which replaces every config row and records one audit line
    * per key — the history says the store was reseeded, not that nothing
    * happened. Drafts are not config and survive it; published campaign
-   * definitions are config and survive it too ("Published definitions"), and
-   * a document that carries some is held to write-once against them.
+   * definitions are config and survive it too ("Published definitions"). A
+   * seed writes none: a document may carry a definition only exactly as it is
+   * already stored (an export restored for a rollback), and anything else
+   * under `campaign-defs` is refused — publishing is the one writer.
    */
   seed(doc: unknown, opts: PutOptions & { force?: boolean } = {}): { seeded: boolean; keys: number } {
     this.requireWritable();
@@ -669,17 +674,18 @@ export class ConfigStore {
     const config = existing.filter((r) => !isPublishedKey(r.key));
     if (config.length > 0 && opts.force !== true) return { seeded: false, keys: existing.length };
     const split = splitFleet(doc);
-    const incoming = split.filter((r) => r.key.startsWith(CAMPAIGN_DEFS_PREFIX));
-    for (const r of incoming) {
-      const pub = checkedPublication(r.value, r.key);
-      if (campaignDefKey(pub.definition) !== r.key) throw new ConfigRejected(`${r.key} holds ${campaignDefKey(pub.definition)}`);
+    for (const r of split.filter((x) => x.key.startsWith(CAMPAIGN_DEFS_PREFIX))) {
       const was = kept.find((k) => k.key === r.key);
-      if (was !== undefined && hashOf(was.value) !== pub.hash) {
-        throw new ConfigRejected(`${r.key} is already published as ${String(hashOf(was.value))}; the document's hashes to ${pub.hash} — a published version is never changed`);
+      if (was === undefined) {
+        throw new ConfigRejected(
+          `${r.key}: a seed does not publish campaign definitions — publish it with runner/src/campaign-publish.ts, then seed the rest`,
+        );
+      }
+      if (canonicalJson(was.value) !== canonicalJson(r.value)) {
+        throw new ConfigRejected(`${r.key} is already published as ${String(hashOf(was.value))}, and the document holds it differently — a published version is never changed`);
       }
     }
-    const added = incoming.filter((r) => !kept.some((k) => k.key === r.key));
-    const rows = [...split.filter((r) => !isPublishedKey(r.key)), ...added];
+    const rows = split.filter((r) => !isPublishedKey(r.key));
     // The document as written (a key the renderer would drop is still
     // refused by name), then the config it leaves behind, definitions kept.
     validateFleet(doc);
@@ -782,7 +788,7 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
   delete <key>              remove one row; validated
   publish -                 write a published campaign definition read from stdin, once (what
                             runner/src/campaign-publish.ts --k8s pipes in; campaign-defs/* is refused by
-                            set, patch and delete)
+                            set, patch and delete, and seed writes none)
   audit [n]                 the last n changes (default 20)
 
   --db <path>     the store (default $WRATHBENCH_CONFIG_DB, else $WRATHBENCH_DATA/config.sqlite)
