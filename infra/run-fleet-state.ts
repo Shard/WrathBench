@@ -39,6 +39,7 @@ import {
   type ModelState,
   modelStates,
   type RunFact,
+  type RunPodsMode,
   type StartingCharacter,
 } from "../runner/src/models";
 
@@ -140,7 +141,7 @@ export function jobLogPath(job: string, stamp: string): string {
  */
 export function jobArgv(
   spawn: JobSpawn,
-  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean },
+  opts: { stamp: string; until: string | undefined; resumeRoster?: boolean; runPods?: RunPodsMode },
 ): string[] {
   const argv = [
     ROSTER_SH,
@@ -152,6 +153,11 @@ export function jobArgv(
   ];
   if (spawn.loop) argv.push("--loop");
   if (opts.until !== undefined) argv.push("--until", opts.until);
+  // The fleet setting as this tick read it, handed to the roster that will act
+  // on it. Only when on, so every argv a pre-pod config produced is unchanged;
+  // a roster started under `probes` keeps it for its life, as it keeps its
+  // stamp — the switch reaches a running job at its next spawn.
+  if (opts.runPods !== undefined && opts.runPods !== "off") argv.push("--run-pods", opts.runPods);
   // A resume spawn always reattaches: the roster must find the paused run's
   // row and --resume it rather than launch the id fresh.
   if (opts.resumeRoster === true || spawn.resumeRunId !== undefined) argv.push("--resume-roster");

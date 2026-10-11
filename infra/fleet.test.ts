@@ -911,6 +911,13 @@ describe("jobArgv", () => {
     // The supervisor has no deadline; steering is the config store.
     expect(jobArgv(spawn({ loop: true }), { stamp: "20260822", until: undefined })).not.toContain("--until");
   });
+
+  test("the run-pods setting reaches the roster only when it is on, so a pre-pod argv is unchanged", () => {
+    expect(jobArgv(spawn(), { stamp: "20260822", until: undefined })).not.toContain("--run-pods");
+    expect(jobArgv(spawn(), { stamp: "20260822", until: undefined, runPods: "off" })).not.toContain("--run-pods");
+    const argv = jobArgv(spawn(), { stamp: "20260822", until: undefined, runPods: "probes" });
+    expect(argv[argv.indexOf("--run-pods") + 1]).toBe("probes");
+  });
 });
 
 describe("diffJobs", () => {
@@ -1276,6 +1283,11 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
     expect(() => parseFleet(nextShape({ policy: { paid: { runsPerEpisode: { e90: 3 } } } }))).toThrow(/policy.paid.runsPerEpisode is not a 0.5 key/);
     // What the policy block still carries: where runs execute, and how many.
     expect(parseFleet(nextShape({ policy: { paid: { maxConcurrent: 2 } } })).policy.paid).toEqual({ maxConcurrent: 2 });
+    // Where a probe EXECUTES is in the same sentence: off by default, strict.
+    expect(parseFleet(nextShape({})).policy.runPods).toBe("off");
+    expect(parseFleet(nextShape({ policy: { runPods: "probes" } })).policy.runPods).toBe("probes");
+    expect(() => parseFleet(nextShape({ policy: { runPods: "all" } }))).toThrow(/policy.runPods must be one of "off", "probes"/);
+    expect(() => parseFleet(nextShape({ policy: { runPods: true } }))).toThrow(/policy.runPods must be one of/);
     expect(() => parseFleet(nextShape({ queue: [{ ref: "glm", episode: "e90" }, { ref: "glm", episode: "e90" }] }))).toThrow(/share the name/);
     // The roster policy applies to every entry.
     expect(() => parseFleet(nextShape({ roster: { bad: { tier: "t1", model: "sonnet" } }, queue: [] }))).toThrow(/roster policy/);

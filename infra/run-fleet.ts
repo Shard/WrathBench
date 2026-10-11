@@ -176,6 +176,8 @@ import {
 } from "./run-fleet-state";
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
 import { accountHeldBy, releaseRunSession } from "./run-roster";
+import { K8sClient } from "./k8s-client";
+import { rosterHasRunPod } from "./run-pod";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import {
@@ -1297,7 +1299,7 @@ async function main(): Promise<void> {
     // A respawn (job toggled off then on again the same day) resumes the
     // materialized roster instead of relaunching finished runs from scratch.
     const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
-    const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster });
+    const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster, runPods: config.policy.runPods });
     const stdoutLog = jobLogPath(spawn.name, stampToday);
     // O_APPEND, not Bun.file(): a BunFile sink starts at offset 0, so a
     // respawned job used to overwrite the head of its own log and leave the
@@ -1343,6 +1345,29 @@ async function main(): Promise<void> {
     const how = spawn.resumeRunId !== undefined ? `, resuming ${spawn.resumeRunId}` : resumeRoster ? ", --resume-roster" : "";
     say(`job ${spawn.name}: spawned pid ${proc.pid} (account ${spawn.account}${how}) -> ${stdoutLog}`);
     record({ job: spawn.name, event: "spawned", detail: `pid ${proc.pid}${how}; account ${spawn.account}` });
+  };
+
+  /**
+   * A roster whose episode is a run pod has no child process, so the /proc scan
+   * alone would SIGTERM it mid-episode. Asked only on the cluster; an API that
+   * does not answer reads as "in flight", because the cost of a wrong SIGTERM
+   * (a paused run, a spent scored attempt) outweighs a drain that waits a tick.
+   */
+  let podsApiComplained = false;
+  const rosterHasLivePod = async (pid: number): Promise<boolean> => {
+    const client = K8sClient.inCluster();
+    if (client === null) return false;
+    try {
+      const live = await rosterHasRunPod(client, pid);
+      podsApiComplained = false;
+      return live;
+    } catch (e) {
+      if (!podsApiComplained) {
+        podsApiComplained = true;
+        say(`run pods: the Kubernetes API did not answer (${e instanceof Error ? e.message : String(e)}) — treating every draining roster as mid-episode until it does`);
+      }
+      return true;
+    }
   };
 
   let wakeTick: (() => void) | undefined;
@@ -1593,16 +1618,16 @@ async function main(): Promise<void> {
       say(`job ${name}: ${why} — ${how}`);
       record({ job: name, event: "draining", detail: why });
     }
-    // Drains: only SIGTERM a roster with no episode child. Delivered BEFORE the
-    // gate, which can sit inside a smoke for minutes: an operator parking a job
-    // must never wait on the gate for their SIGTERM.
+    // Drains: only SIGTERM a roster with no episode in flight. Delivered BEFORE
+    // the gate, which can sit inside a smoke for minutes: an operator parking a
+    // job must never wait on the gate for their SIGTERM.
     for (const name of [...sets.draining]) {
       const p = procs.get(name);
       if (p === undefined || p.exited) continue;
       const now = pausesOnDrain(liveJobs.get(name));
       if (now && pauseSignalled.has(name)) continue;
       if (now) pauseSignalled.add(name);
-      if (now || !hasLiveChild(p.pid)) {
+      if (now || !(hasLiveChild(p.pid) || (await rosterHasLivePod(p.pid)))) {
         try {
           process.kill(p.pid, "SIGTERM");
         } catch {
