@@ -1493,12 +1493,8 @@ credential it bills. The per-run session secret the child authenticates with
 is registered for redaction the moment it is leased, so a snippet that prints
 its environment writes `[redacted]` into the trajectory.
 
-A run pod ("Run pods", above) gets the module secret and only the credential
-its driver bills — its lane's token, its `apiKeyEnv`, or the mounted codex
-home — by Secret reference in the chart's template; the launcher strips the
-rest, and no `ANTHROPIC_*` variable can reach one. Its run.ts checks the key
-and base against the provider table again, so the run pod carries
-`WRATHBENCH_LOCAL_MODEL_HOSTS` as the pods that parse the config do.
+A run pod's environment is in "Run pods", above: the launcher keeps only the
+module secret and its driver's one credential.
 
 **The images are private.** WrathBench's images live in a private Harbor
 project (`harbor.nusphere.shard.page/wrathbench`, operator decision
