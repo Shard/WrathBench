@@ -1267,7 +1267,9 @@ deletes its pod with that grace and waits for it to be gone; the supervisor's
 drain counts a roster's run pod as an episode in flight (beside its /proc
 scan); `infra/k8s-deploy.sh` waits for zero run pods after the fleet pod is
 gone and before the worldserver is touched, and fails the window closed naming
-the run if one outlives the budget; `infra/fleet-update.sh status` lists them.
+the run if one outlives the budget — or if the pods cannot be listed for that
+long, because a failed read is not an empty one; `infra/fleet-update.sh status`
+lists them.
 A pod that will not pull (`ImagePullBackOff`), cannot be scheduled for five
 minutes, stays Pending for fifteen, or is evicted ends the attempt as
 `launch-failed` with the kubelet's reason in the roster's log, never as a hang.
