@@ -13,7 +13,8 @@
  * spells, the runner-generated character name and its race/class labels — and
  * redact game PROSE: quest, gossip, item and mail body text. So `items[].name`,
  * a move's `target`, a position's episodic `status` (the model's own words
- * under a zone name) and `terminationDetail` pass through; entry summaries
+ * under a zone name) and `terminationDetail` pass through (but for a
+ * `launch-failed` stub's, which is launcher text); entry summaries
  * cross `projectEntry` (an allowlist per entry type) and `redactGameProse`
  * (`redact-prose.ts`, the prose fields enumerated by opcode); the scratchpad
  * is the model's own notes and ships whole.
@@ -368,7 +369,10 @@ function projectRunRow(r: RunRow): RunRow {
     endedAt: r.endedAt,
     terminationReason: r.terminationReason,
     // Names of NPCs, quests and places, at most — never prose (operator, 2026-08-30).
-    terminationDetail: r.terminationDetail,
+    // Except a `launch-failed` stub's, which is the launcher's own text: image
+    // references with their registry host, the cluster API's URL and message,
+    // node names. Host-like, so withheld; the reason itself crosses.
+    terminationDetail: r.terminationReason === "launch-failed" ? null : r.terminationDetail,
     pauseReason: pausedToken(r.pauseReason),
     // A run id, which every public listing already carries; the lineage is the
     // only thing that makes a freeplay character legible as one character.

@@ -608,6 +608,15 @@ describe("projectRuns", () => {
     assertClean(JSON.stringify(out));
   });
 
+  test("a launch-failed stub's detail is the launcher's text, registry host and API URL included: withheld, the reason crosses", () => {
+    const detail = "run pod create refused: POST https://kubernetes.default.svc/api/v1/namespaces/wrathbench/pods: 403 Forbidden — harbor.example/library/wrathbench-runner:harness-0.5-1";
+    const row = projectRuns({ runs: [{ ...runListRowFixture(), terminationReason: "launch-failed", terminationDetail: detail }] }).runs[0]!;
+    expect(row.terminationReason).toBe("launch-failed");
+    expect(row.terminationDetail).toBeNull();
+    expect(JSON.stringify(row)).not.toContain("harbor.example");
+    expect(JSON.stringify(row)).not.toContain("kubernetes.default.svc");
+  });
+
   test("a run that never paused stays null: the token marks paused runs only", () => {
     const input = { runs: [{ ...runListRowFixture(), pauseReason: null }] };
     expect(projectRuns(input).runs[0]!.pauseReason).toBeNull();
