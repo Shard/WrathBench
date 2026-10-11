@@ -8,8 +8,11 @@
 #   ./infra/build-images.sh --tag v0.6.0         # override the computed tag
 #   ./infra/build-images.sh --only runner        # one image (repeatable)
 #   ./infra/build-images.sh --commit <sha> --tag <tag>   # a named commit (k8s-release.sh)
+#   ./infra/build-images.sh --builder <name> ...  # through a buildx builder, no Docker daemon
+#   ./infra/build-images.sh --push --digests <file>  # ... and record <ref>@<digest> per push
 #
-# The tag is `git describe --tags --always` of the working tree, and the tree
+# The tag is `git describe --tags --always` of the working tree (computed by
+# infra/image-tag.sh, which the branch-image workflow uses too), and the tree
 # must be clean: on Kubernetes the tag IS the pin (GitHub issue 7 — no `latest`,
 # no branch tag, no mutable default may become the deployment source), and a
 # tag built from uncommitted work is a pin that points at nothing. Since the
@@ -36,6 +39,16 @@
 # One string, so the deployed revision, the server identity and the harness
 # stamp on a run all agree and are reviewable.
 #
+# --builder names a `docker buildx` builder (the branch-image workflow's is a
+# rootless BuildKit beside the CI runner, with no Docker daemon anywhere). Each
+# image is then exported as a docker-format tarball, scanned by image-guard.sh
+# from that tarball (`--image-tar`, which needs crane), and pushed from it with
+# `crane push`, so the bytes the guard read are the bytes that reach the
+# registry. Same context, Dockerfiles and build args as the daemon path.
+#
+# --digests appends `<ref>@<digest>` for every pushed image to a file, the
+# digest read back from the registry after the push (what a node will pull).
+#
 # Related: infra/build-worldserver.sh builds the worldserver alone to the
 # compose deploy script's `:next` tag and stays the tool for that flow.
 
@@ -46,6 +59,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # it at a throwaway one.
 REPO_ROOT="${WRATHBENCH_BUILD_REPO_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 IMAGE_GUARD="${SCRIPT_DIR}/image-guard.sh"
+IMAGE_TAG="${SCRIPT_DIR}/image-tag.sh"
 
 REGISTRY="${WRATHBENCH_REGISTRY:-harbor.local/wrathbench}"
 TAG=""
@@ -53,6 +67,8 @@ COMMIT=""
 PUSH=0
 ALLOW_DIRTY=0
 ONLY=()
+BUILDER=""
+DIGESTS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -62,7 +78,9 @@ while [[ $# -gt 0 ]]; do
     --only) ONLY+=("$2"); shift 2 ;;
     --push) PUSH=1; shift ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
-    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --builder) BUILDER="$2"; shift 2 ;;
+    --digests) DIGESTS="$2"; shift 2 ;;
+    -h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build-images: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -93,8 +111,10 @@ if tree_dirty; then
   say "WARNING: --allow-dirty — the uncommitted changes are NOT in these images (they are built from ${SHA}); the -dirty tag is never pushed"
 fi
 
+# infra/image-tag.sh is the one place the tag is computed, shared with the
+# branch-image workflow so a CI build and a release name a commit alike.
 if [[ -z "${TAG}" ]]; then
-  TAG="$(git describe --tags --always $(tree_dirty && echo --dirty) 2>/dev/null || echo unknown)"
+  TAG="$("${IMAGE_TAG}" 2>/dev/null || echo unknown)"
 fi
 [[ "${TAG}" != "unknown" && -n "${TAG}" ]] || die "could not compute a tag from git"
 [[ "${TAG}" != "latest" ]] || die "'latest' is not an immutable tag and is refused (GitHub issue 7)"
@@ -119,8 +139,15 @@ wants_server() { wants wrathbench-worldserver || wants wrathbench-authserver || 
 # `-f` paths point INSIDE the export too: BuildKit reads the ignore file beside
 # the Dockerfile it is given, so a working-tree `-f` would pick up an
 # uncommitted ignore file.
+if [[ -n "${BUILDER}" ]]; then
+  docker buildx inspect "${BUILDER}" >/dev/null 2>&1 || die "--builder ${BUILDER}: docker buildx knows no such builder"
+  command -v crane >/dev/null 2>&1 || die "--builder needs crane on PATH (the image guard reads, and the push sends, the exported tarball)"
+fi
+
 CONTEXT="$(mktemp -d "${TMPDIR:-/tmp}/wrathbench-build.XXXXXX")"
-trap 'rm -rf "${CONTEXT}"' EXIT
+# --builder's exported image tarballs, beside the context and removed with it.
+TARBALLS="$(mktemp -d "${TMPDIR:-/tmp}/wrathbench-images.XXXXXX")"
+trap 'rm -rf "${CONTEXT}" "${TARBALLS}"' EXIT
 say "exporting ${SHA} (git archive, tracked files only) to ${CONTEXT}"
 git archive --format=tar "${SHA}" | tar -xf - -C "${CONTEXT}"
 
@@ -149,12 +176,34 @@ export_azerothcore() {
 }
 if wants_server; then export_azerothcore; fi
 
+# The tarball --builder exports an image to, by ref.
+tarball() { local name="${1##*/}"; printf '%s/%s.tar' "${TARBALLS}" "${name//:/_}"; }
+
+# One image: `docker build` into the daemon, or with --builder a buildx build
+# exported as a docker-format tarball (one linux manifest, no attestations, as a
+# daemon push gives). The remaining arguments are the build's own.
+build_image() {
+  local ref="$1"; shift
+  if [[ -z "${BUILDER}" ]]; then
+    docker build -t "${ref}" "$@"
+  else
+    docker buildx build --builder "${BUILDER}" --provenance=false --sbom=false \
+      --output "type=docker,name=${ref},dest=$(tarball "${ref}")" "$@"
+  fi
+}
+
 # Every image is scanned before anything is pushed (infra/image-guard.sh). A
-# refused image loses its tag here, so it cannot be pushed by hand either.
+# refused image loses its tag (or its tarball) here, so it cannot be pushed by
+# hand either.
 guard() {
-  if ! "${IMAGE_GUARD}" "$1"; then
-    docker image rm "$1" >/dev/null 2>&1 || true
-    die "image-guard refused $1; its tag is removed and nothing was pushed"
+  if [[ -z "${BUILDER}" ]]; then
+    if ! "${IMAGE_GUARD}" "$1"; then
+      docker image rm "$1" >/dev/null 2>&1 || true
+      die "image-guard refused $1; its tag is removed and nothing was pushed"
+    fi
+  elif ! "${IMAGE_GUARD}" --image-tar "$(tarball "$1")"; then
+    rm -f "$(tarball "$1")"
+    die "image-guard refused $1; its tarball is removed and nothing was pushed"
   fi
 }
 
@@ -167,12 +216,12 @@ build_server_target() {
   local target="$1" name="$2" ref="${REGISTRY}/$2:${TAG}"
   wants "${name}" || return 0
   say "building ${ref} (server.Dockerfile target ${target})"
-  docker build \
+  build_image "${ref}" \
     --target "${target}" \
     --build-arg "WRATHBENCH_BUILD=${TAG}" \
     --build-arg "USER_ID=${WRATHBENCH_UID:-1000}" \
     --build-arg "GROUP_ID=${WRATHBENCH_GID:-1000}" \
-    -t "${ref}" -f "${CONTEXT}/infra/docker/server.Dockerfile" "${CONTEXT}"
+    -f "${CONTEXT}/infra/docker/server.Dockerfile" "${CONTEXT}"
   guard "${ref}"
   BUILT+=("${ref}")
 }
@@ -181,9 +230,9 @@ build_runner() {
   local ref="${REGISTRY}/wrathbench-runner:${TAG}"
   wants "wrathbench-runner" || return 0
   say "building ${ref} (runner.Dockerfile, repo baked in)"
-  docker build \
+  build_image "${ref}" \
     --build-arg "WRATHBENCH_BUILD_VERSION=${TAG}" \
-    -t "${ref}" -f "${CONTEXT}/infra/docker/runner.Dockerfile" "${CONTEXT}"
+    -f "${CONTEXT}/infra/docker/runner.Dockerfile" "${CONTEXT}"
   guard "${ref}"
   BUILT+=("${ref}")
 }
@@ -197,10 +246,27 @@ build_runner
 
 say "built, and passed the image guard:"
 for ref in "${BUILT[@]}"; do
-  printf '  %-52s %s  %s\n' "${ref}" \
-    "$(docker image inspect -f '{{.Id}}' "${ref}" | cut -c8-19)" \
-    "$(docker image inspect -f '{{.Size}}' "${ref}" | awk '{printf "%.2f GB", $1/1073741824}')"
+  if [[ -z "${BUILDER}" ]]; then
+    printf '  %-52s %s  %s\n' "${ref}" \
+      "$(docker image inspect -f '{{.Id}}' "${ref}" | cut -c8-19)" \
+      "$(docker image inspect -f '{{.Size}}' "${ref}" | awk '{printf "%.2f GB", $1/1073741824}')"
+  else
+    printf '  %-52s %s  %s (tarball)\n' "${ref}" \
+      "$(crane digest --tarball "$(tarball "${ref}")" | cut -c8-19)" \
+      "$(wc -c < "$(tarball "${ref}")" | awk '{printf "%.2f GB", $1/1073741824}')"
+  fi
 done
+
+# The digest a node will pull, read back from where it was pushed: the
+# registry for --builder, the daemon's record of the push otherwise.
+pushed_digest() {
+  local ref="$1" repo="${1%:*}"
+  if [[ -n "${BUILDER}" ]]; then
+    crane digest "${ref}"
+  else
+    docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "${ref}" | sed -n "s|^${repo}@||p" | head -n 1
+  fi
+}
 
 if [[ "${PUSH}" -eq 1 ]]; then
   if tree_dirty && [[ "${ALLOW_DIRTY}" -eq 1 ]]; then
@@ -208,7 +274,15 @@ if [[ "${PUSH}" -eq 1 ]]; then
   fi
   for ref in "${BUILT[@]}"; do
     say "pushing ${ref}"
-    docker push "${ref}"
+    if [[ -z "${BUILDER}" ]]; then
+      docker push "${ref}"
+    else
+      crane push "$(tarball "${ref}")" "${ref}"
+    fi
+    digest="$(pushed_digest "${ref}")"
+    [[ "${digest}" == sha256:* ]] || die "pushed ${ref} but could not read its digest back"
+    say "pushed ${ref}@${digest}"
+    [[ -z "${DIGESTS}" ]] || printf '%s@%s\n' "${ref}" "${digest}" >> "${DIGESTS}"
   done
   say "pushed ${#BUILT[@]} image(s) at ${TAG}; set image.tag=${TAG} in the cluster repo"
 else

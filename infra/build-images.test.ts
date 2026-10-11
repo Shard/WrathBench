@@ -100,27 +100,66 @@ function makeRepo(opts: { submodule?: boolean } = {}): { tree: string; ac: strin
   return { tree, ac, acFirst: first, sha: git(tree, "rev-parse", "HEAD") };
 }
 
-/** argv to the log, never the environment; each build's context tarred beside it. */
+/**
+ * argv to the log, never the environment; each build's context tarred beside
+ * it. `buildx build` (the --builder path) also writes a stand-in image tarball
+ * where its `--output ...,dest=` says, and `buildx inspect` knows one builder.
+ */
 const DOCKER_SHIM = `#!/usr/bin/env bash
 printf 'docker %s\\n' "$*" >> "\${FAKE_LOG}"
+save_context() {
+  ctx="\${!#}"
+  n="$(grep -cE '^docker (buildx )?build ' "\${FAKE_LOG}")"
+  printf '%s\\n' "\${ctx}" > "\${FAKE_LOG}.context-\${n}.dir"
+  tar -cf "\${FAKE_LOG}.context-\${n}.tar" -C "\${ctx}" .
+}
 case "$1" in
   build)
-    ctx="\${!#}"
-    n="$(grep -c '^docker build' "\${FAKE_LOG}")"
-    printf '%s\\n' "\${ctx}" > "\${FAKE_LOG}.context-\${n}.dir"
-    tar -cf "\${FAKE_LOG}.context-\${n}.tar" -C "\${ctx}" .
+    save_context "$@"
     exit "\${FAKE_BUILD_RC:-0}"
+    ;;
+  buildx)
+    case "$2" in
+      inspect) [[ "$3" == "\${FAKE_BUILDER:-wb}" ]] || exit 1 ;;
+      build)
+        save_context "$@"
+        for a in "$@"; do
+          if [[ "$a" == type=docker,* ]]; then printf 'image tarball for %s\\n' "\${a}" > "\${a##*dest=}"; fi
+        done
+        exit "\${FAKE_BUILD_RC:-0}"
+        ;;
+    esac
     ;;
   create) echo fake-container ;;
   export) tar -cf - -C "\${FAKE_IMAGE_ROOT}" . ;;
   image)
     if [[ "$2" == "inspect" ]]; then
-      if [[ "$*" == *Size* ]]; then echo 1073741824; else echo sha256:0123456789abcdef0123; fi
+      ref="\${!#}"
+      if [[ "$*" == *Size* ]]; then echo 1073741824
+      elif [[ "$*" == *RepoDigests* ]]; then echo "\${ref%:*}@sha256:\${FAKE_DIGEST}"
+      else echo sha256:0123456789abcdef0123; fi
     fi
     ;;
 esac
 exit 0
 `;
+
+/**
+ * A crane with no registry: `export - -` tars FAKE_IMAGE_ROOT (after checking
+ * it was handed an existing tarball on stdin), `push` checks its tarball
+ * exists, `digest` answers FAKE_DIGEST.
+ */
+const CRANE_SHIM = `#!/usr/bin/env bash
+printf 'crane %s\\n' "$*" >> "\${FAKE_LOG}"
+case "$1" in
+  export) [[ "$(head -c 13)" == "image tarball" ]] || exit 9; tar -cf - -C "\${FAKE_IMAGE_ROOT}" . ;;
+  push) [[ -f "$2" ]] || exit 9 ;;
+  digest) echo "sha256:\${FAKE_DIGEST}" ;;
+esac
+exit 0
+`;
+
+const FAKE_DIGEST = "ab".repeat(32);
 
 interface Run {
   code: number;
@@ -143,6 +182,8 @@ function run(cwdRepo: string, args: string[], opts: { imageFiles?: Record<string
   put(image, opts.imageFiles ?? { "wrathbench/package.json": "{}" });
   writeFileSync(join(bin, "docker"), DOCKER_SHIM);
   chmodSync(join(bin, "docker"), 0o755);
+  writeFileSync(join(bin, "crane"), CRANE_SHIM);
+  chmodSync(join(bin, "crane"), 0o755);
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
 
@@ -154,6 +195,7 @@ function run(cwdRepo: string, args: string[], opts: { imageFiles?: Record<string
       TMPDIR: tmp,
       FAKE_LOG: log,
       FAKE_IMAGE_ROOT: image,
+      FAKE_DIGEST,
       WRATHBENCH_BUILD_REPO_ROOT: cwdRepo,
       ...opts.env,
     },
@@ -183,8 +225,10 @@ function run(cwdRepo: string, args: string[], opts: { imageFiles?: Record<string
   };
 }
 
-const builds = (r: Run) => r.calls.filter((l) => l.startsWith("docker build"));
+const builds = (r: Run) => r.calls.filter((l) => l.startsWith("docker build "));
 const pushes = (r: Run) => r.calls.filter((l) => l.startsWith("docker push"));
+const buildxBuilds = (r: Run) => r.calls.filter((l) => l.startsWith("docker buildx build"));
+const cranePushes = (r: Run) => r.calls.filter((l) => l.startsWith("crane push"));
 
 describe("build-images.sh builds from git, never the working tree", () => {
   test("the runner's context is an archive of the commit: tracked files in, untracked and ignored files out", () => {
@@ -316,6 +360,94 @@ describe("build-images.sh and the image guard", () => {
     const at = (line: string) => r.calls.indexOf(line);
     expect(at(`docker push ${ref}`)).toBeGreaterThan(at("docker export fake-container"));
     expect(at("docker export fake-container")).toBeGreaterThan(r.calls.findIndex((l) => l.startsWith("docker build")));
+    expect(r.out).toContain(`pushed ${ref}@sha256:${FAKE_DIGEST}`);
+  });
+
+  test("--digests records <ref>@<digest> for each pushed image, and nothing when nothing is pushed", () => {
+    const { tree, sha } = makeRepo();
+    const file = join(tempDir("wb-build-images-digests-"), "digests.txt");
+    const ref = `reg.example/wrathbench/wrathbench-runner:${sha.slice(0, 7)}`;
+    expect(run(tree, ["--only", "runner", "--registry", "reg.example/wrathbench", "--digests", file]).code).toBe(0);
+    expect(existsSync(file)).toBe(false);
+    expect(run(tree, ["--only", "runner", "--push", "--registry", "reg.example/wrathbench", "--digests", file]).code).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(`${ref}@sha256:${FAKE_DIGEST}\n`);
+  });
+});
+
+describe("build-images.sh --builder (buildx, no Docker daemon)", () => {
+  test("builds into a tarball, guards that tarball, and pushes that same tarball with crane", () => {
+    const { tree, sha } = makeRepo();
+    const file = join(tempDir("wb-build-images-digests-"), "digests.txt");
+    const r = run(tree, ["--only", "runner", "--builder", "wb", "--push", "--registry", "reg.example/wrathbench", "--digests", file]);
+    const ref = `reg.example/wrathbench/wrathbench-runner:${sha.slice(0, 7)}`;
+    expect(r.code).toBe(0);
+    expect(builds(r)).toEqual([]);
+    expect(buildxBuilds(r)).toHaveLength(1);
+    const line = buildxBuilds(r)[0]!;
+    const [ctx] = r.contexts;
+    // The same archive context and Dockerfile as the daemon path, one plain manifest.
+    expect(line).toContain("--builder wb --provenance=false --sbom=false");
+    expect(line).toContain(`-f ${ctx!.dir}/infra/docker/runner.Dockerfile ${ctx!.dir}`);
+    expect(line).toContain(`--build-arg WRATHBENCH_BUILD_VERSION=${sha.slice(0, 7)}`);
+    expect(ctx!.entries).toContain("a.txt");
+    expect(ctx!.entries).not.toContain(".env.local");
+    const dest = /--output type=docker,name=(\S+),dest=(\S+)/.exec(line);
+    expect(dest?.[1]).toBe(ref);
+    // Guarded from the tarball, then that tarball pushed, then the digest read back.
+    const at = (prefix: string) => r.calls.findIndex((l) => l.startsWith(prefix));
+    expect(at("crane export - -")).toBeGreaterThan(at("docker buildx build"));
+    expect(cranePushes(r)).toEqual([`crane push ${dest![2]} ${ref}`]);
+    expect(at("crane push")).toBeGreaterThan(at("crane export - -"));
+    expect(r.calls).toContain(`crane digest ${ref}`);
+    expect(at(`crane digest ${ref}`)).toBeGreaterThan(at("crane push"));
+    expect(readFileSync(file, "utf8")).toBe(`${ref}@sha256:${FAKE_DIGEST}\n`);
+    // No daemon call of any kind, and the export and the tarball are gone.
+    expect(r.calls.filter((l) => l.startsWith("docker ") && !l.startsWith("docker buildx "))).toEqual([]);
+    expect(r.leftovers).toEqual([]);
+  });
+
+  test("a secret-shaped path in the tarball stops the run before any push", () => {
+    const { tree } = makeRepo();
+    const r = run(tree, ["--only", "runner", "--builder", "wb", "--push"], {
+      imageFiles: { "wrathbench/package.json": "{}", "wrathbench/.env.prod": "API_KEY=fixture-not-a-secret\n" },
+    });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("/wrathbench/.env.prod");
+    expect(r.out).not.toContain("fixture-not-a-secret");
+    expect(r.out).toContain("its tarball is removed and nothing was pushed");
+    expect(cranePushes(r)).toEqual([]);
+    expect(r.leftovers).toEqual([]);
+  });
+
+  test("an unknown builder stops before anything is exported or built", () => {
+    const { tree } = makeRepo();
+    const r = run(tree, ["--only", "runner", "--builder", "nope"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("no such builder");
+    expect(buildxBuilds(r)).toEqual([]);
+    expect(r.leftovers).toEqual([]);
+  });
+
+  test("a --allow-dirty build through a builder is never pushed either", () => {
+    const { tree, sha } = makeRepo();
+    writeFileSync(join(tree, "a.txt"), "two\n");
+    const r = run(tree, ["--only", "runner", "--builder", "wb", "--allow-dirty", "--push"]);
+    expect(buildxBuilds(r)[0]).toContain(`:${sha.slice(0, 7)}-dirty`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("refusing to push a --allow-dirty tag");
+    expect(cranePushes(r)).toEqual([]);
+  });
+});
+
+describe("build-images.sh and image-tag.sh", () => {
+  test("the computed tag is image-tag.sh's, so a release and the branch workflow name a commit alike", () => {
+    const { tree } = makeRepo();
+    git(tree, "tag", "-a", "harness-0.5", "-m", "harness 0.5", "HEAD~1");
+    const expected = Bun.spawnSync(["bash", join(REPO_ROOT, "infra", "image-tag.sh")], { cwd: tree, env: GIT_ENV, stdout: "pipe" }).stdout.toString().trim();
+    expect(expected).toMatch(/^harness-0\.5-1-g[0-9a-f]{7,}$/);
+    const r = run(tree, ["--only", "runner"]);
+    expect(r.code).toBe(0);
+    expect(builds(r)[0]).toContain(`wrathbench-runner:${expected} `);
   });
 });
 
