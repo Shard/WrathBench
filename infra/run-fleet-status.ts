@@ -71,6 +71,7 @@ import {
   lastLaunchedRunId,
   liveJobsFromState,
   loadConfigForRead,
+  runHasImageRecord,
   pidAlive,
   readPauseSidecar,
   resolveStatePath,
@@ -634,6 +635,7 @@ export function printStatus(): void {
           held: (a) => accountHeldBy(a, ""),
           now: Date.now(),
           campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
+          hasImageRecord: (id) => runHasImageRecord(id),
         })
       : { resume: [], listed: [], end: [] };
   /**
@@ -874,7 +876,15 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   const runs = implicitPauses({ runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }), campaigns: config.campaigns, now: Date.now() });
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
   const held = (a: string): string | undefined => accountHeldBy(a, "");
-  const resumes = planResumes({ runs, config, running: new Map(), held, now: Date.now(), campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)) });
+  const resumes = planResumes({
+    runs,
+    config,
+    running: new Map(),
+    held,
+    now: Date.now(),
+    campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
+    hasImageRecord: (id) => runHasImageRecord(id),
+  });
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.
   const plan = planTick(

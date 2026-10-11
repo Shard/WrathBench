@@ -34,6 +34,7 @@ import {
 } from "./run-fleet-plan";
 import { type DeferEntry, deferSidecarPath, parseDefers } from "./run-roster";
 import { type Campaign } from "../runner/src/campaigns";
+import { IMAGE_RECORD_FILE } from "./run-pod";
 import {
   type ModelsSidecar,
   type ModelState,
@@ -177,6 +178,15 @@ export function readPauseSidecar(runsDir: string = RUNS_DIR): FleetPause | undef
 /** Resolve a configured smoke path against the repo. */
 export function smokePath(script: string, root: string = REPO_ROOT): string {
   return isAbsolute(script) ? script : join(root, script);
+}
+
+/**
+ * Whether a run's directory holds a run pod's `image.json` — the digest a
+ * resume relaunches, and so `planResumes`' only reason to resume a probe
+ * across harness series.
+ */
+export function runHasImageRecord(runId: string, runsDir: string = RUNS_DIR): boolean {
+  return existsSync(join(runsDir, runId, IMAGE_RECORD_FILE));
 }
 
 /** Does this pid have a live child (an episode in flight)? /proc scan. */

@@ -119,7 +119,7 @@ import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
 import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/config-store";
 import { parseCampaigns } from "../runner/src/campaigns";
-import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
+import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
 import { backoffMs, episodeArgv, resolve } from "./run-roster";
 import { STALL_PAUSE } from "../runner/src/lapse";
@@ -2425,14 +2425,82 @@ describe("pause and resume across a fleet stop", () => {
     // A disabled campaign keeps its paused run, listed with the reason.
     const off = { ...pool, campaigns: pool.campaigns.map((c) => ({ ...c, enabled: false })) };
     expect(planResumes({ runs: [run], config: off, running: new Map(), held, now: NOW, campaignFileOf: fileOf }).listed[0]?.why).toContain("campaign race-probe is disabled");
-    // A probe with no campaign.json has no arm to come back on: listed, never guessed.
-    expect(planResumes({ runs: [run], config: pool, running: new Map(), held, now: NOW }).listed[0]?.why).toContain("no campaign.json");
+    // A run with its own file comes back on it and nothing is written.
+    expect(plan.resume[0]!.writeCampaignFile).toBeUndefined();
   });
 
-  test("a probe with its own campaign.json resumes whatever harness series this supervisor runs; one without keeps the gate", () => {
-    // The probe resumes on the image it recorded, so the series running here
-    // is beside the point. A probe from before campaign files is another
-    // series' run as it always was: listed, and never ended by this supervisor.
+  test("a probe paused before campaign files resumes on a file rebuilt from the published definition its stamps name", () => {
+    // A probe paused across the release that brought campaign files has none,
+    // and used to be listed "resume by hand" — while the paused run kept its
+    // model out of every scored lane.
+    const race = checkedIn("race-probe@1");
+    const j = joined([race], { "race-probe": { version: 1, assignments: [{ model: "glm" }] } });
+    const cfg = { ...config(), campaigns: j.campaigns };
+    const preRelease = paused({
+      runId: "fleet-glm-race-probe-orc-warrior-z-ai-glm-5-2-free-20261009-a3",
+      model: "z-ai/glm-5.2:free",
+      account: "RUNNER3",
+      episode: "probing",
+      episodeMs: 12 * H,
+      campaign: "race-probe",
+      campaignVersion: 1,
+      cell: "orc-warrior",
+      ref: "glm",
+      // Stamped before arms existed.
+      arm: null,
+      pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: 5 * H },
+    });
+    const plan = planResumes({ runs: [preRelease], config: cfg, running: new Map(), held, now: NOW });
+    expect(plan.listed).toEqual([]);
+    expect(plan.end).toEqual([]);
+    expect(plan.resume).toHaveLength(1);
+    const r = plan.resume[0]!;
+    const expected = campaignFileOf(j.definitions[0]!, "orc-warrior");
+    expect(r.writeCampaignFile).toEqual(expected);
+    expect(r.job.campaignFile).toEqual(expected);
+    expect(r.job.name).toBe("glm-race-probe-orc-warrior-base");
+    expect(r.job.attempt).toBe(3);
+    expect(r.job.probe).toEqual({ campaign: "race-probe", version: 1, cell: "orc-warrior", arm: "base" });
+    expect(r.why).toContain("campaign.json rebuilt from the published race-probe@1");
+    // What the supervisor writes reads back as the run's own file, so the next
+    // pause of this run is planned from disk like any other.
+    const dir = join(tempDir("fleet-rebuilt-"), preRelease.runId);
+    writeCampaignFile(dir, r.writeCampaignFile!);
+    expect(runCampaignFile(dir)).toEqual(expected);
+    const again = planResumes({ runs: [preRelease], config: cfg, running: new Map(), held, now: NOW, campaignFileOf: () => runCampaignFile(dir) });
+    expect(again.resume[0]!.writeCampaignFile).toBeUndefined();
+    expect(again.resume[0]!.job.name).toBe(r.job.name);
+    // The run's own arm stamp is honoured when it has one.
+    expect(planResumes({ runs: [{ ...preRelease, arm: "base" }], config: cfg, running: new Map(), held, now: NOW }).resume[0]!.writeCampaignFile?.arm.id).toBe("base");
+
+    // A version nobody published (a legacy stamp) has no definition to say
+    // "resume", so nothing is rebuilt for it: the lane's rule decides, as it
+    // did before — a fleet run is ended as a failed attempt that is not the
+    // model's, a hand-launched one is listed for the operator.
+    const legacy = { ...preRelease, campaignVersion: 7 };
+    const legacyPlan = planResumes({ runs: [legacy], config: cfg, running: new Map(), held, now: NOW });
+    expect(legacyPlan.resume).toEqual([]);
+    expect(legacyPlan.end).toMatchObject([{ runId: legacy.runId, reason: "manual", counts: false }]);
+    const byHand = { ...legacy, runId: "run-20261009-120000" };
+    const byHandPlan = planResumes({ runs: [byHand], config: cfg, running: new Map(), held, now: NOW });
+    expect(byHandPlan.resume).toEqual([]);
+    expect(byHandPlan.listed[0]?.why).toContain("resume by hand");
+    // A published version that asks to resume, but whose cell or arm the run's
+    // stamps cannot name: listed with the reason, nothing guessed.
+    expect(planResumes({ runs: [{ ...preRelease, cell: "gone-cell" }], config: cfg, running: new Map(), held, now: NOW }).listed[0]?.why).toContain("gone-cell is not a cell");
+    const twoArms = definition({ id: "race-probe", version: 2, cells: [{ id: "orc-warrior", race: 2, class: 1 }], arms: [{ id: "a", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-1" }, { id: "b", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-2" }] });
+    const j2 = joined([twoArms], { "race-probe": { version: 2, assignments: [{ model: "glm" }] } });
+    const armless = planResumes({ runs: [{ ...preRelease, campaignVersion: 2 }], config: { ...config(), campaigns: j2.campaigns }, running: new Map(), held, now: NOW });
+    expect(armless.resume).toEqual([]);
+    expect(armless.listed[0]?.why).toContain("has 2 arms; name one");
+  });
+
+  test("only a probe a run pod ran resumes across harness series, and only while run pods are on", () => {
+    // A pod's image.json is what pins a resume to the build it started on.
+    // campaign.json alone pins nothing: with run pods off, or for a probe that
+    // ran as a child process, the resume would run on this supervisor's build,
+    // so such a probe is another series' run as it always was — listed, and
+    // never ended by this supervisor.
     const race = checkedIn("race-probe@1");
     const j = joined([race], { "race-probe": { version: 1, assignments: [{ model: "glm" }] } });
     const run = paused({
@@ -2450,13 +2518,25 @@ describe("pause and resume across a fleet stop", () => {
       harnessSeries: "0.4",
       pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: H },
     });
-    const cfg = { ...config(), policy: { ...config().policy, series: "0.5" }, campaigns: j.campaigns };
+    const cfg = { ...config(), policy: { ...config().policy, series: "0.5", runPods: "probes" as const }, campaigns: j.campaigns };
     const file = campaignFileOf(j.definitions[0]!, "orc-warrior");
-    expect(planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW, campaignFileOf: () => file }).resume).toHaveLength(1);
-    const gated = planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW });
-    expect(gated.resume).toEqual([]);
-    expect(gated.end).toEqual([]);
-    expect(gated.listed[0]?.why).toContain("paused under harness series 0.4");
+    const withImage = { campaignFileOf: () => file, hasImageRecord: (id: string) => id === run.runId };
+    expect(planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW, ...withImage }).resume).toHaveLength(1);
+    const gatedWhy = (p: ReturnType<typeof planResumes>): string | undefined => {
+      expect(p.resume).toEqual([]);
+      expect(p.end).toEqual([]);
+      return p.listed[0]?.why;
+    };
+    // campaign.json and no image.json: the gate holds.
+    expect(gatedWhy(planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW, campaignFileOf: () => file }))).toContain("paused under harness series 0.4");
+    // image.json, but run pods are off now: the resume would be a child process on this build.
+    const podsOff = { ...cfg, policy: { ...cfg.policy, runPods: "off" as const } };
+    expect(gatedWhy(planResumes({ runs: [run], config: podsOff, running: new Map(), held, now: NOW, ...withImage }))).toContain("paused under harness series 0.4");
+    // Neither file: the gate holds, as it always did.
+    expect(gatedWhy(planResumes({ runs: [run], config: cfg, running: new Map(), held, now: NOW }))).toContain("paused under harness series 0.4");
+    // A scored run with an image.json beside it is no exception: only probes are.
+    const e90 = { ...run, episode: "e90" as const, campaign: null, campaignVersion: null, cell: null, arm: null, runId: "fleet-glm-e90-z-ai-glm-5-2-free-20261010" };
+    expect(gatedWhy(planResumes({ runs: [e90], config: cfg, running: new Map(), held, now: NOW, hasImageRecord: () => true }))).toContain("paused under harness series 0.4");
   });
 
   test("a policy freeplay run paused by a fleet restart resumes under a synthetic policy job — same account, same run id", () => {

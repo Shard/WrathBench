@@ -155,6 +155,7 @@ import {
   type FleetState,
   hasLiveChild,
   rosterEpisodeInFlight,
+  runHasImageRecord,
   jobArgv,
   jobDefers,
   jobJsonlPath,
@@ -180,7 +181,7 @@ import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-f
 import { accountHeldBy, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
-import { runCampaignFile } from "../runner/src/campaign-file";
+import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import {
@@ -1018,7 +1019,15 @@ async function main(): Promise<void> {
     // spawn; a pool job's resume reserves its account like an assignment.
     const runningMap = new Map<string, string>(assigned);
     for (const job of pinnedJobs(cfg)) if (sets.running.has(job.name)) runningMap.set(job.name, job.account!);
-    const resumes = planResumes({ runs, config: cfg, running: runningMap, held, now: Date.now(), campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)) });
+    const resumes = planResumes({
+      runs,
+      config: cfg,
+      running: runningMap,
+      held,
+      now: Date.now(),
+      campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
+      hasImageRecord: (id) => runHasImageRecord(id),
+    });
     lastPaused = resumes.listed;
     // Runs nothing came back for are ended on every tick, boot
     // included: the host slept, or the fleet was down past the run's own
@@ -1065,6 +1074,19 @@ async function main(): Promise<void> {
     for (const r of resumes.resume) {
       const name = r.job.name;
       if (sets.running.has(name)) continue;
+      // A probe paused before campaign files existed comes back with one
+      // rebuilt from its published definition (`pausedProbeFile`); it goes
+      // beside the run before the spawn, so the run carries it from here on.
+      // Never over a file the run already has.
+      if (r.writeCampaignFile !== undefined && runCampaignFile(join(RUNS_DIR, r.runId)) === null) {
+        try {
+          writeCampaignFile(join(RUNS_DIR, r.runId), r.writeCampaignFile);
+          say(`resume ${name}: wrote ${r.runId}/campaign.json from the published ${r.writeCampaignFile.campaign}@${r.writeCampaignFile.version} (the run predates campaign files)`);
+        } catch (e) {
+          say(`resume ${name}: could not write ${r.runId}/campaign.json — ${e instanceof Error ? e.message : String(e)}; not resuming it this tick`);
+          continue;
+        }
+      }
       // A resumed run goes back to the subscription it started on: the runner
       // rebuilds its config from meta.json, and the lane is in it. Stamped on
       // the spawn too so the count and the state file agree with the run.

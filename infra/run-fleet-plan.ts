@@ -695,6 +695,43 @@ export interface ResumePlan {
   /** The pause streak (`RunFact.pause.count`), for the line that announces the resume. */
   pauseCount: number;
   why: string;
+  /**
+   * A probe launched before campaign files has none: this is the one rebuilt
+   * for it from the published definition its stamps name
+   * (`pausedProbeFile`). The caller writes it into the run's directory before
+   * the resume is spawned, so the run carries it from then on; never set when
+   * the run has its own.
+   */
+  writeCampaignFile?: CampaignFile;
+}
+
+/**
+ * The campaign file a paused probe comes back with: its own `campaign.json`,
+ * or, for a run launched before campaign files existed (a probe paused across
+ * the release that brought them), one rebuilt from the published definition
+ * its stamps name — the version it recorded, its cell, and its arm, or the
+ * definition's only arm when the run predates arms. `rebuilt` tells the caller
+ * to write it. A run whose stamps name a version nobody published, or a cell
+ * or arm that version does not have, gets the reason instead and stays
+ * listed: nothing about it is guessed.
+ */
+export function pausedProbeFile(
+  f: Pick<RunFact, "runId" | "campaign" | "campaignVersion" | "cell" | "arm">,
+  campaigns: readonly Campaign[],
+  own: (runId: string) => CampaignFile | null,
+): { file: CampaignFile; rebuilt: boolean } | { why: string } {
+  const file = own(f.runId);
+  if (file !== null) return { file, rebuilt: false };
+  const version = f.campaignVersion ?? null;
+  const ref = `${f.campaign ?? "?"}@${version ?? "?"}`;
+  const published = version === null ? undefined : campaigns.find((c) => c.name === f.campaign)?.versions.find((v) => v.def.version === version);
+  if (published === undefined) return { why: `no campaign.json, and the run's ${ref} is not a published version this config names` };
+  if (f.cell === null) return { why: `no campaign.json, and the run stamps no cell of ${ref}` };
+  try {
+    return { file: campaignFileOf(published, f.cell, f.arm ?? undefined), rebuilt: true };
+  } catch (e) {
+    return { why: `no campaign.json, and none can be rebuilt from ${ref}: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
 
 /**
@@ -982,13 +1019,21 @@ export function planResumes(opts: {
   now: number;
   /**
    * A run's own `campaign.json` (`runCampaignFile`), or null when it has none.
-   * A paused probe is rebuilt from it, arm included; absent reads every run
-   * as having none.
+   * A paused probe is rebuilt from it, arm included, or from the published
+   * definition when it has none (`pausedProbeFile`); absent reads every run as
+   * having none.
    */
   campaignFileOf?: (runId: string) => CampaignFile | null;
+  /**
+   * Whether a run's directory holds `image.json`, the record a run pod's
+   * launcher writes when the container starts. Absent reads every run as
+   * having none.
+   */
+  hasImageRecord?: (runId: string) => boolean;
 }): { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] } {
   const { config, now } = opts;
-  const campaignFileOf = opts.campaignFileOf ?? ((): CampaignFile | null => null);
+  const ownCampaignFile = opts.campaignFileOf ?? ((): CampaignFile | null => null);
+  const hasImageRecord = opts.hasImageRecord ?? ((): boolean => false);
   const resume: ResumePlan[] = [];
   const listed: PausedListing[] = [];
   const end: EndedRun[] = [];
@@ -1021,13 +1066,14 @@ export function planResumes(opts: {
     // wall clock, not by `isStaleRun`: a freeplay run is never stale, and this
     // is a listing of another supervisor's runs, not a decision about one.
     //
-    // A probe with its own campaign.json is exempt: it resumes on the image it
-    // recorded (the launcher relaunches that digest), not on this
-    // supervisor's, so the harness running now is beside the point. Only such
-    // a probe — one from before campaign files has no arm to come back on and
-    // keeps the gate.
-    const file = f.episode === "probing" && f.campaign !== null ? campaignFileOf(f.runId) : null;
-    if (file === null && !inSeries(f, config.policy)) {
+    // A probe a run pod ran is exempt, while run pods are on: the launcher
+    // relaunches the digest it recorded in image.json, not this supervisor's
+    // build, so the harness running now is beside the point. A campaign.json
+    // alone pins nothing — with run pods off, or for a probe that ran as a
+    // child process, the resume would run on this build — so such a probe
+    // keeps the gate like any other run.
+    const pinnedBuild = f.episode === "probing" && config.policy.runPods === "probes" && hasImageRecord(f.runId);
+    if (!pinnedBuild && !inSeries(f, config.policy)) {
       if (now - lastActivityOf(f) <= staleAfterMs(f.episodeMs)) {
         list(
           `paused under harness series ${f.harnessSeries ?? "unversioned"}, this supervisor runs ${config.policy.series ?? "no series"} — resume by hand (--resume ${f.runId}) or archive`,
@@ -1035,6 +1081,8 @@ export function planResumes(opts: {
       }
       continue;
     }
+    const probeFile = f.episode === "probing" && f.campaign !== null ? pausedProbeFile(f, config.campaigns ?? [], ownCampaignFile) : null;
+    const file = probeFile !== null && "file" in probeFile ? probeFile.file : null;
     // One character per model: an arm's own compaction window is not a
     // different model, so it does not make a second paused run of one entry
     // resumable beside the first.
@@ -1126,17 +1174,22 @@ export function planResumes(opts: {
     } else if (f.episode === "probing") {
       // A probe whose definition asked to resume (the lapse rule above already
       // said so) comes back under the job it was spawned as, rebuilt from the
-      // run's own campaign.json: the campaign, its version, the cell and the
-      // arm, and the roster name it stamped. The spawn carries that file, so
-      // the run resumes on its own arm whatever has been published since.
-      // Without this a supervisor restart stranded a paused probe as "not in
-      // config", and the paused run then held its model out of every lane
-      // until someone resumed it by hand — on a twelve-hour cell, the most
-      // expensive way to lose one.
+      // run's own campaign.json — or, for a run from before campaign files,
+      // from the published definition its stamps name (`pausedProbeFile`): the
+      // campaign, its version, the cell and the arm, and the roster name it
+      // stamped. The spawn carries that file, so the run resumes on its own
+      // arm whatever has been published since. Without this a supervisor
+      // restart stranded a paused probe as "not in config", and the paused run
+      // then held its model out of every lane until someone resumed it by hand
+      // — on a twelve-hour cell, the most expensive way to lose one.
+      if (probeFile !== null && "why" in probeFile) {
+        list(`paused probe with ${probeFile.why} — resume by hand or archive`);
+        continue;
+      }
       const c = file === null ? undefined : config.campaigns?.find((x) => x.name === file.campaign);
-      const ref = f.ref ?? undefined;
+      const ref = f.ref ?? launchedUnder;
       if (file === null || c === undefined || ref === undefined || config.roster[ref] === undefined) {
-        list("paused probe with no campaign.json, or whose campaign row or roster entry the config no longer names — resume by hand or archive");
+        list("paused probe whose campaign row or roster entry the config no longer names — resume by hand or archive");
         continue;
       }
       if (!c.enabled) {
@@ -1256,7 +1309,8 @@ export function planResumes(opts: {
       pauseCount: pause.count,
       why: `${pause.reason}${
         providerResetOf(pause) !== undefined ? " (provider reset passed)" : pause.count > 1 ? ` (pause ${pause.count})` : ""
-      }, ${fmtPaused(pause.episodeElapsedMs, f.episodeMs)}`,
+      }, ${fmtPaused(pause.episodeElapsedMs, f.episodeMs)}${probeFile !== null && "rebuilt" in probeFile && probeFile.rebuilt ? `; campaign.json rebuilt from the published ${file!.campaign}@${file!.version}` : ""}`,
+      ...(probeFile !== null && "rebuilt" in probeFile && probeFile.rebuilt ? { writeCampaignFile: probeFile.file } : {}),
     });
   }
   return { resume, listed, end };

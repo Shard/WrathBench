@@ -289,8 +289,10 @@ owner: a resume onto a run with a fresh one is refused, and an account is held
 by a run whose heartbeat is fresh however quiet its trajectory. The
 trajectory's `response` records count the attempt's turns. A pod also leaves
 `image.json` (`ref`, `digest`, `pod`, `node`, `startedAt`), written by the
-launcher when the container starts, and a resume relaunches that digest
-whatever the arm says now.
+launcher when the container starts, and a resume in a pod relaunches that
+digest whatever the arm says now; a resume while run pods are off is a child
+process on the release, so only a probe with `image.json` and run pods on is
+exempt from the harness-series gate.
 
 **Signals and exit codes.** SIGTERM is the supervisor's: the run writes its
 `operator-pause` row synchronously, then unwinds, and exits within 60 seconds;

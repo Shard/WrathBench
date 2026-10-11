@@ -215,10 +215,20 @@ fleet can launch in a run pod.
     wanted".
   - Completion is derived from the runs on disk, never recorded.
 - **Resuming.** A paused probe whose definition says resume comes back under
-  the job it was spawned as, rebuilt from its own `campaign.json`: its arm,
-  and through the launcher the image digest it recorded. A probe with a
-  campaign file is therefore not gated on the harness series this supervisor
-  runs.
+  the job it was spawned as, rebuilt from its own `campaign.json`, arm
+  included.
+  - A probe paused before campaign files existed is given one, rebuilt from
+    the published definition its stamps name (its version, its cell, and its
+    arm or the definition's only arm) and written beside it before the
+    resume. It keeps the stamps it started with, so a run from before arms
+    still belongs to no square. A version nobody published rebuilds nothing,
+    and the lane's rule ends or lists that run as before.
+  - When a run pod ran it, the launcher relaunches the image digest it
+    recorded in `image.json`, so such a probe is not gated on the harness
+    series this supervisor runs while run pods are on. Any other probe — one
+    that ran as a child process, or any probe once run pods are off — would
+    resume on this supervisor's build, and keeps the series gate like every
+    other run.
 - **Scoring.** **Unscored, always** — the `scored: false` flag is what excludes
   it from the Ladder and every chart, through the same predicate that excludes
   `freeplay`. It still appears in the runs table, which lists every
