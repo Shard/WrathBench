@@ -1,0 +1,15 @@
+{
+  "id": "pod-proof",
+  "version": 1,
+  "question": "Does a probing episode launched as its own pod on the release image play, reach the module, end on its clock or level target, and clean up?",
+  "note": "First proof of run pods after the 2026-10-11 cutover release (harness-0.5-991-g870bfa38). One cell, the Human Paladin start the release smokes already drove; one image-less arm, so the pod floats on the release runner image. Level 2 ends the run early, twenty minutes of play is the ceiling, forty tool calls bound the model, one attempt, no resume: the measurement is whether the pod lifecycle works, not how far the character gets.",
+  "cells": [{ "id": "human-paladin", "race": 1, "class": 2 }],
+  "arms": [{ "id": "base" }],
+  "objective": null,
+  "stopAtLevel": 2,
+  "budget": { "episodeMs": 1200000, "idleMs": 600000, "noXpMs": null, "maxToolCalls": 40 },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": false,
+  "maxAttemptsPerCell": 1
+}
