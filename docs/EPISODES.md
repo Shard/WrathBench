@@ -127,7 +127,10 @@ and is informational only.
   run already recorded against it: class-probe's `nightelf-hunter` cell did
   exactly that before definitions were versioned. A change is a new version.
 - **A row naming an unpublished version is refused** by its store key, and the
-  rest of the config stands. So is a published row that no longer checks out.
+  rest of the config stands. So is a row that does not read (no version, an
+  unknown key — the store will not write one, but an older image's may be
+  there) and a published definition that no longer checks out: one bad row
+  never empties the board.
 
 **Arms.** An arm is `{id, note?, image?, command?, args?}`, and a definition
 has at least one; a sweep that tests nothing harness-side has one arm

@@ -191,7 +191,7 @@ export function pairRefusalKey(c: Pick<Campaign, "name" | "version">, ref: strin
 export function parseCampaignDefinitions(raw: unknown): { definitions: PublishedCampaign[]; refused: CampaignRefusal[] } {
   if (raw === undefined) return { definitions: [], refused: [] };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new Error('campaign-defs must be an object of { "<id>@<version>": { definition, hash, source, publishedAt } }');
+    return { definitions: [], refused: [{ key: "campaign-defs", reason: 'campaign-defs must be an object of { "<id>@<version>": { definition, hash, source, publishedAt } }' }] };
   }
   const definitions: PublishedCampaign[] = [];
   const refused: CampaignRefusal[] = [];
@@ -218,6 +218,18 @@ export function parseCampaignDefinitions(raw: unknown): { definitions: Published
 }
 
 /**
+ * Why a `campaigns/<name>` row does not read, or null when it does: the id
+ * and the strict row schema. One check for the reader, which refuses such a
+ * row by key, and the store's write path, which refuses to write one.
+ */
+export function campaignRowProblem(name: string, spec: unknown): string | null {
+  if (!CAMPAIGN_NAME.test(name)) return `campaign ${name}: the id must match ${CAMPAIGN_NAME}`;
+  const parsed = campaignRowSchema.safeParse(spec);
+  if (parsed.success) return null;
+  return `campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, excludeUnhealthy? }`;
+}
+
+/**
  * Parse the `campaigns` block, in declaration order, against the published
  * definitions.
  *
@@ -225,12 +237,14 @@ export function parseCampaignDefinitions(raw: unknown): { definitions: Published
  * the same free account, so an operator can say which sweep matters by where
  * they put it.
  *
- * Two kinds of failure, kept apart. A row the parser cannot READ — not an
- * object, an unknown key, a bad value — throws, as every shape error in the
- * fleet config does, so a store write that would produce it is refused on the
- * spot. A row it can read but will not SCHEDULE — a version nobody has
- * published — is refused by key and left out, and stays listed until the
- * version is published or the row is rewritten.
+ * Nothing here throws. A row the parser cannot read (no version, an unknown
+ * key, a bad value, a bad id) and a row it can read but will not schedule (a
+ * version nobody has published) are both refused by key and left out, and the
+ * rest of the config — every other campaign, the roster, the policy — loads as
+ * if the row were not there: one bad campaign row must never empty the board.
+ * The store still refuses to WRITE a row that does not read
+ * (`campaignRowProblem`), so a malformed row can only be one written before
+ * this shape, by an older image, or past the store.
  */
 export function parseCampaigns(
   raw: unknown,
@@ -238,17 +252,17 @@ export function parseCampaigns(
 ): { campaigns: Campaign[]; refused: CampaignRefusal[] } {
   if (raw === undefined) return { campaigns: [], refused: [] };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new Error("campaigns must be an object of { <id>: { version, enabled, assignments, … } }");
+    return { campaigns: [], refused: [{ key: "campaigns", reason: "campaigns must be an object of { <id>: { version, enabled, assignments, … } }" }] };
   }
   const campaigns: Campaign[] = [];
   const refused: CampaignRefusal[] = [];
   for (const [name, spec] of Object.entries(raw as Record<string, unknown>)) {
-    if (!CAMPAIGN_NAME.test(name)) throw new Error(`campaign ${name}: the id must match ${CAMPAIGN_NAME}`);
-    const parsed = campaignRowSchema.safeParse(spec);
-    if (!parsed.success) {
-      throw new Error(`campaign ${name}: ${issuesOf(parsed.error)} — a row is { version, enabled, assignments [{ model, runsPerCell }], account?, excludeUnhealthy? }`);
+    const problem = campaignRowProblem(name, spec);
+    if (problem !== null) {
+      refused.push({ key: `campaigns/${name}`, campaign: name, reason: problem });
+      continue;
     }
-    const row = parsed.data;
+    const row = campaignRowSchema.parse(spec);
     const ref = campaignRef({ id: name, version: row.version });
     const published = definitions.find((d) => d.ref === ref);
     if (published === undefined) {

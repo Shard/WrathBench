@@ -60,6 +60,7 @@ import {
   publishedCampaignSchema,
   type PublishedCampaignDoc,
 } from "./campaign-def";
+import { campaignRowProblem } from "./campaigns";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
 export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
@@ -136,6 +137,24 @@ function checkedPublication(doc: unknown, where: string): PublishedCampaignDoc {
   const hash = campaignHash(parsed.data.definition);
   if (hash !== parsed.data.hash) throw new ConfigRejected(`${where}: the definition hashes to ${hash}, not ${parsed.data.hash}`);
   return parsed.data;
+}
+
+/**
+ * Refuse to write a campaign row that does not read. The supervisor reads such
+ * a row as a refusal of that campaign alone (`parseCampaigns`), so a store
+ * written before this shape still loads; the store's job is not to write a new
+ * one. Checked on the rows being written, never on the rest of the store, so a
+ * stale row elsewhere cannot block an unrelated edit.
+ */
+function refuseUnreadableCampaignRows(block: unknown): void {
+  if (block === undefined) return;
+  if (typeof block !== "object" || block === null || Array.isArray(block)) {
+    throw new ConfigRejected("campaigns must be an object of { <id>: { version, enabled, assignments, … } }");
+  }
+  for (const [name, row] of Object.entries(block as Record<string, unknown>)) {
+    const problem = campaignRowProblem(name, row);
+    if (problem !== null) throw new ConfigRejected(`campaigns: ${problem}`);
+  }
 }
 
 function hashOf(doc: unknown): string | undefined {
@@ -488,6 +507,7 @@ export class ConfigStore {
           `entries are roster/<name>, campaigns/<name> and queue/<n>`,
       );
     }
+    if (value !== undefined) refuseUnreadableCampaignRows(key === "campaigns" ? value : key.startsWith("campaigns/") ? { [key.slice("campaigns/".length)]: value } : undefined);
     this.write(key, value, opts);
   }
 
@@ -663,6 +683,7 @@ export class ConfigStore {
     // The document as written (a key the renderer would drop is still
     // refused by name), then the config it leaves behind, definitions kept.
     validateFleet(doc);
+    refuseUnreadableCampaignRows((doc as { campaigns?: unknown }).campaigns);
     validateFleet(renderFleet([...rows, ...kept]));
     const at = Date.now();
     const actor = opts.actor ?? DEFAULT_ACTOR;

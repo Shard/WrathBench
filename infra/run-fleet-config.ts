@@ -866,14 +866,10 @@ export function parseFleet(raw: unknown): FleetConfig {
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
   const roster = parseRoster(o.roster);
-  let campaigns: Campaign[];
-  let campaignDefs: PublishedCampaign[];
-  let campaignRefusals: CampaignRefusal[];
-  try {
-    ({ campaigns, definitions: campaignDefs, refused: campaignRefusals } = parseCampaignBlocks(o["campaign-defs"], o.campaigns, roster));
-  } catch (err) {
-    fail(`campaigns: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  // Never throws: a campaign row or a published definition that does not read
+  // is refused by key below, and the roster, the policy and every other
+  // campaign load as if it were not there. One bad row must not empty the board.
+  const { campaigns, definitions: campaignDefs, refused: campaignRefusals } = parseCampaignBlocks(o["campaign-defs"], o.campaigns, roster);
   const jobs: FleetJob[] = [];
   const names = new Set<string>();
   const add = (job: FleetJob): void => {
@@ -886,8 +882,8 @@ export function parseFleet(raw: unknown): FleetConfig {
   const strictJobKeys = new Map<string, string[]>();
   for (const job of parseQueue(o.queue, roster, strictJobKeys)) add(job);
   const refusals: ConfigRefusal[] = [];
-  // A campaign row the parser read but will not schedule — a version nobody
-  // has published — is left out by name, so one row cannot take the rest of
+  // A campaign row refused by key — one that does not read, or names a
+  // version nobody has published — is left out by name, so one row cannot take the rest of
   // the config down. It is also a pin refusal, so `--status` and the
   // supervisor log say it in the same place a refused pin is said.
   for (const r of campaignRefusals) {

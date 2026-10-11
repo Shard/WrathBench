@@ -464,10 +464,35 @@ describe("campaigns: probe sweeps as the third lane", () => {
     expect(config.campaignDefs.map((d) => d.ref).sort()).toEqual(["class-probe@2", "race-probe@1", "solo-probe@1", "window-probe@1"]);
   });
 
-  test("a row stating anything a row does not have refuses the config, generically", () => {
-    expect(() => parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, cells: [{ id: "c1" }] } } }))).toThrow(/campaigns: campaign race-probe/);
-    expect(() => parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, objective: "x" } } }))).toThrow(/campaigns: campaign race-probe/);
-    expect(() => parseFleet(fleetJson([], { campaigns: { "nav-probe": { enabled: true, models: ["son"] } } }))).toThrow(/campaigns: campaign nav-probe/);
+  test("one bad campaign row is refused by key and the rest of the config plans normally: roster, scored lanes, the good campaign", () => {
+    // A row with no version (the pre-definition shape), one with an unknown
+    // key, and a stored definition that no longer parses, beside a good
+    // pinned campaign and a scored roster entry. Before, any of them took the
+    // whole config down, and a fresh boot ran an empty board.
+    const config = parseFleet(
+      fleetJson([], {
+        accounts: { pool: ["RUNNER", "RUNNER2"] },
+        "campaign-defs": { ...FLEET_DEFS, "broken@1": { definition: { id: "broken" } } },
+        campaigns: {
+          "nav-probe": { enabled: true, account: "SHAKEOUT", models: ["son"], cells: [{ id: "coldridge", race: 3, class: 2 }] },
+          "race-probe": { version: 1, objective: "x" },
+          "solo-probe": { version: 1, account: "SOLO", assignments: [{ model: "son" }] },
+        },
+      }),
+    );
+    expect(config.campaignRefusals.map((r) => r.key)).toEqual(["campaign-defs/broken@1", "campaigns/nav-probe", "campaigns/race-probe"]);
+    expect(config.campaignRefusals[1]!.reason).toContain("version");
+    expect(config.refusals.map((r) => r.pin)).toEqual(["campaign nav-probe", "campaign race-probe"]);
+    expect(config.campaigns.map((c) => c.name)).toEqual(["solo-probe"]);
+    expect(Object.keys(config.roster)).toEqual(["glm", "son", "ox"]);
+    // The board: the good campaign's square on its account, and the scored
+    // lanes filling the pool as if the bad rows were not there.
+    const plan = planTick(config, modelStatesOf(rosterModels(config.roster)), () => undefined, "20261011");
+    expect(plan.pinned.map((p) => [p.job.name, p.spawn.account])).toEqual([["solo-probe-coldridge-base", "SOLO"]]);
+    expect(plan.policy.map((p) => [p.job.ref, p.job.episode, p.account])).toEqual([
+      ["glm", "e90", "RUNNER"],
+      ["ox", "e90", "RUNNER2"],
+    ]);
   });
 
   test("a version nobody published is refused by name, not the file, and listed by its store key", () => {
@@ -745,7 +770,7 @@ describe("roster policy", () => {
     expect(() => parseFleet(entry("Fleetsonnetlo"))).toThrow(/the model names its own character/);
     // Nor may a campaign row: a cell is the published definition's, and the
     // store row's strict shape refuses the key outright.
-    expect(() => parseCampaigns({ "solo-probe": { version: 1, character: "Soloprobe" } }, [])).toThrow(/campaign solo-probe/);
+    expect(parseCampaigns({ "solo-probe": { version: 1, character: "Soloprobe" } }, []).refused[0]!.reason).toMatch(/campaign solo-probe/);
   });
 
   test("a model id is never refused for its billing: the verdict is derived, and billing overrides it", () => {

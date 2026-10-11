@@ -190,9 +190,10 @@ describe("/api/campaigns", () => {
     expect(body.campaigns.map((c) => c.key)).toEqual(["race-probe@1"]);
   });
 
-  test("a campaigns block the parser cannot read at all is one refusal, never an empty page that says nothing", async () => {
+  test("a row that does not read is refused by its key, and the published versions are still served", async () => {
     const body = await campaigns([], { ...CONFIG, campaigns: { "race-probe": { enabled: true, models: ["m"], cells: [] } } }, true);
-    expect(body.refused).toEqual([{ key: "campaigns", reason: expect.stringContaining("campaign race-probe") }]);
+    expect(body.refused).toEqual([{ key: "campaigns/race-probe", reason: expect.stringContaining("campaign race-probe") }]);
+    expect(body.campaigns.map((c) => `${c.key}:${c.state}`)).toEqual(["race-probe@1:unassigned"]);
   });
 
   test("an empty config store serves no campaigns and no refusals", async () => {

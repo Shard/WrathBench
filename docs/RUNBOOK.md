@@ -277,8 +277,9 @@ campaign-defs  published campaign definitions, `<id>@<version>` → { definition
 campaigns   probe campaigns (docs/EPISODES.md, `probing`): the DYNAMIC half only —
             { <id>: { version, enabled, assignments [{ model: <roster name>, runsPerCell }],
             account?, excludeUnhealthy? } }, strict. The shape (cells, arms, start, leash, stop
-            level, resume, attempt cap) is the published definition `<id>@<version>`; a row naming
-            a version nobody published is refused by name and the rest of the config stands.
+            level, resume, attempt cap) is the published definition `<id>@<version>`. A row the store
+            will not write (no version, an unknown key) or one naming a version nobody published is
+            refused by name on read, alone: the roster, the policy and every other campaign load.
             `version` is explicit, never "latest", so a new publish cannot re-target a sweep. Every
             run is an unscored `probing` episode. With `account` the campaign is PINNED and follows
             the pinned-job account rules; without, the policy schedules it between the evals and

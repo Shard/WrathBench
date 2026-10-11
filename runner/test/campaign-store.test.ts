@@ -94,6 +94,25 @@ describe("the generic write paths", () => {
     }
   });
 
+  test("a row that does not read is never written; one already stored blocks no other edit, and reads as its own refusal", () => {
+    const { s, path } = store();
+    expect(() => s.put("campaigns/probe", { enabled: true, models: ["glm"] })).toThrow(/campaign probe/);
+    expect(() => s.patch("campaigns/probe", { cells: [] })).toThrow(/campaign probe/);
+    expect(() => s.put("campaigns/bad id", { version: 1 })).toThrow(ConfigRejected);
+    expect(() => s.seed({ ...CONFIG, campaigns: { probe: { version: 1, objective: "x" } } }, { force: true })).toThrow(/campaign probe/);
+    // A row written past the store (an older image's shape): the next edit
+    // elsewhere still goes through, and the reader refuses that row alone.
+    s.db.run("INSERT INTO config (key, ord, json, updated_at) VALUES (?, 0, ?, 0)", ["campaigns/legacy", JSON.stringify({ enabled: true, models: ["glm"] })]);
+    s.publishDefinition(publication(def));
+    s.put("campaigns/probe", { version: 1, assignments: [{ model: "glm" }] });
+    s.patch("roster/glm", { tier: "t2" });
+    s.close();
+    const roster = readFleetRoster(path, null);
+    expect(roster.campaigns.map((c) => c.name)).toEqual(["probe"]);
+    expect(roster.campaignRefusals.map((r) => r.key)).toEqual(["campaigns/legacy"]);
+    expect(roster.models.find((m) => m.name === "glm")?.tier).toBe("t2");
+  });
+
   test("a row naming an unpublished version is accepted by the store and refused by name on read", () => {
     const { s, path } = store();
     s.put("campaigns/later", { version: 1, assignments: [{ model: "glm" }] });

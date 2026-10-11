@@ -52,11 +52,24 @@ describe("the store row", () => {
     expect(campaigns.map((c) => c.name)).toEqual(["two", "one"]);
   });
 
-  test("any key a row does not have is refused, generically and on the spot", () => {
+  test("a row that does not read is refused by key, alone: no version, an unknown key, a bad value, a bad id", () => {
     for (const key of ["cells", "objective", "models", "runsPerCell", "arms", "image"]) {
-      expect(() => parseCampaignBlocks(defsBlock(one), { one: { version: 1, [key]: [] } })).toThrow(/campaign one/);
+      const r = parseCampaignBlocks(defsBlock(one, two), { one: { version: 1, [key]: [] }, two: { version: 1 } });
+      expect(r.campaigns.map((c) => c.name)).toEqual(["two"]);
+      expect(r.refused).toEqual([{ key: "campaigns/one", campaign: "one", reason: expect.stringContaining("campaign one") }]);
     }
-    expect(() => parseCampaignBlocks(defsBlock(one), { one: { enabled: true } })).toThrow(/version/);
+    const bad = parseCampaignBlocks(defsBlock(one, two), {
+      one: { enabled: true },
+      "bad id": { version: 1 },
+      typed: { version: "1" },
+      two: { version: 1 },
+    });
+    expect(bad.campaigns.map((c) => c.name)).toEqual(["two"]);
+    expect(bad.refused.map((r) => r.key)).toEqual(["campaigns/one", "campaigns/bad id", "campaigns/typed"]);
+    expect(bad.refused[0]!.reason).toContain("version");
+    // A block that is not an object at all is one refusal, never a throw.
+    expect(parseCampaignBlocks(defsBlock(one), []).refused).toEqual([{ key: "campaigns", reason: expect.stringContaining("must be an object") }]);
+    expect(parseCampaignBlocks("x", { one: { version: 1 } }).refused.map((r) => r.key)).toEqual(["campaign-defs", "campaigns/one"]);
   });
 
   test("a row naming an unpublished version is refused by key, and the rest still load", () => {
@@ -82,8 +95,8 @@ describe("the published definitions", () => {
     expect(r.refused[2]!.reason).toContain("holds one@1");
   });
 
-  test("the block itself must be an object", () => {
-    expect(() => parseCampaignDefinitions([])).toThrow(/campaign-defs/);
+  test("a block that is not an object is one refusal, never a throw", () => {
+    expect(parseCampaignDefinitions([])).toEqual({ definitions: [], refused: [{ key: "campaign-defs", reason: expect.stringContaining("must be an object") }] });
   });
 });
 
