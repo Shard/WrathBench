@@ -279,10 +279,17 @@ if [[ "${PUSH}" -eq 1 ]]; then
     else
       crane push "$(tarball "${ref}")" "${ref}"
     fi
-    digest="$(pushed_digest "${ref}")"
-    [[ "${digest}" == sha256:* ]] || die "pushed ${ref} but could not read its digest back"
-    say "pushed ${ref}@${digest}"
-    [[ -z "${DIGESTS}" ]] || printf '%s@%s\n' "${ref}" "${digest}" >> "${DIGESTS}"
+    digest="$(pushed_digest "${ref}" || true)"
+    if [[ "${digest}" == sha256:* ]]; then
+      say "pushed ${ref}@${digest}"
+      [[ -z "${DIGESTS}" ]] || printf '%s@%s\n' "${ref}" "${digest}" >> "${DIGESTS}"
+    elif [[ -n "${DIGESTS}" ]]; then
+      die "pushed ${ref} but could not read its digest back, and --digests needs it"
+    else
+      # A release does not need the digest, and must not stop half-pushed
+      # because a daemon kept no record of it.
+      say "pushed ${ref} (its digest could not be read back)"
+    fi
   done
   say "pushed ${#BUILT[@]} image(s) at ${TAG}; set image.tag=${TAG} in the cluster repo"
 else

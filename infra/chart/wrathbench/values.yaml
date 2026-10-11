@@ -261,9 +261,11 @@ fleet:
 runPods:
   # Image REPOSITORIES an arm may name, matched on the part before the tag or
   # digest, exactly or as a path prefix. Empty means the release runner alone:
-  # `<image.registry>/<image.names.runner>`. A cluster whose PR builds land
-  # elsewhere lists that repository too (e.g. ghcr.io/shard/wrathbench-runner);
-  # anything else, an untagged ref, or `:latest` is refused before a pod exists.
+  # `<image.registry>/<image.names.runner>`, which is also where the branch-image
+  # workflow pushes (docs/RUNBOOK.md "A branch on the main server"). A cluster
+  # whose branch builds land elsewhere lists that repository too (e.g.
+  # ghcr.io/example/wrathbench-runner); anything else, an untagged ref, or
+  # `:latest` is refused before a pod exists.
   allowedImages: []
   # Pull Secrets for run pods only, by name, on top of the chart-wide
   # `imagePullSecrets` above (the two lists are merged, once each). For a

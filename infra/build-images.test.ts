@@ -136,7 +136,7 @@ case "$1" in
     if [[ "$2" == "inspect" ]]; then
       ref="\${!#}"
       if [[ "$*" == *Size* ]]; then echo 1073741824
-      elif [[ "$*" == *RepoDigests* ]]; then echo "\${ref%:*}@sha256:\${FAKE_DIGEST}"
+      elif [[ "$*" == *RepoDigests* ]]; then [[ -n "\${FAKE_NO_REPODIGESTS:-}" ]] || echo "\${ref%:*}@sha256:\${FAKE_DIGEST}"
       else echo sha256:0123456789abcdef0123; fi
     fi
     ;;
@@ -371,6 +371,18 @@ describe("build-images.sh and the image guard", () => {
     expect(existsSync(file)).toBe(false);
     expect(run(tree, ["--only", "runner", "--push", "--registry", "reg.example/wrathbench", "--digests", file]).code).toBe(0);
     expect(readFileSync(file, "utf8")).toBe(`${ref}@sha256:${FAKE_DIGEST}\n`);
+  });
+
+  test("a daemon that kept no digest for the push does not stop a release, but does stop --digests", () => {
+    const { tree } = makeRepo();
+    const env = { FAKE_NO_REPODIGESTS: "1" };
+    const release = run(tree, ["--push", "--registry", "reg.example/wrathbench", "--only", "runner"], { env });
+    expect(release.code).toBe(0);
+    expect(release.out).toContain("its digest could not be read back");
+    const file = join(tempDir("wb-build-images-digests-"), "digests.txt");
+    const recorded = run(tree, ["--push", "--registry", "reg.example/wrathbench", "--only", "runner", "--digests", file], { env });
+    expect(recorded.code).toBe(1);
+    expect(recorded.out).toContain("--digests needs it");
   });
 });
 
