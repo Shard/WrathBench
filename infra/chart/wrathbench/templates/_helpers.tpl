@@ -120,6 +120,23 @@ seccompProfile:
   type: RuntimeDefault
 {{- end -}}
 
+{{/*
+The pull Secrets every WrathBench-image pod carries. The images live in a
+private Harbor project (operator decision 2026-10-11), and the deploying
+cluster owns the Secret; the chart only names it. Empty renders nothing, which
+is what a public registry wants. The database pods are not included: MySQL and
+ClickHouse are upstream public images, and templates/_helpers.tpl's rule that
+their pod templates never move with the release stands.
+*/}}
+{{- define "wrathbench.imagePullSecrets" -}}
+{{- with .Values.imagePullSecrets }}
+imagePullSecrets:
+{{- range . }}
+  - name: {{ . }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "wrathbench.containerSecurityContext" -}}
 allowPrivilegeEscalation: false
 capabilities:

@@ -64,6 +64,16 @@ storage:
   codexHome:
     size: 5Gi
 
+# The WrathBench images live in a PRIVATE registry project (operator decision
+# 2026-10-11), so every pod built from them — fleet, runner, viewer, publisher,
+# collector, worldserver, authserver, the bootstrap and db-import Jobs, and
+# every run pod — needs a pull Secret, named here. The deploying cluster
+# creates the Secret (kubernetes.io/dockerconfigjson) and names it in its
+# HelmRelease; the chart only references it. Empty renders nothing, for a
+# public registry. The MySQL and ClickHouse pods pull upstream public images
+# and are deliberately left out.
+imagePullSecrets: []
+
 # Existing Secret, created by the deploying cluster's HelmRelease. Keys are
 # the `.env` names.
 # The chart never templates a secret value and never puts one on a command
@@ -241,9 +251,11 @@ runPods:
   # elsewhere lists that repository too (e.g. ghcr.io/shard/wrathbench-runner);
   # anything else, an untagged ref, or `:latest` is refused before a pod exists.
   allowedImages: []
-  # Pull Secrets for run pods only, by name, on top of whatever the node already
-  # authenticates to. The deploying cluster creates the Secret (a GHCR token for
-  # a private package, say); the chart only references it.
+  # Pull Secrets for run pods only, by name, on top of the chart-wide
+  # `imagePullSecrets` above (the two lists are merged, once each). For a
+  # repository in `allowedImages` that the chart-wide Secret cannot pull — a
+  # GHCR token for a private package, say. The deploying cluster creates the
+  # Secret; the chart only references it.
   imagePullSecrets: []
   resources:
     requests:

@@ -67,6 +67,7 @@ spec:
       {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
       # Only the fleet pod holds an API token (templates/run-pods.yaml).
       automountServiceAccountToken: false
       containers:

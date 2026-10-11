@@ -51,6 +51,7 @@ spec:
       {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
       # The one pod with a token: the run-pod launcher creates, watches and
       # deletes pods in this namespace (templates/run-pods.yaml holds the Role).
       serviceAccountName: {{ include "wrathbench.fullname" . }}-fleet

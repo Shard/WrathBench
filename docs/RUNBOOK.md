@@ -1218,9 +1218,10 @@ and the launcher's settings. Two values matter at deploy time:
   the repository PR builds are pushed to (`ghcr.io/shard/wrathbench-runner`).
   An image outside the list, untagged, or `:latest` is refused before a pod
   exists.
-- `runPods.imagePullSecrets` — pull Secret names for run pods, on top of what
-  the node already authenticates to; the cluster repo creates the Secret for a
-  private package and the chart references it by name.
+- `runPods.imagePullSecrets` — pull Secret names for run pods only, merged
+  once each with the chart-wide `imagePullSecrets` every WrathBench pod carries
+  ("Secrets", below); for a repository in `allowedImages` the chart-wide Secret
+  cannot pull. The cluster repo creates the Secret and the chart names it.
 
 A run pod gets the module secret and the one credential its driver bills (its
 lane's `CLAUDE_CODE_OAUTH_TOKEN*`, its `apiKeyEnv`, or the mounted codex home),
@@ -1397,6 +1398,18 @@ job needs the token of the lane it was scheduled on there (`claude setup-token`)
 — `CLAUDE_CODE_OAUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN_2` for the second
 subscription; without it the roster refuses the episode with a `launch-failed`
 row naming that variable, rather than burning a session.
+
+**The images are private.** WrathBench's images live in a private Harbor
+project (`harbor.nusphere.shard.page/wrathbench`, operator decision
+2026-10-11), so every pod built from them — fleet, runner, viewer, publisher,
+collector, worldserver, authserver, the bootstrap and db-import Jobs, and every
+run pod — pulls with a Secret the cluster owns (`wrathbench-harbor-pull`, a
+`kubernetes.io/dockerconfigjson`), named in the chart's `imagePullSecrets`
+value from the HelmRelease. The chart never holds the credential. The MySQL and
+ClickHouse pods pull upstream public images and carry none. Run pods add
+`runPods.imagePullSecrets` for a repository the Harbor Secret cannot pull.
+`runPods.allowedImages` defaults to `<image.registry>/wrathbench-runner`, so
+the move of the registry project moves the allow-list with it.
 
 A run pod ("Run pods", above) gets the module secret and only the credential
 its driver bills — its lane's token, its `apiKeyEnv`, or the mounted codex

@@ -44,6 +44,7 @@ spec:
       {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
       initContainers:
         # The hooks run as soon as Helm creates them; the db Deployment may
         # still be starting. `dbimport` fails fast on a refused connection, so
@@ -112,6 +113,7 @@ spec:
       {{- end }}
       nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8 }}
       securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 8 }}
+      {{- include "wrathbench.imagePullSecrets" . | nindent 6 }}
       initContainers:
         # The hooks run as soon as Helm creates them; the db Deployment may
         # still be starting. `dbimport` fails fast on a refused connection, so

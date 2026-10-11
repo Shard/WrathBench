@@ -669,6 +669,39 @@ describe("the chart's run-pod template", () => {
   });
 
   const helm = Bun.which("helm");
+
+  test.skipIf(helm === null)("rendered, every WrathBench-image pod carries the chart-wide pull Secrets, and run pods add their own once each", () => {
+    const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/wrathbench", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "imagePullSecrets={wrathbench-harbor-pull}", "--set", "runPods.imagePullSecrets={ghcr-pull,wrathbench-harbor-pull}"], { stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(0);
+    const docs = r.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: Record<string, unknown> }; jobTemplate?: unknown } } | null);
+    const specOf = (kind: string, name: string): Record<string, unknown> => {
+      const d = docs.find((x) => x?.kind === kind && x.metadata?.name === name);
+      expect(d, `${kind}/${name} renders`).toBeDefined();
+      return d!.spec!.template!.spec!;
+    };
+    const want = [{ name: "wrathbench-harbor-pull" }];
+    for (const name of ["fleet", "runner", "viewer", "publisher", "collector", "worldserver", "authserver"]) {
+      expect(specOf("Deployment", `wrathbench-${name}`)["imagePullSecrets"], name).toEqual(want);
+    }
+    for (const d of docs) if (d?.kind === "Job") expect(d.spec!.template!.spec!["imagePullSecrets"], d.metadata!.name).toEqual(want);
+    // Upstream public images: the database pods carry none, and do not move.
+    expect(specOf("Deployment", "wrathbench-db")["imagePullSecrets"]).toBeUndefined();
+    expect(specOf("StatefulSet", "wrathbench-clickhouse")["imagePullSecrets"]).toBeUndefined();
+    const cm = docs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template") as { data: { "pod.json": string } } | undefined;
+    expect(cm).toBeDefined();
+    const tpl = JSON.parse(cm!.data["pod.json"]) as Pod;
+    expect(tpl.spec["imagePullSecrets"]).toEqual([{ name: "wrathbench-harbor-pull" }, { name: "ghcr-pull" }]);
+    // The default renders no key on any pod spec at all (a public registry).
+    const plain = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/wrathbench", "--set", "image.tag=t-1-gabcdef0"], { stdout: "pipe", stderr: "pipe" });
+    expect(plain.exitCode).toBe(0);
+    const plainDocs = plain.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: Record<string, unknown> } }; data?: Record<string, string> } | null);
+    for (const d of plainDocs) {
+      if (d?.spec?.template?.spec !== undefined) expect(d.spec.template.spec["imagePullSecrets"], `${d.kind}/${d.metadata?.name}`).toBeUndefined();
+    }
+    const plainCm = plainDocs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template");
+    expect((JSON.parse(plainCm!.data!["pod.json"]!) as Pod).spec["imagePullSecrets"]).toBeUndefined();
+  });
+
   test.skipIf(helm === null)("rendered, the template builds a pod the env builder accepts, with only this driver's secrets", () => {
     const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/library", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "runPods.allowedImages={harbor.example/library/wrathbench-runner,ghcr.io/shard/wrathbench-runner}", "--set", "runPods.imagePullSecrets={ghcr-pull}"], { stdout: "pipe", stderr: "pipe" });
     expect(r.exitCode).toBe(0);

@@ -26,9 +26,11 @@ spec:
   securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 4 }}
   # run-roster's episode grace; the launcher sets the same number on each pod.
   terminationGracePeriodSeconds: 90
-  {{- if .Values.runPods.imagePullSecrets }}
+  {{- /* The chart-wide list every WrathBench pod carries, plus the run pods' own, once each. */}}
+  {{- $pull := uniq (concat (default (list) .Values.imagePullSecrets) (default (list) .Values.runPods.imagePullSecrets)) }}
+  {{- if $pull }}
   imagePullSecrets:
-    {{- range .Values.runPods.imagePullSecrets }}
+    {{- range $pull }}
     - name: {{ . }}
     {{- end }}
   {{- end }}
