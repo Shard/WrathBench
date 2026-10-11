@@ -119,7 +119,7 @@ function fixture(probes: Probe[], fleet?: unknown, raw = false): { runs: string;
     if (raw) seedRaw(fleetPath, fleet);
     else {
       const store = new ConfigStore(fleetPath);
-      seedPublished(store, fleet as Record<string, unknown>);
+      seedPublished(store, fleet);
       store.close();
     }
   }

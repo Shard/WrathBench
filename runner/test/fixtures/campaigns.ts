@@ -75,8 +75,8 @@ export function joined(
  * `campaign-defs` block published first, then the document seeded. A seed
  * writes no definition, and accepts one only as the store already holds it.
  */
-export function seedPublished(store: Pick<ConfigStore, "publishDefinition" | "seed">, doc: Record<string, unknown>): void {
-  const defs = (doc["campaign-defs"] ?? {}) as Record<string, unknown>;
+export function seedPublished(store: Pick<ConfigStore, "publishDefinition" | "seed">, doc: unknown): void {
+  const defs = ((doc as { "campaign-defs"?: unknown })["campaign-defs"] ?? {}) as Record<string, unknown>;
   for (const pub of Object.values(defs)) store.publishDefinition(pub);
   store.seed(doc);
 }
