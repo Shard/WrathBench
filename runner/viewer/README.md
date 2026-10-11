@@ -423,6 +423,10 @@ It is not authentication: a non-browser client is not what it guards, and DNS
 rebinding, where the attacking page shares the viewer's origin, needs a Host
 allowlist or a login in front of the viewer.
 
+A roster write is also held to the provider table (`runner/src/providers.ts`):
+an `apiKeyEnv` that is not a listed provider key, or a key sent towards a host
+its provider does not own, is a 400 and nothing is stored.
+
 Two things the page has to work around, and they are properties of this API
 rather than of the page. There is **no if-version and no conflict detection**:
 `version` is the last audit id and a write carries no expectation of it, so the

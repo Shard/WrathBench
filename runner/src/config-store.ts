@@ -46,7 +46,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { parseFleet } from "../../infra/run-fleet-config";
+import { parseFleet, rosterKeyRefusal } from "../../infra/run-fleet-config";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
 export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
@@ -262,12 +262,29 @@ export function renderFleet(rows: readonly ConfigRow[]): Record<string, unknown>
 }
 
 /** The accept/reject gate: exactly what the supervisor does to the file. */
-export function validateFleet(doc: unknown): void {
+export function validateFleet(doc: unknown, env: Record<string, string | undefined> = process.env): void {
   try {
-    parseFleet(doc);
+    parseFleet(doc, env);
   } catch (e) {
     throw new ConfigRejected(e instanceof Error ? e.message : String(e));
   }
+}
+
+/**
+ * The store's own refusal of a roster entry whose provider key would go to a
+ * host its provider does not own (`runner/src/providers.ts`).
+ *
+ * `parseFleet` only REFUSES such an entry — it stays in the catalog and nothing
+ * schedules it, which is right for a document already on disk. A write is
+ * different: there is no reason to store a pairing the harness will never
+ * honour, and the write surface is exactly where one would arrive from. So the
+ * store refuses the write outright, judging only the row being written, so an
+ * older row the table now refuses never blocks an unrelated edit.
+ */
+function refuseKeyPairing(key: string, value: unknown, env: Record<string, string | undefined>): void {
+  if (!key.startsWith("roster/") || typeof value !== "object" || value === null || Array.isArray(value)) return;
+  const why = rosterKeyRefusal(value as Record<string, unknown>, env);
+  if (why !== null) throw new ConfigRejected(`${key}: ${why}`);
 }
 
 // ------------------------------------------------------------------- store
@@ -275,6 +292,12 @@ export function validateFleet(doc: unknown): void {
 export interface OpenOptions {
   /** A reader (the supervisor). Never creates the file and never migrates it. */
   readonly?: boolean;
+  /**
+   * Where a write's validation reads deploy-time config from (the self-hosted
+   * model hosts, `runner/src/providers.ts`). Defaults to the process's own;
+   * a test states the deployment it means.
+   */
+  env?: Record<string, string | undefined>;
 }
 
 export interface PutOptions {
@@ -288,9 +311,11 @@ export const DEFAULT_ACTOR = "viewer";
 export class ConfigStore {
   readonly db: Database;
   private readonly writable: boolean;
+  private readonly env: Record<string, string | undefined>;
 
   constructor(path: string, opts: OpenOptions = {}) {
     this.writable = opts.readonly !== true;
+    this.env = opts.env ?? process.env;
     if (this.writable) mkdirSync(dirname(path), { recursive: true });
     this.db = this.writable ? new Database(path) : new Database(path, { readonly: true });
     try {
@@ -437,7 +462,8 @@ export class ConfigStore {
     if (value !== undefined) {
       next.push({ key, ord: before?.ord ?? this.nextOrd(key, rows), value, updatedAt: at });
     }
-    validateFleet(renderFleet(next));
+    validateFleet(renderFleet(next), this.env);
+    refuseKeyPairing(key, value, this.env);
     const tx = this.db.transaction(() => {
       if (value === undefined) {
         this.db.run("DELETE FROM config WHERE key = ?", [key]);
@@ -558,8 +584,9 @@ export class ConfigStore {
     this.requireWritable();
     const existing = this.rows();
     if (existing.length > 0 && opts.force !== true) return { seeded: false, keys: existing.length };
-    validateFleet(doc);
+    validateFleet(doc, this.env);
     const rows = splitFleet(doc);
+    for (const r of rows) refuseKeyPairing(r.key, r.value, this.env);
     const at = Date.now();
     const actor = opts.actor ?? DEFAULT_ACTOR;
     const note = opts.note ?? (existing.length > 0 ? "reseed --force" : "seed");

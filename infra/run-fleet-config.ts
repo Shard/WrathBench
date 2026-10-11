@@ -12,6 +12,7 @@ import { harnessSeries } from "../runner/src/comparability";
 import { isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
+import { apiKeyRefusal, DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
 import { campaignWork, parseCampaigns, type Campaign, type ProbeRun } from "../runner/src/campaigns";
 import { unversionedOwner } from "../runner/src/campaign-defs";
 import {
@@ -807,7 +808,32 @@ function refJobNames(name: string, jobs: readonly FleetJob[], campaigns: readonl
 }
 
 /** Parse + validate a fleet config. Throws with a config-error message. */
-export function parseFleet(raw: unknown): FleetConfig {
+/**
+ * Why a roster entry's `apiKeyEnv` may not be sent to its `apiBase`
+ * (`runner/src/providers.ts`), or null when the pairing holds. The defaults
+ * are the runner's: no base is OpenRouter and no key name is `OPENROUTER_KEY`,
+ * so an entry stating only a non-OpenRouter base is refused — it would send
+ * the OpenRouter key there. Only the openai driver sends a key; the CLI
+ * drivers are given no `--api-key-env` at all (`episodeArgv`).
+ *
+ * `env` is where the self-hosted hosts are read from (deploy-time config),
+ * injected so a test states the deployment it means.
+ */
+export function rosterKeyRefusal(
+  e: { driver?: unknown; apiBase?: unknown; apiKeyEnv?: unknown },
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  if ((e.driver ?? "openai") !== "openai") return null;
+  if (e.apiKeyEnv !== undefined && typeof e.apiKeyEnv !== "string") return "apiKeyEnv must be the NAME of the env var holding the key";
+  if (e.apiBase !== undefined && typeof e.apiBase !== "string") return "apiBase must be a URL";
+  return apiKeyRefusal(e.apiKeyEnv ?? DEFAULT_API_KEY_ENV, e.apiBase ?? DEFAULT_API_BASE, env);
+}
+
+/**
+ * `env` is read for one thing, the deploy-time self-hosted model hosts
+ * (`rosterKeyRefusal`); every other verdict is the document's alone.
+ */
+export function parseFleet(raw: unknown, env: Record<string, string | undefined> = process.env): FleetConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail("fleet config must be a JSON object");
   }
@@ -924,6 +950,21 @@ export function parseFleet(raw: unknown): FleetConfig {
     const keys = unknownKeysOf(e, ROSTER_ENTRY_KEYS);
     if (keys.length === 0) continue;
     const why = strictKeyWhy("roster entry", keys, ROSTER_ENTRY_KEYS);
+    roster[name] = { ...e, refused: why };
+    refusals.push({
+      pin: `roster ${name}`,
+      why: `${why} — the entry is in the catalog and scheduled by nothing`,
+      jobs: refJobNames(name, jobs, campaigns),
+    });
+  }
+  // A provider key named towards a host its provider does not own
+  // (runner/src/providers.ts). Refused as the ENTRY, like the two around it:
+  // the rest of the roster stays in effect, and nothing launches a run that
+  // would send the variable anywhere.
+  for (const [name, e] of Object.entries(roster)) {
+    if (e.refused !== undefined) continue;
+    const why = rosterKeyRefusal(e, env);
+    if (why === null) continue;
     roster[name] = { ...e, refused: why };
     refusals.push({
       pin: `roster ${name}`,

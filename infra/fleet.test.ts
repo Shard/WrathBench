@@ -22,7 +22,7 @@ import {
   jobArgv,
   fleetComplete,
   resolveStatePath,
-  parseFleet,
+  parseFleet as parseFleetIn,
   rereadFleet,
   formatConfigBanner,
   loadConfigForRead,
@@ -123,6 +123,18 @@ import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";
 
 const tempDir = tempDirs();
+
+/**
+ * The deployment the self-hosted fixtures below assume: their LAN boxes are
+ * hosts it allows the self-hosted key to reach (runner/src/providers.ts).
+ * Stated, never read from the process, so an operator's own `.env` cannot
+ * change a verdict here.
+ */
+const LAN_ENV = { WRATHBENCH_LOCAL_MODEL_HOSTS: "10.0.0.1:1234, 192.168.100.20:1234" };
+
+/** `parseFleet` under that deployment unless a test states another. */
+const parseFleet = (raw: unknown, env: Record<string, string | undefined> = LAN_ENV): ReturnType<typeof parseFleetIn> =>
+  parseFleetIn(raw, env);
 
 /**
  * The fleet is config, and the config's whole job is to become a set of
@@ -257,6 +269,75 @@ describe("parseFleet", () => {
     // A lane spelling that looks like it would work gets its own alternative.
     const lane = parseFleet(fleetJson([], { roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", tokenEnv: "CLAUDE_CODE_OAUTH_TOKEN_2" } } }));
     expect(lane.refusals[0]!.why).toMatch(/use `subscription`, the NAME of the env var/);
+  });
+
+  test("an entry that would send a key anywhere but its own provider is refused by name, and the rest of the roster stands", () => {
+    const config = parseFleet(
+      fleetJson([], {
+        roster: {
+          glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
+          // A harness secret as the "key", to the provider's own host.
+          lane: { tier: "t1", model: "vendor/a", apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN" },
+          mod: { tier: "t1", model: "vendor/b", apiBase: "https://openrouter.ai/api/v1", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" },
+          // A real provider key, to somebody else's host.
+          away: { tier: "t1", model: "vendor/c", apiBase: "https://collector.example/v1", apiKeyEnv: "OPENROUTER_KEY" },
+          // A lookalike host that a substring match would take for the real one.
+          alike: { tier: "t1", model: "vendor/d", apiBase: "https://openrouter.ai.collector.example/v1" },
+          // Only a base: the default key name is OpenRouter's, which may not go to Cerebras.
+          bare: { tier: "t1", model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1" },
+          // The right key, over plain http.
+          plain: { tier: "t1", model: "vendor/e", apiBase: "http://openrouter.ai/api/v1" },
+          // A name no provider row holds.
+          other: { tier: "t1", model: "vendor/f", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "SOME_OTHER_KEY" },
+        },
+      }),
+      {},
+    );
+    expect(config.refusals.map((r) => r.pin).sort()).toEqual(
+      ["roster alike", "roster away", "roster bare", "roster lane", "roster mod", "roster other", "roster plain"],
+    );
+    const why = (name: string): string => config.refusals.find((r) => r.pin === `roster ${name}`)!.why;
+    expect(why("lane")).toMatch(/CLAUDE_CODE_OAUTH_TOKEN names a harness or infrastructure credential/);
+    expect(why("mod")).toMatch(/WRATHBENCH_MODULE_SECRET names a harness or infrastructure credential/);
+    expect(why("away")).toMatch(/OPENROUTER_KEY is OpenRouter's key and may be sent only to openrouter.ai — not collector.example/);
+    expect(why("alike")).toMatch(/not openrouter.ai.collector.example/);
+    expect(why("bare")).toMatch(/OPENROUTER_KEY is OpenRouter's key .* not api.cerebras.ai/);
+    expect(why("plain")).toMatch(/https only/);
+    expect(why("other")).toMatch(/SOME_OTHER_KEY is not a provider key this harness sends anywhere/);
+    for (const name of ["lane", "mod", "away", "alike", "bare", "plain", "other"]) {
+      expect(policyExclusion(config, name)).toBe(config.roster[name]!.refused!);
+    }
+    // Refused, never dropped: every entry is still in the catalog, and the
+    // well-formed one is untouched.
+    expect(Object.keys(config.roster).length).toBe(8);
+    expect(config.roster["glm"]!.refused).toBeUndefined();
+    expect([...policyRefs(config)]).toEqual(["glm"]);
+  });
+
+  test("each provider key reaches its own host; the self-hosted key reaches only the hosts the deployment names", () => {
+    const roster = {
+      or: { tier: "t1", model: "z-ai/glm-5.2:free" },
+      oc: { tier: "t1", model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1", apiKeyEnv: "OPENCODE_KEY", billing: "paid" },
+      cb: { tier: "t1", model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_KEY" },
+      ds: { tier: "t1", model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_KEY" },
+      lan: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" },
+      // Claude-code and codex entries send no key at all, so nothing to pair.
+      son: { tier: "t1", model: "sonnet", driver: "claude-code" },
+    };
+    expect(parseFleet(fleetJson([], { roster }), LAN_ENV).refusals).toEqual([]);
+    // No self-hosted host configured: the LAN entry alone is refused.
+    const none = parseFleet(fleetJson([], { roster }), {});
+    expect(none.refusals.map((r) => r.pin)).toEqual(["roster lan"]);
+    expect(none.refusals[0]!.why).toMatch(/names no self-hosted model host \(WRATHBENCH_LOCAL_MODEL_HOSTS\)/);
+    // A host the deployment does not name, or the right host on another port.
+    for (const apiBase of ["http://192.168.100.21:1234/v1", "http://192.168.100.20:9999/v1"]) {
+      const moved = parseFleet(fleetJson([], { roster: { lan: { ...roster.lan, apiBase } } }), LAN_ENV);
+      expect(moved.refusals[0]!.why).toMatch(/may be sent only to a host WRATHBENCH_LOCAL_MODEL_HOSTS lists/);
+    }
+    // A host listed without a port allows any port on it.
+    expect(parseFleet(fleetJson([], { roster: { lan: { ...roster.lan, apiBase: "http://192.168.100.20:9999/v1" } } }), {
+      WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20",
+    }).refusals).toEqual([]);
   });
 
   // Provider routing (issue #25, operator decision 2026-09-16). Pinned routing
@@ -1147,7 +1228,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
       "nav-probe": { tier: "t1", model: "sonnet", driver: "claude-code" },
       glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
       ox: { model: "stealth/ox-alpha:free", tier: "t2" },
-      qwen: { model: "qwen/q", driver: "openai", apiBase: "http://10.0.0.1:1234/v1", apiKeyEnv: "K", tier: "t1" },
+      qwen: { model: "qwen/q", driver: "openai", apiBase: "http://10.0.0.1:1234/v1", apiKeyEnv: "LMSTUDIO_KEY", tier: "t1" },
     },
     queue: [
       { ref: "nav-probe", episode: "freeplay", account: "SHAKEOUT", repeat: "loop" },
@@ -1160,7 +1241,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
   });
 
   test("the job shape: a job with an account is pinned, the rest are the pool's", () => {
-    const config = parseFleet(nextShape());
+    const config = parseFleet(nextShape(), LAN_ENV);
     expect(pinnedJobs(config).map((j) => [j.name, j.account])).toEqual([["nav-probe-freeplay", "SHAKEOUT"]]);
     expect(config.accounts.pinned).toEqual({ SHAKEOUT: "nav-probe-freeplay" });
     expect(config.accounts.pool).toEqual(["RUNNER", "RUNNER2", "RUNNER3"]);
@@ -1855,12 +1936,12 @@ describe("scheduling policy: defer ladder and retirement", () => {
       accounts: { pool: ["RUNNER"], paid: ["PAID"], local: ["LOCALBOX"] },
       roster: {
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
-        big: { tier: "t1", model: "vendor/big", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
-        local: { tier: "t1", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+        big: { tier: "t1", model: "vendor/big", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_KEY" },
+        local: { tier: "t1", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY", race: 1, class: 2 },
       },
       policy: { paid: {} },
     };
-    const config = parseFleet(raw);
+    const config = parseFleet(raw, LAN_ENV);
     const states = modelStatesOf(rosterModels(config.roster), [], NOW, config.policy);
     const args = {
       states,
@@ -1926,15 +2007,15 @@ describe("scheduling policy: defer ladder and retirement", () => {
     const raw = {
       accounts: { pool: ["RUNNER", "RUNNER2", "RUNNER3"], paid: ["PAID"], local: ["LOCALBOX"] },
       roster: {
-        big: { tier: "t1", model: "vendor/big", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
-        bigger: { tier: "t1", model: "vendor/bigger", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
+        big: { tier: "t1", model: "vendor/big", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_KEY" },
+        bigger: { tier: "t1", model: "vendor/bigger", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_KEY" },
         glm: { tier: "t1", idle: "unlimited", model: "z-ai/glm-5.2:free" },
-        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY", race: 1, class: 2 },
         forced: { tier: "t1", model: "z-ai/other:free", billing: "paid" },
       },
       policy: { paid: {} },
     };
-    const config = parseFleet(raw);
+    const config = parseFleet(raw, LAN_ENV);
     // The paid block is a throttle and nothing else now: no targets in it.
     expect(config.policy.paid).toEqual({ maxConcurrent: 1 });
     expect(rosterModels(config.roster).find((m) => m.name === "forced")!.billing).toBe("paid");
@@ -2112,8 +2193,8 @@ describe("scheduling policy: defer ladder and retirement", () => {
       accounts: { pool: ["RUNNER"], paid: ["PAID1", "PAID2", "PAID3"], local: [] },
       roster: {
         go: { tier: "t1", model: "omen-alpha", apiBase: "https://opencode.ai/zen/go/v1", apiKeyEnv: "OPENCODE_KEY", billing: "paid" },
-        p1: { tier: "t1", model: "vendor/one", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
-        p2: { tier: "t1", model: "vendor/two", apiBase: "https://api.vendor.example/v1", apiKeyEnv: "K" },
+        p1: { tier: "t1", model: "vendor/one", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_KEY" },
+        p2: { tier: "t1", model: "vendor/two", apiBase: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_KEY" },
       },
       policy: { maxConcurrent: { "opencode-go": 1 }, paid: { maxConcurrent: 2 } },
     };
@@ -2146,11 +2227,11 @@ describe("scheduling policy: defer ladder and retirement", () => {
       accounts: { pool: ["RUNNER"], local: ["LOCALBOX"] },
       roster: {
         glm: { tier: "t1", model: "z-ai/glm-5.2:free" },
-        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "K", race: 1, class: 2 },
+        local: { tier: "t1", idle: "unlimited", model: "qwen/q", driver: "openai", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY", race: 1, class: 2 },
       },
       policy: {},
     };
-    const config = parseFleet(raw);
+    const config = parseFleet(raw, LAN_ENV);
     expect(config.roster["local"]!.idle).toBe("unlimited");
     expect(() => parseFleet({ ...raw, roster: { ...raw.roster, local: { ...raw.roster.local, idle: "e90" } } })).toThrow(/idle must be one of/);
 

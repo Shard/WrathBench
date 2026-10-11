@@ -245,6 +245,13 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               of what maps a run back to its entry — so a copy of an entry that differs only in
               its window owns its own runs and its own tier budget, and pages show it after the
               effort (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
+            `apiBase` / `apiKeyEnv` — openai entries: the endpoint, and the NAME of the env var
+              holding its key (absent: OpenRouter and `OPENROUTER_KEY`). The pair must be one the
+              provider table holds (`KEY_PROVIDERS`, runner/src/providers.ts): each key goes only
+              to its own provider's host over https, and `LMSTUDIO_KEY` only to a host the
+              deployment lists in `WRATHBENCH_LOCAL_MODEL_HOSTS` (chart: `localModelHosts`). Any
+              other pairing REFUSES the entry by name, a write through the store is a 400, and
+              run.ts refuses to start one. A new provider is a row in that table, not config.
             A t0 model that reaches level 5 KEEPS the witness (`t0*` in --status) without spending
             it: move it to t1 and it promotes at once on evidence it already has. Moving a model
             by hand is always allowed and never records a promotion — "promoted" is said only of

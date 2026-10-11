@@ -44,6 +44,7 @@
 import { z } from "zod";
 import type { ChatMessage } from "./context";
 import { isOpenRouterBase, providerBodyOf, type RoutingSpec } from "./routing";
+import { apiKeyRefusal } from "./providers";
 import type { ToolDef } from "./tools";
 
 export interface ChatRequest {
@@ -264,6 +265,14 @@ function toUsageRaw(u: z.infer<typeof completionSchema>["usage"]): RawUsage | un
 export interface OpenAiAdapterOptions {
   baseUrl: string;
   apiKey: string;
+  /**
+   * The env var `apiKey` was read from. When given, the adapter refuses to be
+   * built unless the provider table allows that key towards `baseUrl`
+   * (runner/src/providers.ts) — the last check before the key is attached to
+   * a request. `run.ts` always passes it; a test that builds the adapter
+   * around a fake key and a fake host leaves it out.
+   */
+  apiKeyEnv?: string;
   model: string;
   /**
    * Reasoning effort, sent as `reasoning_effort`. Omitted when absent.
@@ -444,6 +453,10 @@ export class OpenAiChatAdapter implements ChatAdapter {
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.now = opts.now ?? Date.now;
     const env = opts.env ?? process.env;
+    if (opts.apiKeyEnv !== undefined) {
+      const refusal = apiKeyRefusal(opts.apiKeyEnv, opts.baseUrl, env);
+      if (refusal !== null) throw new Error(`refusing to send the key: ${refusal}`);
+    }
     const fromEnv = env["WRATHBENCH_APP_URL"];
     const configured = opts.appUrl ?? fromEnv;
     // A stray newline or control character in the env var would make `fetch`

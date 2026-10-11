@@ -167,6 +167,23 @@ describe("writes", () => {
     store.close();
   });
 
+  test("a roster edit that would send a key anywhere but its own provider is a 400, and nothing is written", async () => {
+    const { handle, dbPath } = fixture();
+    for (const [method, path, body] of [
+      ["PUT", "/api/config/roster/glm", { tier: "t1", model: "z-ai/glm-5.2:free", apiKeyEnv: "WRATHBENCH_MODULE_SECRET" }],
+      ["PATCH", "/api/config/roster/glm", { apiBase: "https://collector.example/v1" }],
+      ["PUT", "/api/config/roster/new", { tier: "t0", model: "vendor/x", apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN" }],
+    ] as const) {
+      const res = await handle(req(path, { method, body: JSON.stringify(body) }));
+      expect([method, path, res.status]).toEqual([method, path, 400]);
+      expect(((await res.json()) as { error: string }).error).toMatch(/harness or infrastructure credential|may be sent only to openrouter.ai/);
+    }
+    const store = new ConfigStore(dbPath, { readonly: true });
+    expect(store.get("roster/glm")).toEqual({ tier: "t1", model: "z-ai/glm-5.2:free" });
+    expect(store.get("roster/new")).toBeUndefined();
+    store.close();
+  });
+
   test("a key the renderer would never emit is refused rather than stored", async () => {
     const { handle } = fixture();
     const res = await handle(req("/api/config/nonsense", { method: "PUT", body: "{}" }));

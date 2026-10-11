@@ -239,6 +239,13 @@ the worldserver's /health build, so a run says which revision produced it. */}}
        read into an error. */}}
 - name: WRATHBENCH_CONFIG_DB
   value: /wrathbench/data/config/config.sqlite
+{{- /* The self-hosted model hosts the provider table pairs with LMSTUDIO_KEY
+       (runner/src/providers.ts). Here, beside the store's path, because every
+       pod that parses the store must reach the same verdict on an entry: the
+       viewer refusing a write the supervisor would accept, or the reverse,
+       is the disagreement the store exists to rule out. */}}
+- name: WRATHBENCH_LOCAL_MODEL_HOSTS
+  value: {{ join "," (.Values.localModelHosts | default list) | quote }}
 {{- end -}}
 
 {{/*
