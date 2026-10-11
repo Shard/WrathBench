@@ -32,12 +32,16 @@
  *
  * ### Network posture — stated honestly
  *
- * The real boundary is topology: the compose runner service can only reach
- * `worldserver` on the wrathbench network. In-process we additionally replace
- * `fetch` and `WebSocket` with versions that refuse any host other than the
- * module's. That is best-effort hardening against accidental egress, not a
- * security boundary — a snippet is trusted exactly as far as the network lets
- * it reach, which is the module and nothing else.
+ * The kernel holds the boundary: this process runs under the Landlock ruleset
+ * `confine.ts` applied before exec, which allows TCP connections to the module
+ * URL's port and no other, no bind, no exec of any binary but bun, and no
+ * signal outside its domain. Those rules are per port, not per host: which
+ * hosts the port is reached on, and anything that is not TCP (UDP, raw
+ * sockets), is the deployment's network policy — docs/CONTRACTS.md says what
+ * that leaves. In-process we additionally replace `fetch` and `WebSocket` with
+ * versions that refuse any host other than the module's: a readable error
+ * ahead of the kernel's `EACCES`, and a check on the host, which Landlock
+ * cannot make. It is the second layer, not the boundary.
  *
  * ### Timeouts
  *
