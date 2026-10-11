@@ -91,6 +91,27 @@ export async function leaseSessionSecret(o: LeaseOptions): Promise<LeaseOutcome>
   return { secret: body.secret, account: body.account };
 }
 
+/**
+ * Lease this run's session secret and register it for redaction in the same
+ * step, so no caller can hold one without the other.
+ *
+ * The secret is handed to the snippet child in its environment, and a snippet
+ * can read its own environment and print it; whatever it prints lands in the
+ * trajectory, and from there in the derived store and the published feed. So
+ * the value must be on the run's redaction list before the child exists. The
+ * session token beside it is deliberately not (run.ts says why: meta.json is
+ * scrubbed with the same list and `--resume` reads the token back) — and it
+ * authenticates nothing without this secret.
+ */
+export async function leaseRunSecret(
+  o: LeaseOptions,
+  sink: { redact(secret: string | undefined): void },
+): Promise<LeaseOutcome> {
+  const lease = await leaseSessionSecret(o);
+  sink.redact(lease.secret);
+  return lease;
+}
+
 /** Best effort: forget the token's lease at the end of a run. Never throws. */
 export async function releaseSessionSecret(o: Omit<LeaseOptions, "account">): Promise<void> {
   const secret = moduleSecret(o.env ?? process.env);

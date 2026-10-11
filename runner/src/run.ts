@@ -44,7 +44,7 @@ import { openRunDb } from "./rundb";
 import { archiveIfNoResponses } from "./archive";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { characterOwners, clearAccountCharacters } from "./hygiene";
-import { leaseSessionSecret, releaseSessionSecret } from "./module-auth";
+import { leaseRunSecret, releaseSessionSecret } from "./module-auth";
 import { comparabilityOf, fetchServerBuild, sameComparability } from "./comparability";
 import { CampaignLaunchError, campaignLaunch } from "./campaign-launch";
 import { EPISODES, EPISODE_IDS, isEpisodeId } from "./episodes";
@@ -799,9 +799,11 @@ async function main(): Promise<void> {
    * run's account and yields the session secret the child authenticates with
    * (module/PROTOCOL.md, "Authentication"). The host keeps the port secret;
    * the child gets only this. A resume re-leases the stored token, which
-   * rotates the secret and keeps the character binding.
+   * rotates the secret and keeps the character binding. The secret is on the
+   * trajectory's redaction list before the child exists (`leaseRunSecret`): a
+   * snippet can print its own environment.
    */
-  const lease = await leaseSessionSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account });
+  const lease = await leaseRunSecret({ moduleUrl: config.moduleUrl, token: config.token, account: config.account }, trajectory);
   if (lease.secret === undefined) console.error(`[wrathbench] ${lease.note}`);
 
   const sandbox = new SandboxHost({
