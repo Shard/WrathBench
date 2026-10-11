@@ -207,6 +207,27 @@ export interface SchedulingPolicy {
    * merged routing is one nobody wrote down.
    */
   routing?: RoutingSpec;
+  /**
+   * Where a probe-campaign episode executes: `off`, a child process of the
+   * fleet like every other lane; `probes`, its own pod on the cluster, created
+   * from the chart's template and able to run an arm's own image
+   * (infra/episode-launcher.ts, docs/RUNBOOK.md "Run pods"). The same species
+   * as the rest of this block — where a run may physically execute — and the
+   * dark switch the launcher ships behind: off by default, and off the cluster
+   * it changes nothing but turns an arm with a pinned image into a refusal.
+   */
+  runPods: RunPodsMode;
+}
+
+export const RUN_PODS_MODES = ["off", "probes"] as const;
+export type RunPodsMode = (typeof RUN_PODS_MODES)[number];
+
+export function parseRunPodsMode(raw: unknown, where: string): RunPodsMode {
+  if (raw === undefined) return "off";
+  if (typeof raw !== "string" || !(RUN_PODS_MODES as readonly string[]).includes(raw)) {
+    throw new Error(`${where} must be one of ${RUN_PODS_MODES.map((m) => JSON.stringify(m)).join(", ")} — "probes" runs every probe-campaign episode in its own pod on the cluster`);
+  }
+  return raw as RunPodsMode;
 }
 
 /** The paid default once `policy.paid` is present: one paid run in flight. */
@@ -217,6 +238,7 @@ export const DEFAULT_POLICY: SchedulingPolicy = {
   series: null,
   paid: null,
   subscriptions: [DEFAULT_CLAUDE_TOKEN_ENV],
+  runPods: "off",
 };
 
 /**
@@ -239,8 +261,9 @@ export function parsePolicyBlock(raw: unknown, series: string | null = null): Sc
   const base = { ...DEFAULT_POLICY, series, maxConcurrent: {} as Record<string, number> };
   if (raw === undefined) return base;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("fleet config: policy must be an object");
-  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown };
+  const o = raw as { runsPerEpisode?: unknown; maxConcurrent?: unknown; paid?: unknown; extras?: unknown; resume?: unknown; subscriptions?: unknown; routing?: unknown; runPods?: unknown };
   const out = { ...base };
+  out.runPods = parseRunPodsMode(o.runPods, "policy.runPods");
   if (o.runsPerEpisode !== undefined) {
     throw new Error(`policy.runsPerEpisode is not a 0.5 key — run counts are a model's tier now (${TIERS.join(", ")}); set roster.<name>.tier`);
   }

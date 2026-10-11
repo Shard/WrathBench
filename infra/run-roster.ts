@@ -62,6 +62,21 @@ import { Trajectory } from "../runner/src/trajectory";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, type ScanReads } from "../runner/src/models";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  chooseLauncher,
+  EPISODE_TERM_GRACE_MS,
+  parseLaunchSpec,
+  parseRunPodsMode,
+  ProcessLauncher,
+  refusedEpisode,
+  type EpisodeExit,
+  type EpisodeHandle,
+  type EpisodeLauncher,
+  type LaunchSpec,
+  type RunPodsMode,
+} from "./episode-launcher";
+import { K8sClient } from "./k8s-client";
+import { IMAGE_RECORD_FILE, loadPodLauncher } from "./run-pod";
 
 // ------------------------------------------------------------------ types
 
@@ -188,6 +203,15 @@ export interface RosterSpec {
    * elsewhere (`--continue-dropped`, `--continue-dropped-reason`). Record only.
    */
   continueDropped?: { runId: string; reason: string };
+  /**
+   * How the episode is executed: as its own pod, on `image` (null = the
+   * release image) with `command` (null = this repository's runner). The
+   * planner sets it on every probing job so arms compare on one execution
+   * path; absent means a child process, which every other lane still is.
+   * Honoured only where the fleet setting `policy.runPods` and the cluster
+   * allow (`chooseLauncher`); an arm with an image is refused elsewhere.
+   */
+  launch?: LaunchSpec;
 }
 
 export interface Resolved {
@@ -227,6 +251,7 @@ export interface Resolved {
   continueFrom: string | undefined;
   keepCharacters: string[];
   continueDropped: { runId: string; reason: string } | undefined;
+  launch: LaunchSpec | undefined;
 }
 
 type Outcome =
@@ -271,13 +296,10 @@ const MAX_RETRY_CYCLES = 2;
 const CYCLE_GAP_MS = 10 * 60_000;
 const EARLY_TURN_THRESHOLD = 2;
 /**
- * SIGTERM → SIGKILL grace for the episode child. The runner pauses on SIGTERM
- * (pause, not terminate): it abandons the request in flight, tears down a CLI child, writes
- * the pause record and releases the session; its own backstop fires at 60s.
- * This must outlast that, and stay inside the fleet container's 180s
- * `stop_grace_period` with room for the supervisor's own reap.
+ * SIGTERM → SIGKILL grace for the episode, child process or pod alike; the
+ * number and its reasoning live with the launcher (`EPISODE_TERM_GRACE_MS`).
  */
-export const CHILD_TERM_GRACE_MS = 90_000;
+export const CHILD_TERM_GRACE_MS = EPISODE_TERM_GRACE_MS;
 const RUNS_DIR = "data/runs";
 /** A trajectory touched more recently than this belongs to a live process. */
 const LIVE_TRAJECTORY_MS = 3 * 60_000;
@@ -360,6 +382,7 @@ function parseArgs(argv: string[]): {
   freeTokens: string[];
   date: string | undefined;
   log: string | undefined;
+  runPods: RunPodsMode;
 } {
   let roster: string | undefined;
   let dryRun = false;
@@ -369,6 +392,7 @@ function parseArgs(argv: string[]): {
   let maxHours: number | undefined;
   let log: string | undefined;
   let date: string | undefined;
+  let runPods: RunPodsMode = "off";
   const skip: string[] = [];
   const freeTokens: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -376,6 +400,9 @@ function parseArgs(argv: string[]): {
     switch (a) {
       case "--dry-run":
         dryRun = true;
+        break;
+      case "--run-pods":
+        runPods = parseRunPodsMode(argv[++i], "--run-pods");
         break;
       case "--loop":
         loop = true;
@@ -421,7 +448,7 @@ function parseArgs(argv: string[]): {
         roster = a;
     }
   }
-  return { roster, dryRun, loop, resumeRoster, until, maxHours, skip, freeTokens, date, log };
+  return { roster, dryRun, loop, resumeRoster, until, maxHours, skip, freeTokens, date, log, runPods };
 }
 
 function usage(): void {
@@ -444,6 +471,9 @@ function usage(): void {
       "                       derived run ids change and every model relaunches from scratch",
       "  --dry-run            print the plan and the exact argv per episode; launch nothing",
       "  --log <path>         roster JSONL (default data/runs/roster-<YYYYMMDD>.jsonl)",
+      "  --run-pods off|probes  the fleet setting policy.runPods as the supervisor read it: with",
+      "                       `probes`, on the cluster, an entry carrying `launch` runs as its own pod",
+      "                       (docs/RUNBOOK.md, \"Run pods\"). Default off: every episode is a child process",
       "",
       `  backoff: a spec that defers (pool saturated) cools for ${DEFER_LADDER} on`,
       `           consecutive defers, then is TAINTED — dropped from the rotation for the rest of`,
@@ -581,6 +611,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       continueFrom: s.continueFrom,
       keepCharacters: s.keepCharacters ?? [],
       continueDropped: s.continueDropped,
+      launch: s.launch === undefined ? undefined : parseLaunchSpec(s.launch, `roster entry ${s.model}`),
     });
   }
   return out;
@@ -639,10 +670,19 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
   // unknown flags through to `bun runner/src/run.ts` verbatim, so the two heads
   // are interchangeable and only one of them needs docker.
   const head = opts.container === true ? ["bun", RUNNER_ENTRY] : [EPISODE_SH];
+  return [...head, ...episodeFlags(spec, resume)];
+}
+
+/**
+ * run.ts's own flags, with no launcher head: what a run pod's container is
+ * given as `args` after its command (infra/run-pod.ts), and the tail of every
+ * child-process argv above.
+ */
+export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // Identity — driver, model, account, effort, compactWindow, objective, wiki, race/class,
   // episode, campaign/cell — is the resumed run's own and is never restated.
-  if (resume) return [...head, "--resume", spec.runId, ...leashArgv(spec)];
-  const argv = [...head, "--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
+  if (resume) return ["--resume", spec.runId, ...leashArgv(spec)];
+  const argv = ["--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
   if (spec.driver === "openai") {
     argv.push("--api-base", spec.apiBase, "--api-key-env", spec.apiKeyEnv);
     // Only when the entry stated one: the runner derives the same default from
@@ -1206,10 +1246,18 @@ function accountOfRun(runId: string): string | undefined {
   }
 }
 
-/** Age of the most recently touched artefact of a run, whichever it is. */
+/**
+ * Age of the most recently touched artefact of a run, whichever it is. The
+ * heartbeat counts (runner/src/trajectory.ts, rewritten every 20s while
+ * run.ts lives and removed on exit): a run waiting on a slow provider writes
+ * neither its trajectory nor its database for longer than LIVE_TRAJECTORY_MS
+ * and still holds its account. So does `image.json`, which the pod launcher
+ * writes the moment a run pod's container starts — before run.ts has opened
+ * anything — so a booting pod is live from its first second.
+ */
 function activityAgeMs(runId: string): number | undefined {
   let newest: number | undefined;
-  for (const name of ["trajectory.jsonl", "run.sqlite"]) {
+  for (const name of ["trajectory.jsonl", "run.sqlite", "heartbeat", IMAGE_RECORD_FILE]) {
     try {
       const m = statSync(join(runDir(runId), name)).mtimeMs;
       if (newest === undefined || m > newest) newest = m;
@@ -1315,9 +1363,15 @@ function record(entry: {
 // ------------------------------------------------------------------ process
 
 let stopping = false;
-let child: ReturnType<typeof Bun.spawn> | undefined;
+/** The episode in flight — a child process or a run pod — behind one handle. */
+let episode: EpisodeHandle | undefined;
 let childRunId: string | undefined;
 const wakeups: (() => void)[] = [];
+/** `--run-pods`, as the supervisor read the fleet setting; off for a hand-run roster. */
+let runPodsMode: RunPodsMode = "off";
+const processLauncher = new ProcessLauncher({ cwd: REPO_ROOT });
+/** Built once per roster process when a pod is first wanted; a string says why there is none. */
+let podLauncher: EpisodeLauncher | { error: string } | undefined;
 
 /**
  * Signal the runner *inside* the container.
@@ -1353,19 +1407,17 @@ function requestStop(sig: string): void {
   stopping = true;
   say(`${sig}: no further episodes will be launched`);
   for (const w of wakeups.splice(0)) w();
-  if (child !== undefined) {
-    const c = child;
+  if (episode !== undefined) {
+    const e = episode;
     const id = childRunId;
-    say(`${sig}: pausing the running episode — the runner pauses as operator-pause on SIGTERM (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
-    c.kill("SIGTERM");
+    say(`${sig}: pausing the running episode (${e.describe()}) — the runner pauses as operator-pause on SIGTERM (grace ${CHILD_TERM_GRACE_MS / 1000}s)`);
+    // SIGTERM now, SIGKILL at the grace for a child; a pod is deleted with
+    // the same grace and the kubelet does the killing. runEpisode is awaiting
+    // the same handle, so nothing here waits.
+    void e.stop(CHILD_TERM_GRACE_MS);
     if (id !== undefined) signalInContainer(id, "TERM");
     setTimeout(() => {
       if (id !== undefined) signalInContainer(id, "KILL");
-      try {
-        c.kill("SIGKILL");
-      } catch {
-        // already gone
-      }
     }, CHILD_TERM_GRACE_MS).unref();
   }
 }
@@ -1385,23 +1437,43 @@ async function nap(ms: number, deadline: number | undefined, why: string): Promi
   });
 }
 
-async function runEpisode(spec: Resolved, resume: boolean): Promise<number> {
-  const argv = episodeArgv(spec, resume, { container: CONTAINER });
+/**
+ * Which launcher this episode gets (`chooseLauncher`), built on first use. The
+ * pod launcher needs the chart's mounted template and the pod's own
+ * ServiceAccount; without either, a spec that wanted a pod is refused with the
+ * reason rather than run as a process it was not planned for.
+ */
+function launcherFor(spec: Resolved): EpisodeLauncher | { refused: string } {
+  const choice = chooseLauncher({ runPods: runPodsMode, onCluster: CONTAINER && K8sClient.inCluster() !== null, launch: spec.launch });
+  if (choice.kind === "refused") return { refused: choice.reason };
+  if (choice.kind === "process") return processLauncher;
+  podLauncher ??= loadPodLauncher({ rosterPid: process.pid });
+  if ("error" in podLauncher) return { refused: `run pod wanted for ${spec.runId} but no launcher: ${podLauncher.error}` };
+  return podLauncher;
+}
+
+async function runEpisode(spec: Resolved, resume: boolean): Promise<EpisodeExit> {
+  const launcher = launcherFor(spec);
+  if ("refused" in launcher) return refusedEpisode(launcher.refused).exited;
   childRunId = spec.runId;
-  child = Bun.spawn(argv, {
-    cwd: REPO_ROOT,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit", // the runner's operator lines all go to stderr
-    // On the host run-episode.sh stamps this; in the container we are the
-    // launcher, so we stamp it. Secrets still never travel via argv or env
-    // from here: Bun loads /wrathbench/.env in the child itself.
-    ...(CONTAINER ? { env: { ...process.env, WRATHBENCH_HARNESS_VERSION: harnessVersion() } } : {}),
+  // On the host run-episode.sh stamps the version; in the container we are the
+  // launcher, so we stamp it. Secrets still never travel via argv or env from
+  // here: Bun loads /wrathbench/.env in a child itself, and a pod gets its own
+  // from the chart's Secret references.
+  episode = await launcher.start({
+    spec,
+    resume,
+    runDir: join(REPO_ROOT, RUNS_DIR, spec.runId),
+    argv: episodeArgv(spec, resume, { container: CONTAINER }),
+    args: episodeFlags(spec, resume),
+    env: CONTAINER ? { WRATHBENCH_HARNESS_VERSION: harnessVersion() } : {},
+    log: say,
   });
-  const code = await child.exited;
-  child = undefined;
+  if (launcher.kind === "pod") say(`episode ${spec.runId} runs as ${episode.describe()}`);
+  const exit = await episode.exited;
+  episode = undefined;
   childRunId = undefined;
-  return code;
+  return exit;
 }
 
 /**
@@ -1478,10 +1550,14 @@ type Verdict =
   | { kind: "paused"; reason: string }
   | { kind: "unknown"; detail: string };
 
-function classify(spec: Resolved, exitCode: number): Verdict {
+function classify(spec: Resolved, exit: EpisodeExit): Verdict {
   const row = readRunRow(spec.runId);
+  // The launcher's own reason first, when it had one: an image that would not
+  // pull or a pod never scheduled leaves no run row, and "exit 1, no
+  // run.sqlite" would be all the operator got.
+  const why = exit.failure !== undefined ? `${exit.failure}; ` : "";
   if (row === undefined) {
-    return { kind: "launch-failed", detail: `exit ${exitCode}, no run.sqlite for ${spec.runId}` };
+    return { kind: "launch-failed", detail: `${why}exit ${exit.code}, no run.sqlite for ${spec.runId}` };
   }
   // Termination first: `--resume` clears the pause row, but checking in this
   // order is correct either way.
@@ -1495,7 +1571,7 @@ function classify(spec: Resolved, exitCode: number): Verdict {
   if (row.pause_reason !== null && row.pause_reason !== "") {
     return { kind: "paused", reason: row.pause_reason };
   }
-  return { kind: "unknown", detail: `exit ${exitCode}, run row has neither termination nor pause` };
+  return { kind: "unknown", detail: `${why}exit ${exit.code}, run row has neither termination nor pause` };
 }
 
 const RATE_PAUSES = new Set(["rate-limited", "quota-exhausted", "window-exhausted"]);
@@ -1576,8 +1652,8 @@ async function attemptSpec(
     // The name is the model's own and is not known until it creates the
     // character, so the launch line has none to print.
     say(`launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ""}`);
-    const code = await runEpisode(spec, resume);
-    const verdict = classify(spec, code);
+    const exit = await runEpisode(spec, resume);
+    const verdict = classify(spec, exit);
     const level = readLevel(spec.runId);
     // Resolved again: a run archived as it exited has moved, bytes and all.
     const counted = turnsSince(trajectoryOf(spec.runId), launchedAt);
@@ -1827,6 +1903,7 @@ async function main(): Promise<void> {
     say("--loop with no --until/--max-hours: looping until stopped (SIGTERM/SIGINT, or the job is disabled)");
   }
   logPath = args.log ?? join(REPO_ROOT, RUNS_DIR, `roster-${stampToday}.jsonl`);
+  runPodsMode = args.runPods;
 
   let pending: Attempt[] = [];
   for (const spec of specs) {
@@ -1915,8 +1992,16 @@ async function main(): Promise<void> {
           (s.wiki ? "" : `\n   NO reference wiki: no search_reference tool, and the prompt does not name it`) +
           (watchdogsJson(s) !== undefined ? `\n   watchdogs ${watchdogsJson(s)}` : "") +
           (s.maxToolCalls !== undefined ? `\n   maxTools  ${s.maxToolCalls}` : "");
+      const launch =
+        s.launch === undefined
+          ? ""
+          : (() => {
+              const choice = chooseLauncher({ runPods: runPodsMode, onCluster: CONTAINER && K8sClient.inCluster() !== null, launch: s.launch });
+              const how = choice.kind === "refused" ? `REFUSED — ${choice.reason}` : choice.kind === "pod" ? `run pod, image ${s.launch.image ?? "(release)"}, command ${s.launch.command?.join(" ") ?? "(this runner)"}` : `child process (image-less arm; policy.runPods ${runPodsMode})`;
+              return `\n   launch    ${how}`;
+            })();
       console.log(
-        `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}\n   pre-launch: DELETE /session with ${s.runId}'s stored token ${CONTAINER ? "(direct fetch to the module)" : "via docker compose exec -T runner"}\n   argv      ${episodeArgv(s, a.resume, { container: CONTAINER }).join(" ")}`,
+        `\n${i + 1}. ${s.model}${cycle1}\n   runId     ${s.runId}\n${identity}${launch}\n   pre-launch: DELETE /session with ${s.runId}'s stored token ${CONTAINER ? "(direct fetch to the module)" : "via docker compose exec -T runner"}\n   argv      ${episodeArgv(s, a.resume, { container: CONTAINER }).join(" ")}`,
       );
     }
     if (args.freeTokens.length > 0) {
