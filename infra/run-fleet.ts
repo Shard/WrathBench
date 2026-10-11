@@ -183,7 +183,7 @@ import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
-import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
+import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
 import {
   capFor,
   CLAUDE_TOTAL_KEY,
@@ -736,7 +736,11 @@ async function main(): Promise<void> {
    * not to start — nothing is running yet, so there is nothing to protect by
    * exiting, and a supervisor that is up retries every tick by itself.
    */
-  const boot = rereadFleet(parseFleet({}));
+  // Where this supervisor runs, which only it knows: an arm that pins an image
+  // or a command is refused as a pair off the cluster (`campaignPairRefusals`).
+  // The same test the roster's launcher choice makes.
+  const parseOpts = { onCluster: CONTAINER && K8sClient.inCluster() !== null };
+  const boot = rereadFleet(parseFleet({}, parseOpts), readFleetConfig, parseOpts);
   let config = boot.config;
   let wasEmpty = boot.empty === true;
   configRejected = nextConfigRejection(undefined, { error: boot.error, mtime: storeMtime(configPath) }, Date.now());
@@ -1580,7 +1584,7 @@ async function main(): Promise<void> {
     // unapplied, which is the failure this whole path exists to make loud.
     // The store file's mtime is only recorded, to dedupe the complaint.
     const mtime = storeMtime(configPath);
-    const { config: next, error, empty } = rereadFleet(config);
+    const { config: next, error, empty } = rereadFleet(config, readFleetConfig, parseOpts);
     const wasRejected = configRejected;
     configRejected = nextConfigRejection(wasRejected, { error, mtime }, Date.now());
     if (error !== undefined) {

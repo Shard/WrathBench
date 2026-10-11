@@ -77,7 +77,7 @@ import {
   type RunPodsMode,
 } from "./episode-launcher";
 import { K8sClient } from "./k8s-client";
-import { IMAGE_RECORD_FILE, loadPodLauncher } from "./run-pod";
+import { harnessStampOf, IMAGE_RECORD_FILE, loadPodLauncher, parseImageRef } from "./run-pod";
 
 // ------------------------------------------------------------------ types
 
@@ -1585,6 +1585,84 @@ function classify(spec: Resolved, exit: EpisodeExit): Verdict {
   return { kind: "unknown", detail: `${why}exit ${exit.code}, run row has neither termination nor pause` };
 }
 
+/**
+ * Leave a counted record of a fresh probe launch that failed before the run
+ * wrote anything — the launcher refused it, the pod never ran, or run.ts
+ * refused its flags — so the square shows it was tried.
+ *
+ * Without one the directory held only launch files, which is not a run: no
+ * fact, no attempt, so `maxAttemptsPerCell` never engaged and the scheduler
+ * re-picked the square every tick. The stub is the smallest run the readers
+ * count (`readRunFact`): a `meta.json` with the stamps the run would have
+ * written — the roster entry's identity, so the probing attempt counter moves
+ * on to a fresh run id, and the campaign, version, cell, arm and ref, so it
+ * lands in its square — and a `run` row terminated `launch-failed` with the
+ * reason. No trajectory: it played no turn, so it is no model's evidence, no
+ * rung on the defer ladder, and no play time on any page. It is left where it
+ * is rather than archived, because the campaigns page reads only the runs
+ * directory and must count the attempt the scheduler counts.
+ *
+ * The run row first and `meta.json` last, so a write cut short never leaves a
+ * stamped run with no verdict for the resume planner to mistake for one that
+ * went offline.
+ */
+export function writeLaunchFailure(runDir: string, spec: Resolved, detail: string, opts: { harnessVersion: string; now?: number }): void {
+  const file = spec.campaignFile;
+  if (file === undefined) throw new Error(`${spec.runId}: only a probe launch leaves a launch-failed stub`);
+  const now = opts.now ?? Date.now();
+  const config = {
+    runId: spec.runId,
+    driver: spec.driver,
+    model: spec.model,
+    ...(spec.effort !== undefined ? { effort: spec.effort } : {}),
+    ...(spec.compactWindow !== undefined ? { compactWindow: spec.compactWindow } : {}),
+    ...(spec.account !== undefined ? { account: spec.account } : {}),
+    episode: "probing",
+    campaign: file.campaign,
+    campaignVersion: file.version,
+    campaignHash: file.hash,
+    cell: file.cell.id,
+    arm: file.arm.id,
+    ...(spec.ref !== undefined ? { ref: spec.ref } : {}),
+    race: file.cell.race,
+    class: file.cell.class,
+    ...(spec.launch?.image != null ? { image: spec.launch.image } : {}),
+  };
+  mkdirSync(runDir, { recursive: true });
+  // The run store's own schema, and nothing appended: no trajectory.
+  new Trajectory(runDir).close();
+  const db = openRunDb(join(runDir, "run.sqlite"));
+  try {
+    db.query(
+      `INSERT INTO run (run_id, harness_version, started_at, ended_at, driver, model, termination_reason, termination_detail, config_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_id) DO NOTHING`,
+    ).run(spec.runId, opts.harnessVersion, now, now, spec.driver, spec.model, "launch-failed", detail, JSON.stringify(config));
+  } finally {
+    db.close();
+  }
+  const meta = {
+    runId: spec.runId,
+    harnessVersion: opts.harnessVersion,
+    startedAt: now,
+    config,
+    comparability: {
+      harnessVersion: opts.harnessVersion,
+      episode: "probing",
+      effort: spec.effort ?? null,
+      ...(spec.compactWindow !== undefined ? { compactWindow: spec.compactWindow } : {}),
+    },
+  };
+  writeFileSync(join(runDir, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
+}
+
+/** The build a launch-failed stub names: the arm's pinned image's stamp, or this roster's own. */
+function launchStamp(spec: Resolved): string {
+  const image = spec.launch?.image ?? null;
+  if (image === null) return harnessVersion();
+  const parsed = parseImageRef(image);
+  return "error" in parsed ? image : harnessStampOf(parsed);
+}
+
 const RATE_PAUSES = new Set(["rate-limited", "quota-exhausted", "window-exhausted"]);
 
 // ------------------------------------------------------------------ main
@@ -1678,6 +1756,19 @@ async function attemptSpec(
     if (verdict.kind === "launch-failed") {
       say(`launch-failed ${spec.runId}: ${verdict.detail}`);
       record({ runId: spec.runId, model: spec.model, outcome: "launch-failed", detail: verdict.detail });
+      // A fresh probe that never became a run still spent an attempt on its
+      // square: the stub is that attempt on disk (`writeLaunchFailure`). Never
+      // on a resume, never over a run that wrote its own meta.json, never for
+      // another lane.
+      const dir = join(REPO_ROOT, RUNS_DIR, spec.runId);
+      if (!resume && spec.campaignFile !== undefined && !opts.dryRun && !existsSync(join(dir, "meta.json"))) {
+        try {
+          writeLaunchFailure(dir, spec, verdict.detail, { harnessVersion: launchStamp(spec) });
+          say(`launch-failed ${spec.runId}: recorded as a launch-failed attempt on ${spec.campaignFile.campaign}@${spec.campaignFile.version} ${spec.campaignFile.cell.id}/${spec.campaignFile.arm.id}`);
+        } catch (e) {
+          say(`launch-failed ${spec.runId}: could not record the attempt — ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
       return "done";
     }
     if (verdict.kind === "unknown") {

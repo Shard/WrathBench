@@ -102,17 +102,21 @@ export type LauncherChoice = { kind: "process" } | { kind: "pod" } | { kind: "re
 
 /**
  * Pod iff the setting is on, we are on the cluster and the spec asked; a
- * child process otherwise — except that an arm with a pinned image is refused
- * rather than run on the code the fleet happens to be made of.
+ * child process otherwise — except that an arm with a pinned image or command
+ * is refused rather than run on the code the fleet happens to be made of: a
+ * child process runs this repository's run.ts and would ignore both. The
+ * planner refuses such a pair before it is ever scheduled
+ * (`campaignPairRefusals`); this is the launcher's own check of the same rule.
  */
 export function chooseLauncher(opts: { runPods: RunPodsMode; onCluster: boolean; launch: LaunchSpec | undefined }): LauncherChoice {
   if (opts.launch === undefined) return { kind: "process" };
   if (opts.runPods === "probes" && opts.onCluster) return { kind: "pod" };
-  if (opts.launch.image !== null) {
+  if (opts.launch.image !== null || opts.launch.command !== null) {
+    const pinned = opts.launch.image !== null ? `arm image ${opts.launch.image}` : `arm command ${opts.launch.command!.join(" ")}`;
     const why = !opts.onCluster
-      ? "this supervisor is not on the cluster (no Kubernetes ServiceAccount), and an image cannot run as a child process"
+      ? "this supervisor is not on the cluster (no Kubernetes ServiceAccount), and a pinned arm cannot run as a child process"
       : `the fleet setting policy.runPods is ${JSON.stringify(opts.runPods)}; set it to "probes" to launch run pods`;
-    return { kind: "refused", reason: `arm image ${opts.launch.image} refused: ${why} — a pinned arm is never run on master's code instead` };
+    return { kind: "refused", reason: `${pinned} refused: ${why} — a pinned arm is never run on master's code instead` };
   }
   return { kind: "process" };
 }

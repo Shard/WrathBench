@@ -844,8 +844,15 @@ function refJobNames(name: string, jobs: readonly FleetJob[], campaigns: readonl
   return [...names];
 }
 
-/** Parse + validate a fleet config. Throws with a config-error message. */
-export function parseFleet(raw: unknown): FleetConfig {
+/**
+ * Parse + validate a fleet config. Throws with a config-error message.
+ *
+ * `onCluster` is the supervisor's own knowledge of where it runs, which only
+ * it has: given, an arm that pins an image or a command is refused as a pair
+ * off the cluster too (`campaignPairRefusals`). Every other reader leaves it
+ * out, and gets the refusals `policy.runPods` alone implies.
+ */
+export function parseFleet(raw: unknown, opts: { onCluster?: boolean } = {}): FleetConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     fail("fleet config must be a JSON object");
   }
@@ -866,10 +873,16 @@ export function parseFleet(raw: unknown): FleetConfig {
   const notes = Array.isArray(o._notes) ? o._notes.filter((n): n is string => typeof n === "string") : [];
   const accounts = parseAccounts(o.accounts);
   const roster = parseRoster(o.roster);
+  // Before the campaigns: where an arm can launch (`policy.runPods`) is part of
+  // whether a campaign's (assignment, arm) pair is refused.
+  const { policy, maxConcurrent } = parsePolicy(o.policy);
   // Never throws: a campaign row or a published definition that does not read
   // is refused by key below, and the roster, the policy and every other
   // campaign load as if it were not there. One bad row must not empty the board.
-  const { campaigns, definitions: campaignDefs, refused: campaignRefusals } = parseCampaignBlocks(o["campaign-defs"], o.campaigns, roster);
+  const { campaigns, definitions: campaignDefs, refused: campaignRefusals } = parseCampaignBlocks(o["campaign-defs"], o.campaigns, roster, {
+    runPods: policy.runPods,
+    ...(opts.onCluster !== undefined ? { onCluster: opts.onCluster } : {}),
+  });
   const jobs: FleetJob[] = [];
   const names = new Set<string>();
   const add = (job: FleetJob): void => {
@@ -935,7 +948,6 @@ export function parseFleet(raw: unknown): FleetConfig {
   if (jobs.some((j) => j.enabled && j.account === undefined) && accounts.pool.length === 0) {
     fail("queue has enabled pool jobs but accounts.pool is empty — nothing could ever run them");
   }
-  const { policy, maxConcurrent } = parsePolicy(o.policy);
   // `policy.routing` is the fleet-wide default, applied HERE rather than at
   // launch so that `--status`, the spawned argv and the run's own config all
   // say the same thing an operator can read off one line. An entry that states

@@ -96,12 +96,14 @@ export function statesAfterSweep(
 export function rereadFleet(
   lastGood: FleetConfig,
   read: () => FleetRead = readFleetConfig,
+  /** The supervisor's own knowledge of where it runs (`parseFleet`). */
+  parse: { onCluster?: boolean } = {},
 ): { config: FleetConfig; error?: string; empty?: boolean } {
   const r = read();
-  if (r.status === "empty") return { config: parseFleet({}), empty: true };
+  if (r.status === "empty") return { config: parseFleet({}, parse), empty: true };
   if (r.status === "unreadable") return { config: lastGood, error: `config store ${r.path} could not be read: ${r.error}` };
   try {
-    return { config: parseFleet(JSON.parse(r.text)) };
+    return { config: parseFleet(JSON.parse(r.text), parse) };
   } catch (e) {
     return { config: lastGood, error: e instanceof Error ? e.message : String(e) };
   }

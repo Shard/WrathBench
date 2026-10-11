@@ -282,7 +282,9 @@ paused, `pause.{reason, at, episodeElapsedMs, notBefore}`. `run.sqlite`: the
 `run` row (`started_at`, `ended_at`, `termination_reason`,
 `termination_detail`, `pause_reason`) is how the roster classifies an exit —
 a termination is done, a pause is resumable or a failed attempt by the lane's
-rule, neither is "unknown", and no row at all is a failed launch; the `state`
+rule, neither is "unknown", and no row at all is a failed launch (for a
+fleet probe, the roster then writes a stub run terminated `launch-failed`, so
+the attempt counts toward its square's cap); the `state`
 table's `level` is the level it reports. `heartbeat`, one small file rewritten
 every 20 seconds and removed on a clean exit, is the only proof of a live
 owner: a resume onto a run with a fresh one is refused, and an account is held
@@ -321,8 +323,9 @@ honours the contract appears everywhere a run appears.
 is `probes`, the supervisor is on the cluster, and the planner put `launch` on
 the spec — which it does for every probing job, image-less arms included, so
 arms compare on one execution path; scored lanes stay child processes until a
-campaign has proven the launcher. A pinned image off the cluster or with the
-switch off is refused, never run on master's code instead. The pod carries an
+campaign has proven the launcher. An arm that pins an image or a command off
+the cluster or with the switch off is a refused pair, never scheduled and
+never run on master's code instead. The pod carries an
 ownerReference to the fleet pod, so a fleet stop or crash deletes its run pods
 with the same grace; the fleet's drain counts a roster's run pod as an episode
 in flight, and `infra/k8s-deploy.sh` waits for zero run pods before the

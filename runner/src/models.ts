@@ -1739,8 +1739,12 @@ export function projectModel(
   // The ladder: trailing consecutive no-progress attempts, newest last, after the clear.
   let ladder = 0;
   let lastFail: RunFact | undefined;
-  // A paused run is neither rung nor reset: it is skipped on the walk.
-  const finished = mine.filter((f) => !f.live && f.pause === null && f.endedAt !== null && (opts.clearedAt === undefined || f.endedAt > opts.clearedAt));
+  // A paused run is neither rung nor reset: it is skipped on the walk. So is a
+  // launch that never became a run (`launch-failed`): it says nothing about
+  // the provider, so it neither cools the model nor forgives its streak.
+  const finished = mine.filter(
+    (f) => !f.live && f.pause === null && f.endedAt !== null && f.terminationReason !== "launch-failed" && (opts.clearedAt === undefined || f.endedAt > opts.clearedAt),
+  );
   for (let i = finished.length - 1; i >= 0; i--) {
     const f = finished[i]!;
     if (!isNoProgress(f)) break;

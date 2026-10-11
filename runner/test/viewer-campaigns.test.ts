@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { ConfigStore, splitFleet } from "../src/config-store";
 import type { CampaignsResponse, RunsResponse } from "../viewer/api-types";
-import { checkedIn, defsBlock, seedPublished } from "./fixtures/campaigns";
+import { checkedIn, defsBlock, definition, seedPublished } from "./fixtures/campaigns";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -194,6 +194,30 @@ describe("/api/campaigns", () => {
     const body = await campaigns([], { ...CONFIG, campaigns: { "race-probe": { enabled: true, models: ["m"], cells: [] } } }, true);
     expect(body.refused).toEqual([{ key: "campaigns/race-probe", reason: expect.stringContaining("campaign race-probe") }]);
     expect(body.campaigns.map((c) => `${c.key}:${c.state}`)).toEqual(["race-probe@1:unassigned"]);
+  });
+
+  test("a pinned arm's pairs reach refused[] while run pods are off, and leave once they are on", async () => {
+    const pinned = definition({
+      id: "pin-probe",
+      cells: [{ id: "c", race: 1, class: 1 }],
+      arms: [
+        { id: "a", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-1" },
+        { id: "b", image: "ghcr.io/shard/wrathbench-runner:harness-0.5-2" },
+      ],
+    });
+    const doc = (policy: Record<string, unknown>): unknown => ({
+      ...CONFIG,
+      policy,
+      "campaign-defs": defsBlock(race, pinned),
+      campaigns: { "pin-probe": { version: 1, assignments: [{ model: "m", runsPerCell: 1 }] } },
+    });
+    const off = await campaigns([], doc({}));
+    expect(off.refused.map((r) => r.key)).toEqual(["pin-probe@1:m:a", "pin-probe@1:m:b"]);
+    expect(off.refused[0]!.reason).toContain('policy.runPods is "off"');
+    const view = off.campaigns.find((c) => c.key === "pin-probe@1")!;
+    expect(view.grid[0]!.squares.every((q) => q.refused?.includes("run pod") === true)).toBe(true);
+    const on = await campaigns([], doc({ runPods: "probes" }));
+    expect(on.refused).toEqual([]);
   });
 
   test("an empty config store serves no campaigns and no refusals", async () => {

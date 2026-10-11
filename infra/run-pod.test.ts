@@ -374,6 +374,15 @@ describe("chooseLauncher", () => {
     expect(host.kind === "refused" ? host.reason : "").toContain("not on the cluster");
   });
 
+  test("an arm that pins only a command is refused off a pod too: a child process would run this runner and ignore it", () => {
+    const command = { pod: true as const, image: null, command: ["/app/harness", "--x"] };
+    expect(chooseLauncher({ runPods: "probes", onCluster: true, launch: command })).toEqual({ kind: "pod" });
+    const off = chooseLauncher({ runPods: "off", onCluster: true, launch: command });
+    expect(off.kind === "refused" ? off.reason : "").toContain("arm command /app/harness --x refused");
+    const host = chooseLauncher({ runPods: "probes", onCluster: false, launch: command });
+    expect(host.kind).toBe("refused");
+  });
+
   test("parseLaunchSpec admits the seam's shape and nothing more", () => {
     expect(parseLaunchSpec({ pod: true, image: null, command: null }, "x")).toEqual(floating);
     expect(parseLaunchSpec({ pod: true, image: pinned.image, command: ["/app/h"] }, "x")).toEqual({ ...pinned, command: ["/app/h"] });

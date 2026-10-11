@@ -268,8 +268,8 @@ policy      Only where runs execute and how many at once. maxConcurrent { <rate-
             (the model author's own provider, fallbacks off).
             `runPods` — `"off"` (default) or `"probes"`: where a probe-campaign episode executes.
             `probes` runs every probing episode as its own pod on the cluster, on the arm's image
-            ("Run pods", below). Anything else is refused. Off the cluster the setting changes
-            nothing except that an arm with a pinned image is refused rather than run on master.
+            ("Run pods", below). Anything else is refused. While it is not `probes`, or off the
+            cluster, an arm that pins an image or a command is a refused pair, never run on master.
 campaign-defs  published campaign definitions, `<id>@<version>` → { definition, hash, source,
             publishedAt }. Written ONLY by runner/src/campaign-publish.ts and never changed: `set`,
             `patch`, `delete`, the /config page and a reseed all refuse the prefix, and a second
@@ -1177,9 +1177,11 @@ under refused, and nothing launches until the version is published.
 
 **Arms.** An arm with no `image` runs the release image; a definition with
 more than one arm must pin every arm's image, by tag or `@sha256:` digest
-(never `:latest`). A pinned arm runs only in a run pod ("Run pods", below):
-with `policy.runPods` off, or off the cluster, its launches are refused rather
-than run on the release image. An arm image must be a build that has
+(never `:latest`). A pinned arm (an `image` or a `command`) runs only in a run
+pod ("Run pods", below): with `policy.runPods` off, or off the cluster, every
+(assignment, arm) pair of it is refused before any launch and listed as
+`<id>@<v>:<ref>:<arm>`, never run on the release image, and it schedules again
+once the switch is on. An arm image must be a build that has
 `--campaign-file` and refuses unknown flags — anything older ignores the
 campaign file it is given. An arm's `args` come after the supervisor's own
 and may not restate a shape flag or a supervisor flag; `--compact-window` is
@@ -1230,9 +1232,10 @@ $R patch policy '{"runPods":"off"}'    --actor <you> --note "run pods off"
 It reaches a job at its next roster spawn (the supervisor hands it to
 `run-roster` as `--run-pods`), so a roster already mid-episode keeps the mode it
 started under. With it on, every probing episode — image-less arms too, so
-arms compare on one execution path — is a pod; an arm with an image is refused
-with the reason when the switch is off or the supervisor is not on the cluster,
-never run on master's code instead.
+arms compare on one execution path — is a pod; an arm with an image or a
+command is a refused pair when the switch is off or the supervisor is not on
+the cluster — parked and shown on the campaigns page, never launched on
+master's code instead.
 
 **What the chart provides** (`templates/run-pods.yaml`): the fleet's
 ServiceAccount and a Role over pods in the release namespace only; the pod
@@ -1279,6 +1282,11 @@ lists them.
 A pod that will not pull (`ImagePullBackOff`), cannot be scheduled for five
 minutes, stays Pending for fifteen, or is evicted ends the attempt as
 `launch-failed` with the kubelet's reason in the roster's log, never as a hang.
+So does an image the allow-list refuses, a pod the API will not create, and a
+run.ts that refuses its flags. Each leaves a stub run terminated `launch-failed`
+with that reason, which counts toward the definition's `maxAttemptsPerCell`:
+a square that cannot launch settles as capped instead of being picked again
+every tick.
 The pod's log is followed into the job log as a child's stderr was, and the
 finished pod is deleted.
 

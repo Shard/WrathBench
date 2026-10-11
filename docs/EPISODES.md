@@ -180,7 +180,15 @@ The fleet's argv for a probe is its identity, then the arm's args:
 `--episode probing --campaign-file data/runs/<id>/campaign.json --ref <name> …`.
 A directory holding only launch files (`campaign.json`, a run pod's
 `image.json`) is not a run: the next fresh launch onto that id overwrites
-them. A hand launch goes through `infra/run-episode.sh --campaign <id>@<v>
+them. A fleet launch that fails before the run writes anything — the launcher
+refused it, its pod never ran, or run.ts refused its flags — is still an
+attempt on its square, so the roster turns its directory into a stub run:
+the stamps the run would have had and a termination of `launch-failed` with
+the reason, no trajectory. It counts toward `maxAttemptsPerCell` and never as
+a run, is listed rather than archived so the campaigns page counts the
+attempt the scheduler counts, and is no rung on the defer ladder. An arm that
+pins an image or a command while run pods are off, or off the cluster, is a
+refused pair and is never launched at all. A hand launch goes through `infra/run-episode.sh --campaign <id>@<v>
 --cell <id> [--arm <id>]`, which writes the same file from the store where the
 store is; it refuses an arm that pins an image or a command, which only the
 fleet can launch in a run pod.
@@ -342,7 +350,10 @@ a chart: it is a launch that did not happen, not a short episode. A *paused* run
 with no response yet is not one — it is still in progress until the supervisor
 decides what becomes of it. The scheduler still reads the archive, because
 consecutive such launches are what the defer ladder backs off from
-(`docs/RUNBOOK.md`, the scheduling policy).
+(`docs/RUNBOOK.md`, the scheduling policy). A fleet probe launch that failed
+before its run existed is the one exception: its `launch-failed` stub stays
+listed, because it is an attempt its campaign square counts, and it is no rung
+on that ladder (`probing`, above).
 
 ## Runs that lapsed
 

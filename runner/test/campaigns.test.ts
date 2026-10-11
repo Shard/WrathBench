@@ -128,6 +128,22 @@ describe("pairs that cannot launch", () => {
     const squares = campaignSquares(c, ["windowed"], []);
     expect(squares.filter((s) => s.refused !== null).map((s) => s.arm.id)).toEqual(["w200k", "w200k"]);
   });
+
+  test("a pinned arm is refused while run pods are off, or the supervisor says it is off the cluster; unknown refuses nothing", () => {
+    const roster = { plain: { driver: "claude-code" } };
+    const c = joined([windows], { w: { version: 1, assignments: [{ model: "plain" }] } }).campaigns[0]!;
+    const off = campaignPairRefusals(c, roster, { runPods: "off" });
+    expect(off.map((p) => `${p.ref}:${p.arm}`)).toEqual(["plain:auto", "plain:w200k"]);
+    expect(off[0]!.reason).toBe('arm auto pins image r.example/wb:t1, which runs only in a run pod, and policy.runPods is "off" — set it to "probes" to launch it');
+    expect(campaignPairRefusals(c, roster, { runPods: "probes" })).toEqual([]);
+    expect(campaignPairRefusals(c, roster, { runPods: "probes", onCluster: true })).toEqual([]);
+    expect(campaignPairRefusals(c, roster, { runPods: "probes", onCluster: false })[0]!.reason).toContain("not on the cluster");
+    // No launch context at all (a caller that never asked) refuses on the window alone.
+    expect(campaignPairRefusals(c, roster)).toEqual([]);
+    // A floating arm is never refused for where it runs.
+    const floating = joined([definition({ id: "f" })], { f: { version: 1, assignments: [{ model: "plain" }] } }).campaigns[0]!;
+    expect(campaignPairRefusals(floating, roster, { runPods: "off", onCluster: false })).toEqual([]);
+  });
 });
 
 describe("model selection", () => {

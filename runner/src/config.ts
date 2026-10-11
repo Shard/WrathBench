@@ -102,6 +102,14 @@ export const TERMINATION_REASONS = [
   // way out (codex `contextWindowExceeded`). The fixed loop cannot hit this —
   // its window is rebuilt every turn — so it only ever names a CLI harness.
   "context-limit",
+  // A probe launch that failed before the run wrote anything: the launcher
+  // refused it (an image outside the allow-list, a pod the API would not
+  // create), the pod never ran (a pull that failed, never scheduled, evicted),
+  // or run.ts refused its flags. The run never existed, so the roster writes
+  // this on a stub of it (infra/run-roster.ts, `writeLaunchFailure`) — the
+  // record that the square was tried, without which the scheduler re-picked
+  // it every tick. Never the model's: no turn was played.
+  "launch-failed",
 ] as const;
 export type TerminationReason = (typeof TERMINATION_REASONS)[number];
 

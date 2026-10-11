@@ -111,9 +111,9 @@ import {
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
-import type { Campaign } from "../runner/src/campaigns";
+import { campaignSquares, campaignWork, type Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
@@ -121,7 +121,10 @@ import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/conf
 import { parseCampaigns } from "../runner/src/campaigns";
 import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
-import { backoffMs, episodeArgv, resolve } from "./run-roster";
+import { backoffMs, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
+import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
+import { isCounted, readRunFacts } from "../runner/src/models";
+import { listRuns } from "../runner/viewer/runs";
 import { STALL_PAUSE } from "../runner/src/lapse";
 import { tempDirs } from "./temp-dirs";
 
@@ -510,6 +513,8 @@ describe("campaigns: probe sweeps as the third lane", () => {
     const config = parseFleet(
       fleetJson([], {
         roster: { ...ROSTER_BASE, son100: { tier: "t1", model: "sonnet", driver: "claude-code", compactWindow: "100k" } },
+        // Run pods on, so the pinned arms themselves can launch and only the window decides.
+        policy: { runPods: "probes" },
         campaigns: { "window-probe": { version: 1, assignments: [{ model: "son" }, { model: "son100" }, { model: "glm" }] } },
       }),
     );
@@ -517,6 +522,48 @@ describe("campaigns: probe sweeps as the third lane", () => {
     // Not a pin refusal: the rest of the campaign schedules.
     expect(config.refusals).toEqual([]);
     expect(config.campaigns[0]!.refusedPairs.map((p) => `${p.ref}:${p.arm}`)).toEqual(["son100:w200k", "glm:w200k"]);
+  });
+
+  test("a pinned arm is a refused pair while run pods are off or the fleet is off the cluster: parked and shown, never launched", () => {
+    // Such an arm runs only in a run pod. The launcher refused each launch
+    // before the run existed, so nothing counted the attempt and the square
+    // was re-picked every tick; now the planner never picks it.
+    const doc = (policy: Record<string, unknown>, account?: string): unknown =>
+      fleetJson([], {
+        policy,
+        campaigns: { "window-probe": { version: 1, ...(account !== undefined ? { account } : {}), assignments: [{ model: "son" }] } },
+      });
+    const off = parseFleet(doc({}));
+    expect(off.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:son:auto", "window-probe@1:son:w200k"]);
+    expect(off.campaignRefusals[0]!.reason).toContain('policy.runPods is "off"');
+    expect(off.campaignRefusals[0]!.reason).toContain("image registry.example/wb/runner:harness-0.5-931");
+    expect(off.refusals).toEqual([]);
+    // Parked: neither the policy's fan-out nor a pinned campaign offers a square of it.
+    expect(campaignWork(off.campaigns, Object.keys(off.roster), [])).toEqual([]);
+    expect(pinnedCampaignJobs(parseFleet(doc({}, "SHAKEOUT")), [])).toEqual([]);
+    // Shown: the tally keeps every square, each carrying the reason.
+    const squares = campaignSquares(off.campaigns[0]!, Object.keys(off.roster), []);
+    expect(squares.length).toBe(4);
+    expect(squares.every((q) => q.refused?.includes("run pod") === true)).toBe(true);
+    // Switched on, they schedule — unless the supervisor knows it is off the cluster.
+    const on = parseFleet(doc({ runPods: "probes" }));
+    expect(on.campaignRefusals).toEqual([]);
+    expect(campaignWork(on.campaigns, Object.keys(on.roster), []).length).toBe(4);
+    const host = parseFleet(doc({ runPods: "probes" }), { onCluster: false });
+    expect(host.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:son:auto", "window-probe@1:son:w200k"]);
+    expect(host.campaignRefusals[0]!.reason).toContain("not on the cluster");
+    expect(parseFleet(doc({ runPods: "probes" }), { onCluster: true }).campaignRefusals).toEqual([]);
+    // An arm with no image or command floats on the release and is never refused for it.
+    expect(parseFleet(fleetJson([], { campaigns: { "race-probe": { version: 1, assignments: [{ model: "glm" }] } } })).campaignRefusals).toEqual([]);
+    // A command alone pins the arm just the same.
+    const cmd = definition({ id: "cmd-probe", arms: [{ id: "ext", command: ["/app/harness"] }] });
+    const withCmd = parseFleet(fleetJson([], { "campaign-defs": defsBlock(cmd), campaigns: { "cmd-probe": { version: 1, assignments: [{ model: "glm" }] } } }));
+    expect(withCmd.campaignRefusals.map((r) => r.key)).toEqual(["cmd-probe@1:glm:ext"]);
+    expect(withCmd.campaignRefusals[0]!.reason).toContain("command /app/harness");
+    // A pair refused on both grounds says both, once.
+    const both = parseFleet(fleetJson([], { campaigns: { "window-probe": { version: 1, assignments: [{ model: "glm" }] } } }));
+    expect(both.campaignRefusals.map((r) => r.key)).toEqual(["window-probe@1:glm:auto", "window-probe@1:glm:w200k"]);
+    expect(both.campaignRefusals[1]!.reason).toMatch(/runs only in a run pod.*; arm w200k sets --compact-window 200k/);
   });
 
   test("a pinned campaign sharing an account with an enabled job is refused, not the file", () => {
@@ -626,7 +673,7 @@ describe("campaigns: probe sweeps as the third lane", () => {
   });
 
   test("an arm's image and command reach the launch seam exactly; its args reach the argv after the supervisor's", () => {
-    const config = parseFleet(fleetJson([], { campaigns: { "window-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
+    const config = parseFleet(fleetJson([], { policy: { runPods: "probes" }, campaigns: { "window-probe": { version: 1, account: "SHAKEOUT", assignments: [{ model: "son" }] } } }));
     const job: FleetJob = { ...pinnedCampaignJobs(config, [])[0]!, probe: { campaign: "window-probe", version: 1, cell: "a", arm: "w200k" }, name: "window-probe-a-w200k" };
     const entry = jobSpawn(job, config.roster, "SHAKEOUT", "20261010", undefined, config.campaigns).entries[0]!;
     expect(entry.launch).toEqual({ pod: true, image: "registry.example/wb/runner:harness-0.5-931", command: null });
@@ -2281,6 +2328,79 @@ describe("scheduling policy: defer ladder and retirement", () => {
     const next = planTick(config, afterStates, () => undefined, "20260101").policy.find((p) => p.account === "LOCALBOX")!;
     expect(next.job).toMatchObject({ name: "local-freeplay", attempt: 2 });
     expect(jobSpawn(next.job, config.roster, "LOCALBOX", "20260101").entries[0]!.runId).toContain("-a2");
+  });
+});
+
+describe("a probe launch that failed before the run existed", () => {
+  // The launcher refused it (an image outside the allow-list, a pod the API
+  // would not create), the pod never ran, or run.ts refused its flags: the
+  // directory held only campaign.json, which is not a run, so no attempt was
+  // counted and the scheduler re-picked the square every tick. The roster now
+  // leaves a counted stub, and the attempt cap engages.
+  const NOW = 1_800_000_000_000;
+  const roster: Record<string, FleetRosterEntry> = { glm: { model: "z-ai/glm-5.2:free", tier: "t1", idle: "none" } };
+  const solo = definition({ id: "solo", cells: [{ id: "coldridge", race: 3, class: 2 }], maxAttemptsPerCell: 3 });
+  const j = joined([solo], { solo: { version: 1, assignments: [{ model: "glm" }] } });
+
+  test("leaves a counted launch-failed stub, so maxAttemptsPerCell stops the loop on fresh run ids", () => {
+    const runs = tempDir("fleet-launch-failed-");
+    const catalog = Object.keys(roster);
+    const ids: string[] = [];
+    for (let tick = 0; tick < 5; tick++) {
+      const facts = readRunFacts(runs, NOW, { includeArchived: true });
+      const work = campaignWork(j.campaigns, catalog, probeRunsOf(facts));
+      if (work.length === 0) break;
+      // The pick the policy makes: the attempt number off the probing bucket.
+      const state = modelStatesOf(rosterModels(roster), facts, NOW).find((st) => st.name === "glm")!;
+      const attempt = (state.perEpisode.probing?.attempts ?? 0) + 1;
+      const job = policyJob({ name: "glm", episode: "probing", account: "RUNNER3", attempt, why: "w", probe: { campaign: "solo", version: 1, cell: "coldridge", arm: "base" } });
+      const [spec] = resolve(fillEntries(jobSpawn(job, roster, "RUNNER3", "20261011", undefined, j.campaigns), "20261011"), "20261011");
+      // Every attempt lands on a run id nothing is on yet.
+      expect(holdsOnlyLaunchFiles(join(runs, spec!.runId))).toBe(true);
+      writeLaunchFailure(join(runs, spec!.runId), spec!, "arm image refused: outside the allowed repositories", { harnessVersion: "harness-0.5-950-gabc1234", now: NOW + tick });
+      ids.push(spec!.runId);
+    }
+    expect(ids).toEqual([
+      "fleet-glm-solo-coldridge-base-glm-5-2-20261011",
+      "fleet-glm-solo-coldridge-base-glm-5-2-20261011-a2",
+      "fleet-glm-solo-coldridge-base-glm-5-2-20261011-a3",
+    ]);
+    const facts = readRunFacts(runs, NOW, { includeArchived: true });
+    // Each reads as a finished attempt that is no evidence: no turns, no play time, not live, not paused.
+    for (const f of facts) {
+      expect(f).toMatchObject({ episode: "probing", terminationReason: "launch-failed", live: false, pause: null, modelResponses: null, campaign: "solo", campaignVersion: 1, cell: "coldridge", ref: "glm", arm: "base" });
+      expect(isCounted(f)).toBe(false);
+    }
+    // The square is settled as capped, and offers no more work.
+    const [square] = campaignSquares(j.campaigns[0]!, catalog, probeRunsOf(facts));
+    expect(square).toMatchObject({ attempts: 3, done: 0, settled: "capped" });
+    // Nothing for the resume planner or the stale sweep to pick up.
+    expect(implicitPauses({ runs: facts, campaigns: j.campaigns, now: NOW + 3_600_000 }).every((f) => f.pause === null)).toBe(true);
+    // And the model is not cooled for it: a launch that never ran says nothing
+    // about its provider, so it neither climbs the defer ladder nor blocks the model.
+    const state = modelStatesOf(rosterModels(roster), facts, NOW).find((st) => st.name === "glm")!;
+    expect(state.cooling).toBeUndefined();
+    expect(state.perEpisode.probing?.attempts).toBe(3);
+    expect(schedulability(state).verdict).not.toBe("blocked");
+    // The viewer lists each as the failed attempt it is, with no play time behind it.
+    const rows = listRuns(runs, NOW);
+    expect(rows.map((r) => r.terminationReason)).toEqual(["launch-failed", "launch-failed", "launch-failed"]);
+    expect(rows[0]!.terminationDetail).toContain("outside the allowed repositories");
+  });
+
+  test("a stub never lands on a run that wrote its own meta.json, and its stamps are the roster entry's", () => {
+    const runs = tempDir("fleet-launch-failed-");
+    const job = policyJob({ name: "glm", episode: "probing", account: "RUNNER3", attempt: 1, why: "w", probe: { campaign: "solo", version: 1, cell: "coldridge", arm: "base" } });
+    const [spec] = resolve(fillEntries(jobSpawn(job, roster, "RUNNER3", "20261011", undefined, j.campaigns), "20261011"), "20261011");
+    const dir = join(runs, spec!.runId);
+    writeLaunchFailure(dir, spec!, "pod never scheduled", { harnessVersion: "harness-0.5-950-gabc1234", now: NOW });
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { harnessVersion: string; config: Record<string, unknown>; comparability: Record<string, unknown> };
+    expect(meta.harnessVersion).toBe("harness-0.5-950-gabc1234");
+    expect(meta.config).toMatchObject({ model: "z-ai/glm-5.2:free", account: "RUNNER3", episode: "probing", campaign: "solo", campaignVersion: 1, campaignHash: j.definitions[0]!.hash, cell: "coldridge", arm: "base", ref: "glm", race: 3, class: 2 });
+    expect(meta.comparability).toEqual({ harnessVersion: "harness-0.5-950-gabc1234", episode: "probing", effort: null });
+    // No trajectory: it played no turn.
+    expect(holdsOnlyLaunchFiles(dir)).toBe(false);
+    expect(readdirSync(dir).sort()).toEqual(["meta.json", "run.sqlite"]);
   });
 });
 

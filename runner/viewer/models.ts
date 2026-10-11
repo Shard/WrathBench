@@ -282,7 +282,9 @@ export function readFleetRoster(dbPath: string = configDbPath(), series: string 
     // (assignment, arm) pair that cannot launch. Carried to the page, never
     // swallowed.
     const pairs = Object.fromEntries(Object.entries(parsed.roster).map(([n, e]) => [n, { driver: e.driver, compactWindow: e.compactWindow }]));
-    ({ campaigns, definitions: campaignDefs, refused: campaignRefusals } = parseCampaignBlocks(parsed["campaign-defs"], parsed.campaigns, pairs));
+    // Where an arm can launch, as far as this reader knows: the setting, and
+    // not the cluster, which only the supervisor can tell.
+    ({ campaigns, definitions: campaignDefs, refused: campaignRefusals } = parseCampaignBlocks(parsed["campaign-defs"], parsed.campaigns, pairs, { runPods: policy.runPods }));
   } catch (err) {
     // A block the supervisor could not read at all: one refusal, so the page
     // says so instead of showing no campaigns.

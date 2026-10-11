@@ -29,6 +29,7 @@
  */
 
 import { z } from "zod";
+import type { RunPodsMode } from "./models";
 import {
   CAMPAIGN_NAME,
   campaignDefKey,
@@ -145,31 +146,64 @@ export interface PairRosterEntry {
 }
 
 /**
+ * Where the fleet can launch an arm, as far as the reader knows: the fleet
+ * setting `policy.runPods`, and whether the supervisor is on the cluster.
+ * `onCluster` is known only to the supervisor itself; a reader that cannot
+ * tell (the viewer, `--status`, the store's validator) leaves it out, and
+ * nothing is refused on that ground.
+ */
+export interface PairLaunchContext {
+  runPods: RunPodsMode;
+  onCluster?: boolean;
+}
+
+/**
  * The (assignment, arm) pairs of a campaign that would fail at launch, said
  * before one is made: a failed launch spends an attempt, and three spend the
- * square. Today that is the compaction window, which an arm may vary
- * (operator, 2026-10-11): an arm that sets `--compact-window` cannot run an
- * assignment whose roster entry sets one too (the run would get the flag
- * twice), nor one off the claude-code driver (no other harness has the
- * window).
+ * square.
+ *
+ * - **A pinned arm with nowhere to run.** An arm that names an `image` or a
+ *   `command` runs only in a run pod, so while `policy.runPods` is not
+ *   `probes`, or the supervisor is not on the cluster, every pair of it is
+ *   refused: parked and shown, never launched, and back the tick the setting
+ *   allows it. The launcher would refuse each launch anyway (`chooseLauncher`)
+ *   — and before the run existed, so nothing counted the attempt.
+ * - **The compaction window**, which an arm may vary (operator, 2026-10-11):
+ *   an arm that sets `--compact-window` cannot run an assignment whose roster
+ *   entry sets one too (the run would get the flag twice), nor one off the
+ *   claude-code driver (no other harness has the window).
+ *
+ * One entry per pair, its reasons joined.
  */
 export function campaignPairRefusals(
   c: Pick<Campaign, "name" | "version" | "assignments" | "arms">,
   roster: Readonly<Record<string, PairRosterEntry>>,
+  launch?: PairLaunchContext,
 ): { ref: string; arm: string; reason: string }[] {
   const out: { ref: string; arm: string; reason: string }[] = [];
   for (const a of c.assignments) {
     const entry = roster[a.model];
     if (entry === undefined) continue;
     for (const arm of c.arms) {
-      const window = armArg(arm, "compact-window");
-      if (window === undefined) continue;
-      const driver = entry.driver ?? "openai";
-      if (driver !== "claude-code") {
-        out.push({ ref: a.model, arm: arm.id, reason: `arm ${arm.id} sets --compact-window ${window}, and ${a.model} runs on the ${driver} driver, which has no compaction window` });
-      } else if (entry.compactWindow !== undefined) {
-        out.push({ ref: a.model, arm: arm.id, reason: `arm ${arm.id} sets --compact-window ${window}, and roster entry ${a.model} already sets compactWindow ${entry.compactWindow} — assign an entry with no window` });
+      const reasons: string[] = [];
+      const pins = arm.image !== undefined ? `image ${arm.image}` : arm.command !== undefined ? `command ${arm.command.join(" ")}` : undefined;
+      if (pins !== undefined && launch !== undefined) {
+        if (launch.runPods !== "probes") {
+          reasons.push(`arm ${arm.id} pins ${pins}, which runs only in a run pod, and policy.runPods is ${JSON.stringify(launch.runPods)} — set it to "probes" to launch it`);
+        } else if (launch.onCluster === false) {
+          reasons.push(`arm ${arm.id} pins ${pins}, which runs only in a run pod, and this supervisor is not on the cluster`);
+        }
       }
+      const window = armArg(arm, "compact-window");
+      if (window !== undefined) {
+        const driver = entry.driver ?? "openai";
+        if (driver !== "claude-code") {
+          reasons.push(`arm ${arm.id} sets --compact-window ${window}, and ${a.model} runs on the ${driver} driver, which has no compaction window`);
+        } else if (entry.compactWindow !== undefined) {
+          reasons.push(`arm ${arm.id} sets --compact-window ${window}, and roster entry ${a.model} already sets compactWindow ${entry.compactWindow} — assign an entry with no window`);
+        }
+      }
+      if (reasons.length > 0) out.push({ ref: a.model, arm: arm.id, reason: reasons.join("; ") });
     }
   }
   return out;
@@ -292,19 +326,21 @@ export function parseCampaigns(
 
 /**
  * Both blocks at once, as every reader of the config wants them, with each
- * campaign's pair refusals found against the roster when one is given.
+ * campaign's pair refusals found against the roster when one is given, and
+ * against where the fleet can launch when that is given too.
  */
 export function parseCampaignBlocks(
   rawDefs: unknown,
   rawRows: unknown,
   roster?: Readonly<Record<string, PairRosterEntry>>,
+  launch?: PairLaunchContext,
 ): { definitions: PublishedCampaign[]; campaigns: Campaign[]; refused: CampaignRefusal[] } {
   const d = parseCampaignDefinitions(rawDefs);
   const c = parseCampaigns(rawRows, d.definitions);
   const pairs: CampaignRefusal[] = [];
   if (roster !== undefined) {
     for (const camp of c.campaigns) {
-      camp.refusedPairs = campaignPairRefusals(camp, roster);
+      camp.refusedPairs = campaignPairRefusals(camp, roster, launch);
       for (const p of camp.refusedPairs) pairs.push({ key: pairRefusalKey(camp, p.ref, p.arm), reason: p.reason });
     }
   }
