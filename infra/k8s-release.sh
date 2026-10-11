@@ -18,6 +18,11 @@
 #   deploy   ./infra/k8s-deploy.sh — the smokes, then the fleet comes back
 #   resume   ./infra/fleet-update.sh resume — the switch, cleared
 #
+# --KEEP-PAUSED. For a release the gate smokes cannot vouch for: the deploy
+# window is run with --keep-paused, so the fleet comes back up with the switch
+# still set, and the resume phase is skipped. The operator smokes one short
+# real run per driver, then runs `./infra/fleet-update.sh resume` by hand.
+#
 # THE HOOK CONTRACT. `--pin-hook <command>` is run as
 #
 #     <command> <tag> <sha>        with WRATHBENCH_TAG and WRATHBENCH_SHA
@@ -39,12 +44,14 @@
 #
 #   ./infra/k8s-release.sh --dry-run
 #   ./infra/k8s-release.sh --pin-hook ~/bin/place-wrathbench-pin
+#   ./infra/k8s-release.sh --pin-hook ~/bin/place-wrathbench-pin --keep-paused
 #   ./infra/k8s-release.sh --from pin --helmrelease <namespace>/<name>
 #
 # Flags: --from <phase>, --dry-run, --pin-hook <command>,
 # --helmrelease <namespace/name> (an extra wait target, skipped when absent —
 # nothing here assumes a Flux namespace, or Flux at all), --tag <tag>,
 # --registry <registry>, --no-smoke (passed to the deploy window),
+# --keep-paused (passed to the deploy window; the resume phase is skipped),
 # --pin-wait <seconds>, --namespace/-n, --release.
 
 set -Eeuo pipefail
@@ -64,6 +71,7 @@ HELMRELEASE=""
 TAG=""
 REGISTRY=""
 NO_SMOKE=0
+KEEP_PAUSED=0
 PIN_WAIT_S="${WRATHBENCH_RELEASE_PIN_WAIT_S:-1800}"
 POLL_S="${WRATHBENCH_RELEASE_POLL_S:-15}"
 ROLLOUT_WAIT_S="${WRATHBENCH_RELEASE_ROLLOUT_WAIT_S:-900}"
@@ -90,11 +98,12 @@ while [[ $# -gt 0 ]]; do
     --tag) TAG="${2:-}"; shift 2 ;;
     --registry) REGISTRY="${2:-}"; shift 2 ;;
     --no-smoke) NO_SMOKE=1; shift ;;
+    --keep-paused) KEEP_PAUSED=1; shift ;;
     --pin-wait) PIN_WAIT_S="${2:-}"; shift 2 ;;
     --namespace|-n) NAMESPACE="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) die "unknown argument $1 (--from ${PHASES[*]}, --dry-run, --pin-hook, --helmrelease, --tag, --registry, --no-smoke, --pin-wait, --namespace, --release)" ;;
+    -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument $1 (--from ${PHASES[*]}, --dry-run, --pin-hook, --helmrelease, --tag, --registry, --no-smoke, --keep-paused, --pin-wait, --namespace, --release)" ;;
   esac
 done
 
@@ -104,6 +113,8 @@ for i in "${!PHASES[@]}"; do [[ "${PHASES[$i]}" == "${FROM}" ]] && FROM_INDEX="$
 [[ "${PIN_WAIT_S}" =~ ^[0-9]+$ ]] || die "--pin-wait takes whole seconds (got ${PIN_WAIT_S})"
 [[ "${POLL_S}" =~ ^[0-9]+$ ]] || die "WRATHBENCH_RELEASE_POLL_S takes whole seconds"
 [[ -z "${HELMRELEASE}" || "${HELMRELEASE}" == */* ]] || die "--helmrelease takes <namespace>/<name> (got ${HELMRELEASE})"
+# The one phase --from resume would run is the one --keep-paused skips.
+[[ "${KEEP_PAUSED}" -eq 0 || "${FROM}" != "resume" ]] || die "--from resume --keep-paused would run nothing: --keep-paused skips the resume phase. To resume, run ./infra/fleet-update.sh resume (or --from resume alone)"
 
 SELECTED=("${PHASES[@]:${FROM_INDEX}}")
 wants_phase() { local p; for p in "${SELECTED[@]}"; do [[ "${p}" == "$1" ]] && return 0; done; return 1; }
@@ -194,6 +205,7 @@ say "  namespace   ${NAMESPACE} (release ${RELEASE})"
 say "  phases      ${SELECTED[*]}$(if [[ "${FROM}" != "build" ]]; then echo "  (--from ${FROM}; ${PHASES[*]:0:${FROM_INDEX}} skipped)"; fi)"
 say "  pin         $(if [[ -n "${PIN_HOOK}" ]]; then echo "hook: ${PIN_HOOK} ${TAG} ${SHA}"; else echo "no --pin-hook: printed instructions, then the same wait"; fi)"
 say "  wait target $(if [[ -n "${HELMRELEASE}" ]]; then echo "helmrelease ${HELMRELEASE} (after the tag poll, never instead of it)"; else echo "the Deployments' own images and rollouts (no --helmrelease given)"; fi)"
+say "  resume      $(if [[ "${KEEP_PAUSED}" -eq 1 ]]; then echo "--keep-paused: the deploy leaves the pause switch SET and the resume phase is skipped; smoke, then ./infra/fleet-update.sh resume"; else echo "the deploy clears the switch and the resume phase makes sure"; fi)"
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   say "--dry-run: the plan only. Nothing is built, pushed, drained, pinned, smoked or scaled."
@@ -215,8 +227,14 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
     done
     [[ -n "${HELMRELEASE}" ]] && say "                 and kubectl wait --for=condition=Ready helmrelease/${HELMRELEASE#*/} in ${HELMRELEASE%/*}"
   fi
-  wants_phase deploy && say "  would deploy ${K8S_DEPLOY} --namespace ${NAMESPACE} --release ${RELEASE} --expect-tag ${TAG}$(if [[ "${NO_SMOKE}" -eq 1 ]]; then echo " --no-smoke"; fi)"
-  wants_phase resume && say "  would resume ${FLEET_UPDATE} resume --namespace ${NAMESPACE} --release ${RELEASE}"
+  wants_phase deploy && say "  would deploy ${K8S_DEPLOY} --namespace ${NAMESPACE} --release ${RELEASE} --expect-tag ${TAG}$(if [[ "${NO_SMOKE}" -eq 1 ]]; then echo " --no-smoke"; fi)$(if [[ "${KEEP_PAUSED}" -eq 1 ]]; then echo " --keep-paused"; fi)"
+  if wants_phase resume; then
+    if [[ "${KEEP_PAUSED}" -eq 1 ]]; then
+      say "  skip resume  --keep-paused: the fleet comes back up with the switch SET; ./infra/fleet-update.sh resume is yours, after the smoke"
+    else
+      say "  would resume ${FLEET_UPDATE} resume --namespace ${NAMESPACE} --release ${RELEASE}"
+    fi
+  fi
   say "--dry-run: each phase's own script has a --dry-run that says more; this is the order."
   exit 0
 fi
@@ -332,6 +350,7 @@ phase_deploy() {
   say "=== deploy: ${K8S_DEPLOY} (its own drain, the smokes, and the fleet comes back)"
   local args=(--namespace "${NAMESPACE}" --release "${RELEASE}" --expect-tag "${TAG}")
   [[ "${NO_SMOKE}" -eq 1 ]] && args+=(--no-smoke)
+  [[ "${KEEP_PAUSED}" -eq 1 ]] && args+=(--keep-paused)
   # --expect-tag is belt and braces: the pin phase already proved the cluster
   # carries ${TAG}, and the deploy refuses on its own if that stopped being true
   # between the two.
@@ -346,8 +365,20 @@ phase_resume() {
   "${FLEET_UPDATE}" resume --namespace "${NAMESPACE}" --release "${RELEASE}"
 }
 
+RAN_PHASES=()
 for phase in "${SELECTED[@]}"; do
+  if [[ "${phase}" == "resume" && "${KEEP_PAUSED}" -eq 1 ]]; then
+    say "=== resume: SKIPPED (--keep-paused). The fleet is up with the pause switch SET: nothing is scheduled and no paused run resumes."
+    continue
+  fi
   "phase_${phase}"
+  RAN_PHASES+=("${phase}")
 done
 
-say "RELEASED ${TAG} (${SHA}). Phases run: ${SELECTED[*]}."
+say "RELEASED ${TAG} (${SHA}). Phases run: ${RAN_PHASES[*]}."
+if [[ "${KEEP_PAUSED}" -eq 1 ]]; then
+  k8s_flags=""
+  [[ "${NAMESPACE}" == "wrathbench" && "${RELEASE}" == "wrathbench" ]] || k8s_flags=" --namespace ${NAMESPACE} --release ${RELEASE}"
+  say "HELD PAUSED (--keep-paused). Smoke one short real run per driver (./infra/run-episode.sh --k8s --account PROBE ...;"
+  say "  the deploy's output above has the shape), then: ./infra/fleet-update.sh resume${k8s_flags}"
+fi
