@@ -16,3 +16,6 @@ dashboard
 collector
 minimap
 infra/chart
+# Claude Code worktrees: whole checkouts with their node_modules, sent to the
+# daemon on every server build for nothing.
+.claude
