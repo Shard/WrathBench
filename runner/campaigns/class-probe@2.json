@@ -1,0 +1,25 @@
+{
+  "id": "class-probe",
+  "version": 2,
+  "question": "From one start zone where the class allows it, how long does each class take to reach level 10?",
+  "note": "Holds the start zone constant where the class allows it rather than the race: the start shapes levels 1-10 more than racials do. Coldridge Valley covers seven of the nine classes (Dwarf for Warrior, Paladin, Hunter, Rogue and Priest; Gnome for Mage and Warlock); the only Alliance shaman is a Draenei and the only Alliance druid a Night Elf. Death Knight is left out: the server creates one only on an account that already holds a level-55 character, and it starts at 55. The leash is race-probe@1's. Version 1 lived only in the fleet config and was edited in place while it ran, so it has no definition.",
+  "cells": [
+    { "id": "dwarf-warrior", "race": 3, "class": 1 },
+    { "id": "dwarf-paladin", "race": 3, "class": 2, "note": "The subscription lanes' scored start: the calibration cell." },
+    { "id": "dwarf-hunter", "race": 3, "class": 3 },
+    { "id": "dwarf-rogue", "race": 3, "class": 4 },
+    { "id": "dwarf-priest", "race": 3, "class": 5 },
+    { "id": "gnome-mage", "race": 7, "class": 8 },
+    { "id": "gnome-warlock", "race": 7, "class": 9 },
+    { "id": "draenei-shaman", "race": 11, "class": 7, "note": "The only Alliance shaman; starts in Ammen Vale." },
+    { "id": "nightelf-druid", "race": 4, "class": 11, "note": "The only Alliance druid; starts in Shadowglen." }
+  ],
+  "arms": [{ "id": "base" }],
+  "objective": null,
+  "stopAtLevel": 10,
+  "budget": { "episodeMs": 43200000, "idleMs": 1200000, "noXpMs": null, "maxToolCalls": 24000 },
+  "wiki": true,
+  "wikiCoords": false,
+  "resume": true,
+  "maxAttemptsPerCell": 3
+}

@@ -41,12 +41,25 @@
  *
  * **Drafts share the file and are not config** ("The draft key space", below):
  * `proposed/<model id>` rows that no reader of the config ever sees.
+ *
+ * **Published campaign definitions are config, written once**
+ * ("Published definitions", below): `campaign-defs/<id>@<version>` rows are
+ * rendered and validated with the rest, so every reader sees the same set,
+ * but only `publishDefinition` writes one and nothing deletes one.
  */
 
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseFleet } from "../../infra/run-fleet-config";
+import {
+  CAMPAIGN_DEFS_PREFIX,
+  campaignDefKey,
+  campaignHash,
+  issuesOf,
+  publishedCampaignSchema,
+  type PublishedCampaignDoc,
+} from "./campaign-def";
 
 /** How long a reader waits for the single writer. Same posture as `rundb.ts`. */
 export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
@@ -60,10 +73,10 @@ export const CONFIG_DB_BUSY_TIMEOUT_MS = 5000;
  * unknown top-level keys, and silently round-tripping something nothing reads
  * would make the store a place to hide config that does nothing.
  */
-export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "roster", "policy", "campaigns", "queue"] as const;
+export const TOP_LEVEL_KEYS = ["_notes", "preflight", "accounts", "roster", "policy", "campaign-defs", "campaigns", "queue"] as const;
 
 /** The keys whose entries get a row each. Everything else is a singleton row. */
-export const COLLECTION_KEYS = ["roster", "campaigns", "queue"] as const;
+export const COLLECTION_KEYS = ["roster", "campaign-defs", "campaigns", "queue"] as const;
 export type CollectionKey = (typeof COLLECTION_KEYS)[number];
 
 function isCollection(k: string): k is CollectionKey {
@@ -86,7 +99,47 @@ export function isConfigKey(key: string): boolean {
   const name = key.slice(slash + 1);
   if (!isCollection(head) || name.length === 0 || name.includes("/")) return false;
   if (head === "queue") return /^\d+$/.test(name);
+  if (head === "campaign-defs") return /^[A-Za-z0-9._-]+@[1-9][0-9]*$/.test(name);
   return /^[A-Za-z0-9_.:-]+$/.test(name);
+}
+
+// ------------------------------------------------------- published definitions
+
+/**
+ * Published campaign definitions (`runner/src/campaign-def.ts`): one
+ * `campaign-defs/<id>@<version>` row each, holding `{ definition, hash,
+ * source, publishedAt }`. They are config — rendered into the document under
+ * `campaign-defs`, so the supervisor, the viewer and the write validator all
+ * read the same set through `parseFleet` — with three differences:
+ *
+ * - **Write-once.** `publishDefinition` is the only writer. A second publish
+ *   of the same key with the same hash is a no-op; with a different hash it is
+ *   refused, which is what makes "a changed definition is a new version" a
+ *   rule rather than a convention.
+ * - **Never through the generic path.** `put` (and so `patch`, the CLI's
+ *   `set`/`patch`/`delete` and the viewer's `/config` routes) refuses the
+ *   prefix: a hand-written row would carry no provenance, and a delete
+ *   followed by a re-publish would defeat write-once.
+ * - **A reseed keeps them.** `seed --force` replaces the rest of the config
+ *   and leaves these, and a seeded document that carries some goes through
+ *   the same write-once check, so restoring an export reproduces them and
+ *   cannot change one.
+ */
+export function isPublishedKey(key: string): boolean {
+  return key === "campaign-defs" || key.startsWith(CAMPAIGN_DEFS_PREFIX);
+}
+
+/** A published definition, checked the way a publish checks it: the schema, and the hash against its definition. */
+function checkedPublication(doc: unknown, where: string): PublishedCampaignDoc {
+  const parsed = publishedCampaignSchema.safeParse(doc);
+  if (!parsed.success) throw new ConfigRejected(`${where}: ${issuesOf(parsed.error)}`);
+  const hash = campaignHash(parsed.data.definition);
+  if (hash !== parsed.data.hash) throw new ConfigRejected(`${where}: the definition hashes to ${hash}, not ${parsed.data.hash}`);
+  return parsed.data;
+}
+
+function hashOf(doc: unknown): string | undefined {
+  return typeof doc === "object" && doc !== null && typeof (doc as { hash?: unknown }).hash === "string" ? (doc as { hash: string }).hash : undefined;
 }
 
 /** One stored document: a whole singleton block, or one entry of a collection. */
@@ -424,12 +477,45 @@ export class ConfigStore {
    */
   put(key: string, value: unknown, opts: PutOptions = {}): void {
     this.requireWritable();
+    if (isPublishedKey(key)) {
+      throw new ConfigRejected(
+        `${key}: published campaign definitions are written once, only by runner/src/campaign-publish.ts, and never edited or deleted — a changed definition is a new version`,
+      );
+    }
     if (!isConfigKey(key)) {
       throw new ConfigRejected(
         `${key} is not a config key — singletons are ${TOP_LEVEL_KEYS.filter((k) => !isCollection(k)).join(", ")}; ` +
           `entries are roster/<name>, campaigns/<name> and queue/<n>`,
       );
     }
+    this.write(key, value, opts);
+  }
+
+  /**
+   * Publish a campaign definition: the only writer of `campaign-defs/*`
+   * ("Published definitions"). Checked as a publish checks it, then written
+   * through the same whole-config validation and audit as any row. Returns
+   * `unchanged` when the same definition is already published there; refuses
+   * a different one.
+   */
+  publishDefinition(doc: unknown, opts: PutOptions = {}): { key: string; status: "published" | "unchanged" } {
+    this.requireWritable();
+    const pub = checkedPublication(doc, "publish");
+    const key = campaignDefKey(pub.definition);
+    const existing = this.get(key);
+    if (existing !== undefined) {
+      if (hashOf(existing) === pub.hash) return { key, status: "unchanged" };
+      const was = existing as { hash?: unknown; source?: { commit?: unknown } };
+      throw new ConfigRejected(
+        `${key} is already published as ${String(was.hash)} (from ${String(was.source?.commit ?? "an unknown commit")}); ` +
+          `this definition hashes to ${pub.hash} — a published version is never changed, publish it as a new version`,
+      );
+    }
+    this.write(key, pub, opts);
+    return { key, status: "published" };
+  }
+
+  private write(key: string, value: unknown, opts: PutOptions): void {
     const rows = this.rows();
     const at = Date.now();
     const before = rows.find((r) => r.key === key);
@@ -552,19 +638,37 @@ export class ConfigStore {
    * Import a fleet config document. A no-op on a store that already has rows
    * unless `force`, which replaces every config row and records one audit line
    * per key — the history says the store was reseeded, not that nothing
-   * happened. Drafts are not config and survive it.
+   * happened. Drafts are not config and survive it; published campaign
+   * definitions are config and survive it too ("Published definitions"), and
+   * a document that carries some is held to write-once against them.
    */
   seed(doc: unknown, opts: PutOptions & { force?: boolean } = {}): { seeded: boolean; keys: number } {
     this.requireWritable();
     const existing = this.rows();
-    if (existing.length > 0 && opts.force !== true) return { seeded: false, keys: existing.length };
+    const kept = existing.filter((r) => r.key.startsWith(CAMPAIGN_DEFS_PREFIX));
+    const config = existing.filter((r) => !isPublishedKey(r.key));
+    if (config.length > 0 && opts.force !== true) return { seeded: false, keys: existing.length };
+    const split = splitFleet(doc);
+    const incoming = split.filter((r) => r.key.startsWith(CAMPAIGN_DEFS_PREFIX));
+    for (const r of incoming) {
+      const pub = checkedPublication(r.value, r.key);
+      if (campaignDefKey(pub.definition) !== r.key) throw new ConfigRejected(`${r.key} holds ${campaignDefKey(pub.definition)}`);
+      const was = kept.find((k) => k.key === r.key);
+      if (was !== undefined && hashOf(was.value) !== pub.hash) {
+        throw new ConfigRejected(`${r.key} is already published as ${String(hashOf(was.value))}; the document's hashes to ${pub.hash} — a published version is never changed`);
+      }
+    }
+    const added = incoming.filter((r) => !kept.some((k) => k.key === r.key));
+    const rows = [...split.filter((r) => !isPublishedKey(r.key)), ...added];
+    // The document as written (a key the renderer would drop is still
+    // refused by name), then the config it leaves behind, definitions kept.
     validateFleet(doc);
-    const rows = splitFleet(doc);
+    validateFleet(renderFleet([...rows, ...kept]));
     const at = Date.now();
     const actor = opts.actor ?? DEFAULT_ACTOR;
-    const note = opts.note ?? (existing.length > 0 ? "reseed --force" : "seed");
+    const note = opts.note ?? (config.length > 0 ? "reseed --force" : "seed");
     const tx = this.db.transaction(() => {
-      this.db.run(`DELETE FROM config WHERE NOT ${DRAFT_ROWS}`);
+      this.db.run(`DELETE FROM config WHERE NOT ${DRAFT_ROWS} AND key NOT GLOB '${CAMPAIGN_DEFS_PREFIX}*'`);
       for (const r of rows) {
         this.db.run("INSERT INTO config (key, ord, json, updated_at) VALUES (?, ?, ?, ?)", [r.key, r.ord, JSON.stringify(r.value), at]);
         const before = existing.find((e) => e.key === r.key);
@@ -655,6 +759,9 @@ const USAGE = `usage: bun runner/src/config-store.ts <command>
   set <key> <json>          replace one row (JSON on argv, or "-" to read stdin); validated
   patch <key> <json>        merge into one row; validated
   delete <key>              remove one row; validated
+  publish -                 write a published campaign definition read from stdin, once (what
+                            runner/src/campaign-publish.ts --k8s pipes in; campaign-defs/* is refused by
+                            set, patch and delete)
   audit [n]                 the last n changes (default 20)
 
   --db <path>     the store (default $WRATHBENCH_CONFIG_DB, else $WRATHBENCH_DATA/config.sqlite)
@@ -744,6 +851,15 @@ async function main(argv: string[]): Promise<number> {
         }
         store.put(key, undefined, opts);
         console.error(`deleted ${key}`);
+        return 0;
+      }
+      case "publish": {
+        if (args[0] !== "-") {
+          console.error(USAGE);
+          return 2;
+        }
+        const { key, status } = store.publishDefinition(JSON.parse(await Bun.stdin.text()) as unknown, opts);
+        console.error(status === "published" ? `published ${key}` : `${key} is already published with this hash — nothing written`);
         return 0;
       }
       case "audit": {
