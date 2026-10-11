@@ -60,6 +60,7 @@ import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type Rout
 import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
 import { Trajectory } from "../runner/src/trajectory";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, type ScanReads } from "../runner/src/models";
+import { CAMPAIGN_FILE, holdsOnlyLaunchFiles, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -164,14 +165,15 @@ export interface RosterSpec {
    */
   episode?: string;
   /**
-   * The probe campaign that commissioned this entry, as `<id>@<version>`, and
-   * which of its cells it is. Passed to the runner as `--campaign` / `--cell`;
-   * the runner takes the cell's whole shape from the checked-in definition and
-   * refuses any flag that would set part of it, so a campaign spec's argv
+   * A probe's campaign file (`runner/src/campaign-file.ts`): the published
+   * definition, the cell and the arm this run is. The roster writes it to
+   * `runs/<runId>/campaign.json` before a fresh launch and passes the runner
+   * `--campaign-file` to it; the runner takes the run's whole shape from it
+   * and refuses any flag that would set part of it, so a campaign spec's argv
    * carries no objective, race/class, wiki or leash flag on a fresh launch.
+   * The arm's own args come last.
    */
-  campaign?: string;
-  cell?: string;
+  campaignFile?: CampaignFile;
   /**
    * The roster name a campaign run is launched as (`--ref`), recorded on the
    * run so the sweep counts its work against the assignment that made it.
@@ -180,7 +182,7 @@ export interface RosterSpec {
   /**
    * Whether a run of this entry that pauses is resumed. The fleet
    * writes it from the lane: `freeplay` yes, a probe campaign only if it asked
-   * (its checked-in definition's `resume`), a scored eval never. Absent falls back to
+   * (its published definition's `resume`), a scored eval never. Absent falls back to
    * `resumesOnPause(episode)`, so a hand-written roster with no episode keeps
    * the lane's behaviour.
    */
@@ -243,8 +245,8 @@ export interface Resolved {
   wiki: boolean;
   extra: boolean;
   episode: string | undefined;
-  campaign: string | undefined;
-  cell: string | undefined;
+  /** Checked against itself (`parseCampaignFile`): the roster file is a boundary. */
+  campaignFile: CampaignFile | undefined;
   ref: string | undefined;
   /** Resolved once here, so no caller has to remember the fallback. */
   resumeOnPause: boolean;
@@ -604,8 +606,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       wiki: s.wiki !== false,
       extra: s.extra === true,
       episode: s.episode,
-      campaign: s.campaign,
-      cell: s.cell,
+      campaignFile: s.campaignFile === undefined ? undefined : parseCampaignFile(s.campaignFile, `roster entry ${s.model}: campaignFile`),
       ref: s.ref,
       resumeOnPause: s.resumeOnPause ?? resumesOnPause(s.episode),
       continueFrom: s.continueFrom,
@@ -665,6 +666,15 @@ function leashArgv(spec: Resolved): string[] {
   return argv;
 }
 
+/**
+ * Where a probe's campaign file lives, as the runner is told it: relative to
+ * the repository root every launch path runs from (the roster's cwd, the
+ * runner container's and a run pod's workdir), so one spelling serves them all.
+ */
+export function campaignFilePath(runId: string): string {
+  return join(RUNS_DIR, runId, CAMPAIGN_FILE);
+}
+
 export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?: boolean } = {}): string[] {
   // Everything after the launcher is identical: run-episode.sh passes its
   // unknown flags through to `bun runner/src/run.ts` verbatim, so the two heads
@@ -676,11 +686,14 @@ export function episodeArgv(spec: Resolved, resume: boolean, opts: { container?:
 /**
  * run.ts's own flags, with no launcher head: what a run pod's container is
  * given as `args` after its command (infra/run-pod.ts), and the tail of every
- * child-process argv above.
+ * child-process argv above. Every flag here is one `run.ts` reads
+ * (`runner/src/run-flags.ts`, `SUPERVISOR_FLAGS`), and `run-argv.test.ts`
+ * runs every lane's output through the runner's own parser.
  */
 export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // Identity — driver, model, account, effort, compactWindow, objective, wiki, race/class,
-  // episode, campaign/cell — is the resumed run's own and is never restated.
+  // episode, the campaign file — is the resumed run's own and is never restated;
+  // nor are an arm's args, which the run stored with the rest of its config.
   if (resume) return ["--resume", spec.runId, ...leashArgv(spec)];
   const argv = ["--driver", spec.driver, "--model", spec.model, "--run-id", spec.runId];
   if (spec.driver === "openai") {
@@ -707,15 +720,15 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   if (spec.continueDropped !== undefined) {
     argv.push("--continue-dropped", spec.continueDropped.runId, "--continue-dropped-reason", spec.continueDropped.reason);
   }
-  // A probe campaign's cell names its own shape: the runner resolves it from
-  // the checked-in definition and refuses every flag that would set part of it
-  // (objective, race/class, wiki, leash). So a campaign spec's argv is its
-  // identity and nothing else.
-  if (spec.campaign !== undefined) {
-    argv.push("--episode", spec.episode ?? "probing", "--campaign", spec.campaign);
-    if (spec.cell !== undefined) argv.push("--cell", spec.cell);
+  // A probe's campaign file names its whole shape: the runner reads it and
+  // refuses every flag that would set part of it (objective, race/class, wiki,
+  // leash). So a probe's argv is its identity, then the arm's own args — after
+  // the supervisor's, opaque here, and checked against the reserved flags when
+  // the definition was published.
+  if (spec.campaignFile !== undefined) {
+    argv.push("--episode", "probing", "--campaign-file", campaignFilePath(spec.runId));
     if (spec.ref !== undefined) argv.push("--ref", spec.ref);
-    return argv;
+    return [...argv, ...(spec.campaignFile.arm.args ?? [])];
   }
   if (spec.objective !== undefined) argv.push("--objective", spec.objective);
   // Explicit value rather than a bare flag, so the runner's argv parser never
@@ -725,9 +738,7 @@ export function episodeFlags(spec: Resolved, resume: boolean): string[] {
   // pre-#61 roster produced is unchanged.
   if (!spec.wiki) argv.push("--wiki", "false");
   if (spec.extra) argv.push("--extra", "true");
-  // The tier id rides its own flag (a string, never interpreted here); the
-  // runner's argv parser ignores flags it does not know, so this is safe to
-  // emit before the runner learns it.
+  // The tier id rides its own flag (a string, never interpreted here).
   if (spec.episode !== undefined) argv.push("--episode", spec.episode);
   // Race and class only: the name is the model's, and the runner records it.
   argv.push("--race", String(spec.race), "--class", String(spec.class));
@@ -1652,6 +1663,10 @@ async function attemptSpec(
     // The name is the model's own and is not known until it creates the
     // character, so the launch line has none to print.
     say(`launch ${spec.model} as ${spec.runId}${resume ? " (--resume)" : ""}`);
+    // A fresh probe's campaign file goes beside the run before the run exists:
+    // the runner reads its whole shape from it, and a run pod needs no store.
+    // A resume keeps the file the run launched with.
+    if (!resume && spec.campaignFile !== undefined && !opts.dryRun) writeCampaignFile(join(REPO_ROOT, RUNS_DIR, spec.runId), spec.campaignFile);
     const exit = await runEpisode(spec, resume);
     const verdict = classify(spec, exit);
     const level = readLevel(spec.runId);
@@ -1935,7 +1950,9 @@ async function main(): Promise<void> {
     }
     const fresh = planFreshLaunch({
       runId: spec.runId,
-      dirExists: existsSync(runDir(spec.runId)),
+      // Launch files alone (a campaign.json a failed launch left) are not a
+      // run: the next launch onto that id overwrites them, as the runner does.
+      dirExists: !holdsOnlyLaunchFiles(runDir(spec.runId)),
       resumeRoster: args.resumeRoster === true,
     });
     if (fresh.kind === "skip") {

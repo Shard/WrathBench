@@ -1,36 +1,29 @@
 /**
- * A fresh probe launch, resolved against the checked-in campaign definitions.
+ * A fresh probe launch, resolved from its campaign file.
  *
  * The rule (operator decision, 2026-10-09): a `probing` run exists only as a
- * cell of a checked-in, versioned campaign definition. Every way a run starts —
- * the fleet, `infra/run-episode.sh`, a `kubectl exec`, a branch pod — ends in
- * `run.ts`, so this is where it is enforced:
+ * cell of a published, versioned campaign definition. Every way a run starts —
+ * the fleet, `infra/run-episode.sh`, a `kubectl exec`, a run pod on another
+ * image — ends in `run.ts`, so this is where it is enforced:
  *
- * - `--episode probing` needs `--campaign <id>@<version> --cell <id>` naming an
- *   open definition in this checkout and one of its cells;
- * - `--campaign` without `probing` (or with another episode) is refused, and
- *   so is `--cell` without `--campaign`;
- * - with `--campaign`, the run's shape comes from the definition and nowhere
- *   else, so every flag that would set part of it is refused — a different
- *   shape is a new version, not a launch flag.
+ * - `--episode probing` needs `--campaign-file <path>`, a `campaign.json`
+ *   (`campaign-file.ts`) naming the definition, the cell and the arm;
+ * - `--campaign-file` with another episode is refused, and so is `--ref`
+ *   without one;
+ * - the run's shape comes from the file and nowhere else, so every flag that
+ *   would set part of it is refused — a different shape is a new version, not
+ *   a launch flag. An arm's own args were checked against the same list when
+ *   the definition was published.
  *
  * Fresh launches only. A `--resume` reloads the run's own stored config and
- * never comes through here, so a run from before the rule still loads.
- *
- * Before this, nothing refused `--episode probing` on its own: nine hand
- * launches of a harness spike used `probing` as an off-board switch and
- * recorded no campaign at all.
+ * never comes through here.
  */
 
-import {
-  CAMPAIGN_DEFS,
-  campaignDef,
-  campaignHash,
-  campaignRef,
-  parseCampaignRef,
-  type CampaignDef,
-} from "./campaign-defs";
-import { cellDimensions } from "./campaigns";
+import { readCampaignFile, CampaignFileError, type CampaignFile } from "./campaign-file";
+import { cellDimensions } from "./campaign-def";
+import { PROBE_SHAPE_FLAGS } from "./run-flags";
+
+export { PROBE_SHAPE_FLAGS } from "./run-flags";
 
 /** A launch the rule refuses. The message is the operator's whole notice. */
 export class CampaignLaunchError extends Error {
@@ -40,75 +33,46 @@ export class CampaignLaunchError extends Error {
   }
 }
 
-/** The flags that set part of a run's shape, which a campaign launch takes from its definition instead. */
-export const PROBE_SHAPE_FLAGS = [
-  "objective",
-  "race",
-  "class",
-  "wiki-coords",
-  "wiki",
-  "max-tool-calls",
-  "idle-ms",
-  "no-xp-ms",
-  "episode-ms",
-  "watchdogs-json",
-] as const;
-
-function openRefs(defs: readonly CampaignDef[]): string {
-  const open = defs.filter((d) => d.status === "open").map(campaignRef);
-  return open.length === 0 ? "none" : open.join(", ");
-}
+/** The environment variable a run pod's launcher names the requested image in. */
+export const RUN_IMAGE_ENV = "WRATHBENCH_RUN_IMAGE";
 
 /**
  * The raw config fields a campaign launch contributes, or null when the
- * launch names no campaign and is not a probe. Throws `CampaignLaunchError`
- * for every launch the rule refuses.
+ * launch names no campaign file and is not a probe. Throws
+ * `CampaignLaunchError` for every launch the rule refuses.
  */
 export function campaignLaunch(
   args: Readonly<Record<string, string | boolean>>,
-  defs: readonly CampaignDef[] = CAMPAIGN_DEFS,
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ): Record<string, unknown> | null {
-  const campaign = args["campaign"];
-  const cell = args["cell"];
+  const path = args["campaign-file"];
   const episode = args["episode"];
-  if (campaign === undefined) {
+  if (path === undefined) {
     if (episode === "probing") {
       throw new CampaignLaunchError(
-        `--episode probing needs --campaign <id>@<version> --cell <id>: a probe is a cell of a checked-in campaign definition (runner/src/campaign-defs/; open: ${openRefs(defs)})`,
+        "--episode probing needs --campaign-file <path>: a probe is a cell of a published campaign definition " +
+          "(by hand: infra/run-episode.sh --campaign <id>@<version> --cell <id> [--arm <id>], which writes the file from the store)",
       );
     }
-    if (cell !== undefined) throw new CampaignLaunchError("--cell names a cell of a campaign; pass --campaign <id>@<version> with it");
-    if (args["ref"] !== undefined) throw new CampaignLaunchError("--ref records the roster entry a campaign launch was made as; pass it with --campaign");
+    if (args["ref"] !== undefined) throw new CampaignLaunchError("--ref records the roster entry a campaign launch was made as; pass it with --campaign-file");
     return null;
   }
-  if (typeof campaign !== "string") throw new CampaignLaunchError("--campaign takes <id>@<version>, e.g. race-probe@1");
-  const ref = parseCampaignRef(campaign);
-  if (ref === null) {
-    throw new CampaignLaunchError(
-      `--campaign ${campaign}: name the version as <id>@<version> (e.g. race-probe@1); a bare id would let a newer definition re-target the launch`,
-    );
-  }
+  if (typeof path !== "string") throw new CampaignLaunchError("--campaign-file takes the path of a campaign.json");
   if (episode !== undefined && episode !== "probing") {
-    throw new CampaignLaunchError(`--campaign is a probe: it runs --episode probing, not --episode ${String(episode)}`);
+    throw new CampaignLaunchError(`--campaign-file is a probe: it runs --episode probing, not --episode ${String(episode)}`);
   }
-  const def = campaignDef(ref.id, ref.version, defs);
-  if (def === undefined) {
-    throw new CampaignLaunchError(`--campaign ${campaign}: no such definition in this checkout (open: ${openRefs(defs)})`);
+  let file: CampaignFile;
+  try {
+    file = readCampaignFile(path);
+  } catch (err) {
+    if (err instanceof CampaignFileError) throw new CampaignLaunchError(`--campaign-file ${err.message}`);
+    throw err;
   }
-  if (def.status !== "open") {
-    throw new CampaignLaunchError(`--campaign ${campaign} is closed: it attributes past runs and launches nothing`);
-  }
-  if (typeof cell !== "string") {
-    throw new CampaignLaunchError(`--campaign ${campaign} needs --cell <id> (one of: ${def.cells.map((c) => c.id).join(", ")})`);
-  }
-  const c = def.cells.find((x) => x.id === cell);
-  if (c === undefined) {
-    throw new CampaignLaunchError(`--cell ${cell} is not a cell of ${campaign} (one of: ${def.cells.map((x) => x.id).join(", ")})`);
-  }
+  const ref = `${file.campaign}@${file.version}`;
   const shape = PROBE_SHAPE_FLAGS.filter((f) => args[f] !== undefined);
   if (shape.length > 0) {
     throw new CampaignLaunchError(
-      `--campaign ${campaign} takes the run's shape from its definition; ${shape.map((f) => `--${f}`).join(", ")} ` +
+      `${ref} takes the run's shape from its campaign file; ${shape.map((f) => `--${f}`).join(", ")} ` +
         `${shape.length === 1 ? "is" : "are"} not ${shape.length === 1 ? "a flag" : "flags"} a probe may set — a different shape is a new version`,
     );
   }
@@ -116,13 +80,23 @@ export function campaignLaunch(
   if (rosterRef !== undefined && (typeof rosterRef !== "string" || rosterRef.length === 0)) {
     throw new CampaignLaunchError("--ref takes the roster name the launch was made as");
   }
-  const dims = cellDimensions(def, c);
+  // A pinned arm names the build it measures. A process the launcher did not
+  // start in that image would run the fleet's own build under the arm's name,
+  // which is the silent mismeasure arms exist to rule out.
+  const image = env[RUN_IMAGE_ENV];
+  if (file.arm.image !== undefined && (image === undefined || image.length === 0)) {
+    throw new CampaignLaunchError(
+      `arm ${file.arm.id} of ${ref} pins image ${file.arm.image}, and this process was not launched in it ($${RUN_IMAGE_ENV} is unset) — a pinned arm runs in a run pod`,
+    );
+  }
+  const dims = cellDimensions(file.definition, file.cell);
   return {
     episode: "probing",
-    campaign: def.id,
-    campaignVersion: def.version,
-    campaignHash: campaignHash(def),
-    cell: c.id,
+    campaign: file.campaign,
+    campaignVersion: file.version,
+    campaignHash: file.hash,
+    cell: file.cell.id,
+    arm: file.arm.id,
     ...(typeof rosterRef === "string" ? { ref: rosterRef } : {}),
     race: dims.race,
     class: dims.class,

@@ -1,25 +1,53 @@
 /**
  * A fresh probe launch: the rule that a `probing` run exists only as a cell of
- * a checked-in, versioned campaign definition, and the shape the definition
- * hands the run.
+ * a published, versioned campaign definition, carried to the run as its
+ * campaign file, and the shape that file hands the run.
  *
  * Asserted through `configFromArgs`, the whole fresh-launch seam, because that
  * is what every launch path — the fleet's roster, run-episode.sh, a kubectl
- * exec, a branch pod — ends in. The nine runs this rule exists for were hand
- * launches with `--episode probing` and nothing else.
+ * exec, a run pod on another image — ends in.
  */
 
 import { describe, expect, test } from "bun:test";
-import { campaignHash, campaignDef } from "../src/campaign-defs";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { campaignFileOf, writeCampaignFile } from "../src/campaign-file";
 import { CampaignLaunchError, PROBE_SHAPE_FLAGS } from "../src/campaign-launch";
 import { loadRunConfig } from "../src/config";
 import { configFromArgs } from "../src/run";
+import { checkedIn, definition, joined } from "./fixtures/campaigns";
+import { tempDirs } from "./fixtures/temp-dirs";
 
+const tempDir = tempDirs();
 const MODEL = ["--driver", "openai", "--model", "deepseek/deepseek-v4.1-flash"];
 
-function refused(argv: string[]): string {
+const race = checkedIn("race-probe@1");
+const steered = definition({
+  id: "nav",
+  objective: "Travel to Ironforge and keep a log.",
+  stopAtLevel: null,
+  wikiCoords: true,
+  budget: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null, maxToolCalls: 2500 },
+  cells: [{ id: "coldridge", race: 3, class: 2 }],
+});
+const pinned = definition({
+  id: "pinned",
+  arms: [
+    { id: "a", image: "registry.example/wb/runner:t1" },
+    { id: "b", image: "registry.example/wb/runner:t2", args: ["--compact-window", "200k"] },
+  ],
+});
+const { definitions } = joined([race, steered, pinned], {});
+const pub = (ref: string): (typeof definitions)[number] => definitions.find((d) => d.ref === ref)!;
+
+/** A campaign file on disk for one square. */
+function fileFor(ref: string, cell: string, arm?: string): string {
+  return writeCampaignFile(tempDir("wb-launch-"), campaignFileOf(pub(ref), cell, arm));
+}
+
+function refused(argv: string[], env: Record<string, string> = {}): string {
   try {
-    configFromArgs([...MODEL, ...argv]);
+    configFromArgs([...MODEL, ...argv], env);
   } catch (err) {
     expect(err).toBeInstanceOf(CampaignLaunchError);
     return (err as Error).message;
@@ -28,34 +56,32 @@ function refused(argv: string[]): string {
 }
 
 describe("what a fresh probe launch must name", () => {
-  test("--episode probing alone is refused: a probe is a cell of a checked-in campaign", () => {
-    expect(refused(["--episode", "probing"])).toContain("--campaign <id>@<version> --cell <id>");
+  test("--episode probing alone is refused: a probe is a cell of a published campaign", () => {
+    expect(refused(["--episode", "probing"])).toContain("--campaign-file");
   });
 
-  test("the version must be named; a bare id is refused", () => {
-    expect(refused(["--campaign", "race-probe", "--cell", "orc-warrior"])).toContain("@<version>");
+  test("a campaign file is a probe: another episode is refused, and so is a ref without one", () => {
+    expect(refused(["--episode", "e90", "--campaign-file", fileFor("race-probe@1", "orc-warrior")])).toContain("--episode probing");
+    expect(refused(["--ref", "codex-sol-61"])).toContain("--campaign-file");
   });
 
-  test("a version this checkout does not define is refused, naming the open ones", () => {
-    const msg = refused(["--campaign", "race-probe@7", "--cell", "orc-warrior"]);
-    expect(msg).toContain("no such definition");
-    expect(msg).toContain("race-probe@1");
+  test("a missing or unreadable file is refused, naming it", () => {
+    expect(refused(["--campaign-file", "/nonexistent/campaign.json"])).toContain("/nonexistent/campaign.json");
+    const bad = join(tempDir("wb-launch-bad-"), "campaign.json");
+    writeFileSync(bad, "{");
+    expect(refused(["--campaign-file", bad])).toContain(bad);
   });
 
-  test("a closed definition launches nothing", () => {
-    expect(refused(["--campaign", "class-probe@1", "--cell", "human-warrior"])).toContain("closed");
-    expect(refused(["--campaign", "loop-spike@1", "--cell", "workspace"])).toContain("closed");
-  });
-
-  test("a cell must be named, and must be the definition's", () => {
-    expect(refused(["--campaign", "race-probe@1"])).toContain("needs --cell");
-    expect(refused(["--campaign", "race-probe@1", "--cell", "human-paladin"])).toContain("not a cell of race-probe@1");
-  });
-
-  test("a campaign is a probe: another episode is refused, and so is a cell or a ref without one", () => {
-    expect(refused(["--episode", "e90", "--campaign", "race-probe@1", "--cell", "orc-warrior"])).toContain("--episode probing");
-    expect(refused(["--cell", "orc-warrior"])).toContain("--campaign");
-    expect(refused(["--ref", "codex-sol-61"])).toContain("--campaign");
+  test("a file that disagrees with itself is refused: its hash, its cell and its arm are the definition's own", () => {
+    const f = campaignFileOf(pub("race-probe@1"), "orc-warrior");
+    const write = (doc: unknown): string => {
+      const p = join(tempDir("wb-launch-edit-"), "campaign.json");
+      writeFileSync(p, JSON.stringify(doc));
+      return p;
+    };
+    expect(refused(["--campaign-file", write({ ...f, hash: "sha256:0000000000000000" })])).toContain("hashes to");
+    expect(refused(["--campaign-file", write({ ...f, cell: { ...f.cell, class: 2 } })])).toContain("cell");
+    expect(refused(["--campaign-file", write({ ...f, arm: { id: "other" } })])).toContain("arm");
   });
 
   test("every flag that would set part of the shape is refused, each by name", () => {
@@ -71,21 +97,30 @@ describe("what a fresh probe launch must name", () => {
       "episode-ms": "60000",
       "watchdogs-json": "{}",
     };
-    for (const f of PROBE_SHAPE_FLAGS) {
-      expect(refused(["--campaign", "race-probe@1", "--cell", "orc-warrior", `--${f}`, values[f]])).toContain(`--${f}`);
-    }
+    const file = fileFor("race-probe@1", "orc-warrior");
+    for (const f of PROBE_SHAPE_FLAGS) expect(refused(["--campaign-file", file, `--${f}`, values[f]])).toContain(`--${f}`);
+  });
+
+  test("an arm that pins an image is refused in a process its launcher did not start in an image", () => {
+    const file = fileFor("pinned@1", "a", "a");
+    expect(refused(["--campaign-file", file])).toContain("WRATHBENCH_RUN_IMAGE");
+    expect(configFromArgs([...MODEL, "--campaign-file", file], { WRATHBENCH_RUN_IMAGE: "registry.example/wb/runner:t1" })).toMatchObject({
+      arm: "a",
+      image: "registry.example/wb/runner:t1",
+    });
   });
 });
 
-describe("the shape a cell hands the run", () => {
+describe("the shape a campaign file hands the run", () => {
   test("race-probe@1's orc-warrior: the cell's start, the definition's leash, stop at level 10, stamped", () => {
-    const c = configFromArgs([...MODEL, "--campaign", "race-probe@1", "--cell", "orc-warrior", "--ref", "deepseek-v41-flash"]);
+    const c = configFromArgs([...MODEL, "--campaign-file", fileFor("race-probe@1", "orc-warrior"), "--ref", "deepseek-v41-flash"], {});
     expect(c).toMatchObject({
       episode: "probing",
       campaign: "race-probe",
       campaignVersion: 1,
-      campaignHash: campaignHash(campaignDef("race-probe", 1)!),
+      campaignHash: pub("race-probe@1").hash,
       cell: "orc-warrior",
+      arm: "base",
       ref: "deepseek-v41-flash",
       race: 2,
       class: 1,
@@ -97,27 +132,38 @@ describe("the shape a cell hands the run", () => {
     expect(c.watchdogs).toMatchObject({ episodeMs: 43_200_000, idleMs: 1_200_000, noXpMs: null });
     // No objective text: the standing goal drives levelling, and the run is unscored by its episode.
     expect(c.objective).toBeUndefined();
+    // Not launched by a pod: no image stamp.
+    expect(c.image).toBeUndefined();
   });
 
   test("--episode probing may be spelled out; the result is the same launch", () => {
-    const a = configFromArgs([...MODEL, "--campaign", "class-probe@2", "--cell", "draenei-shaman", "--run-id", "x"]);
-    const b = configFromArgs([...MODEL, "--episode", "probing", "--campaign", "class-probe@2", "--cell", "draenei-shaman", "--run-id", "x"]);
+    const file = fileFor("race-probe@1", "draenei-warrior");
+    const a = configFromArgs([...MODEL, "--campaign-file", file, "--run-id", "x"], {});
+    const b = configFromArgs([...MODEL, "--episode", "probing", "--campaign-file", file, "--run-id", "x"], {});
     expect({ ...b, token: "" }).toEqual({ ...a, token: "" });
-    expect(a).toMatchObject({ race: 11, class: 7, campaignVersion: 2 });
+    expect(a).toMatchObject({ race: 11, class: 1 });
   });
 
   test("a definition with an objective and no stop level passes exactly that", () => {
-    const c = configFromArgs([...MODEL, "--campaign", "nav-probe@1", "--cell", "coldridge"]);
-    expect(c.objective).toContain("Travel from Coldridge Valley to Ironforge");
+    const c = configFromArgs([...MODEL, "--campaign-file", fileFor("nav@1", "coldridge")], {});
+    expect(c.objective).toBe("Travel to Ironforge and keep a log.");
     expect(c.stopAtLevel).toBeUndefined();
     expect(c).toMatchObject({ wikiCoords: true, race: 3, class: 2, maxToolCallsPerEpisode: 2500 });
     expect(c.watchdogs).toMatchObject({ episodeMs: 21_600_000, noXpMs: null });
   });
 
-  test("a launch that names no campaign is untouched", () => {
-    const c = configFromArgs([...MODEL, "--episode", "e90"]);
+  test("an arm's args land in the config by ordinary parsing, after the supervisor's", () => {
+    const c = configFromArgs(["--driver", "claude-code", "--model", "sonnet", "--campaign-file", fileFor("pinned@1", "a", "b"), "--compact-window", "200k"], {
+      WRATHBENCH_RUN_IMAGE: "registry.example/wb/runner:t2",
+    });
+    expect(c).toMatchObject({ arm: "b", compactWindow: "200k" });
+  });
+
+  test("a launch that names no campaign file is untouched", () => {
+    const c = configFromArgs([...MODEL, "--episode", "e90"], {});
     expect(c.campaign).toBeUndefined();
     expect(c.campaignVersion).toBeUndefined();
+    expect(c.arm).toBeUndefined();
     expect(c.stopAtLevel).toBeUndefined();
   });
 });

@@ -29,6 +29,8 @@ import { readRun } from "../viewer/runs";
 import { Watchdogs } from "../src/watchdogs";
 import { tempDirs } from "./fixtures/temp-dirs";
 import { requestsOf } from "./fixtures/requests";
+import { definition, joined } from "./fixtures/campaigns";
+import { campaignFileOf, writeCampaignFile } from "../src/campaign-file";
 
 const tempDir = tempDirs();
 
@@ -301,7 +303,9 @@ describe("argv -> run config", () => {
     // ceiling is its campaign definition's, never a default.
     expect(configFromArgs(["--model", "m", "--max-tool-calls", "250"]).maxToolCallsPerEpisode).toBe(250);
     expect(configFromArgs(["--model", "m"]).maxToolCallsPerEpisode).toBe(500);
-    expect(configFromArgs(["--model", "m", "--campaign", "nav-probe@1", "--cell", "coldridge"]).maxToolCallsPerEpisode).toBe(2500);
+    const solo = joined([definition({ id: "solo", budget: { episodeMs: 21_600_000, idleMs: 1_200_000, noXpMs: null, maxToolCalls: 2500 } })], {}).definitions[0]!;
+    const file = writeCampaignFile(tempDir("wrathbench-objective-probe-"), campaignFileOf(solo, "a"));
+    expect(configFromArgs(["--model", "m", "--campaign-file", file], {}).maxToolCallsPerEpisode).toBe(2500);
     expect(configFromArgs(["--episode", "freeplay"]).maxToolCallsPerEpisode).toBe(500);
   });
 });
