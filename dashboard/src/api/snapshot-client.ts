@@ -33,7 +33,6 @@
 import { PUBLIC_ATTRIBUTION } from "../lib/attribution";
 import type {
   ApiInfoResponse,
-  CampaignsResponse,
   CharacterResponse,
   CharacterStatePoint,
   ToolsResponse,
@@ -52,6 +51,7 @@ import type {
 } from "@viewer/api-types";
 import type { PublicFleetResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
+import type { CampaignsResponse } from "./campaign-types";
 import { ApiError, getJson, sweepExpired, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 

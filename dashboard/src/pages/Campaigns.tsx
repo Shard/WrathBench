@@ -1,327 +1,502 @@
 /**
- * Probe campaigns: the commissioned middle lane.
+ * Probe campaigns: the commissioned middle lane, and how harness questions are
+ * settled.
  *
- * Everything here is unscored by construction, so this page reports coverage
- * rather than performance — which cells have been swept, by which models, and
- * what is left. One pane per campaign VERSION (a checked-in definition), with
- * a cells × models grid: whether each square reached the definition's stop
- * level and how many minutes of play it took. The grid is read, never ranked:
- * cells keep the definition's order and columns the assignments' order, and
- * nothing is sorted by a result (`probing` has no comparability group).
+ * A campaign is a matrix — cells (the start) × arms (the harness build and its
+ * flags) × assignments (the models) — and this page answers two questions about
+ * it: what is queued, running or done, and how its arms compare per model. The
+ * index is one row per published version; `/campaigns/:id/:version` is one
+ * campaign, with its shape, its arms, the cells × (assignment × arm) grid and
+ * the arm comparison.
+ *
+ * Everything on it comes from `/api/campaigns` alone. State, progress, live
+ * markers, run ids and cost are decided server-side by the same counting the
+ * scheduler uses, so nothing here joins another feed to find out what is live,
+ * and nothing reads the store row's account, which the public projection omits.
+ * Nothing is ranked (lib/campaigns.ts says why).
  */
 
-import { A } from "@solidjs/router";
+import { A, useParams, useSearchParams } from "@solidjs/router";
 import { For, Show } from "solid-js";
-import { api, type CampaignRowView, type LegacyCampaignsResponse } from "../api/client";
-import { Collapsible } from "../components/Collapsible";
+import { api, type CampaignsResponse, type CampaignView, type Square } from "../api/client";
+import { InfoHint } from "../components/InfoHint";
 import {
-  campaignCosts,
-  campaignCoverage,
-  campaignLiveRuns,
-  campaignRowKey,
-  campaignState,
+  COST_TITLE,
+  armRowText,
+  armTitle,
+  argvText,
+  assignmentLabel,
+  assignmentTitle,
+  assignmentsText,
+  assignmentsTitle,
+  campaignHref,
+  clockText,
+  columnGroups,
   columnLabel,
-  columnTitle,
-  progressOf,
+  findCampaign,
+  gridRows,
+  imageTitle,
+  medianTitle,
+  progressText,
+  progressTitle,
+  selectedSquare,
+  shortImage,
   squareClass,
+  squareHref,
   squareText,
   squareTitle,
-  type CampaignCost,
-  type CampaignRunRow,
+  stateClass,
+  stateTitle,
+  truncate,
+  wikiText,
 } from "../lib/campaigns";
-import { useFeeds } from "../lib/feeds";
-import { progressLabel, progressTitle, rowProgress, rowStateLabel, runHref } from "../lib/fleet";
-import { fmtDuration, fmtUsd, fmtWhen, modelDisplay, shortRunId } from "../lib/format";
-import { LevelXp } from "../components/CharacterFacts";
-import { poll } from "../lib/poll";
 import { displayError } from "../lib/errors";
-import { InfoHint } from "../components/InfoHint";
+import { fmtUsd, fmtWhen, shortRunId, stamp } from "../lib/format";
+import { poll } from "../lib/poll";
 
 /** What a campaign is, and why nothing here reaches a chart. */
 const CAMPAIGNS_NOTE =
-  "Commissioned sweeps of a checked-in campaign definition, one pane per version; every run is an unscored probe episode (see the about page), so nothing here reaches a chart or a target.";
+  "Commissioned sweeps of a published campaign definition: cells (the start) × arms (the harness build and flags) × assignments (the models). Every run is an unscored probe episode (see the about page), so nothing here reaches a chart or a target, and nothing is ranked.";
 
-/** Campaign progress moves when a probe ends, which is a ~90-minute event. */
-const POLL_MS = 60_000;
+/** Progress and live markers move when a probe starts or ends. */
+const POLL_MS = 30_000;
 
-/**
- * The live rows inside a pane move on their own clock — a level, a playtime —
- * so they are read faster than the campaign totals above them, and on the same
- * cadence the fleet page reads the same feed at. Slower than the fleet's 5s
- * shared poll because this page is not where an operator watches a run; the
- * run page is.
- */
-const RUNS_POLL_MS = 10_000;
-
-/** `1 cell` / `3 cells`. The `(s)` form is a note to self and this page is read. */
-function plural(n: number, word: string): string {
-  return n === 1 ? word : `${word}s`;
-}
-
-/**
- * The cost figure's tooltip. Its denominator is every run the campaign has,
- * which is not the swept count beside it, so the title says which runs it is.
- */
-function costTitle(c: CampaignCost): string {
-  const excluded =
-    c.asIfMetered === 0
-      ? ""
-      : `; ${c.asIfMetered} subscription ${plural(c.asIfMetered, "run")} reported an as-if-metered figure, not summed`;
-  return `what the providers reported billing, summed over the runs that reported a charge, out of every run recorded against this campaign (live and failed included)${excluded}`;
-}
+/** How much of a question the index shows; the rest is in the hover. */
+const QUESTION_CHARS = 72;
 
 export default function Campaigns() {
+  const params = useParams<{ id?: string; version?: string }>();
   const feed = poll(() => api.campaigns(), POLL_MS);
-  // Every run on disk, read for the live rows inside the panes: the campaigns
-  // projection carries a live COUNT and no run ids, so the attribution comes
-  // from the runs feed (which records the campaign per run) and the state from
-  // the shared fleet feed, joined by run id in lib/campaigns.
-  const runs = poll(() => api.runs().then((r) => r.runs), RUNS_POLL_MS);
-  const { fleet } = useFeeds();
-  // The pre-v3 page over the v3 response, until the v3 page replaces it.
-  const body = (): LegacyCampaignsResponse | undefined => feed.latest as unknown as LegacyCampaignsResponse | undefined;
-  const rows = (): CampaignRowView[] => body()?.campaigns ?? [];
-  const live = (): Map<string, CampaignRunRow[]> => campaignLiveRuns(fleet.latest, runs.latest ?? []);
-  // Undefined until the runs feed lands, so a pane shows no figure rather than a
-  // "0 of 0" that only means the feed is still in flight.
-  const cost = (key: string): CampaignCost | undefined =>
-    runs.latest === undefined ? undefined : campaignCosts(runs.latest).get(key);
-  const keyOf = (row: CampaignRowView): string => campaignRowKey(row.campaign, row.version);
+  const body = (): CampaignsResponse | undefined => feed.latest;
 
   return (
     <div class="page">
       <Show when={feed.error !== undefined}>
         <div class="banner bad">{displayError(feed.error)}</div>
       </Show>
-      <Show when={runs.error !== undefined}>
-        <div class="banner bad">{displayError(runs.error)}</div>
+      <Show when={params.id !== undefined && params.version !== undefined} fallback={<Index body={body()} />}>
+        <Campaign body={body()} id={params.id!} version={params.version!} />
       </Show>
+    </div>
+  );
+}
 
+/** The index: one row per published campaign version, then the store rows the viewer refused. */
+function Index(props: { body: CampaignsResponse | undefined }) {
+  // `refused` is read defensively: a projection that leaves it out is a page
+  // with nothing refused, not a crash.
+  const refused = (): CampaignsResponse["refused"] => props.body?.refused ?? [];
+  return (
+    <>
       <h1>
         campaigns
         <InfoHint label="about this page" text={CAMPAIGNS_NOTE} />
       </h1>
-
-      <Show when={body() !== undefined} fallback={<p class="dim">loading…</p>}>
-        <Show when={rows().length === 0}>
-          <p class="dim">no campaigns</p>
-        </Show>
-
-        <For each={rows()}>
-          {(row) => (
-            /*
-              One pane per campaign version, closed until asked for: the grid is
-              a detail, and the page's question — which sweeps exist and how far
-              along they are — is answered by the headings alone.
-
-              The storage key is not a nicety here. `poll()` hands back fresh objects
-              every tick and `<For>` is keyed on reference, so without it every open
-              pane would shut itself once a minute.
-            */
-            <Collapsible
-              title={
-                <>
-                  <span title={row.definition?.question ?? ""}>{keyOf(row)}</span>{" "}
-                  <span class={campaignState(row).cls}>{campaignState(row).label}</span>
-                </>
-              }
-              summary={
-                <>
-                  {campaignCoverage(row)}
-                  <Show when={row.live > 0}> · {row.live} live</Show>
-                  <Show when={cost(keyOf(row))}>
-                    {(c) => (
-                      <>
-                        {" · "}
-                        <span title={costTitle(c())}>
-                          {fmtUsd(c().actualUsd)} actual ({c().reported} of {c().runs} {plural(c().runs, "run")})
-                        </span>
-                      </>
-                    )}
+      <Show when={props.body} fallback={<p class="dim">loading…</p>}>
+        {(b) => (
+          <>
+            <div class="scroller">
+              <table>
+                <thead>
+                  <tr>
+                    <th>campaign</th>
+                    <th>state</th>
+                    <th>question</th>
+                    <th class="right">arms</th>
+                    <th>assignments</th>
+                    <th class="right">progress</th>
+                    <th class="right">cost</th>
+                    <th>newest</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <Show when={b().campaigns.length === 0}>
+                    <tr>
+                      <td colSpan={8} class="dim">
+                        no published campaigns
+                      </td>
+                    </tr>
                   </Show>
-                  {/* The account NAME is operator detail and is kept out of the
-                      public projection; that it is pinned at all is the fact a
-                      reader of this page needs. */}
-                  <Show when={row.config?.account != null}> · pinned</Show>
-                  <Show when={row.newestRunId !== null}>
-                    {" · "}
-                    <A href={`/run/${encodeURIComponent(row.newestRunId!)}`} title={row.newestRunId!}>
-                      newest {fmtWhen(row.newestAt)}
-                    </A>
-                  </Show>
-                </>
-              }
-              storageKey={`wrathbench.campaigns.${keyOf(row)}`}
-            >
-              {/*
-                What is running right now, listed the way the fleet page lists
-                the same rows — same state badge, same lvl/xp and elapsed cells,
-                same click-through — because it is the same job seen from the
-                campaign's side rather than the supervisor's. The rows are
-                joined client-side (lib/campaigns); nothing here re-derives a
-                fleet row. Both feeds, not just the runs one: with the fleet
-                still in flight the join is legitimately empty.
-              */}
-              <Show
-                when={runs.latest !== undefined && fleet.latest !== undefined}
-                fallback={<p class="dim">live runs: loading…</p>}
-              >
-                <Show when={(live().get(keyOf(row)) ?? []).length > 0}>
-                  <div class="scroller">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>state</th>
-                          <th>cell</th>
-                          <th>character</th>
-                          <th>model</th>
-                          <th class="right">lvl / xp</th>
-                          <th class="right">elapsed</th>
-                          <th>run</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <For each={live().get(keyOf(row)) ?? []}>{(r) => <LiveRunRow row={r} />}</For>
-                      </tbody>
-                    </table>
-                  </div>
-                </Show>
-              </Show>
+                  <For each={b().campaigns}>{(c) => <IndexRow c={c} />}</For>
+                </tbody>
+              </table>
+            </div>
 
-              {/*
-                The grid: cells as rows in the definition's order, model
-                identities as columns in the assignments' order. A square reads
-                reached/counted and the median minutes of play to the stop
-                level; a definition with no stop level shows the best level.
-              */}
+            <Show when={refused().length > 0}>
+              <h2 class="section">refused</h2>
               <div class="scroller">
                 <table>
                   <thead>
                     <tr>
-                      <th>cell</th>
-                      <th>start</th>
-                      <th class="right">runs</th>
-                      <th class="right" title="best level any run of this cell reached">best</th>
-                      <For each={row.columns}>
-                        {(col) => (
-                          <th class="right" title={columnTitle(col)}>
-                            {columnLabel(col, modelDisplay)}
-                          </th>
-                        )}
-                      </For>
+                      <th>store row</th>
+                      <th>reason</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <For each={row.cells}>
-                      {(c, i) => (
+                    <For each={refused()}>
+                      {(r) => (
                         <tr>
-                          <td>
-                            {c.cell}
-                            <Show when={!c.declared}>
-                              {" "}
-                              <span class="dim" title="not a cell of this definition">
-                                (undeclared)
-                              </span>
-                            </Show>
-                          </td>
-                          <td class="dim" title={c.note ?? ""}>
-                            {c.characterLabel ?? "—"}
-                            <Show when={c.note !== null}>
-                              <span class="dim">*</span>
-                            </Show>
-                          </td>
-                          <td class={`right mono ${c.runs === 0 ? "dim" : ""}`}>{c.runs}</td>
-                          <td class="right mono dim">
-                            <LevelXp level={c.bestLevel} xp={null} compact />
-                          </td>
-                          <For each={row.grid[i()] ?? []}>
-                            {(sq) => (
-                              <td
-                                class={squareClass(sq, row.definition?.stopAtLevel ?? null)}
-                                title={squareTitle(sq, row.definition?.stopAtLevel ?? null)}
-                              >
-                                {squareText(sq, row.definition?.stopAtLevel ?? null)}
-                              </td>
-                            )}
-                          </For>
+                          <td>{r.key}</td>
+                          <td class="err">{r.reason}</td>
                         </tr>
                       )}
                     </For>
                   </tbody>
                 </table>
               </div>
-            </Collapsible>
-          )}
-        </For>
+            </Show>
+          </>
+        )}
+      </Show>
+    </>
+  );
+}
 
-        <Show when={body()!.orphans > 0}>
-          <p class="banner warn" title="probe runs no campaign claims, left out of every count above">
-            {body()!.orphans} unattributed probe {plural(body()!.orphans, "run")}
-          </p>
+function IndexRow(props: { c: CampaignView }) {
+  const c = (): CampaignView => props.c;
+  return (
+    <tr>
+      <td>
+        <A href={campaignHref(c())}>{c().key}</A>
+      </td>
+      <td>
+        <span class={stateClass(c().state)} title={stateTitle(c().state)}>
+          {c().state}
+        </span>
+      </td>
+      <td class="dim" title={c().question}>
+        {truncate(c().question, QUESTION_CHARS)}
+      </td>
+      <td class="right mono" title={c().arms.map((a) => a.id).join(", ")}>
+        {c().arms.length}
+      </td>
+      <td class="dim" title={assignmentsTitle(c())}>
+        {assignmentsText(c())}
+      </td>
+      <td class="right mono" title={progressTitle(c().progress)}>
+        <ProgressFigure c={c()} />
+      </td>
+      <td class="right mono dim" title={COST_TITLE}>
+        {fmtUsd(c().costUsd)}
+      </td>
+      <td class="dim">
+        <NewestLink c={c()} />
+      </td>
+    </tr>
+  );
+}
+
+/** `12/40`, then the live marker and count when a run is in flight. */
+function ProgressFigure(props: { c: CampaignView }) {
+  return (
+    <>
+      {progressText(props.c.progress)}
+      <Show when={props.c.progress.live > 0}>
+        {" · "}
+        <span class="dot live" />
+        {props.c.progress.live} live
+      </Show>
+    </>
+  );
+}
+
+function NewestLink(props: { c: CampaignView }) {
+  return (
+    <Show when={props.c.newestRunId} fallback="—">
+      {(id) => (
+        <A href={`/run/${encodeURIComponent(id())}`} title={id()}>
+          {fmtWhen(props.c.newestAt)}
+        </A>
+      )}
+    </Show>
+  );
+}
+
+/** One campaign version's page, picked out of the same response the index reads. */
+function Campaign(props: { body: CampaignsResponse | undefined; id: string; version: string }) {
+  const found = (): CampaignView | undefined => (props.body === undefined ? undefined : findCampaign(props.body, props.id, props.version));
+  return (
+    <Show
+      when={found()}
+      fallback={
+        <>
+          <h1>
+            {props.id}@{props.version}
+          </h1>
+          <p class="dim">{props.body === undefined ? "loading…" : "not published"}</p>
+        </>
+      }
+    >
+      {(c) => <CampaignBody c={c()} />}
+    </Show>
+  );
+}
+
+function CampaignBody(props: { c: CampaignView }) {
+  const c = (): CampaignView => props.c;
+  const stop = (): number | null => c().shape.stopAtLevel;
+  const [search] = useSearchParams<{ cell?: string; column?: string }>();
+  const selected = () => selectedSquare(c(), search.cell, search.column);
+
+  return (
+    <>
+      <h1>
+        {c().key}{" "}
+        <span class={stateClass(c().state)} title={stateTitle(c().state)}>
+          {c().state}
+        </span>
+      </h1>
+
+      <dl class="tuple">
+        <dt>question</dt>
+        <dd>{c().question}</dd>
+        <dt>progress</dt>
+        <dd class="mono" title={progressTitle(c().progress)}>
+          <ProgressFigure c={c()} />
+        </dd>
+        <dt>cost</dt>
+        <dd class="mono" title={COST_TITLE}>
+          {fmtUsd(c().costUsd)}
+        </dd>
+        <dt>newest</dt>
+        <dd>
+          <NewestLink c={c()} />
+        </dd>
+        <dt>objective</dt>
+        <dd>{c().shape.objective ?? "—"}</dd>
+        <dt>stop level</dt>
+        <dd class="mono">{stop() === null ? "—" : `L${stop()}`}</dd>
+        <dt>clock</dt>
+        <dd class="mono">{clockText(c().shape)}</dd>
+        <dt>tool calls</dt>
+        <dd class="mono">{c().shape.maxToolCalls}</dd>
+        <dt>wiki</dt>
+        <dd>{wikiText(c().shape)}</dd>
+        <dt>resume</dt>
+        <dd>{c().shape.resume ? "yes" : "no"}</dd>
+        <dt>attempts per cell</dt>
+        <dd class="mono">{c().shape.maxAttemptsPerCell ?? "—"}</dd>
+        <dt>definition</dt>
+        <dd class="mono" title={c().hash}>
+          {c().hash.slice(0, 12)}
+          <Show when={c().source}>
+            {(s) => (
+              <span title={s().commit}>
+                {" · "}
+                {s().path} @ {s().commit.slice(0, 8)}
+              </span>
+            )}
+          </Show>
+          <Show when={c().publishedAt !== null}>
+            {" · "}
+            <span title={stamp(c().publishedAt)}>published {fmtWhen(c().publishedAt)}</span>
+          </Show>
+        </dd>
+      </dl>
+
+      <h2 class="section">arms</h2>
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              <th>arm</th>
+              <th>image</th>
+              <th>command</th>
+              <th>args</th>
+              <th>note</th>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={c().arms}>
+              {(a) => (
+                <tr>
+                  <td>{a.id}</td>
+                  <td class={a.image === null ? "dim" : ""} title={imageTitle(a.image)}>
+                    {shortImage(a.image)}
+                  </td>
+                  <td class="dim">{argvText(a.command)}</td>
+                  <td>{argvText(a.args)}</td>
+                  <td class="dim">{a.note ?? "—"}</td>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 class="section">grid</h2>
+      <Show
+        when={c().columns.length > 0}
+        fallback={<p class="dim">{c().config === null ? "no store row" : "no assignments"}</p>}
+      >
+        <Grid c={c()} />
+        <Show when={selected()}>
+          {(s) => (
+            <div class="detail">
+              <p>
+                {s().cell} · {columnLabel(s().column)} · {s().column.arm} ·{" "}
+                <A href={campaignHref(c())}>close</A>
+              </p>
+              <For each={s().square.runIds}>
+                {(id, i) => (
+                  <>
+                    <Show when={i() > 0}>{", "}</Show>
+                    <A href={`/run/${encodeURIComponent(id)}`} title={id}>
+                      {shortRunId(id)}
+                    </A>
+                  </>
+                )}
+              </For>
+            </div>
+          )}
         </Show>
       </Show>
+
+      <h2 class="section">arm comparison</h2>
+      <Show when={c().comparison.length > 0} fallback={<p class="dim">{c().config === null ? "no store row" : "no assignments"}</p>}>
+        <div class="scroller">
+          <table>
+            <thead>
+              <tr>
+                <th>assignment</th>
+                <th>arm</th>
+                <th class="right">runs</th>
+                <th class="right" title={stop() === null ? "this campaign sets no stop level" : `runs that reached L${stop()}`}>
+                  reached
+                </th>
+                <th class="right" title={medianTitle("minutes of play", stop())}>
+                  min
+                </th>
+                <th class="right" title={medianTitle("turns", stop())}>
+                  turns
+                </th>
+                <th class="right" title={medianTitle("cost", stop())}>
+                  cost
+                </th>
+                <th class="right" title={medianTitle("prompt tokens", stop())}>
+                  prompt
+                </th>
+                <th>terminations</th>
+                <th>builds</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={c().comparison}>
+                {(g) => (
+                  <For each={g.arms}>
+                    {(a, i) => {
+                      const t = armRowText(a);
+                      const head = assignmentLabel(c(), g.ref);
+                      return (
+                        <tr>
+                          <Show when={i() === 0}>
+                            <td rowSpan={g.arms.length} title={head.title}>
+                              {head.label}
+                            </td>
+                          </Show>
+                          <td title={armTitle(c().arms.find((x) => x.id === a.arm))}>{a.arm}</td>
+                          <td class="right mono">{t.runs}</td>
+                          <td class="right mono">{t.reached}</td>
+                          <td class="right mono">{t.minutes}</td>
+                          <td class="right mono">{t.turns}</td>
+                          <td class="right mono">{t.cost}</td>
+                          <td class="right mono">{t.promptTokens}</td>
+                          <td class="dim">{t.terminations}</td>
+                          <td class="dim" title={a.builds.join("\n")}>
+                            {t.builds}
+                          </td>
+                        </tr>
+                      );
+                    }}
+                  </For>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      </Show>
+    </>
+  );
+}
+
+/**
+ * The cells × (assignment × arm) grid. Two header rows: each assignment over
+ * its arms, then the arm ids — the second row is dropped for a single-arm
+ * sweep, where it would repeat one id across every column.
+ */
+function Grid(props: { c: CampaignView }) {
+  const c = (): CampaignView => props.c;
+  const stop = (): number | null => c().shape.stopAtLevel;
+  const multiArm = (): boolean => c().arms.length > 1;
+  return (
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th rowSpan={multiArm() ? 2 : 1}>cell</th>
+            <th rowSpan={multiArm() ? 2 : 1}>start</th>
+            <For each={columnGroups(c().columns)}>
+              {(g) => (
+                <th class="right" colSpan={g.span} title={assignmentTitle(g.first)}>
+                  {columnLabel(g.first)}
+                </th>
+              )}
+            </For>
+          </tr>
+          <Show when={multiArm()}>
+            <tr>
+              <For each={c().columns}>
+                {(col) => (
+                  <th class="right" title={armTitle(c().arms.find((a) => a.id === col.arm))}>
+                    {col.arm}
+                  </th>
+                )}
+              </For>
+            </tr>
+          </Show>
+        </thead>
+        <tbody>
+          <For each={gridRows(c())}>
+            {(row) => (
+              <tr>
+                <td title={row.cell.note ?? ""}>
+                  {row.cell.id}
+                  <Show when={row.cell.note !== undefined}>
+                    <span class="dim">*</span>
+                  </Show>
+                </td>
+                <td class="dim">{row.start}</td>
+                <For each={row.squares}>
+                  {(sq) => <SquareCell c={c()} cell={row.cell.id} sq={sq} stop={stop()} />}
+                </For>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
     </div>
   );
 }
 
 /**
- * One live probe inside a pane. The state cell is the fleet's own — its badge,
- * its percentage, its ETA title — so the two pages cannot disagree about what
- * a job is doing.
- *
- * A row with no state is a run the runs feed calls unfinished that no job
- * holds: said plainly rather than dressed as running, because that is a fact
- * worth noticing (an orphaned probe) and not a rendering gap.
+ * One square: its live marker, then its figure, both inside the link to its
+ * runs — so a square whose only run is live is still a way into that run.
  */
-function LiveRunRow(props: { row: CampaignRunRow }) {
-  const r = (): CampaignRunRow => props.row;
-  const prog = () => {
-    const p = progressOf(r());
-    return p === null ? null : rowProgress(p);
-  };
+function SquareCell(props: { c: CampaignView; cell: string; sq: Square | null; stop: number | null }) {
+  const href = (): string | null => squareHref(props.c, props.cell, props.sq);
+  const figure = () => (
+    <>
+      <Show when={(props.sq?.live ?? 0) > 0}>
+        <span class="dot live" />
+      </Show>
+      {squareText(props.sq, props.stop)}
+    </>
+  );
   return (
-    <tr>
-      <td title={prog() === null ? "" : progressTitle(prog(), r())}>
-        <Show
-          when={r().state}
-          fallback={
-            <span class="dim" title="no job in the fleet is driving this run; it recorded no termination either">
-              no job
-            </span>
-          }
-        >
-          {(state) => (
-            <>
-              <span class={`dot ${state() === "running" ? "live" : ""}`} />
-              <span class={`badge ${state()}`}>{rowStateLabel(state())}</span>
-              <Show when={prog() !== null}>
-                <span class="dim mono progress">{progressLabel(prog())}</span>
-              </Show>
-            </>
-          )}
-        </Show>
-      </td>
-      <td class="dim">{r().cell ?? "—"}</td>
-      <td>{r().character ?? "—"}</td>
-      <td
-        class="dim"
-        title={[r().model ?? "", r().attempt === null ? "" : `attempt #${r().attempt}`].filter((t) => t.length > 0).join(" — ")}
-      >
-        {r().model === null ? "—" : modelDisplay(r().model!)}
-      </td>
-      <td class="right mono">
-        <LevelXp level={r().level} xp={r().xp} compact />
-      </td>
-      <td class="right mono dim">{fmtDuration(r().elapsedMs)}</td>
-      <td>
-        <Show when={runHref(r().runId)} fallback={<span title={r().runId}>{shortRunId(r().runId)}</span>}>
-          {(to) => (
-            <A href={to()} title={r().runId}>
-              {shortRunId(r().runId)}
-            </A>
-          )}
-        </Show>
-      </td>
-    </tr>
+    <td class={squareClass(props.sq, props.stop)} title={squareTitle(props.sq, props.stop)}>
+      <Show when={href()} fallback={figure()}>
+        {(to) => <A href={to()}>{figure()}</A>}
+      </Show>
+    </td>
   );
 }
