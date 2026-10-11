@@ -494,17 +494,28 @@ client-parity queries, fired from the event fold outside every snippet, are
 marked `auto`. Record-only; why and the size are in `docs/ARCHITECTURE.md`,
 "The action log".
 
-Network posture: the real boundary is the deployment's network topology — the
-compose network, or whatever the cluster gives the runner pod — under which the
-runner reaches `worldserver` and nothing else. In-process, `fetch` and
-`WebSocket` are additionally replaced with versions that refuse any host but the
-module's — best-effort hardening, not a security boundary.
+Confinement: the child is exec'd under a Linux Landlock ruleset
+(`src/sandbox/confine.ts`, whose `confinementPlan` is the one place the rules
+live) that the kernel enforces whatever API a snippet uses. Filesystem: reads
+of the interpreter, `runner/`, `sdk/`, `node_modules/` and the manifests, so
+`.env`, the repo root, the home directory and `/tmp` answer `EACCES`. Exec:
+only the bun binary and its ELF loader, so `/bin/sh`, `curl` and every other
+binary are `EACCES` at spawn (nothing in the sandbox needs to spawn). TCP:
+connect only to the port in the run's module URL — the one port the SDK's HTTP
+and `/events` WebSocket share — and bind nothing. Scope, on a kernel with
+Landlock ABI 6 (Linux 6.12+): no signals to processes outside the domain, the
+runner host included, and no abstract unix sockets. It fails closed: without
+Landlock, or on an ABI below 4 (Linux 6.7+, the TCP rules), the wrapper exits
+instead of exec'ing, and there is no opt-out. Missing scopes are announced on
+stderr, not fatal — the fleet's kernel has them; CI's may not.
 
-Filesystem posture: the child is exec'd under a Linux Landlock ruleset
-(`src/sandbox/confine.ts`, which holds the read allowlist), so
-`.env`, the repo root and the home directory answer `EACCES` from the kernel
-however a snippet reaches for them. It fails closed, and it covers the
-filesystem only — the network posture is the paragraph above.
+What that does not cover, plainly: Landlock's TCP rules name a port and no
+host, so the child can dial the module's port on any address; UDP (DNS is its
+legitimate use), raw sockets and other socket families are outside Landlock
+entirely. Both are the deployment's network policy to close. In-process,
+`fetch` and `WebSocket` are also replaced with versions that refuse any host
+but the module's: a readable error ahead of the kernel's, and the one check
+that does look at the host — a second layer, not the boundary.
 
 ## Watchdogs
 
