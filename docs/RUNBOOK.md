@@ -876,6 +876,25 @@ the compose path, which is the local rehearsal stack and the rollback.
 `infra/README.md`, "Releasing on Kubernetes", has the phases, the pin hook,
 and what `k8s-deploy.sh` — the deploy window on its own — refuses.
 
+The images are built from the commit, never from the working tree.
+`build-images.sh` unpacks a `git archive` of the commit into a temporary
+directory and builds there, so nothing untracked or ignored in your checkout
+can reach an image, whatever the ignore files say. The server images take
+AzerothCore the same way, from the submodule commit that the commit pins, and
+take only the paths `server.Dockerfile` copies. The submodule therefore has to
+be initialised in the checkout you build from. Uncommitted edits are never in an
+image, which is why a dirty tree is refused. `--allow-dirty` builds the commit
+anyway, but its `-dirty` tag is never pushed. `k8s-release.sh` hands the build
+the exact commit its tag describes.
+
+Each image then goes through `infra/image-guard.sh` before anything is pushed.
+The guard lists the image's filesystem and refuses one that holds a
+secret-shaped path (env files, keys, credential and token files, agent or
+wrangler state, sqlite stores) or client data. It names the paths, never their
+contents. The run stops and the refused image loses its tag. A refusal means
+the commit or a Dockerfile step put that file in the image, so fix it there.
+Don't widen the allow-list in the guard to get past it.
+
 #### On compose
 
 Two scripts, from the host; the deploy is **one command** that owns the whole

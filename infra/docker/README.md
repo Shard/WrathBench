@@ -21,6 +21,8 @@ docker build --target authserver  -t wrathbench/authserver  -f infra/docker/serv
 docker build --target db-import   -t wrathbench/db-import   -f infra/docker/server.Dockerfile .
 ```
 
+These build from the working tree and are for local use. Images that get pushed come from `infra/build-images.sh`, which builds from a `git archive` of the commit and runs `infra/image-guard.sh` on each image before pushing it.
+
 All targets share one `build` stage, so after the first (~30-60 min) build the others are assembly-only. Object files live in a BuildKit ccache cache mount; editing `module/` and rebuilding recompiles only what changed. `docker builder prune` discards that cache and forces a cold build.
 
 ## Layout inside the images
