@@ -410,6 +410,19 @@ LAN behind `WRATHBENCH_VIEWER_LAN`), so "not public" is the whole of the
 authorisation — which is why a public handle answers 404 rather than the 403
 it gives for a withheld read route.
 
+What stops a web page on another site from writing through a LAN browser is
+`write-guard.ts`, in front of every route on a private handle: any method but
+GET, HEAD and OPTIONS must be `Content-Type: application/json` (a cross-site
+page can only send that after a CORS preflight, which the viewer never
+grants), must not carry `Sec-Fetch-Site: cross-site`, and, when it carries an
+`Origin`, must come from the viewer's own host — compared by host and port,
+not scheme, because behind the TLS ingress the browser's origin is https and
+the request the viewer sees is http. A refusal is a 415 or a 403 before any
+route runs. The dashboard sends every write as JSON, bodyless ones included.
+It is not authentication: a non-browser client is not what it guards, and DNS
+rebinding, where the attacking page shares the viewer's origin, needs a Host
+allowlist or a login in front of the viewer.
+
 Two things the page has to work around, and they are properties of this API
 rather than of the page. There is **no if-version and no conflict detection**:
 `version` is the last audit id and a write carries no expectation of it, so the

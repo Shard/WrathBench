@@ -48,8 +48,18 @@ function fixture(opts: { seed?: boolean; publicMode?: boolean } = {}): {
   return { handle, dbPath };
 }
 
+/**
+ * A request as the dashboard sends it: a write says JSON, which the viewer's
+ * write guard requires (`write-guard.ts`; its own suite covers the refusals).
+ * A bare `new Request(url, { body })` would be `text/plain` — the cross-site
+ * shape the guard exists to refuse.
+ */
 function req(path: string, init: RequestInit = {}): Request {
-  return new Request(`http://x${path}`, init);
+  const write = (init.method ?? "GET").toUpperCase() !== "GET";
+  return new Request(`http://x${path}`, {
+    ...init,
+    headers: { ...(write ? { "content-type": "application/json" } : {}), ...((init.headers ?? {}) as Record<string, string>) },
+  });
 }
 
 describe("public mode", () => {

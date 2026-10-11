@@ -98,7 +98,11 @@ async function send<T>(
   init: RequestInit & { attribution?: Attribution; actor?: string },
 ): Promise<T> {
   const { attribution, actor, ...rest } = init;
-  const headers: Record<string, string> = { accept: "application/json", ...(rest.body !== undefined ? { "content-type": "application/json" } : {}) };
+  // Every write says JSON, a body or not (DELETE, the draft fetch): the viewer
+  // refuses an unsafe method without it, which is what keeps another site's
+  // form or `text/plain` POST from writing here (runner/viewer/write-guard.ts).
+  const write = (rest.method ?? "GET").toUpperCase() !== "GET";
+  const headers: Record<string, string> = { accept: "application/json", ...(write || rest.body !== undefined ? { "content-type": "application/json" } : {}) };
   if (attribution !== undefined) {
     // Folded to what a header can carry: `fetch` refuses the whole request on a
     // code point above U+00FF, and an em dash in a note is the likeliest thing
