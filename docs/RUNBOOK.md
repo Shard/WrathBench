@@ -1339,15 +1339,21 @@ kubectl -n wrathbench get cm wrathbench-run-pod-template -o jsonpath='{.data.pod
 **A branch runner image.** PR heads and master commits are built by a GitHub
 Actions workflow and pushed to GHCR as
 `ghcr.io/shard/wrathbench-runner:harness-0.5-<n>-g<sha>[-pr<N>]`; a definition
-usually pins the digest. By hand, from a clean checkout of the branch:
+usually pins the digest. By hand, from a clean checkout of the branch, or
+naming the branch's head from any clean checkout:
 
 ```
 ./infra/build-images.sh --only runner --push --registry ghcr.io/shard
+./infra/build-images.sh --only runner --push --registry ghcr.io/shard \
+  --commit <sha> --tag "$(git describe --tags --always <sha>)"
 ```
 
-The tag is `git describe` of the branch's head, so it still names series 0.5
-and a run stamped with it groups with the series; `--allow-dirty` tags are
-refused for push, and `latest` is refused everywhere.
+Like a release ("Deploy window", above), the image is built from a `git
+archive` of that commit, never from the working tree, so an uncommitted edit is
+never in it, and `infra/image-guard.sh` checks it before the push. The tag is
+`git describe` of the commit, so it still names series 0.5 and a run stamped
+with it groups with the series; `--allow-dirty` tags are refused for push, and
+`latest` is refused everywhere.
 
 **First proof.** One short probe on `PROBE`: publish a one-arm definition,
 assign a model, set `runPods` to `probes`, and watch `fleet-update.sh status`
