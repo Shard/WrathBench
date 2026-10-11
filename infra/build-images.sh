@@ -4,7 +4,7 @@
 #
 #   ./infra/build-images.sh                      # build all four, local tags
 #   ./infra/build-images.sh --push               # ... and push them
-#   ./infra/build-images.sh --registry harbor.local/library
+#   ./infra/build-images.sh --registry registry.example/wrathbench
 #   ./infra/build-images.sh --tag v0.6.0         # override the computed tag
 #   ./infra/build-images.sh --only runner        # one image (repeatable)
 #   ./infra/build-images.sh --commit <sha> --tag <tag>   # a named commit (k8s-release.sh)
@@ -47,7 +47,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${WRATHBENCH_BUILD_REPO_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 IMAGE_GUARD="${SCRIPT_DIR}/image-guard.sh"
 
-REGISTRY="${WRATHBENCH_REGISTRY:-harbor.local/library}"
+REGISTRY="${WRATHBENCH_REGISTRY:-harbor.local/wrathbench}"
 TAG=""
 COMMIT=""
 PUSH=0

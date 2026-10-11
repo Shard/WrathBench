@@ -131,7 +131,7 @@ case "\${cmd}" in
       exit 0
     fi
     log "get image"
-    printf 'reg.example/library/wrathbench-worldserver:%s' "\${FAKE_TAG}"
+    printf 'reg.example/wrathbench/wrathbench-worldserver:%s' "\${FAKE_TAG}"
     exit 0
     ;;
   scale) log "\${raw}"; exit 0 ;;
