@@ -132,37 +132,43 @@ interface Pending {
  * credential present in the runner (OPENROUTER_KEY, OPENCODE_KEY,
  * CLAUDE_CODE_OAUTH_TOKEN, …) to a `console.log(process.env)` snippet.
  *
- * Unlike `childEnv` in adapter-claude.ts (a denylist, because the CLI needs a
- * broad environment), this is an allowlist: the child needs only a runnable
- * `bun` (PATH), a home/temp for the runtime, and the WRATHBENCH_* knobs. The
- * SDK reads no env. WRATHBENCH_* is forwarded as a prefix so operators (and
- * the storm-control tests) can tune the fault knobs from the parent.
+ * Like the CLI drivers' `childEnv` (adapter-claude.ts, adapter-codex.ts), this
+ * is an allowlist, and the tightest of the three: the child needs a runnable
+ * `bun` (PATH), a home/temp for the runtime, the four values the host passes
+ * explicitly (module URL, token, session secret, account), and the fault knobs
+ * `entry.ts` reads — `SANDBOX_FORWARDED_ENV`, named one by one. The SDK reads
+ * no env.
  *
- * Two holes the prefix forwarding would otherwise open are closed here, at the
- * one place every snippet child is spawned, rather than by keeping the values
- * off a service. WRATHBENCH_DB_*: the `fleet` and `runner` services carry the
- * database host/user/password so the preflight gate's smokes can stage a
- * fixture, and an episode is a child of one of those; root on acore_characters
- * is exactly the server-side shortcut docs/CONTRACTS.md forbids — a snippet
- * holding it could write its own level and money. WRATHBENCH_MODULE_SECRET:
- * the module's port secret (module/PROTOCOL.md "Authentication"), which the
- * host process holds from `.env`; a snippet holding it could lease, list and
- * delete on any allowlisted account. The child gets its own per-token session
- * secret instead (`WRATHBENCH_SECRET`, passed explicitly below).
+ * Named, never a prefix. Forwarding `WRATHBENCH_*` wholesale would hand the
+ * child whatever the runner holds under that prefix: on the cluster that is the
+ * database credentials the preflight smokes use and the module's port secret,
+ * and wherever Bun autoloads a `.env` it is every `WRATHBENCH_`-spelled value
+ * in that file — deploy tokens, store passwords. A snippet can read its whole
+ * environment (`/proc/self/environ` included) and print it into a result,
+ * which is published; root on acore_characters would also be exactly the
+ * server-side shortcut docs/CONTRACTS.md forbids, and the port secret would let
+ * it lease, list and delete on any allowlisted account. The child gets its own
+ * per-token session secret instead (`WRATHBENCH_SECRET`, passed explicitly
+ * below), which the run registers for redaction (`leaseRunSecret`).
  */
+export const SANDBOX_FORWARDED_ENV: readonly string[] = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  // entry.ts's fault-storm knobs, tunable from the parent (and by the storm tests).
+  "WRATHBENCH_FAULT_WINDOW_MS",
+  "WRATHBENCH_FAULT_ROLLUP_MS",
+  "WRATHBENCH_FAULT_ESCALATION_THRESHOLD",
+  "WRATHBENCH_FAULT_IMMEDIATE_CAP",
+];
 export function sandboxChildEnv(
   parent: Record<string, string | undefined>,
   explicit: Record<string, string>,
 ): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const key of ["PATH", "HOME", "TMPDIR"] as const) {
+  for (const key of SANDBOX_FORWARDED_ENV) {
     const v = parent[key];
     if (v !== undefined) out[key] = v;
-  }
-  for (const [k, v] of Object.entries(parent)) {
-    if (v === undefined || !k.startsWith("WRATHBENCH_")) continue;
-    if (k.startsWith("WRATHBENCH_DB_") || k === "WRATHBENCH_MODULE_SECRET") continue;
-    out[k] = v;
   }
   return { ...out, ...explicit };
 }
@@ -255,10 +261,9 @@ export class SandboxHost {
         // Explicit and possibly empty, for the same reason as WRATHBENCH_ACCOUNT
         // below: nothing leaked from the operator's shell may stand in for it.
         WRATHBENCH_SECRET: this.opts.secret ?? "",
-        // Always set explicitly (empty when unbound) so it wins over any
-        // WRATHBENCH_ACCOUNT that leaked in from the operator's own shell via
-        // sandboxChildEnv's WRATHBENCH_* forwarding — the child must bind only
-        // the account this run was actually assigned, never a stray one.
+        // Always set explicitly (empty when unbound): the child must bind only
+        // the account this run was actually assigned, never a stray one, and
+        // sandboxChildEnv forwards no WRATHBENCH_ACCOUNT of its own.
         WRATHBENCH_ACCOUNT: this.opts.account ?? "",
       }),
       stdio: ["ignore", "inherit", "pipe"],

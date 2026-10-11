@@ -1325,6 +1325,17 @@ job needs the token of the lane it was scheduled on there (`claude setup-token`)
 subscription; without it the roster refuses the episode with a `launch-failed`
 row naming that variable, rather than burning a session.
 
+Where a secret may travel from the runner is fixed in code, not config. A
+provider key goes only to its own provider's host (`KEY_PROVIDERS` in
+`runner/src/providers.ts`; the self-hosted key only to the deployment's
+`WRATHBENCH_LOCAL_MODEL_HOSTS`). No child inherits the runner's environment:
+the snippet child gets a named list (`sandboxChildEnv`), and each CLI driver an
+allowlist of its own (`childEnv` in `adapter-claude.ts` and
+`adapter-codex.ts`) — the plumbing a process needs to run plus the one lane
+credential it bills. The per-run session secret the child authenticates with
+is registered for redaction the moment it is leased, so a snippet that prints
+its environment writes `[redacted]` into the trajectory.
+
 `WRATHBENCH_MODULE_SECRET` — the module's **port secret** (module/PROTOCOL.md,
 "Authentication"). Every request to the worldserver's control
 port, `GET /health` included, must carry it (or a session secret leased with
@@ -1336,8 +1347,9 @@ shorter than 32 characters — refuses to listen at all and says so at ERROR in
 - the **runner and fleet** services, through Bun's `.env` autoload: the run
   host presents it for hygiene, `/health` and `POST /lease`, then hands the
   snippet child only the per-run session secret the lease returned. The
-  child's environment never carries the port secret (`sandboxChildEnv` drops
-  it) — a snippet that could read it could list and delete on any account;
+  child's environment never carries the port secret (`sandboxChildEnv`
+  forwards a named list without it) — a snippet that could read it could list
+  and delete on any account;
 - the **smokes** (`infra/smoke/lib/auth.ts`), exec'd in the runner container,
   and the deploy script's `/health` probes, which run there too;
 - the **worldserver**, as `AC_WRATH_BENCH_SECRET`. Compose interpolates that

@@ -8,7 +8,7 @@
  *    environment (Bun loads it from the repo-root `.env`; docs/RUNBOOK.md
  *    "Secrets"). It is the operator class: the host process presents it on
  *    hygiene, `/health`, and to lease. It never reaches the snippet child —
- *    `sandboxChildEnv` drops it — because a snippet holding it could list and
+ *    `sandboxChildEnv` does not forward it — because a snippet holding it could list and
  *    delete characters on any allowlisted account.
  *  - The **session secret**, leased per token with `POST /lease` and handed to
  *    the child as `WRATHBENCH_SECRET`. It is the only credential the child

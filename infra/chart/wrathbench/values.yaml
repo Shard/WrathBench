@@ -76,8 +76,7 @@ envSecretName: wrathbench-env
 # the pod. Adding a provider is one line here and one key in that Secret.
 #
 # Enumerated rather than `envFrom` on the whole Secret on purpose — see the
-# note in templates/_helpers.tpl; `envFrom` would put WRATHBENCH_ACCOUNT_PASSWORD
-# in reach of the snippet sandbox's WRATHBENCH_* forwarding.
+# note in templates/_helpers.tpl: the pods carry only the keys they use.
 #
 # Which of these a roster entry may name as `apiKeyEnv`, and the hosts each
 # may be sent to, is code: the provider table in runner/src/providers.ts. A

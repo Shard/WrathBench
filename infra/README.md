@@ -148,10 +148,11 @@ as `fixtures` — and so does `runner`, where the smokes are exec'd by hand, so
     docker compose -f infra/compose.yml exec runner bun infra/smoke/kill-credit.ts
 
 needs no `-e` flags at all. A benchmark episode cannot pass those credentials
-on: `sandboxChildEnv` in `runner/src/sandbox/host.ts` drops every
-`WRATHBENCH_DB_*` var — and `WRATHBENCH_MODULE_SECRET`, the module's port
-secret the smokes present (`infra/smoke/lib/auth.ts`) — from the snippet
-child's environment, on both services.
+on: `sandboxChildEnv` in `runner/src/sandbox/host.ts` forwards the snippet
+child a named list of variables (PATH, HOME, TMPDIR, the sandbox's fault
+knobs) plus the four the host sets itself, so no `WRATHBENCH_DB_*` var and
+not `WRATHBENCH_MODULE_SECRET`, the module's port secret the smokes present
+(`infra/smoke/lib/auth.ts`), reaches it on either service.
 
 This is **operator tooling**. Nothing in `runner/` or `sdk/` imports it, so the
 agent-facing contract in `docs/CONTRACTS.md` is untouched: the agent still only
