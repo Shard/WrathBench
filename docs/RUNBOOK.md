@@ -1285,6 +1285,9 @@ and the launcher's settings. Two values matter at deploy time:
 
 A run pod gets the module secret and the one credential its driver bills (its
 lane's `CLAUDE_CODE_OAUTH_TOKEN*`, its `apiKeyEnv`, or the mounted codex home),
+`WRATHBENCH_LOCAL_MODEL_HOSTS` from the chart's `localModelHosts` (run.ts
+checks an openai entry's key and base against the provider table again, and a
+pod without the hosts would refuse every self-hosted entry the fleet accepted),
 the runs and wiki volumes, and no config store, no database variables and no
 `ANTHROPIC_*` variable — `infra/run-pod.test.ts` asserts the last on the
 rendered template and on the env builder. Its harness stamp is the arm's image
@@ -1487,7 +1490,9 @@ its environment writes `[redacted]` into the trajectory.
 A run pod ("Run pods", above) gets the module secret and only the credential
 its driver bills — its lane's token, its `apiKeyEnv`, or the mounted codex
 home — by Secret reference in the chart's template; the launcher strips the
-rest, and no `ANTHROPIC_*` variable can reach one.
+rest, and no `ANTHROPIC_*` variable can reach one. Its run.ts checks the key
+and base against the provider table again, so the run pod carries
+`WRATHBENCH_LOCAL_MODEL_HOSTS` as the pods that parse the config do.
 
 **The images are private.** WrathBench's images live in a private Harbor
 project (`harbor.nusphere.shard.page/wrathbench`, operator decision

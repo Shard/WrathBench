@@ -797,4 +797,35 @@ describe("the chart's run-pod template", () => {
     expect(pod.spec.containers[0]!.command).toEqual(["/usr/bin/tini", "--", "bun", "runner/src/run.ts"]);
     expect(pod.spec.volumes!.map((v) => v.name)).toEqual(["data", "tmp"]);
   });
+
+  test.skipIf(helm === null)("rendered, localModelHosts reaches every pod that parses the config and every run pod, which run.ts checks an LM Studio pair against", () => {
+    // run.ts refuses a key towards a host the provider table does not pair it
+    // with before it reads the key (runner/src/providers.ts), and in a run pod
+    // it reads the self-hosted hosts from its own env: without them there, an
+    // entry the fleet parsed as fine would exit 2 in its pod on every attempt.
+    const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/library", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "localModelHosts={192.0.2.20:1234,lmbox.lan}"], { stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(0);
+    type Env = { name: string; value?: string; valueFrom?: unknown }[];
+    const docs = r.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: { containers?: { name: string; env?: Env }[] } } }; data?: Record<string, string> } | null);
+    const want = "192.0.2.20:1234,lmbox.lan";
+    // Every container that reads the config store gets the hosts beside it.
+    const readers: string[] = [];
+    for (const d of docs) {
+      for (const c of d?.spec?.template?.spec?.containers ?? []) {
+        const env = c.env ?? [];
+        if (!env.some((e) => e.name === "WRATHBENCH_CONFIG_DB")) continue;
+        readers.push(`${d!.metadata!.name}/${c.name}`);
+        expect([c.name, env.find((e) => e.name === "WRATHBENCH_LOCAL_MODEL_HOSTS")?.value]).toEqual([c.name, want]);
+      }
+    }
+    for (const name of ["fleet", "runner", "viewer", "publisher"]) expect(readers.some((x) => x.startsWith(`wrathbench-${name}/`)), name).toBe(true);
+    // The run pod gets them as a plain value, and the launcher keeps it for an openai run.
+    const cm = docs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template");
+    const tpl = JSON.parse(cm!.data!["pod.json"]!) as Pod;
+    const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver: "openai", tokenEnv: undefined, apiKeyEnv: "LMSTUDIO_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+    const env = envOf(pod);
+    expect(env["WRATHBENCH_LOCAL_MODEL_HOSTS"]).toEqual({ name: "WRATHBENCH_LOCAL_MODEL_HOSTS", value: want });
+    expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["LMSTUDIO_KEY", "WRATHBENCH_MODULE_SECRET"]);
+    expect(Object.keys(env).some((n) => n.startsWith("ANTHROPIC_"))).toBe(false);
+  });
 });

@@ -263,9 +263,11 @@ when the arm pinned one; a digest-only pin stamps
 `<repository basename>@sha256:<12 hex>`, which names no series),
 `WRATHBENCH_RUN_IMAGE` (the image as requested, when the episode is a pod),
 `WRATHBENCH_MODULE_URL`, `WRATHBENCH_RUNS_DIR`, `WRATHBENCH_IN_CONTAINER=1`,
-the module port secret, and the one credential the driver bills: its lane's
-`CLAUDE_CODE_OAUTH_TOKEN*` for claude-code, its `apiKeyEnv` for openai, the
-mounted `CODEX_HOME` for codex. Nothing else: no database variables, no config
+`WRATHBENCH_LOCAL_MODEL_HOSTS` (the self-hosted hosts the provider table pairs
+with `LMSTUDIO_KEY`, which run.ts checks the key and base against before it
+reads the key), the module port secret, and the one credential the driver
+bills: its lane's `CLAUDE_CODE_OAUTH_TOKEN*` for claude-code, its `apiKeyEnv`
+for openai, the mounted `CODEX_HOME` for codex. Nothing else: no database variables, no config
 store, and no `ANTHROPIC_*` variable ever (claude-code is subscription-only;
 the pod env builder refuses to build a pod that would carry one). The run
 directory is on a shared volume. Before the run starts it holds at most launch

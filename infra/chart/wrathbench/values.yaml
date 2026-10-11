@@ -106,7 +106,8 @@ modelKeys:
 # list there would let an edit point the key anywhere. Empty means this
 # deployment has no self-hosted model, and a roster entry naming that key is
 # refused. Rendered as WRATHBENCH_LOCAL_MODEL_HOSTS on every pod that parses
-# the fleet config, so they all reach the same verdict.
+# the fleet config, so they all reach the same verdict, and on every run pod,
+# whose run.ts checks the pair again before it reads the key.
 localModelHosts: []
 
 # There is no fleet config value and no ConfigMap: the fleet config is the
