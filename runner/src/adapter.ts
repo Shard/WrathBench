@@ -500,7 +500,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
       // OpenRouter-only accounting opt-in: returns cache and cost detail in
       // `usage`. Observability, not behavior — but gated to the one host that
       // documents it, since a strict OpenAI-compat server may 400 on unknowns.
-      ...(this.opts.baseUrl.includes("openrouter.ai") ? { usage: { include: true } } : {}),
+      ...(isOpenRouterBase(this.opts.baseUrl) ? { usage: { include: true } } : {}),
       // Which backend may serve this (operator decision 2026-09-16, see
       // `routing.ts`). Host-gated like the usage opt-in: an aggregator is the
       // only thing with a choice to make, and a direct endpoint would 400 on

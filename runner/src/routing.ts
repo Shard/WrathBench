@@ -23,6 +23,7 @@
  */
 
 import { z } from "zod";
+import { hostOfBase } from "./platform";
 
 /** How a routed request picks among the backends it is allowed. */
 export const ROUTING_SORTS = ["price", "throughput", "latency"] as const;
@@ -111,16 +112,13 @@ export function labProvidersOf(model: string): string[] | null {
   return names === undefined ? null : [...names];
 }
 
-/** Whether an api base is OpenRouter — the one host whose routing this speaks. */
+/**
+ * Whether an api base is OpenRouter — the one host whose routing this speaks.
+ * Its parsed hostname, exactly: a lookalike (`openrouter.ai.example.com`) or a
+ * base that does not parse is not OpenRouter.
+ */
 export function isOpenRouterBase(apiBase: string | null | undefined): boolean {
-  if (apiBase === null || apiBase === undefined || apiBase === "") return false;
-  let host = apiBase;
-  try {
-    host = new URL(apiBase).hostname;
-  } catch {
-    /* a malformed base still names a host often enough to match on */
-  }
-  return host.includes("openrouter.ai");
+  return hostOfBase(apiBase) === "openrouter.ai";
 }
 
 /**
