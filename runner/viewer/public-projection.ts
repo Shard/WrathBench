@@ -97,6 +97,7 @@ import type {
   TradeFacts,
   MoveIntentView,
   TrackResponse,
+  TrackTravelMark,
   Square,
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
@@ -1126,6 +1127,14 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
   });
 }
 
+function publicTravel(m: TrackTravelMark): boolean {
+  return m.kind === "taxi" || m.kind === "taxi_landed" || m.kind === "hearth";
+}
+
+function projectTravel(m: TrackTravelMark): TrackTravelMark {
+  return { kind: m.kind, ts: m.ts };
+}
+
 export function projectTrack(t: TrackResponse): TrackResponse {
   return scrubPathsValue<TrackResponse>({
     runId: t.runId,
@@ -1158,6 +1167,12 @@ export function projectTrack(t: TrackResponse): TrackResponse {
     ),
     // As on the live feed.
     moves: (t.moves ?? []).map(projectMove),
+    // Flights and hearths, as kinds and timestamps: the flight count already
+    // ships in the safe core and the hearthstone dispatch in the action log.
+    // A graveyard release does not — it is one mark per death, and deaths are
+    // withheld whole (`projectRunDetail`), so it would be a second door onto
+    // the same fact. Absent stays absent: it is what an older track says.
+    ...(t.travel === undefined ? {} : { travel: t.travel.filter(publicTravel).map(projectTravel) }),
     // The character's neighbours: run ids and two counters, every one of them
     // already public on `runs.json` and on the run page's attempt strip. Field
     // by field, so a shape that grows here does not ship by accident.

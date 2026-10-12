@@ -1422,6 +1422,10 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // Same threshold as the detail route's, for the same reason: a bar with
       // no attempt either side of it has nothing to step to.
       const character = whole !== null && whole.attempts > 1 ? whole : null;
+      // The travel marks ride the same incremental tail the run page reads, so
+      // a replay opened after the page — and every publisher pass, which asks
+      // for both — pays nothing for them; a cold replay pays the page's scan.
+      await scan(runId, tail);
       const body: TrackResponse = {
         runId,
         characterName: run.character,
@@ -1437,6 +1441,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
           const rows = await store.moveRows(runId);
           return rows.length > 0 ? moveViewsOf(rows) : readMoves(runsDir, runId);
         })(),
+        // How the character crossed each gap — flights, hearths, graveyard
+        // releases — derived from the trajectory at read time, never stored.
+        travel: tail.travel,
         // Absent, not null, on a run with no character — as on the detail route.
         ...(character === null
           ? {}

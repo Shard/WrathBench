@@ -7,7 +7,7 @@
  * the cursor maths and the route the map traces are testable with no canvas.
  */
 
-import type { AgentPosition, TrackPoint, TrackResponse } from "@viewer/api-types";
+import type { AgentPosition, TrackPoint, TrackResponse, TrackTravelMark } from "@viewer/api-types";
 import { intentAt } from "./mapintent";
 
 /** Index of the last point at or before `ts`, or -1 when the cursor precedes all. */
@@ -95,25 +95,261 @@ export function trackSpan(points: readonly TrackPoint[]): { from: number; to: nu
   return { from: points[0]!.ts, to: points[points.length - 1]!.ts };
 }
 
+/* ------------------------------------------------------------------ route */
+
 /**
- * The route walked on one map, up to the cursor.
+ * How the character got from one recorded sample to the next: under its own
+ * power (on foot, mounted, swimming, a ghost walking back to its corpse), on a
+ * flight path, or by a teleport no line can honestly draw — a hearthstone, a
+ * release to a graveyard, a portal, a change of map.
+ */
+export type SegmentKind = "walk" | "flight" | "teleport";
+
+/** One unbroken stretch of the drawn route, all of one kind. */
+export interface RouteRun {
+  kind: Exclude<SegmentKind, "teleport">;
+  points: { x: number; y: number }[];
+}
+
+/**
+ * How long after the dispatch a hearthstone can land: its ten-second cast, and
+ * slack for the dispatch → cast → teleport chain. The jump falls in whichever
+ * segment holds the landing, and that can be the one after the dispatch's.
+ */
+export const HEARTH_LANDS_WITHIN_MS = 15_000;
+
+/**
+ * How long a takeoff with no landing on the record keeps colouring the route —
+ * a run stopped mid-flight, whose next process never saw the flag turn off.
+ * Generous for the longest hop a 3.3.5 flight path flies; it only bounds what
+ * an unpaired mark can claim, and a paired flight never reaches it.
+ */
+export const MAX_FLIGHT_MS = 30 * 60_000;
+
+/**
+ * The speed backstop, for a same-map jump no recorded event explains (a portal,
+ * a summons, a class teleport, a hearth from before the action log, a flight
+ * from before the taxi milestones): a segment whose straight-line speed beats
+ * the map's limit over at least `JUMP_MIN_YD` is a teleport. A backstop only —
+ * events classify, this catches what they miss.
  *
- * Split per map: a continent change is a teleport in world coordinates, and
- * joining the two would draw a line across the map that nobody walked.
+ * The limits sit above anything a character moves at under its own power in
+ * 3.3.5, and implied speed is a straight line over the sample gap, so it can
+ * only understate a real path:
+ * - `JUMP_SPEED_YPS`, 20 yd/s, where nothing flies: the fastest there is an
+ *   epic ground mount under Crusader Aura, about 17 yd/s.
+ * - `JUMP_SPEED_FLYING_YPS`, 40 yd/s, on `FLYING_MAPS`: a 310% flying mount
+ *   is about 29 yd/s, 34 under the same aura.
+ * A flight path is faster than either (about 32 yd/s) but is never tested
+ * here — only segments outside every flight window are.
+ *
+ * Checked against a nine-day freeplay run (60 s samples): nothing it walked or
+ * rode passes 11 yd/s. The ground limit is what keeps a held Ironforge →
+ * Thelsamar flight (≈1,900 yd in one gap, ≈31 yd/s) from drawing as a walk on
+ * a track with no travel marks, which is every snapshot published before them.
+ * What no limit can catch, and why the events are not optional: that run's
+ * early hearths, from before its action log, landed 800–1,200 yd away (13–19
+ * yd/s), and a release to a nearby graveyard moved ~560 yd in one gap (9
+ * yd/s) — a mounted ride, by speed. The distance floor keeps a few yards of
+ * jitter between two samples a moment apart from reading as a jump.
+ */
+export const JUMP_SPEED_YPS = 20;
+export const JUMP_SPEED_FLYING_YPS = 40;
+export const JUMP_MIN_YD = 250;
+/** The maps a 3.3.5 character can fly a mount on: Outland and Northrend. */
+const FLYING_MAPS: ReadonlySet<number> = new Set([530, 571]);
+
+/**
+ * Two samples at the same spot: the SDK held the position still. Positions it
+ * holds repeat to the digit, so the tolerance only absorbs float formatting.
+ */
+const HELD_YD = 0.5;
+
+/** Index of the first point at or after `ts`; `points.length` when none is. */
+function firstAtOrAfter(points: readonly TrackPoint[], ts: number): number {
+  let lo = 0;
+  let hi = points.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid]!.ts < ts) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function held(a: TrackPoint, b: TrackPoint): boolean {
+  return a.map === b.map && Math.abs(a.x - b.x) <= HELD_YD && Math.abs(a.y - b.y) <= HELD_YD;
+}
+
+/** A flight's takeoff and landing marks; either may be missing from the record. */
+interface FlightWindow {
+  from: number | null;
+  to: number | null;
+  /** Where an unpaired takeoff stops claiming the route. */
+  until: number;
+}
+
+function flightWindows(travel: readonly TrackTravelMark[]): FlightWindow[] {
+  const out: FlightWindow[] = [];
+  let open: number | null = null;
+  for (const m of travel) {
+    if (m.kind === "taxi") {
+      // A second takeoff before any landing: the first one's landing is not on
+      // the record, and this takeoff is the latest it can have ended by.
+      if (open !== null) out.push({ from: open, to: null, until: Math.min(open + MAX_FLIGHT_MS, m.ts - 1) });
+      open = m.ts;
+    } else if (m.kind === "taxi_landed") {
+      out.push({ from: open, to: m.ts, until: m.ts });
+      open = null;
+    }
+  }
+  if (open !== null) out.push({ from: open, to: null, until: open + MAX_FLIGHT_MS });
+  return out;
+}
+
+/**
+ * Classify every segment of a track — `kinds[i]` is the step from `points[i]`
+ * to `points[i + 1]` — from what the record says happened, not from how far
+ * the character moved.
+ *
+ * Speed cannot tell these apart on its own. The SDK held a flying character's
+ * position at the departure flight master for the whole flight, so the flight
+ * shows up as one jump at the landing, which by speed is a hearthstone; and a
+ * release to a nearby graveyard is slower than a mounted ride. So, in order,
+ * each overriding the last:
+ *
+ * - **Flights**, from the `taxi` / `taxi_landed` milestones. A milestone is
+ *   written in the state sample that observed it, so the takeoff sample `t` is
+ *   the first point at or after the mark and the landing sample `l` likewise;
+ *   everything from `t` to `l` flew. Two shapes are on the record:
+ *   - *Held* rows (every run so far): `t` onwards sits on the departure
+ *     point, and the jump to the landing comes on the first segment that moves
+ *     — sometimes the one ending at `l`, sometimes one sample later, depending
+ *     on when the position caught up. That segment is the flight's one
+ *     straight coloured line (two, where a multi-hop flight caught up at a node
+ *     on the way).
+ *   - *Moving* rows (an SDK that tracks the flight): each segment in the
+ *     window is coloured, and so is the one ending at `t`, since the takeoff
+ *     happened inside it.
+ * - **Teleports**, hidden: a graveyard release (the segment ending at the
+ *   sample that saw it), a hearthstone (every segment from its dispatch to
+ *   `HEARTH_LANDS_WITHIN_MS` after), and a move the module ended `teleported`
+ *   or `transferred`.
+ * - **Map changes**, hidden: a sample on another map breaks the line rather
+ *   than being stepped over, so a Deeprun Tram ride between two map-0 samples
+ *   no longer joins them.
+ * - **The speed backstop** (`JUMP_SPEED_YPS`), for walk segments only: a held
+ *   flight's landing jump is a flight segment by now, and stays drawn.
+ *
+ * Pure and computed once per track: the cursor only slices it (`routeUpTo`).
+ */
+export function classifySegments(
+  track: Pick<TrackResponse, "points" | "moves" | "travel">,
+): SegmentKind[] {
+  const points = track.points;
+  const n = points.length;
+  const kinds: SegmentKind[] = new Array<SegmentKind>(Math.max(0, n - 1)).fill("walk");
+  if (n < 2) return kinds;
+  const travel = [...(track.travel ?? [])].sort((a, b) => a.ts - b.ts);
+
+  for (const w of flightWindows(travel)) {
+    let t: number;
+    let l: number;
+    if (w.to !== null) {
+      l = Math.min(firstAtOrAfter(points, w.to), n - 1);
+      // A landing whose takeoff is not on the record was still flying at the
+      // sample before it; that much is all the record vouches for.
+      t = w.from === null ? Math.max(0, l - 1) : firstAtOrAfter(points, w.from);
+    } else {
+      t = firstAtOrAfter(points, w.from!);
+      l = Math.min(indexAt(points, w.until), n - 1);
+    }
+    if (t >= n || l < t) continue;
+    for (let i = t; i < l; i++) kinds[i] = "flight";
+    // Moving rows leave the departure point on the first step after takeoff;
+    // the takeoff itself then happened inside the step before, so it flew too.
+    // (A one-step flight whose landing row caught up reads the same way, and
+    // colours the walk to the flight master with it — the record cannot tell.)
+    const heldAtTakeoff = t >= l || held(points[t]!, points[t + 1]!);
+    if (!heldAtTakeoff && t > 0) kinds[t - 1] = "flight";
+    // A landing sample still where the sample before it was: the position has
+    // not caught up, so the flight carries on to the first step that moves.
+    // Not "held since takeoff" — a multi-hop flight's rows can catch up once
+    // at a node on the way and hold again from there.
+    if (t >= l || held(points[l - 1]!, points[l]!)) {
+      for (let i = l; i < n - 1 && points[i]!.map === points[i + 1]!.map; i++) {
+        kinds[i] = "flight";
+        if (!held(points[i]!, points[i + 1]!)) break;
+      }
+    }
+  }
+
+  /** Hide every segment that overlaps `[from, to]`. */
+  const hide = (from: number, to: number): void => {
+    // A segment (i, i+1) overlaps when it ends at or after `from` and starts
+    // before `to`; for an instant that is exactly the one ending at the first
+    // sample at or after it.
+    for (let i = Math.max(0, firstAtOrAfter(points, from) - 1); i < n - 1 && points[i]!.ts < to; i++) {
+      if (points[i + 1]!.ts >= from) kinds[i] = "teleport";
+    }
+  };
+  for (const m of travel) {
+    if (m.kind === "release") hide(m.ts, m.ts);
+    else if (m.kind === "hearth") hide(m.ts, m.ts + HEARTH_LANDS_WITHIN_MS);
+  }
+  for (const m of track.moves ?? []) {
+    if (m.status === "teleported" || m.status === "transferred") hide(m.ts, m.ts);
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    if (a.map !== b.map) {
+      kinds[i] = "teleport";
+      continue;
+    }
+    if (kinds[i] !== "walk") continue;
+    const d = Math.hypot(b.x - a.x, b.y - a.y);
+    const seconds = (b.ts - a.ts) / 1000;
+    const limit = FLYING_MAPS.has(a.map) ? JUMP_SPEED_FLYING_YPS : JUMP_SPEED_YPS;
+    if (d >= JUMP_MIN_YD && (seconds <= 0 || d / seconds > limit)) kinds[i] = "teleport";
+  }
+  return kinds;
+}
+
+/**
+ * The route travelled on one map, up to the cursor: unbroken runs of one kind
+ * each, so the map can draw a flight in its own colour and leave a gap where a
+ * teleport or another map came between two samples.
+ *
+ * `kinds` is `classifySegments` of the same points. Two runs of different
+ * kinds share the point where one became the other, so a flight joins the walk
+ * it left; a teleport ends a run without one.
  */
 export function routeUpTo(
   points: readonly TrackPoint[],
+  kinds: readonly SegmentKind[],
   map: number,
   ts: number,
-): { x: number; y: number }[] {
-  const out: { x: number; y: number }[] = [];
+): RouteRun[] {
+  const out: RouteRun[] = [];
+  let open: RouteRun | null = null;
   // The cursor's index is a binary search, so the walk is bounded by the route
   // actually drawn rather than by the length of the track.
   const end = indexAt(points, ts);
-  for (let i = 0; i <= end; i++) {
-    const p = points[i]!;
-    if (p.map !== map) continue;
-    out.push({ x: p.x, y: p.y });
+  for (let i = 0; i < end; i++) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    const kind = kinds[i] ?? "walk";
+    if (kind === "teleport" || a.map !== map || b.map !== map) {
+      open = null;
+      continue;
+    }
+    if (open === null || open.kind !== kind) {
+      open = { kind, points: [{ x: a.x, y: a.y }] };
+      out.push(open);
+    }
+    open.points.push({ x: b.x, y: b.y });
   }
   return out;
 }

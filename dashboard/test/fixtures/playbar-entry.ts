@@ -4,5 +4,5 @@
  * other way the test holds a second copy of the router, and the anchor cannot
  * find the router context the test provides.
  */
-export { PlayBar } from "../../src/components/PlayBar";
+export { PlayBar, routeNote } from "../../src/components/PlayBar";
 export { MemoryRouter, Route, createMemoryHistory } from "@solidjs/router";

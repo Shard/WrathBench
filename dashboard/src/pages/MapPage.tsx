@@ -83,7 +83,15 @@ import {
 import { poll } from "../lib/poll";
 import { useSeriesFilter } from "../components/SeriesSelect";
 import { useClock } from "../lib/clock";
-import { nextSampleAfter, positionsAt, routeUpTo, runParam, trackSpan } from "../lib/replay";
+import {
+  type RouteRun,
+  classifySegments,
+  nextSampleAfter,
+  positionsAt,
+  routeUpTo,
+  runParam,
+  trackSpan,
+} from "../lib/replay";
 import { displayError, logError } from "../lib/errors";
 
 const POLL_MS = 5000;
@@ -143,6 +151,12 @@ let INTENT_FAIL = "#f7768e";
  * page rather than a canvas invention.
  */
 let REST_TINT = "#7b3fd6";
+/**
+ * A flight path's stretch of a replayed route: one colour for every run, the
+ * stylesheet's `--flight`, because the run's own colour already says "this
+ * run" and the flight has to read as something else beside it.
+ */
+let FLIGHT = "#bfe6ff";
 /** Whether the viewer asked for less motion; the glyph is drawn either way. */
 let reduceMotion = false;
 
@@ -232,11 +246,11 @@ export default function MapPage() {
   let feedClock: FeedClock | null = null;
   const tiles = new Map<string, TileEntry>();
   let view: View = { scale: 0.25, ox: 0, oy: 0 };
-  let route: { x: number; y: number }[] = [];
+  let route: RouteRun[] = [];
   let routeColor = "";
   /* The decimation of `route` last handed to the canvas, and what it was for. */
-  let routeDrawn: { x: number; y: number }[] = [];
-  let routeSrc: { x: number; y: number }[] | null = null;
+  let routeDrawn: RouteRun[] = [];
+  let routeSrc: RouteRun[] | null = null;
   let routeScale = 0;
   /* Fitting is deliberate, not reactive — see the fit effect for why. */
   let pendingFit = true;
@@ -296,6 +310,7 @@ export default function MapPage() {
     };
     INTENT_FAIL = get("--err", "#f7768e");
     REST_TINT = get("--xp", "#7b3fd6");
+    FLIGHT = get("--flight", "#bfe6ff");
     needsDraw = true;
   }
 
@@ -409,28 +424,38 @@ export default function MapPage() {
    * only a zoom or a freshly built prefix rebuilds. Identity is enough to spot
    * the latter because the effect that owns `route` assigns a new array every
    * time, including the empty one on a mode swap.
+   *
+   * Run by run, so decimation keeps every run's ends: the gap at a teleport and
+   * the point where a walk becomes a flight survive any zoom.
    */
-  function drawnRoute(): { x: number; y: number }[] {
+  function drawnRoute(): RouteRun[] {
     if (route === routeSrc && view.scale === routeScale) return routeDrawn;
     routeSrc = route;
     routeScale = view.scale;
-    routeDrawn = decimateRoute(route, worldPerPixel(view.scale));
+    const minDist = worldPerPixel(view.scale);
+    routeDrawn = route.map((r) => ({ kind: r.kind, points: decimateRoute(r.points, minDist) }));
     return routeDrawn;
   }
 
-  /** The path walked so far on this map, behind the pip. Replay only. */
-  function drawRoute(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]): void {
-    if (points.length < 2) return;
-    ctx.beginPath();
-    for (let i = 0; i < points.length; i++) {
-      const p = project(view, points[i]!.x, points[i]!.y);
-      if (i === 0) ctx.moveTo(p.sx, p.sy);
-      else ctx.lineTo(p.sx, p.sy);
-    }
+  /**
+   * The path travelled so far on this map, behind the pip. Replay only: the
+   * run's colour where it moved under its own power, `FLIGHT` where it flew,
+   * and nothing across a teleport (`classifySegments`).
+   */
+  function drawRoute(ctx: CanvasRenderingContext2D, runs: RouteRun[]): void {
     ctx.lineWidth = 2;
     ctx.globalAlpha = 0.65;
-    ctx.strokeStyle = routeColor;
-    ctx.stroke();
+    for (const run of runs) {
+      if (run.points.length < 2) continue;
+      ctx.beginPath();
+      for (let i = 0; i < run.points.length; i++) {
+        const p = project(view, run.points[i]!.x, run.points[i]!.y);
+        if (i === 0) ctx.moveTo(p.sx, p.sy);
+        else ctx.lineTo(p.sx, p.sy);
+      }
+      ctx.strokeStyle = run.kind === "flight" ? FLIGHT : routeColor;
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -866,12 +891,22 @@ export default function MapPage() {
     needsDraw = true;
   });
 
+  /*
+   * How each step of the track was travelled, once per track: the
+   * classification walks the whole run, and the cursor and map only slice it.
+   */
+  const segmentKinds = createMemo(() => {
+    const t = track();
+    return t === undefined ? [] : classifySegments(t);
+  });
+
   /* The drawn route, recomputed when its inputs move rather than per frame. */
   createEffect(() => {
     const t = track();
+    const kinds = segmentKinds();
     const map = activeMap();
     const ts = cursor();
-    route = t === undefined ? [] : routeUpTo(t.points, map, ts);
+    route = t === undefined ? [] : routeUpTo(t.points, kinds, map, ts);
     routeColor = colorOf(t?.runId ?? "");
     needsDraw = true;
   });

@@ -1441,6 +1441,46 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
     expect(body.characterName).toBe("Fixturely");
     expect(body.points).toHaveLength(1);
     expect(body.points[0]).toMatchObject({ map: 0, x: -6240, y: 380 });
+    // Nothing on the record says how it travelled: the field is there, empty.
+    expect((body as { travel?: unknown }).travel).toEqual([]);
+  });
+
+  test("/api/run/<id>/track carries the travel marks, read off the trajectory at request time", async () => {
+    const runs = fixture();
+    const handle = api(runs);
+    // Read once before anything is appended, so the second read shows the
+    // marks arriving through the same incremental tail a live run grows.
+    await handle(new Request(`http://x/api/run/${RUN_ID}/track`));
+    appendFileSync(
+      join(runs, RUN_ID, "trajectory.jsonl"),
+      [
+        { ts: 1500, t: "milestone", kind: "taxi", from: { areaId: 9 }, turn: 2 },
+        { ts: 1600, t: "milestone", kind: "taxi_landed", to: { areaId: 1519 }, turn: 2 },
+        { ts: 1700, t: "milestone", kind: "release", turn: 3 },
+        {
+          ts: 1900,
+          t: "actions",
+          turn: 3,
+          actions: [{ ts: 1800, action: "use_item", status: 200, ms: 4, args: { bag: 255, slot: 23 }, names: { item: "Hearthstone" } }],
+        },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join("\n") + "\n",
+    );
+    const body = (await (await handle(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
+      travel: { kind: string; ts: number }[];
+    };
+    expect(body.travel).toEqual([
+      { kind: "taxi", ts: 1500 },
+      { kind: "taxi_landed", ts: 1600 },
+      { kind: "release", ts: 1700 },
+      { kind: "hearth", ts: 1800 },
+    ]);
+    // Public mode withholds the release with the rest of the deaths.
+    const pub = (await (await api(runs, true)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
+      travel: { kind: string }[];
+    };
+    expect(pub.travel.map((m) => m.kind)).toEqual(["taxi", "taxi_landed", "hearth"]);
   });
 
   test("the new routes leak no secret either", async () => {

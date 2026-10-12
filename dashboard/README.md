@@ -88,6 +88,20 @@ predicate, over both the table and the graph. The one exemption that stands is
 the harness series, because a character is durable across series and cutting
 its older attempts would report a long-lived character as attempt 1.
 
+## The replay's route
+
+The map's replay draws the route behind the pip in the run's colour, a flight
+path in `--flight`, and no line across a teleport or a change of map. Which is
+which comes from what the record says happened, not from speed
+(`classifySegments` in `src/lib/replay.ts`): a flying character's position was
+held at the departure flight master for the whole flight, so its landing is
+one jump that looks exactly like a hearthstone by distance, and a release to a
+nearby graveyard is slower than a mounted ride. The viewer derives the events
+at read time — flight and graveyard milestones, the action log's hearthstone —
+into the track's `travel` list, without storing anything new; the moves' typed
+`teleported` and `transferred` verdicts and map changes are already on the
+track. An implied-speed limit backs them up for jumps nothing explains.
+
 ## Structure
 
 ```

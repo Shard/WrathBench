@@ -30,6 +30,7 @@ import type {
   TaxiFacts,
   TokenTotals,
   TpsFacts,
+  TrackTravelMark,
   TradeFacts,
   TradeMarkView,
   UnreportedUsage,
@@ -78,6 +79,7 @@ export type {
   TaxiFacts,
   TokenTotals,
   TpsFacts,
+  TrackTravelMark,
   TradeFacts,
   TradeMarkView,
 } from "./api-types";
@@ -1308,6 +1310,60 @@ export function taxiFactsFrom(
   return { flights: marks.filter((m) => m === "taxi").length };
 }
 
+/* --------------------------------------------------- the replay's travel */
+
+/**
+ * What the action log calls the hearthstone: the client-cache name the SDK
+ * stamped on the `use_item` dispatch (`ActionNote.names`, sandbox/ipc.ts). The
+ * dispatch carries a bag and a slot, not an item id, so the name is the only
+ * thing on the record that says which item it was.
+ */
+export const HEARTHSTONE_ITEM_NAME = "Hearthstone";
+/** The hearthstone's own spell, should a dispatch cast it directly. */
+export const HEARTHSTONE_SPELL_ID = 8690;
+
+/**
+ * The travel marks one trajectory record contributes to `TrackResponse.travel`,
+ * or none.
+ *
+ * From a milestone: a flight's takeoff and landing, and a spirit's release to a
+ * graveyard — including a `death` first observed already released, after which
+ * no separate `release` is written (`runner/src/loop.ts`). From an `actions`
+ * record: every hearthstone the module accepted, at the dispatch's own `ts`, and
+ * at the last of a folded run of identical dispatches too, since any of them
+ * may be the cast that landed. A refused dispatch casts nothing.
+ */
+export function travelMarksOf(rec: Record<string, unknown>): TrackTravelMark[] {
+  const t = rec["t"];
+  if (t === "milestone") {
+    const ts = rec["ts"];
+    if (typeof ts !== "number") return [];
+    const kind = rec["kind"];
+    if (kind === "taxi" || kind === "taxi_landed" || kind === "release") return [{ kind, ts }];
+    if (kind === "death" && rec["released"] === true) return [{ kind: "release", ts }];
+    return [];
+  }
+  if (t !== "actions" || !Array.isArray(rec["actions"])) return [];
+  const out: TrackTravelMark[] = [];
+  for (const a of rec["actions"] as unknown[]) {
+    if (a === null || typeof a !== "object") continue;
+    const note = a as Record<string, unknown>;
+    const status = note["status"];
+    if (typeof note["ts"] !== "number" || typeof status !== "number" || status < 200 || status >= 300) continue;
+    const names = note["names"] as { item?: unknown } | undefined;
+    const args = note["args"] as { spellId?: unknown } | undefined;
+    const hearth =
+      (note["action"] === "use_item" && names?.item === HEARTHSTONE_ITEM_NAME) ||
+      (note["action"] === "cast_spell" && args?.spellId === HEARTHSTONE_SPELL_ID);
+    if (!hearth) continue;
+    out.push({ kind: "hearth", ts: note["ts"] });
+    if (typeof note["lastTs"] === "number" && note["lastTs"] !== note["ts"]) {
+      out.push({ kind: "hearth", ts: note["lastTs"] });
+    }
+  }
+  return out;
+}
+
 /* ---------------------------------------------- level and death milestones */
 
 /** A death-family milestone: the death itself, the release, or the resurrect. */
@@ -2084,6 +2140,8 @@ export class TrajectoryTail {
   private readonly spellMarks: SpellMark[] = [];
   private readonly talentMarks: TalentSpendMark[] = [];
   private readonly tradeMarks: TradeMarkView[] = [];
+  /** The replay's flight, hearth and graveyard marks; see `travelMarksOf`. */
+  private readonly travelMarks: TrackTravelMark[] = [];
   /** `reflect_window` transitions, for the run page's per-turn accent. */
   private readonly reflectMarks: ReflectMark[] = [];
   /**
@@ -2145,6 +2203,7 @@ export class TrajectoryTail {
       this.spellMarks.length = 0;
       this.talentMarks.length = 0;
       this.tradeMarks.length = 0;
+      this.travelMarks.length = 0;
       this.reflectMarks.length = 0;
       this.systemTextAt.clear();
       this.codexUsage.reset();
@@ -2191,6 +2250,8 @@ export class TrajectoryTail {
             const trade = tradeMarkOf(rec);
             if (trade !== null) this.tradeMarks.push(trade);
           }
+          // Milestones and the action log both: the hearthstone is a dispatch.
+          for (const mark of travelMarksOf(rec)) this.travelMarks.push(mark);
           // Not a milestone: its own record kind, written by the loop's builder.
           const reflect = reflectMarkOf(rec);
           if (reflect !== null) this.reflectMarks.push(reflect);
@@ -2254,6 +2315,15 @@ export class TrajectoryTail {
   /** Completed trades; null when they were not recorded for this run. */
   get trades(): TradeFacts | null {
     return tradeFactsFrom(this.tradeMarks, this.spellMarks.length > 0);
+  }
+
+  /**
+   * The replay's travel marks, oldest first. Sorted rather than in file order:
+   * an `actions` record is flushed after the dispatches it lists, so a hearth
+   * can land in the file after a milestone stamped later than it.
+   */
+  get travel(): TrackTravelMark[] {
+    return [...this.travelMarks].sort((a, b) => a.ts - b.ts);
   }
 
   /**

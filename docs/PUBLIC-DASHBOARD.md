@@ -287,6 +287,16 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
 - **The safe core ships whole**: the `ResultRun` layer is ids, numbers and
   model identifiers — levels, XP, areas and achievements as ids, taxi facts,
   costs, tokens.
+- **A track's travel marks ship, its graveyard releases do not.** The
+  replay draws flights in their own colour and leaves a gap at a teleport
+  from the track's `travel` list, read off the trajectory at request time
+  (`dashboard/src/lib/replay.ts`). Its flight takeoffs and landings and its
+  hearthstone uses ship as kinds and timestamps, facts the safe core and the
+  action log already carry. A release is one mark per death, so it is
+  withheld with the deaths: the public route breaks at a graveyard port only
+  where the speed backstop catches it. A finished run's `track.json` changes
+  key only when its detail, entries or scratchpad do, so a replay published
+  before the marks existed keeps drawing without them.
 
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
