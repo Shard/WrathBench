@@ -428,4 +428,49 @@ describe("the play bar across the route swap", () => {
       restore();
     }
   });
+
+  test("the route's legend is a tooltip, and the public build promises no gap it is not sent", async () => {
+    const { document, restore } = installDom();
+    try {
+      const { PlayBar, routeNote, MemoryRouter, Route, createMemoryHistory } = await loadEntry();
+      const props: PlayBarProps = {
+        replayId: TRACK.runId,
+        track: TRACK,
+        replayError: undefined,
+        feedError: undefined,
+        cursor: 1_000,
+        playing: false,
+        speed: 1,
+        count: 0,
+        seriesHidden: 0,
+        liveSeries: null,
+        selected: null,
+        onSeek: () => {},
+        onTogglePlay: () => {},
+        onStepBack: () => {},
+        onStepForward: () => {},
+        onCycleSpeed: () => {},
+      };
+      const mount = document.createElement("div");
+      const dispose = render(
+        () =>
+          createComponent(MemoryRouter, {
+            history: createMemoryHistory(),
+            get children() {
+              return createComponent(Route, { path: "*", component: () => createComponent(PlayBar, props) });
+            },
+          }),
+        mount,
+      );
+      // Behind the hint, not on the page; this suite is the private build.
+      expect(mount.querySelector(".playbar .info-hint")?.getAttribute("title")).toBe(routeNote(false));
+      expect(mount.textContent).not.toContain("flight path");
+      expect(routeNote(false)).toContain("graveyard");
+      // Releases are withheld from the public feed with the deaths.
+      expect(routeNote(true)).not.toContain("graveyard");
+      dispose();
+    } finally {
+      restore();
+    }
+  });
 });

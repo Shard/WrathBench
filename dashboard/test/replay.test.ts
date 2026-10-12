@@ -329,22 +329,15 @@ describe("classifySegments", () => {
   });
 
   test("the tram's map change breaks the line rather than joining two map-0 samples", () => {
-    // Ironforge's platform, two samples on the tram's own map, Stormwind's.
-    const points = samples(
-      [-4840, -1280],
-      [-4842, -1283],
-      [69, 10, 369],
-      [-19, 40, 369],
-      [-8350, 520],
-      [-8340, 530],
-    );
+    // One city's platform, two samples on the tram's own map, the other city's.
+    const points = samples([0, 0], [10, 0], [5, 5, 369], [15, 5, 369], [3000, 0], [3010, 0]);
     const kinds = classifySegments({ points });
     expect(kinds).toEqual(["walk", "teleport", "walk", "teleport", "walk"]);
     expect(route(points, kinds, 0)).toEqual([
-      { kind: "walk", points: [{ x: -4840, y: -1280 }, { x: -4842, y: -1283 }] },
-      { kind: "walk", points: [{ x: -8350, y: 520 }, { x: -8340, y: 530 }] },
+      { kind: "walk", points: [{ x: 0, y: 0 }, { x: 10, y: 0 }] },
+      { kind: "walk", points: [{ x: 3000, y: 0 }, { x: 3010, y: 0 }] },
     ]);
-    expect(route(points, kinds, 369)).toEqual([{ kind: "walk", points: [{ x: 69, y: 10 }, { x: -19, y: 40 }] }]);
+    expect(route(points, kinds, 369)).toEqual([{ kind: "walk", points: [{ x: 5, y: 5 }, { x: 15, y: 5 }] }]);
   });
 
   test("a move the module ended teleported is a gap", () => {
