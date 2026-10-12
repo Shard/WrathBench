@@ -24,6 +24,7 @@ import {
   summarize,
   tokenTotals,
   tokensPerSecond,
+  travelMarksOf,
 } from "../viewer/tail";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -1459,6 +1460,80 @@ describe("achievement and flight milestones (issue #8)", () => {
     // A second scan of an unchanged file adds nothing.
     await tail.scan();
     expect(tail.achievements).toEqual(totals.achievements);
+  });
+});
+
+describe("the replay's travel marks", () => {
+  const milestone = (ts: number, kind: string, extra: Record<string, unknown> = {}) => ({
+    t: "milestone",
+    ts,
+    kind,
+    ...extra,
+  });
+  const actions = (ts: number, notes: Record<string, unknown>[]) => ({ t: "actions", ts, actions: notes });
+  const hearth = (ts: number, extra: Record<string, unknown> = {}) => ({
+    ts,
+    action: "use_item",
+    status: 200,
+    ms: 10,
+    args: { bag: 255, slot: 23 },
+    names: { item: "Hearthstone" },
+    ...extra,
+  });
+
+  test("flights and releases come off the milestones, at the sample that saw them", () => {
+    expect(travelMarksOf(milestone(1300, "taxi", { from: { areaId: 9 } }))).toEqual([{ kind: "taxi", ts: 1300 }]);
+    expect(travelMarksOf(milestone(1400, "taxi_landed"))).toEqual([{ kind: "taxi_landed", ts: 1400 }]);
+    expect(travelMarksOf(milestone(1500, "release", { graveyard: { map: 0, x: 1, y: 2, z: 3 } }))).toEqual([
+      { kind: "release", ts: 1500 },
+    ]);
+    // A death first seen already released has no release record after it.
+    expect(travelMarksOf(milestone(1600, "death", { observedTs: 1550, released: true }))).toEqual([
+      { kind: "release", ts: 1600 },
+    ]);
+    expect(travelMarksOf(milestone(1600, "death", { observedTs: 1550, released: false }))).toEqual([]);
+    expect(travelMarksOf(milestone(1700, "resurrect"))).toEqual([]);
+    expect(travelMarksOf(milestone(1800, "area", { to: { id: 87 } }))).toEqual([]);
+  });
+
+  test("a hearthstone comes off the action log, at the dispatch, and only when the module took it", () => {
+    expect(travelMarksOf(actions(2000, [hearth(1950)]))).toEqual([{ kind: "hearth", ts: 1950 }]);
+    // Any of a folded run of identical dispatches may be the cast that landed.
+    expect(travelMarksOf(actions(9000, [hearth(2000, { count: 3, lastTs: 8000 })]))).toEqual([
+      { kind: "hearth", ts: 2000 },
+      { kind: "hearth", ts: 8000 },
+    ]);
+    expect(
+      travelMarksOf(actions(2000, [{ ts: 1950, action: "cast_spell", status: 200, ms: 3, args: { spellId: 8690 } }])),
+    ).toEqual([{ kind: "hearth", ts: 1950 }]);
+    // Refused, or some other item: nothing was cast.
+    expect(travelMarksOf(actions(2000, [hearth(1950, { status: 400, error: "bad_slot" })]))).toEqual([]);
+    expect(travelMarksOf(actions(2000, [hearth(1950, { names: { item: "Refreshing Spring Water" } })]))).toEqual([]);
+    expect(travelMarksOf({ t: "actions", ts: 2000 })).toEqual([]);
+  });
+
+  test("the tail serves them oldest first, and forgets them with a truncated file", async () => {
+    const dir = tempDir("wrathbench-travel-");
+    const path = join(dir, "trajectory.jsonl");
+    // The action log is flushed after the dispatches it lists, so a hearth can
+    // sit in the file after a milestone stamped later than it.
+    const lines = [
+      { t: "meta", ts: 1000 },
+      milestone(1300, "taxi"),
+      milestone(1400, "taxi_landed"),
+      actions(1500, [hearth(1200)]),
+    ];
+    writeFileSync(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    const tail = new TrajectoryTail(path);
+    await tail.scan();
+    expect(tail.travel).toEqual([
+      { kind: "hearth", ts: 1200 },
+      { kind: "taxi", ts: 1300 },
+      { kind: "taxi_landed", ts: 1400 },
+    ]);
+    writeFileSync(path, JSON.stringify({ t: "meta", ts: 1000 }) + "\n");
+    await tail.scan();
+    expect(tail.travel).toEqual([]);
   });
 });
 

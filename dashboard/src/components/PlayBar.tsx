@@ -41,6 +41,12 @@ import { replayHref, replayHrefFor } from "../lib/mapstate";
 import { colorOf, pipName } from "../lib/mapview";
 import { type Speed, playbackClock, prevSampleBefore, progressOf } from "../lib/playback";
 import { nextSampleAfter, trackSpan } from "../lib/replay";
+import { InfoHint } from "./InfoHint";
+
+/** What the replayed route's colours and gaps mean (`classifySegments`). */
+const ROUTE_NOTE =
+  "The route: the run's own colour where it moved under its own power, blue on a flight path, " +
+  "and no line across a hearthstone, a release to a graveyard, a portal or a change of map.";
 
 export interface PlayBarProps {
   /** The route's run id; undefined is the live map. */
@@ -138,6 +144,7 @@ export function PlayBar(props: PlayBarProps) {
                 <span class="dim">
                   · {t().points.length} {t().points.length === 1 ? "position" : "positions"}
                 </span>
+                <InfoHint label="about the route" text={ROUTE_NOTE} />
                 <Show when={t().character}>
                   {(s) => (
                     <span class="attempt-steps">

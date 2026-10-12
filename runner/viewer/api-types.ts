@@ -2087,6 +2087,24 @@ export interface TrackCharacter {
   next: string | null;
 }
 
+/**
+ * One recorded fact about how the character crossed the gap between two track
+ * points, which is what the replay's route is drawn by: a flight path's
+ * takeoff and landing, a hearthstone used, a spirit released to a graveyard.
+ *
+ * Derived at read time from records the trajectory already carries — the
+ * `taxi`, `taxi_landed` and `release` milestones, a `death` first seen already
+ * released (no separate release follows one), and the action log's
+ * hearthstone — and never stored. `ts` is the record's own: a milestone's is
+ * the state sample that observed it, so the change it names happened since the
+ * sample before; a hearth's is the dispatch, about ten seconds before the
+ * teleport lands.
+ */
+export interface TrackTravelMark {
+  kind: "taxi" | "taxi_landed" | "hearth" | "release";
+  ts: number;
+}
+
 export interface TrackResponse extends SnapshotEnvelope {
   runId: string;
   characterName: string | null;
@@ -2106,6 +2124,14 @@ export interface TrackResponse extends SnapshotEnvelope {
    * for the same reason as `AgentPosition.move`.
    */
   moves?: MoveIntentView[];
+  /**
+   * The flight, hearth and graveyard marks, oldest first (`TrackTravelMark`).
+   * Optional: an older viewer and a snapshot published before this carry
+   * none, and the replay then breaks its line on map changes, the moves'
+   * typed teleports and its speed backstop alone. The public projection drops
+   * `release` with the rest of the deaths.
+   */
+  travel?: TrackTravelMark[];
 }
 
 /**

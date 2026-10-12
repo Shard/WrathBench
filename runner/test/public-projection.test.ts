@@ -889,6 +889,13 @@ describe("projectPositions and projectTrack", () => {
       // The character's neighbours: run ids and two counters, each
       // already public on every runs row, and nothing smuggled beside them.
       character: smuggle({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" }),
+      // Flights and hearths as kinds and timestamps; the release is a death.
+      travel: [
+        smuggle({ kind: "taxi", ts: 1300 }),
+        smuggle({ kind: "taxi_landed", ts: 1400 }),
+        smuggle({ kind: "release", ts: 1500 }),
+        smuggle({ kind: "hearth", ts: 1600 }),
+      ],
     });
     const out = projectTrack(input);
     expect(keyPaths(out)).toEqual(
@@ -908,11 +915,19 @@ describe("projectPositions and projectTrack", () => {
         ...under("moves[]", ["ts", "map", "x", "y", "z", "target", "status"]),
         "character",
         ...under("character", ["characterId", "attempt", "attempts", "previous", "next"]),
+        "travel",
+        ...under("travel[]", ["kind", "ts"]),
       ]),
     );
     assertClean(JSON.stringify(out));
     expect(out.characterName).toBe(CHARACTER_NAME);
     expect(out.moves![0]!.target).toBe(SURVIVES.targetName);
+    // Deaths are withheld whole, and a graveyard release is one per death.
+    expect(out.travel).toEqual([
+      { kind: "taxi", ts: 1300 },
+      { kind: "taxi_landed", ts: 1400 },
+      { kind: "hearth", ts: 1600 },
+    ]);
     expect(out.points[0]).toMatchObject({ health: 140, maxHealth: 220, powerType: 3, nextLevelXp: 2100 });
     // The inventory is published where it changed, and "unchanged" stays the
     // absence of the field rather than an empty list the reader would misread.
@@ -932,6 +947,8 @@ describe("projectPositions and projectTrack", () => {
       points: [],
     });
     expect("character" in out).toBe(false);
+    // Nor travel marks: absent is what an older track says, not "none".
+    expect("travel" in out).toBe(false);
   });
 });
 

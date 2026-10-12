@@ -20,6 +20,10 @@
   --warn: #e0af68;
   --grid: #1a1d22;
   --gridline: #23272e;
+  /* A replayed route's flights. A run's own route colour is any hue at 60%
+     lightness, so this is set apart by lightness instead of hue: a pale sky
+     here, a deep blue on the light theme, and never one a run can draw in. */
+  --flight: #bfe6ff;
   /* Claude's own orange, so the claude-code harness tag reads as itself rather
      than as one more accent-coloured badge. */
   --claude: #da7756;
@@ -80,6 +84,7 @@
     --warn: #8a5d00;
     --grid: #e9ebef;
     --gridline: #d5d9e0;
+    --flight: #0a4f8a;
     /* Darkened for a light background: #da7756 is too pale for an 11px badge. */
     --claude: #b4522f;
     --codex: #0b7a5f;
@@ -475,6 +480,8 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .playbar-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .playbar-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .playbar-stamp { font-size: var(--fs-xs); }
+/* The row's own gap spaces it; the hint must not give way when the row is crowded. */
+.playbar .info-hint { margin-left: 0; flex: none; }
 .playbar-btn {
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
   font: inherit; color: var(--accent); background: var(--bg);
