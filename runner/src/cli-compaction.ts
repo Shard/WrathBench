@@ -51,16 +51,14 @@ import type { HarnessNotice } from "./sandbox/host";
 export const COMPACTION_ASK_LOOKAHEAD_TURNS = 2;
 
 /**
- * The two notices, the same bytes on both CLIs (no vendor named), phrased as
- * the fixed loop's `trim_pending` is. "The CLI" is the prompt's own name for
- * what owns the conversation on these harnesses (`contextSentence`).
+ * The two notices, the same bytes on both CLIs (no vendor named), worded by
+ * the operator (2026-10-14). They render after their kind, as
+ * `- compaction_pending: older turns will soon be summarised — …`.
  */
 export const COMPACTION_PENDING_NOTICE =
-  "The CLI will soon compact older conversation into a summary. Record a short status entry — " +
-  "what you are doing and how it is going — with log_status.";
+  "older turns will soon be summarised — record a short status entry with log_status (what you're doing, how it's going).";
 export const COMPACTED_NOTICE =
-  "The CLI has compacted older conversation into a summary. Record a short status entry — " +
-  "what you are doing and how it is going — with log_status.";
+  "older turns were just summarised — record a short status entry with log_status (what you're doing, how it's going).";
 
 export type CompactionAskTiming = "before" | "after";
 
