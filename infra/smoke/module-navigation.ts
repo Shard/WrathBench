@@ -4,6 +4,8 @@
  * End to end against a booted worldserver, from inside the compose network:
  * session in world (Human in Northshire) -> a `move_to` whose z is 5y above
  * the ground arrives and reports `meshZ` (the mesh owns z) -> a `move_to`
+ * whose z is 5y UNDER the ground arrives on the ground with `meshZ`, never a
+ * `drop` and never a position below the terrain -> a `move_to`
  * whose z is 100y above the ground (far outside the navmesh's vertical poly
  * search) still arrives, with `meshZ` at the ground: the module's ground-z
  * fallback (part 3) -> a `move_to` to a nearby NPC's position
@@ -199,6 +201,23 @@ async function main() {
   // endpointOk is 2D only, so this is what keeps a rooftop poly from passing.
   if (Math.abs(high.meshZ - COURTYARD.z) > 3) fail(`meshZ ${high.meshZ} is not the courtyard ground (${COURTYARD.z})`);
   log(`PASS z+5 -> arrived with meshZ ${high.meshZ.toFixed(1)} (requested ${(COURTYARD.z + 5).toFixed(1)})`);
+
+  // 2a. Wrong z the other way: 5y UNDER the ground. The core's path
+  //     normalization looks down from 2y above the requested point, so from
+  //     inside the terrain it finds no surface (or a buried floor) and keeps
+  //     the guessed z; the walk then ends inside the hill, or the last segment
+  //     is a `drop` the SDK takes on its own (Dun Algaz, 2026-10-11: 67 such
+  //     landings in one run). The module now ends the walk at the mesh's own
+  //     height: `arrived`, `meshZ` at the ground, and the server's position
+  //     on it — never a `drop`, never a z below the ground.
+  const back2 = await move(HOME);
+  if (back2.status !== "arrived") fail(`walk home before the under-ground leg: ${JSON.stringify(back2)}`);
+  const low = await move({ x: COURTYARD.x, y: COURTYARD.y, z: COURTYARD.z - 5 });
+  if (low.status !== "arrived") fail(`z-5 request should arrive on the ground (endpoint lifted to the mesh), got ${JSON.stringify(low)}`);
+  if (dist2d(low.pos, COURTYARD) > 4) fail(`z-5 arrived ${dist2d(low.pos, COURTYARD).toFixed(1)}m from target`);
+  if (typeof low.meshZ !== "number" || Math.abs(low.meshZ - COURTYARD.z) > 3) fail(`z-5 arrival should carry the ground meshZ (~${COURTYARD.z}): ${JSON.stringify(low)}`);
+  if (low.pos.z < COURTYARD.z - 1.5) fail(`z-5 arrival left the character under the ground: server z ${low.pos.z} vs ground ${COURTYARD.z}`);
+  log(`PASS z-5 -> arrived on the ground, meshZ ${low.meshZ.toFixed(1)}, server z ${low.pos.z.toFixed(1)}`);
 
   // 3. Far outside the poly search box (±50y vertically): no polygon under the
   //    request's z. Until harness-0.4 this was target_off_mesh; the module now
