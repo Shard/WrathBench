@@ -3,8 +3,8 @@
  * window raises around a block trim. Fixture-driven: no live stack, no model.
  *
  * The decisions under test are docs/METHODOLOGY.md, "Reflection is the model's
- * to take, and only at rest" and "An episodic log, written before each trim,
- * read back at rest".
+ * to take, and only at rest or in flight" and "An episodic log, written before
+ * each trim, read back at rest or in flight".
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -33,6 +33,7 @@ import {
   ReflectGate,
   ClosedWindowReflectGate,
   restingOf,
+  taxiFlightOf,
 } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
 import { callTool, TOOLS, type ToolContext } from "../src/tools";
@@ -45,7 +46,7 @@ import { tempDirs } from "./fixtures/temp-dirs";
 const tempDir = tempDirs();
 
 /** A sandbox whose snapshot is whatever the test last set. */
-function fakeSandbox(state: { resting?: boolean; level?: number; zone?: string }): SandboxHost {
+function fakeSandbox(state: { resting?: boolean; taxiFlight?: boolean; level?: number; zone?: string }): SandboxHost {
   return {
     evalSnippet: (code: string): Promise<SnippetResult> =>
       Promise.resolve({ ok: true, value: `ran:${code}`, logs: [], durationMs: 1 }),
@@ -54,6 +55,7 @@ function fakeSandbox(state: { resting?: boolean; level?: number; zone?: string }
       Promise.resolve({
         self: {
           ...(state.resting === undefined ? {} : { resting: { value: state.resting, seq: 1, ts: 1 } }),
+          ...(state.taxiFlight === undefined ? {} : { taxiFlight: { value: state.taxiFlight, seq: 1, ts: 1 } }),
           ...(state.level === undefined ? {} : { level: { value: state.level, seq: 1, ts: 1 } }),
           ...(state.zone === undefined ? {} : { zone: { value: { id: 1, name: state.zone }, seq: 1, ts: 1 } }),
         },
@@ -67,7 +69,7 @@ function fakeSandbox(state: { resting?: boolean; level?: number; zone?: string }
   } as unknown as SandboxHost;
 }
 
-function makeCtx(state: { resting?: boolean; level?: number; zone?: string } = {}): {
+function makeCtx(state: { resting?: boolean; taxiFlight?: boolean; level?: number; zone?: string } = {}): {
   ctx: ToolContext;
   state: typeof state;
   dir: string;
@@ -179,6 +181,164 @@ describe("the reflect gate", () => {
     gate.note(false);
     expect(gate.isOpen).toBe(false);
     expect(gate.drainEvents()).toEqual([{ event: "close", reason: "left_rest" }]);
+  });
+});
+
+describe("the flight window (operator, 2026-10-14)", () => {
+  test("taxiFlightOf reads the SDK's decoded flag, and nothing else", () => {
+    expect(taxiFlightOf({ self: { taxiFlight: { value: true } } })).toBe(true);
+    expect(taxiFlightOf({ self: { taxiFlight: { value: false } } })).toBe(false);
+    expect(taxiFlightOf({ self: {} })).toBeUndefined();
+    expect(taxiFlightOf(null)).toBeUndefined();
+  });
+
+  test("a flight yields the fixed prompt through the tool; a second call in the same flight refuses", async () => {
+    const { ctx } = makeCtx({ resting: false, taxiFlight: true });
+    const first = await callTool(ctx, "reflect", {});
+    expect(first.isError).toBeUndefined();
+    expect(first.text).toBe(REFLECTION_PROMPT);
+    expect((await callTool(ctx, "reflect", {})).text).toBe(REFLECT_ALREADY_USED);
+  });
+
+  test("neither resting nor flying refuses, and so does an unobserved flight flag", async () => {
+    expect((await callTool(makeCtx({ resting: false, taxiFlight: false }).ctx, "reflect", {})).text).toBe(
+      REFLECT_NOT_RESTING,
+    );
+    expect((await callTool(makeCtx({ resting: false }).ctx, "reflect", {})).text).toBe(REFLECT_NOT_RESTING);
+  });
+
+  test("an unobserved flight flag leaves a latched flight standing", () => {
+    const gate = new ReflectGate();
+    gate.note(false, true);
+    gate.note(undefined, undefined);
+    gate.note(false);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    expect(gate.isOpen).toBe(true);
+  });
+
+  test("landing outside a rest area closes the window as `landed`, and the next flight re-arms", () => {
+    const gate = new ReflectGate();
+    gate.note(false, false);
+    gate.note(false, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.note(false, false);
+    expect(gate.isOpen).toBe(false);
+    expect(gate.drainEvents()).toEqual([{ event: "open" }, { event: "close", reason: "landed" }]);
+    expect(gate.request().text).toBe(REFLECT_NOT_RESTING);
+    gate.note(false, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+  });
+
+  test("a multi-hop flight is one flight while the flag holds across its legs", () => {
+    const gate = new ReflectGate();
+    gate.note(false, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.drainEvents();
+    // Every intermediate node passes with the flag still set: nothing closes
+    // and nothing re-arms.
+    for (let leg = 0; leg < 3; leg++) gate.note(false, true);
+    expect(gate.isOpen).toBe(true);
+    expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
+    expect(gate.drainEvents()).toEqual([]);
+  });
+
+  test("landing in a city is one stay: no second reflection, the window stays open until the city is left", () => {
+    // The rest flag comes on in flight, as the zone updates over the city,
+    // then the flight flag drops at the landing.
+    const gate = new ReflectGate();
+    gate.note(false, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.note(true, true);
+    gate.note(true, false);
+    expect(gate.isOpen).toBe(true);
+    expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
+    gate.note(false, false);
+    expect(gate.drainEvents()).toEqual([{ event: "open" }, { event: "close", reason: "left_rest" }]);
+  });
+
+  test("a landing whose two flags flip in one sample is one stay too", () => {
+    const gate = new ReflectGate();
+    gate.note(false, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.note(true, false);
+    expect(gate.isOpen).toBe(true);
+    expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
+  });
+
+  test("a sample between the landing and the rest flag is an observed end of stay, and re-arms", () => {
+    // Accepted behaviour, not hysteresis: the gate follows what was observed,
+    // and a sample that saw neither flag saw the stay end.
+    const gate = new ReflectGate();
+    gate.note(false, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.note(false, false);
+    gate.note(true, false);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+  });
+
+  test("taking off from a rest area where the model already reflected is the same stay", () => {
+    const gate = new ReflectGate();
+    gate.note(true, false);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.note(true, true);
+    gate.note(false, true);
+    expect(gate.isOpen).toBe(true);
+    expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
+  });
+
+  test("flying over a city neither re-arms nor closes", () => {
+    const gate = new ReflectGate();
+    gate.note(false, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.drainEvents();
+    gate.note(true, true);
+    gate.note(false, true);
+    expect(gate.isOpen).toBe(true);
+    expect(gate.drainEvents()).toEqual([]);
+    expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
+  });
+
+  test("read_log follows the flight window: open in flight, refused after landing", async () => {
+    const { ctx, state } = makeCtx({ resting: false, taxiFlight: true });
+    ctx.episodic.append({ turn: 1, text: "flying to the harbor" });
+    expect((await callTool(ctx, "read_log", {})).text).toBe(READ_LOG_CLOSED);
+    await callTool(ctx, "reflect", {});
+    expect((await callTool(ctx, "read_log", {})).text).toContain("flying to the harbor");
+    state.taxiFlight = false;
+    ctx.reflect.note(false, false);
+    expect((await callTool(ctx, "read_log", {})).text).toBe(READ_LOG_CLOSED);
+  });
+
+  test("the builder's state sample alone opens a flight's stay and closes it on landing", async () => {
+    const state: { resting: boolean; taxiFlight?: boolean } = { resting: false };
+    const dir = tempDir("wrathbench-reflect-flight-");
+    const config = {
+      ...loadRunConfig({ driver: "stub", stepIntervalMs: 0, stateIntervalMs: 1 }),
+      runId: "run-flight",
+      token: "run-flight",
+    };
+    const trajectory = new Trajectory(dir);
+    trajectory.writeMeta({ runId: config.runId, harnessVersion: "t", startedAt: Date.now(), config });
+    const builder = new ContextBuilder({
+      config,
+      sandbox: fakeSandbox(state),
+      scratchpad: new Scratchpad(join(dir, "scratchpad.md")),
+      trajectory,
+      watchdogs: new Watchdogs(config.watchdogs),
+    });
+    await builder.sampleState();
+    expect(builder.reflect.request().text).toBe(REFLECT_NOT_RESTING);
+    state.taxiFlight = true;
+    await builder.sampleState();
+    expect(builder.reflect.request().text).toBe(REFLECTION_PROMPT);
+    state.taxiFlight = false;
+    await builder.sampleState();
+    expect(builder.reflect.isOpen).toBe(false);
+    expect(builder.reflect.drainEvents()).toEqual([
+      { event: "open" },
+      { event: "close", reason: "landed" },
+    ]);
+    trajectory.close();
   });
 });
 

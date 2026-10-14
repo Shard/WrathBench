@@ -50,19 +50,21 @@ The SDK is versioned. Its surface is part of the harness version.
 
 **Reflection, the episodic log, and the trim notices.** Three of the tools
 exist because of the message window rather than the world (docs/METHODOLOGY.md,
-"Reflection is the model's to take, and only at rest" and "An episodic log,
-written before each trim, read back at rest"). `log_status` appends one
-harness-stamped entry (turn, level, zone) to `data/runs/<id>/episodic.jsonl`,
-which is append-only and therefore not the scratchpad. `reflect` returns a
-fixed, content-free review prompt while the character's `resting` flag is set —
-one reflection per rest visit — and opens a reflection window in which
-`read_log` pages that log; the window closes when the character leaves the rest
-area, on a circuit breaker, or at the end of the run, and every
-transition is a `reflect_window` record. After a sandbox restart the state
-cache is rebuilt, so `resting` is unobserved until the next update block
-carries `playerFlags` and the gate holds the last reading it was fed rather
-than reading silence as "not resting" — the same latch discipline the ghost
-flag has.
+"Reflection is the model's to take, and only at rest or in flight" and "An
+episodic log, written before each trim, read back at rest or in flight").
+`log_status` appends one harness-stamped entry (turn, level, zone) to
+`data/runs/<id>/episodic.jsonl`, which is append-only and therefore not the
+scratchpad. `reflect` returns a fixed, content-free review prompt while the
+character's `resting` or `taxiFlight` flag is set — one reflection per stay,
+an unbroken stretch with either flag set, so a flight that lands in a city is
+one stay — and opens a reflection window in which `read_log` pages that log;
+the window closes when the stay ends (`left_rest` or `landed`), on a circuit
+breaker, or at the end of the run, and every transition is a
+`reflect_window` record. After a sandbox restart the state cache is rebuilt,
+so both flags are unobserved until the next update block carries
+`playerFlags` and `unitFlags`, and the gate holds the last reading of each
+rather than reading silence as "not resting" or "not flying" — the same latch
+discipline the ghost flag has.
 
 The fixed loop asks for an entry (`trim_pending`) on the last turn before a
 block trim and says so afterwards (`window_trimmed`). That is exact rather than
@@ -84,7 +86,7 @@ second, quieter difference between them — so `log_status`, `reflect` and
 nothing prompts for entries, and one CLI session is one driver turn, which puts
 the reflection breaker far out of reach. The standalone MCP server (`runner/src/mcp.ts`,
 an operator's hand-driven mode) has no context builder at all, so nothing there
-could ever observe the character leaving or count a turn: it answers `reflect`
+could ever observe a stay ending or count a turn: it answers `reflect`
 and refuses `read_log` rather than serving the log through a window that could
 never close.
 

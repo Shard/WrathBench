@@ -3,11 +3,11 @@
  * `data/runs/<id>/episodic.jsonl`.
  *
  * The decision is docs/METHODOLOGY.md, "An episodic log, written before each
- * trim, read back at rest". It is deliberately *not* the scratchpad: working
- * memory is the model's to rewrite at will, and a record it can rewrite cannot
- * tell it where things went wrong. Entries are appended, never edited, and are
- * stamped with the turn, level and zone the harness observed when they were
- * written — the model supplies only the text.
+ * trim, read back at rest or in flight". It is deliberately *not* the
+ * scratchpad: working memory is the model's to rewrite at will, and a record it
+ * can rewrite cannot tell it where things went wrong. Entries are appended,
+ * never edited, and are stamped with the turn, level and zone the harness
+ * observed when they were written — the model supplies only the text.
  *
  * Read back only through `read_log`, and only inside a reflection window
  * (`reflect.ts`).
