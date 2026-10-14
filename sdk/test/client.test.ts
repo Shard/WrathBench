@@ -3204,9 +3204,21 @@ describe("client: sellItem reports what the server did", () => {
     const pending = client.sellItem(CREATURE_GUID, ITEM_GUID, undefined, { timeout: 2000 });
     await untilAction(stub, "sell_item");
     expect(stub.actions.at(-1)).toMatchObject({ action: "sell_item", guid: CREATURE_GUID, itemGuid: ITEM_GUID });
-    // One player update: the slot zeroed and the coinage raised, as the core
-    // sends them for a whole-stack sale.
-    stub.push(JSON.stringify(values(70, SELF_GUID, { [`invSlot${BACKPACK_SLOT}Lo`]: 0, [`invSlot${BACKPACK_SLOT}Hi`]: 0, money: MONEY + 200 })));
+    // One player update, as the core sends it for a whole-stack sale: the slot
+    // zeroed, the guid written into the first buyback slot (74), and the
+    // coinage raised. The buyback write is here so that a wider inventory view
+    // cannot make a sale look unsold.
+    stub.push(
+      JSON.stringify(
+        values(70, SELF_GUID, {
+          [`invSlot${BACKPACK_SLOT}Lo`]: 0,
+          [`invSlot${BACKPACK_SLOT}Hi`]: 0,
+          invSlot74Lo: ITEM_GUID_LO,
+          invSlot74Hi: ITEM_GUID_HI,
+          money: MONEY + 200,
+        }),
+      ),
+    );
     expect(await pending).toEqual({
       ok: true,
       status: "sold",

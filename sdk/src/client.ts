@@ -3460,13 +3460,13 @@ export class WrathClient {
 
   private async sellAndConfirm(vendor: string, itemGuid: string, count: number | undefined, timeout: number): Promise<SellItemResult> {
     // Where the item is held now, as the cache sees it: the bags (backpack and
-    // worn bags) first, then any other inventory slot the server's own lookup
-    // would also find. Read through the public views only.
+    // worn bags), which is all a client sells from. Deliberately not
+    // `state.inventory`: the core moves a sold item into a buyback slot
+    // (PLAYER_FIELD_VENDORBUYBACK_SLOT_1, invSlot74 on), and a view that ever
+    // served those would make every sale look unsold.
     const held = (): { itemId: number | undefined; name: string | undefined; count: number | undefined } | undefined => {
       const row = this.state.bag().items.find((i) => i.guid === itemGuid);
-      if (row !== undefined) return { itemId: row.itemId, name: row.name, count: row.count };
-      const slot = this.state.inventory.find((i) => i.guid === itemGuid);
-      return slot === undefined ? undefined : { itemId: slot.itemId, name: slot.name, count: slot.stackCount };
+      return row === undefined ? undefined : { itemId: row.itemId, name: row.name, count: row.count };
     };
     const before = held();
     const facts: SellItemFacts = { itemGuid, itemId: before?.itemId, name: before?.name };
