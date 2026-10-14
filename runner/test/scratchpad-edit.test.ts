@@ -44,7 +44,6 @@ describe("Scratchpad.edit", () => {
       expect(res.replaced).toBe(1);
       expect(res.chars).toBe(pad.read().length);
       expect(res.lines).toBe(3); // the trailing newline terminates line 3, it is not a fourth line
-      expect(res.truncated).toBe(false);
     }
   });
 
@@ -101,13 +100,13 @@ describe("Scratchpad.edit", () => {
     expect(pad.read()).toBe("coords: $& $1 (x)\n");
   });
 
-  test("the 32k cap applies exactly as it does to a write", () => {
+  test("the 32k cap applies exactly as it does to a write: refused, nothing saved", () => {
     const pad = makePad();
-    pad.write(`HEAD\n${"x".repeat(SCRATCHPAD_MAX_CHARS - 10)}`);
+    const before = `HEAD\n${"x".repeat(SCRATCHPAD_MAX_CHARS - 10)}`;
+    pad.write(before);
     const res = pad.edit("HEAD", "H".repeat(200));
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.truncated).toBe(true);
-    expect(readFileSync(pad.path, "utf8")).toContain(`[scratchpad truncated at ${SCRATCHPAD_MAX_CHARS} chars]`);
+    expect(res).toEqual({ ok: false, reason: "over_cap", chars: SCRATCHPAD_MAX_CHARS + 191 });
+    expect(readFileSync(pad.path, "utf8")).toBe(before);
   });
 });
 
@@ -160,6 +159,19 @@ describe("edit_scratchpad, the tool", () => {
 
     // Every refusal left the pad exactly as it was.
     expect(pad.read()).toBe("boar\nboar\n");
+  });
+
+  test("an edit over the cap is refused with the size it would have made", async () => {
+    const pad = makePad();
+    const before = `HEAD\n${"x".repeat(SCRATCHPAD_MAX_CHARS - 10)}`;
+    pad.write(before);
+    const res = await callTool(makeCtx(pad), "edit_scratchpad", { old: "HEAD", new: "H".repeat(200) });
+    expect(res.isError).toBe(true);
+    expect(res.text).toBe(
+      `edit_scratchpad refused: the scratchpad would be ${SCRATCHPAD_MAX_CHARS + 191} chars, over its ` +
+        `${SCRATCHPAD_MAX_CHARS}-char cap. Nothing was saved. Condense the scratchpad, then try again.`,
+    );
+    expect(pad.read()).toBe(before);
   });
 
   test("replaceAll goes through the tool, booleanish like every other flag", async () => {
