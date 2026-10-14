@@ -18,7 +18,7 @@ import { InfoHint } from "../components/InfoHint";
 
 /** What the loop diagram is showing, one hover off its heading. */
 const LOOP_NOTE =
-  "Each turn the model sees a fixed state summary, the newest server events, any harness notices and its own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back every turn; the episodic log is a one-line status the harness asks for before it trims older conversation, which the model can page through while reflecting at an inn or on a flight.";
+  "Each turn the model sees a fixed state summary, the newest server events, any harness notices and its own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back every turn; the episodic log is a one-line status the harness asks for when older conversation is trimmed or compacted, which the model can page through while reflecting at an inn or on a flight.";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;

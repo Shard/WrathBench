@@ -276,7 +276,7 @@ describe("formatStateSummary", () => {
       { sessionLive: true },
     );
     expect(text).toContain("xp: 0 / 400     money: 0 copper");
-    expect(text).toContain("bag: 0 free / 16    items: empty");
+    expect(text).toContain("bag: 0 free / 16, empty");
   });
 
   test("gaps are surfaced", () => {
@@ -307,8 +307,8 @@ describe("formatStateSummary", () => {
       },
       { sessionLive: true },
     );
-    expect(text).toContain("bag: 12 free / 16    items: Hearthstone, Tough Jerky x5");
-    expect(text).toContain("quests: 54 complete, 82 progress");
+    expect(text).toContain("bag: 12 free / 16; most: Tough Jerky x5, Hearthstone");
+    expect(text).toContain("quests: complete — 54; in progress — 82");
     expect(text).toContain("nearby: Kobold Vermin (12.3y), Kobold Worker dead (30y)");
     expect(text).toContain("ui: gossip (3 options)");
   });
@@ -316,14 +316,15 @@ describe("formatStateSummary", () => {
   test("the bag line totals across worn bags when the snapshot says how many slots there are", () => {
     const items = [{ bag: 255, slot: 23, name: "Hearthstone", count: 1 }, { bag: 19, slot: 0, name: "Linen Cloth", count: 3 }];
     const text = formatStateSummary({ bag: { freeSlots: 20, totalSlots: 22, items } }, { sessionLive: true });
-    expect(text).toContain("bag: 20 free / 22    items: Hearthstone, Linen Cloth x3");
+    expect(text).toContain("bag: 20 free / 22; most: Linen Cloth x3, Hearthstone");
   });
 
-  test("bag caps the item list at 8 with a '+K more' tail", () => {
+  test("a bag of single items names its first four slots", () => {
+    // Ties keep bag order, so with nothing stacked the line reads as the old
+    // one did, cut to BAG_MOST.
     const items = Array.from({ length: 11 }, (_, i) => ({ slot: 23 + i, itemId: i, name: `it${i}`, count: 1 }));
     const text = formatStateSummary({ bag: { freeSlots: 5, items } }, { sessionLive: true });
-    expect(text).toContain("+3 more");
-    expect(text).toContain("it0, it1, it2, it3, it4, it5, it6, it7 +3 more");
+    expect(text).toContain("bag: 5 free / 16; most: it0, it1, it2, it3\n");
   });
 
   test("nearby caps at 6 and never prints exact mob health", () => {
@@ -407,6 +408,144 @@ describe("formatStateSummary", () => {
       { sessionLive: true },
     );
     expect(later).toContain("corpse on map 1 at (5,5), you are on map 0: reclaim within 39y after the reclaim delay");
+  });
+});
+
+/**
+ * The three HUD lines reworked by operator decision (2026-10-14), each to fix
+ * what a freeplay run showed it hiding, under the condition that the HUD not
+ * grow much: quest titles, a nearby line that prefers what can be acted on,
+ * and a bag summary in place of the first eight slots. Names are invented.
+ */
+describe("formatStateSummary: quest titles, nearby priority, bag summary", () => {
+  const line = (text: string, prefix: string): string | undefined => text.split("\n").find((l) => l.startsWith(prefix));
+
+  test("quests carry their titles, complete ones grouped first, long titles cut", () => {
+    const text = formatStateSummary(
+      {
+        questLog: [
+          { questId: 11, complete: false, title: "Mossy Errands" },
+          { questId: 12, complete: true, title: "The Unreasonably Long Expedition Title" },
+          { questId: 13, complete: false },
+          { questId: 14, complete: true, title: "Boar Ribs" },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(line(text, "quests: ")).toBe(
+      "quests: complete — 12 The Unreasonably Long E…, 14 Boar Ribs; in progress — 11 Mossy Errands, 13",
+    );
+  });
+
+  test("a log with one state names only that group", () => {
+    const open = formatStateSummary({ questLog: [{ questId: 5, complete: false, title: "Lost Lantern" }] }, { sessionLive: true });
+    expect(line(open, "quests: ")).toBe("quests: in progress — 5 Lost Lantern");
+    const done = formatStateSummary({ questLog: [{ questId: 5, complete: true, title: "Lost Lantern" }] }, { sessionLive: true });
+    expect(line(done, "quests: ")).toBe("quests: complete — 5 Lost Lantern");
+  });
+
+  // Eight guards nearer than anything else, then the NPCs worth walking to.
+  const town = (extra: Record<string, unknown>[] = []): Record<string, unknown>[] => [
+    ...Array.from({ length: 8 }, (_, i) => ({ guid: `g${i}`, name: `Gate Warden`, type: "unit", distance: i + 1, roles: [] })),
+    { guid: "q1", name: "Elder Pell", type: "unit", distance: 20, roles: ["gossip", "questGiver"], questGiver: "reward" },
+    { guid: "q2", name: "Scout Arvi", type: "unit", distance: 22, roles: ["questGiver"], questGiver: "available" },
+    { guid: "q3", name: "Brother Odo", type: "unit", distance: 24, roles: ["questGiver"], questGiver: "incomplete" },
+    { guid: "v1", name: "Tamsin Reed", type: "unit", distance: 30, roles: ["vendor", "foodVendor"] },
+    { guid: "f1", name: "Wing Keeper Ilsa", type: "unit", distance: 40, roles: ["flightMaster"] },
+    ...extra,
+  ];
+
+  test("nearby keeps the two nearest, then prefers what can be acted on, shown nearest first", () => {
+    const text = formatStateSummary({ self: { guid: "1" }, units: town() }, { sessionLive: true });
+    expect(line(text, "nearby: ")).toBe(
+      "nearby: Gate Warden (1y), Gate Warden (2y), Elder Pell (quest giver: reward, 20y), " +
+        "Scout Arvi (quest giver: available, 22y), Tamsin Reed (vendor, 30y), " +
+        "Wing Keeper Ilsa (flight master, 40y) +7 more",
+    );
+    // A questgiver whose marker says it has nothing for you now is not preferred.
+    expect(text).not.toContain("Brother Odo");
+  });
+
+  test("anything that has you targeted is never crowded out", () => {
+    const text = formatStateSummary(
+      {
+        self: { guid: "1" },
+        units: town([
+          { guid: "m1", name: "Rabid Thornpaw", type: "unit", distance: 60, roles: [], targetGuid: "1" },
+          { guid: "m2", name: "Dead Thornpaw", type: "unit", distance: 61, roles: [], targetGuid: "1", dead: true },
+        ]),
+      },
+      { sessionLive: true },
+    );
+    const nearby = line(text, "nearby: ")!;
+    expect(nearby).toContain("Rabid Thornpaw (60y)");
+    // The corpse's stale target is not a threat; the two nearest stay.
+    expect(nearby).not.toContain("Dead Thornpaw");
+    expect(nearby.startsWith("nearby: Gate Warden (1y), Gate Warden (2y), ")).toBe(true);
+    // Six entries, the farthest preferred NPC dropped for the threat.
+    expect(nearby).not.toContain("Wing Keeper Ilsa");
+    expect(nearby.endsWith("+9 more")).toBe(true);
+  });
+
+  test("six or fewer in view are all shown in distance order, a quest object's marker included", () => {
+    const text = formatStateSummary(
+      {
+        units: [
+          { guid: "1", name: "Grubby Boar", type: "unit", distance: 3, roles: [] },
+          { guid: "2", name: "Notice Board", type: "gameObject", distance: 5, roles: [], questGiver: "available" },
+        ],
+      },
+      { sessionLive: true },
+    );
+    expect(line(text, "nearby: ")).toBe("nearby: Grubby Boar (3y), Notice Board (quest giver: available, 5y)");
+  });
+
+  test("the bag line counts grey junk, merges stacks, and names the best and the biggest", () => {
+    const items = [
+      { bag: 255, slot: 23, itemId: 1, name: "Homestone", count: 1, quality: 1 },
+      { bag: 255, slot: 24, itemId: 2, name: "Cracked Tusk", count: 1, quality: 0 },
+      { bag: 255, slot: 25, itemId: 3, name: "Rough Cloth", count: 20, quality: 1 },
+      { bag: 255, slot: 26, itemId: 3, name: "Rough Cloth", count: 12, quality: 1 },
+      { bag: 255, slot: 27, itemId: 4, name: "Broken Buckle", count: 1, quality: 0 },
+      { bag: 19, slot: 0, itemId: 5, name: "Mossweave Gloves", count: 1, quality: 2 },
+      { bag: 19, slot: 1, itemId: 6, name: "Starlit Pendant", count: 1, quality: 3 },
+      { bag: 19, slot: 2, itemId: 7, name: "Bright Pebble", count: 6, quality: 2 },
+      { bag: 19, slot: 3, itemId: 8, name: "Trail Bread", count: 9, quality: 1 },
+      { bag: 19, slot: 4, itemId: 9, count: 3 },
+      { bag: 19, slot: 5, itemId: 10, name: "Spare Twine", count: 4 },
+    ];
+    const text = formatStateSummary({ bag: { freeSlots: 9, totalSlots: 20, items } }, { sessionLive: true });
+    expect(line(text, "bag: ")).toBe(
+      "bag: 9 free / 20, 2 grey; most: Rough Cloth x32, Trail Bread x9, Spare Twine x4, item 9 x3; " +
+        "green+: Starlit Pendant, Bright Pebble x6, Mossweave Gloves",
+    );
+  });
+
+  test("an item whose quality is unobserved is neither junk nor green", () => {
+    const text = formatStateSummary(
+      { bag: { freeSlots: 14, items: [{ slot: 23, itemId: 9, name: "Odd Trinket", count: 1 }] } },
+      { sessionLive: true },
+    );
+    expect(line(text, "bag: ")).toBe("bag: 14 free / 16; most: Odd Trinket");
+  });
+});
+
+describe("assembleContext: the scratchpad's size against its cap", () => {
+  const withPad = (scratchpad: string): string => assembleContext({ ...makeInputs(), scratchpad });
+
+  test("the header shows the size, rounded down so it never reads as full early", () => {
+    expect(withPad("x".repeat(31_234))).toContain("\n\n[scratchpad 31.2k/32k]\nxxx");
+    expect(withPad("x".repeat(31_999))).toContain("[scratchpad 31.9k/32k]\n");
+    expect(withPad("x".repeat(32_000))).toContain("[scratchpad 32.0k/32k]\n");
+    expect(withPad("# plan")).toContain("[scratchpad 0.0k/32k]\n# plan");
+  });
+
+  test("a pad past the cap says so", () => {
+    expect(withPad("x".repeat(32_040))).toContain("[scratchpad 32.0k/32k, over the cap]\n");
+  });
+
+  test("an empty pad keeps its placeholder", () => {
+    expect(withPad("")).toContain("[scratchpad]\n(empty — write your plan");
   });
 });
 
@@ -543,7 +682,7 @@ describe("messageWindow", () => {
   test("the crossing turn keeps its whole window; the block drops one turn later", () => {
     // The cut lags one turn behind the crossing on purpose, so the turn that
     // takes the history past the ceiling can be *told* it is the last one
-    // before the trim (docs/METHODOLOGY.md, "An episodic log, written before
+    // before the trim (docs/METHODOLOGY.md, "An episodic log, asked for at
     // each trim"). `pairs` is one assistant + one tool result a turn, so a turn
     // boundary is an even length.
     const h = pairs(4 * MESSAGE_WINDOW_MAX);

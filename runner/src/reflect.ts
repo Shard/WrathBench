@@ -2,8 +2,8 @@
  * The `reflect` tool's gate, the reflection window, and their fixed text.
  *
  * The decisions are docs/METHODOLOGY.md, "Reflection is the model's to take,
- * and only at rest or in flight" and "An episodic log, written before each
- * trim, read back at rest or in flight": the model may spend a turn thinking
+ * and only at rest or in flight" and "An episodic log, asked for at each trim
+ * or compaction, read back at rest or in flight": the model may spend a turn thinking
  * instead of acting, but only while the character is in a rest area or on a
  * taxi flight, and only once per rest visit or flight. Both conditions are
  * world facts a client sees (`PLAYER_FLAGS_RESTING` and

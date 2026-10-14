@@ -106,6 +106,22 @@ describe("system prompt: the shapes and seams runs proved models get wrong", () 
     expect(SYSTEM_PROMPT).toContain("This is the complete, unmodified 3.3.5a world");
     expect(SYSTEM_PROMPT).toContain("nothing has been walled off for the benchmark");
   });
+
+  test("the scratchpad cap is stated, with the refusal, at the number the pad enforces", () => {
+    // A freeplay run filled its pad and lost every note it appended for eighty
+    // turns: the cap was in no prompt or tool text (operator, 2026-10-14).
+    const { SCRATCHPAD_MAX_CHARS } = require("../src/scratchpad");
+    expect(SYSTEM_PROMPT).toContain(`The scratchpad holds at most ${SCRATCHPAD_MAX_CHARS.toLocaleString("en-US")} characters`);
+    expect(SYSTEM_PROMPT).toContain("is refused and saves nothing (in a snippet, the call rejects)");
+  });
+
+  test("bank and mail are on the helper surface", () => {
+    // openBank, bankDeposit and sendMail existed in the SDK and no run had
+    // ever used them; the prompt never named them (operator, 2026-10-14).
+    for (const call of ["sdk.openBank(", "sdk.bankDeposit(", "sdk.bankWithdraw(", "state.bank()", "sdk.openMailbox(", "sdk.sendMail(", "sdk.mailList()"]) {
+      expect(SYSTEM_PROMPT).toContain(call);
+    }
+  });
 });
 
 describe("the context sentence is the harness's, and says what that harness does", () => {
@@ -189,22 +205,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the reflect and
-    // read_log lines naming flight beside rest (operator, 2026-10-14); it is
-    // in every rendering, so it moved every row.
+    // any rendering fails here. The last edits to move them are the bank and
+    // mail helper line, the scratchpad cap line and the read_log line reading
+    // newest first with filters (operator, 2026-10-14); all are in every
+    // rendering, so they moved every row.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:ab09b6c651cc1c4d", off: "sha256:69a3e00d6012ea77" },
-        cli: { on: "sha256:ee813ca40794491a", off: "sha256:89193a2974c879e2" },
+        wrathbench: { on: "sha256:3ab8156dd42656af", off: "sha256:542cd136719e1a1e" },
+        cli: { on: "sha256:6ec1db021b06039e", off: "sha256:0f155692495554c2" },
       },
       e90: {
-        wrathbench: { on: "sha256:f8e1a2dd219868f0", off: "sha256:de502d1166491c1d" },
-        cli: { on: "sha256:6fed5deb2c49f513", off: "sha256:351e74847b57fbfc" },
+        wrathbench: { on: "sha256:d970f20f1c4ac50d", off: "sha256:2f4b2153d3bc61c8" },
+        cli: { on: "sha256:932f276805e33da3", off: "sha256:a1b6b6fcabd768c2" },
       },
       e360: {
-        wrathbench: { on: "sha256:bbe63693752797bb", off: "sha256:e80a854a70eb361e" },
-        cli: { on: "sha256:a6f27f8e57f43657", off: "sha256:064ef0867a01c191" },
+        wrathbench: { on: "sha256:8106ad9896f21f95", off: "sha256:b0acbe4c7ec77033" },
+        cli: { on: "sha256:afac20c41e19dcc2", off: "sha256:5264416d345d4cbc" },
       },
     };
     const episodes = [

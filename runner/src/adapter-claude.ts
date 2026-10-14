@@ -107,6 +107,16 @@ import { McpServer } from "./mcp";
 import { CLAUDE_CODE_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import { toolsFor, type ToolContext } from "./tools";
 import { cliBaseEnv, signalGroup } from "./adapter-shared";
+import {
+  CompactionAsk,
+  claudeAutoCompactLimit,
+  claudeCompactSummary,
+  claudeModelWindow,
+  compactionNotice,
+  messageText,
+  summaryFields,
+  type CompactionRecord,
+} from "./cli-compaction";
 import type { EpisodicLog } from "./episodic";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -398,21 +408,14 @@ export function compactEnv(window: string | undefined): Record<string, string> {
  * `duration_ms` (recorded by 2.1.239 runs; the same mapping is in the pinned
  * 2.1.293 binary, where the last two are optional). The raw envelope is already on the trajectory as
  * `claude_system`; this is the same fact as a `harness` record of kind
- * `compaction`, so a reader can find every compaction of a run without knowing
- * the CLI's vocabulary. Trajectory only: no text, so the feed draws it as
- * bookkeeping, and nothing about it reaches the model. Missing numbers read as
- * null rather than zero. Null when the envelope is not a compaction.
+ * `compaction` (`cli-compaction.ts`, the shape both CLI drivers write), so a
+ * reader can find every compaction of a run without knowing the CLI's
+ * vocabulary. The driver adds when it saw the boundary (`at`) and the summary
+ * the CLI wrote (`summary`, from its transcript) before appending it; nothing
+ * about it reaches the model. Missing numbers read as null rather than zero.
+ * Null when the envelope is not a compaction.
  */
-/** A type alias, not an interface, so it is assignable to `Trajectory.append`'s record. */
-export type CompactionRecord = {
-  t: "harness";
-  kind: "compaction";
-  turn: number;
-  trigger: string | null;
-  preTokens: number | null;
-  postTokens: number | null;
-  durationMs: number | null;
-};
+export type { CompactionRecord } from "./cli-compaction";
 
 export function compactionRecord(turn: number, msg: Record<string, unknown>): CompactionRecord | null {
   if (msg["type"] !== "system" || msg["subtype"] !== "compact_boundary") return null;
@@ -1000,6 +1003,8 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     // A turn cut short mid-message still has its newest response entry held
     // back one envelope. It goes to the trajectory, usage and all.
     flushPendingResponse();
+    // So does a compaction whose summary had not turned up yet.
+    settleCompactions(true);
     // A reflection window still open when the episode ends is closed on the
     // record rather than left dangling, exactly as `runLoop`'s finally does.
     // Before `stopTicker`, so the record is written while the trajectory is
@@ -1058,6 +1063,45 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     const { entry, usage } = pendingResponse;
     pendingResponse = null;
     trajectory.append(usage !== undefined ? { ...entry, usage } : entry);
+  };
+
+  /**
+   * The CLI's own compactions, and the episodic-log ask they drive
+   * (`cli-compaction.ts`; METHODOLOGY, "An episodic log, asked for at each
+   * trim or compaction"). A boundary's record waits for its summary, which the
+   * CLI writes into its session transcript beside the boundary: it is looked
+   * up on the envelopes that follow, a bounded number of times, and the record
+   * goes out when it is found or when the turn closes without it.
+   */
+  const compactionAsk = new CompactionAsk();
+  interface PendingCompaction {
+    record: CompactionRecord;
+    uuid: string | undefined;
+    sessionId: string | undefined;
+    summary: string | undefined;
+    lookups: number;
+  }
+  const pendingCompactions: PendingCompaction[] = [];
+  /** The context each of this turn's compactions was reported at, for the ask. */
+  let turnCompactions: (number | null)[] = [];
+  /** The last API call's prompt plus output, off its `assistant` envelope. */
+  let lastContext: number | undefined;
+  /** The main model's window, off the newest `result` envelope's `modelUsage`. */
+  let modelWindow: { contextWindow: number; maxOutputTokens?: number } | undefined;
+  /** The model the CLI resolved at `init`, which keys `modelUsage`. */
+  let cliModel: string | undefined;
+  const SUMMARY_LOOKUPS = 5;
+  const settleCompactions = (final: boolean): void => {
+    while (pendingCompactions.length > 0) {
+      const p = pendingCompactions[0]!;
+      if (p.summary === undefined && p.uuid !== undefined && p.sessionId !== undefined) {
+        p.summary = claudeCompactSummary(configDir, p.sessionId, p.uuid);
+        p.lookups++;
+        if (p.summary === undefined && !final && p.lookups < SUMMARY_LOOKUPS) return;
+      }
+      pendingCompactions.shift();
+      trajectory.append({ ...p.record, ...summaryFields(p.summary) });
+    }
   };
 
   /**
@@ -1160,8 +1204,21 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
         switch (msg["type"]) {
           case "system": {
             trajectory.append({ t: "claude_system", turn, ...msg });
+            if (msg["subtype"] === "init" && typeof msg["model"] === "string") cliModel = msg["model"];
             const compaction = compactionRecord(turn, msg);
-            if (compaction !== null) trajectory.append(compaction);
+            if (compaction !== null) {
+              // The boundary arrives once the compaction is done, so it began
+              // its duration earlier.
+              const at = Date.now() - (compaction.durationMs ?? 0);
+              pendingCompactions.push({
+                record: { ...compaction, at },
+                uuid: typeof msg["uuid"] === "string" ? msg["uuid"] : undefined,
+                sessionId: typeof msg["session_id"] === "string" ? msg["session_id"] : undefined,
+                summary: undefined,
+                lookups: 0,
+              });
+              turnCompactions.push(compaction.preTokens);
+            }
             /*
              * The CLI resolves the roster's alias (`sonnet`) to a real id
              * (`claude-sonnet-5`) at launch and names it — with its own version —
@@ -1232,6 +1289,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
                 },
               };
               const usage = assistantUsage(msg);
+              if (usage !== undefined) lastContext = usage.prompt_tokens + usage.completion_tokens;
               if (idKey === undefined) {
                 flushPendingResponse();
                 trajectory.append(usage !== undefined ? { ...entry, usage } : entry);
@@ -1249,10 +1307,23 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             }
             break;
           }
+          case "user": {
+            // Tool results echoed back, which the MCP side already recorded.
+            // A summary the CLI flags as a compaction's, if the stream carries
+            // one, saves the transcript lookup.
+            if (msg["isCompactSummary"] === true) {
+              const text = messageText(msg["message"]);
+              const p = pendingCompactions.find((c) => c.summary === undefined);
+              if (p !== undefined && text !== undefined) p.summary = text;
+            }
+            break;
+          }
           case "result": {
             turnEnded = true;
             // the message is over: nothing more can arrive for its id
             flushPendingResponse();
+            modelWindow = claudeModelWindow(msg["modelUsage"], cliModel) ?? modelWindow;
+            settleCompactions(true);
             const resultText = typeof msg["result"] === "string" ? (msg["result"] as string) : "";
             trajectory.append({
               t: "claude_result",
@@ -1300,10 +1371,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             break;
           }
           default:
-            // user (tool results echoed back), stream_event, etc. The MCP side
-            // already records tool calls and results authoritatively.
+            // stream_event, etc. The MCP side already records tool calls and
+            // results authoritatively.
             break;
         }
+        settleCompactions(false);
         // A wind-down is `done()` by construction — the termination is already
         // recorded — and breaking here is exactly what used to throw the
         // closing `result` away. Keep reading until `finishWindDown` runs.
@@ -1334,6 +1406,20 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
 
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
+      }
+      // The episodic-log ask, delivered in the next turn's context. Only a
+      // turn boundary can carry it, so on a turn long enough to cross the
+      // threshold alone the ask comes after the compaction.
+      const ask = compactionAsk.noteTurn({
+        context: lastContext,
+        threshold:
+          modelWindow !== undefined ? claudeAutoCompactLimit({ ...modelWindow, compactWindow: config.compactWindow }) : undefined,
+        compactions: turnCompactions,
+      });
+      turnCompactions = [];
+      if (ask !== null) {
+        pendingNotices.push(compactionNotice(ask.ask, Date.now()));
+        trajectory.append({ t: "harness", kind: "compaction_ask", turn, ...ask });
       }
       await sleep(config.stepIntervalMs);
     }

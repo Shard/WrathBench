@@ -16,7 +16,7 @@
 
 import { join } from "node:path";
 import type { Subprocess } from "bun";
-import type { Scratchpad } from "../scratchpad";
+import { overCapText, type Scratchpad } from "../scratchpad";
 import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
@@ -79,6 +79,10 @@ export interface HarnessNotice {
     // The turn before the block trim is expected: the harness asks for an
     // episodic status entry (METHODOLOGY, "An episodic log"). Fixed-loop only.
     | "trim_pending"
+    // The CLI drivers' counterparts: a status entry asked for before the
+    // CLI's own compaction, or right after one (`cli-compaction.ts`).
+    | "compaction_pending"
+    | "compacted"
     // A reflection window closed on its circuit breaker (`reflect.ts`).
     | "reflect_ended";
   text: string;
@@ -350,9 +354,18 @@ export class SandboxHost {
         };
         try {
           const pad = this.opts.scratchpad;
-          if (msg.method === "scratchpad_read") reply(true, pad.read());
-          else if (msg.method === "scratchpad_write") reply(true, pad.write(msg.params.content ?? ""));
-          else reply(true, pad.append(msg.params.content ?? ""));
+          if (msg.method === "scratchpad_read") {
+            reply(true, pad.read());
+          } else {
+            // A refusal is an error reply, so the snippet's promise rejects:
+            // awaited, it is the snippet's error; not awaited, the child still
+            // reports it (`collectPadRefusals` in entry.ts). A resolved
+            // `{ truncated }` the model never read is how notes vanished.
+            const write = msg.method === "scratchpad_write";
+            const res = write ? pad.write(msg.params.content ?? "") : pad.append(msg.params.content ?? "");
+            if (res.ok) reply(true, { chars: res.chars });
+            else reply(false, undefined, overCapText(write ? "scratchpad.write" : "scratchpad.append", res.chars));
+          }
         } catch (err) {
           reply(false, undefined, String(err));
         }

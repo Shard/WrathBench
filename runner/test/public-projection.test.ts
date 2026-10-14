@@ -1634,6 +1634,31 @@ describe("projectEntries", () => {
     expect((out.entries[1] as unknown as { before: unknown }).before).toBeNull();
   });
 
+  // A CLI compaction ships its numbers; the summary the CLI wrote (model text
+  // about the run, in a field named apart from `text` for this reason), its
+  // timing and what it retained stay private, as does the ask's arithmetic.
+  test("a CLI compaction ships its token counts only; the summary stays private", () => {
+    const summary = "This session is being continued from a previous conversation. PRIVATE-SUMMARY";
+    const input = {
+      from: 0,
+      total: 2,
+      entries: [
+        { i: 0, t: "harness", ts: 1, start: 0, end: 10, turn: 36, kind: "compaction", trigger: null, preTokens: 447_305,
+          postTokens: 77_759, durationMs: 118_938, at: 1_791_801_361_085, summary, summaryEncrypted: true,
+          encryptedChars: 40_000, retainedTurns: [28, 29], window: 1 },
+        { i: 1, t: "harness", ts: 2, start: 11, end: 20, turn: 35, kind: "compaction_ask", ask: "before",
+          context: 436_000, threshold: 450_000, growth: 14_000 },
+      ],
+    };
+    const out = projectEntries(input as never);
+    expect(JSON.stringify(out)).not.toContain("PRIVATE-SUMMARY");
+    expect(keyPaths(out.entries[0])).toEqual(
+      allow(["i", "t", "ts", "start", "end", "turn", "kind", "trigger", "preTokens", "postTokens", "durationMs"]),
+    );
+    expect(out.entries[0]).toMatchObject({ preTokens: 447_305, postTokens: 77_759, durationMs: 118_938 });
+    expect(keyPaths(out.entries[1])).toEqual(allow(["i", "t", "ts", "start", "end", "turn", "kind"]));
+  });
+
   // The feed times a call from its writer's dispatch stamp; without it here the
   // public feed would fall back to guessing the writer from the record's shape.
   test("a tool call keeps its dispatch stamp, its call index and nothing smuggled", () => {

@@ -140,9 +140,11 @@ prefix survives, and one fresh deterministic message — goal, harness notices,
 a HUD summary of already-observed fields, recent events and the full
 scratchpad. Old turns are dropped, so the scratchpad is the only durable
 memory and the prompt says so; models with weak note-taking underperform at
-equal reasoning strength, which is signal, not bias. Model-driven
-summarization was rejected because the summarizer becomes an unversioned,
-model-dependent part of the harness. Any constant in the policy is a harness
+equal reasoning strength, which is signal, not bias. A write that would take
+the scratchpad past its 32,000-character cap is refused and saves nothing,
+never truncated, and every turn shows its size against the cap (operator,
+2026-10-14). Model-driven summarization was rejected because the summarizer
+becomes an unversioned, model-dependent part of the harness. Any constant in the policy is a harness
 version change.
 
 **Reflection is the model's to take, and only at rest or in flight** (2026-08-30). A
@@ -155,12 +157,17 @@ fixed, content-free prompt and the model writes the outcome into its own
 scratchpad; the harness summarizes nothing. Reflect turns count like any
 other: a free turn would invite gaming.
 
-**An episodic log, written before each trim, read back at rest or in flight** (2026-08-30).
+**An episodic log, asked for at each trim or compaction, read back at rest or in flight** (2026-08-30).
 On the last turn before a block-trim the harness asks for a short status entry
 — append-only and harness-stamped, a record the model cannot edit, unlike the
-scratchpad — readable only while reflecting. The trigger is the trim, not a
-cadence constant, so the CLI scaffolds, which have no trim, get neither: a
-documented asymmetry between harness groups.
+scratchpad — readable only while reflecting: newest first, filterable by level
+and zone, and pageable back to the first entry (operator, 2026-10-14). The
+trigger is the loss of context, not a cadence constant. The CLI scaffolds have
+no trim, so theirs is the CLI's own compaction (operator, 2026-10-14), with the
+same entry, cap and stamps: the harness asks before it where the usage the CLI
+reports predicts it, and right after an observed one otherwise. The asymmetry
+left between harness groups is that a CLI ask is a prediction from outside the
+loss, and can land after it.
 
 ## Episodes, lanes, and evidence
 

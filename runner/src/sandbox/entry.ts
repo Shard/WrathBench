@@ -579,6 +579,155 @@ function hostcall(method: "scratchpad_read" | "scratchpad_write" | "scratchpad_a
   });
 }
 
+// ------------------------------------------------ scratchpad writes, watched
+//
+// A scratchpad write over the cap is refused and its promise rejects (host.ts).
+// Awaited, that is the snippet's error like any other. Not awaited — the usual
+// shape, `scratchpad.append(note); return …` — the rejection would land after
+// the snippet's result had gone, and reach the model only as a background
+// fault on its next turn; a model that never awaited its appends lost eighty
+// turns of notes to a `{ truncated }` it never read. So each write remembers
+// whether the snippet ever attached to it, and a snippet's result waits for
+// the writes it made: an unobserved refusal becomes that snippet's error.
+
+/** One scratchpad write, as the snippet that made it may or may not have kept it. */
+interface PadCall {
+  /** The eval it was made in (`evalContext`), if any. */
+  evalId: number | undefined;
+  /** Something attached to the promise: an await, then, catch or finally. */
+  observed: boolean;
+  settled: boolean;
+  error: Error | undefined;
+  /** Its refusal has been reported, in a result or as a background fault. Once only. */
+  reported: boolean;
+  /** Resolves once the call has settled, either way. */
+  done: Promise<void>;
+}
+
+/** Report an unobserved refusal as a background fault, once. */
+function reportPadCall(call: PadCall): void {
+  if (call.error === undefined || call.observed || call.reported) return;
+  call.reported = true;
+  reportBackgroundError("unhandled promise rejection", call.error);
+}
+
+/**
+ * The promise a snippet gets back. A subclass, because that is the only way to
+ * see an `await`: the runtime awaits a native promise without calling its
+ * `then`, but calls `then` on any other thenable. Derived promises are plain
+ * (`Symbol.species`), so only the one handed out is watched.
+ */
+class PadPromise<T> extends Promise<T> {
+  static override get [Symbol.species](): PromiseConstructor {
+    return Promise;
+  }
+
+  call: PadCall | undefined;
+
+  override then<A = T, B = never>(
+    onFulfilled?: ((value: T) => A | PromiseLike<A>) | null,
+    onRejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
+  ): Promise<A | B> {
+    if (this.call !== undefined) this.call.observed = true;
+    return super.then(onFulfilled, onRejected);
+  }
+}
+
+/** The writes each still-running snippet made, until its result collects them. */
+const padCallsByEval = new Map<number, Set<PadCall>>();
+
+/** How long a snippet's result waits for its writes. A hostcall is one IPC round trip. */
+const PAD_SETTLE_MS = 1_000;
+
+function padWrite(method: "scratchpad_write" | "scratchpad_append", content: string): Promise<unknown> {
+  const evalId = evalContext.getStore()?.evalId;
+  let markDone!: () => void;
+  const call: PadCall = {
+    evalId,
+    observed: false,
+    settled: false,
+    error: undefined,
+    reported: false,
+    done: new Promise<void>((resolve) => (markDone = resolve)),
+  };
+  let resolveCall!: (v: unknown) => void;
+  let rejectCall!: (e: unknown) => void;
+  const p = new PadPromise<unknown>((resolve, reject) => {
+    resolveCall = resolve;
+    rejectCall = reject;
+  });
+  p.call = call;
+  if (evalId !== undefined && evalControllers.has(evalId)) {
+    let calls = padCallsByEval.get(evalId);
+    if (calls === undefined) padCallsByEval.set(evalId, (calls = new Set()));
+    calls.add(call);
+  }
+  const settle = (error: Error | undefined): void => {
+    call.settled = true;
+    call.error = error;
+    markDone();
+    if (error === undefined) return;
+    // Its snippet is still running: that snippet's result reports it.
+    if (evalId !== undefined && padCallsByEval.get(evalId)?.has(call) === true) return;
+    // A background routine's write, or one that outlived its snippet's
+    // result: reported like any unhandled rejection, a tick later so a late
+    // await can still claim it.
+    setTimeout(() => reportPadCall(call), 0);
+  };
+  // The harness's own handler goes on through the base `then`: it does not
+  // count as the snippet observing the call, and it keeps the runtime's
+  // unhandled-rejection hook out of it, so the refusal is reported once.
+  Promise.prototype.then.call(
+    p,
+    () => settle(undefined),
+    (err: unknown) => settle(err instanceof Error ? err : new Error(String(err))),
+  );
+  hostcall(method, { content }).then(resolveCall, rejectCall);
+  return p;
+}
+
+/**
+ * The refusals among the writes snippet `id` made and never attached to,
+ * after waiting up to PAD_SETTLE_MS for any still in flight. Collecting ends
+ * the snippet's claim: a write still unsettled after the wait is reported as a
+ * background fault when it settles.
+ */
+async function collectPadRefusals(id: number): Promise<Error[]> {
+  const calls = padCallsByEval.get(id);
+  if (calls === undefined) return [];
+  const pending = [...calls].filter((c) => !c.settled).map((c) => c.done);
+  if (pending.length > 0) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.all(pending),
+      new Promise<void>((resolve) => (timer = setTimeout(resolve, PAD_SETTLE_MS))),
+    ]);
+    clearTimeout(timer);
+  }
+  padCallsByEval.delete(id);
+  const refused: Error[] = [];
+  for (const c of calls) {
+    if (c.error === undefined || c.observed || c.reported) continue;
+    c.reported = true;
+    refused.push(c.error);
+  }
+  return refused;
+}
+
+/**
+ * An eval that ends without collecting — abandoned, or failing before it got
+ * there: its unobserved refusals go the background-fault way, which the
+ * abandon's pong carries, and its writes still in flight follow when they
+ * settle. Called on abort too, so a snippet that ignores its signal and never
+ * finishes cannot sit on a refusal.
+ */
+function releasePadCalls(id: number): void {
+  const calls = padCallsByEval.get(id);
+  if (calls === undefined) return;
+  padCallsByEval.delete(id);
+  for (const c of calls) reportPadCall(c);
+}
+
 // The generated SDK reference (sdk/API.md), at a stable absolute path a snippet
 // can read: `await Bun.file(API_MD_PATH).text()`. It is larger than one snippet
 // result, so read it in slices (one `## ` section, or lines filtered by name).
@@ -764,8 +913,8 @@ const ambient: Record<string, unknown> = {
   sleep,
   scratchpad: {
     read: (): Promise<unknown> => hostcall("scratchpad_read"),
-    write: (content: string): Promise<unknown> => hostcall("scratchpad_write", { content }),
-    append: (text: string): Promise<unknown> => hostcall("scratchpad_append", { content: text }),
+    write: (content: string): Promise<unknown> => padWrite("scratchpad_write", content),
+    append: (text: string): Promise<unknown> => padWrite("scratchpad_append", text),
   },
 };
 Object.assign(globalThis, ambient);
@@ -869,14 +1018,25 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
     const value: unknown = await evalContext.run({ evalId: id, signal: controller.signal, deadline, timeoutMs }, () =>
       run.call(globalThis),
     );
+    // A scratchpad write the snippet did not await and the cap refused is this
+    // snippet's error; its value still comes back beside it. Collected before
+    // the logs are drained, so a log line written while waiting is not lost.
+    let refused = await collectPadRefusals(id);
+    if (controller.signal.aborted) {
+      // Abandoned while waiting: this result will be discarded, so the
+      // refusals go the background way and ride the pong.
+      for (const e of refused) reportBackgroundError("unhandled promise rejection", e);
+      refused = [];
+    }
     const msg: ChildToHost = {
       t: "result",
       id,
-      ok: true,
+      ok: refused.length === 0,
       logs: drainLogs(),
       hints: drainHints(),
       durationMs: Date.now() - started,
     };
+    if (refused.length > 0) msg.error = refused.map(renderError).join("\n");
     if (value !== undefined) msg.value = Bun.inspect(value, { depth: 4 }).slice(0, VALUE_MAX_CHARS);
     // A snippet whose completion value is a function defined a wrapper and then
     // never invoked it, so nothing it wrote actually ran: `north-mini-code`
@@ -911,6 +1071,9 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
       const carried = typeof moveAbandon === "string" ? moveAbandon : thrown?.sleepAbandon;
       if (typeof carried === "string") abandonNote = carried;
     }
+    // Not for an abandoned eval: its result is discarded, so its refusals go
+    // the background way (`releasePadCalls`, below) and ride the pong.
+    const refused = controller.signal.aborted ? [] : await collectPadRefusals(id);
     flushActions(id);
     // An aborted eval's result is discarded host-side; its logs must not go
     // with it — leave them in the buffer for the liveness pong that follows.
@@ -918,7 +1081,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
       t: "result",
       id,
       ok: false,
-      error: renderError(err),
+      error: [renderError(err), ...refused.map(renderError)].join("\n"),
       // As with the logs: an abandoned eval's result is discarded host-side, so
       // its hints must stay in the SDK's tally for the pong that follows.
       logs: controller.signal.aborted ? [] : drainLogs(),
@@ -926,6 +1089,7 @@ async function evaluate(id: number, code: string, deadline?: number, timeoutMs?:
       durationMs: Date.now() - started,
     });
   } finally {
+    releasePadCalls(id);
     evalControllers.delete(id);
     const settled = abandonUnwindSettled.get(id);
     if (settled !== undefined) {
@@ -940,6 +1104,7 @@ function abortEval(id: number): void {
   const controller = evalControllers.get(id);
   if (controller === undefined) return;
   evalControllers.delete(id);
+  releasePadCalls(id);
   abandonUnwind = new Promise((resolve) => abandonUnwindSettled.set(id, resolve));
   controller.abort(new Error(`snippet abandoned by the harness (timeout); pending waits cancelled`));
 }
@@ -1146,7 +1311,8 @@ function contextEvents(limit: number): ContextEvents {
  * It is `StateCache.snapshot()` plus three derived views the HUD needs and the
  * raw snapshot does not expose flat: `units()` (nearest-first, items/containers
  * dropped — with mob health/maxHealth deliberately stripped, since CONTRACTS.md
- * forbids exact mob health and the HUD only needs name/distance/dead), `bag()`
+ * forbids exact mob health and the HUD only needs name, distance, dead, roles,
+ * questgiver marker and target), `bag()`
  * (backpack shape with freeSlots), and the open-window fold over the retained
  * event stream. All three are pure reads over what the cache already holds — no
  * new observation. This JSON is consumed only by the HUD, never returned raw.
@@ -1161,6 +1327,11 @@ function stateSnapshot(): unknown {
     distance: u.distance,
     dead: u.dead,
     roles: u.roles,
+    // The marker and the target, for which six the nearby line names
+    // (`pickNearby` in context.ts): both are what the client draws, a `!`/`?`
+    // over the NPC and a unit's own selection.
+    questGiver: u.questGiver,
+    targetGuid: u.targetGuid,
   }));
   snap["units"] = toJsonSafe(units, 4);
   snap["bag"] = toJsonSafe(client.state.bag(), 4);

@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compaction";
 import { comparabilityOf } from "../src/comparability";
 import { childEnv, claudeArgs, compactEnv, compactionRecord, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, parseCompactWindow, unscoredStamp } from "../src/config";
@@ -229,9 +230,9 @@ describe("claude-code driver", () => {
   }, 20_000);
 
   test("no trim notice is ever raised here: this harness runs no message window", async () => {
-    // The documented asymmetry (docs/METHODOLOGY.md, "An episodic log, written
-    // before each trim"): the CLI owns its own history, so there is no block
-    // trim to announce and the model must never be told there was one.
+    // docs/METHODOLOGY.md, "An episodic log, asked for at each trim or
+    // compaction": the CLI owns its own history, so there is no block trim to
+    // announce and the model must never be told there was one.
     const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 4 });
     await runClaudeEpisode(options);
     for (const msg of readRecord(recordPath)["userMessages"] as string[]) {
@@ -340,21 +341,48 @@ describe("claude-code driver", () => {
     plain.trajectory.close();
   }, 30_000);
 
-  test("a CLI compaction is a harness record on the trajectory, and nothing the model sees", async () => {
-    const { recordPath, trajectory, runDir, options } = setupEpisode("tools", { maxTurns: 2 }, { WB_FAKE_COMPACT_TURN: "2" });
+  test("a CLI compaction is a harness record with its summary; the model is told only that it happened", async () => {
+    const summary = "This session is being continued from a previous conversation. SUMMARY-BODY";
+    const { recordPath, trajectory, runDir, options } = setupEpisode("tools", { maxTurns: 3 }, {
+      WB_FAKE_COMPACT_TURN: "2",
+      WB_FAKE_COMPACT_SUMMARY: summary,
+    });
+    const before = Date.now();
     await runClaudeEpisode(options);
     trajectory.close();
     const entries = readTrajectory(runDir);
     const compactions = entries.filter((e) => e["t"] === "harness" && e["kind"] === "compaction");
     expect(compactions).toHaveLength(1);
-    expect(compactions[0]).toMatchObject({ turn: 2, trigger: "auto", preTokens: 80_412, postTokens: 3_127, durationMs: 41_000 });
+    expect(compactions[0]).toMatchObject({ turn: 2, trigger: "auto", preTokens: 80_412, postTokens: 3_127, durationMs: 41_000, summary });
+    // Started its duration before the boundary arrived.
+    expect(compactions[0]!["at"] as number).toBeLessThanOrEqual(Date.now() - 41_000);
+    expect(compactions[0]!["at"] as number).toBeGreaterThanOrEqual(before - 41_000);
     // Bookkeeping, not a notice: no text for the feed to shout.
     expect(compactions[0]!["text"]).toBeUndefined();
     // The raw envelope is still kept beside it.
     expect(entries.some((e) => e["t"] === "claude_system" && e["subtype"] === "compact_boundary")).toBe(true);
-    // Nothing of it reached the model on the following turn.
+    // No threshold was known (the fake reports no window), so the ask came after.
+    expect(entries.filter((e) => e["t"] === "harness" && e["kind"] === "compaction_ask")).toEqual([
+      expect.objectContaining({ turn: 2, ask: "after", threshold: 80_412 }),
+    ]);
+    // The model is told on the next turn that it happened, and nothing of the summary.
     const sent = readRecord(recordPath)["userMessages"] as string[];
-    expect(sent.some((m) => /compact/i.test(m))).toBe(false);
+    expect(sent.map((m) => m.includes(`- compacted: ${COMPACTED_NOTICE}`))).toEqual([false, false, true]);
+    expect(sent.some((m) => m.includes("SUMMARY-BODY"))).toBe(false);
+  }, 30_000);
+
+  test("a compaction a turn's usage predicts is asked about before it, against the model's reported window", async () => {
+    // A 300k window is a 267k threshold; 200k + 2 × 100k crosses it after turn 2.
+    const { recordPath, trajectory, runDir, options } = setupEpisode("tools", { maxTurns: 3 }, {
+      WB_FAKE_CONTEXT_STEP: "100000",
+      WB_FAKE_CONTEXT_WINDOW: "300000",
+    });
+    await runClaudeEpisode(options);
+    trajectory.close();
+    const sent = readRecord(recordPath)["userMessages"] as string[];
+    expect(sent.map((m) => m.includes(`- compaction_pending: ${COMPACTION_PENDING_NOTICE}`))).toEqual([false, false, true]);
+    const asks = readTrajectory(runDir).filter((e) => e["t"] === "harness" && e["kind"] === "compaction_ask");
+    expect(asks).toEqual([expect.objectContaining({ turn: 2, ask: "before", threshold: 267_000, growth: 100_000 })]);
   }, 30_000);
 
   test("the CLI's init word is promoted onto the run: meta.json, the tuple and the run row", async () => {

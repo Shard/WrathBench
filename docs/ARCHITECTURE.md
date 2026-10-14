@@ -51,13 +51,16 @@ The SDK is versioned. Its surface is part of the harness version.
 **Reflection, the episodic log, and the trim notices.** Three of the tools
 exist because of the message window rather than the world (docs/METHODOLOGY.md,
 "Reflection is the model's to take, and only at rest or in flight" and "An
-episodic log, written before each trim, read back at rest or in flight").
+episodic log, asked for at each trim or compaction, read back at rest or in
+flight").
 `log_status` appends one harness-stamped entry (turn, level, zone) to
 `data/runs/<id>/episodic.jsonl`, which is append-only and therefore not the
 scratchpad. `reflect` returns a fixed, content-free review prompt while the
 character's `resting` or `taxiFlight` flag is set — one reflection per rest
 visit and one per flight, each armed by its own flag turning on — and opens a
-reflection window in which `read_log` pages that log; the window closes when
+reflection window in which `read_log` pages that log, newest first unless
+asked for `order: "oldest"`, optionally filtered to a level range or a zone
+(`formatPage` in `runner/src/episodic.ts`); the window closes when
 the rest visit or flight it was granted in ends (`left_rest` or `landed`), on
 a circuit breaker, or at the end of the run, and every transition is a
 `reflect_window` record. After a sandbox restart the state cache is rebuilt,
@@ -77,14 +80,30 @@ does; the price is that the window sits at most one turn's growth above
 `MESSAGE_WINDOW_MAX` for that one turn, and the prefix stays byte-stable
 because the cut still moves only in whole blocks.
 
-The asymmetry between harness groups is deliberate and follows from the policy:
-the claude-code driver runs no message window of ours, so it never raises
-either notice and is never asked for a status entry. Its tool list is
-identical — a tool that appeared on one harness and not the other would be a
-second, quieter difference between them — so `log_status`, `reflect` and
-`read_log` all work there; in practice its episodic log stays empty because
-nothing prompts for entries, and one CLI session is one driver turn, which puts
-the reflection breaker far out of reach. The standalone MCP server (`runner/src/mcp.ts`,
+The CLI drivers run no message window of ours, so they never raise either
+trim notice; what loses their context is the CLI's own compaction, and that is
+what they ask on (`runner/src/cli-compaction.ts`). Neither CLI says ahead of
+time when it will compact, so at each turn boundary the driver compares the
+context the CLI last reported against the CLI's auto-compaction threshold —
+derived from the window it reports, by the pinned CLI's rule, and capped by
+the lowest context this run has actually been compacted at — and asks
+(`compaction_pending`) once the context plus two turns of the cycle's largest
+per-turn growth reaches it. A compaction that no ask preceded is asked about on
+the next turn instead (`compacted`). One ask per cycle between compactions.
+Codex turns are short — one `codex exec`, a few calls — and the Codex CLI
+compacts after a turn's first call, so the prediction lands a turn ahead; a
+claude-code turn can run for hours, and a notice reaches the model only at a
+turn boundary, so there the after-ask is common. Each compaction is also a
+`harness` record of kind `compaction` (`CompactionRecord`): token counts
+before and after, when and how long, and the summary the CLI produced — off
+the Claude Code session transcript, while the Codex CLI on a ChatGPT login
+compacts remotely into an encrypted item, so its record says so and lists the
+turns whose context messages it kept verbatim instead. The record is
+trajectory only; the public projection passes its token counts and duration,
+never the summary. The tool list is identical on every harness — a tool that
+appeared on one and not the other would be a second, quieter difference — and
+one claude-code CLI session can be one long driver turn, which puts the
+reflection breaker far out of reach there. The standalone MCP server (`runner/src/mcp.ts`,
 an operator's hand-driven mode) has no context builder at all, so nothing there
 could ever observe the character leaving or landing, or count a turn: it answers `reflect`
 and refuses `read_log` rather than serving the log through a window that could
