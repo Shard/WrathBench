@@ -446,6 +446,31 @@ to afford the output tokens; the sample does not show it fleet-wide, so this
 is the profile the evidence covers. There is no read tool: the pad is in
 every turn's context already (docs/ARCHITECTURE.md, runner section).
 
+The cap refuses rather than cuts (operator, 2026-10-14; `src/scratchpad.ts`).
+It used to keep the head of an over-long write and drop the tail, so a
+freeplay run that prepended a turn log lost its durable notes off the end, and
+its appends at the cap vanished for eighty turns behind a `{ truncated }` it
+never awaited. Now the write, the edit and the snippet's `scratchpad.write` /
+`append` all refuse with the size the pad would have reached. On the snippet
+side the promise rejects, and a snippet's result waits for the writes it made,
+so a refusal it never awaited is still that snippet's error (a write from a
+background routine is reported as a background fault). A pad already over the
+cap — written before the refusal, or under a lowered cap — stays readable and
+accepts any write that leaves it no larger, so the condensing the refusal asks
+for is never itself refused. The old cut's marker is stripped on read and on
+write. The context header shows the size against the cap every turn.
+
+Three HUD lines were reworked by the same operator decision, under the
+condition that they not grow the context much (`src/context.ts`). The quest
+line names each quest's title (cut at 24 characters), grouped complete then
+in progress so the per-quest state word is gone. The nearby line keeps six
+entries but fills them in order with whatever has the character targeted, the
+two nearest, then NPCs to act on (a quest to take or hand in, a vendor,
+trainer, flight master, innkeeper or banker), then the rest; it was filled by
+town guards on nearly every turn of that run. The bag line summarizes — free
+slots, grey stacks, the biggest stacks and the uncommon-or-better items —
+instead of naming the first eight slots, which never changed.
+
 ### The request record and the replay
 
 The fixed loop's `request` record keeps only what nothing else in the

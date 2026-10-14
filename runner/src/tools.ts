@@ -22,7 +22,7 @@ import {
 import { READ_LOG_CLOSED, restingOf, taxiFlightOf, type ReflectGate } from "./reflect";
 import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
-import type { Scratchpad } from "./scratchpad";
+import { overCapText, type Scratchpad } from "./scratchpad";
 
 export interface ToolDef {
   name: string;
@@ -952,23 +952,17 @@ async function runTool(ctx: ToolContext, name: string, args: unknown, origin: Ca
         };
         const res = ctx.scratchpad.edit(old, replacement, replaceAll);
         if (!res.ok) {
+          if (res.reason === "over_cap") return { text: overCapText("edit_scratchpad", res.chars), isError: true };
           return { text: EDIT_SCRATCHPAD_HINTS[res.reason](res.matches), isError: true };
         }
         const where = res.replaced === 1 ? "1 replacement" : `${res.replaced} replacements`;
-        return {
-          text: res.truncated
-            ? `edited (${where}; ${res.chars} chars, ${res.lines} lines, TRUNCATED at cap — keep it shorter)`
-            : `edited (${where}; ${res.chars} chars, ${res.lines} lines)`,
-        };
+        return { text: `edited (${where}; ${res.chars} chars, ${res.lines} lines)` };
       }
       case "write_scratchpad": {
         const { content } = parsed.data as { content: string };
         const res = ctx.scratchpad.write(content);
-        return {
-          text: res.truncated
-            ? `written (${res.chars} chars, TRUNCATED at cap — keep it shorter)`
-            : `written (${res.chars} chars)`,
-        };
+        if (!res.ok) return { text: overCapText("write_scratchpad", res.chars), isError: true };
+        return { text: `written (${res.chars} chars)` };
       }
     }
   } catch (err) {

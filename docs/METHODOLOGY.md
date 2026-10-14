@@ -140,9 +140,11 @@ prefix survives, and one fresh deterministic message — goal, harness notices,
 a HUD summary of already-observed fields, recent events and the full
 scratchpad. Old turns are dropped, so the scratchpad is the only durable
 memory and the prompt says so; models with weak note-taking underperform at
-equal reasoning strength, which is signal, not bias. Model-driven
-summarization was rejected because the summarizer becomes an unversioned,
-model-dependent part of the harness. Any constant in the policy is a harness
+equal reasoning strength, which is signal, not bias. A write that would take
+the scratchpad past its 32,000-character cap is refused and saves nothing,
+never truncated, and every turn shows its size against the cap (operator,
+2026-10-14). Model-driven summarization was rejected because the summarizer
+becomes an unversioned, model-dependent part of the harness. Any constant in the policy is a harness
 version change.
 
 **Reflection is the model's to take, and only at rest or in flight** (2026-08-30). A

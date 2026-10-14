@@ -32,6 +32,7 @@
 import { inventoryResultText } from "@wrathbench/sdk";
 
 import { compactJson } from "./jsonsafe";
+import { scratchpadSizeLabel } from "./scratchpad";
 import type { EventSummary, MoveIntentNote } from "./sandbox/ipc";
 import type { HarnessNotice } from "./sandbox/host";
 
@@ -108,6 +109,14 @@ interface UnitLike {
   dead?: unknown;
   /** `UNIT_NPC_FLAGS` decoded to role words by the SDK (`questGiver`, `vendor`, …). */
   roles?: unknown;
+  /**
+   * The questgiver marker the client draws over it, as the SDK names it
+   * (`available`, `reward`, `incomplete`, `none`, …); absent until a status
+   * packet named this guid.
+   */
+  questGiver?: unknown;
+  /** What it has selected (`UNIT_FIELD_TARGET`), when observed. */
+  targetGuid?: unknown;
 }
 
 /** The carried inventory as `state.bag()` shapes it, flattened into the rpc JSON. */
@@ -196,8 +205,12 @@ export interface SnapshotLike {
   money?: ObservedLike;
   /** Confirmed turn-ins this session, oldest first. Recorded, not shown. */
   questCompletions?: { questId?: unknown; ts?: unknown }[];
-  /** The quest log's occupied slots: questId + completion bit only, no titles. */
-  questLog?: { questId?: unknown; complete?: unknown }[];
+  /**
+   * The quest log's occupied slots: questId, the completion bit, and the title
+   * from the quest's template answer (`SMSG_QUEST_QUERY_RESPONSE`, what the
+   * client's quest log shows) once it has arrived.
+   */
+  questLog?: { questId?: unknown; complete?: unknown; title?: unknown }[];
   characters?: ObservedLike;
   nearby?: Record<string, unknown>;
   /**
@@ -312,16 +325,152 @@ export const PLAYER_FLAGS_GHOST = 0x10;
 
 /** Backpack size (16 slots): the bag line's total when the snapshot carries none. */
 const BACKPACK_SIZE = 16;
-/** How many bag items the HUD names before collapsing the rest to "+K more". */
-const BAG_ITEM_CAP = 8;
+/** How many of the most numerous items the bag line names (stacks of one item counted together). */
+const BAG_MOST = 4;
+/** How many uncommon-or-better items the bag line names. */
+const BAG_BEST = 3;
+/** Item quality (`ItemQualities`): 0 poor (grey), 2 uncommon (green) and up. */
+const QUALITY_POOR = 0;
+const QUALITY_UNCOMMON = 2;
 /** How many nearby objects the HUD names before collapsing the rest to "+K more". */
 const NEARBY_CAP = 6;
+/** Nearby slots kept for the nearest objects whatever they are (see `pickNearby`). */
+const NEARBY_NEAREST = 2;
+/** Longest quest title the quest line prints; a longer one is cut and ends in "…". */
+const QUEST_TITLE_CHARS = 24;
 
-/** One item's label for the bag line: name, else item id, else slot. */
-function bagItemLabel(it: { slot?: unknown; itemId?: unknown; name?: unknown; count?: unknown }): string {
-  const name =
-    it.name != null ? String(it.name) : it.itemId != null ? `item ${String(it.itemId)}` : `slot ${String(it.slot)}`;
-  return typeof it.count === "number" && it.count > 1 ? `${name} x${it.count}` : name;
+/**
+ * The bag line: room first, then a summary rather than a listing. It used to
+ * name the first eight slots in bag order, which are the same eight from turn
+ * to turn (a hearthstone, a pick, whatever was looted first) and say nothing
+ * about the rest. The summary answers what the line is read for, in the same
+ * room or less: how full the bags are, how much of it is grey junk a vendor
+ * takes, which items are worth something (uncommon or better — equip it or
+ * sell it), and what the big stacks are (consumables, trade goods, quest
+ * items). Stacks of one item are counted together. Quality unobserved is
+ * neither junk nor uncommon: an item whose template has not answered is not
+ * guessed at.
+ */
+function bagLine(bag: BagLike): string {
+  const items = bag.items ?? [];
+  const free = bag.freeSlots;
+  const total = typeof bag.totalSlots === "number" ? bag.totalSlots : BACKPACK_SIZE;
+  const room = typeof free === "number" ? `${free} free / ${total}` : "unobserved";
+  if (items.length === 0) return `bag: ${room}, empty`;
+  let grey = 0;
+  const byItem = new Map<string, { label: string; count: number; quality: number | undefined }>();
+  for (const it of items) {
+    if (it.quality === QUALITY_POOR) {
+      grey++;
+      continue;
+    }
+    const label =
+      it.name != null ? String(it.name) : it.itemId != null ? `item ${String(it.itemId)}` : `slot ${String(it.slot)}`;
+    const key = it.itemId != null ? `id ${String(it.itemId)}` : `name ${label}`;
+    const count = typeof it.count === "number" && it.count > 0 ? it.count : 1;
+    const quality = typeof it.quality === "number" ? it.quality : undefined;
+    const seen = byItem.get(key);
+    if (seen === undefined) byItem.set(key, { label, count, quality });
+    else seen.count += count;
+  }
+  const all = [...byItem.values()];
+  const show = (i: { label: string; count: number }): string => (i.count > 1 ? `${i.label} x${i.count}` : i.label);
+  // Ties keep bag order (the sort is stable), so a bag of single items reads
+  // as the old line did, its first slots first.
+  const best = all
+    .filter((i) => i.quality !== undefined && i.quality >= QUALITY_UNCOMMON)
+    .sort((a, b) => b.quality! - a.quality! || b.count - a.count)
+    .slice(0, BAG_BEST);
+  const most = all
+    .filter((i) => !best.includes(i))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, BAG_MOST);
+  const parts = [grey > 0 ? `bag: ${room}, ${grey} grey` : `bag: ${room}`];
+  if (most.length > 0) parts.push(`most: ${most.map(show).join(", ")}`);
+  if (best.length > 0) parts.push(`green+: ${best.map(show).join(", ")}`);
+  return parts.join("; ");
+}
+
+/** One quest as the quest line names it: id, then the title, cut if long. */
+function questLabel(q: { questId?: unknown; title?: unknown }): string {
+  const id = fmt(q.questId, "?");
+  if (typeof q.title !== "string" || q.title.length === 0) return id;
+  const title = q.title.length > QUEST_TITLE_CHARS ? `${q.title.slice(0, QUEST_TITLE_CHARS - 1)}…` : q.title;
+  return `${id} ${title}`;
+}
+
+/**
+ * The quest line: ids with their titles, completed quests first. The ids alone
+ * meant nothing once the notes that named them were gone — a model with three
+ * complete quests could not tell which they were. The two states are grouped
+ * rather than worded per quest, which pays for part of the titles: on a
+ * twenty-quest log the line grew by about 200 characters, against a turn's
+ * context of about 40,000. A title not yet answered prints as the bare id.
+ */
+function questLine(ql: NonNullable<SnapshotLike["questLog"]>): string {
+  const complete = ql.filter((q) => q.complete === true).map(questLabel);
+  const open = ql.filter((q) => q.complete !== true).map(questLabel);
+  const parts: string[] = [];
+  if (complete.length > 0) parts.push(`complete — ${complete.join(", ")}`);
+  if (open.length > 0) parts.push(`in progress — ${open.join(", ")}`);
+  return `quests: ${parts.join("; ")}`;
+}
+
+/** The marker over a questgiver when it has something for you now, else undefined. */
+function questOffer(u: UnitLike): "available" | "reward" | undefined {
+  const m = u.questGiver;
+  if (m === "available" || m === "available_rep") return "available";
+  if (typeof m === "string" && m.includes("reward")) return "reward";
+  return undefined;
+}
+
+/** NPC roles a character acts on by walking up to them. Sub-kinds fold into their parent. */
+const ACTIONABLE_ROLES = new Set(["vendor", "repair", "trainer", "flightMaster", "innkeeper", "banker"]);
+
+function actionable(u: UnitLike): boolean {
+  if (questOffer(u) !== undefined) return true;
+  if (!Array.isArray(u.roles)) return false;
+  return u.roles.some(
+    (r) => typeof r === "string" && (ACTIONABLE_ROLES.has(r) || r.endsWith("Vendor") || r.endsWith("Trainer")),
+  );
+}
+
+/**
+ * Which NEARBY_CAP of the objects in view the nearby line names, nearest first
+ * as before. In a town the nearest six were guards — a questgiver made the
+ * line in a handful of a run's turns — so the slots go, in order: to anything
+ * alive that has you targeted (the only hostility the snapshot shows); to the
+ * NEARBY_NEAREST nearest, whatever they are, so a mob that has not picked you
+ * yet is still in sight; to NPCs you can act on (a quest to take or hand in, a
+ * vendor, trainer, flight master, innkeeper or banker); then to the rest by
+ * distance. Only observed fields, no guessing at what an unflagged unit is.
+ */
+function pickNearby(units: readonly UnitLike[], selfGuid: string | undefined): UnitLike[] {
+  if (units.length <= NEARBY_CAP) return [...units];
+  const chosen = new Set<number>();
+  const take = (want: (u: UnitLike, i: number) => boolean): void => {
+    for (let i = 0; i < units.length && chosen.size < NEARBY_CAP; i++) {
+      if (!chosen.has(i) && want(units[i]!, i)) chosen.add(i);
+    }
+  };
+  take((u) => selfGuid !== undefined && u.dead !== true && u.targetGuid != null && String(u.targetGuid) === selfGuid);
+  take((_u, i) => i < NEARBY_NEAREST);
+  take(actionable);
+  take(() => true);
+  return [...chosen].sort((a, b) => a - b).map((i) => units[i]!);
+}
+
+/** One nearby entry: name, dead-when-known, roles with the quest marker, distance. */
+function nearbyLabel(u: UnitLike): string {
+  const name = u.name != null ? String(u.name) : "(unnamed)";
+  const dead = u.dead === true ? " dead" : "";
+  const dist = typeof u.distance === "number" ? `${u.distance}y` : "?y";
+  const offer = questOffer(u);
+  const roles = fmtRoles(u.roles)
+    .split(", ")
+    .filter((r) => r !== "" && !(offer !== undefined && r === "quest giver"));
+  if (offer !== undefined) roles.unshift(`quest giver: ${offer}`);
+  return `${name}${dead} (${roles.length === 0 ? "" : `${roles.join(", ")}, `}${dist})`;
 }
 
 /**
@@ -515,28 +664,17 @@ export function formatStateSummary(
   lines.push(`xp: ${fmt(snapshot.xp?.value)} / ${fmt(snapshot.nextLevelXp?.value)}     money: ${moneyStr}`);
 
   // bag
-  if (snapshot.bag === undefined) {
-    lines.push("bag: unobserved");
-  } else {
-    const items = snapshot.bag.items ?? [];
-    const free = snapshot.bag.freeSlots;
-    const total = typeof snapshot.bag.totalSlots === "number" ? snapshot.bag.totalSlots : BACKPACK_SIZE;
-    const freeStr = typeof free === "number" ? `${free} free / ${total}` : "unobserved";
-    let itemsStr = items.length === 0 ? "empty" : items.slice(0, BAG_ITEM_CAP).map(bagItemLabel).join(", ");
-    if (items.length > BAG_ITEM_CAP) itemsStr += ` +${items.length - BAG_ITEM_CAP} more`;
-    lines.push(`bag: ${freeStr}    items: ${itemsStr}`);
-  }
+  lines.push(snapshot.bag === undefined ? "bag: unobserved" : bagLine(snapshot.bag));
 
-  // quests (questId + completion bit only, no titles — CONTRACTS.md / no wiki lookup)
+  // quests — the log's ids, completion bits and titles, as the client's quest
+  // log shows them; never a wiki lookup
   const ql = snapshot.questLog;
   if (ql === undefined) {
     lines.push("quests: unobserved");
   } else if (ql.length === 0) {
     lines.push("quests: none");
   } else {
-    lines.push(
-      `quests: ${ql.map((q) => `${fmt(q.questId, "?")} ${q.complete === true ? "complete" : "progress"}`).join(", ")}`,
-    );
+    lines.push(questLine(ql));
   }
 
   // achievements — count and points only. The full list is tens of lines of
@@ -564,22 +702,18 @@ export function formatStateSummary(
   }
 
   // nearby — from state.units() semantics (nearest first, items/containers
-  // dropped by the sandbox). Name + distance + dead-when-known; never mob health.
+  // dropped by the sandbox), which six by `pickNearby`. Name + roles + distance
+  // + dead-when-known; never mob health.
   const units = snapshot.units;
   if (units === undefined) {
     lines.push("nearby: unobserved");
   } else if (units.length === 0) {
     lines.push("nearby: none");
   } else {
-    const shown = units.slice(0, NEARBY_CAP).map((u) => {
-      const name = u.name != null ? String(u.name) : "(unnamed)";
-      const dead = u.dead === true ? " dead" : "";
-      const dist = typeof u.distance === "number" ? `${u.distance}y` : "?y";
-      const roles = fmtRoles(u.roles);
-      return `${name}${dead} (${roles === "" ? "" : `${roles}, `}${dist})`;
-    });
-    let nearbyStr = shown.join(", ");
-    if (units.length > NEARBY_CAP) nearbyStr += ` +${units.length - NEARBY_CAP} more`;
+    const selfGuid = s.guid === undefined || s.guid === null ? undefined : String(s.guid);
+    const shown = pickNearby(units, selfGuid);
+    let nearbyStr = shown.map(nearbyLabel).join(", ");
+    if (units.length > shown.length) nearbyStr += ` +${units.length - shown.length} more`;
     lines.push(`nearby: ${nearbyStr}`);
   }
 
@@ -701,10 +835,12 @@ export function assembleContext(inputs: ContextInputs): string {
     );
   }
 
+  // The size against the cap, every turn: a write past the cap is refused
+  // (scratchpad.ts), and a model should see the wall before it walks into it.
   parts.push(
     inputs.scratchpad.trim().length === 0
       ? "[scratchpad]\n(empty — write your plan and durable facts with write_scratchpad)"
-      : `[scratchpad]\n${inputs.scratchpad}`,
+      : `[scratchpad ${scratchpadSizeLabel(inputs.scratchpad.length)}]\n${inputs.scratchpad}`,
   );
 
   return parts.join("\n\n");
