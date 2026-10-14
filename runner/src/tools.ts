@@ -11,7 +11,14 @@ import type { Database } from "bun:sqlite";
 import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
-import { EPISODIC_PAGE_DEFAULT, EPISODIC_PAGE_MAX, type EpisodicEntry, type EpisodicLog } from "./episodic";
+import {
+  EPISODIC_ORDERS,
+  EPISODIC_PAGE_DEFAULT,
+  EPISODIC_PAGE_MAX,
+  type EpisodicEntry,
+  type EpisodicLog,
+  type EpisodicQuery,
+} from "./episodic";
 import { READ_LOG_CLOSED, restingOf, taxiFlightOf, type ReflectGate } from "./reflect";
 import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
@@ -185,18 +192,23 @@ export const TOOLS: ToolDef[] = [
   {
     name: "read_log",
     description:
-      "Page your episodic log, oldest first. Usable only while reflecting — see the reflect tool. " +
+      "Read your episodic log, newest first. Usable only while reflecting — see the reflect tool. " +
+      'Filter by level range or zone; page with offset, or set order to "oldest" to start from the first entry. ' +
       `Returns "showing a-b of N" and one line per entry.`,
     inputSchema: {
       type: "object",
       properties: {
-        offset: { type: "integer", minimum: 0, description: "Entries to skip from the oldest. Default 0." },
+        order: { type: "string", enum: [...EPISODIC_ORDERS], description: "Which end to start from. Default newest." },
+        offset: { type: "integer", minimum: 0, description: "Entries to skip from that end. Default 0." },
         limit: {
           type: "integer",
           minimum: 1,
           maximum: EPISODIC_PAGE_MAX,
           description: `How many entries to return. Default ${EPISODIC_PAGE_DEFAULT}.`,
         },
+        minLevel: { type: "integer", minimum: 1, description: "Only entries written at this level or above." },
+        maxLevel: { type: "integer", minimum: 1, description: "Only entries written at this level or below." },
+        zone: { type: "string", description: "Only entries whose zone name contains this text, ignoring case." },
       },
       additionalProperties: false,
     },
@@ -256,8 +268,16 @@ const argSchemas = {
   log_status: z.strictObject({ text: z.string().min(1) }),
   // Lenient by declaration, like `recent_events`: a clamped page is an answer,
   // and a validation error inside a reflection window costs a turn of it.
+  // The order word is matched ignoring case and surrounding space, the one
+  // deterministic repair; any other word is refused with the parameter help.
+  // An empty zone filters nothing, so it reads as no filter.
   read_log: z
     .strictObject({
+      order: z
+        .string()
+        .transform((v) => v.trim().toLowerCase())
+        .pipe(z.enum(EPISODIC_ORDERS))
+        .default("newest"),
       offset: z.coerce
         .number()
         .transform((n) => Math.max(0, Math.round(n)))
@@ -266,6 +286,18 @@ const argSchemas = {
         .number()
         .transform((n) => Math.min(EPISODIC_PAGE_MAX, Math.max(1, Math.round(n))))
         .default(EPISODIC_PAGE_DEFAULT),
+      minLevel: z.coerce
+        .number()
+        .transform((n) => Math.round(n))
+        .optional(),
+      maxLevel: z.coerce
+        .number()
+        .transform((n) => Math.round(n))
+        .optional(),
+      zone: z
+        .string()
+        .transform((v) => (v.trim().length > 0 ? v.trim() : undefined))
+        .optional(),
     })
     .prefault({}),
 } as const;
@@ -289,8 +321,10 @@ const TOOL_PARAM_HELP: Record<keyof typeof argSchemas, string> = {
   reflect: "reflect takes no parameters ({}).",
   log_status: "log_status expects { text: string } — one short status entry.",
   read_log:
-    `read_log expects { offset?: number, limit?: number } — entries to skip from the oldest (default 0) ` +
-    `and how many to return (1-${EPISODIC_PAGE_MAX}, default ${EPISODIC_PAGE_DEFAULT}).`,
+    `read_log expects { order?: "newest" | "oldest", offset?: number, limit?: number, minLevel?: number, ` +
+    `maxLevel?: number, zone?: string } — which end to start from (default newest), entries to skip from ` +
+    `that end (default 0), how many to return (1-${EPISODIC_PAGE_MAX}, default ${EPISODIC_PAGE_DEFAULT}), ` +
+    `an optional level range, and text the zone name must contain (ignoring case).`,
 };
 
 /**
@@ -908,8 +942,7 @@ async function runTool(ctx: ToolContext, name: string, args: unknown, origin: Ca
       }
       case "read_log": {
         if (!ctx.reflect.isOpen) return { text: READ_LOG_CLOSED, isError: true };
-        const { offset, limit } = parsed.data as { offset: number; limit: number };
-        return { text: ctx.episodic.page(offset, limit) };
+        return { text: ctx.episodic.page(parsed.data as EpisodicQuery) };
       }
       case "edit_scratchpad": {
         const { old, new: replacement, replaceAll } = parsed.data as {

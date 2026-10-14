@@ -171,3 +171,267 @@ export class CodexLastCallReader {
     return undefined;
   }
 }
+
+// ------------------------------------------------------------ compactions
+
+/**
+ * One compaction as the Codex CLI's rollout records it (0.159.3, read off a
+ * live GPT-6.1 Sol thread). In file order:
+ *
+ *   {"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{…"total_tokens":446911},"model_context_window":475000}}}
+ *   {"type":"compacted","payload":{"message":"","replacement_history":[…user messages…,{"type":"compaction","encrypted_content":"…"}],
+ *     "window_number":1,"latest_token_usage_record":{"usage":{"input_tokens":447305,…}},"guardian_history":[…], …}}
+ *   {"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{…all zero…,"total_tokens":77759}}}}
+ *   {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"ContextCompaction",…},"started_at_ms":…,"completed_at_ms":…}}
+ *
+ * `message` is the summary when the CLI summarised locally; on a ChatGPT
+ * login it compacts remotely and `message` is empty, the summary living only
+ * in the encrypted `compaction` item. `preTokens` is the compaction call's
+ * own input (`latest_token_usage_record`), else the last total reported
+ * before it; `postTokens` is the first total reported after it, the CLI's own
+ * estimate of the compacted context. The compacted line can exceed 1.5 MB
+ * (`guardian_history` is the whole prior history), so nothing of its arrays
+ * but a length and turn numbers is kept.
+ */
+export interface CodexCompaction {
+  at: number | null;
+  durationMs: number | null;
+  preTokens: number | null;
+  postTokens: number | null;
+  /** `payload.message` when non-empty. */
+  summary: string | null;
+  /** Characters of the encrypted summary item, when the compaction was remote. */
+  encryptedChars: number | null;
+  /** The `[turn N]` of each harness context message the CLI kept verbatim. */
+  retainedTurns: number[];
+  window: number | null;
+}
+
+/** The context the CLI last reported: its last call's input plus output, and the window it reported. */
+export interface CodexContextReading {
+  total: number;
+  window?: number;
+}
+
+const finite = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+/** A `token_count` line's last-call total and reported window; undefined for any other line. */
+export function tokenCountOfLine(line: string): CodexContextReading | undefined {
+  if (!line.includes('"token_count"')) return undefined;
+  let rec: unknown;
+  try {
+    rec = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  const payload = (rec as { payload?: { type?: unknown; info?: unknown } } | null)?.payload;
+  if (payload === null || typeof payload !== "object" || payload.type !== "token_count") return undefined;
+  const info = payload.info as Record<string, unknown> | null | undefined;
+  if (info === null || typeof info !== "object") return undefined;
+  const last = info["last_token_usage"] as Record<string, unknown> | null | undefined;
+  if (last === null || typeof last !== "object") return undefined;
+  const total = finite(last["total_tokens"]) ?? (finite(last["input_tokens"]) ?? 0) + (finite(last["output_tokens"]) ?? 0);
+  const window = finite(info["model_context_window"]);
+  return window !== undefined && window > 0 ? { total, window } : { total };
+}
+
+/** The `[turn N]` prefix of a retained harness context message (`assembleContext`). */
+const TURN_PREFIX = /^\[turn (\d+)\]/;
+
+type PendingCompaction = Partial<CodexCompaction> & { seenCompacted: boolean; awaitingPost: boolean };
+
+/**
+ * Folds rollout lines, in file order, into compactions and the latest context
+ * reading. Pure apart from its own state, so a compaction whose lines
+ * straddle two reads is still one compaction. Lines that cannot matter are
+ * passed over on a substring test, before any parse.
+ */
+export class CodexRolloutScan {
+  /** The newest `token_count` seen, if any. */
+  context: CodexContextReading | undefined;
+  private pending: PendingCompaction | null = null;
+  private readonly done: CodexCompaction[] = [];
+
+  line(line: string): void {
+    if (line.includes('"token_count"')) {
+      const reading = tokenCountOfLine(line);
+      if (reading === undefined) return;
+      const window = reading.window ?? this.context?.window;
+      this.context = window !== undefined ? { total: reading.total, window } : { total: reading.total };
+      if (this.pending?.awaitingPost === true) {
+        this.pending.postTokens = reading.total;
+        this.pending.awaitingPost = false;
+      }
+      return;
+    }
+    if (line.includes('"type":"compacted"')) this.compacted(line);
+    else if (line.includes('"ContextCompaction"')) this.compactionItem(line);
+  }
+
+  private compacted(line: string): void {
+    let rec: { type?: unknown; payload?: Record<string, unknown> | null };
+    try {
+      rec = JSON.parse(line) as typeof rec;
+    } catch {
+      return;
+    }
+    const p = rec.payload;
+    if (rec.type !== "compacted" || p === undefined || p === null || typeof p !== "object") return;
+    // A second compacted line closes the one before it.
+    if (this.pending?.seenCompacted === true) this.settle();
+    const usage = (p["latest_token_usage_record"] as { usage?: Record<string, unknown> } | null | undefined)?.usage;
+    const history = Array.isArray(p["replacement_history"]) ? (p["replacement_history"] as unknown[]) : [];
+    let encryptedChars: number | null = null;
+    const retainedTurns: number[] = [];
+    for (const raw of history) {
+      if (raw === null || typeof raw !== "object") continue;
+      const item = raw as Record<string, unknown>;
+      if (item["type"] === "compaction" && typeof item["encrypted_content"] === "string") {
+        encryptedChars = (encryptedChars ?? 0) + (item["encrypted_content"] as string).length;
+      } else if (item["type"] === "message" && item["role"] === "user" && Array.isArray(item["content"])) {
+        const first = (item["content"] as { text?: unknown }[])[0]?.text;
+        const m = typeof first === "string" ? TURN_PREFIX.exec(first) : null;
+        if (m !== null) retainedTurns.push(Number(m[1]));
+      }
+    }
+    const message = typeof p["message"] === "string" && p["message"].length > 0 ? p["message"] : null;
+    this.pending = {
+      ...(this.pending ?? {}),
+      seenCompacted: true,
+      awaitingPost: true,
+      preTokens: finite(usage?.["input_tokens"]) ?? this.context?.total ?? null,
+      postTokens: null,
+      summary: message,
+      encryptedChars,
+      retainedTurns,
+      window: finite(p["window_number"]) ?? null,
+    };
+  }
+
+  private compactionItem(line: string): void {
+    let rec: { payload?: Record<string, unknown> | null };
+    try {
+      rec = JSON.parse(line) as typeof rec;
+    } catch {
+      return;
+    }
+    const p = rec.payload;
+    if (p === undefined || p === null || p["type"] !== "item_completed") return;
+    if ((p["item"] as { type?: unknown } | null | undefined)?.type !== "ContextCompaction") return;
+    const started = finite(p["started_at_ms"]);
+    const completed = finite(p["completed_at_ms"]);
+    const timing = {
+      at: started ?? null,
+      durationMs: started !== undefined && completed !== undefined ? Math.max(0, completed - started) : null,
+    };
+    if (this.pending === null) this.pending = { seenCompacted: false, awaitingPost: false, ...timing };
+    else Object.assign(this.pending, timing);
+  }
+
+  private settle(): void {
+    const p = this.pending;
+    this.pending = null;
+    if (p === null || !p.seenCompacted) return;
+    this.done.push({
+      at: p.at ?? null,
+      durationMs: p.durationMs ?? null,
+      preTokens: p.preTokens ?? null,
+      postTokens: p.postTokens ?? null,
+      summary: p.summary ?? null,
+      encryptedChars: p.encryptedChars ?? null,
+      retainedTurns: p.retainedTurns ?? [],
+      window: p.window ?? null,
+    });
+  }
+
+  /**
+   * The compactions settled so far, oldest first. With `final` one still open
+   * is settled as it stands: at the end of a turn the CLI has exited, so every
+   * line it wrote for that compaction is already on disk. A timing item that
+   * never met a compacted line is not a compaction and is dropped.
+   */
+  drain(final: boolean): CodexCompaction[] {
+    if (final) this.settle();
+    return this.done.splice(0, this.done.length);
+  }
+}
+
+/** How much of the rollout one read step takes. */
+export const ROLLOUT_FOLLOW_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Follows one thread's rollout across turns: each `read` parses only the
+ * bytes the CLI appended since the last one, so every compaction is seen
+ * exactly once whatever the file's size. A new thread starts over on its own
+ * file. Like `CodexLastCallReader` it touches `sessions/**` only, says why it
+ * failed at most once, and never throws.
+ */
+export class CodexRolloutFollower {
+  private threadId: string | undefined;
+  private path: string | undefined;
+  private offset = 0;
+  private carry = "";
+  private decoder = new TextDecoder();
+  private scan = new CodexRolloutScan();
+  private noted = false;
+
+  constructor(
+    private readonly codexHome: string | undefined,
+    private readonly onFailure: (reason: string) => void,
+    private readonly chunkBytes = ROLLOUT_FOLLOW_CHUNK_BYTES,
+  ) {}
+
+  /** What the CLI appended since the last read: its compactions, and the newest context reading so far. */
+  read(threadId: string | undefined): { compactions: CodexCompaction[]; context: CodexContextReading | undefined } {
+    try {
+      if (this.codexHome === undefined || this.codexHome.length === 0) return this.fail("no CODEX_HOME");
+      if (threadId === undefined) return this.fail("no thread id");
+      if (threadId !== this.threadId) {
+        this.threadId = threadId;
+        this.path = undefined;
+        this.restart();
+        this.scan = new CodexRolloutScan();
+      }
+      this.path ??= findRollout(this.codexHome, threadId);
+      if (this.path === undefined) return this.fail("rollout file not found");
+      const fd = openSync(this.path, "r");
+      try {
+        const size = fstatSync(fd).size;
+        // A file shorter than what was read is a different file: start it over.
+        if (size < this.offset) this.restart();
+        const buf = Buffer.alloc(Math.min(this.chunkBytes, Math.max(0, size - this.offset)));
+        while (this.offset < size && buf.length > 0) {
+          const n = readSync(fd, buf, 0, Math.min(buf.length, size - this.offset), this.offset);
+          if (n <= 0) break;
+          this.offset += n;
+          const lines = (this.carry + this.decoder.decode(buf.subarray(0, n), { stream: true })).split("\n");
+          this.carry = lines.pop() ?? "";
+          for (const l of lines) this.scan.line(l);
+        }
+      } finally {
+        closeSync(fd);
+      }
+      return { compactions: this.scan.drain(true), context: this.scan.context };
+    } catch (err) {
+      return this.fail(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private restart(): void {
+    this.offset = 0;
+    this.carry = "";
+    this.decoder = new TextDecoder();
+  }
+
+  private fail(reason: string): { compactions: CodexCompaction[]; context: undefined } {
+    if (!this.noted) {
+      this.noted = true;
+      try {
+        this.onFailure(reason);
+      } catch {
+        // a log line never costs a turn
+      }
+    }
+    return { compactions: [], context: undefined };
+  }
+}

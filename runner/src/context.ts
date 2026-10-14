@@ -887,7 +887,7 @@ export function messageWindowCut(history: ChatMessage[]): number {
  *
  * The raw cut is taken here rather than at `history.length` so that the trim
  * lags one turn behind the crossing. That lag is what makes the pre-trim prompt
- * *exact* (docs/METHODOLOGY.md, "An episodic log, written before each trim":
+ * *exact* (docs/METHODOLOGY.md, "An episodic log, asked for at each trim":
  * the harness asks for a status entry on the last turn before a block-trim).
  * Predicting the crossing forward is impossible — a turn's message count is not
  * known until the model has answered it — but once the answer is in the history

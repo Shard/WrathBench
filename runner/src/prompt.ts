@@ -67,7 +67,7 @@ A raw action's { ok: true } means the opcode was dispatched, not that it worked:
 - write_scratchpad / edit_scratchpad: your durable notes. The scratchpad survives restarts and context loss; keep your plan, progress, and hard-won facts (coordinates, quest ids, what failed) there. write_scratchpad replaces the whole document — use it to start the pad or rewrite it wholesale. edit_scratchpad({old, new}) changes one part in place: old must match the pad byte for byte and appear exactly once (or pass replaceAll), new replaces it, and an empty new deletes it. Ordinary upkeep — striking a done item, fixing a coordinate, adding a line — is an edit, not a rewrite. There is no read tool: every turn's context already carries the scratchpad as last written, and inside a snippet scratchpad.read() returns it.
 - log_status: append one short status entry to your episodic log. The log is append-only and stamped by the harness with the turn, your level and your zone; unlike the scratchpad, entries cannot be edited or removed once written.
 - reflect: spend a turn thinking instead of acting. It returns a fixed set of review questions and nothing else — nothing is summarised for you, and nothing is remembered unless you write it down. It works only while your character is resting or in flight, and once per rest visit and once per flight.
-- read_log: page your episodic log, oldest first. It works only while you are reflecting; reflect opens that window and leaving the rest area or landing closes it again.
+- read_log: read your episodic log, newest first; filter it by level or zone and page back as far as the first entry. It works only while you are reflecting; reflect opens that window and leaving the rest area or landing closes it again.
 
 ## Each turn
 

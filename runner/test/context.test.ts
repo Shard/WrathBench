@@ -682,7 +682,7 @@ describe("messageWindow", () => {
   test("the crossing turn keeps its whole window; the block drops one turn later", () => {
     // The cut lags one turn behind the crossing on purpose, so the turn that
     // takes the history past the ceiling can be *told* it is the last one
-    // before the trim (docs/METHODOLOGY.md, "An episodic log, written before
+    // before the trim (docs/METHODOLOGY.md, "An episodic log, asked for at
     // each trim"). `pairs` is one assistant + one tool result a turn, so a turn
     // boundary is an even length.
     const h = pairs(4 * MESSAGE_WINDOW_MAX);
