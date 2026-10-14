@@ -79,6 +79,10 @@ export interface HarnessNotice {
     // The turn before the block trim is expected: the harness asks for an
     // episodic status entry (METHODOLOGY, "An episodic log"). Fixed-loop only.
     | "trim_pending"
+    // The CLI drivers' counterparts: a status entry asked for before the
+    // CLI's own compaction, or right after one (`cli-compaction.ts`).
+    | "compaction_pending"
+    | "compacted"
     // A reflection window closed on its circuit breaker (`reflect.ts`).
     | "reflect_ended";
   text: string;

@@ -155,12 +155,17 @@ fixed, content-free prompt and the model writes the outcome into its own
 scratchpad; the harness summarizes nothing. Reflect turns count like any
 other: a free turn would invite gaming.
 
-**An episodic log, written before each trim, read back at rest or in flight** (2026-08-30).
+**An episodic log, asked for at each trim or compaction, read back at rest or in flight** (2026-08-30).
 On the last turn before a block-trim the harness asks for a short status entry
 — append-only and harness-stamped, a record the model cannot edit, unlike the
-scratchpad — readable only while reflecting. The trigger is the trim, not a
-cadence constant, so the CLI scaffolds, which have no trim, get neither: a
-documented asymmetry between harness groups.
+scratchpad — readable only while reflecting: newest first, filterable by level
+and zone, and pageable back to the first entry (operator, 2026-10-14). The
+trigger is the loss of context, not a cadence constant. The CLI scaffolds have
+no trim, so theirs is the CLI's own compaction (operator, 2026-10-14), with the
+same entry, cap and stamps: the harness asks before it where the usage the CLI
+reports predicts it, and right after an observed one otherwise. The asymmetry
+left between harness groups is that a CLI ask is a prediction from outside the
+loss, and can land after it.
 
 ## Episodes, lanes, and evidence
 

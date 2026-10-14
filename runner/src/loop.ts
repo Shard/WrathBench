@@ -1067,7 +1067,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // own pure cut function — the notice is an input to `assembleContext`
       // like every other, and assembly stays pure.
       const cut = messageWindowCut(history);
-      // The pre-trim prompt (METHODOLOGY, "An episodic log, written before each
+      // The pre-trim prompt (METHODOLOGY, "An episodic log, asked for at each
       // trim"): the trigger is the trim itself, not a cadence. `trimExpected`
       // is exact — the crossing has already happened and the cut lags one turn
       // behind it — so this fires on exactly the last turn before each trim,

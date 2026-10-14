@@ -189,22 +189,22 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the reflect and
-    // read_log lines naming flight beside rest (operator, 2026-10-14); it is
+    // any rendering fails here. The last edit to move them is the read_log
+    // line reading newest first, with filters (operator, 2026-10-14); it is
     // in every rendering, so it moved every row.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:ab09b6c651cc1c4d", off: "sha256:69a3e00d6012ea77" },
-        cli: { on: "sha256:ee813ca40794491a", off: "sha256:89193a2974c879e2" },
+        wrathbench: { on: "sha256:7159328853004b4a", off: "sha256:b526585d4d255669" },
+        cli: { on: "sha256:c93175669cc62d30", off: "sha256:536dc815a20b147d" },
       },
       e90: {
-        wrathbench: { on: "sha256:f8e1a2dd219868f0", off: "sha256:de502d1166491c1d" },
-        cli: { on: "sha256:6fed5deb2c49f513", off: "sha256:351e74847b57fbfc" },
+        wrathbench: { on: "sha256:25d68e4f48ac8202", off: "sha256:ad60460562a0e829" },
+        cli: { on: "sha256:d09c49f9f38b64d0", off: "sha256:ee73314d481c97ec" },
       },
       e360: {
-        wrathbench: { on: "sha256:bbe63693752797bb", off: "sha256:e80a854a70eb361e" },
-        cli: { on: "sha256:a6f27f8e57f43657", off: "sha256:064ef0867a01c191" },
+        wrathbench: { on: "sha256:26717dd472e24d69", off: "sha256:40a40754871235cf" },
+        cli: { on: "sha256:89acd394a76095d3", off: "sha256:5bc81c31bbc1ed75" },
       },
     };
     const episodes = [

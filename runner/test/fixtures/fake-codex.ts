@@ -36,6 +36,9 @@
  *   enospc       like tools, but stderr carries the CLI's rollout-write
  *                failure on a full disk while the turn still completes.
  *
+ * $WB_FAKE_ROLLOUT makes the default turn write the thread's rollout as well
+ * (`writeRollout`), compactions included.
+ *
  * `turn.completed.usage` is the THREAD's running total, as the real CLI's
  * is: each completed turn on a thread adds `PER_TURN` to it.
  *
@@ -43,7 +46,7 @@
  * `--version` prints a version line and exits, as the real CLI does.
  */
 
-import { writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 
 const argv = Bun.argv.slice(2);
 const mode = Bun.env["WB_FAKE_MODE"] ?? "tools";
@@ -341,10 +344,53 @@ switch (mode) {
     break;
 }
 
+/**
+ * $WB_FAKE_ROLLOUT, a JSON array indexed by turn: `{ total, compact?: { pre,
+ * post } }`. Each turn appends to the thread's rollout under $CODEX_HOME what
+ * the real CLI writes there — a compaction's four lines when the entry has
+ * one (0.159.3's remote shape: an empty `message` and an encrypted item),
+ * then the turn's last `token_count` — so the driver's rollout follower reads
+ * it after the process exits.
+ */
+function writeRollout(): void {
+  const spec = Bun.env["WB_FAKE_ROLLOUT"];
+  const home = Bun.env["CODEX_HOME"];
+  if (spec === undefined || home === undefined) return;
+  const entry = (JSON.parse(spec) as { total: number; compact?: { pre: number; post: number } }[])[turn - 1];
+  if (entry === undefined) return;
+  const dir = `${home}/sessions/2026/10/14`;
+  mkdirSync(dir, { recursive: true });
+  const count = (total: number, input = total): string =>
+    JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: input, output_tokens: total - input, total_tokens: total }, model_context_window: 475_000 } } });
+  const lines: string[] = [];
+  if (entry.compact !== undefined) {
+    lines.push(
+      count(entry.compact.pre),
+      JSON.stringify({
+        type: "compacted",
+        payload: {
+          message: "",
+          replacement_history: [
+            { type: "message", role: "user", content: [{ type: "input_text", text: `[turn ${turn}] Goal: survive and level as far as you can.` }] },
+            { type: "compaction", encrypted_content: "gAAAAfake" },
+          ],
+          window_number: 1,
+          latest_token_usage_record: { usage: { input_tokens: entry.compact.pre } },
+        },
+      }),
+      count(entry.compact.post, 0),
+      JSON.stringify({ type: "event_msg", payload: { type: "item_completed", item: { type: "ContextCompaction" }, started_at_ms: 1_000, completed_at_ms: 120_000 } }),
+    );
+  }
+  lines.push(count(entry.total));
+  appendFileSync(`${dir}/rollout-2026-10-14T00-00-00-${threadId}.jsonl`, `${lines.join("\n")}\n`);
+}
+
 // tools (and flaky after its first turn): text, one tool call, text, done
 emit({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: `turn ${turn}: acting` } });
 if (mcp !== null) await callTool(1);
 emit({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: `turn ${turn} done` } });
+writeRollout();
 emit({ type: "turn.completed", usage: threadUsage() });
 saveRecord();
 process.exit(0);

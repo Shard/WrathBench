@@ -21,6 +21,7 @@ import {
   runCodexEpisode,
   tomlString,
 } from "../src/adapter-codex";
+import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compaction";
 import { comparabilityOf, harnessOfRun } from "../src/comparability";
 import { HARNESSES, harnessOf, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, CODEX_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
@@ -315,6 +316,66 @@ describe("codex driver", () => {
     expect(records.some((r) => r.t === "harness" && String(r["text"]).includes("no assistant output"))).toBe(true);
     trajectory.close();
   }, 20_000);
+
+  test("a predicted compaction is asked about the turn before, and recorded off the rollout when it lands", async () => {
+    const thread = "01a119da-ef89-7a63-ac51-314ac6a70a52";
+    // 475,000 reported is a 450,000 threshold. 300k + 2 × 100k crosses it at
+    // the end of turn 3, so turn 4's context carries the ask; turn 4 compacts.
+    const rollout = [
+      { total: 100_000 },
+      { total: 200_000 },
+      { total: 300_000 },
+      { total: 70_000, compact: { pre: 440_000, post: 50_000 } },
+      { total: 80_000 },
+    ];
+    const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 5 }, {
+      WB_FAKE_THREAD_ID: thread,
+      WB_FAKE_ROLLOUT: JSON.stringify(rollout),
+    });
+    await runCodexEpisode(options);
+    const users = readRecord(recordPath)["userMessages"] as string[];
+    expect(users).toHaveLength(5);
+    expect(users.map((u) => u.includes(`- compaction_pending: ${COMPACTION_PENDING_NOTICE}`))).toEqual([false, false, false, true, false]);
+    for (const u of users) expect(u).not.toContain("- compacted:");
+    const records = readTrajectory(runDir);
+    expect(records.filter((r) => r.t === "harness" && r["kind"] === "compaction_ask")).toEqual([
+      expect.objectContaining({ turn: 3, ask: "before", context: 300_000, threshold: 450_000, growth: 100_000 }),
+    ]);
+    const compactions = records.filter((r) => r.t === "harness" && r["kind"] === "compaction");
+    expect(compactions).toEqual([
+      expect.objectContaining({
+        turn: 4,
+        trigger: null,
+        preTokens: 440_000,
+        postTokens: 50_000,
+        durationMs: 119_000,
+        at: 1_000,
+        summary: null,
+        summaryEncrypted: true,
+        encryptedChars: 9,
+        retainedTurns: [4],
+        window: 1,
+      }),
+    ]);
+    // The reader found the rollout every turn.
+    expect(records.some((r) => r.t === "harness" && String(r["text"]).startsWith("codex compaction reader unavailable"))).toBe(false);
+    trajectory.close();
+  }, 30_000);
+
+  test("a compaction no prediction covered is asked about on the next turn", async () => {
+    const rollout = [{ total: 100_000 }, { total: 60_000, compact: { pre: 446_911, post: 50_000 } }, { total: 70_000 }];
+    const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 3 }, {
+      WB_FAKE_THREAD_ID: "01a119da-ef89-7a63-ac51-314ac6a70a52",
+      WB_FAKE_ROLLOUT: JSON.stringify(rollout),
+    });
+    await runCodexEpisode(options);
+    const users = readRecord(recordPath)["userMessages"] as string[];
+    expect(users.map((u) => u.includes(`- compacted: ${COMPACTED_NOTICE}`))).toEqual([false, false, true]);
+    for (const u of users) expect(u).not.toContain("- compaction_pending:");
+    const asks = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "compaction_ask");
+    expect(asks).toEqual([expect.objectContaining({ turn: 2, ask: "after", context: 60_000 })]);
+    trajectory.close();
+  }, 30_000);
 
   test("no trim notice is ever raised: this harness runs no message window", async () => {
     const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 3 });

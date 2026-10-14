@@ -3,8 +3,8 @@
  * window raises around a block trim. Fixture-driven: no live stack, no model.
  *
  * The decisions under test are docs/METHODOLOGY.md, "Reflection is the model's
- * to take, and only at rest or in flight" and "An episodic log, written before
- * each trim, read back at rest or in flight".
+ * to take, and only at rest or in flight" and "An episodic log, asked for at
+ * each trim or compaction, read back at rest or in flight".
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -21,7 +21,14 @@ import {
   trimExpected,
   type ChatMessage,
 } from "../src/context";
-import { EpisodicLog, EPISODIC_TEXT_CHARS, capEntryText, formatEntry } from "../src/episodic";
+import {
+  EpisodicLog,
+  EPISODIC_PAGE_DEFAULT,
+  EPISODIC_PAGE_MAX,
+  EPISODIC_TEXT_CHARS,
+  capEntryText,
+  formatEntry,
+} from "../src/episodic";
 import { ContextBuilder, runLoop } from "../src/loop";
 import {
   READ_LOG_CLOSED,
@@ -381,18 +388,94 @@ describe("read_log", () => {
     expect((await callTool(ctx, "read_log", {})).isError).toBe(true);
   });
 
-  test("pages oldest first and clamps the page", async () => {
+  /** Entry texts of a page, in the order it printed them. */
+  const texts = (page: string): string[] =>
+    page
+      .split("\n")
+      .slice(1)
+      .map((l) => l.replace(/^\[[^\]]*\] /, ""));
+
+  test("reads newest first by default, and pages back from there", async () => {
     const { ctx } = makeCtx({ resting: true });
     for (let i = 1; i <= 5; i++) ctx.episodic.append({ turn: i, text: `entry ${i}` });
     await callTool(ctx, "reflect", {});
+    const first = await callTool(ctx, "read_log", {});
+    expect(first.text.split("\n")[0]).toBe("showing 1–5 of 5, newest first");
+    expect(texts(first.text)).toEqual(["entry 5", "entry 4", "entry 3", "entry 2", "entry 1"]);
     const page = await callTool(ctx, "read_log", { offset: 2, limit: 2 });
-    expect(page.text.split("\n")[0]).toBe("showing 3–4 of 5");
-    expect(page.text).toContain("entry 3");
-    expect(page.text).toContain("entry 4");
-    expect(page.text).not.toContain("entry 5");
-    // A limit past the cap is clamped, not refused.
-    const all = await callTool(ctx, "read_log", { limit: 999 });
-    expect(all.text.split("\n")[0]).toBe("showing 1–5 of 5");
+    expect(page.text.split("\n")[0]).toBe("showing 3–4 of 5, newest first");
+    expect(texts(page.text)).toEqual(["entry 3", "entry 2"]);
+  });
+
+  test("order oldest starts from the first entry; the order word is read ignoring case", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    for (let i = 1; i <= 5; i++) ctx.episodic.append({ turn: i, text: `entry ${i}` });
+    await callTool(ctx, "reflect", {});
+    const page = await callTool(ctx, "read_log", { order: " Oldest ", offset: 2, limit: 2 });
+    expect(page.text.split("\n")[0]).toBe("showing 3–4 of 5, oldest first");
+    expect(texts(page.text)).toEqual(["entry 3", "entry 4"]);
+    const bad = await callTool(ctx, "read_log", { order: "latest" });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('order?: "newest" | "oldest"');
+  });
+
+  test("the oldest entries of a long log are reachable both ways, past the page cap", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    const n = 3 * EPISODIC_PAGE_MAX + 7;
+    for (let i = 1; i <= n; i++) ctx.episodic.append({ turn: i, text: `entry ${i}` });
+    await callTool(ctx, "reflect", {});
+    const oldest = await callTool(ctx, "read_log", { order: "oldest", limit: 3 });
+    expect(texts(oldest.text)).toEqual(["entry 1", "entry 2", "entry 3"]);
+    // Newest first, the last page is the oldest entries.
+    const tail = await callTool(ctx, "read_log", { offset: n - 3, limit: 3 });
+    expect(tail.text.split("\n")[0]).toBe(`showing ${n - 2}–${n} of ${n}, newest first`);
+    expect(texts(tail.text)).toEqual(["entry 3", "entry 2", "entry 1"]);
+  });
+
+  test("limit is clamped to its bounds; an offset past the end says so instead of showing another page", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    for (let i = 1; i <= EPISODIC_PAGE_MAX + 10; i++) ctx.episodic.append({ turn: i, text: `entry ${i}` });
+    await callTool(ctx, "reflect", {});
+    const dflt = await callTool(ctx, "read_log", {});
+    expect(texts(dflt.text)).toHaveLength(EPISODIC_PAGE_DEFAULT);
+    const capped = await callTool(ctx, "read_log", { limit: 999 });
+    expect(texts(capped.text)).toHaveLength(EPISODIC_PAGE_MAX);
+    const floor = await callTool(ctx, "read_log", { limit: 0 });
+    expect(texts(floor.text)).toEqual([`entry ${EPISODIC_PAGE_MAX + 10}`]);
+    const past = await callTool(ctx, "read_log", { offset: 500 });
+    expect(past.isError).toBeUndefined();
+    expect(past.text).toBe(`offset 500 is past the end: ${EPISODIC_PAGE_MAX + 10}`);
+  });
+
+  test("filters by level range and zone on the harness's stamps; an unobserved stamp matches no filter", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    ctx.episodic.append({ turn: 1, level: 3, zone: "Elwynn Forest", text: "a" });
+    ctx.episodic.append({ turn: 2, level: 10, zone: "Westfall", text: "b" });
+    ctx.episodic.append({ turn: 3, level: 12, zone: "Westfall", text: "c" });
+    ctx.episodic.append({ turn: 4, text: "unstamped" });
+    ctx.episodic.append({ turn: 5, level: 15, zone: "Duskwood", text: "d" });
+    await callTool(ctx, "reflect", {});
+    const range = await callTool(ctx, "read_log", { minLevel: 10, maxLevel: 12 });
+    expect(range.text.split("\n")[0]).toBe("showing 1–2 of 2 matching level 10–12 (5 in the log), newest first");
+    expect(texts(range.text)).toEqual(["c", "b"]);
+    const zone = await callTool(ctx, "read_log", { zone: "  westFALL ", order: "oldest" });
+    expect(texts(zone.text)).toEqual(["b", "c"]);
+    expect(texts((await callTool(ctx, "read_log", { zone: "wood" })).text)).toEqual(["d"]);
+    expect(texts((await callTool(ctx, "read_log", { minLevel: 12 })).text)).toEqual(["d", "c"]);
+    expect(texts((await callTool(ctx, "read_log", { maxLevel: "3" })).text)).toEqual(["a"]);
+    // Both filters at once, and an empty zone filters nothing.
+    expect(texts((await callTool(ctx, "read_log", { zone: "westfall", minLevel: 11 })).text)).toEqual(["c"]);
+    expect(texts((await callTool(ctx, "read_log", { zone: " " })).text)).toHaveLength(5);
+    const none = await callTool(ctx, "read_log", { zone: "Stranglethorn", minLevel: 30 });
+    expect(none.isError).toBeUndefined();
+    expect(none.text).toBe('no entries match level 30+, zone "Stranglethorn" (5 in the log)');
+  });
+
+  test("an empty log says so whatever the query", async () => {
+    const { ctx } = makeCtx({ resting: true });
+    await callTool(ctx, "reflect", {});
+    const res = await callTool(ctx, "read_log", { zone: "Westfall", order: "oldest" });
+    expect(res.text).toBe("your episodic log is empty (nothing has been recorded with log_status)");
   });
 });
 

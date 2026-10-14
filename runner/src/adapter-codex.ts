@@ -129,7 +129,8 @@ import { cliBaseEnv, signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
-import { CodexLastCallReader } from "./codex-rollout";
+import { CodexLastCallReader, CodexRolloutFollower, type CodexCompaction } from "./codex-rollout";
+import { CompactionAsk, codexAutoCompactLimit, compactionNotice, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
@@ -283,6 +284,29 @@ export function parseCodexEvent(line: string): Record<string, unknown> | null {
     return null;
   }
   return eventSchema.safeParse(parsed).success ? (parsed as Record<string, unknown>) : null;
+}
+
+/**
+ * One compaction off the rollout (`CodexRolloutFollower`) as the record both
+ * CLI drivers write (`cli-compaction.ts`). The CLI names no trigger in exec
+ * mode, where every compaction is its own automatic one, so `trigger` stays
+ * null rather than a word it did not say.
+ */
+export function codexCompactionRecord(turn: number, c: CodexCompaction): CompactionRecord {
+  return {
+    t: "harness",
+    kind: "compaction",
+    turn,
+    trigger: null,
+    preTokens: c.preTokens,
+    postTokens: c.postTokens,
+    durationMs: c.durationMs,
+    at: c.at,
+    ...summaryFields(c.summary),
+    ...(c.encryptedChars !== null ? { summaryEncrypted: true as const, encryptedChars: c.encryptedChars } : {}),
+    retainedTurns: c.retainedTurns,
+    window: c.window,
+  };
 }
 
 /** The envelope type `wakeReader` pushes; not a CLI event, and acted on nowhere. */
@@ -781,6 +805,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   };
   const shutdown = async (): Promise<void> => {
     flushPendingResponse();
+    // A turn the episode ended inside may have left a compaction unread.
+    for (const c of rollout.read(threadId).compactions) trajectory.append(codexCompactionRecord(turn, c));
     builder.reflect.close("run_end");
     for (const e of builder.reflect.drainEvents()) {
       trajectory.append({ t: "reflect_window", turn: builder.currentTurn, ...e });
@@ -834,6 +860,17 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   });
   /** Each thread's last reported total: the baseline its next turn's delta is taken against. */
   const threadTotals = new Map<string, CodexUsage>();
+  /**
+   * The CLI's own compactions, read off the thread's rollout after each turn
+   * (`CodexRolloutFollower`), and the episodic-log ask they drive
+   * (`cli-compaction.ts`; METHODOLOGY, "An episodic log, asked for at each
+   * trim or compaction"). Both best effort: an unreadable rollout is one
+   * harness line per run, no compaction record and no ask.
+   */
+  const rollout = new CodexRolloutFollower(env["CODEX_HOME"], (reason) => {
+    trajectory.append({ t: "harness", kind: "session_note", text: `codex compaction reader unavailable: ${reason}` });
+  });
+  const compactionAsk = new CompactionAsk();
   const pushResponse = (entry: Record<string, unknown> & { t: string }): void => {
     flushPendingResponse();
     pendingResponse = entry;
@@ -1088,6 +1125,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       await stdoutTask.catch(() => undefined);
       await stderrTask.catch(() => undefined);
       const exitCode = await proc.exited.catch(() => null);
+      // The process has exited, so the rollout holds every line of this turn.
+      const followed = rollout.read(threadId);
+      for (const c of followed.compactions) trajectory.append(codexCompactionRecord(turn, c));
 
       if (done()) return finish();
       failure ??= detectCodexFailure(stderrChunks.join("\n"));
@@ -1126,6 +1166,19 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
 
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
+      }
+      // The episodic-log ask, delivered in the next turn's context: the
+      // context is the last call's input plus output as the rollout reported
+      // it, the threshold the pinned CLI's rule over the window it reported.
+      const reportedWindow = followed.context?.window;
+      const ask = compactionAsk.noteTurn({
+        context: followed.context?.total,
+        threshold: reportedWindow !== undefined ? codexAutoCompactLimit(reportedWindow) : undefined,
+        compactions: followed.compactions.map((c) => c.preTokens),
+      });
+      if (ask !== null) {
+        pendingNotices.push(compactionNotice(ask.ask, Date.now()));
+        trajectory.append({ t: "harness", kind: "compaction_ask", turn, ...ask });
       }
       await sleep(config.stepIntervalMs);
     }

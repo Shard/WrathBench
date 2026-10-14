@@ -26,11 +26,18 @@
  *               tools forever, so the grace expires and the CLI is killed.
  *
  * $WB_FAKE_COMPACT_TURN=<n> adds a `compact_boundary` envelope at the start of
- * turn n, in any mode.
+ * turn n, in any mode; $WB_FAKE_COMPACT_SUMMARY also writes its summary into
+ * the session transcript, as the real CLI does.
+ *
+ * $WB_FAKE_CONTEXT_STEP=<tokens> makes the default turn's API call read that
+ * many tokens per turn so far from the cache, and $WB_FAKE_CONTEXT_WINDOW
+ * puts the model's window on the `result` envelope's `modelUsage`.
  *
  * Everything it saw (argv, selected env, the system prompt, the MCP tool list,
  * the user messages) is written to $WB_FAKE_RECORD as JSON after every event.
  */
+
+import { appendFileSync, mkdirSync } from "node:fs";
 
 const argv = Bun.argv.slice(2);
 const mode = Bun.env["WB_FAKE_MODE"] ?? "tools";
@@ -191,6 +198,18 @@ for await (const chunk of Bun.stdin.stream()) {
     // announces as a `compact_boundary` system envelope (the shape real runs
     // recorded on 2.1.239).
     if (Bun.env["WB_FAKE_COMPACT_TURN"] === String(turn)) {
+      // The summary goes where the real CLI writes it: the session transcript
+      // under CLAUDE_CONFIG_DIR, the line after the boundary, parented on it.
+      const summary = Bun.env["WB_FAKE_COMPACT_SUMMARY"];
+      const configDir = Bun.env["CLAUDE_CONFIG_DIR"];
+      if (summary !== undefined && configDir !== undefined) {
+        mkdirSync(`${configDir}/projects/-tmp-fake`, { recursive: true });
+        appendFileSync(
+          `${configDir}/projects/-tmp-fake/fake-session.jsonl`,
+          `${JSON.stringify({ type: "system", subtype: "compact_boundary", uuid: "fake-compact", parentUuid: null })}\n` +
+            `${JSON.stringify({ type: "user", uuid: "fake-summary", parentUuid: "fake-compact", isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: "user", content: summary } })}\n`,
+        );
+      }
       emit({
         type: "system",
         subtype: "compact_boundary",
@@ -383,7 +402,7 @@ for await (const chunk of Bun.stdin.stream()) {
           input_tokens: 12,
           output_tokens: 7,
           cache_creation_input_tokens: 3,
-          cache_read_input_tokens: 100,
+          cache_read_input_tokens: Bun.env["WB_FAKE_CONTEXT_STEP"] !== undefined ? turn * Number(Bun.env["WB_FAKE_CONTEXT_STEP"]) : 100,
         },
       },
       session_id: "fake-session",
@@ -428,6 +447,16 @@ for await (const chunk of Bun.stdin.stream()) {
       duration_api_ms: 7,
       total_cost_usd: 0,
       usage: { input_tokens: 10, output_tokens: 5 },
+      ...(Bun.env["WB_FAKE_CONTEXT_WINDOW"] !== undefined
+        ? {
+            modelUsage: {
+              [Bun.env["WB_FAKE_RESOLVED_MODEL"] ?? (record["model"] as string | undefined) ?? "fake"]: {
+                contextWindow: Number(Bun.env["WB_FAKE_CONTEXT_WINDOW"]),
+                maxOutputTokens: 64_000,
+              },
+            },
+          }
+        : {}),
       session_id: "fake-session",
     });
   }

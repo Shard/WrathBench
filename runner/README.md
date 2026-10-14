@@ -197,9 +197,33 @@ Each compaction the CLI streams — a `system` envelope with subtype
 known `post_tokens` and `duration_ms`: recorded by 2.1.239 runs, and the same
 mapping is in the pinned 2.1.293 binary) — stays on the trajectory
 raw as `claude_system` and is also written as a `harness` record of kind
-`compaction` with `trigger`, `preTokens`, `postTokens` and `durationMs`, so a
-reader can count a run's compactions without knowing the CLI's vocabulary. It
-carries no text and nothing about it reaches the model.
+`compaction` with `trigger`, `preTokens`, `postTokens`, `durationMs`, `at` and
+`summary`, so a reader can count a run's compactions without knowing the CLI's
+vocabulary. The summary is not on the stream: the CLI writes it into its
+session transcript under the run's `claude-config/projects/`, as the `user`
+line flagged `isCompactSummary` whose `parentUuid` is the boundary's `uuid`,
+and the driver reads it from there (a bounded tail read, retried on the next
+few envelopes) before appending the record. The codex driver writes the same
+record off its rollout. It is trajectory only, and the public projection
+passes its token counts and duration but never the summary.
+
+**The episodic-log ask** (`src/cli-compaction.ts`; METHODOLOGY, "An episodic
+log, asked for at each trim or compaction"). Neither CLI has our trim, so the
+status entry the fixed loop asks for before each trim is asked for around the
+CLI's compaction instead, through the next turn's harness notices. In the
+pinned CLI the compaction starts at the window less `min(maxOutputTokens,
+20000)` less 13,000, the window being `compactWindow` or the model's
+`contextWindow` off the `result` envelope's `modelUsage` (`auto` on Claude
+Haiku 5.5 compacted at a `pre_tokens` of 967,077). At each turn boundary the
+driver compares the last API call's context against that threshold, capped by
+the lowest context this run has been compacted at — `auto` can apply a
+per-model default window the stream never names — and asks
+(`compaction_pending`) when the context plus two turns of the cycle's largest
+per-turn growth reaches it. A compaction no ask preceded is asked about on the
+next turn (`compacted`). Since a claude-code turn can run for hours and a
+notice can only ride a turn boundary, that after-ask is the usual case on long
+turns. Each ask is a `harness` record of kind `compaction_ask` with the
+context, threshold and growth it was decided on.
 
 ### Billing: subscription or nothing
 
@@ -322,6 +346,22 @@ and differs only where the CLI does:
   noted as a `usage_regressed` harness record (`src/codex-usage.ts`). Records
   written before the driver did this carry the total as `usage`; the viewer
   derives the same delta for them at read time.
+- **Compaction is in the rollout, not the stream.** The CLI compacts its own
+  thread once the last call's tokens reach 90% of the model's catalogue window
+  (the `model_context_window` it reports is 95% of that window, so 475,000
+  reported is 450,000), mid-turn and usually right after the turn's first
+  call; on GPT-6.1 Sol that froze the agent for about two minutes every 25
+  turns. Exec mode reports none of it. After each turn the driver reads what
+  the CLI appended to the thread's rollout (`CodexRolloutFollower` in
+  `src/codex-rollout.ts`, `sessions/**` only) and writes each compaction as a
+  `harness` record of kind `compaction`: when it started and how long it took
+  (the `ContextCompaction` item), the tokens it compacted and the CLI's
+  estimate after, and the summary. On a ChatGPT login the summary is not
+  readable: the CLI compacts remotely and keeps only an encrypted item, so the
+  record carries `summary: null`, `summaryEncrypted` with the item's length,
+  and `retainedTurns`, the turns whose context messages the CLI kept verbatim.
+  The same reading drives the episodic-log ask, with the threshold above
+  (`src/cli-compaction.ts`; the claude-code section "The compaction window").
 - **Failure vocabulary.** Exhaustion is a failed turn: `detectCodexFailure`
   maps a usage limit to the `quota-exhausted` pause, a rate limit to
   `rate-limited`, a dead login ("Your access token could not be refreshed",
