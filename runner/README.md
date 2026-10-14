@@ -200,10 +200,11 @@ raw as `claude_system` and is also written as a `harness` record of kind
 `compaction` with `trigger`, `preTokens`, `postTokens`, `durationMs`, `at` and
 `summary`, so a reader can count a run's compactions without knowing the CLI's
 vocabulary. The summary is not on the stream: the CLI writes it into its
-session transcript under the run's `claude-config/projects/`, as the `user`
-line flagged `isCompactSummary` whose `parentUuid` is the boundary's `uuid`,
-and the driver reads it from there (a bounded tail read, retried on the next
-few envelopes) before appending the record. The codex driver writes the same
+session transcript under the run's `claude-config/projects/`, as the first
+`user` line flagged `isCompactSummary` after the boundary line with the
+envelope's `uuid` (2.1.293 writes two attachment lines between them), and the
+driver reads it from there (a bounded tail read, retried on the next few
+envelopes) before appending the record. The codex driver writes the same
 record off its rollout. It is trajectory only, and the public projection
 passes its token counts and duration but never the summary.
 

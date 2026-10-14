@@ -199,15 +199,22 @@ for await (const chunk of Bun.stdin.stream()) {
     // recorded on 2.1.239).
     if (Bun.env["WB_FAKE_COMPACT_TURN"] === String(turn)) {
       // The summary goes where the real CLI writes it: the session transcript
-      // under CLAUDE_CONFIG_DIR, the line after the boundary, parented on it.
+      // under CLAUDE_CONFIG_DIR, after the boundary and the two attachment
+      // lines 2.1.293 puts between them.
       const summary = Bun.env["WB_FAKE_COMPACT_SUMMARY"];
       const configDir = Bun.env["CLAUDE_CONFIG_DIR"];
       if (summary !== undefined && configDir !== undefined) {
         mkdirSync(`${configDir}/projects/-tmp-fake`, { recursive: true });
         appendFileSync(
           `${configDir}/projects/-tmp-fake/fake-session.jsonl`,
-          `${JSON.stringify({ type: "system", subtype: "compact_boundary", uuid: "fake-compact", parentUuid: null })}\n` +
-            `${JSON.stringify({ type: "user", uuid: "fake-summary", parentUuid: "fake-compact", isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: "user", content: summary } })}\n`,
+          [
+            { type: "system", subtype: "compact_boundary", uuid: "fake-compact", parentUuid: null },
+            { type: "attachment", uuid: "fake-ctx", parentUuid: "fake-compact", attachment: { type: "session_context" } },
+            { type: "attachment", uuid: "fake-date", parentUuid: "fake-ctx", attachment: { type: "date" } },
+            { type: "user", uuid: "fake-summary", parentUuid: "fake-date", isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: "user", content: summary } },
+          ]
+            .map((l) => `${JSON.stringify(l)}\n`)
+            .join(""),
         );
       }
       emit({

@@ -149,7 +149,10 @@ export class CompactionAsk {
  * catalogue and the field's default. So 475,000 reported is 450,000 (GPT-6.1
  * Sol: no call at or above it went uncompacted across 72 cycles) and 258,400
  * is 244,800 (GPT-6 Astra, whose context peaked about 242k). Re-checked at
- * every CLI bump, like `DISABLED_FEATURES`.
+ * every CLI bump, like `DISABLED_FEATURES`. The driver sets no
+ * `model_auto_compact_token_limit`; should a codex compaction window ever be
+ * a run dimension (#131), the CLI takes the smaller of it and this 90%, and
+ * so must this.
  */
 export const CODEX_AUTO_COMPACT_PERCENT = 90;
 export const CODEX_EFFECTIVE_WINDOW_PERCENT = 95;
@@ -287,21 +290,27 @@ export function messageText(message: unknown): string | undefined {
 }
 
 /**
- * The summary in a chunk of transcript text: the `user` line the CLI flags
- * `isCompactSummary` whose `parentUuid` is the boundary's own `uuid` — the
- * shape a 2026-08 claude-code run's transcript holds, where the boundary and
- * its summary are adjacent lines. `partialHead` drops a first line cut by
- * the tail read.
+ * The summary in a chunk of transcript text: the first `user` line the CLI
+ * flags `isCompactSummary` after the `compact_boundary` line whose `uuid` is
+ * the boundary envelope's. Found by order, not by parent: in a 2.1.239
+ * transcript the summary's `parentUuid` is the boundary itself, while the
+ * pinned 2.1.293 writes two attachment lines (`session_context`, `date`)
+ * between them and parents the summary on the last of those. `partialHead`
+ * drops a first line cut by the tail read.
  */
 export function summaryInTranscript(text: string, boundaryUuid: string, partialHead: boolean): string | undefined {
   const lines = text.split("\n");
   if (partialHead) lines.shift();
-  for (let k = lines.length - 1; k >= 0; k--) {
-    const line = lines[k]!;
-    if (!line.includes('"isCompactSummary":true') || !line.includes(boundaryUuid)) continue;
+  let afterBoundary = false;
+  for (const line of lines) {
+    const wanted = afterBoundary
+      ? line.includes('"isCompactSummary":true')
+      : line.includes('"compact_boundary"') && line.includes(boundaryUuid);
+    if (!wanted) continue;
     try {
-      const rec = JSON.parse(line) as { isCompactSummary?: unknown; parentUuid?: unknown; message?: unknown };
-      if (rec.isCompactSummary === true && rec.parentUuid === boundaryUuid) return messageText(rec.message);
+      const rec = JSON.parse(line) as { uuid?: unknown; subtype?: unknown; isCompactSummary?: unknown; message?: unknown };
+      if (!afterBoundary) afterBoundary = rec.subtype === "compact_boundary" && rec.uuid === boundaryUuid;
+      else if (rec.isCompactSummary === true) return messageText(rec.message);
     } catch {
       // a half-written last line
     }
@@ -312,10 +321,12 @@ export function summaryInTranscript(text: string, boundaryUuid: string, partialH
 /**
  * The summary the Claude Code CLI wrote after a compact boundary, read from
  * its own session transcript under the run's `CLAUDE_CONFIG_DIR`
- * (`projects/<cwd slug>/<session id>.jsonl`). The stream-json output does
- * not reliably carry it; the transcript always does. A bounded tail read,
- * looked up soon after the boundary, so the line is near the end; undefined
- * when it is not there (yet). Never throws.
+ * (`projects/<cwd slug>/<session id>.jsonl`; checked against a 2.1.293
+ * Claude Haiku 5.5 run, whose stream envelope's `uuid` is the transcript
+ * boundary's). The stream-json output is not known to carry it; the
+ * transcript does. A bounded tail read, looked up soon after the boundary,
+ * so both lines are near the end; undefined when they are not there (yet).
+ * Never throws.
  */
 export function claudeCompactSummary(
   configDir: string,

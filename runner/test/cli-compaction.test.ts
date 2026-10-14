@@ -350,11 +350,33 @@ describe("codex rollout compactions", () => {
 const SESSION = "d79945d9-d777-4a26-9835-8f075947cbac";
 const BOUNDARY = "7e2a3fc8-d5f7-4453-8043-f8e2493dc73a";
 
-function transcriptLines(summary: unknown): string[] {
+/**
+ * A transcript around one compaction, in the pinned 2.1.293's shape: two
+ * attachment lines between the boundary and its summary, the summary parented
+ * on the last of them. `adjacent` is the 2.1.239 shape, parented on the
+ * boundary itself.
+ */
+function transcriptLines(summary: unknown, adjacent = false): string[] {
+  const between = adjacent
+    ? []
+    : [
+        JSON.stringify({ type: "attachment", uuid: "t1", parentUuid: BOUNDARY, attachment: { type: "session_context" } }),
+        JSON.stringify({ type: "attachment", uuid: "t2", parentUuid: "t1", attachment: { type: "date" } }),
+      ];
   return [
+    // An earlier compaction's summary, which is not this one's.
+    JSON.stringify({ type: "user", uuid: "s0", parentUuid: "b0", isCompactSummary: true, message: { role: "user", content: "an older summary" } }),
     JSON.stringify({ type: "assistant", uuid: "a1", parentUuid: "u0", message: { content: [{ type: "text", text: "working" }] } }),
-    JSON.stringify({ type: "system", subtype: "compact_boundary", uuid: BOUNDARY, parentUuid: null, compactMetadata: { trigger: "auto", preTokens: 934_427 } }),
-    JSON.stringify({ type: "user", uuid: "s1", parentUuid: BOUNDARY, isVisibleInTranscriptOnly: true, isCompactSummary: true, message: { role: "user", content: summary } }),
+    JSON.stringify({ type: "system", subtype: "compact_boundary", uuid: BOUNDARY, parentUuid: null, compactMetadata: { trigger: "auto", preTokens: 967_077 } }),
+    ...between,
+    JSON.stringify({
+      type: "user",
+      uuid: "s1",
+      parentUuid: adjacent ? BOUNDARY : "t2",
+      isVisibleInTranscriptOnly: true,
+      isCompactSummary: true,
+      message: { role: "user", content: summary },
+    }),
     JSON.stringify({ type: "assistant", uuid: "a2", parentUuid: "s1", message: { content: [{ type: "tool_use", name: "mcp__wrathbench__run_snippet" }] } }),
   ];
 }
@@ -368,10 +390,14 @@ function claudeConfig(lines: string[]): string {
 }
 
 describe("claude-code compaction summary", () => {
-  test("found in the session transcript by the boundary's uuid", () => {
+  test("found in the session transcript after the boundary with the envelope's uuid", () => {
     const text = "This session is being continued from a previous conversation that ran out of context.\n\nSummary: …";
     const dir = claudeConfig(transcriptLines(text));
     expect(claudeCompactSummary(dir, SESSION, BOUNDARY)).toBe(text);
+    // The older CLI's shape, the summary right after the boundary, reads the same.
+    expect(summaryInTranscript(transcriptLines("adjacent", true).join("\n"), BOUNDARY, false)).toBe("adjacent");
+    // A boundary with no summary after it yet is nothing, not the older one.
+    expect(summaryInTranscript(transcriptLines("x").slice(0, 3).join("\n"), BOUNDARY, false)).toBeUndefined();
     // Another boundary's summary is not this one's.
     expect(claudeCompactSummary(dir, SESSION, "00000000-0000-0000-0000-000000000000")).toBeUndefined();
     // A session id that is not one is never globbed.
