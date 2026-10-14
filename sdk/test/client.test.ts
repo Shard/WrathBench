@@ -1021,11 +1021,10 @@ describe("client: movement", () => {
         ev.data.surfaceZ = 154.04;
         return ev;
       };
+      // Wording approved by the operator, 2026-10-14.
       const expected =
-        "the route to (-4090.0, -2460.0, z 150.0) steps off a ledge at (-4090.4, -2460.0) whose foot (z 108.8) " +
-        "lies under the ground there (z 154.0) — a point inside solid terrain that nothing can stand on — so the " +
-        "character stopped at the edge; force does not apply. The z asked for is below the surface: quote a z on " +
-        "the ground (an earlier arrival's meshZ, or the z a unit standing there reports) and move again.";
+        "stopped at the edge (-4090.4, -2460.0): the drop ahead lands at z 108.8, underground (the ground here is " +
+        "z 154.0). Your target z 150.0 is below the ground — retry with a z on the surface. force does not apply.";
       const stub = startStub({ onConnect: () => frames([...loginSequence, selfCreate]) });
       const client = await connect({ baseUrl: stub.baseUrl, token: "t", events: { reconnect: false } });
       await client.createSession({ character: "Fenwick" });
@@ -1051,7 +1050,7 @@ describe("client: movement", () => {
       if (r2.ok) throw new Error("unreachable");
       expect(r2.status).toBe("drop");
       expect(r2.surfaceZ).toBe(154.04);
-      expect(r2.hint).toContain(expected.replace("(-4090.0, -2460.0, z 150.0)", "(-4091.0, -2460.0, z 150.0)"));
+      expect(r2.hint).toContain(expected);
       expect(r2.hint).not.toContain("force: true");
       expect(stub.actions.filter((a) => a.action === "move_to")).toHaveLength(2);
       client.close();
@@ -1068,7 +1067,7 @@ describe("client: movement", () => {
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error("unreachable");
       expect(r.status).toBe("drop");
-      expect(r.hint).toContain("whose foot (z -3.5) lies under the ground there (z 0.6)");
+      expect(r.hint).toContain("the drop ahead lands at z -3.5, underground (the ground here is z 0.6)");
       expect(stub.actions.map((a) => a.action)).toEqual(["move_to", "stop"]);
       client.close();
       await stub.stop();
@@ -1109,11 +1108,9 @@ describe("client: movement", () => {
     // Above the request by more than the band: the z asked for was under the
     // ground and the module ended the walk on it (the Dun Algaz road, z 150
     // asked for under a surface at 154.2) — a stale z to quote, not a level.
+    // Wording approved by the operator, 2026-10-14.
     const lifted = meshZHint({ x: -4090, y: -2460, z: 150 }, 154.2);
-    expect(lifted).toContain("z 154.2, not 150.0");
-    expect(lifted).toContain("The z asked for was 4.2 yards under the surface, so the walk ended on the ground instead");
-    expect(lifted).toContain("quote 154.2 for this spot next time");
-    expect(lifted).not.toContain("different level");
+    expect(lifted).toBe("arrived on the ground at (-4090.0, -2460.0, z 154.2); the requested z 150.0 was 4.2 yards underground.");
   });
 
   test("arrived with meshZ says which z the mesh used; a plain arrived carries neither", async () => {

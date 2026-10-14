@@ -841,8 +841,8 @@ export interface MoveToOptions {
    * it the ledge is walked whatever the estimate — the fall is then the
    * server's to charge, as it would a client's. It applies to drops only: a
    * step too steep to walk up is refused forced or not, since no client walks
-   * up a ledge, and so is a step whose foot lies under the ground (`drop`
-   * with `surfaceZ`), since no client falls through terrain.
+   * up a ledge, and so is a step that would land underground (`drop` with
+   * `surfaceZ`).
    */
   force?: boolean;
 }
@@ -1094,11 +1094,9 @@ function buriedFootHint(p: MovePoint, d: MoveResultData, surfaceZ: number): stri
   const edge = d.reachedPos ?? d.pos;
   const foot = edge.z + (d.dz ?? 0);
   return (
-    `the route to (${fmtXY(p)}, z ${p.z.toFixed(1)}) steps off a ledge at (${fmtXY(edge)}) whose foot ` +
-    `(z ${foot.toFixed(1)}) lies under the ground there (z ${surfaceZ.toFixed(1)}) — a point inside solid ` +
-    `terrain that nothing can stand on — so the character stopped at the edge; force does not apply. The z ` +
-    `asked for is below the surface: quote a z on the ground (an earlier arrival's meshZ, or the z a unit ` +
-    `standing there reports) and move again.`
+    `stopped at the edge (${fmtXY(edge)}): the drop ahead lands at z ${foot.toFixed(1)}, underground (the ground ` +
+    `here is z ${surfaceZ.toFixed(1)}). Your target z ${p.z.toFixed(1)} is below the ground — retry with a z on ` +
+    `the surface. force does not apply.`
   );
 }
 
@@ -1278,8 +1276,8 @@ export function meshZHint(point: { x: number; y: number; z: number }, meshZ: num
   }
   if (dz > 0) {
     return (
-      `${head} The z asked for was ${dz.toFixed(1)} yards under the surface, so the walk ended on the ground ` +
-      `instead. The mesh owns z; quote ${meshZ.toFixed(1)} for this spot next time.`
+      `arrived on the ground at (${fmtXY(point)}, z ${meshZ.toFixed(1)}); the requested z ${point.z.toFixed(1)} ` +
+      `was ${dz.toFixed(1)} yards underground.`
     );
   }
   return (
