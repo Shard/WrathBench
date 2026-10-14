@@ -273,6 +273,13 @@ export interface FleetJob {
    * not a model dimension: the same entry runs on whichever account is free.
    */
   subscription?: string;
+  /**
+   * Set by the planner on a config job with a numeric `repeat` it is about to
+   * start (`owedCopies`): the copies each ref still owes, counted off the runs
+   * on disk, and every run id already used, so the remainder's ids are fresh
+   * ones. Absent means the full `repeat` for every ref. Never from the file.
+   */
+  owed?: { copies: Readonly<Record<string, number>>; taken: ReadonlySet<string> };
 }
 
 export interface FleetAccounts {

@@ -125,14 +125,32 @@ otherwise on whichever pool account is free.
   flight, SIGTERM at the next episode boundary. Worst case a just-started
   episode is terminated gracefully; never a corrupted one. A pool job frees
   its account when the process exits; deleting a job from the queue drains it
-  the same way.
+  the same way. A roster starts its next episode milliseconds after the last
+  one ends, faster than the supervisor's once-a-tick look, so the drain is
+  also written beside the job's log (`<jsonl>.drain`). The roster checks it
+  before every launch and exits at that boundary. Re-enabling the job before
+  then removes it.
 - `"enabled": true`, or a brand-new job — spawned on the next tick (a pool job
-  when an account is free). A job respawned the same day gets
-  `--resume-roster` so finished runs are skipped. `enabled` belongs to a JOB; on
-  a roster entry it is refused (pause a character with `idle: "none"` —
-  "Strict keys", below).
-- A job whose process exits while enabled is *finished*, not respawned; flip
-  it off and on again to re-arm it.
+  when an account is free) for what its `repeat` still owes. `enabled` belongs
+  to a JOB; on a roster entry it is refused (pause a character with
+  `idle: "none"` — "Strict keys", below).
+- **`repeat: n` is a total, counted off the runs on disk**, never off the
+  supervisor's memory, which a restart loses. A job's progress is the counted
+  runs its ref already has on that episode in this harness series: the same
+  runs the policy's tier target counts (`isCounted`, archive included),
+  whoever launched them. A policy pick shares the job's name, so the two
+  cannot be told apart, and a run is worth the same either way. A run that
+  ended `manual`, `attempt-failed`, `stale`, `adapter-error`, on a harness
+  error or with no model response does not count and is redone under a fresh
+  run id. A run still in flight does not count yet. A job whose count is met is
+  **done**: it spawns nothing across restarts, day stamps and releases, and
+  `--status` shows `(3/3 counted) — done`. To get more runs, raise `repeat`;
+  flipping the job off and on adds none.
+- A job whose process exits while enabled is *finished* for the life of that
+  supervisor, and is not respawned even if a copy did not count. A supervisor
+  restart, or flipping the job off and on, retries what it still owes. A job
+  that can never be satisfied (a dead endpoint) therefore costs its remainder
+  once per boot or flip, and never loops.
 - A malformed edit is complained about and ignored; the last good config keeps
   running. Check it first if you like:
   `docker compose -f infra/compose.yml run --rm --no-deps fleet bun infra/run-fleet.ts --dry-run`
@@ -302,7 +320,9 @@ queue       jobs, in priority order (never `probing`: a probe is a campaign's ce
             any other key REFUSES the job by name ("Strict keys", below). With `account` the job is PINNED to it and never the policy's;
             without, it is a manual pool job that outranks the policy. The name is always
             `<first ref>-<episode>` (run ids `fleet-<name>-<model>[-<effort>][-<compactWindow>]-<stamp>`), one job
-            per (ref, episode). A pool job whose ref is not eligible for its EPISODE is skipped
+            per (ref, episode). A numeric `repeat` is DERIVED like a campaign's completion: a total
+            of counted runs per ref on disk in this series, and a job that meets it is done ("Steer
+            it", above). A pool job whose ref is not eligible for its EPISODE is skipped
             with the reason in --status; a pinned one waits the same way. A waiting manual job
             reserves the POOL only — the paid and local classes still pick, and the reservation
             is named in --status.
@@ -1177,7 +1197,9 @@ but does climb the ladder, so a dead provider costs at most ten launches over
 ~10 hours before it is retired. A manual pool job (`queue` entry without an account) always
 outranks the policy for a POOL account; add one to force a specific run (an
 `e360` for a model that has not climbed needs `tier: "t2"` on its roster entry
-as well). How many runs a model gets is its `tier` and nothing else.
+as well). Its `repeat` tops the model's counted runs on that episode up to
+`n`, the policy's runs included ("Steer it", above). How many runs a model gets
+is its `tier` and nothing else.
 
 ### Probe campaigns
 

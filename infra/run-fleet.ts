@@ -34,7 +34,10 @@
  *    unavoidable small race — a child spawned in the instant between the
  *    idle check and the kill gets run-roster's graceful episode termination
  *    (30s grace), not a hard kill — so in the worst case "disable" costs one
- *    just-started episode, never a corrupted one.
+ *    just-started episode, never a corrupted one. Because a roster launches its
+ *    next episode within milliseconds, the drain is also a marker file the
+ *    roster reads before every launch (`drainMarkerPath`), so a multi-episode
+ *    job stops at its next boundary instead of running every copy.
  *  - enabled:true / new job -> spawned on the next tick.
  *  - malformed or invalid config on re-read, or a store that cannot be
  *    opened -> complaint, last good config kept, nothing running is touched.
@@ -72,6 +75,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
   writeSync,
@@ -145,6 +149,10 @@ import {
   characterKey,
   charactersFrom,
   characterStanding,
+  countedFrom,
+  owedCopies,
+  owesNothing,
+  progressLabel,
   tailOf,
   TICK_MS,
   tripsBreaker,
@@ -178,7 +186,7 @@ import {
   WINDOW_PHASES,
 } from "./run-fleet-state";
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
-import { accountHeldBy, releaseRunSession } from "./run-roster";
+import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
@@ -771,12 +779,16 @@ async function main(): Promise<void> {
   const liveJobs = new Map<string, FleetJob>();
   /** Unlimited sessions already sent their one SIGTERM: a second would hard-exit the pause. */
   const pauseSignalled = new Set<string>();
-  let lastPlan: QueuePlan = { assign: [], waiting: [], skipped: [] };
+  let lastPlan: QueuePlan = { assign: [], waiting: [], skipped: [], done: [] };
   /** Paused runs the last plan did not resume, with why; for the state file. */
   let lastPaused: PausedListing[] = [];
   /** Paused runs ended instead of resumed, this session; for the state file. */
   const endedRuns: EndedRun[] = [];
   const complainedSkips = new Map<string, string>();
+  /** Config jobs whose `repeat` the counted runs meet, already announced as done. */
+  const announcedDone = new Set<string>();
+  /** The pinned config jobs the newest tick found done; the queue's own are on the plan. */
+  let pinnedDone: FleetJob[] = [];
   /** Jobs handed an account this tick, claimed by spawnJob; a gated tick re-plans next time. */
   const pending = new Map<string, FleetJob>();
   const announcedPicks = new Set<string>();
@@ -934,6 +946,9 @@ async function main(): Promise<void> {
     // was written down.
     const probes = probeRunsOf(runs);
     campaignJobs = pinnedCampaignJobs(cfg, probes, healthyFrom(states));
+    // Every run id on disk, archive included: a job's remainder never reuses one.
+    const takenRunIds = new Set(runs.map((f) => f.runId));
+    pinnedDone = [];
     for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
@@ -942,7 +957,16 @@ async function main(): Promise<void> {
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }
-      const placed = assignLane(job);
+      // A pinned job's `repeat` is met off the runs on disk, the queue's rule
+      // (`owedCopies`): one that owes nothing yields no spawn, so a supervisor
+      // boot cannot start it again. Only a job that is not running is asked —
+      // a live roster keeps its spawn and is never drained for finishing.
+      const owed = job.enabled && !sets.running.has(job.name) ? owedCopies(job, runnableRefs(job, cfg.roster, eligible), countedFrom(states)) : undefined;
+      if (owesNothing(owed)) {
+        pinnedDone.push(job);
+        continue;
+      }
+      const placed = assignLane(owed === undefined ? job : { ...job, owed: { copies: owed, taken: takenRunIds } });
       out.push(jobSpawn(placed, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
       if (job.enabled || sets.running.has(job.name)) {
         for (const r of job.refs) runningRefs.add(r);
@@ -1153,6 +1177,8 @@ async function main(): Promise<void> {
       eligible,
       runningRefs,
       affinity,
+      counted: countedFrom(states),
+      takenRunIds,
     });
     lastPlan.skipped.unshift(...pinnedSkips);
     // Every fresh launch this tick, for the cross-account name sweep below.
@@ -1286,6 +1312,18 @@ async function main(): Promise<void> {
       }
     }
     for (const j of cfg.jobs) if (!lastPlan.skipped.some((sk) => sk.job.name === j.name)) complainedSkips.delete(j.name);
+    // A job whose `repeat` is met says so once, not once a tick; raising its
+    // repeat and meeting it again says so again.
+    const done = [...pinnedDone, ...lastPlan.done];
+    const counted = countedFrom(states);
+    for (const j of done) {
+      if (announcedDone.has(j.name)) continue;
+      announcedDone.add(j.name);
+      const progress = progressLabel(j, counted) ?? "met";
+      say(`queue ${j.name}: done — ${j.ref} ${j.episode} ${progress}; nothing spawns (raise repeat for more)`);
+      record({ job: j.name, event: "queue-done", detail: progress });
+    }
+    for (const n of [...announcedDone]) if (!done.some((j) => j.name === n)) announcedDone.delete(n);
     return out;
   };
   const poolView = (cfg: FleetConfig): PoolView => ({
@@ -1305,6 +1343,23 @@ async function main(): Promise<void> {
     paused: lastPaused,
     ended: endedRuns,
   });
+
+  /**
+   * The drain, said where the job's roster reads it before every launch
+   * (`drainMarkerPath`): a roster starts its next episode milliseconds after
+   * the last one ends, so the SIGTERM below almost never found a multi-episode
+   * job between episodes. `why` undefined clears it. Best effort — the SIGTERM
+   * path still stops a roster that is napping or waiting on an account.
+   */
+  const markDrain = (name: string, why: string | undefined): void => {
+    const path = drainMarkerPath(jobJsonlPath(name, stampToday));
+    try {
+      if (why === undefined) rmSync(path, { force: true });
+      else writeFileSync(path, JSON.stringify({ at: Date.now(), why }) + "\n");
+    } catch (e) {
+      say(`job ${name}: could not ${why === undefined ? "clear" : "write"} the drain marker ${path} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   const spawnJob = (spawn: JobSpawn): void => {
     {
@@ -1333,6 +1388,8 @@ async function main(): Promise<void> {
     writeFileSync(rosterPath, JSON.stringify(entries, null, 2) + "\n");
     // A respawn (job toggled off then on again the same day) resumes the
     // materialized roster instead of relaunching finished runs from scratch.
+    // A queue job's remainder needs none of that — its ids are fresh ones
+    // (`owedCopies`) — but a paused run in the same roster still does.
     const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
     const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster, runPods: config.policy.runPods });
     const stdoutLog = jobLogPath(spawn.name, stampToday);
@@ -1343,6 +1400,8 @@ async function main(): Promise<void> {
     // stderr from clobbering each other.
     mkdirSync(dirname(stdoutLog), { recursive: true });
     const fd = openSync(stdoutLog, "a");
+    // A fresh process never inherits a drain meant for the one before it.
+    markDrain(spawn.name, undefined);
     const proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdin: "ignore", stdout: fd, stderr: fd });
     writeSync(fd, `---- spawned ${new Date().toISOString()} pid ${proc.pid} ${argv.join(" ")}\n`);
     closeSync(fd);
@@ -1557,6 +1616,7 @@ async function main(): Promise<void> {
       if (p.exited && sets.running.has(name)) {
         sets.running.delete(name);
         const drained = sets.draining.delete(name);
+        markDrain(name, undefined);
         if (!drained) sets.finished.add(name);
         const acct = assigned.get(name);
         assigned.delete(name);
@@ -1651,6 +1711,7 @@ async function main(): Promise<void> {
     for (const name of [...spared]) if (!refusedJobs.has(name)) spared.delete(name);
     for (const name of actions.undrain) {
       sets.draining.delete(name);
+      markDrain(name, undefined);
       say(`job ${name}: re-enabled before it drained — keeping it running`);
       record({ job: name, event: "undrain" });
     }
@@ -1661,6 +1722,7 @@ async function main(): Promise<void> {
     for (const name of actions.drain) {
       sets.draining.add(name);
       const why = pauseSwitch !== undefined ? "the fleet is paused" : (drainReasons.get(name) ?? "disabled");
+      markDrain(name, why);
       const how = pausesOnDrain(liveJobs.get(name)) ? "pausing now (no episode boundary on an unlimited session)" : "draining (SIGTERM at the next episode boundary)";
       say(`job ${name}: ${why} — ${how}`);
       record({ job: name, event: "draining", detail: why });

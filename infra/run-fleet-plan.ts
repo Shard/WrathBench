@@ -138,6 +138,74 @@ export interface QueueSkip {
   reason: string;
 }
 
+// ------------------------------------------------------------- queue progress
+//
+// A config job's `repeat` is a TARGET, counted off the runs on disk, never off
+// the supervisor's memory. It used to be the latter: the job was "finished"
+// once its roster process exited, in a set that died with the supervisor, and
+// the next boot took a new date stamp, so the same job materialised `repeat`
+// fresh run ids and ran them all again: a `codex-luna-6` e360 x3 job added on
+// 2026-10-03 launched three more e360 runs on every supervisor boot until an
+// operator noticed on 2026-10-14.
+//
+// The counting rule is the policy's, so the two can never disagree about what
+// a run is worth:
+//
+//  - A run counts toward `repeat` when it is COUNTED evidence (`isCounted`: it
+//    finished with model responses, is not an extra or an override, and did not
+//    end for a reason that is not the model's) on the job's episode, in this
+//    supervisor's harness series (`inSeries`), for the roster entry the ref
+//    names. That is exactly `EpisodeStats.counted`, the number the policy's
+//    tier target reads, archive included.
+//  - A failed attempt (`attempt-failed`, `stale`), a fleet stop or an operator
+//    cut (`manual`), a transport failure (`adapter-error`), a harness error and
+//    a launch that never produced a response do not count, and the remainder is
+//    attempted again — the same rerun the policy gives a model.
+//  - A run still in flight does not count yet.
+//
+// It is a TOTAL for the (ref, episode, series), not "n more": a policy pick
+// names its job `<ref>-<episode>`, the same name a manual job gets, so there is
+// no telling one's runs from the other's, and a run is worth the same whoever
+// asked for it. `repeat: 3` tops the pair up to three counted runs; to get more,
+// raise it.
+//
+// What bounds the retries is unchanged: a job whose roster exits while
+// enabled is finished for the life of that supervisor (`JobSets.finished`), so
+// a job that can never be satisfied — a dead endpoint — costs at most its
+// remainder once per supervisor boot, or per off/on flip, never a loop.
+
+/** Counted runs of a roster entry on an episode, in this series: the projection's own number. */
+export type CountedRuns = (ref: string, episode: EpisodeId) => number;
+
+/** `CountedRuns` read off the projection the policy schedules from. */
+export function countedFrom(states: readonly ModelState[]): CountedRuns {
+  const byName = new Map(states.map((s) => [s.name, s]));
+  return (ref, episode) => byName.get(ref)?.perEpisode[episode]?.counted ?? 0;
+}
+
+/**
+ * The copies each of `refs` still owes a config job, or undefined for a job
+ * that has no count to meet: a `"loop"`, a policy pick (`attempt`) and a probe
+ * are scheduled by their own rules. Pure.
+ */
+export function owedCopies(job: Pick<FleetJob, "repeat" | "episode" | "attempt" | "probe">, refs: readonly string[], counted: CountedRuns): Record<string, number> | undefined {
+  if (job.repeat === "loop" || job.attempt !== undefined || job.probe !== undefined) return undefined;
+  const repeat = job.repeat;
+  return Object.fromEntries(refs.map((r) => [r, Math.max(0, repeat - counted(r, job.episode))]));
+}
+
+/** Whether every ref's copies are met: the job is done, and nothing about it is started. */
+export function owesNothing(owed: Readonly<Record<string, number>> | undefined): boolean {
+  return owed !== undefined && Object.keys(owed).length > 0 && Object.values(owed).every((n) => n === 0);
+}
+
+/** `<counted>/<repeat>` per ref, for a log line or `--status`; undefined for a job with no count. */
+export function progressLabel(job: Pick<FleetJob, "refs" | "repeat" | "episode" | "attempt" | "probe">, counted: CountedRuns): string | undefined {
+  if (job.repeat === "loop" || job.attempt !== undefined || job.probe !== undefined) return undefined;
+  const one = (r: string): string => `${counted(r, job.episode)}/${job.repeat}`;
+  return job.refs.length === 1 ? `${one(job.refs[0]!)} counted` : job.refs.map((r) => `${r} ${one(r)}`).join(", ") + " counted";
+}
+
 export interface QueuePlan {
   /** Jobs to spawn this tick, in queue order, each on the pool account it was given. */
   assign: { job: FleetJob; account: string }[];
@@ -145,6 +213,8 @@ export interface QueuePlan {
   waiting: FleetJob[];
   /** Jobs that will not run, and why (logged once per reason by the caller). */
   skipped: QueueSkip[];
+  /** Enabled jobs whose `repeat` the counted runs on disk already meet (`owedCopies`). */
+  done: FleetJob[];
 }
 
 /**
@@ -158,6 +228,11 @@ export interface QueuePlan {
  *
  * `freeplay` bypasses the tiers gate: it is unscored, so there is no
  * promotion to record for it.
+ *
+ * With `counted`, a job's `repeat` is met off the runs on disk (`owedCopies`):
+ * a job that owes nothing is `done` and takes no account, and an assigned one
+ * carries the copies it still owes and the run ids already used (`takenRunIds`),
+ * so its spawn launches only the remainder, under ids nothing has used.
  */
 export function planQueue(opts: {
   queue: FleetJob[];
@@ -181,8 +256,12 @@ export function planQueue(opts: {
    * account is busy takes the next free one, as before.
    */
   affinity?: AccountAffinity;
+  /** Counted runs per (ref, episode) in this series (`countedFrom`); absent reads every job as owing its whole `repeat`. */
+  counted?: CountedRuns;
+  /** Every run id on disk, archive included: a remainder copy never reuses one. */
+  takenRunIds?: ReadonlySet<string>;
 }): QueuePlan {
-  const plan: QueuePlan = { assign: [], waiting: [], skipped: [] };
+  const plan: QueuePlan = { assign: [], waiting: [], skipped: [], done: [] };
   const taken = new Set([...opts.running.values()].map((a) => a.toUpperCase()));
   const free = opts.pool.filter((a) => !taken.has(a.toUpperCase()) && opts.held(a) === undefined);
   const runningRefs = new Set<string>(opts.runningRefs ?? []);
@@ -202,6 +281,11 @@ export function planQueue(opts: {
       });
       continue;
     }
+    const owed = opts.counted === undefined ? undefined : owedCopies(job, refs, opts.counted);
+    if (owesNothing(owed)) {
+      plan.done.push(job);
+      continue;
+    }
     const clash = refs.find((r) => runningRefs.has(r));
     if (clash !== undefined) {
       plan.skipped.push({ job, reason: `${clash} is already running under another job — one character per model` });
@@ -218,7 +302,7 @@ export function planQueue(opts: {
       continue;
     }
     for (const r of refs) runningRefs.add(r);
-    plan.assign.push({ job, account });
+    plan.assign.push({ job: owed === undefined ? job : { ...job, owed: { copies: owed, taken: opts.takenRunIds ?? new Set() } }, account });
   }
   return plan;
 }
@@ -565,10 +649,13 @@ export function jobSpawn(
           wiki: allProbeDims.wiki,
           ...(allProbeDims.objective !== undefined ? { objective: allProbeDims.objective } : {}),
         };
-  const copies = job.repeat === "loop" ? 1 : job.repeat;
+  // What the planner says a ref still owes (`owedCopies`), else the whole count.
+  const copiesOf = (r: string): number => job.owed?.copies[r] ?? (job.repeat === "loop" ? 1 : job.repeat);
   const entries: RosterSpec[] = [];
   // A resume is its own witness too: the run was launched, so its ref is runnable.
   for (const r of job.resume !== undefined ? job.refs.filter((x) => roster[x] !== undefined) : runnableRefs(job, roster, eligible)) {
+    const copies = copiesOf(r);
+    if (copies <= 0) continue;
     const { tier: _tier, idle: _idle, ...entry } = roster[r]!;
     // A probe keeps only what identifies the model; the campaign owns the rest.
     const { objective: _obj, watchdogs: _wd, maxToolCalls: _mtc, wikiCoords: _wc, wiki: _wk, ...credentials } = entry;
@@ -638,10 +725,19 @@ export function jobSpawn(
       `fleet-${job.name}-${slug(base.model)}${base.effort !== undefined ? `-${slug(base.effort)}` : ""}` +
       `${base.compactWindow !== undefined ? `-${slug(base.compactWindow)}` : ""}-${stamp}` +
       (job.attempt !== undefined && job.attempt > 1 ? `-a${job.attempt}` : "");
-    for (let k = 1; k <= copies; k++) {
-      entries.push(k === 1 ? (job.attempt !== undefined && job.attempt > 1 ? { ...base, runId } : base) : { ...base, runId: `${runId}-r${k}` });
+    // Copy k's id: the first is the attempt's, else the bare id `fillEntries`
+    // stamps; the rest are `-r<k>`. A remainder skips every id already on disk
+    // — under the same stamp a redone copy would otherwise land on the id of
+    // the run it replaces, which `--resume-roster` skips as terminated.
+    const firstId = job.attempt !== undefined && job.attempt > 1 ? runId : bareRunId(job.name, base, stamp);
+    const idOf = (k: number): string => (k === 1 ? firstId : `${runId}-r${k}`);
+    for (let k = 1, made = 0; made < copies; k++) {
+      if (job.owed?.taken.has(idOf(k)) === true) continue;
+      entries.push(k === 1 ? (job.attempt !== undefined && job.attempt > 1 ? { ...base, runId } : base) : { ...base, runId: idOf(k) });
+      made++;
     }
   }
+  if (entries.length === 0 && owesNothing(job.owed?.copies)) fail(`job ${job.name}: its repeat is already met by counted runs — nothing to spawn`);
   if (entries.length === 0) fail(`job ${job.name}: no ref of ${job.ref} is eligible for ${job.episode}`);
   const spawn: JobSpawn = {
     name: job.name,
@@ -1737,10 +1833,17 @@ export function fillEntries(spawn: JobSpawn, stamp: string): RosterSpec[] {
   return spawn.entries.map((e) => ({
     ...e,
     account: spawn.account,
-    runId:
-      e.runId ??
-      `fleet-${spawn.name}-${slug(e.model)}${e.effort !== undefined ? `-${slug(e.effort)}` : ""}-${stamp}`,
+    runId: e.runId ?? bareRunId(spawn.name, e, stamp),
   }));
+}
+
+/**
+ * The id an entry with none is given: `fleet-<job>-<model>[-<effort>]-<stamp>`.
+ * The first copy of a job's entry carries no id and gets this one, so a
+ * remainder that has to know which ids are taken asks the same function.
+ */
+export function bareRunId(job: string, e: { model: string; effort?: string | undefined }, stamp: string): string {
+  return `fleet-${job}-${slug(e.model)}${e.effort !== undefined ? `-${slug(e.effort)}` : ""}-${stamp}`;
 }
 
 /**
@@ -2021,6 +2124,8 @@ export function planTick(
   affinity?: AccountAffinity,
   /** Which subscription each ref's live run is on (`liveSubscriptions`); absent reads every claude ref as the default lane. */
   lanes: ReadonlyMap<string, string> = new Map(),
+  /** Every run id on disk, so a planned remainder names the ids its spawn will really use. */
+  takenRunIds: ReadonlySet<string> = new Set(),
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2029,14 +2134,21 @@ export function planTick(
   heldPicks: HeldPick[];
 } {
   const eligible = eligibleFrom(states);
+  const counted = countedFrom(states);
   const resumed = new Set(resumes.map((r) => r.job.name));
   // A pinned campaign's next cell is a pinned job, and it has to be one HERE
   // too: `planTick` is what `--status` and `--dry-run` print, and a probe the
   // live loop would spawn but this planner never mentions is exactly the kind
   // of quiet disagreement between the supervisor and its own report that has
-  // cost a night before.
+  // cost a night before. A pinned config job whose `repeat` is met is not
+  // spawned, by the queue's own rule (`owedCopies`).
   const pinned = [...pinnedJobs(config), ...pinnedCampaignJobs(config, probeRuns, healthyFrom(states))]
     .filter((j) => j.enabled && !resumed.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
+    .flatMap((j) => {
+      const owed = owedCopies(j, runnableRefs(j, config.roster, eligible), counted);
+      if (owesNothing(owed)) return [];
+      return [owed === undefined ? j : { ...j, owed: { copies: owed, taken: takenRunIds } }];
+    })
     .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
   // Resumes hold their accounts and their refs ahead of everything fresh.
   const running = new Map(resumes.map((r) => [r.job.name, r.account]));
@@ -2052,6 +2164,8 @@ export function planTick(
     eligible,
     runningRefs,
     ...(affinity !== undefined ? { affinity } : {}),
+    counted,
+    takenRunIds,
   });
   const policyStates = states.filter((st) => policyRefs(config).has(st.name));
   const billingOfName = new Map(states.map((st) => [st.name, st.billing]));

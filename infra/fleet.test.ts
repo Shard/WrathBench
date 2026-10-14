@@ -20,6 +20,7 @@ import {
   isClaudeFamily,
   concurrencyKeyOfRef,
   jobArgv,
+  jobJsonlPath,
   fleetComplete,
   resolveStatePath,
   parseFleet as parseFleetIn,
@@ -60,6 +61,10 @@ import {
   resumeNotBefore,
   withResume,
   planQueue,
+  countedFrom,
+  owedCopies,
+  owesNothing,
+  progressLabel,
   planPolicy,
   affinityFrom,
   affinityOf,
@@ -113,7 +118,7 @@ import { billingOf } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import { campaignSquares, campaignWork, type Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
@@ -121,7 +126,7 @@ import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/conf
 import { parseCampaigns } from "../runner/src/campaigns";
 import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
-import { backoffMs, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
+import { backoffMs, drainMarkerPath, drainRequested, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
 import { isCounted, readRunFacts } from "../runner/src/models";
 import { listRuns } from "../runner/viewer/runs";
@@ -1614,7 +1619,7 @@ describe("jobs, pinned and pool: one unit of work over the account classes", () 
 
   test("a disabled job is neither assigned nor skipped — it is simply not in the plan", () => {
     const plan = planQueue({ ...base, queue: [job({ ref: "glm", enabled: false })], running: new Map() });
-    expect(plan).toEqual({ assign: [], waiting: [], skipped: [] });
+    expect(plan).toEqual({ assign: [], waiting: [], skipped: [], done: [] });
   });
 
   test("a job materialises: episode dimensions fold in, repeat n is n run ids, loop is --loop, tiers never reach the roster", () => {
@@ -2067,7 +2072,7 @@ describe("scheduling policy: defer ladder and retirement", () => {
     source: "queue",
     ...over,
   });
-  const empty = { assign: [], waiting: [], skipped: [] };
+  const empty = { assign: [], waiting: [], skipped: [], done: [] };
 
   test("e90 is every model's on arrival; e360 is earned by a level-5 e90 run or forced by tiers", () => {
     const states = modelStatesOf(rosterModels(roster), [run("stealth/ox-alpha:free", "e90", 1, { bestLevel: 5 })]);
@@ -3346,7 +3351,7 @@ describe("account affinity and cross-account name hygiene", () => {
     ...over,
   });
   const base = { roster, pool: ["RUNNER", "RUNNER2", "RUNNER3"], finished: new Set<string>(), held: () => undefined, cooling: () => undefined };
-  const empty = { assign: [], waiting: [], skipped: [] };
+  const empty = { assign: [], waiting: [], skipped: [], done: [] };
 
   test("the latest run of a model names the account its character is standing on", () => {
     const runs = [
@@ -4023,5 +4028,196 @@ describe("a run whose runner died before its verdict is paused, not invisible (2
     const pick = { job: { refs: ["deepseek-v41-flash"], ref: "deepseek-v41-flash", episode: "freeplay" as const, repeat: 1, name: "deepseek-v41-flash-freeplay", enabled: true, source: "policy" as const, attempt: 2 }, account: "RUNNER2", why: "extra" };
     const { picks } = planContinuations([pick], characters, roster);
     expect(picks[0]!.job.continueFrom).toBe("fleet-deepseek-v41-flash-freeplay-deepseek-v4-1-flash-20260919");
+  });
+});
+
+describe("a queue job's repeat is met by counted runs on disk, not by the supervisor's memory (2026-10-14)", () => {
+  // The incident: an e360 x3 job was "finished" only in a set that died with
+  // the supervisor, and each boot took a new date stamp, so every boot ran
+  // three fresh e360 runs. The fixture is the same shape on a plain roster.
+  const NOW = 1_800_000_000_000;
+  const SERIES = "0.5";
+  const run = (runId: string, over: Partial<RunFact> = {}): RunFact => ({
+    runId,
+    model: "stealth/ox-alpha:free",
+    effort: null,
+    episode: "e360",
+    episodeOverride: false,
+    harnessVersion: `harness-${SERIES}-991-gabc`,
+    harnessSeries: SERIES,
+    extra: false,
+    startedAt: NOW - 30 * 3_600_000,
+    endedAt: NOW - 24 * 3_600_000,
+    terminationReason: "episode-limit",
+    modelResponses: 2_400,
+    bestLevel: 8,
+    live: false,
+    pause: null,
+    account: "RUNNER",
+    character: null,
+    episodeMs: 21_600_000,
+    campaign: null,
+    cell: null,
+    subscription: null,
+    ...over,
+  });
+  const ROSTER = { ...ROSTER_BASE, ox: { tier: "t2", model: "stealth/ox-alpha:free" } };
+  const config = (queue: unknown[]): FleetConfig => {
+    const c = parseFleet(fleetJson(queue, { roster: ROSTER }));
+    // The series is pinned here rather than read off the checkout, so the
+    // other-series case below means the same thing in a bare clone.
+    return { ...c, policy: { ...c.policy, series: SERIES } };
+  };
+  const statesOf = (c: FleetConfig, runs: RunFact[]): ModelState[] => modelStatesOf(rosterModels(c.roster), runs, NOW, c.policy);
+  const taken = (runs: RunFact[]): Set<string> => new Set(runs.map((f) => f.runId));
+  const OX = "fleet-ox-e360-ox-alpha";
+  const SATISFIED = [run(`${OX}-20261011`), run(`${OX}-20261011-r2`), run(`${OX}-20261011-r3`)];
+
+  test("the counting rule: counted evidence in this series counts; failed, cut, stillborn, extra, live and other-series runs do not", () => {
+    const c = config([{ ref: "ox", episode: "e360", repeat: 9 }]);
+    const runs = [
+      run(`${OX}-a`),
+      run(`${OX}-b`, { terminationReason: "manual" }),
+      run(`${OX}-c`, { terminationReason: "attempt-failed" }),
+      run(`${OX}-d`, { terminationReason: "adapter-error" }),
+      run(`${OX}-e`, { modelResponses: 0 }),
+      run(`${OX}-f`, { extra: true }),
+      run(`${OX}-g`, { terminationReason: null, endedAt: null, live: true }),
+      run(`${OX}-h`, { harnessVersion: "harness-0.4-700-gdef", harnessSeries: "0.4" }),
+      run(`${OX}-i`, { episode: "e90" }),
+      run(`${OX}-j`, { archived: true }),
+    ];
+    // The same predicate the policy's tier target reads, archive included.
+    expect(runs.filter((f) => isCounted(f) && f.episode === "e360" && f.harnessSeries === SERIES).map((f) => f.runId)).toEqual([`${OX}-a`, `${OX}-j`]);
+    const counted = countedFrom(statesOf(c, runs));
+    expect(counted("ox", "e360")).toBe(2);
+    expect(owedCopies(c.jobs[0]!, ["ox"], counted)).toEqual({ ox: 7 });
+    // No count to meet: a loop, a policy pick, a probe.
+    expect(owedCopies({ ...c.jobs[0]!, repeat: "loop" }, ["ox"], counted)).toBeUndefined();
+    expect(owedCopies({ ...c.jobs[0]!, attempt: 2 }, ["ox"], counted)).toBeUndefined();
+    expect(owesNothing(undefined)).toBe(false);
+    expect(owesNothing({})).toBe(false);
+  });
+
+  test("a supervisor restart on a new day stamp: a satisfied job is done, takes no account, and --status says so", () => {
+    const c = config([{ ref: "ox", episode: "e360", repeat: 3 }]);
+    const states = statesOf(c, SATISFIED);
+    // The supervisor's memory is empty after a boot: nothing is `finished`.
+    for (const stamp of ["20261011", "20261014"]) {
+      const plan = planTick(c, states, () => undefined, stamp, [], [], undefined, new Map(), taken(SATISFIED));
+      expect(plan.queue.done.map((j) => j.name)).toEqual(["ox-e360"]);
+      expect(plan.queue.assign).toEqual([]);
+      expect(plan.queue.waiting).toEqual([]);
+      // The policy owes ox no e360 either: one counted run is its whole t2 target.
+      expect(plan.policy.filter((p) => p.job.episode === "e360")).toEqual([]);
+    }
+    const live = planQueue({
+      queue: poolJobs(c),
+      roster: c.roster,
+      pool: c.accounts.pool,
+      running: new Map(),
+      finished: new Set(),
+      held: () => undefined,
+      cooling: () => undefined,
+      eligible: eligibleFrom(states),
+      counted: countedFrom(states),
+      takenRunIds: taken(SATISFIED),
+    });
+    expect(live.done.map((j) => j.name)).toEqual(["ox-e360"]);
+    expect(live.assign).toEqual([]);
+    // --status derives done from disk, with or without a supervisor's report.
+    const counted = countedFrom(states);
+    const report = { depth: 1, running: [], waiting: [], finished: [], skipped: [] };
+    for (const q of [formatQueue(poolJobs(c), report, counted), formatQueue(poolJobs(c), undefined, counted)]) {
+      expect(q.join("\n")).toMatch(/ox-e360 +ox e360 x3 \(3\/3 counted\) — done/);
+    }
+    // A running job stays RUNNING until its roster exits, even with the count met.
+    expect(formatQueue(poolJobs(c), { ...report, running: ["ox-e360"] }, counted).join("\n")).toMatch(/\(3\/3 counted\) — RUNNING/);
+    // Disabled reads disabled, and still says where it stands.
+    expect(formatQueue(poolJobs(config([{ ref: "ox", episode: "e360", repeat: 3, enabled: false }])), report, counted).join("\n")).toMatch(/\(3\/3 counted\) — disabled/);
+    // Raising repeat is how to get more: one more owed, on a fresh id.
+    const raised = config([{ ref: "ox", episode: "e360", repeat: 4 }]);
+    const more = planTick(raised, statesOf(raised, SATISFIED), () => undefined, "20261014", [], [], undefined, new Map(), taken(SATISFIED));
+    expect(more.queue.done).toEqual([]);
+    const job = more.queue.assign[0]!.job;
+    expect(job.owed?.copies).toEqual({ ox: 1 });
+    expect(fillEntries(jobSpawn(job, raised.roster, "RUNNER", "20261014"), "20261014").map((e) => e.runId)).toEqual([`${OX}-20261014`]);
+  });
+
+  test("a partially satisfied job owes only the remainder, and a redo never reuses a run id — same stamp or a new one", () => {
+    const c = config([{ ref: "ox", episode: "e360", repeat: 3 }]);
+    // Copy 1 counted; copy 2 was cut by a fleet stop (`manual`); copy 3 never launched.
+    const runs = [run(`${OX}-20261011`), run(`${OX}-20261011-r2`, { terminationReason: "manual", bestLevel: 4 })];
+    const states = statesOf(c, runs);
+    const ids = (stamp: string): string[] => {
+      const plan = planTick(c, states, () => undefined, stamp, [], [], undefined, new Map(), taken(runs));
+      expect(plan.queue.done).toEqual([]);
+      const a = plan.queue.assign.find((x) => x.job.name === "ox-e360")!;
+      expect(a.job.owed?.copies).toEqual({ ox: 2 });
+      return fillEntries(jobSpawn(a.job, c.roster, a.account, stamp), stamp).map((e) => e.runId!);
+    };
+    // A new day stamp: the remainder starts the stamp's numbering afresh.
+    expect(ids("20261014")).toEqual([`${OX}-20261014`, `${OX}-20261014-r2`]);
+    // The same stamp (a restart, or an off/on flip, the same day): both ids it
+    // has used are skipped, so the cut copy is redone under a fresh id instead
+    // of being skipped by --resume-roster as already terminated.
+    expect(ids("20261011")).toEqual([`${OX}-20261011-r3`, `${OX}-20261011-r4`]);
+    // Two more counted runs and it is done, on either stamp.
+    const after = [...runs, run(`${OX}-20261011-r3`), run(`${OX}-20261011-r4`)];
+    expect(planTick(c, statesOf(c, after), () => undefined, "20261015", [], [], undefined, new Map(), taken(after)).queue.done.map((j) => j.name)).toEqual(["ox-e360"]);
+    expect(progressLabel(c.jobs[0]!, countedFrom(statesOf(c, after)))).toBe("3/3 counted");
+  });
+
+  test("a pinned job: satisfied, it is not spawned on its account; owing, it spawns only what it owes", () => {
+    const pinned = config([{ ref: "ox", episode: "e360", repeat: 2, account: "PINNED1" }]);
+    const one = [run(`${OX}-20261011`, { account: "PINNED1" })];
+    const owing = planTick(pinned, statesOf(pinned, one), () => undefined, "20261014", [], [], undefined, new Map(), taken(one));
+    expect(owing.pinned.map((p) => p.spawn.entries.length)).toEqual([1]);
+    expect(fillEntries(owing.pinned[0]!.spawn, "20261014").map((e) => e.runId)).toEqual([`${OX}-20261014`]);
+    const two = [...one, run(`${OX}-20261014`, { account: "PINNED1" })];
+    expect(planTick(pinned, statesOf(pinned, two), () => undefined, "20261015", [], [], undefined, new Map(), taken(two)).pinned).toEqual([]);
+  });
+
+  test("a rotation job counts per ref, and a loop job has no count to meet", () => {
+    const c = config([
+      { ref: ["glm", "ox"], episode: "e90", repeat: 2 },
+      { ref: "son", episode: "e90", repeat: "loop" },
+    ]);
+    const e90 = (model: string, id: string): RunFact => run(id, { model, episode: "e90" });
+    const runs = [
+      e90("z-ai/glm-5.2:free", "fleet-glm-e90-glm-5-2-free-20261011"),
+      e90("z-ai/glm-5.2:free", "fleet-glm-e90-glm-5-2-free-20261011-r2"),
+      e90("stealth/ox-alpha:free", "fleet-glm-e90-ox-alpha-20261011"),
+      e90("sonnet", "fleet-son-e90-sonnet-20261011"),
+      e90("sonnet", "fleet-son-e90-sonnet-20261011-r2"),
+    ];
+    const plan = planTick(c, statesOf(c, runs), () => undefined, "20261014", [], [], undefined, new Map(), taken(runs));
+    const rotation = plan.queue.assign.find((a) => a.job.name === "glm-e90")!;
+    expect(rotation.job.owed?.copies).toEqual({ glm: 0, ox: 1 });
+    expect(jobSpawn(rotation.job, c.roster, rotation.account, "20261014").entries.map((e) => e.model)).toEqual(["stealth/ox-alpha:free"]);
+    const loop = plan.queue.assign.find((a) => a.job.name === "son-e90")!;
+    expect(loop.job.owed).toBeUndefined();
+    expect(jobSpawn(loop.job, c.roster, loop.account, "20261014").loop).toBe(true);
+    expect(plan.queue.done).toEqual([]);
+  });
+});
+
+describe("a drain reaches the roster between episodes, which a 60s look almost never sees", () => {
+  test("the supervisor's marker is the path the roster reads off its own --log, and it reads it live", () => {
+    // The supervisor writes drainMarkerPath(jobJsonlPath(name, stamp)); the
+    // roster reads drainMarkerPath(<its --log>). One path, or the drain is a no-op.
+    const argv = jobArgv(spawn({ name: "ox-e360" }), { stamp: "20261014", until: undefined });
+    const log = argv[argv.indexOf("--log") + 1]!;
+    expect(log).toBe(jobJsonlPath("ox-e360", "20261014"));
+    expect(drainMarkerPath(log)).toBe(`${jobJsonlPath("ox-e360", "20261014")}.drain`);
+    // Read before every launch, so an undrain (the marker removed) takes effect
+    // at the very next boundary, and a roster with no --log never drains.
+    const jsonl = join(tempDir("fleet-drain-"), "fleet-ox-e360-20261014.jsonl");
+    expect(drainRequested(jsonl)).toBe(false);
+    writeFileSync(drainMarkerPath(jsonl), JSON.stringify({ at: 1, why: "disabled" }) + "\n");
+    expect(drainRequested(jsonl)).toBe(true);
+    rmSync(drainMarkerPath(jsonl));
+    expect(drainRequested(jsonl)).toBe(false);
+    expect(drainRequested("")).toBe(false);
   });
 });
