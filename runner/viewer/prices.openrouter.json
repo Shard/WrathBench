@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-10-08",
+  "asOf": "2026-10-14",
   "models": {
     "cohere/north-mini-code:free": [
       {
@@ -43,6 +43,13 @@
         "cacheRead": 0.0128,
         "cacheWrite": 0.0128,
         "from": "2026-10-08"
+      },
+      {
+        "input": 0.091,
+        "output": 0.182,
+        "cacheRead": 0.0182,
+        "cacheWrite": 0.091,
+        "from": "2026-10-14"
       }
     ],
     "deepseek/deepseek-v4-flash-0731": [
@@ -72,6 +79,13 @@
         "cacheRead": 0.018,
         "cacheWrite": 0.018,
         "from": "2026-10-08"
+      },
+      {
+        "input": 0.016,
+        "output": 0.64,
+        "cacheRead": 0.016,
+        "cacheWrite": 0.016,
+        "from": "2026-10-14"
       }
     ],
     "deepseek/deepseek-v4-pro-0813": [
@@ -123,6 +137,13 @@
         "cacheRead": 0.006,
         "cacheWrite": 0.3,
         "from": "2026-10-08"
+      },
+      {
+        "input": 0.0396,
+        "output": 0.891,
+        "cacheRead": 0.0054,
+        "cacheWrite": 0.0396,
+        "from": "2026-10-14"
       }
     ],
     "dots-studio/dots-3-note-preview:free": [
@@ -156,20 +177,20 @@
         "cacheWrite": 0.0416667
       }
     ],
+    "google/gemini-4-argon": [
+      {
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
+        "cacheWrite": 0.1875
+      }
+    ],
     "inception/mercury-2.5": [
       {
         "input": 0.04,
         "output": 0.15,
         "cacheRead": 0.004,
         "cacheWrite": 0.04
-      }
-    ],
-    "inclusionai/ling-3.0-flash-sante:free": [
-      {
-        "input": 0,
-        "output": 0,
-        "cacheRead": 0,
-        "cacheWrite": 0
       }
     ],
     "liquid/lfm-2.5-2.6b:free": [
@@ -274,6 +295,13 @@
         "output": 0.17,
         "cacheRead": 0.037,
         "cacheWrite": 0.037
+      },
+      {
+        "input": 0.15,
+        "output": 0.6,
+        "cacheRead": 0.075,
+        "cacheWrite": 0.15,
+        "from": "2026-10-14"
       }
     ],
     "poolside/laguna-s-2.1:free": [
@@ -318,6 +346,13 @@
         "cacheRead": 0.085,
         "cacheWrite": 0.53125,
         "from": "2026-10-08"
+      },
+      {
+        "input": 0.04,
+        "output": 2.3,
+        "cacheRead": 0.0198,
+        "cacheWrite": 0.04,
+        "from": "2026-10-14"
       }
     ],
     "thinkingmachines/inkling-small:free": [
@@ -386,6 +421,13 @@
         "cacheRead": 0.048,
         "cacheWrite": 0.049,
         "from": "2026-10-08"
+      },
+      {
+        "input": 0.079,
+        "output": 4.8,
+        "cacheRead": 0.059,
+        "cacheWrite": 0.079,
+        "from": "2026-10-14"
       }
     ],
     "z-ai/glm-5.3-flash": [
@@ -408,6 +450,13 @@
         "cacheRead": 0.03,
         "cacheWrite": 0.15,
         "from": "2026-10-08"
+      },
+      {
+        "input": 0.036,
+        "output": 0.9,
+        "cacheRead": 0.0108,
+        "cacheWrite": 0.036,
+        "from": "2026-10-14"
       }
     ]
   }
