@@ -145,6 +145,10 @@ import {
   characterKey,
   charactersFrom,
   characterStanding,
+  countedFrom,
+  owedCopies,
+  owesNothing,
+  progressLabel,
   tailOf,
   TICK_MS,
   tripsBreaker,
@@ -771,12 +775,16 @@ async function main(): Promise<void> {
   const liveJobs = new Map<string, FleetJob>();
   /** Unlimited sessions already sent their one SIGTERM: a second would hard-exit the pause. */
   const pauseSignalled = new Set<string>();
-  let lastPlan: QueuePlan = { assign: [], waiting: [], skipped: [] };
+  let lastPlan: QueuePlan = { assign: [], waiting: [], skipped: [], done: [] };
   /** Paused runs the last plan did not resume, with why; for the state file. */
   let lastPaused: PausedListing[] = [];
   /** Paused runs ended instead of resumed, this session; for the state file. */
   const endedRuns: EndedRun[] = [];
   const complainedSkips = new Map<string, string>();
+  /** Config jobs whose `repeat` the counted runs meet, already announced as done. */
+  const announcedDone = new Set<string>();
+  /** The pinned config jobs the newest tick found done; the queue's own are on the plan. */
+  let pinnedDone: FleetJob[] = [];
   /** Jobs handed an account this tick, claimed by spawnJob; a gated tick re-plans next time. */
   const pending = new Map<string, FleetJob>();
   const announcedPicks = new Set<string>();
@@ -934,6 +942,9 @@ async function main(): Promise<void> {
     // was written down.
     const probes = probeRunsOf(runs);
     campaignJobs = pinnedCampaignJobs(cfg, probes, healthyFrom(states));
+    // Every run id on disk, archive included: a job's remainder never reuses one.
+    const takenRunIds = new Set(runs.map((f) => f.runId));
+    pinnedDone = [];
     for (const job of [...pinnedJobs(cfg), ...campaignJobs]) {
       if (job.enabled && runnableRefs(job, cfg.roster, eligible).length === 0) {
         // A pinned job whose ref is not promoted into its tier: it waits,
@@ -942,7 +953,16 @@ async function main(): Promise<void> {
         out.push({ name: job.name, enabled: false, account: job.account!, loop: false, entries: [{ model: "gated" }] });
         continue;
       }
-      const placed = assignLane(job);
+      // A pinned job's `repeat` is met off the runs on disk, the queue's rule
+      // (`owedCopies`): one that owes nothing yields no spawn, so a supervisor
+      // boot cannot start it again. Only a job that is not running is asked —
+      // a live roster keeps its spawn and is never drained for finishing.
+      const owed = job.enabled && !sets.running.has(job.name) ? owedCopies(job, runnableRefs(job, cfg.roster, eligible), countedFrom(states)) : undefined;
+      if (owesNothing(owed)) {
+        pinnedDone.push(job);
+        continue;
+      }
+      const placed = assignLane(owed === undefined ? job : { ...job, owed: { copies: owed, taken: takenRunIds } });
       out.push(jobSpawn(placed, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
       if (job.enabled || sets.running.has(job.name)) {
         for (const r of job.refs) runningRefs.add(r);
@@ -1153,6 +1173,8 @@ async function main(): Promise<void> {
       eligible,
       runningRefs,
       affinity,
+      counted: countedFrom(states),
+      takenRunIds,
     });
     lastPlan.skipped.unshift(...pinnedSkips);
     // Every fresh launch this tick, for the cross-account name sweep below.
@@ -1286,6 +1308,18 @@ async function main(): Promise<void> {
       }
     }
     for (const j of cfg.jobs) if (!lastPlan.skipped.some((sk) => sk.job.name === j.name)) complainedSkips.delete(j.name);
+    // A job whose `repeat` is met says so once, not once a tick; raising its
+    // repeat and meeting it again says so again.
+    const done = [...pinnedDone, ...lastPlan.done];
+    const counted = countedFrom(states);
+    for (const j of done) {
+      if (announcedDone.has(j.name)) continue;
+      announcedDone.add(j.name);
+      const progress = progressLabel(j, counted) ?? "met";
+      say(`queue ${j.name}: done — ${j.ref} ${j.episode} ${progress}; nothing spawns (raise repeat for more)`);
+      record({ job: j.name, event: "queue-done", detail: progress });
+    }
+    for (const n of [...announcedDone]) if (!done.some((j) => j.name === n)) announcedDone.delete(n);
     return out;
   };
   const poolView = (cfg: FleetConfig): PoolView => ({

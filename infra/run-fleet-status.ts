@@ -34,6 +34,8 @@ import {
   affinityFrom,
   affinityOf,
   type ConfigRejection,
+  countedFrom,
+  type CountedRuns,
   type EndedRun,
   failedAttemptsFor,
   fillEntries,
@@ -44,6 +46,8 @@ import {
   isExtraJob,
   jobSpawn,
   type Occupant,
+  owedCopies,
+  owesNothing,
   PAUSE_SIDECAR,
   type PausedListing,
   pausesOnDrain,
@@ -51,6 +55,7 @@ import {
   planResumes,
   planStaleRuns,
   planTick,
+  progressLabel,
   providerResetOf,
   type ResumePlan,
   retryNumbers,
@@ -465,27 +470,38 @@ export function formatLocalClass(config: Pick<FleetConfig, "accounts" | "roster"
   ];
 }
 
-/** --status / --dry-run: the manual queue, only when there is one. Pure. */
-export function formatQueue(queue: readonly FleetJob[], state: FleetState["queue"] | undefined): string[] {
+/**
+ * --status / --dry-run: the manual queue, only when there is one. Pure.
+ *
+ * With `counted` each job carries its progress, read off the runs on disk the
+ * way the supervisor reads it (`owedCopies`), and a job whose `repeat` is met
+ * reads `done` whether or not a supervisor is up to say so — the supervisor's
+ * own sets live in its memory, which is exactly what used to forget it.
+ */
+export function formatQueue(queue: readonly FleetJob[], state: FleetState["queue"] | undefined, counted?: CountedRuns): string[] {
   if (queue.length === 0) return [];
   const enabled = queue.filter((j) => j.enabled);
   const out = [`queue: ${enabled.length} enabled manual job(s) of ${queue.length}` + (state === undefined ? " (supervisor has not reported on it)" : "")];
   for (const job of queue) {
+    const progress = counted === undefined ? undefined : progressLabel(job, counted);
+    const done = counted !== undefined && owesNothing(owedCopies(job, job.refs, counted));
     const status =
       !job.enabled
         ? "disabled"
-        : state === undefined
-          ? "?"
-          : state.running.includes(job.name)
-            ? "RUNNING"
-            : state.finished.includes(job.name)
-              ? "finished"
-              : state.skipped.find((sk) => sk.name === job.name) !== undefined
-                ? `skipped: ${state.skipped.find((sk) => sk.name === job.name)!.reason}`
-                : state.waiting.includes(job.name)
-                  ? "waiting for a free pool account"
-                  : "pending";
-    out.push(`  ${job.name.padEnd(28)} ${job.ref} ${job.episode} x${job.repeat} — ${status}`);
+        : state?.running.includes(job.name) === true
+          ? "RUNNING"
+          : done
+            ? "done — repeat met by counted runs; nothing spawns (raise repeat for more)"
+            : state === undefined
+              ? "?"
+              : state.finished.includes(job.name)
+                ? "finished"
+                : state.skipped.find((sk) => sk.name === job.name) !== undefined
+                  ? `skipped: ${state.skipped.find((sk) => sk.name === job.name)!.reason}`
+                  : state.waiting.includes(job.name)
+                    ? "waiting for a free pool account"
+                    : "pending";
+    out.push(`  ${job.name.padEnd(28)} ${job.ref} ${job.episode} x${job.repeat}${progress !== undefined ? ` (${progress})` : ""} — ${status}`);
   }
   return out;
 }
@@ -609,6 +625,11 @@ export function printStatus(): void {
     console.log("  logs: docker compose -f infra/compose.yml logs -f fleet");
   }
   if (config !== undefined) for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
+
+  // The projection, once: the models table reads it, and so does every job's
+  // progress toward its `repeat` (archive included, as the supervisor counts).
+  const projected = config !== undefined ? modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }) : [];
+  const counted = countedFrom(projected);
 
   // (b) accounts: pinned first, then the pool, each with the job on it.
   const live = liveJobsFromState(state);
@@ -761,9 +782,12 @@ export function printStatus(): void {
       } else if (kind !== "pool" && config !== undefined) {
         const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase() && j.enabled) ?? pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
         if (job !== undefined) {
-          note = job.enabled
-            ? `job ${job.name} enabled${rejected !== undefined ? " (FILE, NOT in effect)" : ""}, not spawned${fleetUp ? "" : " (supervisor down)"}`
-            : `job ${job.name} disabled${rejected !== undefined ? " (FILE, NOT in effect)" : ""}`;
+          const progress = progressLabel(job, counted);
+          note = !job.enabled
+            ? `job ${job.name} disabled${rejected !== undefined ? " (FILE, NOT in effect)" : ""}${progress !== undefined ? ` (${progress})` : ""}`
+            : owesNothing(owedCopies(job, job.refs, counted))
+              ? `job ${job.name} done (${progress ?? "met"}) — repeat met, nothing spawns (raise repeat for more)`
+              : `job ${job.name} enabled${rejected !== undefined ? " (FILE, NOT in effect)" : ""}, not spawned${fleetUp ? "" : " (supervisor down)"}${progress !== undefined ? ` (${progress})` : ""}`;
         }
       }
       rows.push({ account, kind, free: true, ...(note !== undefined ? { note } : {}) });
@@ -776,7 +800,7 @@ export function printStatus(): void {
   if (config !== undefined && Object.keys(config.roster).length > 0) {
     const running = new Set<string>();
     for (const j of live.values()) for (const r of j.ref.split("+")) running.add(r);
-    const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy });
+    const states = projected;
     const excluded = new Map<string, string>();
     for (const name of Object.keys(config.roster)) {
       const why = policyExclusion(config, name);
@@ -847,7 +871,7 @@ export function printStatus(): void {
   );
 
   // (f) the manual queue, only when there is one.
-  if (config !== undefined) for (const line of formatQueue(poolJobs(config), state?.queue)) console.log(`  ${line}`);
+  if (config !== undefined) for (const line of formatQueue(poolJobs(config), state?.queue, counted)) console.log(`  ${line}`);
 
   // A /proc scan only means anything when the supervisor shares this namespace.
   // Against a containerized fleet every job would show up here as "hand
@@ -896,6 +920,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     probeRunsOf(runs),
     affinityOf(affinityFrom(runs, config.roster)),
     liveSubscriptions(runs, rosterModels(config.roster)),
+    new Set(runs.map((f) => f.runId)),
   );
   const rows: AccountRow[] = [];
   const argvs: string[] = [];
@@ -932,7 +957,18 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     else if (p !== undefined) rows.push({ account, kind: "pinned", job: planned(p.job, p.spawn) });
     else {
       const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
-      rows.push({ account, kind: "pinned", free: true, note: holder !== undefined ? `held by run ${holder}` : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn` });
+      const met = job?.enabled === true && owesNothing(owedCopies(job, job.refs, countedFrom(states)));
+      rows.push({
+        account,
+        kind: "pinned",
+        free: true,
+        note:
+          holder !== undefined
+            ? `held by run ${holder}`
+            : met
+              ? `job ${job.name} done (${progressLabel(job, countedFrom(states)) ?? "met"}) — repeat met, nothing spawns (raise repeat for more)`
+              : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn`,
+      });
     }
   }
   for (const [kind, accounts] of ACCOUNT_CLASSES.map((c) => [c, classAccountsOf(config, c)] as const)) {
@@ -956,6 +992,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   }
   for (const job of plan.queue.waiting) console.log(`  ${job.name}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);
   for (const sk of plan.queue.skipped) console.log(`  ${sk.job.name}: SKIP — ${sk.reason}`);
+  for (const job of plan.queue.done) console.log(`  ${job.name}: done — ${progressLabel(job, countedFrom(states)) ?? "repeat met"}; nothing spawns (raise repeat for more)`);
   if (plan.policy.length === 0 && plan.queue.waiting.length > 0) console.log("  (manual jobs are waiting; they outrank the policy)");
   console.log("");
   const excluded = new Map<string, string>();
@@ -978,7 +1015,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     if (line !== undefined) console.log(line);
   }
   console.log("finished this session: 0 (ok 0, retried 0) — dry run");
-  for (const line of formatQueue(poolJobs(config), undefined)) console.log(line);
+  for (const line of formatQueue(poolJobs(config), undefined, countedFrom(states))) console.log(line);
   console.log(
     `\n${resumes.resume.length} paused run(s) would resume first; ${plan.pinned.length} pinned job(s) would spawn now plus ${plan.queue.assign.length + plan.policy.length} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
       `\nsupervision: re-read the config store every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
