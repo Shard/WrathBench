@@ -34,7 +34,9 @@
  *
  * **Pruning is bounded and best-effort.** Immutable objects accumulate forever
  * otherwise. We keep the last few versions of each aggregate and the last
- * couple of versions per run; a delete that fails is retried next pass and never fails a publish,
+ * couple of versions per run, or just the current one for a run that has not
+ * moved since the previous flip (`settleRun`); a delete that fails is retried
+ * next pass and never fails a publish,
  * because a leaked object costs a fraction of a cent and a failed publish costs
  * a minute of staleness.
  *
@@ -102,7 +104,10 @@ export const SNAP_PREFIX = "v1/snap/";
  * stale manifest points at, and they are small.
  */
 export const DEFAULT_KEEP_GENS = 5;
-/** Content versions kept per run. See `planPrune` for why two is enough. */
+/**
+ * Content versions kept per run while it is changing. See `planPrune` for why
+ * two is enough, and `settleRun` for the one a run that stopped changing keeps.
+ */
 export const DEFAULT_KEEP_RUN_VERSIONS = 2;
 /** In-flight PUTs (or deletes) per wave. Waves themselves are barriers. */
 export const DEFAULT_CONCURRENCY = 8;
@@ -286,6 +291,33 @@ function registerVersion(index: Record<string, string[]>, key: string, version: 
   const at = versions.indexOf(version);
   if (at !== -1) versions.splice(at, 1);
   versions.push(version);
+}
+
+/**
+ * Record a run's content version as the current one, and let a run that has
+ * stopped changing shed the versions it no longer needs.
+ *
+ * The keep window of two exists for one reader: the one still holding the
+ * previous manifest, which names the run's previous version. When the previous
+ * flip already named THIS version, that manifest names it too, so no manifest
+ * the window protects names an older one and the history collapses to the
+ * current version; the pruner then deletes the rest as ordinary surplus. A run
+ * whose version moves every pass never reaches this and keeps two, as before.
+ *
+ * Without it a finished run keeps its superseded version for good, because a
+ * version only leaves the window when a newer one arrives. That is one stale
+ * set per run that ever changed, and a full second copy of the corpus the day
+ * something a version covers (the track, once it joined the hash) re-keys every
+ * run at once.
+ *
+ * Call it once per (run, version) a flip names: its own look at the last
+ * entry is what a second call for the same pair would misread as "already
+ * named".
+ */
+function settleRun(state: PublishState, runId: string, version: string): void {
+  const alreadyNamed = state.runVersions[runId]?.at(-1) === version;
+  registerVersion(state.runVersions, runId, version);
+  if (alreadyNamed) state.runVersions[runId] = [version];
 }
 
 /** Record a completed flip. Re-publishing the same manifest is not history. */
@@ -700,12 +732,21 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   // treats them as surplus unless that flip names them. Bounded either way, and
   // deliberately not indexed: an inventory of unflipped uploads would be a
   // second history to keep correct for no gain.
-  for (const [runId, version] of streamedRuns) registerVersion(state.runVersions, runId, version);
+  const runPairs = [...streamedRuns];
+  const runPairSeen = new Set(streamedRunKeys);
   for (const a of result.artifacts) {
     const c = classifyPath(a.path);
-    if (c.kind === "run") registerVersion(state.runVersions, c.runId, c.version);
-    else if (c.kind === "snap") registerVersion(state.snapVersions, c.name, c.version);
+    if (c.kind === "run") {
+      // A run is four objects on one version, and this loop sees them one at
+      // a time: the pair is taken once, or `settleRun` would read the second
+      // object of a version as proof that the version had already been named.
+      if (!runPairSeen.has(`${c.runId} ${c.version}`)) {
+        runPairSeen.add(`${c.runId} ${c.version}`);
+        runPairs.push([c.runId, c.version]);
+      }
+    } else if (c.kind === "snap") registerVersion(state.snapVersions, c.name, c.version);
   }
+  for (const [runId, version] of runPairs) settleRun(state, runId, version);
 
   if (opts.prune !== false) await runPrune(store, state, report, { keepGens: opts.keepGens, keepRunVersions: opts.keepRunVersions }, concurrency, log);
   return report;

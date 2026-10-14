@@ -120,7 +120,12 @@ Upload order is per-run → aggregates → manifest last, so a reader can never
 observe a torn generation: an old manifest points at a complete old set, the
 new one at a complete new set. `live.json` sits deliberately outside the
 generation chain — for the fleet pips, freshness beats consistency. Superseded
-versions are pruned after a few cycles; deletes are free.
+versions are pruned after a few cycles; deletes are free. An aggregate keeps its
+last five versions. A run keeps two while it is changing, so a reader still on
+the previous manifest finds what that manifest names, and one once the previous
+flip already named its current version. A finished run therefore holds only its
+current objects, and a run re-keyed by a change to what its key covers (the
+track, below) is down to the new set two passes later.
 
 Each aggregate carries its own content version rather than one hash over the
 whole set (GitHub issue #38), so a pass rewrites only what moved. Under a
@@ -199,8 +204,9 @@ track carries its character — the identity, the place in the
 chain and the run ids either side — so the play bar's previous/next attempt
 links need no second request, which is what makes them work over static
 snapshot objects at all. The published `track.json` is content-addressed
-beside its `detail.json`, and a new attempt changes that detail's `character`, so
-the key rotates and the neighbours never go stale. Two clock fixes keep the
+with its `detail.json`, entries and scratchpad under one version, and a new
+attempt changes that detail's `character`, so the key rotates and the neighbours
+never go stale. Two clock fixes keep the
 staleness story honest, and both are improvements for the private dashboard
 too:
 
@@ -294,9 +300,11 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   hearthstone uses ship as kinds and timestamps, facts the safe core and the
   action log already carry. A release is one mark per death, so it is
   withheld with the deaths: the public route breaks at a graveyard port only
-  where the speed backstop catches it. A finished run's `track.json` changes
-  key only when its detail, entries or scratchpad do, so a replay published
-  before the marks existed keeps drawing without them.
+  where the speed backstop catches it. The track is hashed into the run's key
+  with the rest, so a replay published before the marks existed is re-keyed
+  once and draws them: the old URL is cached for a year and cannot be corrected
+  in place. That re-uploads every object of every run once, and the old set is
+  pruned as above.
 
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),

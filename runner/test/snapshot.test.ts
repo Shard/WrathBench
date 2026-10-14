@@ -28,6 +28,7 @@ import {
   type SnapshotResult,
 } from "../viewer/snapshot";
 import { createApi } from "../viewer/api";
+import { emptyState, publishPass, type ObjectStore } from "../../infra/publish-core";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -282,6 +283,34 @@ function trackOfIn(out: SnapshotResult, runId: string): Record<string, unknown> 
   return JSON.parse(a.body) as Record<string, unknown>;
 }
 
+/**
+ * A viewer handle over `runs` whose `/track` answers carry the given `travel`
+ * list and are otherwise untouched: the one input a test can move without
+ * moving a run's detail, entries or scratchpad.
+ */
+function handleWithTravel(runs: string, travel: unknown): (req: Request) => Promise<Response> {
+  const api = createApi({
+    runsDir: runs,
+    tilesDir: join(runs, "tiles-unused"),
+    publicMode: true,
+    moduleUrl: "http://127.0.0.1:1",
+  });
+  return async (req) => {
+    const res = await api(req);
+    if (!new URL(req.url).pathname.endsWith("/track")) return res;
+    const body = (await res.json()) as Record<string, unknown>;
+    return new Response(JSON.stringify({ ...body, travel }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+}
+
+/** One run's row in a pass's `runs.json`: the keys the listing points at. */
+function rowOf(out: SnapshotResult, runId: string): { runId: string; snapshot: Record<string, string> } {
+  const listed = JSON.parse(out.artifacts.find((a) => a.path === out.snap["runs.json"])!.body) as {
+    runs: { runId: string; snapshot: Record<string, string> }[];
+  };
+  return listed.runs.find((r) => r.runId === runId)!;
+}
+
 describe("renderSnapshot", () => {
   test("the cache-control constants are the contract's", () => {
     expect(MUTABLE_CACHE).toBe("public, max-age=30");
@@ -324,9 +353,10 @@ describe("renderSnapshot", () => {
   /*
    * The published track carries the character's neighbours, so the
    * public map's transport steps between a character's attempts with the one
-   * fetch a replay already makes. The version key covers it without being
-   * hashed over it: an attempt's own detail carries the `character` view, so the
-   * arrival of a successor moves the key and the new track lands beside it.
+   * fetch a replay already makes. The version key covers it twice over: the
+   * track is hashed itself, and an attempt's own detail carries the `character`
+   * view, so the arrival of a successor moves the key and the new track lands
+   * beside it.
    */
   test("a published track names the attempts either side of it", async () => {
     const runs = tempDir("snapshot-chain-");
@@ -357,6 +387,92 @@ describe("renderSnapshot", () => {
     const lone = await render(fixture(false), 111);
     expect("character" in trackOfIn(lone, DEAD_RUN)).toBe(false);
     rmSync(runs, { recursive: true, force: true });
+  });
+
+  /*
+   * The track is part of what a run's key addresses. A finished run's detail
+   * and entries never change again, so a track that gains a field (the replay's
+   * `travel` marks) is the one input that moves, and it has to move the key:
+   * the old track sits at an immutable URL the edge and the browsers cache for
+   * a year, so no later pass could correct it in place. Only the track is
+   * varied here, through a handle that rewrites that one route's `travel`.
+   */
+  test("a track that changes alone moves all four of a run's keys, and the row follows", async () => {
+    const runs = fixture(false);
+    const bodyOf = (out: SnapshotResult, path: string): string => out.artifacts.find((a) => a.path === path)!.body;
+    const unstamped = (body: string): string => body.replace(/"generatedAt":\d+,/, "");
+
+    const before = await createRenderer({ runsDir: runs, api: handleWithTravel(runs, []) })(111);
+    const marks = [
+      { kind: "taxi", ts: 1400 },
+      { kind: "taxi_landed", ts: 1450 },
+    ];
+    const after = await createRenderer({ runsDir: runs, api: handleWithTravel(runs, marks) })(222);
+    const again = await createRenderer({ runsDir: runs, api: handleWithTravel(runs, marks) })(333);
+
+    const a = rowOf(before, DEAD_RUN).snapshot;
+    const b = rowOf(after, DEAD_RUN).snapshot;
+    // Nothing but the track differs, and every object of the run is re-keyed
+    // under one new version, so the row never points at half of a set.
+    for (const which of ["detail", "track", "entries", "scratchpad"] as const) {
+      expect(b[which]).not.toBe(a[which]);
+      expect(b[which]!.split("/")[3]).toBe(b["detail"]!.split("/")[3]);
+    }
+    expect(unstamped(bodyOf(after, b["detail"]!))).toBe(unstamped(bodyOf(before, a["detail"]!)));
+    expect(unstamped(bodyOf(after, b["entries"]!))).toBe(unstamped(bodyOf(before, a["entries"]!)));
+    expect((JSON.parse(bodyOf(after, b["track"]!)) as { travel: unknown }).travel).toEqual(marks);
+    // The listing moved with it, so the manifest flips onto the new keys.
+    expect(after.gen).not.toBe(before.gen);
+    expect(after.snap["runs.json"]).not.toBe(before.snap["runs.json"]);
+    // And a track that did not change keeps its address, which is what makes
+    // hashing it free for every pass after the first.
+    expect(rowOf(again, DEAD_RUN).snapshot).toEqual(b);
+    expect(again.gen).toBe(after.gen);
+  });
+
+  /*
+   * The whole path, renderer into publisher: a run published before its track
+   * changed ends up with exactly the objects the listing names and no others.
+   * The pass that re-keys it must leave the old set alone (the previous
+   * manifest names it, and a reader may still be on that manifest); the next
+   * pass, where the run has not moved again, takes it.
+   */
+  test("published, a re-keyed run's old objects go once the listing has settled on the new ones", async () => {
+    const runs = fixture(false);
+    const bucket = new Map<string, string>();
+    const store: ObjectStore = {
+      put: async (path, body) => void bucket.set(path, body),
+      delete: async (path) => void bucket.delete(path),
+    };
+    const state = emptyState();
+    const pass = async (travel: unknown, now: number): Promise<{ out: SnapshotResult; deleted: string[] }> => {
+      const render = createRenderer({ runsDir: runs, api: handleWithTravel(runs, travel) });
+      let out: SnapshotResult | undefined;
+      const report = await publishPass(
+        async (sink) => (out = await render(now, { sink, batch: 1 })),
+        store,
+        state,
+      );
+      return { out: out!, deleted: report.deleted.filter((p) => p.startsWith("v1/run/")) };
+    };
+    const runKeys = (): string[] => [...bucket.keys()].filter((k) => k.startsWith("v1/run/")).sort();
+    const named = (out: SnapshotResult): string[] => Object.values(rowOf(out, DEAD_RUN).snapshot).sort();
+
+    const first = await pass([], 111);
+    expect(runKeys()).toEqual(named(first.out));
+
+    const marks = [{ kind: "taxi", ts: 1400 }];
+    const second = await pass(marks, 222);
+    expect(second.deleted).toEqual([]);
+    expect(runKeys()).toEqual([...named(first.out), ...named(second.out)].sort());
+
+    const third = await pass(marks, 333);
+    expect(third.deleted).toEqual(named(first.out));
+    // Listing and bucket agree: what runs.json points at is all there is, and the
+    // manifest the bucket holds is the one that names that listing.
+    expect(runKeys()).toEqual(named(third.out));
+    expect(JSON.parse(bucket.get("v1/manifest.json")!)).toMatchObject({ gen: third.out.gen, artifacts: third.out.snap });
+    for (const key of Object.values(third.out.snap)) expect(bucket.has(key)).toBe(true);
   });
 
   test("no artifact path names a withheld surface", async () => {

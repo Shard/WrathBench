@@ -340,9 +340,10 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     /*
      * Per-run artifacts first: `runs.json` rows carry the resulting paths, so
      * the run addressing has to settle before the snap bodies are hashed. `ver`
-     * is the projected detail payload's own hash — a finished run re-renders to
-     * the same key, a changed one (a live run that grew) claims a new one, and
-     * the row is what tells a client which is current.
+     * is a hash over the projected detail, track, entries window and
+     * scratchpad — a finished run re-renders to the same key, a changed one (a
+     * live run that grew) claims a new one, and the row is what tells a client
+     * which is current.
      *
      * The pool overlaps the file reads; the results are parked by listing
      * position so the artifact order is the listing's, not the order the pool
@@ -381,9 +382,13 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
           // dropped together.
           if (detail === null || track === null || entries === null) continue;
           // The version covers everything the row points at, so a window that
-          // grew or a scratchpad rewritten between two identical details still
-          // lands on a new key rather than mutating an immutable one.
-          const ver = hash12([addressable(detail), addressable(entries), scratchpad ?? ""].join("\n"));
+          // grew, a scratchpad rewritten, or a track that gained a field
+          // (`travel`) between two identical details still lands on a new key
+          // rather than mutating an immutable one. The track used to be left
+          // out because a successor attempt moves the detail's `character`
+          // with it; that covers nothing else, and a key the edge caches for
+          // a year cannot be corrected in place.
+          const ver = hash12([addressable(detail), addressable(track), addressable(entries), scratchpad ?? ""].join("\n"));
           // Run ids are `isValidRunId`-safe (`[A-Za-z0-9._-]+`), so they are bucket
           // keys as-is; anything else never got a run directory to be listed from.
           const base = `v1/run/${row.runId}/${ver}`;

@@ -894,6 +894,132 @@ describe("pruning against the bucket", () => {
   });
 });
 
+/*
+ * The keep window of two protects the reader on the previous manifest. A run
+ * that has not moved since the previous flip needs only its current version,
+ * and without letting it go a finished run would keep the version it was
+ * published under before the last thing that changed it, indefinitely.
+ */
+describe("a run that stopped changing", () => {
+  const runObjects = (store: FakeStore, id: string): string[] => [...store.objects.keys()].filter((k) => k.startsWith(`v1/run/${id}/`)).sort();
+
+  // The engine's two entry points over the same fixture: one array, and the
+  // run wave streamed in batches. Both have to settle a run the same way.
+  const entryPoints: [string, (r: SnapshotResult, s: FakeStore, st: PublishState) => Promise<PublishReport>][] = [
+    ["publish", (r, s, st) => publish(r, s, st)],
+    ["publishPass, streamed", (r, s, st) => publishPass(streamingRenderer(r, 1), s, st)],
+  ];
+
+  for (const [name, run] of entryPoints) {
+    test(`sheds its superseded version on the second flip that names the current one (${name})`, async () => {
+      const store = new FakeStore();
+      const state = emptyState();
+      await run(snapshot("gen1", [{ id: "runA", ver: "v1" }, { id: "runB", ver: "v1" }]), store, state);
+
+      // runA's content moves; runB's does not.
+      await run(snapshot("gen2", [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v1" }]), store, state);
+      // The previous manifest still names runA v1, so it must still be there.
+      expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
+      expect(runObjects(store, "runA")).toEqual([
+        "v1/run/runA/v1/detail.json",
+        "v1/run/runA/v1/track.json",
+        "v1/run/runA/v2/detail.json",
+        "v1/run/runA/v2/track.json",
+      ]);
+
+      // Nothing about runA moved this time: the previous manifest names v2 as well.
+      store.reset();
+      const report = await run(snapshot("gen3", [{ id: "runA", ver: "v2" }, { id: "runB", ver: "v1" }]), store, state);
+      expect(report.deleted).toEqual(["v1/run/runA/v1/detail.json", "v1/run/runA/v1/track.json"]);
+      expect(runObjects(store, "runA")).toEqual(["v1/run/runA/v2/detail.json", "v1/run/runA/v2/track.json"]);
+      expect(state.runVersions["runA"]).toEqual(["v2"]);
+      // The run that never moved was never holding anything back.
+      expect(state.runVersions["runB"]).toEqual(["v1"]);
+      expect(runObjects(store, "runB")).toHaveLength(2);
+      // The state forgets what was deleted, or the key could never come back.
+      expect(Object.keys(state.uploaded).filter((k) => k.startsWith("v1/run/runA/v1/"))).toEqual([]);
+    });
+  }
+
+  test("never deletes a version the previous manifest named, in any pass", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    // runA moves on every pass but the ones marked, runB on none: the previous
+    // manifest's run versions must survive every delete the engine plans.
+    const versions = ["v1", "v2", "v2", "v3", "v3", "v3", "v4"];
+    let previous: string | undefined;
+    for (const [i, ver] of versions.entries()) {
+      store.reset();
+      await publish(snapshot(`gen${i + 1}`, [{ id: "runA", ver }, { id: "runB", ver: "v1" }], `agg${i + 1}`), store, state);
+      for (const path of store.deletes()) {
+        expect(path).not.toContain(`/runA/${ver}/`);
+        if (previous !== undefined) expect(path).not.toContain(`/runA/${previous}/`);
+        expect(path).not.toContain("/runB/v1/");
+      }
+      previous = ver;
+    }
+    expect(runObjects(store, "runA").every((p) => p.includes("/v4/") || p.includes("/v3/"))).toBe(true);
+  });
+
+  test("a run that changes every pass still keeps two versions", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    for (let i = 1; i <= 5; i++) await publish(snapshot(`gen${i}`, [{ id: "runA", ver: `v${i}` }], `agg${i}`), store, state);
+    expect(state.runVersions["runA"]).toEqual(["v4", "v5"]);
+  });
+
+  test("a version that comes back after a different one is not settled by the earlier pass", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
+    await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }]), store, state);
+    // Back to v1: the previous manifest names v2, so v2 stays and v1 is current.
+    await publish(snapshot("gen3", [{ id: "runA", ver: "v1" }]), store, state);
+    expect(state.runVersions["runA"]).toEqual(["v2", "v1"]);
+    expect(runObjects(store, "runA").some((p) => p.includes("/v2/"))).toBe(true);
+  });
+
+  test("a state written before the rule existed is swept by the first flip that names the current version", async () => {
+    // What the publisher finds on its PVC the first time it runs this: a
+    // finished run with the version before its last change still in the window.
+    const store = new FakeStore();
+    const state = emptyState();
+    state.runVersions["runA"] = ["v0", "v1"];
+    for (const v of ["v0", "v1"]) for (const f of ["detail", "track"]) state.uploaded[`v1/run/runA/${v}/${f}.json`] = "h";
+    state.gens = ["gen0"];
+    state.lastGen = "gen0";
+
+    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
+    expect(report.deleted).toEqual(["v1/run/runA/v0/detail.json", "v1/run/runA/v0/track.json"]);
+    expect(state.runVersions["runA"]).toEqual(["v1"]);
+  });
+
+  test("a run missing from a pass is left as it was", async () => {
+    // A run the render skipped (archived, or its files mid-move) names nothing
+    // this flip, so there is no second sighting to settle it on.
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
+    await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }]), store, state);
+    await publish(snapshot("gen3", []), store, state);
+    await publish(snapshot("gen4", []), store, state);
+    expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
+    expect(runObjects(store, "runA")).toHaveLength(4);
+  });
+
+  test("a failed pass settles nothing", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state);
+    await publish(snapshot("gen2", [{ id: "runA", ver: "v2" }]), store, state);
+    // gen3 would settle runA on v2, but never flips.
+    store.failPuts.add("v1/snap/gen3/ladder.json");
+    await expect(publish(snapshot("gen3", [{ id: "runA", ver: "v2" }]), store, state)).rejects.toThrow(PublishError);
+    expect(state.runVersions["runA"]).toEqual(["v1", "v2"]);
+    expect(runObjects(store, "runA")).toHaveLength(4);
+  });
+});
+
 describe("a delete that fails", () => {
   test("does not fail the pass, and is retried on the next one", async () => {
     const store = new FakeStore();
