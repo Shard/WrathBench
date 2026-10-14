@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SANDBOX_FORWARDED_ENV, SandboxHost, sandboxChildEnv } from "../src/sandbox/host";
 import type { ActionHintNote } from "../src/sandbox/ipc";
-import { Scratchpad } from "../src/scratchpad";
+import { Scratchpad, SCRATCHPAD_MAX_CHARS } from "../src/scratchpad";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -253,6 +253,8 @@ describe("sandbox evaluation", () => {
     await host.evalSnippet('await scratchpad.append("line two")');
     const again = await host.evalSnippet("await scratchpad.read()");
     expect(again.value).toContain("line two");
+    // A write resolves to the pad's new size.
+    expect((await host.evalSnippet('await scratchpad.write("abc")')).value).toBe("{\n  chars: 3,\n}");
   });
 
   test("fetch to a non-module host is refused in-process", async () => {
@@ -779,4 +781,84 @@ describe("background fault storm control (morning-laguna-2)", () => {
     expect(res.logs[0]!.text).toBe("same line ×25");
     expect(res.logs[1]!.text).toBe("different");
   });
+});
+
+/**
+ * The snippet side of the scratchpad cap (operator, 2026-10-14): a refused
+ * write rejects. Awaited, the rejection is the snippet's error like any other;
+ * not awaited — the shape that lost a run eighty turns of notes — the
+ * snippet's own result still reports it, beside its value. Only a write the
+ * snippet attached to is its own business.
+ */
+describe("scratchpad writes over the cap, from a snippet", () => {
+  const MAX = SCRATCHPAD_MAX_CHARS;
+  const refusal = (op: string, chars: number): string =>
+    `Error: ${op} refused: the scratchpad would be ${chars} chars, over its ${MAX}-char cap. ` +
+    "Nothing was saved. Condense the scratchpad, then try again.";
+
+  function fullHost(): { host: SandboxHost; pad: Scratchpad } {
+    const pad = new Scratchpad(join(tempDir("wrathbench-sbx-pad-"), "scratchpad.md"));
+    pad.write("p".repeat(MAX - 3));
+    return { host: makeHost({ scratchpad: pad }), pad };
+  }
+
+  test("an awaited append rejects, and the snippet fails with the refusal", async () => {
+    const { host, pad } = fullHost();
+    const res = await host.evalSnippet('await scratchpad.append("too long"); "after"');
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe(refusal("scratchpad.append", MAX + 6));
+    expect(pad.read()).toBe("p".repeat(MAX - 3));
+  });
+
+  test("an unawaited append is the snippet's error, and its value still comes back", async () => {
+    const { host, pad } = fullHost();
+    const res = await host.evalSnippet('scratchpad.append("note the model never awaited"); return 41 + 1');
+    expect(res.ok).toBe(false);
+    expect(res.value).toBe("42");
+    expect(res.error).toBe(refusal("scratchpad.append", MAX + 26));
+    expect(pad.read()).toBe("p".repeat(MAX - 3));
+    // Reported once: not again as a background fault.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(host.drainNotices().some((n) => n.text.includes("refused"))).toBe(false);
+    expect((await host.evalSnippet("1")).logs).toEqual([]);
+  });
+
+  test("an unawaited write in a statement snippet that returns nothing is still reported", async () => {
+    const { host } = fullHost();
+    const res = await host.evalSnippet(`scratchpad.write("w".repeat(${MAX + 1}));\nconst kept = 1;`);
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe(refusal("scratchpad.write", MAX + 1));
+  });
+
+  test("a refusal the snippet caught is its own business", async () => {
+    const { host } = fullHost();
+    const res = await host.evalSnippet('await scratchpad.append("too long").catch((e) => "caught: " + e.message.slice(0, 25))');
+    expect(res.ok).toBe(true);
+    expect(res.value).toBe(JSON.stringify("caught: scratchpad.append refused"));
+    const chained = await host.evalSnippet('scratchpad.append("too long").catch(() => {}); "fine"');
+    expect(chained.ok).toBe(true);
+  });
+
+  test("an abandoned snippet's unawaited refusal rides the abandon's report", async () => {
+    // Its result is discarded, so the refusal goes the background way: the
+    // pong's logs, which the timeout result carries.
+    const { host } = fullHost();
+    const res = await host.evalSnippet('scratchpad.append("too long"); await new Promise(() => {});');
+    expect(res.timedOut).toBe(true);
+    expect(res.logs.some((l) => l.level === "error" && l.text.includes("scratchpad.append refused"))).toBe(true);
+  }, 15_000);
+
+  test("a background routine's refused write is reported as a background fault", async () => {
+    const { host } = fullHost();
+    const res = await host.evalSnippet(
+      'setTimeout(() => { scratchpad.append("from a routine, long after"); }, 50); "started"',
+    );
+    expect(res.ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 400));
+    const notes = host.drainNotices();
+    expect(notes.some((n) => n.kind === "session_note" && n.text.includes("scratchpad.append refused"))).toBe(true);
+    const next = await host.evalSnippet("1");
+    expect(next.ok).toBe(true);
+    expect(next.logs.some((l) => l.level === "error" && l.text.includes("scratchpad.append refused"))).toBe(true);
+  }, 15_000);
 });
