@@ -19,7 +19,7 @@ import {
   type ChatMessage,
   type SnapshotLike,
 } from "./context";
-import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf } from "./reflect";
+import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf, taxiFlightOf } from "./reflect";
 import type { EpisodicLog } from "./episodic";
 import { buildSystemPrompt } from "./prompt";
 import { fixedLoopRequestRecord } from "./request-record";
@@ -252,7 +252,8 @@ export class ContextBuilder {
    * The episode's reflection gate, fed by every state sample this builder
    * takes. It lives here because this is the one place both drivers sample the
    * world on the clock: the `reflect` tool needs to see the character *leave*
-   * a rest area to re-arm, and no reflect call is made while that happens.
+   * a rest area or land to re-arm, and no reflect call is made while that
+   * happens.
    */
   readonly reflect = new ReflectGate();
   /** The sample in flight, if any; concurrent callers share it. */
@@ -519,10 +520,10 @@ export class ContextBuilder {
     // row, so an intention only recorded at row cadence would be one nobody
     // could ever see in flight.
     this.noteMove(snap);
-    // Ungated for the same reason `noteMove` is: the gate re-arms on a rest
-    // area being left, and a rest visit can begin and end well inside one
-    // state row.
-    this.reflect.note(restingOf(snap));
+    // Ungated for the same reason `noteMove` is: the gate re-arms on a stay
+    // (rest or flight) ending, and a rest visit or a short flight can begin and
+    // end well inside one state row.
+    this.reflect.note(restingOf(snap), taxiFlightOf(snap));
     if (this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
     this.lastStateAt = this.now();
     const pos = snap.self?.position?.value as

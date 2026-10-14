@@ -145,14 +145,18 @@ summarization was rejected because the summarizer becomes an unversioned,
 model-dependent part of the harness. Any constant in the policy is a harness
 version change.
 
-**Reflection is the model's to take, and only at rest** (2026-08-30). A
+**Reflection is the model's to take, and only at rest or in flight** (2026-08-30). A
 `reflect` tool spends a turn thinking instead of acting, only while the
 character is in a client-visible rest area — never mid-combat, always among
-the NPCs a player visits anyway. It returns a fixed, content-free prompt and
-the model writes the outcome into its own scratchpad; the harness summarizes
-nothing. Reflect turns count like any other: a free turn would invite gaming.
+the NPCs a player visits anyway — or on a taxi flight (operator, 2026-10-14):
+the flight flag is client-visible, a passenger cannot fight, and a flight is
+minutes of otherwise idle turns. One reflection per stay, an unbroken stretch
+resting, flying or both, so landing in a city grants no second. It returns a
+fixed, content-free prompt and the model writes the outcome into its own
+scratchpad; the harness summarizes nothing. Reflect turns count like any
+other: a free turn would invite gaming.
 
-**An episodic log, written before each trim, read back at rest** (2026-08-30).
+**An episodic log, written before each trim, read back at rest or in flight** (2026-08-30).
 On the last turn before a block-trim the harness asks for a short status entry
 — append-only and harness-stamped, a record the model cannot edit, unlike the
 scratchpad — readable only while reflecting. The trigger is the trim, not a

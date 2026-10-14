@@ -12,7 +12,7 @@ import { parseIdQuery, searchReference } from "@wrathbench/wiki/search";
 import { bundleHasIds } from "@wrathbench/wiki/bundle";
 import { CONTEXT_POLICY, formatEventLine, formatStateSummary, type SnapshotLike } from "./context";
 import { EPISODIC_PAGE_DEFAULT, EPISODIC_PAGE_MAX, type EpisodicEntry, type EpisodicLog } from "./episodic";
-import { READ_LOG_CLOSED, restingOf, type ReflectGate } from "./reflect";
+import { READ_LOG_CLOSED, restingOf, taxiFlightOf, type ReflectGate } from "./reflect";
 import type { ActionHintNote, EventSummary } from "./sandbox/ipc";
 import type { SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
@@ -164,7 +164,7 @@ export const TOOLS: ToolDef[] = [
     description:
       "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; " +
       "nothing is summarised for you and nothing is remembered unless you write it to the scratchpad. " +
-      "Available only while your character is resting — the state summary shows `resting` when it applies — and once per rest visit.",
+      "Available only while your character is resting — the state summary shows `resting` when it applies — or in flight, and once per stay: being neither, then resting or flying again, makes it available again.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -872,7 +872,7 @@ async function runTool(ctx: ToolContext, name: string, args: unknown, origin: Ca
         // the next tick to be believed.
         try {
           const snapshot = (await ctx.sandbox.stateSnapshot()) as SnapshotLike;
-          ctx.reflect.note(restingOf(snapshot));
+          ctx.reflect.note(restingOf(snapshot), taxiFlightOf(snapshot));
         } catch {
           // A sandbox mid-restart tells us nothing new; the gate keeps the last
           // reading it was fed, which is the honest state of the observation.
