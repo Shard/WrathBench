@@ -20,6 +20,7 @@ import {
   isClaudeFamily,
   concurrencyKeyOfRef,
   jobArgv,
+  jobJsonlPath,
   fleetComplete,
   resolveStatePath,
   parseFleet as parseFleetIn,
@@ -117,7 +118,7 @@ import { billingOf } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
 import { campaignSquares, campaignWork, type Campaign } from "../runner/src/campaigns";
 import type { EpisodeId } from "../runner/src/episodes";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
 import { loadRunConfig } from "../runner/src/config";
@@ -125,7 +126,7 @@ import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/conf
 import { parseCampaigns } from "../runner/src/campaigns";
 import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
 import { checkedIn, defsBlock, definition, joined, seedPublished } from "../runner/test/fixtures/campaigns";
-import { backoffMs, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
+import { backoffMs, drainMarkerPath, drainRequested, episodeArgv, resolve, writeLaunchFailure } from "./run-roster";
 import { holdsOnlyLaunchFiles } from "../runner/src/launch-files";
 import { isCounted, readRunFacts } from "../runner/src/models";
 import { listRuns } from "../runner/viewer/runs";
@@ -4198,5 +4199,25 @@ describe("a queue job's repeat is met by counted runs on disk, not by the superv
     expect(loop.job.owed).toBeUndefined();
     expect(jobSpawn(loop.job, c.roster, loop.account, "20261014").loop).toBe(true);
     expect(plan.queue.done).toEqual([]);
+  });
+});
+
+describe("a drain reaches the roster between episodes, which a 60s look almost never sees", () => {
+  test("the supervisor's marker is the path the roster reads off its own --log, and it reads it live", () => {
+    // The supervisor writes drainMarkerPath(jobJsonlPath(name, stamp)); the
+    // roster reads drainMarkerPath(<its --log>). One path, or the drain is a no-op.
+    const argv = jobArgv(spawn({ name: "ox-e360" }), { stamp: "20261014", until: undefined });
+    const log = argv[argv.indexOf("--log") + 1]!;
+    expect(log).toBe(jobJsonlPath("ox-e360", "20261014"));
+    expect(drainMarkerPath(log)).toBe(`${jobJsonlPath("ox-e360", "20261014")}.drain`);
+    // Read before every launch, so an undrain (the marker removed) takes effect
+    // at the very next boundary, and a roster with no --log never drains.
+    const jsonl = join(tempDir("fleet-drain-"), "fleet-ox-e360-20261014.jsonl");
+    expect(drainRequested(jsonl)).toBe(false);
+    writeFileSync(drainMarkerPath(jsonl), JSON.stringify({ at: 1, why: "disabled" }) + "\n");
+    expect(drainRequested(jsonl)).toBe(true);
+    rmSync(drainMarkerPath(jsonl));
+    expect(drainRequested(jsonl)).toBe(false);
+    expect(drainRequested("")).toBe(false);
   });
 });

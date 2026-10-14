@@ -956,6 +956,26 @@ export function deferSidecarPath(log: string): string {
   return `${log}.defer.json`;
 }
 
+// ------------------------------------------------------------- drain marker
+//
+// The supervisor drains a job by SIGTERMing its roster once no episode is in
+// flight, and it looks once a tick. A roster launches its next episode within
+// milliseconds of the last one ending, so a multi-episode job almost never
+// showed the supervisor a boundary, and a drained `repeat: 3` ran all three.
+// The marker says the drain where the roster can see it: the supervisor writes
+// `<log>.drain` when it drains the job and removes it on an undrain or a
+// respawn, and the roster reads it before every launch. The SIGTERM path is
+// unchanged and still covers the roster's naps and account waits.
+
+export function drainMarkerPath(log: string): string {
+  return `${log}.drain`;
+}
+
+/** Whether the job this roster's `--log` belongs to is being drained. */
+export function drainRequested(log: string): boolean {
+  return log !== "" && existsSync(drainMarkerPath(log));
+}
+
 export function serializeDefers(map: Map<string, DeferEntry>): string {
   return JSON.stringify({ version: 1, entries: Object.fromEntries(map) }, null, 2);
 }
@@ -1373,6 +1393,21 @@ function record(entry: {
 // ------------------------------------------------------------------ process
 
 let stopping = false;
+/** The supervisor's drain marker was seen: launch nothing more (`drainSeen`). */
+let drained = false;
+
+/**
+ * Whether the supervisor has drained this job, read off its marker before every
+ * launch. Said once. Kept apart from `stopping` so a SIGTERM that follows the
+ * drain is an ordinary first signal, not the second one that hard-exits.
+ */
+function drainSeen(): boolean {
+  if (drained) return true;
+  if (!drainRequested(logPath)) return false;
+  drained = true;
+  say(`drained: ${drainMarkerPath(logPath)} is set — the supervisor is draining this job; no further episodes will be launched`);
+  return true;
+}
 /** The episode in flight — a child process or a run pod — behind one handle. */
 let episode: EpisodeHandle | undefined;
 let childRunId: string | undefined;
@@ -2228,7 +2263,7 @@ async function main(): Promise<void> {
     let cooling = 0;
     let earliest: number | undefined;
     for (const a of pending) {
-      if (stopping) break;
+      if (stopping || drainSeen()) break;
       const plan = planCycle(deferred.get(a.spec.runId), a.doneCycle1 === true, cycle, Date.now());
       // Cycle 1 already ran for this spec (--resume-roster found it terminated).
       // No nap is owed for it either: planGap only counts cooling specs.
@@ -2295,7 +2330,7 @@ async function main(): Promise<void> {
       saveDefers(logPath, deferred, false);
     }
     pruneTainted();
-    if (!args.loop || stopping) break;
+    if (!args.loop || stopping || drained) break;
     if (deadline !== undefined && Date.now() >= deadline) break;
     if (pending.length === 0) {
       say("nothing left to run (every entry already terminated or tainted) — ending the loop");
@@ -2310,7 +2345,7 @@ async function main(): Promise<void> {
     const gap = planGap(launched, cooling, earliest, Date.now(), cycle + 1);
     if (gap.kind === "none") say(gap.why);
     else await nap(gap.ms, deadline, gap.why);
-    if (stopping || (deadline !== undefined && Date.now() >= deadline)) break;
+    if (stopping || drainSeen() || (deadline !== undefined && Date.now() >= deadline)) break;
   }
 
   // Only *reached* in non-loop runs (a --loop run exits this point only on
@@ -2318,13 +2353,13 @@ async function main(): Promise<void> {
   // already been resuming these in place, cycle after cycle.
   let queue = retryQueueOf(roster, deferred);
 
-  for (let cycle = 1; cycle <= MAX_RETRY_CYCLES && queue.length > 0 && !stopping; cycle++) {
+  for (let cycle = 1; cycle <= MAX_RETRY_CYCLES && queue.length > 0 && !stopping && !drainSeen(); cycle++) {
     if (deadline !== undefined && Date.now() >= deadline) break;
     say(`retry cycle ${cycle}/${MAX_RETRY_CYCLES}: ${queue.length} deferred model(s)`);
     await nap(CYCLE_GAP_MS, deadline, `gap before retry cycle ${cycle}`);
     const next: Attempt[] = [];
     for (const a of queue) {
-      if (stopping) {
+      if (stopping || drainSeen()) {
         next.push(a);
         continue;
       }

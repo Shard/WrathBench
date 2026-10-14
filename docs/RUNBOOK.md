@@ -125,7 +125,11 @@ otherwise on whichever pool account is free.
   flight, SIGTERM at the next episode boundary. Worst case a just-started
   episode is terminated gracefully; never a corrupted one. A pool job frees
   its account when the process exits; deleting a job from the queue drains it
-  the same way.
+  the same way. A roster starts its next episode milliseconds after the last
+  one ends, faster than the supervisor's once-a-tick look, so the drain is
+  also written beside the job's log (`<jsonl>.drain`). The roster checks it
+  before every launch and exits at that boundary. Re-enabling the job before
+  then removes it.
 - `"enabled": true`, or a brand-new job — spawned on the next tick (a pool job
   when an account is free) for what its `repeat` still owes. `enabled` belongs
   to a JOB; on a roster entry it is refused (pause a character with

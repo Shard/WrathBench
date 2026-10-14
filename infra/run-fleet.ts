@@ -34,7 +34,10 @@
  *    unavoidable small race — a child spawned in the instant between the
  *    idle check and the kill gets run-roster's graceful episode termination
  *    (30s grace), not a hard kill — so in the worst case "disable" costs one
- *    just-started episode, never a corrupted one.
+ *    just-started episode, never a corrupted one. Because a roster launches its
+ *    next episode within milliseconds, the drain is also a marker file the
+ *    roster reads before every launch (`drainMarkerPath`), so a multi-episode
+ *    job stops at its next boundary instead of running every copy.
  *  - enabled:true / new job -> spawned on the next tick.
  *  - malformed or invalid config on re-read, or a store that cannot be
  *    opened -> complaint, last good config kept, nothing running is touched.
@@ -72,6 +75,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
   writeSync,
@@ -182,7 +186,7 @@ import {
   WINDOW_PHASES,
 } from "./run-fleet-state";
 import { formatEndedRun, printDryRun, printLiveRuns, printStatus } from "./run-fleet-status";
-import { accountHeldBy, releaseRunSession } from "./run-roster";
+import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster";
 import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
@@ -1340,6 +1344,23 @@ async function main(): Promise<void> {
     ended: endedRuns,
   });
 
+  /**
+   * The drain, said where the job's roster reads it before every launch
+   * (`drainMarkerPath`): a roster starts its next episode milliseconds after
+   * the last one ends, so the SIGTERM below almost never found a multi-episode
+   * job between episodes. `why` undefined clears it. Best effort — the SIGTERM
+   * path still stops a roster that is napping or waiting on an account.
+   */
+  const markDrain = (name: string, why: string | undefined): void => {
+    const path = drainMarkerPath(jobJsonlPath(name, stampToday));
+    try {
+      if (why === undefined) rmSync(path, { force: true });
+      else writeFileSync(path, JSON.stringify({ at: Date.now(), why }) + "\n");
+    } catch (e) {
+      say(`job ${name}: could not ${why === undefined ? "clear" : "write"} the drain marker ${path} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   const spawnJob = (spawn: JobSpawn): void => {
     {
       // The breaker, before anything is written or spawned. Handing the
@@ -1367,6 +1388,8 @@ async function main(): Promise<void> {
     writeFileSync(rosterPath, JSON.stringify(entries, null, 2) + "\n");
     // A respawn (job toggled off then on again the same day) resumes the
     // materialized roster instead of relaunching finished runs from scratch.
+    // A queue job's remainder needs none of that — its ids are fresh ones
+    // (`owedCopies`) — but a paused run in the same roster still does.
     const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
     const argv = jobArgv(spawn, { stamp: stampToday, until: args.until, resumeRoster, runPods: config.policy.runPods });
     const stdoutLog = jobLogPath(spawn.name, stampToday);
@@ -1377,6 +1400,8 @@ async function main(): Promise<void> {
     // stderr from clobbering each other.
     mkdirSync(dirname(stdoutLog), { recursive: true });
     const fd = openSync(stdoutLog, "a");
+    // A fresh process never inherits a drain meant for the one before it.
+    markDrain(spawn.name, undefined);
     const proc = Bun.spawn(argv, { cwd: REPO_ROOT, stdin: "ignore", stdout: fd, stderr: fd });
     writeSync(fd, `---- spawned ${new Date().toISOString()} pid ${proc.pid} ${argv.join(" ")}\n`);
     closeSync(fd);
@@ -1591,6 +1616,7 @@ async function main(): Promise<void> {
       if (p.exited && sets.running.has(name)) {
         sets.running.delete(name);
         const drained = sets.draining.delete(name);
+        markDrain(name, undefined);
         if (!drained) sets.finished.add(name);
         const acct = assigned.get(name);
         assigned.delete(name);
@@ -1685,6 +1711,7 @@ async function main(): Promise<void> {
     for (const name of [...spared]) if (!refusedJobs.has(name)) spared.delete(name);
     for (const name of actions.undrain) {
       sets.draining.delete(name);
+      markDrain(name, undefined);
       say(`job ${name}: re-enabled before it drained — keeping it running`);
       record({ job: name, event: "undrain" });
     }
@@ -1695,6 +1722,7 @@ async function main(): Promise<void> {
     for (const name of actions.drain) {
       sets.draining.add(name);
       const why = pauseSwitch !== undefined ? "the fleet is paused" : (drainReasons.get(name) ?? "disabled");
+      markDrain(name, why);
       const how = pausesOnDrain(liveJobs.get(name)) ? "pausing now (no episode boundary on an unlimited session)" : "draining (SIGTERM at the next episode boundary)";
       say(`job ${name}: ${why} — ${how}`);
       record({ job: name, event: "draining", detail: why });
