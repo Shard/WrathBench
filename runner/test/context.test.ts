@@ -607,6 +607,21 @@ describe("foldUiOpenWindows", () => {
     expect(closed.gossip).toBeUndefined();
   });
 
+  test("a refused loot and an undecodable one open nothing", () => {
+    expect(
+      foldUiOpenWindows([{ opcode: "SMSG_LOOT_RESPONSE", seq: 3, data: { guid: "7", lootType: 0, error: 4 } }])
+        .loot,
+    ).toBeUndefined();
+    expect(foldUiOpenWindows([{ opcode: "SMSG_LOOT_RESPONSE", seq: 3, data: { decodeError: true } }]).loot).toBeUndefined();
+    // A refusal after a real window neither opens nor closes anything.
+    expect(
+      foldUiOpenWindows([
+        { opcode: "SMSG_LOOT_RESPONSE", seq: 3, data: { guid: "7", lootType: 1, gold: 0, items: [] } },
+        { opcode: "SMSG_LOOT_RESPONSE", seq: 4, data: { guid: "8", lootType: 0, error: 0 } },
+      ]).loot,
+    ).toBe(true);
+  });
+
   test("loot is open until its release response", () => {
     expect(foldUiOpenWindows([{ opcode: "SMSG_LOOT_RESPONSE", seq: 3 }]).loot).toBe(true);
     expect(

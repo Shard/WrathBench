@@ -205,23 +205,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edits to move them are the bank and
-    // mail helper line, the scratchpad cap line and the read_log line reading
-    // newest first with filters (operator, 2026-10-14); all are in every
-    // rendering, so they moved every row.
+    // any rendering fails here. The last edit to move them is the lootCorpse
+    // line's refused status (a loot the server refuses settles at once with
+    // the reason instead of timing out); it is in every rendering, so it
+    // moved every row.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:3ab8156dd42656af", off: "sha256:542cd136719e1a1e" },
-        cli: { on: "sha256:6ec1db021b06039e", off: "sha256:0f155692495554c2" },
+        wrathbench: { on: "sha256:0e6d26b55958937c", off: "sha256:f23d092265d9ec04" },
+        cli: { on: "sha256:ff70dc7023bb693a", off: "sha256:f850a3ba56fa478e" },
       },
       e90: {
-        wrathbench: { on: "sha256:d970f20f1c4ac50d", off: "sha256:2f4b2153d3bc61c8" },
-        cli: { on: "sha256:932f276805e33da3", off: "sha256:a1b6b6fcabd768c2" },
+        wrathbench: { on: "sha256:ce7c02c012a56319", off: "sha256:bfdbe1d79bd95ae0" },
+        cli: { on: "sha256:d10dc25d106e7ed7", off: "sha256:c77d65f9b1e98076" },
       },
       e360: {
-        wrathbench: { on: "sha256:8106ad9896f21f95", off: "sha256:b0acbe4c7ec77033" },
-        cli: { on: "sha256:afac20c41e19dcc2", off: "sha256:5264416d345d4cbc" },
+        wrathbench: { on: "sha256:e3aff092923662c1", off: "sha256:2b1c0e3ad93c8cda" },
+        cli: { on: "sha256:5963d6540bdbaaa8", off: "sha256:30742bac660bfa3e" },
       },
     };
     const episodes = [

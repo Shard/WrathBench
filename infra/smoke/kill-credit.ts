@@ -535,6 +535,29 @@ async function main() {
   );
   if (lootEvt.opcode !== "SMSG_LOOT_RESPONSE") fail(`loot window never opened: first loot event was ${lootEvt.opcode}`);
   await waitFor((e) => e.opcode === "SMSG_LOOT_RELEASE_RESPONSE", REPLY_TIMEOUT_MS, "loot release", lootMark);
+
+  // 4a. Loot refused, decoded. CMSG_LOOT on the corpse just emptied is
+  //     answered with the refusal form of SMSG_LOOT_RESPONSE
+  //     (Player::SendLootError: guid, LOOT_NONE, one LootError byte — 0,
+  //     "didn't kill", once the corpse has lost UNIT_DYNFLAG_LOOTABLE). The
+  //     module used to run off the end of that 10-byte packet and serve
+  //     {"decodeError":true}, so the SDK waited for a window that was never
+  //     coming. Gate: the structured form. A corpse that still had an
+  //     unstorable slot reopens a window instead; that is released and
+  //     reported as "not exercised", not failed, since it says nothing about
+  //     the decode.
+  const refuseMark = events.length;
+  await action("loot", { guid: target.guid });
+  const refusal = await waitFor((e) => e.opcode === "SMSG_LOOT_RESPONSE", REPLY_TIMEOUT_MS, "loot refusal", refuseMark);
+  if (refusal.data?.decodeError) fail("loot refusal served as {decodeError:true}: the module did not decode SendLootError");
+  if (refusal.data?.lootType === 0) {
+    if (refusal.data?.error !== 0) fail(`second loot of the emptied corpse should be LootError 0 (didn't kill); got ${JSON.stringify(refusal.data)}`);
+    log(`second loot of the emptied corpse refused as expected: ${JSON.stringify(refusal.data)}`);
+  } else {
+    log(`loot refusal not exercised: the corpse still showed ${refusal.data?.items?.length ?? "?"} slot(s); releasing`);
+    await action("loot_release", { guid: target.guid });
+    await waitFor((e) => e.opcode === "SMSG_LOOT_RELEASE_RESPONSE", REPLY_TIMEOUT_MS, "second loot release", refuseMark);
+  }
   // What the cleared bag makes readable: N free slots before the kill, and
   // what the loot occupied. Logged, not asserted — a money-only loot is a
   // legitimate outcome and must not fail the gate.
