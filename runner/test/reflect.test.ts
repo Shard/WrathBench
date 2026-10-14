@@ -242,59 +242,75 @@ describe("the flight window (operator, 2026-10-14)", () => {
     expect(gate.drainEvents()).toEqual([]);
   });
 
-  test("landing in a city is one stay: no second reflection, the window stays open until the city is left", () => {
-    // The rest flag comes on in flight, as the zone updates over the city,
-    // then the flight flag drops at the landing.
+  test("landing in a city after a flight's reflection allows the rest visit's own", () => {
+    // Both flags flipping in one sample: the flight's window closes as it
+    // lands, and the city is a rest visit of its own.
+    const gate = new ReflectGate();
+    gate.note(false, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.note(true, false);
+    expect(gate.isOpen).toBe(false);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
+    expect(gate.drainEvents()).toEqual([
+      { event: "open" },
+      { event: "close", reason: "landed" },
+      { event: "open" },
+    ]);
+  });
+
+  test("a city's rest flag coming on before the landing is the rest visit beginning", () => {
+    // The zone updates in flight, so the rest flag can precede the landing; a
+    // reflection there spends the rest visit's and keeps the window open
+    // through the landing until the city is left.
     const gate = new ReflectGate();
     gate.note(false, true);
     expect(gate.request().text).toBe(REFLECTION_PROMPT);
     gate.note(true, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
     gate.note(true, false);
     expect(gate.isOpen).toBe(true);
     expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
     gate.note(false, false);
+    // One window, extended rather than opened twice.
     expect(gate.drainEvents()).toEqual([{ event: "open" }, { event: "close", reason: "left_rest" }]);
   });
 
-  test("a landing whose two flags flip in one sample is one stay too", () => {
+  test("taking off from a city where the model already reflected allows the flight's own", () => {
     const gate = new ReflectGate();
-    gate.note(false, true);
-    expect(gate.request().text).toBe(REFLECTION_PROMPT);
     gate.note(true, false);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    gate.note(true, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    // Leaving the city behind does not close a window the flight also holds.
+    gate.note(false, true);
     expect(gate.isOpen).toBe(true);
     expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
-  });
-
-  test("a sample between the landing and the rest flag is an observed end of stay, and re-arms", () => {
-    // Accepted behaviour, not hysteresis: the gate follows what was observed,
-    // and a sample that saw neither flag saw the stay end.
-    const gate = new ReflectGate();
-    gate.note(false, true);
-    expect(gate.request().text).toBe(REFLECTION_PROMPT);
     gate.note(false, false);
-    gate.note(true, false);
-    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    expect(gate.drainEvents()).toEqual([{ event: "open" }, { event: "close", reason: "landed" }]);
   });
 
-  test("taking off from a rest area where the model already reflected is the same stay", () => {
+  test("a window granted at rest closes when the city is left, even in flight; the flight's own stays available", () => {
     const gate = new ReflectGate();
     gate.note(true, false);
     expect(gate.request().text).toBe(REFLECTION_PROMPT);
     gate.note(true, true);
     gate.note(false, true);
-    expect(gate.isOpen).toBe(true);
+    expect(gate.isOpen).toBe(false);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
+    expect(gate.drainEvents()).toEqual([
+      { event: "open" },
+      { event: "close", reason: "left_rest" },
+      { event: "open" },
+    ]);
+  });
+
+  test("one reflection while both flags are set spends both", () => {
+    const gate = new ReflectGate();
+    gate.note(true, true);
+    expect(gate.request().text).toBe(REFLECTION_PROMPT);
     expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
-  });
-
-  test("flying over a city neither re-arms nor closes", () => {
-    const gate = new ReflectGate();
     gate.note(false, true);
-    expect(gate.request().text).toBe(REFLECTION_PROMPT);
-    gate.drainEvents();
-    gate.note(true, true);
-    gate.note(false, true);
-    expect(gate.isOpen).toBe(true);
-    expect(gate.drainEvents()).toEqual([]);
     expect(gate.request().text).toBe(REFLECT_ALREADY_USED);
   });
 
@@ -309,7 +325,7 @@ describe("the flight window (operator, 2026-10-14)", () => {
     expect((await callTool(ctx, "read_log", {})).text).toBe(READ_LOG_CLOSED);
   });
 
-  test("the builder's state sample alone opens a flight's stay and closes it on landing", async () => {
+  test("the builder's state sample alone arms a flight and closes its window on landing", async () => {
     const state: { resting: boolean; taxiFlight?: boolean } = { resting: false };
     const dir = tempDir("wrathbench-reflect-flight-");
     const config = {
