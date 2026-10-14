@@ -18,7 +18,7 @@ import { InfoHint } from "../components/InfoHint";
 
 /** What the loop diagram is showing, one hover off its heading. */
 const LOOP_NOTE =
-  "Each turn the model sees a fixed state summary, the newest server events, any harness notices and its own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back every turn; the episodic log is a one-line status the harness asks for before it trims older conversation, which the model can page through while reflecting at an inn.";
+  "Each turn the model sees a fixed state summary, the newest server events, any harness notices and its own scratchpad. It acts by running a snippet; the server answers with packets; those fold into the next turn's state. The scratchpad is the model's own notes, read and rewritten by it and handed back every turn; the episodic log is a one-line status the harness asks for before it trims older conversation, which the model can page through while reflecting at an inn or on a flight.";
 
 /** The tool list is harness text and changes only with a deploy; the strip follows the map's cadence. */
 const TOOLS_POLL_MS = 300_000;
@@ -160,7 +160,7 @@ export default function Home() {
             <li>See what a game client sees: units in range, its quests, bags, spells, chat, position.</li>
             <li>Act through the handlers a client hits: move, fight, talk, loot, trade, train, fly, mail.</li>
             <li>Keep its own notes: a scratchpad it rewrites, and an episodic log it can read.</li>
-            <li>Reflection mode, allowing agents resting at an inn or in a city to consider their next steps.</li>
+            <li>Reflection mode, allowing agents at an inn, in a city or on a flight to consider their next steps.</li>
             <li>Search a frozen 3.3.5a reference wiki; on scored episodes it gets names, never actual coordinates.</li>
           </ul>
         </div>
@@ -337,7 +337,7 @@ function LoopDiagram() {
       <text x="194" y="137" text-anchor="end" class="loop-sub">edit_scratchpad</text>
       <line x1="270" y1="92" x2="270" y2="164" class="loop-edge dashed" marker-start="url(#loop-head)" marker-end="url(#loop-head)" />
       <text x="278" y="126" class="loop-sub">log_status before a trim</text>
-      <text x="278" y="137" class="loop-sub">read_log while reflecting, at an inn</text>
+      <text x="278" y="137" class="loop-sub">read_log while reflecting, inn or flight</text>
       <path d="M98,188 L70,188 L70,92" class="loop-edge dashed" fill="none" marker-end="url(#loop-head)" />
       <text x="66" y="200" text-anchor="end" class="loop-sub">read into every</text>
       <text x="66" y="211" text-anchor="end" class="loop-sub">turn's context</text>

@@ -5,22 +5,23 @@
  * and only at rest or in flight" and "An episodic log, written before each
  * trim, read back at rest or in flight": the model may spend a turn thinking
  * instead of acting, but only while the character is in a rest area or on a
- * taxi flight, and only once per stay. Both conditions are world facts a
- * client sees (`PLAYER_FLAGS_RESTING` and `UNIT_FLAG_TAXI_FLIGHT`, decoded by
- * the SDK onto `state.self.resting` and `state.self.taxiFlight`), so
- * reflection cannot happen mid-combat: a rest area is among the NPCs a player
- * would be visiting anyway, and a taxi passenger cannot fight.
+ * taxi flight, and only once per rest visit or flight. Both conditions are
+ * world facts a client sees (`PLAYER_FLAGS_RESTING` and
+ * `UNIT_FLAG_TAXI_FLIGHT`, decoded by the SDK onto `state.self.resting` and
+ * `state.self.taxiFlight`), so reflection cannot happen mid-combat: a rest area
+ * is among the NPCs a player would be visiting anyway, and a taxi passenger
+ * cannot fight.
  *
- * A *stay* is one unbroken stretch in which the character is resting, flying,
- * or both. The two run together on purpose: a flight into a capital turns the
- * rest flag on before it lands (the zone updates in flight), and a flight out
- * of one leaves it after takeoff, so counting them apart would hand out a
- * second reflection back to back for one continuous stretch.
+ * Rest visits and flights are independent: each arms on its own flag turning
+ * on, so a flight out of a city where the model already reflected has its own
+ * reflection, and so does a city reached by air. A reflection granted while
+ * both flags are set spends both, since it happened during both.
  *
  * A granted reflection opens a *reflection window*. Every normal tool stays
  * usable inside it; what it adds is `read_log`, the only way the episodic log
- * is ever read back. The window closes when the stay ends — the character is
- * neither resting nor flying any more — or when the run ends, or on a
+ * is ever read back. The window closes when the rest visit or flight it was
+ * granted in ends (the character leaves the rest area or lands; a window
+ * granted in both lasts until both have ended), or when the run ends, or on a
  * circuit breaker after `REFLECT_MAX_TURNS` turns, which exists so a character
  * parked in an inn cannot hold the window open for a whole episode.
  *
@@ -42,9 +43,9 @@ export const REFLECT_NOT_RESTING =
   "Reflection needs rest or a flight — you are neither resting nor in flight. " +
   "Inns and cities set the resting state (the character shows it when it applies).";
 
-/** The refusal when this stay's one reflection has already been spent. */
+/** The refusal when this rest visit's or flight's one reflection has already been spent. */
 export const REFLECT_ALREADY_USED =
-  "You already reflected during this stay; it becomes available again after you are neither resting nor in flight, then rest or fly again.";
+  "You already reflected during this rest or flight; it becomes available again on your next rest visit or flight.";
 
 /** The refusal `read_log` gives outside a reflection window. */
 export const READ_LOG_CLOSED =
@@ -61,7 +62,7 @@ export const READ_LOG_CLOSED =
 export const REFLECT_MAX_TURNS = 30;
 
 /** The notice pushed when the breaker closes a window. */
-export const REFLECT_BREAKER_NOTICE = `Reflection ended after ${REFLECT_MAX_TURNS} turns; it becomes available again after you are neither resting nor in flight, then rest or fly again.`;
+export const REFLECT_BREAKER_NOTICE = `Reflection ended after ${REFLECT_MAX_TURNS} turns; it becomes available again on your next rest visit or flight.`;
 
 /**
  * The reflection itself: fixed for every model and every run, and deliberately
@@ -110,9 +111,13 @@ export class ReflectGate {
   /** The last observed readings; each `undefined` until a block carried it. */
   private resting: boolean | undefined;
   private taxiFlight: boolean | undefined;
-  /** Whether this stay's one reflection has been spent. */
-  private used = false;
+  /** Whether this rest visit's, and this flight's, one reflection has been spent. */
+  private restUsed = false;
+  private flightUsed = false;
   private open = false;
+  /** Which of the rest visit and the flight the open window was granted in, while each lasts. */
+  private openInRest = false;
+  private openInFlight = false;
   /** Turns counted since the window opened; the breaker's only input. */
   private turnsOpen = 0;
   private readonly events: ReflectWindowEvent[] = [];
@@ -122,31 +127,35 @@ export class ReflectGate {
     return this.open;
   }
 
-  /** Resting, flying, or both: the stay one reflection belongs to. */
-  private get inStay(): boolean {
-    return this.resting === true || this.taxiFlight === true;
-  }
-
   /**
    * Record an observation of the resting and taxi-flight flags. `undefined`
    * (the field was not carried) leaves that flag's last reading standing
    * rather than erasing it, exactly as the ghost latch in `loop.ts` does.
    *
-   * Arming is the stay's false→true edge, and the first sight of a resting or
-   * flying character arms too: a run that opens inside an inn is at rest, and
-   * refusing there would make the first reflection depend on having been seen
-   * to walk in. The true→false edge closes any open window: being neither
-   * resting nor flying is what ends reflecting, not a timer. Only the combined
-   * edge counts, so landing in a city, taking off from one or flying over one
-   * stays one stay.
+   * Each flag arms its own reflection on its false→true edge — a new rest
+   * visit, a new flight — and the first sight of a set flag arms too: a run
+   * that opens inside an inn is at rest, and refusing there would make the
+   * first reflection depend on having been seen to walk in. A flight stays one
+   * flight while its flag holds, however many nodes it passes. A true→false
+   * edge ends that visit or flight, and closes an open window once every one
+   * it was granted in has ended: leaving is what ends reflecting, not a timer.
    */
   note(resting: boolean | undefined, taxiFlight?: boolean): void {
-    const was = this.inStay;
     const wasResting = this.resting === true;
+    const wasFlying = this.taxiFlight === true;
     if (resting !== undefined) this.resting = resting;
     if (taxiFlight !== undefined) this.taxiFlight = taxiFlight;
-    if (this.inStay && !was) this.used = false;
-    if (!this.inStay && was) this.close(wasResting ? "left_rest" : "landed");
+    const isResting = this.resting === true;
+    const isFlying = this.taxiFlight === true;
+    if (isResting && !wasResting) this.restUsed = false;
+    if (isFlying && !wasFlying) this.flightUsed = false;
+    const leftRest = wasResting && !isResting;
+    const landed = wasFlying && !isFlying;
+    if (leftRest) this.openInRest = false;
+    if (landed) this.openInFlight = false;
+    if ((leftRest || landed) && !this.openInRest && !this.openInFlight) {
+      this.close(landed ? "landed" : "left_rest");
+    }
   }
 
   /**
@@ -164,18 +173,34 @@ export class ReflectGate {
   close(reason: ReflectCloseReason): void {
     if (!this.open) return;
     this.open = false;
+    this.openInRest = false;
+    this.openInFlight = false;
     this.turnsOpen = 0;
     this.events.push({ event: "close", reason });
   }
 
-  /** The tool's answer: the fixed prompt, or one of the two fixed refusals. */
+  /**
+   * The tool's answer: the fixed prompt, or one of the two fixed refusals.
+   *
+   * A grant spends the reflection of every visit or flight in progress. One
+   * that lands while a window is still open — a flight's own reflection taken
+   * before the city it left is behind — extends that window rather than
+   * writing a second `open` with none closed, and restarts the breaker's count.
+   */
   request(): ToolResult {
-    if (!this.inStay) return { text: REFLECT_NOT_RESTING, isError: true };
-    if (this.used) return { text: REFLECT_ALREADY_USED, isError: true };
-    this.used = true;
-    this.open = true;
+    const isResting = this.resting === true;
+    const isFlying = this.taxiFlight === true;
+    if (!isResting && !isFlying) return { text: REFLECT_NOT_RESTING, isError: true };
+    if (!(isResting && !this.restUsed) && !(isFlying && !this.flightUsed)) {
+      return { text: REFLECT_ALREADY_USED, isError: true };
+    }
+    if (isResting) this.restUsed = this.openInRest = true;
+    if (isFlying) this.flightUsed = this.openInFlight = true;
     this.turnsOpen = 0;
-    this.events.push({ event: "open" });
+    if (!this.open) {
+      this.open = true;
+      this.events.push({ event: "open" });
+    }
     return { text: REFLECTION_PROMPT };
   }
 
@@ -191,7 +216,7 @@ export class ReflectGate {
  *
  * For the standalone MCP server, which has no context builder — nothing samples
  * the world on a clock and nothing counts turns there, so a window opened would
- * never see the stay end and the breaker could never fire.
+ * never see the character leave or land and the breaker could never fire.
  * Serving the log through a window that cannot close would be worse than not
  * serving it at all; a scored episode always runs under a driver whose builder
  * feeds this gate.

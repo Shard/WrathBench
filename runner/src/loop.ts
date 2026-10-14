@@ -520,9 +520,9 @@ export class ContextBuilder {
     // row, so an intention only recorded at row cadence would be one nobody
     // could ever see in flight.
     this.noteMove(snap);
-    // Ungated for the same reason `noteMove` is: the gate re-arms on a stay
-    // (rest or flight) ending, and a rest visit or a short flight can begin and
-    // end well inside one state row.
+    // Ungated for the same reason `noteMove` is: the gate re-arms on a rest
+    // visit or a flight beginning, and either can begin and end well inside
+    // one state row.
     this.reflect.note(restingOf(snap), taxiFlightOf(snap));
     if (this.now() - this.lastStateAt < config.stateIntervalMs) return snap;
     this.lastStateAt = this.now();

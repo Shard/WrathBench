@@ -148,10 +148,9 @@ version change.
 **Reflection is the model's to take, and only at rest or in flight** (2026-08-30). A
 `reflect` tool spends a turn thinking instead of acting, only while the
 character is in a client-visible rest area — never mid-combat, always among
-the NPCs a player visits anyway — or on a taxi flight (operator, 2026-10-14):
-the flight flag is client-visible, a passenger cannot fight, and a flight is
-minutes of otherwise idle turns. One reflection per stay, an unbroken stretch
-resting, flying or both, so landing in a city grants no second. It returns a
+the NPCs a player visits anyway — or on a taxi flight, once per rest visit or
+flight (operator, 2026-10-14): the flight flag is client-visible, a passenger
+cannot fight, and a flight is minutes of otherwise idle turns. It returns a
 fixed, content-free prompt and the model writes the outcome into its own
 scratchpad; the harness summarizes nothing. Reflect turns count like any
 other: a free turn would invite gaming.

@@ -164,7 +164,7 @@ export const TOOLS: ToolDef[] = [
     description:
       "Spend this turn thinking instead of acting. Returns a fixed set of questions to review your own record against; " +
       "nothing is summarised for you and nothing is remembered unless you write it to the scratchpad. " +
-      "Available only while your character is resting — the state summary shows `resting` when it applies — or in flight, and once per stay: being neither, then resting or flying again, makes it available again.",
+      "Available only while your character is resting — the state summary shows `resting` when it applies — or in flight, and once per rest visit and once per flight.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
