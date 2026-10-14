@@ -80,6 +80,8 @@ const PIN: readonly string[] = [
   "stealth/ox-alpha",
   "openai/gpt-5.6-luna",
   "google/gemini-3.7-flash",
+  // Added ahead of its t0 trial (2026-10-14).
+  "google/gemini-4-argon",
   // Launch discount: $0.075/$0.25 per Mtok runs to roughly 2026-09-09, after
   // which the catalogue quotes list ($0.15/$0.50). A sync past that date
   // appends a window dated that day; August's runs keep the discount.
