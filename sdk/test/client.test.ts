@@ -3302,7 +3302,7 @@ describe("client: sellItem reports what the server did", () => {
   // Every code HandleSellItemOpcode sends at the pinned core, with its sentence.
   const refusals: readonly [number, string, string][] = [
     [1, "SELL_ERR_CANT_FIND_ITEM", "refused: you do not have that item (SELL_ERR_CANT_FIND_ITEM) — re-read state.bag() for its guid"],
-    [2, "SELL_ERR_CANT_SELL_ITEM", "refused: the vendor will not buy that item (SELL_ERR_CANT_SELL_ITEM) — it has no sell price, is a bag that is not empty, or count is more than the stack"],
+    [2, "SELL_ERR_CANT_SELL_ITEM", "refused: the vendor will not buy that item (SELL_ERR_CANT_SELL_ITEM) — no sell price, a non-empty bag, or count over the stack"],
     [3, "SELL_ERR_CANT_FIND_VENDOR", "refused: too far from the vendor, or it is not a vendor (SELL_ERR_CANT_FIND_VENDOR) — move within 5 yards and retry"],
     [5, "SELL_ERR_UNK", "refused: the sale would take your money past the gold cap (SELL_ERR_UNK)"],
     [7, "SELL_ERR_CANT_SELL_TO_THIS_MERCHANT", "refused: this vendor does not buy items (SELL_ERR_CANT_SELL_TO_THIS_MERCHANT) — sell to another vendor"],
@@ -3364,9 +3364,7 @@ describe("client: sellItem reports what the server did", () => {
     const stub = startStub({ onConnect: () => bagWorld() });
     const client = await inWorld(stub);
     const result = await client.sellItem(CREATURE_GUID, ITEM_GUID, undefined, { timeout: 60 });
-    const hint =
-      "no answer: the item did not leave your bags and no refusal (SMSG_SELL_ITEM) arrived — the server is silent " +
-      "for an item still refundable from its purchase; re-read state.bag() before retrying";
+    const hint = "no answer from the server — the item is still in your bags; re-read state.bag() before retrying";
     expect(result).toEqual({ ok: false, status: "timeout", itemGuid: ITEM_GUID, itemId: ITEM_ENTRY, name: "Gritstone Charm", hint });
     expect(client.drainActionHints()).toMatchObject([{ action: "sellItem", status: "timeout", count: 1, hint }]);
     client.close();

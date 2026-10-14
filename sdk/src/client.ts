@@ -2085,7 +2085,7 @@ const SELL_RESULT_NAMES: Record<number, string> = {
  */
 const SELL_REFUSAL_HINTS: Record<number, string> = {
   1: "refused: you do not have that item (SELL_ERR_CANT_FIND_ITEM) — re-read state.bag() for its guid",
-  2: "refused: the vendor will not buy that item (SELL_ERR_CANT_SELL_ITEM) — it has no sell price, is a bag that is not empty, or count is more than the stack",
+  2: "refused: the vendor will not buy that item (SELL_ERR_CANT_SELL_ITEM) — no sell price, a non-empty bag, or count over the stack",
   3: "refused: too far from the vendor, or it is not a vendor (SELL_ERR_CANT_FIND_VENDOR) — move within 5 yards and retry",
   // Sent alongside SMSG_INVENTORY_CHANGE_FAILURE EQUIP_ERR_TOO_MUCH_GOLD.
   5: "refused: the sale would take your money past the gold cap (SELL_ERR_UNK)",
@@ -2104,9 +2104,7 @@ function sellRefusalHint(result: number): string {
  * The `timeout` hint. The pinned core answers every sale it handles except one:
  * an item still refundable from its purchase is dropped without a packet.
  */
-const SELL_TIMEOUT_HINT =
-  "no answer: the item did not leave your bags and no refusal (SMSG_SELL_ITEM) arrived — the server is silent " +
-  "for an item still refundable from its purchase; re-read state.bag() before retrying";
+const SELL_TIMEOUT_HINT = "no answer from the server — the item is still in your bags; re-read state.bag() before retrying";
 
 /**
  * `SMSG_INVENTORY_CHANGE_FAILURE.result` — the 3.3.5a `InventoryResult` enum
