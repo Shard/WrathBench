@@ -1,7 +1,8 @@
 /**
  * infra/image-guard.sh: the matcher on its own (`--paths`, fixture path lists)
  * and the image mode against a `docker` shim whose `export` tars a fixture
- * directory, so nothing here needs a daemon.
+ * directory, and the tarball mode against a `crane` shim that does the same,
+ * so nothing here needs a daemon or a registry.
  *
  * Fixture secrets are invented strings, and every assertion that a secret was
  * found also asserts its content was not printed: the guard names paths only.
@@ -210,5 +211,82 @@ describe("image-guard on an image", () => {
     const r = scan({ "wrathbench/package.json": "{}" }, { FAKE_EXPORT_FAIL: "1" });
     expect(r.code).not.toBe(0);
     expect(r.out).toContain("refusing it");
+  });
+});
+
+/**
+ * A `crane` whose `export - -` reads the tarball from stdin (so the guard must
+ * hand it the right file) and tars FAKE_IMAGE_ROOT as the flattened
+ * filesystem; argv is logged, never the environment.
+ */
+const CRANE_SHIM = `#!/usr/bin/env bash
+printf 'crane %s\\n' "$*" >> "\${FAKE_LOG}"
+case "$1" in
+  export)
+    [[ "$2" == "-" && "$3" == "-" ]] || exit 9
+    head -c 64 > "\${FAKE_LOG}.stdin"
+    [[ "\${FAKE_EXPORT_FAIL:-0}" == "1" ]] && exit 1
+    tar -cf - -C "\${FAKE_IMAGE_ROOT}" .
+    ;;
+esac
+exit 0
+`;
+
+function scanTarball(files: Record<string, string>, opts: { env?: Record<string, string>; missing?: boolean } = {}) {
+  const dir = tempDir("wb-guard-tarball-");
+  mkdirSync(join(dir, "bin"));
+  writeFileSync(join(dir, "bin", "crane"), CRANE_SHIM);
+  chmodSync(join(dir, "bin", "crane"), 0o755);
+  const log = join(dir, "calls.log");
+  writeFileSync(log, "");
+  const tarball = join(dir, "wrathbench-runner_t1.tar");
+  if (!opts.missing) writeFileSync(tarball, "fixture image tarball\n");
+  const proc = Bun.spawnSync(["bash", GUARD, "--image-tar", tarball], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...BASE_ENV, PATH: `${join(dir, "bin")}:${BASE_ENV.PATH}`, FAKE_LOG: log, FAKE_IMAGE_ROOT: tree(files), ...opts.env },
+  });
+  const stdinSeen = Bun.spawnSync(["cat", `${log}.stdin`], { stdout: "pipe", stderr: "pipe" }).stdout.toString();
+  return { code: proc.exitCode ?? -1, out: proc.stdout.toString() + proc.stderr.toString(), calls: Bun.file(log).text(), stdinSeen };
+}
+
+describe("image-guard on an image tarball (--image-tar)", () => {
+  test("a clean tarball passes, read through crane export of that very file and nothing else", async () => {
+    const r = scanTarball({ "wrathbench/package.json": "{}", "wrathbench/.env.example": "KEY=\n" });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("clean");
+    expect(r.stdinSeen).toBe("fixture image tarball\n");
+    expect(await r.calls).toBe("crane export - -\n");
+  });
+
+  test("a secret-shaped path refuses the tarball and is named without its content", () => {
+    const r = scanTarball({ "wrathbench/package.json": "{}", "wrathbench/.env.prod": "API_KEY=fixture-not-a-secret\n" });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("REFUSED");
+    expect(r.out).toContain("/wrathbench/.env.prod");
+    expect(r.out).not.toContain("fixture-not-a-secret");
+  });
+
+  test("an .npmrc is read for a token there too", () => {
+    const withToken = scanTarball({ "home/bun/.npmrc": "//r.example/:_authToken=npm_FIXTUREnotarealtoken\n" });
+    expect(withToken.code).toBe(1);
+    expect(withToken.out).toContain("/home/bun/.npmrc");
+    expect(withToken.out).not.toContain("npm_FIXTURE");
+    expect(scanTarball({ "home/bun/.npmrc": "registry=https://r.example/\n" }).code).toBe(0);
+  });
+
+  test("a tarball it cannot flatten, or that is not there, is refused, never passed", () => {
+    const unreadable = scanTarball({ "wrathbench/package.json": "{}" }, { env: { FAKE_EXPORT_FAIL: "1" } });
+    expect(unreadable.code).not.toBe(0);
+    expect(unreadable.out).toContain("refusing it");
+    const missing = scanTarball({ "wrathbench/package.json": "{}" }, { missing: true });
+    expect(missing.code).not.toBe(0);
+    expect(missing.out).toContain("no such image tarball");
+  });
+
+  test("--image-tar with no tarball is a usage error", () => {
+    const proc = Bun.spawnSync(["bash", GUARD, "--image-tar"], { stdout: "pipe", stderr: "pipe", env: BASE_ENV });
+    expect(proc.exitCode).toBe(2);
+    expect(proc.stderr.toString()).toContain("--image-tar takes");
   });
 });

@@ -5,6 +5,8 @@
 # is pushed.
 #
 #   ./infra/image-guard.sh <image>...          # scan each image; exit 1 naming what it found
+#   ./infra/image-guard.sh --image-tar <tar>...  # the same, for docker-format image tarballs
+#                                              # (no daemon; needs crane)
 #   ./infra/image-guard.sh --paths [--root D]  # the matcher alone: tar-style paths on stdin,
 #                                              # offending ones on stdout, exit 1 if any
 #
@@ -15,9 +17,10 @@
 # can reach one in the first place. This is the second line: it catches a
 # tracked file that should not be, a Dockerfile step that writes one, or a
 # build that went around build-images.sh. It reads the final filesystem
-# (`docker export` of a container that is created and never started), so a file
-# added in one layer and deleted in a later one is not seen here; keeping such a
-# file out of the build context is the archive's job.
+# (`docker export` of a container that is created and never started, or
+# `crane export` of an image tarball), so a file added in one layer and deleted
+# in a later one is not seen here; keeping such a file out of the build context
+# is the archive's job.
 #
 # What is refused:
 #   - `.env` and `.env.*` (but `.env.example`), anywhere;
@@ -40,9 +43,9 @@
 #     `claude --version` writes. Any other file there is refused.
 #
 # With --paths, an `.npmrc` is refused unless --root names a directory holding
-# a copy of it at the listed path whose content shows no token. In image mode
-# the guard extracts only the `.npmrc` files it listed, into a temp directory,
-# and greps them; no other file is ever read out of an image.
+# a copy of it at the listed path whose content shows no token. In image and
+# tarball mode the guard extracts only the `.npmrc` files it listed, into a
+# temp directory, and greps them; no other file is ever read out of an image.
 
 set -Eeuo pipefail
 
@@ -137,12 +140,24 @@ if [[ "${1:-}" == "--paths" ]]; then
   exit $?
 fi
 
+# The two image sources. An image in the Docker daemon is read through a
+# container that is created and never started; a docker-format image tarball
+# (what `build-images.sh --builder` exports and then pushes, byte for byte) is
+# flattened by `crane export`, which applies each layer's whiteouts exactly as
+# a container's filesystem would. Either way the guard sees the final
+# filesystem of the very artifact that would be pushed.
+MODE=daemon
 case "${1:-}" in
-  ""|-h|--help) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; [[ -n "${1:-}" ]] && exit 0; exit 2 ;;
+  ""|-h|--help) sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; [[ -n "${1:-}" ]] && exit 0; exit 2 ;;
+  --image-tar) MODE=tar; shift; [[ $# -gt 0 ]] || die "--image-tar takes one or more tarball paths" ;;
   -*) die "unknown flag $1" ;;
 esac
 
-command -v docker >/dev/null 2>&1 || die "docker is not on PATH"
+if [[ "${MODE}" == daemon ]]; then
+  command -v docker >/dev/null 2>&1 || die "docker is not on PATH"
+else
+  command -v crane >/dev/null 2>&1 || die "crane is not on PATH (--image-tar flattens the tarball with crane export)"
+fi
 
 WORK="$(mktemp -d)"
 CID=""
@@ -152,13 +167,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The subject's final filesystem as a tar stream on stdout.
+subject_fs() {
+  if [[ "${MODE}" == daemon ]]; then docker export "${CID}"; else crane export - - < "$1"; fi
+}
+
 rc=0
 for ref in "$@"; do
-  # Created, never started: nothing in the image runs. `true` is a placeholder
-  # command for images with no CMD.
-  CID="$(docker create "${ref}" true)" || die "${ref}: could not create a container to read it"
+  if [[ "${MODE}" == daemon ]]; then
+    # Created, never started: nothing in the image runs. `true` is a placeholder
+    # command for images with no CMD.
+    CID="$(docker create "${ref}" true)" || die "${ref}: could not create a container to read it"
+  else
+    [[ -f "${ref}" ]] || die "${ref}: no such image tarball"
+  fi
   list="${WORK}/list"
-  if ! docker export "${CID}" | tar -tf - > "${list}"; then
+  if ! subject_fs "${ref}" | tar -tf - > "${list}"; then
     die "${ref}: could not list the image filesystem; refusing it"
   fi
   # An empty listing is a failure to read, never a clean image.
@@ -173,13 +197,15 @@ for ref in "$@"; do
     mkdir -p "${WORK}/npmrc"
     # Only the .npmrc files, by exact name. An extraction failure leaves them
     # absent, and an absent copy is refused.
-    docker export "${CID}" | tar -xf - -C "${WORK}/npmrc" -- "${npmrcs[@]}" 2>/dev/null || true
+    subject_fs "${ref}" | tar -xf - -C "${WORK}/npmrc" -- "${npmrcs[@]}" 2>/dev/null || true
     NPMRC_CLEAN="$(clean_npmrcs "${WORK}/npmrc" "${list}" || true)"
     rm -rf "${WORK}/npmrc"
   fi
 
-  docker rm -f "${CID}" >/dev/null 2>&1 || true
-  CID=""
+  if [[ -n "${CID}" ]]; then
+    docker rm -f "${CID}" >/dev/null 2>&1 || true
+    CID=""
+  fi
 
   if found="$(NPMRC_CLEAN="${NPMRC_CLEAN}" match_paths < "${list}")"; then
     say "${ref}: clean ($(wc -l < "${list}" | tr -d ' ') paths checked)"

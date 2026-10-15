@@ -1336,10 +1336,11 @@ and the launcher's settings. Two values matter at deploy time:
 
 - `runPods.allowedImages` — the image *repositories* an arm may name, matched
   on the part before the tag or digest, exactly or as a path prefix. Empty
-  means the release runner alone (`<image.registry>/wrathbench-runner`). Add
-  the repository PR builds are pushed to (`ghcr.io/shard/wrathbench-runner`).
-  An image outside the list, untagged, or `:latest` is refused before a pod
-  exists.
+  means the release runner alone (`<image.registry>/wrathbench-runner`).
+  Branch builds are pushed to that same repository ("A branch on the main
+  server", below), so it covers them; add a repository only for an image
+  built somewhere else. An image outside the list, untagged, or `:latest` is
+  refused before a pod exists.
 - `runPods.imagePullSecrets` — pull Secret names for run pods only, merged
   once each with the chart-wide `imagePullSecrets` every WrathBench pod carries
   ("Secrets", below); for a repository in `allowedImages` the chart-wide Secret
@@ -1398,30 +1399,82 @@ kubectl -n wrathbench logs <name>                  # run.ts's own lines; also in
 kubectl -n wrathbench get cm wrathbench-run-pod-template -o jsonpath='{.data.pod\.json}'
 ```
 
-**A branch runner image.** PR heads and master commits are built by a GitHub
-Actions workflow and pushed to GHCR as
-`ghcr.io/shard/wrathbench-runner:harness-0.5-<n>-g<sha>[-pr<N>]`; a definition
-usually pins the digest. By hand, from a clean checkout of the branch, or
-naming the branch's head from any clean checkout:
-
-```
-./infra/build-images.sh --only runner --push --registry ghcr.io/shard
-./infra/build-images.sh --only runner --push --registry ghcr.io/shard \
-  --commit <sha> --tag "$(git describe --tags --always <sha>)"
-```
-
-Like a release ("Deploy window", above), the image is built from a `git
-archive` of that commit, never from the working tree, so an uncommitted edit is
-never in it, and `infra/image-guard.sh` checks it before the push. The tag is
-`git describe` of the commit, so it still names series 0.5 and a run stamped
-with it groups with the series; `--allow-dirty` tags are refused for push, and
-`latest` is refused everywhere.
-
 **First proof.** One short probe on `PROBE`: publish a one-arm definition,
 assign a model, set `runPods` to `probes`, and watch `fleet-update.sh status`
 and the job log for `run pod … created`, `… running on <node>: <image> is
 sha256:…`, and the roster's verdict. Expect the first pull of a new image to
 take minutes; the account is held through it by `image.json` and the heartbeat.
+
+### A branch on the main server
+
+A branch's harness change is measured against its base by a campaign with two
+arms, both named builds (`docs/EPISODES.md`, "Arms"): the **control** is
+master's runner image at the branch's merge-base, the **treatment** is the
+branch's own. Both go to the release repository,
+`harbor.nusphere.shard.page/wrathbench/wrathbench-runner`, which the cluster's
+`runPods.allowedImages` already names and its pull Secret already reads, so
+neither arm needs a cluster change. Arms run only as run pods, so
+`policy.runPods` must be `probes` ("Run pods", above).
+
+**The tags.** `infra/image-tag.sh` names every image, whoever builds it:
+`harness-0.5-<n>-g<sha>` for a commit, and with `--branch` the same plus the
+branch's slug (the name past `feat/`, lowercased, runs of other characters
+turned into one `-`, at most 48 characters): `harness-0.5-944-gdef5678-wake-on-event`.
+Every form reads as series 0.5, and a run on the image is stamped with it.
+
+**By hand, today.** From any clean checkout that has the commits, with a docker
+login for Harbor that may push to the project:
+
+```
+R=harbor.nusphere.shard.page/wrathbench
+sha=$(git rev-parse origin/feat/<name>)
+./infra/build-images.sh --only runner --push --registry "$R" \
+  --commit "$sha" --tag "$(./infra/image-tag.sh --branch feat/<name> "$sha")"
+# the control, unless master's image of the merge-base is already there
+base=$(git merge-base origin/master "$sha")
+./infra/build-images.sh --only runner --push --registry "$R" \
+  --commit "$base" --tag "$(./infra/image-tag.sh "$base")"
+```
+
+Like a release ("Deploy window", above), each image is built from a `git
+archive` of its commit, never the working tree, and `infra/image-guard.sh`
+checks it before the push; `--allow-dirty` tags are refused for push and
+`latest` everywhere. `build-images.sh` prints `pushed <ref>@sha256:…` for each
+image (`--digests <file>` writes the same lines to a file).
+
+**In CI, once the cluster's runner exists.** `.github/workflows/branch-image.yml`
+does the same on every push to master and to a `feat/**` branch of this
+repository: master's commits become control images, a branch's pushes its
+treatment images. It runs on a self-hosted runner in the cluster (Harbor is
+LAN-only), through `build-images.sh --builder` — a rootless BuildKit beside the
+runner and no Docker daemon, with the guard reading, and crane pushing, the same
+exported image tarball. Only a push starts it, so a fork cannot. Each run's
+summary lists the pushed `ref@digest`, the merge-base's master image if master
+has built it, and an `arms` snippet ready to paste. A branch cut from a commit
+master never built has no control image; merge master into it and push.
+
+**Naming the arms.** Pin both by digest, in the definition the branch carries
+beside its code ("Probe campaigns", above):
+
+```json
+"arms": [
+  { "id": "control", "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-940-gabc1234@sha256:…" },
+  { "id": "wake-on-event", "image": "harbor.nusphere.shard.page/wrathbench/wrathbench-runner:harness-0.5-944-gdef5678-wake-on-event@sha256:…" }
+]
+```
+
+- The control is the merge-base, not master's tip: whatever master gained since
+  the branch was cut would otherwise be measured as the branch's effect.
+- The digest, not only the tag: the tag names the commit, the digest names the
+  bytes. A master build and a release of the same commit push the same tag,
+  and the second push moves it to different bytes. A digest whose tag has moved
+  is untagged in Harbor and lasts only as long as garbage collection keeps
+  untagged artifacts. A resumed probe relaunches the digest it recorded in
+  `image.json` whatever the arm says by then.
+- Every image this workflow builds has `--campaign-file`; an image from before
+  arms does not and cannot be an arm.
+- Nothing deletes a branch's images when the branch goes away, because a paused
+  probe may still resume from one. Prune them by hand once the campaign is done.
 
 ### Ad-hoc launches still work
 

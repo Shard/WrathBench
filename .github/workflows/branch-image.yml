@@ -1,0 +1,219 @@
+# Runner images for probe-campaign arms. A campaign compares a control build
+# with a treatment build, and the comparison only means something if both came
+# out of the same builder with the same tag scheme (infra/image-tag.sh):
+#
+#   push to master   <registry>/wrathbench-runner:<describe>
+#                    every master commit, so any branch's merge-base has a
+#                    control image
+#   push to feat/**  <registry>/wrathbench-runner:<describe>-<branch slug>
+#                    every push; the slug is the branch name past `feat/`
+#
+# <describe> is `git describe` against the harness tags (harness-0.5-<n>-g<sha>),
+# so a run on either image stamps a version the comparability layer reads as
+# its series. Nothing here deploys anything: a campaign definition names an
+# image by digest and the cluster pulls it (docs/RUNBOOK.md, "A branch on the
+# main server").
+#
+# The registry is Harbor's private `wrathbench` project, which is LAN-only, so
+# this job runs on a self-hosted runner in the cluster (the `wrathbench-image`
+# runner scale set; the cluster repository holds its definition). The build
+# goes through infra/build-images.sh like a release: a `git archive` of the
+# commit as the context, infra/image-guard.sh on the exported image before
+# anything is pushed, and the push from that same tarball. The runner has no
+# Docker daemon; build-images.sh --builder drives the rootless BuildKit beside
+# it. The push credential is the cluster's (a Harbor robot that can push and
+# pull in that one project), mounted into the runner pod: this workflow holds
+# no secret and asks for none.
+#
+# Why `push` and nothing else: a self-hosted runner on a public repository must
+# never run code from a fork. `pull_request` from a fork would run the fork's
+# workflow file; `pull_request_target` would run this one with the fork's code
+# in reach. A push to a branch of this repository needs write access, which
+# only collaborators have. That protects this workflow only: any workflow file
+# can name the runner, so the repository's "require approval for all outside
+# collaborators" setting is what keeps a fork's pull request from reaching it.
+#
+# Deliberately absent: a pull request comment (a push has no pull request
+# context, and finding one would need a token that can write to pull requests),
+# and deleting a branch's images when it goes away (a paused probe on an arm
+# resumes from the digest it first resolved, so the image has to outlive the
+# branch; pruning is the operator's, by hand, once its campaign is done).
+name: Branch image
+
+on:
+  push:
+    branches: [master, "feat/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One build per branch, the newest push winning. Master builds never cancel
+  # one another: each commit is some branch's control image, and a pending run
+  # in a shared group is replaced even without cancel-in-progress, so each
+  # master commit gets a group of its own.
+  group: branch-image-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  REGISTRY: harbor.nusphere.shard.page/wrathbench
+  CRANE_VERSION: v0.22.1
+  # sha256 of go-containerregistry_Linux_x86_64.tar.gz in that release's checksums.txt.
+  CRANE_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+
+jobs:
+  image:
+    name: Runner image
+    # The runner is registered to this repository alone; in a fork's copy the
+    # job would wait for it forever.
+    if: github.repository == 'Shard/WrathBench'
+    runs-on: wrathbench-image
+    timeout-minutes: 60
+    steps:
+      # Full history and tags, so `git describe` reaches the harness tag
+      # exactly as a release's does, and origin/master is there for the
+      # merge-base. No credentials left behind in .git/config.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install (frozen)
+        run: bun install --frozen-lockfile
+
+      # crane flattens the exported image for the guard and pushes it. A pinned
+      # release, checked against its published checksum.
+      - name: crane
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/crane.tar.gz" \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  $RUNNER_TEMP/crane.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/crane.tar.gz" -C "$RUNNER_TEMP/bin" crane
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          revision="$(git rev-parse HEAD)"
+          [[ "$revision" == "$GITHUB_SHA" ]] || { echo "::error::checked out $revision, pushed $GITHUB_SHA"; exit 1; }
+          plain="$(infra/image-tag.sh "$revision")"
+          base="" base_tag="" slug=""
+          if [[ "$GITHUB_REF" == refs/heads/master ]]; then
+            tag="$plain"
+          else
+            tag="$(infra/image-tag.sh --branch "$REF_NAME" "$revision")"
+            slug="${tag#"$plain"-}"
+            base="$(git merge-base origin/master "$revision")"
+            base_tag="$(infra/image-tag.sh "$base")"
+          fi
+          {
+            echo "image=$REGISTRY/wrathbench-runner"
+            echo "tag=$tag"
+            echo "revision=$revision"
+            echo "slug=$slug"
+            echo "base=$base"
+            echo "base_tag=$base_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "$REGISTRY/wrathbench-runner:$tag from $revision${base:+ (merge-base $base, control tag $base_tag)}"
+
+      # A tag that fell back to a bare SHA (no harness tag reachable) names no
+      # series, and every run on the image would be unattributable. The check
+      # is the comparability layer's own function, not a copy of its regex.
+      - name: The tag names a harness series
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          series="$(bun -e 'import { harnessSeries } from "./runner/src/comparability.ts"; console.log(harnessSeries(process.env.TAG) ?? "")')"
+          if [[ -z "$series" ]]; then
+            echo "::error::$TAG names no harness series (was a harness tag fetched?); no run on this image could be attributed"
+            exit 1
+          fi
+          echo "$TAG is harness series $series"
+
+      # The rootless BuildKit sidecar listens on the pod's loopback
+      # (BUILDKIT_HOST, set by the runner pod template).
+      - name: Builder
+        run: |
+          docker buildx create --name wrathbench --driver remote "$BUILDKIT_HOST"
+          docker buildx inspect --bootstrap wrathbench
+
+      - name: Build, guard and push
+        id: build
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          infra/build-images.sh --only runner --builder wrathbench --registry "$REGISTRY" \
+            --commit "$GITHUB_SHA" --tag "$TAG" --push --digests "$RUNNER_TEMP/digests.txt"
+          pinned="$(head -n 1 "$RUNNER_TEMP/digests.txt")"
+          [[ "$pinned" == *@sha256:* ]] || { echo "::error::no digest recorded for the push"; exit 1; }
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+
+      # The control image for a branch: the master build of its merge-base, if
+      # master has built that commit. A branch cut from a commit that was never
+      # master's tip, or from before this workflow, has none; one whose master
+      # build is still queued has none yet.
+      - name: The merge-base's master image
+        id: base
+        if: steps.tag.outputs.base_tag != ''
+        env:
+          REF: ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.base_tag }}
+        run: |
+          if digest="$(crane digest "$REF" 2>"$RUNNER_TEMP/base.err")"; then
+            echo "pinned=$REF@$digest" >> "$GITHUB_OUTPUT"
+            echo "$REF is $digest"
+          else
+            echo "no image at $REF: $(cat "$RUNNER_TEMP/base.err")"
+          fi
+
+      - name: Report
+        env:
+          IMAGE: ${{ steps.tag.outputs.image }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PINNED: ${{ steps.build.outputs.pinned }}
+          REVISION: ${{ steps.tag.outputs.revision }}
+          REF_NAME: ${{ github.ref_name }}
+          SLUG: ${{ steps.tag.outputs.slug }}
+          BASE: ${{ steps.tag.outputs.base }}
+          BASE_TAG: ${{ steps.tag.outputs.base_tag }}
+          BASE_PINNED: ${{ steps.base.outputs.pinned }}
+        run: |
+          {
+            echo '### Runner image'
+            echo
+            echo '| | |'
+            echo '| --- | --- |'
+            echo "| image | \`$PINNED\` |"
+            echo "| built from | \`$REF_NAME\` at \`$REVISION\` |"
+            if [[ -n "$SLUG" ]]; then
+              echo "| merge-base | \`$BASE\` on master |"
+              if [[ -n "$BASE_PINNED" ]]; then
+                echo "| control image | \`$BASE_PINNED\` |"
+              else
+                echo "| control image | none yet: no master image at \`$IMAGE:$BASE_TAG\`. If master's build of it is still queued, re-run this job once it finishes; otherwise merge master into the branch and push |"
+              fi
+            fi
+            echo
+            echo "Arms for a campaign definition's \`arms\`, pinned by digest:"
+            echo
+            echo '```json'
+            echo '['
+            if [[ -z "$SLUG" ]]; then
+              echo "  { \"id\": \"control\", \"image\": \"$PINNED\" }"
+            elif [[ -n "$BASE_PINNED" ]]; then
+              echo "  { \"id\": \"control\", \"image\": \"$BASE_PINNED\" },"
+              echo "  { \"id\": \"$SLUG\", \"image\": \"$PINNED\" }"
+            else
+              echo "  { \"id\": \"$SLUG\", \"image\": \"$PINNED\" }"
+            fi
+            echo ']'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

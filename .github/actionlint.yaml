@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # The cluster runner scale set .github/workflows/branch-image.yml runs on.
+  labels:
+    - wrathbench-image
