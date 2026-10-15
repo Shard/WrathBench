@@ -207,21 +207,21 @@ describe("episode sentence", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
     // any rendering fails here. The last edit to move them is the lootCorpse
     // line's refused status (a loot the server refuses settles at once with
-    // the reason instead of timing out); it is in every rendering, so it
-    // moved every row.
+    // the reason instead of timing out), in the operator's shorter wording
+    // (2026-10-16); it is in every rendering, so it moved every row.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:0e6d26b55958937c", off: "sha256:f23d092265d9ec04" },
-        cli: { on: "sha256:ff70dc7023bb693a", off: "sha256:f850a3ba56fa478e" },
+        wrathbench: { on: "sha256:ff486e78c87b5ee6", off: "sha256:8525e5e9ef5e81c3" },
+        cli: { on: "sha256:a9d385dedfd52c37", off: "sha256:f1631bc330912243" },
       },
       e90: {
-        wrathbench: { on: "sha256:ce7c02c012a56319", off: "sha256:bfdbe1d79bd95ae0" },
-        cli: { on: "sha256:d10dc25d106e7ed7", off: "sha256:c77d65f9b1e98076" },
+        wrathbench: { on: "sha256:b1a6ca638741db49", off: "sha256:2cef8879e5463236" },
+        cli: { on: "sha256:72f748036a4e6435", off: "sha256:d734133abec5b64e" },
       },
       e360: {
-        wrathbench: { on: "sha256:e3aff092923662c1", off: "sha256:2b1c0e3ad93c8cda" },
-        cli: { on: "sha256:5963d6540bdbaaa8", off: "sha256:30742bac660bfa3e" },
+        wrathbench: { on: "sha256:90293b759d8bf765", off: "sha256:6b4938bc5afbaaf1" },
+        cli: { on: "sha256:324f186960e8167c", off: "sha256:79d9a0b8eef39268" },
       },
     };
     const episodes = [
