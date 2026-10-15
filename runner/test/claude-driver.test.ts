@@ -371,6 +371,28 @@ describe("claude-code driver", () => {
     expect(sent.some((m) => m.includes("SUMMARY-BODY"))).toBe(false);
   }, 30_000);
 
+  test("a registered secret in the CLI's transcript is [redacted] on the trajectory; the transcript stays the CLI's", async () => {
+    const secret = "fake-lease-secret-0123456789abcdef0123456789abcdef";
+    const summary = `The agent printed WRATHBENCH_SECRET=${secret} and moved on. Next: Kharanos.`;
+    const { trajectory, runDir, options } = setupEpisode("tools", { maxTurns: 2 }, {
+      WB_FAKE_COMPACT_TURN: "2",
+      WB_FAKE_COMPACT_SUMMARY: summary,
+    });
+    trajectory.redact(secret);
+    await runClaudeEpisode(options);
+    trajectory.close();
+    const written = readFileSync(join(runDir, "trajectory.jsonl"), "utf8");
+    expect(written).not.toContain(secret);
+    const compactions = readTrajectory(runDir).filter((e) => e["t"] === "harness" && e["kind"] === "compaction");
+    expect(compactions).toEqual([
+      expect.objectContaining({ turn: 2, summary: "The agent printed WRATHBENCH_SECRET=[redacted] and moved on. Next: Kharanos." }),
+    ]);
+    // The runner reads the transcript and writes nothing to it: the CLI writes
+    // it under the run's CLAUDE_CONFIG_DIR for the life of the session.
+    const transcript = join(runDir, "claude-config", "projects", "-tmp-fake", "fake-session.jsonl");
+    expect(readFileSync(transcript, "utf8")).toContain(secret);
+  }, 30_000);
+
   test("a compaction a turn's usage predicts is asked about before it, against the model's reported window", async () => {
     // A 300k window is a 267k threshold; 200k + 2 × 100k crosses it after turn 2.
     const { recordPath, trajectory, runDir, options } = setupEpisode("tools", { maxTurns: 3 }, {

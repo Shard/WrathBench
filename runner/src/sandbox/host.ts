@@ -16,6 +16,7 @@
 
 import { join } from "node:path";
 import type { Subprocess } from "bun";
+import { ScrubbedStream, SecretRedactor } from "../redact";
 import { overCapText, type Scratchpad } from "../scratchpad";
 import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
@@ -97,6 +98,10 @@ export interface SandboxHostOptions {
    * bound onto its SDK client. The only credential the child holds: it
    * reaches this token's session and nothing else. Undefined (tests, a
    * pre-auth module) sends the child in with no credential.
+   *
+   * Also the value scrubbed from everything the child writes to stdout and
+   * stderr before the runner passes it on (`logSink`): it is the only secret
+   * the child holds, so it is the only one the child can print.
    */
   secret?: string;
   /**
@@ -113,6 +118,12 @@ export interface SandboxHostOptions {
   entryPath?: string;
   /** Called for every notice, so the loop can log it as it happens. */
   onNotice?: (notice: HarnessNotice) => void;
+  /**
+   * Where the child's stdout and stderr go once scrubbed: the runner's own
+   * streams by default, and from there the job log and the pod log. A test
+   * passes its own to read what would have been logged.
+   */
+  logSink?: (stream: "stdout" | "stderr", text: string) => void;
   /**
    * Called with every action-log flush the child pushes, already linked to its
    * snippet's tool call, so the owner of the trajectory can write it. Record
@@ -185,6 +196,11 @@ const STATE_LOSS_RECOVERY =
   "`await connect()` to resubscribe to events, then `await sdk.createSession({...})` " +
   "— a `token_in_use` error means the session is still alive and `sdk` works as-is.";
 
+/** The runner's own stream of the same name: the job log, or the pod log on the cluster. */
+function defaultLogSink(stream: "stdout" | "stderr", text: string): void {
+  (stream === "stdout" ? process.stdout : process.stderr).write(text);
+}
+
 /** How many evals' links the host keeps for routines still dispatching under them. */
 const EVAL_LINKS_MAX = 256;
 
@@ -213,8 +229,14 @@ export class SandboxHost {
    * losing or polluting the "Last stderr" diagnostic).
    */
   private stderr: { tail: string; done: Promise<void> } = { tail: "", done: Promise.resolve() };
+  /** Both of the current child's output pumps, settled once each has written what it held. */
+  private drained: Promise<void> = Promise.resolve();
+  /** Scrubs the child's output on its way to `logSink`; it knows only `opts.secret`. */
+  private readonly redactor = new SecretRedactor();
 
-  constructor(private readonly opts: SandboxHostOptions) {}
+  constructor(private readonly opts: SandboxHostOptions) {
+    this.redactor.redact(opts.secret);
+  }
 
   get entryPath(): string {
     return this.opts.entryPath ?? join(import.meta.dir, "entry.ts");
@@ -264,6 +286,11 @@ export class SandboxHost {
     // WRATHBENCH_MODULE_URL for the port, and that must be this value and not
     // an autoloaded `.env`'s. The IPC channel and stdio are inherited
     // descriptors and survive the exec.
+    //
+    // stdout and stderr are both piped, never inherited: a snippet's
+    // `console.log` reaches the child's stdout as well as its result, and the
+    // child holds its session secret, so both streams pass the redaction
+    // before they reach the runner's own and the logs behind them (`pump`).
     this.proc = Bun.spawn(["bun", "--env-file=/dev/null", this.confinePath, "bun", "--env-file=/dev/null", this.entryPath], {
       env: sandboxChildEnv(process.env, {
         WRATHBENCH_MODULE_URL: this.opts.moduleUrl,
@@ -276,7 +303,7 @@ export class SandboxHost {
         // sandboxChildEnv forwards no WRATHBENCH_ACCOUNT of its own.
         WRATHBENCH_ACCOUNT: this.opts.account ?? "",
       }),
-      stdio: ["ignore", "inherit", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       serialization: "json",
       ipc: (message) => {
         this.onMessage(message as ChildToHost, markReady);
@@ -311,23 +338,39 @@ export class SandboxHost {
         this.abandonedEvals.clear();
       },
     });
-    stderr.done = this.pumpStderr(this.proc, stderr);
+    stderr.done = this.pump(this.proc.stderr, "stderr", (text) => {
+      stderr.tail = (stderr.tail + text).slice(-4_000);
+    });
+    this.drained = Promise.all([stderr.done, this.pump(this.proc.stdout, "stdout")]).then(() => undefined);
     await this.ready;
   }
 
-  /** Mirror the child's stderr to ours while keeping a tail for crash notices. */
-  private async pumpStderr(proc: Subprocess, stderr: { tail: string }): Promise<void> {
-    const stream = proc.stderr;
+  /**
+   * Mirror one of the child's output streams to the runner's, scrubbed of the
+   * child's secret on the way (`ScrubbedStream`). `onRaw` sees the text as the
+   * child wrote it: the stderr tail kept from it feeds the crash notice the
+   * model reads, which the redaction leaves as it was (the trajectory scrubs
+   * its own copy of the notice, like every record).
+   */
+  private async pump(stream: unknown, name: "stdout" | "stderr", onRaw?: (text: string) => void): Promise<void> {
     if (!(stream instanceof ReadableStream)) return;
+    const sink = this.opts.logSink ?? defaultLogSink;
+    const out = new ScrubbedStream(
+      (text) => this.redactor.scrub(text),
+      (text) => sink(name, text),
+    );
     const decoder = new TextDecoder();
     try {
       for await (const chunk of stream) {
         const text = decoder.decode(chunk as Uint8Array, { stream: true });
-        process.stderr.write(text);
-        stderr.tail = (stderr.tail + text).slice(-4_000);
+        onRaw?.(text);
+        out.push(text);
       }
     } catch {
       // stream torn down with the process; the tail keeps what we saw
+    } finally {
+      out.push(decoder.decode());
+      out.end();
     }
   }
 
@@ -668,6 +711,7 @@ export class SandboxHost {
     } catch {
       // ignore
     }
+    const drained = this.drained;
     const exited = Promise.race([proc.exited, new Promise((r) => setTimeout(r, 1_000))]);
     await exited;
     try {
@@ -675,6 +719,9 @@ export class SandboxHost {
     } catch {
       // already gone
     }
+    // The child is gone and its pipes are closing: give the pumps a moment to
+    // write what they still hold, such as a last line with no newline.
+    await Promise.race([drained, new Promise((r) => setTimeout(r, 250))]);
   }
 }
 

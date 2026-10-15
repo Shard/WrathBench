@@ -27,6 +27,7 @@ import { jsonLine, toJsonSafe } from "./jsonsafe";
 import type { Comparability } from "./comparability";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import { platformOf } from "./platform";
+import { SecretRedactor } from "./redact";
 import type { ActionNote } from "./sandbox/ipc";
 
 export interface StateLine {
@@ -531,7 +532,7 @@ export class Trajectory {
   readonly dir: string;
   readonly jsonlPath: string;
   private readonly db: Database;
-  private readonly secrets: string[] = [];
+  private readonly secrets = new SecretRedactor();
   private readonly now: () => number;
   /**
    * The run this file belongs to, latched at `writeMeta` — which every launch
@@ -594,13 +595,11 @@ export class Trajectory {
 
   /** Register a secret to scrub from every persisted string. */
   redact(secret: string | undefined): void {
-    if (secret !== undefined && secret.length >= 8) this.secrets.push(secret);
+    this.secrets.redact(secret);
   }
 
   private scrub(line: string): string {
-    let out = line;
-    for (const s of this.secrets) out = out.replaceAll(s, "[redacted]");
-    return out;
+    return this.secrets.scrub(line);
   }
 
   /** Append one record. `ts` is stamped here unless the record carries one. */

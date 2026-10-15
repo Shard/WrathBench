@@ -346,17 +346,18 @@ switch (mode) {
 
 /**
  * $WB_FAKE_ROLLOUT, a JSON array indexed by turn: `{ total, compact?: { pre,
- * post } }`. Each turn appends to the thread's rollout under $CODEX_HOME what
- * the real CLI writes there — a compaction's four lines when the entry has
- * one (0.159.3's remote shape: an empty `message` and an encrypted item),
- * then the turn's last `token_count` — so the driver's rollout follower reads
- * it after the process exits.
+ * post, message? } }`. Each turn appends to the thread's rollout under
+ * $CODEX_HOME what the real CLI writes there — a compaction's four lines when
+ * the entry has one (0.159.3's remote shape: an empty `message` and an
+ * encrypted item; `message` puts a readable summary there instead), then the
+ * turn's last `token_count` — so the driver's rollout follower reads it after
+ * the process exits.
  */
 function writeRollout(): void {
   const spec = Bun.env["WB_FAKE_ROLLOUT"];
   const home = Bun.env["CODEX_HOME"];
   if (spec === undefined || home === undefined) return;
-  const entry = (JSON.parse(spec) as { total: number; compact?: { pre: number; post: number } }[])[turn - 1];
+  const entry = (JSON.parse(spec) as { total: number; compact?: { pre: number; post: number; message?: string } }[])[turn - 1];
   if (entry === undefined) return;
   const dir = `${home}/sessions/2026/10/14`;
   mkdirSync(dir, { recursive: true });
@@ -369,7 +370,7 @@ function writeRollout(): void {
       JSON.stringify({
         type: "compacted",
         payload: {
-          message: "",
+          message: entry.compact.message ?? "",
           replacement_history: [
             { type: "message", role: "user", content: [{ type: "input_text", text: `[turn ${turn}] Goal: survive and level as far as you can.` }] },
             { type: "compaction", encrypted_content: "gAAAAfake" },
