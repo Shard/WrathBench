@@ -3,7 +3,7 @@
  * Render the social card to `dashboard/public/og.png`, and print its stamp.
  *
  *   bun infra/render-og.ts            # render, print the content stamp on stdout
- *   bun infra/render-og.ts --upload   # …and PUT it to the public bucket as well
+ *   bun infra/render-og.ts --upload   # …and seed the public bucket's card if it has none
  *   bun infra/render-og.ts --svg out.svg   # also keep the SVG, for looking at
  *   bun infra/render-og.ts --width 400 --out /tmp/small.png  # a downscale to check
  *
@@ -14,6 +14,7 @@
  * URL `og:image` names. This script is the ship-time half — it writes the file
  * the app origin serves, and with `--upload` it seeds the bucket so a first
  * ship does not have to wait a publish interval for its own card to exist.
+ * Seeds only: when `v1/og.png` is already there, the upload is skipped.
  *
  * The data is the snapshot renderer's own `ladder-e90.json`, not a live poll:
  * that is the artifact the public build reads, so the picture and the
@@ -95,18 +96,34 @@ try {
 await Bun.write(out, card.png);
 
 if (upload) {
-  // Seeding the bucket, not owning it: the publisher overwrites this on its
-  // next pass. Missing credentials are a warning and not a failure — a ship
-  // from a machine with no R2 key pair still produces a correct site, it just
-  // leaves the first card to the publisher.
+  // Seeding the bucket, not owning it. Once `v1/og.png` exists it is the
+  // publisher's, and the publisher PUTs only when its own render changes — so
+  // a PUT from here would replace the fleet's card with one drawn from this
+  // machine's runs tree, and it would stand until the ladder next moved or the
+  // publisher restarted. Hence a HEAD first, and a PUT only into an empty slot.
+  // A HEAD that fails (403, a wrong endpoint) throws rather than reading as
+  // absent, and stops the ship the same way a failed PUT does.
+  //
+  // Missing credentials are a warning and not a failure — a ship from a
+  // machine with no R2 key pair still produces a correct site, it just leaves
+  // the first card to the publisher.
+  //
+  // Every line here goes to stderr: stdout is the stamp, and
+  // deploy-dashboard.sh captures it whole.
   const missing = (["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const).filter(
     (n) => (Bun.env[n] ?? "") === "" && (Bun.env[n.replace("S3_", "AWS_")] ?? "") === "",
   );
   if (missing.length > 0) {
     console.error(`render-og: not uploading — ${missing.join(", ")} unset; the publisher will write ${OG_KEY} on its next pass`);
   } else {
-    await new S3Client().write(OG_KEY, card.png, { type: "image/png" });
-    console.error(`render-og: uploaded ${OG_KEY} (${Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET})`);
+    const s3 = new S3Client();
+    const bucket = Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET;
+    if (await s3.exists(OG_KEY)) {
+      console.error(`render-og: ${OG_KEY} already in ${bucket} — the publisher's card, left as it is`);
+    } else {
+      await s3.write(OG_KEY, card.png, { type: "image/png" });
+      console.error(`render-og: ${OG_KEY} absent from ${bucket} — seeded it with this render`);
+    }
   }
 }
 
@@ -114,8 +131,9 @@ if (upload) {
  * The stamp is the picture's own content hash, so a redeploy that changed
  * nothing leaves the card's URL alone and a crawler keeps its cached copy —
  * and a redeploy that moved a point changes it. It is a cache key and not an
- * identity: the publisher's next pass replaces the bytes at that URL without
- * changing it, which is the whole point of the loop owning the picture.
+ * identity: the publisher replaces the bytes at that URL whenever its own
+ * render changes, without changing the URL, which is the whole point of the
+ * loop owning the picture.
  */
 console.error(
   `render-og: ${card.runs} runs → ${out} (${Math.round(width)}×${heightAt(width)}, ${(card.png.length / 1024).toFixed(0)} KiB)`,

@@ -443,7 +443,11 @@ re-renders every pass — the live chart cannot be either.
 
   `infra/render-og.ts` is the ship-time half — it writes the static asset the
   app origin serves, and seeds `v1/og.png` so a first ship does not point at an
-  object no publisher has written yet.
+  object no publisher has written yet. It seeds only an absent object (a HEAD
+  first): the ship renders from the shipping machine's runs tree, which need
+  not be the fleet's, and since the publisher PUTs only when its own render
+  changes, a stale card written over the publisher's would stand until the
+  ladder next moved.
 
 - **The tags** are injected into `index.html` by a Vite `transformIndexHtml`
   hook over `dashboard/src/lib/og-tags.ts`. `og:image` must be absolute, so
