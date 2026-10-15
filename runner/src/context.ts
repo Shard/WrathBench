@@ -508,9 +508,15 @@ export function foldUiOpenWindows(
       case "SMSG_GOSSIP_COMPLETE":
         if (e.seq > gossipDoneSeq) gossipDoneSeq = e.seq;
         break;
-      case "SMSG_LOOT_RESPONSE":
+      case "SMSG_LOOT_RESPONSE": {
+        // The refusal form (`error` in place of gold and items) and a decode
+        // failure open nothing; counting either showed a "loot" window the
+        // model then spent turns trying to close.
+        const d = e.data as { error?: unknown; decodeError?: unknown } | undefined;
+        if (d?.error !== undefined || d?.decodeError === true) break;
         if (e.seq > lootSeq) lootSeq = e.seq;
         break;
+      }
       case "SMSG_LOOT_RELEASE_RESPONSE":
         if (e.seq > lootReleaseSeq) lootReleaseSeq = e.seq;
         break;
