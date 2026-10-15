@@ -163,6 +163,60 @@ describe("the generic write paths", () => {
     expect(parseFleet(JSON.parse(read.text), { env: LAN }).refusals).toEqual([]);
   });
 
+  test("every entry the supervisor refuses is refused on the page too, and the page never says what the refusal names", () => {
+    // One assigned entry per rule (`rosterEntryRefusal`): a key the harness
+    // does not read, a subscription the policy does not list, and a provider
+    // key towards a host this deployment does not list. glm is fine.
+    const LAN = { WRATHBENCH_LOCAL_MODEL_HOSTS: "192.168.100.20:1234" };
+    const roster = {
+      ...CONFIG.roster,
+      extra: { tier: "t1", model: "z-ai/glm-5.2:free", pagerAlias: "ops-desk-7" },
+      lane9: { tier: "t1", model: "claude-sonnet-5-5", driver: "claude-code", subscription: "CLAUDE_CODE_OAUTH_TOKEN_9" },
+      lan: { tier: "t1", model: "qwen/q", apiBase: "http://192.168.100.20:1234/v1", apiKeyEnv: "LMSTUDIO_KEY" },
+    };
+    const path = join(tempDir("wb-campaign-refused-"), "config.sqlite");
+    const s = new ConfigStore(path, { env: LAN });
+    s.seed({ ...CONFIG, roster }, { actor: "fixture" });
+    s.publishDefinition(publication(def));
+    s.put("campaigns/probe", { version: 1, assignments: ["extra", "lane9", "lan", "glm"].map((model) => ({ model })) });
+    s.close();
+    const read = readFleetConfig(path);
+    if (read.status !== "ok") throw new Error(read.status);
+
+    // The supervisor refuses all three entries, each for its own reason …
+    const config = parseFleet(JSON.parse(read.text), { env: {} });
+    const why = Object.fromEntries(config.refusals.map((r) => [r.pin, r.why]));
+    expect(Object.keys(why).sort()).toEqual(["roster extra", "roster lan", "roster lane9"]);
+    expect(why["roster extra"]).toContain("unknown key `pagerAlias`");
+    expect(why["roster lane9"]).toContain("subscription CLAUDE_CODE_OAUTH_TOKEN_9 is not in policy.subscriptions");
+    expect(why["roster lan"]).toContain("names no self-hosted model host");
+
+    // … and the page parks exactly the squares the scheduler parks.
+    const page = readFleetRoster(path, null, {});
+    const arms = def.arms.map((a) => a.id);
+    const refusedKeys = ["extra", "lane9", "lan"].flatMap((ref) => arms.map((a) => `probe@1:${ref}:${a}`));
+    expect(config.campaignRefusals.map((r) => r.key)).toEqual(refusedKeys);
+    expect(page.campaignRefusals.map((r) => r.key)).toEqual(refusedKeys);
+    expect(page.campaignRefusals.map((r) => r.reason)).toEqual(config.campaignRefusals.map((r) => r.reason));
+
+    const view = campaignsView([], page, () => true);
+    const squares = view.campaigns.find((c) => c.id === "probe")!.grid.flatMap((line) => line.squares);
+    for (const ref of ["extra", "lane9", "lan"]) {
+      const own = squares.filter((q) => q.column.startsWith(`${ref}/`));
+      expect(own.length).toBe(def.cells.length * arms.length);
+      expect(own.every((q) => q.refused === `roster entry ${ref} is refused, so nothing schedules it`)).toBe(true);
+    }
+    expect(squares.filter((q) => q.column.startsWith("glm/")).every((q) => q.refused === null)).toBe(true);
+
+    // What the squares and the refused list say, privately and publicly, names
+    // the entry and nothing its refusal names: no key, value, lane or host.
+    const pub = JSON.stringify(projectCampaigns({ now: 0, campaigns: view.campaigns, refused: view.refused }));
+    const shown = [...squares.map((q) => q.refused ?? ""), ...view.refused.map((r) => r.reason), pub];
+    for (const secret of ["pagerAlias", "ops-desk-7", "CLAUDE_CODE_OAUTH_TOKEN_9", "192.168.100.20", "LMSTUDIO_KEY"]) {
+      for (const text of shown) expect(text).not.toContain(secret);
+    }
+  });
+
   test("a row naming an unpublished version is accepted by the store and refused by name on read", () => {
     const { s, path } = store();
     s.put("campaigns/later", { version: 1, assignments: [{ model: "glm" }] });
