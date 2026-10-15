@@ -93,6 +93,7 @@ import {
 } from "./clickhouse";
 import { isArchiveDir } from "./archive-dir";
 import { CONFIG_API_PREFIX, handleConfigRequest } from "./config-api";
+import { hostAllowlist, hostGuard } from "./host-guard";
 import { writeGuard } from "./write-guard";
 import { e90TokenProfile } from "./drafts";
 import {
@@ -160,6 +161,14 @@ export interface ApiOptions {
    * one-shot render get.
    */
   store?: RunStore;
+  /**
+   * The names this handle answers to beyond `localhost` and IP addresses
+   * (`host-guard.ts`); a request addressed to any other is a 421 on every path.
+   * Absent means no Host check at all, which is right only for a handle no
+   * network reaches — the snapshot renderer's and a test's. `serve.ts`, the one
+   * place a handle is bound to a port, always passes it.
+   */
+  allowedHosts?: readonly string[];
 }
 
 /** How long one /health answer (or one failure) stands in for the next. */
@@ -605,6 +614,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
   const store = opts.store ?? storeFor(runsDir);
   const publicMode = opts.publicMode === true;
   const tilesPublic = opts.tilesPublic === true;
+  const allowedHosts = opts.allowedHosts === undefined ? null : hostAllowlist(opts.allowedHosts);
   /**
    * Serve a body, through the public projection when this handle is public.
    *
@@ -1584,6 +1594,17 @@ export function createApi(opts: ApiOptions): ApiHandle {
   }
 
   return Object.assign(async function handle(req: Request): Promise<Response> {
+    /*
+     * Every request, on every path and every method, public handle or not, must
+     * be addressed to a name this viewer answers to (`host-guard.ts`): what a
+     * page that has re-pointed its own name at the viewer cannot fake. First,
+     * so such a page learns nothing else about what is here.
+     */
+    if (allowedHosts !== null) {
+      const misdirected = hostGuard(req, allowedHosts);
+      if (misdirected !== null) return misdirected;
+    }
+
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
 

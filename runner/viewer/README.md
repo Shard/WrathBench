@@ -39,6 +39,14 @@ is created empty, and every page serves its labelled empty state.
   service").
 - `WRATHBENCH_VIEWER_TILES_PUBLIC=1` serves minimap tiles in public mode
   anyway. Off by default, and a no-op on its own.
+- `WRATHBENCH_VIEWER_ALLOWED_HOSTS` lists, comma-separated, the host names
+  the viewer answers to beyond `localhost` and IP addresses (ports ignored).
+  Unset, it is the host of `WRATHBENCH_VIEWER_URL` when that is set, and
+  nothing else. Every other `Host` gets a 421 ("Host allowlist" below). On the
+  cluster the chart renders it from `viewer.ingress.host` and
+  `ingress.extraHosts`, so changing those values is the whole of a rename; a
+  viewer reached by any other name — another alias, a hand-run process behind
+  your own proxy — needs that name added here, or its pages answer 421.
 - `CLICKHOUSE_URL`, with `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` /
   `CLICKHOUSE_DATABASE`, point the listing routes at the derived store
   (`clickhouse.ts`; what it is and how it is filled are docs/ARCHITECTURE.md
@@ -93,6 +101,36 @@ verify from another machine, or the check proves nothing.
 It also only ever reads. Each `run.sqlite` is opened readonly, so a run being
 written by the harness inside the container is never disturbed, and an old run
 directory never gains a schema it did not have.
+
+### Host allowlist
+
+There is no login, by the operator's choice: the network the viewer is served
+on is private. What a private network does not stop is DNS rebinding — a web
+page a LAN browser opens re-points its own name at the viewer's address, and
+the browser then counts the viewer as that page's origin, so the page can read
+every route and its writes pass the write guard. The browser still sends the
+page's own name in `Host`, so `host-guard.ts` answers a request addressed to
+any name but the viewer's own with a 421 Misdirected Request — the request
+reached a server that does not answer for that name, which is not the write
+guard's 403 — before any route runs, on every path and every method. The names
+it accepts:
+
+- `localhost`, always — what local development, a `kubectl port-forward` and
+  the operator's curl use;
+- any IP address, always. A browser sends an IP `Host` only when the page's
+  own origin is that address, which an attacker cannot serve, so it costs no
+  protection; and it is what a Kubernetes probe sends (the pod IP) and what a
+  LAN browser pointed at `http://<lan-ip>:8090` sends;
+- the names in `WRATHBENCH_VIEWER_ALLOWED_HOSTS`, else the host of
+  `WRATHBENCH_VIEWER_URL`.
+
+Only `Host` is read, never `X-Forwarded-Host`, which a rebinding page could set
+itself; the proxy in front of the viewer must pass the browser's `Host` through
+(Traefik does by default). An in-cluster client reaching the viewer by its
+Service name is refused like any other unlisted name. A name in the list that
+is not a host is a startup failure. A handle no network reaches — the snapshot renderer's, a test's — has
+no allowlist and no check; only `serve.ts` binds a port, and it always passes
+one.
 
 ## The run listing
 
@@ -422,9 +460,9 @@ grants), must not carry `Sec-Fetch-Site: cross-site`, and, when it carries an
 not scheme, because behind the TLS ingress the browser's origin is https and
 the request the viewer sees is http. A refusal is a 415 or a 403 before any
 route runs. The dashboard sends every write as JSON, bodyless ones included.
-It is not authentication: a non-browser client is not what it guards, and DNS
-rebinding, where the attacking page shares the viewer's origin, needs a Host
-allowlist or a login in front of the viewer.
+It is not authentication: a non-browser client is not what it guards. DNS
+rebinding, where the attacking page shares the viewer's origin, is the Host
+allowlist's to stop (above), and it runs first.
 
 A roster write is also held to the provider table (`runner/src/providers.ts`):
 an `apiKeyEnv` that is not a listed provider key, or a key sent towards a host

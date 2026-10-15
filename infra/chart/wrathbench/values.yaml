@@ -362,7 +362,9 @@ viewer:
     # Canonical name: first rule host, the one NOTES.txt and dashboard tiles
     # link. A placeholder here, as in values.example.yaml: the deploying
     # cluster sets its own LAN name. Aliases the same router should answer for
-    # go in extraHosts, in order, after it.
+    # go in extraHosts, in order, after it. Together they are also the viewer's
+    # Host allowlist (WRATHBENCH_VIEWER_ALLOWED_HOSTS): a name not listed here
+    # is answered 421, so a rename is a change here and nowhere else.
     host: wrathbench.example.com
     extraHosts: []
     className: traefik

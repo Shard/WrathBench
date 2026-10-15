@@ -27,6 +27,10 @@ WorkingDirectory=%h/git/wrathbench
 # it is a literal: edit it when the worldserver is not on loopback.
 Environment=WRATHBENCH_MODULE_URL=http://127.0.0.1:8086
 Environment=WRATHBENCH_VIEWER_LAN=1
+# The names browsers reach it by besides localhost and its IP (comma-separated);
+# any other Host is a 421 (runner/viewer/host-guard.ts). Uncomment and edit to
+# reach it by a LAN alias; .env's WRATHBENCH_VIEWER_URL host is used otherwise.
+#Environment=WRATHBENCH_VIEWER_ALLOWED_HOSTS=wrathbench.local
 ExecStart=%h/.bun/bin/bun runner/viewer/serve.ts
 Restart=on-failure
 RestartSec=5

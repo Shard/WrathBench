@@ -18,7 +18,16 @@ no second Ingress anywhere in this chart.
 WRATHBENCH_VIEWER_LAN=1 is required, and is an explicit opt-in by design: the
 viewer refuses a non-loopback bind without it (docs/DATA-AND-LEGAL.md). Inside
 a pod the "LAN" is the pod network, fronted by the Ingress above.
+
+The Ingress hosts are also the viewer's Host allowlist
+(WRATHBENCH_VIEWER_ALLOWED_HOSTS, runner/viewer/host-guard.ts, the DNS-rebinding
+guard): every name the Ingress routes is a name the viewer answers to, and no
+other is, so renaming the viewer is changing `ingress.host` / `extraHosts` and
+nothing else. localhost and IP addresses are always answered, which is what
+keeps the readiness probe (Host: the pod IP) and a port-forward working.
 */}}
+{{- $ing := .Values.viewer.ingress }}
+{{- $hosts := prepend ($ing.extraHosts | default list) $ing.host }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -86,6 +95,12 @@ spec:
               value: "1"
             - name: WRATHBENCH_VIEWER_PORT
               value: "8090"
+            {{- if $ing.enabled }}
+            # The names a browser may address the viewer by: the Ingress hosts.
+            # Any other Host is a 421 (runner/viewer/host-guard.ts).
+            - name: WRATHBENCH_VIEWER_ALLOWED_HOSTS
+              value: {{ join "," $hosts | quote }}
+            {{- end }}
             - name: WRATHBENCH_MINIMAP_DIR
               value: /wrathbench/data/minimap
             # The SPA is built into the runner image (dashboard/dist is
@@ -103,6 +118,8 @@ spec:
           ports:
             - name: http
               containerPort: 8090
+          # The kubelet sends Host: <pod IP>:8090, which the Host allowlist
+          # always answers (an IP, not a name a rebinding page could use).
           readinessProbe:
             httpGet:
               path: /api/info
@@ -139,9 +156,7 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "wrathbench.fullname" . }}-data
-{{- if .Values.viewer.ingress.enabled }}
-{{- $ing := .Values.viewer.ingress }}
-{{- $hosts := prepend ($ing.extraHosts | default list) $ing.host }}
+{{- if $ing.enabled }}
 {{- if $ing.issuer }}
 ---
 apiVersion: cert-manager.io/v1

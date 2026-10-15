@@ -92,7 +92,12 @@ export — never for committing.
 Edit it from the **viewer's `/config` page**. Every write takes a note,
 which lands in `config_audit` beside the actor. The page is operator-only: no
 nav link and nothing served on the public build or behind a public viewer,
-which is the same condition `/api/config` is mounted under.
+which is the same condition `/api/config` is mounted under. The viewer has no
+login; it answers only to its own names, `localhost` and IP addresses (the
+DNS-rebinding guard, `runner/viewer/README.md` "Host allowlist"). On the
+cluster its names are the chart's `viewer.ingress.host` and `extraHosts`, so a
+rename is those values and nothing else; elsewhere they are
+`WRATHBENCH_VIEWER_ALLOWED_HOSTS`. Any other name gets a 421.
 
 ```
 # the CLI — for a pod, a script, or a viewer that is not up
