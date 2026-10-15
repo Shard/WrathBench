@@ -17,7 +17,9 @@
  * `WRATHBENCH_VIEWER_LAN`, docs/PUBLIC-DASHBOARD.md), so "not public" is the
  * whole of the authorisation and the actor header is attribution, not identity.
  * What keeps another site's page from writing here through a LAN browser is
- * `write-guard.ts`, which `api.ts` runs in front of every route.
+ * `write-guard.ts`, and what keeps a page that has re-pointed its own name at
+ * the viewer from doing so is `host-guard.ts`; `api.ts` runs both in front of
+ * every route.
  *
  * No UI in this pass: the dashboard is a separate track. `runner/viewer/README.md`
  * has the endpoint list.

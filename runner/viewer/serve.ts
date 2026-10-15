@@ -21,6 +21,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createApi, json } from "./api";
 import { clickhouseConfigFromEnv } from "./clickhouse";
+import { allowedHostsFromEnv } from "./host-guard";
 
 const REQUIRED_HOST = "127.0.0.1";
 const lanOptIn = process.env["WRATHBENCH_VIEWER_LAN"] === "1";
@@ -31,6 +32,20 @@ if (host !== REQUIRED_HOST && !lanOptIn) {
       `trajectory text and binds ${REQUIRED_HOST} unless WRATHBENCH_VIEWER_LAN=1 ` +
       `explicitly opts a trusted private network in (docs/DATA-AND-LEGAL.md).`,
   );
+  process.exit(1);
+}
+
+/*
+ * The names the viewer answers to beyond localhost and IP addresses
+ * (`host-guard.ts`, the DNS-rebinding guard): WRATHBENCH_VIEWER_ALLOWED_HOSTS,
+ * else the host of WRATHBENCH_VIEWER_URL. A name that is not a host is a
+ * startup failure, not a viewer that refuses its own operator.
+ */
+let allowedHosts: string[];
+try {
+  allowedHosts = allowedHostsFromEnv(process.env);
+} catch (err) {
+  console.error(`refusing to start: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 
@@ -89,6 +104,7 @@ const handle = createApi({
   publicMode,
   tilesPublic,
   moduleUrl,
+  allowedHosts,
 });
 
 const server = Bun.serve({
@@ -103,6 +119,7 @@ const server = Bun.serve({
 
 console.log(
   `wrathbench viewer: http://${host}:${server.port}  (runs: ${runsDir}, store: ${clickhouse === null ? "local (no CLICKHOUSE_URL)" : clickhouse.url})` +
+    `  (hosts: localhost, any IP${allowedHosts.map((h) => `, ${h}`).join("")})` +
     (built ? "" : "  [dashboard not built — run `bun run --cwd dashboard build`]") +
     (publicMode
       ? tilesPublic

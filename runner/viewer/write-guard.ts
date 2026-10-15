@@ -23,8 +23,8 @@
  * What this is not: authentication. A client that is not a browser sends what
  * it likes and is not what this guards against; the viewer's posture for those
  * is the network it is served on. Nor does it stop DNS rebinding, where the
- * attacking page and the viewer share an origin: that needs a Host allowlist
- * or a login in front of the viewer.
+ * attacking page and the viewer share an origin: the Host allowlist
+ * (`host-guard.ts`), which runs before this, is what stops that.
  */
 
 /** Methods that change nothing, and so are never refused here. */

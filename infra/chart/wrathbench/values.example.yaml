@@ -203,6 +203,7 @@ viewer:
       memory: 3Gi
   ingress:
     enabled: true
+    # Also the viewer's Host allowlist: any name not listed here is answered 421.
     host: wrathbench.example.com
     extraHosts: []
     className: traefik
