@@ -219,7 +219,7 @@ async function deletePreviousCharacter(): Promise<void> {
       log(`deleted last run's ${CHARACTER}: ${JSON.stringify(r.json)}`);
       return;
     }
-    if (r.status === 502 && r.json?.error === "character_not_found") {
+    if (r.json?.error === "character_not_found") {
       log(`no previous ${CHARACTER} to delete (first run on this realm)`);
       return;
     }

@@ -74,7 +74,7 @@ async function deletePreviousCharacter(): Promise<void> {
     });
     const json: any = await res.json().catch(() => undefined);
     if (json?.deleted === true) return log(`deleted last run's ${CHARACTER}`);
-    if (res.status === 502 && json?.error === "character_not_found") return log(`no previous ${CHARACTER}`);
+    if (json?.error === "character_not_found") return log(`no previous ${CHARACTER}`);
     log(`character-delete attempt ${attempt}: ${res.status} ${JSON.stringify(json)}`);
     if (res.status !== 504) break;
     await Bun.sleep(2000);
