@@ -1595,6 +1595,70 @@ Rotating it is a deploy window: change `.env`, then `deploy-worldserver.sh`
 container keeps the old value in already-running processes only, and every
 `docker compose exec` reads the file fresh).
 
+### Network policy
+
+The chart can put NetworkPolicies on the pods that run model-driven code: the
+fleet pod and the run pods. Each gets an egress allow-list and no ingress. The
+viewer, publisher and collector get egress allow-lists too. The switch is
+`networkPolicy.enabled`, and it is off by default. `templates/networkpolicy.yaml`
+says what each policy admits and why. In short, the fleet and run pods may
+reach:
+
+- the module on 8086;
+- cluster DNS;
+- TCP 443 anywhere outside the private, CGNAT and link-local ranges, for the
+  model APIs and the CLIs' own endpoints;
+- the self-hosted model servers in `localModelHosts`, each of which must then
+  be written as IPv4:port.
+
+Only the fleet may reach the Kubernetes API, for the run-pod launcher. It may
+also reach MySQL, because the preflight gate's fixture staging runs in that
+pod. Neither may reach ClickHouse, the viewer or any other address on the LAN.
+
+**Turning it on is a release step of its own.** Ship the chart first, with the
+switch off, which changes nothing. Then set the values in a separate GitOps
+commit. Under Flux, a chart change and the values that depend on it can land
+in either order. The values:
+
+```
+networkPolicy:
+  enabled: true
+  kubeApi:            # kubectl get svc kubernetes -n default; and its EndpointSlice
+    - { cidr: <service ClusterIP>/32, port: 443 }
+    - { cidr: <apiserver address>/32, port: 6443 }
+```
+
+A missing `kubeApi`, or a `localModelHosts` entry that is not IPv4:port, fails
+the render rather than producing a policy that silently drops traffic. A
+dropped connection does not fail fast: it hangs until its own timeout. So turn
+the policies on with the fleet quiet, and check the result before resuming:
+
+```
+./infra/fleet-update.sh drain        # switch set, every run parked, fleet at 0
+#  ...the values commit lands; `kubectl -n wrathbench get networkpolicy` lists five
+kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=1   # if the upgrade has not; it comes up paused
+kubectl -n wrathbench exec deploy/wrathbench-fleet -- bun -e '
+for (const u of ["http://worldserver:8086/health", "https://openrouter.ai/api/v1/models",
+  "http://<localModelHost>/v1/models", "https://kubernetes.default.svc/version",
+  "http://wrathbench-clickhouse:8123/ping", "http://wrathbench-viewer:8090/api/info"])
+  await fetch(u, { signal: AbortSignal.timeout(5000), tls: { rejectUnauthorized: false } })
+    .then((r) => console.log(r.status, u), (e) => console.log(e.name, u));'
+./infra/fleet-update.sh resume
+```
+
+Every line but the last two should print an HTTP status. Any status means the
+connection was made, the API's included, whatever it answers a request with no
+token. ClickHouse and the viewer should print `TimeoutError`. After the
+resume, watch three things:
+
+- the next preflight gate pass (its fixture smoke uses MySQL);
+- each driver's first episode, through its first model call and first module
+  call;
+- the first run pod.
+
+To roll back, set the switch off again. The policies are deleted and nothing
+else changes.
+
 ### Harness version stamping
 
 Every episode is stamped with `git describe --tags --always --dirty`, computed
