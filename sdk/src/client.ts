@@ -2882,7 +2882,8 @@ export class WrathClient {
       secret: options.secret,
     });
     this.state = new StateCache(options.state ?? {});
-    // Registered before the socket opens, so the cache sees every frame.
+    // Registered before the socket opens, so the cache sees every frame. The
+    // cache first: the client-parity queries read what each event left in it.
     this.events.onAny((event: StreamEvent) => this.state.apply(event));
     this.events.onAny((event: StreamEvent) => this.clientParityQueries(event));
   }
@@ -2978,7 +2979,8 @@ export class WrathClient {
   //    The core's unprompted login-time `SMSG_QUESTGIVER_STATUS_MULTIPLE` is
   //    empty (sent before visibility is populated; verified live 2026-08-22),
   //    so these per-guid queries are what populate the initial view — after
-  //    every login, since the cache drops the last session's markers then.
+  //    every login, since the cache drops the last session's markers then,
+  //    and for each questgiver back in view after a trip to another map.
   //  - `questgiver_status_multiple_query` when the quest log's membership or
   //    a quest's complete bit changes (the client re-requests every marker on
   //    a quest-log update; counters alone do not move a marker, so they do
@@ -3025,6 +3027,18 @@ export class WrathClient {
         // client asks for every marker after logging in.
         this.statusKnown.clear();
         this.statusPending.clear();
+        break;
+      case "SMSG_NEW_WORLD":
+      case "WB_SESSION_STATE":
+        // A new map: the cache has already evicted every object the old one
+        // put in view (`state.apply` is subscribed before this handler), and
+        // no out-of-range names them, so each is forgotten here and is first
+        // sight again when it comes back into view, as for a client, whose
+        // world load drops them all. A same-map arrival evicts nothing and so
+        // forgets nothing.
+        for (const guid of [...this.statusKnown, ...this.statusPending]) {
+          if (!this.state.nearby.has(guid)) this.forgetStatus(guid);
+        }
         break;
       case "SMSG_QUESTGIVER_STATUS": {
         const d = event.data as QuestGiverStatusData;

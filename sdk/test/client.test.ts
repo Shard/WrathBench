@@ -3994,6 +3994,55 @@ describe("client: questgiver status and quest query, issued the way a client doe
     await stub.stop();
   });
 
+  test("a questgiver back in view after a trip to another map is queried again; a same-map arrival asks nothing", async () => {
+    // A new map evicts every object the old one put in view, and no
+    // out-of-range names them, so the asked-already set has to follow the
+    // cache: otherwise the first map's questgivers come back with no marker
+    // until the next quest-log change.
+    const stub = startStub({ onConnect: () => combatWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questGiverCreate(GIVER, 91)));
+    await untilAction(stub, "questgiver_status_query");
+    stub.push(JSON.stringify(questGiverStatus(GIVER, 8, 92)));
+    await Bun.sleep(20);
+    expect(client.state.nearby.get(GIVER)?.questGiver?.value).toBe(8);
+
+    // A same-map arrival keeps the objects and their markers: nothing to ask.
+    stub.push(JSON.stringify(newWorld(0, 93)));
+    stub.push(JSON.stringify(questGiverCreate(GIVER, 94)));
+    await Bun.sleep(200);
+    expect(stub.actions.filter((a) => a.action === "questgiver_status_query")).toHaveLength(1);
+    expect(client.state.nearby.get(GIVER)?.questGiver?.value).toBe(8);
+
+    // Out to another map and back.
+    stub.push(JSON.stringify(newWorld(1, 95)));
+    stub.push(JSON.stringify(newWorld(0, 96)));
+    stub.push(JSON.stringify(questGiverCreate(GIVER, 97)));
+    const again = await untilAction(stub, "questgiver_status_query", 1);
+    expect(stub.actions[again]).toMatchObject({ guid: GIVER });
+    stub.push(JSON.stringify(questGiverStatus(GIVER, 10, 98)));
+    await Bun.sleep(20);
+    expect(client.state.units({ questGiver: "reward" }).map((r) => r.guid)).toEqual([GIVER]);
+
+    // A reattach that finds the character on another map evicts the same way:
+    // here the socket was down for both legs of a second round trip.
+    const reattach = (seq: number, map: number) =>
+      JSON.stringify({
+        seq,
+        opcode: "WB_SESSION_STATE",
+        opcodeId: 0xff03,
+        ts: 1_700_000_000_000 + seq,
+        data: { character: "Fenwick", guid: SELF_GUID, inWorld: true, map, x: -1234.5, y: 987.25, z: 42.125, o: 3.5, level: 3 },
+      });
+    stub.push(reattach(99, 1));
+    stub.push(reattach(100, 0));
+    stub.push(JSON.stringify(questGiverCreate(GIVER, 101)));
+    const third = await untilAction(stub, "questgiver_status_query", again + 1);
+    expect(stub.actions[third]).toMatchObject({ guid: GIVER });
+    client.close();
+    await stub.stop();
+  });
+
   test("a quest entering the log is queried once; completion refreshes every marker; re-accept re-queries", async () => {
     const stub = startStub({ onConnect: () => combatWorld() });
     const client = await inWorld(stub);

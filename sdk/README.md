@@ -208,7 +208,8 @@ completed still reads `incomplete`, and an NPC just turned in to still reads
 `reward` while the next quest of its chain is already on offer. An older
 marker, or none, still sends. Event `seq` restarts with every session, so a
 login drops every marker the cache holds, and each questgiver the new session
-puts in view is asked again, as a client asks after logging in. The login also
+puts in view is asked again, as a client asks after logging in; so is each
+questgiver back in view after a trip to another map. The login also
 re-dates the quest-log slot and level fields to itself (their values stand):
 a create block leaves out every zero-valued field, so an empty slot would
 otherwise keep the last session's `seq` and outrank every new marker.
