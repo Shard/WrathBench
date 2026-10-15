@@ -302,6 +302,7 @@ const STATE_INTERNAL = new Set([
   "evictOnMapChange",
   "forget",
   "forgetQuestGiverMarkers",
+  "redateQuestGiverMarkerInputs",
   "isSelfGuid",
   "joinName",
   "mergeFields",

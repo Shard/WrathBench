@@ -110,6 +110,7 @@ import {
 import {
   mailResultText,
   partyResultText,
+  isQuestGiverMarkerInput,
   pointOf,
   questGiverStatusName,
   StateCache,
@@ -1654,14 +1655,15 @@ function questgiverMarkerOf(state: StateCache, guid: GuidArg, wanted: "reward" |
  * asking the same NPC for the next quest of its chain at once is the other.
  * Undefined when no marker was observed or it is older than such a change.
  * The comparison is by `seq`, which restarts with every session; the cache
- * drops every marker at login, so none from an earlier session is compared.
+ * drops every marker at login, so none from an earlier session is compared,
+ * and re-dates these fields to the login, so none of theirs is either.
  */
 function freshQuestgiverMarkerOf(state: StateCache, guid: GuidArg, wanted: "reward" | "available", questId?: number): QuestGiverMarker | undefined {
   const observed = state.nearby.get(guidKey(guid))?.questGiver;
   if (observed === undefined) return undefined;
   let changed = -1;
   for (const [key, field] of state.self.fields) {
-    if (key === "level" || /^quest\d+(Id|State)$/.test(key)) changed = Math.max(changed, field.seq);
+    if (isQuestGiverMarkerInput(key)) changed = Math.max(changed, field.seq);
   }
   return observed.seq > changed ? { name: questGiverStatusName(observed.value), wanted, questId } : undefined;
 }

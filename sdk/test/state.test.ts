@@ -1812,6 +1812,49 @@ describe("state cache: questgiver markers", () => {
     expect(again.nearby.get(CREATURE_GUID)?.questGiver).toEqual({ value: 8, seq: 5, ts: 1_700_000_000_005 });
   });
 
+  test("a login re-dates the quest-log slot and level fields to itself; values stand, and a create restates as usual", () => {
+    // A create block never carries a zero-valued field, so the new session's
+    // create leaves an empty slot or an active quest's zero state stamped
+    // with the last session's seq, which no new marker could be newer than.
+    const login = {
+      seq: 2,
+      opcode: "SMSG_LOGIN_VERIFY_WORLD",
+      opcodeId: 0x236,
+      ts: 1_700_000_000_902,
+      data: { map: 0, x: -1234.5, y: 987.25, z: 42.125, o: 3.5 },
+    };
+    const late = {
+      seq: 4000,
+      opcode: "SMSG_UPDATE_OBJECT",
+      opcodeId: 0x0a9,
+      ts: 1_700_000_004_000,
+      data: { blocks: 1, objects: [{ update: "values", guid: SEED.guid, fields: { quest1Id: 0, quest1State: 0 } }] },
+    };
+    const before = withWorld([questAccepted, late]);
+    const live = new StateCache({ seed: SEED });
+    for (const e of toEvents([...worldStream, questAccepted, late])) live.apply(e);
+    const old = live.snapshot();
+    for (const e of toEvents([login])) live.apply(e);
+    expect(live.self.fields.get("quest1Id")?.seq).toBe(2);
+    const after = withWorld([questAccepted, late, login]);
+    const at = { seq: 2, ts: 1_700_000_000_902 };
+    for (const key of ["quest0Id", "quest0State", "quest1Id", "quest1State", "level"]) {
+      expect(after.self.fields.get(key)).toEqual({ value: before.self.fields.get(key)!.value, ...at });
+    }
+    // Objective counters do not move a marker, so they keep their stamp.
+    expect(after.self.fields.get("quest0CountsLo")).toEqual(before.self.fields.get("quest0CountsLo"));
+    expect(after.questLog.map((q) => q.questId)).toEqual(before.questLog.map((q) => q.questId));
+    // The new session's own create restates what is not zero, at its own seq.
+    const created = structuredClone(selfCreate);
+    created.seq = 4;
+    (created.data.objects[0] as { fields: Record<string, number> }).fields = { ...selfCreate.data.objects[0]!.fields, quest0Id: QUEST_ID };
+    const restated = withWorld([questAccepted, late, login, created]);
+    expect(restated.self.fields.get("quest0Id")?.seq).toBe(4);
+    expect(restated.self.fields.get("quest1Id")).toEqual({ value: 0, ...at });
+    // An earlier snapshot keeps its own stamps.
+    expect(old.self.fields.get("quest1Id")?.seq).toBe(4000);
+  });
+
   test("the marker leaves with the object, and a replay is identical", () => {
     const frames = [questGiverStatus(CREATURE_GUID, 10, 60), creatureOutOfRange];
     const c = withWorld(frames);

@@ -5523,6 +5523,46 @@ describe("client: quest-start items and the questgiver marker pre-check (2026-08
     client.close();
     await stub.stop();
   });
+
+  test("after a relog, the new session's marker answers although a zero slot field kept the last session's seq", async () => {
+    // A create block never carries a zero-valued field, so the new session's
+    // own create leaves an empty slot, or an active quest's zero state, as
+    // the last session stamped it. Late in a long session that seq is far
+    // above anything the new one has produced, and every new marker read as
+    // older than it: both pre-checks stayed quiet for most of the session.
+    const stub = startStub({ onConnect: () => questWorld() });
+    const client = await inWorld(stub);
+    stub.push(JSON.stringify(questAccepted)); // seq 30: slot 0 taken, state 0
+    // Late in the session another quest left slot 1.
+    stub.push(frame(4000, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: SELF_GUID, fields: { quest1Id: 0, quest1State: 0 } }] }));
+    await Bun.sleep(20);
+
+    await client.deleteSession();
+    await client.createSession({ character: "Fenwick" });
+    // Slot 0's quest is restated; its zero state and the empty slot 1 are not.
+    const self = structuredClone(selfCreate);
+    self.seq = 4;
+    (self.data.objects[0] as { fields: Record<string, number> }).fields = { ...selfCreate.data.objects[0]!.fields, quest0Id: QUEST_ID };
+    const giver = structuredClone(creatureCreate);
+    giver.seq = 5;
+    (giver.data.objects[0] as { fields: Record<string, number> }).fields = { ...creatureCreate.data.objects[0]!.fields, npcFlags: 2 };
+    for (const f of [...loginSequence, self, giver, { ...creatureQuery, seq: 6 }, selfArrived(7, { x: -1202, y: 980, z: 42 })]) {
+      stub.push(JSON.stringify(f));
+    }
+    await untilAction(stub, "questgiver_status_query");
+    stub.push(JSON.stringify(questGiverStatus(CREATURE_GUID, 5, 8))); // incomplete, this session's answer
+    await Bun.sleep(20);
+    expect(client.state.quest(QUEST_ID)?.complete).toBe(false);
+
+    const before = stub.actions.length;
+    const turnIn = await client.turnInQuest(CREATURE_GUID, QUEST_ID, 0, { timeout: 300 }).catch((e: unknown) => e);
+    expect(turnIn).toMatchObject({ ok: false, status: "not_ready", marker: "incomplete" });
+    const listed = await client.questsAvailableFrom(CREATURE_GUID, { timeout: 300 }).catch((e: unknown) => e);
+    expect(listed).toMatchObject({ ok: false, status: "nothing_on_offer" });
+    expect(stub.actions.slice(before)).toEqual([]);
+    client.close();
+    await stub.stop();
+  });
 });
 
 describe("connect() closes the stream it fails to open", () => {
