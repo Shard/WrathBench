@@ -377,6 +377,30 @@ describe("codex driver", () => {
     trajectory.close();
   }, 30_000);
 
+  test("a registered secret in the rollout's summary is [redacted] on the trajectory; the rollout stays the CLI's", async () => {
+    const secret = "fake-lease-secret-0123456789abcdef0123456789abcdef";
+    const thread = "01a119da-ef89-7a63-ac51-314ac6a70a53";
+    const message = `The agent printed WRATHBENCH_SECRET=${secret} and moved on. Next: Kharanos.`;
+    const rollout = [{ total: 100_000 }, { total: 60_000, compact: { pre: 446_911, post: 50_000, message } }];
+    const { runDir, codexHome, trajectory, options } = setupEpisode("tools", { maxTurns: 2 }, {
+      WB_FAKE_THREAD_ID: thread,
+      WB_FAKE_ROLLOUT: JSON.stringify(rollout),
+    });
+    trajectory.redact(secret);
+    await runCodexEpisode(options);
+    trajectory.close();
+    const written = readFileSync(join(runDir, "trajectory.jsonl"), "utf8");
+    expect(written).not.toContain(secret);
+    const compactions = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "compaction");
+    expect(compactions).toEqual([
+      expect.objectContaining({ turn: 2, summary: "The agent printed WRATHBENCH_SECRET=[redacted] and moved on. Next: Kharanos." }),
+    ]);
+    // The runner reads the rollout and writes nothing to it: it is the CLI's
+    // own thread on the lane's volume, and `exec resume` reads it back.
+    const rolloutFile = join(codexHome, "sessions", "2026", "10", "14", `rollout-2026-10-14T00-00-00-${thread}.jsonl`);
+    expect(readFileSync(rolloutFile, "utf8")).toContain(secret);
+  }, 30_000);
+
   test("no trim notice is ever raised: this harness runs no message window", async () => {
     const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 3 });
     await runCodexEpisode(options);

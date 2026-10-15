@@ -1545,7 +1545,12 @@ allowlist of its own (`childEnv` in `adapter-claude.ts` and
 `adapter-codex.ts`) — the plumbing a process needs to run plus the one lane
 credential it bills. The per-run session secret the child authenticates with
 is registered for redaction the moment it is leased, so a snippet that prints
-its environment writes `[redacted]` into the trajectory.
+its environment writes `[redacted]` into the trajectory, and the sandbox host
+scrubs the same value from the child's stdout and stderr before they reach the
+job log or the pod log. The CLI drivers' own session files (the claude-code
+transcript under the run's `claude-config/`, the Codex rollout under the
+lane's `CODEX_HOME`) keep what the CLI was sent, the secret included if a
+snippet printed it (runner/README.md, "The sandbox", says why).
 
 A run pod's environment is in "Run pods", above: the launcher keeps only the
 module secret and its driver's one credential.
