@@ -51,7 +51,7 @@ import {
 import { harnessSeries } from "../src/comparability";
 import { isEpisodeId } from "../src/episodes";
 import { parseCampaignBlocks, type Campaign, type CampaignRefusal, type PublishedCampaign } from "../src/campaigns";
-import { rosterKeyRefusal } from "../src/providers";
+import { rosterEntryRefusal } from "../src/roster-refusal";
 import { harnessVersion } from "../src/version";
 import type { EpisodeIdView, HarnessView, ModelEpisodeView, ModelRowView, ModelRunView, ModelsResponse } from "./api-types";
 import { redactSecrets } from "./tail";
@@ -213,8 +213,8 @@ function windowOf(raw: string | undefined): string | undefined {
  * without a `roster` map, is `unreadable` — the same posture `readFleet` takes
  * to a missing `fleet-state.json`: say it is not usable, do not synthesise
  * what it would have said. `path` is the store's. `env` is where the
- * deploy-time self-hosted model hosts are read from (`rosterKeyRefusal`), the
- * same variable every pod that parses the store is given.
+ * deploy-time self-hosted model hosts are read from (`rosterEntryRefusal`),
+ * the same variable every pod that parses the store is given.
  */
 export function readFleetRoster(
   dbPath: string = configDbPath(),
@@ -288,12 +288,15 @@ export function readFleetRoster(
     // unpublished version, a definition that no longer checks out, an
     // (assignment, arm) pair that cannot launch. Carried to the page, never
     // swallowed.
-    // An entry whose provider key the table would not send to its base is
-    // refused by the supervisor and scheduled by nothing, so its squares are
-    // refused here too (`campaignPairRefusals`), not shown as owed work.
+    // An entry the supervisor refuses — an unknown key, a provider key
+    // towards a host its provider does not own, a subscription the policy
+    // does not list — is scheduled by nothing, so its squares are refused here
+    // too (`campaignPairRefusals`), not shown as owed work. The verdict is the
+    // supervisor's own function (`rosterEntryRefusal`); its text stays off the
+    // page, whose squares say only that the entry is refused.
     const pairs = Object.fromEntries(
       Object.entries(parsed.roster).map(([n, e]) => {
-        const refused = rosterKeyRefusal(e, env) ?? undefined;
+        const refused = rosterEntryRefusal(e, policy.subscriptions, env)?.why;
         return [n, { driver: e.driver, compactWindow: e.compactWindow, ...(refused !== undefined ? { refused } : {}) }];
       }),
     );

@@ -1271,7 +1271,10 @@ it launches, and listed as `<id>@<v>:<ref>:<arm>`. So is every pair of an
 assignment whose roster entry the fleet refuses (an unknown key, a provider
 key towards a host the provider table does not pair it with, a subscription
 the policy does not list): the campaign sweeps its other assignments, and the
-entry's own refusal, with its reason, is under `--status`'s refused pins.
+entry's own refusal, with its reason, is under `--status`'s refused pins. The
+campaigns page asks the same function (`rosterEntryRefusal`), so those squares
+show as refused there too. The page says only that the entry is refused,
+because the reason can name a key, a lane or a host.
 
 Before you enable race-probe@1, run the start gate once, and enable it only
 when it passes. It creates, walks and takes a quest at each start no run had

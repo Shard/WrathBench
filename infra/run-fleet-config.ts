@@ -12,7 +12,7 @@ import { harnessSeries } from "../runner/src/comparability";
 import { isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
-import { rosterKeyRefusal } from "../runner/src/providers";
+import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
 import {
   applyPairRefusals,
   campaignWork,
@@ -787,53 +787,12 @@ export function parsePreflight(raw: unknown): FleetPreflight {
 }
 
 /**
- * The keys a ROSTER ENTRY may carry, and the keys a QUEUE JOB may carry.
- *
- * An entry is a catalog card and a job is a scheduling instruction; anything
- * else on either of them is a key the harness does not read. It used to be
- * dropped in silence, which is how `"enabled": false` sat on a roster entry
- * for a day while the character it was meant to pause kept running (2026-08-30).
- * A key outside these sets now REFUSES that entry or job by name — scheduling
- * only, never a drain — so the operator's edit either takes effect or says why
- * it did not. Whole-file rejection stays for shape errors, and the retired
- * spellings (`tiers`, `runsPerEpisode`, `objective`, `character`, ...) keep
- * their own `fail()`s ahead of this check: they meant something specific, and
- * naming them is worth taking the file down for.
+ * The keys a roster entry and a queue job may carry, and the refusal of a
+ * whole entry, live beside the viewer's reader of them
+ * (runner/src/roster-refusal.ts); re-exported so importers of this module keep
+ * their names.
  */
-export const ROSTER_ENTRY_KEYS = [
-  "model", "tier", "idle", "driver", "effort", "apiBase", "apiKeyEnv",
-  "billing", "subscription", "race", "class", "watchdogs", "maxToolCalls",
-  "routing", "wiki", "compactWindow",
-] as const;
-
-export const QUEUE_JOB_KEYS = ["ref", "episode", "repeat", "enabled", "account", "subscription"] as const;
-
-/**
- * The nearest valid alternative, where there is an obvious one. Both entries
- * are keys that LOOK like they would work and quietly would not: `enabled` is
- * the queue job's word, not the entry's, and `tokenEnv` is the runner-side
- * spelling of a lane that an entry states as `subscription`.
- */
-const ROSTER_KEY_HINTS: Record<string, string> = {
-  enabled: 'roster entries have no `enabled`; to pause a character set `idle: "none"`; to stop scheduling set tier/idle accordingly',
-  tokenEnv: "use `subscription`, the NAME of the env var holding the token",
-};
-
-/** The keys of `entry` that are outside `allowed`, in the file's own order. */
-export function unknownKeysOf(entry: object, allowed: readonly string[]): string[] {
-  return Object.keys(entry).filter((k) => !allowed.includes(k));
-}
-
-/** The refusal text for an entry or job carrying keys the harness does not read. */
-function strictKeyWhy(kind: "roster entry" | "queue job", keys: readonly string[], allowed: readonly string[]): string {
-  const named = keys.map((k) => `\`${k}\``).join(", ");
-  const hint = kind === "roster entry" ? keys.map((k) => ROSTER_KEY_HINTS[k]).find((h) => h !== undefined) : undefined;
-  return (
-    `unknown key ${named} on a ${kind} — ` +
-    (hint ?? `not a ${kind === "roster entry" ? "roster-entry" : "queue-job"} key`) +
-    ` (valid keys: ${allowed.join(", ")})`
-  );
-}
+export { ROSTER_ENTRY_KEYS, QUEUE_JOB_KEYS, unknownKeysOf } from "../runner/src/roster-refusal";
 
 /**
  * Every job name a roster entry could spawn under: the file's own jobs that
@@ -979,50 +938,22 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
       roster[name] = { ...e, routing: policy.routing };
     }
   }
-  // An entry pinned to a subscription the file does not configure. Refused as
-  // the ENTRY, not the file: the rest of the roster is fine, and a rejected
-  // re-read would make every other flag in the file inert.
-  // A key the harness does not read. Same refusal shape: the entry stays in
-  // the catalog, nothing schedules it, and the line says which key and what to
-  // write instead.
+  // Every refusal of a whole ENTRY, in one verdict the viewer's campaign
+  // squares read too (`rosterEntryRefusal`, runner/src/roster-refusal.ts): a
+  // key the harness does not read, a provider key towards a host its provider
+  // does not own, a subscription the policy does not list. Refused as the
+  // ENTRY, not the file: it stays in the catalog, nothing schedules it or
+  // launches a run that would send its key anywhere, and the rest of the
+  // roster stays in effect. One line per entry; the jobs it could have spawned
+  // under ride along, as a pin's refusal carries them, so a live freeplay run
+  // under it is spared.
   for (const [name, e] of Object.entries(roster)) {
-    const keys = unknownKeysOf(e, ROSTER_ENTRY_KEYS);
-    if (keys.length === 0) continue;
-    const why = strictKeyWhy("roster entry", keys, ROSTER_ENTRY_KEYS);
-    roster[name] = { ...e, refused: why };
+    const r = rosterEntryRefusal(e, policy.subscriptions, env);
+    if (r === null) continue;
+    roster[name] = r.kind === "subscription" ? { ...e, refused: r.why, subscription: undefined } : { ...e, refused: r.why };
     refusals.push({
       pin: `roster ${name}`,
-      why: `${why} — the entry is in the catalog and scheduled by nothing`,
-      jobs: refJobNames(name, jobs, campaigns),
-    });
-  }
-  // A provider key named towards a host its provider does not own
-  // (runner/src/providers.ts). Refused as the ENTRY, like the two around it:
-  // the rest of the roster stays in effect, and nothing launches a run that
-  // would send the variable anywhere.
-  for (const [name, e] of Object.entries(roster)) {
-    if (e.refused !== undefined) continue;
-    const why = rosterKeyRefusal(e, env);
-    if (why === null) continue;
-    roster[name] = { ...e, refused: why };
-    refusals.push({
-      pin: `roster ${name}`,
-      why: `${why} — the entry is in the catalog and scheduled by nothing`,
-      jobs: refJobNames(name, jobs, campaigns),
-    });
-  }
-  for (const [name, e] of Object.entries(roster)) {
-    // One refusal line per entry: an entry already out of the catalog's
-    // scheduling has nothing left for a second one to suppress.
-    if (e.refused !== undefined) continue;
-    if (e.subscription === undefined || policy.subscriptions.includes(e.subscription)) continue;
-    const why = `subscription ${e.subscription} is not in policy.subscriptions (${policy.subscriptions.join(", ")})`;
-    roster[name] = { ...e, refused: why, subscription: undefined };
-    // The jobs it could have spawned under, for the same reason a pin's
-    // refusal carries them: a live freeplay run under this entry is spared.
-    refusals.push({
-      pin: `roster ${name}`,
-      why: `${why} — the entry is in the catalog and scheduled by nothing`,
+      why: `${r.why} — the entry is in the catalog and scheduled by nothing`,
       jobs: refJobNames(name, jobs, campaigns),
     });
   }

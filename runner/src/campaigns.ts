@@ -144,7 +144,8 @@ export interface PairRosterEntry {
   driver?: string | undefined;
   compactWindow?: string | undefined;
   /**
-   * The fleet parser's refusal of the whole entry (`FleetRosterEntry.refused`:
+   * The fleet's refusal of the whole entry (`rosterEntryRefusal`, the one
+   * verdict the parser's `FleetRosterEntry.refused` and the viewer both read:
    * a key it does not read, a provider key towards a host the provider table
    * does not pair it with, a subscription the policy does not list).
    */
