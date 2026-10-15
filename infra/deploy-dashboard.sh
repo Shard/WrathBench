@@ -78,8 +78,10 @@ fi
 #
 # The ship still renders it, for two reasons. It writes dashboard/public/og.png,
 # which the app origin serves and which is the fallback the tags name when no
-# data hostname is set; and `--upload` seeds `v1/og.png` so a first ship after
-# this change does not point at an object no publisher has written yet.
+# data hostname is set; and `--upload` seeds `v1/og.png` when the bucket has
+# none, so a first ship does not point at an object no publisher has written
+# yet. Only then: the ship renders from this machine's runs tree, which need not
+# be the fleet's, so an existing card is the publisher's and is left alone.
 #
 # The stamp is still the ship-time picture's content hash, and it is still what
 # `?v=` carries — a crawler caches a card by URL and has no purge, so an
