@@ -267,6 +267,29 @@ describe("priceFor", () => {
     }
   });
 
+  /*
+   * The list page's own figures (platform.claude.com/docs/en/about-claude/pricing,
+   * read 2026-10-16) for every id a claude-code roster entry names or resolves
+   * to: base input, output, cache hit, and the 1-hour cache write. A row that
+   * moves has to move here too, with the day it was read.
+   */
+  test("every Claude id the roster serves prices at the list page's current figures", () => {
+    const list: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+      "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 20 },
+      "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 20 },
+      "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 8 },
+      "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 },
+      "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 },
+      "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 },
+      "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 4 },
+      "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 },
+      "claude-haiku-4-5-20251001": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 2 },
+    };
+    for (const [id, rates] of Object.entries(list)) expect(claudePrice(id)).toMatchObject(rates);
+    // Tiered at 100K prompt tokens per request: no row, by decision.
+    expect(claudePrice("claude-haiku-5-5")).toBeNull();
+  });
+
   test("a suffixless id is never quoted at 0/0: a paid model reading as free is the failure the table must not hold", () => {
     // A `:free`/`-free` row may be zero and is never consulted anyway
     // (`priceFor` answers the suffix first). Anything else at 0/0 is a paid
@@ -800,7 +823,7 @@ describe("runCost", () => {
     expect(c.note).not.toContain("upper bound");
     // The date rides the wire, so a display string cannot outlive the rate.
     expect(c.priceId).toBe("claude-sonnet-5");
-    expect(c.asOf).toBe("2026-10-08");
+    expect(c.asOf).toBe("2026-10-16");
   });
 
   test("an unknown model gets no cost and says why", () => {

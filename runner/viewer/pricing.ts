@@ -97,7 +97,10 @@ export interface ClaudePriceRow {
  * notes, read 2026-10-08 (claude.com/pricing as a cross-check). Checked the
  * same day against the CLI's own `total_cost_usd` on one run per model: Sonnet
  * 5.5, Opus 5.5 and Fable 5.1 reproduce to the cent, and seven Fable 5 runs to
- * within $0.003.
+ * within $0.003. Re-read 2026-10-16 against the same page and the Claude API
+ * reference's model table: no row's rate had moved. That table (cached
+ * 2026-10-06) still lists Sonnet 5.5's cache read at $0.20; the page lists
+ * $0.10, which is the second window below.
  *
  * **Cache writes are the 1-hour rate, 2× input.** Every claude-code run so far
  * writes 1-hour cache — `usageRaw.cache_creation.ephemeral_1h_input_tokens`
@@ -114,13 +117,13 @@ export interface ClaudePriceRow {
  * Haiku 5.5 is deliberately absent: see `CLAUDE_UNPRICED`.
  */
 export const CLAUDE_PRICES: readonly ClaudePriceRow[] = [
-  { ids: ["claude-fable-5-1"], windows: [{ input: 10, output: 50, cacheRead: 0.25, cacheWrite: 20 }], asOf: "2026-10-08" },
-  { ids: ["claude-fable-5"], windows: [{ input: 10, output: 50, cacheRead: 1.0, cacheWrite: 20 }], asOf: "2026-10-08" },
-  { ids: ["claude-opus-5-5"], windows: [{ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 8 }], asOf: "2026-10-08" },
-  { ids: ["claude-opus-5"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-08" },
-  { ids: ["claude-opus-4-8"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-08" },
-  { ids: ["claude-opus-4-7"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-08" },
-  { ids: ["claude-opus-4-6"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-08" },
+  { ids: ["claude-fable-5-1"], windows: [{ input: 10, output: 50, cacheRead: 0.25, cacheWrite: 20 }], asOf: "2026-10-16" },
+  { ids: ["claude-fable-5"], windows: [{ input: 10, output: 50, cacheRead: 1.0, cacheWrite: 20 }], asOf: "2026-10-16" },
+  { ids: ["claude-opus-5-5"], windows: [{ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 8 }], asOf: "2026-10-16" },
+  { ids: ["claude-opus-5"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" },
+  { ids: ["claude-opus-4-8"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" },
+  { ids: ["claude-opus-4-7"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" },
+  { ids: ["claude-opus-4-6"], windows: [{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }], asOf: "2026-10-16" },
   {
     ids: ["claude-sonnet-5-5"],
     // Cache reads dropped to $0.10 on 2026-10-07; a run started before keeps $0.20.
@@ -128,13 +131,13 @@ export const CLAUDE_PRICES: readonly ClaudePriceRow[] = [
       { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 },
       { from: "2026-10-07", input: 2, output: 10, cacheRead: 0.1, cacheWrite: 4 },
     ],
-    asOf: "2026-10-08",
+    asOf: "2026-10-16",
   },
-  { ids: ["claude-sonnet-5"], windows: [{ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 }], asOf: "2026-10-08" },
+  { ids: ["claude-sonnet-5"], windows: [{ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 4 }], asOf: "2026-10-16" },
   {
     ids: ["claude-haiku-4-5", "claude-haiku-4-5-20251001"],
     windows: [{ input: 1, output: 5, cacheRead: 0.1, cacheWrite: 2 }],
-    asOf: "2026-10-08",
+    asOf: "2026-10-16",
   },
 ];
 
@@ -147,8 +150,10 @@ export const CLAUDE_PRICES: readonly ClaudePriceRow[] = [
  * and the CLI tiers each API call on its own. A run's token totals cannot say
  * which calls were which, and either flat rate is wrong: the ≤100K rate read
  * the first Haiku 5.5 e90 4.3× low, the >100K rate about 15% high (267 of its
- * 375 calls were over 100K). Pricing it needs the tier applied per response
- * when the totals are read; that is GitHub issue #122.
+ * 375 calls were over 100K). So it stays a blank, by the rule at the top of
+ * this file — a guessed price is worse than a blank — and its runs read the
+ * CLI's own figure, which prices each call at its own tier. A row could only
+ * come back with the tier applied per response when the totals are read.
  */
 export const CLAUDE_UNPRICED: Readonly<Record<string, string>> = {
   "claude-haiku-5-5":

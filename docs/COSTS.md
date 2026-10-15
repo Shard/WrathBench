@@ -106,8 +106,9 @@ the operator's figure in GitHub issue #66.
   claude-code run writes 1-hour cache, billed at 2× input rather than the
   5-minute 1.25×. Sonnet 5 stays at $2/$10: the announced rise to $3/$15 never
   happened. Haiku 5.5 has no row, because Anthropic prices each call by its
-  prompt size and a run's totals cannot say which calls were which (GitHub
-  issue #122); its runs read the CLI's own figure.
+  prompt size and a run's totals cannot say which calls were which; a flat
+  rate would be a guess, and a guessed price is worse than a blank (the rule
+  in `pricing.ts`'s header), so its runs read the CLI's own figure.
 - **Cost control is external to the fleet by decision**: a tier is
   denominated in runs, dollars are the operator's reasoning. If an in-fleet
   money budget is ever wanted, it belongs beside `policy.paid.maxConcurrent`,
