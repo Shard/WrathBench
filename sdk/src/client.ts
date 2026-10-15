@@ -1641,8 +1641,11 @@ function questgiverMarkerOf(state: StateCache, guid: GuidArg, wanted: "reward" |
  * quest log's slots (a quest entering or leaving it, or its state changing)
  * and our own level. The client re-asks for every marker when the log
  * changes, so an older marker may be about to change — finishing the last
- * objective and turning in at once is the common case. Undefined when no
- * marker was observed or it is older than such a change.
+ * objective and turning in at once is the common case, and turning in and
+ * asking the same NPC for the next quest of its chain at once is the other.
+ * Undefined when no marker was observed or it is older than such a change.
+ * The comparison is by `seq`, which restarts with every session; the cache
+ * drops every marker at login, so none from an earlier session is compared.
  */
 function freshQuestgiverMarkerOf(state: StateCache, guid: GuidArg, wanted: "reward" | "available", questId?: number): QuestGiverMarker | undefined {
   const observed = state.nearby.get(guidKey(guid))?.questGiver;
@@ -1841,9 +1844,10 @@ export type QuestAcceptResult =
   | {
       readonly ok: false;
       /**
-       * The NPC's observed questgiver marker already says it offers nothing
-       * (nothing was sent), or the NPC answered with the turn-in window of a
-       * quest already in the log: the one quest it has for this character.
+       * The NPC's questgiver marker, newer than the last quest-log or level
+       * change, already says it offers nothing (nothing was sent), or the NPC
+       * answered with the turn-in window of a quest already in the log: the
+       * one quest it has for this character.
        */
       readonly status: "nothing_on_offer";
       readonly questId: number;
@@ -1905,8 +1909,9 @@ export interface QuestOfferRow {
 
 /**
  * `questsAvailableFrom`'s answer. `nothing_on_offer` is the marker pre-check
- * (nothing sent) or the NPC answering with the turn-in window of a quest
- * already in the log; `too_far` is the range pre-check, nothing sent.
+ * (a marker newer than the last quest-log or level change; nothing sent) or
+ * the NPC answering with the turn-in window of a quest already in the log;
+ * `too_far` is the range pre-check, nothing sent.
  */
 export type QuestsAvailableResult =
   | { readonly ok: true; readonly quests: readonly QuestOfferRow[] }
@@ -2961,7 +2966,8 @@ export class WrathClient {
   //    skipped when a status for that guid already arrived in the same burst.
   //    The core's unprompted login-time `SMSG_QUESTGIVER_STATUS_MULTIPLE` is
   //    empty (sent before visibility is populated; verified live 2026-08-22),
-  //    so these per-guid queries are what populate the initial view.
+  //    so these per-guid queries are what populate the initial view — after
+  //    every login, since the cache drops the last session's markers then.
   //  - `questgiver_status_multiple_query` when the quest log's membership or
   //    a quest's complete bit changes (the client re-requests every marker on
   //    a quest-log update; counters alone do not move a marker, so they do
@@ -3001,6 +3007,13 @@ export class WrathClient {
       }
       case "SMSG_DESTROY_OBJECT":
         this.forgetStatus((event.data as { guid: string }).guid);
+        break;
+      case "SMSG_LOGIN_VERIFY_WORLD":
+        // A new session: the cache drops every marker from the last one, and
+        // each questgiver the new session puts in view is asked again, as a
+        // client asks for every marker after logging in.
+        this.statusKnown.clear();
+        this.statusPending.clear();
         break;
       case "SMSG_QUESTGIVER_STATUS": {
         const d = event.data as QuestGiverStatusData;
@@ -6731,12 +6744,16 @@ export class WrathClient {
   private async questOffer(npcGuid: GuidArg, timeout: number): Promise<QuestOfferOutcome> {
     const sinceSeq = this.events.recent(1)[0]?.seq;
     const distance = distanceToUnit(this.state, npcGuid);
-    const marker = questgiverMarkerOf(this.state, npcGuid, "available");
+    const marker = freshQuestgiverMarkerOf(this.state, npcGuid, "available");
     if (marker !== undefined && OFFERS_NOTHING.has(marker.name)) {
       // The server already said what this NPC has for us (its questgiver
       // marker, received before the call), and it is not a quest on offer — a
       // turn-in-only or empty-handed NPC answers a quest_list with silence, so
-      // waiting the timeout out would only confirm what is already known.
+      // waiting the timeout out would only confirm what is already known. Only
+      // a marker newer than the last quest-log or level change counts, as in
+      // `turnInQuest`: right after a turn-in the marker still reads `reward`
+      // while the next quest of the chain is already on offer. An unobserved
+      // or older marker sends, as before.
       return {
         nothing: marker,
         hint:
