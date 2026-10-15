@@ -116,6 +116,79 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("Before.\n\n{{unclosed lorem")).toBe("Before.");
   });
 
+  test("inline link templates leave the name they link to", () => {
+    // Each shape is the template's own slot order: the name is the link target.
+    expect(stripWikitext("Sold by {{npc|Alliance|Example Person Gamma|Lorem Seller}} in Example Town.")).toBe(
+      "Sold by Example Person Gamma in Example Town.",
+    );
+    expect(stripWikitext("A reward from {{quest|Example Quest Alpha}}.")).toBe(
+      "A reward from Example Quest Alpha.",
+    );
+    expect(stripWikitext("* {{questlong|Horde|12|Example Quest Alpha}} starts here")).toBe(
+      "Example Quest Alpha starts here",
+    );
+    expect(stripWikitext("It drops {{loot|epic|Example Item Delta}}.")).toBe("It drops Example Item Delta.");
+    expect(stripWikitext("Combine {{item|Example Item Delta|icon=Lorem}} with ink.")).toBe(
+      "Combine Example Item Delta with ink.",
+    );
+    expect(stripWikitext("Cast {{ability|Example Spell Kappa}} first.")).toBe("Cast Example Spell Kappa first.");
+    expect(stripWikitext("Slay {{mob|Example Beast Eta|level=12}} twice.")).toBe("Slay Example Beast Eta twice.");
+    expect(stripWikitext("Ask {{npclong|Neutral|30|Example Person Gamma|Lorem}} nearby.")).toBe(
+      "Ask Example Person Gamma nearby.",
+    );
+    expect(stripWikitext("Earn {{achievement|Example Feat Iota}} and {{achievementlong|Example Feat Mu}}.")).toBe(
+      "Earn Example Feat Iota and Example Feat Mu.",
+    );
+  });
+
+  test("the name slot is the link target, never a display override", () => {
+    expect(stripWikitext("From {{quest|Example Quest Alpha|(Lorem)}}.")).toBe("From Example Quest Alpha.");
+    expect(stripWikitext("From {{loot|rare|Example Item Delta|s}}.")).toBe("From Example Item Delta.");
+  });
+
+  test("an inline link template is matched the way the wiki matched it", () => {
+    expect(stripWikitext("By {{NPC||Example Person Gamma}}.")).toBe("By Example Person Gamma.");
+    expect(stripWikitext("By {{ Npc |Neutral|Example Person Gamma}}.")).toBe("By Example Person Gamma.");
+    expect(stripWikitext("By {{Template:Quest|Example Quest Alpha}}.")).toBe("By Example Quest Alpha.");
+    expect(stripWikitext("By {{quest\n|Example Quest Alpha\n}}.")).toBe("By Example Quest Alpha.");
+    // `2=` names the slot outright; a named argument is never positional.
+    expect(stripWikitext("By {{npc|smallicon=Lorem.png|Horde|2=Example Person Gamma}}.")).toBe(
+      "By Example Person Gamma.",
+    );
+    expect(stripWikitext("By {{npc|level=5|Horde|Example Person Gamma}}.")).toBe("By Example Person Gamma.");
+    // A pipe inside a link is not an argument separator.
+    expect(stripWikitext("By {{item|[[Example Item Delta|Delta]]}}.")).toBe("By Delta.");
+  });
+
+  test("an empty name slot leaves nothing, as before", () => {
+    expect(stripWikitext("Sold by {{npc|Alliance}} here.")).toBe("Sold by here.");
+    expect(stripWikitext("Sold by {{npc|Alliance||Lorem Seller}} here.")).toBe("Sold by here.");
+    expect(stripWikitext("A {{quest}} here.")).toBe("A here.");
+  });
+
+  test("every other template still goes, a link template nested in one included", () => {
+    expect(stripWikitext("Costs {{cost|1|50|0}} and sits at {{coords|48.2|42.1|Example Zone Beta}}.")).toBe(
+      "Costs and sits at .",
+    );
+    expect(stripWikitext("{{questbox\n| name = Example Quest Alpha\n| start = {{npc||Example Person Gamma}}\n}}Lorem.")).toBe(
+      "Lorem.",
+    );
+    expect(stripWikitext("{{box|a={{quest|Example Quest Alpha}}}}Lorem.")).toBe("Lorem.");
+    expect(stripWikitext("{|\n| {{loot|epic|Example Item Delta}}\n|}\nLorem.")).toBe("Lorem.");
+    expect(stripWikitext("{{{quest|Example Quest Alpha}}}Lorem.")).toBe("Lorem.");
+  });
+
+  test("a link template nested in the name slot follows the same rule", () => {
+    expect(stripWikitext("By {{quest|{{item|Example Item Delta}}}}.")).toBe("By Example Item Delta.");
+    expect(stripWikitext("By {{quest|{{lorem}}}}.")).toBe("By .");
+  });
+
+  test("the strip counts the link templates it wrote", () => {
+    const counts = { inlineLinks: 0 };
+    stripWikitext("{{npc||Example Person Gamma}} and {{quest|Example Quest Alpha}}; {{cost|1}} {{npc|Horde}}", counts);
+    expect(counts.inlineLinks).toBe(2);
+  });
+
   test("a realistic synthetic article reduces to prose", () => {
     const wt = `{{questbox
  | name = Example Quest Alpha

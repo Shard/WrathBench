@@ -169,6 +169,17 @@ lives in docs/METHODOLOGY.md "The reference bundle".
   lost. The consumer is a model reading search results, not a browser. An opener
   that is never closed costs its own paragraph, not the page: the strip resumes
   at the next blank line after it.
+- **Inline link templates are the one exception: they leave the name they link
+  to.** Dropping them left sentences with holes where the answer was — "sold by
+  in", "a reward from ." — in 36,502 of 81,325 kept pages. Ten templates, each an
+  item, NPC, quest, spell or achievement link (`INLINE_LINKS` in
+  `wiki/src/strip.ts`, with the slot order read from each template's Wrath-era
+  source), are written as their link target, never a display override, and
+  only at the top level, so one inside an infobox or a table still goes with
+  it. Everything else still goes: money (`cost`), reputation, faction and race
+  icons, and `coords`, which would hand back the yards `wikiCoords` withholds.
+  `meta.inline_links_rendered` counts them; a bundle built before the rule has
+  no such key.
 - Three things are lifted off the raw wikitext **before** the strip, because they
   live in the templates the strip removes:
   - **Coordinates** (`extractCoords`): `{{coords|x|y|zone}}` and infobox

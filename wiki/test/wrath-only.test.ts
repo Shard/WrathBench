@@ -353,6 +353,21 @@ describe("out-of-world sections", () => {
     expect(cut.sectionsTrimmedBy).toEqual({ "(empty)": 1 });
   });
 
+  test("a section listed only in inline link templates is not empty", () => {
+    // The names are what the section says; a list of other templates still goes.
+    const page = [
+      "Lead lorem.",
+      "== Quests ==",
+      "* {{questlong|Alliance|10|Example Quest Alpha}}",
+      "* {{questlong|Alliance|12|Example Quest Beta}}",
+      "== Prices ==",
+      "* {{cost|1|50|0}}",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.\nQuests\nExample Quest Alpha\nExample Quest Beta");
+    expect(cut.sectionsTrimmedBy).toEqual({ "(empty)": 1 });
+  });
+
   test("a heading with no body of its own but an occupied subsection survives", () => {
     const page = ["== Abilities ==", "=== Example Strike ===", "Ability lorem."].join("\n");
     const cut = dropPostWrath(page);

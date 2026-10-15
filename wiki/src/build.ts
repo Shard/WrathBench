@@ -31,7 +31,7 @@ import { assertCanaries, MAX_REDIRECT_HOPS } from "./canary";
 import { DEFAULT_ERA_CUTOFF, dropOutOfWorldOnly, dropPostWrath } from "./wrath-only";
 import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiPage } from "./parse";
 import { loadWorldIds } from "./world-ids";
-import { redirectTarget, stripWikitext } from "./strip";
+import { redirectTarget, stripWikitext, type StripCounts } from "./strip";
 
 /**
  * How much of the signalled revision a stepped-back one has to be worth.
@@ -194,6 +194,13 @@ export const METRICS = {
   },
   chars_kept: {
     help: "Plain-text characters across every kept row.",
+    identity: { role: "none" },
+  },
+  inline_links_rendered: {
+    help:
+      "Inline item, NPC, quest, spell and achievement link templates in kept prose, " +
+      "written as the name they link to instead of dropped with every other template " +
+      "(`INLINE_LINKS` in strip.ts). Absent from a bundle built before the rule.",
     identity: { role: "none" },
   },
   pages_distinct_keys: {
@@ -387,6 +394,10 @@ const SUMMARY = [
   {
     uses: ["pages_kept", "chars_kept"],
     render: (n) => `pages kept:  ${n.pages_kept} (${fmtBytes(n.chars_kept)} of plain text)`,
+  },
+  {
+    uses: ["inline_links_rendered"],
+    render: (n) => `  links:     ${n.inline_links_rendered} inline link templates written as their name`,
   },
   { uses: [], render: (_n, ctx) => `era cutoff:  ${ctx.eraCutoff}` },
   {
@@ -728,7 +739,8 @@ async function main(): Promise<void> {
     for (const [heading, n] of Object.entries(cut.sectionsTrimmedBy)) {
       sectionsTrimmedBy[heading] = (sectionsTrimmedBy[heading] ?? 0) + n;
     }
-    const text = stripWikitext(cut.text);
+    const stripped: StripCounts = { inlineLinks: 0 };
+    const text = stripWikitext(cut.text, stripped);
     let emptied = false;
     if (text.length === 0) {
       // Which cut emptied it decides whether the page is dropped or kept.
@@ -761,6 +773,7 @@ async function main(): Promise<void> {
     keptTitles.add(page.title.toLowerCase());
     n.pages_kept++;
     n.chars_kept += text.length;
+    n.inline_links_rendered += stripped.inlineLinks;
     n.coord_rows += coords.length;
     n.id_rows += ids.length;
     if (quest !== null) n.quest_rows++;

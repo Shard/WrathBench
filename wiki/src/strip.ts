@@ -5,6 +5,8 @@
  * rendering is explicitly not the goal: templates carry infobox data we cannot
  * expand without the template namespace, so they go, and so do tables. What is
  * left is prose, headings and link labels, which is what a search index wants.
+ * The one exception is a short list of inline link templates (`INLINE_LINKS`),
+ * which are written as the name they link to.
  *
  * Everything here is a deterministic function of the input string.
  */
@@ -12,6 +14,121 @@
 import { decodeEntities } from "./entities";
 
 const DROP_LINK_PREFIX = /^\s*(?::\s*)?(file|image|category|media)\s*:/i;
+
+/**
+ * Inline link templates, written as the name they link to instead of being
+ * dropped: lower-cased template name -> the 1-based positional slot that holds
+ * the name. Every other template still goes, infoboxes included.
+ *
+ * Dropping these left holes in sentences — "sold by  in", "a reward from ." —
+ * where the name was the answer a model had searched for. A survey of the kept
+ * prose of a full build counted 121,199 templates sitting inline in prose, on
+ * 97,074 lines of 36,502 of the 81,325 pages; these ten are 75,072 of them.
+ * Each is a link to an item, NPC, quest, spell or achievement page whose text is
+ * that page's name, and each was read in its Wrath-era template source:
+ *
+ * - `npc` (19,166 inline) and its redirect `NPC`: faction, **name**, title.
+ * - `questlong` (17,995): faction, level, **name**.
+ * - `loot` (16,337): quality, **name**.
+ * - `item` (11,660): **name**.
+ * - `quest` (3,449): **name**.
+ * - `ability` (2,006): **name** — the spell link.
+ * - `mob` (1,734): **name**.
+ * - `npclong` (1,396): faction, level, **name**, title.
+ * - `achievement` (905) and `achievementlong` (424): **name**.
+ *
+ * The slot is the link target, never a display override: the override slots
+ * changed meaning across the wiki's history (a `quest` second argument is as
+ * often `(Horde)` as a label), and the target is the title a model can search
+ * for next. A template is matched case-insensitively, since `npc` and `NPC`
+ * were one template by the cutoff. Rendering happens only at the top level: a
+ * link template inside an infobox or a table goes with it. Zones have no link
+ * template here — they are plain `[[links]]` — and `coords` is not one, so it
+ * stays stripped.
+ */
+const INLINE_LINKS: ReadonlyMap<string, number> = new Map([
+  ["npc", 2],
+  ["questlong", 3],
+  ["loot", 2],
+  ["item", 1],
+  ["quest", 1],
+  ["ability", 1],
+  ["mob", 1],
+  ["npclong", 3],
+  ["achievement", 1],
+  ["achievementlong", 1],
+]);
+
+/** Split a template body on its own pipes, not on those inside `[[…]]` or `{{…}}`. */
+function templateArgs(body: string): string[] {
+  const parts: string[] = [];
+  let braces = 0;
+  let brackets = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const c = body.charCodeAt(i);
+    const d = body.charCodeAt(i + 1);
+    if (c === 0x7b && d === 0x7b) {
+      braces++;
+      i++;
+    } else if (c === 0x7d && d === 0x7d && braces > 0) {
+      braces--;
+      i++;
+    } else if (c === 0x5b && d === 0x5b) {
+      brackets++;
+      i++;
+    } else if (c === 0x5d && d === 0x5d && brackets > 0) {
+      brackets--;
+      i++;
+    } else if (c === 0x7c && braces === 0 && brackets === 0) {
+      parts.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(body.slice(start));
+  return parts;
+}
+
+/**
+ * The name an `INLINE_LINKS` template links to, or null for any other template
+ * (and for one whose name slot is empty, which leaves the hole it always left).
+ * `raw` is the whole `{{…}}`. Positional slots follow MediaWiki: an argument
+ * with a non-numeric `key=` is named and skipped, and `2=Name` fills slot 2.
+ */
+function inlineLinkName(raw: string): string | null {
+  // A parameter (`{{{1|x}}}`) is not a template call.
+  if (!raw.startsWith("{{") || !raw.endsWith("}}") || raw[2] === "{") return null;
+  const args = templateArgs(raw.slice(2, -2));
+  const name = args[0]!
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^template\s*:\s*/i, "")
+    .toLowerCase();
+  const slot = INLINE_LINKS.get(name);
+  if (slot === undefined) return null;
+  let position = 0;
+  let value: string | undefined;
+  for (const arg of args.slice(1)) {
+    const key = /^\s*([^=]*?)\s*=/.exec(arg);
+    if (key === null) {
+      position++;
+      if (position === slot) value = arg;
+    } else if (/^\d+$/.test(key[1]!) && Number(key[1]) === slot) {
+      value = arg.slice(key[0].length);
+    }
+  }
+  if (value === undefined) return null;
+  // The name may itself hold a template; it goes, or renders, by the same rule.
+  const text = removeBraced(value).replace(/\s+/g, " ").trim();
+  return text.length > 0 ? text : null;
+}
+
+/** Tallies `stripWikitext` keeps for the caller; the build turns them into `meta`. */
+export interface StripCounts {
+  /** `INLINE_LINKS` templates written as their name. */
+  inlineLinks: number;
+}
 
 /** One unclosed `{{` or `{|`, kept so a closer can be matched to its own kind. */
 interface Opener {
@@ -47,8 +164,11 @@ interface Opener {
  * a paragraph boundary. Only if there is no blank line after it does the tail go
  * with it. Previously every one of these returned the empty string for the whole
  * page.
+ *
+ * A top-level template in `INLINE_LINKS` leaves its name behind instead of
+ * nothing; one nested in anything else goes with its parent.
  */
-function removeBraced(input: string, guard = 0): string {
+function removeBraced(input: string, counts?: StripCounts, guard = 0): string {
   if (!input.includes("{")) return input;
   const out: string[] = [];
   const stack: Opener[] = [];
@@ -78,13 +198,21 @@ function removeBraced(input: string, guard = 0): string {
       while (i + run < n && input.charCodeAt(i + run) === 0x7d) run++;
       let closes = run >> 1;
       if (closes > 0) {
+        const outer = stack[0]!;
         while (closes > 0 && stack.length > 0) {
           // A `}}` closes the nearest template; a table opened inside it and
           // never closed goes with it rather than outliving the page.
           if (stack.pop()?.table === false) closes--;
         }
         i += run;
-        if (stack.length === 0) segStart = i;
+        if (stack.length === 0) {
+          const name = outer.table ? null : inlineLinkName(input.slice(outer.at, i));
+          if (name !== null) {
+            out.push(name);
+            if (counts !== undefined) counts.inlineLinks++;
+          }
+          segStart = i;
+        }
         continue;
       }
     } else if (stack.length > 0 && c === 0x7c /* | */ && input.charCodeAt(i + 1) === 0x7d) {
@@ -108,7 +236,7 @@ function removeBraced(input: string, guard = 0): string {
   const rest = input.slice(stack[0]!.at);
   const boundary = /\n[ \t]*\n/.exec(rest);
   if (boundary !== null && guard < 16) {
-    out.push(removeBraced(rest.slice(boundary.index + boundary[0].length), guard + 1));
+    out.push(removeBraced(rest.slice(boundary.index + boundary[0].length), counts, guard + 1));
   }
   return out.join("");
 }
@@ -176,13 +304,14 @@ const TABLE_LEFTOVER = /^[ \t]*[|!].*$/gm;
 
 /**
  * Reduce wikitext to plain text. Best effort, deterministic, never throws.
+ * `counts`, when given, is incremented with what the strip kept.
  */
-export function stripWikitext(input: string): string {
+export function stripWikitext(input: string, counts?: StripCounts): string {
   let s = input;
   s = s.replace(COMMENT, "").replace(OPEN_COMMENT, "");
   s = s.replace(CONTAINER_TAGS, " ");
   s = s.replace(SELF_CLOSING, " ");
-  s = removeBraced(s);
+  s = removeBraced(s, counts);
   s = s.replace(TABLE_LEFTOVER, "");
   s = processLinks(s);
   s = s.replace(EXTERNAL_LINK, (_whole, label?: string) => (label ? label : " "));
