@@ -166,6 +166,21 @@ is what keeps a model off the database on the fleet and runner pods alike.
 {{- end -}}
 
 {{/*
+The same password as MYSQL_PWD, which the stock mysql clients read when no
+password is given on the command line: `-p<password>` would put it in the
+client's argv, readable in the pod's process list. Only for a container that
+runs nothing but a client — the mysql server image's own first-boot init
+connects with no password and would pick this up.
+*/}}
+{{- define "wrathbench.mysqlPwdEnv" -}}
+- name: MYSQL_PWD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.envSecretName }}
+      key: WRATHBENCH_DB_ROOT_PASSWORD
+{{- end -}}
+
+{{/*
 AzerothCore's three database DSNs. `AC_*` env wins over the parsed .conf
 (Config.cpp GetValueDefault checks the env var first), which is why the
 generated files under etc/ stay stock and everything we care about is pinned

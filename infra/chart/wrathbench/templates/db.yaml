@@ -81,12 +81,17 @@ spec:
             - name: mysql
               containerPort: 3306
           readinessProbe:
-            # AzerothCore's own compose healthcheck, verbatim.
+            # AzerothCore's own compose healthcheck, with the password moved
+            # from `--password=` (the client's argv, readable in the pod's
+            # process list) to MYSQL_PWD. Set for this one command and not on
+            # the container: the image's first-boot init connects as a root
+            # with no password yet, and a container-wide MYSQL_PWD would make
+            # it send one and fail.
             exec:
               command:
                 - sh
                 - -c
-                - '/usr/bin/mysql --user=root --password="$MYSQL_ROOT_PASSWORD" --execute "SHOW DATABASES;"'
+                - 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" /usr/bin/mysql --user=root --execute "SHOW DATABASES;"'
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 10

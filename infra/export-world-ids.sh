@@ -45,9 +45,11 @@ trap 'rm -rf "${WORK}"' EXIT
 
 # Two columns per row, id then name, in mysql's batch escaping (a tab, newline
 # or backslash inside a name comes back as \t, \n or \\). The JSON pass below
-# undoes exactly that.
+# undoes exactly that. The password reaches mysql as MYSQL_PWD: `-e MYSQL_PWD`
+# with no value copies it from this environment, so it is on neither docker's
+# command line here nor mysql's in the container.
 query() {
-  docker exec -i "${CONTAINER}" mysql -uroot -p"${PASSWORD}" --batch --skip-column-names \
+  MYSQL_PWD="${PASSWORD}" docker exec -i -e MYSQL_PWD "${CONTAINER}" mysql -uroot --batch --skip-column-names \
     --default-character-set=utf8mb4 acore_world -e "$2" 2>/dev/null >"${WORK}/$1.tsv"
   if [[ ! -s "${WORK}/$1.tsv" ]]; then
     echo "export-world-ids: $1 came back empty — refusing to write a bundle-shrinking export" >&2

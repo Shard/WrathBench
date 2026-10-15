@@ -75,8 +75,11 @@ services:
     networks: [wrathbench]
     restart: unless-stopped
     healthcheck:
-      # Verbatim from AzerothCore's compose; the $$ is compose escaping for $.
-      test: "/usr/bin/mysql --user=root --password=$$MYSQL_ROOT_PASSWORD --execute \"SHOW DATABASES;\""
+      # AzerothCore's compose healthcheck, with the password as MYSQL_PWD
+      # rather than `--password=` on the client's command line. Set for this
+      # command only: the image's first-boot init connects with no password,
+      # and a container-wide MYSQL_PWD would break it. $$ is compose escaping.
+      test: "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" /usr/bin/mysql --user=root --execute \"SHOW DATABASES;\""
       interval: 5s
       timeout: 10s
       retries: 40
@@ -434,8 +437,10 @@ services:
     networks: [wrathbench]
     restart: unless-stopped
     healthcheck:
-      # The image ships no curl; its own client is the probe.
-      test: ["CMD", "clickhouse-client", "--user", "${WRATHBENCH_CLICKHOUSE_USER:-wrathbench}", "--password", "${WRATHBENCH_CLICKHOUSE_PASSWORD:-wrathbench}", "--query", "SELECT 1"]
+      # The image ships no curl; its own client is the probe. It reads
+      # CLICKHOUSE_USER and CLICKHOUSE_PASSWORD from the environment above, so
+      # neither is on its command line or in the container's healthcheck config.
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 30
