@@ -608,8 +608,9 @@ its environment (`childEnv` is an allowlist, and the MCP server runs in the
 runner), so the CLI's environment snapshots cannot carry it. Keeping it out of
 those files altogether would mean redacting the tool result the model reads,
 and that would change what the model sees; it is not done. The secret
-authenticates only its own run's session, and the run's end revokes it
-(`releaseSessionSecret`).
+authenticates only its own run's session. A termination revokes it
+(`releaseSessionSecret`); a pause does not, so a paused run's copy stays valid
+until the resume re-leases the token, which rotates it.
 
 ## Watchdogs
 
