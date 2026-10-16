@@ -201,7 +201,9 @@ suffixless id, so such a preview is free only by that declaration. Free models o
 OpenRouter or OpenCode Zen share one rate-limit key per platform because those
 free tiers are pooled per upstream provider: a single sequential run per pool
 is both the polite and the effective shape — two runs on one pool just trip the
-same rate limits twice.
+same rate limits twice. OpenCode Go is billed apart from Zen on the same host,
+so every model on a Go base counts against its own key, `opencode-go`, its free
+slugs included; the base's path is what tells the two apart.
 
 #### Config reference
 
@@ -260,16 +262,21 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               `effort` also requires the parameter by default, so a backend that would silently
               drop `reasoning_effort` is skipped rather than mislabelling the matrix cell.
               OpenRouter entries ONLY: on a claude-code/codex entry, or an apiBase that is not
-              OpenRouter (Cerebras, LM Studio, OpenCode Zen), `routing` takes the whole file down
+              OpenRouter (Cerebras, LM Studio, OpenCode Zen or Go), `routing` takes the whole file down
               rather than sitting there doing nothing. The resolved routing is stamped into the
               run's comparability tuple and the provider that actually served it is recorded on
               the run (docs/METHODOLOGY.md, "Routing is pinned"). The served provider is recorded
               rather than keyed — a fact observed minutes after launch cannot be part of what a
               launch stamped — and with fallbacks off the two agree, which is what makes a
-              disagreement worth seeing. The field is absent, not null, on a run whose endpoint
-              has one backend (a CLI harness, Cerebras, LM Studio, OpenCode Zen): there is
-              nothing to record, and those runs stamp exactly as they did before the field
-              existed.
+              disagreement worth seeing. An OpenCode Go run cannot be pinned: Go picks the
+              backend behind each model and the request has no way to name one. So it stamps
+              `{ via: "OpenCode Go", allowFallbacks: true }`, unpinned and keyed apart from a
+              pinned run of the same model, and the backend that answered each call is recorded
+              from Go's response headers (`x-opencode-endpoint-id`,
+              `x-opencode-upstream-model-id`). The field is absent, not null, on a run whose
+              request has no routing to state (a CLI harness, Cerebras, LM Studio, OpenCode
+              Zen): there is nothing to record, and those runs stamp exactly as they did before
+              the field existed.
             `wiki` — whether this entry's runs get the reference wiki at all. Default true; set
               `false` and the run has no `search_reference` tool, the prompt does not name one,
               and no bundle is opened (issue #61). It is a
@@ -419,8 +426,24 @@ driver — is shown on the row, and the draft stays.
 
 Nothing calls the model first: whether a slug really answers a tool call is
 what its `t0` trial finds out. A model the catalogue does not carry — a
-claude-code or codex lane, the LAN box, Cerebras — is still added with **add a
+claude-code or codex lane, the LAN box, Cerebras, OpenCode Go — is still added with **add a
 roster entry**. The endpoints are in `runner/viewer/README.md`.
+
+An OpenCode Go model is an openai entry with `apiBase`
+`https://opencode.ai/inference/go/openai/v1` (the base Go's docs give; the
+older `https://opencode.ai/zen/go/v1` still answers and is the same surface)
+and `apiKeyEnv` `OPENCODE_KEY`, under the id Go's own listing uses
+(`https://opencode.ai/inference/go/v1/models`, no key needed). Only the
+models Go serves over chat completions can be reached this way; its Responses
+and Anthropic-messages models cannot. Go admits agents other than its own client
+on stated conditions, and the adapter meets them as itself: its own user
+agent, and `x-opencode-session` set to the run id, one value for the whole run.
+It never sends the headers that identify OpenCode's own client. Go picks
+the backend behind each model, so a Go run stamps unpinned routing and
+records the backend that answered (`routing`, above). A `-free`
+Go slug derives free; any other derives paid, which puts it under the paid
+throttle, and is priced by a `PROVIDER_PRICES` row on that exact base, since
+Go reports no per-response charge.
 
 A new model needs a price too, or its runs read no expected cost. `--status`
 lists every roster entry with none, and says which fix it needs: a paid

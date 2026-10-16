@@ -883,6 +883,27 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
     expect(key({ driver: "stub", apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).toBe("stub");
   });
 
+  test("Go's documented /inference/go path is the same surface as the older /zen/go", () => {
+    const go = "https://opencode.ai/inference/go/openai/v1";
+    expect(isOpenCodeGoBase(go)).toBe(true);
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/go/v1")).toBe(true);
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/go")).toBe(true);
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/go/openai/v1/")).toBe(true);
+    // Both spellings land in the one key, whatever the entry's billing: a free
+    // Go slug and a paid one share the surface, and the older base still does.
+    expect(key({ apiBase: go }, "free")).toBe("opencode-go");
+    expect(key({ apiBase: go }, "paid")).toBe("opencode-go");
+    expect(key({ apiBase: go }, "paid")).toBe(key({ apiBase: "https://opencode.ai/zen/go/v1" }, "paid"));
+    // The shared tier's new path is not Go, and keeps its own key.
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/openai/v1")).toBe(false);
+    expect(key({ apiBase: "https://opencode.ai/inference/openai/v1" }, "free")).toBe("opencode");
+    // A segment that merely starts with "go" is not the go segment.
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/google/v1beta")).toBe(false);
+    // The host is still matched exactly.
+    expect(isOpenCodeGoBase("https://opencode.ai.example.com/inference/go/openai/v1")).toBe(false);
+    expect(isOpenCodeGoBase("https://openrouter.ai/inference/go/openai/v1")).toBe(false);
+  });
+
   test("the go surface classifies paid by the RULE, with no billing override in play", () => {
     // cost: 0 on the wire today (free alpha preview); the entry is still paid —
     // no `-free`/`:free` suffix, not a contributor slug, not local.

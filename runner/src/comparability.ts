@@ -159,11 +159,16 @@ export const comparabilitySchema = z.object({
    * conditions, so they must not share a chart by default. Operator decision
    * 2026-09-16.
    *
-   * ABSENT, never null, for a run whose endpoint has no routing to state: a
-   * claude-code, codex, Cerebras, LM Studio or OpenCode Zen run has one
-   * backend and nothing to record. That also keeps every such run stamping
-   * byte-for-byte as it did before the field existed, so nothing already in
-   * flight restamps on resume for a fact that did not change.
+   * An OpenCode Go run stamps `{ via: "OpenCode Go", allowFallbacks: true }`
+   * (`OPENCODE_GO_ROUTING`): Go picks the backend itself and a request cannot
+   * pin one, so the run is unpinned by construction and says so, keyed apart
+   * from a pinned run of the same model elsewhere.
+   *
+   * ABSENT, never null, for a run whose request has no routing to state: a
+   * claude-code, codex, Cerebras, LM Studio or OpenCode Zen run. That also
+   * keeps every such run stamping byte-for-byte as it did before the field
+   * existed, so nothing already in flight restamps on resume for a fact that
+   * did not change.
    */
   routing: routingSchema.optional(),
   /**
