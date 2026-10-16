@@ -359,9 +359,10 @@ print_keep_paused_next() {
 # `server`, and what the Fleet page's banner prints verbatim. Written through
 # the runner pod for the same reason as every other PVC read.
 #
-# No lock is held across the window. The supervisor writes `running` over a
-# window phase only when server-state.lock is free, and the fleet is at 0 for
-# the whole window, so no supervisor is there to do it. An flock taken inside a
+# No lock is held across the window. The supervisor writes `running` over any
+# window phase it finds on file, and the fleet is at 0 for the whole window,
+# so no supervisor is there to do it. The phases written here are exactly the
+# viewer's (infra/deploy-phases.test.ts). An flock taken inside a
 # `kubectl exec` dies with the exec, so a lock held across this script would be
 # a lie; it is deliberately not faked. The mutual exclusion that matters is
 # that Flux owns the image tag, so exactly one thing can change what is

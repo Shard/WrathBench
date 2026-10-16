@@ -1409,20 +1409,17 @@ export interface FleetOutstandingView {
  * The worldserver's deploy-window phase, as `infra/k8s-deploy.sh`
  * writes it to `data/runs/server-state.json` at each transition. `running`
  * is the rest state (and the answer when the file is absent); the four
- * window phases mean a deploy holds the server right now; `rolled-back` and
- * `failed` are verdicts that stay up until the supervisor next boots. The
- * detail is the script's own sentence — the page prints it, never guesses.
- * `swapping` and `rolled-back` were the retired compose deploy window's; the
- * cluster window never writes them.
+ * window phases mean a deploy holds the server right now; `failed` is a
+ * verdict that stays up until the supervisor next boots. The detail is the
+ * script's own sentence — the page prints it, never guesses. These are exactly
+ * the phases the script writes; `infra/deploy-phases.test.ts` holds them to it.
  */
 export interface FleetServerView {
-  phase: "running" | "draining" | "swapping" | "verifying" | "resuming" | "rolled-back" | "failed";
+  phase: "running" | "draining" | "waiting" | "verifying" | "resuming" | "failed";
   /** When the window opened (or the phase was reclaimed as running). */
   since: number;
   /** The build being deployed (or, at rest, the one last deployed); "" when unknown. */
   build: string;
-  /** The build a failed deploy rolled back to, when there was one. */
-  prevBuild?: string;
   detail: string;
   updatedAt: number;
 }

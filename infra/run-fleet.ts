@@ -162,7 +162,6 @@ import {
 } from "./run-fleet-plan";
 import {
   CONTAINER,
-  deployLockFree,
   type FleetState,
   hasLiveChild,
   rosterEpisodeInFlight,
@@ -616,10 +615,11 @@ function writeState(
 
 /**
  * Write `running` over a phase the deploy script left behind. On boot any
- * phase goes (a `rolled-back` or `failed` notice has been on the page until
- * now; the restart is the operator's acknowledgement); on a tick only a WINDOW
- * phase goes, because those claim a deploy is in progress and, with the lock
- * free, none is — while a terminal verdict stays up until the next boot.
+ * phase goes (a `failed` notice has been on the page until now; the restart is
+ * the operator's acknowledgement); on a tick only a WINDOW phase goes, because
+ * those claim a deploy is in progress and, with this supervisor up, none is:
+ * infra/k8s-deploy.sh keeps the fleet at 0 for its whole window. A terminal
+ * verdict stays up until the next boot.
  */
 function reclaimServerState(where: "boot" | "tick"): void {
   if (!existsSync(SERVER_STATE_PATH)) return;
@@ -631,14 +631,12 @@ function reclaimServerState(where: "boot" | "tick"): void {
   }
   if (prev.phase === "running") return;
   if (where === "tick" && !WINDOW_PHASES.has(prev.phase)) return;
-  if (!deployLockFree()) return;
   const next: ServerState = {
     phase: "running",
     since: Date.now(),
     build: prev.build ?? "",
-    ...(prev.prevBuild !== undefined ? { prevBuild: prev.prevBuild } : {}),
     detail:
-      `supervisor ${where === "boot" ? "started" : "ticked"} with the phase "${prev.phase}" on file and no deploy holding the lock` +
+      `supervisor ${where === "boot" ? "started" : "ticked"} with the phase "${prev.phase}" on file` +
       (WINDOW_PHASES.has(prev.phase) ? " (that deploy did not finish)" : "") +
       ` — was: ${prev.detail}`,
     updatedAt: Date.now(),

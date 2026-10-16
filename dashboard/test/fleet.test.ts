@@ -238,7 +238,7 @@ describe("the row order", () => {
     // paused-deploy, paused, idle, exited. A deploy window is open so that
     // paused-deploy and exited can both be on the table at once.
     const f = fleet({
-      server: { ...REST, phase: "swapping" },
+      server: { ...REST, phase: "waiting" },
       jobs: [
         job({ name: "j-zz", account: "ZZ" }),
         job({ name: "j-aa", account: "AA" }),
@@ -366,7 +366,7 @@ describe("the deploy window (server-state.json)", () => {
       text: `Deploy window since ${hhmm} — stopping the fleet for harness-0.4-52, runs are pausing: ${d}`,
       tone: "info",
     });
-    expect(serverBanner(server({ phase: "swapping", detail: d }))).toEqual({
+    expect(serverBanner(server({ phase: "waiting", detail: d }))).toEqual({
       text: `Deploy window since ${hhmm} — swapping the worldserver to harness-0.4-52: ${d}`,
       tone: "info",
     });
@@ -380,32 +380,32 @@ describe("the deploy window (server-state.json)", () => {
     });
   });
 
-  test("a verdict is red and names the builds; an unnamed build is said to be unnamed", () => {
-    expect(serverBanner(server({ phase: "rolled-back", prevBuild: "harness-0.4-3", detail: "gate smoke failed" }))).toEqual({
-      text: `Deploy of harness-0.4-52 FAILED at ${hhmm} and was rolled back to harness-0.4-3: gate smoke failed`,
+  test("a verdict is red and names the build; an unnamed build is said to be unnamed", () => {
+    expect(serverBanner(server({ phase: "failed", detail: "gate smoke failed" }))).toEqual({
+      text: `Deploy of harness-0.4-52 FAILED at ${hhmm}: gate smoke failed`,
       tone: "bad",
     });
-    expect(serverBanner(server({ phase: "failed", build: "", detail: "no :prev" }))).toEqual({
-      text: `Deploy of an unnamed build FAILED at ${hhmm}: no :prev`,
+    expect(serverBanner(server({ phase: "failed", build: "", detail: "gate smoke failed" }))).toEqual({
+      text: `Deploy of an unnamed build FAILED at ${hhmm}: gate smoke failed`,
       tone: "bad",
     });
   });
 
   test("only the four window phases open the window; verdicts do not", () => {
-    for (const phase of ["draining", "swapping", "verifying", "resuming"] as const) expect(deployWindowOpen({ phase })).toBe(true);
-    for (const phase of ["running", "rolled-back", "failed"] as const) expect(deployWindowOpen({ phase })).toBe(false);
+    for (const phase of ["draining", "waiting", "verifying", "resuming"] as const) expect(deployWindowOpen({ phase })).toBe(true);
+    for (const phase of ["running", "failed"] as const) expect(deployWindowOpen({ phase })).toBe(false);
   });
 
   test("a job whose process is gone and whose run is not held reads 'paused for deploy' inside the window, 'exited' outside it", () => {
     const gone = job({ alive: false, runId: null, model: null, exitCode: 0 });
     const jobRow = (f: FleetResponse): FleetRow => fleetRows(f, []).find((r) => r.job !== null)!;
-    const inWindow = jobRow(fleet({ server: server({ phase: "swapping" }), jobs: [gone] }));
+    const inWindow = jobRow(fleet({ server: server({ phase: "waiting" }), jobs: [gone] }));
     expect(inWindow.state).toBe("paused-deploy");
     expect(rowStateLabel(inWindow.state)).toBe("paused for deploy");
     expect(inWindow.note).toContain("resumes it when the fleet starts");
     expect(jobRow(fleet({ jobs: [gone] })).state).toBe("exited");
     // A gone process still holding a run is not a paused run, whatever the phase.
-    expect(jobRow(fleet({ server: server({ phase: "swapping" }), jobs: [job({ alive: false })] })).state).toBe("exited");
+    expect(jobRow(fleet({ server: server({ phase: "waiting" }), jobs: [job({ alive: false })] })).state).toBe("exited");
     expect(rowStateLabel("running")).toBe("running");
   });
 });

@@ -65,7 +65,7 @@ describe("serviceStatus", () => {
   });
 
   test("a deploy window is yellow with the phase word; once the fleet's heartbeat is gone it is paused for deploy", () => {
-    for (const phase of ["draining", "swapping", "verifying", "resuming"] as const) {
+    for (const phase of ["draining", "waiting", "verifying", "resuming"] as const) {
       expect(status(fleet({ server: server({ phase }) }))).toEqual({ tone: "yellow", word: phase });
       expect(status(fleet({ server: server({ phase }), heartbeatAt: 0 }))).toEqual({ tone: "yellow", word: "paused for deploy" });
     }
@@ -73,7 +73,7 @@ describe("serviceStatus", () => {
 
   test("a deploy verdict is red and outranks the heartbeat", () => {
     expect(status(fleet({ server: server({ phase: "failed" }) }))).toEqual({ tone: "red", word: "failed" });
-    expect(status(fleet({ server: server({ phase: "rolled-back" }) }))).toEqual({ tone: "red", word: "rolled back" });
+    expect(status(fleet({ server: server({ phase: "failed" }), heartbeatAt: 0 }))).toEqual({ tone: "red", word: "failed" });
   });
 
   /*

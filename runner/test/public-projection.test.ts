@@ -1372,7 +1372,6 @@ describe("projectFleet", () => {
         phase: "verifying",
         since: 1,
         build: "harness-0.5-2",
-        prevBuild: "harness-0.5-1",
         detail: "gate smoke x (1 of 2)",
         updatedAt: 2,
       }),
@@ -1444,7 +1443,7 @@ describe("projectFleet", () => {
       allow([
         "present",
         "server",
-        ...under("server", ["phase", "since", "build", "prevBuild", "detail", "updatedAt"]),
+        ...under("server", ["phase", "since", "build", "detail", "updatedAt"]),
         "startedAt",
         "heartbeatAt",
         "containerized",

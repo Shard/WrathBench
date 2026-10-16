@@ -34,6 +34,7 @@ import {
 } from "./run-fleet-plan";
 import { type DeferEntry, deferSidecarPath, parseDefers } from "./run-roster";
 import { type Campaign } from "../runner/src/campaigns";
+import type { FleetServerView } from "../runner/viewer/api-types";
 import { IMAGE_RECORD_FILE } from "./run-pod";
 import {
   type ModelsSidecar,
@@ -57,7 +58,6 @@ export const STATE_PATH = join(RUNS_DIR, "fleet-state.json");
  * what clears it. The cluster window holds no lock; it keeps the fleet at 0.
  */
 export const SERVER_STATE_PATH = join(RUNS_DIR, "server-state.json");
-export const SERVER_STATE_LOCK = join(RUNS_DIR, "server-state.lock");
 export const PAUSE_PATH = join(RUNS_DIR, "fleet-pause.json");
 /** Terminated runs' facts, kept across restarts (`runFactCache`); safe to delete, which costs one cold read. */
 export const RUN_FACTS_CACHE = join(RUNS_DIR, "run-facts.cache.json");
@@ -425,28 +425,18 @@ export function stateJobFacts(
 
 // ------------------------------------------------------------ server state
 
-/** The phases the deploy script writes while it holds the lock; `running` is the rest state. */
-export type ServerPhase = "running" | "draining" | "swapping" | "verifying" | "resuming" | "rolled-back" | "failed";
-/** Phases that mean a deploy is in progress RIGHT NOW — meaningless once nothing holds the lock. */
-export const WINDOW_PHASES: ReadonlySet<string> = new Set(["draining", "swapping", "verifying", "resuming"]);
+/** The phases infra/k8s-deploy.sh writes; `running` is the rest state, `failed` a verdict. */
+export type ServerPhase = FleetServerView["phase"];
+/** Phases that mean a deploy is in progress RIGHT NOW: the window keeps the fleet at 0, so a supervisor that finds one is looking at a window that died. */
+export const WINDOW_PHASES: ReadonlySet<ServerPhase> = new Set<ServerPhase>(["draining", "waiting", "verifying", "resuming"]);
 
 export interface ServerState {
   phase: ServerPhase;
   since: number;
   build: string;
-  prevBuild?: string;
   detail: string;
   pid?: number;
   updatedAt: number;
-}
-
-/** True when no deploy holds the lock (flock -n succeeds). Unknown is "held": never clear what might be live. */
-export function deployLockFree(): boolean {
-  try {
-    return Bun.spawnSync(["flock", "-n", SERVER_STATE_LOCK, "true"]).exitCode === 0;
-  } catch {
-    return false;
-  }
 }
 
 export function lastLaunchedRunId(stdoutLog: string): string | undefined {

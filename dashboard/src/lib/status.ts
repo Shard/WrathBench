@@ -45,7 +45,7 @@ export interface StatusInput {
  *                                        fetch would freeze the badge on its last word)
  *   3 nothing has arrived yet          — grey "loading"
  *   4 the fleet has never run here     — red "down"
- *   5 a deploy verdict stands          — red "failed" / "rolled back"
+ *   5 a deploy verdict stands          — red "failed"
  *   6 a deploy window is open          — yellow with the phase word; "paused for
  *                                        deploy" once the fleet's heartbeat is gone,
  *                                        which is the window's doing, not a fault
@@ -71,7 +71,6 @@ export function serviceStatus(input: StatusInput): ServiceStatus {
   if (f === undefined) return { tone: "grey", word: "loading" };
   if (!f.present) return { tone: "red", word: "down" };
   if (f.server.phase === "failed") return { tone: "red", word: "failed" };
-  if (f.server.phase === "rolled-back") return { tone: "red", word: "rolled back" };
   const alive = supervisorAlive(f);
   if (deployWindowOpen(f.server)) return { tone: "yellow", word: alive ? f.server.phase : "paused for deploy" };
   if (f.heartbeatAt === undefined) return { tone: "red", word: "down" };
