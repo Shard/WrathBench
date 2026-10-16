@@ -13,6 +13,13 @@ path — no deploy window, no update script, no rollback. A compose stack is
 brought up, used and brought down; the release and update procedures below
 are the cluster's.
 
+The operator commands below are `bun wb <group> <command>`, run from the
+repository root (`infra/wb.ts`). `bun wb` lists them, and `bun wb <group>`
+shows the script each one runs and where. A command that reads the data
+volume runs in the runner pod, the rest run on your machine, and the
+arguments after the command go to the script untouched. `bun wb --local …`
+targets the quickstart stack instead, where a command has a compose form.
+
 ## Running the fleet as a service
 
 The fleet supervisor (`infra/run-fleet.ts`) is a long-lived service — a
@@ -26,7 +33,8 @@ re-read every 60 seconds, the same drain on SIGTERM — with the Deployment
 scaled 0/1 where compose stops and starts a service. Read every
 `docker compose` line below as the quickstart stack's; on the cluster the
 equivalent is a `kubectl scale` or `kubectl rollout restart` of that
-Deployment, and `./infra/fleet-update.sh` speaks only kubectl.
+Deployment, and the update verbs, `bun wb fleet graceful|force|drain|resume|state`
+(`infra/fleet-update.sh`), speak only kubectl.
 
 ### Start it
 
@@ -44,15 +52,18 @@ against the same config; naming the service is what activates it.
 ### Watch it
 
 ```
-docker compose -f infra/compose.yml logs -f fleet     # supervisor stdout
-./infra/run-fleet.sh --status                          # host, read-only
-tail -f data/runs/fleet-<job>-<stamp>.log              # one job's roster stdout
+bun wb fleet status                                     # read-only report
+kubectl -n wrathbench logs -f deploy/wrathbench-fleet   # supervisor stdout
+kubectl -n wrathbench exec deploy/wrathbench-runner -- tail -f data/runs/fleet-<job>-<stamp>.log   # one job's roster stdout
+docker compose -f infra/compose.yml logs -f fleet       # supervisor stdout, quickstart
 ```
 
-`--status` works from the host even though the supervisor is in a container: it
-reads `data/runs/fleet-state.json`, and liveness comes from a heartbeat the
-supervisor refreshes each tick, not from a pid probe that would mean nothing
-across the namespace. A supervisor that has been gone for more than three ticks
+`--status` reads `data/runs/fleet-state.json` on the data volume, which is
+why `bun wb fleet status` runs it in the runner pod: run on a workstation,
+`infra/run-fleet.sh --status` reads that machine's own `data/`, which on a
+cluster deployment is empty. Liveness comes from a heartbeat the supervisor
+refreshes each tick, not from a pid probe that would mean nothing across
+pods. A supervisor that has been gone for more than three ticks
 reports `NOT RUNNING`. Finished runs get no rows there: the run directories and
 `fleet-<stamp>.jsonl` are the record.
 
@@ -108,18 +119,20 @@ rename is those values and nothing else; elsewhere they are
 `WRATHBENCH_VIEWER_ALLOWED_HOSTS`. Any other name gets a 421.
 
 ```
-# the CLI — for a pod, a script, or a viewer that is not up
-bun runner/src/config-store.ts seed infra/fleet.example.json   # once, on a fresh deployment (--force replaces)
-bun runner/src/config-store.ts get roster/sonnet
-bun runner/src/config-store.ts patch roster/sonnet '{"tier":"t2"}' --actor operator --note "promote"
-bun runner/src/config-store.ts audit 20
-bun runner/src/config-store.ts export /tmp/fleet.json           # to read or diff; never to commit
+# the CLI — for a script, or a viewer that is not up
+bun wb config seed                     # once, on a fresh deployment: infra/fleet.example.json (--force replaces)
+bun wb config get roster/sonnet
+bun wb config patch roster/sonnet '{"tier":"t2"}' --actor operator --note "promote"
+bun wb config audit 20
+bun wb config export > /tmp/fleet.json # to read or diff; never to commit
 ```
 
-On a cluster the store is on the PVC, so the CLI runs through the runner pod
-(`kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts …`)
-the same way `fleet-state.json` is read; `infra/k8s-deploy.sh` reads the
-`preflight` block that way too (`get preflight`). The
+The store is on the PVC, so `bun wb config` runs `runner/src/config-store.ts`
+in the runner pod (`kubectl -n wrathbench exec deploy/wrathbench-runner -- bun
+runner/src/config-store.ts …`), the same way `fleet-state.json` is read;
+`infra/k8s-deploy.sh` reads the `preflight` block that way too (`get
+preflight`). A file argument is a path inside the pod, so an export goes to
+stdout and is redirected on your side. The
 endpoints behind the page are the
 same operations over HTTP and are documented in `runner/viewer/README.md`;
 they are operator-only and are not mounted at all when the viewer is in public
@@ -164,8 +177,7 @@ otherwise on whichever pool account is free.
   that can never be satisfied (a dead endpoint) therefore costs its remainder
   once per boot or flip, and never loops.
 - A malformed edit is complained about and ignored; the last good config keeps
-  running. Check it first if you like:
-  `docker compose -f infra/compose.yml run --rm --no-deps fleet bun infra/run-fleet.ts --dry-run`
+  running. Check it first if you like, with `bun wb fleet dry-run`
   (the store validates every write, so a rejected config is rare: a shape the
   running code does not read, or a store it could not open).
 - While the config is rejected, **every `enabled` flag in it is inert** — including
@@ -412,7 +424,7 @@ roster entry**. The endpoints are in `runner/viewer/README.md`.
 
 A new model needs a price too, or its runs read no expected cost. `--status`
 lists every roster entry with none, and says which fix it needs: a paid
-OpenRouter or codex model is priced by `bun infra/sync-prices.ts`, a new Claude
+OpenRouter or codex model is priced by `bun wb data prices`, a new Claude
 model by a dated row in `CLAUDE_PRICES`, a non-OpenRouter provider by one in
 `PROVIDER_PRICES` (both in `runner/viewer/pricing.ts`). The price file ships in
 the image, so either way the price reaches the viewer with the next release.
@@ -453,12 +465,13 @@ in `data/runs/` is what matters and it is on the bind mount.
 
 ### Updating the live fleet
 
-This is the cluster's procedure. `infra/fleet-update.sh` and the deploy window,
-`infra/k8s-deploy.sh`, speak only kubectl; a quickstart compose stack has no
+This is the cluster's procedure. The fleet's update verbs (`bun wb fleet
+graceful|force|drain|resume|state`, `infra/fleet-update.sh`) and the deploy
+window, `bun wb release deploy` (`infra/k8s-deploy.sh`), speak only kubectl; a quickstart compose stack has no
 update path beyond `up -d --build`, which recreates what changed under
 whatever is running. On the cluster the repo is baked into the runner image
 rather than bind-mounted, so every code row of the table below lands with a
-release (a new image tag, `infra/k8s-release.sh`); the config store and the
+release (a new image tag, `bun wb release run`); the config store and the
 wiki bundle live on the data volume and need none.
 
 Everything that changes the harness reaches the running fleet one of three
@@ -481,9 +494,9 @@ reboot. Resumes do not care: the run id is read off disk.
 #### Graceful — nobody's run is interrupted
 
 ```
-./infra/fleet-update.sh graceful            # the whole thing
-./infra/fleet-update.sh graceful --dry-run  # the plan and every resolved value; safe while runs are live
-./infra/fleet-update.sh status              # the switch, the heartbeat, the live jobs
+bun wb fleet graceful             # the whole thing
+bun wb fleet graceful --dry-run   # the plan and every resolved value; safe while runs are live
+bun wb fleet state                # the switch, the heartbeat, the live jobs
 ```
 
 It sets the **pause switch**, waits for every run a recreate would *cost* to end
@@ -550,7 +563,7 @@ supervisor's frozen rows both keep waiting rather than recreating over live
 episodes.
 
 Ctrl-C during the wait is safe: no scored run has been signalled, the switch stays
-set, and `./infra/fleet-update.sh resume` puts the fleet back to work — which
+set, and `bun wb fleet resume` puts the fleet back to work — which
 the script says, loudly, on the way out. An aborted window that looked like
 nothing happened is how a fleet ends up scheduling nothing until somebody
 notices.
@@ -574,7 +587,7 @@ so it is the fallback and never the recipe.
 #### Forceful — now, and it costs the live runs
 
 ```
-./infra/fleet-update.sh force               # asks for confirmation; --yes to skip
+bun wb fleet force                # asks for confirmation; --yes to skip
 kubectl -n wrathbench rollout restart deployment/wrathbench-fleet   # the same thing by hand
 ```
 
@@ -609,12 +622,12 @@ that one stops the container instead. A supervisor that does not come back
 leaves the switch set, exactly as on the graceful path.
 
 `fleet-update.sh` does not build or pin an image for you: new code reaches the
-fleet pod through a release (`infra/k8s-release.sh`), whose drain and resume
+fleet pod through a release (`bun wb release run`), whose drain and resume
 phases are this script's.
 
 #### The worldserver
 
-`./infra/k8s-deploy.sh` owns its own window and is the **forceful**
+`bun wb release deploy` (`infra/k8s-deploy.sh`) owns its own window and is the **forceful**
 path by design: its `draining` phase scales the fleet to 0, so every live run
 pauses and a scored one spends its attempt, exactly as above. That is the
 documented trade — the script needs nothing from you while it runs, and a
@@ -623,9 +636,9 @@ deploy must never depend on an operator watching a wait loop.
 For the graceful version, drain first and hand the script a quiet fleet:
 
 ```
-./infra/fleet-update.sh drain      # pause, wait for quiet, scale the fleet to 0; switch stays set
-./infra/k8s-deploy.sh              # its own drain finds nothing live; it scales the fleet back
-./infra/fleet-update.sh resume     # clear the switch; the pool fills on the next tick
+bun wb fleet drain        # pause, wait for quiet, scale the fleet to 0; switch stays set
+bun wb release deploy     # its own drain finds nothing live; it scales the fleet back
+bun wb fleet resume       # clear the switch; the pool fills on the next tick
 ```
 
 The deploy still brings the fleet up on every exit path — that invariant is
@@ -670,7 +683,7 @@ account and character go back, and the policy schedules a fresh attempt on the
 tick after. Three counted failures on one (model, episode, series) and the
 model is **tainted** for that episode: `--status` says so and the model is
 blocked — not "free", so
-it takes no idle work either — until `run-fleet.sh --clear-model <name>`. A
+it takes no idle work either — until `bun wb fleet clear-model <name>`. A
 fleet stop (`manual`) and an offline gap (`stale`) do not count toward those
 three: they are the harness's doing. Do not confuse this taint with the
 roster's own `tainted` in a job's defer sidecar, which is one process backing
@@ -715,7 +728,7 @@ with why:
 
 - **not in config** — the model or episode is gone from the fleet config (or the
   pinned job is disabled, or on another account). Resume it by hand
-  (`infra/run-episode.sh --resume <run id>` on its account) or archive it.
+  (`bun wb run episode --resume <run id>`, on its account) or archive it.
 - **cooling** — a pause on the roster's defer ladder (every reason but
   `operator-pause` and `offline`), indexed by the run's pause streak: its
   ladder pauses since its last segment that made a turn, so a segment that
@@ -912,19 +925,19 @@ sharing the node when one fills.
 ### Deploy window (worldserver changes)
 
 A worldserver change reaches the cluster in a release, and `infra/k8s-deploy.sh`
-is the only deploy window. There is none for compose: a quickstart stack takes
+(`bun wb release deploy`) is the only deploy window. There is none for compose: a quickstart stack takes
 a new worldserver with `docker compose --env-file .env -f infra/compose.yml up
 -d --build`, which recreates it under whatever is running and verifies nothing.
 
 #### On the cluster
 
 ```
-./infra/build-images.sh --push                 # every image, tagged `git describe`
-./infra/k8s-release.sh                         # the whole release, start to finish
-./infra/k8s-release.sh --dry-run
-./infra/k8s-release.sh --pin-hook ~/bin/place-wrathbench-pin
-./infra/k8s-release.sh --from pin              # restart at a phase
-./infra/k8s-deploy.sh                          # the deploy window alone
+bun wb release build --push                    # every image, tagged `git describe` (infra/build-images.sh)
+bun wb release run                             # the whole release, start to finish (infra/k8s-release.sh)
+bun wb release run --dry-run
+bun wb release run --pin-hook <your pin hook>
+bun wb release run --from pin                  # restart at a phase
+bun wb release deploy                          # the deploy window alone (infra/k8s-deploy.sh)
 ```
 
 `infra/README.md`, "Releasing on Kubernetes", has the phases, the pin hook,
@@ -956,7 +969,7 @@ container), and its startup probe passes only on a `200` from the module's
 or MySQL restarted during the load (module/PROTOCOL.md, `GET /health`). Such a
 pod is restarted when the startup budget runs out (`worldserver.startupProbe`,
 15 minutes), so a deploy window waiting on it fails first, at "the worldserver
-rollout did not complete". `./infra/module-health.sh` prints the counts and
+rollout did not complete". `bun wb server health` prints the counts and
 `dbRestarted`; `kubectl -n wrathbench delete pod -l
 app.kubernetes.io/component=worldserver` restarts it now instead.
 
@@ -969,11 +982,11 @@ sandbox's confinement, passes them untested. The default resume phase would
 then put every paused run straight onto that build. Release such a change held:
 
 ```
-./infra/k8s-release.sh --pin-hook ~/bin/place-wrathbench-pin --keep-paused
-./infra/run-episode.sh --k8s --account PROBE --driver claude-code --model <id> --max-tool-calls 20
-./infra/run-episode.sh --k8s --account PROBE --driver codex --model <id> --max-tool-calls 20
-./infra/run-episode.sh --k8s --account PROBE --driver openai --model <id> --max-turns 5
-./infra/fleet-update.sh resume
+bun wb release run --pin-hook <your pin hook> --keep-paused
+bun wb run episode --account PROBE --driver claude-code --model <id> --max-tool-calls 20
+bun wb run episode --account PROBE --driver codex --model <id> --max-tool-calls 20
+bun wb run episode --account PROBE --driver openai --model <id> --max-turns 5
+bun wb fleet resume
 ```
 
 `--keep-paused` reaches `k8s-deploy.sh`, which sets the pause switch before its
@@ -987,7 +1000,7 @@ subscription lane. The CLI drivers have no turn limit, so `--max-tool-calls`
 bounds them. Read each trajectory as far as a logged-in CLI and a snippet that
 reached the module. A run that hits its limit costs the model nothing, but one
 that dies before the model answers, or on an adapter error, is a rung on that
-model's cooling ladder, and `run-fleet.sh --clear-model` forgives it. Only then run `fleet-update.sh resume`. Keep the window short,
+model's cooling ladder, and `bun wb fleet clear-model` forgives it. Only then run `bun wb fleet resume`. Keep the window short,
 because a provider-paused run is not resumed while the switch is set and can go
 stale, which counts (see "Graceful" above). If a smoke fails, nothing scheduled
 has run on that build: revert the pin, and resume once a build passes.
@@ -1053,16 +1066,16 @@ Then:
    runner past its 60s backstop), or the named pod, then run the window again.
 2. **The worldserver never answered ready.** The rollout or the module is the
    problem: `kubectl -n wrathbench logs deploy/wrathbench-worldserver` and
-   `./infra/module-health.sh`. Revert the pin if the build is at fault.
+   `bun wb server health`. Revert the pin if the build is at fault.
 3. **A smoke failed on the new build.** The fleet is up and gated shut, so
    nothing has spawned on that build. Revert the pin and let Flux roll the
    worldserver back; the gate re-runs on the new server identity and unblocks
    the fleet once the old build passes. If the old build fails too, the
    failure is not in the build (auth, the database, the smoke accounts, the
    runner image). Run a smoke by hand and read its output:
-   `kubectl -n wrathbench exec deploy/wrathbench-runner -- bun infra/smoke/preflight.ts`
-   logs in as PROBE, and `-- env MODULE_ACCOUNT=SMOKE bun …` reproduces the
-   gate's account.
+   `bun wb smoke preflight` logs in as PROBE. The gate's own account needs
+   the variable set in the pod, which is the kubectl form,
+   `kubectl -n wrathbench exec deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE bun infra/smoke/preflight.ts`.
 4. **The fleet did not scale back up.** The one case with a command for you:
    `kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=1`.
 
@@ -1123,8 +1136,8 @@ or a rollback unblocks the fleet with no operator action. Drains still work
 while the gate is shut. `timeoutMs` is the budget for the whole gate — every
 child gets the same deadline — sized for the slowest legitimate login (the
 module bounds a create that reclaims a stale session at 20s), not for the
-smoke's usual run. `./infra/run-fleet.sh --status` shows the last gate result,
-per script; `--dry-run` shows the plan.
+smoke's usual run. `bun wb fleet status` shows the last gate result,
+per script; `bun wb fleet dry-run` shows the plan.
 
 **Gate accounts.** Every account a smoke is bound to must exist in auth and be
 in the module's allowlist — `worldserver.accounts` in the chart's values
@@ -1187,9 +1200,9 @@ Everything it decides is derived from `data/runs/` each tick; nothing is
 stored except an operator's clear.
 
 ```
-./infra/run-fleet.sh --status      # models table: status, counted/target per episode, why (not) schedulable
-./infra/run-fleet.sh --dry-run     # the picks the policy would make for the free accounts right now
-./infra/run-fleet.sh --clear-model <roster-name>    # forgive a retired/cooling model; picked up on the next tick
+bun wb fleet status                       # models table: status, counted/target per episode, why (not) schedulable
+bun wb fleet dry-run                      # the picks the policy would make for the free accounts right now
+bun wb fleet clear-model <roster-name>    # forgive a retired/cooling model; picked up on the next tick
 ```
 
 Both read what is running as the supervisor does: a job whose process is
@@ -1240,14 +1253,15 @@ runs each owes per square. `/campaigns` lists every published version;
 3. Publish it from a checkout that has the commit:
 
 ```
-bun runner/src/campaign-publish.ts runner/campaigns/<id>@<version>.json --k8s --actor <you> --note "<why>"
-bun runner/src/campaign-publish.ts runner/campaigns/<id>@<version>.json --dry-run   # check and print, write nothing
+bun wb campaign publish runner/campaigns/<id>@<version>.json --actor <you> --note "<why>"
+bun wb campaign publish runner/campaigns/<id>@<version>.json --dry-run   # check and print, write nothing
 ```
 
-The CLI fetches origin, refuses a file that is untracked or modified or whose
+The CLI (`runner/src/campaign-publish.ts --k8s`) runs on your machine, where
+git is. It fetches origin, refuses a file that is untracked or modified or whose
 last commit no origin branch holds, and pipes the publication into the runner
-pod's store (`config-store.ts publish -`; without `--k8s` it writes the local
-store). Publishing the same definition again is a no-op; publishing a
+pod's store (`config-store.ts publish -`; under `bun wb --local` it writes the
+local store). Publishing the same definition again is a no-op; publishing a
 different one under a published `id@version` is refused. Which commits may
 publish is `PUBLISH_RULE` in `campaign-publish.ts`: any origin branch today,
 `origin-master` to tighten it.
@@ -1265,8 +1279,8 @@ The CLI validates every write against the whole config, as the `/config` page
 does:
 
 ```
-kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts \
-  set campaigns/race-probe '{"version":1,"enabled":true,"assignments":[{"model":"codex-sol-61","runsPerCell":1}]}' \
+bun wb config set campaigns/race-probe \
+  '{"version":1,"enabled":true,"assignments":[{"model":"codex-sol-61","runsPerCell":1}]}' \
   --actor <you> --note "race-probe@1: sol-61 x1"
 ```
 
@@ -1301,12 +1315,12 @@ used before: Valley of Trials, Deathknell, Camp Narache, Sunstrider Isle and
 Ammen Vale. It runs on `PROBE`, never a pool account.
 
 ```
-kubectl -n wrathbench exec deploy/wrathbench-runner -- bun infra/smoke/race-probe-starts.ts
+bun wb smoke race-probe-starts
 ```
 
 **A hand launch** names the square and nothing that sets its shape.
 `run-episode.sh` writes the run's `campaign.json` from the published
-definition (in the runner pod with `--k8s`) and launches `run.ts` with
+definition (in the runner pod, where `bun wb run episode` sends it) and launches `run.ts` with
 `--campaign-file`; the runner refuses `--episode probing` without one, and
 with one it refuses `--objective`, `--race`/`--class`,
 `--wiki-coords`/`--wiki`, `--max-tool-calls` and the watchdog flags. `--arm`
@@ -1314,7 +1328,7 @@ may be left out when the definition has one arm; an arm that pins an image or
 a command cannot be hand-launched.
 
 ```
-./infra/run-episode.sh --k8s --model <id> --campaign class-probe@2 --cell dwarf-paladin
+bun wb run episode --model <id> --campaign class-probe@2 --cell dwarf-paladin
 ```
 
 ### Run pods
@@ -1330,9 +1344,8 @@ stay child processes until a campaign has proven the launcher.
 **The switch.** `policy.runPods` in the config store, `"off"` by default:
 
 ```
-R="kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts"
-$R patch policy '{"runPods":"probes"}' --actor <you> --note "run pods on for probes"
-$R patch policy '{"runPods":"off"}'    --actor <you> --note "run pods off"
+bun wb config patch policy '{"runPods":"probes"}' --actor <you> --note "run pods on for probes"
+bun wb config patch policy '{"runPods":"off"}'    --actor <you> --note "run pods off"
 ```
 
 It reaches a job at its next roster spawn (the supervisor hands it to
@@ -1387,7 +1400,7 @@ scan), asking the API only of a roster it spawned with `--run-pods`, where a
 `infra/k8s-deploy.sh` waits for zero run pods after the fleet pod is
 gone and before the worldserver is touched, and fails the window closed naming
 the run if one outlives the budget — or if the pods cannot be listed for that
-long, because a failed read is not an empty one; `infra/fleet-update.sh status`
+long, because a failed read is not an empty one; `bun wb fleet state`
 lists them.
 A pod that will not pull (`ImagePullBackOff`), cannot be scheduled for five
 minutes, stays Pending for fifteen, or is evicted ends the attempt as
@@ -1439,21 +1452,24 @@ take minutes; the account is held through it by `image.json` and the heartbeat.
 
 ### Ad-hoc launches still work
 
-Nothing about the host path changed. One episode:
+One episode, launched in the runner pod (`bun wb --local run episode`: in the
+quickstart's runner container):
 
 ```
-./infra/run-episode.sh --model <id> [--driver openai|claude-code|codex]
+bun wb run episode --model <id> [--driver openai|claude-code|codex]
 ```
 
-One roster, or a whole fleet, from the host:
+One roster, or a whole supervisor, by hand:
 
 ```
 ./infra/run-roster.sh <roster.json> --until 07:30
 ./infra/run-fleet.sh --until 18:00
 ```
 
-Do not run a host supervisor against the same config store while the `fleet`
-service is up: they would both spawn jobs on the same accounts.
+Both read the config store and `data/runs/` of the machine they run on, so
+on a cluster deployment they have nothing to read on a workstation. Do not
+run a second supervisor against the same config store while the fleet is up:
+they would both spawn jobs on the same accounts.
 
 ### Archiving runs
 
@@ -1624,8 +1640,9 @@ shorter than 32 characters — refuses to listen at all and says so at ERROR in
   on every `up` (`infra/README.md`). An `up` without it ships an empty secret
   and the module refuses to listen — the loud failure, by design. An
   operator's loopback probe inside the container needs the header too, and
-  the image has neither curl nor wget: on the cluster `./infra/module-health.sh`
-  does it with perl and prints the full census (`sessions`, drops by opcode).
+  the image has neither curl nor wget: on the cluster `bun wb server health`
+  (`infra/module-health.sh`) does it with perl and prints the full census
+  (`sessions`, drops by opcode).
   A probe from anywhere else — the runner container included — gets liveness
   with the counters zeroed.
 
@@ -1674,7 +1691,7 @@ dropped connection does not fail fast: it hangs until its own timeout. So turn
 the policies on with the fleet quiet, and check the result before resuming:
 
 ```
-./infra/fleet-update.sh drain        # switch set, every run parked, fleet at 0
+bun wb fleet drain                   # switch set, every run parked, fleet at 0
 #  ...the values commit lands; `kubectl -n wrathbench get networkpolicy` lists five
 kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=1   # if the upgrade has not; it comes up paused
 kubectl -n wrathbench exec deploy/wrathbench-fleet -- bun -e '
@@ -1683,7 +1700,7 @@ for (const u of ["http://worldserver:8086/health", "https://openrouter.ai/api/v1
   "http://wrathbench-clickhouse:8123/ping", "http://wrathbench-viewer:8090/api/info"])
   await fetch(u, { signal: AbortSignal.timeout(5000), tls: { rejectUnauthorized: false } })
     .then((r) => console.log(r.status, u), (e) => console.log(e.name, u));'
-./infra/fleet-update.sh resume
+bun wb fleet resume
 ```
 
 Every line but the last two should print an HTTP status. Any status means the
@@ -1768,7 +1785,7 @@ spelled `WRATHBENCH_*` and why they come from `.env` rather than from
 `compose.yml`.
 
 Then read the bucket back before trusting the loop with it —
-`bun infra/publish-accept.ts` walks the whole generation, and
+`bun wb site verify` (`infra/publish-accept.ts`) walks the whole generation, and
 `--base https://wrathbench-data.shard.page` walks it again through the public
 hostname, which is the form that also exercises the custom domain and the cache
 rules.
@@ -1781,12 +1798,12 @@ extraction has changed — the skip-unchanged check is a content hash kept in
 `tiles/manifest.json` in the bucket, so a re-run with nothing new PUTs nothing.
 
 ```
-bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
-bun infra/publish-tiles.ts --upload
+bun wb site tiles --dry-run    # counts only, uploads nothing
+bun wb site tiles --upload
 ```
 
 It uses the same `S3_*` credentials as the snapshot publisher
-(`WRATHBENCH_MINIMAP_DIR` overrides the root). `bun ship --tiles` runs the
+(`WRATHBENCH_MINIMAP_DIR` overrides the root). `bun wb site ship --tiles` runs the
 same upload as part of a deploy, which is the usual way to do it after a
 re-extraction. Two things go with it: `WRATHBENCH_TILES_BASE` in `.env`, without
 which the built site asks for nothing, and — after a re-extraction, since the
@@ -1811,7 +1828,7 @@ The app is a separate deploy, and only ever a UI change, because data never
 moves through it:
 
 ```
-bun ship
+bun wb site ship               # or `bun ship`, the same script
 ```
 
 `infra/deploy-dashboard.sh` needs three names from `.env`:

@@ -13,6 +13,12 @@ WrathBench runs in containers, two ways, from the same Dockerfiles and code:
   `infra/k8s-release.sh` and operated by `infra/k8s-deploy.sh` ("Releasing on
   Kubernetes", below, and `docs/RUNBOOK.md`).
 
+The operator commands are `bun wb <group> <command>` from the repository root
+(`infra/wb.ts`): `bun wb` lists them, and `bun wb <group>` shows the script
+each runs. The cluster is the default target, and a command that reads the
+data volume runs in the runner pod. `bun wb --local …` targets the quickstart
+stack where a command has a compose form.
+
 ## Try it on one machine
 
 From the repository root, on a fresh machine:
@@ -274,9 +280,12 @@ that names an `account` is pinned to it; a job without one is pool work; and
 the scheduling policy makes up jobs of its own for whatever the manual queue
 leaves free. Inspect the config, and you have inspected the fleet.
 
-    ./infra/run-fleet.sh --until 18:00   # run it
-    ./infra/run-fleet.sh --dry-run       # print the plan
-    ./infra/run-fleet.sh --status        # read-only report
+The supervisor (`infra/run-fleet.ts`) runs as the chart's `fleet` Deployment,
+or compose's `fleet` service on the quickstart stack. It reads its state where
+the data is, so the reports run there too:
+
+    bun wb fleet dry-run      # print the plan
+    bun wb fleet status       # read-only report
 
 Steering it, its guards and the config shape are `docs/RUNBOOK.md`, "Steer it"
 and "Config reference".
@@ -307,7 +316,7 @@ instead of a cloud pool, for example an LM Studio box on the LAN
 
 Before adding a local model, prove the endpoint can drive the tool loop:
 
-    bun infra/smoke/local-model.ts
+    bun wb smoke local-model
 
 It hits the endpoint directly with one tool definition and no `tool_choice`
 (mirroring the adapter), and asserts the model *elects* a tool call whose shape
@@ -379,9 +388,11 @@ and the next `up` re-imports from scratch.
 ## Releasing on Kubernetes
 
 ```
-./infra/k8s-release.sh --dry-run
-./infra/k8s-release.sh --pin-hook ~/bin/place-the-pin
+bun wb release run --dry-run
+bun wb release run --pin-hook <your pin hook>
 ```
+
+`bun wb release run` is `infra/k8s-release.sh`, with every flag passed through.
 
 Five phases, run in order, each one idempotent and each one restartable with
 `--from <phase>`:
@@ -418,7 +429,7 @@ instead of it: a HelmRelease is still `Ready` on the previous revision, so
 waiting on it alone would return instantly and hand the deploy window the old
 image.
 
-`k8s-deploy.sh` makes the same check on its own and **refuses** when the cluster
+`k8s-deploy.sh` (`bun wb release deploy`) makes the same check on its own and **refuses** when the cluster
 is not on this tree's tag — `--expect-tag <tag>` requires a different one and
 `--allow-tag-mismatch` is the deliberate override. It also clears the pause
 switch a `drain` left set when it reaches its resume phase, and says so; a
