@@ -19,7 +19,10 @@
  *      for that guid with the same status;
  *   3. quest_query 783 -> SMSG_QUEST_QUERY_RESPONSE with the title and no
  *      required entries (a talk-to quest); quest_query 7 ("Kobold Camp
- *      Cleanup") -> requiredNpcOrGo[0] = { entry 6, count 8 };
+ *      Cleanup") -> requiredNpcOrGo[0] = { entry 6, count 8 } and a numeric
+ *      `flags` without the exploration bit (0x4); quest_query 62 (an
+ *      exploration quest) -> `flags` with 0x4 set and an areaDescription
+ *      (the flags field needs a module that serves it);
  *   4. accept 783 from Willem, then questgiver_status_multiple_query ->
  *      SMSG_QUESTGIVER_STATUS_MULTIPLE in which Willem is no longer
  *      "available" (he gave his quest; the ender McBride is out of view);
@@ -44,6 +47,8 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 
 const QUEST_INTRO = 783; // A Threat Within (Deputy Willem -> Marshal McBride)
 const QUEST_KILL = 7; // Kobold Camp Cleanup (kill 8 Kobold Vermin, entry 6)
+const QUEST_EXPLORE = 62; // an Elwynn areatrigger quest whose template carries QUEST_FLAGS_EXPLORATION
+const QUEST_FLAGS_EXPLORATION = 0x4;
 const ENTRY_WILLEM = 823;
 const ENTRY_VERMIN = 6;
 const STATUS_AVAILABLE = new Set([8, 2, 7, 4]); // available / low-level / rep variants
@@ -189,6 +194,17 @@ async function main() {
   const first = kill.data.requiredNpcOrGo?.[0];
   if (!first || first.entry !== ENTRY_VERMIN || first.count !== 8) fail(`quest ${QUEST_KILL} objective 0 should be { entry ${ENTRY_VERMIN}, count 8 }: ${JSON.stringify(kill.data.requiredNpcOrGo)}`);
   log(`quest ${QUEST_KILL}: "${kill.data.title}" objective 0 = ${JSON.stringify(first)}`);
+
+  // The raw flags word: a kill quest without the exploration bit, an
+  // exploration quest with it (the SDK's `explore` objective row reads it).
+  if (typeof kill.data.flags !== "number") fail(`quest ${QUEST_KILL} has no numeric flags: ${JSON.stringify(kill.data)}`);
+  if ((kill.data.flags & QUEST_FLAGS_EXPLORATION) !== 0) fail(`quest ${QUEST_KILL} should not carry the exploration flag: flags=${kill.data.flags}`);
+  mark = events.length;
+  await action("quest_query", { questId: QUEST_EXPLORE });
+  const explore = await waitFor((e) => e.opcode === "SMSG_QUEST_QUERY_RESPONSE" && e.data?.questId === QUEST_EXPLORE, 5000, `QUEST_QUERY_RESPONSE ${QUEST_EXPLORE}`, mark);
+  if (typeof explore.data.flags !== "number" || (explore.data.flags & QUEST_FLAGS_EXPLORATION) === 0) fail(`quest ${QUEST_EXPLORE} should carry the exploration flag: ${JSON.stringify(explore.data.flags)}`);
+  if (typeof explore.data.areaDescription !== "string" || explore.data.areaDescription.length === 0) fail(`quest ${QUEST_EXPLORE} has no areaDescription`);
+  log(`flags: quest ${QUEST_KILL}=${kill.data.flags}, quest ${QUEST_EXPLORE}=${explore.data.flags} (exploration bit set)`);
 
   // A bad request is rejected, not coerced.
   const bad = await req("POST", "/action", { token: TOKEN, action: "quest_query" });
