@@ -73,6 +73,8 @@ function setupEpisode(
     ...loadRunConfig({
       driver: "claude-code",
       model: "opus",
+      // A runs directory of its own: the driver seeds its lane reading from one.
+      runsDir: tempDir("wrathbench-claude-runs-"),
       stepIntervalMs: 0,
       stateIntervalMs: 1,
       ...extraConfig,
@@ -1247,8 +1249,22 @@ describe("claude driver: the subscription's usage windows", () => {
       { usedPercent: 50, windowMinutes: 10_080, resetsAt: expect.any(Number) },
     ]);
     // A rejected frame marks the window it names as spent.
-    const rejected = claudeRateLimitWindows({ status: "rejected", rateLimitType: "seven_day_opus", resetsAt: 1_900_000_000 });
-    expect(rejected).toEqual([{ usedPercent: 100, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 }]);
+    // A per-model weekly cap is its own window, scoped to its family; the
+    // lane-wide weekly window is left as the frame states it.
+    const rejected = claudeRateLimitWindows({
+      status: "rejected",
+      rateLimitType: "seven_day_opus",
+      resetsAt: 1_900_000_000,
+      unifiedWindows: { seven_day: { utilization: 0.4, resetsAt: 1_900_000_000 } },
+    });
+    expect(rejected).toEqual([
+      { usedPercent: 40, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 },
+      { usedPercent: 100, windowMinutes: 10_080, resetsAt: 1_900_000_000_000, family: "opus" },
+    ]);
+    // A rejected lane-wide window is the lane's.
+    expect(claudeRateLimitWindows({ status: "rejected", rateLimitType: "seven_day", resetsAt: 1_900_000_000 })).toEqual([
+      { usedPercent: 100, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 },
+    ]);
     expect(claudeRateLimitWindows({ status: "allowed" })).toBeUndefined();
     expect(claudeRateLimitWindows(null)).toBeUndefined();
   });

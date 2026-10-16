@@ -779,7 +779,7 @@ export function printStatus(): void {
           now: Date.now(),
           campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
           hasImageRecord: (id) => runHasImageRecord(id),
-          subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode),
+          subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode, f.model),
         })
       : { resume: [], listed: [], end: [] };
   const jobRow = (name: string, j: StateJob): JobRow => {
@@ -1137,7 +1137,7 @@ export function planDryRun(opts: {
     now: opts.now ?? Date.now(),
     ...(opts.campaignFileOf !== undefined ? { campaignFileOf: opts.campaignFileOf } : {}),
     ...(opts.hasImageRecord !== undefined ? { hasImageRecord: opts.hasImageRecord } : {}),
-    ...(gate !== undefined ? { subscriptionHold: (f: RunFact) => gate.holdOf(laneOfRun(f), f.episode) } : {}),
+    ...(gate !== undefined ? { subscriptionHold: (f: RunFact) => gate.holdOf(laneOfRun(f), f.episode, f.model) } : {}),
   });
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.

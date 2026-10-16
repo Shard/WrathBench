@@ -156,4 +156,87 @@ describe("SubscriptionUsageTracker", () => {
     expect(() => t.observe([{ usedPercent: 1, windowMinutes: 300, resetsAt: NOW + H }], NOW)).not.toThrow();
     expect(t.freeplayHold(80, NOW)).toBeNull();
   });
+
+  test("a stated reset wins over the reading's guess at the spent window", () => {
+    // Five hours at 90% and a week at 50%: the guess would be the five-hour
+    // window, an hour out; the CLI says 96 hours.
+    const t = new SubscriptionUsageTracker("claude-code:CLAUDE_CODE_OAUTH_TOKEN", () => {});
+    t.observe(
+      [
+        { usedPercent: 90, windowMinutes: 300, resetsAt: NOW + H },
+        { usedPercent: 50, windowMinutes: 10_080, resetsAt: NOW + 100 * H },
+      ],
+      NOW,
+    );
+    expect(t.quotaReset(NOW, NOW + 96 * H)).toBe(NOW + 96 * H);
+    expect(t.current!.windows.at(-1)).toEqual({ usedPercent: 100, windowMinutes: null, resetsAt: NOW + 96 * H });
+    // The lane gate holds until then, not until the guessed hour.
+    expect(usageHold(t.current, 100, NOW + 2 * H)?.until).toBe(NOW + 96 * H);
+  });
+
+  test("a seeded reading stands in for the run's own until it has one, and is not written", () => {
+    const written: SubscriptionUsage[] = [];
+    const t = new SubscriptionUsageTracker("codex:CODEX_HOME", (u) => written.push(u));
+    t.seed({ lane: "codex:CODEX_HOME", observedAt: NOW - H, windows: [{ usedPercent: 96, windowMinutes: 10_080, resetsAt: NOW + 3 * H }] });
+    t.seed({ lane: "codex:CODEX_HOME_2", observedAt: NOW, windows: [] });
+    expect(written).toEqual([]);
+    expect(t.quotaReset(NOW)).toBe(NOW + 3 * H);
+    expect(written.at(-1)!.windows[0]!.usedPercent).toBe(100);
+  });
+});
+
+describe("the seven-day ceiling", () => {
+  test("every reading expires within seven days of being taken, whatever its reset says", () => {
+    // A monthly window spent, its reset 30 days out.
+    const monthly: SubscriptionUsage = { lane: "opencode-go:OPENCODE_KEY", observedAt: NOW, windows: [{ usedPercent: 100, windowMinutes: null, resetsAt: NOW + 30 * 24 * H }] };
+    expect(usageHold(monthly, 100, NOW + 6 * 24 * H)).not.toBeNull();
+    expect(usageHold(monthly, 100, NOW + 8 * 24 * H)).toBeNull();
+    // A reset mis-scaled (seconds × 1000 twice over) cannot hold the lane for good.
+    const misScaled: SubscriptionUsage = { lane: "codex:CODEX_HOME", observedAt: NOW, windows: [{ usedPercent: 95, windowMinutes: 300, resetsAt: NOW * 1000 }] };
+    expect(usageHold(misScaled, 80, NOW + H)!.until).toBe(NOW + SUBSCRIPTION_RESET_CEILING_MS);
+    expect(usageHold(misScaled, 80, NOW + SUBSCRIPTION_RESET_CEILING_MS + 1)).toBeNull();
+    expect(liveWindows(misScaled, NOW + 8 * 24 * H)).toEqual([]);
+  });
+});
+
+describe("a per-model cap", () => {
+  const scoped: SubscriptionUsage = {
+    lane: "claude-code:CLAUDE_CODE_OAUTH_TOKEN",
+    observedAt: NOW,
+    windows: [
+      { usedPercent: 40, windowMinutes: 10_080, resetsAt: NOW + 50 * H },
+      { usedPercent: 100, windowMinutes: 10_080, resetsAt: NOW + 50 * H, family: "opus" },
+    ],
+  };
+
+  test("holds only its family's launches; a lane-wide window holds every one", () => {
+    expect(usageHold(scoped, 80, NOW, "claude-opus-4-8")).not.toBeNull();
+    expect(usageHold(scoped, 80, NOW, "opus")).not.toBeNull();
+    expect(usageHold(scoped, 80, NOW, "sonnet")).toBeNull();
+    expect(usageHold(scoped, 80, NOW, "claude-haiku-5-5")).toBeNull();
+    // No model named: only the lane-wide windows bind.
+    expect(usageHold(scoped, 80, NOW)).toBeNull();
+    const laneWide: SubscriptionUsage = { ...scoped, windows: [{ usedPercent: 100, windowMinutes: 10_080, resetsAt: NOW + 50 * H }] };
+    expect(usageHold(laneWide, 80, NOW, "sonnet")).not.toBeNull();
+    expect(usageHold(laneWide, 80, NOW, "claude-opus-4-8")).not.toBeNull();
+    expect(windowLabel(scoped.windows[1]!)).toBe("7d opus");
+  });
+
+  test("a spent cap survives a newer reading that does not mention it, until it ends", () => {
+    const newer: SubscriptionUsage = { lane: scoped.lane, observedAt: NOW + H, windows: [{ usedPercent: 45, windowMinutes: 10_080, resetsAt: NOW + 50 * H }] };
+    const lane = newestByLane([newer, scoped]).get(scoped.lane)!;
+    expect(lane.observedAt).toBe(NOW + H);
+    expect(lane.windows.find((w) => w.family === "opus")?.usedPercent).toBe(100);
+    expect(usageHold(lane, 80, NOW + 2 * H, "opus")).not.toBeNull();
+    expect(usageHold(lane, 80, NOW + 2 * H, "sonnet")).toBeNull();
+    // A newer reading that says the cap is back is believed.
+    const cleared: SubscriptionUsage = { ...newer, windows: [...newer.windows, { usedPercent: 10, windowMinutes: 10_080, resetsAt: NOW + 50 * H, family: "opus" }] };
+    expect(usageHold(newestByLane([cleared, scoped]).get(scoped.lane), 80, NOW + 2 * H, "opus")).toBeNull();
+    // The tracker keeps it across its own readings the same way.
+    const t = new SubscriptionUsageTracker(scoped.lane, () => {});
+    t.observe(scoped.windows, NOW);
+    t.observe(newer.windows, NOW + H);
+    expect(t.freeplayHold(80, NOW + 2 * H, "claude-opus-4-8")).not.toBeNull();
+    expect(t.freeplayHold(80, NOW + 2 * H, "claude-sonnet-5")).toBeNull();
+  });
 });

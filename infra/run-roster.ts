@@ -1421,9 +1421,9 @@ export async function awaitSubscriptionGate(
       return false;
     }
     const gate = subscriptionGate(readLaneUsage(deps.runsDir ?? join(REPO_ROOT, RUNS_DIR)), subscriptionThresholds(deps.env ?? process.env), t);
-    const hold = gate.hold(lane, spec.episode);
+    const hold = gate.hold(lane, spec.episode, spec.model);
     if (hold === null) return true;
-    const why = gate.holdOf(lane, spec.episode)!;
+    const why = gate.holdOf(lane, spec.episode, spec.model)!;
     if (why !== said) {
       said = why;
       tell(`hold ${spec.model} (${spec.runId}): ${why} — not launching until it reopens`);

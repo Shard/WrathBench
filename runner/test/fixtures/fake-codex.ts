@@ -286,7 +286,8 @@ function fail(kind: "turn.failed" | "error", message: string, details?: string):
 switch (mode) {
   case "limit":
     writeRollout();
-    fail("turn.failed", "You've hit your usage limit. Try again at 4:00 PM.");
+    // The CLI's own words; $WB_FAKE_LIMIT_TEXT gives the "Try again at …" a test wants.
+    fail("turn.failed", Bun.env["WB_FAKE_LIMIT_TEXT"] ?? "You’ve hit your usage limit. Try again later.");
     saveRecord();
     process.exit(1);
   case "rate-limit":

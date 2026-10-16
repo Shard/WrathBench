@@ -1000,12 +1000,18 @@ async function main(): Promise<void> {
       // A roster pin outranks everything: that entry bills that subscription.
       const pin = job.refs.map((r) => cfg.roster[r]?.subscription).find((l) => l !== undefined);
       if (pin !== undefined) return withLane(job, pin);
-      const known = laneOf(job) ?? laneMemo.get(job.name);
+      const model = cfg.roster[job.ref]?.model;
+      // A remembered lane binds a job only while it has a run in progress: a
+      // fresh launch with no resume whose remembered lane the subscription
+      // gate now holds is placed afresh, on an open one if there is one.
+      const memo = laneMemo.get(job.name);
+      const memoHeld = memo !== undefined && !sets.running.has(job.name) && job.resume === undefined && !claudeLaneOpen(subGate, memo, job.episode, model);
+      const known = laneOf(job) ?? (memoHeld ? undefined : memo);
       if (known !== undefined) return withLane(job, known);
       // Room in the lane AND under the overall ceiling: a claude session spends
       // both, so a free subscription with the total spent is not free. A lane
       // the subscription gate holds is passed over for one it does not.
-      const open = cfg.policy.subscriptions.filter((l) => claudeLaneOpen(subGate, l, job.episode));
+      const open = cfg.policy.subscriptions.filter((l) => claudeLaneOpen(subGate, l, job.episode, model));
       const free = open.find((l) =>
         claudeKeysFor(l).every((k) => {
           const cap = capFor(cfg.maxConcurrent, k);
@@ -1168,7 +1174,7 @@ async function main(): Promise<void> {
       now: Date.now(),
       campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
       hasImageRecord: (id) => runHasImageRecord(id),
-      subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode),
+      subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode, f.model),
     });
     lastPaused = resumes.listed;
     // Runs nothing came back for are ended on every tick, boot
@@ -1327,7 +1333,7 @@ async function main(): Promise<void> {
           max: cfg.maxConcurrent,
           running: keyCount,
           pinnedLane: (n) => cfg.roster[n]?.subscription,
-          gate: (n, ep, lane) => subGate.holdOf(laneOfEntry(cfg.roster[n], lane), ep),
+          gate: (n, ep, lane) => subGate.holdOf(laneOfEntry(cfg.roster[n], lane), ep, cfg.roster[n]?.model),
         },
         policy: cfg.policy,
         paidRunning,

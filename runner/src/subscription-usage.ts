@@ -45,6 +45,9 @@
  * operator's surfaces (`--status`, the run's own records), never on a public
  * page or in published data.
  */
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV } from "./config";
 
 /** One usage window, normalised: what the operator decided may be recorded, and nothing more. */
@@ -55,6 +58,13 @@ export interface UsageWindow {
   windowMinutes: number | null;
   /** When the window resets (epoch ms), or null when the source did not say. */
   resetsAt: number | null;
+  /**
+   * The model family a per-model cap binds (`opus`, `sonnet`: a Claude weekly
+   * cap that only one family's runs draw on), or absent for a window the whole
+   * lane shares. A scoped window holds only the launches of a model whose id
+   * names that family (`windowApplies`).
+   */
+  family?: string;
 }
 
 /** One observation of a lane's windows. */
@@ -136,16 +146,33 @@ export function subscriptionLaneOf(r: {
   return null;
 }
 
-/** When a window stops counting: its reset, else its own length past the observation, else never known (null). */
+/**
+ * When a window stops counting: its reset, else its own length past the
+ * observation, else never known (null) — and never later than seven days
+ * past the observation, whatever the reset says. So every reading expires
+ * within the ceiling of being taken: a monthly window, or a reset a source
+ * mis-scaled, cannot hold a lane longer, and a held lane, on which nothing
+ * launches to take a newer reading, cannot stay held for good.
+ */
 export function windowEndsAt(w: UsageWindow, observedAt: number): number | null {
-  if (w.resetsAt !== null) return w.resetsAt;
-  if (w.windowMinutes !== null) return observedAt + w.windowMinutes * 60_000;
-  return null;
+  const end = w.resetsAt !== null ? w.resetsAt : w.windowMinutes !== null ? observedAt + w.windowMinutes * 60_000 : null;
+  return end === null ? null : Math.min(end, observedAt + SUBSCRIPTION_RESET_CEILING_MS);
 }
 
-/** The windows still in force at `now`. A window whose end is unknown never gates. */
-export function liveWindows(u: SubscriptionUsage, now: number): UsageWindow[] {
+/**
+ * Whether a window binds a launch of `model`: a lane-wide window binds every
+ * one; a per-model cap only a model whose id names its family (`claude-opus-…`
+ * and `opus` for `opus`). A scoped window binds no launch whose model is unknown.
+ */
+export function windowApplies(w: UsageWindow, model?: string | null): boolean {
+  if (w.family === undefined) return true;
+  return typeof model === "string" && model.toLowerCase().includes(w.family.toLowerCase());
+}
+
+/** The windows still in force at `now` (for `model`, when given). A window whose end is unknown never gates. */
+export function liveWindows(u: SubscriptionUsage, now: number, model?: string | null): UsageWindow[] {
   return u.windows.filter((w) => {
+    if (model !== undefined && !windowApplies(w, model)) return false;
     const end = windowEndsAt(w, u.observedAt);
     return end !== null && end > now;
   });
@@ -163,10 +190,14 @@ export interface UsageHold {
   until: number;
 }
 
-/** Whether an observation holds a launch at `threshold` percent at `now`, and until when. */
-export function usageHold(u: SubscriptionUsage | undefined, threshold: number, now: number): UsageHold | null {
+/**
+ * Whether an observation holds a launch of `model` at `threshold` percent at
+ * `now`, and until when. A per-model window binds only its family's launches;
+ * with no model named, only the lane-wide windows bind.
+ */
+export function usageHold(u: SubscriptionUsage | undefined, threshold: number, now: number, model?: string | null): UsageHold | null {
   if (u === undefined) return null;
-  const over = liveWindows(u, now).filter((w) => w.usedPercent >= threshold);
+  const over = liveWindows(u, now, model ?? null).filter((w) => w.usedPercent >= threshold);
   if (over.length === 0) return null;
   let until: number | null = null;
   for (const w of over) until = later(until, windowEndsAt(w, u.observedAt));
@@ -186,10 +217,10 @@ export function capReset(resetAt: number, now: number): number | undefined {
  * typed error, Claude's `rejected` frame names it only sometimes — so this is
  * the reading's best answer, and undefined when it has none.
  */
-export function spentWindowOf(u: SubscriptionUsage | undefined, now: number): UsageWindow | undefined {
+export function spentWindowOf(u: SubscriptionUsage | undefined, now: number, model?: string | null): UsageWindow | undefined {
   if (u === undefined) return undefined;
   let best: UsageWindow | undefined;
-  for (const w of liveWindows(u, now)) {
+  for (const w of liveWindows(u, now, model ?? null)) {
     if (
       best === undefined ||
       w.usedPercent > best.usedPercent ||
@@ -207,7 +238,7 @@ export function sameWindows(a: readonly UsageWindow[], b: readonly UsageWindow[]
     a.length === b.length &&
     a.every((w, i) => {
       const o = b[i]!;
-      return w.usedPercent === o.usedPercent && w.windowMinutes === o.windowMinutes && w.resetsAt === o.resetsAt;
+      return w.usedPercent === o.usedPercent && w.windowMinutes === o.windowMinutes && w.resetsAt === o.resetsAt && w.family === o.family;
     })
   );
 }
@@ -222,7 +253,8 @@ function parseWindow(raw: unknown): UsageWindow | undefined {
   if (used === undefined) return undefined;
   const minutes = finite(w["windowMinutes"]);
   const resets = finite(w["resetsAt"]);
-  return { usedPercent: used, windowMinutes: minutes ?? null, resetsAt: resets ?? null };
+  const family = typeof w["family"] === "string" && w["family"].length > 0 ? (w["family"] as string) : undefined;
+  return { usedPercent: used, windowMinutes: minutes ?? null, resetsAt: resets ?? null, ...(family !== undefined ? { family } : {}) };
 }
 
 /** A persisted observation (meta.json's `subscriptionUsage`), read tolerantly: anything malformed is no observation. */
@@ -240,13 +272,40 @@ export function parseSubscriptionUsage(raw: unknown): SubscriptionUsage | undefi
   return { lane, observedAt: at, windows };
 }
 
-/** The newest observation per lane, by `observedAt`. */
+/**
+ * A per-model cap the CLI reports only on the frame that refused a launch:
+ * later readings on the lane, taken by another family's runs, do not carry it.
+ * So a spent scoped window an older reading holds is kept beside a newer one
+ * until it ends, unless the newer one says something of that window itself.
+ */
+function carrySpentScoped(newer: SubscriptionUsage, older: readonly UsageWindow[], olderAt: number): SubscriptionUsage {
+  const carried = older.filter(
+    (w) =>
+      w.family !== undefined &&
+      w.usedPercent >= EXHAUSTED_PCT &&
+      (windowEndsAt(w, olderAt) ?? 0) > newer.observedAt &&
+      !newer.windows.some((n) => n.family === w.family && n.windowMinutes === w.windowMinutes),
+  );
+  // Ended at the instant it would have: re-anchored to the newer reading's clock.
+  const kept = carried.map((w) => ({ ...w, resetsAt: windowEndsAt(w, olderAt) }));
+  return kept.length === 0 ? newer : { ...newer, windows: [...newer.windows, ...kept] };
+}
+
+/** The newest observation per lane, by `observedAt`, with any spent per-model cap an older one holds (`carrySpentScoped`). */
 export function newestByLane(observations: Iterable<SubscriptionUsage | null | undefined>): Map<string, SubscriptionUsage> {
-  const out = new Map<string, SubscriptionUsage>();
+  const byLane = new Map<string, SubscriptionUsage[]>();
   for (const u of observations) {
     if (u === null || u === undefined) continue;
-    const have = out.get(u.lane);
-    if (have === undefined || u.observedAt > have.observedAt) out.set(u.lane, u);
+    const list = byLane.get(u.lane);
+    if (list === undefined) byLane.set(u.lane, [u]);
+    else list.push(u);
+  }
+  const out = new Map<string, SubscriptionUsage>();
+  for (const [lane, list] of byLane) {
+    list.sort((a, b) => b.observedAt - a.observedAt);
+    let newest = list[0]!;
+    for (const older of list.slice(1)) newest = carrySpentScoped(newest, older.windows, older.observedAt);
+    out.set(lane, newest);
   }
   return out;
 }
@@ -254,10 +313,11 @@ export function newestByLane(observations: Iterable<SubscriptionUsage | null | u
 /** "5h", "7d", "90m" — a window by its length, for the operator's lines. */
 export function windowLabel(w: UsageWindow): string {
   const m = w.windowMinutes;
-  if (m === null) return "window";
-  if (m % 1440 === 0) return `${m / 1440}d`;
-  if (m % 60 === 0) return `${m / 60}h`;
-  return `${m}m`;
+  const scope = w.family !== undefined ? ` ${w.family}` : "";
+  if (m === null) return `window${scope}`;
+  if (m % 1440 === 0) return `${m / 1440}d${scope}`;
+  if (m % 60 === 0) return `${m / 60}h${scope}`;
+  return `${m}m${scope}`;
 }
 
 /** "5h 82% (resets 2026-…Z)" — operator-only wording; never for a public surface. */
@@ -268,6 +328,65 @@ export function describeWindows(windows: readonly UsageWindow[], observedAt: num
       return `${windowLabel(w)} ${Math.round(w.usedPercent)}%${end !== null ? ` (resets ${new Date(end).toISOString()})` : ""}`;
     })
     .join(", ");
+}
+
+/**
+ * Where the fleet supervisor leaves its own readings (OpenCode Go's, polled)
+ * for the readers without a poller — the roster's pre-launch check, `--status`
+ * and a driver seeding its tracker. Under the runs directory, operator-only
+ * like everything there.
+ */
+export const LANE_USAGE_SIDECAR = "fleet-subscription-usage.json";
+
+/**
+ * Every run's newest usage reading, off meta.json alone (the archive's too),
+ * plus the supervisor's own sidecar: the light read for a caller with no run
+ * facts in hand. A directory without one, or an unreadable file, contributes
+ * nothing.
+ */
+export function readLaneUsage(runsDir: string): SubscriptionUsage[] {
+  const out: SubscriptionUsage[] = [];
+  const scan = (dir: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (name === ARCHIVE_DIR) continue;
+      const path = join(dir, name, "meta.json");
+      if (!existsSync(path)) continue;
+      try {
+        const meta = JSON.parse(readFileSync(path, "utf8")) as { subscriptionUsage?: unknown };
+        const u = parseSubscriptionUsage(meta.subscriptionUsage);
+        if (u !== undefined) out.push(u);
+      } catch {
+        // a torn or foreign meta.json is no reading
+      }
+    }
+  };
+  scan(runsDir);
+  scan(join(runsDir, ARCHIVE_DIR));
+  try {
+    const raw = JSON.parse(readFileSync(join(runsDir, LANE_USAGE_SIDECAR), "utf8")) as { lanes?: unknown };
+    for (const l of Array.isArray(raw.lanes) ? raw.lanes : []) {
+      const u = parseSubscriptionUsage(l);
+      if (u !== undefined) out.push(u);
+    }
+  } catch {
+    // no sidecar yet
+  }
+  return out;
+}
+
+/** The newest reading on one lane in a runs directory, or undefined. Never throws. */
+export function newestLaneUsage(runsDir: string, lane: string): SubscriptionUsage | undefined {
+  try {
+    return newestByLane(readLaneUsage(runsDir)).get(lane);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -290,11 +409,25 @@ export class SubscriptionUsageTracker {
     return this.last;
   }
 
+  /**
+   * The lane's newest reading from before this run (another run's, off
+   * meta.json), so a run whose first turn meets a spent quota still knows the
+   * window it was spent in. Taken only before the run's own first reading,
+   * and not written: the run records only what it saw itself.
+   */
+  seed(u: SubscriptionUsage | undefined): void {
+    if (this.last === undefined && u !== undefined && u.lane === this.lane) this.last = u;
+  }
+
   /** A fresh reading of the lane's windows. Recorded only when it differs from the last one recorded. */
   observe(windows: readonly UsageWindow[], now: number): void {
     if (windows.length === 0) return;
-    if (this.last !== undefined && sameWindows(this.last.windows, windows)) return;
-    this.record({ lane: this.lane, observedAt: now, windows: windows.map((w) => ({ ...w })) });
+    const next =
+      this.last === undefined
+        ? { lane: this.lane, observedAt: now, windows: windows.map((w) => ({ ...w })) }
+        : carrySpentScoped({ lane: this.lane, observedAt: now, windows: windows.map((w) => ({ ...w })) }, this.last.windows, this.last.observedAt);
+    if (this.last !== undefined && sameWindows(this.last.windows, next.windows)) return;
+    this.record(next);
   }
 
   /**
@@ -305,23 +438,25 @@ export class SubscriptionUsageTracker {
    * no window with a future reset is known: the pause then falls back to the
    * ladder, as before.
    *
-   * `statedReset` is a reset the CLI's own failure text named (epoch ms), for
-   * when no window was observed: it is recorded as one spent window of
-   * unknown length ending then.
+   * `statedReset` is a reset the CLI's own failure text named (epoch ms). It
+   * wins over the reading's guess whenever it is given — the CLI knows which
+   * window refused it, the reading only which is fullest — and is recorded as
+   * one spent window of unknown length ending then. `model` scopes the guess
+   * to the windows that bind it (`windowApplies`).
    */
-  quotaReset(now: number, statedReset?: number): number | undefined {
+  quotaReset(now: number, statedReset?: number, model?: string | null): number | undefined {
     const u = this.last;
-    const spent = spentWindowOf(u, now);
-    if (u === undefined || spent === undefined) {
-      const notBefore = statedReset === undefined ? undefined : capReset(statedReset, now);
-      if (notBefore === undefined) return undefined;
+    const stated = statedReset === undefined ? undefined : capReset(statedReset, now);
+    if (stated !== undefined) {
       this.record({
         lane: this.lane,
         observedAt: now,
         windows: [...(u?.windows ?? []).map((w) => ({ ...w })), { usedPercent: EXHAUSTED_PCT, windowMinutes: null, resetsAt: statedReset! }],
       });
-      return notBefore;
+      return stated;
     }
+    const spent = spentWindowOf(u, now, model ?? null);
+    if (u === undefined || spent === undefined) return undefined;
     const end = windowEndsAt(spent, u.observedAt);
     const notBefore = end === null ? undefined : capReset(end, now);
     if (notBefore === undefined) return undefined;
@@ -335,9 +470,9 @@ export class SubscriptionUsageTracker {
     return notBefore;
   }
 
-  /** The hold a live freeplay run stops for at its turn boundary, or null. */
-  freeplayHold(threshold: number, now: number): UsageHold | null {
-    return usageHold(this.last, threshold, now);
+  /** The hold a live freeplay run of `model` stops for at its turn boundary, or null. */
+  freeplayHold(threshold: number, now: number, model?: string | null): UsageHold | null {
+    return usageHold(this.last, threshold, now, model ?? null);
   }
 
   private record(u: SubscriptionUsage): void {

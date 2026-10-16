@@ -1646,8 +1646,14 @@ the supervisor reads Go's usage endpoint with the entry's key, at most once a
 minute per key, before a tick decides anything, and leaves the reading in
 `data/runs/fleet-subscription-usage.json` for the roster and `--status`; a
 live Go freeplay run refreshes its own copy at turn boundaries without
-waiting on it. A window counts until its reset; a lane with no reading, or
-one whose reading cannot be had, is open.
+waiting on it. A window counts until its reset, and no reading counts for
+longer than seven days past being taken; a lane with no reading, or one whose
+reading cannot be had, is open. A Claude per-model weekly cap (a refusal
+naming `seven_day_opus`, say) is a window of its own that holds only that
+family's launches; the lane's other models go on. A quota pause whose CLI
+names its reset ("Try again at …", `usage limit reached|<epoch>`) waits for
+that instant over the reading's guess, and a run's first turn starts from the
+lane's newest reading another run left.
 
 `--status` prints the gate per lane: the newest windows with their percent
 and reset, the reading's age, whether a scored and a freeplay launch are held,

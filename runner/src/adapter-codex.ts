@@ -158,7 +158,7 @@ import { CodexLastCallReader, CodexRolloutFollower, type CodexCompaction } from 
 import { CompactionAsk, codexAutoCompactLimit, compactionNotice, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
-import { SubscriptionUsageTracker, describeWindows, subscriptionLaneOf, subscriptionThresholds } from "./subscription-usage";
+import { SubscriptionUsageTracker, describeWindows, newestLaneUsage, subscriptionLaneOf, subscriptionThresholds } from "./subscription-usage";
 import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
@@ -312,6 +312,36 @@ export { normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 export function isRetryNotice(msg: Record<string, unknown>): boolean {
   const m = msg["message"];
   return msg["type"] === "error" && typeof m === "string" && m.trimStart().startsWith("Reconnecting...");
+}
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * The reset the pinned CLI's own usage-limit message names, as epoch ms, or
+ * undefined. 0.159.3 ends that message with "Try again at 4:05 PM." when the
+ * reset falls today and "Try again at Oct 21st, 2026 9:05 AM." otherwise (or
+ * "…or try again at …"), in the CLI's local time — the same clock this
+ * process reads, in the same container. A stated reset is what the CLI knows
+ * of the window that refused it, so it wins over the reading's guess
+ * (`SubscriptionUsageTracker.quotaReset`).
+ */
+export function codexStatedReset(text: string | undefined | null, now = Date.now()): number | undefined {
+  if (text === undefined || text === null) return undefined;
+  const dated = /try again at ([A-Za-z]{3}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) (\d{1,2}):(\d{2}) ([AP]M)/i.exec(text);
+  const clock = dated === null ? /try again at (\d{1,2}):(\d{2}) ([AP]M)/i.exec(text) : null;
+  const hour = (h: string, ampm: string): number => (Number(h) % 12) + (ampm.toUpperCase() === "PM" ? 12 : 0);
+  let at: number;
+  if (dated !== null) {
+    const month = MONTHS.indexOf(dated[1]!.toLowerCase());
+    if (month < 0) return undefined;
+    at = new Date(Number(dated[3]), month, Number(dated[2]), hour(dated[4]!, dated[6]!), Number(dated[5])).getTime();
+  } else if (clock !== null) {
+    const d = new Date(now);
+    at = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour(clock[1]!, clock[3]!), Number(clock[2])).getTime();
+  } else {
+    return undefined;
+  }
+  return Number.isFinite(at) && at > now ? at : undefined;
 }
 
 /**
@@ -802,6 +832,9 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   const usage = new SubscriptionUsageTracker(subscriptionLaneOf({ driver: "codex", lane: laneEnv })!, (u) =>
     trajectory.recordSubscriptionUsage(u, turn),
   );
+  // The lane's newest reading from before this run, so a first turn that
+  // meets a spent quota still knows the window it was spent in.
+  usage.seed(newestLaneUsage(config.runsDir, usage.lane));
 
   // ---- one process at a time; the group kill and the exit net track it
   const spawnCodex = (args: string[]) =>
@@ -1217,7 +1250,8 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         if (failure.kind === "pause") {
           // A spent quota waits for its window's reset, when the rollout named
           // one: every attempt before it is a refusal already announced.
-          const notBefore = failure.reason === "quota-exhausted" ? usage.quotaReset(Date.now()) : undefined;
+          const now = Date.now();
+          const notBefore = failure.reason === "quota-exhausted" ? usage.quotaReset(now, codexStatedReset(failure.detail, now), config.model) : undefined;
           if (notBefore !== undefined) {
             return pause(failure.reason, `${failure.detail} (usage window resets ${new Date(notBefore).toISOString()})`, notBefore);
           }
@@ -1262,7 +1296,7 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // scored run: pausing one would spend its attempt.
       if (config.episode === "freeplay") {
         const now = Date.now();
-        const hold = usage.freeplayHold(thresholds.freeplay, now);
+        const hold = usage.freeplayHold(thresholds.freeplay, now, config.model);
         if (hold !== null) {
           return pause(
             SUBSCRIPTION_PAUSE,

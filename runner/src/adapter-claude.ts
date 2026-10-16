@@ -131,6 +131,7 @@ import { SUBSCRIPTION_PAUSE } from "./lapse";
 import {
   SubscriptionUsageTracker,
   describeWindows,
+  newestLaneUsage,
   subscriptionLaneOf,
   subscriptionThresholds,
   type UsageWindow,
@@ -266,6 +267,13 @@ export function detectLimit(text: string | undefined | null): { reason: PauseRea
 /** The window lengths the CLI's `unifiedWindows` keys name, in minutes. */
 const CLAUDE_WINDOWS: Readonly<Record<string, number>> = { five_hour: 300, seven_day: 10_080 };
 
+/** The model family a per-model cap's `rateLimitType` names (`seven_day_opus` → `opus`), or undefined for a lane-wide one. */
+function claudeFamilyOfType(type: unknown): string | undefined {
+  if (typeof type !== "string") return undefined;
+  const m = /^seven_day_([a-z]+)$/.exec(type);
+  return m !== null && m[1] !== "overage" ? m[1] : undefined;
+}
+
 /** A rejected frame's `rateLimitType`, as the window it spent: the per-model weekly caps are weekly windows. */
 function claudeWindowOfType(type: unknown): number | undefined {
   if (type === "five_hour") return 300;
@@ -307,7 +315,17 @@ export function claudeRateLimitWindows(info: unknown): UsageWindow[] | undefined
   }
   const named = claudeWindowOfType(i["rateLimitType"]);
   const topResets = num(i["resetsAt"]);
-  if (named !== undefined) {
+  const family = claudeFamilyOfType(i["rateLimitType"]);
+  const scoped: UsageWindow[] = [];
+  if (named !== undefined && family !== undefined) {
+    // A per-model weekly cap: its own window, binding only that family's
+    // launches; the lane-wide weekly window stays what the frame says of it.
+    const topUsed = num(i["utilization"]);
+    const usedPercent = i["status"] === "rejected" ? 100 : topUsed !== undefined ? topUsed * 100 : undefined;
+    if (usedPercent !== undefined) {
+      scoped.push({ usedPercent, windowMinutes: named, resetsAt: topResets !== undefined ? topResets * 1000 : null, family });
+    }
+  } else if (named !== undefined) {
     const have = byMinutes.get(named);
     const topUsed = num(i["utilization"]);
     const usedPercent = i["status"] === "rejected" ? 100 : topUsed !== undefined ? topUsed * 100 : have?.usedPercent;
@@ -319,7 +337,7 @@ export function claudeRateLimitWindows(info: unknown): UsageWindow[] | undefined
       });
     }
   }
-  const windows = [...byMinutes.entries()].sort(([a], [b]) => a - b).map(([, w]) => w);
+  const windows = [...[...byMinutes.entries()].sort(([a], [b]) => a - b).map(([, w]) => w), ...scoped];
   return windows.length > 0 ? windows : undefined;
 }
 
@@ -949,9 +967,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   const usage = new SubscriptionUsageTracker(subscriptionLaneOf({ driver: "claude-code", lane: config.subscription })!, (u) =>
     trajectory.recordSubscriptionUsage(u, turn),
   );
+  // The lane's newest reading from before this run (`SubscriptionUsageTracker.seed`).
+  usage.seed(newestLaneUsage(config.runsDir, usage.lane));
   /** A spent quota's pause, waiting for its window's reset when one is known. */
   const quotaPause = (l: { reason: PauseReason; detail: string; resetAt?: number }): LoopOutcome => {
-    const notBefore = l.reason === "quota-exhausted" ? usage.quotaReset(Date.now(), l.resetAt) : undefined;
+    const notBefore = l.reason === "quota-exhausted" ? usage.quotaReset(Date.now(), l.resetAt, cliModel ?? config.model) : undefined;
     return notBefore !== undefined
       ? pause(l.reason, `${l.detail} (usage window resets ${new Date(notBefore).toISOString()})`, notBefore)
       : pause(l.reason, l.detail);
@@ -1518,7 +1538,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
       // scored run: pausing one would spend its attempt.
       if (config.episode === "freeplay") {
         const now = Date.now();
-        const hold = usage.freeplayHold(thresholds.freeplay, now);
+        const hold = usage.freeplayHold(thresholds.freeplay, now, cliModel ?? config.model);
         if (hold !== null) {
           return pause(
             SUBSCRIPTION_PAUSE,

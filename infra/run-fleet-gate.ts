@@ -24,7 +24,7 @@
  * never a percentage or a reset time; `formatSubscriptionGate` is the
  * operator's `--status` block, which carries both.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_CODEX_HOME_ENV } from "../runner/src/config";
 import { goKeyEnvOf, subscriptionLaneOfConfig, type RunFact } from "../runner/src/models";
@@ -35,7 +35,8 @@ import {
   describeWindows,
   gateClassOf,
   newestByLane,
-  parseSubscriptionUsage,
+  LANE_USAGE_SIDECAR,
+  readLaneUsage,
   subscriptionLaneOf,
   thresholdOf,
   usageHold,
@@ -45,17 +46,19 @@ import {
 } from "../runner/src/subscription-usage";
 import type { FleetJob, FleetRosterEntry, JobSpawn } from "./run-fleet-config";
 import type { RosterSpec } from "./run-roster";
-import { ARCHIVE_DIR } from "../runner/viewer/archive-dir";
 
 export interface FleetSubscriptionGate {
   thresholds: Pick<SubscriptionThresholds, "scored" | "freeplay">;
   now: number;
   /** The newest observation per lane. */
   usage: ReadonlyMap<string, SubscriptionUsage>;
-  /** The hold on a launch of `episode`'s class on `lane`, or null (`usageHold`). */
-  hold(lane: string | null, episode: string | null | undefined): UsageHold | null;
+  /**
+   * The hold on a launch of `model` and `episode`'s class on `lane`, or null
+   * (`usageHold`): a per-model cap holds only its family's launches.
+   */
+  hold(lane: string | null, episode: string | null | undefined, model?: string | null): UsageHold | null;
   /** Why such a launch is held, in words fit for any surface (no figures), or undefined. */
-  holdOf(lane: string | null, episode: string | null | undefined): string | undefined;
+  holdOf(lane: string | null, episode: string | null | undefined, model?: string | null): string | undefined;
 }
 
 /** The words for a hold: the lane and the class, never a figure. */
@@ -73,15 +76,15 @@ export function subscriptionGate(
   now: number,
 ): FleetSubscriptionGate {
   const usage = newestByLane(observations);
-  const hold = (lane: string | null, episode: string | null | undefined): UsageHold | null =>
-    lane === null ? null : usageHold(usage.get(lane), thresholdOf(gateClassOf(episode), thresholds), now);
+  const hold = (lane: string | null, episode: string | null | undefined, model?: string | null): UsageHold | null =>
+    lane === null ? null : usageHold(usage.get(lane), thresholdOf(gateClassOf(episode), thresholds), now, model ?? null);
   return {
     thresholds,
     now,
     usage,
     hold,
-    holdOf: (lane, episode) => {
-      const h = hold(lane, episode);
+    holdOf: (lane, episode, model) => {
+      const h = hold(lane, episode, model);
       return h === null || lane === null ? undefined : holdWords(lane, episode, h.threshold);
     },
   };
@@ -100,48 +103,8 @@ export function subscriptionGateFromRuns(
   );
 }
 
-/**
- * Every run's newest usage reading, off meta.json alone (the archive's too):
- * the light read for the roster's pre-launch check and `--status`, which have
- * no run facts in hand. A directory without one, or with an unreadable
- * meta.json, contributes nothing.
- */
-export function readLaneUsage(runsDir: string): SubscriptionUsage[] {
-  const out: SubscriptionUsage[] = [];
-  const scan = (dir: string): void => {
-    let names: string[];
-    try {
-      names = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      if (name === ARCHIVE_DIR) continue;
-      const path = join(dir, name, "meta.json");
-      if (!existsSync(path)) continue;
-      try {
-        const meta = JSON.parse(readFileSync(path, "utf8")) as { subscriptionUsage?: unknown };
-        const u = parseSubscriptionUsage(meta.subscriptionUsage);
-        if (u !== undefined) out.push(u);
-      } catch {
-        // a torn or foreign meta.json is no reading
-      }
-    }
-  };
-  scan(runsDir);
-  scan(join(runsDir, ARCHIVE_DIR));
-  // The supervisor's own Go readings (`writeLaneUsageSidecar`).
-  try {
-    const raw = JSON.parse(readFileSync(join(runsDir, LANE_USAGE_SIDECAR), "utf8")) as { lanes?: unknown };
-    for (const l of Array.isArray(raw.lanes) ? raw.lanes : []) {
-      const u = parseSubscriptionUsage(l);
-      if (u !== undefined) out.push(u);
-    }
-  } catch {
-    // no sidecar yet
-  }
-  return out;
-}
+/** The light read of every reading on disk (`readLaneUsage`, subscription-usage.ts), for the readers without run facts. */
+export { readLaneUsage, LANE_USAGE_SIDECAR };
 
 /** A run's lane, from what it recorded: its driver and its lane variable. */
 export function laneOfRun(f: Pick<RunFact, "subscription"> & { driver?: string | null | undefined; lane?: string | null | undefined }): string | null {
@@ -194,13 +157,13 @@ export function jobHoldOf(
     if (e?.driver === "claude-code") {
       const pinned = job.subscription ?? e.subscription;
       const candidates = pinned !== undefined ? [pinned] : lanes.length > 0 ? lanes : [undefined];
-      const whys = candidates.map((l) => gate.holdOf(subscriptionLaneOf({ driver: "claude-code", lane: l ?? null }), job.episode));
+      const whys = candidates.map((l) => gate.holdOf(subscriptionLaneOf({ driver: "claude-code", lane: l ?? null }), job.episode, e.model));
       if (whys.every((w) => w !== undefined)) return whys[0];
     } else if (e?.driver === "codex") {
-      const why = gate.holdOf(subscriptionLaneOf({ driver: "codex", lane: job.subscription ?? null }), job.episode);
+      const why = gate.holdOf(subscriptionLaneOf({ driver: "codex", lane: job.subscription ?? null }), job.episode, e.model);
       if (why !== undefined) return why;
     } else if (e !== undefined) {
-      const why = gate.holdOf(laneOfEntry(e), job.episode);
+      const why = gate.holdOf(laneOfEntry(e), job.episode, e.model);
       if (why !== undefined) return why;
     }
   }
@@ -208,8 +171,8 @@ export function jobHoldOf(
 }
 
 /** Whether a claude subscription is open for a launch of `episode`'s class. */
-export function claudeLaneOpen(gate: FleetSubscriptionGate | undefined, lane: string, episode: string | null | undefined): boolean {
-  return gate === undefined || gate.holdOf(subscriptionLaneOf({ driver: "claude-code", lane }), episode) === undefined;
+export function claudeLaneOpen(gate: FleetSubscriptionGate | undefined, lane: string, episode: string | null | undefined, model?: string | null): boolean {
+  return gate === undefined || gate.holdOf(subscriptionLaneOf({ driver: "claude-code", lane }), episode, model ?? null) === undefined;
 }
 
 /** A spawn the gate changed, and why. */
@@ -239,7 +202,7 @@ export function gateSpawns(
     if (!s.enabled) return s;
     let why: string | undefined;
     for (const e of s.entries) {
-      why = gate.holdOf(laneOfSpec(e), e.episode);
+      why = gate.holdOf(laneOfSpec(e), e.episode, e.model);
       if (why !== undefined) break;
     }
     if (why === undefined) return s;
@@ -339,13 +302,6 @@ export class FleetGoUsage {
     return [...this.pollers.values()].flatMap((p) => (p.current !== undefined ? [p.current] : []));
   }
 }
-
-/**
- * Where the supervisor leaves its own Go readings for the readers without a
- * poller — the roster's pre-launch check and `--status` (`readLaneUsage`).
- * Under the runs directory, operator-only like everything there.
- */
-export const LANE_USAGE_SIDECAR = "fleet-subscription-usage.json";
 
 /** Write the supervisor's readings beside the runs. Best effort: a failure is no reading for the others, never a stopped tick. */
 export function writeLaneUsageSidecar(runsDir: string, usage: readonly SubscriptionUsage[]): void {

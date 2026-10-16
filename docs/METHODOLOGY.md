@@ -255,7 +255,10 @@ roster entry, denominated in runs, and the only thing that sets a run count:
 `e360`). Promotion is a threshold applied to every model alike — one counted
 `e90` reaching level 5 climbs `t1` to `t2` — never a judgement. Billing buys no
 runs and costs none; it decides only where a run may execute, and money caps
-are external to the fleet by decision. Mechanics: `docs/RUNBOOK.md`.
+are external to the fleet by decision; subscription usage is the one cap inside
+it: a scored launch on a subscription lane holds, and freeplay pauses and does
+not start, at a configured share of the usage window (operator, 2026-10-16).
+Mechanics: `docs/RUNBOOK.md`.
 
 ## Scoring
 

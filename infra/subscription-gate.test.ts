@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { modelStates, type RunFact } from "../runner/src/models";
+import { isStaleRun, modelStates, type RunFact } from "../runner/src/models";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { projectEntry, projectFleet, SUBSCRIPTION_WAIT_WHY } from "../runner/viewer/public-projection";
 import type { EntrySummary, FleetResponse } from "../runner/viewer/api-types";
@@ -217,6 +217,54 @@ describe("resumes and the pause the gate writes", () => {
     expect(errored["text"]).toBeUndefined();
     const ok = projectEntry({ i: 3, t: "claude_result", ts: NOW, start: 0, end: 1, isError: false, text: "done" } as EntrySummary);
     expect(ok["text"]).toBe("done");
+  });
+});
+
+describe("a per-model cap on a claude lane", () => {
+  test("holds only that family's picks; the lane's other models still launch", () => {
+    const config = parseFleet(
+      {
+        accounts: { pool: ["RUNNER", "RUNNER2"] },
+        roster: { op: { tier: "t1", model: "claude-opus-4-8", driver: "claude-code" }, son: { tier: "t1", model: "sonnet", driver: "claude-code" } },
+        policy: { maxConcurrent: { "claude-code": 2 } },
+      },
+      { env: {} },
+    );
+    const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(config.roster), runs: [], sidecar: { version: 1, cleared: {} }, now: NOW, policy: config.policy });
+    const capped: SubscriptionUsage = {
+      lane: LANE1,
+      observedAt: NOW - 60_000,
+      windows: [
+        { usedPercent: 30, windowMinutes: 10_080, resetsAt: NOW + 50 * H },
+        { usedPercent: 100, windowMinutes: 10_080, resetsAt: NOW + 50 * H, family: "opus" },
+      ],
+    };
+    const plan = planTick(config, states, () => undefined, "20300101", [], [], undefined, new Map(), new Set(), [], [], subscriptionGate([capped], T, NOW));
+    expect(plan.policy.map((p) => p.job.ref)).toEqual(["son"]);
+    expect(plan.heldPicks.find((h) => h.name === "op")!.why).toContain("at or over the scored threshold");
+    // A lane-wide spent window holds both.
+    const laneWide = { ...capped, windows: [{ usedPercent: 100, windowMinutes: 10_080, resetsAt: NOW + 50 * H }] };
+    expect(planTick(config, states, () => undefined, "20300101", [], [], undefined, new Map(), new Set(), [], [], subscriptionGate([laneWide], T, NOW)).policy).toEqual([]);
+  });
+});
+
+describe("a resuming probe waiting on a reset", () => {
+  test("is not aged into stale while its reset is ahead, however short its own budget", () => {
+    const probe = {
+      episode: "probing" as const,
+      episodeMs: 60 * 60_000,
+      live: false,
+      terminationReason: null,
+      startedAt: NOW - 3 * H,
+      endedAt: null,
+      pause: { reason: "quota-exhausted", at: NOW - 2 * H, count: 1, episodeElapsedMs: 40 * 60_000, notBefore: NOW + 3 * 24 * H },
+    };
+    expect(isStaleRun(probe, NOW)).toBe(false);
+    expect(isStaleRun(probe, NOW + 3 * 24 * H + 30 * 60_000)).toBe(false);
+    // Its gap starts at the reset: an hour past it with no resume is stale again.
+    expect(isStaleRun(probe, NOW + 3 * 24 * H + 61 * 60_000)).toBe(true);
+    // A pause with no reset ages from its own instant, as before.
+    expect(isStaleRun({ ...probe, pause: { ...probe.pause, reason: "auth-failed" } }, NOW)).toBe(true);
   });
 });
 

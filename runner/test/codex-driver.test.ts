@@ -13,6 +13,7 @@ import {
   DISABLED_FEATURES,
   childEnv,
   codexArgs,
+  codexStatedReset,
   codexEffortRefusal,
   detectCodexFailure,
   laneLooksLoggedIn,
@@ -88,6 +89,8 @@ function setupEpisode(
     ...loadRunConfig({
       driver: "codex",
       model: "gpt-5.5",
+      // A runs directory of its own: the driver seeds its lane reading from one.
+      runsDir: tempDir("wrathbench-codex-runs-"),
       stepIntervalMs: 0,
       stateIntervalMs: 1,
       ...extraConfig,
@@ -1045,6 +1048,42 @@ describe("codex driver: the subscription's usage windows", () => {
     expect(Math.abs(notBefore - (Date.now() + 7 * 24 * 3_600_000))).toBeLessThan(60_000);
     trajectory.close();
   }, 20_000);
+
+  test("a fresh run whose first turn meets a spent quota waits for the lane's last known window, seeded from another run", async () => {
+    const runsDir = tempDir("wrathbench-codex-lane-");
+    const reset = Date.now() + 3 * 3_600_000;
+    mkdirSync(join(runsDir, "fleet-earlier"), { recursive: true });
+    writeFileSync(
+      join(runsDir, "fleet-earlier", "meta.json"),
+      JSON.stringify({ subscriptionUsage: { lane: "codex:CODEX_HOME", observedAt: Date.now() - 600_000, windows: [{ usedPercent: 97, windowMinutes: 10_080, resetsAt: reset }] } }),
+    );
+    const { runDir, trajectory, options } = setupEpisode("limit", { maxTurns: 3, runsDir });
+    const outcome = await runCodexEpisode(options);
+    expect(outcome).toMatchObject({ kind: "paused", reason: "quota-exhausted", notBefore: reset });
+    // Recorded as spent on this run, so the lane gate holds the next attempt.
+    expect(readMeta(runDir)!.subscriptionUsage?.windows[0]?.usedPercent).toBe(100);
+    trajectory.close();
+  }, 20_000);
+
+  test("the CLI's own \"Try again at …\" is a stated reset, and wins", async () => {
+    const at = new Date(Date.now() + 2 * 24 * 3_600_000);
+    at.setSeconds(0, 0);
+    const month = at.toLocaleString("en-US", { month: "short" });
+    const h12 = at.getHours() % 12 === 0 ? 12 : at.getHours() % 12;
+    const text = `You’ve hit your usage limit. Try again at ${month} ${at.getDate()}th, ${at.getFullYear()} ${h12}:${String(at.getMinutes()).padStart(2, "0")} ${at.getHours() < 12 ? "AM" : "PM"}.`;
+    const { trajectory, options } = setupEpisode("limit", { maxTurns: 3 }, { WB_FAKE_LIMIT_TEXT: text });
+    expect(await runCodexEpisode(options)).toMatchObject({ kind: "paused", reason: "quota-exhausted", notBefore: at.getTime() });
+    trajectory.close();
+  }, 20_000);
+
+  test("codexStatedReset reads both of the CLI's spellings, in local time, and only a future one", () => {
+    const now = new Date(2030, 4, 6, 10, 0).getTime();
+    expect(codexStatedReset("You’ve hit your usage limit. Try again at 4:05 PM.", now)).toBe(new Date(2030, 4, 6, 16, 5).getTime());
+    expect(codexStatedReset('{"message":"…or try again at May 8th, 2030 12:30 AM."}', now)).toBe(new Date(2030, 4, 8, 0, 30).getTime());
+    expect(codexStatedReset("Try again at 9:00 AM.", now)).toBeUndefined();
+    expect(codexStatedReset("You’ve hit your usage limit. Try again later.", now)).toBeUndefined();
+    expect(codexStatedReset(undefined, now)).toBeUndefined();
+  });
 
   test("a spent quota with no window known pauses as before, with no reset", async () => {
     const { trajectory, options } = setupEpisode("limit", { maxTurns: 3 });

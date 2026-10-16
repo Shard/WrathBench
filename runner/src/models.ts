@@ -1668,8 +1668,16 @@ export { NOT_THE_MODELS_FAULT } from "./lapse";
  * hours of life.
  */
 export function lastActivityOf(f: Pick<RunFact, "pause" | "endedAt" | "startedAt">): number {
-  return f.pause !== null ? f.pause.at : Math.max(f.endedAt ?? 0, f.startedAt);
+  if (f.pause === null) return Math.max(f.endedAt ?? 0, f.startedAt);
+  // A pause waiting on a stated reset — a spent quota, the subscription gate —
+  // is not gone quiet while it waits: nothing may play it before then, so its
+  // gap starts at the reset, and a resuming probe whose reset is farther than
+  // its own budget is not aged into stale while it waits.
+  return WAITS_ON_RESET.has(f.pause.reason) && f.pause.notBefore !== undefined ? Math.max(f.pause.at, f.pause.notBefore) : f.pause.at;
 }
+
+/** The pauses whose `notBefore` is a reset the run must wait for (`lastActivityOf`). */
+const WAITS_ON_RESET: ReadonlySet<string> = new Set(["quota-exhausted", SUBSCRIPTION_PAUSE]);
 
 /**
  * A run nothing came back for: no termination, and no activity for

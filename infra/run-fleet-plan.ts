@@ -2404,7 +2404,7 @@ export function planTick(
       max: config.maxConcurrent,
       running: keyCount,
       pinnedLane: (n) => config.roster[n]?.subscription,
-      ...(gate !== undefined ? { gate: (n: string, ep: EpisodeId, lane: string) => gate.holdOf(laneOfEntry(config.roster[n], lane), ep) } : {}),
+      ...(gate !== undefined ? { gate: (n: string, ep: EpisodeId, lane: string) => gate.holdOf(laneOfEntry(config.roster[n], lane), ep, config.roster[n]?.model) } : {}),
     },
     policy: config.policy,
     paidRunning,
