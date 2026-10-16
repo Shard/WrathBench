@@ -193,6 +193,16 @@ export const DEFAULT_CLAUDE_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
 export const DEFAULT_CODEX_HOME_ENV = "CODEX_HOME";
 
 /**
+ * Whether a lane variable NAME is a Codex home (`CODEX_HOME`, `CODEX_HOME_2`)
+ * rather than a Claude token. `policy.subscriptions` lists both kinds, because
+ * a roster entry may only pin a lane that list names, so the kind is read off
+ * the name, which is the convention the two defaults already set.
+ */
+export function isCodexHomeEnvName(name: string): boolean {
+  return new RegExp(`^${DEFAULT_CODEX_HOME_ENV}(_[0-9]+)?$`).test(name);
+}
+
+/**
  * Whether a string is usable as a subscription lane name. An env var name and
  * nothing else: the fleet builds a concurrency key out of it and the runner
  * looks it up in `process.env`, so a value that snuck in here would be a

@@ -74,10 +74,10 @@ describe("resolve", () => {
     expect(episodeArgv(sub, false)).not.toContain("--billing");
   });
 
-  test("routing on an endpoint with one backend is refused at resolve, not dropped", () => {
+  test("routing off OpenRouter is refused at resolve, not dropped", () => {
     expect(() =>
       resolve([{ model: "qwen-3.8-27b", apiBase: "https://api.cerebras.ai/v1", routing: ["Cerebras"] as never }], "20260916"),
-    ).toThrow(/routing is an OpenRouter setting/);
+    ).toThrow(/routing is an OpenRouter setting.*single-backend or \(OpenCode Go\) routed by its provider/);
   });
 
   test("an unknown driver is refused rather than passed through", () => {
