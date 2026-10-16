@@ -396,8 +396,10 @@ export function nameHasPostWrathQualifier(name: string): boolean {
  * Later-world qualifiers that are on no title list, because as a title they
  * name this world too. `(Worgen)` disambiguates the worgen starting zone's
  * version of a quest (Cataclysm, operator 2026-10-16); worgen themselves are this
- * world's NPCs — Duskwood, Grizzly Hills — which is why the word is not a
- * category-title subject above, where it would take `Category:Worgen` with it.
+ * world's NPCs — Duskwood, Grizzly Hills. The word is not a category-title
+ * subject above because that list also decides which category pages are in the
+ * bundle: on the 2020 dump it would drop three of them, and a qualifier is about
+ * a name, not about a page.
  * `(Goblin)` is not here: on this dump it names Goblin Engineering, this world's.
  */
 const POST_WRATH_QUALIFIERS: ReadonlySet<string> = new Set(["worgen"]);
