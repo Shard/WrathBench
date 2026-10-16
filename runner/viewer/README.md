@@ -12,11 +12,10 @@ owns the tag, so it comes back on its own and new viewer code needs a new tag
 rather than a restart. `bun run viewer:restart`
 (`infra/viewer-restart.sh`) rollout-restarts that Deployment and checks
 `/api/info` on `$WRATHBENCH_VIEWER_URL` — it kicks a wedged process, it does not
-deploy anything. `viewer-restart.sh --local` drives the compose shape's systemd
-user unit (`infra/wrathbench-viewer.service`) instead.
+deploy anything.
 
-Locally — a rehearsal, a bare clone, or development on the pages — it is still
-one process:
+Anywhere else — the single-machine compose stack, a bare clone, or development
+on the pages — it is one process you start and stop yourself:
 
 ```
 bun runner/viewer/serve.ts        # from the repo root

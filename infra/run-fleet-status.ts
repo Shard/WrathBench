@@ -1249,7 +1249,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   for (const line of formatGate(undefined, config.preflight)) console.log(line);
   if (config.preflight.enabled) {
     for (const s of config.preflight.smokes) console.log(`  would run: bun ${smokePath(s.script)} (account ${s.account})`);
-    for (const s of config.preflight.deploySmokes) console.log(`  deploy-worldserver.sh only: bun ${smokePath(s.script)} (account ${s.account})`);
+    for (const s of config.preflight.deploySmokes) console.log(`  deploy window only: bun ${smokePath(s.script)} (account ${s.account})`);
   } else {
     console.log("  gate open: jobs spawn without smoking the server first");
   }

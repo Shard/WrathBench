@@ -4,21 +4,29 @@ How to run the harness day to day. Architecture is in `docs/ARCHITECTURE.md`;
 what the agent may see and do is `docs/CONTRACTS.md`. Bringing the stack up on
 a fresh machine is `infra/README.md`.
 
+The fleet runs on Kubernetes from the Helm chart at `infra/chart/wrathbench`,
+and the chart is also the reference for anyone doing a more serious
+deployment. `infra/compose.yml` is the single-machine quickstart
+(`infra/README.md`, "Try it on one machine"): it brings the same services up
+to try WrathBench without installing anything, and there is no compose deploy
+path — no deploy window, no update script, no rollback. A compose stack is
+brought up, used and brought down; the release and update procedures below
+are the cluster's.
+
 ## Running the fleet as a service
 
 The fleet supervisor (`infra/run-fleet.ts`) is a long-lived service — a
-compose service locally, a Deployment on a cluster. It has no
-deadline, and it is steered entirely through the config store, which it
+Deployment on the cluster, and a compose service on the quickstart stack. It
+has no deadline, and it is steered entirely through the config store, which it
 re-reads every 60 seconds ("Where the config lives", below). It lives inside
 the runner image rather than on the host so it survives the operator's shell
 and reboots, and never crosses the container boundary to spawn a runner.
-That shape is what the Helm chart at `infra/chart/wrathbench` deploys
-unchanged — the same image, the same store re-read every 60 seconds,
-the same drain on SIGTERM — with the Deployment scaled 0/1 where compose stops
-and starts a service. Read every `docker compose` line below as the local
-stack's; on a cluster the equivalent is a `kubectl scale` or `kubectl rollout
-restart` of that Deployment, and `./infra/fleet-update.sh` already speaks
-kubectl for all five of its verbs.
+The chart and compose run it the same way — the same image, the same store
+re-read every 60 seconds, the same drain on SIGTERM — with the Deployment
+scaled 0/1 where compose stops and starts a service. Read every
+`docker compose` line below as the quickstart stack's; on the cluster the
+equivalent is a `kubectl scale` or `kubectl rollout restart` of that
+Deployment, and `./infra/fleet-update.sh` speaks only kubectl.
 
 ### Start it
 
@@ -111,8 +119,7 @@ bun runner/src/config-store.ts export /tmp/fleet.json           # to read or dif
 On a cluster the store is on the PVC, so the CLI runs through the runner pod
 (`kubectl -n wrathbench exec deploy/wrathbench-runner -- bun runner/src/config-store.ts …`)
 the same way `fleet-state.json` is read; `infra/k8s-deploy.sh` reads the
-`preflight` block that way too (`get preflight`), and
-`infra/deploy-worldserver.sh` through the compose `runner` container. The
+`preflight` block that way too (`get preflight`). The
 endpoints behind the page are the
 same operations over HTTP and are documented in `runner/viewer/README.md`;
 they are operator-only and are not mounted at all when the viewer is in public
@@ -446,11 +453,13 @@ in `data/runs/` is what matters and it is on the bind mount.
 
 ### Updating the live fleet
 
-`infra/fleet-update.sh` drives compose locally and kubectl on a cluster — the
-same five verbs, the same semantics — and the deploy window is
-`infra/deploy-worldserver.sh` or, on a cluster, `infra/k8s-deploy.sh`, where the
-runner-image row of the table below is "a new image tag" rather than a rebuild
-in place.
+This is the cluster's procedure. `infra/fleet-update.sh` and the deploy window,
+`infra/k8s-deploy.sh`, speak only kubectl; a quickstart compose stack has no
+update path beyond `up -d --build`, which recreates what changed under
+whatever is running. On the cluster the repo is baked into the runner image
+rather than bind-mounted, so every code row of the table below lands with a
+release (a new image tag, `infra/k8s-release.sh`); the config store and the
+wiki bundle live on the data volume and need none.
 
 Everything that changes the harness reaches the running fleet one of three
 ways, and the first question is always **which**:
@@ -569,7 +578,7 @@ so it is the fallback and never the recipe.
 kubectl -n wrathbench rollout restart deployment/wrathbench-fleet   # the same thing by hand
 ```
 
-Compose stops the container inside its 180s `stop_grace_period`, so every live
+The fleet pod stops inside its 180s termination grace, so every live
 run takes the **pause** path rather than being killed: the supervisor SIGTERMs
 each roster, each roster SIGTERMs its episode, and the runner writes a pause and
 logs the character out. Nothing is corrupted. What it costs:
@@ -599,16 +608,14 @@ runs and schedules nothing; `drain` is the mode whose job is leaving it set, and
 that one stops the container instead. A supervisor that does not come back
 leaves the switch set, exactly as on the graceful path.
 
-`--no-deps` is not optional on either path: without it compose may decide the
-worldserver is out of date and recreate it under every live episode.
-
-Rebuilding the image (`docker compose -f infra/compose.yml build fleet`) belongs
-between the drain and the recreate; `fleet-update.sh` does not build for you.
+`fleet-update.sh` does not build or pin an image for you: new code reaches the
+fleet pod through a release (`infra/k8s-release.sh`), whose drain and resume
+phases are this script's.
 
 #### The worldserver
 
-`./infra/deploy-worldserver.sh` owns its own window and is the **forceful**
-path by design: its `draining` phase is `compose stop fleet`, so every live run
+`./infra/k8s-deploy.sh` owns its own window and is the **forceful**
+path by design: its `draining` phase scales the fleet to 0, so every live run
 pauses and a scored one spends its attempt, exactly as above. That is the
 documented trade — the script needs nothing from you while it runs, and a
 deploy must never depend on an operator watching a wait loop.
@@ -904,8 +911,10 @@ sharing the node when one fills.
 
 ### Deploy window (worldserver changes)
 
-The canonical deployment is the Kubernetes chart; the rest of this chapter is
-the compose path, which is the local rehearsal stack and the rollback.
+A worldserver change reaches the cluster in a release, and `infra/k8s-deploy.sh`
+is the only deploy window. There is none for compose: a quickstart stack takes
+a new worldserver with `docker compose --env-file .env -f infra/compose.yml up
+-d --build`, which recreates it under whatever is running and verifies nothing.
 
 #### On the cluster
 
@@ -972,120 +981,85 @@ because a provider-paused run is not resumed while the switch is set and can go
 stale, which counts (see "Graceful" above). If a smoke fails, nothing scheduled
 has run on that build: revert the pin, and resume once a build passes.
 
-#### On compose
-
-Two scripts, from the host; the deploy is **one command** that owns the whole
-window and needs nothing from you while it runs:
-
-```
-./infra/build-worldserver.sh                   # build wrathbench/worldserver:next, stamped
-./infra/deploy-worldserver.sh                  # the whole window, start to finish
-./infra/deploy-worldserver.sh --next-tag wrathbench/worldserver:mybuild
-./infra/deploy-worldserver.sh --dry-run        # print the plan and every resolved value; do nothing
-```
-
-The build script stamps the image with this checkout's
-`git describe --tags --always --dirty`, and everything that names the server
-names it by that stamp. Commit before building so the stamp names a commit
-rather than `-dirty`.
-
-You do not drain anything first, you do not wait for anything, and you do not
-kill anything. If a deploy ever needs a wait loop or a `pkill` from the
-operator, that is a bug in the script, not a procedure. Run it with the fleet
-up; run it again if it failed; it is safe both ways. The price of that is the
-`draining` phase below: a `compose stop`, so every live run pauses and a scored
-one spends its attempt. When you would rather pay nothing, drain first —
-"Updating the live fleet", *The worldserver* — and hand the script a fleet that
-is already quiet. Nothing about the script changes either way.
-
 #### What each phase means
 
-The script writes `data/runs/server-state.json` at every transition, and the
-Fleet page's banner is the phase plus the script's own `detail` sentence
-verbatim. The page never guesses at what the window is doing.
+`infra/k8s-deploy.sh` writes `data/runs/server-state.json` at every
+transition, and the Fleet page's banner is the phase plus the script's own
+`detail` sentence verbatim. The page never guesses at what the window is doing.
 
-- **draining** — `docker compose stop fleet`. SIGTERM reaches the supervisor,
-  every live run pauses (see "Stop it"), the supervisor writes its final state and
-  exits. The script then waits for that state file to say no job is alive —
-  the supervisor's own word, never a process listing — for at most 60s after
-  `stop` returns, and fails loudly if it never does (a SIGKILL inside the
-  grace period is the only way that happens). While the window is open the
-  supervisor and its jobs read as stopped for the deploy, not as dead.
-- **swapping** — `:latest` is tagged `:prev` (the rollback target), `:next`
-  becomes `:latest`, the worldserver is recreated (`--no-deps`: the one time
-  recreation is the point) and the script waits up to 300s for `/health` to
-  answer ready.
-- **verifying** — the gate smokes (`preflight.smokes`) and then the
-  deploy smokes (`preflight.deploySmokes`: the game surface and the
-  `module-quest.ts` full arc) run directly through `docker compose exec
-  runner`, each list against its budget. The fleet is down, so nothing else is
-  on the smoke accounts. The detail names the smoke in flight.
-- **resuming** — every smoke passed; `docker compose up -d fleet`. The
+- **draining** — the fleet Deployment is scaled to 0. SIGTERM reaches the
+  supervisor, every live run pauses (see "Stop it"), and the supervisor writes
+  its final state and exits. The script then waits, for at most 300s, for that
+  state file to say no job is alive — the supervisor's own word, never a
+  process listing — and for the fleet pod and every run pod to be gone, since
+  the supervisor's own preflight smoke is not a job and still holds a smoke
+  account. A pod that outlives the wait, or a pod listing that fails, fails the
+  window closed with the pod named.
+- **waiting** — the worldserver rollout Flux performs, then `/health` answering
+  ready with the bearer, for at most 900s.
+- **verifying** — the gate smokes (`preflight.smokes`) and then the deploy
+  smokes (`preflight.deploySmokes`: the game surface and the `module-quest.ts`
+  full arc) run through `kubectl exec` into the runner pod, each list against
+  its budget. The fleet is down, so nothing else is on the smoke accounts. The
+  detail names the smoke in flight.
+- **resuming** — every smoke passed; the fleet is scaled back to 1. The
   supervisor boots, re-gates on the new server identity and resumes every
-  paused run on its own account before the queue or the policy gets one.
+  paused run on its own account before the queue or the policy gets one. Under
+  `--keep-paused` the pause switch stays set and it resumes nothing.
 - **running** — the window is over. The script's last line is `DEPLOYED and
   verified by …`, exit 0.
-- **rolled-back** — a smoke failed on the new build. `:prev` is retagged
-  `:latest`, the worldserver recreated, health waited for, and the **old** build
-  is re-verified with the gate smokes; then the fleet is started on it. Exit 1.
-- **failed** — the deploy failed *and* nothing is verified: the drain never
-  completed (nothing was swapped; the old server is still live), there was no
-  `:prev` to roll back to, the rolled-back build would not verify either, or
-  the fleet would not start. The fleet is started regardless — its own
-  preflight gate blocks spawning until a build passes — and the detail says
-  which case it was. Exit 1.
+- **failed** — the window failed closed: the drain never completed, the
+  worldserver never answered ready, a smoke failed, or the fleet would not
+  scale back. The fleet is scaled back regardless — its own preflight gate
+  blocks spawning until a build passes — and the detail says which case it
+  was. Exit 1.
 
-Whatever happens after the fleet is stopped, the script's EXIT trap brings it
-back up: a deploy never leaves the fleet stopped, on any path, including an
-unexpected error. `set -Eeuo pipefail` plus an ERR trap means any failed step
-after the swap is a failed deploy (rollback, verify old, fleet up, exit 1),
-never a warning.
+Whatever happens after the fleet is scaled to 0, the script's EXIT trap scales
+it back: a deploy never leaves the fleet stopped, on any path, including an
+unexpected error. An ERR trap makes any failed step a failed window, never a
+warning.
 
-The script holds an `flock` on `data/runs/server-state.lock` for its lifetime:
-a second deploy refuses to start while one runs, and the supervisor writes
-`running` over whatever phase it finds only when that lock is free — on boot
-over any phase (a restart is your acknowledgement of a `rolled-back` or
-`failed` notice), and on every tick over a *window* phase (`draining`,
-`swapping`, `verifying`, `resuming`), which with no lock holder can only be the
-leftovers of a deploy that died. So a crashed deploy cannot leave the page
-claiming a window is open.
+The script does not change the image tag and does not roll back. Flux owns the
+tag, so a rollback is reverting `image.tag` in the cluster repo to the previous
+immutable tag and letting Flux reconcile; the script says so when it fails.
+It holds no deploy lock either: an `flock` taken inside a `kubectl exec` dies
+with the exec. The supervisor writes `running` over a window phase it finds on
+file (the leftovers of a window that died) and over any phase when it boots,
+which is the acknowledgement of a `failed` notice. Keep the window to one
+operator.
 
-#### If it says failed (or rolled-back)
+#### If it says failed
 
-Read the detail: it names the smoke that failed and its tail is in the script's
-output. Then:
+Read the detail: it names what failed, and the script's output has the tail.
+Then:
 
-1. **rolled-back** — the old build is live, verified, and the fleet is running
-   on it. Nothing to do for the fleet. Fix the module, rebuild `:next`, deploy
-   again. The red banner stays until the supervisor next boots (a `stop` /
-   `up -d fleet`, or the next deploy), so it is not missed.
-2. **failed, "the server was not swapped"** — the drain did not complete, so
-   the old build is still live and untouched. The fleet was started again;
-   check `data/runs/fleet-<stamp>.jsonl` for why the supervisor did not exit
-   cleanly (a roster that ignored SIGTERM, a runner past its 60s backstop),
-   then deploy again.
-3. **failed, "ROLLBACK IMPOSSIBLE"** — the new build is live and unverified
-   because there was no `:latest` to keep. The fleet is up and its gate is the
-   only check; `run-fleet --status` and the gate strip on the Fleet page say
-   whether it passed. If the gate fails, build a known-good `:next` and deploy
-   it.
-4. **failed, "could not verify it"** — the rollback happened but the old build
-   failed the gate smokes too, which means the failure is not in the build
-   (auth, the database, the smoke accounts, the runner image). The fleet is up
-   and gated shut. Run a smoke by hand (`docker compose -f infra/compose.yml
-   exec runner bun infra/smoke/preflight.ts`, which logs in as PROBE;
-   add `-e MODULE_ACCOUNT=SMOKE` to reproduce the gate's account) and read its
-   output.
-5. **failed, "the fleet service did not start"** — the one case with a command
-   for you: `docker compose -f infra/compose.yml up -d fleet`, after reading
-   why compose refused (`docker compose logs fleet`).
+1. **The drain did not complete** (a job still alive, a fleet or run pod still
+   listed, or a pod listing that failed). Nothing was smoked, but the window
+   only opens once the cluster carries this tree's tag, so the new build is
+   already live, or rolling out, and unverified. The fleet's own gate still
+   smokes it before anything spawns. Check `data/runs/fleet-<stamp>.jsonl` for
+   why the supervisor did not exit cleanly (a roster that ignored SIGTERM, a
+   runner past its 60s backstop), or the named pod, then run the window again.
+2. **The worldserver never answered ready.** The rollout or the module is the
+   problem: `kubectl -n wrathbench logs deploy/wrathbench-worldserver` and
+   `./infra/module-health.sh`. Revert the pin if the build is at fault.
+3. **A smoke failed on the new build.** The fleet is up and gated shut, so
+   nothing has spawned on that build. Revert the pin and let Flux roll the
+   worldserver back; the gate re-runs on the new server identity and unblocks
+   the fleet once the old build passes. If the old build fails too, the
+   failure is not in the build (auth, the database, the smoke accounts, the
+   runner image). Run a smoke by hand and read its output:
+   `kubectl -n wrathbench exec deploy/wrathbench-runner -- bun infra/smoke/preflight.ts`
+   logs in as PROBE, and `-- env MODULE_ACCOUNT=SMOKE bun …` reproduces the
+   gate's account.
+4. **The fleet did not scale back up.** The one case with a command for you:
+   `kubectl -n wrathbench scale deploy/wrathbench-fleet --replicas=1`.
 
-`--no-smoke` is the honest escape hatch for a machine where the preflight
-accounts do not exist yet: it drains, swaps, waits for health, verifies
-nothing, says `DEPLOYED UNVERIFIED`, and hands the server to the fleet — whose
-own gate is then the only check. An enabled preflight with no `smokes`
-configured is not that: it rolls back and exits 1, because nobody asked for an
-unverified deploy.
+`--no-smoke` is the honest escape hatch for a cluster where the preflight
+accounts do not exist yet: it drains, waits for health, verifies nothing, says
+`DEPLOYED UNVERIFIED`, and hands the server to the fleet — whose own gate is
+then the only check. An enabled preflight with no `smokes` configured is not
+that: it fails and exits 1, because nobody asked for an unverified deploy.
 
 `--dry-run` prints the plan and every resolved value and executes nothing. It
 is read-only and safe while the fleet is up.
@@ -1095,10 +1069,10 @@ deploy (`DEPLOYED and verified by N direct smoke(s) + M full-arc smoke(s)`),
 and it can only be reached by a step that actually ran and exited zero. Each
 smoke logs its start, its duration and its exit code.
 
-`infra/deploy-worldserver.test.ts` covers this without a daemon: it runs the
-real script with `docker` replaced by a PATH shim, under `FORCE_COLOR=3`, and
-asserts the phase sequence, the drain, the rollback branch, the fleet-up
-invariant on every exit path, and the exit codes.
+`infra/k8s-deploy.test.ts` covers the drain without a cluster: it runs the
+real script with `kubectl` replaced by a PATH shim and asserts that no smoke
+runs while a fleet or run pod is listed, that the fleet comes back on every
+exit path, and what `--keep-paused` leaves set.
 
 ### The preflight gate
 
@@ -1119,7 +1093,7 @@ top-level `preflight` block of the config, hot-reloaded like the jobs;
   **distinct accounts run in parallel**; entries sharing an account run in
   order. A bare string entry means "on `account`".
 - **`deploySmokes` is what a release proves on top.** The deploy window
-  (`infra/k8s-deploy.sh`, `infra/deploy-worldserver.sh`) runs the gate smokes
+  (`infra/k8s-deploy.sh`) runs the gate smokes
   and then these, one after another, with the fleet down and before anything
   resumes; the supervisor never runs them. The game surface lives here:
   `kill-credit.ts` (combat, kill credit, loot), `quest-accept-status.ts`
@@ -1142,7 +1116,8 @@ smoke's usual run. `./infra/run-fleet.sh --status` shows the last gate result,
 per script; `--dry-run` shows the plan.
 
 **Gate accounts.** Every account a smoke is bound to must exist in auth and be
-in the module's allowlist — `AC_WRATH_BENCH_ACCOUNTS` in `infra/compose.yml`,
+in the module's allowlist — `worldserver.accounts` in the chart's values
+(`AC_WRATH_BENCH_ACCOUNTS` in `infra/compose.yml` on the quickstart stack),
 which the module reads **only at worldserver recreate**. A smoke bound to an
 account the running module does not permit gets 403 `account_not_permitted`,
 the gate fails, and no job spawns until it is fixed, so a new gate account is
@@ -1628,22 +1603,24 @@ shorter than 32 characters — refuses to listen at all and says so at ERROR in
   and delete on any account;
 - the **smokes** (`infra/smoke/lib/auth.ts`), exec'd in the runner container,
   and the deploy script's `/health` probes, which run there too;
-- the **worldserver**, as `AC_WRATH_BENCH_SECRET`. Compose interpolates that
-  from the *shell*, not from the repo-root `.env` (its project directory is
-  `infra/`), so `./infra/deploy-worldserver.sh` exports the value from `.env`
-  before it recreates the container and refuses to open the window when it is
-  missing; `--dry-run` prints its length. A bare `docker compose up -d
-  worldserver` from a shell without it ships an empty secret and the module
-  refuses to listen — the loud failure, by design. An operator's loopback
-  probe inside the container needs the header too, and the image has neither
-  curl nor wget: `./infra/module-health.sh` does it with perl and prints the
-  full census (`sessions`, drops by opcode). A probe from anywhere else — the
-  runner container included — gets liveness with the counters zeroed.
+- the **worldserver**, as `AC_WRATH_BENCH_SECRET`. On the cluster the chart
+  takes it from the `WRATHBENCH_MODULE_SECRET` key of the env Secret
+  (`envSecretName`), which the cluster repo generates from `.env`. On the
+  quickstart stack compose interpolates it, and with `infra/` as its project
+  directory it reads the repo-root `.env` only when told to: `--env-file .env`
+  on every `up` (`infra/README.md`). An `up` without it ships an empty secret
+  and the module refuses to listen — the loud failure, by design. An
+  operator's loopback probe inside the container needs the header too, and
+  the image has neither curl nor wget: on the cluster `./infra/module-health.sh`
+  does it with perl and prints the full census (`sessions`, drops by opcode).
+  A probe from anywhere else — the runner container included — gets liveness
+  with the counters zeroed.
 
-Rotating it is a deploy window: change `.env`, then `deploy-worldserver.sh`
-(the fleet is recreated on the way out and re-reads `.env`; a live `runner`
-container keeps the old value in already-running processes only, and every
-`docker compose exec` reads the file fresh).
+Rotating it is a deploy window: the worldserver and everything that presents
+the secret must change together, and a process reads it once, at start. On the
+cluster that is the env Secret, then the worldserver and every pod carrying
+the key restart onto it with the fleet drained. On the quickstart stack it is
+`.env`, then `down` and `up` again with `--env-file .env`.
 
 ### Network policy
 

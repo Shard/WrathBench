@@ -55,7 +55,7 @@ export function supervisorAlive(fleet: Pick<FleetResponse, "heartbeatAt" | "now"
 }
 
 /**
- * True while a deploy holds the server (infra/deploy-worldserver.sh): the
+ * True while a deploy holds the server (infra/k8s-deploy.sh): the
  * fleet is stopped on purpose, its jobs' processes are gone on purpose, and
  * the page must say so rather than "NOT RUNNING" and a column of "exited".
  * A `rolled-back` or `failed` verdict is not a window: by then the script has

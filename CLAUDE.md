@@ -35,7 +35,7 @@ data/          Gitignored. Server data directory, wiki dump, runs, sqlite stores
 - Bun 1.4.x pinned in `.bun-version` and `package.json`. Use Bun built-ins before adding dependencies: `bun:sqlite`, `Bun.serve` (HTTP + WebSocket), `Bun.JSONL`, `Bun.markdown`, `bun test`.
 - TypeScript strict. Zod only at external boundaries (module messages, model output, config).
 - C++ follows AzerothCore's module conventions and builds inside the worldserver image.
-- Everything runs in containers via `infra/compose.yml`. The only host-side prerequisite is the AzerothCore server data directory at `data/client`.
+- Everything runs in containers: the Helm chart at `infra/chart/wrathbench` for the fleet and any real deployment, `infra/compose.yml` for a single-machine quickstart with no deploy tooling around it. Either way the only host-side prerequisite is the AzerothCore server data directory at `data/client`.
 
 ## How to work
 - Read the relevant doc before touching a component. `docs/ARCHITECTURE.md` for structure, `docs/CONTRACTS.md` for what the agent may see and do, `docs/METHODOLOGY.md` for the decisions that shape what results mean — check it before changing anything the model sees, the scorer reads, or the scheduler counts — and `docs/RUNBOOK.md` for running the fleet, the config store and a deploy.

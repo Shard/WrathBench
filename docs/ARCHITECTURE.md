@@ -235,7 +235,7 @@ Tooling for local map assets used by the viewer. The assets themselves are suppl
 
 ### infra/
 
-Compose file for worldserver, authserver, database, module build, and runner. The server data directory is supplied by the operator under `data/`. Smoke script that drives one quest end to end through the SDK.
+The images (`infra/docker/`) and two ways to run them. The Helm chart (`infra/chart/wrathbench`) is how the fleet runs and the reference for a real deployment; its release and deploy scripts are `infra/k8s-release.sh` and `infra/k8s-deploy.sh`. `infra/compose.yml` brings the same services up on one machine as a quickstart, with no deploy or update path of its own, because nothing is operated on it over time. The server data directory is supplied by the operator under `data/`. The smoke scripts under `infra/smoke/` drive the module end to end through the SDK.
 
 The core is stock AzerothCore, pinned by commit — no playerbots fork, so there
 is one dependency tree; the party question waits for encounter work and will

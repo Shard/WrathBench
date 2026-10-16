@@ -71,7 +71,7 @@ export default function Fleet() {
       <h1>fleet</h1>
       {/*
         The server's phase first, in one line, in the deploy script's own words
-        (infra/deploy-worldserver.sh writes data/runs/server-state.json at each
+        (infra/k8s-deploy.sh writes data/runs/server-state.json at each
         transition). Shown even with no fleet state: a deploy can run on a
         machine the fleet has never run on.
       */}

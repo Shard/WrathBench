@@ -201,8 +201,8 @@ CMD ["authserver"]
 ##############################################
 
 FROM runtime AS worldserver
-# The build stamp the module serves on /health, also on the image so
-# infra/deploy-worldserver.sh can name a build before it boots.
+# The build stamp the module serves on /health, also on the image as a label
+# so `docker image inspect` names a build before it boots.
 ARG WRATHBENCH_BUILD=""
 LABEL description="WrathBench AzerothCore World Server + mod-wrathbench" wrathbench.build="${WRATHBENCH_BUILD}"
 

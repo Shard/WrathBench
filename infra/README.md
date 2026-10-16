@@ -1,22 +1,33 @@
 # infra
 
-Everything runs in containers from `infra/compose.yml`. The only host-side
-prerequisite is an AzerothCore server data directory at `data/client`.
+WrathBench runs in containers, two ways, from the same Dockerfiles and code:
 
-The same stack on Kubernetes is `infra/chart/wrathbench` (Helm), built by
-`infra/build-images.sh`, released by `infra/k8s-release.sh` and operated by
-`infra/k8s-deploy.sh`. The compose stack stays the local path; nothing in it
-changes because the chart exists.
+- **On one machine, `infra/compose.yml`.** The quickstart: a way to try
+  WrathBench that needs nothing installed beyond Docker, plus an AzerothCore
+  server data directory at `data/client`. It is brought up, used and brought
+  down. There is no compose deploy or update tooling, because nobody operates
+  a compose stack over time.
+- **On a cluster, the Helm chart at `infra/chart/wrathbench`.** How the
+  project's own fleet runs, and the reference for anyone doing a more serious
+  deployment. It is built by `infra/build-images.sh`, released by
+  `infra/k8s-release.sh` and operated by `infra/k8s-deploy.sh` ("Releasing on
+  Kubernetes", below, and `docs/RUNBOOK.md`).
 
-## Bringing the stack up
+## Try it on one machine
 
 From the repository root, on a fresh machine:
 
 ```
-mkdir -p data/{client,wiki,runs,etc,logs,collector}
+mkdir -p data/{client,wiki,runs,etc,logs,collector,codex}
 # place an AzerothCore server data directory (dbc/ maps/ vmaps/ mmaps/) at data/client
-docker compose -f infra/compose.yml up -d
+echo "WRATHBENCH_MODULE_SECRET=$(openssl rand -hex 32)" >> .env
+# add the model key your run will use, e.g. OPENROUTER_KEY=...
+docker compose --env-file .env -f infra/compose.yml up -d --build
 ```
+
+`.env.example` lists every name `.env` may carry. Copy only the lines you set:
+Bun reads an empty `NAME=` line as an empty value, not as unset, and an empty
+`WRATHBENCH_MODULE_URL` sends a run to no module at all.
 
 The `mkdir` is not optional. The server containers run as uid 1000 and Docker
 creates a missing bind-mount source as root, so without it the AzerothCore
@@ -25,8 +36,18 @@ servers refuse to start usefully — and the collector, which also runs as 1000,
 cannot create its offset database under a root-owned `data/collector`. If your uid is not 1000, set `WRATHBENCH_UID`
 and `WRATHBENCH_GID` before building.
 
-The first `up` takes a while: `db-import` populates three databases from the
-AzerothCore SQL dumps.
+`--env-file .env` is how the worldserver gets the module's port secret.
+Compose's project directory is `infra/`, so it does not read the repo-root
+`.env` on its own; the runner reads the same file through Bun's autoload. Pass
+it on every `up`. An `up` without it recreates the worldserver with an empty
+secret, and the module refuses to listen until the next `up` that has it. To
+stamp the worldserver's `/health` build, export
+`WRATHBENCH_BUILD="$(git describe --tags --always --dirty)"` before building;
+unstamped, it says `unknown`.
+
+The first `up` takes a while: the AzerothCore build, then `db-import`
+populating three databases from the AzerothCore SQL dumps. `docker compose -f
+infra/compose.yml down` stops it all and keeps the data ("Where data lives").
 
 ## Services
 
@@ -201,12 +222,13 @@ schema). An unset `effort` means the provider's own default, which is not the
 same as any named level.
 
 The codex lane is a directory, so under compose it is BIND-MOUNTED —
-`${CODEX_HOME:?…}` on the host to `/home/bun/.codex` in `runner` and `fleet`,
+`CODEX_HOME` on the host to `/home/bun/.codex` in `runner` and `fleet`,
 which is what those services set `CODEX_HOME` to (`x-codex-lane` in
-compose.yml). There is no default host path: compose interpolation is
-file-wide, so the invoking shell must export `CODEX_HOME` before ANY
-`docker compose -f infra/compose.yml` command, codex or not. Never copied: a
-second copy of `auth.json` spends the other side's refresh token.
+compose.yml). Compose reads the host path from the shell or from
+`--env-file .env`; unset or empty, it is `data/codex` in the checkout, which
+holds no login until someone runs `codex login` with `CODEX_HOME` pointing
+there. Never copied: a second copy of `auth.json` spends the other side's
+refresh token.
 
 `--loop` restarts the roster when the list is exhausted, until `--until` or
 `--max-hours` (one of which it requires). Cycle 2 onward gets `-cN` run ids;
