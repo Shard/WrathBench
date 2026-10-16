@@ -33,8 +33,8 @@ re-read every 60 seconds, the same drain on SIGTERM — with the Deployment
 scaled 0/1 where compose stops and starts a service. Read every
 `docker compose` line below as the quickstart stack's; on the cluster the
 equivalent is a `kubectl scale` or `kubectl rollout restart` of that
-Deployment, and `bun wb fleet …` (`infra/fleet-update.sh`) speaks only
-kubectl.
+Deployment, and the update verbs, `bun wb fleet graceful|force|drain|resume|state`
+(`infra/fleet-update.sh`), speak only kubectl.
 
 ### Start it
 
@@ -465,9 +465,9 @@ in `data/runs/` is what matters and it is on the bind mount.
 
 ### Updating the live fleet
 
-This is the cluster's procedure. `bun wb fleet …` (`infra/fleet-update.sh`)
-and the deploy window, `bun wb release deploy` (`infra/k8s-deploy.sh`), speak
-only kubectl; a quickstart compose stack has no
+This is the cluster's procedure. The fleet's update verbs (`bun wb fleet
+graceful|force|drain|resume|state`, `infra/fleet-update.sh`) and the deploy
+window, `bun wb release deploy` (`infra/k8s-deploy.sh`), speak only kubectl; a quickstart compose stack has no
 update path beyond `up -d --build`, which recreates what changed under
 whatever is running. On the cluster the repo is baked into the runner image
 rather than bind-mounted, so every code row of the table below lands with a
