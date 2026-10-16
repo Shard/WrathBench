@@ -1,0 +1,223 @@
+{{/*
+NetworkPolicies: what the pods that run model-driven code, and the pods that
+hold a credential which leaves the cluster, may connect to. Off by default
+(`networkPolicy.enabled`); turning it on is its own release step, with the
+check in docs/RUNBOOK.md ("Network policy").
+
+The fleet pod and the run pods are why this exists. The snippet sandbox's
+Landlock ruleset confines a snippet's TCP connects to the module port, but not
+which host that port is on, nor UDP or non-IP sockets, and nothing at the pod
+level limited what the rest of the pod could reach. Each of the two gets an
+egress allow-list and no ingress at all (nothing listens on either: the
+claude-code MCP bridge is loopback, and `kubectl exec`/`logs` do not cross the
+pod network).
+
+NetworkPolicy has no deny rule, so MySQL, ClickHouse and the viewer are kept
+from the fleet and run pods by having no rule that admits them. The internet
+rule is what would otherwise let them through: it is TCP 443 to anywhere
+EXCEPT the private, CGNAT and link-local ranges, which hold every pod, every
+Service and the LAN. Something on the LAN gets its own rule (the Kubernetes
+API, a self-hosted model server), never a hole in that one.
+
+One exception, on purpose: the FLEET may reach MySQL. Its preflight gate runs
+smokes in-process, and a smoke that starts from a fixture (kill-credit.ts on
+the live gate) stages it with infra/fixtures/apply.ts, which writes
+acore_characters over 3306 from this pod. A benchmark episode cannot use that
+path: the snippet child is not given the database env (sandboxChildEnv) and
+Landlock confines its connects to the module port. Run pods have no database
+env and no such rule.
+
+Not covered, deliberately: the runner pod (the operator's shell, which runs
+bootstrap, fixtures and every smoke, and so needs MySQL), the worldserver and
+authserver, and the databases' own ingress — a backup job outside this chart
+connects to MySQL with labels the chart does not know.
+*/}}
+
+{{- define "wrathbench.np.matchLabels" -}}
+matchLabels:
+  app.kubernetes.io/instance: {{ .ctx.Release.Name }}
+  app.kubernetes.io/component: {{ .component }}
+{{- end -}}
+
+{{- define "wrathbench.np.dns" -}}
+- to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.networkPolicy.dns.namespace }}
+      podSelector:
+        matchLabels: {{- toYaml .Values.networkPolicy.dns.podLabels | nindent 10 }}
+  ports:
+    - protocol: UDP
+      port: {{ .Values.networkPolicy.dns.port }}
+    - protocol: TCP
+      port: {{ .Values.networkPolicy.dns.port }}
+{{- end -}}
+
+{{/* The module's control port only; nothing here talks to the world port. */}}
+{{- define "wrathbench.np.module" -}}
+- to:
+    - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "worldserver") | nindent 8 }}
+  ports:
+    - protocol: TCP
+      port: 8086
+{{- end -}}
+
+{{- define "wrathbench.np.internet" -}}
+- to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: {{- toYaml .Values.networkPolicy.internet.except | nindent 10 }}
+  ports:
+    {{- range .Values.networkPolicy.internet.ports }}
+    - protocol: TCP
+      port: {{ . }}
+    {{- end }}
+{{- end -}}
+
+{{- define "wrathbench.np.clickhouse" -}}
+- to:
+    - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "clickhouse") | nindent 8 }}
+  ports:
+    - protocol: TCP
+      port: 8123
+{{- end -}}
+
+{{/*
+The self-hosted model servers, from `localModelHosts` — the same list that
+decides where LMSTUDIO_KEY may be sent, so the two cannot drift. A policy
+admits an address and a port, never a name, so each entry has to be
+IPv4:port; anything else is refused at render rather than opened wider.
+*/}}
+{{- define "wrathbench.np.localModels" -}}
+{{- range .Values.localModelHosts }}
+{{- $parts := splitList ":" (toString .) }}
+{{- if not (and (eq (len $parts) 2) (regexMatch "^[0-9]{1,3}(\\.[0-9]{1,3}){3}$" (first $parts)) (regexMatch "^[0-9]{1,5}$" (last $parts))) }}
+{{- fail (printf "networkPolicy.enabled: localModelHosts entry %q must be IPv4:port — a NetworkPolicy admits an address and a port, not a host name" (toString .)) }}
+{{- end }}
+- to:
+    - ipBlock:
+        cidr: {{ first $parts }}/32
+  ports:
+    - protocol: TCP
+      port: {{ last $parts | int }}
+{{- end }}
+{{- end -}}
+
+{{- if .Values.networkPolicy.enabled }}
+{{- if .Values.fleet.enabled }}
+{{- if not .Values.networkPolicy.kubeApi }}
+{{- fail "networkPolicy.enabled: set networkPolicy.kubeApi to the Kubernetes API's addresses (the `kubernetes` Service and its endpoints). The fleet pod launches, watches and drains run pods through it, and a policy without it would shut it out." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-fleet
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fleet
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "fleet") | nindent 4 }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "wrathbench.np.dns" . | nindent 4 }}
+    {{- include "wrathbench.np.module" . | nindent 4 }}
+    {{- include "wrathbench.np.internet" . | nindent 4 }}
+    {{- with include "wrathbench.np.localModels" . | trim }}{{ . | nindent 4 }}{{ end }}
+    # The run-pod launcher (infra/run-pod.ts), the one client of this pod's
+    # ServiceAccount token.
+    {{- range .Values.networkPolicy.kubeApi }}
+    - to:
+        - ipBlock:
+            cidr: {{ required "networkPolicy.kubeApi: every entry needs a cidr" .cidr }}
+      ports:
+        - protocol: TCP
+          port: {{ required "networkPolicy.kubeApi: every entry needs a port" .port }}
+    {{- end }}
+    # The preflight gate's fixture staging (see the header).
+    - to:
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "db") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: 3306
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-run
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: run
+spec:
+  # The run-pod template's labels, which the launcher keeps whatever image or
+  # command an arm names (infra/run-pod.ts buildRunPod).
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "run") | nindent 4 }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "wrathbench.np.dns" . | nindent 4 }}
+    {{- include "wrathbench.np.module" . | nindent 4 }}
+    {{- include "wrathbench.np.internet" . | nindent 4 }}
+    {{- with include "wrathbench.np.localModels" . | trim }}{{ . | nindent 4 }}{{ end }}
+{{- end }}
+{{- /* Egress only from here on: the viewer is reached through the Ingress,
+       and the publisher and collector listen on nothing. */}}
+{{- if .Values.viewer.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-viewer
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: viewer
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "viewer") | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "wrathbench.np.dns" . | nindent 4 }}
+    {{- if .Values.clickhouse.enabled }}
+    {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
+    {{- end }}
+    # /health, for the worldserver build /api/info names.
+    {{- include "wrathbench.np.module" . | nindent 4 }}
+    # The OpenRouter catalogue a /config draft fetch reads.
+    {{- include "wrathbench.np.internet" . | nindent 4 }}
+{{- end }}
+{{- if .Values.publisher.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-publisher
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: publisher
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "publisher") | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "wrathbench.np.dns" . | nindent 4 }}
+    {{- if .Values.clickhouse.enabled }}
+    {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
+    {{- end }}
+    # The viewer's handler, rendered in-process, asks /health too.
+    {{- include "wrathbench.np.module" . | nindent 4 }}
+    # The bucket (S3_ENDPOINT, https).
+    {{- include "wrathbench.np.internet" . | nindent 4 }}
+{{- end }}
+{{- if and .Values.clickhouse.enabled .Values.collector.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-collector
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "collector") | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "wrathbench.np.dns" . | nindent 4 }}
+    {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
+{{- end }}
+{{- end }}

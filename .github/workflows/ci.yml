@@ -78,6 +78,12 @@ jobs:
       - name: Render the example values
         run: helm template ci infra/chart/wrathbench -f infra/chart/wrathbench/values.example.yaml --set image.tag=ci-lint >/dev/null
 
+      # The NetworkPolicies ship off, so neither render above reaches them.
+      # Render them on too, so a template error is not first found by the
+      # release that turns them on.
+      - name: Render with the NetworkPolicies on
+        run: helm template ci infra/chart/wrathbench -f infra/chart/wrathbench/values.example.yaml --set image.tag=ci-lint --set networkPolicy.enabled=true --set 'localModelHosts={192.0.2.20:1234}' >/dev/null
+
       # An upgrade that changes nothing about MySQL or ClickHouse must leave
       # their pods alone: no per-release label in any pod template, and the
       # database templates identical across two releases.

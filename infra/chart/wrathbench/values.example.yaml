@@ -55,8 +55,31 @@ modelKeys:
   - DEEPSEEK_KEY
   - LMSTUDIO_KEY
 
-# Self-hosted model servers LMSTUDIO_KEY may be sent to (`host` or `host:port`).
+# Self-hosted model servers LMSTUDIO_KEY may be sent to (`host` or `host:port`;
+# IPv4:port only once networkPolicy is on).
 localModelHosts: []
+# Off until its own release step (docs/RUNBOOK.md, "Network policy").
+networkPolicy:
+  enabled: false
+  dns:
+    namespace: kube-system
+    podLabels:
+      k8s-app: kube-dns
+    port: 53
+  # The `kubernetes` Service and its endpoints.
+  kubeApi:
+    - cidr: 10.43.0.1/32
+      port: 443
+    - cidr: 192.0.2.10/32
+      port: 6443
+  internet:
+    ports: [443]
+    except:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 100.64.0.0/10
+      - 169.254.0.0/16
 
 realm:
   id: 1

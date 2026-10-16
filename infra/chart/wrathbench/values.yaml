@@ -110,6 +110,41 @@ modelKeys:
 # whose run.ts checks the pair again before it reads the key.
 localModelHosts: []
 
+# NetworkPolicies for the fleet and run pods (egress allow-list, no ingress)
+# and egress allow-lists for the viewer, publisher and collector
+# (templates/networkpolicy.yaml, which says what each one admits and why).
+# OFF by default, so that shipping the chart changes nothing. Turning it on is
+# a release step of its own, with its own check (docs/RUNBOOK.md, "Network
+# policy"). When it is on, every `localModelHosts` entry must be IPv4:port,
+# because a policy admits addresses and ports, not names.
+networkPolicy:
+  enabled: false
+  # Cluster DNS. `port` is the DNS pods' own port, which is what a policy
+  # matches once the Service has been translated, not the Service's port.
+  dns:
+    namespace: kube-system
+    podLabels:
+      k8s-app: kube-dns
+    port: 53
+  # REQUIRED when enabled: the Kubernetes API as the fleet pod reaches it, a
+  # list of `{cidr, port}`. List both the `kubernetes` Service's ClusterIP
+  # (port 443) and its endpoints, the apiserver (usually 6443), because a CNI
+  # may check egress before or after it translates the Service address. Both
+  # belong to one cluster, so the deploying cluster's HelmRelease sets them.
+  kubeApi: []
+  # "The internet": the model APIs, the CLIs' own endpoints, the price
+  # catalogue and the public bucket. TCP on these ports to anywhere except
+  # these ranges. The ranges hold every pod, every Service and the LAN, which
+  # is what keeps MySQL, ClickHouse and the viewer out of reach.
+  internet:
+    ports: [443]
+    except:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 100.64.0.0/10
+      - 169.254.0.0/16
+
 # There is no fleet config value and no ConfigMap: the fleet config is the
 # sqlite store on the data PVC (WRATHBENCH_CONFIG_DB, templates/_helpers.tpl),
 # seeded once from infra/fleet.example.json through the runner pod and edited
