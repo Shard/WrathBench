@@ -73,11 +73,136 @@ rather than silently translated.
 The harness is stamped into the comparability tuple and shown on every run,
 results, ladder and models row. It is a tag, not a partition: claude-code and
 codex rows sit in the same charts as wrathbench rows, and `?harness=` on the
-API narrows to one when wanted. `harnessVersion`
+API narrows to one when wanted. It can stay a tag because no row mixes two
+harnesses: a run is mapped back to its roster entry by model id, and the
+roster refuses one model id under two harnesses (`harnessClash` in
+`src/config.ts`). A variant of a harness runs as a probe-campaign arm until
+the operator promotes it (docs/METHODOLOGY.md, "Harness and driver are
+separate words"). `harnessVersion`
 is a different word — the `git describe` of this repo, which applies to every
 harness, since the SDK, tools, prompt and sandbox each CLI drives are ours.
 Each CLI scaffold is its own group because each is a different unversioned
 summarizer (docs/METHODOLOGY.md).
+
+The `openai` driver identifies itself the same way to every endpoint:
+`User-Agent: WrathBench` and OpenRouter's attribution pair, `HTTP-Referer` and
+`X-Title` (`src/adapter.ts`). One header is host-gated. To `opencode.ai` it
+also sends `x-opencode-session: <run id>`, the stable per-conversation id that
+OpenCode Go's docs ask of agents other than its own client. It never sends the
+headers that identify OpenCode's own client.
+
+### The driver contract
+
+A driver is how the runner reaches a model, and nothing more: everything that
+decides what a result means stays with the runner, so that adding a driver
+adds a transport, not a second benchmark. This is what `openai`, `claude-code`
+and `codex` already do, and what another driver would have to.
+
+**The runner owns these, identically for every driver.**
+
+- One `SandboxHost` per run: the SDK runtime, the module session, the
+  confinement and the token. A driver never starts a second sandbox or
+  session, which is why the CLI drivers reach the tools through a loopback MCP
+  listener and `src/mcp-bridge.ts` rather than launching `src/mcp.ts`.
+- The tools: `toolsFor` and `callTool` (`src/tools.ts`), the hint drain,
+  secret redaction and the exact result text. A driver exposes exactly these
+  tools under these names; a transport prefix (`mcp__wrathbench__`) is the
+  only difference allowed.
+- The prompt: the system prompt bytes `buildSystemPrompt` renders for the
+  run's harness, and the per-turn context message from `ContextBuilder`.
+  Where a scaffold lets its own base instructions be replaced, they are
+  replaced, not supplemented.
+- The termination and pause vocabulary (`src/config.ts`), the watchdog
+  thresholds, the scratchpad, the episodic log, `reflect`, and the trim or
+  compaction ask.
+- Run identity: `meta.json`, and the comparability tuple stamped once at
+  launch by `comparabilityOf`, with the harness taken from
+  `HARNESS_OF_DRIVER`; the unscored stamps; the resume rules.
+- The child environment: the `CLI_BASE_ENV` allowlist, one lane credential and
+  the run-controlled knobs, and nothing else.
+
+**A driver owns these.**
+
+- The transport and process model — an in-process request, one long-lived
+  process, or one process per turn — and so what a "turn" is: one model
+  response, or one scaffold turn with its own inner tool loop.
+- Who owns history and compaction. The fixed loop applies the context policy;
+  a CLI scaffold keeps and compacts its own conversation, which is what makes
+  it a different harness, and `contextSentence` (`src/prompt.ts`) tells the
+  model which regime it is in.
+- How a run dimension maps onto the scaffold. **A level the driver cannot
+  express is refused by name, never mapped to a neighbour**: the tuple would
+  otherwise carry a level the run never had. codex refuses `none` and
+  `minimal`; a dimension a driver has no setting for at all is refused at
+  config time, as `compactWindow` is off claude-code (`loadRunConfig`).
+  Reaching the same level by another mechanism is not a neighbour:
+  claude-code's `none` is `MAX_THINKING_TOKENS=0`, because its `--effort` has
+  no such level.
+- Lane mechanics, and classifying the scaffold's failures into the shared
+  pause and termination reasons.
+
+**A scaffold driver must also:**
+
+- Enforce the watchdogs and the tool-call ceiling where control actually comes
+  back to the runner, which for a scaffold is every MCP `tools/call` — one
+  claude-code turn has held 168 calls — and after a termination refuse every
+  further call with the fixed wind-down text.
+- Kill the process group with a bounded shutdown, run in a temp cwd outside
+  the repository, read no user config, skills, hooks or instruction files, and
+  run the CLI version pinned in the runner image.
+- Remove every built-in that could observe or act outside our tools, and list
+  here, in its own section, whatever it cannot remove or whatever the scaffold
+  varies by model. That residue is part of what the harness label means
+  (docs/METHODOLOGY.md, principle 3): codex's GPT-6 code mode and
+  collaboration tools are the case today ("The codex driver", below).
+
+**Harness settings.** A harness setting is a knob of one harness's machinery:
+it has the harness's default, a roster entry may override it, and it is
+recorded like effort. The claude-code compaction window (`compactWindow`) is
+the one that exists, and its shape is the pattern. Absent, or `auto`, is the
+scaffold's own default and stamps nothing, so every run that says nothing
+shares one tuple. A named value is a roster-entry field normalised to one
+spelling. It keys the tuple, and it is part of `RosterIdentity`, so an entry
+that differs from another only in it owns its own runs and its own row. A
+resume keeps it, and a driver without the setting refuses it. An override set
+this way is a run dimension, not a per-model prompt: the operator sets it, it
+does the same thing to whichever model is given it, and the tuple says so.
+
+**The trajectory records these, whatever the driver.**
+
+- `meta.json` with the config and the tuple. A scaffold driver also writes a
+  `driver` record at the start: driver, harness, binary, argv, cwd, the lane
+  by env-var name, `systemPromptChars`, and any dimension that travels
+  outside argv.
+- A `request` record per turn carrying the fresh context message.
+- A `response` record per model output. Normalised `usage` (`prompt_tokens`
+  including cached, `completion_tokens`, and `cached_tokens`,
+  `cache_write_tokens` and `reasoning_tokens` where reported) is attached at
+  the finest grain the scaffold reports — per request, per API call or per
+  turn — with the raw object beside it.
+- For every call, a `tool_call` with its `dispatchTs`, and the `snippet_result`
+  or `tool_result` holding the exact text the model saw.
+- A `harness` record of kind `compaction` (`CompactionRecord`) for every
+  scaffold compaction, with the summary where the scaffold leaves it readable.
+- The served model, on first observation (`recordResolved`): what the
+  endpoint or the CLI says actually answered, beside what was asked for.
+- The termination or pause, a `wind-down` record when there was one, and the
+  scaffold's stderr and unparseable lines, bounded.
+- Cost as the provider or the CLI reported it, and absent otherwise, never a
+  zero. An estimate is the viewer's, marked as-if-metered (`docs/COSTS.md`).
+
+**Two asymmetries are deliberate.**
+
+- `budget.maxToolCalls` is stamped into every tuple, but only the CLI drivers
+  enforce it. The fixed loop owns its tool loop, so its bound is `maxTurns`.
+  On a `wrathbench` run the field says what ceiling the run was given, not one
+  it was held to.
+- `resumedFresh` is stamped only by the CLI drivers. A CLI resume starts a
+  fresh session and loses the whole conversation the scaffold had built, which
+  can be hours of history. A fixed-loop resume rebuilds the bounded window: it
+  loses about the 48 messages the window holds, which the context policy
+  already treats as disposable, since the scratchpad is the only durable memory
+  there with or without a resume.
 
 ### Why claude-code is its own harness
 
@@ -336,9 +461,10 @@ and differs only where the CLI does:
   and its collaboration tools (`spawn_agent` and the rest), with developer
   messages describing them, a skills list and an environment block carrying
   the date and timezone; `--disable multi_agent` does not remove them. That
-  surface is part of what a `codex` row means: each CLI scaffold is its own
-  comparability group (METHODOLOGY). Every game action still goes through our
-  MCP tools, under the tool-call ceiling and the watchdogs.
+  per-model surface cannot be configured out, so it is part of what the
+  `codex` label means (docs/METHODOLOGY.md, principle 3), and the driver runs
+  those models with it rather than refusing them. Every game action still goes through our MCP tools, under the
+  tool-call ceiling and the watchdogs.
 - **MCP approval.** With `approval_policy="never"` an MCP call that needs
   approval *fails* ("MCP tool call requires approval, but approval policy is
   never" — observed); `default_tools_approval_mode="approve"` on the server is

@@ -230,11 +230,12 @@ const driverSchema = z.string().superRefine((v, ctx) => {
  *    `claude-code` rather than one "CLI" group, because each scaffold is a
  *    different unversioned summarizer sitting inside the harness.
  *
- * A comparability dimension, not a scoring penalty: `claude-code` and `codex`
- * runs score within their own group and never share a chart with `wrathbench`
- * rows. Distinct from `harnessVersion`, which is the git describe of *this*
- * repo and applies to all three (the SDK and MCP surface each CLI drives is
- * ours).
+ * A tag on every run, not a partition and not a scoring penalty (operator,
+ * 2026-10-16): rows of every harness share the charts, and no row mixes two
+ * harnesses because a model id runs under one harness across the roster
+ * (`harnessClash`). Distinct from `harnessVersion`, which is the git describe
+ * of *this* repo and applies to all three (the SDK and MCP surface each CLI
+ * drives is ours).
  */
 export const HARNESSES = ["wrathbench", "claude-code", "codex"] as const;
 export type Harness = (typeof HARNESSES)[number];
@@ -248,6 +249,47 @@ export const HARNESS_OF_DRIVER: Readonly<Record<Driver, Harness>> = {
 
 export function harnessOf(driver: Driver): Harness {
   return HARNESS_OF_DRIVER[driver];
+}
+
+/**
+ * The roster rule that keeps the harness a tag (docs/METHODOLOGY.md, "Harness
+ * and driver are separate words"; operator, 2026-10-16): one model id, one
+ * harness, across the whole roster. Every entry the policy schedules is in the
+ * scored lanes — its tier is required and the smallest buys one counted `e90`,
+ * and `idle` only adds freeplay after it. A pinned queue job can hold an entry
+ * out of the policy, but it can name a scored episode as well, so the rule
+ * reads the roster and not the queue. A run is mapped
+ * back to its entry by model id (`RosterIdentity`), so an id under two
+ * harnesses would pool both into one ladder row, one tier count and one
+ * freeplay character. A variant of a harness runs as a probe-campaign arm,
+ * which is not a roster entry.
+ *
+ * The id is compared exactly, as `RosterIdentity` compares it: two spellings
+ * of one model (a vendor-prefixed aggregator slug and a CLI catalogue id) are
+ * two ids and two rows. Returns the refusal for the first clash in roster
+ * order, or null.
+ */
+export function harnessClash(
+  roster: Readonly<Record<string, { model: string; driver?: string | undefined }>>,
+): string | null {
+  const first = new Map<string, { name: string; harness: Harness }>();
+  for (const [name, e] of Object.entries(roster)) {
+    const driver = e.driver ?? "openai";
+    if (!isDriver(driver)) continue;
+    const harness = harnessOf(driver);
+    const seen = first.get(e.model);
+    if (seen === undefined) {
+      first.set(e.model, { name, harness });
+      continue;
+    }
+    if (seen.harness === harness) continue;
+    return (
+      `roster policy — model ${e.model} runs under two harnesses: ${seen.name} (${seen.harness}) and ${name} (${harness}). ` +
+      `A model id runs under one harness in the scored lanes; a variant runs as a probe-campaign arm until the operator promotes it ` +
+      `(docs/METHODOLOGY.md, "Harness and driver are separate words")`
+    );
+  }
+  return null;
 }
 
 /**
@@ -334,9 +376,9 @@ export const runConfigSchema = z.object({
    *    without a model; never scores.
    *  - `claude-code`: the Claude Code CLI is both transport and harness — it
    *    owns its own history, compaction and preamble, so the run belongs to the
-   *    `claude-code` harness group and is scored only against its own kind.
+   *    `claude-code` harness and is tagged with it on every row.
    *  - `codex`: the OpenAI Codex CLI, the same shape on a ChatGPT
-   *    subscription: transport and harness at once, its own group.
+   *    subscription: transport and harness at once, tagged `codex`.
    */
   driver: driverSchema.default("openai"),
   /** Model id passed through verbatim to the OpenAI-compatible endpoint. */
@@ -726,7 +768,7 @@ export function isUnscoredDriver(driver: Driver): boolean {
  * driver is the scripted stub, and/or the operator steered the run with an
  * objective. The driver's stamp stays the *prefix* so anything
  * matching on it keeps matching. The harness is *not* a reason: a
- * `claude-code` or `codex` run scores within its own group.
+ * `claude-code` or `codex` run scores, tagged with its harness.
  */
 export function unscoredStamp(driver: Driver, objective?: string | undefined): string | undefined {
   const byDriver = driver === "stub" ? STUB_STAMP : undefined;

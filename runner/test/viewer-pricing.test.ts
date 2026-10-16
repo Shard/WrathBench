@@ -15,7 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { PriceableRun } from "../viewer/pricing";
-import { CLAUDE_PRICES, CLAUDE_UNPRICED, DELISTED_MODELS, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, claudePrice, codexPrice, costOf, priceFor, providerPrice, rosterPriceGap, runCost, syncedPrice, windowAt } from "../viewer/pricing";
+import { CLAUDE_PRICES, CLAUDE_UNPRICED, DELISTED_MODELS, OPENCODE_GO_BASE, PROVIDER_PRICES, SYNCED_PRICES, breakdownTotal, claudePrice, codexPrice, costOf, priceFor, providerPrice, rosterPriceGap, runCost, syncedPrice, windowAt } from "../viewer/pricing";
 import { isFreeSlug } from "../src/model-cost";
 import { catalogueIds, isZeroQuote, mergeWindows, rosterModels, sameRates } from "../../infra/sync-prices";
 import { reportedCostUsd, responseCostCoverage, scanRunTotals, summarize, tokenTotals, TrajectoryTail } from "../viewer/tail";
@@ -402,6 +402,32 @@ describe("the hand-held provider table", () => {
     expect(priceFor({ ...go, model: "hy3-free" })?.id).toBe("free-tier");
     // A platform string alone, with the base missing, names no row.
     expect(priceFor({ model: "omen-alpha", apiBase: null, platform: "opencode.ai", driver: "openai", harness: "wrathbench" })).toBeNull();
+  });
+
+  test("the Go models on Go's documented base are priced at their listing, and the free Go slugs stay free", () => {
+    const go = { apiBase: OPENCODE_GO_BASE, platform: "opencode.ai", driver: "openai", harness: "wrathbench" } as const;
+    const ds = priceFor({ ...go, model: "deepseek-v4.1-flash" })!;
+    expect(ds.id).toBe("opencode-go/deepseek-v4.1-flash");
+    expect([ds.input, ds.output, ds.cacheRead]).toEqual([0.15, 0.6, 0.003]);
+    expect(ds.source).toBe("catalogue");
+    expect(ds.asIfMetered).toBe(false);
+    for (const m of ["space-bunny", "mimo-v2.6-flash", "mimo-v2.5"]) expect(priceFor({ ...go, model: m })?.id).toBe(`opencode-go/${m}`);
+    // The $0 Go slugs are free by their suffix, as on every host.
+    expect(priceFor({ ...go, model: "longcat-2.5-preview-free" })?.id).toBe("free-tier");
+    expect(priceFor({ ...go, model: "cat-jam-free" })?.id).toBe("free-tier");
+    // Exact base: the same ids on the older spelling, or on OpenRouter, are not these rows.
+    expect(providerPrice({ model: "deepseek-v4.1-flash", apiBase: "https://opencode.ai/zen/go/v1" })).toBeNull();
+    expect(providerPrice({ model: "deepseek/deepseek-v4.1-flash", apiBase: "https://openrouter.ai/api/v1" })).toBeNull();
+    // The roster entries that will name them carry a price, so --status lists no gap.
+    for (const m of ["space-bunny", "mimo-v2.6-flash", "mimo-v2.5", "deepseek-v4.1-flash"]) {
+      expect(rosterPriceGap({ model: m, apiBase: OPENCODE_GO_BASE, billing: "paid" })).toBeNull();
+    }
+    // A Go model with no row yet is told where its row goes, never to run the sync.
+    expect(rosterPriceGap({ model: "glm-5.3", apiBase: OPENCODE_GO_BASE, billing: "paid" })).toContain("PROVIDER_PRICES");
+    // And a provider-reported charge on this base is never called OpenRouter's.
+    const c = runCost({ run: { ...go, model: "mimo-v2.5" }, tokens: tokens({ promptTokens: 1_000_000, completionTokens: 1_000_000 }), reportedUsd: 0.5, coverage: { costed: 1, uncosted: 0 } });
+    expect(c.actual.note).not.toContain("OpenRouter");
+    expect(c.expected.usd).toBeCloseTo(0.14 + 0.28, 6);
   });
 
   test("a row is keyed on the base and the id together, never the id alone", () => {

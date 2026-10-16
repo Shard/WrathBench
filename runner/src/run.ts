@@ -683,6 +683,9 @@ async function main(): Promise<void> {
       model: config.model,
       ...(config.effort !== undefined ? { effort: config.effort } : {}),
       ...(routing !== null ? { routing } : {}),
+      // The run is the conversation: one id for its whole life, resumes
+      // included. Sent to OpenCode only (`openCodeSessionHeaders`).
+      sessionId: config.runId,
     });
   }
 

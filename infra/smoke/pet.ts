@@ -28,7 +28,8 @@
  * state.pet() undefined -> logout and delete.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/pet.ts
+ *   bun wb smoke pet
+ *   bun wb --local smoke pet   # the quickstart
  */
 
 import { connect, isEvent, isDecodeError, petFeedbackText, type WrathClient } from "../../sdk/src/index";

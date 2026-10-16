@@ -246,7 +246,7 @@ export function formatCampaignRefusals(refusals: readonly CampaignRefusal[]): st
  * A warning line, never a refusal: the entry still runs, it just reads
  * unpriced until a row exists. Printed because the alternative is the way the
  * codex models went unpriced for a week in 2026-10 — nobody looks at a blank.
- * The usual fix is `bun infra/sync-prices.ts` and a release, since the price
+ * The usual fix is `bun wb data prices` and a release, since the price
  * file ships in the image; the line says which fix the model needs.
  */
 export function formatPriceGaps(roster: Readonly<Record<string, FleetRosterEntry>>): string[] {
@@ -720,7 +720,7 @@ export function printStatus(): void {
   for (const line of formatPriceGaps(config?.roster ?? {})) console.log(line);
   // Liveness, honestly, from either side of a container boundary (`stateLiveness`).
   const { fleetUp, hbAgeMs, isAlive } = stateLiveness(state, Date.now());
-  const where = state?.containerized === true ? "compose service `fleet`" : "host process";
+  const where = state?.containerized === true ? "the fleet container" : "host process";
   console.log(
     `fleet (config store ${configPath})` +
       (state === undefined
@@ -732,7 +732,8 @@ export function printStatus(): void {
           `, up since ${new Date(state.startedAt).toLocaleString()}, stamp ${state.stamp}`),
   );
   if (state?.containerized === true) {
-    console.log("  logs: docker compose -f infra/compose.yml logs -f fleet");
+    // The state cannot say which orchestrator runs the container, so both.
+    console.log("  logs: kubectl -n wrathbench logs -f deploy/wrathbench-fleet on the cluster, docker compose -f infra/compose.yml logs -f fleet on the quickstart");
   }
   if (config !== undefined) for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
 
@@ -1253,6 +1254,31 @@ export function planDryRun(opts: {
   return { resumes, plan, rows, spawns };
 }
 
+/**
+ * The dry-run's argv block: one line per spawn the rows make, resumes
+ * included (a resume's argv is the roster started with `--resume-roster`).
+ * Nothing at all when nothing spawns, so a plan that only keeps runs going
+ * never prints a bare `argv:` header over nothing.
+ */
+export function formatArgvBlock(
+  spawns: DryRunPlan["spawns"],
+  opts: { stamp: string; until: string | undefined; jsonlExists?: (path: string) => boolean },
+): string[] {
+  if (spawns.length === 0) return [];
+  const exists = opts.jsonlExists ?? existsSync;
+  return [
+    "argv:",
+    ...spawns.map(({ job, spawn }) => {
+      // The same resume decision the live spawn makes (see the spawn path):
+      // without it the plan showed a fresh launch for a job whose day jsonl was
+      // on disk, which read as "the paused probe gets clobbered" when the real
+      // spawn would have resumed it.
+      const resumeRoster = spawn.resumeRunId !== undefined || exists(jobJsonlPath(spawn.name, opts.stamp));
+      return `  ${job.name}: ${jobArgv(spawn, { stamp: opts.stamp, until: opts.until, resumeRoster }).join(" ")}`;
+    }),
+  ];
+}
+
 export function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string): void {
   console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
   // The running supervisor, read the way --status reads it: this is the next
@@ -1266,7 +1292,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   for (const line of formatGate(undefined, config.preflight)) console.log(line);
   if (config.preflight.enabled) {
     for (const s of config.preflight.smokes) console.log(`  would run: bun ${smokePath(s.script)} (account ${s.account})`);
-    for (const s of config.preflight.deploySmokes) console.log(`  deploy window only: bun ${smokePath(s.script)} (account ${s.account})`);
+    for (const s of config.preflight.deploySmokes) console.log(`  deploy window only (bun wb release deploy): bun ${smokePath(s.script)} (account ${s.account})`);
   } else {
     console.log("  gate open: jobs spawn without smoking the server first");
   }
@@ -1306,17 +1332,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   for (const line of formatSubscriptionGate(subGate, gateLanes(subGate, config.roster, config.policy.subscriptions), { local, notes: state?.subscriptionGate !== undefined ? (state.subscriptionGate.notes ?? []) : local.notes })) console.log(line);
   for (const line of formatAccounts(rows)) console.log(line);
   for (const line of formatAccountClasses(config)) console.log(line);
-  if (spawns.length > 0) {
-    console.log("argv:");
-    for (const { job, spawn } of spawns) {
-      // The same resume decision the live spawn makes (see the spawn path):
-      // without it the plan showed a fresh launch for a job whose day jsonl was
-      // on disk, which read as "the paused probe gets clobbered" when the real
-      // spawn would have resumed it.
-      const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
-      console.log(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil, resumeRoster }).join(" ")}`);
-    }
-  }
+  for (const line of formatArgvBlock(spawns, { stamp: stampToday, until: cliUntil })) console.log(line);
   for (const job of plan.queue.waiting) console.log(`  ${job.name}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);
   for (const sk of plan.queue.skipped) console.log(`  ${sk.job.name}: SKIP — ${sk.reason}`);
   for (const job of plan.queue.done) console.log(`  ${job.name}: done — ${progressLabel(job, countedFrom(states)) ?? "repeat met"}; nothing spawns (raise repeat for more)`);
@@ -1351,6 +1367,6 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
       `\nsupervision: re-read the config store every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
       `\nboundary; enabled:true/new jobs spawn; a malformed edit keeps the last good config.` +
       `\nstamp ${stampToday} is fixed for the life of the supervisor, not rolled at midnight.` +
-      `\nrunning as: ${CONTAINER ? "the `fleet` compose service (episodes spawn in-process)" : "a host process (episodes go through docker compose exec)"}.`,
+      `\nrunning as: ${CONTAINER ? "the fleet container (episodes are its child processes, or run pods where policy.runPods says)" : "a host process (episodes go through docker compose exec)"}.`,
   );
 }

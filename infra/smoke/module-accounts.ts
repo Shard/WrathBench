@@ -20,7 +20,8 @@
  * external probe cannot schedule. That path is compile-time-only for now.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-accounts.ts
+ *   bun wb smoke module-accounts
+ *   bun wb --local smoke module-accounts   # the quickstart
  */
 
 import { authHeaders } from "./lib/auth";

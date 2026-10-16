@@ -21,8 +21,8 @@
  *   passes its own harness, and `prompt.ts`'s `contextSentence` then states the
  *   context regime that harness actually applies: the fixed loop's trim, or the
  *   claude-code CLI's continuous history. So two runs alike in everything but
- *   the driver hash differently *on purpose* — the tuple already puts them in
- *   two comparability groups (`harness`), and now the prompt hash shows that
+ *   the driver hash differently *on purpose* — the tuple already tags them
+ *   with different harnesses (`harness`), and now the prompt hash shows that
  *   the text was not the same text either. `promptChars` gives the difference a
  *   magnitude, and the claude-code driver record logs the same length as
  *   `systemPromptChars` (`adapter-claude.ts`). Within one harness, scored runs
@@ -42,8 +42,10 @@ import type { WikiBundleMeta } from "./wiki";
  * each turn. `wrathbench` applies its own context policy (docs/METHODOLOGY.md,
  * "Context policy": event window, hysteretic message window, regenerated
  * per-turn context); `claude-code` is the Claude Code CLI and `codex` the
- * OpenAI Codex CLI, each of which owns its own history and compaction. Three
- * harnesses are three comparability groups; none is a scoring penalty.
+ * OpenAI Codex CLI, each of which owns its own history and compaction. A tag,
+ * never a partition and never a scoring penalty (docs/METHODOLOGY.md, "Harness
+ * and driver are separate words"): rows of every harness share the charts, and
+ * none mixes two, because a model id runs under one harness (`harnessClash`).
  */
 export const harnessSchema = z.enum(HARNESSES);
 
@@ -53,7 +55,9 @@ export const episodeBudgetSchema = z.object({
    * a fixed-loop turn: one of them has held 168 tool calls. */
   maxTurns: z.number().int().positive().nullable(),
   /**
-   * Tool calls for the whole episode; enforced at the MCP boundary. Null = no
+   * Tool calls for the whole episode; enforced at the MCP boundary by the CLI
+   * drivers. The fixed loop stamps it and does not enforce it — its bound is
+   * `maxTurns` (runner/README.md, "The driver contract"). Null = no
    * ceiling, which is the policy's `idle: "unlimited"` freeplay lane and
    * nothing else. It is part of the budget, so a run that moved between a
    * ceiling and none restamps rather than staying comparable to itself.
@@ -155,11 +159,16 @@ export const comparabilitySchema = z.object({
    * conditions, so they must not share a chart by default. Operator decision
    * 2026-09-16.
    *
-   * ABSENT, never null, for a run whose endpoint has no routing to state: a
-   * claude-code, codex, Cerebras, LM Studio or OpenCode Zen run has one
-   * backend and nothing to record. That also keeps every such run stamping
-   * byte-for-byte as it did before the field existed, so nothing already in
-   * flight restamps on resume for a fact that did not change.
+   * An OpenCode Go run stamps `{ via: "OpenCode Go", allowFallbacks: true }`
+   * (`OPENCODE_GO_ROUTING`): Go picks the backend itself and a request cannot
+   * pin one, so the run is unpinned by construction and says so, keyed apart
+   * from a pinned run of the same model elsewhere.
+   *
+   * ABSENT, never null, for a run whose request has no routing to state: a
+   * claude-code, codex, Cerebras, LM Studio or OpenCode Zen run. That also
+   * keeps every such run stamping byte-for-byte as it did before the field
+   * existed, so nothing already in flight restamps on resume for a fact that
+   * did not change.
    */
   routing: routingSchema.optional(),
   /**

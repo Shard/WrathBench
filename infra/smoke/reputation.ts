@@ -18,7 +18,8 @@
  * exercised by any quest turn-in in a real run.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/reputation.ts
+ *   bun wb smoke reputation
+ *   bun wb --local smoke reputation   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

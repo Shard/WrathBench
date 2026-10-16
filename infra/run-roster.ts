@@ -317,12 +317,13 @@ const RUNNER_ENTRY = join(REPO_ROOT, "runner", "src", "run.ts");
 // --------------------------------------------------------------- where am I
 //
 // Two homes, one code path. On the HOST the roster shells out to
-// `infra/run-episode.sh`, which docker-compose-execs the runner container —
-// that is how it has always worked and it stays byte-identical. Inside the
-// runner image (the `fleet` compose service) there is no docker CLI
+// `infra/run-episode.sh`, which docker-compose-execs the quickstart's runner
+// container — that is how it has always worked and it stays byte-identical.
+// Inside the runner image (the fleet container: the chart's `fleet`
+// Deployment, or compose's `fleet` service) there is no docker CLI
 // and no container to exec into: the runner is a sibling process, so the
 // roster spawns `bun runner/src/run.ts` directly, talks to the module over the
-// compose network itself, and signals its own child.
+// container network itself, and signals its own child.
 //
 // The flag is explicit rather than sniffed (`command -v docker` would also be
 // absent on a host without Docker, which is a different situation and deserves
@@ -1377,38 +1378,60 @@ const SUB_GATE_POLL_MS = 60_000;
  * re-reading the lane every minute. The supervisor drains the job on its next
  * tick, which ends the wait (`drainSeen`); a hand-run roster waits for the
  * reset. False when stopping or drained: launch nothing.
+ *
+ * `deps` is for tests: the runs directory, the environment, the clock, the
+ * wait, the stop check and the two writers, each defaulting to this process's.
  */
-async function awaitSubscriptionGate(spec: Resolved, deadline: number | undefined): Promise<boolean> {
+export async function awaitSubscriptionGate(
+  spec: Pick<Resolved, "model" | "runId" | "episode" | "driver" | "tokenEnv" | "apiBase" | "apiKeyEnv" | "billing">,
+  deadline: number | undefined,
+  deps: {
+    runsDir?: string;
+    env?: Record<string, string | undefined>;
+    now?: () => number;
+    wait?: (ms: number) => Promise<void>;
+    stopped?: () => boolean;
+    say?: (line: string) => void;
+    record?: (entry: Parameters<typeof record>[0]) => void;
+  } = {},
+): Promise<boolean> {
   const lane = laneOfSpec(spec);
   if (lane === null) return true;
+  const now = deps.now ?? Date.now;
+  const tell = deps.say ?? say;
+  const log = deps.record ?? record;
+  const stopped = deps.stopped ?? ((): boolean => stopping || drainSeen());
+  const wait =
+    deps.wait ??
+    ((ms: number): Promise<void> =>
+      new Promise<void>((res) => {
+        const timer = setTimeout(res, ms);
+        wakeups.push(() => {
+          clearTimeout(timer);
+          res();
+        });
+      }));
   let said: string | undefined;
   for (;;) {
-    if (stopping || drainSeen()) return false;
-    const now = Date.now();
-    if (said !== undefined && deadline !== undefined && now >= deadline) {
-      say(`wall-clock budget reached — not launching ${spec.model}`);
-      record({ runId: spec.runId, model: spec.model, outcome: "budget-stop", detail: "not launched (subscription gate)" });
+    if (stopped()) return false;
+    const t = now();
+    if (said !== undefined && deadline !== undefined && t >= deadline) {
+      tell(`wall-clock budget reached — not launching ${spec.model}`);
+      log({ runId: spec.runId, model: spec.model, outcome: "budget-stop", detail: "not launched (subscription gate)" });
       return false;
     }
-    const gate = subscriptionGate(readLaneUsage(join(REPO_ROOT, RUNS_DIR)), subscriptionThresholds(process.env), now);
+    const gate = subscriptionGate(readLaneUsage(deps.runsDir ?? join(REPO_ROOT, RUNS_DIR)), subscriptionThresholds(deps.env ?? process.env), t);
     const hold = gate.hold(lane, spec.episode);
     if (hold === null) return true;
     const why = gate.holdOf(lane, spec.episode)!;
     if (why !== said) {
       said = why;
-      say(`hold ${spec.model} (${spec.runId}): ${why} — not launching until it reopens`);
-      record({ runId: spec.runId, model: spec.model, outcome: "skipped", detail: why });
+      tell(`hold ${spec.model} (${spec.runId}): ${why} — not launching until it reopens`);
+      log({ runId: spec.runId, model: spec.model, outcome: "skipped", detail: why });
     }
     // Quietly, unlike `nap`: this can last days, and one line per minute
     // would bury the log.
-    const ms = Math.max(1_000, Math.min(SUB_GATE_POLL_MS, hold.until - now, deadline !== undefined ? deadline - now : SUB_GATE_POLL_MS));
-    await new Promise<void>((res) => {
-      const timer = setTimeout(res, ms);
-      wakeups.push(() => {
-        clearTimeout(timer);
-        res();
-      });
-    });
+    await wait(Math.max(1_000, Math.min(SUB_GATE_POLL_MS, hold.until - t, deadline !== undefined ? deadline - t : SUB_GATE_POLL_MS)));
   }
 }
 

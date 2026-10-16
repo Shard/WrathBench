@@ -413,7 +413,7 @@ describe("the ladder", () => {
     expect(s.status).toBe("retired");
     expect(s.retired).toMatchObject({ at: NOW - 1000 });
     expect(s.retired!.reason).toContain("f-99");
-    expect(schedulability(s).why).toContain("--clear-model m");
+    expect(schedulability(s).why).toContain("bun wb fleet clear-model m");
     expect(nextJobs([s], ["RUNNER"])).toEqual([]);
     // Cleared after the last failure: the ladder starts over and it is schedulable.
     s = projectModel(m, oneMore, DEFAULT_POLICY, { now: NOW, clearedAt: NOW - 500 });
@@ -881,6 +881,27 @@ describe("concurrency lanes (cap keys on the rate-limit key)", () => {
     expect(isOpenCodeGoBase("opencode.ai/zen/go/v1")).toBe(false);
     // A go slug on the claude-code or stub driver keeps its driver key.
     expect(key({ driver: "stub", apiBase: "https://opencode.ai/zen/go/v1" }, "paid")).toBe("stub");
+  });
+
+  test("Go's documented /inference/go path is the same surface as the older /zen/go", () => {
+    const go = "https://opencode.ai/inference/go/openai/v1";
+    expect(isOpenCodeGoBase(go)).toBe(true);
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/go/v1")).toBe(true);
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/go")).toBe(true);
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/go/openai/v1/")).toBe(true);
+    // Both spellings land in the one key, whatever the entry's billing: a free
+    // Go slug and a paid one share the surface, and the older base still does.
+    expect(key({ apiBase: go }, "free")).toBe("opencode-go");
+    expect(key({ apiBase: go }, "paid")).toBe("opencode-go");
+    expect(key({ apiBase: go }, "paid")).toBe(key({ apiBase: "https://opencode.ai/zen/go/v1" }, "paid"));
+    // The shared tier's new path is not Go, and keeps its own key.
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/openai/v1")).toBe(false);
+    expect(key({ apiBase: "https://opencode.ai/inference/openai/v1" }, "free")).toBe("opencode");
+    // A segment that merely starts with "go" is not the go segment.
+    expect(isOpenCodeGoBase("https://opencode.ai/inference/google/v1beta")).toBe(false);
+    // The host is still matched exactly.
+    expect(isOpenCodeGoBase("https://opencode.ai.example.com/inference/go/openai/v1")).toBe(false);
+    expect(isOpenCodeGoBase("https://openrouter.ai/inference/go/openai/v1")).toBe(false);
   });
 
   test("the go surface classifies paid by the RULE, with no billing override in play", () => {

@@ -9,7 +9,7 @@
  * N3 build.
  *
  * Fixture: a persistent character (default
- * `Smokeflight` on MODULE_ACCOUNT, never deleted) is placed by
+ * `Tf` + the account's letters, e.g. `Tfprobe` on PROBE, never deleted) is placed by
  * `infra/fixtures/apply.ts --scenario taxi-ironforge` — level 10, 1g, in
  * front of Gryth Thurden in Ironforge with TaxiNodes 6 (Ironforge) and 8
  * (Thelsamar) visited, because the server only sells routes between visited
@@ -29,18 +29,19 @@
  * Run from inside the network (the runner service carries the DB env the
  * fixture tool needs; MODULE_ACCOUNT defaults to PROBE):
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/taxi-nodes.ts
+ *   bun wb smoke taxi-nodes
+ *   bun wb --local smoke taxi-nodes   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";
-import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-taxi-nodes-${crypto.randomUUID()}`;
-const CHARACTER = process.env.SMOKE_CHARACTER ?? "Smokeflight";
+const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Tf", ACCOUNT);
 const SCENARIO = "taxi-ironforge";
 
 const GRYTH_THURDEN = 1573; // creature entry, Ironforge flight master

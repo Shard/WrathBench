@@ -14,7 +14,8 @@
  * throwaway Human Warriors at the human start; grouping has no range check.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/group.ts
+ *   bun wb smoke group
+ *   bun wb --local smoke group   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

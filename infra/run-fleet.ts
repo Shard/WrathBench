@@ -2,13 +2,15 @@
 /**
  * Fleet orchestrator: one run-roster process per enabled job in the fleet config.
  *
- *   docker compose -f infra/compose.yml up -d --no-deps fleet   (the normal shape)
- *   ./infra/run-fleet.sh --until 18:00                          (ad-hoc, host)
- *   ./infra/run-fleet.sh --dry-run
- *   ./infra/run-fleet.sh --status                               (host, read-only)
+ *   bun infra/run-fleet.ts             (the fleet container: the normal shape)
+ *   bun wb fleet status                (read-only, where the fleet's data is)
+ *   bun wb fleet dry-run
+ *   bun wb fleet clear-model <name>
+ *   ./infra/run-fleet.sh --until 18:00 (ad-hoc, a host process)
  *
- * The supervisor's home is the `fleet` compose service — same image and mounts
- * as `runner`, `restart: unless-stopped`, no deadline. It therefore
+ * The supervisor's home is the fleet container: the chart's `fleet`
+ * Deployment, or the `fleet` compose service on the quickstart: the runner's
+ * image and mounts, restarted when it exits, no deadline. It therefore
  * cannot assume the reader of `--status` shares its PID namespace: liveness is
  * published as a heartbeat in fleet-state.json and per-job `alive` flags, not
  * inferred with kill(pid, 0). Paths in that state file are repo-relative for
@@ -709,8 +711,8 @@ function parseArgs(argv: string[]): {
             "",
             "  --until HH:MM   stop condition passed to every job (none when absent)",
             "  --dry-run       print what would spawn on every account right now; spawn nothing",
-            "  --status        read-only: accounts, models and session report. Works from the",
-            "                  host against a containerized supervisor (heartbeat, not kill -0)",
+            "  --status        read-only: accounts, models and session report. Works from outside",
+            "                  the supervisor's container (heartbeat, not kill -0)",
             "  --live-runs     read-only: list live episodes across the job accounts and exit",
             "                  non-zero if there are any (the deploy window's refusal check)",
             "  --clear-model NAME  forgive a roster model's defer ladder / retirement:",
@@ -718,9 +720,10 @@ function parseArgs(argv: string[]): {
             "                  supervisor picks it up on its next tick. Safe while the fleet runs.",
             "",
             "The config is the store (runner/src/config-store.ts), edited on the viewer's /config page",
-            "or with the CLI; there is no file argument. The supervisor's normal home is the `fleet`",
-            "compose service (see docs/RUNBOOK.md):",
-            "  docker compose -f infra/compose.yml up -d --no-deps fleet",
+            "or with the CLI; there is no file argument. The supervisor's normal home is the fleet",
+            "container: the chart's `fleet` Deployment, or the `fleet` compose service on the quickstart",
+            "(see docs/RUNBOOK.md). From a checkout, `bun wb fleet status | dry-run | clear-model <name>`",
+            "run these flags where the fleet's data is.",
           ].join("\n"),
         );
         process.exit(0);
@@ -1631,7 +1634,7 @@ async function main(): Promise<void> {
   say(
     `fleet (config store ${configPath}): ${pinnedJobs(config).filter((j) => j.enabled).length} enabled pinned job(s), ` +
       `${poolJobs(config).filter((j) => j.enabled).length} queued job(s) and ${policyRefs(config).size} policy model(s) over ${config.accounts.pool.length} pool account(s), log ${fleetLog}` +
-      `, stamp ${stampToday}${CONTAINER ? " (compose service `fleet`)" : ""}` +
+      `, stamp ${stampToday}${CONTAINER ? " (the fleet container)" : ""}` +
       `${args.until !== undefined ? `, deadline ${args.until}` : ", no deadline — steer on /config"}`,
   );
   say(`subscription gate: scored starts held at ${subThresholds.scored}%, freeplay at ${subThresholds.freeplay}% (100 = off)`);

@@ -23,8 +23,9 @@ rather than respawning.
 
 ## Standing rules (learned the hard way)
 
-- NEVER restart the worldserver while a run is live. Module changes build to a
-  `:next` image tag and land in a deploy window between runs.
+- NEVER restart the worldserver while a run is live. Module changes ship in a
+  release (`bun wb release run`), whose deploy window drains the fleet before
+  the worldserver is replaced.
 - Trajectory JSONL lines are huge: never read whole files — use compact python
   extractors, and poll `run.sqlite` for level/xp.
 - Watch runs with the Monitor tool (filtered events), not re-read loops — and
@@ -33,7 +34,8 @@ rather than respawning.
   counters, or model-attributable errors; those get one batch trajectory
   analysis after the run. Poll ~3 min for a 60–90 min episode.
 - One live game session per account (RUNNER / SHAKEOUT / PROBE; per-run
-  `--account` exists). Runs launch via `./infra/run-episode.sh`.
+  `--account` exists). The fleet and its rosters launch runs; a one-off is
+  `bun wb run episode`.
 - The claude-code driver (the claude-code harness: a tag on the run,
   scored alongside wrathbench rows) must never see ANTHROPIC_* env
   (subscription, not API credits).
@@ -46,16 +48,16 @@ rather than respawning.
 ## On invocation
 
 Read `/home/mark/git/wrathbench-private/FOLLOW-UPS.md` and `git log --oneline -10`, check
-`docker compose -f infra/compose.yml ps` and whether any run under `data/runs/`
-is live (no termination row in its run.sqlite) before touching anything. Then
+`bun wb fleet status` for the fleet's state and its live runs (a run is live
+when it has neither a termination nor a pause reason) before touching anything. Then
 report state and proceed with the highest-priority open item, delegating per
 the policy above.
 
 ## Learned 2026-08-22 (0.2 ship day)
 - Effort is a run dimension: roster entries take `effort`; recorded in run config; score turns-to-level, never tokens.
-- Kill runs via `pgrep -f "run.ts.*<run-id>"` + SIGTERM; TaskStop on wrapper shells does not reach the bun process. Force-kill leaves no termination row — write one into run.sqlite.
+- Stop runs with `bun wb fleet drain` (pause, wait for quiet, scale the fleet to 0; `bun wb fleet resume` clears the switch); TaskStop on wrapper shells does not reach the bun process. Force-kill leaves no termination row — write one into run.sqlite.
 - Subscription lane (claude driver) has no context policy: one growing CLI conversation; never compare its costs against API-driver runs.
-- Deploy windows: module image builds are safe anytime; `up -d worldserver` only with zero live runs. Full smoke = module-slice, module-session-state, module-accounts, death-recovery, travel (optional, exploratory).
+- Deploy windows: module image builds are safe anytime (`bun wb release build`); the worldserver is replaced only by the deploy window (`bun wb release deploy`), which drains to zero live runs first. Full smoke = module-slice, module-session-state, module-accounts, death-recovery, travel (optional, exploratory).
 - Multi-agent same-worktree: instruct agents to stage by explicit path (never `git add -A`) — sweep commits misattributed work twice today.
 - Viewer LAN: WRATHBENCH_VIEWER_LAN=1 opt-in binds 0.0.0.0:8090; the firewalld rich rule must be `--permanent` (a runtime-only rule dies on reload/reboot — that is why it kept lapsing). Recipe in runner/viewer/README.md. Verifying with curl from the HOST proves nothing: local traffic to the LAN IP goes over lo and never crosses the zone.
 - SHAKEOUT2 exists and is allowlisted; two roster processes (one per account) is the parallel-burn pattern.

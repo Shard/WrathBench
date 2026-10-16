@@ -46,7 +46,7 @@ export const LOCAL_MODEL_HOSTS_ENV = "WRATHBENCH_LOCAL_MODEL_HOSTS";
 /** Every provider key a run may name, and the only hosts each may be sent to. */
 export const KEY_PROVIDERS: readonly KeyProvider[] = [
   { keyEnv: "OPENROUTER_KEY", provider: "OpenRouter", hosts: ["openrouter.ai"] },
-  // Both OpenCode gateways (`/zen/v1` and `/zen/go/v1`) are on the one host.
+  // Every OpenCode gateway is on the one host: Zen and Go, under `/inference/` and the older `/zen/`.
   { keyEnv: "OPENCODE_KEY", provider: "OpenCode", hosts: ["opencode.ai"] },
   { keyEnv: "CEREBRAS_KEY", provider: "Cerebras", hosts: ["api.cerebras.ai"] },
   { keyEnv: "DEEPSEEK_KEY", provider: "DeepSeek", hosts: ["api.deepseek.com"] },

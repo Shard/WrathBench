@@ -1034,6 +1034,39 @@ describe("prompt-cache prefix discipline", () => {
     expect(readTrajectory(dir).filter((r) => r["kind"] === "resolved_model")).toHaveLength(1);
   });
 
+  test("OpenCode's served headers land on every record and the first is promoted, ahead of the body", async () => {
+    // Go picks the backend itself, so its headers are the only record of which
+    // machine answered; its body's `model` just echoes the id asked for.
+    let call = 0;
+    const adapter: ChatAdapter = {
+      label: "fake-go",
+      complete: (_req: ChatRequest): Promise<AdapterOutcome> => {
+        const first = call++ === 0;
+        return Promise.resolve({
+          kind: "ok",
+          turn: {
+            content: "done",
+            toolCalls: [],
+            served: first
+              ? { provider: "orcarouter-dsv4.1flash", model: "deepseek/deepseek-v4.1-flash" }
+              : { provider: "another-endpoint", model: "deepseek/deepseek-v4.1-flash" },
+            raw: { model: "deepseek-v4.1-flash" },
+          },
+        });
+      },
+    };
+    const { dir, options } = setup(adapter, { maxTurns: 2 });
+    await runLoop(options);
+    const responses = readTrajectory(dir).filter((r) => r.t === "response");
+    expect(responses).toHaveLength(2);
+    // Each record says what served it, as an OpenRouter body's `provider` does.
+    expect(responses[0]!.provider).toBe("orcarouter-dsv4.1flash");
+    expect(responses[0]!.model).toBe("deepseek/deepseek-v4.1-flash");
+    expect(responses[1]!.provider).toBe("another-endpoint");
+    // The run keeps the first answer, never revised.
+    expect(readMeta(dir)?.resolved).toEqual({ model: "deepseek/deepseek-v4.1-flash", cliVersion: null, provider: "orcarouter-dsv4.1flash" });
+  });
+
   test("no provider field appears when the body names none", async () => {
     const adapter = new StubAdapter([{ content: "done", toolCalls: [] }]);
     const { dir, options } = setup(adapter, { maxTurns: 1 });

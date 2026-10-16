@@ -36,6 +36,22 @@ export function hostOfBase(apiBase: string | null | undefined): string | null {
   }
 }
 
+/**
+ * Whether an api base is OpenCode Go, billed apart from Zen's shared tier on
+ * the same host. The path is what distinguishes it —
+ * `https://opencode.ai/inference/go/openai/v1` (or the older
+ * `https://opencode.ai/zen/go/v1`, which still answers) against the shared
+ * tier's `https://opencode.ai/inference/openai/v1` and `/zen/v1` — so this
+ * reads the base itself rather than `platformOfBase`, which answers with a
+ * hostname. The host is matched exactly (`hostOfBase`), never by substring,
+ * and a base that does not parse is not this surface. Read by the scheduler's
+ * concurrency key (`models.ts`) and by the routing a run stamps (`routing.ts`).
+ */
+export function isOpenCodeGoBase(apiBase: string | null | undefined): boolean {
+  if (hostOfBase(apiBase) !== "opencode.ai") return false;
+  return /(^|\/)(zen|inference)\/go(\/|$)/.test(new URL(apiBase!).pathname);
+}
+
 /** The platforms a hostname is labelled with, matched exactly. Anything else is its own host. */
 const NAMED_HOSTS: Readonly<Record<string, string>> = {
   "openrouter.ai": "openrouter",

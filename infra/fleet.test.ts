@@ -31,6 +31,7 @@ import {
   validateEntries,
   episodeDimensions,
   formatAccounts,
+  formatArgvBlock,
   formatQueue,
   liveJobsFromState,
   jobsByAccount,
@@ -132,7 +133,7 @@ import type { EpisodeId } from "../runner/src/episodes";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Trajectory } from "../runner/src/trajectory";
-import { loadRunConfig } from "../runner/src/config";
+import { harnessClash, loadRunConfig } from "../runner/src/config";
 import { ConfigStore, readFleetConfig, type FleetRead } from "../runner/src/config-store";
 import { parseCampaigns } from "../runner/src/campaigns";
 import { campaignFileOf, runCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
@@ -932,6 +933,53 @@ describe("roster policy", () => {
     });
     expect(config.roster["astra"]).toMatchObject({ driver: "codex", subscription: "CODEX_HOME" });
     expect(config.refusals).toHaveLength(0);
+  });
+
+  // The harness is a tag because model ids are harness-disjoint (operator,
+  // 2026-10-16): a run maps back to its entry by model id, so one id under two
+  // harnesses would pool both into one ladder row and one tier count.
+  describe("one model id, one harness", () => {
+    const roster = (entries: Record<string, Record<string, unknown>>) => ({ accounts: { pool: ["R"] }, roster: entries, policy: {} });
+
+    test("the same id under two harnesses refuses the file, naming both entries and their harnesses", () => {
+      const raw = roster({
+        "luna-api": { tier: "t1", model: "gpt-6-luna" },
+        "luna-codex": { tier: "t1", model: "gpt-6-luna", driver: "codex" },
+      });
+      expect(() => parseFleet(raw)).toThrow(
+        /roster: roster policy — model gpt-6-luna runs under two harnesses: luna-api \(wrathbench\) and luna-codex \(codex\)\. .*probe-campaign arm/,
+      );
+    });
+
+    test("one id at several efforts under one harness is one harness, so it passes", () => {
+      const config = parseFleet(
+        roster({
+          sonnet: { tier: "t1", model: "sonnet", driver: "claude-code" },
+          "sonnet-low": { tier: "t1", model: "sonnet", driver: "claude-code", effort: "low" },
+          "sonnet-100k": { tier: "t0", model: "sonnet", driver: "claude-code", compactWindow: "100k" },
+        }),
+      );
+      expect(Object.keys(config.roster).sort()).toEqual(["sonnet", "sonnet-100k", "sonnet-low"]);
+      expect(config.refusals).toHaveLength(0);
+    });
+
+    test("ids are compared exactly: an aggregator slug and a CLI catalogue id are two ids", () => {
+      const config = parseFleet(
+        roster({
+          "luna-or": { tier: "t0", model: "openai/gpt-6-luna" },
+          "luna-codex": { tier: "t1", model: "gpt-6-luna", driver: "codex" },
+        }),
+      );
+      expect(config.refusals).toHaveLength(0);
+    });
+
+    test("harnessClash names the first clash in roster order, and an absent driver is openai", () => {
+      expect(harnessClash({})).toBeNull();
+      expect(harnessClash({ a: { model: "m" }, b: { model: "m", driver: "openai" } })).toBeNull();
+      expect(harnessClash({ a: { model: "m" }, b: { model: "n", driver: "codex" }, c: { model: "m", driver: "codex" } })).toMatch(
+        /model m runs under two harnesses: a \(wrathbench\) and c \(codex\)/,
+      );
+    });
   });
 
   test("the respawn breaker trips on repeated short-lived exits inside the window, and only then", () => {
@@ -4302,7 +4350,7 @@ describe("the read-only views read what is running, not every job the supervisor
     expect([...runningRefsOf(running)]).toEqual(["codex-sol-61"]);
     // The models table gives the real reason, and the fix it needs.
     const line = formatModels(states, runningRefsOf(running), NOW).find((l) => l.includes("gemma-4-31b"))!;
-    expect(line).toContain("no: tainted on e90 (3 failed attempts) — clear with --clear-model gemma-4-31b");
+    expect(line).toContain("no: tainted on e90 (3 failed attempts) — clear with bun wb fleet clear-model gemma-4-31b");
     // Reading every row as running is what hid it.
     expect(formatModels(states, runningRefsOf(live), NOW).find((l) => l.includes("gemma-4-31b"))).toContain("no: running (one character per model)");
     // The account row: the exited job is not shown, so RUNNER reads free; the live one is.
@@ -4436,6 +4484,21 @@ describe("the read-only views read what is running, not every job the supervisor
       // The argv is the live spawn's: the paused run first, --resume-roster.
       expect(spawns.map((s) => s.spawn.resumeRunId)).toEqual([A2]);
       expect(rows.find((r) => r.account === "RUNNER3")).toMatchObject({ job: { resumes: A2, planned: true } });
+      // And it prints as one real argv line under the header, never a bare `argv:`.
+      const block = formatArgvBlock(spawns, { stamp: "20261014", until: undefined, jsonlExists: () => false });
+      expect(block).toHaveLength(2);
+      expect(block[0]).toBe("argv:");
+      expect(block[1]).toStartWith(`  ${REF}-freeplay: `);
+      expect(block[1]).toContain("--resume-roster");
+    });
+
+    test("a plan that spawns nothing prints no argv block at all", () => {
+      // Kept in flight, not spawned: no header over nothing.
+      const runs = [...history, a2({ live: true })];
+      const inFlight = inFlightRuns({ jobs: new Map(), runs, roster: config().roster, campaigns: [] });
+      const { spawns } = dryRun(runs, { held: heldByA2, inFlight });
+      expect(spawns).toEqual([]);
+      expect(formatArgvBlock(spawns, { stamp: "20261014", until: undefined })).toEqual([]);
     });
 
     test("a run in flight under the supervisor keeps its account and its model, and says what a restart does to it", () => {

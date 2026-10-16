@@ -43,6 +43,7 @@
 
 import { z } from "zod";
 import type { ChatMessage } from "./context";
+import { hostOfBase } from "./platform";
 import { isOpenRouterBase, providerBodyOf, type RoutingSpec } from "./routing";
 import { apiKeyRefusal } from "./providers";
 import type { ToolDef } from "./tools";
@@ -127,6 +128,15 @@ export interface AssistantTurn {
    * must not be scored as a model failure. Absent when not reported.
    */
   finishReason?: string;
+  /**
+   * Which backend served this call, and the model id it served, when the
+   * endpoint names them outside the body: OpenCode does so in response
+   * headers (`openCodeServedOf`). OpenRouter names them in the body instead
+   * (`provider`, `model`), which the loop reads off `raw`. Record-only, like
+   * those: nothing the model sees changes. Absent when the endpoint names
+   * neither.
+   */
+  served?: { provider?: string; model?: string };
   raw?: unknown;
 }
 
@@ -293,6 +303,12 @@ export interface OpenAiAdapterOptions {
    * this, and the comparability tuple omits the field for exactly those.
    */
   routing?: RoutingSpec;
+  /**
+   * The conversation this adapter serves, stable for its whole life: the run
+   * id. Sent only to OpenCode (`OPENCODE_SESSION_HEADER`); every other host
+   * gets nothing from it.
+   */
+  sessionId?: string;
   maxAttempts?: number;
   requestTimeoutMs?: number;
   /** Wall-clock ceiling for one complete()'s retries (see the retry policy). */
@@ -330,6 +346,66 @@ export const APP_TITLE = "WrathBench";
  * making anyway.
  */
 export const USER_AGENT = APP_TITLE;
+
+/**
+ * OpenCode's session header. Go's docs admit coding agents other than its own
+ * client on three conditions: typical coding-agent traffic, a user agent of
+ * the agent's own (`USER_AGENT` already is one), and "a stable session ID in
+ * x-opencode-session for each conversation so we can optimize routing and
+ * prompt caching". This is the third, and it is all we send: the headers that
+ * identify OpenCode's own client (`x-opencode-client` and its siblings) are
+ * never sent, because claiming to be a client we are not is the spoofing this
+ * harness does not do.
+ *
+ * Host-gated on `opencode.ai` exactly (`hostOfBase`), both of its gateways,
+ * since a strict endpoint elsewhere has no use for it.
+ */
+export const OPENCODE_SESSION_HEADER = "x-opencode-session";
+
+/**
+ * The session header for this base, or nothing. A value that is not plain
+ * printable ASCII is dropped rather than sent: `fetch` throws building such a
+ * header, and this adapter would read the throw as a network error and retry
+ * it as an outage.
+ */
+export function openCodeSessionHeaders(baseUrl: string, sessionId: string | undefined): Record<string, string> {
+  if (hostOfBase(baseUrl) !== "opencode.ai") return {};
+  if (sessionId === undefined || !/^[\x21-\x7e]+$/.test(sessionId)) return {};
+  return { [OPENCODE_SESSION_HEADER]: sessionId };
+}
+
+/**
+ * The response headers in which OpenCode names the upstream that served a
+ * call: the endpoint it routed to (`openrouter-xiaomi`,
+ * `orcarouter-dsv4.1flash`, …) and that upstream's own model id
+ * (`xiaomi/mimo-v2.5`). Go picks the backend itself, so these are the only
+ * record of which machine answered.
+ */
+export const OPENCODE_SERVED_HEADERS = {
+  provider: "x-opencode-endpoint-id",
+  model: "x-opencode-upstream-model-id",
+} as const;
+
+/** Longest header value kept as a served provider or model; a longer one is dropped. */
+const SERVED_HEADER_MAX = 200;
+
+/**
+ * What an OpenCode response's headers say served it, or undefined for any
+ * other host or a response that names neither. Host-gated like the session
+ * header, and each value is kept only when it is plain printable text of a
+ * sane length, so a malformed header records nothing rather than garbage.
+ */
+export function openCodeServedOf(baseUrl: string, headers: Headers): { provider?: string; model?: string } | undefined {
+  if (hostOfBase(baseUrl) !== "opencode.ai") return undefined;
+  const read = (name: string): string | undefined => {
+    const v = headers.get(name)?.trim();
+    return v !== undefined && v.length > 0 && v.length <= SERVED_HEADER_MAX && /^[\x20-\x7e]+$/.test(v) ? v : undefined;
+  };
+  const provider = read(OPENCODE_SERVED_HEADERS.provider);
+  const model = read(OPENCODE_SERVED_HEADERS.model);
+  if (provider === undefined && model === undefined) return undefined;
+  return { ...(provider !== undefined ? { provider } : {}), ...(model !== undefined ? { model } : {}) };
+}
 
 /** `Retry-After`: integer seconds or an HTTP-date. Anything else is ignored. */
 export function parseRetryAfter(value: string | null, nowMs: number): number | null {
@@ -478,6 +554,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
       "HTTP-Referer": appUrl,
       "X-Title": APP_TITLE,
       "user-agent": USER_AGENT,
+      ...openCodeSessionHeaders(opts.baseUrl, opts.sessionId),
     };
   }
 
@@ -656,6 +733,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
         const bodyId = (json as { id?: unknown }).id;
         const turnRequestId =
           requestId ?? (typeof bodyId === "string" && bodyId.length > 0 ? bodyId : undefined);
+        const served = openCodeServedOf(this.opts.baseUrl, res.headers);
         return {
           kind: "ok",
           turn: {
@@ -669,6 +747,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
             })),
             ...(usage !== undefined ? { usage } : {}),
             ...(usageRaw !== undefined ? { usageRaw } : {}),
+            ...(served !== undefined ? { served } : {}),
             raw: json,
           },
         };

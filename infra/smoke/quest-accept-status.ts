@@ -36,7 +36,8 @@
  * re-runs every tick while it fails, so a slow failure is an expensive one.
  *
  * Run:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/quest-accept-status.ts
+ *   bun wb smoke quest-accept-status
+ *   bun wb --local smoke quest-accept-status   # the quickstart
  */
 
 import { authHeaders } from "./lib/auth";

@@ -30,11 +30,14 @@
  * realm, so a name tied to the account cannot be taken by a run of this smoke on
  * another account. `--character <Name>` overrides it.
  *
- * Run:
- *   docker compose -f infra/compose.yml exec -e MODULE_ACCOUNT=SMOKE runner bun infra/smoke/preflight.ts
+ * Run as the gate's SMOKE account. MODULE_ACCOUNT is the runner's environment,
+ * which `bun wb` does not carry (`bun wb smoke preflight` logs in as PROBE):
+ *   kubectl -n wrathbench exec deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE bun infra/smoke/preflight.ts
+ *   docker compose -f infra/compose.yml exec -e MODULE_ACCOUNT=SMOKE runner bun infra/smoke/preflight.ts   # the quickstart
  */
 
 import { authHeaders } from "./lib/auth";
+import { accountFixtureName } from "./lib/fixture";
 import { moduleBase, moduleWsBase } from "./lib/module";
 
 const BASE = moduleBase();
@@ -64,18 +67,9 @@ function log(msg: string): void {
   console.log(`[preflight +${elapsed()}] ${msg}`);
 }
 
-/** `Pf` + the account's letters, digits as letters (0 -> a), capped at the game's 12. */
-function fixtureName(account: string): string {
-  const tail = account
-    .toLowerCase()
-    .replace(/[0-9]/g, (d) => "abcdefghij"[Number(d)]!)
-    .replace(/[^a-z]/g, "");
-  return `Pf${tail}`.slice(0, 12);
-}
-
 const CHARACTER = (() => {
   const i = process.argv.indexOf("--character");
-  return i >= 0 ? (process.argv[i + 1] ?? "") : fixtureName(ACCOUNT);
+  return i >= 0 ? (process.argv[i + 1] ?? "") : accountFixtureName("Pf", ACCOUNT);
 })();
 
 let session = false;

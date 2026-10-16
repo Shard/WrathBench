@@ -24,6 +24,7 @@ import {
   writeLaneUsageSidecar,
 } from "./run-fleet-gate";
 import type { GoFetch } from "../runner/src/opencode-go";
+import { awaitSubscriptionGate } from "./run-roster";
 import { tempDirs } from "./temp-dirs";
 
 const tempDir = tempDirs();
@@ -225,7 +226,7 @@ describe("--status", () => {
     const gate = subscriptionGate([reading(CODEX, 85)], { scored: 80, freeplay: 100 }, NOW);
     const lines = formatSubscriptionGate(gate, gateLanes(gate, config.roster, config.policy.subscriptions), { local: { scored: 70, freeplay: 100 } });
     expect(lines[0]).toContain("scored starts held at 80%, freeplay held off");
-    expect(lines[1]).toContain("this shell reads scored 70%");
+    expect(lines[1]).toContain("the fleet container's thresholds, off its state file; this shell's env reads scored 70%");
     expect(lines.find((l) => l.includes(CODEX))).toMatch(/5h 85% \(resets .*\); observed 1m ago — scored HELD until .*, freeplay open/);
     expect(lines.find((l) => l.includes(LANE1))).toContain("no observation — open");
   });
@@ -304,5 +305,59 @@ describe("OpenCode Go", () => {
     const lanes = readLaneUsage(runs).map((u) => u.lane).sort();
     expect(lanes).toEqual([CODEX, GO]);
     expect(LANE_USAGE_SIDECAR).toBe("fleet-subscription-usage.json");
+  });
+});
+
+describe("the roster's pre-launch check (awaitSubscriptionGate)", () => {
+  const spec = { model: "gpt-5.5", runId: "fleet-cx-e90-gpt-5-5-20300101-r2", episode: "e90", driver: "codex" as const, tokenEnv: undefined, apiBase: "", apiKeyEnv: "", billing: undefined };
+  /** A runs directory holding one run whose reading puts the codex lane at `used`, resetting at `resetsAt`. */
+  const runsWith = (used: number | null, resetsAt: number): string => {
+    const runs = tempDir("wrathbench-roster-gate-");
+    if (used !== null) {
+      mkdirSync(join(runs, "fleet-a"), { recursive: true });
+      writeFileSync(
+        join(runs, "fleet-a", "meta.json"),
+        JSON.stringify({ subscriptionUsage: { lane: CODEX, observedAt: NOW - 60_000, windows: [{ usedPercent: used, windowMinutes: 300, resetsAt }] } }),
+      );
+    }
+    return runs;
+  };
+
+  test("a held launch waits, quietly, and goes once the window resets", async () => {
+    let clock = NOW;
+    const waits: number[] = [];
+    const said: string[] = [];
+    const recorded: string[] = [];
+    const go = await awaitSubscriptionGate(spec, undefined, {
+      runsDir: runsWith(92, NOW + 150_000),
+      env: {},
+      now: () => clock,
+      wait: (ms) => {
+        waits.push(ms);
+        clock += ms;
+        return Promise.resolve();
+      },
+      stopped: () => false,
+      say: (l) => said.push(l),
+      record: (e) => recorded.push(e.outcome),
+    });
+    expect(go).toBe(true);
+    // A minute at most per look, the last one exactly to the reset.
+    expect(waits).toEqual([60_000, 60_000, 30_000]);
+    expect(clock).toBe(NOW + 150_000);
+    // One line for the whole hold, however long it lasts.
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain(`hold gpt-5.5 (${spec.runId}): subscription gate: ${CODEX} is at or over the scored threshold`);
+    expect(recorded).toEqual(["skipped"]);
+  });
+
+  test("a lane with no reading launches at once; a stop or a drain while held launches nothing", async () => {
+    const waited: number[] = [];
+    const deps = { env: {}, now: () => NOW, wait: (ms: number) => (waited.push(ms), Promise.resolve()), say: () => {}, record: () => {} };
+    expect(await awaitSubscriptionGate(spec, undefined, { ...deps, runsDir: runsWith(null, 0), stopped: () => false })).toBe(true);
+    expect(waited).toEqual([]);
+    // A spec on no subscription is never asked about.
+    expect(await awaitSubscriptionGate({ ...spec, driver: "openai" }, undefined, { ...deps, runsDir: runsWith(99, NOW + H), stopped: () => false })).toBe(true);
+    expect(await awaitSubscriptionGate(spec, undefined, { ...deps, runsDir: runsWith(99, NOW + H), stopped: () => true })).toBe(false);
   });
 });

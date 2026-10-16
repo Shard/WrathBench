@@ -8,8 +8,9 @@
  * built before those taps (the login event never arrives). Run it only after
  * the image is deployed.
  *
- * Fixture: a persistent character (default
- * `Smoketaxi` on MODULE_ACCOUNT, never deleted) is placed by
+ * Fixture: a persistent character (default `Tx` + the account's letters, e.g.
+ * `Txprobe`, so each account owns its own: names are realm-global; never
+ * deleted; `SMOKE_CHARACTER` overrides) is placed by
  * `infra/fixtures/apply.ts --scenario taxi-ironforge` — level 10, 1g, logged
  * out, standing in front of Gryth Thurden in Ironforge with TaxiNodes 6
  * (Ironforge) and 8 (Thelsamar) marked visited, because the server refuses a
@@ -28,16 +29,19 @@
  *   4. DELETE /session mid-flight. apply.ts resets `taxi_path` and the
  *      position on the next run, so the flight never has to finish.
  *
- * Run from inside the network. The `runner` service carries the DB env the
- * fixture tool needs and MODULE_ACCOUNT defaults to PROBE, so no `-e` flags:
+ * Run from inside the network. The runner carries the DB env the fixture
+ * tool needs and MODULE_ACCOUNT defaults to PROBE, so nothing is added:
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/achievements-taxi.ts
+ *   bun wb smoke achievements-taxi
+ *   bun wb --local smoke achievements-taxi   # the quickstart
  *
- * (Add `-e MODULE_ACCOUNT=SMOKE2` and the like only to log in as another
- * allowlisted account.)
+ * Another allowlisted account is MODULE_ACCOUNT in the runner's environment,
+ * which `bun wb` does not carry: `kubectl -n wrathbench exec
+ * deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE2 bun
+ * infra/smoke/achievements-taxi.ts` (the character is then `Txsmokec`).
  */
 
-import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders } from "./lib/auth";
 import { moduleBase, moduleWsBase } from "./lib/module";
 
@@ -46,7 +50,7 @@ const WS = moduleWsBase();
 
 const TOKEN = `probe-achievements-taxi-${crypto.randomUUID()}`;
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
-const CHARACTER = process.env.SMOKE_CHARACTER ?? "Smoketaxi";
+const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Tx", ACCOUNT);
 const SCENARIO = "taxi-ironforge";
 
 const GRYTH_THURDEN = 1573; // creature entry, Ironforge flight master

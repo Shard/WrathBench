@@ -382,7 +382,7 @@ export function formatSubscriptionGate(
       `(${SUB_SCORED_MAX_ENV}, ${SUB_FREEPLAY_MAX_ENV}; 100 = off) — a spent window holds every launch on its lane until it resets:`,
   ];
   if (opts.local !== undefined && (opts.local.scored !== t.scored || opts.local.freeplay !== t.freeplay)) {
-    out.push(`  (the supervisor's thresholds; this shell reads scored ${opts.local.scored}%, freeplay ${opts.local.freeplay}%)`);
+    out.push(`  (the fleet container's thresholds, off its state file; this shell's env reads scored ${opts.local.scored}%, freeplay ${opts.local.freeplay}%)`);
   }
   for (const n of opts.notes ?? []) out.push(`  !! ${n}`);
   for (const lane of lanes) {
