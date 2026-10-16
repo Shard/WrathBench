@@ -103,7 +103,7 @@ export interface JobSpawn {
  *
  * `deploySmokes` are the release's smokes on top of the gate (the game
  * surface and the module-quest.ts full arc, minutes long): run by the deploy
- * window (infra/k8s-deploy.sh, infra/deploy-worldserver.sh) once per deploy,
+ * window (infra/k8s-deploy.sh) once per deploy,
  * never by the supervisor. It is config here so the deploy scripts and the
  * supervisor read the same store and the same accounts clash-check.
  */
@@ -114,7 +114,7 @@ export interface FleetPreflight {
   /** Repo-relative (or absolute) smoke scripts, each bound to the account it logs in as. */
   smokes: PreflightSmoke[];
   timeoutMs: number;
-  /** Deploy-only smokes (deploy-worldserver.sh), same entry forms as `smokes`. */
+  /** Deploy-only smokes (infra/k8s-deploy.sh), same entry forms as `smokes`. */
   deploySmokes: PreflightSmoke[];
   /** Budget for the whole deploySmokes sequence. */
   deployTimeoutMs: number;

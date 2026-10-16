@@ -51,10 +51,10 @@ export const RUNS_DIR = join(REPO_ROOT, "data", "runs");
 export const ROSTER_SH = join(REPO_ROOT, "infra", "run-roster.sh");
 export const STATE_PATH = join(RUNS_DIR, "fleet-state.json");
 /**
- * The deploy window's phase file (infra/deploy-worldserver.sh): what the
- * viewer's /api/fleet serves as `server`. The script holds an flock on the
- * `.lock` sibling for its lifetime; a phase found here with the lock FREE was
- * left by a deploy that did not finish, and this process is what clears it.
+ * The deploy window's phase file (infra/k8s-deploy.sh): what the viewer's
+ * /api/fleet serves as `server`. A window phase found here with the `.lock`
+ * sibling FREE was left by a deploy that did not finish, and this process is
+ * what clears it. The cluster window holds no lock; it keeps the fleet at 0.
  */
 export const SERVER_STATE_PATH = join(RUNS_DIR, "server-state.json");
 export const SERVER_STATE_LOCK = join(RUNS_DIR, "server-state.lock");

@@ -35,9 +35,6 @@
 #     WRATHBENCH_HARNESS_VERSION on every trajectory it produces.
 # One string, so the deployed revision, the server identity and the harness
 # stamp on a run all agree and are reviewable.
-#
-# Related: infra/build-worldserver.sh builds the worldserver alone to the
-# compose deploy script's `:next` tag and stays the tool for that flow.
 
 set -Eeuo pipefail
 
@@ -62,7 +59,7 @@ while [[ $# -gt 0 ]]; do
     --only) ONLY+=("$2"); shift 2 ;;
     --push) PUSH=1; shift ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
-    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build-images: unknown flag $1" >&2; exit 2 ;;
   esac
 done
@@ -162,7 +159,7 @@ BUILT=()
 
 # The three AzerothCore targets share one `build` stage, so after the first the
 # others are assembly only. The ccache cache mount lives in the Dockerfile
-# (infra/docker/server.Dockerfile), the same one build-worldserver.sh warms.
+# (infra/docker/server.Dockerfile), shared with compose builds on the same daemon.
 build_server_target() {
   local target="$1" name="$2" ref="${REGISTRY}/$2:${TAG}"
   wants "${name}" || return 0

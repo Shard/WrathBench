@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# The day-2 deploy window on Kubernetes. The compose equivalent is
-# infra/deploy-worldserver.sh, and this is deliberately the same shape:
+# The day-2 deploy window on Kubernetes, the only deploy window there is.
+# Each phase is written to data/runs/server-state.json for the Fleet page:
 #
 #   draining    scale the fleet Deployment to 0. SIGTERM reaches the
 #               supervisor, every live run PAUSES and is resumed when it comes
@@ -112,9 +112,9 @@ readonly BUN_PLAIN_ENV=(env NO_COLOR=1 FORCE_COLOR=0 TERM=dumb)
 strip_ansi() { sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g'; }
 
 # ------------------------------------------------------------------ 0. config
-# Identical parse to deploy-worldserver.sh: the config store's `preflight`
-# block is the one place the smokes and their accounts are configured, on
-# compose and on Kubernetes. The store is on the data PVC, so it is read the
+# The config store's `preflight` block is the one place the smokes and their
+# accounts are configured, for the supervisor's gate and for this window
+# alike. The store is on the data PVC, so it is read the
 # way the supervisor reads it — `config-store.ts get preflight`, through the
 # runner pod (the same pod fleet-state.json is read through). An empty or
 # unreadable store fails the window here, loudly, rather than reading as "no
@@ -155,8 +155,8 @@ require_num "DRAIN_WAIT_S" "${DRAIN_WAIT_S}"
 
 # ------------------------------------------------------------- state readers
 # fleet-state.json lives on the data PVC, which the workstation cannot see, so
-# every read of it goes through the runner pod. Same file, same meaning; the
-# only difference from the compose script is who does the reading.
+# every read of it goes through the runner pod: the same file the supervisor
+# writes, read where it lives.
 in_runner() { "${KUBECTL[@]}" exec -i "${RUNNER_DEPLOY}" -- "$@"; }
 
 alive_jobs() {
@@ -359,12 +359,12 @@ print_keep_paused_next() {
 # `server`, and what the Fleet page's banner prints verbatim. Written through
 # the runner pod for the same reason as every other PVC read.
 #
-# The compose script holds an flock on server-state.lock for its whole window,
-# and the supervisor only writes `running` over another phase when that lock is
-# FREE. That does not port: an flock taken inside a `kubectl exec` dies with the
-# exec, so a lock held across this script would be a lie. It is deliberately not
-# faked. On the cluster the mutual exclusion that matters is a different one —
-# Flux owns the image tag, so there is exactly one thing that can change what is
+# No lock is held across the window. The supervisor writes `running` over a
+# window phase only when server-state.lock is free, and the fleet is at 0 for
+# the whole window, so no supervisor is there to do it. An flock taken inside a
+# `kubectl exec` dies with the exec, so a lock held across this script would be
+# a lie; it is deliberately not faked. The mutual exclusion that matters is
+# that Flux owns the image tag, so exactly one thing can change what is
 # deployed, and two operators running this script at once contend for the smoke
 # accounts rather than for the server. Keep the window to one operator.
 NEW_BUILD=""

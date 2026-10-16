@@ -15,8 +15,8 @@
 From the repository root:
 
 ```sh
-./infra/build-worldserver.sh   # worldserver, stamped with git describe (-> :next)
-docker build --target worldserver -t wrathbench/worldserver -f infra/docker/server.Dockerfile .   # unstamped: /health.build = "unknown"
+docker build --target worldserver -t wrathbench/worldserver -f infra/docker/server.Dockerfile \
+  --build-arg WRATHBENCH_BUILD="$(git describe --tags --always --dirty)" .   # without the arg, /health.build = "unknown"
 docker build --target authserver  -t wrathbench/authserver  -f infra/docker/server.Dockerfile .
 docker build --target db-import   -t wrathbench/db-import   -f infra/docker/server.Dockerfile .
 ```

@@ -1,6 +1,5 @@
 /**
- * Bash-level tests for infra/fleet-update.sh, in the shape
- * infra/deploy-worldserver.test.ts established: the real script, `kubectl`
+ * Bash-level tests for infra/fleet-update.sh: the real script, `kubectl`
  * replaced by a PATH shim, no cluster and no pods.
  *
  * The shim answers `get` from a fixture, records `rollout`/`scale`, and — the
