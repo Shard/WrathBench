@@ -89,6 +89,7 @@ describe("sections", () => {
       text: plain,
       sectionsDropped: 0,
       paragraphsDropped: 0,
+      paragraphsDroppedOnLinks: 0,
       sectionsTrimmedBy: {},
     });
   });
@@ -351,6 +352,69 @@ describe("out-of-world sections", () => {
     expect(stripWikitext(cut.text)).toBe("Lead lorem.\nInhabitants\nKeeper lorem.");
     expect(trimmed(cut)).toBe(1);
     expect(cut.sectionsTrimmedBy).toEqual({ "(empty)": 1 });
+  });
+
+  test("a section listed only in inline link templates is not empty", () => {
+    // The names are what the section says; a list of other templates still goes.
+    const page = [
+      "Lead lorem.",
+      "== Quests ==",
+      "* {{questlong|Alliance|10|Example Quest Alpha}}",
+      "* {{questlong|Alliance|12|Example Quest Beta}}",
+      "== Prices ==",
+      "* {{cost|1|50|0}}",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.\nQuests\nExample Quest Alpha\nExample Quest Beta");
+    expect(cut.sectionsTrimmedBy).toEqual({ "(empty)": 1 });
+  });
+
+  test("a paragraph that reads as the later world only through its names keeps them out", () => {
+    // The template-free reading passes the paragraph rules; with the names in,
+    // "in Cataclysm" appears. The paragraph stays as it was, holes included.
+    const page = [
+      "Lead lorem.",
+      "",
+      "A reward from {{quest|Example Return in Cataclysm}}, sold by {{npc||Example Person Gamma}}.",
+      "",
+      "Sold by {{npc||Example Person Gamma}} here.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.paragraphsDropped).toBe(0);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.\nA reward from , sold by .\nSold by Example Person Gamma here.");
+    // Rendering off reads the page exactly as before.
+    expect(stripWikitext(dropPostWrath(page, { inlineLinks: false }).text, { inlineLinks: false })).toBe(
+      "Lead lorem.\nA reward from , sold by .\nSold by here.",
+    );
+  });
+
+  test("with rendering on, the phrase rules read a link as its label", () => {
+    // The template-free reading sees "[[The Shattering]]" and never fired; read
+    // as the strip renders it, the paragraph is the later world's and goes.
+    const page = [
+      "Lead lorem.",
+      "",
+      "This quest was replaced by {{quest|Example Quest Beta}} after [[The Shattering]].",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.paragraphsDropped).toBe(1);
+    expect(cut.paragraphsDroppedOnLinks).toBe(1);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.");
+    // Rendering off is the reading the page set is decided on, unchanged.
+    const plain = dropPostWrath(page, { inlineLinks: false });
+    expect(plain.paragraphsDropped).toBe(0);
+    expect(stripWikitext(plain.text, { inlineLinks: false })).toBe(
+      "Lead lorem.\nThis quest was replaced by after The Shattering.",
+    );
+    // A piped link reads as its label, never as its target.
+    const piped = "Lorem in [[Example Expansion|Cataclysm]] dolor.\n\nKept lorem, in [[Cataclysm|the next one]].";
+    expect(stripWikitext(dropPostWrath(piped).text)).toBe("Kept lorem, in the next one.");
+  });
+
+  test("a line that a line rule catches only through its name keeps it out", () => {
+    const page = ["== Inhabitants ==", "* {{item|Example Speedbarge Token}}", "* {{item|Example Item Delta}}"].join("\n");
+    const cut = dropPostWrath(page);
+    expect(stripWikitext(cut.text)).toBe("Inhabitants\nExample Item Delta");
   });
 
   test("a heading with no body of its own but an occupied subsection survives", () => {

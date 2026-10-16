@@ -368,6 +368,43 @@ export function categoryTitleIsPostWrath(ns: number, title: string): boolean {
 }
 
 /**
+ * Does a name end in a qualifier that places it in a later world: `(Cataclysm)`,
+ * `(Gilneas)`, `(Shimmering Expanse)`?
+ *
+ * Read on the names `strip.ts` writes for inline link templates, which no other
+ * era rule sees: the paragraph rules read prose with every template removed.
+ * No new words: the qualifier is the disambiguation a title carries, so it is
+ * matched against the lists the title rules already hold — an expansion
+ * parenthetical, a later zone or feature as a category title names one, or a
+ * coined zone — plus `POST_WRATH_QUALIFIERS` below. It has to be the **whole**
+ * qualifier, never a word inside one, because a qualifier that only mentions a
+ * place (`(Battle for …)`) is the old world's as often as not.
+ */
+export function nameHasPostWrathQualifier(name: string): boolean {
+  const m = /\(([^()]+)\)\s*$/.exec(name);
+  if (m === null) return false;
+  const qualifier = foldTitle(m[1]!);
+  return (
+    TITLE_PARENTHETICAL.test(`(${qualifier})`) ||
+    POST_WRATH_TITLE_SUBJECTS.includes(qualifier) ||
+    POST_WRATH_TITLES.has(qualifier) ||
+    POST_WRATH_QUALIFIERS.has(qualifier)
+  );
+}
+
+/**
+ * Later-world qualifiers that are on no title list, because as a title they
+ * name this world too. `(Worgen)` disambiguates the worgen starting zone's
+ * version of a quest (Cataclysm, operator 2026-10-16); worgen themselves are this
+ * world's NPCs — Duskwood, Grizzly Hills. The word is not a category-title
+ * subject above because that list also decides which category pages are in the
+ * bundle: on the 2020 dump it would drop three of them, and a qualifier is about
+ * a name, not about a page.
+ * `(Goblin)` is not here: on this dump it names Goblin Engineering, this world's.
+ */
+const POST_WRATH_QUALIFIERS: ReadonlySet<string> = new Set(["worgen"]);
+
+/**
  * Zone names Cataclysm **coined**, as a main-namespace page's whole title.
  *
  * A separate list from `POST_WRATH_TITLE_SUBJECTS` above, and deliberately a

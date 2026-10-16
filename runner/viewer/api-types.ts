@@ -295,8 +295,8 @@ export interface ComparabilityView {
   compactWindow?: string | null;
   /**
    * Which reference bundle the run read, off the bundle's own `meta` table
-   * An annotation: a text-changing rebuild is paired with a harness
-   * minor bump, which is what actually groups. Null when the run had no bundle;
+   * An annotation: a text-changing rebuild ships as a patch within the
+   * series, and `builtAt` marks which side of it a run read. Null when the run had no bundle;
    * absent on runs stamped before the field existed.
    */
   wikiBundle?: {
