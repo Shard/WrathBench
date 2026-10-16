@@ -263,13 +263,20 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   the feed's tail, `entries.json` beside `detail.json` — after `projectEntry`
   (an allowlist per entry type) and `redactGameProse`
   (`runner/viewer/redact-prose.ts`), which replaces the prose fields enumerated
-  from `sdk/src/protocol.ts` wherever a decoded payload appears in a tool
-  result. Quest titles, item, NPC, zone and spell names and
+  from `sdk/src/protocol.ts` and the SDK's own types wherever a decoded
+  payload appears in a tool result — as JSON, or as the sandbox renders a
+  snippet's value and its console objects (`Bun.inspect`, read in place) —
+  and the gossip option text the SDK quotes in its own hints and errors.
+  Quest titles, item, NPC, zone and spell names and
   every id remain. The run's `scratchpad.json` ships whole beside it.
   **Residual, stated plainly**: model-authored text — turn text, snippet
-  code, the scratchpad, the episodic status, console lines, and any tool
-  result the model formatted as plain prose rather than JSON — is published
-  as written and is not filtered; it may quote game prose. No "load earlier"
+  code, the scratchpad, the episodic status, the words of console lines,
+  objects the model rebuilt under keys of its own, and any tool result the
+  model formatted as plain prose — is published as written and is not
+  filtered; it may quote game prose. A change to the redaction needs no
+  re-key of its own: the run's key hashes the projected window, so exactly
+  the runs whose window the change alters move to a new key, and their old
+  objects are pruned on the pass after. No "load earlier"
   and no live tail publicly: the window advances with the detail poll.
 - **Paths**: a container-internal prefix is made repo-relative — every
   exported projector's output crosses `scrubPathsValue`
