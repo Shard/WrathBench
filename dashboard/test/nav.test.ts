@@ -6,6 +6,10 @@ describe("NAV", () => {
   test("about is last", () => {
     expect(NAV.map((n) => n.href).at(-1)).toBe("/about");
   });
+  test("ladder comes immediately before runs", () => {
+    const hrefs = NAV.map((n) => n.href);
+    expect(hrefs.indexOf("/ladder")).toBe(hrefs.indexOf("/runs") - 1);
+  });
   test("fleet is not a nav item; the status popout is the way to it", () => {
     expect(NAV.some((n) => n.href === "/fleet")).toBe(false);
   });
