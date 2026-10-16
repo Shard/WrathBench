@@ -645,7 +645,9 @@ has its account does the pool fill. The same planner runs every tick, so a run
 paused by its provider (`rate-limited`, `quota-exhausted`) is resumed once its
 cooling is over — see "Lapsed runs" below. A supervisor that boots with the
 pause switch set does none of this until the switch is cleared, which is what
-keeps an update window from filling the pool behind the operator's back.
+keeps an update window from filling the pool behind the operator's back; its
+log names a planned resume or policy pick once the switch is cleared, not while
+it holds.
 
 ### Lapsed runs: paused, and stale
 
@@ -1203,6 +1205,18 @@ stored except an operator's clear.
 ./infra/run-fleet.sh --dry-run     # the picks the policy would make for the free accounts right now
 ./infra/run-fleet.sh --clear-model <roster-name>    # forgive a retired/cooling model; picked up on the next tick
 ```
+
+Both read what is running as the supervisor does: a job whose process is
+alive, never a row `fleet-state.json` keeps for a roster that has exited, so an
+exited job's account reads free and its model gives its real reason (tainted,
+cooling) rather than "running". `--dry-run` plans the next tick around that:
+a job in flight keeps its account and its model, and its row says what a
+restart does to its run; a paused run the supervisor would bring back reads
+`resumes <run id> in place`. A live fleet run no job owns (a killed runner's
+heartbeat stays warm for two minutes) keeps only its account, as on the live
+tick, and its row says so: a run on a resuming lane comes back in place only if
+it stops before that tick. With the pause switch set the dry-run leads with the switch, and the plan
+is what launches once it is cleared.
 
 What the status words mean: `new` has no counted run yet; `active` is working
 toward its `e90` target; `promoted` may also be scheduled on `e360`; `cooling`

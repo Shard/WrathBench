@@ -20,6 +20,7 @@ import {
   type FleetJob,
   type FleetRosterEntry,
   healthyFrom,
+  type JobSource,
   type JobSpawn,
   keysOfIn,
   pinnedCampaignJobs,
@@ -33,6 +34,7 @@ import {
 import { backoffMs, isTainted, type RosterSpec, slug } from "./run-roster";
 import {
   armArg,
+  campaignSquares,
   pinnedCampaignJobName,
   policyCampaignJobName,
   type Campaign,
@@ -1701,6 +1703,40 @@ export function policyJobDropped(
 }
 
 /**
+ * Why a live pinned job the config no longer yields is drained — the words on
+ * the drain line, and nothing else: the drain is `diffJobs`' (a running job
+ * with no spawn), whatever this says. Pure.
+ *
+ * A pinned campaign yields one job, for its next square, so a job whose run
+ * fills its square stops being yielded while that run plays. It used to drain
+ * as plain "disabled" with the campaign row still enabled, which read as if the
+ * operator had switched the campaign off (pod-proof@1, 2026-10-11).
+ */
+export function unyieldedDrainReason(
+  job: Pick<FleetJob, "ref" | "probe">,
+  campaigns: readonly Campaign[],
+  catalog: readonly string[],
+  probeRuns: readonly ProbeRun[],
+): string {
+  if (job.probe === undefined) return "no longer in the config";
+  const { campaign, version, cell, arm } = job.probe;
+  const c = campaigns.find((x) => x.name === campaign);
+  if (c === undefined) return `campaign ${campaign} is no longer in the config`;
+  if (!c.enabled) return `campaign ${campaign} disabled`;
+  if (c.version !== version) return `campaign ${campaign} moved to version ${c.version}`;
+  const square = `square ${cell}/${arm} of ${campaign}@${version}`;
+  const sq = campaignSquares(c, catalog, probeRuns).find((s) => s.ref === job.ref && s.cell.id === cell && s.arm.id === arm);
+  if (sq === undefined) return `${square} is no longer assigned to ${job.ref}`;
+  const tally = `${sq.done}/${sq.want} counted, ${sq.attempts} launched`;
+  if (sq.refused !== null) return `${square} refused: ${sq.refused}`;
+  if (sq.done >= sq.want) return `${square} is met (${tally}) — nothing more to launch`;
+  if (c.maxAttemptsPerCell !== undefined && sq.attempts >= c.maxAttemptsPerCell) {
+    return `${square} has had its ${c.maxAttemptsPerCell} launch(es), the live run included (${tally}) — nothing more to launch`;
+  }
+  return `campaign ${campaign}@${version} moved on to another square (${cell}/${arm}: ${tally})`;
+}
+
+/**
  * Whether this job's run comes back WHERE IT LEFT OFF after a supervisor
  * restart — same run id, account and character — rather than spending its
  * attempt. Two kinds do: the freeplay character (`pausesOnDrain`, resumed in
@@ -2110,9 +2146,26 @@ export const fmtElapsed = (ms: number): string => {
 };
 
 /**
- * The plan for one tick with nothing running: which pinned jobs spawn, which
- * pool accounts the queue and then the policy would take. Pure over the
- * projection; used by --dry-run and by the startup fail-fast.
+ * A job already running when a plan is made: the supervisor has a live
+ * process for it. It holds its account and its refs — one character per
+ * model — exactly as the live tick's own processes do.
+ */
+export interface InFlight {
+  /** The job name; for a run no job owns (a reader's row, never planned around), its run id. */
+  name: string;
+  account: string;
+  refs: readonly string[];
+  /** The job's source. A pinned job is outside the paid cap, as on the live tick. */
+  source?: JobSource;
+}
+
+/**
+ * The plan for one tick: which pinned jobs spawn, which pool accounts the
+ * queue and then the policy would take. Pure over the projection; used by
+ * --dry-run and by the startup fail-fast. `inFlight` is what is already
+ * running (none at boot): without it a model whose run was live read as free
+ * and the dry-run planned it a second character on another account
+ * (2026-10-14, codex-sol-61's a3 beside its live a2).
  */
 export function planTick(
   config: FleetConfig,
@@ -2126,6 +2179,7 @@ export function planTick(
   lanes: ReadonlyMap<string, string> = new Map(),
   /** Every run id on disk, so a planned remainder names the ids its spawn will really use. */
   takenRunIds: ReadonlySet<string> = new Set(),
+  inFlight: readonly InFlight[] = [],
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2136,6 +2190,8 @@ export function planTick(
   const eligible = eligibleFrom(states);
   const counted = countedFrom(states);
   const resumed = new Set(resumes.map((r) => r.job.name));
+  // A job already running is kept, never spawned again (`diffJobs`).
+  const running = new Set(inFlight.map((j) => j.name));
   // A pinned campaign's next cell is a pinned job, and it has to be one HERE
   // too: `planTick` is what `--status` and `--dry-run` print, and a probe the
   // live loop would spawn but this planner never mentions is exactly the kind
@@ -2143,21 +2199,22 @@ export function planTick(
   // cost a night before. A pinned config job whose `repeat` is met is not
   // spawned, by the queue's own rule (`owedCopies`).
   const pinned = [...pinnedJobs(config), ...pinnedCampaignJobs(config, probeRuns, healthyFrom(states))]
-    .filter((j) => j.enabled && !resumed.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
+    .filter((j) => j.enabled && !resumed.has(j.name) && !running.has(j.name) && runnableRefs(j, config.roster, eligible).length > 0)
     .flatMap((j) => {
       const owed = owedCopies(j, runnableRefs(j, config.roster, eligible), counted);
       if (owesNothing(owed)) return [];
       return [owed === undefined ? j : { ...j, owed: { copies: owed, taken: takenRunIds } }];
     })
     .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
-  // Resumes hold their accounts and their refs ahead of everything fresh.
-  const running = new Map(resumes.map((r) => [r.job.name, r.account]));
-  const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs)]);
+  // What is running, and the resumes, hold their accounts and their refs
+  // ahead of everything fresh.
+  const occupied = new Map([...inFlight.map((j) => [j.name, j.account] as const), ...resumes.map((r) => [r.job.name, r.account] as const)]);
+  const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs), ...inFlight.flatMap((j) => j.refs)]);
   const queue = planQueue({
     queue: poolJobs(config),
     roster: config.roster,
     pool: config.accounts.pool,
-    running,
+    running: occupied,
     finished: new Set(),
     held,
     cooling: () => undefined,
@@ -2176,17 +2233,20 @@ export function planTick(
   for (const r of runningRefs) {
     for (const k of keysOfIn(keyOf, r, lanes.get(r))) keyCount.set(k, (keyCount.get(k) ?? 0) + 1);
   }
+  // The paid cap counts what the live tick counts: every paid model in flight
+  // but a pinned job's.
+  const paidRunning = inFlight.filter((j) => j.source !== "pinned").flatMap((j) => j.refs).filter((r) => billingOfName.get(r) === "paid").length;
   const { picks: policy, held: heldPicks } = planPolicyHeld({
     states: policyStates,
     pool: config.accounts.pool,
     classPools: classPoolsOf(config),
-    running,
+    running: occupied,
     held,
     queuePlan: queue,
     runningRefs,
     concurrency: { keyOf, max: config.maxConcurrent, running: keyCount, pinnedLane: (n) => config.roster[n]?.subscription },
     policy: config.policy,
-    paidRunning: 0,
+    paidRunning,
     campaigns: unpinnedCampaigns(config),
     probeRuns,
     ...(affinity !== undefined ? { affinity } : {}),

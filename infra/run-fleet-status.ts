@@ -33,6 +33,7 @@ import {
 import {
   affinityFrom,
   affinityOf,
+  campaignResumeOf,
   type ConfigRejection,
   countedFrom,
   type CountedRuns,
@@ -43,6 +44,7 @@ import {
   fmtElapsed,
   fmtPaused,
   HEARTBEAT_STALE_MS,
+  type InFlight,
   isExtraJob,
   jobSpawn,
   type Occupant,
@@ -57,6 +59,7 @@ import {
   planTick,
   progressLabel,
   providerResetOf,
+  refOfRunId,
   type ResumePlan,
   retryNumbers,
   type Character,
@@ -87,10 +90,11 @@ import {
   type StateJob,
 } from "./run-fleet-state";
 import { accountHeldBy } from "./run-roster";
-import { runCampaignFile } from "../runner/src/campaign-file";
-import type { CampaignRefusal } from "../runner/src/campaigns";
+import { readImageRecord } from "./run-pod";
+import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
+import type { Campaign, CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
-import { TAINT_AFTER } from "../runner/src/lapse";
+import { resumesOnPause, TAINT_AFTER } from "../runner/src/lapse";
 import { rosterPriceGap } from "../runner/viewer/pricing";
 import {
   ACCOUNT_CLASSES,
@@ -108,6 +112,8 @@ import {
   outstandingWork,
   readRunFacts,
   rosterClass,
+  type RunFact,
+  sameRosterIdentity,
   schedulability,
   type SchedulingPolicy,
   type StartingCharacter,
@@ -286,6 +292,10 @@ export interface JobRow {
   cooling?: string;
   /** Dry-run only: this job would spawn, nothing is running yet. */
   planned?: boolean;
+  /** Dry-run only, with `planned`: the spawn resumes this paused run in place rather than launching one. */
+  resumes?: string;
+  /** Dry-run only: the job is already running under the supervisor, and what a restart does to its run. */
+  inFlight?: string;
   /** The policy's attempt number, for a policy job. */
   attempt?: number;
   /** A scored-tier extra run, with the character it rolls; a freeplay extra rolls none. */
@@ -339,7 +349,11 @@ export function formatAccounts(rows: readonly AccountRow[]): string[] {
       // claude row meant before there was another one.
       `${j.subscription !== undefined ? ` [${j.subscription}]` : ""}`;
     if (j.planned === true) {
-      out.push(`${head}${what} — would spawn${j.runId !== undefined ? ` as ${j.runId}` : ""}`);
+      out.push(`${head}${what} — ${j.resumes !== undefined ? `resumes ${j.resumes} in place` : `would spawn${j.runId !== undefined ? ` as ${j.runId}` : ""}`}`);
+      continue;
+    }
+    if (j.inFlight !== undefined) {
+      out.push(`${head}${what} — in flight${j.runId !== undefined ? ` as ${j.runId}` : ""}; ${j.inFlight}`);
       continue;
     }
     const prog = j.level !== undefined ? `L${j.level} ${j.xp ?? 0}xp` : "no state rows yet";
@@ -568,20 +582,124 @@ export function formatPauseBanner(onDisk: FleetPause | undefined, inEffect: Flee
   ];
 }
 
+/** fleet-state.json as a reader finds it: undefined when absent, or caught mid-write (the supervisor writes it in place). */
+function readStateFile(): FleetState | undefined {
+  if (!existsSync(STATE_PATH)) return undefined;
+  try {
+    return JSON.parse(readFileSync(STATE_PATH, "utf8")) as FleetState;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The one liveness verdict for a printing, from either side of a container
+ * boundary: a heartbeat refreshed every tick. kill(pid, 0) is meaningless when
+ * the supervisor lives in another PID namespace — it either says "no such
+ * process" for a healthy fleet or, worse, hits an unrelated host process with
+ * the same number. It is still the right check for a state file written by a
+ * host supervisor, which has no heartbeat field at all. `isAlive` is a job's
+ * verdict under the same rule, so every reader of the jobs agrees with the
+ * supervisor's. Pure but for the pid probe, which is injected.
+ */
+export function stateLiveness(
+  state: FleetState | undefined,
+  now: number,
+  pidCheck: (pid: number) => boolean = pidAlive,
+): { fleetUp: boolean; hbAgeMs?: number; isAlive: (j: StateJob) => boolean } {
+  const hb = state?.heartbeatAt;
+  const hbAgeMs = hb === undefined ? undefined : now - hb;
+  const fleetUp = state === undefined ? false : hbAgeMs !== undefined ? hbAgeMs < HEARTBEAT_STALE_MS : pidCheck(state.fleetPid);
+  const isAlive = (j: StateJob): boolean => (typeof j.pid !== "number" ? false : hbAgeMs !== undefined ? fleetUp && j.alive : pidCheck(j.pid));
+  return { fleetUp, ...(hbAgeMs !== undefined ? { hbAgeMs } : {}), isAlive };
+}
+
+/**
+ * The jobs a reader treats as running: the ones whose process is alive
+ * (`stateLiveness`). Pure.
+ *
+ * `fleet-state.json`'s `jobs` is cumulative — an exited roster keeps its row,
+ * `alive: false` — and `--status` once read every row as running. A model
+ * whose last roster had exited then read "running (one character per model)",
+ * which hid the real reason it was not scheduled: three tainted models read
+ * that way for thirty-odd hours with nothing in flight. The supervisor's own
+ * plan never had the fault: it takes running from its live processes and
+ * releases the account at reap.
+ */
+export function runningJobs(live: ReadonlyMap<string, StateJob>, isAlive: (j: StateJob) => boolean): Map<string, StateJob> {
+  return new Map([...live].filter(([, j]) => isAlive(j)));
+}
+
+/** The roster names those jobs carry: a rotation's ref is its refs joined with "+". Pure. */
+export function runningRefsOf(jobs: ReadonlyMap<string, StateJob>): Set<string> {
+  return new Set([...jobs.values()].flatMap((j) => j.ref.split("+")));
+}
+
+/**
+ * Whether an account row shows the job `jobsByAccount` picked for it: a live
+ * one, or a row from another supervisor build (no pid to judge it by), which
+ * says so. An exited job leaves its account free, and the row then says what
+ * holds it, if anything. Pure.
+ */
+export function showsJob(j: StateJob, isAlive: (j: StateJob) => boolean): boolean {
+  return isAlive(j) || typeof j.pid !== "number" || typeof j.spawnedAt !== "number";
+}
+
+/**
+ * The job that launched a run, out of every job in the state file, by run id:
+ * the ids its roster was materialized with, the run it resumed, or the last
+ * one its log launched (`lastLaunched`, for a loop's later cycles). The newest
+ * spawn wins. Pure.
+ */
+export function jobOfRun(
+  runId: string,
+  jobs: ReadonlyMap<string, StateJob>,
+  lastLaunched: (name: string, j: StateJob) => string | undefined = () => undefined,
+): { name: string; j: StateJob } | undefined {
+  let found: { name: string; j: StateJob } | undefined;
+  for (const [name, j] of jobs) {
+    const mine = (j.runIds ?? []).includes(runId) || j.resuming === runId || lastLaunched(name, j) === runId;
+    if (!mine) continue;
+    if (found === undefined || (typeof j.spawnedAt === "number" ? j.spawnedAt : 0) > (typeof found.j.spawnedAt === "number" ? found.j.spawnedAt : 0)) found = { name, j };
+  }
+  return found;
+}
+
+/**
+ * What an account row says about the run holding it when no live job of the
+ * supervisor is on it. Pure.
+ *
+ * The holder is matched back to the job that launched it by run id
+ * (`jobOfRun`) — the run-id annotation a run pod carries, read off disk rather
+ * than off the pod: `--status` runs in the runner pod, which mounts no API
+ * token, so the pod's labels cannot be read there. `pod` is the run pod the
+ * run's `image.json` names ("" when it names none). Only a run the fleet did
+ * not launch is "not fleet-managed": a fleet run pod used to be called that
+ * too.
+ */
+export function formatHolder(h: {
+  runId: string;
+  progress?: { level: number; xp: number };
+  owner?: { name: string; j: StateJob; alive: boolean };
+  pod?: string;
+}): string {
+  const head = `held by run ${h.runId}${h.progress !== undefined ? ` (L${h.progress.level}, ${h.progress.xp} xp)` : ""}`;
+  const where = h.pod === undefined ? "" : h.pod === "" ? " in a run pod" : ` in run pod ${h.pod}`;
+  if (h.owner !== undefined) {
+    const roster = h.owner.alive ? "" : `, still live though its roster ${h.owner.j.exitCode !== null ? `exited ${h.owner.j.exitCode}` : "is gone"}`;
+    return `${head} — job ${h.owner.name}'s run${where}${roster}`;
+  }
+  if (h.runId.startsWith("fleet-")) return `${head} — a fleet run${where} that no job of this supervisor launched`;
+  return `${head}${where} — not fleet-managed`;
+}
+
 export function printStatus(): void {
   const configPath = configDbPath();
   // State first, and the banner before anything else: the store may not parse
   // here either, and even when it does, this reader can be a different code
   // version than the supervisor (that is how the shape-change incident hid).
   // The verdict that matters is the supervisor's, carried in the state file.
-  let state: FleetState | undefined;
-  if (existsSync(STATE_PATH)) {
-    try {
-      state = JSON.parse(readFileSync(STATE_PATH, "utf8")) as FleetState;
-    } catch {
-      state = undefined;
-    }
-  }
+  const state = readStateFile();
   const rejected = state?.configRejected;
   for (const line of formatConfigBanner(rejected, state?.configLoadedAt)) console.log(line);
   // The pause switch is read from ITS OWN file, not from the state: the state
@@ -600,16 +718,8 @@ export function printStatus(): void {
   for (const line of formatRefusals(config?.refusals ?? [], rejected === undefined)) console.log(line);
   for (const line of formatCampaignRefusals(config?.campaignRefusals ?? [])) console.log(line);
   for (const line of formatPriceGaps(config?.roster ?? {})) console.log(line);
-  // Liveness, honestly, from either side of a container boundary: a heartbeat
-  // refreshed every tick. kill(pid, 0) is meaningless when the supervisor lives
-  // in another PID namespace — it either says "no such process" for a healthy
-  // fleet or, worse, hits an unrelated host process with the same number. It is
-  // still the right check for a state file written by a host supervisor, which
-  // has no heartbeat field at all.
-  const hb = state?.heartbeatAt;
-  const hbAgeMs = hb === undefined ? undefined : Date.now() - hb;
-  const fleetUp =
-    state === undefined ? false : hbAgeMs !== undefined ? hbAgeMs < HEARTBEAT_STALE_MS : pidAlive(state.fleetPid);
+  // Liveness, honestly, from either side of a container boundary (`stateLiveness`).
+  const { fleetUp, hbAgeMs, isAlive } = stateLiveness(state, Date.now());
   const where = state?.containerized === true ? "compose service `fleet`" : "host process";
   console.log(
     `fleet (config store ${configPath})` +
@@ -632,7 +742,10 @@ export function printStatus(): void {
   const counted = countedFrom(projected);
 
   // (b) accounts: pinned first, then the pool, each with the job on it.
+  // Every job row the state file has, and the ones whose process is alive:
+  // the rows are a cumulative record, and only the alive ones are running.
   const live = liveJobsFromState(state);
+  const aliveJobs = runningJobs(live, isAlive);
   // Paused runs: what the supervisor would resume now, and what it
   // lists instead — computed from disk so it is right with the fleet down.
   // What the tick reads: a verdict-less run on a resuming lane is a paused
@@ -640,8 +753,8 @@ export function printStatus(): void {
   const runFacts = implicitPauses({
     runs: readRunFacts(RUNS_DIR),
     ...(config !== undefined ? { campaigns: config.campaigns } : {}),
-    running: new Set([...live.values()].filter((j) => fleetUp && j.alive).flatMap((j) => j.runIds ?? [])),
-    busyAccounts: new Set([...live.values()].filter((j) => fleetUp && j.alive).map((j) => j.account.toUpperCase())),
+    running: new Set([...aliveJobs.values()].flatMap((j) => j.runIds ?? [])),
+    busyAccounts: new Set([...aliveJobs.values()].map((j) => j.account.toUpperCase())),
     now: Date.now(),
   });
   // Newest start first, so an account's row names the paused run the resume
@@ -652,21 +765,15 @@ export function printStatus(): void {
       ? planResumes({
           runs: runFacts,
           config,
-          running: new Map([...live].filter(([, j]) => fleetUp).map(([name, j]) => [name, j.account])),
+          // The supervisor's live processes, as its own tick passes them: an
+          // exited job's account is free, and a paused run on it resumes.
+          running: new Map([...aliveJobs].map(([name, j]) => [name, j.account])),
           held: (a) => accountHeldBy(a, ""),
           now: Date.now(),
           campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
           hasImageRecord: (id) => runHasImageRecord(id),
         })
       : { resume: [], listed: [], end: [] };
-  /**
-   * The one liveness verdict for this printing. A heartbeat is the only honest
-   * signal across a container boundary; without one (a host supervisor) the pid
-   * is. Shared with `jobsByAccount` so the job a row picks and the note that
-   * row prints can never contradict each other.
-   */
-  const isAlive = (j: StateJob): boolean =>
-    typeof j.pid !== "number" ? false : hbAgeMs !== undefined ? fleetUp && j.alive : pidAlive(j.pid);
   const jobRow = (name: string, j: StateJob): JobRow => {
     const row: JobRow = {
       name,
@@ -710,6 +817,8 @@ export function printStatus(): void {
     if (!alive) row.cooling = `${row.cooling !== undefined ? `${row.cooling}; ` : ""}process ${j.exitCode !== null ? `exited ${j.exitCode}` : "dead"}`;
     return row;
   };
+  // Shared with `jobsByAccount`, so the job a row picks and the note that row
+  // prints can never contradict each other.
   const byAccount = jobsByAccount(live, isAlive);
   // With the config in hand the classes come from the file; without it (an
   // older or foreign checkout) from whatever the state file published.
@@ -729,7 +838,8 @@ export function printStatus(): void {
   for (const [kind, accounts] of [["pinned", pinnedAccounts], ...ACCOUNT_CLASSES.map((c) => [c, classAccounts(c)] as const)] as const) {
     for (const account of accounts) {
       const on = byAccount.get(account.toUpperCase());
-      if (on !== undefined) {
+      // An exited job's account is free: the row below says what holds it now.
+      if (on !== undefined && showsJob(on.j, isAlive)) {
         // A class governs the next pick, never a run in flight: a job that
         // landed before the classes did keeps its account and says so.
         const entry = config?.roster[on.j.ref];
@@ -752,7 +862,14 @@ export function printStatus(): void {
       let note: string | undefined;
       if (holder !== undefined) {
         const prog = runProgress(holder);
-        note = `held by run ${holder}${prog !== undefined ? ` (L${prog.level}, ${prog.xp} xp)` : ""} — not fleet-managed`;
+        const owner = jobOfRun(holder, live, (name, j) => lastLaunchedRunId(resolveStatePath(j.log, jobLogPath(name, state!.stamp))));
+        const image = readImageRecord(join(RUNS_DIR, holder));
+        note = formatHolder({
+          runId: holder,
+          ...(prog !== undefined ? { progress: prog } : {}),
+          ...(owner !== undefined ? { owner: { ...owner, alive: isAlive(owner.j) } } : {}),
+          ...(image !== undefined ? { pod: image.pod } : {}),
+        });
       } else if (pausedHere !== undefined) {
         const p = pausedHere.pause!;
         const prog = runProgress(pausedHere.runId);
@@ -798,8 +915,9 @@ export function printStatus(): void {
 
   // (c) models: the projection, every roster entry, with why (not) schedulable.
   if (config !== undefined && Object.keys(config.roster).length > 0) {
-    const running = new Set<string>();
-    for (const j of live.values()) for (const r of j.ref.split("+")) running.add(r);
+    // Only a job whose process is alive is running: an exited one's model
+    // reads its real reason (tainted, cooling, free), not "running".
+    const running = runningRefsOf(aliveJobs);
     const states = projected;
     const excluded = new Map<string, string>();
     for (const name of Object.keys(config.roster)) {
@@ -888,76 +1006,206 @@ export function printStatus(): void {
 
 // ------------------------------------------------------------------ dry run
 
-export function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string): void {
-  console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
-  for (const line of formatGate(undefined, config.preflight)) console.log(line);
-  if (config.preflight.enabled) {
-    for (const s of config.preflight.smokes) console.log(`  would run: bun ${smokePath(s.script)} (account ${s.account})`);
-    for (const s of config.preflight.deploySmokes) console.log(`  deploy-worldserver.sh only: bun ${smokePath(s.script)} (account ${s.account})`);
-  } else {
-    console.log("  gate open: jobs spawn without smoking the server first");
+/** Something already running when the dry-run plans, with what its account row needs. */
+export interface InFlightRun extends InFlight {
+  /** A job of the running supervisor; false for a live fleet run on disk that no live job of it owns. */
+  owned: boolean;
+  models: string[];
+  episode: EpisodeId | null;
+  runId?: string;
+  attempt?: number;
+  extra?: StartingCharacter;
+  subscription?: string;
+  /** Its run comes back where it left off after a restart — same run id, account and character — instead of spending its attempt. */
+  resumesInPlace: boolean;
+}
+
+/**
+ * What is already running, for the dry-run's plan. Pure.
+ *
+ * The supervisor's own live jobs (`jobs`, the alive ones), and every live
+ * fleet run on disk that none of them is playing: one whose roster is gone, or
+ * one inside the two minutes a killed runner's warm heartbeat outlives it. A
+ * job holds its account and its model, as the tick's own processes do; the
+ * dry-run used to plan as if nothing were running, so it predicted
+ * codex-sol-61 a second character (`-a3`, on another account) beside its live
+ * `-a2`. A run no job owns holds only its account, because that is all the
+ * tick holds for it, and its row says what follows (`planDryRun`).
+ */
+export function inFlightRuns(opts: {
+  jobs: ReadonlyMap<string, StateJob>;
+  runs: readonly RunFact[];
+  roster: Readonly<Record<string, FleetRosterEntry>>;
+  campaigns: readonly Campaign[];
+  /** The run a job is playing now (its log's last launch), when the caller can read it. */
+  runIdOf?: (name: string, j: StateJob) => string | undefined;
+}): InFlightRun[] {
+  const out: InFlightRun[] = [];
+  const claimed = new Set<string>();
+  for (const [name, j] of opts.jobs) {
+    const runId = opts.runIdOf?.(name, j) ?? j.resuming ?? (j.runIds?.length === 1 ? j.runIds[0] : undefined);
+    for (const id of [...(j.runIds ?? []), j.resuming, runId]) if (id !== undefined) claimed.add(id);
+    out.push({
+      name,
+      account: j.account,
+      refs: j.ref.split("+"),
+      source: j.source,
+      owned: true,
+      models: j.models.length > 0 ? j.models : [j.ref],
+      episode: j.episode,
+      ...(runId !== undefined ? { runId } : {}),
+      ...(j.attempt !== undefined ? { attempt: j.attempt } : {}),
+      ...(j.extra !== undefined ? { extra: j.extra } : {}),
+      ...(j.subscription !== undefined ? { subscription: j.subscription } : {}),
+      // The supervisor's own word for a campaign that asked to resume; the lane's rule for the rest.
+      resumesInPlace: j.resumesInPlace === true || (j.episode !== null && resumesOnPause(j.episode, false)),
+    });
   }
-  const runs = implicitPauses({ runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }), campaigns: config.campaigns, now: Date.now() });
-  const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
-  const held = (a: string): string | undefined => accountHeldBy(a, "");
+  const busy = new Set(out.map((r) => r.account.toUpperCase()));
+  const names = Object.keys(opts.roster);
+  for (const f of opts.runs) {
+    if (!f.live || !f.runId.startsWith("fleet-") || f.account === null) continue;
+    if (claimed.has(f.runId) || busy.has(f.account.toUpperCase())) continue;
+    const ref =
+      (f.ref != null && opts.roster[f.ref] !== undefined ? f.ref : undefined) ??
+      refOfRunId(f.runId, f.episode, names) ??
+      names.find((n) => sameRosterIdentity(opts.roster[n]!, f));
+    busy.add(f.account.toUpperCase());
+    out.push({
+      name: f.runId,
+      account: f.account,
+      refs: ref !== undefined ? [ref] : [],
+      owned: false,
+      models: [f.model],
+      episode: f.episode,
+      runId: f.runId,
+      resumesInPlace: resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign, f.campaignVersion ?? null)),
+    });
+  }
+  return out;
+}
+
+/** The dry-run: the plan, and one row per account saying what it does next. */
+export interface DryRunPlan {
+  resumes: { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] };
+  plan: ReturnType<typeof planTick>;
+  rows: AccountRow[];
+  /** Every spawn the rows make, in row order, for the argv block. */
+  spawns: { job: FleetJob; spawn: JobSpawn }[];
+}
+
+/**
+ * --dry-run's plan and its account rows. Pure over what the caller read: the
+ * run facts as the tick reads them (`implicitPauses` applied), the
+ * projection, the account holders, and what is already running
+ * (`inFlightRuns`) — handed to the resume planner and to `planTick` the way
+ * the live tick hands them its own processes. A row says what its account
+ * does next: resumes a paused run in place, keeps a run in flight, spawns
+ * one, or stays free and why.
+ */
+export function planDryRun(opts: {
+  config: FleetConfig;
+  runs: readonly RunFact[];
+  states: readonly ModelState[];
+  held: (account: string) => string | undefined;
+  stamp: string;
+  inFlight?: readonly InFlightRun[];
+  now?: number;
+  campaignFileOf?: (runId: string) => CampaignFile | null;
+  hasImageRecord?: (runId: string) => boolean;
+}): DryRunPlan {
+  const { config, runs, states, held, stamp } = opts;
+  const inFlight = opts.inFlight ?? [];
   const resumes = planResumes({
     runs,
     config,
-    running: new Map(),
+    running: new Map(inFlight.filter((r) => r.owned).map((r) => [r.name, r.account])),
     held,
-    now: Date.now(),
-    campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
-    hasImageRecord: (id) => runHasImageRecord(id),
+    now: opts.now ?? Date.now(),
+    ...(opts.campaignFileOf !== undefined ? { campaignFileOf: opts.campaignFileOf } : {}),
+    ...(opts.hasImageRecord !== undefined ? { hasImageRecord: opts.hasImageRecord } : {}),
   });
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.
+  // For the same reason only the supervisor's own jobs hold their models: the
+  // tick holds nothing else, so a live run no job owns keeps its account (via
+  // `held`) and not its model, and its row says so.
   const plan = planTick(
     config,
     states,
     held,
-    stampToday,
+    stamp,
     resumes.resume,
     probeRunsOf(runs),
     affinityOf(affinityFrom(runs, config.roster)),
     liveSubscriptions(runs, rosterModels(config.roster)),
     new Set(runs.map((f) => f.runId)),
+    inFlight.filter((r) => r.owned),
   );
+  const counted = countedFrom(states);
   const rows: AccountRow[] = [];
-  const argvs: string[] = [];
-  const planned = (job: FleetJob, spawn: JobSpawn): JobRow => {
-    const entries = fillEntries(spawn, stampToday);
-    // The same resume decision the live spawn makes (see the spawn path):
-    // without it the plan showed a fresh launch for a job whose day jsonl was
-    // on disk, which read as "the paused probe gets clobbered" when the real
-    // spawn would have resumed it.
-    const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
-    argvs.push(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil, resumeRoster }).join(" ")}`);
+  const spawns: DryRunPlan["spawns"] = [];
+  const planned = (job: FleetJob, spawn: JobSpawn, name: string = job.name): JobRow => {
+    spawns.push({ job, spawn });
+    const entries = fillEntries(spawn, stamp);
     return {
-      name: job.name,
+      name,
       models: [...new Set(entries.map((e) => e.model))],
       episode: job.episode,
       runId: entries.map((e) => e.runId).join(", "),
       planned: true,
+      ...(spawn.resumeRunId !== undefined ? { resumes: spawn.resumeRunId } : {}),
       ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
       ...(job.extra !== undefined ? { extra: job.extra } : {}),
       ...(job.subscription !== undefined ? { subscription: job.subscription } : {}),
     };
   };
-  const resumeRow = (r: ResumePlan, kind: AccountKind): AccountRow => ({
-    account: r.account,
+  const resumeRow = (r: ResumePlan, account: string, kind: AccountKind): AccountRow => ({
+    account,
     kind,
-    job: { ...planned(r.job, jobSpawn(r.job, config.roster, r.account, stampToday, undefined, config.campaigns)), name: `${r.job.name} (resume ${r.runId}: ${r.why})` },
+    job: planned(r.job, jobSpawn(r.job, config.roster, r.account, stamp, undefined, config.campaigns), `${r.job.name} (paused: ${r.why})`),
   });
-  const listedInDryRun = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
-  for (const account of Object.keys(config.accounts.pinned).filter((a) => !listedInDryRun.has(a.toUpperCase()))) {
-    const p = plan.pinned.find((x) => x.job.account!.toUpperCase() === account.toUpperCase());
-    const holder = held(account);
+  const inFlightOn = (account: string): InFlightRun | undefined => inFlight.find((r) => r.account.toUpperCase() === account.toUpperCase());
+  const inFlightRow = (r: InFlightRun, account: string, kind: AccountKind): AccountRow =>
+    r.owned
+      ? {
+          account,
+          kind,
+          job: {
+            name: r.name,
+            models: r.models,
+            episode: r.episode,
+            ...(r.runId !== undefined ? { runId: r.runId } : {}),
+            ...(r.attempt !== undefined ? { attempt: r.attempt } : {}),
+            ...(r.extra !== undefined ? { extra: r.extra } : {}),
+            ...(r.subscription !== undefined ? { subscription: r.subscription } : {}),
+            inFlight: r.resumesInPlace ? "a restart pauses it and it resumes in place here" : "a restart spends its attempt (ended manual, not a strike)",
+          },
+        }
+      : {
+          account,
+          kind,
+          free: true,
+          // Said plainly: nothing here knows whether the supervisor's next
+          // tick lands before or after this run stops, and the plan above is
+          // what the tick does while it has not.
+          note:
+            `held by run ${r.runId ?? r.name} — live, and no job of a running supervisor owns it; ` +
+            (r.resumesInPlace ? "if it stops before the next tick, the supervisor resumes it in place here" : "once it lapses it is ended, not resumed") +
+            (r.refs.length > 0 ? `; while it stays live the tick does not hold ${r.refs.join("+")} and may plan it on another account` : ""),
+        };
+  const listed = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
+  for (const account of Object.keys(config.accounts.pinned).filter((a) => !listed.has(a.toUpperCase()))) {
+    const fl = inFlightOn(account);
     const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
-    if (rs !== undefined) rows.push(resumeRow(rs, "pinned"));
+    const p = plan.pinned.find((x) => x.job.account!.toUpperCase() === account.toUpperCase());
+    if (fl !== undefined) rows.push(inFlightRow(fl, account, "pinned"));
+    else if (rs !== undefined) rows.push(resumeRow(rs, account, "pinned"));
     else if (p !== undefined) rows.push({ account, kind: "pinned", job: planned(p.job, p.spawn) });
     else {
+      const holder = held(account);
       const job = pinnedJobs(config).find((j) => j.account?.toUpperCase() === account.toUpperCase());
-      const met = job?.enabled === true && owesNothing(owedCopies(job, job.refs, countedFrom(states)));
+      const met = job?.enabled === true && owesNothing(owedCopies(job, job.refs, counted));
       rows.push({
         account,
         kind: "pinned",
@@ -966,29 +1214,88 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
           holder !== undefined
             ? `held by run ${holder}`
             : met
-              ? `job ${job.name} done (${progressLabel(job, countedFrom(states)) ?? "met"}) — repeat met, nothing spawns (raise repeat for more)`
+              ? `job ${job.name} done (${progressLabel(job, counted) ?? "met"}) — repeat met, nothing spawns (raise repeat for more)`
               : `job ${job?.name ?? "?"} disabled — flip enabled:true to spawn`,
       });
     }
   }
   for (const [kind, accounts] of ACCOUNT_CLASSES.map((c) => [c, classAccountsOf(config, c)] as const)) {
     for (const account of accounts) {
+      const fl = inFlightOn(account);
+      const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
       const q = plan.queue.assign.find((a) => a.account === account);
       const pp = plan.policy.find((a) => a.account === account);
-      const holder = held(account);
-      const rs = resumes.resume.find((r) => r.account.toUpperCase() === account.toUpperCase());
-      if (rs !== undefined) rows.push(resumeRow(rs, kind));
-      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobSpawn(q.job, config.roster, account, stampToday, eligibleFrom(states), config.campaigns)) });
-      else if (pp !== undefined) rows.push({ account, kind, job: { ...planned(pp.job, jobSpawn(pp.job, config.roster, account, stampToday, undefined, config.campaigns)), name: `${pp.job.name} (policy: ${pp.why})` } });
-      else rows.push({ account, kind, free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
+      if (fl !== undefined) rows.push(inFlightRow(fl, account, kind));
+      else if (rs !== undefined) rows.push(resumeRow(rs, account, kind));
+      else if (q !== undefined) rows.push({ account, kind, job: planned(q.job, jobSpawn(q.job, config.roster, account, stamp, eligibleFrom(states), config.campaigns)) });
+      else if (pp !== undefined) {
+        rows.push({ account, kind, job: planned(pp.job, jobSpawn(pp.job, config.roster, account, stamp, undefined, config.campaigns), `${pp.job.name} (policy: ${pp.why})`) });
+      } else {
+        const holder = held(account);
+        rows.push({ account, kind, free: true, ...(holder !== undefined ? { note: `held by run ${holder}` } : {}) });
+      }
     }
   }
+  return { resumes, plan, rows, spawns };
+}
+
+export function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string): void {
+  console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
+  // The running supervisor, read the way --status reads it: this is the next
+  // tick's plan, so what it already has in flight keeps its account and model.
+  const state = readStateFile();
+  const now = Date.now();
+  const jobs = runningJobs(liveJobsFromState(state), stateLiveness(state, now).isAlive);
+  const pause = formatPauseBanner(readPauseSidecar(), state?.pausedSwitch);
+  for (const line of pause) console.log(line);
+  if (pause.length > 0) console.log("   the plan below is what launches once the switch is cleared");
+  for (const line of formatGate(undefined, config.preflight)) console.log(line);
+  if (config.preflight.enabled) {
+    for (const s of config.preflight.smokes) console.log(`  would run: bun ${smokePath(s.script)} (account ${s.account})`);
+    for (const s of config.preflight.deploySmokes) console.log(`  deploy-worldserver.sh only: bun ${smokePath(s.script)} (account ${s.account})`);
+  } else {
+    console.log("  gate open: jobs spawn without smoking the server first");
+  }
+  // The tick's own read: a verdict-less run is a paused one unless a live job holds it.
+  const runs = implicitPauses({
+    runs: readRunFacts(RUNS_DIR, now, { includeArchived: true }),
+    campaigns: config.campaigns,
+    running: new Set([...jobs.values()].flatMap((j) => j.runIds ?? [])),
+    busyAccounts: new Set([...jobs.values()].map((j) => j.account.toUpperCase())),
+    now,
+  });
+  const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
+  const inFlight = inFlightRuns({
+    jobs,
+    runs,
+    roster: config.roster,
+    campaigns: config.campaigns,
+    runIdOf: (name, j) => lastLaunchedRunId(resolveStatePath(j.log, jobLogPath(name, state!.stamp))),
+  });
+  const { resumes, plan, rows, spawns } = planDryRun({
+    config,
+    runs,
+    states,
+    held: (a) => accountHeldBy(a, ""),
+    stamp: stampToday,
+    inFlight,
+    now,
+    campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
+    hasImageRecord: (id) => runHasImageRecord(id),
+  });
   console.log("");
   for (const line of formatAccounts(rows)) console.log(line);
   for (const line of formatAccountClasses(config)) console.log(line);
-  if (argvs.length > 0) {
+  if (spawns.length > 0) {
     console.log("argv:");
-    for (const a of argvs) console.log(a);
+    for (const { job, spawn } of spawns) {
+      // The same resume decision the live spawn makes (see the spawn path):
+      // without it the plan showed a fresh launch for a job whose day jsonl was
+      // on disk, which read as "the paused probe gets clobbered" when the real
+      // spawn would have resumed it.
+      const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
+      console.log(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil, resumeRoster }).join(" ")}`);
+    }
   }
   for (const job of plan.queue.waiting) console.log(`  ${job.name}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);
   for (const sk of plan.queue.skipped) console.log(`  ${sk.job.name}: SKIP — ${sk.reason}`);
@@ -1000,11 +1307,11 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     const why = policyExclusion(config, name);
     if (why !== undefined) excluded.set(name, why);
   }
-  for (const line of formatModels(states, new Set(), Date.now(), excluded, config.policy)) console.log(line);
+  for (const line of formatModels(states, new Set(inFlight.filter((r) => r.owned).flatMap((r) => r.refs)), now, excluded, config.policy)) console.log(line);
   for (const line of formatHeld(plan.heldPicks)) console.log(line);
   for (const line of formatPaused(resumes.listed)) console.log(line);
   for (const line of formatEnded(
-    [...resumes.end, ...planStaleRuns({ runs, campaigns: config.campaigns, refs: Object.keys(config.roster), now: Date.now() })],
+    [...resumes.end, ...planStaleRuns({ runs, campaigns: config.campaigns, refs: Object.keys(config.roster), now })],
     false,
     (e) => failedAttemptsFor(states, e) ?? 0,
   )) {
@@ -1016,8 +1323,10 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   }
   console.log("finished this session: 0 (ok 0, retried 0) — dry run");
   for (const line of formatQueue(poolJobs(config), undefined, countedFrom(states))) console.log(line);
+  const running = inFlight.filter((r) => r.owned).length;
   console.log(
-    `\n${resumes.resume.length} paused run(s) would resume first; ${plan.pinned.length} pinned job(s) would spawn now plus ${plan.queue.assign.length + plan.policy.length} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
+    `\n${running > 0 ? `${running} job(s) already running keep their accounts; ` : ""}` +
+      `${resumes.resume.length} paused run(s) would resume first; ${plan.pinned.length} pinned job(s) would spawn now plus ${plan.queue.assign.length + plan.policy.length} pool job(s) over ${config.accounts.pool.length} pool account(s).` +
       `\nsupervision: re-read the config store every ${TICK_MS / 1000}s; enabled:false drains at the next episode` +
       `\nboundary; enabled:true/new jobs spawn; a malformed edit keeps the last good config.` +
       `\nstamp ${stampToday} is fixed for the life of the supervisor, not rolled at midnight.` +
