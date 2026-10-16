@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import type { RosterSpec } from "./run-roster";
 import { harnessSeries } from "../runner/src/comparability";
-import { isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
+import { harnessClash, isTokenEnvName, parseCompactWindow, watchdogOverrideSchema } from "../runner/src/config";
 import type { Billing } from "../runner/src/model-cost";
 import { isOpenRouterBase, parseRouting } from "../runner/src/routing";
 import { QUEUE_JOB_KEYS, rosterEntryRefusal, strictKeyWhy, unknownKeysOf } from "../runner/src/roster-refusal";
@@ -1093,6 +1093,9 @@ function parseRoster(raw: unknown): Record<string, FleetRosterEntry> {
       ...(rawSub !== undefined ? { subscription: rawSub as string } : {}),
     };
   }
+  // One model id, one harness: what keeps the harness a tag (`harnessClash`).
+  const clash = harnessClash(out);
+  if (clash !== null) fail(`roster: ${clash}`);
   return out;
 }
 

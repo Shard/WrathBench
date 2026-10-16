@@ -1,7 +1,7 @@
 /**
  * Probe for the navigation status vocabulary.
  *
- * End to end against a booted worldserver, from inside the compose network:
+ * End to end against a booted worldserver, from inside the container network:
  * session in world (Human in Northshire) -> a `move_to` whose z is 5y above
  * the ground arrives and reports `meshZ` (the mesh owns z) -> a `move_to`
  * whose z is 5y UNDER the ground arrives on the ground with `meshZ`, never a
@@ -44,7 +44,8 @@
  * WorldSession::expireTime, during which a delete is silently ignored.
  *
  * Run standalone (defaults to the PROBE account):
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-navigation.ts
+ *   bun wb smoke module-navigation
+ *   bun wb --local smoke module-navigation   # the quickstart
  *
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086)
  * and the login account with MODULE_ACCOUNT (default PROBE).

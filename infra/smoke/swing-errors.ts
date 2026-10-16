@@ -36,7 +36,8 @@
  * -> logout and delete.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/swing-errors.ts
+ *   bun wb smoke swing-errors
+ *   bun wb --local smoke swing-errors   # the quickstart
  */
 
 import { connect, isEvent, type UnitView, type WrathClient } from "../../sdk/src/index";

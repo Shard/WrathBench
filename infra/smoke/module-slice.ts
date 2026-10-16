@@ -1,14 +1,14 @@
 /**
  * Throwaway probe for the Stage-2 module vertical slice.
  *
- * Drives the whole slice against a booted worldserver from inside the compose
+ * Drives the whole slice against a booted worldserver from inside the container
  * network: open a WebSocket for events, POST /session (create character + enter
  * world), POST /action say "hello world", assert the chat echo comes back on the
  * WS, then DELETE /session. No dependencies; Bun built-ins only.
  *
  * Run from inside the network, e.g.:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-slice.ts
- *   docker compose -f infra/compose.yml run --rm runner bun infra/smoke/module-slice.ts
+ *   bun wb smoke module-slice
+ *   bun wb --local smoke module-slice   # the quickstart
  *
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086).
  */

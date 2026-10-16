@@ -42,13 +42,32 @@ export type FixtureContext = {
 };
 
 /**
+ * A persistent fixture character's name for one account: the prefix, then the
+ * account's letters (digits as letters, 0 -> a), capped at the game's 12.
+ *
+ * Character names are realm-global, so a fixed default collides the moment a
+ * second account runs the same smoke: `Smoketaxi` already stood on PROBE, and
+ * SMOKE2 failed its create with `char_create_failed_code_50`. Derived from the
+ * account, each account owns its own character and the name is stable between
+ * runs, which a persistent fixture needs. Runs of three identical letters
+ * (SMOKE222) are cut to two, the game's rule.
+ */
+export function accountFixtureName(prefix: string, account: string): string {
+  const tail = account
+    .toLowerCase()
+    .replace(/[0-9]/g, (d) => "abcdefghij"[Number(d)]!)
+    .replace(/[^a-z]/g, "");
+  return `${prefix}${tail}`.replace(/(.)\1{2,}/gi, "$1$1").slice(0, 12);
+}
+
+/**
  * How `infra/fixtures/apply.ts` is invoked. It talks to the characters DB
  * directly, and the DB port is not published to the host:
  *   - WRATHBENCH_FIXTURES_CMD, if set, is the command verbatim (space-split),
  *     with --account/--character/--scenario appended;
- *   - else, with WRATHBENCH_DB_HOST set (inside a container on the compose
- *     network), run it in-process with bun;
- *   - else, from the host, through compose. The `fixtures` service carries
+ *   - else, with WRATHBENCH_DB_HOST set (inside the runner: the cluster's
+ *     pods, or a container on the quickstart's network), run it with bun;
+ *   - else, from the quickstart's host, through compose. The `fixtures` service carries
  *     the DB env and an `entrypoint` of `bun run infra/fixtures/apply.ts`, so
  *     only the flags are passed here — apply.ts rejects positional arguments.
  *     `--no-deps` is load-bearing: without it compose may decide a dependency
@@ -120,7 +139,7 @@ export async function applyScenario(ctx: FixtureContext, scenario: string): Prom
     ctx.fail(
       `could not run the fixtures tool (${argv[0]}): ${String(e instanceof Error ? e.message : e)} — ` +
         `set WRATHBENCH_FIXTURES_CMD to the exact command for this environment, or WRATHBENCH_DB_HOST=db ` +
-        `to run \`bun infra/fixtures/apply.ts\` directly from inside the compose network`,
+        `to run \`bun infra/fixtures/apply.ts\` directly from inside the runner`,
     );
   }
   const code = await proc.exited;

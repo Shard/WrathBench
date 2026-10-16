@@ -29,7 +29,8 @@
  *   5. log out and delete the character.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/quest-status.ts
+ *   bun wb smoke quest-status
+ *   bun wb --local smoke quest-status   # the quickstart
  */
 
 const BASE = moduleBase();

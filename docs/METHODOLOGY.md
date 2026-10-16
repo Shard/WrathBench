@@ -16,10 +16,14 @@ question comes up, these are what it is judged against.
    parity is also the ownership test: what a client does locally, the module
    does; what a player decides, the model decides; game semantics live in
    TypeScript, never in C++.
-3. **The model is the only variable.** One loop, one prompt, one context
-   policy, one surface, for every model. Anything that would be tuning if it
-   varied per model is either frozen into the harness version or recorded as
-   a per-run dimension identical in shape for everyone.
+3. **The model is the only variable within a harness.** One loop, one
+   prompt, one context policy, one surface, for every model under a harness
+   label. Anything that would be tuning if it varied per model is either
+   frozen into the harness version or recorded as a per-run dimension
+   identical in shape for everyone. A scaffold that varies its prompt,
+   sampling or tools by model id is configured out of doing so, and whatever
+   cannot be is part of what its label means and is stated with it
+   (operator, 2026-10-16).
 4. **Record signals, derive scores offline.** The harness never computes a
    score; any number is a versioned derivation over recorded signals,
    recomputable over every past run.
@@ -61,12 +65,20 @@ measurements.
 **Harness and driver are separate words.** The *harness* owns the loop and
 context: `wrathbench` (our fixed loop), `claude-code` or `codex` (CLI scaffolds
 that own their own history and compaction); the *driver* is how the runner
-reaches the model. The harness is a tag on every row, never a partition;
-nothing about a CLI harness unscores a run, and `stub` never scores because it
+reaches the model. The harness is a tag on every row, never a partition, and
+it stays one because no model id runs under two harnesses in a scored lane:
+the roster refuses it, and a variant of a harness runs only as a
+probe-campaign arm until the operator promotes it (operator, 2026-10-16).
+Nothing about a CLI harness unscores a run, and `stub` never scores because it
 is not a model. **Each CLI scaffold is its own comparability group**
 (2026-09-05): each contains a *different* unversioned summarizer, which is the
-whole reason a scaffold is tagged apart from `wrathbench`. The claude-code
-compaction window is a recorded run dimension like effort, with the CLI's own
+whole reason a scaffold is tagged apart from `wrathbench`, and disjoint ids
+keep its rows from pooling with another harness's. What a scaffold does per
+model that cannot be configured out is stated with its label (principle 3):
+`codex` gives GPT-6 models its code mode and collaboration tools. A harness
+setting has the harness's default and may be overridden per roster entry, as a
+recorded run dimension like effort rather than per-model tuning (operator,
+2026-10-16); the claude-code compaction window is one, with the CLI's own
 `auto` as the default (2026-10-09).
 
 ## Client fidelity

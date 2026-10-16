@@ -36,7 +36,10 @@
  * leave, logout, delete both.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec -T -e MODULE_ACCOUNT=PROBE -e MODULE_ACCOUNT2=SMOKE2 runner bun infra/smoke/loot-roll.ts
+ *   bun wb smoke loot-roll
+ *   bun wb --local smoke loot-roll   # the quickstart
+ *
+ * MODULE_ACCOUNT and MODULE_ACCOUNT2 default to PROBE and SMOKE2.
  */
 
 import { connect, isDecodeError, isEvent, type WrathClient } from "../../sdk/src/index";

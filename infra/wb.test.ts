@@ -83,6 +83,17 @@ describe("the table", () => {
     expect(files).toContain("preflight");
   });
 
+  test("a row's required flag is in its argv and in this checkout's copy of its file", () => {
+    const rows = ENTRIES.filter((e) => e.requires !== undefined);
+    expect(rows.map((e) => `${e.group} ${e.command}`).sort()).toEqual(["accounts ensure", "accounts spectator"]);
+    for (const e of rows) {
+      for (const form of forms(e)) {
+        expect(form.argv).toContain(e.requires!);
+        expect(readFileSync(join(REPO_ROOT, targetPath(form)!), "utf8")).toContain(e.requires!);
+      }
+    }
+  });
+
   test("the root package.json runs this file as `bun wb`", () => {
     const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { scripts: Record<string, string> };
     expect(pkg.scripts["wb"]).toBe("bun infra/wb.ts");
@@ -270,6 +281,37 @@ describe("bun wb, for real", () => {
     const r = runWb(["--local", "smoke", "module-slice"]);
     expect(r.code).toBe(0);
     expect(r.calls).toEqual([["docker", "compose", "-f", "infra/compose.yml", "exec", "-T", "runner", "bun", "infra/smoke/module-slice.ts"]]);
+  });
+
+  test("a row whose flag the pod's copy of its file lacks is refused, naming the image, and nothing runs", () => {
+    const r = runWb(["accounts", "ensure", "SMOKE5"], { FAKE_PRESENT: "absent" });
+    expect(r.code).toBe(2);
+    expect(r.calls.length).toBe(2);
+    expect(r.calls[0]!.slice(-3)).toEqual(["sh", "--accounts-only", "infra/bootstrap/bootstrap.ts"]);
+    expect(r.calls[1]!.slice(0, 4)).toEqual(["kubectl", "-n", "wrathbench", "get"]);
+    expect(r.err).toContain("infra/bootstrap/bootstrap.ts predates --accounts-only; the pod runs registry.example/wrathbench-runner:harness-0.5-1-gold");
+  });
+
+  test("a check that cannot read the pod's file refuses too", () => {
+    const r = runWb(["accounts", "spectator"], { FAKE_PRESENT: "Error from server" });
+    expect(r.code).toBe(2);
+    expect(r.calls.length).toBe(1);
+    expect(r.err).toContain("could not read the runner pod's infra/spectator-account.ts");
+  });
+
+  test("once the pod's file has the flag, the command runs with the operator's names", () => {
+    const r = runWb(["accounts", "ensure", "SMOKE5", "PROBE"]);
+    expect(r.code).toBe(0);
+    expect(r.calls.length).toBe(2);
+    expect(r.calls[1]).toEqual([
+      "kubectl", "-n", "wrathbench", "exec", "-i", "deploy/wrathbench-runner", "--", "bun", "infra/bootstrap/bootstrap.ts", "--accounts-only", "SMOKE5", "PROBE",
+    ]);
+  });
+
+  test("--local checks nothing first: compose's runner has this checkout's file", () => {
+    const r = runWb(["--local", "accounts", "ensure", "SMOKE5"]);
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([["docker", "compose", "-f", "infra/compose.yml", "exec", "-T", "runner", "bun", "infra/bootstrap/bootstrap.ts", "--accounts-only", "SMOKE5"]]);
   });
 
   test("help, and an unknown command, run nothing", () => {

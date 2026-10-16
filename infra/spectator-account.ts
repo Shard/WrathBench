@@ -10,14 +10,16 @@
  * the keyboard. The account is deliberately not created by bootstrap.ts —
  * the harness accounts never carry GM, and this one never runs unattended.
  *
- * There is no default password. Export one in your shell and pass it through
- * by name, so it is never on a command line (`-e NAME` with no value copies it
- * from the calling environment):
+ * There is no default password, and it is never on a command line, where the
+ * process list would show it. From a checkout it goes to the runner on stdin
+ * (`printf` is a shell builtin, so it is not a process either):
  *
- *   read -rs WRATHBENCH_SPECTATOR_PASSWORD; export WRATHBENCH_SPECTATOR_PASSWORD
- *   docker compose -f infra/compose.yml run --rm --no-deps \
- *     -e WRATHBENCH_SPECTATOR_PASSWORD \
- *     bootstrap bun run infra/spectator-account.ts
+ *   read -rs P && printf '%s\n' "$P" | bun wb accounts spectator
+ *
+ * which is `bun infra/spectator-account.ts --password-stdin` in the runner pod
+ * (`bun wb --local …` on the quickstart): `kubectl exec` carries no
+ * environment, so stdin is the one way in. Without the flag the password is
+ * WRATHBENCH_SPECTATOR_PASSWORD in this process's environment.
  *
  * Re-run with a new password to rotate it.
  */
@@ -42,12 +44,20 @@ function env(name: string, fallback?: string): string {
   return v;
 }
 
-function readPassword(): string {
-  // Environment only: an argument would put the password in the process list.
-  const raw = process.env["WRATHBENCH_SPECTATOR_PASSWORD"];
+/** The flag that reads the password from stdin. wb checks the runner pod's copy of this file carries it before it runs one. */
+const PASSWORD_STDIN = "--password-stdin";
+
+async function readPassword(argv: readonly string[]): Promise<string> {
+  // Environment or stdin only: an argument would put the password in the process list.
+  if (argv.some((a) => a !== PASSWORD_STDIN)) {
+    console.error(`usage: bun infra/spectator-account.ts [${PASSWORD_STDIN}]   (the password: stdin with the flag, else WRATHBENCH_SPECTATOR_PASSWORD)`);
+    process.exit(2);
+  }
+  const fromStdin = argv.includes(PASSWORD_STDIN);
+  const raw = fromStdin ? (await Bun.stdin.text()).replace(/\r?\n$/, "") : process.env["WRATHBENCH_SPECTATOR_PASSWORD"];
   if (!raw || raw.trim() === "") {
     console.error(
-      "No password given. Set WRATHBENCH_SPECTATOR_PASSWORD.\n" +
+      (fromStdin ? "No password given on stdin.\n" : "No password given. Set WRATHBENCH_SPECTATOR_PASSWORD, or pass it on stdin with --password-stdin.\n") +
         "There is deliberately no default; pick your own.",
     );
     process.exit(1);
@@ -88,7 +98,7 @@ async function connect(): Promise<SQL> {
     username: cfg.user,
     password: cfg.password,
     database: cfg.database,
-    // Same reasoning as bootstrap.ts: private compose network only.
+    // Same reasoning as bootstrap.ts: the private container network only.
     allowPublicKeyRetrieval: true,
     max: 1,
   });
@@ -182,7 +192,7 @@ async function verify(sql: SQL, password: string): Promise<void> {
 }
 
 if (import.meta.main) {
-  const password = readPassword();
+  const password = await readPassword(Bun.argv.slice(2));
   const sql = await connect();
   try {
     const id = await ensureAccount(sql, password);

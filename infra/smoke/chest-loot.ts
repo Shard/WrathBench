@@ -12,7 +12,7 @@
  * loot window. The SDK now does that; this smoke proves it against the live
  * server.
  *
- * Fixture: a persistent character (default `Smokechest` on PROBE, never
+ * Fixture: a persistent character (default `Ch` + the account's letters, e.g. `Chprobe` on PROBE, never
  * deleted) is placed by `infra/fixtures/apply.ts --scenario felix-bucket` —
  * level 5 in front of Felix's Bucket of Bolts (template 178085, lock 43 =
  * "Open Kneeling", one loot row: the quest item 16314) with A Refugee's
@@ -30,18 +30,19 @@
  *      window come back empty — which is what happened on 2026-08-30);
  *   5. logout.
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/chest-loot.ts
+ *   bun wb smoke chest-loot
+ *   bun wb --local smoke chest-loot   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";
-import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-chest-loot-${crypto.randomUUID()}`;
-const CHARACTER = process.env.SMOKE_CHARACTER ?? "Smokechest";
+const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Ch", ACCOUNT);
 const SCENARIO = "felix-bucket";
 
 const BUCKET = 178085; // gameobject_template entry, Felix's Bucket of Bolts

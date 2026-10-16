@@ -15,7 +15,8 @@
  * right); the answers parse (no decodeError) -> logout and delete.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/item-stats.ts
+ *   bun wb smoke item-stats
+ *   bun wb --local smoke item-stats   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

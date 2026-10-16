@@ -14,7 +14,8 @@
  * `mailbox-goldshire` scenario (level 1, 50s: postage is 30c).
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/mail.ts
+ *   bun wb smoke mail
+ *   bun wb --local smoke mail   # the quickstart
  */
 
 import { connect, type WrathClient } from "../../sdk/src/index";

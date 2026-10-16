@@ -1,7 +1,7 @@
 /**
  * Probe for the movement + update-object module pillars.
  *
- * End to end against a booted worldserver, from inside the compose network:
+ * End to end against a booted worldserver, from inside the container network:
  * session in world (Human in Northshire) -> observe own create block via
  * SMSG_UPDATE_OBJECT -> a nearby creature appears as a create event and its
  * name arrives via the auto creature-query -> move_to a point ~35m away ->
@@ -9,7 +9,8 @@
  * the target -> face -> logout. No dependencies; Bun built-ins only.
  *
  * Run:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-movement.ts
+ *   bun wb smoke module-movement
+ *   bun wb --local smoke module-movement   # the quickstart
  *
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086).
  */

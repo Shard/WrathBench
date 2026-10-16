@@ -1980,7 +1980,7 @@ export function schedulability(
   _policy: Pick<SchedulingPolicy, "paid"> = DEFAULT_POLICY,
 ): Verdict {
   const blocked = (why: string): Verdict => ({ verdict: "blocked", why });
-  if (s.retired !== undefined) return blocked(`retired: ${s.retired.reason} — clear with --clear-model ${s.name}`);
+  if (s.retired !== undefined) return blocked(`retired: ${s.retired.reason} — clear with bun wb fleet clear-model ${s.name}`);
   if (s.cooling !== undefined) {
     return blocked(`cooling rung ${s.cooling.rung}/${LADDER_MS.length} until ${new Date(s.cooling.until).toISOString()} (${s.cooling.reason})`);
   }
@@ -2007,7 +2007,7 @@ export function schedulability(
   if (open.length === 0 && tainted.length > 0) {
     return blocked(
       `tainted on ${tainted.map((ep) => `${ep} (${s.perEpisode[ep]!.failed} failed attempts)`).join(", ")} — ` +
-        `clear with --clear-model ${s.name} once the endpoint is back`,
+        `clear with bun wb fleet clear-model ${s.name} once the endpoint is back`,
     );
   }
   if (open.length === 0) {

@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 command -v bun >/dev/null 2>&1 || {
-  echo "run-fleet.sh: bun is not on PATH (the orchestrator runs on the host)" >&2
+  echo "run-fleet.sh: bun is not on PATH (the runner image has it; so must a host that runs the fleet)" >&2
   exit 2
 }
 

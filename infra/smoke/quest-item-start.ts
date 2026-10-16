@@ -31,7 +31,8 @@
  * quest-start items. That failure is the gate for the deploy.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec -T runner bun infra/smoke/quest-item-start.ts
+ *   bun wb smoke quest-item-start
+ *   bun wb --local smoke quest-item-start   # the quickstart
  */
 
 import { connect, WrathRequestError, type WrathClient } from "../../sdk/src/index";

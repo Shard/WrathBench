@@ -11,7 +11,8 @@
  * same event with the same seq → DELETE /session + character cleanup.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-session-state.ts
+ *   bun wb smoke module-session-state
+ *   bun wb --local smoke module-session-state   # the quickstart
  */
 
 import { authHeaders } from "./lib/auth";

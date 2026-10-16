@@ -413,7 +413,7 @@ describe("the ladder", () => {
     expect(s.status).toBe("retired");
     expect(s.retired).toMatchObject({ at: NOW - 1000 });
     expect(s.retired!.reason).toContain("f-99");
-    expect(schedulability(s).why).toContain("--clear-model m");
+    expect(schedulability(s).why).toContain("bun wb fleet clear-model m");
     expect(nextJobs([s], ["RUNNER"])).toEqual([]);
     // Cleared after the last failure: the ladder starts over and it is schedulable.
     s = projectModel(m, oneMore, DEFAULT_POLICY, { now: NOW, clearedAt: NOW - 500 });
