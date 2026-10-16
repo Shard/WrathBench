@@ -18,7 +18,7 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { EPISODES, episodeIdSchema, matchesTier, watchdogsFor, type EpisodeId } from "./episodes";
-import { STALL_PAUSE } from "./lapse";
+import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { routingSchema } from "./routing";
 
 // ---------------------------------------------------------------- watchdogs
@@ -131,6 +131,9 @@ export type TerminationReason = (typeof TERMINATION_REASONS)[number];
  * rather than burning turns on a thread that is losing them.
  * `observation-stalled` is the sandbox's event stream closed with the
  * observation standing still (`STALL_PAUSE`, lapse.ts).
+ * `subscription-budget` is a freeplay run stopped at its turn boundary because
+ * its subscription lane's usage window reached the freeplay threshold
+ * (`SUBSCRIPTION_PAUSE`, lapse.ts; `subscription-usage.ts`).
  */
 export const PAUSE_REASONS = [
   "quota-exhausted",
@@ -139,6 +142,7 @@ export const PAUSE_REASONS = [
   "auth-failed",
   "infrastructure-failed",
   STALL_PAUSE,
+  SUBSCRIPTION_PAUSE,
 ] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 

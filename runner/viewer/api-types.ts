@@ -1347,6 +1347,12 @@ export interface FleetPausedView {
   elapsedMs: number | null;
   budgetMs: number | null;
   why: string;
+  /**
+   * The wait is a subscription usage window's (operator, 2026-10-16): its
+   * reset time is the operator's, so the public build withholds `resumeAfter`
+   * and `why` on such a row. Absent on every other row.
+   */
+  subscriptionWait?: true;
 }
 
 /** The supervisor's counters since it started (`session` in fleet-state.json). */

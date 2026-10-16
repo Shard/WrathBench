@@ -279,6 +279,13 @@ export interface FleetState {
    * instead of leaving an operator to wonder why nothing spawns.
    */
   pausedSwitch?: FleetPause;
+  /**
+   * The subscription usage gate's thresholds this supervisor runs with
+   * (`WRATHBENCH_SUB_SCORED_MAX_PCT`, `WRATHBENCH_SUB_FREEPLAY_MAX_PCT`), so
+   * `--status` from another pod reports the supervisor's, not its own env's.
+   * Thresholds only: no usage figure is ever written here.
+   */
+  subscriptionGate?: { scored: number; freeplay: number; notes?: string[] };
   /** Who holds which account: pinned -> job name; pool -> job name or null when free. */
   accounts?: {
     pinned: Record<string, string>;

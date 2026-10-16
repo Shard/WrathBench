@@ -39,6 +39,11 @@
  *   path it already is (operator, 2026-09-11).
  * - Nothing host-like leaves: `apiBase` (a LAN base URL is topology), and the
  *   supervisor's pids.
+ * - No subscription usage figure leaves (operator, 2026-10-16): the drivers'
+ *   `rate_limits` records carry their windows in fields no list here names,
+ *   a paused row waiting on a usage window (`subscriptionWait`) ships without
+ *   its `resumeAfter` and with a fixed `why`, and an errored `claude_result`
+ *   ships without its text, which is the CLI's limit message.
  * - Minimap tiles are Blizzard bytes and never leave through a snapshot.
  * The rule when a field is arguable: withhold.
  */
@@ -140,6 +145,9 @@ export interface PublicFleetResponse extends Omit<FleetResponse, "fleetPid" | "j
  * "stalled" rather than "paused" about a run whose observation froze. The
  * fleet's own paused listing already publishes its reasons verbatim.
  */
+/** What the public fleet page says about a paused run waiting on a subscription usage window: no figure, no time. */
+export const SUBSCRIPTION_WAIT_WHY = "waiting for its subscription usage window to reset";
+
 function pausedToken(reason: string | null): string | null {
   if (reason === null || reason === "") return null;
   return reason === STALL_PAUSE ? STALL_PAUSE : "paused";
@@ -963,12 +971,15 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
         reason: p.reason,
         since: p.since,
         pauseCount: p.pauseCount,
-        resumeAfter: p.resumeAfter,
+        // A subscription usage window's reset is the operator's (operator,
+        // 2026-10-16): no reset time and no usage figure leaves the machine.
+        resumeAfter: p.subscriptionWait === true ? null : p.resumeAfter,
         elapsedMs: p.elapsedMs,
         budgetMs: p.budgetMs,
         // The supervisor's own sentence about its own scheduling; rendered
-        // verbatim by the fleet page and never sourced from the world.
-        why: p.why,
+        // verbatim by the fleet page and never sourced from the world — but
+        // for a subscription wait, whose sentence names its reset.
+        why: p.subscriptionWait === true ? SUBSCRIPTION_WAIT_WHY : p.why,
       }),
     ),
     ended: f.ended.map(
@@ -1368,6 +1379,9 @@ export function projectEntry(e: EntrySummary): EntrySummary {
   if (e.clipped === true) out.clipped = true;
   for (const k of ENTRY_FIELDS[e.t] ?? []) {
     if (!(k in e) || e[k] === undefined) continue;
+    // An errored turn's text is the CLI's own message, not the model's — a
+    // spent subscription's names when it resets, which stays the operator's.
+    if (e.t === "claude_result" && k === "text" && e["isError"] === true) continue;
     const v = e[k];
     out[k] =
       k === "items" && e.t === "state"

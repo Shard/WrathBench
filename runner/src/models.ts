@@ -62,7 +62,8 @@ import { harnessSeries } from "./comparability";
 import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
-import { badEvidenceReason, neverStale, OFFLINE_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { badEvidenceReason, neverStale, OFFLINE_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
+import { parseSubscriptionUsage, subscriptionLaneOf, type SubscriptionUsage } from "./subscription-usage";
 import { billingOf, type Billing } from "./model-cost";
 import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
@@ -367,14 +368,16 @@ export const RESUME_RECORD = "resume";
 
 /**
  * Pause reasons that ride no backoff ladder: the fleet stopped under the run
- * (`operator-pause`), or its runner died before it could write a verdict
- * (`offline`, derived and never on disk). Both are the harness's own doing, so
- * `resumeNotBefore` brings them back without cooling and the pause streak
- * neither counts them nor resets on them. Every other pause — a provider's
- * refusal, a dead login, a CLI failing on its host, a stalled observation —
- * is on the ladder.
+ * (`operator-pause`), its runner died before it could write a verdict
+ * (`offline`, derived and never on disk), or the subscription usage gate
+ * stopped a freeplay run at the freeplay threshold (`subscription-budget`,
+ * operator 2026-10-16). All three are the harness's own doing, so the pause
+ * streak neither counts them nor resets on them; `resumeNotBefore` brings the
+ * first two back without cooling and the third at its window's reset, under
+ * the lane gate. Every other pause — a provider's refusal, a dead login, a CLI
+ * failing on its host, a stalled observation — is on the ladder.
  */
-export const LADDER_EXEMPT_PAUSES: ReadonlySet<string> = new Set(["operator-pause", OFFLINE_PAUSE]);
+export const LADDER_EXEMPT_PAUSES: ReadonlySet<string> = new Set(["operator-pause", OFFLINE_PAUSE, SUBSCRIPTION_PAUSE]);
 
 /** Whether a pause of this reason cools on the backoff ladder and counts toward its streak. */
 export function onPauseLadder(reason: unknown): boolean {
@@ -625,6 +628,24 @@ export interface RunFact {
    * restart, which nothing held in memory does.
    */
   subscription: string | null;
+  /**
+   * The run's driver (`config.driver`), or null when meta.json names none.
+   * With `subscription` it names the subscription lane the run bills
+   * (`subscriptionLaneOf`). Optional so a fact built by hand need not spell it.
+   */
+  driver?: string | null;
+  /**
+   * The newest subscription usage reading the run recorded (meta.json's
+   * `subscriptionUsage`), or null. What the fleet's lane gate reads, newest
+   * per lane (operator, 2026-10-16).
+   */
+  subscriptionUsage?: SubscriptionUsage | null;
+  /**
+   * The subscription lane the run bills (`subscriptionLaneOfConfig`) — a
+   * claude-code token, a codex home, an OpenCode Go key — or null. Optional so
+   * a fact built by hand need not spell it.
+   */
+  lane?: string | null;
 }
 
 // ----------------------------------------------------------------- outputs
@@ -1136,10 +1157,15 @@ export function readRunFact(
       ref?: unknown;
       arm?: unknown;
       subscription?: unknown;
+      driver?: unknown;
+      apiBase?: unknown;
+      apiKeyEnv?: unknown;
+      billing?: unknown;
       watchdogs?: { episodeMs?: unknown; idleMs?: unknown };
     };
     comparability?: { episode?: unknown; episodeOverride?: unknown; effort?: unknown; compactWindow?: unknown };
     pause?: { reason?: unknown; at?: unknown; episodeElapsedMs?: unknown; notBefore?: unknown };
+    subscriptionUsage?: unknown;
   };
   try {
     meta = JSON.parse(readFileSync(metaPath, "utf8")) as typeof meta;
@@ -1181,6 +1207,16 @@ export function readRunFact(
     ref: str(meta.config?.ref),
     arm: str(meta.config?.arm),
     subscription: str(meta.config?.subscription),
+    driver: str(meta.config?.driver),
+    subscriptionUsage: parseSubscriptionUsage(meta.subscriptionUsage) ?? null,
+    lane: subscriptionLaneOfConfig({
+      driver: str(meta.config?.driver),
+      model,
+      apiBase: str(meta.config?.apiBase),
+      apiKeyEnv: str(meta.config?.apiKeyEnv),
+      billing: meta.config?.billing === "free" || meta.config?.billing === "paid" ? meta.config.billing : null,
+      subscription: str(meta.config?.subscription),
+    }),
   };
 
   const jsonl = join(dir, "trajectory.jsonl");
@@ -1297,7 +1333,7 @@ export function runFactCacheVersion(): string {
     .update(
       [
         String(RUN_FACT_CACHE_SCHEMA),
-        ...[readRunFact, runFactKey, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, str, num].map(String),
+        ...[readRunFact, runFactKey, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, str, num, parseSubscriptionUsage, subscriptionLaneOfConfig, goKeyEnvOf, isOpenCodeGoBase, billingOf].map(String),
         JSON.stringify([EPISODE_IDS, MODEL_RESPONSE_RECORD, HEARTBEAT_FILE]),
       ].join("\n"),
     )
@@ -1454,6 +1490,44 @@ export const OPENCODE_GO_KEY = "opencode-go";
 export { isOpenCodeGoBase };
 
 /**
+ * The key env NAME of the OpenCode Go allowance an `openai` entry or run
+ * draws on, or undefined when it draws on none: its base is a Go base and its
+ * billing is paid. A `$0` Go model (billing free) does not draw the allowance
+ * down — Go's free models keep working past the limit — so it bills no lane
+ * and the subscription gate never holds it (operator, 2026-10-16).
+ */
+export function goKeyEnvOf(r: {
+  driver?: string | null | undefined;
+  model?: string | null | undefined;
+  apiBase?: string | null | undefined;
+  apiKeyEnv?: string | null | undefined;
+  billing?: Billing | null | undefined;
+}): string | undefined {
+  if ((r.driver ?? "openai") !== "openai" || !isOpenCodeGoBase(r.apiBase)) return undefined;
+  const billing = billingOf({ model: r.model ?? "", apiBase: r.apiBase ?? undefined, driver: "openai", ...(r.billing != null ? { billing: r.billing } : {}) });
+  return billing === "paid" ? (r.apiKeyEnv ?? GO_DEFAULT_KEY_ENV) : undefined;
+}
+
+/** The key the provider table pairs with opencode.ai (`KEY_PROVIDERS`). */
+const GO_DEFAULT_KEY_ENV = "OPENCODE_KEY";
+
+/**
+ * The subscription lane (`subscriptionLaneOf`) of a run config or a roster
+ * entry: a claude-code token, a codex home, an OpenCode Go key — or null.
+ * `subscription` is the CLI lane variable (a spec's `tokenEnv`).
+ */
+export function subscriptionLaneOfConfig(r: {
+  driver?: string | null | undefined;
+  model?: string | null | undefined;
+  apiBase?: string | null | undefined;
+  apiKeyEnv?: string | null | undefined;
+  billing?: Billing | null | undefined;
+  subscription?: string | null | undefined;
+}): string | null {
+  return subscriptionLaneOf({ driver: r.driver ?? "openai", lane: r.subscription ?? null, goKeyEnv: goKeyEnvOf(r) ?? null });
+}
+
+/**
  * The rate-limit keys `policy.maxConcurrent` may cap: every driver, plus the
  * two shared free-cloud platforms whose free tiers are metered separately by
  * their upstream provider, plus OpenCode Zen's separately billed `zen/go`
@@ -1594,8 +1668,16 @@ export { NOT_THE_MODELS_FAULT } from "./lapse";
  * hours of life.
  */
 export function lastActivityOf(f: Pick<RunFact, "pause" | "endedAt" | "startedAt">): number {
-  return f.pause !== null ? f.pause.at : Math.max(f.endedAt ?? 0, f.startedAt);
+  if (f.pause === null) return Math.max(f.endedAt ?? 0, f.startedAt);
+  // A pause waiting on a stated reset — a spent quota, the subscription gate —
+  // is not gone quiet while it waits: nothing may play it before then, so its
+  // gap starts at the reset, and a resuming probe whose reset is farther than
+  // its own budget is not aged into stale while it waits.
+  return WAITS_ON_RESET.has(f.pause.reason) && f.pause.notBefore !== undefined ? Math.max(f.pause.at, f.pause.notBefore) : f.pause.at;
 }
+
+/** The pauses whose `notBefore` is a reset the run must wait for (`lastActivityOf`). */
+const WAITS_ON_RESET: ReadonlySet<string> = new Set(["quota-exhausted", SUBSCRIPTION_PAUSE]);
 
 /**
  * A run nothing came back for: no termination, and no activity for

@@ -196,6 +196,8 @@ import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
+import { subscriptionThresholds } from "../runner/src/subscription-usage";
+import { claudeLaneOpen, FleetGoUsage, gateSpawns, jobHoldOf, laneOfEntry, laneOfRun, subscriptionGate, writeLaneUsageSidecar } from "./run-fleet-gate";
 import { configDbPath, EMPTY_STORE_HINT, readFleetConfig } from "../runner/src/config-store";
 import {
   capFor,
@@ -533,6 +535,23 @@ let configLoadedAt: number | undefined;
 /** The pause switch as of the last tick; every writeState carries it. */
 let pauseSwitch: FleetPause | undefined;
 /**
+ * The subscription usage gate's thresholds, read once at boot like every other
+ * env knob (operator, 2026-10-16; `runner/src/subscription-usage.ts`).
+ */
+const subThresholds = subscriptionThresholds(process.env);
+/**
+ * The OpenCode Go allowances the roster draws on, read off Go's usage
+ * endpoint at most once a minute per key, before each tick decides anything
+ * (`FleetGoUsage`). The CLI lanes' readings come off the runs instead.
+ */
+const goUsage = new FleetGoUsage({ say });
+/** Refresh the Go readings and leave them where the roster and `--status` read them. Never throws. */
+async function refreshGoUsage(roster: FleetConfig["roster"]): Promise<void> {
+  await goUsage.refresh(roster);
+  const readings = goUsage.observations();
+  if (readings.length > 0) writeLaneUsageSidecar(RUNS_DIR, readings);
+}
+/**
  * The refusals last logged, joined. Deduping on the SET rather than a count
  * means a swap — one pin fixed and another broken in the same edit — is still
  * announced. `undefined` until the first tick, so a file that boots with
@@ -584,6 +603,7 @@ function writeState(
     ...(preflight !== undefined ? { preflight } : {}),
     ...(preflightInFlight !== undefined ? { preflightInFlight } : {}),
     ...(pauseSwitch !== undefined ? { pausedSwitch: pauseSwitch } : {}),
+    subscriptionGate: { scored: subThresholds.scored, freeplay: subThresholds.freeplay, ...(subThresholds.notes.length > 0 ? { notes: subThresholds.notes } : {}) },
     ...(pool !== undefined
       ? {
           accounts: {
@@ -931,6 +951,9 @@ async function main(): Promise<void> {
     // the policy read at the bottom of it.
     let states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(cfg.roster), policy: cfg.policy, runs });
     let eligible = eligibleFrom(states);
+    // The subscription usage gate over the same facts: the newest reading per
+    // lane, asked at every launch below (`run-fleet-gate.ts`).
+    const subGate = subscriptionGate([...runs.map((f) => f.subscriptionUsage), ...goUsage.observations()], subThresholds, Date.now());
     const byName = new Map(cfg.jobs.map((j) => [j.name, j]));
     const runningRefs = new Set<string>();
     const keyCount = new Map<string, number>();
@@ -977,20 +1000,28 @@ async function main(): Promise<void> {
       // A roster pin outranks everything: that entry bills that subscription.
       const pin = job.refs.map((r) => cfg.roster[r]?.subscription).find((l) => l !== undefined);
       if (pin !== undefined) return withLane(job, pin);
-      const known = laneOf(job) ?? laneMemo.get(job.name);
+      const model = cfg.roster[job.ref]?.model;
+      // A remembered lane binds a job only while it has a run in progress: a
+      // fresh launch with no resume whose remembered lane the subscription
+      // gate now holds is placed afresh, on an open one if there is one.
+      const memo = laneMemo.get(job.name);
+      const memoHeld = memo !== undefined && !sets.running.has(job.name) && job.resume === undefined && !claudeLaneOpen(subGate, memo, job.episode, model);
+      const known = laneOf(job) ?? (memoHeld ? undefined : memo);
       if (known !== undefined) return withLane(job, known);
       // Room in the lane AND under the overall ceiling: a claude session spends
-      // both, so a free subscription with the total spent is not free.
-      const free = cfg.policy.subscriptions.find((l) =>
+      // both, so a free subscription with the total spent is not free. A lane
+      // the subscription gate holds is passed over for one it does not.
+      const open = cfg.policy.subscriptions.filter((l) => claudeLaneOpen(subGate, l, job.episode, model));
+      const free = open.find((l) =>
         claudeKeysFor(l).every((k) => {
           const cap = capFor(cfg.maxConcurrent, k);
           return cap === undefined || (keyCount.get(k) ?? 0) + (laneReserve.get(k) ?? 0) < cap;
         }),
       );
       // Nothing free: the job is pinned or manual, so it is not held for a cap
-      // it never consulted — it takes the default lane, as it did before there
-      // was a second one.
-      return withLane(job, free);
+      // it never consulted — it takes an open lane, else the default one, as it
+      // did before there was a second.
+      return withLane(job, free ?? open[0]);
     };
     /** Assign a lane and reserve it: for a job the policy's own cap loop will count. */
     const reserveLane = (job: FleetJob): FleetJob => {
@@ -1027,6 +1058,14 @@ async function main(): Promise<void> {
         continue;
       }
       const placed = assignLane(owed === undefined ? job : { ...job, owed: { copies: owed, taken: takenRunIds } });
+      // The subscription usage gate holds a pinned job that is not running:
+      // it waits with the reason said, and spends no slot it will not use.
+      const gated = job.enabled && !sets.running.has(job.name) ? jobHoldOf(placed, cfg.roster, cfg.policy.subscriptions, subGate) : undefined;
+      if (gated !== undefined) {
+        pinnedSkips.push({ job, reason: gated });
+        out.push({ ...jobSpawn(placed, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns), enabled: false });
+        continue;
+      }
       out.push(jobSpawn(placed, cfg.roster, job.account!, stampToday, eligible, cfg.campaigns));
       if (job.enabled || sets.running.has(job.name)) {
         for (const r of job.refs) runningRefs.add(r);
@@ -1135,6 +1174,7 @@ async function main(): Promise<void> {
       now: Date.now(),
       campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
       hasImageRecord: (id) => runHasImageRecord(id),
+      subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode, f.model),
     });
     lastPaused = resumes.listed;
     // Runs nothing came back for are ended on every tick, boot
@@ -1254,7 +1294,7 @@ async function main(): Promise<void> {
       running: runningAndReserved,
       finished: sets.finished,
       held,
-      cooling: jobCooling,
+      cooling: (job) => jobCooling(job) ?? jobHoldOf(job, cfg.roster, cfg.policy.subscriptions, subGate),
       eligible,
       runningRefs,
       affinity,
@@ -1288,7 +1328,13 @@ async function main(): Promise<void> {
         held,
         queuePlan: lastPlan,
         runningRefs,
-        concurrency: { keyOf, max: cfg.maxConcurrent, running: keyCount, pinnedLane: (n) => cfg.roster[n]?.subscription },
+        concurrency: {
+          keyOf,
+          max: cfg.maxConcurrent,
+          running: keyCount,
+          pinnedLane: (n) => cfg.roster[n]?.subscription,
+          gate: (n, ep, lane) => subGate.holdOf(laneOfEntry(cfg.roster[n], lane), ep, cfg.roster[n]?.model),
+        },
         policy: cfg.policy,
         paidRunning,
         campaigns: unpinnedCampaigns(cfg),
@@ -1406,7 +1452,20 @@ async function main(): Promise<void> {
       record({ job: j.name, event: "queue-done", detail: progress });
     }
     for (const n of [...announcedDone]) if (!done.some((j) => j.name === n)) announcedDone.delete(n);
-    return out;
+    // The subscription usage gate over every spawn, last: a pinned job, or a
+    // running job's next episode, on a held lane. A running freeplay job is
+    // its driver's to pause; a running scored one drains to its boundary.
+    const gated = gateSpawns(out, subGate, sets.running);
+    for (const g of gated.gated) {
+      if (g.drained) drainReasons.set(g.name, g.why);
+      const key = `gate:${g.name}:${g.drained}:${g.why}`;
+      if (!announcedPicks.has(key)) {
+        announcedPicks.add(key);
+        say(`${g.drained ? "drain" : "hold"} ${g.name}: ${g.why}${g.drained ? " — its live episode finishes, the next does not start" : ""}`);
+        record({ job: g.name, event: "subscription-gate", detail: g.why });
+      }
+    }
+    return gated.spawns;
   };
   const poolView = (cfg: FleetConfig): PoolView => ({
     pinned: cfg.accounts.pinned,
@@ -1584,6 +1643,8 @@ async function main(): Promise<void> {
       `, stamp ${stampToday}${CONTAINER ? " (the fleet container)" : ""}` +
       `${args.until !== undefined ? `, deadline ${args.until}` : ", no deadline — steer on /config"}`,
   );
+  say(`subscription gate: scored starts held at ${subThresholds.scored}%, freeplay at ${subThresholds.freeplay}% (100 = off)`);
+  for (const note of subThresholds.notes) say(`subscription gate: ${note}`);
   // The gate: nothing is spawned against a server nobody has smoked. Held
   // across ticks so a passing result is not re-run for the same identity.
   let gate: PreflightRecord | undefined;
@@ -1697,6 +1758,7 @@ async function main(): Promise<void> {
     () => undefined,
     stampToday,
   );
+  await refreshGoUsage(config.roster);
   if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);
   writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
 
@@ -1797,6 +1859,8 @@ async function main(): Promise<void> {
     }
 
     readPause();
+    // Not while stopping: the stop polls fast so rosters are reaped in the grace.
+    if (!stopping) await refreshGoUsage(config.roster);
     const actions = diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets);
     // A refusal suppresses SCHEDULING; it must never drain. A disabled pin
     // normally means the operator parked it, so `diffJobs` drains its live run

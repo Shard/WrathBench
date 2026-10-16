@@ -19,18 +19,25 @@
  *
  * ## Transport: `codex exec` + `codex exec resume`, one process per turn
  *
- * Claude Code takes stream-json on a long-lived stdin. Codex has no such mode
- * in 0.153.4: `codex exec --json` runs ONE turn and exits, and a persisted
- * thread is continued with `codex exec resume <thread_id>`. So this driver
- * spawns one CLI process per driver turn — the first with `exec`, every later
- * one with `exec resume <id>` — and the thread lives in `$CODEX_HOME/sessions`
- * between them. Each spawn re-pays the CLI's startup and MCP handshake (a
- * second or two), which is why the record shape names the thread.
+ * Claude Code takes stream-json on a long-lived stdin. `codex exec --json`
+ * (the pinned CLI, `CODEX_VERSION` in `infra/docker/runner.Dockerfile`) runs
+ * ONE turn and exits, and a persisted thread is continued with `codex exec
+ * resume <thread_id>`. So this driver spawns one CLI process per driver turn —
+ * the first with `exec`, every later one with `exec resume <id>` — and the
+ * thread lives in `$CODEX_HOME/sessions` between them. Each spawn re-pays the
+ * CLI's startup and MCP handshake (a second or two), which is why the record
+ * shape names the thread.
  *
- * `codex app-server` (JSON-RPC over stdio: `thread/start`, `turn/start`,
- * `thread/tokenUsage/updated`, `account/rateLimits/updated`, typed misalignment
- * steers) is the upgrade path once it leaves "experimental"; it would give a
- * long-lived process and the rate-limit surface exec mode never reports.
+ * Exec is itself a client of the CLI's in-process app server: it maps the
+ * server's notifications onto its eight JSONL event types and drops the rest.
+ * What it drops that we want comes back from the thread's rollout instead
+ * (`codex-rollout.ts`): the last call's usage, compactions, the model each
+ * turn ran on (`turn_context`) and the subscription's usage windows
+ * (`rate_limits` on every `token_count`; exec's own stdout never carries them,
+ * and upstream declined to add them). What only the standalone
+ * `codex app-server` would add is a long-lived process and typed errors
+ * (`codexErrorInfo`, a retry flag, a misalignment steer); it stays parked
+ * while upstream marks it experimental and unsupported for production.
  *
  * ## The prompt goes in on stdin, and stdin is closed
  *
@@ -101,22 +108,40 @@
  * the driver logs the turn's delta against the previous total of the same
  * thread and keeps the total beside it (`codex-usage.ts`). No cost (a
  * subscription has no per-turn price, so cost stays absent as on the Claude
- * lanes) and — in exec mode — no rate-limit window (codex issue #14728).
- * Exhaustion therefore shows
- * up only as a failed turn: `turn.failed` / `error` with a message, sometimes
- * a `codexErrorInfo` (usageLimitExceeded, rateLimitExceeded,
- * contextWindowExceeded, sessionBudgetExceeded, misalignmentPolicyViolation).
- * `detectCodexFailure` maps those: usage limit → the same `quota-exhausted`
- * pause the claude driver uses for its window; rate limit → `rate-limited`;
+ * lanes) and no rate-limit window on stdout (codex issue #14728): the window
+ * is read off the rollout after each turn and recorded on change
+ * (`subscription-usage.ts`), where the fleet's lane gate reads it.
+ *
+ * Exhaustion still shows up only as a failed turn, and in exec mode only as
+ * words: `turn.failed` / `error` carry `{message}` alone — the server's
+ * typed `codexErrorInfo` never reaches exec's stdout — so classification is
+ * the message text. `detectCodexFailure` maps it: usage limit → the same
+ * `quota-exhausted` pause the claude driver uses for its window, waiting for
+ * the window's reset when the rollout named one; rate limit → `rate-limited`;
  * a dead login → `auth-failed`; a blown context window → the `context-limit`
  * termination; and the model's own policy monitor stopping the task (GPT-6
  * Astra's misalignment monitor, which can halt long agentic work and has
  * nobody to ask in exec mode) → `provider-policy`, with the message recorded
  * verbatim and NO automatic steer or override — that is the operator's call.
+ * A server that words its policy stop without the CLI's own "misalignment
+ * policy violation" sentence is not recognised: the turn is an unclassified
+ * failure, a session note, and three of them end the run as `adapter-error` —
+ * the known limit of classifying exec's words until typed errors reach it.
  * The CLI failing on the host under it — its thread store unwritable, a full
  * disk under `$CODEX_HOME` — is `infrastructure-failed`: a pause for the
  * operator, never a notice to the model, which can do nothing about it and
  * would otherwise keep playing on a thread that is silently losing turns.
+ *
+ * A retry notice is not a failure. While the CLI retries a stream it prints
+ * `{"type":"error","message":"Reconnecting... 2/5 (…)"}` — exec drops the
+ * server's retry flag — and a retried 429 reads exactly like a rate limit. So
+ * an `error` whose message starts with the CLI's own "Reconnecting..." is
+ * recorded (`codex_retry`) and never classified; if the retries run out the
+ * CLI says so with a `turn.failed`, which is.
+ *
+ * A freeplay run whose lane's usage window reaches the freeplay threshold
+ * pauses at its next turn boundary as `subscription-budget`, waiting for the
+ * window's reset (operator, 2026-10-16). Nothing about it reaches the model.
  */
 
 import type { Database } from "bun:sqlite";
@@ -132,6 +157,8 @@ import { McpServer } from "./mcp";
 import { CodexLastCallReader, CodexRolloutFollower, type CodexCompaction } from "./codex-rollout";
 import { CompactionAsk, codexAutoCompactLimit, compactionNotice, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
+import { SUBSCRIPTION_PAUSE } from "./lapse";
+import { SubscriptionUsageTracker, describeWindows, newestLaneUsage, subscriptionLaneOf, subscriptionThresholds } from "./subscription-usage";
 import { CODEX_SYSTEM_PROMPT, buildSystemPrompt } from "./prompt";
 import type { ToolContext } from "./tools";
 import type { EpisodicLog } from "./episodic";
@@ -274,6 +301,54 @@ const eventSchema = z.looseObject({ type: z.string() });
 // `CodexUsage` and `normalizeCodexUsage` live in `codex-usage.ts`, beside the
 // per-turn delta rule the viewer shares; re-exported for the driver's readers.
 export { normalizeCodexUsage, type CodexUsage } from "./codex-usage";
+
+/**
+ * The CLI's own retry notice — `Reconnecting... 2/5 (…)`, `Reconnecting...
+ * waiting for network` — printed as an `error` event while it retries a
+ * stream (exec drops the server's retry flag). Not a failure: a retried 429
+ * would otherwise read as a rate limit and pause a run the CLI was still
+ * carrying. Only the `error` type: a `turn.failed` is terminal by construction.
+ */
+export function isRetryNotice(msg: Record<string, unknown>): boolean {
+  const m = msg["message"];
+  return msg["type"] === "error" && typeof m === "string" && m.trimStart().startsWith("Reconnecting...");
+}
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * The reset the pinned CLI's own usage-limit message names, as epoch ms, or
+ * undefined. 0.159.3 ends that message with "Try again at 4:05 PM." when the
+ * reset falls today and "Try again at Oct 21st, 2026 9:05 AM." otherwise (or
+ * "…or try again at …"), in the CLI's local time — the same clock this
+ * process reads, in the same container. A stated reset is what the CLI knows
+ * of the window that refused it, so it wins over the reading's guess
+ * (`SubscriptionUsageTracker.quotaReset`).
+ */
+export function codexStatedReset(text: string | undefined | null, now = Date.now()): number | undefined {
+  if (text === undefined || text === null) return undefined;
+  const dated = /try again at ([A-Za-z]{3}) (\d{1,2})(?:st|nd|rd|th)?, (\d{4}) (\d{1,2}):(\d{2}) ([AP]M)/i.exec(text);
+  const clock = dated === null ? /try again at (\d{1,2}):(\d{2}) ([AP]M)/i.exec(text) : null;
+  const hour = (h: string, ampm: string): number => (Number(h) % 12) + (ampm.toUpperCase() === "PM" ? 12 : 0);
+  let at: number;
+  if (dated !== null) {
+    const month = MONTHS.indexOf(dated[1]!.toLowerCase());
+    if (month < 0) return undefined;
+    at = new Date(Number(dated[3]), month, Number(dated[2]), hour(dated[4]!, dated[6]!), Number(dated[5])).getTime();
+  } else if (clock !== null) {
+    const d = new Date(now);
+    at = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour(clock[1]!, clock[3]!), Number(clock[2])).getTime();
+  } else {
+    return undefined;
+  }
+  return Number.isFinite(at) && at > now ? at : undefined;
+}
+
+/**
+ * A server-side reroute, which exec prints as an `error` ITEM (not an event):
+ * `model rerouted: <from> -> <to> (<reason>)`. The rollout does not keep it.
+ */
+const REROUTED = /^model rerouted: (\S+) -> (\S+)(?: \((.*)\))?/;
 
 /** A parsed exec event, or null for a line that is not one. */
 export function parseCodexEvent(line: string): Record<string, unknown> | null {
@@ -544,10 +619,11 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
     endEpisode(reason, detail);
     return finish();
   };
-  const pause = (reason: PauseReason, detail: string): LoopOutcome => {
+  /** `notBefore`: a usage window's reset, which the supervisor waits for (`subscription-usage.ts`). */
+  const pause = (reason: PauseReason, detail: string, notBefore?: number): LoopOutcome => {
     if (done()) return finish();
-    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs());
-    return { kind: "paused", reason, detail };
+    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs(), notBefore);
+    return notBefore !== undefined ? { kind: "paused", reason, detail, notBefore } : { kind: "paused", reason, detail };
   };
 
   const builder = new ContextBuilder({
@@ -738,6 +814,27 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   });
   const version = cliVersion(bin, env);
   if (version !== null) trajectory.recordResolved(runId, { model: null, cliVersion: version });
+  /**
+   * The model the CLI actually ran, off the rollout's `turn_context`, promoted
+   * onto the run once (`recordResolved`, first observation wins) as the other
+   * drivers do. Set once it has been.
+   */
+  let resolvedModel = false;
+
+  /**
+   * The lane's usage windows, off the rollout after each turn, recorded on
+   * change; and the two thresholds (`subscription-usage.ts`). Only the
+   * freeplay one is the driver's to act on: a scored run is never paused by
+   * the gate, which holds the next launch instead.
+   */
+  const thresholds = subscriptionThresholds(o.env ?? process.env);
+  for (const note of thresholds.notes) console.error(`[wrathbench] ${note}`);
+  const usage = new SubscriptionUsageTracker(subscriptionLaneOf({ driver: "codex", lane: laneEnv })!, (u) =>
+    trajectory.recordSubscriptionUsage(u, turn),
+  );
+  // The lane's newest reading from before this run, so a first turn that
+  // meets a spent quota still knows the window it was spent in.
+  usage.seed(newestLaneUsage(config.runsDir, usage.lane));
 
   // ---- one process at a time; the group kill and the exit net track it
   const spawnCodex = (args: string[]) =>
@@ -1040,6 +1137,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
               }
             } else if (kind === "reasoning" && typeof item["text"] === "string") {
               trajectory.append({ t: "codex_reasoning", turn, text: (item["text"] as string).slice(0, 2_000) });
+            } else if (kind === "error" && typeof item["message"] === "string") {
+              // The server moved the turn to another model mid-flight. The
+              // run's resolved model stays the first one seen (the rule
+              // every driver keeps); the reroute is on the record beside it.
+              const r = REROUTED.exec(item["message"] as string);
+              if (r !== null) trajectory.append({ t: "harness", kind: "model_rerouted", turn, from: r[1], to: r[2], reason: r[3] ?? null });
             }
             break;
           }
@@ -1092,6 +1195,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
           }
           case "turn.failed":
           case "error": {
+            if (isRetryNotice(msg)) {
+              // The CLI is retrying; its words go on the record for the
+              // operator and nowhere near the classifier (header).
+              trajectory.append({ t: "codex_retry", turn, message: String(msg["message"]).slice(0, 500), durationMs: Date.now() - startedAt });
+              break;
+            }
             const errText = JSON.stringify(msg["error"] ?? msg["message"] ?? msg).slice(0, 2_000);
             failureTexts.push(errText);
             failure ??= detectCodexFailure(errText);
@@ -1129,11 +1238,25 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       // The process has exited, so the rollout holds every line of this turn.
       const followed = rollout.read(threadId);
       for (const c of followed.compactions) trajectory.append(codexCompactionRecord(turn, c));
+      if (!resolvedModel && followed.model !== undefined) {
+        resolvedModel = true;
+        trajectory.recordResolved(runId, { model: followed.model, cliVersion: version });
+      }
+      if (followed.rateLimits !== undefined) usage.observe(followed.rateLimits, Date.now());
 
       if (done()) return finish();
       failure ??= detectCodexFailure(stderrChunks.join("\n"));
       if (failure !== null) {
-        if (failure.kind === "pause") return pause(failure.reason, failure.detail);
+        if (failure.kind === "pause") {
+          // A spent quota waits for its window's reset, when the rollout named
+          // one: every attempt before it is a refusal already announced.
+          const now = Date.now();
+          const notBefore = failure.reason === "quota-exhausted" ? usage.quotaReset(now, codexStatedReset(failure.detail, now), config.model) : undefined;
+          if (notBefore !== undefined) {
+            return pause(failure.reason, `${failure.detail} (usage window resets ${new Date(notBefore).toISOString()})`, notBefore);
+          }
+          return pause(failure.reason, failure.detail);
+        }
         return terminate(failure.reason, failure.detail);
       }
       if (!turnCompleted) {
@@ -1167,6 +1290,20 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
 
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
+      }
+      // The freeplay gate, at the turn boundary: a lane at or over the
+      // freeplay threshold stops the run until the window resets. Never a
+      // scored run: pausing one would spend its attempt.
+      if (config.episode === "freeplay") {
+        const now = Date.now();
+        const hold = usage.freeplayHold(thresholds.freeplay, now, config.model);
+        if (hold !== null) {
+          return pause(
+            SUBSCRIPTION_PAUSE,
+            `subscription usage at or over the freeplay threshold (${hold.threshold}%): ${describeWindows(hold.windows, usage.current?.observedAt ?? now)}`,
+            hold.until,
+          );
+        }
       }
       // The episodic-log ask, delivered in the next turn's context: the
       // context is the last call's input plus output as the rollout reported

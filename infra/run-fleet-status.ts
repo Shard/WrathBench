@@ -94,6 +94,8 @@ import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file"
 import type { Campaign, CampaignRefusal } from "../runner/src/campaigns";
 import { configDbPath, EMPTY_STORE_HINT } from "../runner/src/config-store";
 import { resumesOnPause, TAINT_AFTER } from "../runner/src/lapse";
+import { subscriptionThresholds } from "../runner/src/subscription-usage";
+import { formatSubscriptionGate, gateLanes, laneOfRun, readLaneUsage, subscriptionGate, type FleetSubscriptionGate } from "./run-fleet-gate";
 import { rosterPriceGap } from "../runner/viewer/pricing";
 import {
   ACCOUNT_CLASSES,
@@ -761,6 +763,10 @@ export function printStatus(): void {
   // Newest start first, so an account's row names the paused run the resume
   // planner would bring back (`byNewestStart`).
   const pausedRuns = runFacts.filter((f) => isStandingPause(f, Date.now())).sort(byNewestStart);
+  // The subscription usage gate as the supervisor applies it: its own
+  // thresholds when its state file says, this shell's otherwise.
+  const localThresholds = subscriptionThresholds(process.env);
+  const subGate = subscriptionGate(readLaneUsage(RUNS_DIR), state?.subscriptionGate ?? localThresholds, Date.now());
   const resumePlan =
     config !== undefined
       ? planResumes({
@@ -773,6 +779,7 @@ export function printStatus(): void {
           now: Date.now(),
           campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
           hasImageRecord: (id) => runHasImageRecord(id),
+          subscriptionHold: (f) => subGate.holdOf(laneOfRun(f), f.episode, f.model),
         })
       : { resume: [], listed: [], end: [] };
   const jobRow = (name: string, j: StateJob): JobRow => {
@@ -933,6 +940,12 @@ export function printStatus(): void {
     {
       const line = formatConcurrency(config.maxConcurrent, config.policy);
       if (line !== undefined) console.log(`  ${line}`);
+    }
+    for (const line of formatSubscriptionGate(subGate, gateLanes(subGate, config.roster, config.policy.subscriptions), {
+      local: localThresholds,
+      notes: state?.subscriptionGate !== undefined ? (state.subscriptionGate.notes ?? []) : localThresholds.notes,
+    })) {
+      console.log(`  ${line}`);
     }
     if (state?.policy?.idle !== undefined) console.log(`  policy: ${state.policy.idle}`);
     // (c') freeplay characters: each unlimited ref's head and what the next pick
@@ -1111,8 +1124,10 @@ export function planDryRun(opts: {
   now?: number;
   campaignFileOf?: (runId: string) => CampaignFile | null;
   hasImageRecord?: (runId: string) => boolean;
+  /** The subscription usage gate (`run-fleet-gate.ts`), as the tick applies it; absent holds nothing. */
+  gate?: FleetSubscriptionGate;
 }): DryRunPlan {
-  const { config, runs, states, held, stamp } = opts;
+  const { config, runs, states, held, stamp, gate } = opts;
   const inFlight = opts.inFlight ?? [];
   const resumes = planResumes({
     runs,
@@ -1122,6 +1137,7 @@ export function planDryRun(opts: {
     now: opts.now ?? Date.now(),
     ...(opts.campaignFileOf !== undefined ? { campaignFileOf: opts.campaignFileOf } : {}),
     ...(opts.hasImageRecord !== undefined ? { hasImageRecord: opts.hasImageRecord } : {}),
+    ...(gate !== undefined ? { subscriptionHold: (f: RunFact) => gate.holdOf(laneOfRun(f), f.episode, f.model) } : {}),
   });
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.
@@ -1139,6 +1155,7 @@ export function planDryRun(opts: {
     new Set(runs.map((f) => f.runId)),
     inFlight.filter((r) => r.owned),
     inFlight.filter((r) => !r.owned).flatMap((r) => r.refs),
+    gate,
   );
   const counted = countedFrom(states);
   const rows: AccountRow[] = [];
@@ -1288,6 +1305,10 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     now,
   });
   const states = modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs });
+  // The subscription usage gate as the supervisor applies it: its own
+  // thresholds when its state file says, this shell's otherwise.
+  const local = subscriptionThresholds(process.env);
+  const subGate = subscriptionGate(readLaneUsage(RUNS_DIR), state?.subscriptionGate ?? local, now);
   const inFlight = inFlightRuns({
     jobs,
     runs,
@@ -1305,8 +1326,10 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     now,
     campaignFileOf: (id) => runCampaignFile(join(RUNS_DIR, id)),
     hasImageRecord: (id) => runHasImageRecord(id),
+    gate: subGate,
   });
   console.log("");
+  for (const line of formatSubscriptionGate(subGate, gateLanes(subGate, config.roster, config.policy.subscriptions), { local, notes: state?.subscriptionGate !== undefined ? (state.subscriptionGate.notes ?? []) : local.notes })) console.log(line);
   for (const line of formatAccounts(rows)) console.log(line);
   for (const line of formatAccountClasses(config)) console.log(line);
   for (const line of formatArgvBlock(spawns, { stamp: stampToday, until: cliUntil })) console.log(line);

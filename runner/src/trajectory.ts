@@ -32,6 +32,7 @@ import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import { platformOf } from "./platform";
 import { SecretRedactor } from "./redact";
 import type { ActionNote } from "./sandbox/ipc";
+import type { SubscriptionUsage } from "./subscription-usage";
 
 export interface StateLine {
   level?: number | undefined;
@@ -375,6 +376,15 @@ export interface RunMeta {
    * those at read time from the trajectory rather than rewriting them.
    */
   resolved?: ResolvedModel;
+  /**
+   * The newest reading of the run's subscription usage windows, as its driver
+   * normalised it (`subscription-usage.ts`: per window the used percent, the
+   * window's length and its reset — nothing else). Written on change by
+   * `recordSubscriptionUsage`; the fleet reads the newest per lane off these
+   * to gate launches (operator, 2026-10-16). Operator-only: no public
+   * projection carries it. Absent on every run that never saw one.
+   */
+  subscriptionUsage?: SubscriptionUsage;
 }
 
 /** The provider's own answer to "what ran", promoted onto the run. */
@@ -772,6 +782,27 @@ export class Trajectory {
     }
     this.append({ t: "harness", kind: "resolved_model", ...next });
     return true;
+  }
+
+  /**
+   * The run's newest subscription usage reading (`subscription-usage.ts`), on
+   * the record and in meta.json, where the fleet reads the newest per lane.
+   * The driver calls this only when the reading changed. The record carries
+   * the windows and no text: a `harness` record's `text` is published, and a
+   * usage percentage or a reset time never is (operator, 2026-10-16).
+   * meta.json is rewritten whole, like `recordResolved` does, and never
+   * throws into a turn.
+   */
+  recordSubscriptionUsage(u: SubscriptionUsage, turn?: number): void {
+    this.append({ t: "harness", kind: "rate_limits", ...(turn !== undefined ? { turn } : {}), lane: u.lane, windows: u.windows });
+    const meta = this.readMetaFile();
+    if (meta === null) return;
+    try {
+      const safe = JSON.parse(this.scrub(jsonLine({ ...meta, subscriptionUsage: u }))) as RunMeta;
+      writeFileSync(join(this.dir, "meta.json"), `${JSON.stringify(toJsonSafe(safe), null, 2)}\n`, "utf8");
+    } catch {
+      // the record has it; the gate reads the next one
+    }
   }
 
   /** meta.json as it stands, or null when it is missing or unreadable. */

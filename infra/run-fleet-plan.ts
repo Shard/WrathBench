@@ -45,7 +45,8 @@ import { cellDimensions } from "../runner/src/campaign-def";
 import { campaignFileOf, type CampaignFile } from "../runner/src/campaign-file";
 import { DEFAULT_CLAUDE_TOKEN_ENV, type TerminationReason } from "../runner/src/config";
 import { isScoredEpisode } from "../runner/src/episodes";
-import { classifyLapse, OFFLINE_PAUSE, resumesOnPause, staleAfterMs } from "../runner/src/lapse";
+import { classifyLapse, OFFLINE_PAUSE, resumesOnPause, staleAfterMs, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
+import { jobHoldOf, laneOfEntry, laneOfRun, type FleetSubscriptionGate } from "./run-fleet-gate";
 import {
   ACCOUNT_CLASSES,
   type AccountClass,
@@ -418,6 +419,12 @@ export function planPolicy(opts: {
     running: ReadonlyMap<string, number>;
     /** A roster entry pinned to one subscription (`FleetRosterEntry.subscription`): its only candidate lane. */
     pinnedLane?: (name: string) => string | undefined;
+    /**
+     * Why the subscription usage gate holds a pick of `episode` on a candidate
+     * lane (`""` for a pick with no claude lane), or undefined: a held lane is
+     * passed over like a full key (`FleetSubscriptionGate`).
+     */
+    gate?: (name: string, episode: EpisodeId, lane: string) => string | undefined;
   };
   policy?: SchedulingPolicy;
   /** Paid policy models already in flight (pinned jobs excluded). */
@@ -567,7 +574,17 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
     for (const h of plan.held) if (!held.some((x) => x.name === h.name)) held.push(h);
     let rejected = false;
     for (const pick of plan.jobs) {
-      const cands = keysOf(pick.name);
+      const all = keysOf(pick.name);
+      // A lane the subscription gate holds is no candidate at all; with
+      // every candidate held, the pick is held with the gate's reason.
+      const gateWhy = all.map((c) => opts.concurrency?.gate?.(pick.name, pick.episode, c.lane));
+      const cands = all.filter((_, i) => gateWhy[i] === undefined);
+      if (cands.length === 0) {
+        passed.add(pick.name);
+        held.push({ name: pick.name, episode: pick.episode, why: gateWhy[0]! });
+        rejected = true;
+        continue;
+      }
       /** A key with no room left; undefined when this placement can be made. */
       const fullKey = (keys: readonly string[]): string | undefined =>
         keys.find((k) => {
@@ -883,6 +900,12 @@ export interface PausedListing {
   elapsedMs: number | null;
   budgetMs: number | null;
   why: string;
+  /**
+   * Set when the wait is a subscription usage window's — a `subscription-budget`
+   * pause, a spent quota's reset, the lane gate — whose figures are the
+   * operator's: the public projection withholds `resumeAfter` and `why` then.
+   */
+  subscriptionWait?: true;
 }
 
 /** "41m of 90m" — what the accounts table and the paused listing say about a paused run. */
@@ -913,6 +936,10 @@ export function providerResetOf(pause: NonNullable<RunFact["pause"]>): number | 
  */
 export function resumeNotBefore(pause: NonNullable<RunFact["pause"]>): number | "never" | null {
   if (pause.reason === "operator-pause") return null;
+  // The subscription gate stopped a freeplay run (operator, 2026-10-16): it
+  // waits for the window's reset, and is on no ladder at all — the lane gate
+  // (`subscriptionHold`) is what holds it while the window stays over.
+  if (pause.reason === SUBSCRIPTION_PAUSE) return pause.notBefore ?? null;
   // An offline pause is the harness's own doing too — the runner was killed
   // under the run, and nothing about the provider changed — but it is derived,
   // not written, so it is resumable only from the instant the run provably
@@ -1196,6 +1223,11 @@ export function planResumes(opts: {
    * having none.
    */
   hasImageRecord?: (runId: string) => boolean;
+  /**
+   * Why the subscription usage gate holds this run's resume
+   * (`FleetSubscriptionGate`), or undefined. Absent holds nothing.
+   */
+  subscriptionHold?: (f: RunFact) => string | undefined;
 }): { resume: ResumePlan[]; listed: PausedListing[]; end: EndedRun[] } {
   const { config, now } = opts;
   const ownCampaignFile = opts.campaignFileOf ?? ((): CampaignFile | null => null);
@@ -1218,8 +1250,22 @@ export function planResumes(opts: {
   const seenModel = new Set<string>();
   for (const f of paused) {
     const pause = f.pause!;
-    const list = (why: string, resumeAfter: number | null = null): void => {
-      listed.push({ runId: f.runId, model: f.model, account: f.account, reason: pause.reason, since: pause.at, pauseCount: pause.count, resumeAfter, elapsedMs: pause.episodeElapsedMs, budgetMs: f.episodeMs, why });
+    // A wait on a subscription usage window: its figures are the operator's.
+    const onLane = laneOfRun(f) !== null;
+    const list = (why: string, resumeAfter: number | null = null, subscriptionWait = false): void => {
+      listed.push({
+        runId: f.runId,
+        model: f.model,
+        account: f.account,
+        reason: pause.reason,
+        since: pause.at,
+        pauseCount: pause.count,
+        resumeAfter,
+        elapsedMs: pause.episodeElapsedMs,
+        budgetMs: f.episodeMs,
+        why,
+        ...(subscriptionWait || pause.reason === SUBSCRIPTION_PAUSE ? { subscriptionWait: true as const } : {}),
+      });
     };
     // Another series' paused run is not this supervisor's to resume — the
     // harness it ran under is not the one running now — and just as
@@ -1450,9 +1496,16 @@ export function planResumes(opts: {
     if (notBefore !== null && now < notBefore) {
       const waiting =
         providerResetOf(pause) !== undefined
-          ? `${pause.reason}, resuming at ${new Date(notBefore).toLocaleString()} (provider reset)`
+          ? `${pause.reason}, resuming at ${new Date(notBefore).toLocaleString()} (${onLane ? "usage window reset" : "provider reset"})`
           : `${pause.reason}, pause ${pause.count}: resuming after ${new Date(notBefore).toLocaleTimeString()}`;
-      list(waiting, notBefore);
+      list(waiting, notBefore, onLane && providerResetOf(pause) !== undefined);
+      continue;
+    }
+    // The subscription usage gate: a lane at or over this run's threshold
+    // holds the resume until its window resets (operator, 2026-10-16).
+    const gated = opts.subscriptionHold?.(f);
+    if (gated !== undefined) {
+      list(gated, null, true);
       continue;
     }
     if (takenAccounts.has(account.toUpperCase())) {
@@ -2267,6 +2320,8 @@ export function planTick(
   takenRunIds: ReadonlySet<string> = new Set(),
   inFlight: readonly InFlight[] = [],
   unownedRefs: readonly string[] = [],
+  /** The subscription usage gate (`run-fleet-gate.ts`); absent holds nothing. */
+  gate?: FleetSubscriptionGate,
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2293,6 +2348,17 @@ export function planTick(
       return [owed === undefined ? j : { ...j, owed: { copies: owed, taken: takenRunIds } }];
     })
     .map((job) => ({ job, spawn: jobSpawn(job, config.roster, job.account!, stamp, eligible, config.campaigns) }));
+  // A pinned job the subscription gate holds does not spawn: it is reported
+  // with the picks the policy held, which is where `--dry-run` says why.
+  const gatedPinned: HeldPick[] = [];
+  if (gate !== undefined) {
+    for (let i = pinned.length - 1; i >= 0; i--) {
+      const why = jobHoldOf(pinned[i]!.job, config.roster, config.policy.subscriptions, gate);
+      if (why === undefined) continue;
+      gatedPinned.unshift({ name: pinned[i]!.job.name, episode: pinned[i]!.job.episode, why });
+      pinned.splice(i, 1);
+    }
+  }
   // What is running, and the resumes, hold their accounts and their refs
   // ahead of everything fresh.
   const occupied = new Map([...inFlight.map((j) => [j.name, j.account] as const), ...resumes.map((r) => [r.job.name, r.account] as const)]);
@@ -2306,7 +2372,7 @@ export function planTick(
     running: occupied,
     finished: new Set(),
     held,
-    cooling: () => undefined,
+    cooling: (job) => (gate === undefined ? undefined : jobHoldOf(job, config.roster, config.policy.subscriptions, gate)),
     eligible,
     runningRefs: heldRefs,
     ...(affinity !== undefined ? { affinity } : {}),
@@ -2333,12 +2399,18 @@ export function planTick(
     held,
     queuePlan: queue,
     runningRefs: heldRefs,
-    concurrency: { keyOf, max: config.maxConcurrent, running: keyCount, pinnedLane: (n) => config.roster[n]?.subscription },
+    concurrency: {
+      keyOf,
+      max: config.maxConcurrent,
+      running: keyCount,
+      pinnedLane: (n) => config.roster[n]?.subscription,
+      ...(gate !== undefined ? { gate: (n: string, ep: EpisodeId, lane: string) => gate.holdOf(laneOfEntry(config.roster[n], lane), ep, config.roster[n]?.model) } : {}),
+    },
     policy: config.policy,
     paidRunning,
     campaigns: unpinnedCampaigns(config),
     probeRuns,
     ...(affinity !== undefined ? { affinity } : {}),
   });
-  return { pinned, queue, policy, heldPicks };
+  return { pinned, queue, policy, heldPicks: [...gatedPinned, ...heldPicks] };
 }

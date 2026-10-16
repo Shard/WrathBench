@@ -18,11 +18,17 @@
  * Rollouts reach hundreds of megabytes, so only the tail is ever read. Nothing
  * here may fail or delay a turn: every failure is an absent figure. Only
  * `sessions/**` is touched, never `auth.json`. No imports beyond
- * `codex-usage.ts`, so tests can use it without the driver.
+ * `codex-usage.ts` (and a type from `subscription-usage.ts`), so tests can use
+ * it without the driver.
+ *
+ * The same lines carry the subscription's usage windows (`rate_limits`, read by
+ * `rateLimitsOfLine`), and the thread's `turn_context` lines name the model each
+ * turn ran on (`turnModelOfLine`); `CodexRolloutFollower` reads both.
  */
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeCodexUsage } from "./codex-usage";
+import type { UsageWindow } from "./subscription-usage";
 
 /** The last API call's accounting as the response record carries it. */
 export interface CodexLastCall {
@@ -215,6 +221,65 @@ export interface CodexContextReading {
 
 const finite = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
+/**
+ * The subscription's usage windows off one rollout line (0.159.3). `codex
+ * exec --json` never prints them (codex issue #14728, closed), but every
+ * `token_count` the CLI persists carries the account's `rate_limits`:
+ *
+ *   "rate_limits":{"limit_id":…,"primary":{"used_percent":…,"window_minutes":…,"resets_at":<epoch s>},
+ *                  "secondary":null,"credits":{…},"plan_type":…,"rate_limit_reached_type":null,…}
+ *
+ * Only `primary` and `secondary` are read, and of each only the used percent,
+ * the window's length and its reset (ms here): never `credits`, `plan_type`
+ * or any other field (operator, 2026-10-16). Undefined for a line that is not
+ * a `token_count`, or whose `rate_limits` is null or holds no window.
+ */
+export function rateLimitsOfLine(line: string): UsageWindow[] | undefined {
+  if (!line.includes('"rate_limits"')) return undefined;
+  let rec: unknown;
+  try {
+    rec = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  const payload = (rec as { payload?: { type?: unknown; rate_limits?: unknown } } | null)?.payload;
+  if (payload === null || typeof payload !== "object" || payload.type !== "token_count") return undefined;
+  const rl = payload.rate_limits;
+  if (rl === null || typeof rl !== "object") return undefined;
+  const windows: UsageWindow[] = [];
+  for (const key of ["primary", "secondary"] as const) {
+    const w = (rl as Record<string, unknown>)[key];
+    if (w === null || typeof w !== "object") continue;
+    const o = w as Record<string, unknown>;
+    const used = finite(o["used_percent"]);
+    if (used === undefined) continue;
+    const minutes = finite(o["window_minutes"]);
+    const resets = finite(o["resets_at"]);
+    windows.push({ usedPercent: used, windowMinutes: minutes ?? null, resetsAt: resets !== undefined ? resets * 1000 : null });
+  }
+  return windows.length > 0 ? windows : undefined;
+}
+
+/**
+ * The model a turn ran on, off a `turn_context` line — the CLI's own record
+ * of the turn's settings, written at its start. Undefined for any other line.
+ * It is the model the CLI asked for; a mid-turn reroute by the server is not
+ * persisted (exec prints it on stdout, where the driver records it).
+ */
+export function turnModelOfLine(line: string): string | undefined {
+  if (!line.includes('"turn_context"')) return undefined;
+  let rec: unknown;
+  try {
+    rec = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  const r = rec as { type?: unknown; payload?: { model?: unknown } } | null;
+  if (r === null || r.type !== "turn_context") return undefined;
+  const model = r.payload?.model;
+  return typeof model === "string" && model.length > 0 ? model : undefined;
+}
+
 /** A `token_count` line's last-call total and reported window; undefined for any other line. */
 export function tokenCountOfLine(line: string): CodexContextReading | undefined {
   if (!line.includes('"token_count"')) return undefined;
@@ -249,11 +314,23 @@ type PendingCompaction = Partial<CodexCompaction> & { seenCompacted: boolean; aw
 export class CodexRolloutScan {
   /** The newest `token_count` seen, if any. */
   context: CodexContextReading | undefined;
+  /** The newest usage windows a `token_count` carried (`rateLimitsOfLine`); a null `rate_limits` leaves them as they were. */
+  rateLimits: UsageWindow[] | undefined;
+  /** The model the newest `turn_context` names. */
+  model: string | undefined;
   private pending: PendingCompaction | null = null;
   private readonly done: CodexCompaction[] = [];
 
   line(line: string): void {
+    if (line.includes('"turn_context"')) {
+      const model = turnModelOfLine(line);
+      if (model !== undefined) {
+        this.model = model;
+        return;
+      }
+    }
     if (line.includes('"token_count"')) {
+      this.rateLimits = rateLimitsOfLine(line) ?? this.rateLimits;
       const reading = tokenCountOfLine(line);
       if (reading === undefined) return;
       const window = reading.window ?? this.context?.window;
@@ -356,6 +433,16 @@ export class CodexRolloutScan {
   }
 }
 
+/** What one `CodexRolloutFollower.read` answers. */
+export interface CodexRolloutRead {
+  compactions: CodexCompaction[];
+  context: CodexContextReading | undefined;
+  /** The newest usage windows on the thread (`rateLimitsOfLine`). */
+  rateLimits: UsageWindow[] | undefined;
+  /** The model the thread's newest `turn_context` names. */
+  model: string | undefined;
+}
+
 /** How much of the rollout one read step takes. */
 export const ROLLOUT_FOLLOW_CHUNK_BYTES = 4 * 1024 * 1024;
 
@@ -381,8 +468,11 @@ export class CodexRolloutFollower {
     private readonly chunkBytes = ROLLOUT_FOLLOW_CHUNK_BYTES,
   ) {}
 
-  /** What the CLI appended since the last read: its compactions, and the newest context reading so far. */
-  read(threadId: string | undefined): { compactions: CodexCompaction[]; context: CodexContextReading | undefined } {
+  /**
+   * What the CLI appended since the last read: its compactions, and the newest
+   * context reading, usage windows and turn model so far on this thread.
+   */
+  read(threadId: string | undefined): CodexRolloutRead {
     try {
       if (this.codexHome === undefined || this.codexHome.length === 0) return this.fail("no CODEX_HOME");
       if (threadId === undefined) return this.fail("no thread id");
@@ -411,7 +501,7 @@ export class CodexRolloutFollower {
       } finally {
         closeSync(fd);
       }
-      return { compactions: this.scan.drain(true), context: this.scan.context };
+      return { compactions: this.scan.drain(true), context: this.scan.context, rateLimits: this.scan.rateLimits, model: this.scan.model };
     } catch (err) {
       return this.fail(err instanceof Error ? err.message : String(err));
     }
@@ -423,7 +513,7 @@ export class CodexRolloutFollower {
     this.decoder = new TextDecoder();
   }
 
-  private fail(reason: string): { compactions: CodexCompaction[]; context: undefined } {
+  private fail(reason: string): CodexRolloutRead {
     if (!this.noted) {
       this.noted = true;
       try {
@@ -432,6 +522,6 @@ export class CodexRolloutFollower {
         // a log line never costs a turn
       }
     }
-    return { compactions: [], context: undefined };
+    return { compactions: [], context: undefined, rateLimits: undefined, model: undefined };
   }
 }

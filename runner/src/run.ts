@@ -78,13 +78,14 @@ import {
   type RunConfig,
   type WatchdogOverride,
 } from "./config";
-import { STALL_PAUSE } from "./lapse";
+import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { runLoop, type StopRequest } from "./loop";
 import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./prompt";
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
 import { Scratchpad } from "./scratchpad";
-import { liveOwnerOf, RESUME_REFUSED_EXIT } from "./models";
+import { goKeyEnvOf, liveOwnerOf, RESUME_REFUSED_EXIT, subscriptionLaneOfConfig } from "./models";
+import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
@@ -1160,6 +1161,7 @@ async function main(): Promise<void> {
           turnOffset,
           signal: abort.signal,
           onObservationStalled,
+          usage: goUsageGaugeFor(config, trajectory),
         });
 
   if (outcome.kind === "paused") {
@@ -1176,13 +1178,20 @@ async function main(): Promise<void> {
     const metaThen = readMeta(runDir);
     if (metaThen?.pause === undefined) trajectory.writeMeta({ ...(metaThen ?? metaNow()), pause: pauseMark(outcome) });
   }
-  if (outcome.kind === "terminated" || outcome.reason === "operator-pause" || outcome.reason === STALL_PAUSE) {
+  if (
+    outcome.kind === "terminated" ||
+    outcome.reason === "operator-pause" ||
+    outcome.reason === STALL_PAUSE ||
+    outcome.reason === SUBSCRIPTION_PAUSE
+  ) {
     // A finished run frees its module session so the account is not held
     // (the realm caps characters/sessions per account). So does a run the
     // supervisor paused: the fleet is going down, and the account must be
     // free for the resume (same character — logout, never a wipe). So does a
     // run whose observation stalled: the session is what stopped reporting,
-    // and the resume's fresh one is the cure. A run
+    // and the resume's fresh one is the cure. So does a freeplay run the
+    // subscription gate stopped: it waits hours or days for a usage window,
+    // and nothing retries it in place. A run
     // paused by its provider keeps the session alive on purpose: that is
     // the in-place retry path, and the roster frees it when it moves on.
     try {
@@ -1226,6 +1235,23 @@ async function main(): Promise<void> {
     process.exit(130);
   }
   wiki?.close();
+}
+
+/**
+ * The OpenCode Go allowance a fixed-loop run draws on, as the loop's usage
+ * gauge (`opencode-go.ts`), or undefined for any run that draws on none: not
+ * a Go base, a `$0` Go model, no key in the environment, or a base with no
+ * usage endpoint. The key is handed to the reader and nothing else.
+ */
+export function goUsageGaugeFor(config: RunConfig, trajectory: Trajectory): GoUsageGauge | undefined {
+  const keyEnv = goKeyEnvOf(config);
+  const lane = subscriptionLaneOfConfig(config);
+  const url = goUsageUrl(config.apiBase);
+  const key = keyEnv !== undefined ? process.env[keyEnv] : undefined;
+  if (keyEnv === undefined || lane === null || url === undefined || key === undefined || key.length === 0) return undefined;
+  return new GoUsageGauge(lane, url, key, (u) => trajectory.recordSubscriptionUsage(u), {
+    onNote: (text) => console.error(`[wrathbench] ${text}`),
+  });
 }
 
 if (import.meta.main) {
