@@ -648,6 +648,16 @@ export interface ToolContext {
   onEventsServed?: (events: unknown[], folded?: number) => void;
   /** Called with every episodic entry written, so the driver can log it. */
   onEpisodicEntry?: (entry: EpisodicEntry) => void;
+  /**
+   * The run's secret registry: the trajectory, which holds the lease secret
+   * and every other value registered with it (`redact.ts`). Every result
+   * `callTool` and `appendPendingActionHints` return has passed its `scrub`, so
+   * a secret a snippet printed, threw, returned, wrote to the pad or said in
+   * chat reaches the model, and the record of the result, as `[redacted]`.
+   * Required, like `reflect`: a dispatcher without it would hand the model the
+   * raw text on one driver only.
+   */
+  secrets: { scrub(text: string): string };
 }
 
 export interface ToolResult {
@@ -718,7 +728,8 @@ export function renderActionHints(hints: readonly ActionHintNote[]): string | un
  * fact. Pending hints now ride whichever tool result comes next. No counter,
  * threshold or new text: the block is `renderActionHints`' own, appended after
  * the tool's text exactly as a snippet result carries it, and the tool's text
- * and `isError` are untouched.
+ * and `isError` are untouched but for the secret scrub every result passes
+ * (`scrubResult`).
  *
  * Never throws. A drain that fails — the sandbox mid-restart, a child not
  * answering in time — reads as nothing pending: delivering a hint must never
@@ -729,10 +740,21 @@ export async function appendPendingActionHints(ctx: ToolContext, result: ToolRes
   try {
     hints = await ctx.sandbox.drainActionHints();
   } catch {
-    return result;
+    return scrubResult(ctx, result);
   }
   const block = renderActionHints(hints);
-  return block === undefined ? result : { ...result, text: `${result.text}\n${block}` };
+  return scrubResult(ctx, block === undefined ? result : { ...result, text: `${result.text}\n${block}` });
+}
+
+/**
+ * `result` as the model may read it: every registered secret in its text
+ * replaced by `[redacted]` (`ToolContext.secrets`). The last step of both ways
+ * a tool result leaves this module, so every driver logs and sends the same
+ * text. A result with no secret in it is returned as it was.
+ */
+function scrubResult(ctx: ToolContext, result: ToolResult): ToolResult {
+  const text = ctx.secrets.scrub(result.text);
+  return text === result.text ? result : { ...result, text };
 }
 
 /**
@@ -753,11 +775,13 @@ export interface CallOrigin {
 /**
  * Dispatch one tool call. Never throws: errors come back as `isError` text.
  * Pending action hints ride the result (`appendPendingActionHints`), whichever
- * tool it is; an evaluated snippet's result already carries its own.
+ * tool it is; an evaluated snippet's result already carries its own. Either
+ * way the result is scrubbed of registered secrets (`scrubResult`).
  */
 export async function callTool(ctx: ToolContext, name: string, args: unknown, origin: CallOrigin = {}): Promise<ToolResult> {
   const result = await runTool(ctx, name, args, origin);
-  return EVALUATED.has(result) ? result : appendPendingActionHints(ctx, result);
+  // `EVALUATED` is keyed on identity, so it is read before the scrub copies.
+  return EVALUATED.has(result) ? scrubResult(ctx, result) : appendPendingActionHints(ctx, result);
 }
 
 async function runTool(ctx: ToolContext, name: string, args: unknown, origin: CallOrigin): Promise<ToolResult> {

@@ -16,6 +16,7 @@ import { type ActionsFlush, SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
 import type { ToolContext } from "../src/tools";
 import { Trajectory, readTrajectory } from "../src/trajectory";
+import { SecretRedactor } from "../src/redact";
 import { summarize } from "../viewer/tail";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -202,6 +203,7 @@ describe("the record joins its tool call", () => {
       reflect: new ReflectGate(),
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       turn: () => 5,
+      secrets: new SecretRedactor(),
     };
     const server = new McpServer(ctx, { onToolCall: trajectoryToolCallWriter(trajectory) });
     await server.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }));

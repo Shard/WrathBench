@@ -3,6 +3,7 @@
  * trajectory records, message-window mechanics. No live stack, no real model.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StubAdapter, type ChatAdapter, type ChatRequest, type AdapterOutcome } from "../src/adapter";
 import { parseEventFrame, StateCache } from "@wrathbench/sdk";
@@ -16,6 +17,7 @@ import type { ActionHintNote } from "../src/sandbox/ipc";
 import { renderActionHints } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
+import { LEAKED_SECRET, LEAKY_PAD, LEAKY_RESULT_AS_READ, leakyCrashNotice, leakySnippetResult } from "./fixtures/leaky-snippet";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -1079,5 +1081,41 @@ describe("runLoop fresh-character precondition", () => {
     options.watchdogs.expectFreshCharacter(new Set(["294"]));
     const outcome = await runLoop(options);
     expect(outcome).toEqual({ kind: "terminated", reason: "stub-complete" });
+  });
+});
+
+describe("registered secrets in what the model reads", () => {
+  test("a secret a snippet returned, logged or threw, a notice's and the pad's reach the model as [redacted], and the record is the same text", async () => {
+    const sent: ChatRequest["messages"][] = [];
+    let n = 0;
+    const adapter: ChatAdapter = {
+      label: "raw",
+      complete: async (req: ChatRequest): Promise<AdapterOutcome> => {
+        sent.push(req.messages.map((m) => ({ ...m })));
+        n++;
+        if (n > 1) return { kind: "stub-complete" };
+        return { kind: "ok", turn: { content: null, toolCalls: [{ id: "c1", name: "run_snippet", arguments: JSON.stringify({ code: "process.env" }) }] } };
+      },
+    };
+    const { dir, options } = setup(adapter);
+    options.trajectory.redact(LEAKED_SECRET);
+    const notices = [leakyCrashNotice()];
+    Object.assign(options.sandbox, {
+      evalSnippet: () => Promise.resolve(leakySnippetResult()),
+      drainNotices: () => notices.splice(0),
+    });
+    writeFileSync(join(dir, "scratchpad.md"), LEAKY_PAD, "utf8");
+    await runLoop(options);
+    options.trajectory.close();
+
+    const context = sent[0]!.at(-1)!.content ?? "";
+    expect(context).toContain("Last stderr: dumping [redacted]");
+    expect(context).toContain("key: [redacted]");
+    const toolMessage = sent[1]!.find((m) => m.role === "tool");
+    expect(toolMessage?.content).toBe(LEAKY_RESULT_AS_READ);
+    // Scrubbed once, before both: the record is the text the model read.
+    expect(readTrajectory(dir).find((r) => r.t === "snippet_result")?.["text"]).toBe(LEAKY_RESULT_AS_READ);
+    expect(JSON.stringify(sent)).not.toContain(LEAKED_SECRET);
+    expect(readFileSync(join(dir, "trajectory.jsonl"), "utf8")).not.toContain(LEAKED_SECRET);
   });
 });

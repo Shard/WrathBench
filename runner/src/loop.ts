@@ -900,14 +900,21 @@ export class ContextBuilder {
       // sandbox mid-restart: an empty window is honest
     }
     const { window: events, folded } = eventWindow(fetched.events, fetched.folded);
-    const contextText = assembleContext({
-      stateSummary: formatStateSummary(snap, { sessionLive: this.live }),
-      events,
-      folded,
-      scratchpad: this.o.scratchpad.read(),
-      notices: pendingNotices.splice(0, pendingNotices.length),
-      turn,
-    });
+    // Scrubbed of the run's registered secrets as a whole, after the pure
+    // assembly: a notice (the crash notice's stderr tail), a chat line or an
+    // event a snippet's text came back in, and the scratchpad all reach the
+    // model, and the request record, as `[redacted]` (tools.ts scrubs tool
+    // results the same way, `ToolContext.secrets`).
+    const contextText = this.o.trajectory.scrub(
+      assembleContext({
+        stateSummary: formatStateSummary(snap, { sessionLive: this.live }),
+        events,
+        folded,
+        scratchpad: this.o.scratchpad.read(),
+        notices: pendingNotices.splice(0, pendingNotices.length),
+        turn,
+      }),
+    );
     // What the model was shown, and how many ambient events the span folded —
     // the same shape the recent_events tool logs. The ambient packets
     // themselves were never shown; logging them was most of the file.
@@ -1012,6 +1019,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
     reflect: builder.reflect,
     episodic: o.episodic,
     turn: () => builder.currentTurn,
+    secrets: trajectory,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({

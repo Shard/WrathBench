@@ -16,7 +16,10 @@
  * Redaction: records never carry API keys by construction (headers are never
  * logged), and every string is additionally scrubbed against the secret values
  * registered via `redact()` — belt and braces for a key that leaks into a
- * message body.
+ * message body. The same list is the run's model-facing one: every tool result
+ * and every turn's context message passes `scrub()` before the model reads it
+ * (`tools.ts`, `ContextBuilder.build`), so a record and the model see the same
+ * `[redacted]`.
  */
 
 import type { Database } from "bun:sqlite";
@@ -610,13 +613,18 @@ export class Trajectory {
     this.append({ t: "milestone", ...m });
   }
 
-  /** Register a secret to scrub from every persisted string. */
+  /** Register a secret to scrub from every persisted string and from everything the model reads. */
   redact(secret: string | undefined): void {
     this.secrets.redact(secret);
   }
 
-  private scrub(line: string): string {
-    return this.secrets.scrub(line);
+  /**
+   * `text` with every registered secret replaced by `[redacted]`. Applied to
+   * every line this writes, and by the drivers to what the model reads, so
+   * there is one list per run.
+   */
+  scrub(text: string): string {
+    return this.secrets.scrub(text);
   }
 
   /** Append one record. `ts` is stamped here unless the record carries one. */
