@@ -949,6 +949,75 @@ test("a Cataclysm-coined title is neither a page nor a recovered name", async ()
   db.close();
 }, 30_000);
 
+test("a rendered name changes what a row says, never which rows there are", async () => {
+  const xmlPath = join(dir, "links-dump.xml");
+  const outPath = join(dir, "links-bundle.sqlite");
+  await Bun.write(
+    xmlPath,
+    renderDump([
+      {
+        // The era paragraph rule takes all of its prose; a list of names is
+        // left outside the cut. Dropped before link templates rendered, and
+        // still dropped: the names are not a reason to keep a later world's page.
+        title: "Example Era Camp",
+        ns: 0,
+        id: 1,
+        revisions: [
+          {
+            id: 1,
+            timestamp: "2010-06-01T00:00:00Z",
+            text: "In Cataclysm the camp is gone and nothing else is said here.\n\n* {{quest|Example Quest Alpha}}",
+          },
+        ],
+      },
+      {
+        // An infobox and a section listed only in link templates: an empty row
+        // before, the same row now, with the names as its prose.
+        title: "Example Item Cache",
+        ns: 0,
+        id: 2,
+        revisions: [
+          {
+            id: 2,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "{{itembox|patch=3.0.2}}\n== Contents ==\n* {{loot|epic|Example Item Delta}}",
+          },
+        ],
+      },
+      {
+        title: "Example Zone Beta",
+        ns: 0,
+        id: 3,
+        revisions: [
+          {
+            id: 3,
+            timestamp: "2009-01-01T00:00:00Z",
+            text: "'''Example Zone Beta''' is sold by {{npc|Alliance|Example Person Gamma}} lorem.",
+          },
+        ],
+      },
+    ]),
+  );
+  const proc = Bun.spawn(
+    ["bun", join(import.meta.dir, "..", "src", "build.ts"), xmlPath, "--out", outPath, "--no-canary"],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  expect(await proc.exited).toBe(0);
+  const db = new Database(outPath, { readonly: true });
+  const rows = db.query<{ title: string; text: string }, []>("SELECT title, text FROM pages ORDER BY title").all();
+  expect(rows).toEqual([
+    { title: "Example Item Cache", text: "Contents\nExample Item Delta" },
+    { title: "Example Zone Beta", text: "Example Zone Beta is sold by Example Person Gamma lorem." },
+  ]);
+  const meta = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?");
+  expect(meta.get("pages_dropped_post_wrath")!.value).toBe("1");
+  // The row that was empty before is a row with prose now, so it moves bucket.
+  expect(meta.get("empty_pages")!.value).toBe("0");
+  expect(meta.get("pages_pre_cutoff")!.value).toBe("2");
+  expect(meta.get("inline_links_rendered")!.value).toBe("2");
+  db.close();
+}, 30_000);
+
 /**
  * Which revision a protected page's prose comes from.
  */

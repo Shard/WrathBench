@@ -368,6 +368,31 @@ describe("out-of-world sections", () => {
     expect(cut.sectionsTrimmedBy).toEqual({ "(empty)": 1 });
   });
 
+  test("a paragraph that reads as the later world only through its names keeps them out", () => {
+    // The template-free reading passes the paragraph rules; with the names in,
+    // "in Cataclysm" appears. The paragraph stays as it was, holes included.
+    const page = [
+      "Lead lorem.",
+      "",
+      "A reward from {{quest|Example Return in Cataclysm}}, sold by {{npc||Example Person Gamma}}.",
+      "",
+      "Sold by {{npc||Example Person Gamma}} here.",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.paragraphsDropped).toBe(0);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.\nA reward from , sold by .\nSold by Example Person Gamma here.");
+    // Rendering off reads the page exactly as before.
+    expect(stripWikitext(dropPostWrath(page, { inlineLinks: false }).text, { inlineLinks: false })).toBe(
+      "Lead lorem.\nA reward from , sold by .\nSold by here.",
+    );
+  });
+
+  test("a line that a line rule catches only through its name keeps it out", () => {
+    const page = ["== Inhabitants ==", "* {{item|Example Speedbarge Token}}", "* {{item|Example Item Delta}}"].join("\n");
+    const cut = dropPostWrath(page);
+    expect(stripWikitext(cut.text)).toBe("Inhabitants\nExample Item Delta");
+  });
+
   test("a heading with no body of its own but an occupied subsection survives", () => {
     const page = ["== Abilities ==", "=== Example Strike ===", "Ability lorem."].join("\n");
     const cut = dropPostWrath(page);

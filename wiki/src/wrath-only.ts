@@ -54,7 +54,7 @@
  * Deterministic, never throws, no network.
  */
 
-import { stripWikitext } from "./strip";
+import { proseWithInlineLinks, screenInlineLinks, stripWikitext } from "./strip";
 
 /**
  * The revision cutoff the bundle is taken at: patch 4.0.1, the client patch
@@ -365,11 +365,21 @@ function headingIsPostWrath(text: string): boolean {
 }
 
 /**
+ * Whether the cuts read link templates as the names the strip writes for them
+ * (`INLINE_LINKS` in strip.ts). On by default. Off is every cut exactly as it
+ * was before those templates rendered, which is what `build.ts` decides page
+ * membership with, so rendering a name never adds or removes a page.
+ */
+export interface CutOptions {
+  inlineLinks?: boolean;
+}
+
+/**
  * Remove every post-Wrath section, then every post-Wrath paragraph of what is
  * left. Sections first: a paragraph inside a dropped section is not counted
  * twice, and the phrase rules never have to see it.
  */
-export function dropPostWrath(wikitext: string): WrathOnlyResult {
+export function dropPostWrath(wikitext: string, opts: CutOptions = {}): WrathOnlyResult {
   if (typeof wikitext !== "string" || wikitext.length === 0) {
     return {
       text: wikitext,
@@ -379,10 +389,10 @@ export function dropPostWrath(wikitext: string): WrathOnlyResult {
     };
   }
   const sections = dropPostWrathSections(wikitext);
-  const paragraphs = dropPostWrathParagraphs(sections.text);
+  const paragraphs = dropPostWrathParagraphs(sections.text, opts);
   // Empty sections last: both cuts above are themselves a source of a heading
   // with nothing under it.
-  const empties = dropEmptySections(paragraphs.text);
+  const empties = dropEmptySections(paragraphs.text, opts);
   const sectionsTrimmedBy = { ...sections.sectionsTrimmedBy };
   if (empties.sectionsTrimmed > 0) {
     sectionsTrimmedBy[EMPTY_SECTION_KEY] =
@@ -523,12 +533,15 @@ export function dropPostWrathSections(
  * rather than returned by `dropPostWrath`: almost no page needs it, and the
  * empty-section sweep strips every section body to decide.
  */
-export function dropOutOfWorldOnly(wikitext: string): string {
+export function dropOutOfWorldOnly(wikitext: string, opts: CutOptions = {}): string {
   if (typeof wikitext !== "string" || wikitext.length === 0) return wikitext;
-  return dropEmptySections(dropPostWrathSections(wikitext, { eraCuts: false }).text).text;
+  return dropEmptySections(dropPostWrathSections(wikitext, { eraCuts: false }).text, opts).text;
 }
 
-export function dropEmptySections(wikitext: string): { text: string; sectionsTrimmed: number } {
+export function dropEmptySections(
+  wikitext: string,
+  opts: CutOptions = {},
+): { text: string; sectionsTrimmed: number } {
   const lines = wikitext.split("\n");
   const levels = lines.map((line) => {
     const m = HEADING_LINE.exec(line);
@@ -546,7 +559,7 @@ export function dropEmptySections(wikitext: string): { text: string; sectionsTri
     for (let j = i + 1; j < end; j++) {
       if (levels[j] === 0) body.push(lines[j]!);
     }
-    if (stripWikitext(body.join("\n")).length === 0) {
+    if (stripWikitext(body.join("\n"), opts).length === 0) {
       for (let j = i; j < end; j++) drop[j] = true;
       sectionsTrimmed++;
       i = end - 1;
@@ -572,21 +585,47 @@ export function dropEmptySections(wikitext: string): { text: string; sectionsTri
  * never a candidate: the strip removes it anyway, and testing it would let an
  * infobox field decide a page's prose.
  */
-export function dropPostWrathParagraphs(wikitext: string): {
+export function dropPostWrathParagraphs(
+  wikitext: string,
+  opts: CutOptions = {},
+): {
   text: string;
   paragraphsDropped: number;
 } {
   if (!PARAGRAPH_PREFILTER.test(wikitext)) {
     return { text: wikitext, paragraphsDropped: 0 };
   }
+  const render = opts.inlineLinks !== false;
   const blocks = wikitext.split(/\n[ \t]*\n/);
   const kept: string[] = [];
   let paragraphsDropped = 0;
-  for (const block of blocks) {
-    const prose = proseOf(block).trim();
+  let screened = 0;
+  /**
+   * The same rules again, on the text with link templates rendered as the
+   * names the strip will write. A paragraph or line that reads as the later
+   * world only once its names are in keeps everything it said before, and its
+   * names stay out (`screenInlineLinks`): rendering them must not show what the
+   * template-free reading never let through.
+   */
+  const laterOnlyWithNames = (
+    raw: string,
+    prose: string,
+    rules: { test: (prose: string) => boolean }[],
+  ): boolean => {
+    if (!render) return false;
+    const named = proseWithInlineLinks(raw).trim();
+    return named !== prose && rules.some((rule) => rule.test(named));
+  };
+  for (const original of blocks) {
+    const prose = proseOf(original).trim();
     if (prose.length > 0 && POST_WRATH_PARAGRAPH.some((rule) => rule.test(prose))) {
       paragraphsDropped++;
       continue;
+    }
+    let block = original;
+    if (laterOnlyWithNames(block, prose, POST_WRATH_PARAGRAPH)) {
+      block = screenInlineLinks(block);
+      screened++;
     }
     // The block stays; a line of it may not. A block with nothing left is not
     // emitted, so the line rules never leave a bullet-less list behind.
@@ -598,6 +637,11 @@ export function dropPostWrathParagraphs(wikitext: string): {
         paragraphsDropped++;
         continue;
       }
+      if (laterOnlyWithNames(line, lineProse, POST_WRATH_LINE)) {
+        keptLines.push(screenInlineLinks(line));
+        screened++;
+        continue;
+      }
       keptLines.push(line);
     }
     if (keptLines.length < lines.length && proseOf(keptLines.join("\n")).trim().length === 0) {
@@ -605,6 +649,6 @@ export function dropPostWrathParagraphs(wikitext: string): {
     }
     kept.push(keptLines.join("\n"));
   }
-  if (paragraphsDropped === 0) return { text: wikitext, paragraphsDropped: 0 };
+  if (paragraphsDropped === 0 && screened === 0) return { text: wikitext, paragraphsDropped: 0 };
   return { text: kept.join("\n\n"), paragraphsDropped };
 }

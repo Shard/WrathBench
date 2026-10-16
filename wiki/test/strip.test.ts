@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { redirectTarget, stripWikitext } from "../src/strip";
+import { redirectTarget, screenInlineLinks, stripWikitext } from "../src/strip";
 import { decodeEntities } from "../src/entities";
 
 describe("stripWikitext", () => {
@@ -183,10 +183,42 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("By {{quest|{{lorem}}}}.")).toBe("By .");
   });
 
-  test("the strip counts the link templates it wrote", () => {
-    const counts = { inlineLinks: 0 };
-    stripWikitext("{{npc||Example Person Gamma}} and {{quest|Example Quest Alpha}}; {{cost|1}} {{npc|Horde}}", counts);
-    expect(counts.inlineLinks).toBe(2);
+  test("the strip counts the link templates it wrote and the ones it screened", () => {
+    const counts = { inlineLinks: 0, screenedByQualifier: 0, screenedByEra: 0 };
+    stripWikitext(
+      "{{npc||Example Person Gamma}} and {{quest|Example Quest Alpha}}; {{cost|1}} {{npc|Horde}} " +
+        "{{quest|Example Quest Beta (Cataclysm)}} " +
+        screenInlineLinks("{{item|Example Item Delta}} {{item|}}"),
+      { counts },
+    );
+    expect(counts).toEqual({ inlineLinks: 2, screenedByQualifier: 1, screenedByEra: 1 });
+  });
+
+  test("a name with a later-world qualifier leaves the hole it always left", () => {
+    // The qualifier lists are the title rules' own: an expansion, a later zone.
+    expect(stripWikitext("From {{quest|Example Quest Alpha (Cataclysm)}}.")).toBe("From .");
+    expect(stripWikitext("From {{quest|Example Quest Alpha (Shimmering Expanse)}}.")).toBe("From .");
+    expect(stripWikitext("By {{npc||Example Person Gamma (Gilneas)}}.")).toBe("By .");
+    // A qualifier of this world, or one that only mentions a place, still renders.
+    expect(stripWikitext("By {{npc||Example Person Gamma (Alliance)}}.")).toBe("By Example Person Gamma (Alliance).");
+    expect(stripWikitext("By {{npc||Example Person Gamma (Gilneas Example Hold)}}.")).toBe(
+      "By Example Person Gamma (Gilneas Example Hold).",
+    );
+    expect(stripWikitext("By {{npc||Example Person Gamma (Worgen)}}.")).toBe("By Example Person Gamma (Worgen).");
+  });
+
+  test("a screened call strips exactly as it did before link templates rendered", () => {
+    const wt = "* {{quest|Example Quest Alpha}} from {{NPC|Horde|Example Person Gamma}}\n* {{ Template:Loot |epic|Example Item Delta}}";
+    expect(stripWikitext(screenInlineLinks(wt))).toBe(stripWikitext(wt, { inlineLinks: false }));
+    expect(stripWikitext(screenInlineLinks(wt))).toBe("from");
+    // Other templates are untouched by the mark.
+    expect(screenInlineLinks("{{cost|1}}{{questbox|x}}")).toBe("{{cost|1}}{{questbox|x}}");
+  });
+
+  test("the strip with rendering off is the strip as it was", () => {
+    expect(stripWikitext("Sold by {{npc|Alliance|Example Person Gamma}} here.", { inlineLinks: false })).toBe(
+      "Sold by here.",
+    );
   });
 
   test("a realistic synthetic article reduces to prose", () => {

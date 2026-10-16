@@ -12,6 +12,7 @@
  */
 
 import { decodeEntities } from "./entities";
+import { nameHasPostWrathQualifier } from "./post-wrath";
 
 const DROP_LINK_PREFIX = /^\s*(?::\s*)?(file|image|category|media)\s*:/i;
 
@@ -45,6 +46,14 @@ const DROP_LINK_PREFIX = /^\s*(?::\s*)?(file|image|category|media)\s*:/i;
  * link template inside an infobox or a table goes with it. Zones have no link
  * template here — they are plain `[[links]]` — and `coords` is not one, so it
  * stays stripped.
+ *
+ * A name is this world's text only if the era rules would let it through as
+ * prose. One whose qualifier places it in a later world
+ * (`nameHasPostWrathQualifier`) is left out, and so is every name in a
+ * paragraph or line the era rules read as the later world once its names are in
+ * (`screenInlineLinks`, called from `wrath-only.ts`): either way the text is what
+ * it was before link templates rendered. And a name never decides whether a page
+ * is in the bundle — `build.ts` decides that with rendering off.
  */
 const INLINE_LINKS: ReadonlyMap<string, number> = new Map([
   ["npc", 2],
@@ -90,14 +99,38 @@ function templateArgs(body: string): string[] {
 }
 
 /**
- * The name an `INLINE_LINKS` template links to, or null for any other template
- * (and for one whose name slot is empty, which leaves the hole it always left).
- * `raw` is the whole `{{…}}`. Positional slots follow MediaWiki: an argument
- * with a non-numeric `key=` is named and skipped, and `2=Name` fills slot 2.
+ * Put in front of a link template's name by `screenInlineLinks`. The name then
+ * matches nothing in `INLINE_LINKS`, so the strip removes the call the way it
+ * removes any other template. A dump cannot contain one: XML forbids NUL.
  */
-function inlineLinkName(raw: string): string | null {
+const SCREENED = "\u0000";
+
+/**
+ * A link template call, found by its name: `{{`, optional `Template:`, an
+ * `INLINE_LINKS` name, then its first pipe or its closing braces.
+ */
+const LINK_CALL = new RegExp(
+  String.raw`\{\{(?=\s*(?:template\s*:\s*)?(?:` +
+    [...INLINE_LINKS.keys()].join("|") +
+    String.raw`)\s*(?:\||\}\}))`,
+  "gi",
+);
+
+/**
+ * The name an `INLINE_LINKS` template links to, or null when the call leaves
+ * nothing: any other template, an empty name slot (the hole it always left), a
+ * call the era rules screened, and a name `nameHasPostWrathQualifier` places in
+ * a later world. `raw` is the whole `{{…}}`. Positional slots follow MediaWiki:
+ * an argument with a non-numeric `key=` is named and skipped, and `2=Name` fills
+ * slot 2. `counts`, when given, records which of those it was.
+ */
+function inlineLinkName(raw: string, counts?: StripCounts): string | null {
   // A parameter (`{{{1|x}}}`) is not a template call.
   if (!raw.startsWith("{{") || !raw.endsWith("}}") || raw[2] === "{") return null;
+  if (raw[2] === SCREENED) {
+    if (counts !== undefined && inlineLinkName(`{{${raw.slice(3)}`) !== null) counts.screenedByEra++;
+    return null;
+  }
   const args = templateArgs(raw.slice(2, -2));
   const name = args[0]!
     .replace(/_/g, " ")
@@ -120,14 +153,58 @@ function inlineLinkName(raw: string): string | null {
   }
   if (value === undefined) return null;
   // The name may itself hold a template; it goes, or renders, by the same rule.
-  const text = removeBraced(value).replace(/\s+/g, " ").trim();
-  return text.length > 0 ? text : null;
+  const text = removeBraced(value, true).replace(/\s+/g, " ").trim();
+  if (text.length === 0) return null;
+  if (nameHasPostWrathQualifier(text)) {
+    if (counts !== undefined) counts.screenedByQualifier++;
+    return null;
+  }
+  if (counts !== undefined) counts.inlineLinks++;
+  return text;
+}
+
+/**
+ * A paragraph as the era rules read it once its link templates render: every
+ * innermost call becomes its name if it is a link template and a space if it
+ * is anything else — `proseOf` in `wrath-only.ts`, with the names left in.
+ */
+export function proseWithInlineLinks(text: string): string {
+  let s = text;
+  for (let i = 0; i < 4 && s.includes("{{"); i++) {
+    s = s.replace(/\{\{[^{}]*\}\}/g, (call) => inlineLinkName(call) ?? " ");
+  }
+  return s;
+}
+
+/**
+ * Mark every link template in `text` so the strip removes it instead of writing
+ * its name: what the era rules do to a paragraph or a line that reads as the
+ * later world only once its names are in. The strip then reduces that text
+ * exactly as it did before link templates rendered.
+ */
+export function screenInlineLinks(text: string): string {
+  return text.replace(LINK_CALL, `{{${SCREENED}`);
 }
 
 /** Tallies `stripWikitext` keeps for the caller; the build turns them into `meta`. */
 export interface StripCounts {
   /** `INLINE_LINKS` templates written as their name. */
   inlineLinks: number;
+  /** Link templates left out because their name carries a later-world qualifier. */
+  screenedByQualifier: number;
+  /** Link templates left out because the era rules read their paragraph or line as the later world. */
+  screenedByEra: number;
+}
+
+export interface StripOptions {
+  /**
+   * Write `INLINE_LINKS` templates as their name. On by default; off is the
+   * strip exactly as it was before they rendered, which is what the build
+   * decides a page's membership with.
+   */
+  inlineLinks?: boolean;
+  /** Incremented with what the strip wrote and what it screened. */
+  counts?: StripCounts;
 }
 
 /** One unclosed `{{` or `{|`, kept so a closer can be matched to its own kind. */
@@ -168,7 +245,7 @@ interface Opener {
  * A top-level template in `INLINE_LINKS` leaves its name behind instead of
  * nothing; one nested in anything else goes with its parent.
  */
-function removeBraced(input: string, counts?: StripCounts, guard = 0): string {
+function removeBraced(input: string, render: boolean, counts?: StripCounts, guard = 0): string {
   if (!input.includes("{")) return input;
   const out: string[] = [];
   const stack: Opener[] = [];
@@ -206,10 +283,9 @@ function removeBraced(input: string, counts?: StripCounts, guard = 0): string {
         }
         i += run;
         if (stack.length === 0) {
-          const name = outer.table ? null : inlineLinkName(input.slice(outer.at, i));
-          if (name !== null) {
-            out.push(name);
-            if (counts !== undefined) counts.inlineLinks++;
+          if (render && !outer.table) {
+            const name = inlineLinkName(input.slice(outer.at, i), counts);
+            if (name !== null) out.push(name);
           }
           segStart = i;
         }
@@ -236,7 +312,7 @@ function removeBraced(input: string, counts?: StripCounts, guard = 0): string {
   const rest = input.slice(stack[0]!.at);
   const boundary = /\n[ \t]*\n/.exec(rest);
   if (boundary !== null && guard < 16) {
-    out.push(removeBraced(rest.slice(boundary.index + boundary[0].length), counts, guard + 1));
+    out.push(removeBraced(rest.slice(boundary.index + boundary[0].length), render, counts, guard + 1));
   }
   return out.join("");
 }
@@ -304,14 +380,14 @@ const TABLE_LEFTOVER = /^[ \t]*[|!].*$/gm;
 
 /**
  * Reduce wikitext to plain text. Best effort, deterministic, never throws.
- * `counts`, when given, is incremented with what the strip kept.
+ * `opts` turns link-template rendering off or collects counts (`StripOptions`).
  */
-export function stripWikitext(input: string, counts?: StripCounts): string {
+export function stripWikitext(input: string, opts: StripOptions = {}): string {
   let s = input;
   s = s.replace(COMMENT, "").replace(OPEN_COMMENT, "");
   s = s.replace(CONTAINER_TAGS, " ");
   s = s.replace(SELF_CLOSING, " ");
-  s = removeBraced(s, counts);
+  s = removeBraced(s, opts.inlineLinks !== false, opts.counts);
   s = s.replace(TABLE_LEFTOVER, "");
   s = processLinks(s);
   s = s.replace(EXTERNAL_LINK, (_whole, label?: string) => (label ? label : " "));
@@ -321,7 +397,7 @@ export function stripWikitext(input: string, counts?: StripCounts): string {
   s = s.replace(BOLD_ITALIC, "");
   s = s.replace(ANY_TAG, " ");
   s = decodeEntities(s);
-  s = s.replace(/[{}]/g, "");
+  s = s.replace(/[{}\u0000]/g, "");
   s = s.replace(/\[\[|\]\]/g, "");
 
   // Whitespace: trim every line, drop empties, keep one line per paragraph.

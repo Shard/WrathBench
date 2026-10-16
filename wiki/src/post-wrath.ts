@@ -368,6 +368,31 @@ export function categoryTitleIsPostWrath(ns: number, title: string): boolean {
 }
 
 /**
+ * Does a name end in a qualifier that places it in a later world: `(Cataclysm)`,
+ * `(Gilneas)`, `(Shimmering Expanse)`?
+ *
+ * Read on the names `strip.ts` writes for inline link templates, which no other
+ * era rule sees: the paragraph rules read prose with every template removed.
+ * No new words: the qualifier is the disambiguation a title carries, so it is
+ * matched against the lists the title rules already hold — an expansion
+ * parenthetical, a later zone or feature as a category title names one, or a
+ * coined zone. It has to be the **whole** qualifier, never a word inside one,
+ * because a qualifier that only mentions a place (`(Battle for …)`) is the old
+ * world's as often as not. `(Worgen)` and `(Goblin)` are not on any list: both
+ * are this world's NPCs.
+ */
+export function nameHasPostWrathQualifier(name: string): boolean {
+  const m = /\(([^()]+)\)\s*$/.exec(name);
+  if (m === null) return false;
+  const qualifier = foldTitle(m[1]!);
+  return (
+    TITLE_PARENTHETICAL.test(`(${qualifier})`) ||
+    POST_WRATH_TITLE_SUBJECTS.includes(qualifier) ||
+    POST_WRATH_TITLES.has(qualifier)
+  );
+}
+
+/**
  * Zone names Cataclysm **coined**, as a main-namespace page's whole title.
  *
  * A separate list from `POST_WRATH_TITLE_SUBJECTS` above, and deliberately a

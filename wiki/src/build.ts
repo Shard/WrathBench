@@ -33,6 +33,9 @@ import { DEFAULT_NAMESPACES, decodeUtf8, parsePages, type ParseStats, type WikiP
 import { loadWorldIds } from "./world-ids";
 import { redirectTarget, stripWikitext, type StripCounts } from "./strip";
 
+/** The cuts and the strip as they were before link templates rendered: what decides page membership. */
+const PLAIN = { inlineLinks: false } as const;
+
 /**
  * How much of the signalled revision a stepped-back one has to be worth.
  *
@@ -201,6 +204,18 @@ export const METRICS = {
       "Inline item, NPC, quest, spell and achievement link templates in kept prose, " +
       "written as the name they link to instead of dropped with every other template " +
       "(`INLINE_LINKS` in strip.ts). Absent from a bundle built before the rule.",
+    identity: { role: "none" },
+  },
+  inline_links_screened_qualifier: {
+    help:
+      "Link templates left out, as before they rendered, because the name ends in a " +
+      "qualifier the title rules place in a later world (`nameHasPostWrathQualifier`).",
+    identity: { role: "none" },
+  },
+  inline_links_screened_era: {
+    help:
+      "Link templates left out, as before they rendered, because the era paragraph or " +
+      "line rules read their paragraph or line as the later world once the names are in.",
     identity: { role: "none" },
   },
   pages_distinct_keys: {
@@ -396,8 +411,10 @@ const SUMMARY = [
     render: (n) => `pages kept:  ${n.pages_kept} (${fmtBytes(n.chars_kept)} of plain text)`,
   },
   {
-    uses: ["inline_links_rendered"],
-    render: (n) => `  links:     ${n.inline_links_rendered} inline link templates written as their name`,
+    uses: ["inline_links_rendered", "inline_links_screened_qualifier", "inline_links_screened_era"],
+    render: (n) =>
+      `  links:     ${n.inline_links_rendered} inline link templates written as their name; ` +
+      `screened ${n.inline_links_screened_qualifier} by qualifier, ${n.inline_links_screened_era} by the era rules`,
   },
   { uses: [], render: (_n, ctx) => `era cutoff:  ${ctx.eraCutoff}` },
   {
@@ -739,10 +756,17 @@ async function main(): Promise<void> {
     for (const [heading, n] of Object.entries(cut.sectionsTrimmedBy)) {
       sectionsTrimmedBy[heading] = (sectionsTrimmedBy[heading] ?? 0) + n;
     }
-    const stripped: StripCounts = { inlineLinks: 0 };
-    const text = stripWikitext(cut.text, stripped);
-    let emptied = false;
-    if (text.length === 0) {
+    const stripped: StripCounts = { inlineLinks: 0, screenedByQualifier: 0, screenedByEra: 0 };
+    const text = stripWikitext(cut.text, { counts: stripped });
+    // Which pages are in the bundle is decided on the cuts and the strip as they
+    // were before link templates rendered (`PLAIN`), so a rendered name changes
+    // what a row says and never whether it exists: a page the era cuts emptied
+    // stays dropped even when a list of names would now survive them.
+    const decidingText =
+      stripped.inlineLinks === 0 && stripped.screenedByQualifier === 0 && stripped.screenedByEra === 0
+        ? text
+        : stripWikitext(dropPostWrath(source, PLAIN).text, PLAIN);
+    if (decidingText.length === 0) {
       // Which cut emptied it decides whether the page is dropped or kept.
       //
       // Only the ERA cuts are evidence about the page's world: prose that would
@@ -752,13 +776,15 @@ async function main(): Promise<void> {
       // is still this world's item, and its title, ids, coords and quest infobox
       // are still the right answer to a query. So it stays, as an empty row,
       // beside the page that never had prose at all.
-      const trimmedOnly = stripWikitext(dropOutOfWorldOnly(source));
+      const trimmedOnly = stripWikitext(dropOutOfWorldOnly(source, PLAIN), PLAIN);
       // Dropped, and the caller counts it: the reasons are its ledger.
       if (trimmedOnly.length > 0) return false;
-      const hadProse = stripWikitext(source).length > 0;
-      emptied = true;
+    }
+    // A kept page whose only prose is names is a row with prose, not an empty one.
+    const emptied = text.length === 0;
+    if (emptied) {
       n.empty_pages++;
-      if (hadProse) n.pages_emptied_by_trim++;
+      if (stripWikitext(source, PLAIN).length > 0) n.pages_emptied_by_trim++;
     }
     writer.addPage(page.title, page.ns, text, coords, ids, quest);
     if (!emptied) {
@@ -774,6 +800,8 @@ async function main(): Promise<void> {
     n.pages_kept++;
     n.chars_kept += text.length;
     n.inline_links_rendered += stripped.inlineLinks;
+    n.inline_links_screened_qualifier += stripped.screenedByQualifier;
+    n.inline_links_screened_era += stripped.screenedByEra;
     n.coord_rows += coords.length;
     n.id_rows += ids.length;
     if (quest !== null) n.quest_rows++;
