@@ -1544,6 +1544,15 @@ job needs the token of the lane it was scheduled on there (`claude setup-token`)
 subscription; without it the roster refuses the episode with a `launch-failed`
 row naming that variable, rather than burning a session.
 
+Database clients follow the same rule. `mysql`, `mysqladmin` and `mysqldump`
+take the password as `MYSQL_PWD` and `clickhouse-client` as
+`CLICKHOUSE_PASSWORD`, never as `-p`/`--password`, which any process in the
+pod could read from the client's command line. That covers the db readiness
+probe, the hook Jobs' wait for the database, the compose healthchecks and
+`infra/export-world-ids.sh`. The probe sets `MYSQL_PWD` for its one command
+and not on the MySQL container, whose first-boot init connects with no
+password and would fail if it inherited one.
+
 Where a secret may travel from the runner is fixed in code, not config. A
 provider key goes only to its own provider's host (`KEY_PROVIDERS` in
 `runner/src/providers.ts`; the self-hosted key only to the deployment's

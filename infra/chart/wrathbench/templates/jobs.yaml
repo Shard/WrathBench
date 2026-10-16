@@ -56,9 +56,10 @@ spec:
           command:
             - sh
             - -c
-            - 'for i in $(seq 1 120); do mysqladmin ping -h "$WRATHBENCH_DB_HOST" -u root -p"$WRATHBENCH_DB_PASSWORD" --silent && exit 0; sleep 5; done; echo "db never answered"; exit 1'
+            - 'for i in $(seq 1 120); do mysqladmin ping -h "$WRATHBENCH_DB_HOST" -u root --silent && exit 0; sleep 5; done; echo "db never answered"; exit 1'
           env:
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
+            {{- include "wrathbench.mysqlPwdEnv" . | nindent 12 }}
           resources:
             requests: { cpu: 10m, memory: 64Mi, ephemeral-storage: 256Mi }
             limits: { memory: 256Mi }
@@ -125,9 +126,10 @@ spec:
           command:
             - sh
             - -c
-            - 'for i in $(seq 1 120); do mysqladmin ping -h "$WRATHBENCH_DB_HOST" -u root -p"$WRATHBENCH_DB_PASSWORD" --silent && exit 0; sleep 5; done; echo "db never answered"; exit 1'
+            - 'for i in $(seq 1 120); do mysqladmin ping -h "$WRATHBENCH_DB_HOST" -u root --silent && exit 0; sleep 5; done; echo "db never answered"; exit 1'
           env:
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
+            {{- include "wrathbench.mysqlPwdEnv" . | nindent 12 }}
           resources:
             requests: { cpu: 10m, memory: 64Mi, ephemeral-storage: 256Mi }
             limits: { memory: 256Mi }

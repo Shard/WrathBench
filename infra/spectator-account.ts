@@ -10,14 +10,16 @@
  * the keyboard. The account is deliberately not created by bootstrap.ts —
  * the harness accounts never carry GM, and this one never runs unattended.
  *
- * There is no default password. Pass one:
+ * There is no default password. Export one in your shell and pass it through
+ * by name, so it is never on a command line (`-e NAME` with no value copies it
+ * from the calling environment):
  *
+ *   read -rs WRATHBENCH_SPECTATOR_PASSWORD; export WRATHBENCH_SPECTATOR_PASSWORD
  *   docker compose -f infra/compose.yml run --rm --no-deps \
- *     -e WRATHBENCH_SPECTATOR_PASSWORD=<password> \
+ *     -e WRATHBENCH_SPECTATOR_PASSWORD \
  *     bootstrap bun run infra/spectator-account.ts
  *
- * (or `--password <password>` as an argument). Re-run with a new password to
- * rotate it.
+ * Re-run with a new password to rotate it.
  */
 
 import { SQL } from "bun";
@@ -41,12 +43,11 @@ function env(name: string, fallback?: string): string {
 }
 
 function readPassword(): string {
-  const flagIndex = process.argv.indexOf("--password");
-  const fromFlag = flagIndex >= 0 ? process.argv[flagIndex + 1] : undefined;
-  const raw = fromFlag ?? process.env["WRATHBENCH_SPECTATOR_PASSWORD"];
+  // Environment only: an argument would put the password in the process list.
+  const raw = process.env["WRATHBENCH_SPECTATOR_PASSWORD"];
   if (!raw || raw.trim() === "") {
     console.error(
-      "No password given. Set WRATHBENCH_SPECTATOR_PASSWORD or pass --password <password>.\n" +
+      "No password given. Set WRATHBENCH_SPECTATOR_PASSWORD.\n" +
         "There is deliberately no default; pick your own.",
     );
     process.exit(1);
