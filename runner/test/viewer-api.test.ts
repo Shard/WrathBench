@@ -918,11 +918,17 @@ describe("fleet state", () => {
       JSON.stringify({ phase: "verifying", since: 1, build: "harness-0.4-52", prevBuild: "harness-0.4-3", detail: "gate smoke x (1 of 2)", pid: 123, updatedAt: 2 }),
     );
     const s = readFleet(runs).server;
-    expect(s).toEqual({ phase: "verifying", since: 1, build: "harness-0.4-52", prevBuild: "harness-0.4-3", detail: "gate smoke x (1 of 2)", updatedAt: 2 });
+    // prevBuild was the retired compose window's rollback target: nothing writes it, and a file that still has it does not pass it on.
+    expect(s).toEqual({ phase: "verifying", since: 1, build: "harness-0.4-52", detail: "gate smoke x (1 of 2)", updatedAt: 2 });
     // The script's pid is a host fact and stays behind.
     expect(JSON.stringify(s)).not.toContain("123");
     writeFileSync(join(runs, "server-state.json"), JSON.stringify({ phase: "exploding", detail: "?" }));
     expect(readFleet(runs).server.phase).toBe("running");
+    // The retired compose window's phases are unknown now: nothing writes them.
+    for (const phase of ["swapping", "rolled-back"]) {
+      writeFileSync(join(runs, "server-state.json"), JSON.stringify({ phase, since: 1, build: "b", detail: "d", updatedAt: 2 }));
+      expect(readFleet(runs).server).toMatchObject({ phase: "running", detail: "" });
+    }
     writeFileSync(join(runs, "server-state.json"), "{");
     expect(readFleet(runs).server.phase).toBe("running");
     // Served even when the fleet has never run here.

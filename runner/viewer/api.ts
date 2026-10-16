@@ -446,7 +446,16 @@ export function heldAccounts(runsDir: string, now = Date.now()): Map<string, { r
   return new Map([...out].map(([k, v]) => [k, { runId: v.runId, model: v.model }]));
 }
 
-const SERVER_PHASES: ReadonlySet<string> = new Set(["running", "draining", "swapping", "verifying", "resuming", "rolled-back", "failed"]);
+/** Keyed by the union, so the compiler holds this set to `FleetServerView["phase"]` both ways. */
+const SERVER_PHASE_KEYS: Record<FleetServerView["phase"], true> = {
+  running: true,
+  draining: true,
+  waiting: true,
+  verifying: true,
+  resuming: true,
+  failed: true,
+};
+export const SERVER_PHASES: ReadonlySet<string> = new Set(Object.keys(SERVER_PHASE_KEYS));
 
 /**
  * Read the deploy script's phase file. Absent (or unreadable, or nonsense) is
@@ -463,7 +472,6 @@ export function readServerState(runsDir: string, now = Date.now()): FleetServerV
       phase: raw.phase,
       since: typeof raw.since === "number" ? raw.since : now,
       build: typeof raw.build === "string" ? raw.build : "",
-      ...(typeof raw.prevBuild === "string" && raw.prevBuild !== "" ? { prevBuild: raw.prevBuild } : {}),
       detail: typeof raw.detail === "string" ? raw.detail : "",
       updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
     };

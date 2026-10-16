@@ -876,7 +876,6 @@ function projectServer(s: FleetServerView): FleetServerView {
     phase: s.phase,
     since: s.since,
     build: s.build,
-    ...(s.prevBuild !== undefined ? { prevBuild: s.prevBuild } : {}),
     // The deploy script's own sentence; the fleet page prints it verbatim.
     detail: s.detail,
     updatedAt: s.updatedAt,

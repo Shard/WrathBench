@@ -58,11 +58,11 @@ export function supervisorAlive(fleet: Pick<FleetResponse, "heartbeatAt" | "now"
  * True while a deploy holds the server (infra/k8s-deploy.sh): the
  * fleet is stopped on purpose, its jobs' processes are gone on purpose, and
  * the page must say so rather than "NOT RUNNING" and a column of "exited".
- * A `rolled-back` or `failed` verdict is not a window: by then the script has
- * brought the fleet back up, and the banner alone carries the news.
+ * A `failed` verdict is not a window: by then the script has brought the
+ * fleet back up, and the banner alone carries the news.
  */
 export function deployWindowOpen(server: Pick<FleetServerView, "phase">): boolean {
-  return server.phase === "draining" || server.phase === "swapping" || server.phase === "verifying" || server.phase === "resuming";
+  return server.phase === "draining" || server.phase === "waiting" || server.phase === "verifying" || server.phase === "resuming";
 }
 
 const hhmm = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -81,14 +81,12 @@ export function serverBanner(server: FleetServerView): { text: string; tone: "in
       return server.detail === "" ? null : { text: `server running${detail}`, tone: "dim" };
     case "draining":
       return { text: `Deploy window since ${hhmm(server.since)} — stopping the fleet for ${b}, runs are pausing${detail}`, tone: "info" };
-    case "swapping":
+    case "waiting":
       return { text: `Deploy window since ${hhmm(server.since)} — swapping the worldserver to ${b}${detail}`, tone: "info" };
     case "verifying":
       return { text: `Deploy window since ${hhmm(server.since)} — swapped to ${b}, verifying${detail}`, tone: "info" };
     case "resuming":
       return { text: `Deploy window since ${hhmm(server.since)} — ${b} verified, starting the fleet; paused runs resume${detail}`, tone: "info" };
-    case "rolled-back":
-      return { text: `Deploy of ${b} FAILED at ${hhmm(server.since)} and was rolled back${server.prevBuild !== undefined ? ` to ${server.prevBuild}` : ""}${detail}`, tone: "bad" };
     case "failed":
       return { text: `Deploy of ${b} FAILED at ${hhmm(server.since)}${detail}`, tone: "bad" };
   }
