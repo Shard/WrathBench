@@ -1,12 +1,16 @@
-# WrathBench stack.
+# WrathBench on one machine: the quickstart (infra/README.md, "Try it on one
+# machine"). The fleet runs on the Helm chart at infra/chart/wrathbench, which
+# is also the reference for any deployment beyond one machine. There is no
+# compose deploy path: this file is brought up, used and brought down.
 #
-# Bring up with:  docker compose -f infra/compose.yml up -d
+# From the repository root, with WRATHBENCH_MODULE_SECRET in .env:
+#   docker compose --env-file .env -f infra/compose.yml up -d --build
 # See infra/README.md for the fresh-machine checklist (the data/ directories
 # must exist and be owned by the invoking user before the first `up`).
 #
-# Posture (docs/DATA-AND-LEGAL.md): no port is published to the host. The realm
-# is reachable only from inside the `wrathbench` network. If you must expose
-# something for debugging, bind it to 127.0.0.1 explicitly and never commit it.
+# Posture (docs/DATA-AND-LEGAL.md): every port published here is bound to
+# 127.0.0.1, for inspection from the same machine, and the module's control
+# port is not published at all. Nothing may ever bind beyond loopback.
 #
 # Config: AzerothCore reads `AC_*` environment variables in preference to the
 # values in worldserver.conf / authserver.conf (Config.cpp GetValueDefault
@@ -37,20 +41,19 @@ x-wb-db: &wb-db
 # ChatGPT token in place and a second copy invalidates the first ("refresh
 # token was already used").
 #
-# The host side is the operator's own `codex login` home, and it is the same
-# directory the host `--local` path uses. `docker compose -f infra/compose.yml`
-# takes infra/ as the project directory, so it reads infra/.env (absent) and
-# NOT the repository .env — the invoking shell has to export CODEX_HOME. There
-# is no default: a path is one machine's, and interpolation is file-wide, so a
-# missing value fails EVERY compose command here rather than silently mounting
-# someone else's home.
+# The host side is CODEX_HOME, the operator's own `codex login` home and the
+# same directory run-episode.sh's host `--local` path uses; compose reads it
+# from the shell or from `--env-file .env`. Unset or empty, it is data/codex
+# in this checkout: gitignored, empty until someone logs in there, and nobody
+# else's home. So a stack with no codex lane comes up, and only a codex
+# episode fails, at its first call.
 #
 # The container side is a fixed path, and the services set CODEX_HOME to it:
 # the repository .env carries the HOST path (so `--local` works) and Bun's
 # autoload does not overwrite a variable the environment already set, so the
 # compose value wins inside the container. uid 1000 on both sides, so the
 # refresh writes through.
-x-codex-lane: &codex-lane "${CODEX_HOME:?set CODEX_HOME to the codex lane directory}:/home/bun/.codex"
+x-codex-lane: &codex-lane "${CODEX_HOME:-../data/codex}:/home/bun/.codex"
 
 x-ac-build: &ac-build
   context: ..
@@ -59,8 +62,9 @@ x-ac-build: &ac-build
     USER_ID: ${WRATHBENCH_UID:-1000}
     GROUP_ID: ${WRATHBENCH_GID:-1000}
     DOCKER_USER: acore
-    # /health `build` stamp. Set by infra/build-worldserver.sh; a bare
-    # `docker compose build` without it produces an image that says "unknown".
+    # /health `build` stamp, from the shell because the build context carries
+    # no .git. Unset, the image says "unknown"; to stamp it, export
+    # WRATHBENCH_BUILD="$(git describe --tags --always --dirty)" before a build.
     WRATHBENCH_BUILD: ${WRATHBENCH_BUILD:-}
 
 services:
@@ -232,13 +236,14 @@ services:
       # ERROR/WARN history survives restarts and container recreation on the
       # data/logs volume. Default mode "w" truncated every boot.
       AC_APPENDER_SERVER: "2,5,16,Server.log,w"
-      # The port secret (module/PROTOCOL.md "Authentication").
-      # Every route needs it. It lives in the repo-root .env as
-      # WRATHBENCH_MODULE_SECRET; compose does not read that file (its project
-      # directory is infra/), so infra/deploy-worldserver.sh exports it before
-      # recreating this container, and a bare `compose up` without it in the
-      # shell leaves the module refusing to listen (fail closed, logged). The
-      # runner and fleet services read the same .env through Bun's autoload.
+      # The port secret (module/PROTOCOL.md "Authentication"). Every route
+      # needs it, and unset or under 32 characters the module refuses to
+      # listen (fail closed, logged). It lives in the repo-root .env as
+      # WRATHBENCH_MODULE_SECRET, which the runner and fleet services read
+      # through Bun's autoload. Compose does not read that file on its own
+      # (its project directory is infra/), so every `up` passes it with
+      # `--env-file .env` from the repo root; an `up` without it recreates
+      # this container with an empty secret.
       AC_WRATH_BENCH_SECRET: "${WRATHBENCH_MODULE_SECRET:-}"
       AC_WRATH_BENCH_ACCOUNT: "${WRATHBENCH_ACCOUNT_USER:-RUNNER}"
       # Account allowlist: every surface taking an "account" param serves only
@@ -267,7 +272,6 @@ services:
       - ../data/client:/azerothcore/env/dist/data:ro
     # Loopback only, for operator inspection.
     # Per docs/DATA-AND-LEGAL.md this must never bind beyond 127.0.0.1.
-    # Takes effect when the container is next recreated (deploy window).
     ports:
       - "127.0.0.1:8085:8085"
     networks: [wrathbench]
@@ -275,7 +279,7 @@ services:
     tty: true
     restart: unless-stopped
     # No healthcheck: the runtime image has no curl/nc. The module is probed
-    # from the runner side instead (infra/module-health.sh).
+    # from the runner side instead, by the smokes under infra/smoke/.
     depends_on:
       db:
         condition: service_healthy
@@ -336,7 +340,7 @@ services:
   # `profiles` keeps a bare `docker compose up -d` from starting a SECOND
   # supervisor against the same config (two lanes on one account is a night
   # of account_in_use). Naming the service activates the profile, so
-  #   docker compose -f infra/compose.yml up -d --no-deps fleet
+  #   docker compose --env-file .env -f infra/compose.yml up -d --no-deps fleet
   # still works — and --no-deps is not optional: without it compose may decide a
   # dependency is out of date and recreate the worldserver under live episodes.
   fleet:
