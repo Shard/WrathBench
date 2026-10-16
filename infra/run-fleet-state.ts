@@ -59,6 +59,8 @@ export const STATE_PATH = join(RUNS_DIR, "fleet-state.json");
 export const SERVER_STATE_PATH = join(RUNS_DIR, "server-state.json");
 export const SERVER_STATE_LOCK = join(RUNS_DIR, "server-state.lock");
 export const PAUSE_PATH = join(RUNS_DIR, "fleet-pause.json");
+/** Terminated runs' facts, kept across restarts (`runFactCache`); safe to delete, which costs one cold read. */
+export const RUN_FACTS_CACHE = join(RUNS_DIR, "run-facts.cache.json");
 /**
  * The projection the rest of a tick must read once its sweep has ended runs.
  * `sidecar` is the operator's clear list; omitted it is read from

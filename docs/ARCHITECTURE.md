@@ -317,7 +317,12 @@ trajectory's `response` records count the attempt's turns. A pod also leaves
 launcher when the container starts, and a resume in a pod relaunches that
 digest whatever the arm says now; a resume while run pods are off is a child
 process on the release, so only a probe with `image.json` and run pods on is
-exempt from the harness-series gate.
+exempt from the harness-series gate. The supervisor keeps the facts it reads
+for terminated runs in `data/runs/run-facts.cache.json`, keyed by the size,
+mtime and inode of every file above (not ctime, which the fleet pod's fsGroup
+chown moves at every start) and by the reader's own source, so a boot reads in full only
+the runs that have not ended; any doubt about an entry is a cold read, and
+deleting the file costs one.
 
 **Signals and exit codes.** SIGTERM is the supervisor's: the run writes its
 `operator-pause` row synchronously, then unwinds, and exits within 60 seconds;

@@ -53,6 +53,7 @@
  *   attempt, reported apart, never counted toward a target.
  */
 
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -66,7 +67,8 @@ import { billingOf, type Billing } from "./model-cost";
 import { hostOfBase, platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
-import { HEARTBEAT_DEAD_MS, heartbeatAt, heartbeatOwner } from "./trajectory";
+import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
+import { RunFactCache } from "./run-fact-cache";
 
 // ----------------------------------------------------------------- policy
 
@@ -1278,6 +1280,86 @@ export function liveOwnerOf(runsDir: string, runId: string, now = Date.now()): s
   return null;
 }
 
+/** Bump when what `readRunFact` answers, or what `runFactKey` keys on, changes in a way their source text would not show. */
+const RUN_FACT_CACHE_SCHEMA = 1;
+let runFactCacheVersionMemo: string | undefined;
+
+/**
+ * The identity of the reader a kept fact came from: the schema number, and the
+ * source of `readRunFact` and of everything it calls that decides a
+ * terminated run's fact. A fact read by other code is not this code's
+ * answer, so a release that changes any of them starts the cache over rather
+ * than serving what the old reader said (a level counted another way would
+ * be a promotion decided on it).
+ */
+export function runFactCacheVersion(): string {
+  runFactCacheVersionMemo ??= createHash("sha256")
+    .update(
+      [
+        String(RUN_FACT_CACHE_SCHEMA),
+        ...[readRunFact, runFactKey, tallyRecords, RecordCountScanner, harnessSeries, isEpisodeId, heartbeatAt, openRunDb, str, num].map(String),
+        JSON.stringify([EPISODE_IDS, MODEL_RESPONSE_RECORD, HEARTBEAT_FILE]),
+      ].join("\n"),
+    )
+    .digest("hex")
+    .slice(0, 16);
+  return runFactCacheVersionMemo;
+}
+
+/** The kept facts of terminated runs at `path`, for a caller that reads every run on a timer. */
+export function runFactCache(path: string): RunFactCache {
+  return new RunFactCache(path, runFactCacheVersion());
+}
+
+/** The files `readRunFact` reads, and the heartbeat it stats: a kept fact is good while none of them has moved. */
+const RUN_FACT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", HEARTBEAT_FILE] as const;
+/** A write in flight on the run database: no key, so nothing is kept or served for the run. */
+const RUN_DB_SIDE_FILES = ["run.sqlite-journal", "run.sqlite-wal"] as const;
+/** How long a run's files must have been still before its fact is kept. */
+export const RUN_FACT_SETTLE_MS = 60_000;
+
+/**
+ * A run directory's cache key, or null when it has none. Taken BEFORE the
+ * read, so a write that lands during the read leaves the key behind the files
+ * and the next read misses. Size, mtime and inode of each file `readRunFact`
+ * reads (absent is its own value): a write moves the mtime, and a copy put in
+ * its place is a new inode. Not ctime: the kubelet's fsGroup chown moves every
+ * file's ctime each time the fleet pod starts (every file under the runs
+ * volume read the pod's start time on 2026-10-16), which would miss every
+ * entry on exactly the boot the cache is for. The cost is a rewrite in place
+ * at the same size with its mtime set back, which is served stale until the
+ * file is deleted. `newest` is the latest mtime, for the settle rule.
+ */
+export function runFactKey(dir: string): { key: string; newest: number } | null {
+  const parts: (number | string)[] = [];
+  let newest = 0;
+  try {
+    for (const name of RUN_DB_SIDE_FILES) if (statSync(join(dir, name), { throwIfNoEntry: false }) !== undefined) return null;
+    for (const name of RUN_FACT_FILES) {
+      const st = statSync(join(dir, name), { throwIfNoEntry: false });
+      if (st === undefined) {
+        parts.push(name, -1);
+        continue;
+      }
+      parts.push(name, st.size, st.mtimeMs, st.ino);
+      newest = Math.max(newest, st.mtimeMs);
+    }
+  } catch {
+    return null; // a stat that fails for another reason is doubt
+  }
+  return { key: JSON.stringify(parts), newest };
+}
+
+/**
+ * Whether a fact may be kept: the run is terminated, so nothing in it reads
+ * the clock, and its files have been still for `RUN_FACT_SETTLE_MS`, so a
+ * write in the same timestamp tick as the key cannot hide behind it. Paused
+ * and open runs are always read fresh.
+ */
+export function cacheableFact(f: RunFact, newest: number, now: number): boolean {
+  return f.terminationReason !== null && now - newest >= RUN_FACT_SETTLE_MS;
+}
+
 /**
  * Every stamped run under `runsDir`, oldest first.
  *
@@ -1294,21 +1376,43 @@ export function liveOwnerOf(runsDir: string, runId: string, now = Date.now()): s
  * the fleet supervisor, twice a tick — so each trajectory is read whole once
  * and after that only for what was appended since the last call, instead of
  * the whole tree from byte zero every time. Same facts either way.
+ *
+ * `facts` keeps terminated runs' facts on disk across processes
+ * (`runFactCache`), so a supervisor's boot reads in full only the runs that
+ * have not ended. A kept fact is served only under the key its files had when
+ * it was read (`runFactKey`) and only once they had been still for a minute
+ * (`cacheableFact`); everything else is read exactly as without it. Same facts
+ * either way.
  */
 export function readRunFacts(
   runsDir: string,
   now = Date.now(),
-  opts: { includeArchived?: boolean; counts?: CountCache } = {},
+  opts: { includeArchived?: boolean; counts?: CountCache; facts?: RunFactCache } = {},
 ): RunFact[] {
   if (!existsSync(runsDir)) return [];
   const out: RunFact[] = [];
   const seen = new Set<string>();
+  const kept = new Set<string>();
+  const facts = opts.facts;
   const scan = (dir: string, archived: boolean): void => {
     if (!existsSync(dir)) return;
     for (const d of readdirSync(dir, { withFileTypes: true })) {
       if (!d.isDirectory() || !RUN_ID.test(d.name) || d.name === ARCHIVE_DIR) continue;
       seen.add(join(dir, d.name, "trajectory.jsonl"));
-      const f = readRunFact(dir, d.name, now, opts.counts === undefined ? {} : { counts: opts.counts });
+      let f: RunFact | null = null;
+      if (facts === undefined) {
+        f = readRunFact(dir, d.name, now, opts.counts === undefined ? {} : { counts: opts.counts });
+      } else {
+        const rel = archived ? `${ARCHIVE_DIR}/${d.name}` : d.name;
+        kept.add(rel);
+        const key = runFactKey(join(dir, d.name));
+        f = key === null ? null : (facts.get(rel, key.key) ?? null);
+        if (f === null) {
+          f = readRunFact(dir, d.name, now, opts.counts === undefined ? {} : { counts: opts.counts });
+          if (key !== null && f !== null && cacheableFact(f, key.newest, now)) facts.set(rel, key.key, f);
+          else facts.delete(rel);
+        }
+      }
       if (f !== null) out.push(archived ? { ...f, archived: true } : f);
     }
   };
@@ -1318,6 +1422,11 @@ export function readRunFacts(
   // moved into `archive/` leaves its old path behind, and nothing else would
   // ever drop that scanner.
   if (opts.counts !== undefined) for (const path of opts.counts.keys()) if (!seen.has(path)) opts.counts.delete(path);
+  if (facts !== undefined) {
+    // An archive-less read sees only half the tree; it must not drop the other half's entries.
+    if (opts.includeArchived === true) facts.retain(kept);
+    facts.flush();
+  }
   out.sort((a, b) => a.startedAt - b.startedAt || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   return out;
 }
