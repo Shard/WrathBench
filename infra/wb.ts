@@ -20,7 +20,9 @@
  *    has, never this one, because the deployed image can be older than the
  *    checkout (mid-release, on a branch, after a merge before the pin). When
  *    such a command fails and its file is not in the pod, wb names the image
- *    the pod runs.
+ *    the pod runs. A row whose meaning rests on a flag the file gained later
+ *    names that flag, and wb checks the pod's copy carries it before running
+ *    anything: an older file would ignore the flag and do something else.
  *  - A `host` command runs on this machine, from the repository root. The
  *    release, the fleet's update window and the server probe drive kubectl
  *    themselves; the site and data commands write this checkout or the public
@@ -60,6 +62,14 @@ export interface Entry {
   readonly cluster: Form;
   /** The compose quickstart's form; null when there is none, and --local is refused. */
   readonly local: Form | null;
+  /**
+   * A flag the runner's copy of the file must carry before this runs there on
+   * the cluster. bootstrap.ts from before `--accounts-only` ignores its
+   * arguments and runs the whole bootstrap, which in the runner pod would
+   * re-advertise the realm; so the row is refused until the image has it.
+   * Under --local the runner's file is this checkout's (compose bind-mounts it).
+   */
+  readonly requires?: string;
 }
 
 /** The groups, in help order, with what each is for. A group with no command is not here. */
@@ -70,6 +80,7 @@ export const GROUPS: Readonly<Record<string, string>> = {
   campaign: "probe campaign definitions",
   release: "build the images, release them, and the deploy window",
   server: "the worldserver's module, and the viewer",
+  accounts: "game accounts: the harness's, and the operator's GM spectator",
   smoke: "the smoke scripts under infra/smoke",
   site: "the public site",
   data: "prices and logos this checkout carries",
@@ -111,6 +122,8 @@ function smokeEntries(): Entry[] {
 }
 
 const CONFIG_STORE = "runner/src/config-store.ts";
+const BOOTSTRAP = "infra/bootstrap/bootstrap.ts";
+const SPECTATOR = "infra/spectator-account.ts";
 const RUN_FLEET = "infra/run-fleet.ts";
 const FLEET_UPDATE = "infra/fleet-update.sh";
 
@@ -180,6 +193,25 @@ export const ENTRIES: readonly Entry[] = [
 
   { group: "server", command: "health", summary: "the module's health census, read inside the worldserver", ...clusterOnly("infra/module-health.sh") },
   { group: "server", command: "restart-viewer", summary: "rollout restart the viewer, then check it answers", ...clusterOnly("infra/viewer-restart.sh") },
+
+  // Both write game accounts, so neither has a default: `ensure` creates only
+  // the accounts it is given, and `spectator` only with a password on stdin.
+  {
+    group: "accounts",
+    command: "ensure",
+    takes: "<NAME>…",
+    summary: "create each named account that is missing (password: its name); nothing else is written",
+    requires: "--accounts-only",
+    ...inRunner("bun", BOOTSTRAP, "--accounts-only"),
+  },
+  {
+    group: "accounts",
+    command: "spectator",
+    takes: "(password on stdin)",
+    summary: "ensure the operator's GM account SPECTATOR; read -rs P && printf '%s\\n' \"$P\" | bun wb accounts spectator",
+    requires: "--password-stdin",
+    ...inRunner("bun", SPECTATOR, "--password-stdin"),
+  },
 
   ...smokeEntries(),
 
@@ -323,6 +355,7 @@ export function groupHelp(group: string, opts: Options): string {
       lines.push(`      runs: ${cluster}`);
       lines.push(`      --local: ${local ?? "(none: it drives the cluster)"}`);
     }
+    if (e.requires !== undefined) lines.push(`      first: the runner pod's ${targetPath(e.cluster)} must have ${e.requires}, or nothing runs`);
   }
   return lines.join("\n");
 }
@@ -350,21 +383,51 @@ function wrap(text: string, width: number): string[] {
 function explainMissing(form: Form, opts: Options): void {
   const path = targetPath(form);
   if (path === undefined) return;
-  const probe = Bun.spawnSync(
-    ["kubectl", "-n", opts.namespace, "exec", runnerPod(opts), "--", "sh", "-c", 'if [ -e "$1" ]; then echo present; else echo absent; fi', "sh", path],
-    { cwd: REPO_ROOT, stdout: "pipe", stderr: "ignore" },
+  if (podProbe(opts, 'if [ -e "$1" ]; then echo present; else echo absent; fi', path) !== "absent") return;
+  console.error(
+    `wb: ${path} is not in the runner pod, which runs ${runnerImage(opts)}. ` +
+      "This checkout is ahead of what the cluster runs; the command reaches the pod with the release that ships it.",
   );
-  if (probe.stdout.toString().trim() !== "absent") return;
+}
+
+/** One `sh -c` in the runner pod, its stdout trimmed; empty when kubectl fails. */
+function podProbe(opts: Options, script: string, ...args: string[]): string {
+  return Bun.spawnSync(["kubectl", "-n", opts.namespace, "exec", runnerPod(opts), "--", "sh", "-c", script, "sh", ...args], {
+    cwd: REPO_ROOT,
+    stdout: "pipe",
+    stderr: "ignore",
+  })
+    .stdout.toString()
+    .trim();
+}
+
+/** The image the runner Deployment runs, for a message. */
+function runnerImage(opts: Options): string {
   const image = Bun.spawnSync(
     ["kubectl", "-n", opts.namespace, "get", runnerPod(opts), "-o", "jsonpath={.spec.template.spec.containers[0].image}"],
     { cwd: REPO_ROOT, stdout: "pipe", stderr: "ignore" },
   )
     .stdout.toString()
     .trim();
-  console.error(
-    `wb: ${path} is not in the runner pod, which runs ${image === "" ? "an image wb could not read" : image}. ` +
-      "This checkout is ahead of what the cluster runs; the command reaches the pod with the release that ships it.",
-  );
+  return image === "" ? "an image wb could not read" : image;
+}
+
+/**
+ * Before a row with `requires` runs in the runner pod: does the pod's copy of
+ * its file carry the flag? An older file would ignore it and do something
+ * else, so anything but a clear yes refuses, and nothing runs.
+ */
+function refuseUnlessPodCarries(form: Form, flag: string, opts: Options): string | undefined {
+  const path = targetPath(form)!;
+  const found = podProbe(opts, 'if grep -qF -e "$1" "$2"; then echo present; else echo absent; fi', flag, path);
+  if (found === "present") return undefined;
+  if (found === "absent") {
+    return (
+      `the runner pod's ${path} predates ${flag}; the pod runs ${runnerImage(opts)}. ` +
+      "That file would ignore the flag and do something else, so nothing was run; the command works once a release ships the flag."
+    );
+  }
+  return `could not read the runner pod's ${path} to check it has ${flag}, so nothing was run`;
 }
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -383,6 +446,14 @@ async function main(argv: readonly string[]): Promise<number> {
     console.error(`wb: ${p.refused}`);
     return 2;
   }
+  const form = parsed.opts.target === "local" ? parsed.entry.local : parsed.entry.cluster;
+  if (parsed.entry.requires !== undefined && form?.place === "runner" && parsed.opts.target === "cluster") {
+    const refusal = refuseUnlessPodCarries(form, parsed.entry.requires, parsed.opts);
+    if (refusal !== undefined) {
+      console.error(`wb: ${refusal}`);
+      return 2;
+    }
+  }
   // A relative argv[0] is a repository path; execvp would resolve it against
   // the child's cwd, so do the same here rather than lean on a PATH search.
   const argv0 = p.argv[0]!;
@@ -398,7 +469,6 @@ async function main(argv: readonly string[]): Promise<number> {
   process.on("SIGINT", () => {});
   for (const sig of ["SIGTERM", "SIGHUP"] as const) process.on(sig, () => child.kill(sig));
   const code = await child.exited;
-  const form = parsed.opts.target === "local" ? parsed.entry.local : parsed.entry.cluster;
   // Not after a signal: an interrupted command is not a missing one.
   if (code !== 0 && code < 128 && form?.place === "runner" && parsed.opts.target === "cluster") explainMissing(form, parsed.opts);
   return code;
