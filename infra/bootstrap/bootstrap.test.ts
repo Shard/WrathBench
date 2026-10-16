@@ -82,7 +82,7 @@ describe("--accounts-only", () => {
     expect(db.accounts.get("PROBE")).toEqual({ id: 7, salt: "AB".repeat(32), verifier: "CD".repeat(32) });
   });
 
-  test("never the configured runner account: the Job owns it, and the mode reads none of its variables", async () => {
+  test("creates only the accounts it is named, never the configured runner account the Job owns", async () => {
     const db = fakeDb();
     await run(["--accounts-only", "SMOKE6", "PROBE"], db);
     expect([...db.accounts.keys()].sort()).toEqual(["PROBE", "SMOKE6"]);

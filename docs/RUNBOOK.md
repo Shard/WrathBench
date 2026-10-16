@@ -1157,8 +1157,10 @@ It is `infra/bootstrap/bootstrap.ts --accounts-only` in the runner pod: the
 password is the account's name, an account that exists is left alone, and no
 realm row is written. wb refuses it while the deployed image's `bootstrap.ts`
 predates the flag, because that file would run the whole bootstrap. On the
-quickstart without Bun, compose's `bootstrap` service does the same for one
-account: `docker compose -f infra/compose.yml run --rm --no-deps -e
+quickstart without Bun, compose's `bootstrap` service makes one account by
+running the whole bootstrap with it as the configured account: it re-upserts
+the realm row from compose's own realm settings and resets that account's
+password if it differs: `docker compose -f infra/compose.yml run --rm --no-deps -e
 WRATHBENCH_ACCOUNT_USER=SMOKE2 -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap`.
 
 Server identity is the worldserver's boot, read off the shared logs volume

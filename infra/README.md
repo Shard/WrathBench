@@ -127,7 +127,10 @@ as its password, and writes nothing else: no realm row, no account that
 already exists. A plain `bootstrap.ts` in the runner pod would re-advertise the
 realm at the file's defaults, because the pod carries none of the Job's realm
 settings; wb refuses the command while the deployed image predates the flag.
-The quickstart without Bun on the host can use the `bootstrap` service instead:
+The quickstart without Bun on the host can use the `bootstrap` service instead,
+which runs the whole bootstrap with the named account as the configured one
+(so it also re-upserts the realm row from compose's settings, and resets that
+account's password if it differs):
 
     docker compose -f infra/compose.yml run --rm --no-deps \
       -e WRATHBENCH_ACCOUNT_USER=PROBE -e WRATHBENCH_ACCOUNT_PASSWORD=PROBE \
