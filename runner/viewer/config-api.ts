@@ -128,7 +128,7 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
   /*
    * A GET never creates the store: on a deployment that has not been seeded
    * the answer is "not seeded", not a new empty database beside the runs. A
-   * write does not create it either — seeding is `config-store.ts seed`, an
+   * write does not create it either — seeding is `bun wb config seed`, an
    * operator action with the example behind it, and an empty store would be a
    * fleet config that says nothing.
    */

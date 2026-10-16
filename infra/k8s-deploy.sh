@@ -120,7 +120,7 @@ strip_ansi() { sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g'; }
 # unreadable store fails the window here, loudly, rather than reading as "no
 # smokes configured" further down.
 PREFLIGHT_JSON="$("${KUBECTL[@]}" exec -i "${RUNNER_DEPLOY}" -- env NO_COLOR=1 FORCE_COLOR=0 bun runner/src/config-store.ts get preflight 2>/dev/null | strip_ansi || true)"
-[[ -n "${PREFLIGHT_JSON}" ]] || die "could not read \`preflight\` from the config store through ${RUNNER_DEPLOY} — is the runner pod up, and the store seeded? (bun runner/src/config-store.ts seed infra/fleet.example.json, then edit it on /config)"
+[[ -n "${PREFLIGHT_JSON}" ]] || die "could not read \`preflight\` from the config store through ${RUNNER_DEPLOY} — is the runner pod up, and the store seeded? (bun wb config seed, then edit it on /config)"
 PREFLIGHT_ACCOUNT=""
 PREFLIGHT_TIMEOUT_S=""
 DEPLOY_TIMEOUT_S=""

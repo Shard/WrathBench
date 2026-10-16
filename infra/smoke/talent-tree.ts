@@ -11,7 +11,7 @@
  * deployed: it is the gate for that build.
  *
  * Fixture: a persistent Human Paladin (default
- * `Smoketalent` on MODULE_ACCOUNT, never deleted) placed by
+ * `Tl` + the account's letters, e.g. `Tlprobe` on PROBE, never deleted) placed by
  * `infra/fixtures/apply.ts --scenario talents-stormwind` — level 10, 5g,
  * in front of Katherine the Pure (entry 5492) in Stormwind's cathedral. Not
  * Brother Sammuel: the abbey trainer's gossip menu (4663) is "Please teach
@@ -37,14 +37,14 @@
  */
 
 import { connect } from "../../sdk/src/index";
-import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-talent-tree-${crypto.randomUUID()}`;
-const CHARACTER = process.env.SMOKE_CHARACTER ?? "Smoketalent";
+const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("Tl", ACCOUNT);
 const SCENARIO = "talents-stormwind";
 const KATHERINE = 5492;
 const PALADIN_TABS = ["Holy", "Protection", "Retribution"];

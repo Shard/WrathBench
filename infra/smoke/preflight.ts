@@ -37,6 +37,7 @@
  */
 
 import { authHeaders } from "./lib/auth";
+import { accountFixtureName } from "./lib/fixture";
 import { moduleBase, moduleWsBase } from "./lib/module";
 
 const BASE = moduleBase();
@@ -66,18 +67,9 @@ function log(msg: string): void {
   console.log(`[preflight +${elapsed()}] ${msg}`);
 }
 
-/** `Pf` + the account's letters, digits as letters (0 -> a), capped at the game's 12. */
-function fixtureName(account: string): string {
-  const tail = account
-    .toLowerCase()
-    .replace(/[0-9]/g, (d) => "abcdefghij"[Number(d)]!)
-    .replace(/[^a-z]/g, "");
-  return `Pf${tail}`.slice(0, 12);
-}
-
 const CHARACTER = (() => {
   const i = process.argv.indexOf("--character");
-  return i >= 0 ? (process.argv[i + 1] ?? "") : fixtureName(ACCOUNT);
+  return i >= 0 ? (process.argv[i + 1] ?? "") : accountFixtureName("Pf", ACCOUNT);
 })();
 
 let session = false;

@@ -257,3 +257,13 @@ describe("drafts", () => {
     );
   });
 });
+
+describe("the unseeded banner", () => {
+  test("names the CLI seed command, not the script it wraps", async () => {
+    // The page is not rendered here; the text is the whole claim, and it
+    // drifted once when `bun wb config seed` replaced the script path.
+    const page = await Bun.file(new URL("../src/pages/Config.tsx", import.meta.url)).text();
+    expect(page).toContain("<code>bun wb config seed</code>");
+    expect(page).not.toContain("config-store.ts seed");
+  });
+});

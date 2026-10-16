@@ -8,7 +8,7 @@
  * login). Run it only after the image is deployed: it is the gate for the N2
  * build.
  *
- * Fixture: a persistent character (default `Smokeinn` on MODULE_ACCOUNT,
+ * Fixture: a persistent character (default `In` + the account's letters, e.g. `Inprobe` on PROBE,
  * never deleted) is placed by `infra/fixtures/apply.ts --scenario
  * inn-ironforge` — level 10 in front of Innkeeper Firebrew in Ironforge's
  * Commons, hearthstone bound to Coldridge Valley (the dwarf start), so the
@@ -28,14 +28,14 @@
  */
 
 import { connect } from "../../sdk/src/index";
-import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
+import { accountFixtureName, applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
 import { authHeaders, MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
 
 const BASE = moduleBase();
 const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 const TOKEN = `smoke-innkeeper-bind-${crypto.randomUUID()}`;
-const CHARACTER = process.env.SMOKE_CHARACTER ?? "Smokeinn";
+const CHARACTER = process.env.SMOKE_CHARACTER ?? accountFixtureName("In", ACCOUNT);
 const SCENARIO = "inn-ironforge";
 
 const FIREBREW = 5111; // creature entry, Innkeeper Firebrew
