@@ -140,7 +140,7 @@ reach from the Northshire spawn.
 scenarios live in `infra/fixtures/scenarios.ts`, and adding one is a data edit
 in that file.
 
-The preflight gate uses fixtures too: `kill-credit.ts` starts from
+The preflight smokes use fixtures too: `kill-credit.ts` starts from
 `vineyard-kill-credit` instead of playing the 783 turn-in that gates the kill
 quest, which is why the `fleet` service carries the same `WRATHBENCH_DB_*` env
 as `fixtures` — and so does `runner`, where the smokes are exec'd by hand, so

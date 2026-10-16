@@ -1014,10 +1014,10 @@ verbatim. The page never guesses at what the window is doing.
   recreation is the point) and the script waits up to 300s for `/health` to
   answer ready.
 - **verifying** — the gate smokes (`preflight.smokes`) and then the
-  deploy-only full arc (`preflight.deploySmokes`, `module-quest.ts`) run
-  directly through `docker compose exec runner`, each against its budget. The
-  fleet is down, so nothing else is on the smoke accounts. The detail names the
-  smoke in flight.
+  deploy smokes (`preflight.deploySmokes`: the game surface and the
+  `module-quest.ts` full arc) run directly through `docker compose exec
+  runner`, each list against its budget. The fleet is down, so nothing else is
+  on the smoke accounts. The detail names the smoke in flight.
 - **resuming** — every smoke passed; `docker compose up -d fleet`. The
   supervisor boots, re-gates on the new server identity and resumes every
   paused run on its own account before the queue or the policy gets one.
@@ -1071,7 +1071,7 @@ output. Then:
    failed the gate smokes too, which means the failure is not in the build
    (auth, the database, the smoke accounts, the runner image). The fleet is up
    and gated shut. Run a smoke by hand (`docker compose -f infra/compose.yml
-   exec runner bun infra/smoke/quest-accept-status.ts`, which logs in as PROBE;
+   exec runner bun infra/smoke/preflight.ts`, which logs in as PROBE;
    add `-e MODULE_ACCOUNT=SMOKE` to reproduce the gate's account) and read its
    output.
 5. **failed, "the fleet service did not start"** — the one case with a command
@@ -1104,28 +1104,40 @@ The supervisor smokes the server before it launches anything. The knob is the
 top-level `preflight` block of the config, hot-reloaded like the jobs;
 `infra/fleet.example.json` shows its shape. There are two kinds of smoke:
 
-- **`smokes` is the per-tick gate.** It runs before the first job is spawned
-  and again whenever the server identity changes — which is to say on every
-  worldserver recreate *and* on every restart the container does by itself.
-  Entries with **distinct accounts run in parallel**; entries sharing an account
-  run in order. A bare string entry means "on `account`". Each smoke's header
-  says what it proves. The gate smokes delete the previous run's
-  character first (the CMSG_CHAR_DELETE proof) and only log out at the end,
-  because a disconnected character stays in world for the core's 60s
-  `WorldSession::expireTime` during which a delete is silently ignored —
-  deleting last time's character costs nothing, deleting this time's costs a
-  minute.
-- **`deploySmokes` is the deploy-time full arc.** `module-quest.ts` — eight
-  kills to objective completion and the kill quest's own turn-in, about four
-  minutes — is run once per deploy by `infra/deploy-worldserver.sh`, after the
-  gate has passed, never by the supervisor. `deployTimeoutMs` is its budget.
+- **`smokes` is the gate.** It runs before the first job is spawned and again
+  whenever the server identity changes — which is to say on every worldserver
+  recreate *and* on every restart the container does by itself. Every job
+  waits on it, so it proves only that the stack is alive end to end, and the
+  default, `infra/smoke/preflight.ts`, does that in well under a second:
+  health and the port secret, the event stream, a login, the login state on
+  the stream, one action's reply, a logout. Its character is persistent:
+  created the first time and never deleted, because the core keeps a
+  logged-out character in world for 60s and silently ignores a delete in that
+  window, while a login inside it just reattaches. Entries with
+  **distinct accounts run in parallel**; entries sharing an account run in
+  order. A bare string entry means "on `account`".
+- **`deploySmokes` is what a release proves on top.** The deploy window
+  (`infra/k8s-deploy.sh`, `infra/deploy-worldserver.sh`) runs the gate smokes
+  and then these, one after another, with the fleet down and before anything
+  resumes; the supervisor never runs them. The game surface lives here:
+  `kill-credit.ts` (combat, kill credit, loot), `quest-accept-status.ts`
+  (quest status, accept, turn-in, vendor) and `module-quest.ts` (eight kills to
+  the kill quest's own turn-in, about five minutes). `deployTimeoutMs` is their
+  whole budget. Emptying the list takes them out of releases, not out of the
+  gate.
+
+The supervisor runs the gate before it reads the run history (counting every
+trajectory on disk takes about half a minute on a full runs directory), so with
+the server up the gate passes within seconds of a start. While `/health` is not
+ready it asks again every 5s, not once a tick.
 
 A failure spawns nothing, complains once, and is re-checked every tick, so a fix
 or a rollback unblocks the fleet with no operator action. Drains still work
 while the gate is shut. `timeoutMs` is the budget for the whole gate — every
-child gets the same deadline — and is set at ~3x the measured critical path.
-`./infra/run-fleet.sh --status` shows the last gate result, per script;
-`--dry-run` shows the plan.
+child gets the same deadline — sized for the slowest legitimate login (the
+module bounds a create that reclaims a stale session at 20s), not for the
+smoke's usual run. `./infra/run-fleet.sh --status` shows the last gate result,
+per script; `--dry-run` shows the plan.
 
 **Gate accounts.** Every account a smoke is bound to must exist in auth and be
 in the module's allowlist — `AC_WRATH_BENCH_ACCOUNTS` in `infra/compose.yml`,
