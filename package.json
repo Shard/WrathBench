@@ -25,7 +25,6 @@
     "docs:api:check": "bun run sdk/generate-api-docs.ts && git diff --exit-code -- sdk/API.md",
     "deploy:worldserver": "./infra/k8s-deploy.sh",
     "publisher:restart": "kubectl -n wrathbench rollout restart deployment/wrathbench-publisher",
-    "publisher:restart:compose": "docker compose -f infra/compose.yml --profile publish restart publisher",
     "viewer:restart": "./infra/viewer-restart.sh",
     "tiles:publish": "bun infra/publish-tiles.ts --upload",
     "ship": "./infra/deploy-dashboard.sh"
