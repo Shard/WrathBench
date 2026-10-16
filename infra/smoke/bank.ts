@@ -13,7 +13,8 @@
  * is what gets banked.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/bank.ts
+ *   bun wb smoke bank
+ *   bun wb --local smoke bank   # the quickstart
  */
 
 import { connect, type WrathClient } from "../../sdk/src/index";

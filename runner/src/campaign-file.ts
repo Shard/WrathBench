@@ -157,7 +157,7 @@ export function writeCampaignFile(runDir: string, file: CampaignFile): string {
 const USAGE = `usage: bun runner/src/campaign-file.ts --campaign <id>@<version> --cell <id> [--arm <id>] [--run-id <id>] [--runs-dir <dir>] [--db <path>]
 
 Writes <runs-dir>/<run-id>/campaign.json from the published definition in the
-config store, for a hand launch (infra/run-episode.sh --campaign …), and prints
+config store, for a hand launch (bun wb run episode --campaign …), and prints
 "<run-id> <path>". The run id defaults to a fresh run-<stamp>. Refuses an arm
 that pins an image or a command: a hand launch runs this image's run.ts, and a
 pinned arm runs only in a run pod the fleet launches.

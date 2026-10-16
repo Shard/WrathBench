@@ -23,7 +23,8 @@
  * deployed: it is the gate for that build.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/read-item.ts
+ *   bun wb smoke read-item
+ *   bun wb --local smoke read-item   # the quickstart
  */
 
 import { connect, type WrathClient } from "../../sdk/src/index";

@@ -32,7 +32,8 @@
  *      the talents clean for it.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/talent-tree.ts
+ *   bun wb smoke talent-tree
+ *   bun wb --local smoke talent-tree   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

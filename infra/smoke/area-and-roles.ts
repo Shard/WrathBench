@@ -3,7 +3,7 @@
  * zone/subzone names on self (`WB_AREA`, `state.self.zone` / `state.self.area`)
  * and NPC roles from `UNIT_NPC_FLAGS` (`state.units(...).roles`).
  *
- * End to end against a booted worldserver, from inside the compose network:
+ * End to end against a booted worldserver, from inside the container network:
  * a fresh Human in Northshire -> login announces Elwynn Forest / Northshire
  * Valley (ids 12 / 9) -> Deputy Willem in view carries `questGiver` in his
  * roles and answers `units({ role: "questGiver" })` -> a walk into the abbey
@@ -29,7 +29,8 @@
  * during which a delete is silently ignored). Budget: ~20s.
  *
  * Run standalone (defaults to the PROBE account):
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/area-and-roles.ts
+ *   bun wb smoke area-and-roles
+ *   bun wb --local smoke area-and-roles   # the quickstart
  *
  * Override the target with MODULE_HOST / MODULE_PORT (default worldserver:8086)
  * and the login account with MODULE_ACCOUNT (default PROBE).

@@ -28,13 +28,16 @@
  *   4. DELETE /session mid-flight. apply.ts resets `taxi_path` and the
  *      position on the next run, so the flight never has to finish.
  *
- * Run from inside the network. The `runner` service carries the DB env the
- * fixture tool needs and MODULE_ACCOUNT defaults to PROBE, so no `-e` flags:
+ * Run from inside the network. The runner carries the DB env the fixture
+ * tool needs and MODULE_ACCOUNT defaults to PROBE, so nothing is added:
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/achievements-taxi.ts
+ *   bun wb smoke achievements-taxi
+ *   bun wb --local smoke achievements-taxi   # the quickstart
  *
- * (Add `-e MODULE_ACCOUNT=SMOKE2` and the like only to log in as another
- * allowlisted account.)
+ * (Another allowlisted account is MODULE_ACCOUNT in the runner's environment,
+ * which `bun wb` does not carry: `kubectl -n wrathbench exec
+ * deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE2 bun
+ * infra/smoke/achievements-taxi.ts`.)
  */
 
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";

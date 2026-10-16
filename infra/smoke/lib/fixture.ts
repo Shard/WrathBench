@@ -46,9 +46,9 @@ export type FixtureContext = {
  * directly, and the DB port is not published to the host:
  *   - WRATHBENCH_FIXTURES_CMD, if set, is the command verbatim (space-split),
  *     with --account/--character/--scenario appended;
- *   - else, with WRATHBENCH_DB_HOST set (inside a container on the compose
- *     network), run it in-process with bun;
- *   - else, from the host, through compose. The `fixtures` service carries
+ *   - else, with WRATHBENCH_DB_HOST set (inside the runner: the cluster's
+ *     pods, or a container on the quickstart's network), run it with bun;
+ *   - else, from the quickstart's host, through compose. The `fixtures` service carries
  *     the DB env and an `entrypoint` of `bun run infra/fixtures/apply.ts`, so
  *     only the flags are passed here — apply.ts rejects positional arguments.
  *     `--no-deps` is load-bearing: without it compose may decide a dependency
@@ -120,7 +120,7 @@ export async function applyScenario(ctx: FixtureContext, scenario: string): Prom
     ctx.fail(
       `could not run the fixtures tool (${argv[0]}): ${String(e instanceof Error ? e.message : e)} — ` +
         `set WRATHBENCH_FIXTURES_CMD to the exact command for this environment, or WRATHBENCH_DB_HOST=db ` +
-        `to run \`bun infra/fixtures/apply.ts\` directly from inside the compose network`,
+        `to run \`bun infra/fixtures/apply.ts\` directly from inside the runner`,
     );
   }
   const code = await proc.exited;

@@ -23,7 +23,8 @@
  *      agrees;
  *   4. logout. apply.ts re-plants the old homebind next run.
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/innkeeper-bind.ts
+ *   bun wb smoke innkeeper-bind
+ *   bun wb --local smoke innkeeper-bind   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

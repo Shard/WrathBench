@@ -65,12 +65,13 @@
  * Run (this is N1 of the navigation plan). The module's HTTP port is not
  * published to the host, so the smoke runs inside the runner container:
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/travel.ts --from tram-ironforge --rides 3
+ *   bun wb smoke travel --from tram-ironforge --rides 3
+ *   bun wb --local smoke travel --from tram-ironforge --rides 3   # the quickstart
  *
  * — that is, `bun infra/smoke/travel.ts --from tram-ironforge --rides 3` as
- * seen from inside that container. No `-e` flags: MODULE_ACCOUNT defaults to
+ * seen from inside that container. Nothing is added: MODULE_ACCOUNT defaults to
  * PROBE and the four WRATHBENCH_DB_* vars the direct-bun branch below hands to
- * `infra/fixtures/apply.ts` are on the `runner` service (compose.yml's *wb-db
+ * `infra/fixtures/apply.ts` are on the runner (the chart's dbEnv, compose.yml's *wb-db
  * anchor). That branch assumes it can reach MySQL from the runner image. How the fixture is applied is chosen by
  * the environment; see `fixturesCmd()` in lib/fixture.ts. The legacy walk is
  * the same command without `--from` (and needs no DB env at all).

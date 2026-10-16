@@ -25,7 +25,8 @@
  *   5. log out and delete the character.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/spellbook.ts
+ *   bun wb smoke spellbook
+ *   bun wb --local smoke spellbook   # the quickstart
  */
 
 const BASE = moduleBase();

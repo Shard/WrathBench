@@ -27,7 +27,8 @@
  * Each step fails with a named FAIL line and a non-zero exit.
  *
  * Run:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/death-recovery.ts
+ *   bun wb smoke death-recovery
+ *   bun wb --local smoke death-recovery   # the quickstart
  */
 
 const BASE = moduleBase();

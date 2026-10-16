@@ -29,7 +29,8 @@
  * fires is logged.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/trainer.ts
+ *   bun wb smoke trainer
+ *   bun wb --local smoke trainer   # the quickstart
  */
 
 const BASE = moduleBase();

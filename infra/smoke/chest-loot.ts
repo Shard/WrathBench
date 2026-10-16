@@ -30,7 +30,8 @@
  *      window come back empty — which is what happened on 2026-08-30);
  *   5. logout.
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/chest-loot.ts
+ *   bun wb smoke chest-loot
+ *   bun wb --local smoke chest-loot   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

@@ -51,7 +51,7 @@ export function campaignLaunch(
     if (episode === "probing") {
       throw new CampaignLaunchError(
         "--episode probing needs --campaign-file <path>: a probe is a cell of a published campaign definition " +
-          "(by hand: infra/run-episode.sh --campaign <id>@<version> --cell <id> [--arm <id>], which writes the file from the store)",
+          "(by hand: bun wb run episode --campaign <id>@<version> --cell <id> [--arm <id>], which writes the file from the store)",
       );
     }
     if (args["ref"] !== undefined) throw new CampaignLaunchError("--ref records the roster entry a campaign launch was made as; pass it with --campaign-file");
