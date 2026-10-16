@@ -156,6 +156,7 @@ import {
   tailOf,
   TICK_MS,
   tripsBreaker,
+  unyieldedDrainReason,
 } from "./run-fleet-plan";
 import {
   CONTAINER,
@@ -1035,6 +1036,8 @@ async function main(): Promise<void> {
         if (yielded.has(name) || assigned.has(name)) continue;
         const job = liveJobs.get(name);
         if (job === undefined) continue;
+        // Words only: what the drain line says about a job nothing yields.
+        drainReasons.set(name, unyieldedDrainReason(job, cfg.campaigns, Object.keys(cfg.roster), probes));
         for (const r of job.refs) runningRefs.add(r);
         countKey(job.refs, laneOf(job));
         for (const r of job.refs) if (billingOf.get(r) === "paid") paidRunning++;
@@ -1138,9 +1141,10 @@ async function main(): Promise<void> {
       }
       // Once per pause, named by its instant: the streak starts over at 1
       // after every segment that made a turn, so it cannot tell two pauses of
-      // one run apart.
+      // one run apart. Not while the pause switch holds: nothing is spawned
+      // then, and the line is said on the tick the switch clears.
       const key = `resume:${r.runId}:${runs.find((f) => f.runId === r.runId)?.pause?.at ?? r.pauseCount}`;
-      if (!announcedPicks.has(key)) {
+      if (pauseSwitch === undefined && !announcedPicks.has(key)) {
         announcedPicks.add(key);
         say(`resume ${name}: ${r.runId} on ${r.account} — ${r.why}`);
         record({ job: name, event: "resume", detail: `${r.runId} on ${r.account}: ${r.why}` });
@@ -1258,7 +1262,8 @@ async function main(): Promise<void> {
         // the projection, not the finished set, decides whether it runs.
         sets.finished.delete(job.name);
         const key = `${job.name}:${job.attempt}`;
-        if (!announcedPicks.has(key)) {
+        // As with a resume: a pick is announced when it can spawn, not while the switch holds.
+        if (pauseSwitch === undefined && !announcedPicks.has(key)) {
           announcedPicks.add(key);
           const tag = (isExtraJob(job) ? " (extra)" : "") + (job.continueFrom !== undefined ? ` (continues ${job.continueFrom})` : "");
           say(`policy ${job.name}: ${job.ref} ${job.episode} attempt ${job.attempt}${tag} on ${account} — ${why}`);

@@ -113,6 +113,16 @@ import {
   tripsBreaker,
   BREAKER_WINDOW_MS,
   BREAKER_TRIPS,
+  type FleetState,
+  formatHolder,
+  inFlightRuns,
+  jobOfRun,
+  planDryRun,
+  runningJobs,
+  runningRefsOf,
+  showsJob,
+  stateLiveness,
+  unyieldedDrainReason,
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
 import { DEFAULT_POLICY, IDLE_MODES, isStandingPause, isOpenCodeGoBase, TIERS, TIER_TABLE, modelStates, planNextJobs, rosterClass, schedulability, type ModelState, type RosterModel, type RunFact, type SchedulingPolicy } from "../runner/src/models";
@@ -4219,5 +4229,271 @@ describe("a drain reaches the roster between episodes, which a 60s look almost n
     rmSync(drainMarkerPath(jsonl));
     expect(drainRequested(jsonl)).toBe(false);
     expect(drainRequested("")).toBe(false);
+  });
+});
+
+describe("the read-only views read what is running, not every job the supervisor ever spawned", () => {
+  const NOW = 1_800_000_000_000;
+  const H = 3_600_000;
+  const SERIES = "0.5";
+  const stateJob = (over: Partial<StateJob> & { ref: string; account: string }): StateJob => ({
+    episode: "e90",
+    source: "policy",
+    models: [],
+    pid: 4242,
+    rosterPath: "data/runs/x.roster.json",
+    jsonl: "data/runs/x.jsonl",
+    log: "data/runs/x.log",
+    spawnedAt: NOW - 36 * H,
+    exitCode: null,
+    draining: false,
+    alive: true,
+    ...over,
+  });
+  const stateOf = (jobs: Record<string, StateJob>, heartbeatAgo = 30_000): FleetState => ({
+    fleetPid: 7,
+    startedAt: NOW - 48 * H,
+    heartbeatAt: NOW - heartbeatAgo,
+    containerized: true,
+    stamp: "20261014",
+    fleetConfig: "config.sqlite",
+    jobs,
+  });
+
+  test("an exited roster's job is not running: its tainted model reads tainted, and its account reads free", () => {
+    // harness-0.5-1030: three tainted models read "running (one character per
+    // model)" for thirty-odd hours, because fleet-state.json keeps an exited
+    // roster's row (`alive: false`) and --status read every row as running.
+    const roster: Record<string, FleetRosterEntry> = { "gemma-4-31b": { tier: "t1", model: "google/gemma-4-31b-it:free", idle: "none" } };
+    const failed = (n: number): RunFact => ({
+      runId: `fleet-gemma-4-31b-e90-gemma-4-31b-it-20261014${n > 1 ? `-a${n}` : ""}`,
+      model: "google/gemma-4-31b-it:free",
+      effort: null,
+      episode: "e90",
+      episodeOverride: false,
+      harnessVersion: `harness-${SERIES}-1030-g9ebf424`,
+      harnessSeries: SERIES,
+      extra: false,
+      startedAt: NOW - (40 - n) * H,
+      endedAt: NOW - (39 - n) * H,
+      terminationReason: "attempt-failed",
+      modelResponses: 0,
+      bestLevel: 1,
+      live: false,
+      pause: null,
+      account: "RUNNER",
+      character: null,
+      episodeMs: 5_400_000,
+      campaign: null,
+      cell: null,
+      subscription: null,
+    });
+    const states = modelStatesOf(rosterModels(roster), [failed(1), failed(2), failed(3)], NOW, { ...DEFAULT_POLICY, series: SERIES });
+    const state = stateOf({
+      "gemma-4-31b-e90": stateJob({ ref: "gemma-4-31b", account: "RUNNER", attempt: 3, exitCode: 0, alive: false }),
+      "codex-sol-61-freeplay": stateJob({ ref: "codex-sol-61", account: "RUNNER3", episode: "freeplay", spawnedAt: NOW - 2 * H }),
+    });
+    const { fleetUp, isAlive } = stateLiveness(state, NOW, () => false);
+    expect(fleetUp).toBe(true);
+    const live = liveJobsFromState(state);
+    const running = runningJobs(live, isAlive);
+    expect([...running.keys()]).toEqual(["codex-sol-61-freeplay"]);
+    expect([...runningRefsOf(running)]).toEqual(["codex-sol-61"]);
+    // The models table gives the real reason, and the fix it needs.
+    const line = formatModels(states, runningRefsOf(running), NOW).find((l) => l.includes("gemma-4-31b"))!;
+    expect(line).toContain("no: tainted on e90 (3 failed attempts) — clear with --clear-model gemma-4-31b");
+    // Reading every row as running is what hid it.
+    expect(formatModels(states, runningRefsOf(live), NOW).find((l) => l.includes("gemma-4-31b"))).toContain("no: running (one character per model)");
+    // The account row: the exited job is not shown, so RUNNER reads free; the live one is.
+    const byAccount = jobsByAccount(live, isAlive);
+    expect(showsJob(byAccount.get("RUNNER")!.j, isAlive)).toBe(false);
+    expect(showsJob(byAccount.get("RUNNER3")!.j, isAlive)).toBe(true);
+    // A row from another supervisor build has no pid to judge: it is still shown, and says so.
+    expect(showsJob({ ...stateJob({ ref: "x", account: "RUNNER" }), pid: undefined as unknown as number }, isAlive)).toBe(true);
+    // The resume planner reads the exited job's account as free, as the supervisor's own tick does.
+    const pausedHere: RunFact = {
+      ...failed(4),
+      runId: "fleet-codex-astra-freeplay-gpt-6-astra-20261001",
+      model: "gpt-6-astra",
+      episode: "freeplay",
+      extra: true,
+      terminationReason: null,
+      endedAt: null,
+      episodeMs: null,
+      pause: { reason: "operator-pause", at: NOW - H, count: 1, episodeElapsedMs: 50 * H },
+    };
+    const config = {
+      jobs: [],
+      roster: { "codex-astra": { tier: "t1" as const, model: "gpt-6-astra", driver: "codex" as const, idle: "unlimited" as const } },
+      policy: { ...DEFAULT_POLICY, series: SERIES },
+      accounts: { pinned: {}, pool: ["RUNNER", "RUNNER3"], paid: [], local: [] },
+    };
+    const resumeWith = (jobs: ReadonlyMap<string, StateJob>): ReturnType<typeof planResumes> =>
+      planResumes({ runs: [pausedHere], config, running: new Map([...jobs].map(([n, j]) => [n, j.account])), held: () => undefined, now: NOW });
+    expect(resumeWith(running).resume.map((r) => [r.runId, r.account])).toEqual([[pausedHere.runId, "RUNNER"]]);
+    expect(resumeWith(live).listed[0]!.why).toBe("waiting: account RUNNER is busy (gemma-4-31b-e90)");
+    // With the supervisor gone (a stale heartbeat), nothing is running at all.
+    const down = stateLiveness(stateOf(state.jobs, 10 * 60_000), NOW, () => true);
+    expect(down.fleetUp).toBe(false);
+    expect(runningJobs(live, down.isAlive).size).toBe(0);
+  });
+
+  test("a run holding an account is matched back to the job that launched it, a run pod included", () => {
+    // pod-proof@1: the fleet's own pod run read "held by run … — not fleet-managed".
+    const RUN = "fleet-pod-proof-human-paladin-base-gpt-6-luna-20261011";
+    const jobs = new Map([
+      ["pod-proof-human-paladin-base", stateJob({ ref: "codex-luna-6", account: "PROBE", source: "pinned", episode: "probing", runIds: [RUN], exitCode: 0, alive: false })],
+      ["nav-loop", stateJob({ ref: "sonnet", account: "RUNNER2", runIds: ["fleet-nav-loop-sonnet-20261011"] })],
+    ]);
+    const owner = jobOfRun(RUN, jobs)!;
+    expect(owner.name).toBe("pod-proof-human-paladin-base");
+    const note = formatHolder({ runId: RUN, progress: { level: 2, xp: 480 }, owner: { ...owner, alive: false }, pod: "wrathbench-run-b99kx" });
+    expect(note).toBe(`held by run ${RUN} (L2, 480 xp) — job pod-proof-human-paladin-base's run in run pod wrathbench-run-b99kx, still live though its roster exited 0`);
+    expect(note).not.toContain("not fleet-managed");
+    // A loop's later cycle is found by the run its log last launched.
+    expect(jobOfRun("fleet-nav-loop-sonnet-20261011-c2", jobs, (name) => (name === "nav-loop" ? "fleet-nav-loop-sonnet-20261011-c2" : undefined))?.name).toBe("nav-loop");
+    // No job of this supervisor launched it: a fleet run says so, a hand-started one is not fleet-managed.
+    expect(formatHolder({ runId: RUN, pod: "" })).toBe(`held by run ${RUN} — a fleet run in a run pod that no job of this supervisor launched`);
+    expect(formatHolder({ runId: "hand-sonnet-20261011" })).toBe("held by run hand-sonnet-20261011 — not fleet-managed");
+  });
+
+  describe("--dry-run plans around what is running, and says what a paused run does", () => {
+    // After a release the dry-run said codex-sol-61's freeplay stream "would
+    // spawn as …-20261014-a3" on RUNNER, and the supervisor resumed the paused
+    // -a2 in place on RUNNER3. The dry-run planned as if nothing were running,
+    // so a live run held its account and not its model (reproduced on the
+    // cluster with -a2 live).
+    const REF = "codex-sol-61";
+    const A1 = "fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261001";
+    const A2 = "fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261011-a2";
+    const config = (): FleetConfig => {
+      const c = parseFleet(
+        fleetJson([], {
+          roster: { [REF]: { tier: "t1", model: "gpt-6.1-sol", driver: "codex", idle: "unlimited" } },
+          accounts: { pool: ["RUNNER", "RUNNER3"] },
+        }),
+      );
+      return { ...c, policy: { ...c.policy, series: SERIES } };
+    };
+    const fact = (runId: string, over: Partial<RunFact> = {}): RunFact => ({
+      runId,
+      model: "gpt-6.1-sol",
+      effort: null,
+      episode: "e90",
+      episodeOverride: false,
+      harnessVersion: `harness-${SERIES}-1030-g9ebf424`,
+      harnessSeries: SERIES,
+      extra: false,
+      startedAt: NOW - 200 * H,
+      endedAt: NOW - 199 * H,
+      terminationReason: "episode-limit",
+      modelResponses: 900,
+      bestLevel: 4,
+      live: false,
+      pause: null,
+      account: "RUNNER3",
+      character: "Thalvorn",
+      episodeMs: 5_400_000,
+      campaign: null,
+      cell: null,
+      subscription: null,
+      ...over,
+    });
+    // Its targets are met (t1: three counted e90 runs, none at level 5), so its
+    // only work is the one unlimited freeplay session: the a1 that ended, then a2.
+    const history = [
+      fact("fleet-codex-sol-61-e90-gpt-6-1-sol-20260930"),
+      fact("fleet-codex-sol-61-e90-gpt-6-1-sol-20260930-a2"),
+      fact("fleet-codex-sol-61-e90-gpt-6-1-sol-20260930-a3"),
+      fact(A1, { episode: "freeplay", extra: true, startedAt: NOW - 150 * H, endedAt: NOW - 90 * H, terminationReason: "idle", episodeMs: null }),
+    ];
+    const a2 = (over: Partial<RunFact>): RunFact =>
+      fact(A2, { episode: "freeplay", extra: true, startedAt: NOW - 86 * H, endedAt: null, terminationReason: null, bestLevel: 39, episodeMs: null, ...over });
+    const dryRun = (runs: RunFact[], opts: { held?: (a: string) => string | undefined; inFlight?: Parameters<typeof planDryRun>[0]["inFlight"] } = {}) => {
+      const c = config();
+      const plan = planDryRun({
+        config: c,
+        runs,
+        states: modelStatesOf(rosterModels(c.roster), runs, NOW, c.policy),
+        held: opts.held ?? (() => undefined),
+        stamp: "20261014",
+        now: NOW,
+        ...(opts.inFlight !== undefined ? { inFlight: opts.inFlight } : {}),
+      });
+      return { ...plan, text: formatAccounts(plan.rows).join("\n") };
+    };
+    const heldByA2 = (a: string): string | undefined => (a === "RUNNER3" ? A2 : undefined);
+
+    test("a paused freeplay run resumes in place on its own account, and no second character is planned", () => {
+      const runs = [...history, a2({ pause: { reason: "operator-pause", at: NOW - 5 * 60_000, count: 1, episodeElapsedMs: 86 * H } })];
+      const { resumes, plan, rows, spawns, text } = dryRun(runs);
+      expect(resumes.resume.map((r) => [r.job.name, r.runId, r.account])).toEqual([[`${REF}-freeplay`, A2, "RUNNER3"]]);
+      expect(plan.policy).toEqual([]);
+      expect(text).toContain(`RUNNER3   pool   ${REF}-freeplay (paused: operator-pause, 86h00m elapsed): gpt-6.1-sol freeplay attempt 2 extra — resumes ${A2} in place`);
+      expect(text).toMatch(/RUNNER +pool +free$/m);
+      expect(text).not.toContain("-a3");
+      // The argv is the live spawn's: the paused run first, --resume-roster.
+      expect(spawns.map((s) => s.spawn.resumeRunId)).toEqual([A2]);
+      expect(rows.find((r) => r.account === "RUNNER3")).toMatchObject({ job: { resumes: A2, planned: true } });
+    });
+
+    test("a run in flight under the supervisor keeps its account and its model, and says what a restart does to it", () => {
+      const runs = [...history, a2({ live: true })];
+      // What the dry-run used to print: a second character on RUNNER.
+      const blind = dryRun(runs, { held: heldByA2 });
+      expect(blind.plan.policy.map((p) => [p.job.name, p.job.attempt, p.account])).toEqual([[`${REF}-freeplay`, 3, "RUNNER"]]);
+      const jobs = new Map([[`${REF}-freeplay`, stateJob({ ref: REF, account: "RUNNER3", episode: "freeplay", attempt: 2, models: ["gpt-6.1-sol"], runIds: [A2], resuming: A2, resumesInPlace: true })]]);
+      const inFlight = inFlightRuns({ jobs, runs, roster: config().roster, campaigns: [] });
+      expect(inFlight.map((r) => [r.name, r.owned, r.runId, r.resumesInPlace])).toEqual([[`${REF}-freeplay`, true, A2, true]]);
+      const { plan, text } = dryRun(runs, { held: heldByA2, inFlight });
+      expect(plan.policy).toEqual([]);
+      expect(text).toContain(`RUNNER3   pool   ${REF}-freeplay: gpt-6.1-sol freeplay attempt 2 extra — in flight as ${A2}; a restart pauses it and it resumes in place here`);
+      expect(text).toMatch(/RUNNER +pool +free$/m);
+      expect(text).not.toContain("-a3");
+    });
+
+    test("a live run no job of a running supervisor owns: the plan is the tick's, and the row says plainly what it cannot know", () => {
+      // The two minutes a killed runner's heartbeat stays warm after a recreate,
+      // before the new supervisor has spawned anything for it. The live tick
+      // holds only its own processes' models, so in this window it would plan
+      // the a3 too; the dry-run prints that plan, and the row says the resume
+      // in place happens only if the run stops before the tick.
+      const runs = [...history, a2({ live: true })];
+      const inFlight = inFlightRuns({ jobs: new Map(), runs, roster: config().roster, campaigns: [] });
+      expect(inFlight.map((r) => [r.name, r.owned, r.refs, r.resumesInPlace])).toEqual([[A2, false, [REF], true]]);
+      const { plan, text } = dryRun(runs, { held: heldByA2, inFlight });
+      expect(plan.policy.map((p) => [p.job.name, p.job.attempt, p.account])).toEqual([[`${REF}-freeplay`, 3, "RUNNER"]]);
+      expect(text).toContain(
+        `RUNNER3   pool   free — held by run ${A2} — live, and no job of a running supervisor owns it; if it stops before the next tick, the supervisor resumes it in place here; while it stays live the tick does not hold ${REF} and may plan it on another account`,
+      );
+    });
+  });
+});
+
+describe("a pinned campaign job the config stops yielding drains with the reason, not as \"disabled\"", () => {
+  // pod-proof@1: one square, one launch allowed. The live run fills the
+  // square's launches, the plan stops yielding its job, and the drain line
+  // said "disabled" with the campaign row still enabled.
+  const POD = definition({ id: "pod-proof", cells: [{ id: "human-paladin", race: 1, class: 2 }], maxAttemptsPerCell: 1, resume: false });
+  const roster: Record<string, FleetRosterEntry> = { glm: { tier: "t1", model: "z-ai/glm-5.2:free", idle: "none" } };
+  const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ "pod-proof": { version: 1, account: "PROBE", assignments: [{ model: "glm", runsPerCell: 1 }], ...over } });
+  const probe = { campaign: "pod-proof", version: 1, cell: "human-paladin", arm: "base" };
+  const job = { ref: "glm", probe };
+  const run = (over: { counted: boolean; live: boolean }) => ({ campaign: "pod-proof", version: 1, cell: "human-paladin", ref: "glm", arm: "base", ...over });
+
+  test("the square's last launch in flight, the square met, the campaign disabled or gone, a job no campaign made", () => {
+    const { campaigns } = joined([POD], row());
+    const inFlight = [run({ counted: false, live: true })];
+    // The drain is real: the plan has nothing for this campaign while its run plays.
+    expect(pinnedCampaignJobs({ campaigns, roster }, inFlight)).toEqual([]);
+    expect(unyieldedDrainReason(job, campaigns, ["glm"], inFlight)).toBe(
+      "square human-paladin/base of pod-proof@1 has had its 1 launch(es), the live run included (0/1 counted, 1 launched) — nothing more to launch",
+    );
+    expect(unyieldedDrainReason(job, campaigns, ["glm"], [run({ counted: true, live: false })])).toBe(
+      "square human-paladin/base of pod-proof@1 is met (1/1 counted, 1 launched) — nothing more to launch",
+    );
+    expect(unyieldedDrainReason(job, joined([POD], row({ enabled: false })).campaigns, ["glm"], inFlight)).toBe("campaign pod-proof disabled");
+    expect(unyieldedDrainReason(job, [], ["glm"], inFlight)).toBe("campaign pod-proof is no longer in the config");
+    expect(unyieldedDrainReason({ ref: "glm" }, campaigns, ["glm"], inFlight)).toBe("no longer in the config");
   });
 });
