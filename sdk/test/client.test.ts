@@ -650,10 +650,10 @@ describe("client: movement", () => {
     if (result.ok) throw new Error("unreachable");
     expect(result.status).toBe("stopped");
     expect(result.position?.x).toBe(-1205);
-    expect(result.hint).toContain("stop() was called while it was under way");
-    expect(result.hint).toContain("a refused moveTo");
-    expect(result.hint).toContain("a snippet abandoned at its time limit");
-    expect(result.hint).toContain("The stop left nothing walking.");
+    // The operator's wording (2026-10-16), whole.
+    expect(result.hint).toBe(
+      "stop() ended this move, called from within this run: by your own code, after another moveTo was refused, or at a snippet's time limit.",
+    );
     const drained = client.drainActionHints();
     expect(drained).toHaveLength(1);
     expect(drained[0]).toMatchObject({ action: "moveTo", status: "stopped", count: 1, point, hint: result.hint });

@@ -1040,11 +1040,12 @@ export const MOVE_HINTS: Readonly<Record<string, (point: MovePoint, data: MoveRe
   // is active (module/PROTOCOL.md, "stop"), and only this run's client sends
   // one: the caller's own `stop()`, the stop `moveTo` sends after a refusal
   // in `MOVE_LEAVES_NO_STOP`, and the stop on a snippet's abandon. No SDK
-  // helper stops a walk as part of a flow that succeeds.
+  // helper stops a walk as part of a flow that succeeds. "after another moveTo
+  // was refused" is that second stop: it ends a walk a different caller
+  // started. The operator's wording (2026-10-16).
   stopped: () =>
-    `the move ended because stop() was called while it was under way, from within this run: sdk.stop() in a ` +
-    `routine or a snippet, a refused moveTo (the SDK calls stop() after one, which ends a walk another caller ` +
-    `started meanwhile), or a snippet abandoned at its time limit. The stop left nothing walking.`,
+    `stop() ended this move, called from within this run: by your own code, after another moveTo was refused, ` +
+    `or at a snippet's time limit.`,
 };
 
 /**
