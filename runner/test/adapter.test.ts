@@ -5,12 +5,14 @@ import { describe, expect, test } from "bun:test";
 import {
   APP_TITLE,
   APP_URL,
+  OPENCODE_SERVED_HEADERS,
   OPENCODE_SESSION_HEADER,
   OpenAiChatAdapter,
   PROVIDER_RESET_FLOOR_MS,
   RAW_USAGE_MAX_KEY_LENGTH,
   RAW_USAGE_MAX_LEAVES,
   USER_AGENT,
+  openCodeServedOf,
   openCodeSessionHeaders,
   parseRetryAfter,
   statedResetOf,
@@ -181,6 +183,57 @@ describe("OpenAiChatAdapter OpenCode session header", () => {
     const opencode = [...h!.keys()].filter((k) => k.startsWith("x-opencode-"));
     expect(opencode).toEqual([OPENCODE_SESSION_HEADER]);
     expect(h!.get("user-agent")).toBe("WrathBench");
+  });
+
+  /** One complete against a base whose response carries `headers`. */
+  async function turnWith(baseUrl: string, headers: Record<string, string>, body: unknown = { model: "mimo-v2.5", choices }): Promise<AssistantTurn> {
+    const adapter = new OpenAiChatAdapter({
+      baseUrl,
+      apiKey: "k",
+      model: "mimo-v2.5",
+      env: {},
+      fetchImpl: Object.assign(
+        (): Promise<Response> => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers })),
+        { preconnect: () => {} },
+      ) as unknown as typeof fetch,
+      sleep: () => Promise.resolve(),
+    });
+    const out = await adapter.complete({ messages: [{ role: "user", content: "hi" }], tools: [] });
+    if (out.kind !== "ok") throw new Error(`expected ok, got ${out.kind}`);
+    return out.turn;
+  }
+  const GO_SERVED = {
+    [OPENCODE_SERVED_HEADERS.provider]: "openrouter-xiaomi",
+    [OPENCODE_SERVED_HEADERS.model]: "xiaomi/mimo-v2.5",
+    "x-zen-model": "mimo-v2.5",
+  };
+
+  test("a Go response's headers name the backend and the upstream model that served it", async () => {
+    const turn = await turnWith("https://opencode.ai/inference/go/openai/v1", GO_SERVED);
+    expect(turn.served).toEqual({ provider: "openrouter-xiaomi", model: "xiaomi/mimo-v2.5" });
+    // Record-only: what the model sees is untouched.
+    expect(turn.content).toBe("hi");
+    expect(turn.toolCalls).toEqual([]);
+    // One header alone is still recorded; neither is no record at all.
+    expect((await turnWith("https://opencode.ai/zen/go/v1", { [OPENCODE_SERVED_HEADERS.provider]: "mimo" })).served).toEqual({ provider: "mimo" });
+    expect((await turnWith("https://opencode.ai/inference/go/openai/v1", {})).served).toBeUndefined();
+  });
+
+  test("any other host's response records nothing from those headers", async () => {
+    for (const base of ["https://openrouter.ai/api/v1", "https://api.cerebras.ai/v1", "https://opencode.ai.example.com/inference/go/openai/v1"]) {
+      const turn = await turnWith(base, GO_SERVED, { provider: "Xiaomi", model: "xiaomi/mimo-v2.5", choices });
+      expect(turn.served).toBeUndefined();
+      // and an OpenRouter body's own provider still rides on `raw`, as before
+      expect((turn.raw as { provider?: string }).provider).toBe("Xiaomi");
+    }
+  });
+
+  test("a malformed or oversized served header is dropped, never recorded as garbage", async () => {
+    expect(openCodeServedOf("https://opencode.ai/inference/go/openai/v1", new Headers({ [OPENCODE_SERVED_HEADERS.provider]: "x".repeat(201) }))).toBeUndefined();
+    expect(openCodeServedOf("https://opencode.ai/inference/go/openai/v1", new Headers({ [OPENCODE_SERVED_HEADERS.provider]: "   " }))).toBeUndefined();
+    expect(openCodeServedOf("https://opencode.ai/inference/go/openai/v1", new Headers({ [OPENCODE_SERVED_HEADERS.model]: " deepseek/deepseek-v4.1-flash " }))).toEqual({
+      model: "deepseek/deepseek-v4.1-flash",
+    });
   });
 
   test("openCodeSessionHeaders is host-exact", () => {

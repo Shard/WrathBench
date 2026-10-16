@@ -268,10 +268,15 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               the run (docs/METHODOLOGY.md, "Routing is pinned"). The served provider is recorded
               rather than keyed — a fact observed minutes after launch cannot be part of what a
               launch stamped — and with fallbacks off the two agree, which is what makes a
-              disagreement worth seeing. The field is absent, not null, on a run whose endpoint
-              has one backend (a CLI harness, Cerebras, LM Studio, OpenCode Zen): there is
-              nothing to record, and those runs stamp exactly as they did before the field
-              existed.
+              disagreement worth seeing. An OpenCode Go run cannot be pinned: Go picks the
+              backend behind each model and the request has no way to name one. So it stamps
+              `{ via: "OpenCode Go", allowFallbacks: true }`, unpinned and keyed apart from a
+              pinned run of the same model, and the backend that answered each call is recorded
+              from Go's response headers (`x-opencode-endpoint-id`,
+              `x-opencode-upstream-model-id`). The field is absent, not null, on a run whose
+              request has no routing to state (a CLI harness, Cerebras, LM Studio, OpenCode
+              Zen): there is nothing to record, and those runs stamp exactly as they did before
+              the field existed.
             `wiki` — whether this entry's runs get the reference wiki at all. Default true; set
               `false` and the run has no `search_reference` tool, the prompt does not name one,
               and no bundle is opened (issue #61). It is a
@@ -433,7 +438,9 @@ models Go serves over chat completions can be reached this way; its Responses
 and Anthropic-messages models cannot. Go admits agents other than its own client
 on stated conditions, and the adapter meets them as itself: its own user
 agent, and `x-opencode-session` set to the run id, one value for the whole run.
-It never sends the headers that identify OpenCode's own client. A `-free`
+It never sends the headers that identify OpenCode's own client. Go picks
+the backend behind each model, so a Go run stamps unpinned routing and
+records the backend that answered (`routing`, above). A `-free`
 Go slug derives free; any other derives paid, which puts it under the paid
 throttle, and is priced by a `PROVIDER_PRICES` row on that exact base, since
 Go reports no per-response charge.

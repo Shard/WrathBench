@@ -1195,7 +1195,9 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // routing the same model across backends legitimately zeroes the prompt
       // cache, and a cost sweep must be able to tell that from harness prefix
       // instability without replaying per-generation API lookups.
-      const servedBy = (outcome.turn.raw as { provider?: unknown } | null | undefined)?.provider;
+      // OpenCode names the backend in headers instead (`served`, adapter.ts),
+      // and where the endpoint states it there it is the answer, ahead of the body.
+      const servedBy = outcome.turn.served?.provider ?? (outcome.turn.raw as { provider?: unknown } | null | undefined)?.provider;
       /*
        * The model the provider says it served, off the same response body. An
        * aggregator answers a request for one slug with the id it actually
@@ -1203,7 +1205,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
        * name. Recorded on the record and promoted onto the run the first time,
        * the same fact the claude-code harness reads out of its `init` event.
        */
-      const servedModel = (outcome.turn.raw as { model?: unknown } | null | undefined)?.model;
+      // OpenCode's body echoes the id asked for; its upstream's own id is the header's.
+      const servedModel = outcome.turn.served?.model ?? (outcome.turn.raw as { model?: unknown } | null | undefined)?.model;
       // One promotion, on the first response that names either fact: the
       // provider is the answer to the routing the tuple stamped (2026-09-16),
       // and a run whose request pinned one backend and whose response names

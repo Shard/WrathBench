@@ -23,7 +23,7 @@
  */
 
 import { z } from "zod";
-import { hostOfBase } from "./platform";
+import { hostOfBase, isOpenCodeGoBase } from "./platform";
 
 /** How a routed request picks among the backends it is allowed. */
 export const ROUTING_SORTS = ["price", "throughput", "latency"] as const;
@@ -45,6 +45,12 @@ export interface RoutingSpec {
   allowFallbacks: boolean;
   /** Whether a provider that would drop a request parameter is skipped. */
   requireParameters?: boolean;
+  /**
+   * The gateway that picks the backend, on a route where the request cannot
+   * name one (`OPENCODE_GO_ROUTING`). Derived from the api base, never
+   * written in config: `parseRouting` refuses it like any unknown key.
+   */
+  via?: string;
 }
 
 /**
@@ -61,6 +67,7 @@ export const routingSchema = z.object({
   sort: z.enum(ROUTING_SORTS).optional(),
   allowFallbacks: z.boolean(),
   requireParameters: z.boolean().optional(),
+  via: z.string().optional(),
 });
 
 /** The keys a `routing` block may carry. Anything else is refused by name. */
@@ -223,20 +230,36 @@ export function providerBodyOf(routing: RoutingSpec): Record<string, unknown> {
 
 /** A one-line rendering for `--status` and refusal messages. */
 export function routingLabel(routing: RoutingSpec): string {
+  if (routing.via !== undefined) return `chosen by ${routing.via}, not pinned`;
   const who = routing.order !== undefined ? routing.order.join(" > ") : routing.sort !== undefined ? `by ${routing.sort}` : "provider default";
   return `${who}${routing.allowFallbacks ? " (fallbacks on)" : ""}${routing.requireParameters === true ? " (requires parameters)" : ""}`;
 }
+
+/**
+ * What an OpenCode Go run stamps. Go picks the backend behind each model
+ * itself — the probes of 2026-10-16 came back from a third-party router, from
+ * OpenRouter's own endpoint for the vendor, and from Go's own — and a request
+ * has no way to name or pin one. So the run is unpinned by construction, the
+ * shape an unpinned OpenRouter run has (no `order`), with fallbacks on because
+ * nothing stops any backend from serving it, and the route named. A KEY like
+ * every routing: a Go run never shares a chart with a pinned run of the same
+ * model elsewhere. Which backend actually answered is recorded per response
+ * from Go's headers (`openCodeServedOf`, adapter.ts).
+ */
+export const OPENCODE_GO_ROUTING: RoutingSpec = { via: "OpenCode Go", allowFallbacks: true };
 
 /**
  * The routing a run will actually be sent with, or null when its endpoint has
  * no routing to state.
  *
  * One function so the adapter and the comparability tuple cannot disagree:
- * what the tuple stamps is what the wire carries. Null — not an "unrouted"
- * spec — for a claude-code, codex, LM Studio, Cerebras or OpenCode Zen run,
- * because those have exactly one backend and a field claiming otherwise would
- * be a fabricated fact. The tuple omits the field entirely for those, which is
- * also what keeps every non-OpenRouter run stamping the way it always did.
+ * what the tuple stamps is what the wire carries. An OpenRouter run gets the
+ * resolved spec, which the adapter sends as `provider`. An OpenCode Go run gets
+ * `OPENCODE_GO_ROUTING`, which the adapter sends nothing for: the base is the
+ * route, and the backend is Go's to choose. Null — not an "unrouted" spec — for
+ * a claude-code, codex, LM Studio, Cerebras or OpenCode Zen run, whose request
+ * has no routing to state; the tuple omits the field entirely for those, which
+ * is also what keeps every such run stamping the way it always did.
  */
 export function routingForRun(
   run: {
@@ -247,6 +270,7 @@ export function routingForRun(
   },
   policy?: RoutingSpec | undefined,
 ): RoutingSpec | null {
+  if (isOpenCodeGoBase(run.apiBase) && run.model !== undefined) return { ...OPENCODE_GO_ROUTING };
   if (!isOpenRouterBase(run.apiBase) || run.model === undefined) return null;
   return resolveRouting(run.routing, policy, run.model, { effort: run.effort });
 }

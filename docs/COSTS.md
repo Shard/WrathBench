@@ -20,7 +20,9 @@ the operator's figure in GitHub issue #66.
   `reasoning_tokens`, and OpenRouter's own `cost` in credits. OpenCode Go
   sends no `cost`, so a run there carries an expected figure from its
   `PROVIDER_PRICES` row and no actual one. The record also names
-  the serving `provider` when the body reports one, and the first one seen is
+  the serving `provider` when the body reports one, or OpenCode's response
+  headers do (`x-opencode-endpoint-id`, with the upstream's own model id beside
+  it), and the first one seen is
   promoted onto the run itself
   (`run.resolved_provider`, `meta.resolved.provider`) so a cost sweep can group
   by backend without replaying the trajectory. Routing is pinned

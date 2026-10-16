@@ -64,7 +64,7 @@ import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, ty
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
 import { billingOf, type Billing } from "./model-cost";
-import { hostOfBase, platformOfBase } from "./platform";
+import { hostOfBase, isOpenCodeGoBase, platformOfBase } from "./platform";
 import { parseRouting, type RoutingSpec } from "./routing";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { HEARTBEAT_DEAD_MS, HEARTBEAT_FILE, heartbeatAt, heartbeatOwner } from "./trajectory";
@@ -1450,19 +1450,8 @@ export function platformOf(apiBase: string | undefined, driver: string | undefin
  */
 export const OPENCODE_GO_KEY = "opencode-go";
 
-/**
- * Whether an api base points at that surface. The path is what distinguishes
- * it — `https://opencode.ai/inference/go/openai/v1` (or the older
- * `https://opencode.ai/zen/go/v1`, which still answers) against the shared
- * tier's `https://opencode.ai/inference/openai/v1` and `/zen/v1` — so this
- * reads the base itself rather than `platformOfBase`, which answers with a
- * hostname. The host is matched exactly (`hostOfBase`), never by substring,
- * and a base that does not parse is not this surface.
- */
-export function isOpenCodeGoBase(apiBase: string | null | undefined): boolean {
-  if (hostOfBase(apiBase) !== "opencode.ai") return false;
-  return /(^|\/)(zen|inference)\/go(\/|$)/.test(new URL(apiBase!).pathname);
-}
+/** Whether an api base points at that surface (`platform.ts`, where routing reads it too). */
+export { isOpenCodeGoBase };
 
 /**
  * The rate-limit keys `policy.maxConcurrent` may cap: every driver, plus the
@@ -1545,7 +1534,7 @@ export function capFor(max: Record<string, number>, key: string): number | undef
  *
  * OpenCode Zen's `zen/go` is a second, separately billed surface on the same
  * host (pay-as-you-go, not the shared free tier), so it takes its own key —
- * outside the free gate, because every model there is paid and a key reached
+ * outside the free gate, because Go has paid models too, and a key reached
  * only by free models would never apply to one. `platformOfBase` cannot make
  * this distinction: it returns a hostname and discards the path.
  *

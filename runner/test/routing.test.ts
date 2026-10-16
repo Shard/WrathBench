@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   LAB_PROVIDERS,
+  OPENCODE_GO_ROUTING,
   authorOf,
   isOpenRouterBase,
   labProvidersOf,
@@ -203,7 +204,7 @@ describe("the comparability tuple", () => {
     expect(sameComparability(a, b)).toBe(false);
   });
 
-  test("a run whose endpoint has one backend omits the field entirely", () => {
+  test("a run whose request has no routing to state omits the field entirely", () => {
     // Not `null`: an absent key is what every tuple stamped before this
     // existed, so nothing in flight on Cerebras, LM Studio, OpenCode Zen or a
     // CLI restamps on resume for a fact that did not change.
@@ -216,5 +217,70 @@ describe("the comparability tuple", () => {
   test("routingForRun refuses to invent routing for a non-aggregator", () => {
     expect(routingForRun({ apiBase: "https://api.cerebras.ai/v1", model: "qwen-3.8-27b" })).toBeNull();
     expect(routingForRun({ apiBase: "https://openrouter.ai/api/v1" })).toBeNull();
+  });
+});
+
+describe("an OpenCode Go run", () => {
+  const GO = "https://opencode.ai/inference/go/openai/v1";
+  function config(over: Record<string, unknown> = {}) {
+    return loadRunConfig({ runId: "r", token: "t".repeat(32), model: "deepseek-v4.1-flash", ...over });
+  }
+
+  test("stamps unpinned routing with the route named, on both of Go's bases", () => {
+    for (const apiBase of [GO, "https://opencode.ai/zen/go/v1"]) {
+      const t = comparabilityOf(config({ apiBase }), "harness-0.5-1");
+      expect(t.routing).toEqual({ via: "OpenCode Go", allowFallbacks: true });
+      expect(t.routing).toEqual(OPENCODE_GO_ROUTING);
+      // Unpinned: no provider is named, so nothing claims a backend.
+      expect(t.routing).not.toHaveProperty("order");
+    }
+    expect(routingLabel(OPENCODE_GO_ROUTING)).toBe("chosen by OpenCode Go, not pinned");
+  });
+
+  test("never shares a chart with a pinned run, or with an unpinned OpenRouter one", () => {
+    const go = comparabilityOf(config({ apiBase: GO }), "harness-0.5-1");
+    const pinned = comparabilityOf(
+      config({ model: "deepseek-v4.1-flash", apiBase: "https://openrouter.ai/api/v1", routing: { order: ["GMICloud"], allowFallbacks: false } }),
+      "harness-0.5-1",
+    );
+    const orFallbacks = comparabilityOf(
+      config({ model: "deepseek-v4.1-flash", apiBase: "https://openrouter.ai/api/v1", routing: { allowFallbacks: true } }),
+      "harness-0.5-1",
+    );
+    expect(sameComparability(go, pinned)).toBe(false);
+    expect(sameComparability(go, orFallbacks)).toBe(false);
+  });
+
+  test("a declared routing cannot pin Go's backend: the stamp is Go's either way", () => {
+    expect(routingForRun({ apiBase: GO, model: "mimo-v2.5", routing: { order: ["Xiaomi"], allowFallbacks: false } })).toEqual(OPENCODE_GO_ROUTING);
+    // and the returned spec is a copy, so no caller can edit the constant
+    expect(routingForRun({ apiBase: GO, model: "mimo-v2.5" })).not.toBe(OPENCODE_GO_ROUTING);
+  });
+
+  test("Zen's shared tier, on either path, still stamps no routing at all", () => {
+    for (const apiBase of ["https://opencode.ai/inference/openai/v1", "https://opencode.ai/zen/v1"]) {
+      const t = comparabilityOf(config({ apiBase, model: "hy3-free" }), "harness-0.5-1");
+      expect(t).not.toHaveProperty("routing");
+    }
+  });
+
+  test("the request to Go carries no provider object, though the run has a routing", async () => {
+    const seen: { body?: Record<string, unknown> } = {};
+    const adapter = new OpenAiChatAdapter({
+      baseUrl: GO,
+      apiKey: "k",
+      model: "mimo-v2.5",
+      routing: OPENCODE_GO_ROUTING,
+      fetchImpl: (async (_u: string, init: RequestInit) => {
+        seen.body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+      }) as unknown as typeof fetch,
+    });
+    await adapter.complete({ messages: [], tools: [] });
+    expect(seen.body).not.toHaveProperty("provider");
+  });
+
+  test("`via` is derived, never config: parseRouting refuses it", () => {
+    expect(() => parseRouting({ via: "OpenCode Go", allowFallbacks: true }, "roster x")).toThrow(/unknown key `via`/);
   });
 });
