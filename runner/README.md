@@ -164,7 +164,9 @@ actually returns to the runner:
 Subscription window exhaustion (`Claude AI usage limit reached|<epoch>`, or
 limit wording on stderr with a non-zero exit) is a **pause**
 (`quota-exhausted`) with the reset time in the detail, not a termination —
-resume with `--resume <run-id>` when the window resets. A resumed run starts a
+the pause waits for the window's reset when a `rate_limit_event` named it
+(the fleet resumes a freeplay run then), or resume with `--resume <run-id>`
+when the window resets. A resumed run starts a
 fresh `claude` process: the CLI's own accumulated history does not come back,
 only the scratchpad — which is the promise the harness makes anyway: the
 scratchpad, not the chat history, is the durable memory.
@@ -248,6 +250,17 @@ environment. For the same reason `CLAUDE_CONFIG_DIR` is redirected to
 via `apiKeyHelper` — and the process runs in a fresh temp cwd so no `CLAUDE.md`
 (including this repo's) is discovered.
 
+The subscription's usage arrives on the stream: the pinned CLI emits a
+`rate_limit_event` frame whenever its rate-limit status changes or a window's
+rounded percent or reset does, carrying the five-hour and weekly windows'
+utilization and reset (`claudeRateLimitWindows`). The driver records them on
+change for the fleet's subscription usage gate, as the codex driver does —
+used percent, length, reset; never the overage or credit fields beside them —
+waits a spent quota's pause for the rejected window's reset, and stops a
+freeplay run at its turn boundary at the freeplay threshold. The shape is read
+off the pinned CLI's own bundle; until a frame arrives the lane has no reading
+and nothing is held.
+
 ### Setup, once
 
 ```bash
@@ -291,10 +304,12 @@ and differs only where the CLI does:
   under `$CODEX_HOME/sessions`. The trajectory's `driver` record carries the
   first turn's argv, a `codex_thread` record names the thread, every `request`
   after the first names it too, and one `codex_result` per turn carries the
-  turn's status and usage. `codex app-server` (JSON-RPC over stdio, a
-  long-lived process, rate-limit and token-usage notifications, typed
-  misalignment steers) is the upgrade path once it is no longer marked
-  experimental.
+  turn's status and usage. Exec is itself a client of the CLI's in-process
+  app server and drops most of what that server says; what the driver needs
+  of it comes back from the thread's rollout instead (below). The standalone
+  `codex app-server` would add a long-lived process and typed errors
+  (`codexErrorInfo`, a retry flag, misalignment steers); it stays parked while
+  upstream marks it experimental and unsupported for production.
 - **The prompt goes in on stdin, and stdin is closed.** The positional is `-`;
   the context message is written and stdin ended. argv has a per-argument
   ceiling a turn's context can approach, and an *open* pipe is what hung the
@@ -338,7 +353,7 @@ and differs only where the CLI does:
   name rather than mapping them.
 - **Usage is the thread's, not the turn's.** `turn.completed` carries usage
   only — no cost (a subscription; cost stays absent as on the Claude lanes)
-  and, in exec mode, no rate-limit window — and that usage is the thread's
+  and no rate-limit window — and that usage is the thread's
   running total: `exec resume` rebuilds the thread, counts included, from its
   rollout. The driver logs each turn's delta against the previous total of the
   same thread as `usage`, with the CLI's figure beside it as
@@ -363,8 +378,31 @@ and differs only where the CLI does:
   and `retainedTurns`, the turns whose context messages the CLI kept verbatim.
   The same reading drives the episodic-log ask, with the threshold above
   (`src/cli-compaction.ts`; the claude-code section "The compaction window").
-- **Failure vocabulary.** Exhaustion is a failed turn: `detectCodexFailure`
-  maps a usage limit to the `quota-exhausted` pause, a rate limit to
+- **The subscription's usage window is in the rollout.** Exec's stdout never
+  carries it (upstream declined to add it), but every `token_count` the CLI
+  persists carries the account's `rate_limits`. After each turn the driver
+  reads the newest one off the rollout and, when it changed, records it as a
+  `harness` record of kind `rate_limits` and in meta.json's
+  `subscriptionUsage`: per window the used percent, the window's length and
+  its reset — never the plan type, credits or any other field. The fleet's
+  subscription usage gate reads it (docs/RUNBOOK.md, "The subscription usage
+  gate"); a freeplay run stops at its turn boundary once its lane reaches the
+  freeplay threshold (`subscription-budget`), resumable at the reset. None of
+  it reaches the model or a public page.
+- **The model that ran is in the rollout too.** Each turn's `turn_context`
+  names the model the CLI ran; the first one seen is promoted onto the run
+  (`resolved.model`, the run row's `resolved_model`), as the other drivers
+  record theirs. A server-side reroute (`model rerouted: A -> B (reason)`,
+  which exec prints as an `error` item and the rollout does not keep) is a
+  `harness` record of kind `model_rerouted` beside it; the resolved model
+  stays the first one, by the first-observation rule.
+- **Failure vocabulary.** Exhaustion is a failed turn, and exec prints a
+  failure as words alone (`{"message": …}`, details in parentheses; the
+  server's typed `codexErrorInfo` never reaches it), so the classification is
+  the text: `detectCodexFailure` maps a usage limit to the `quota-exhausted`
+  pause — waiting for the window's reset when the rollout named one, capped at
+  seven days, and recording that window as spent so the lane gate holds the
+  next attempt until then — a rate limit to
   `rate-limited`, a dead login ("Your access token could not be refreshed",
   401) to `auth-failed`, a blown context window to the `context-limit`
   termination, and the provider's own policy monitor stopping the task (GPT-6
@@ -377,7 +415,13 @@ and differs only where the CLI does:
   An unclassified failed turn is a session note and the thread resumes; three
   in a row end the run as `adapter-error`. The model's note says only that the
   turn ended with an error from the CLI; the CLI's own words go to a `harness`
-  record for the operator.
+  record for the operator. A policy stop the server words without the CLI's
+  own "misalignment policy violation" sentence is such an unclassified turn —
+  the known limit of reading exec's words. A retry notice is not a failure:
+  `{"type":"error","message":"Reconnecting... 2/5 (…)"}` is the CLI retrying
+  (a retried 429 reads exactly like a rate limit), so it is recorded as
+  `codex_retry` and never classified; retries that run out end in a
+  `turn.failed`, which is.
 
 ### Billing: the lane's CODEX_HOME or nothing
 
@@ -632,7 +676,13 @@ observed), `episode-limit`, `snippet-runaway`, plus the config ceilings
 `classify.ts` after reading the trajectory. Model-API quota exhaustion is a
 *pause* (`quota-exhausted`), not a termination: the run resumes when the budget
 does. So is any HTTP 429 that survives the retries (`rate-limited`), whatever
-the response body says.
+the response body says — except OpenCode Go's `GoUsageLimitError`, its spent
+allowance, which is `quota-exhausted`. A fixed-loop run on a Go allowance (a Go
+base, paid billing; `src/opencode-go.ts`) reads Go's usage endpoint at most
+once a minute, never waiting on it at a turn: a spent allowance's pause waits
+for the spent window's reset, and a freeplay run stops at its turn boundary at
+the freeplay threshold (`subscription-budget`), as on the CLI lanes
+(docs/RUNBOOK.md, "The subscription usage gate").
 
 Where they are checked depends on who owns the tool loop. The fixed loop checks
 them once per turn, which is once per tool batch. The claude-code and codex

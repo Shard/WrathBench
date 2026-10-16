@@ -9,7 +9,7 @@ import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compaction";
 import { comparabilityOf } from "../src/comparability";
-import { childEnv, claudeArgs, compactEnv, compactionRecord, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
+import { childEnv, claudeArgs, claudeRateLimitWindows, compactEnv, compactionRecord, detectLimit, mcpToolNames, runClaudeEpisode, thinkingEnv, toolCallLimitReached } from "../src/adapter-claude";
 import { STUB_STAMP, isUnscoredDriver, loadRunConfig, parseCompactWindow, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, SYSTEM_PROMPT, contextSentence } from "../src/prompt";
 import { EpisodicLog } from "../src/episodic";
@@ -1222,4 +1222,71 @@ describe("harnessVersion", () => {
     const fallback = harnessVersion({ WRATHBENCH_HARNESS_VERSION: "  " });
     expect(fallback === HARNESS_VERSION_FALLBACK || fallback.startsWith("0.0.0-phase0+g")).toBe(true);
   });
+});
+
+// ------------------------------------------------------- subscription usage
+
+describe("claude driver: the subscription's usage windows", () => {
+  /** A `rate_limit_info` in the pinned CLI's shape: synthetic figures, resets `inMs` from now in epoch seconds. */
+  const info = (fiveHour: number, sevenDay: number, inMs: number, extra: Record<string, unknown> = {}): Record<string, unknown> => {
+    const resetsAt = Math.floor((Date.now() + inMs) / 1000);
+    return {
+      status: "allowed",
+      unifiedWindows: {
+        five_hour: { utilization: fiveHour, resetsAt },
+        seven_day: { utilization: sevenDay, resetsAt: resetsAt + 86_400 },
+        seven_day_overage_included: { utilization: 0.99, resetsAt },
+      },
+      ...extra,
+    };
+  };
+
+  test("claudeRateLimitWindows keeps the five-hour and weekly windows' percent, length and reset — never overage", () => {
+    expect(claudeRateLimitWindows(info(0.25, 0.5, 0))).toEqual([
+      { usedPercent: 25, windowMinutes: 300, resetsAt: expect.any(Number) },
+      { usedPercent: 50, windowMinutes: 10_080, resetsAt: expect.any(Number) },
+    ]);
+    // A rejected frame marks the window it names as spent.
+    const rejected = claudeRateLimitWindows({ status: "rejected", rateLimitType: "seven_day_opus", resetsAt: 1_900_000_000 });
+    expect(rejected).toEqual([{ usedPercent: 100, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 }]);
+    expect(claudeRateLimitWindows({ status: "allowed" })).toBeUndefined();
+    expect(claudeRateLimitWindows(null)).toBeUndefined();
+  });
+
+  test("frames land on the record and in meta.json on change only, with nothing of the overage or credit fields", async () => {
+    const frames = [info(0.1, 0.2, 3_600_000), info(0.1, 0.2, 3_600_000), info(0.15, 0.2, 3_600_000)];
+    // The same reset instant every turn, so the second frame reads as no change.
+    frames[1] = frames[0]!;
+    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 3 }, { WB_FAKE_RATE_LIMITS: JSON.stringify(frames) });
+    await runClaudeEpisode(options);
+    const records = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rate_limits");
+    expect(records.map((r) => (r["windows"] as { usedPercent: number }[])[0]!.usedPercent)).toEqual([10, 15]);
+    const meta = readMeta(runDir)!;
+    expect(meta.subscriptionUsage?.lane).toBe("claude-code:CLAUDE_CODE_OAUTH_TOKEN");
+    const all = readFileSync(join(runDir, "trajectory.jsonl"), "utf8") + JSON.stringify(meta);
+    for (const word of ["overage", "canUserPurchaseCredits", "isUsingOverage"]) expect(all).not.toContain(word);
+    trajectory.close();
+  }, 30_000);
+
+  test("a spent quota waits for the rejected window's reset", async () => {
+    const reset = Math.floor((Date.now() + 4 * 3_600_000) / 1000);
+    const frames = [{ status: "rejected", rateLimitType: "seven_day", resetsAt: reset, unifiedWindows: { seven_day: { utilization: 1, resetsAt: reset } } }];
+    const { trajectory, options } = setupEpisode("limit", { maxTurns: 3 }, { WB_FAKE_RATE_LIMITS: JSON.stringify(frames) });
+    const outcome = await runClaudeEpisode(options);
+    expect(outcome).toMatchObject({ kind: "paused", reason: "quota-exhausted", notBefore: reset * 1000 });
+    trajectory.close();
+  }, 20_000);
+
+  test("freeplay stops at the turn boundary at the freeplay threshold; a scored run plays on", async () => {
+    const frames = [info(0.82, 0.3, 3_600_000)];
+    const free = setupEpisode("tools", { maxTurns: 3, episode: "freeplay" }, { WB_FAKE_RATE_LIMITS: JSON.stringify(frames) });
+    const outcome = await runClaudeEpisode(free.options);
+    expect(outcome).toMatchObject({ kind: "paused", reason: "subscription-budget" });
+    expect(Math.abs((outcome.kind === "paused" ? outcome.notBefore! : 0) - (Date.now() + 3_600_000))).toBeLessThan(5_000);
+    expect(free.trajectory.runRow("run-test")?.["pause_reason"]).toBe("subscription-budget");
+    free.trajectory.close();
+    const scored = setupEpisode("tools", { maxTurns: 2, episode: "e90" }, { WB_FAKE_RATE_LIMITS: JSON.stringify(frames) });
+    expect(await runClaudeEpisode(scored.options)).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
+    scored.trajectory.close();
+  }, 30_000);
 });

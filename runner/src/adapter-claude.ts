@@ -64,6 +64,15 @@
  * That list is why `harness: "claude-code"` is in the comparability tuple, and
  * why the tool-call ceiling exists at all.
  *
+ * ## The subscription's usage windows
+ *
+ * The CLI reports its subscription's five-hour and weekly windows on the
+ * stream as `rate_limit_event` frames (`claudeRateLimitWindows`). The driver
+ * records them on change (`subscription-usage.ts`) for the fleet's lane gate,
+ * waits a spent quota's pause for the window's reset, and stops a freeplay run
+ * at its turn boundary once the lane reaches the freeplay threshold
+ * (`subscription-budget`; operator, 2026-10-16). None of it reaches the model.
+ *
  * ## Winding down instead of killing mid-turn
  *
  * The whole episode is usually ONE CLI turn, and the only place the finished
@@ -118,6 +127,14 @@ import {
   type CompactionRecord,
 } from "./cli-compaction";
 import type { EpisodicLog } from "./episodic";
+import { SUBSCRIPTION_PAUSE } from "./lapse";
+import {
+  SubscriptionUsageTracker,
+  describeWindows,
+  subscriptionLaneOf,
+  subscriptionThresholds,
+  type UsageWindow,
+} from "./subscription-usage";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { Scratchpad } from "./scratchpad";
 import type { Trajectory } from "./trajectory";
@@ -230,7 +247,7 @@ export function toolCallLimitReached(toolCalls: number, cap: number | null): boo
  * or an errored `result`. Never on assistant output — an agent narrating "the
  * daily quest limit resets at midnight" must not pause the run.
  */
-export function detectLimit(text: string | undefined | null): { reason: PauseReason; detail: string } | null {
+export function detectLimit(text: string | undefined | null): { reason: PauseReason; detail: string; resetAt?: number } | null {
   if (text === undefined || text === null) return null;
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
@@ -241,8 +258,69 @@ export function detectLimit(text: string | undefined | null): { reason: PauseRea
     const raw = Number(epoch[1]);
     const ms = raw > 1e11 ? raw : raw * 1000;
     detail = `${detail} (resets at ${new Date(ms).toISOString()})`;
+    return { reason: "quota-exhausted", detail, resetAt: ms };
   }
   return { reason: "quota-exhausted", detail };
+}
+
+/** The window lengths the CLI's `unifiedWindows` keys name, in minutes. */
+const CLAUDE_WINDOWS: Readonly<Record<string, number>> = { five_hour: 300, seven_day: 10_080 };
+
+/** A rejected frame's `rateLimitType`, as the window it spent: the per-model weekly caps are weekly windows. */
+function claudeWindowOfType(type: unknown): number | undefined {
+  if (type === "five_hour") return 300;
+  if (typeof type === "string" && type.startsWith("seven_day") && type !== "seven_day_overage_included") return 10_080;
+  return undefined;
+}
+
+/**
+ * The subscription's usage windows off a stream-json `rate_limit_event` (the
+ * pinned CLI, 2.1.293, read off its bundle: the frame is emitted whenever the
+ * status changes or any window's rounded percent or reset does):
+ *
+ *   {"type":"rate_limit_event","rate_limit_info":{"status":"allowed"|"allowed_warning"|"rejected",
+ *     "resetsAt":<epoch s>,"rateLimitType":"five_hour"|"seven_day"|…,"utilization":<0..1>,
+ *     "unifiedWindows":{"five_hour":{"utilization":<0..1>,"resetsAt":<epoch s>},"seven_day":{…}}, …}}
+ *
+ * Kept, per window: the used percent (the CLI's fraction × 100), the window's
+ * length and its reset (ms). Never the overage or credit fields the frame also
+ * carries, nor the `seven_day_overage_included` window, which is about paid
+ * extra usage (operator, 2026-10-16: used percent, window length, reset time
+ * only). A `rejected` frame marks the window it names as spent. Undefined when
+ * the frame holds no window this can use.
+ */
+export function claudeRateLimitWindows(info: unknown): UsageWindow[] | undefined {
+  if (info === null || typeof info !== "object") return undefined;
+  const i = info as Record<string, unknown>;
+  const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const byMinutes = new Map<number, UsageWindow>();
+  const unified = i["unifiedWindows"];
+  if (unified !== null && typeof unified === "object") {
+    for (const [key, minutes] of Object.entries(CLAUDE_WINDOWS)) {
+      const w = (unified as Record<string, unknown>)[key];
+      if (w === null || typeof w !== "object") continue;
+      const used = num((w as Record<string, unknown>)["utilization"]);
+      const resets = num((w as Record<string, unknown>)["resetsAt"]);
+      if (used === undefined) continue;
+      byMinutes.set(minutes, { usedPercent: used * 100, windowMinutes: minutes, resetsAt: resets !== undefined ? resets * 1000 : null });
+    }
+  }
+  const named = claudeWindowOfType(i["rateLimitType"]);
+  const topResets = num(i["resetsAt"]);
+  if (named !== undefined) {
+    const have = byMinutes.get(named);
+    const topUsed = num(i["utilization"]);
+    const usedPercent = i["status"] === "rejected" ? 100 : topUsed !== undefined ? topUsed * 100 : have?.usedPercent;
+    if (usedPercent !== undefined) {
+      byMinutes.set(named, {
+        usedPercent: Math.max(usedPercent, have?.usedPercent ?? 0),
+        windowMinutes: named,
+        resetsAt: topResets !== undefined ? topResets * 1000 : (have?.resetsAt ?? null),
+      });
+    }
+  }
+  const windows = [...byMinutes.entries()].sort(([a], [b]) => a - b).map(([, w]) => w);
+  return windows.length > 0 ? windows : undefined;
 }
 
 // ------------------------------------------------------------------- stream
@@ -628,10 +706,11 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     endEpisode(reason, detail);
     return finish();
   };
-  const pause = (reason: PauseReason, detail: string): LoopOutcome => {
+  /** `notBefore`: a usage window's reset, which the supervisor waits for (`subscription-usage.ts`). */
+  const pause = (reason: PauseReason, detail: string, notBefore?: number): LoopOutcome => {
     if (done()) return finish(); // a recorded termination (or pause) wins over a late pause
-    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs());
-    return { kind: "paused", reason, detail };
+    trajectory.setPause(runId, reason, detail, watchdogs.elapsedMs(), notBefore);
+    return notBefore !== undefined ? { kind: "paused", reason, detail, notBefore } : { kind: "paused", reason, detail };
   };
 
   const builder = new ContextBuilder({
@@ -859,6 +938,25 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     ...(Object.keys(extra).length > 0 ? { extra } : {}),
   });
 
+  /**
+   * The lane's usage windows, off the CLI's `rate_limit_event` frames,
+   * recorded on change; and the two thresholds (`subscription-usage.ts`). Only
+   * the freeplay one is the driver's to act on: a scored run is never paused
+   * by the gate, which holds the next launch instead.
+   */
+  const thresholds = subscriptionThresholds(o.env ?? process.env);
+  for (const note of thresholds.notes) console.error(`[wrathbench] ${note}`);
+  const usage = new SubscriptionUsageTracker(subscriptionLaneOf({ driver: "claude-code", lane: config.subscription })!, (u) =>
+    trajectory.recordSubscriptionUsage(u, turn),
+  );
+  /** A spent quota's pause, waiting for its window's reset when one is known. */
+  const quotaPause = (l: { reason: PauseReason; detail: string; resetAt?: number }): LoopOutcome => {
+    const notBefore = l.reason === "quota-exhausted" ? usage.quotaReset(Date.now(), l.resetAt) : undefined;
+    return notBefore !== undefined
+      ? pause(l.reason, `${l.detail} (usage window resets ${new Date(notBefore).toISOString()})`, notBefore)
+      : pause(l.reason, l.detail);
+  };
+
   trajectory.append({
     t: "driver",
     driver: "claude-code",
@@ -934,7 +1032,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
   // its only job is to unpark a reader so it re-reads the wind-down deadline.
   wakeReader = (): void => queue.push({ type: WAKE_TYPE });
   const stderrChunks: string[] = [];
-  let limit: { reason: PauseReason; detail: string } | null = null;
+  let limit: { reason: PauseReason; detail: string; resetAt?: number } | null = null;
 
   const stdoutTask = (async () => {
     for await (const line of readLines(proc.stdout)) {
@@ -1308,6 +1406,13 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
             }
             break;
           }
+          case "rate_limit_event": {
+            // The subscription's usage windows; recorded on change, never
+            // shown to the model.
+            const windows = claudeRateLimitWindows(msg["rate_limit_info"]);
+            if (windows !== undefined) usage.observe(windows, Date.now());
+            break;
+          }
           case "user": {
             // Tool results echoed back, which the MCP side already recorded.
             // A summary the CLI flags as a compaction's, if the stream carries
@@ -1388,13 +1493,13 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
 
       // A recorded termination (or pause) wins: the reason is already in the trajectory.
       if (done()) return finish();
-      if (limit !== null) return pause(limit.reason, limit.detail);
+      if (limit !== null) return quotaPause(limit);
 
       if (!turnEnded) {
         // The process died. Window exhaustion is a pause; anything else while
         // nothing has ended the episode is an adapter error.
         const detected = detectLimit(stderrChunks.join("\n"));
-        if (detected !== null) return pause(detected.reason, detected.detail);
+        if (detected !== null) return quotaPause(detected);
         const code = await proc.exited;
         return terminate(
           "adapter-error",
@@ -1407,6 +1512,20 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
 
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
+      }
+      // The freeplay gate, at the turn boundary: a lane at or over the
+      // freeplay threshold stops the run until the window resets. Never a
+      // scored run: pausing one would spend its attempt.
+      if (config.episode === "freeplay") {
+        const now = Date.now();
+        const hold = usage.freeplayHold(thresholds.freeplay, now);
+        if (hold !== null) {
+          return pause(
+            SUBSCRIPTION_PAUSE,
+            `subscription usage at or over the freeplay threshold (${hold.threshold}%): ${describeWindows(hold.windows, usage.current?.observedAt ?? now)}`,
+            hold.until,
+          );
+        }
       }
       // The episodic-log ask, delivered in the next turn's context. Only a
       // turn boundary can carry it, so on a turn long enough to cross the

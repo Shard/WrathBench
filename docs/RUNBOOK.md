@@ -747,7 +747,11 @@ with why:
   minutes to 48 hours out is honoured: a per-minute window stays on the
   ladder, which is what stops a saturated key resuming every few minutes
   forever. `--status` lists such a run as `resuming at <time> (provider
-  reset)`. A run paused `observation-stalled` (its sandbox's event stream
+  reset)`. A subscription lane's spent quota (codex, claude-code, an OpenCode
+  Go allowance) waits for its usage window's reset the same way, up to seven
+  days out, listed as `(usage window reset)`; "The subscription usage gate",
+  below. A freeplay run the gate paused (`subscription-budget`) is on no
+  ladder at all: it resumes once its window is back under the threshold. A run paused `observation-stalled` (its sandbox's event stream
   closed and the recorded state stopped moving) cools on the same ladder, but
   the runner releases its session and the roster advances, so the supervisor
   always brings it back, with a fresh sandbox and session. A run paused
@@ -1563,6 +1567,70 @@ rule the Claude lanes follow); per-lane `codex:<ENV NAME>` keys and a place in
 `policy.subscriptions` are not built yet, so a codex
 entry rides the default lane unless its `subscription` pins another
 directory's variable by hand.
+
+### The subscription usage gate
+
+A subscription bills a flat plan whose allowance is metered in rolling
+windows, and a window the fleet drains stays empty until it resets. So the
+fleet reads each lane's usage and stops short of the top by default
+(operator decision, 2026-10-16). The lanes are the concurrency key's:
+`claude-code:<TOKEN ENV>` per Claude OAuth token, `codex:<HOME ENV>` per Codex
+home, and `opencode-go:<KEY ENV>` per OpenCode Go key for the entries that
+draw the Go allowance down (a Go base, paid billing; a `$0` Go model keeps
+working past the limit and is never gated).
+
+Two knobs, both env vars read by the supervisor, the roster and the runner,
+each a percent in (0, 100], default 80:
+
+- `WRATHBENCH_SUB_SCORED_MAX_PCT` — a scored run (`e90`, `e360`) does not
+  start on a lane while any of its windows is at or over it. A scored run
+  already live is never paused by the gate (that would spend its attempt):
+  its episode finishes, and a running job's next episode waits — the
+  supervisor drains the job to its boundary, and the roster re-checks before
+  every launch.
+- `WRATHBENCH_SUB_FREEPLAY_MAX_PCT` — a freeplay run does not start or resume
+  on a lane at or over it, and a live one pauses at its next turn boundary as
+  `subscription-budget`, resumable, waiting for the window's reset. That
+  pause is the harness's doing: no strike, no rung on the defer ladder, no
+  streak.
+
+`100` turns a gate off. What stays on regardless is the quota-reset rule: a
+lane whose quota is spent — a window at 100%, or a `quota-exhausted` pause,
+which marks the window it spent — holds every launch on it, scored, freeplay
+or probe, until the window resets, capped at seven days, so no failed attempt
+is spent against a quota known to be empty. A scored run that pauses on a
+spent quota is still a failed attempt (docs/METHODOLOGY.md); its retry just
+waits for the reset. A probe is held only by that rule. An invalid value
+falls back to 80 and says so in the supervisor log and in `--status`, which
+reports the supervisor's own thresholds from its state file.
+
+Where the readings come from: the codex driver reads the thread's rollout
+after each turn (`rate_limits` on every `token_count`), the claude-code driver
+the CLI's `rate_limit_event` frames, and each records the newest reading on
+change in the run's meta.json and as a `harness` record of kind `rate_limits`
+— the used percent, the window's length and its reset, nothing else. For Go,
+the supervisor reads Go's usage endpoint with the entry's key, at most once a
+minute per key, before a tick decides anything, and leaves the reading in
+`data/runs/fleet-subscription-usage.json` for the roster and `--status`; a
+live Go freeplay run refreshes its own copy at turn boundaries without
+waiting on it. A window counts until its reset; a lane with no reading, or
+one whose reading cannot be had, is open.
+
+`--status` prints the gate per lane: the newest windows with their percent
+and reset, the reading's age, whether a scored and a freeplay launch are held,
+and the supervisor's thresholds (from its state file, so a status shell with
+other env values still reports what the fleet runs with). `--dry-run` shows a
+held launch as a `HELD` pick, a `SKIP`, or a paused run not resumed, each with
+the gate's reason. None of the figures reach a public page: the public fleet
+listing withholds a subscription wait's reset and sentence, and the usage
+records are on no public allowlist.
+
+Setting them on the cluster: the chart has no values key for them, and the
+defaults need none. The natural place is the `wrathbench.runEnv` block in
+`infra/chart/wrathbench/templates/_helpers.tpl` (beside
+`WRATHBENCH_LOCAL_MODEL_HOSTS`), which the fleet, the runner pod (where
+`--status` runs) and the run pods already include; a value changes those pod
+templates, so it rolls them.
 
 ### Secrets
 

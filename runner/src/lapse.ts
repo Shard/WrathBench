@@ -61,6 +61,17 @@ export const PROVIDER_PAUSES: ReadonlySet<string> = new Set(["quota-exhausted", 
 export const STALL_PAUSE = "observation-stalled";
 
 /**
+ * The pause a freeplay run takes when its subscription lane's usage window
+ * reaches the freeplay threshold (`runner/src/subscription-usage.ts`; operator,
+ * 2026-10-16). The harness's own doing, not the provider's refusal and not the
+ * model's: no strike, no rung on the defer ladder, no streak. It carries the
+ * window's reset as `notBefore`, and the lane gate holds the resume until the
+ * window is back under the threshold. Declared here for the reason
+ * `STALL_PAUSE` is: the public projection reads it.
+ */
+export const SUBSCRIPTION_PAUSE = "subscription-budget";
+
+/**
  * The pause a run never got to write. A fleet run with no termination, no
  * pause row and no live process behind it is a run whose runner died before
  * its verdict — a SIGKILL inside the stop grace, a host that lost power. The

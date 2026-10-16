@@ -3,6 +3,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CodexLastCallReader,
+  CodexRolloutFollower,
+  CodexRolloutScan,
+  rateLimitsOfLine,
+  turnModelOfLine,
   findRollout,
   lastCallOfLine,
   lastCallOfRollout,
@@ -155,5 +159,82 @@ describe("findRollout and the reader", () => {
     writeFileSync(file, "");
     expect(reader.read(THREAD)).toBeUndefined();
     expect(notes).toHaveLength(1);
+  });
+});
+
+// ------------------------------------------------------------ usage windows
+
+/** A `token_count` line carrying a `rate_limits` block in the CLI's shape. Synthetic figures only. */
+function withLimits(rateLimits: unknown): string {
+  return JSON.stringify({
+    type: "event_msg",
+    payload: {
+      type: "token_count",
+      info: { last_token_usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 }, model_context_window: 475_000 },
+      rate_limits: rateLimits,
+    },
+  });
+}
+
+const LIMITS = (primaryUsed: number, resetS = 1_900_000_000, secondary: unknown = null): Record<string, unknown> => ({
+  limit_id: "codex",
+  limit_name: null,
+  primary: { used_percent: primaryUsed, window_minutes: 10_080, resets_at: resetS },
+  secondary,
+  credits: { has_credits: true, unlimited: false, balance: "12" },
+  individual_limit: null,
+  spend_control_reached: null,
+  plan_type: "synthetic-plan",
+  rate_limit_reached_type: null,
+});
+
+describe("rateLimitsOfLine", () => {
+  test("keeps each window's used percent, length and reset (in ms), and nothing else", () => {
+    const out = rateLimitsOfLine(withLimits(LIMITS(42.5, 1_900_000_000, { used_percent: 7, window_minutes: 300, resets_at: 1_899_990_000 })));
+    expect(out).toEqual([
+      { usedPercent: 42.5, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 },
+      { usedPercent: 7, windowMinutes: 300, resetsAt: 1_899_990_000_000 },
+    ]);
+    // Never the credits, the plan type or any other field of the block.
+    const text = JSON.stringify(out);
+    for (const word of ["credits", "plan", "synthetic-plan", "balance", "limit_id", "codex"]) expect(text).not.toContain(word);
+  });
+
+  test("a null rate_limits, a null window and a line that is not a token_count read as nothing", () => {
+    expect(rateLimitsOfLine(withLimits(null))).toBeUndefined();
+    expect(rateLimitsOfLine(withLimits({ limit_id: "codex", primary: null, secondary: null }))).toBeUndefined();
+    expect(rateLimitsOfLine(withLimits(LIMITS(10)))).toHaveLength(1);
+    expect(rateLimitsOfLine(JSON.stringify({ type: "response_item", payload: { type: "message", rate_limits: LIMITS(10) } }))).toBeUndefined();
+    expect(rateLimitsOfLine("{not json")).toBeUndefined();
+  });
+});
+
+describe("turnModelOfLine", () => {
+  test("names the model a turn_context line carries, and nothing for any other line", () => {
+    expect(turnModelOfLine(JSON.stringify({ type: "turn_context", payload: { turn_id: "t", model: "gpt-5.5", summary: "auto" } }))).toBe("gpt-5.5");
+    expect(turnModelOfLine(JSON.stringify({ type: "turn_context", payload: { model: "" } }))).toBeUndefined();
+    expect(turnModelOfLine(JSON.stringify({ type: "response_item", payload: { text: "the turn_context said nothing" } }))).toBeUndefined();
+  });
+});
+
+describe("CodexRolloutScan usage windows", () => {
+  test("keeps the newest window; a null rate_limits never erases the one before", () => {
+    const scan = new CodexRolloutScan();
+    scan.line(withLimits(LIMITS(20)));
+    scan.line(withLimits(LIMITS(35)));
+    scan.line(withLimits(null));
+    expect(scan.rateLimits).toEqual([{ usedPercent: 35, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 }]);
+    // The token_count still counts as a context reading.
+    expect(scan.context).toEqual({ total: 11, window: 475_000 });
+  });
+
+  test("the follower answers the windows and the turn model beside the context", () => {
+    const { home: h } = home([JSON.stringify({ type: "turn_context", payload: { turn_id: "t1", model: "gpt-5.5" } }), withLimits(LIMITS(61))]);
+    const follower = new CodexRolloutFollower(h, () => {});
+    const read = follower.read(THREAD);
+    expect(read.model).toBe("gpt-5.5");
+    expect(read.rateLimits).toEqual([{ usedPercent: 61, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 }]);
+    // Nothing new appended: the newest readings stand.
+    expect(follower.read(THREAD).rateLimits?.[0]?.usedPercent).toBe(61);
   });
 });

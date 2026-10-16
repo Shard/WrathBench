@@ -504,6 +504,12 @@ describe("OpenAiChatAdapter budget pauses", () => {
     expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
   });
 
+  test("OpenCode Go's spent allowance (GoUsageLimitError) is quota-exhausted, not a passing rate limit", async () => {
+    const body = JSON.stringify({ type: "error", error: { type: "GoUsageLimitError", message: "usage allowance reached" } });
+    const out = await adapterPlaying([status(429, body)]).complete(req);
+    expect(out.kind === "pause" && out.reason).toBe("quota-exhausted");
+  });
+
   test("a 429 followed by network failures still pauses, not adapter-errors", async () => {
     // The run-real-smoke-1 shape: the 429's status used to be overwritten by
     // the next attempt's network error and the run died as adapter-error.

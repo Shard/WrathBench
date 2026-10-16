@@ -226,6 +226,23 @@ for await (const chunk of Bun.stdin.stream()) {
       });
     }
 
+    // The subscription's usage windows, as the pinned CLI frames them on the
+    // stream (`rate_limit_event`): $WB_FAKE_RATE_LIMITS is a JSON array of
+    // `rate_limit_info` objects indexed by turn (null for none). The overage
+    // and credit fields ride along so a test can see the driver drop them.
+    {
+      const spec = Bun.env["WB_FAKE_RATE_LIMITS"];
+      const info = spec !== undefined ? (JSON.parse(spec) as unknown[])[turn - 1] : undefined;
+      if (info !== undefined && info !== null) {
+        emit({
+          type: "rate_limit_event",
+          rate_limit_info: { ...(info as object), overageStatus: "allowed", isUsingOverage: false, canUserPurchaseCredits: true },
+          uuid: `rl-${turn}`,
+          session_id: "fake-session",
+        });
+      }
+    }
+
     if (mode === "limit-exit" && turn === 1) {
       process.stderr.write("Claude AI usage limit reached|1780000000\n");
       saveRecord();

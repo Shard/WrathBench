@@ -58,7 +58,9 @@ import { DEFAULT_CLAUDE_TOKEN_ENV, DEFAULT_CODEX_HOME_ENV, isTokenEnvName, parse
 import { moduleAuthHeaders } from "../runner/src/module-auth";
 import { isOpenRouterBase, parseRouting, resolveRouting, routingLabel, type RoutingSpec } from "../runner/src/routing";
 import { DEFAULT_API_BASE, DEFAULT_API_KEY_ENV } from "../runner/src/providers";
-import { classifyLapse, resumesOnPause } from "../runner/src/lapse";
+import { classifyLapse, resumesOnPause, SUBSCRIPTION_PAUSE } from "../runner/src/lapse";
+import { readLaneUsage, laneOfSpec, subscriptionGate } from "./run-fleet-gate";
+import { subscriptionThresholds } from "../runner/src/subscription-usage";
 import { Trajectory } from "../runner/src/trajectory";
 import { liveOwnerOf, MODEL_RESPONSE_RECORD, RecordCountScanner, type ScanReads } from "../runner/src/models";
 import { CAMPAIGN_FILE, holdsOnlyLaunchFiles, parseCampaignFile, writeCampaignFile, type CampaignFile } from "../runner/src/campaign-file";
@@ -1364,6 +1366,52 @@ async function awaitAccount(
   }
 }
 
+/** How often a launch held by the subscription gate looks again. */
+const SUB_GATE_POLL_MS = 60_000;
+
+/**
+ * The subscription usage gate before a launch (operator, 2026-10-16;
+ * `infra/run-fleet-gate.ts`). A roster runs `repeat: n` back to back, faster
+ * than the supervisor's tick, so the next scored episode on a lane at or over
+ * its threshold — or any launch on a lane whose quota is spent — waits here,
+ * re-reading the lane every minute. The supervisor drains the job on its next
+ * tick, which ends the wait (`drainSeen`); a hand-run roster waits for the
+ * reset. False when stopping or drained: launch nothing.
+ */
+async function awaitSubscriptionGate(spec: Resolved, deadline: number | undefined): Promise<boolean> {
+  const lane = laneOfSpec(spec);
+  if (lane === null) return true;
+  let said: string | undefined;
+  for (;;) {
+    if (stopping || drainSeen()) return false;
+    const now = Date.now();
+    if (said !== undefined && deadline !== undefined && now >= deadline) {
+      say(`wall-clock budget reached — not launching ${spec.model}`);
+      record({ runId: spec.runId, model: spec.model, outcome: "budget-stop", detail: "not launched (subscription gate)" });
+      return false;
+    }
+    const gate = subscriptionGate(readLaneUsage(join(REPO_ROOT, RUNS_DIR)), subscriptionThresholds(process.env), now);
+    const hold = gate.hold(lane, spec.episode);
+    if (hold === null) return true;
+    const why = gate.holdOf(lane, spec.episode)!;
+    if (why !== said) {
+      said = why;
+      say(`hold ${spec.model} (${spec.runId}): ${why} — not launching until it reopens`);
+      record({ runId: spec.runId, model: spec.model, outcome: "skipped", detail: why });
+    }
+    // Quietly, unlike `nap`: this can last days, and one line per minute
+    // would bury the log.
+    const ms = Math.max(1_000, Math.min(SUB_GATE_POLL_MS, hold.until - now, deadline !== undefined ? deadline - now : SUB_GATE_POLL_MS));
+    await new Promise<void>((res) => {
+      const timer = setTimeout(res, ms);
+      wakeups.push(() => {
+        clearTimeout(timer);
+        res();
+      });
+    });
+  }
+}
+
 // ------------------------------------------------------------------ output
 
 let logPath = "";
@@ -1887,6 +1935,21 @@ async function attemptSpec(
       });
       return "done";
     }
+    if (verdict.reason === SUBSCRIPTION_PAUSE) {
+      // The subscription gate stopped a freeplay run (operator, 2026-10-16):
+      // nothing to retry here, no defer, no strike — the supervisor resumes
+      // it once its lane's usage window resets.
+      say(`paused ${spec.runId}: ${verdict.reason} — the supervisor resumes it once the lane's usage window resets, advancing`);
+      record({
+        runId: spec.runId,
+        model: spec.model,
+        outcome: "paused-operator",
+        ...(level !== undefined ? { level } : {}),
+        detail: `${verdict.reason}; turns ${turnsText(turns)}`,
+      });
+      await freeSession(spec, `paused ${verdict.reason}`, opts.dryRun);
+      return "done";
+    }
     if (!RATE_PAUSES.has(verdict.reason)) {
       say(`paused ${spec.runId}: ${verdict.reason} — leaving it for the operator, advancing`);
       record({
@@ -2315,6 +2378,7 @@ async function main(): Promise<void> {
           detail: `resuming in place after ${plan.reason}; resume restores trajectory + scratchpad, not level`,
         });
       }
+      if (!(await awaitSubscriptionGate(target, deadline))) break;
       launched++;
       const res = await attemptSpec(target, { resume, deadline, dryRun: false });
       if (res === "defer") {

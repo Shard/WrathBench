@@ -593,13 +593,12 @@ describe("codex driver", () => {
     const { runDir, recordPath, trajectory, options } = setupEpisode("policy", { maxTurns: 3 });
     const outcome = await runCodexEpisode(options);
     expect(outcome.kind === "terminated" && outcome.reason).toBe("provider-policy");
-    expect(outcome.kind === "terminated" && outcome.detail).toContain("misalignmentPolicyViolation");
+    // Real exec carries the message alone — no codexErrorInfo — so the words decide.
+    expect(outcome.kind === "terminated" && outcome.detail).toContain("misalignment policy violation");
     const records = readTrajectory(runDir);
     const result = records.find((r) => r.t === "codex_result");
     expect(result?.["status"]).toBe("failed");
-    expect((result?.["error"] as { message: string }).message).toBe(
-      "The model's continued work on this task was stopped by the misalignment monitor.",
-    );
+    expect(result?.["error"]).toEqual({ message: "This request was blocked due to a misalignment policy violation." });
     expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("provider-policy");
     // One process, one turn: nothing tried to steer or retry.
     expect((readRecord(recordPath)["argvs"] as string[][]).length).toBe(1);
@@ -947,5 +946,143 @@ describe("driver, harness and prompt vocabulary", () => {
     const none = await launch(["--model", "gpt-5.5", "--effort", "none"], { CODEX_HOME: fakeCodexHome() });
     expect(none.code).toBe(2);
     expect(none.stderr).toContain("not a Codex reasoning level");
+  }, 30_000);
+});
+
+// ------------------------------------------------------------- exec's words
+
+describe("codex driver: what exec prints", () => {
+  test("a retry notice is recorded and never classified: the turn completes, nothing pauses", async () => {
+    const { runDir, trajectory, options } = setupEpisode("retry-429", { maxTurns: 1 });
+    expect(await runCodexEpisode(options)).toEqual({ kind: "terminated", reason: "turn-limit", detail: "1 turns" });
+    const records = readTrajectory(runDir);
+    const retries = records.filter((r) => r.t === "codex_retry");
+    expect(retries).toHaveLength(1);
+    expect(String(retries[0]!["message"])).toStartWith("Reconnecting... 1/5 (unexpected status 429");
+    expect(records.filter((r) => r.t === "codex_result").map((r) => r["status"])).toEqual(["completed"]);
+    expect(trajectory.runRow("run-test")?.["pause_reason"]).toBeNull();
+    trajectory.close();
+  }, 20_000);
+
+  test("retries that run out end in a turn.failed, which is classified even in the notice's words", async () => {
+    const { runDir, trajectory, options } = setupEpisode("retry-exhausted", { maxTurns: 3 });
+    expect(await runCodexEpisode(options)).toMatchObject({ kind: "paused", reason: "rate-limited" });
+    expect(readTrajectory(runDir).filter((r) => r.t === "codex_retry")).toHaveLength(2);
+    trajectory.close();
+  }, 20_000);
+
+  test("a server-worded policy stop is not recognised: session notes, then adapter-error after three (the known exec limit)", async () => {
+    const { runDir, trajectory, options } = setupEpisode("policy-custom", { maxTurns: 5 });
+    const outcome = await runCodexEpisode(options);
+    expect(outcome).toMatchObject({ kind: "terminated", reason: "adapter-error" });
+    expect(outcome.kind === "terminated" && outcome.detail).toContain("failed 3 turns in a row");
+    const notes = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "session_note" && String(r["text"]).includes("automated safety review"));
+    expect(notes).toHaveLength(2);
+    expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("adapter-error");
+    trajectory.close();
+  }, 30_000);
+
+  test("a server-side reroute is on the record beside the run", async () => {
+    const { runDir, trajectory, options } = setupEpisode("reroute", { maxTurns: 1 });
+    await runCodexEpisode(options);
+    expect(readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "model_rerouted")).toEqual([
+      expect.objectContaining({ turn: 1, from: "gpt-5.5", to: "gpt-5.5-mini", reason: "HighRiskCyberActivity" }),
+    ]);
+    trajectory.close();
+  }, 20_000);
+});
+
+// ------------------------------------------------------- subscription usage
+
+describe("codex driver: the subscription's usage windows", () => {
+  const thread = "01a119da-ef89-7a63-ac51-314ac6a70a52";
+  /** A rollout `rate_limits` primary window: synthetic figures, the reset `inMs` from now (epoch seconds, as the CLI writes it). */
+  const primary = (used: number, inMs: number): Record<string, unknown> => ({
+    primary: { used_percent: used, window_minutes: 10_080, resets_at: Math.floor((Date.now() + inMs) / 1000) },
+  });
+
+  test("land on the record and in meta.json on change only, without credits or the plan; the served model is promoted", async () => {
+    const rollout = [
+      { total: 1_000, model: "gpt-5.5-served", rateLimits: primary(20, 3_600_000) },
+      { total: 2_000, model: "gpt-5.5-served", rateLimits: primary(20, 3_600_000) },
+      { total: 3_000, model: "gpt-5.5-served", rateLimits: primary(30, 3_600_000) },
+    ];
+    const { runDir, trajectory, options } = setupEpisode("tools", { maxTurns: 3 }, { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) });
+    await runCodexEpisode(options);
+    const records = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "rate_limits");
+    expect(records.map((r) => (r["windows"] as { usedPercent: number }[])[0]!.usedPercent)).toEqual([20, 30]);
+    expect(records[0]).toMatchObject({ turn: 1, lane: "codex:CODEX_HOME" });
+    const meta = readMeta(runDir)!;
+    expect(meta.subscriptionUsage).toMatchObject({ lane: "codex:CODEX_HOME", windows: [{ usedPercent: 30, windowMinutes: 10_080 }] });
+    const all = readFileSync(join(runDir, "trajectory.jsonl"), "utf8") + JSON.stringify(meta);
+    for (const word of ["fake-plan", "fake-balance", "plan_type", "credits"]) expect(all).not.toContain(word);
+    // The model the CLI ran, off the rollout's turn_context, as the other drivers record theirs.
+    expect(meta.resolved?.model).toBe("gpt-5.5-served");
+    expect(trajectory.runRow("run-test")?.["resolved_model"]).toBe("gpt-5.5-served");
+    trajectory.close();
+  }, 30_000);
+
+  test("a spent quota pauses until the window's reset, recorded as spent for the lane gate", async () => {
+    const rollout = [{ total: 1_000, rateLimits: primary(97, 3 * 3_600_000) }];
+    const { runDir, trajectory, options } = setupEpisode("limit", { maxTurns: 3 }, { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) });
+    const outcome = await runCodexEpisode(options);
+    const reset = Math.floor((Date.now() + 3 * 3_600_000) / 1000) * 1000;
+    expect(outcome).toMatchObject({ kind: "paused", reason: "quota-exhausted" });
+    const notBefore = outcome.kind === "paused" ? outcome.notBefore : undefined;
+    expect(Math.abs(notBefore! - reset)).toBeLessThan(5_000);
+    expect(outcome.kind === "paused" && outcome.detail).toContain(new Date(notBefore!).toISOString());
+    // The trajectory's pause record carries it too: the streak reads it there.
+    expect(readTrajectory(runDir).find((r) => r.t === "pause")?.["notBefore"]).toBe(notBefore);
+    expect(readMeta(runDir)!.subscriptionUsage?.windows[0]?.usedPercent).toBe(100);
+    trajectory.close();
+  }, 20_000);
+
+  test("a reset farther than seven days out is waited for only seven days", async () => {
+    const rollout = [{ total: 1_000, rateLimits: primary(99, 30 * 24 * 3_600_000) }];
+    const { trajectory, options } = setupEpisode("limit", { maxTurns: 3 }, { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) });
+    const outcome = await runCodexEpisode(options);
+    const notBefore = outcome.kind === "paused" ? outcome.notBefore! : 0;
+    expect(Math.abs(notBefore - (Date.now() + 7 * 24 * 3_600_000))).toBeLessThan(60_000);
+    trajectory.close();
+  }, 20_000);
+
+  test("a spent quota with no window known pauses as before, with no reset", async () => {
+    const { trajectory, options } = setupEpisode("limit", { maxTurns: 3 });
+    const outcome = await runCodexEpisode(options);
+    expect(outcome).toMatchObject({ kind: "paused", reason: "quota-exhausted" });
+    expect(outcome.kind === "paused" && outcome.notBefore).toBeUndefined();
+    trajectory.close();
+  }, 20_000);
+
+  test("freeplay pauses at the turn boundary at the freeplay threshold, resumable at the reset; a higher threshold lets it play", async () => {
+    const rollout = [
+      { total: 1_000, rateLimits: primary(85, 2 * 3_600_000) },
+      { total: 2_000, rateLimits: primary(86, 2 * 3_600_000) },
+    ];
+    const env = { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) };
+    const held = setupEpisode("tools", { maxTurns: 2, episode: "freeplay" }, env);
+    const outcome = await runCodexEpisode(held.options);
+    expect(outcome).toMatchObject({ kind: "paused", reason: "subscription-budget" });
+    expect(outcome.kind === "paused" && outcome.detail).toContain("freeplay threshold (80%)");
+    expect(Math.abs((outcome.kind === "paused" ? outcome.notBefore! : 0) - (Date.now() + 2 * 3_600_000))).toBeLessThan(5_000);
+    // One turn played, then the stop: nothing told the model.
+    expect((readRecord(held.recordPath)["userMessages"] as string[]).length).toBe(1);
+    expect(held.trajectory.runRow("run-test")?.["pause_reason"]).toBe("subscription-budget");
+    held.trajectory.close();
+
+    const open = setupEpisode("tools", { maxTurns: 2, episode: "freeplay" }, { ...env, WRATHBENCH_SUB_FREEPLAY_MAX_PCT: "90" });
+    expect(await runCodexEpisode(open.options)).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
+    open.trajectory.close();
+  }, 30_000);
+
+  test("a scored run is never paused by the gate, however full the window", async () => {
+    const rollout = [
+      { total: 1_000, rateLimits: primary(95, 2 * 3_600_000) },
+      { total: 2_000, rateLimits: primary(96, 2 * 3_600_000) },
+    ];
+    const { trajectory, options } = setupEpisode("tools", { maxTurns: 2, episode: "e90" }, { WB_FAKE_THREAD_ID: thread, WB_FAKE_ROLLOUT: JSON.stringify(rollout) });
+    expect(await runCodexEpisode(options)).toEqual({ kind: "terminated", reason: "turn-limit", detail: "2 turns" });
+    expect(trajectory.runRow("run-test")?.["pause_reason"]).toBeNull();
+    trajectory.close();
   }, 30_000);
 });

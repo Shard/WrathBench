@@ -25,6 +25,8 @@ import { buildSystemPrompt } from "./prompt";
 import { fixedLoopRequestRecord } from "./request-record";
 import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, toolsFor, type ToolContext } from "./tools";
 import { harnessOf } from "./config";
+import { SUBSCRIPTION_PAUSE } from "./lapse";
+import { describeWindows, subscriptionThresholds, type SubscriptionUsage, type UsageHold } from "./subscription-usage";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { ContextEvents, DeathSignal, FlightSignal } from "./sandbox/ipc";
@@ -87,6 +89,26 @@ export interface LoopOptions {
    * in flight is abandoned rather than waited out.
    */
   signal?: AbortSignal | undefined;
+  /**
+   * The run's subscription allowance, when it draws on one through this loop
+   * (OpenCode Go: `GoUsageGauge`, opencode-go.ts). Poked at each turn boundary
+   * and never waited on there; a freeplay run stops at the boundary once its
+   * lane reaches the freeplay threshold (`subscription-budget`), and a
+   * `quota-exhausted` pause with no stated reset waits for the spent window's
+   * (operator, 2026-10-16). Absent on every other run.
+   */
+  usage?: UsageGauge | undefined;
+}
+
+/** What the loop asks of a subscription allowance it runs on (`LoopOptions.usage`). */
+export interface UsageGauge {
+  /** Refresh in the background when due; never awaited by a turn. */
+  poke(): void;
+  /** The hold at `threshold` percent off the newest reading, or null. */
+  freeplayHold(threshold: number, now: number): UsageHold | null;
+  /** A spent allowance's reset, capped, with the spent window recorded; undefined when none is known. */
+  quotaReset(now: number): Promise<number | undefined>;
+  readonly current: SubscriptionUsage | undefined;
 }
 
 /**
@@ -992,6 +1014,10 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const { config, trajectory, watchdogs } = o;
   const runId = config.runId;
+  // Only the freeplay threshold is the loop's to act on (`subscription-usage.ts`).
+  const usageThresholds = subscriptionThresholds(process.env);
+  // The first reading, early: a turn's boundary will want it.
+  o.usage?.poke();
 
   // Append-only. The model-visible window is a pure function of it: no trim
   // state accumulates, so a rebuilt history cuts identically.
@@ -1167,12 +1193,21 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       const outcome = await o.adapter.complete({ messages, tools: toolsFor({ wikiCoords: config.wikiCoords, wikiSearch: config.wiki }), signal: o.signal });
       if (outcome.kind === "stub-complete") return terminate("stub-complete");
       if (outcome.kind === "pause") {
-        trajectory.setPause(runId, outcome.reason, outcome.detail, watchdogs.elapsedMs(), outcome.notBefore);
+        // A spent subscription allowance waits for its window's reset when the
+        // lane's own reading names one (decision 2: no attempt against a quota
+        // known to be empty).
+        let notBefore = outcome.notBefore;
+        let detail = outcome.detail;
+        if (notBefore === undefined && outcome.reason === "quota-exhausted" && o.usage !== undefined) {
+          notBefore = await o.usage.quotaReset(Date.now());
+          if (notBefore !== undefined) detail = `${detail} (usage window resets ${new Date(notBefore).toISOString()})`;
+        }
+        trajectory.setPause(runId, outcome.reason, detail, watchdogs.elapsedMs(), notBefore);
         return {
           kind: "paused",
           reason: outcome.reason,
-          detail: outcome.detail,
-          ...(outcome.notBefore !== undefined ? { notBefore: outcome.notBefore } : {}),
+          detail,
+          ...(notBefore !== undefined ? { notBefore } : {}),
         };
       }
       watchdogs.noteModelOutput();
@@ -1307,6 +1342,22 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // 6. bookkeeping and pacing
       if (config.maxTurns !== undefined && turn >= config.maxTurns) {
         return terminate("turn-limit", `${turn} turns`);
+      }
+      // The subscription gate at the turn boundary (operator, 2026-10-16): a
+      // freeplay run on a lane at or over the freeplay threshold stops until
+      // the window resets. A scored run never: pausing it would spend its
+      // attempt. The reading is refreshed in the background, never awaited.
+      if (o.usage !== undefined) {
+        o.usage.poke();
+        if (config.episode === "freeplay") {
+          const now = Date.now();
+          const hold = o.usage.freeplayHold(usageThresholds.freeplay, now);
+          if (hold !== null) {
+            const detail = `subscription usage at or over the freeplay threshold (${hold.threshold}%): ${describeWindows(hold.windows, o.usage.current?.observedAt ?? now)}`;
+            trajectory.setPause(runId, SUBSCRIPTION_PAUSE, detail, watchdogs.elapsedMs(), hold.until);
+            return { kind: "paused", reason: SUBSCRIPTION_PAUSE, detail, notBefore: hold.until };
+          }
+        }
       }
       await sleep(config.stepIntervalMs);
     }

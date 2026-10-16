@@ -11,11 +11,23 @@
  * Behaviour is picked with $WB_FAKE_MODE:
  *   tools        (default) one agent_message + one run_snippet tool call per
  *                turn, then `turn.completed` with usage, exit 0.
- *   limit        `turn.failed` with the CLI's usage-limit message, exit 1.
+ *   limit        `turn.failed` with the CLI's usage-limit message, exit 1 (the
+ *                turn's rollout is written first when $WB_FAKE_ROLLOUT says).
  *   rate-limit   `error` with rate-limit wording, exit 1.
  *   auth         `error` with the spent-refresh-token message, exit 1.
- *   policy       `turn.failed` carrying codexErrorInfo misalignmentPolicyViolation.
- *   context      `turn.failed` carrying codexErrorInfo contextWindowExceeded.
+ *   policy       `turn.failed` with the CLI's own fallback sentence for a
+ *                misalignment stop ("…misalignment policy violation.").
+ *   policy-custom
+ *                every turn fails with a server-worded policy stop that names
+ *                neither: what exec cannot classify without typed errors.
+ *   context      `turn.failed` with a blown-context-window message.
+ *   retry-429    an `error` retry notice ("Reconnecting... 1/5 (… 429 …)"),
+ *                then the turn completes normally.
+ *   retry-exhausted
+ *                retry notices, then a `turn.failed` whose message is the last
+ *                notice's (exec falls back to it when the turn names none).
+ *   reroute      like tools, plus the `error` item exec prints for a
+ *                server-side model reroute.
  *   flaky        the first turn fails with a transient message, later ones work.
  *   limit-stderr the usage-limit line on stderr, exit 1, no events.
  *   silent       `turn.completed` with no items at all.
@@ -37,7 +49,12 @@
  *                failure on a full disk while the turn still completes.
  *
  * $WB_FAKE_ROLLOUT makes the default turn write the thread's rollout as well
- * (`writeRollout`), compactions included.
+ * (`writeRollout`), compactions, the turn's `turn_context` and the
+ * subscription's `rate_limits` included.
+ *
+ * Failures are what real exec prints: `{type, message}` or
+ * `{type:"turn.failed", error:{message}}`, details appended in parentheses —
+ * never the server's `codexErrorInfo`, which exec does not carry.
  *
  * `turn.completed.usage` is the THREAD's running total, as the real CLI's
  * is: each completed turn on a thread adds `PER_TURN` to it.
@@ -260,13 +277,15 @@ async function callTool(i: number): Promise<{ isError?: boolean; content?: { tex
   return res.result;
 }
 
-function fail(kind: "turn.failed" | "error", message: string, codexErrorInfo?: string): void {
-  const error = codexErrorInfo !== undefined ? { message, codexErrorInfo } : { message };
-  emit(kind === "error" ? { type: "error", message, ...(codexErrorInfo !== undefined ? { codexErrorInfo } : {}) } : { type: "turn.failed", error });
+/** A failure as exec prints one (0.159.3): the message alone, any details in parentheses. */
+function fail(kind: "turn.failed" | "error", message: string, details?: string): void {
+  const text = details !== undefined && details.length > 0 ? `${message} (${details})` : message;
+  emit(kind === "error" ? { type: "error", message: text } : { type: "turn.failed", error: { message: text } });
 }
 
 switch (mode) {
   case "limit":
+    writeRollout();
     fail("turn.failed", "You've hit your usage limit. Try again at 4:00 PM.");
     saveRecord();
     process.exit(1);
@@ -277,10 +296,25 @@ switch (mode) {
     fail("error", "Your access token could not be refreshed because your refresh token was already used. Run `codex login` again.");
     process.exit(1);
   case "policy":
-    fail("turn.failed", "The model's continued work on this task was stopped by the misalignment monitor.", "misalignmentPolicyViolation");
+    // The CLI's own fallback sentence (codex-api responses_error.rs).
+    fail("turn.failed", "This request was blocked due to a misalignment policy violation.");
+    process.exit(1);
+  case "policy-custom":
+    // A server-worded stop: no "misalignment", no "policy violation".
+    fail("turn.failed", "This task was halted by an automated safety review and cannot continue.");
+    saveRecord();
     process.exit(1);
   case "context":
-    fail("turn.failed", "The conversation exceeds the model's context window and could not be compacted.", "contextWindowExceeded");
+    fail("turn.failed", "The conversation exceeds the model's context window and could not be compacted.");
+    process.exit(1);
+  case "retry-429":
+    fail("error", "Reconnecting... 1/5", "unexpected status 429 Too Many Requests: rate limit reached");
+    break;
+  case "retry-exhausted":
+    fail("error", "Reconnecting... 4/5", "unexpected status 429 Too Many Requests");
+    fail("error", "Reconnecting... 5/5", "unexpected status 429 Too Many Requests");
+    fail("turn.failed", "Reconnecting... 5/5", "unexpected status 429 Too Many Requests");
+    saveRecord();
     process.exit(1);
   case "limit-stderr":
     process.stderr.write("ERROR: usage limit reached for this account\n");
@@ -344,26 +378,72 @@ switch (mode) {
     break;
 }
 
+/** A usage window as the rollout writes it: epoch SECONDS for the reset. */
+interface FakeWindow {
+  used_percent: number;
+  window_minutes: number | null;
+  resets_at: number | null;
+}
+
 /**
  * $WB_FAKE_ROLLOUT, a JSON array indexed by turn: `{ total, compact?: { pre,
- * post, message? } }`. Each turn appends to the thread's rollout under
- * $CODEX_HOME what the real CLI writes there — a compaction's four lines when
- * the entry has one (0.159.3's remote shape: an empty `message` and an
- * encrypted item; `message` puts a readable summary there instead), then the
- * turn's last `token_count` — so the driver's rollout follower reads it after
- * the process exits.
+ * post, message? }, model?, rateLimits? }`. Each turn appends to the thread's
+ * rollout under $CODEX_HOME what the real CLI writes there — the turn's
+ * `turn_context` naming `model` when the entry has one, a compaction's four
+ * lines when the entry has one (0.159.3's remote shape: an empty `message`
+ * and an encrypted item; `message` puts a readable summary there instead),
+ * then the turn's last `token_count` — so the driver's rollout follower reads
+ * it after the process exits. `rateLimits` (`{ primary, secondary }`, or
+ * null as the CLI sometimes writes) rides on every `token_count`, with the
+ * fields the driver must never keep (`credits`, `plan_type`) beside it.
  */
 function writeRollout(): void {
   const spec = Bun.env["WB_FAKE_ROLLOUT"];
   const home = Bun.env["CODEX_HOME"];
   if (spec === undefined || home === undefined) return;
-  const entry = (JSON.parse(spec) as { total: number; compact?: { pre: number; post: number; message?: string } }[])[turn - 1];
+  const entry = (
+    JSON.parse(spec) as {
+      total: number;
+      compact?: { pre: number; post: number; message?: string };
+      model?: string;
+      rateLimits?: { primary?: FakeWindow | null; secondary?: FakeWindow | null } | null;
+    }[]
+  )[turn - 1];
   if (entry === undefined) return;
   const dir = `${home}/sessions/2026/10/14`;
   mkdirSync(dir, { recursive: true });
+  const rateLimits =
+    entry.rateLimits === undefined
+      ? {}
+      : {
+          rate_limits:
+            entry.rateLimits === null
+              ? null
+              : {
+                  limit_id: "codex",
+                  limit_name: null,
+                  primary: entry.rateLimits.primary ?? null,
+                  secondary: entry.rateLimits.secondary ?? null,
+                  credits: { has_credits: true, unlimited: false, balance: "fake-balance" },
+                  individual_limit: null,
+                  spend_control_reached: null,
+                  plan_type: "fake-plan",
+                  rate_limit_reached_type: null,
+                },
+        };
   const count = (total: number, input = total): string =>
-    JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: input, output_tokens: total - input, total_tokens: total }, model_context_window: 475_000 } } });
+    JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: { last_token_usage: { input_tokens: input, output_tokens: total - input, total_tokens: total }, model_context_window: 475_000 },
+        ...rateLimits,
+      },
+    });
   const lines: string[] = [];
+  if (entry.model !== undefined) {
+    lines.push(JSON.stringify({ type: "turn_context", payload: { turn_id: `turn-${turn}`, cwd: "/tmp/fake", approval_policy: "never", model: entry.model, summary: "auto" } }));
+  }
   if (entry.compact !== undefined) {
     lines.push(
       count(entry.compact.pre),
@@ -389,6 +469,9 @@ function writeRollout(): void {
 
 // tools (and flaky after its first turn): text, one tool call, text, done
 emit({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: `turn ${turn}: acting` } });
+if (mode === "reroute") {
+  emit({ type: "item.completed", item: { id: "item_r", type: "error", message: "model rerouted: gpt-5.5 -> gpt-5.5-mini (HighRiskCyberActivity)" } });
+}
 if (mcp !== null) await callTool(1);
 emit({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: `turn ${turn} done` } });
 writeRollout();
