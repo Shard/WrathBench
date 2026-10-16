@@ -197,7 +197,12 @@ export interface ItemSample {
  *   is what lets a reader tell "flew nowhere" from "flights were not recorded".
  * - `taxi` / `taxi_landed`: `taxiFlight` on self flipping on after an accepted
  *   reply, and flipping back. The area id is keyed `areaId`, not `id`, so no
- *   consumer can mistake a flight record for a zone/area mark.
+ *   consumer can mistake a flight record for a zone/area mark. Latched in the
+ *   sandbox child at the event that flipped the flag (`FlightSignal`), so
+ *   `observedTs` and `position` are the flip's own and a landing's `to` is the
+ *   landing's area, not the area of the sample that wrote it; two legs inside
+ *   one sample are two records. Absent `observedTs` marks a record the sampled
+ *   fallback wrote.
  * - `level`: `self.level` changing, `from` absent on the first observation of a
  *   process exactly as on `zone` — so a run's starting level is on the record
  *   and a consumer counts level-ups as the marks that carry a `from`, never as
@@ -255,8 +260,20 @@ export type MilestoneLine =
       turn?: number | undefined;
     }
   | { kind: "achievements_at_login"; ids: number[]; points: number; turn?: number | undefined }
-  | { kind: "taxi"; from?: { areaId: number } | undefined; turn?: number | undefined }
-  | { kind: "taxi_landed"; to?: { areaId: number } | undefined; turn?: number | undefined }
+  | {
+      kind: "taxi";
+      from?: { areaId: number } | undefined;
+      observedTs?: number | undefined;
+      position?: { map: number; x: number; y: number; z: number } | undefined;
+      turn?: number | undefined;
+    }
+  | {
+      kind: "taxi_landed";
+      to?: { areaId: number } | undefined;
+      observedTs?: number | undefined;
+      position?: { map: number; x: number; y: number; z: number } | undefined;
+      turn?: number | undefined;
+    }
   | {
       kind: "level";
       from: number | undefined;

@@ -27,7 +27,7 @@ import { appendPendingActionHints, callTool, coerceToolArgs, normalizeToolArgs, 
 import { harnessOf } from "./config";
 import type { PauseReason, RunConfig, TerminationReason } from "./config";
 import type { HarnessNotice, SandboxHost } from "./sandbox/host";
-import type { ContextEvents, DeathSignal } from "./sandbox/ipc";
+import type { ContextEvents, DeathSignal, FlightSignal } from "./sandbox/ipc";
 import type { Scratchpad } from "./scratchpad";
 import type { ItemSample, Trajectory } from "./trajectory";
 import type { Watchdogs } from "./watchdogs";
@@ -614,9 +614,33 @@ export class ContextBuilder {
     // Flights: no packet says "a flight began", so the flip is read the way a
     // client reads it — an accepted reply, then the taxi flag turning on.
     // The flag turning off is the landing, recorded whether or not
-    // the takeoff was seen, because it is its own observation.
+    // the takeoff was seen, because it is its own observation. The child
+    // latches each flip with the position and area at that instant
+    // (`FlightSignal`), so a landing is written with the landing's area and
+    // two legs inside one sample are two records; the sampled read below is
+    // the fallback for a sandbox without the drain.
     const taxiFlight = snap.self?.taxiFlight?.value;
-    if (typeof taxiFlight === "boolean") {
+    const flightSandbox = this.o.sandbox as SandboxHost & { flightSignals?: () => Promise<FlightSignal[]> };
+    let flightSignals: FlightSignal[] | undefined;
+    if (typeof flightSandbox.flightSignals === "function") {
+      try {
+        flightSignals = await flightSandbox.flightSignals();
+      } catch {
+        flightSignals = undefined;
+      }
+    }
+    if (flightSignals !== undefined) {
+      for (const s of flightSignals) {
+        const end = typeof s.area === "number" ? { areaId: s.area } : undefined;
+        const at = s.position === undefined ? {} : { position: s.position };
+        if (s.kind === "taxi") {
+          trajectory.recordMilestone({ kind: "taxi", observedTs: s.ts, ...at, ...(end === undefined ? {} : { from: end }), ...turn });
+        } else {
+          trajectory.recordMilestone({ kind: "taxi_landed", observedTs: s.ts, ...at, ...(end === undefined ? {} : { to: end }), ...turn });
+        }
+      }
+      if (typeof taxiFlight === "boolean") this.lastTaxiFlight = taxiFlight;
+    } else if (typeof taxiFlight === "boolean") {
       const accepted = (snap.self?.taxiReply?.value as { ok?: unknown } | undefined)?.ok === true;
       if (this.lastTaxiFlight === false && taxiFlight && accepted) {
         trajectory.recordMilestone({

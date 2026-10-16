@@ -1481,9 +1481,15 @@ describe("the replay's travel marks", () => {
     ...extra,
   });
 
-  test("flights and releases come off the milestones, at the sample that saw them", () => {
+  test("flights and releases come off the milestones, at the sample that saw them or the flight's own stamp", () => {
     expect(travelMarksOf(milestone(1300, "taxi", { from: { areaId: 9 } }))).toEqual([{ kind: "taxi", ts: 1300 }]);
     expect(travelMarksOf(milestone(1400, "taxi_landed"))).toEqual([{ kind: "taxi_landed", ts: 1400 }]);
+    // A flight latched in the sandbox child carries the flip's own `observedTs`,
+    // which beats the sample's stamp.
+    expect(travelMarksOf(milestone(1300, "taxi", { observedTs: 1260, from: { areaId: 9 } }))).toEqual([{ kind: "taxi", ts: 1260 }]);
+    expect(travelMarksOf(milestone(1400, "taxi_landed", { observedTs: 1385, to: { areaId: 38 } }))).toEqual([
+      { kind: "taxi_landed", ts: 1385 },
+    ]);
     expect(travelMarksOf(milestone(1500, "release", { graveyard: { map: 0, x: 1, y: 2, z: 3 } }))).toEqual([
       { kind: "release", ts: 1500 },
     ]);

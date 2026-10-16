@@ -67,7 +67,7 @@ import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
-import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
+import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, FlightSignal, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
 // The host always passes WRATHBENCH_TOKEN; the fallback only covers running
@@ -1244,6 +1244,55 @@ client.events.onAny((event) => {
   }
 });
 
+// ----------------------------------------------------------- flight watcher
+
+/**
+ * Flights, latched the way deaths are and for the same reason (`ipc.ts`,
+ * `FlightSignal`): the takeoff is the taxi flag turning on after an accepted
+ * reply, the landing is it turning off, and each carries the position and the
+ * zone/area pair as the cache held them at that event — the landing's own
+ * area, not the one the host's next sample finds the character in. The flag
+ * is read off `taxiFlight`, which the cache derives only from a block that
+ * carried `unitFlags`, so a block without it changes nothing here. The first
+ * reading seeds silently: a process that opens mid-flight did not see this
+ * flight begin.
+ */
+const FLIGHT_SIGNAL_CAP = 64;
+const flightSignals: FlightSignal[] = [];
+let lastFlightRead: boolean | undefined;
+
+function pushFlightSignal(signal: FlightSignal): void {
+  flightSignals.push(signal);
+  if (flightSignals.length > FLIGHT_SIGNAL_CAP) flightSignals.splice(0, flightSignals.length - FLIGHT_SIGNAL_CAP);
+}
+
+/** Drain what the flight watcher latched since the last call. Host-only. */
+function drainFlightSignals(): FlightSignal[] {
+  return flightSignals.splice(0, flightSignals.length);
+}
+
+client.events.onAny((event) => {
+  const self = client.state.self;
+  const flying = self.taxiFlight?.value;
+  if (typeof flying !== "boolean") return;
+  const was = lastFlightRead;
+  lastFlightRead = flying;
+  if (was === undefined || was === flying) return;
+  const accepted = (self.taxiReply?.value as { ok?: unknown } | undefined)?.ok === true;
+  if (flying && !accepted) return;
+  const at = point(self.position?.value);
+  const zone = (self.zone?.value as { id?: unknown } | undefined)?.id;
+  const area = (self.area?.value as { id?: unknown } | undefined)?.id;
+  pushFlightSignal({
+    kind: flying ? "taxi" : "taxi_landed",
+    ts: event.ts,
+    seq: event.seq,
+    ...(at === undefined ? {} : { position: at }),
+    ...(typeof zone === "number" ? { zone } : {}),
+    ...(typeof area === "number" ? { area } : {}),
+  });
+});
+
 type StreamEventOf = ReturnType<typeof client.events.recent>[number];
 
 function eventSummary(e: StreamEventOf): EventSummary {
@@ -1389,6 +1438,8 @@ function handle(msg: HostToChild | HostcallResult): void {
               ? contextEvents(msg.params.limit ?? CONTEXT_EVENT_CAP)
               : msg.method === "death_signals"
                 ? drainDeathSignals()
+                : msg.method === "flight_signals"
+                  ? drainFlightSignals()
                 : msg.method === "action_hints"
                   ? drainHints()
                   : stateSnapshot();
