@@ -16,8 +16,8 @@ export interface NavItem {
 
 export const NAV: readonly NavItem[] = [
   { href: "/map", label: "map" },
-  { href: "/runs", label: "runs" },
   { href: "/ladder", label: "ladder" },
+  { href: "/runs", label: "runs" },
   { href: "/models", label: "models" },
   { href: "/campaigns", label: "campaigns" },
   { href: "/about", label: "about" },
