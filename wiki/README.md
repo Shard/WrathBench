@@ -182,8 +182,8 @@ lives in docs/METHODOLOGY.md "The reference bundle".
   icons, and `coords`, which would hand back the yards `wikiCoords` withholds.
   A rendered name is held to the same era rules as prose: one whose qualifier
   the title rules place in a later world — `(Cataclysm)`, `(Gilneas)`,
-  `(Worgen)`, matched as the whole qualifier against the lists `post-wrath.ts`
-  already holds — is left out, and so are the names in a paragraph or line the
+  `(Worgen)`, matched as the whole qualifier against the lists in
+  `post-wrath.ts` — is left out, and so are the names in a paragraph or line the
   era phrase rules read as the later world once its names are in; either way the
   text is what it was before. The phrase rules also read `[[links]]` as their
   labels now, so "after [[The Shattering]]" is caught as what it says. Neither
