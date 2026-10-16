@@ -156,6 +156,7 @@ import {
   tailOf,
   TICK_MS,
   tripsBreaker,
+  unownedLiveRuns,
   unyieldedDrainReason,
 } from "./run-fleet-plan";
 import {
@@ -894,13 +895,15 @@ async function main(): Promise<void> {
     // resuming lane reads as paused `offline` from here on — unless one of
     // this supervisor's own processes is playing it, or a live job holds its
     // account (the same guards the stale sweep applies, for the same reason).
+    const ownRunIds = new Set([...procs.values()].filter((p) => !p.exited).flatMap((p) => p.runIds));
+    const ownAccounts = new Set(
+      [...assigned.values(), ...pinnedJobs(cfg).filter((j) => sets.running.has(j.name)).map((j) => j.account!)].map((a) => a.toUpperCase()),
+    );
     const runs = implicitPauses({
       runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true, counts: factCounts }),
       campaigns: cfg.campaigns,
-      running: new Set([...procs.values()].filter((p) => !p.exited).flatMap((p) => p.runIds)),
-      busyAccounts: new Set(
-        [...assigned.values(), ...pinnedJobs(cfg).filter((j) => sets.running.has(j.name)).map((j) => j.account!)].map((a) => a.toUpperCase()),
-      ),
+      running: ownRunIds,
+      busyAccounts: ownAccounts,
       now: Date.now(),
     });
     // Both are re-derived below if this tick's sweep ends anything: a strike
@@ -1077,6 +1080,24 @@ async function main(): Promise<void> {
         for (const r of job.refs) runningRefs.add(r);
         countKey(job.refs, laneOf(job));
         for (const r of job.refs) if (billingOf.get(r) === "paid") paidRunning++;
+      }
+    }
+    // A live fleet run none of this supervisor's jobs is playing — the two
+    // minutes a killed runner's heartbeat stays warm after a pod recreate, or
+    // a runner still unwinding under an exited roster — holds its model as well
+    // as its account (`held`), or the policy plans that model a second session
+    // on another free account while its character is mid-run on the first.
+    // Its model only: it is not counted against a driver or paid cap. Once it
+    // reads cold it lets go, and `implicitPauses` has made it an `offline`
+    // pause on a lane that resumes.
+    for (const u of unownedLiveRuns({ runs, roster: cfg.roster, campaigns: cfg.campaigns, running: ownRunIds, busyAccounts: ownAccounts })) {
+      const refs = u.refs.filter((r) => !runningRefs.has(r));
+      if (refs.length === 0) continue;
+      for (const r of refs) runningRefs.add(r);
+      const key = `unowned:${u.runId}`;
+      if (!announcedPicks.has(key)) {
+        announcedPicks.add(key);
+        say(`hold ${refs.join("+")}: ${u.runId} is live on ${u.account} and no job of this supervisor owns it — nothing new is planned for it until the run stops or reads cold`);
       }
     }
     const held = (a: string): string | undefined => accountHeldBy(a, "");

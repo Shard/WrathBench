@@ -122,6 +122,7 @@ import {
   runningRefsOf,
   showsJob,
   stateLiveness,
+  unownedLiveRuns,
   unyieldedDrainReason,
 } from "./run-fleet";
 import { billingOf } from "../runner/src/model-cost";
@@ -4452,20 +4453,184 @@ describe("the read-only views read what is running, not every job the supervisor
       expect(text).not.toContain("-a3");
     });
 
-    test("a live run no job of a running supervisor owns: the plan is the tick's, and the row says plainly what it cannot know", () => {
+    test("a live run no job of a running supervisor owns keeps its account and its model, and the row says what follows", () => {
       // The two minutes a killed runner's heartbeat stays warm after a recreate,
-      // before the new supervisor has spawned anything for it. The live tick
-      // holds only its own processes' models, so in this window it would plan
-      // the a3 too; the dry-run prints that plan, and the row says the resume
-      // in place happens only if the run stops before the tick.
+      // before the new supervisor has spawned anything for it. The tick used to
+      // hold only its own processes' models, so in this window the dry-run
+      // printed the a3 on RUNNER beside the live a2, as the tick planned it.
       const runs = [...history, a2({ live: true })];
       const inFlight = inFlightRuns({ jobs: new Map(), runs, roster: config().roster, campaigns: [] });
       expect(inFlight.map((r) => [r.name, r.owned, r.refs, r.resumesInPlace])).toEqual([[A2, false, [REF], true]]);
       const { plan, text } = dryRun(runs, { held: heldByA2, inFlight });
-      expect(plan.policy.map((p) => [p.job.name, p.job.attempt, p.account])).toEqual([[`${REF}-freeplay`, 3, "RUNNER"]]);
+      expect(plan.policy).toEqual([]);
+      expect(text).not.toContain("-a3");
+      expect(text).toMatch(/RUNNER +pool +free$/m);
       expect(text).toContain(
-        `RUNNER3   pool   free — held by run ${A2} — live, and no job of a running supervisor owns it; if it stops before the next tick, the supervisor resumes it in place here; while it stays live the tick does not hold ${REF} and may plan it on another account`,
+        `RUNNER3   pool   free — held by run ${A2} — live, and no job of a running supervisor owns it; ${REF} is held while it stays live; if it stops without a verdict, the supervisor resumes it in place here`,
       );
+    });
+  });
+
+  describe("a live run no job owns holds its model as well as its account, until it reads cold (pod recreate)", () => {
+    // For about two minutes after a fleet pod is recreated, a run whose runner
+    // was killed before it wrote its pause reads live, and no job of the new
+    // supervisor owns it. The tick held its account (`accountHeldBy`) and not
+    // its model, so a freeplay model could be planned a second session on
+    // another free account while its character was still mid-run on the first.
+    const REF = "codex-sol-61";
+    const MODEL = "gpt-6.1-sol";
+    const A1 = "fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261001";
+    const A2 = "fleet-codex-sol-61-freeplay-gpt-6-1-sol-20261011-a2";
+    const EVAL = "gemma-4-31b";
+    const EVAL_MODEL = "google/gemma-4-31b-it:free";
+    const E1 = "fleet-gemma-4-31b-e90-gemma-4-31b-it-20261016";
+    const roster: Record<string, FleetRosterEntry> = {
+      [REF]: { tier: "t1", model: MODEL, driver: "codex", idle: "unlimited" },
+      [EVAL]: { tier: "t1", model: EVAL_MODEL, idle: "none" },
+    };
+    const config = (refs: readonly string[] = Object.keys(roster)): FleetConfig => {
+      const c = parseFleet(fleetJson([], { roster: Object.fromEntries(refs.map((r) => [r, roster[r]!])), accounts: { pool: ["RUNNER", "RUNNER3"] } }));
+      return { ...c, policy: { ...c.policy, series: SERIES } };
+    };
+    const fact = (runId: string, over: Partial<RunFact> = {}): RunFact => ({
+      runId,
+      model: MODEL,
+      effort: null,
+      episode: "e90",
+      episodeOverride: false,
+      harnessVersion: `harness-${SERIES}-1030-g9ebf424`,
+      harnessSeries: SERIES,
+      extra: false,
+      startedAt: NOW - 200 * H,
+      endedAt: NOW - 199 * H,
+      terminationReason: "episode-limit",
+      modelResponses: 900,
+      bestLevel: 4,
+      live: false,
+      pause: null,
+      account: "RUNNER",
+      character: "Thalvorn",
+      episodeMs: 5_400_000,
+      campaign: null,
+      cell: null,
+      subscription: null,
+      ...over,
+    });
+    // codex-sol-61's targets are met, so its only work is its freeplay session.
+    // Its a1 (Thalvorn) ended on RUNNER; its a2 started fresh on RUNNER3 as
+    // Brannoc. gemma-4-31b has no counted run and owes e90s; it is on the roster only
+    // where a test says so, so that the free account is the one model's to take.
+    const history = [
+      fact("fleet-codex-sol-61-e90-gpt-6-1-sol-20260930"),
+      fact("fleet-codex-sol-61-e90-gpt-6-1-sol-20260930-a2"),
+      fact("fleet-codex-sol-61-e90-gpt-6-1-sol-20260930-a3"),
+      fact(A1, { episode: "freeplay", extra: true, startedAt: NOW - 150 * H, endedAt: NOW - 90 * H, terminationReason: "idle", episodeMs: null }),
+    ];
+    const a2 = (over: Partial<RunFact>): RunFact =>
+      fact(A2, { episode: "freeplay", extra: true, startedAt: NOW - 86 * H, endedAt: null, terminationReason: null, bestLevel: 39, episodeMs: null, account: "RUNNER3", character: "Brannoc", ...over });
+    const e1 = (over: Partial<RunFact>): RunFact =>
+      fact(E1, { model: EVAL_MODEL, startedAt: NOW - 30 * 60_000, endedAt: null, terminationReason: null, modelResponses: 40, bestLevel: 2, account: "RUNNER3", character: "Gorvak", ...over });
+    /** Warm: the killed runner's last beat, 20s ago. Cold: three minutes ago, past the two-minute rule. */
+    const WARM = { live: true, heartbeatAt: NOW - 20_000 } as const;
+    const COLD = { live: false, heartbeatAt: NOW - 3 * 60_000 } as const;
+    // Whatever holds RUNNER3 on disk holds it for the roster's three minutes, either way.
+    const heldBy = (runId: string) => (a: string): string | undefined => (a === "RUNNER3" ? runId : undefined);
+    /**
+     * The live tick's own composition, on a supervisor that has spawned
+     * nothing yet: the runs as it reads them, the live runs no job owns, the
+     * resumes, then the policy and the character rule over what is left.
+     * `holdUnowned: false` is the tick before the fix.
+     */
+    const tick = (raw: RunFact[], held: (a: string) => string | undefined, opts: { refs: readonly string[]; holdUnowned?: boolean }) => {
+      const c = config(opts.refs);
+      const none = new Set<string>();
+      const runs = implicitPauses({ runs: raw, campaigns: c.campaigns, running: none, busyAccounts: none, now: NOW });
+      const unowned = unownedLiveRuns({ runs, roster: c.roster, campaigns: c.campaigns, running: none, busyAccounts: none });
+      const states = modelStatesOf(rosterModels(c.roster), runs, NOW, c.policy);
+      const resumes = planResumes({ runs, config: c, running: new Map(), held, now: NOW });
+      const runningRefs = new Set([...resumes.resume.flatMap((r) => r.job.refs), ...(opts.holdUnowned === false ? [] : unowned.flatMap((u) => u.refs))]);
+      const characters = charactersFrom(runs, c.roster);
+      const affinity = characterAffinity(characters, affinityOf(affinityFrom(runs, c.roster)));
+      const picks = planContinuations(
+        planPolicy({
+          states,
+          pool: c.accounts.pool,
+          classPools: classPoolsOf(c),
+          running: new Map(resumes.resume.map((r) => [r.job.name, r.account])),
+          held,
+          queuePlan: { assign: [], waiting: [], skipped: [], done: [] },
+          runningRefs,
+          policy: c.policy,
+          affinity,
+        }),
+        characters,
+        c.roster,
+      ).picks;
+      // What --dry-run prints for the same moment: `planTick` with the unowned refs.
+      const printed = planTick(c, states, held, "20261016", resumes.resume, [], affinity, new Map(), new Set(runs.map((f) => f.runId)), [], unowned.flatMap((u) => u.refs));
+      return { unowned, states, resumes, picks, printed };
+    };
+    const picked = (picks: readonly { job: FleetJob; account: string }[]) => picks.map((p) => [p.job.ref, p.job.episode, p.account, p.job.continueFrom ?? null]);
+
+    test("a live, unowned freeplay run and a second free account: nothing is planned for its model", () => {
+      const runs = [...history, a2(WARM)];
+      const before = tick(runs, heldBy(A2), { refs: [REF], holdUnowned: false });
+      // The tick before the fix: Thalvorn's account is free, so the policy
+      // continued a1 there beside Brannoc's live a2 — two sessions of one model.
+      expect(picked(before.picks)).toEqual([[REF, "freeplay", "RUNNER", A1]]);
+      const { unowned, states, picks, printed } = tick(runs, heldBy(A2), { refs: [REF] });
+      expect(unowned).toEqual([{ runId: A2, account: "RUNNER3", refs: [REF], model: MODEL, episode: "freeplay", resumesInPlace: true }]);
+      expect(picks).toEqual([]);
+      expect(printed.policy).toEqual([]);
+      // The model is held the way a job's is, and says so.
+      expect(schedulability(states.find((s) => s.name === REF)!, new Set([REF])).why).toBe("running (one character per model)");
+      // The free account still goes to a model that owes work.
+      expect(picked(tick(runs, heldBy(A2), { refs: [REF, EVAL] }).picks)).toEqual([[EVAL, "e90", "RUNNER", null]]);
+    });
+
+    test("once the same run reads cold it holds nothing of its own: on a resuming lane the offline pause holds its model and resumes it in place", () => {
+      const { unowned, resumes, picks, printed } = tick([...history, a2(COLD)], heldBy(A2), { refs: [REF] });
+      expect(unowned).toEqual([]);
+      // No proof to wait for: its heartbeat went cold, so no process owns it.
+      expect(resumes.resume.map((r) => [r.runId, r.account])).toEqual([[A2, "RUNNER3"]]);
+      expect(picks).toEqual([]);
+      expect(printed.policy).toEqual([]);
+    });
+
+    test("a live, unowned scored run holds its model, and the model is free again once the run reads cold", () => {
+      // The same second attempt beside the first, before the fix.
+      expect(picked(tick([e1(WARM)], heldBy(E1), { refs: [EVAL], holdUnowned: false }).picks)).toEqual([[EVAL, "e90", "RUNNER", null]]);
+      const live = tick([e1(WARM)], heldBy(E1), { refs: [EVAL] });
+      expect(live.unowned.map((u) => [u.runId, u.refs, u.resumesInPlace])).toEqual([[E1, [EVAL], false]]);
+      expect(live.picks).toEqual([]);
+      expect(live.printed.policy).toEqual([]);
+      // Cold, a scored run is not resumed and holds nothing until the stale
+      // sweep ends it, as before: the model owes e90s and is planned again.
+      const cold = tick([e1(COLD)], heldBy(E1), { refs: [EVAL] });
+      expect(cold.unowned).toEqual([]);
+      expect(cold.resumes.resume).toEqual([]);
+      expect(picked(cold.picks)).toEqual([[EVAL, "e90", "RUNNER", null]]);
+    });
+
+    test("a run a job of this supervisor holds, by run id or by account, is that job's; a paused, ended or hand-started run is not a live fleet run", () => {
+      const c = config();
+      const hand = fact("hand-gemma-4-31b-20261016", { model: EVAL_MODEL, endedAt: null, terminationReason: null, account: "RUNNER2", ...WARM });
+      const runs = [
+        ...history,
+        a2(WARM),
+        e1({ ...WARM, account: "RUNNER4" }),
+        hand,
+        fact("fleet-gemma-4-31b-e90-gemma-4-31b-it-20261015", { model: EVAL_MODEL, ...WARM, live: false, account: "RUNNER5", terminationReason: null, endedAt: null, pause: { reason: "operator-pause", at: NOW - 60_000, count: 1, episodeElapsedMs: 0 } }),
+      ];
+      const unowned = (running: string[], busy: string[]) =>
+        unownedLiveRuns({ runs, roster: c.roster, campaigns: c.campaigns, running: new Set(running), busyAccounts: new Set(busy) }).map((u) => u.runId);
+      expect(unowned([], [])).toEqual([A2, E1]);
+      expect(unowned([A2], [])).toEqual([E1]);
+      // A loop's later cycle is not in its job's run ids; the account says whose it is.
+      expect(unowned([], ["RUNNER4"])).toEqual([A2]);
+      // A run whose roster entry is gone holds its account and no model.
+      const gone = unownedLiveRuns({ runs, roster: { [REF]: roster[REF]! }, campaigns: c.campaigns, running: new Set(), busyAccounts: new Set() });
+      expect(gone.map((u) => [u.runId, u.refs])).toEqual([[A2, [REF]], [E1, []]]);
     });
   });
 });

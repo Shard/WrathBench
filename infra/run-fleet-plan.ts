@@ -1031,6 +1031,74 @@ export function implicitPauses(opts: {
   });
 }
 
+/** A live fleet run that no job of the running supervisor owns (`unownedLiveRuns`). */
+export interface UnownedRun {
+  runId: string;
+  account: string;
+  /** The roster ref it plays; empty when no roster entry matches it any more. */
+  refs: string[];
+  model: string;
+  episode: EpisodeId;
+  /** Its lane resumes a pause in place (freeplay, a campaign that asked) rather than ending it. */
+  resumesInPlace: boolean;
+}
+
+/**
+ * Live fleet runs that none of the supervisor's own jobs is playing. Pure.
+ *
+ * After a fleet pod is recreated (an eviction, a node drain, a manual
+ * restart), a runner SIGKILLed before it wrote its pause leaves a warm
+ * heartbeat behind, and its run reads `live` for up to two minutes with no
+ * process of the new supervisor behind it. So does a run whose roster exited
+ * while its runner, or its run pod, is still unwinding. Such a run holds its
+ * account (`accountHeldBy`) and its model: one character per model holds
+ * whoever launched the run, and a model left free here was planned a second
+ * session on another free account while its character was still mid-run on
+ * the first. Freshness is `live` and nothing else, so a run that has truly
+ * stopped lets go once it reads cold. On a lane that resumes,
+ * `implicitPauses` then makes it an `offline` pause, which holds the model
+ * through the resume path; on a scored lane it waits for the stale sweep, as
+ * before.
+ *
+ * The guards are `implicitPauses`' guards: a run one of the supervisor's
+ * processes holds (`running`, by run id) or that sits on an account a live
+ * job holds (`busyAccounts`) is that job's. The account guard is what covers a
+ * loop's later cycles, whose run ids the roster mints itself. One run per
+ * account, the first read.
+ */
+export function unownedLiveRuns(opts: {
+  /** The runs as the tick reads them (`implicitPauses` applied, which leaves a live run as it was). */
+  runs: readonly RunFact[];
+  roster: Readonly<Record<string, FleetRosterEntry>>;
+  campaigns?: readonly Campaign[];
+  /** Run ids the supervisor's own processes hold. */
+  running: ReadonlySet<string>;
+  /** Accounts a live job holds, upper-cased. */
+  busyAccounts: ReadonlySet<string>;
+}): UnownedRun[] {
+  const out: UnownedRun[] = [];
+  const busy = new Set(opts.busyAccounts);
+  const names = Object.keys(opts.roster);
+  for (const f of opts.runs) {
+    if (!f.live || !f.runId.startsWith("fleet-") || f.account === null) continue;
+    if (opts.running.has(f.runId) || busy.has(f.account.toUpperCase())) continue;
+    const ref =
+      (f.ref != null && opts.roster[f.ref] !== undefined ? f.ref : undefined) ??
+      refOfRunId(f.runId, f.episode, names) ??
+      names.find((n) => sameRosterIdentity(opts.roster[n]!, f));
+    busy.add(f.account.toUpperCase());
+    out.push({
+      runId: f.runId,
+      account: f.account,
+      refs: ref !== undefined ? [ref] : [],
+      model: f.model,
+      episode: f.episode,
+      resumesInPlace: resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign, f.campaignVersion ?? null)),
+    });
+  }
+  return out;
+}
+
 /**
  * Runs nothing came back for. Pure.
  *
@@ -2151,7 +2219,7 @@ export const fmtElapsed = (ms: number): string => {
  * model — exactly as the live tick's own processes do.
  */
 export interface InFlight {
-  /** The job name; for a run no job owns (a reader's row, never planned around), its run id. */
+  /** The job name; for a run no job owns (a reader's row), its run id. */
   name: string;
   account: string;
   refs: readonly string[];
@@ -2165,7 +2233,10 @@ export interface InFlight {
  * --dry-run and by the startup fail-fast. `inFlight` is what is already
  * running (none at boot): without it a model whose run was live read as free
  * and the dry-run planned it a second character on another account
- * (2026-10-14, codex-sol-61's a3 beside its live a2).
+ * (2026-10-14, codex-sol-61's a3 beside its live a2). `unownedRefs` are the
+ * refs of live runs no job owns (`unownedLiveRuns`), held for their model as
+ * the live tick holds them: never planned again, but not counted against a
+ * driver or paid cap, which the tick does not count them against either.
  */
 export function planTick(
   config: FleetConfig,
@@ -2180,6 +2251,7 @@ export function planTick(
   /** Every run id on disk, so a planned remainder names the ids its spawn will really use. */
   takenRunIds: ReadonlySet<string> = new Set(),
   inFlight: readonly InFlight[] = [],
+  unownedRefs: readonly string[] = [],
 ): {
   pinned: { job: FleetJob; spawn: JobSpawn }[];
   queue: QueuePlan;
@@ -2210,6 +2282,8 @@ export function planTick(
   // ahead of everything fresh.
   const occupied = new Map([...inFlight.map((j) => [j.name, j.account] as const), ...resumes.map((r) => [r.job.name, r.account] as const)]);
   const runningRefs = new Set([...pinned.flatMap((p) => p.job.refs), ...resumes.flatMap((r) => r.job.refs), ...inFlight.flatMap((j) => j.refs)]);
+  // Plus the models of live runs no job owns: held, not counted (see above).
+  const heldRefs = new Set([...runningRefs, ...unownedRefs]);
   const queue = planQueue({
     queue: poolJobs(config),
     roster: config.roster,
@@ -2219,7 +2293,7 @@ export function planTick(
     held,
     cooling: () => undefined,
     eligible,
-    runningRefs,
+    runningRefs: heldRefs,
     ...(affinity !== undefined ? { affinity } : {}),
     counted,
     takenRunIds,
@@ -2243,7 +2317,7 @@ export function planTick(
     running: occupied,
     held,
     queuePlan: queue,
-    runningRefs,
+    runningRefs: heldRefs,
     concurrency: { keyOf, max: config.maxConcurrent, running: keyCount, pinnedLane: (n) => config.roster[n]?.subscription },
     policy: config.policy,
     paidRunning,

@@ -33,7 +33,6 @@ import {
 import {
   affinityFrom,
   affinityOf,
-  campaignResumeOf,
   type ConfigRejection,
   countedFrom,
   type CountedRuns,
@@ -59,13 +58,13 @@ import {
   planTick,
   progressLabel,
   providerResetOf,
-  refOfRunId,
   type ResumePlan,
   retryNumbers,
   type Character,
   charactersFrom,
   characterStanding,
   TICK_MS,
+  unownedLiveRuns,
 } from "./run-fleet-plan";
 import {
   CONTAINER,
@@ -113,7 +112,6 @@ import {
   readRunFacts,
   rosterClass,
   type RunFact,
-  sameRosterIdentity,
   schedulability,
   type SchedulingPolicy,
   type StartingCharacter,
@@ -750,11 +748,13 @@ export function printStatus(): void {
   // lists instead — computed from disk so it is right with the fleet down.
   // What the tick reads: a verdict-less run on a resuming lane is a paused
   // one, unless a live job of an alive supervisor holds its account.
+  const aliveRunIds = new Set([...aliveJobs.values()].flatMap((j) => j.runIds ?? []));
+  const aliveAccounts = new Set([...aliveJobs.values()].map((j) => j.account.toUpperCase()));
   const runFacts = implicitPauses({
     runs: readRunFacts(RUNS_DIR),
     ...(config !== undefined ? { campaigns: config.campaigns } : {}),
-    running: new Set([...aliveJobs.values()].flatMap((j) => j.runIds ?? [])),
-    busyAccounts: new Set([...aliveJobs.values()].map((j) => j.account.toUpperCase())),
+    running: aliveRunIds,
+    busyAccounts: aliveAccounts,
     now: Date.now(),
   });
   // Newest start first, so an account's row names the paused run the resume
@@ -916,8 +916,12 @@ export function printStatus(): void {
   // (c) models: the projection, every roster entry, with why (not) schedulable.
   if (config !== undefined && Object.keys(config.roster).length > 0) {
     // Only a job whose process is alive is running: an exited one's model
-    // reads its real reason (tainted, cooling, free), not "running".
-    const running = runningRefsOf(aliveJobs);
+    // reads its real reason (tainted, cooling, free), not "running". A live
+    // fleet run no alive job owns holds its model too, as on the tick.
+    const running = new Set([
+      ...runningRefsOf(aliveJobs),
+      ...unownedLiveRuns({ runs: runFacts, roster: config.roster, campaigns: config.campaigns, running: aliveRunIds, busyAccounts: aliveAccounts }).flatMap((u) => u.refs),
+    ]);
     const states = projected;
     const excluded = new Map<string, string>();
     for (const name of Object.keys(config.roster)) {
@@ -1024,13 +1028,14 @@ export interface InFlightRun extends InFlight {
  * What is already running, for the dry-run's plan. Pure.
  *
  * The supervisor's own live jobs (`jobs`, the alive ones), and every live
- * fleet run on disk that none of them is playing: one whose roster is gone, or
- * one inside the two minutes a killed runner's warm heartbeat outlives it. A
- * job holds its account and its model, as the tick's own processes do; the
- * dry-run used to plan as if nothing were running, so it predicted
- * codex-sol-61 a second character (`-a3`, on another account) beside its live
- * `-a2`. A run no job owns holds only its account, because that is all the
- * tick holds for it, and its row says what follows (`planDryRun`).
+ * fleet run on disk that none of them is playing (`unownedLiveRuns`): one
+ * whose roster is gone, or one inside the two minutes a killed runner's warm
+ * heartbeat outlives it. Both hold their account and their model, as on the
+ * live tick; the dry-run used to plan as if nothing were running, so it
+ * predicted codex-sol-61 a second character (`-a3`, on another account)
+ * beside its live `-a2`. A run no job owns is not counted against a driver or
+ * paid cap, which the tick does not count it against either, and its row says
+ * what follows (`planDryRun`).
  */
 export function inFlightRuns(opts: {
   jobs: ReadonlyMap<string, StateJob>;
@@ -1062,24 +1067,16 @@ export function inFlightRuns(opts: {
     });
   }
   const busy = new Set(out.map((r) => r.account.toUpperCase()));
-  const names = Object.keys(opts.roster);
-  for (const f of opts.runs) {
-    if (!f.live || !f.runId.startsWith("fleet-") || f.account === null) continue;
-    if (claimed.has(f.runId) || busy.has(f.account.toUpperCase())) continue;
-    const ref =
-      (f.ref != null && opts.roster[f.ref] !== undefined ? f.ref : undefined) ??
-      refOfRunId(f.runId, f.episode, names) ??
-      names.find((n) => sameRosterIdentity(opts.roster[n]!, f));
-    busy.add(f.account.toUpperCase());
+  for (const u of unownedLiveRuns({ runs: opts.runs, roster: opts.roster, campaigns: opts.campaigns, running: claimed, busyAccounts: busy })) {
     out.push({
-      name: f.runId,
-      account: f.account,
-      refs: ref !== undefined ? [ref] : [],
+      name: u.runId,
+      account: u.account,
+      refs: u.refs,
       owned: false,
-      models: [f.model],
-      episode: f.episode,
-      runId: f.runId,
-      resumesInPlace: resumesOnPause(f.episode, campaignResumeOf(opts.campaigns, f.campaign, f.campaignVersion ?? null)),
+      models: [u.model],
+      episode: u.episode,
+      runId: u.runId,
+      resumesInPlace: u.resumesInPlace,
     });
   }
   return out;
@@ -1127,9 +1124,8 @@ export function planDryRun(opts: {
   });
   // Affinity, so the printed plan places accounts the way the live
   // supervisor would: a report that disagrees with the tick is worse than none.
-  // For the same reason only the supervisor's own jobs hold their models: the
-  // tick holds nothing else, so a live run no job owns keeps its account (via
-  // `held`) and not its model, and its row says so.
+  // For the same reason a live run no job owns keeps its account (via `held`)
+  // and its model, and counts against no cap, as on the tick.
   const plan = planTick(
     config,
     states,
@@ -1141,6 +1137,7 @@ export function planDryRun(opts: {
     liveSubscriptions(runs, rosterModels(config.roster)),
     new Set(runs.map((f) => f.runId)),
     inFlight.filter((r) => r.owned),
+    inFlight.filter((r) => !r.owned).flatMap((r) => r.refs),
   );
   const counted = countedFrom(states);
   const rows: AccountRow[] = [];
@@ -1186,13 +1183,13 @@ export function planDryRun(opts: {
           account,
           kind,
           free: true,
-          // Said plainly: nothing here knows whether the supervisor's next
-          // tick lands before or after this run stops, and the plan above is
-          // what the tick does while it has not.
+          // Said plainly: nothing here knows when this run stops. The plan
+          // above holds its model while it is live, and its lane decides what
+          // comes after.
           note:
-            `held by run ${r.runId ?? r.name} — live, and no job of a running supervisor owns it; ` +
-            (r.resumesInPlace ? "if it stops before the next tick, the supervisor resumes it in place here" : "once it lapses it is ended, not resumed") +
-            (r.refs.length > 0 ? `; while it stays live the tick does not hold ${r.refs.join("+")} and may plan it on another account` : ""),
+            `held by run ${r.runId ?? r.name} — live, and no job of a running supervisor owns it` +
+            (r.refs.length > 0 ? `; ${r.refs.join("+")} is held while it stays live` : "") +
+            `; ${r.resumesInPlace ? "if it stops without a verdict, the supervisor resumes it in place here" : "once it lapses it is ended, not resumed"}`,
         };
   const listed = new Set(scheduledAccounts(config).map((a) => a.toUpperCase()));
   for (const account of Object.keys(config.accounts.pinned).filter((a) => !listed.has(a.toUpperCase()))) {
@@ -1307,7 +1304,8 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     const why = policyExclusion(config, name);
     if (why !== undefined) excluded.set(name, why);
   }
-  for (const line of formatModels(states, new Set(inFlight.filter((r) => r.owned).flatMap((r) => r.refs)), now, excluded, config.policy)) console.log(line);
+  // Every run in flight holds its model, owned or not, as the plan above does.
+  for (const line of formatModels(states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy)) console.log(line);
   for (const line of formatHeld(plan.heldPicks)) console.log(line);
   for (const line of formatPaused(resumes.listed)) console.log(line);
   for (const line of formatEnded(
