@@ -1213,9 +1213,11 @@ cooling) rather than "running". `--dry-run` plans the next tick around that:
 a job in flight keeps its account and its model, and its row says what a
 restart does to its run; a paused run the supervisor would bring back reads
 `resumes <run id> in place`. A live fleet run no job owns (a killed runner's
-heartbeat stays warm for two minutes) keeps only its account, as on the live
-tick, and its row says so: a run on a resuming lane comes back in place only if
-it stops before that tick. With the pause switch set the dry-run leads with the switch, and the plan
+heartbeat stays warm for two minutes after a pod recreate) keeps its account
+and its model, as on the live tick, so nothing launches a second session for
+that model; it counts against no driver or paid cap. Once it reads cold it
+lets go: on a resuming lane it is then an `offline` pause and resumes in place,
+and a scored run waits for the stale sweep. With the pause switch set the dry-run leads with the switch, and the plan
 is what launches once it is cleared.
 
 What the status words mean: `new` has no counted run yet; `active` is working
