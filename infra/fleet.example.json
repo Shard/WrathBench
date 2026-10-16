@@ -89,17 +89,18 @@
     "queue: jobs { ref | [refs], episode e90|e360|freeplay, repeat n|\"loop\", enabled, account? }. Never probing: a probe is a campaign's cell.",
     "  account set = PINNED to it (never policy-scheduled); absent = manual pool job, outranks the policy for a pool account.",
     "  A waiting manual job reserves the POOL only — the paid and local classes still pick (a226bbb).",
-    "preflight: the smoke gate the supervisor runs before spawning (docs/RUNBOOK.md); its accounts may not be in the pool or on a job."
+    "preflight: the smoke gate the supervisor runs before spawning, and the release's deploy smokes (docs/RUNBOOK.md); its accounts may not be in the pool or on a job."
   ],
   "preflight": {
     "enabled": true,
     "account": "SMOKE",
-    "smokes": [
+    "smokes": [{ "script": "infra/smoke/preflight.ts", "account": "SMOKE" }],
+    "timeoutMs": 45000,
+    "deploySmokes": [
+      { "script": "infra/smoke/kill-credit.ts", "account": "SMOKE2" },
       { "script": "infra/smoke/quest-accept-status.ts", "account": "SMOKE" },
-      { "script": "infra/smoke/kill-credit.ts", "account": "SMOKE2" }
+      { "script": "infra/smoke/module-quest.ts", "account": "SMOKE" }
     ],
-    "timeoutMs": 130000,
-    "deploySmokes": [{ "script": "infra/smoke/module-quest.ts", "account": "SMOKE" }],
     "deployTimeoutMs": 600000
   },
   "accounts": {

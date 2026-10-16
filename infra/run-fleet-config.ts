@@ -101,10 +101,11 @@ export interface JobSpawn {
  * string entry in the config is the pre-2026-08-23 form and means "on the
  * default `account`".
  *
- * `deploySmokes` is the deploy-time full arc (module-quest.ts, minutes long):
- * run by infra/deploy-worldserver.sh once per deploy, never by the per-tick
- * gate. It is config here so the deploy script and the supervisor read the
- * same file and the same accounts clash-check.
+ * `deploySmokes` are the release's smokes on top of the gate (the game
+ * surface and the module-quest.ts full arc, minutes long): run by the deploy
+ * window (infra/k8s-deploy.sh, infra/deploy-worldserver.sh) once per deploy,
+ * never by the supervisor. It is config here so the deploy scripts and the
+ * supervisor read the same store and the same accounts clash-check.
  */
 export interface FleetPreflight {
   enabled: boolean;

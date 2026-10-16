@@ -343,6 +343,42 @@ async function readServerIdentity(): Promise<ServerIdentity | undefined> {
   return serverIdentity(body, () => readBootMarker());
 }
 
+/** How often a gate waiting on an unready server asks /health again. */
+export const READY_POLL_MS = 5_000;
+
+/**
+ * While the gate waits on a server that is not ready, ask `ready` every
+ * `intervalMs`, one probe at a time, and call `wake` once, the first time it
+ * answers true. A probe that throws counts as not ready. Returns the cancel,
+ * after which nothing more is probed or woken. This keeps the tick's own
+ * cadence and only moves its start: without it the gate waits for the next
+ * tick, up to a minute after the worldserver came up.
+ */
+export function wakeWhenReady(ready: () => Promise<boolean>, intervalMs: number, wake: () => void): () => void {
+  let cancelled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const probe = async (): Promise<void> => {
+    let ok = false;
+    try {
+      ok = await ready();
+    } catch {
+      ok = false;
+    }
+    if (cancelled) return;
+    if (ok) {
+      cancelled = true;
+      wake();
+      return;
+    }
+    timer = setTimeout(() => void probe(), intervalMs);
+  };
+  timer = setTimeout(() => void probe(), intervalMs);
+  return () => {
+    cancelled = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
+}
+
 /**
  * One smoke as a child of this supervisor, with the account env it reads
  * (`MODULE_ACCOUNT`), killed at `deadline`. A timed-out child is SIGKILLed and
@@ -758,10 +794,10 @@ async function main(): Promise<void> {
     configLoadedAt = Date.now();
   }
   if (wasEmpty) console.error(`run-fleet: ${EMPTY_STORE_HINT}`);
-  // Fail fast on anything that would fail at spawn time.
-  planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }), () => undefined, stampToday);
 
   if (args.dryRun) {
+    // Fail fast on anything that would fail at spawn time.
+    planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }), () => undefined, stampToday);
     printDryRun(config, args.until, stampToday);
     return;
   }
@@ -1506,6 +1542,8 @@ async function main(): Promise<void> {
   // across ticks so a passing result is not re-run for the same identity.
   let gate: PreflightRecord | undefined;
   let complainedFor: string | undefined;
+  /** The last gate check found /health not ready: the tick sleep polls it (`wakeWhenReady`). */
+  let gateWaiting = false;
 
   /**
    * Evaluate (and if needed run) the gate. Returns whether jobs may spawn.
@@ -1519,6 +1557,7 @@ async function main(): Promise<void> {
     const server = pf.enabled ? await readServerIdentity() : undefined;
     const identity = server?.identity;
     const action = gateDecision({ enabled: pf.enabled, identity, last: gate });
+    gateWaiting = action === "wait";
     if (action === "skip") {
       if (gate?.skipped !== true) {
         gate = { at: Date.now(), serverIdentity: identity ?? "unknown", ok: true, skipped: true, results: [] };
@@ -1594,20 +1633,41 @@ async function main(): Promise<void> {
     say(`fleet PAUSED at boot by ${PAUSE_PATH}: ${pauseSwitch.why} — delete that file to schedule again`);
   }
 
+  // The gate first: it reads no run facts, and the first read of them below
+  // counts every trajectory on disk, about 35s on the live runs directory.
   let mayStart = await checkGate(config.preflight);
+  // Fail fast on anything that would fail at spawn time, still before any
+  // spawn. The read goes through the loop's own cache, so the first tick
+  // reuses it instead of counting every trajectory a second time.
+  planTick(
+    config,
+    modelStates({
+      runsDir: RUNS_DIR,
+      roster: rosterModels(config.roster),
+      policy: config.policy,
+      runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true, counts: factCounts }),
+    }),
+    () => undefined,
+    stampToday,
+  );
   if (mayStart) for (const spawn of diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start) spawnJob(spawn);
   writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
 
   for (;;) {
     // A stop wakes the tick and then polls fast: the container's grace period
     // is finite, and a roster that paused its episode in 5s must not wait
-    // 60s to be reaped.
+    // 60s to be reaped. A gate waiting on an unready server wakes it too, the
+    // moment /health answers, rather than up to a tick later.
     await new Promise<void>((res) => {
-      const t = setTimeout(res, stopping ? 2_000 : TICK_MS);
-      wakeTick = () => {
+      let stopPoll = (): void => {};
+      const wake = (): void => {
         clearTimeout(t);
+        stopPoll();
         res();
       };
+      const t = setTimeout(wake, stopping ? 2_000 : TICK_MS);
+      if (gateWaiting && !stopping) stopPoll = wakeWhenReady(async () => (await readServerIdentity()) !== undefined, READY_POLL_MS, wake);
+      wakeTick = wake;
     });
     wakeTick = undefined;
 
