@@ -6337,9 +6337,8 @@ export class WrathClient {
         if (taxi.length !== 1) {
           throw new Error(
             `showTaxiNodes(${id}): the menu that opened has ${taxi.length === 0 ? "no" : taxi.length} taxi option(s) ` +
-              `(gossip icon 2) — is this NPC a flight master (state.units({ role: "flightMaster" }))? A flight master's ` +
-              `first hello only discovers its node (the server learns it and sends the menu without the option, as a ` +
-              `client's "new flight path" moment); the window opens on the next showTaxiNodes(guid). Options: ` +
+              `(gossip icon 2) — is this NPC a flight master (state.units({ role: "flightMaster" }))? A first hello ` +
+              `only discovers this master's node; call showTaxiNodes(guid) again to open the window. Options: ` +
               menu.options.map((o) => `${o.optionId}:${JSON.stringify(o.text)} (icon ${o.icon})`).join(", "),
           );
         }
@@ -6399,7 +6398,6 @@ export class WrathClient {
       const chain = hops.map((h) => resolveTaxiNode(window, h));
       const to = chain[chain.length - 1]!;
       const via = chain.slice(0, -1);
-      const label = (n: TaxiNodeRef) => n.name ?? `node ${n.nodeId}`;
       const sinceSeq = this.events.recent(1)[0]?.seq;
       if (chain.length === 1) {
         await this.raw("CMSG_ACTIVATETAXI", [{ guid: id }, { u32: window.current.nodeId }, { u32: to.nodeId }]);
@@ -6410,14 +6408,11 @@ export class WrathClient {
       // Player::ActivateTaxiPathTo returns without a reply when no single
       // flight path joins two consecutive nodes of the chain; every other
       // refusal is answered, in the same server tick as the request.
-      const route = [window.current, ...chain].map(label).join(" → ");
+      // Operator's wording, 2026-10-16.
       const silence =
-        `the server sent no reply to activateTaxi(${id}, ${JSON.stringify(dest)}): it answers with silence when no ` +
-        `single flight path joins two consecutive nodes of ${route}, even when you know both. ` +
-        (chain.length === 1
-          ? `A destination two or more hops away is dropped unanswered: give the route as hops — ` +
-            `activateTaxi(guid, [hop, ..., ${JSON.stringify(hops[0])}]) — or fly to a known node one hop toward it first.`
-          : `The server does not say which pair; fly the chain in shorter pieces to find the hop that needs another node between.`);
+        `no reply: the server stays silent when no single flight path joins two consecutive nodes. Give the route as ` +
+        `hops — activateTaxi(guid, [hop, ..., ${JSON.stringify(hops[hops.length - 1])}]) — or fly one hop toward it first.` +
+        (chain.length === 1 ? "" : " It does not say which pair; fly the chain in shorter pieces to find it.");
       let event: StreamEvent;
       try {
         event = await this.waitEvent(

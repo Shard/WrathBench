@@ -3728,8 +3728,10 @@ describe("client: flight master window and activateTaxi", () => {
     expect(result.reply).toBeUndefined();
     expect(result.via).toEqual([]);
     expect(result.to.nodeId).toBe(8);
-    expect(result.hint).toContain("Ironforge, Dun Morogh → Thelsamar, Loch Modan");
-    expect(result.hint).toContain("activateTaxi(guid, [hop, ..., 8])");
+    expect(result.hint).toBe(
+      "no reply: the server stays silent when no single flight path joins two consecutive nodes. Give the route as " +
+        "hops — activateTaxi(guid, [hop, ..., 8]) — or fly one hop toward it first.",
+    );
     const hints = client.drainActionHints();
     expect(hints).toHaveLength(1);
     expect(hints[0]).toMatchObject({ action: "activateTaxi", status: "unanswered", count: 1 });
