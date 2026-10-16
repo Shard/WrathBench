@@ -15,19 +15,20 @@ The pieces that make up WrathBench include:
 - A TypeScript SDK
 - A runner harness that gives a model the SDK in a sandbox and logs everything
 - A Dashboard that is also the public site at <https://wrathbench.shard.page>.
-- Other tools for setting up your own harness and running WrathBench either via Docker Compose or Helm Chart (Kubernetes).
+- Other tools for setting up your own harness: Docker Compose to try WrathBench on one machine, and a Helm chart to run it on Kubernetes.
 
-## Running it
-You will need Docker with compose, Bun for the host-side tooling, and an [AzerothCore](https://www.azerothcore.org/) 3.3.5a server data directory (`dbc/ maps/ vmaps/ mmaps/`) at `data/client`. Producing that directory is outside this repository's scope. Nothing Blizzard-derived is hosted within this repo.
+## Try it on one machine
+`infra/compose.yml` brings the whole stack up on one machine with nothing installed beyond Docker with compose. It also needs an [AzerothCore](https://www.azerothcore.org/) 3.3.5a server data directory (`dbc/ maps/ vmaps/ mmaps/`) at `data/client`. Producing that directory is outside this repository's scope. Nothing Blizzard-derived is hosted within this repo.
 
 ```sh
 git clone --recurse-submodules git@github.com:Shard/WrathBench.git && cd WrathBench
-mkdir -p data/{client,wiki,runs,collector,etc,logs}
+mkdir -p data/{client,wiki,runs,collector,etc,logs,codex}
 # place the server data directory at data/client
-docker compose -f infra/compose.yml up -d --build
+cp .env.example .env   # set WRATHBENCH_MODULE_SECRET (openssl rand -hex 32) and a model key
+docker compose --env-file .env -f infra/compose.yml up -d --build
 ```
 
-The first start compiles AzerothCore with the module and imports the databases. Once the worldserver is up, check the control surface end to end, then run an episode with model keys in `.env`:
+The first start compiles AzerothCore with the module and imports the databases. Once the worldserver is up, check the control surface end to end, then run an episode:
 
 ```sh
 docker compose -f infra/compose.yml exec runner bun infra/smoke/module-slice.ts
@@ -35,7 +36,11 @@ docker compose -f infra/compose.yml exec runner bun infra/smoke/module-slice.ts
   --api-base <openai-compatible base url> --api-key-env <ENV_KEY_NAME>
 ```
 
-Trajectories land under `data/runs/<run-id>/`. The service graph and the operator's runbook are `infra/README.md` and `docs/RUNBOOK.md`.
+Trajectories land under `data/runs/<run-id>/`. `infra/README.md` has the service graph and why each step is there.
+
+## Running it for real
+
+The compose stack is a quickstart, not a deployment, and has no tooling for updating or operating it over time. The project's own fleet runs on Kubernetes from the Helm chart at `infra/chart/wrathbench`, which is also the reference for a more serious deployment. `infra/README.md` ("Releasing on Kubernetes") and `docs/RUNBOOK.md` cover building, releasing and operating it.
 
 ## Developing without game data
 
