@@ -61,6 +61,29 @@ spec:
       # The world takes minutes to load and holds live sessions; give it room
       # to write its final state.
       terminationGracePeriodSeconds: 120
+      # The world load reads the database for minutes and carries on past a
+      # query that lost its connection, with whatever table it was reading left
+      # empty. So the load does not start until MySQL answers a real query
+      # (`mysqladmin ping` passes a server that refuses the login). Server-level
+      # on purpose: acore_world is the db-import hook's to create, and this
+      # pod must not wait on a hook. A db recreated mid-load is caught by the
+      # startup probe below. Same loop as the hooks' wait-for-db, in the
+      # worldserver's own image, which has the client.
+      initContainers:
+        - name: wait-for-db
+          image: {{ include "wrathbench.image.worldserver" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - 'for i in $(seq 1 120); do mysql -h "$WRATHBENCH_DB_HOST" -u root --connect-timeout=5 --execute "SELECT 1" >/dev/null && exit 0; sleep 5; done; echo "db never answered a query"; exit 1'
+          env:
+            {{- include "wrathbench.dbEnv" . | nindent 12 }}
+            {{- include "wrathbench.mysqlPwdEnv" . | nindent 12 }}
+          resources:
+            requests: { cpu: 10m, memory: 64Mi, ephemeral-storage: 256Mi }
+            limits: { memory: 256Mi }
       containers:
         - name: worldserver
           image: {{ include "wrathbench.image.worldserver" . }}
@@ -138,15 +161,33 @@ spec:
               containerPort: 8085
             - name: module
               containerPort: 8086
-          # tcpSocket, not httpGet: the module refuses every request without
-          # the bearer, so an HTTP probe would report a healthy server as sick.
-          # The real readiness check is the deploy's /health call, which does
-          # present the secret (infra/k8s-deploy.sh).
+          # Started means the module's /health answers 200, which it does only
+          # once the world has loaded whole (module/PROTOCOL.md, GET /health):
+          # a load that lost rows to a database restart answers 503
+          # world_not_loaded for good, this probe never passes, and the kubelet
+          # restarts the container at the end of the budget, behind the
+          # wait-for-db above. An exec, not httpGet: the module refuses a
+          # request without the bearer, and only the container's own env holds
+          # it. Perl, as infra/module-health.sh, because the image has no curl;
+          # the secret is read from the environment, never from argv.
           startupProbe:
-            tcpSocket:
-              port: 8085
+            exec:
+              command:
+                - perl
+                - -MIO::Socket::INET
+                - -e
+                - |
+                  $SIG{ALRM} = sub { exit 1 }; alarm 4;
+                  my $s = IO::Socket::INET->new(PeerAddr => "127.0.0.1:8086", Timeout => 3) or exit 1;
+                  print $s "GET /health HTTP/1.0\r\nAuthorization: Bearer $ENV{AC_WRATH_BENCH_SECRET}\r\n\r\n";
+                  exit((<$s> // "") =~ m{^HTTP/\S+ 200 } ? 0 : 1);
+            timeoutSeconds: 5
             periodSeconds: {{ .Values.worldserver.startupProbe.periodSeconds }}
             failureThreshold: {{ .Values.worldserver.startupProbe.failureThreshold }}
+          # tcpSocket, not httpGet: the module refuses every request without
+          # the bearer, so an HTTP probe would report a healthy server as sick.
+          # The deploy's /health call, which presents the secret, is the check
+          # a release waits on (infra/k8s-deploy.sh).
           readinessProbe:
             tcpSocket:
               port: 8085
