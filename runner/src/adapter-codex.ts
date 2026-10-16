@@ -26,7 +26,9 @@
  * the first with `exec`, every later one with `exec resume <id>` — and the
  * thread lives in `$CODEX_HOME/sessions` between them. Each spawn re-pays the
  * CLI's startup and MCP handshake (a second or two), which is why the record
- * shape names the thread.
+ * shape names the thread. A thread lives for one episode at most — a resumed
+ * run starts a new one — so its rollout is deleted once the episode is off it
+ * (`codex-rollout.ts`, "deletion").
  *
  * Exec is itself a client of the CLI's in-process app server: it maps the
  * server's notifications onto its eight JSONL event types and drops the rest.
@@ -154,7 +156,7 @@ import { cliBaseEnv, signalGroup } from "./adapter-shared";
 import { DEFAULT_CODEX_HOME_ENV, harnessOf, type PauseReason, type RunConfig, type TerminationReason } from "./config";
 import { ContextBuilder, startStateTicker, stopRequestOf, type LoopOutcome, type ObservationStallHook } from "./loop";
 import { McpServer } from "./mcp";
-import { CodexLastCallReader, CodexRolloutFollower, type CodexCompaction } from "./codex-rollout";
+import { CodexLastCallReader, CodexRolloutFollower, removeThreadRollouts, writeCodexThread, type CodexCompaction } from "./codex-rollout";
 import { CompactionAsk, codexAutoCompactLimit, compactionNotice, summaryFields, type CompactionRecord } from "./cli-compaction";
 import { codexUsageDelta, codexUsageRegressed, normalizeCodexUsage, type CodexUsage } from "./codex-usage";
 import { SUBSCRIPTION_PAUSE } from "./lapse";
@@ -903,8 +905,6 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
   };
   const shutdown = async (): Promise<void> => {
     flushPendingResponse();
-    // A turn the episode ended inside may have left a compaction unread.
-    for (const c of rollout.read(threadId).compactions) trajectory.append(codexCompactionRecord(turn, c));
     builder.reflect.close("run_end");
     for (const e of builder.reflect.drainEvents()) {
       trajectory.append({ t: "reflect_window", turn: builder.currentTurn, ...e });
@@ -915,6 +915,23 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
       await reap(current);
       current = null;
     }
+    // The last read, once no CLI is writing: a turn the episode ended inside
+    // may have left a compaction, a usage reading or the served model unread,
+    // and the rollout goes next.
+    try {
+      const last = rollout.read(threadId);
+      for (const c of last.compactions) trajectory.append(codexCompactionRecord(turn, c));
+      if (!resolvedModel && last.model !== undefined) {
+        resolvedModel = true;
+        trajectory.recordResolved(runId, { model: last.model, cliVersion: version });
+      }
+      // The follower answers the newest reading so far, read or not: only one
+      // this read found is news (a quota pause has since marked its window spent).
+      if (last.rateLimits !== undefined && last.rateLimits !== observedLimits) usage.observe(last.rateLimits, Date.now());
+    } catch {
+      // the reader never throws; a recorder that does must not cost the verdict
+    }
+    dropRollouts([...ownThreads], "exit");
     process.off("exit", onProcessExit);
     listener.stop(true);
     // The scratch cwd goes with the CLI, as in the claude driver: it holds
@@ -976,6 +993,39 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
 
   let threadId: string | undefined;
   let failedTurns = 0;
+  /**
+   * This episode's threads whose rollouts are still on the lane's volume, and
+   * the ones it has moved off since the last turn ended. A rollout is deleted
+   * once its thread is done with (`codex-rollout.ts`, "deletion"): a thread
+   * left behind after that turn's read, and every one at the episode's end
+   * after the last. Nothing resumes a thread across episodes, so nothing
+   * here is ever needed again — and what was read off them is on the
+   * trajectory.
+   */
+  const ownThreads = new Set<string>();
+  /** The follower's newest usage reading as last observed: it repeats it on every read, new lines or none. */
+  let observedLimits: unknown;
+  const leftThreads: string[] = [];
+  const dropRollouts = (ids: readonly string[], when: "thread-change" | "exit"): void => {
+    if (ids.length === 0) return;
+    try {
+      let files = 0;
+      let bytes = 0;
+      let error: string | undefined;
+      for (const id of ids) {
+        const r = removeThreadRollouts(env["CODEX_HOME"], id);
+        ownThreads.delete(id);
+        files += r.files;
+        bytes += r.bytes;
+        error ??= r.error;
+      }
+      if (files > 0 || error !== undefined) {
+        trajectory.append({ t: "harness", kind: "codex_rollouts_removed", turn, when, threads: [...ids], files, bytes, ...(error !== undefined ? { error } : {}) });
+      }
+    } catch {
+      // best effort: the supervisor's sweep collects what is left
+    }
+  };
 
   const finishWindDown = (outcome: "result" | "exit" | "grace-expired"): void => {
     const wd = windDown as WindDown | null;
@@ -1099,7 +1149,13 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
           case "thread.started": {
             const id = msg["thread_id"];
             if (typeof id === "string" && id.length > 0) {
-              if (threadId !== id) trajectory.append({ t: "codex_thread", turn, threadId: id });
+              if (threadId !== id) {
+                trajectory.append({ t: "codex_thread", turn, threadId: id });
+                // The supervisor's sweep keeps the rollout of the thread this names.
+                writeCodexThread(o.runDir, id);
+                if (threadId !== undefined) leftThreads.push(threadId);
+                ownThreads.add(id);
+              }
               threadId = id;
             }
             break;
@@ -1242,7 +1298,12 @@ export async function runCodexEpisode(o: CodexEpisodeOptions): Promise<LoopOutco
         resolvedModel = true;
         trajectory.recordResolved(runId, { model: followed.model, cliVersion: version });
       }
-      if (followed.rateLimits !== undefined) usage.observe(followed.rateLimits, Date.now());
+      if (followed.rateLimits !== undefined) {
+        observedLimits = followed.rateLimits;
+        usage.observe(followed.rateLimits, Date.now());
+      }
+      // A thread this turn moved off was read to its end after the turn before.
+      dropRollouts(leftThreads.splice(0), "thread-change");
 
       if (done()) return finish();
       failure ??= detectCodexFailure(stderrChunks.join("\n"));

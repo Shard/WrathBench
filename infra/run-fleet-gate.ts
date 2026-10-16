@@ -333,7 +333,12 @@ function ago(ms: number): string {
 export function formatSubscriptionGate(
   gate: FleetSubscriptionGate,
   lanes: readonly string[],
-  opts: { local?: Pick<SubscriptionThresholds, "scored" | "freeplay">; notes?: readonly string[] } = {},
+  opts: {
+    local?: Pick<SubscriptionThresholds, "scored" | "freeplay">;
+    notes?: readonly string[];
+    /** How full a lane's own volume is (a Codex home's), appended to its line; undefined adds nothing. */
+    volumeOf?: (lane: string) => string | undefined;
+  } = {},
 ): string[] {
   if (lanes.length === 0) return [];
   const t = gate.thresholds;
@@ -348,8 +353,10 @@ export function formatSubscriptionGate(
   for (const n of opts.notes ?? []) out.push(`  !! ${n}`);
   for (const lane of lanes) {
     const u = gate.usage.get(lane);
+    const volume = opts.volumeOf?.(lane);
+    const tail = volume !== undefined ? `; volume ${volume}` : "";
     if (u === undefined) {
-      out.push(`  ${lane}: no observation — open`);
+      out.push(`  ${lane}: no observation — open${tail}`);
       continue;
     }
     const state = (episode: string): string => {
@@ -357,7 +364,7 @@ export function formatSubscriptionGate(
       return h === null ? "open" : `HELD until ${new Date(h.until).toISOString()}`;
     };
     const windows = u.windows.length > 0 ? describeWindows(u.windows, u.observedAt) : "no windows";
-    out.push(`  ${lane}: ${windows}; observed ${ago(gate.now - u.observedAt)} — scored ${state("e90")}, freeplay ${state("freeplay")}`);
+    out.push(`  ${lane}: ${windows}; observed ${ago(gate.now - u.observedAt)} — scored ${state("e90")}, freeplay ${state("freeplay")}${tail}`);
   }
   return out;
 }

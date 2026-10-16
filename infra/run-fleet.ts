@@ -163,9 +163,12 @@ import {
   unyieldedDrainReason,
 } from "./run-fleet-plan";
 import {
+  type CodexHome,
+  codexHomesOf,
   CONTAINER,
   type FleetState,
   hasLiveChild,
+  liveCodexThreads,
   rosterEpisodeInFlight,
   runHasImageRecord,
   jobArgv,
@@ -195,6 +198,7 @@ import { accountHeldBy, drainMarkerPath, releaseRunSession } from "./run-roster"
 import { K8sClient } from "./k8s-client";
 import { DRAIN_POD_QUERY_TIMEOUT_MS, rosterHasRunPod } from "./run-pod";
 import { runCampaignFile, writeCampaignFile } from "../runner/src/campaign-file";
+import { pruneRollouts, type RolloutPrune } from "../runner/src/codex-rollout";
 import { DEFAULT_CLAUDE_TOKEN_ENV } from "../runner/src/config";
 import { subscriptionThresholds } from "../runner/src/subscription-usage";
 import { claudeLaneOpen, FleetGoUsage, gateSpawns, jobHoldOf, laneOfEntry, laneOfRun, subscriptionGate, writeLaneUsageSidecar } from "./run-fleet-gate";
@@ -312,6 +316,60 @@ export async function sweepNames(
   }
 }
 
+
+/** How often the supervisor sweeps the Codex homes it can reach (`pruneCodexHomes`). */
+export const CODEX_PRUNE_EVERY_MS = 60 * 60_000;
+
+/**
+ * The backstop for the codex driver's own rollout deletion (`codex-rollout.ts`,
+ * "deletion"): a runner killed outright never reaches its cleanup, and its
+ * threads' rollouts would stay on the lane's volume for good. Each home loses
+ * every rollout that is not the recorded thread of a run with a live owner
+ * (`liveCodexThreads`, across every home — a thread id is a UUID) and has not
+ * been written for two hours. Nothing is deleted while a live codex run has no
+ * thread on record. One line per sweep, never per file; never throws.
+ */
+export function pruneCodexHomes(o: {
+  homes: readonly CodexHome[];
+  runs: readonly Pick<RunFact, "runId" | "driver" | "live" | "heartbeatAt" | "archived">[];
+  now: number;
+  runsDir?: string;
+  threadOf?: (runId: string) => string | undefined;
+  minAgeMs?: number;
+  say: (s: string) => void;
+}): RolloutPrune | undefined {
+  if (o.homes.length === 0) return undefined;
+  try {
+    const { keep, unrecorded } = liveCodexThreads(o.runs, {
+      now: o.now,
+      ...(o.runsDir !== undefined ? { runsDir: o.runsDir } : {}),
+      ...(o.threadOf !== undefined ? { threadOf: o.threadOf } : {}),
+    });
+    if (unrecorded.length > 0) {
+      o.say(`codex rollouts: not swept — live codex run(s) with no thread on record: ${unrecorded.join(", ")}`);
+      return undefined;
+    }
+    const total: RolloutPrune = { files: 0, bytes: 0, errors: 0, kept: 0, dirs: 0 };
+    for (const home of o.homes) {
+      const r = pruneRollouts(home.path, { keep, now: o.now, ...(o.minAgeMs !== undefined ? { minAgeMs: o.minAgeMs } : {}) });
+      total.files += r.files;
+      total.bytes += r.bytes;
+      total.errors += r.errors;
+      total.kept += r.kept;
+      total.dirs += r.dirs;
+      if (r.error !== undefined) total.error ??= `${home.env}: ${r.error}`;
+    }
+    o.say(
+      `codex rollouts: removed ${total.files} (${(total.bytes / 1024 ** 2).toFixed(1)} MiB) under ${o.homes.map((h) => h.env).join(", ")}; ` +
+        `kept ${total.kept} (${keep.size} live thread${keep.size === 1 ? "" : "s"})` +
+        (total.errors > 0 ? `; ${total.errors} not removed (${total.error})` : ""),
+    );
+    return total;
+  } catch (e) {
+    o.say(`codex rollouts: sweep failed — ${e instanceof Error ? e.message : String(e)}`);
+    return undefined;
+  }
+}
 
 /** Where the module answers. Same default the runner and roster use. */
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
@@ -836,6 +894,8 @@ async function main(): Promise<void> {
   const sets: JobSets = { running: new Set(), draining: new Set(), finished: new Set() };
   let stopping = false;
   let wasIdle = false;
+  /** When the Codex homes were last swept; the first tick after boot sweeps. */
+  let codexPrunedAt = 0;
   // Job bookkeeping: which job holds which account, the job itself
   // for every live process, and the last plan's waiting/skipped rows for
   // --status. A skip reason is logged once per (job, reason), not once a tick.
@@ -1931,6 +1991,24 @@ async function main(): Promise<void> {
     }
 
     writeState(configPath, stampToday, procs, sets.draining, gate, poolView(config));
+    // Hourly, after the tick's spawns and never while stopping: the rollouts
+    // no live codex run claims (`pruneCodexHomes`).
+    if (!stopping && Date.now() - codexPrunedAt >= CODEX_PRUNE_EVERY_MS) {
+      codexPrunedAt = Date.now();
+      const homes = codexHomesOf(config.policy.subscriptions);
+      if (homes.length > 0) {
+        try {
+          pruneCodexHomes({
+            homes,
+            runs: readFacts(),
+            now: Date.now(),
+            say,
+          });
+        } catch (e) {
+          say(`codex rollouts: sweep failed — ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
     const toStart =
       diffJobs(applyPause(effectiveJobs(config), pauseSwitch !== undefined), sets).start.length +
       (pauseSwitch !== undefined ? 0 : lastPlan.waiting.length);

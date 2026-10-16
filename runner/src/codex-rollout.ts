@@ -24,8 +24,11 @@
  * The same lines carry the subscription's usage windows (`rate_limits`, read by
  * `rateLimitsOfLine`), and the thread's `turn_context` lines name the model each
  * turn ran on (`turnModelOfLine`); `CodexRolloutFollower` reads both.
+ *
+ * The end of this file deletes rollouts (`removeThreadRollouts`,
+ * `pruneRollouts`): the CLI never does, and a lane's volume filled twice.
  */
-import { closeSync, fstatSync, openSync, readSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeCodexUsage } from "./codex-usage";
 import type { UsageWindow } from "./subscription-usage";
@@ -524,4 +527,215 @@ export class CodexRolloutFollower {
     }
     return { compactions: [], context: undefined, rateLimits: undefined, model: undefined };
   }
+}
+
+// ------------------------------------------------------------- deletion
+
+/**
+ * Rollouts are deleted when their thread is done with, never archived
+ * (operator, 2026-10-16). The CLI keeps one per thread and never removes one;
+ * a lane's volume filled twice. Nothing reads a rollout once its thread is
+ * finished: what the driver takes from one — compactions, the last call's
+ * context, the usage windows, the turn model — is on the trajectory by then,
+ * and `exec resume` is only ever pointed at the thread the live episode is on,
+ * because every resume of a run starts a new thread (`run.ts`, `resumedFresh`).
+ * So:
+ *
+ * - the driver deletes its own: an old thread's when the episode moves to a
+ *   new one, and every one at the episode's end, after the last read
+ *   (`removeThreadRollouts`);
+ * - the supervisor sweeps up after a runner killed outright: every rollout
+ *   that is not the recorded thread of a run with a live owner, and that has
+ *   not been written for `ROLLOUT_PRUNE_MIN_AGE_MS` (`pruneRollouts`).
+ *
+ * Only `sessions/YYYY/MM/DD/rollout-*.jsonl` files are deleted, then the date
+ * directories they leave empty; never `auth.json`, the CLI's config or its
+ * sqlite stores. Neither ever throws.
+ *
+ * The CLI's state db keeps its row for a deleted thread, and says "state db
+ * returned stale rollout path for thread …" when it next looks one up — the
+ * first `exec` of a new thread does, once per old shell snapshot, while it
+ * clears those — which `detectCodexFailure` does not classify.
+ */
+
+/** The thread a run is on: a sidecar in its run directory, rewritten by the driver when the thread changes. */
+export const CODEX_THREAD_FILE = "codex-thread.json";
+
+/** Record the thread a run is on now. Best effort: a failed write leaves the sweep's age floor as the guard. */
+export function writeCodexThread(runDir: string, threadId: string, now = Date.now()): void {
+  try {
+    writeFileSync(join(runDir, CODEX_THREAD_FILE), `${JSON.stringify({ threadId, since: now })}\n`, "utf8");
+  } catch {
+    // a run directory that cannot be written has bigger problems; never a turn's
+  }
+}
+
+/** The thread a run last recorded, or undefined when it recorded none. */
+export function readCodexThread(runDir: string): string | undefined {
+  try {
+    const v = (JSON.parse(readFileSync(join(runDir, CODEX_THREAD_FILE), "utf8")) as { threadId?: unknown } | null)?.threadId;
+    return typeof v === "string" && v.length > 0 ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/**
+ * A rollout's file name as the pinned CLI parses it (`rollout_file_name.rs`):
+ * `rollout-<YYYY-MM-DDTHH-MM-SS>-<thread>.jsonl`, or `…-<thread>_<rollout>.jsonl`
+ * for a further rollout of the same thread (a revert, which exec never makes).
+ */
+const ROLLOUT_NAME = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${UUID})(?:_${UUID})?\\.jsonl$`, "i");
+
+/** The thread a rollout file name belongs to, lowercased, or undefined for any other name. */
+export function rolloutThreadId(name: string): string | undefined {
+  return ROLLOUT_NAME.exec(name)?.[1]?.toLowerCase();
+}
+
+/** What a deletion removed; `error` is the first failure's message. */
+export interface RolloutRemoval {
+  files: number;
+  bytes: number;
+  errors: number;
+  error?: string;
+}
+
+function failed(out: RolloutRemoval, err: unknown): void {
+  out.errors++;
+  out.error ??= err instanceof Error ? err.message : String(err);
+}
+
+const errCode = (err: unknown): unknown => (err as { code?: unknown } | null)?.code;
+
+/** Unlink one regular file and count it; a symlink or anything else is left where it is. */
+function unlinkRollout(path: string, out: RolloutRemoval): void {
+  try {
+    const st = lstatSync(path);
+    if (!st.isFile()) return;
+    unlinkSync(path);
+    out.files++;
+    out.bytes += st.size;
+  } catch (err) {
+    if (errCode(err) !== "ENOENT") failed(out, err);
+  }
+}
+
+/** Delete every rollout of one thread under `<codexHome>/sessions`, whatever its age. Never throws. */
+export function removeThreadRollouts(codexHome: string | undefined, threadId: string): RolloutRemoval {
+  const out: RolloutRemoval = { files: 0, bytes: 0, errors: 0 };
+  if (codexHome === undefined || codexHome.length === 0 || !THREAD_ID.test(threadId)) return out;
+  const sessions = join(codexHome, "sessions");
+  try {
+    if (!lstatSync(sessions).isDirectory()) return out;
+  } catch {
+    return out; // no sessions directory: nothing was written
+  }
+  try {
+    // The thread's own file, and any further rollout of it (`<thread>_<rollout>`).
+    const glob = new Bun.Glob(`*/*/*/rollout-*-${threadId}{,_*}.jsonl`);
+    for (const rel of glob.scanSync({ cwd: sessions, onlyFiles: true })) unlinkRollout(join(sessions, rel), out);
+  } catch (err) {
+    failed(out, err);
+  }
+  return out;
+}
+
+/**
+ * How long a rollout must have gone unwritten before the sweep may delete one
+ * no live run claims. It covers what ownership cannot see: the moment between
+ * the CLI creating a thread's rollout and the driver recording the thread, a
+ * failed sidecar write, and a `codex` session run by hand on the lane.
+ */
+export const ROLLOUT_PRUNE_MIN_AGE_MS = 2 * 60 * 60_000;
+
+/** What a sweep did: files and bytes removed, rollouts kept, date directories removed. */
+export interface RolloutPrune extends RolloutRemoval {
+  kept: number;
+  dirs: number;
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** `YYYY/MM/DD` of today and yesterday, in UTC and in local time: the date directories the CLI may be writing into. */
+function currentDays(now: number): string[] {
+  const out = new Set<string>();
+  for (const t of [now, now - 24 * 60 * 60_000]) {
+    const d = new Date(t);
+    out.add(`${d.getUTCFullYear()}/${pad2(d.getUTCMonth() + 1)}/${pad2(d.getUTCDate())}`);
+    out.add(`${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`);
+  }
+  return [...out];
+}
+
+/**
+ * The supervisor's sweep of one Codex home. A rollout goes when its thread is
+ * not in `keep` (the recorded threads of every run with a live owner) AND it
+ * has not been written for `minAgeMs`. A date directory goes when it is empty,
+ * has not changed for as long, and is not today's or yesterday's or one of
+ * their parents: the CLI creates the directory and then the file, so an empty
+ * current one may be about to fill. Nothing under `sessions/` that is not a
+ * date directory or a rollout is looked at. Never throws: a failure is counted
+ * and the sweep goes on.
+ */
+export function pruneRollouts(codexHome: string, o: { keep: ReadonlySet<string>; now: number; minAgeMs?: number }): RolloutPrune {
+  const out: RolloutPrune = { files: 0, bytes: 0, errors: 0, kept: 0, dirs: 0 };
+  const minAge = o.minAgeMs ?? ROLLOUT_PRUNE_MIN_AGE_MS;
+  const keep = new Set([...o.keep].map((t) => t.toLowerCase()));
+  const current = currentDays(o.now);
+  const settled = (mtimeMs: number): boolean => o.now - mtimeMs >= minAge;
+  const removeDirIfDone = (path: string, key: string): void => {
+    if (current.some((day) => day === key || day.startsWith(`${key}/`))) return;
+    try {
+      if (readdirSync(path).length > 0 || !settled(lstatSync(path).mtimeMs)) return;
+      rmdirSync(path);
+      out.dirs++;
+    } catch {
+      // filled again in between, or already gone: not the sweep's to force
+    }
+  };
+  const walk = (dir: string, key: string, depth: number): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch (err) {
+      if (errCode(err) !== "ENOENT") failed(out, err);
+      return;
+    }
+    for (const name of names) {
+      const path = join(dir, name);
+      if (depth < 3) {
+        if (!(depth === 0 ? /^\d{4}$/ : /^\d{2}$/).test(name)) continue;
+        try {
+          if (!lstatSync(path).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        const sub = key === "" ? name : `${key}/${name}`;
+        walk(path, sub, depth + 1);
+        removeDirIfDone(path, sub);
+        continue;
+      }
+      const thread = rolloutThreadId(name);
+      if (thread === undefined) continue;
+      try {
+        const st = lstatSync(path);
+        if (!st.isFile()) continue;
+        if (keep.has(thread) || !settled(st.mtimeMs)) {
+          out.kept++;
+          continue;
+        }
+      } catch (err) {
+        if (errCode(err) !== "ENOENT") failed(out, err);
+        continue;
+      }
+      unlinkRollout(path, out);
+    }
+  };
+  try {
+    walk(join(codexHome, "sessions"), "", 0);
+  } catch (err) {
+    failed(out, err);
+  }
+  return out;
 }

@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CODEX_THREAD_FILE,
+  pruneRollouts,
+  readCodexThread,
+  removeThreadRollouts,
+  rolloutThreadId,
+  writeCodexThread,
   CodexLastCallReader,
   CodexRolloutFollower,
   CodexRolloutScan,
@@ -236,5 +242,137 @@ describe("CodexRolloutScan usage windows", () => {
     expect(read.rateLimits).toEqual([{ usedPercent: 61, windowMinutes: 10_080, resetsAt: 1_900_000_000_000 }]);
     // Nothing new appended: the newest readings stand.
     expect(follower.read(THREAD).rateLimits?.[0]?.usedPercent).toBe(61);
+  });
+});
+
+describe("rollout deletion", () => {
+  const LIVE = "01a1447e-cf11-7d23-9d03-31d816687f46";
+  const DEAD = "01a13865-5045-7781-8109-0b9505ae9af2";
+  const FRESH = "01a14447-ab85-7691-8c6a-e1c22ad6d98c";
+  const NOW = Date.parse("2026-10-16T12:00:00Z");
+  const HOUR = 3_600_000;
+
+  /** A Codex home with the files the CLI keeps beside its sessions, and rollouts at the given ages. */
+  function codexHome(rollouts: { day: string; thread: string; ageMs: number; bytes?: number; suffix?: string }[]): string {
+    const h = tmp("wrathbench-codex-prune-");
+    writeFileSync(join(h, "auth.json"), "{}\n");
+    writeFileSync(join(h, "config.toml"), "\n");
+    writeFileSync(join(h, "thread_history_1.sqlite"), "x");
+    writeFileSync(join(h, "state_5.sqlite"), "x");
+    for (const r of rollouts) {
+      const dir = join(h, "sessions", ...r.day.split("/"));
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, `rollout-${r.day.replaceAll("/", "-")}T01-02-03-${r.thread}${r.suffix ?? ""}.jsonl`);
+      writeFileSync(file, "x".repeat(r.bytes ?? 10));
+      const at = new Date(NOW - r.ageMs);
+      utimesSync(file, at, at);
+    }
+    return h;
+  }
+  /** Date directories age with their files, as on disk once nothing is written into them. */
+  function ageDirs(h: string, day: string, ageMs: number): void {
+    const at = new Date(NOW - ageMs);
+    const parts = day.split("/");
+    for (let i = parts.length; i > 0; i--) utimesSync(join(h, "sessions", ...parts.slice(0, i)), at, at);
+  }
+
+  test("the thread a file name belongs to, as the CLI parses it", () => {
+    expect(rolloutThreadId(`rollout-2026-10-16T09-28-46-${LIVE}.jsonl`)).toBe(LIVE);
+    expect(rolloutThreadId(`rollout-2026-10-16T09-28-46-${LIVE.toUpperCase()}.jsonl`)).toBe(LIVE);
+    // A further rollout of the same thread names the thread first.
+    expect(rolloutThreadId(`rollout-2026-10-16T09-28-46-${LIVE}_${DEAD}.jsonl`)).toBe(LIVE);
+    expect(rolloutThreadId(`rollout-2026-10-16T09-28-46-${LIVE}.jsonl.zst`)).toBeUndefined();
+    expect(rolloutThreadId("rollout-2026-10-16T09-28-46-fake-thread.jsonl")).toBeUndefined();
+    expect(rolloutThreadId(`history-${LIVE}.jsonl`)).toBeUndefined();
+  });
+
+  test("the sweep keeps a live thread and anything recently written, deletes the rest, and leaves every other file alone", () => {
+    const h = codexHome([
+      { day: "2026/10/12", thread: LIVE, ageMs: 50 * HOUR, bytes: 100 },
+      { day: "2026/10/12", thread: DEAD, ageMs: 50 * HOUR, bytes: 1_000 },
+      { day: "2026/10/16", thread: FRESH, ageMs: 30 * 60_000, bytes: 7 },
+    ]);
+    mkdirSync(join(h, "sessions", "2026", "10", "12", "notes"));
+    writeFileSync(join(h, "sessions", "2026", "10", "12", "README"), "keep me");
+    writeFileSync(join(h, "sessions", "2026", "10", "12", `rollout-2026-10-12T00-00-00-${DEAD}.jsonl.zst`), "z");
+    writeFileSync(join(h, "sessions", "session_index.jsonl"), "{}\n");
+    const r = pruneRollouts(h, { keep: new Set([LIVE.toUpperCase()]), now: NOW });
+    expect(r).toMatchObject({ files: 1, bytes: 1_000, errors: 0, kept: 2 });
+    const day = readdirSync(join(h, "sessions", "2026", "10", "12")).sort();
+    expect(day).toEqual(["README", "notes", `rollout-2026-10-12T00-00-00-${DEAD}.jsonl.zst`, `rollout-2026-10-12T01-02-03-${LIVE}.jsonl`].sort());
+    expect(readdirSync(join(h, "sessions", "2026", "10", "16"))).toHaveLength(1);
+    for (const f of ["auth.json", "config.toml", "thread_history_1.sqlite", "state_5.sqlite", "sessions/session_index.jsonl"]) expect(existsSync(join(h, f))).toBe(true);
+  });
+
+  test("date directories a sweep empties go once they have settled, never today's or yesterday's", () => {
+    const h = codexHome([
+      { day: "2026/09/30", thread: DEAD, ageMs: 400 * HOUR },
+      { day: "2026/10/15", thread: DEAD, ageMs: 30 * HOUR },
+    ]);
+    // Nothing has touched these directories since their files were written.
+    ageDirs(h, "2026/09/30", 400 * HOUR);
+    ageDirs(h, "2026/10/15", 30 * HOUR);
+    const first = pruneRollouts(h, { keep: new Set(), now: NOW });
+    expect(first.files).toBe(2);
+    // Deleting a file moved its directory's mtime: nothing is removed the same sweep.
+    expect(first.dirs).toBe(0);
+    ageDirs(h, "2026/09/30", 400 * HOUR);
+    ageDirs(h, "2026/10/15", 30 * HOUR);
+    const second = pruneRollouts(h, { keep: new Set(), now: NOW });
+    expect(second.dirs).toBe(1);
+    expect(existsSync(join(h, "sessions", "2026", "09", "30"))).toBe(false);
+    // Its month in turn, once that has settled too.
+    ageDirs(h, "2026/09", 400 * HOUR);
+    expect(pruneRollouts(h, { keep: new Set(), now: NOW }).dirs).toBe(1);
+    expect(existsSync(join(h, "sessions", "2026", "09"))).toBe(false);
+    // Yesterday's directory, and the current month and year, stay.
+    expect(existsSync(join(h, "sessions", "2026", "10", "15"))).toBe(true);
+    expect(existsSync(join(h, "sessions"))).toBe(true);
+  });
+
+  test("a home with no sessions, an unwritable directory or a vanished file is counted, never thrown", () => {
+    const empty = tmp("wrathbench-codex-prune-empty-");
+    expect(pruneRollouts(empty, { keep: new Set(), now: NOW })).toMatchObject({ files: 0, errors: 0 });
+    expect(pruneRollouts(join(empty, "missing"), { keep: new Set(), now: NOW })).toMatchObject({ files: 0, errors: 0 });
+    const h = codexHome([{ day: "2026/10/01", thread: DEAD, ageMs: 300 * HOUR }]);
+    const locked = join(h, "sessions", "2026", "10", "01");
+    chmodSync(locked, 0o500); // listable, not writable: the unlink fails
+    try {
+      const r = pruneRollouts(h, { keep: new Set(), now: NOW });
+      if (process.getuid?.() === 0) return; // root ignores the mode
+      expect(r.files).toBe(0);
+      expect(r.errors).toBe(1);
+      expect(r.error).toContain("EACCES");
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
+  test("the driver's deletion takes one thread's rollouts, at any age, and nothing else", () => {
+    const h = codexHome([
+      { day: "2026/10/16", thread: LIVE, ageMs: 1_000, bytes: 30 },
+      { day: "2026/10/16", thread: LIVE, ageMs: 1_000, bytes: 5, suffix: `_${DEAD}` },
+      { day: "2026/10/16", thread: DEAD, ageMs: 1_000 },
+    ]);
+    expect(removeThreadRollouts(h, LIVE)).toEqual({ files: 2, bytes: 35, errors: 0 });
+    expect(readdirSync(join(h, "sessions", "2026", "10", "16"))).toEqual([`rollout-2026-10-16T01-02-03-${DEAD}.jsonl`]);
+    // Again: nothing left. No CODEX_HOME, no sessions, or a name that is no thread id: nothing at all.
+    expect(removeThreadRollouts(h, LIVE)).toEqual({ files: 0, bytes: 0, errors: 0 });
+    expect(removeThreadRollouts(undefined, DEAD).files).toBe(0);
+    expect(removeThreadRollouts(tmp("wrathbench-codex-none-"), DEAD).files).toBe(0);
+    expect(removeThreadRollouts(h, "*").files).toBe(0);
+    expect(existsSync(join(h, "auth.json"))).toBe(true);
+  });
+
+  test("the thread sidecar round-trips, and a missing or torn one reads as none", () => {
+    const dir = tmp("wrathbench-codex-thread-");
+    expect(readCodexThread(dir)).toBeUndefined();
+    writeCodexThread(dir, LIVE, NOW);
+    expect(readCodexThread(dir)).toBe(LIVE);
+    expect(JSON.parse(readFileSync(join(dir, CODEX_THREAD_FILE), "utf8"))).toEqual({ threadId: LIVE, since: NOW });
+    writeFileSync(join(dir, CODEX_THREAD_FILE), "{tor");
+    expect(readCodexThread(dir)).toBeUndefined();
+    // A run directory that cannot be written costs the record, never a throw.
+    expect(() => writeCodexThread(join(dir, "missing", "deeper"), LIVE)).not.toThrow();
   });
 });

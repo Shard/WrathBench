@@ -6,7 +6,7 @@
  * bridge.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODEX_EFFORTS,
@@ -23,6 +23,7 @@ import {
   tomlString,
 } from "../src/adapter-codex";
 import { COMPACTED_NOTICE, COMPACTION_PENDING_NOTICE } from "../src/cli-compaction";
+import { readCodexThread } from "../src/codex-rollout";
 import { comparabilityOf, harnessOfRun } from "../src/comparability";
 import { HARNESSES, harnessOf, isUnscoredDriver, loadRunConfig, unscoredStamp } from "../src/config";
 import { CLAUDE_CODE_SYSTEM_PROMPT, CODEX_SYSTEM_PROMPT, SYSTEM_PROMPT, buildSystemPrompt, contextSentence } from "../src/prompt";
@@ -381,7 +382,7 @@ describe("codex driver", () => {
     trajectory.close();
   }, 30_000);
 
-  test("a registered secret in the rollout's summary is [redacted] on the trajectory; the rollout stays the CLI's", async () => {
+  test("a registered secret in the rollout's summary is [redacted] on the trajectory; the CLI's rollout is never rewritten, only removed", async () => {
     const secret = "fake-lease-secret-0123456789abcdef0123456789abcdef";
     const thread = "01a119da-ef89-7a63-ac51-314ac6a70a53";
     const message = `The agent printed WRATHBENCH_SECRET=${secret} and moved on. Next: Kharanos.`;
@@ -399,10 +400,59 @@ describe("codex driver", () => {
     expect(compactions).toEqual([
       expect.objectContaining({ turn: 2, summary: "The agent printed WRATHBENCH_SECRET=[redacted] and moved on. Next: Kharanos." }),
     ]);
-    // The runner reads the rollout and writes nothing to it: it is the CLI's
-    // own thread on the lane's volume, and `exec resume` reads it back.
+    // The runner writes nothing into the rollout — it is the CLI's own thread,
+    // which `exec resume` reads back — and deletes it once the episode is
+    // over, so nothing of it outlives the run on the lane's volume.
     const rolloutFile = join(codexHome, "sessions", "2026", "10", "14", `rollout-2026-10-14T00-00-00-${thread}.jsonl`);
-    expect(readFileSync(rolloutFile, "utf8")).toContain(secret);
+    expect(existsSync(rolloutFile)).toBe(false);
+  }, 30_000);
+
+  test("the episode's thread is recorded beside the run, and its rollout is deleted at the end, after the last read", async () => {
+    const thread = "01a119da-ef89-7a63-ac51-314ac6a70a54";
+    const other = "01a13865-5045-7781-8109-0b9505ae9af2";
+    const rollout = [{ total: 100_000 }, { total: 120_000, compact: { pre: 446_911, post: 50_000 } }];
+    const { runDir, codexHome, trajectory, options } = setupEpisode("tools", { maxTurns: 2 }, {
+      WB_FAKE_THREAD_ID: thread,
+      WB_FAKE_ROLLOUT: JSON.stringify(rollout),
+    });
+    // Another run's rollout on the same lane, and the CLI's own files: none of them the driver's.
+    const day = join(codexHome, "sessions", "2026", "10", "14");
+    mkdirSync(day, { recursive: true });
+    const theirs = join(day, `rollout-2026-10-14T00-00-00-${other}.jsonl`);
+    writeFileSync(theirs, "{}\n");
+    writeFileSync(join(codexHome, "state_5.sqlite"), "x");
+    await runCodexEpisode(options);
+    trajectory.close();
+    expect(readCodexThread(runDir)).toBe(thread);
+    const records = readTrajectory(runDir);
+    // Everything taken off the rollout is on the trajectory before it goes.
+    expect(records.filter((r) => r.t === "harness" && r["kind"] === "compaction")).toHaveLength(1);
+    const removed = records.filter((r) => r.t === "harness" && r["kind"] === "codex_rollouts_removed");
+    expect(removed).toEqual([expect.objectContaining({ when: "exit", threads: [thread], files: 1 })]);
+    expect((removed[0]?.["bytes"] as number) > 0).toBe(true);
+    expect(records.findIndex((r) => r["kind"] === "compaction")).toBeLessThan(records.findIndex((r) => r["kind"] === "codex_rollouts_removed"));
+    expect(readdirSync(day)).toEqual([`rollout-2026-10-14T00-00-00-${other}.jsonl`]);
+    for (const f of ["auth.json", "state_5.sqlite"]) expect(existsSync(join(codexHome, f))).toBe(true);
+  }, 30_000);
+
+  test("a thread the episode moves off is deleted after the turn that left it; the live one at the end", async () => {
+    const base = "01a119da-ef89-7a63-ac51-314ac6a70a5";
+    const rollout = [{ total: 100_000 }, { total: 110_000 }, { total: 120_000 }];
+    const { runDir, codexHome, trajectory, options } = setupEpisode("new-thread", { maxTurns: 3 }, {
+      WB_FAKE_THREAD_ID: base,
+      WB_FAKE_ROLLOUT: JSON.stringify(rollout),
+    });
+    await runCodexEpisode(options);
+    trajectory.close();
+    const removed = readTrajectory(runDir).filter((r) => r.t === "harness" && r["kind"] === "codex_rollouts_removed");
+    expect(removed.map((r) => [r["when"], r["threads"], r["files"], r["turn"]])).toEqual([
+      ["thread-change", [`${base}-1`], 1, 2],
+      ["thread-change", [`${base}-2`], 1, 3],
+      ["exit", [`${base}-3`], 1, 3],
+    ]);
+    // The sidecar names the thread the run ended on.
+    expect(readCodexThread(runDir)).toBe(`${base}-3`);
+    expect(readdirSync(join(codexHome, "sessions", "2026", "10", "14"))).toEqual([]);
   }, 30_000);
 
   test("a registered secret a snippet returned, logged or threw reaches the CLI as [redacted], as do a notice's and the pad's", async () => {
@@ -821,6 +871,16 @@ describe("detectCodexFailure", () => {
     expect(detectCodexFailure("failed to initialize thread persistence: ENOSPC")).toMatchObject({ kind: "pause", reason: "infrastructure-failed" });
     // An old thread's file cleaned up under the CLI is benign, and so is a slow model list.
     expect(detectCodexFailure("WARN state db returned stale rollout path for thread 01a0")).toBeNull();
+    // What 0.159.3 printed, per old shell snapshot, on the first exec after rollouts were deleted
+    // (2026-10-16), and the lines beside it when a lookup or a listing meets one.
+    for (const line of [
+      "2026-10-16T11:35:24.490587Z ERROR codex_rollout::list: state db returned stale rollout path for thread 01a13865-5045-7781-8109-0b9505ae9af2: /home/bun/.codex/sessions/2026/10/14/rollout-2026-10-14T03-12-06-01a13865-5045-7781-8109-0b9505ae9af2.jsonl",
+      "2026-10-16T11:35:24.490601Z WARN codex_rollout::list: state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path",
+      "2026-10-16T11:35:24.514219Z WARN codex_rollout::state_db: state db list_threads returned stale rollout path for thread 01a138cc-3259-70d2-a55e-89e3aa05277a: /home/bun/.codex/sessions/2026/10/14/rollout-2026-10-14T05-04-29-01a138cc-3259-70d2-a55e-89e3aa05277a.jsonl",
+      "2026-10-16T11:35:24.514230Z WARN codex_rollout::state_db: state db discrepancy during list_threads_db: stale_db_path_retained",
+    ]) {
+      expect(detectCodexFailure(line)).toBeNull();
+    }
     expect(detectCodexFailure("failed to refresh available models: request timed out")).toBeNull();
     expect(detectCodexFailure("stream disconnected before completion")).toBeNull();
     expect(detectCodexFailure("ordinary assistant text about limits of the sandbox")).toBeNull();

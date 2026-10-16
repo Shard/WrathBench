@@ -87,7 +87,9 @@ import {
   smokePath,
   STATE_PATH,
   type StateJob,
+  volumeUsage,
 } from "./run-fleet-state";
+import { readMeta } from "../runner/src/trajectory";
 import { accountHeldBy } from "./run-roster";
 import { readImageRecord } from "./run-pod";
 import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
@@ -177,13 +179,58 @@ export function formatEndedRun(e: EndedRun, retry?: number): string {
   return `${head}${e.detail}${of}`;
 }
 
-/** One line per paused run the supervisor is not resuming, for --status and --dry-run. */
-export function formatPaused(listed: readonly PausedListing[]): string[] {
+/**
+ * One line per paused run the supervisor is not resuming, for --status and
+ * --dry-run. `detailOf` adds what the pause itself said (`pauseDetailOf`):
+ * operator-only, never on `PausedListing`, whose `why` the public fleet page
+ * carries.
+ */
+export function formatPaused(listed: readonly PausedListing[], detailOf?: (l: PausedListing) => string | undefined): string[] {
   if (listed.length === 0) return [];
   return [
     `paused runs not resumed (${listed.length}):`,
-    ...listed.map((l) => `  ${l.runId} — ${l.model}${l.account !== null ? ` on ${l.account}` : ""}: ${l.reason}, ${fmtPaused(l.elapsedMs, l.budgetMs)} — ${l.why}`),
+    ...listed.map((l) => {
+      const detail = detailOf?.(l);
+      return `  ${l.runId} — ${l.model}${l.account !== null ? ` on ${l.account}` : ""}: ${l.reason}, ${fmtPaused(l.elapsedMs, l.budgetMs)} — ${l.why}${detail !== undefined ? ` — CLI: ${detail}` : ""}`;
+    }),
   ];
+}
+
+/** Credential shapes (as `publish-accept.ts` checks for), and a JWT. */
+const CREDENTIAL_SHAPES =
+  /\b(?:Bearer\s+[A-Za-z0-9._~+/-]{12,}|sk-[A-Za-z0-9_-]{16,}|csk-[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})/g;
+
+/**
+ * A pause's detail — the CLI's own stderr line for an `infrastructure-failed`
+ * pause — as one line of at most `max` characters: whitespace collapsed, the
+ * log line's timestamp, level and module target dropped, every absolute path
+ * shortened to `…` (the message is what tells a full disk from a broken
+ * store), credential shapes masked. Undefined for an empty one.
+ */
+export function pauseDetailLine(detail: string | undefined | null, max = 120): string | undefined {
+  if (detail === undefined || detail === null) return undefined;
+  let s = detail.replace(/\s+/g, " ").trim();
+  s = s.replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(?:ERROR|WARN|INFO|DEBUG|TRACE)\s+/, "");
+  s = s.replace(/^[a-z_][a-z0-9_]*(?:::[a-z_][a-z0-9_]*)+:\s+/, "");
+  s = s.replace(/(?<![\w.~-])\/(?:[^\s/;:,"']+\/)+[^\s/;:,"']*/g, "…");
+  s = s.replace(CREDENTIAL_SHAPES, "[masked]");
+  if (s.length === 0) return undefined;
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
+ * The detail lookup `formatPaused` takes: an `infrastructure-failed` pause's
+ * own words, off the run's meta.json pause mark; nothing for any other pause.
+ */
+export function pauseDetailOf(runsDir: string = RUNS_DIR): (l: PausedListing) => string | undefined {
+  return (l) => (l.reason === "infrastructure-failed" ? pauseDetailLine(readMeta(join(runsDir, l.runId))?.pause?.detail) : undefined);
+}
+
+/** The volume line for a `codex:<HOME ENV>` lane: how full the directory that variable names here is. */
+export function codexLaneVolume(lane: string, env: Record<string, string | undefined> = process.env): string | undefined {
+  if (!lane.startsWith("codex:")) return undefined;
+  const dir = env[lane.slice("codex:".length)];
+  return dir !== undefined && dir.length > 0 ? volumeUsage(dir) : undefined;
 }
 
 /**
@@ -944,6 +991,7 @@ export function printStatus(): void {
     for (const line of formatSubscriptionGate(subGate, gateLanes(subGate, config.roster, config.policy.subscriptions), {
       local: localThresholds,
       notes: state?.subscriptionGate !== undefined ? (state.subscriptionGate.notes ?? []) : localThresholds.notes,
+      volumeOf: (lane) => codexLaneVolume(lane),
     })) {
       console.log(`  ${line}`);
     }
@@ -989,7 +1037,7 @@ export function printStatus(): void {
     ...planStaleRuns({ runs: runFacts, ...(config !== undefined ? { campaigns: config.campaigns, refs: Object.keys(config.roster) } : {}), now: Date.now() }),
   ];
   const statusStates = config !== undefined ? modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: runFacts }) : [];
-  for (const line of formatPaused(resumePlan.listed)) console.log(`  ${line}`);
+  for (const line of formatPaused(resumePlan.listed, pauseDetailOf())) console.log(`  ${line}`);
   for (const line of formatEnded(lapsed, fleetUp, (e) => failedAttemptsFor(statusStates, e) ?? 0)) console.log(`  ${line}`);
   if (state?.ended !== undefined && state.ended.length > 0) {
     console.log(`  ended this session (${state.ended.length}): ${state.ended.map((e) => `${e.runId} (${e.detail})`).join("; ")}`);
@@ -1329,7 +1377,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
     gate: subGate,
   });
   console.log("");
-  for (const line of formatSubscriptionGate(subGate, gateLanes(subGate, config.roster, config.policy.subscriptions), { local, notes: state?.subscriptionGate !== undefined ? (state.subscriptionGate.notes ?? []) : local.notes })) console.log(line);
+  for (const line of formatSubscriptionGate(subGate, gateLanes(subGate, config.roster, config.policy.subscriptions), { local, notes: state?.subscriptionGate !== undefined ? (state.subscriptionGate.notes ?? []) : local.notes, volumeOf: (lane) => codexLaneVolume(lane) })) console.log(line);
   for (const line of formatAccounts(rows)) console.log(line);
   for (const line of formatAccountClasses(config)) console.log(line);
   for (const line of formatArgvBlock(spawns, { stamp: stampToday, until: cliUntil })) console.log(line);
@@ -1346,7 +1394,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   // Every run in flight holds its model, owned or not, as the plan above does.
   for (const line of formatModels(states, new Set(inFlight.flatMap((r) => r.refs)), now, excluded, config.policy)) console.log(line);
   for (const line of formatHeld(plan.heldPicks)) console.log(line);
-  for (const line of formatPaused(resumes.listed)) console.log(line);
+  for (const line of formatPaused(resumes.listed, pauseDetailOf())) console.log(line);
   for (const line of formatEnded(
     [...resumes.end, ...planStaleRuns({ runs, campaigns: config.campaigns, refs: Object.keys(config.roster), now })],
     false,
