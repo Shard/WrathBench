@@ -31,6 +31,7 @@ import {
   validateEntries,
   episodeDimensions,
   formatAccounts,
+  formatArgvBlock,
   formatQueue,
   liveJobsFromState,
   jobsByAccount,
@@ -4436,6 +4437,21 @@ describe("the read-only views read what is running, not every job the supervisor
       // The argv is the live spawn's: the paused run first, --resume-roster.
       expect(spawns.map((s) => s.spawn.resumeRunId)).toEqual([A2]);
       expect(rows.find((r) => r.account === "RUNNER3")).toMatchObject({ job: { resumes: A2, planned: true } });
+      // And it prints as one real argv line under the header, never a bare `argv:`.
+      const block = formatArgvBlock(spawns, { stamp: "20261014", until: undefined, jsonlExists: () => false });
+      expect(block).toHaveLength(2);
+      expect(block[0]).toBe("argv:");
+      expect(block[1]).toStartWith(`  ${REF}-freeplay: `);
+      expect(block[1]).toContain("--resume-roster");
+    });
+
+    test("a plan that spawns nothing prints no argv block at all", () => {
+      // Kept in flight, not spawned: no header over nothing.
+      const runs = [...history, a2({ live: true })];
+      const inFlight = inFlightRuns({ jobs: new Map(), runs, roster: config().roster, campaigns: [] });
+      const { spawns } = dryRun(runs, { held: heldByA2, inFlight });
+      expect(spawns).toEqual([]);
+      expect(formatArgvBlock(spawns, { stamp: "20261014", until: undefined })).toEqual([]);
     });
 
     test("a run in flight under the supervisor keeps its account and its model, and says what a restart does to it", () => {

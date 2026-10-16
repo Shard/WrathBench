@@ -1237,6 +1237,31 @@ export function planDryRun(opts: {
   return { resumes, plan, rows, spawns };
 }
 
+/**
+ * The dry-run's argv block: one line per spawn the rows make, resumes
+ * included (a resume's argv is the roster started with `--resume-roster`).
+ * Nothing at all when nothing spawns, so a plan that only keeps runs going
+ * never prints a bare `argv:` header over nothing.
+ */
+export function formatArgvBlock(
+  spawns: DryRunPlan["spawns"],
+  opts: { stamp: string; until: string | undefined; jsonlExists?: (path: string) => boolean },
+): string[] {
+  if (spawns.length === 0) return [];
+  const exists = opts.jsonlExists ?? existsSync;
+  return [
+    "argv:",
+    ...spawns.map(({ job, spawn }) => {
+      // The same resume decision the live spawn makes (see the spawn path):
+      // without it the plan showed a fresh launch for a job whose day jsonl was
+      // on disk, which read as "the paused probe gets clobbered" when the real
+      // spawn would have resumed it.
+      const resumeRoster = spawn.resumeRunId !== undefined || exists(jobJsonlPath(spawn.name, opts.stamp));
+      return `  ${job.name}: ${jobArgv(spawn, { stamp: opts.stamp, until: opts.until, resumeRoster }).join(" ")}`;
+    }),
+  ];
+}
+
 export function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string): void {
   console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
   // The running supervisor, read the way --status reads it: this is the next
@@ -1284,17 +1309,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   console.log("");
   for (const line of formatAccounts(rows)) console.log(line);
   for (const line of formatAccountClasses(config)) console.log(line);
-  if (spawns.length > 0) {
-    console.log("argv:");
-    for (const { job, spawn } of spawns) {
-      // The same resume decision the live spawn makes (see the spawn path):
-      // without it the plan showed a fresh launch for a job whose day jsonl was
-      // on disk, which read as "the paused probe gets clobbered" when the real
-      // spawn would have resumed it.
-      const resumeRoster = spawn.resumeRunId !== undefined || existsSync(jobJsonlPath(spawn.name, stampToday));
-      console.log(`  ${job.name}: ${jobArgv(spawn, { stamp: stampToday, until: cliUntil, resumeRoster }).join(" ")}`);
-    }
-  }
+  for (const line of formatArgvBlock(spawns, { stamp: stampToday, until: cliUntil })) console.log(line);
   for (const job of plan.queue.waiting) console.log(`  ${job.name}: waiting — ${job.ref} ${job.episode} x${job.repeat} (no free pool account)`);
   for (const sk of plan.queue.skipped) console.log(`  ${sk.job.name}: SKIP — ${sk.reason}`);
   for (const job of plan.queue.done) console.log(`  ${job.name}: done — ${progressLabel(job, countedFrom(states)) ?? "repeat met"}; nothing spawns (raise repeat for more)`);

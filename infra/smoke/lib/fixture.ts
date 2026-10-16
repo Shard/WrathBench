@@ -42,6 +42,25 @@ export type FixtureContext = {
 };
 
 /**
+ * A persistent fixture character's name for one account: the prefix, then the
+ * account's letters (digits as letters, 0 -> a), capped at the game's 12.
+ *
+ * Character names are realm-global, so a fixed default collides the moment a
+ * second account runs the same smoke: `Smoketaxi` already stood on PROBE, and
+ * SMOKE2 failed its create with `char_create_failed_code_50`. Derived from the
+ * account, each account owns its own character and the name is stable between
+ * runs, which a persistent fixture needs. Runs of three identical letters
+ * (SMOKE222) are cut to two, the game's rule.
+ */
+export function accountFixtureName(prefix: string, account: string): string {
+  const tail = account
+    .toLowerCase()
+    .replace(/[0-9]/g, (d) => "abcdefghij"[Number(d)]!)
+    .replace(/[^a-z]/g, "");
+  return `${prefix}${tail}`.replace(/(.)\1{2,}/gi, "$1$1").slice(0, 12);
+}
+
+/**
  * How `infra/fixtures/apply.ts` is invoked. It talks to the characters DB
  * directly, and the DB port is not published to the host:
  *   - WRATHBENCH_FIXTURES_CMD, if set, is the command verbatim (space-split),
