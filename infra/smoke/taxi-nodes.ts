@@ -110,7 +110,19 @@ try {
   if (!window.known.some((n) => n.nodeId === TAXI_THELSAMAR)) fail(`the fixture's node ${TAXI_THELSAMAR} is not known: ${JSON.stringify(window.known)}`);
   if (window.mask.length !== 14) fail(`mask has ${window.mask.length} words, expected 14`);
   if (client.state.lastTaxiNodes(gryth.guid)?.seq !== window.seq) fail("state.lastTaxiNodes(guid) does not hold the window");
-  log(`PASS window: ${window.known.length} known node(s), current ${window.current.name}`);
+  // Node positions ride each row (TaxiNodes.dbc): the master's own node is
+  // where the character stands, so the window's current node must be within
+  // a few yards of self, and every known node must carry a map and a point.
+  const here = client.state.self.position?.value ?? fail("self.position unknown while standing at the flight master");
+  const cur = window.current;
+  if (cur.map === undefined || cur.x === undefined || cur.y === undefined || cur.z === undefined)
+    fail(`current node carries no position: ${JSON.stringify(cur)} (module built before node positions?)`);
+  const dNode = Math.hypot(cur.x - here.x, cur.y - here.y);
+  if (cur.map !== here.map || dNode > 25) fail(`current node ${JSON.stringify(cur)} is ${dNode.toFixed(1)}y from self ${JSON.stringify(here)}`);
+  for (const n of window.known)
+    if (n.name !== undefined && (n.map === undefined || n.x === undefined || n.y === undefined || n.z === undefined))
+      fail(`known node ${n.nodeId} is named but carries no position: ${JSON.stringify(n)}`);
+  log(`PASS window: ${window.known.length} known node(s), current ${window.current.name} at ${dNode.toFixed(1)}y`);
 
   // 3. One hop, by name.
   const moneyBefore = client.state.money?.value;
@@ -122,12 +134,32 @@ try {
   log(`PASS takeoff: taxiFlight true; money ${moneyBefore} -> ${client.state.money?.value}`);
 
   // 4. The landing is the flag flipping back; the zone is the proof of where.
+  const landingSince = client.events.recent(1)[0]?.seq ?? 0;
   await waitTaxiFlight(false, 5 * 60_000, "the landing (taxiFlight false)");
+  const splineEnd = client.state.self.position?.value ?? fail("no position at the landing");
+  // The module's drop to the ground (the client's own MSG_MOVE_FALL_LAND)
+  // follows the flag within a tick: position ends under the spline's end.
+  const dropEvent = await client.events.waitFor(
+    (e) => e.seq > landingSince && e.opcode === "WB_SELF_MOVE" && (e.data as { cause?: string }).cause === "taxi_landing",
+    { timeout: 5_000, description: "the WB_SELF_MOVE drop after the landing" },
+  );
+  const drop = dropEvent.data as { pos: { x: number; y: number; z: number }; fromZ: number };
+  const landed = client.state.self.position?.value ?? fail("no position after the drop");
+  if (landed.x !== drop.pos.x || landed.y !== drop.pos.y || landed.z !== drop.pos.z)
+    fail(`position ${JSON.stringify(landed)} is not the drop's ${JSON.stringify(drop.pos)}`);
+  if (!(drop.fromZ > drop.pos.z) || drop.fromZ - drop.pos.z > 10)
+    fail(`the drop went from z ${drop.fromZ} to ${drop.pos.z}: not a fall of up to 10y onto the ground`);
   await Bun.sleep(1500); // let the WB_AREA for the landing zone land
   const zone = client.state.self.zone?.value;
   if (zone?.id === ZONE_IRONFORGE) fail(`landed but self.zone is still Ironforge: ${JSON.stringify(zone)}`);
   if (zone?.id !== ZONE_LOCH_MODAN) fail(`landed in zone ${JSON.stringify(zone)}, expected ${ZONE_LOCH_MODAN} (Loch Modan)`);
-  log(`PASS landing: ${zone.name} at ${JSON.stringify(client.state.self.position?.value)}`);
+  log(`PASS landing: ${zone.name}, spline end z ${splineEnd.z.toFixed(1)} -> ground z ${landed.z.toFixed(1)}`);
+
+  // 5. The first move after a landing is the proof the character stands on
+  // the mesh: a few yards from where it landed, with no z guessed.
+  const step = await client.moveTo({ x: landed.x + 4, y: landed.y, z: landed.z }, { timeout: 30_000 });
+  if (step.status !== "arrived") fail(`first move after landing ended ${step.status}: ${JSON.stringify(step)}`);
+  log(`PASS first move after landing: arrived at ${JSON.stringify(client.state.self.position?.value)}`);
 
   console.log(`PASS: taxi-nodes (${((Date.now() - started) / 1000).toFixed(1)}s)`);
 } catch (e) {

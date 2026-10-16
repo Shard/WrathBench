@@ -18,7 +18,7 @@ import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { ScrubbedStream, SecretRedactor } from "../redact";
 import { overCapText, type Scratchpad } from "../scratchpad";
-import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, HostToChild, HostcallResult, LogEntry } from "./ipc";
+import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, FlightSignal, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
   ok: boolean;
@@ -664,6 +664,22 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "death_signals rpc failed");
     return (res.value ?? []) as DeathSignal[];
+  }
+
+  /**
+   * Flight transitions the child latched since the last drain (`ipc.ts`,
+   * `FlightSignal`): the same shape as `deathSignals`, for the same reason,
+   * and destructive the same way — the loop's state sample owns the drain.
+   */
+  async flightSignals(): Promise<FlightSignal[]> {
+    await this.start();
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "flight_signals", params: {} },
+      5_000,
+    );
+    if (!res.ok) throw new Error(res.error ?? "flight_signals rpc failed");
+    return (res.value ?? []) as FlightSignal[];
   }
 
   /**

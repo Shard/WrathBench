@@ -1339,7 +1339,14 @@ export function travelMarksOf(rec: Record<string, unknown>): TrackTravelMark[] {
     const ts = rec["ts"];
     if (typeof ts !== "number") return [];
     const kind = rec["kind"];
-    if (kind === "taxi" || kind === "taxi_landed" || kind === "release") return [{ kind, ts }];
+    if (kind === "taxi" || kind === "taxi_landed") {
+      // A flight record latched in the sandbox carries the flip's own stamp;
+      // prefer it over the sample's, as `deathMarkOf` does and for the reason
+      // it gives: the producer samples on a timer.
+      const observed = rec["observedTs"];
+      return [{ kind, ts: typeof observed === "number" ? observed : ts }];
+    }
+    if (kind === "release") return [{ kind, ts }];
     if (kind === "death" && rec["released"] === true) return [{ kind: "release", ts }];
     return [];
   }
