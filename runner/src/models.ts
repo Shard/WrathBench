@@ -1445,21 +1445,23 @@ export function platformOf(apiBase: string | undefined, driver: string | undefin
 }
 
 /**
- * OpenCode Zen's pay-as-you-go surface, which is metered apart from the free
- * `zen/v1` tier on the same host and so is capped apart from it.
+ * OpenCode Go, a surface billed apart from Zen's shared tier on the same host
+ * and so capped apart from it.
  */
 export const OPENCODE_GO_KEY = "opencode-go";
 
 /**
  * Whether an api base points at that surface. The path is what distinguishes
- * it — `https://opencode.ai/zen/go/v1` against `https://opencode.ai/zen/v1` —
- * so this reads the base itself rather than `platformOfBase`, which answers
- * with a hostname. The host is matched exactly (`hostOfBase`), never by
- * substring, and a base that does not parse is not this surface.
+ * it — `https://opencode.ai/inference/go/openai/v1` (or the older
+ * `https://opencode.ai/zen/go/v1`, which still answers) against the shared
+ * tier's `https://opencode.ai/inference/openai/v1` and `/zen/v1` — so this
+ * reads the base itself rather than `platformOfBase`, which answers with a
+ * hostname. The host is matched exactly (`hostOfBase`), never by substring,
+ * and a base that does not parse is not this surface.
  */
 export function isOpenCodeGoBase(apiBase: string | null | undefined): boolean {
   if (hostOfBase(apiBase) !== "opencode.ai") return false;
-  return /(^|\/)zen\/go(\/|$)/.test(new URL(apiBase!).pathname);
+  return /(^|\/)(zen|inference)\/go(\/|$)/.test(new URL(apiBase!).pathname);
 }
 
 /**

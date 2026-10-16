@@ -5,11 +5,13 @@ import { describe, expect, test } from "bun:test";
 import {
   APP_TITLE,
   APP_URL,
+  OPENCODE_SESSION_HEADER,
   OpenAiChatAdapter,
   PROVIDER_RESET_FLOOR_MS,
   RAW_USAGE_MAX_KEY_LENGTH,
   RAW_USAGE_MAX_LEAVES,
   USER_AGENT,
+  openCodeSessionHeaders,
   parseRetryAfter,
   statedResetOf,
   type AssistantTurn,
@@ -119,6 +121,72 @@ describe("OpenAiChatAdapter attribution headers", () => {
     const { headers, body } = await sentRequest({ env: {} });
     expect(body).not.toHaveProperty("usage"); // not OpenRouter
     expect(headers.get("x-title")).toBe(APP_TITLE);
+  });
+});
+
+describe("OpenAiChatAdapter OpenCode session header", () => {
+  const RUN = "fleet-mimo-go-mimo-v2.6-flash-20261016T0500";
+
+  /** Every request's headers, over `n` completes of one adapter. */
+  async function headersOver(baseUrl: string, n: number, extra: Record<string, unknown> = {}): Promise<Headers[]> {
+    const seen: Headers[] = [];
+    const adapter = new OpenAiChatAdapter({
+      baseUrl,
+      apiKey: "k",
+      model: "m",
+      env: {},
+      fetchImpl: Object.assign(
+        (_url: string, init: RequestInit): Promise<Response> => {
+          seen.push(new Headers(init.headers as Record<string, string>));
+          return Promise.resolve(new Response(JSON.stringify({ choices }), { status: 200 }));
+        },
+        { preconnect: () => {} },
+      ) as unknown as typeof fetch,
+      sleep: () => Promise.resolve(),
+      ...extra,
+    });
+    for (let i = 0; i < n; i++) await adapter.complete({ messages: [{ role: "user", content: `turn ${i}` }], tools: [] });
+    return seen;
+  }
+
+  test("both OpenCode gateways get the run id, the same on every request", async () => {
+    for (const base of ["https://opencode.ai/inference/go/openai/v1", "https://opencode.ai/zen/go/v1", "https://opencode.ai/zen/v1"]) {
+      const seen = await headersOver(base, 3, { sessionId: RUN });
+      expect(seen).toHaveLength(3);
+      for (const h of seen) expect(h.get(OPENCODE_SESSION_HEADER)).toBe(RUN);
+    }
+  });
+
+  test("no other provider gets it, even when the run passes one", async () => {
+    for (const base of ["https://openrouter.ai/api/v1", "https://api.cerebras.ai/v1", "http://192.168.1.20:1234/v1", "https://opencode.ai.example.com/inference/go/openai/v1"]) {
+      const [h] = await headersOver(base, 1, { sessionId: RUN });
+      expect(h!.get(OPENCODE_SESSION_HEADER)).toBeNull();
+      // and nothing else about the request moved
+      expect(h!.get("user-agent")).toBe(USER_AGENT);
+      expect(h!.get("authorization")).toBe("Bearer k");
+    }
+  });
+
+  test("absent without a session id, and dropped rather than sent when it would break fetch", async () => {
+    const [none] = await headersOver("https://opencode.ai/inference/go/openai/v1", 1);
+    expect(none!.get(OPENCODE_SESSION_HEADER)).toBeNull();
+    for (const bad of ["", "run 1", "run\n1", "run-é"]) {
+      const [h] = await headersOver("https://opencode.ai/inference/go/openai/v1", 1, { sessionId: bad });
+      expect(h!.get(OPENCODE_SESSION_HEADER)).toBeNull();
+    }
+  });
+
+  test("the session header is the only OpenCode header: the client's own are never claimed", async () => {
+    const [h] = await headersOver("https://opencode.ai/inference/go/openai/v1", 1, { sessionId: RUN });
+    const opencode = [...h!.keys()].filter((k) => k.startsWith("x-opencode-"));
+    expect(opencode).toEqual([OPENCODE_SESSION_HEADER]);
+    expect(h!.get("user-agent")).toBe("WrathBench");
+  });
+
+  test("openCodeSessionHeaders is host-exact", () => {
+    expect(openCodeSessionHeaders("https://opencode.ai/inference/go/openai/v1", RUN)).toEqual({ [OPENCODE_SESSION_HEADER]: RUN });
+    expect(openCodeSessionHeaders("https://notopencode.ai/zen/go/v1", RUN)).toEqual({});
+    expect(openCodeSessionHeaders("not a url", RUN)).toEqual({});
   });
 });
 

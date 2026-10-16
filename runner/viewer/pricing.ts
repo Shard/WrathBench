@@ -421,6 +421,13 @@ export interface ProviderPriceRow {
   note: string;
 }
 
+/**
+ * OpenCode Go's chat base as its docs give it. The older `/zen/go/v1` still
+ * answers, and `omen-alpha`'s row stays on it because its runs recorded that
+ * base; a row matches the base a run recorded, exactly.
+ */
+export const OPENCODE_GO_BASE = "https://opencode.ai/inference/go/openai/v1";
+
 export const PROVIDER_PRICES: readonly ProviderPriceRow[] = [
   {
     id: "cerebras/qwen-3.8-27b",
@@ -446,7 +453,31 @@ export const PROVIDER_PRICES: readonly ProviderPriceRow[] = [
     source: "catalogue",
     note: "models.dev registry listing for the opencode-go provider, read 2026-09-04 (model released the same day). The endpoint reported usage.cost 0 on every live response that day, so the published rate and the observed charge disagree: the actual figure beside this one is the provider's own word, and this is what the listing says it would cost if billed — a free alpha preview is the likely reading, but neither a free nor a billed alpha is asserted here. Append a dated window the day the bill changes",
   },
+  // OpenCode Go at its documented chat base. Go's usage limits are dollar
+  // amounts and its chat responses carry no `usage.cost`, so the listing is
+  // the only figure these runs get. The free Go slugs (`-free`) need no row.
+  // A Go model the listing gives no cache-write tier bills a write as input,
+  // the omen-alpha fallback; space-bunny's listing states its tier as 0.
+  ...goRows("2026-10-16", [
+    ["space-bunny", { input: 0.15, output: 0.6, cacheRead: 0.03, cacheWrite: 0 }],
+    ["mimo-v2.6-flash", { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 }],
+    ["mimo-v2.5", { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 }],
+    ["deepseek-v4.1-flash", { input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0.15 }],
+  ]),
 ];
+
+/** Go rows read off one models.dev listing on one day: same base, source and note. */
+function goRows(asOf: string, rates: readonly [string, SyncedWindow][]): ProviderPriceRow[] {
+  return rates.map(([model, window]) => ({
+    id: `opencode-go/${model}`,
+    apiBase: OPENCODE_GO_BASE,
+    model,
+    windows: [window],
+    asOf,
+    source: "catalogue",
+    note: `models.dev registry listing for the opencode-go provider, read ${asOf}. The Go endpoint reports no per-response charge, and its usage limits are denominated in dollars, so this list rate is the expected figure for what a run draws against them, not an invoice. Append a dated window when the listing moves`,
+  }));
+}
 
 /** Two api bases name the same endpoint: same origin, same path, trailing slash ignored. */
 function sameBase(a: string | null | undefined, b: string): boolean {

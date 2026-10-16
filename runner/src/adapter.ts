@@ -43,6 +43,7 @@
 
 import { z } from "zod";
 import type { ChatMessage } from "./context";
+import { hostOfBase } from "./platform";
 import { isOpenRouterBase, providerBodyOf, type RoutingSpec } from "./routing";
 import { apiKeyRefusal } from "./providers";
 import type { ToolDef } from "./tools";
@@ -293,6 +294,12 @@ export interface OpenAiAdapterOptions {
    * this, and the comparability tuple omits the field for exactly those.
    */
   routing?: RoutingSpec;
+  /**
+   * The conversation this adapter serves, stable for its whole life: the run
+   * id. Sent only to OpenCode (`OPENCODE_SESSION_HEADER`); every other host
+   * gets nothing from it.
+   */
+  sessionId?: string;
   maxAttempts?: number;
   requestTimeoutMs?: number;
   /** Wall-clock ceiling for one complete()'s retries (see the retry policy). */
@@ -330,6 +337,33 @@ export const APP_TITLE = "WrathBench";
  * making anyway.
  */
 export const USER_AGENT = APP_TITLE;
+
+/**
+ * OpenCode's session header. Go's docs admit coding agents other than its own
+ * client on three conditions: typical coding-agent traffic, a user agent of
+ * the agent's own (`USER_AGENT` already is one), and "a stable session ID in
+ * x-opencode-session for each conversation so we can optimize routing and
+ * prompt caching". This is the third, and it is all we send: the headers that
+ * identify OpenCode's own client (`x-opencode-client` and its siblings) are
+ * never sent, because claiming to be a client we are not is the spoofing this
+ * harness does not do.
+ *
+ * Host-gated on `opencode.ai` exactly (`hostOfBase`), both of its gateways,
+ * since a strict endpoint elsewhere has no use for it.
+ */
+export const OPENCODE_SESSION_HEADER = "x-opencode-session";
+
+/**
+ * The session header for this base, or nothing. A value that is not plain
+ * printable ASCII is dropped rather than sent: `fetch` throws building such a
+ * header, and this adapter would read the throw as a network error and retry
+ * it as an outage.
+ */
+export function openCodeSessionHeaders(baseUrl: string, sessionId: string | undefined): Record<string, string> {
+  if (hostOfBase(baseUrl) !== "opencode.ai") return {};
+  if (sessionId === undefined || !/^[\x21-\x7e]+$/.test(sessionId)) return {};
+  return { [OPENCODE_SESSION_HEADER]: sessionId };
+}
 
 /** `Retry-After`: integer seconds or an HTTP-date. Anything else is ignored. */
 export function parseRetryAfter(value: string | null, nowMs: number): number | null {
@@ -475,6 +509,7 @@ export class OpenAiChatAdapter implements ChatAdapter {
       "HTTP-Referer": appUrl,
       "X-Title": APP_TITLE,
       "user-agent": USER_AGENT,
+      ...openCodeSessionHeaders(opts.baseUrl, opts.sessionId),
     };
   }
 

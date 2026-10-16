@@ -17,7 +17,9 @@ the operator's figure in GitHub issue #66.
 - Every `t:"response"` trajectory record carries the provider-reported
   `usage` block when the provider sends one: `prompt_tokens`,
   `completion_tokens`, `cached_tokens`, `cache_write_tokens`,
-  `reasoning_tokens`, and OpenRouter's own `cost` in credits. It also names
+  `reasoning_tokens`, and OpenRouter's own `cost` in credits. OpenCode Go
+  sends no `cost`, so a run there carries an expected figure from its
+  `PROVIDER_PRICES` row and no actual one. The record also names
   the serving `provider` when the body reports one, and the first one seen is
   promoted onto the run itself
   (`run.resolved_provider`, `meta.resolved.provider`) so a cost sweep can group

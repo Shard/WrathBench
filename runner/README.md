@@ -79,6 +79,13 @@ harness, since the SDK, tools, prompt and sandbox each CLI drives are ours.
 Each CLI scaffold is its own group because each is a different unversioned
 summarizer (docs/METHODOLOGY.md).
 
+The `openai` driver identifies itself the same way to every endpoint:
+`User-Agent: WrathBench` and OpenRouter's attribution pair, `HTTP-Referer` and
+`X-Title` (`src/adapter.ts`). One header is host-gated. To `opencode.ai` it
+also sends `x-opencode-session: <run id>`, the stable per-conversation id that
+OpenCode Go's docs ask of agents other than its own client. It never sends the
+headers that identify OpenCode's own client.
+
 ### Why claude-code is its own harness
 
 Measured against claude 2.1.238 with a local capture proxy (no model calls):
