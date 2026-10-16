@@ -2101,6 +2101,21 @@ export function serverIdentity(body: unknown, bootMarker: () => string): ServerI
   return { identity: `${bootMarker()}|${healthDigest(body)}` };
 }
 
+/**
+ * Whether a /health answer is a server the gate may smoke and spawn against:
+ * a 200, `ok`, a world that is not stopping, and one that loaded whole. A
+ * module whose world load came up short answers 503 `world_not_loaded` with
+ * `worldLoaded: false` (module/PROTOCOL.md, GET /health), so the status alone
+ * already refuses it; the field is read too so the body is judged the same
+ * whatever the status. A module that predates the field omits it, which
+ * reads as loaded.
+ */
+export function healthReady(status: number, body: unknown): boolean {
+  if (status !== 200 || typeof body !== "object" || body === null) return false;
+  const o = body as { ok?: unknown; worldStopped?: unknown; worldLoaded?: unknown };
+  return o.ok === true && o.worldStopped !== true && o.worldLoaded !== false;
+}
+
 export type GateAction = "skip" | "wait" | "pass" | "run";
 
 /**

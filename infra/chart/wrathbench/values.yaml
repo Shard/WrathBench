@@ -228,7 +228,8 @@ worldserver:
   tempSizeLimit: 2Gi
   # World load takes minutes on a cold map cache. The startup probe is what
   # buys that time without a readiness flap; failureThreshold * periodSeconds
-  # is the budget.
+  # is the budget. It passes on the module's /health 200, so a load that came
+  # up short (503 world_not_loaded) is restarted when the budget runs out.
   startupProbe:
     periodSeconds: 10
     failureThreshold: 90

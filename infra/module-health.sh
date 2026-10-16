@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The module's operator health census (sessions, drop counts by opcode), read
+# The module's operator health census (sessions, drop counts by opcode, the
+# world-load counts behind `worldLoaded`), read
 # over loopback inside the worldserver container, which is the only caller the
 # module gives the census to; any other caller gets liveness with zeroed
 # counters (module/PROTOCOL.md, "Authentication"). The image has no curl or

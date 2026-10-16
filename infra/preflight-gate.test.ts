@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { wakeWhenReady } from "./run-fleet";
+import { healthReady } from "./run-fleet-plan";
 
 /** Resolves once `cond` holds, polling every few milliseconds; fails the test after 2s. */
 async function until(cond: () => boolean): Promise<void> {
@@ -85,5 +86,45 @@ describe("wakeWhenReady: the gate's readiness poll", () => {
     await until(() => probes >= 3);
     cancel();
     expect(most).toBe(1);
+  });
+});
+
+describe("healthReady: what the gate counts as a server to smoke", () => {
+  const loaded = {
+    ok: true,
+    module: "mod-wrathbench",
+    worldStopped: false,
+    worldLoaded: true,
+    sessions: 0,
+    droppedPackets: 0,
+    droppedPacketsLive: 0,
+    build: "harness-0.5-1070-gabcdef0",
+    startedAtMs: 1_790_000_000_000,
+    uptimeMs: 200_000,
+  };
+
+  test("a 200 from a world that loaded whole is ready", () => {
+    expect(healthReady(200, loaded)).toBe(true);
+  });
+
+  test("a module that predates worldLoaded is judged on ok and worldStopped, as before", () => {
+    const { worldLoaded: _, ...older } = loaded;
+    expect(healthReady(200, older)).toBe(true);
+  });
+
+  test("503 world_not_loaded (a load that lost rows to a database restart) is not ready", () => {
+    const short = { ...loaded, ok: false, error: "world_not_loaded", worldLoaded: false };
+    expect(healthReady(503, short)).toBe(false);
+  });
+
+  test("worldLoaded: false is not ready even under a 200", () => {
+    expect(healthReady(200, { ...loaded, worldLoaded: false })).toBe(false);
+  });
+
+  test("a stopping world, a refusal and a body that is not an object are not ready", () => {
+    expect(healthReady(200, { ...loaded, worldStopped: true })).toBe(false);
+    expect(healthReady(401, { ok: false, error: "unauthorized" })).toBe(false);
+    expect(healthReady(200, null)).toBe(false);
+    expect(healthReady(200, "ok")).toBe(false);
   });
 });

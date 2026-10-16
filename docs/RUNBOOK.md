@@ -940,6 +940,17 @@ contents. The run stops and the refused image loses its tag. A refusal means
 the commit or a Dockerfile step put that file in the image, so fix it there.
 Don't widen the allow-list in the guard to get past it.
 
+A worldserver whose world load came up short is never started. Its pod waits
+for MySQL to answer a query before the load begins (the `wait-for-db` init
+container), and its startup probe passes only on a `200` from the module's
+`/health`, which answers `503 world_not_loaded` when a core store came up empty
+or MySQL restarted during the load (module/PROTOCOL.md, `GET /health`). Such a
+pod is restarted when the startup budget runs out (`worldserver.startupProbe`,
+15 minutes), so a deploy window waiting on it fails first, at "the worldserver
+rollout did not complete". `./infra/module-health.sh` prints the counts and
+`dbRestarted`; `kubectl -n wrathbench delete pod -l
+app.kubernetes.io/component=worldserver` restarts it now instead.
+
 #### Deploying a harness change that needs a real smoke first
 
 The gate smokes drive the module with a scripted client. They never start the

@@ -144,6 +144,7 @@ import {
   retryNumbers,
   runnableRefs,
   serverIdentity,
+  healthReady,
   type ServerIdentity,
   characterAffinity,
   characterKey,
@@ -327,20 +328,20 @@ function readBootMarker(dir: string = SERVER_LOG_DIR): string {
 
 /**
  * The server as the supervisor currently sees it: `undefined` when the module
- * does not answer or the world is stopping, which is "not ready" — neither
- * smoke it nor spawn against it.
+ * does not answer, the world is stopping, or it did not load whole, which is
+ * "not ready" — neither smoke it nor spawn against it (`healthReady`).
  */
 async function readServerIdentity(): Promise<ServerIdentity | undefined> {
+  let status: number;
   let body: unknown;
   try {
     const res = await fetch(`${MODULE_URL}/health`, { headers: moduleAuthHeaders(), signal: AbortSignal.timeout(5_000) });
-    if (!res.ok) return undefined;
+    status = res.status;
     body = await res.json();
   } catch {
     return undefined;
   }
-  const o = body as { ok?: unknown; worldStopped?: unknown };
-  if (o.ok !== true || o.worldStopped === true) return undefined;
+  if (!healthReady(status, body)) return undefined;
   return serverIdentity(body, () => readBootMarker());
 }
 
