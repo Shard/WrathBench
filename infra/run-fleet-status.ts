@@ -244,7 +244,7 @@ export function formatCampaignRefusals(refusals: readonly CampaignRefusal[]): st
  * A warning line, never a refusal: the entry still runs, it just reads
  * unpriced until a row exists. Printed because the alternative is the way the
  * codex models went unpriced for a week in 2026-10 — nobody looks at a blank.
- * The usual fix is `bun infra/sync-prices.ts` and a release, since the price
+ * The usual fix is `bun wb data prices` and a release, since the price
  * file ships in the image; the line says which fix the model needs.
  */
 export function formatPriceGaps(roster: Readonly<Record<string, FleetRosterEntry>>): string[] {
@@ -1250,7 +1250,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   for (const line of formatGate(undefined, config.preflight)) console.log(line);
   if (config.preflight.enabled) {
     for (const s of config.preflight.smokes) console.log(`  would run: bun ${smokePath(s.script)} (account ${s.account})`);
-    for (const s of config.preflight.deploySmokes) console.log(`  deploy window only: bun ${smokePath(s.script)} (account ${s.account})`);
+    for (const s of config.preflight.deploySmokes) console.log(`  deploy window only (bun wb release deploy): bun ${smokePath(s.script)} (account ${s.account})`);
   } else {
     console.log("  gate open: jobs spawn without smoking the server first");
   }

@@ -627,7 +627,7 @@ export function unpricedNote(run: PriceableRun): string {
   // it, so the harness is the only thing that says which table can answer, and
   // the answer is the sync's — under `openai/<slug>` rather than the bare id.
   if (isCodex(run)) {
-    return "no synced price — run `bun infra/sync-prices.ts` (a codex model is priced from the catalogue's `openai/` id)";
+    return "no synced price — run `bun wb data prices` (infra/sync-prices.ts; a codex model is priced from the catalogue's `openai/` id)";
   }
   if (isClaudeRun(run)) {
     const served = servedClaudeModel(run);
@@ -641,7 +641,7 @@ export function unpricedNote(run: PriceableRun): string {
   if (isProviderBase(run.apiBase)) {
     return "no hand-held price for this model on this provider — add a dated, sourced row to PROVIDER_PRICES (runner/viewer/pricing.ts); the OpenRouter sync cannot price it";
   }
-  return "no synced price — run `bun infra/sync-prices.ts`";
+  return "no synced price — run `bun wb data prices` (infra/sync-prices.ts)";
 }
 
 /**

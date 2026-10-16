@@ -349,7 +349,7 @@ describe("the read seam", () => {
   });
 
   test("the empty-store hint names the seed command and the page", () => {
-    expect(EMPTY_STORE_HINT).toContain("config-store.ts seed infra/fleet.example.json");
+    expect(EMPTY_STORE_HINT).toContain("bun wb config seed infra/fleet.example.json");
     expect(EMPTY_STORE_HINT).toContain("/config");
   });
 
