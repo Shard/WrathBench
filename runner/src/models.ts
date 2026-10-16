@@ -59,7 +59,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { openRunDb } from "./rundb";
 import { harnessSeries } from "./comparability";
-import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
+import { DEFAULT_CLAUDE_TOKEN_ENV, DRIVERS, harnessOf, isCodexHomeEnvName, isDriver, isTokenEnvName, type Driver, type Harness } from "./config";
 import { EPISODE_IDS, EPISODES, isEpisodeId, isScoredEpisode, type EpisodeId, type ScoredEpisodeId } from "./episodes";
 import { campaignWork, type Campaign, type ProbeIdentity, type ProbeRun } from "./campaigns";
 import { badEvidenceReason, neverStale, OFFLINE_PAUSE, SUBSCRIPTION_PAUSE, TAINT_AFTER, resumesOnPause, staleAfterMs } from "./lapse";
@@ -1576,6 +1576,17 @@ export function isConcurrencyKey(k: string): boolean {
  */
 export function claudeKeysFor(tokenEnv: string | null | undefined): string[] {
   return [claudeLaneKey(tokenEnv), CLAUDE_TOTAL_KEY];
+}
+
+/**
+ * The Claude lanes among `policy.subscriptions`, which also names Codex homes.
+ * A claude run is placed, gated and counted only over these: a Codex home is
+ * not a place a Claude session can bill. Never empty, so a list naming only
+ * Codex homes still leaves claude the default lane.
+ */
+export function claudeLanesOf(subscriptions: readonly string[]): string[] {
+  const out = subscriptions.filter((l) => !isCodexHomeEnvName(l));
+  return out.length > 0 ? out : [DEFAULT_CLAUDE_TOKEN_ENV];
 }
 
 /** The cap on a key; undefined is uncapped. */

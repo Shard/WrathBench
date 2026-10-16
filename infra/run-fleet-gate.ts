@@ -26,8 +26,8 @@
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_CODEX_HOME_ENV } from "../runner/src/config";
-import { goKeyEnvOf, subscriptionLaneOfConfig, type RunFact } from "../runner/src/models";
+import { DEFAULT_CODEX_HOME_ENV, isCodexHomeEnvName } from "../runner/src/config";
+import { claudeLanesOf, goKeyEnvOf, subscriptionLaneOfConfig, type RunFact } from "../runner/src/models";
 import { GoUsagePoller, goUsageUrl, type GoFetch } from "../runner/src/opencode-go";
 import {
   SUB_FREEPLAY_MAX_ENV,
@@ -156,7 +156,7 @@ export function jobHoldOf(
     const e = roster[ref];
     if (e?.driver === "claude-code") {
       const pinned = job.subscription ?? e.subscription;
-      const candidates = pinned !== undefined ? [pinned] : lanes.length > 0 ? lanes : [undefined];
+      const candidates = pinned !== undefined ? [pinned] : claudeLanesOf(lanes);
       const whys = candidates.map((l) => gate.holdOf(subscriptionLaneOf({ driver: "claude-code", lane: l ?? null }), job.episode, e.model));
       if (whys.every((w) => w !== undefined)) return whys[0];
     } else if (e?.driver === "codex") {
@@ -218,12 +218,17 @@ export function gateSpawns(
 export function gateLanes(
   gate: FleetSubscriptionGate,
   roster: Readonly<Record<string, Pick<FleetRosterEntry, "driver" | "model" | "apiBase" | "apiKeyEnv" | "billing">>>,
-  claudeLanes: readonly string[],
+  subscriptions: readonly string[],
 ): string[] {
   const out = new Set<string>(gate.usage.keys());
   const drivers = new Set(Object.values(roster).map((e) => e.driver));
-  if (drivers.has("claude-code")) for (const l of claudeLanes) out.add(subscriptionLaneOf({ driver: "claude-code", lane: l })!);
-  if (drivers.has("codex")) out.add(subscriptionLaneOf({ driver: "codex", lane: DEFAULT_CODEX_HOME_ENV })!);
+  // `policy.subscriptions` names Claude tokens and Codex homes alike; each
+  // lists under its own driver, never the other's.
+  if (drivers.has("claude-code")) for (const l of claudeLanesOf(subscriptions)) out.add(subscriptionLaneOf({ driver: "claude-code", lane: l })!);
+  if (drivers.has("codex")) {
+    out.add(subscriptionLaneOf({ driver: "codex", lane: DEFAULT_CODEX_HOME_ENV })!);
+    for (const l of subscriptions) if (isCodexHomeEnvName(l)) out.add(subscriptionLaneOf({ driver: "codex", lane: l })!);
+  }
   for (const go of goLanesOf(roster)) out.add(go.lane);
   return [...out].sort();
 }

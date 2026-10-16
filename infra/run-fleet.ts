@@ -203,6 +203,7 @@ import {
   capFor,
   CLAUDE_TOTAL_KEY,
   claudeKeysFor,
+  claudeLanesOf,
   liveSubscriptions,
   MODELS_SIDECAR,
   modelStates,
@@ -1011,7 +1012,7 @@ async function main(): Promise<void> {
       // Room in the lane AND under the overall ceiling: a claude session spends
       // both, so a free subscription with the total spent is not free. A lane
       // the subscription gate holds is passed over for one it does not.
-      const open = cfg.policy.subscriptions.filter((l) => claudeLaneOpen(subGate, l, job.episode, model));
+      const open = claudeLanesOf(cfg.policy.subscriptions).filter((l) => claudeLaneOpen(subGate, l, job.episode, model));
       const free = open.find((l) =>
         claudeKeysFor(l).every((k) => {
           const cap = capFor(cfg.maxConcurrent, k);

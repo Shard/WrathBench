@@ -56,6 +56,7 @@ import {
   capFor,
   CLAUDE_TOTAL_KEY,
   claudeKeysFor,
+  claudeLanesOf,
   DEFAULT_POLICY as DEFAULT_POLICY_FOR_FORMAT,
   type HeldPick,
   inSeries,
@@ -542,7 +543,7 @@ export function planPolicyHeld(opts: Parameters<typeof planPolicy>[0]): { picks:
   // full is passed over and the next candidate is asked for its account, until
   // a round yields nothing to pass over.
   const { keyOf, max } = opts.concurrency;
-  const lanes = opts.policy?.subscriptions ?? DEFAULT_POLICY_FOR_FORMAT.subscriptions;
+  const lanes = claudeLanesOf(opts.policy?.subscriptions ?? DEFAULT_POLICY_FOR_FORMAT.subscriptions);
   /**
    * The keys a pick may count against, in preference order. One for everything
    * but a claude-code pick, which may go on any configured subscription: the

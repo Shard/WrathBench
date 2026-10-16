@@ -29,6 +29,7 @@ import type { CampaignFile } from "../runner/src/campaign-file";
 import {
   ACCOUNT_CLASSES,
   claudeKeysFor,
+  claudeLanesOf,
   CLAUDE_TOTAL_KEY,
   concurrencyKeyOf,
   isCounted,
@@ -714,15 +715,15 @@ export function validateEntries(where: string, entries: unknown): RosterSpec[] {
       else e.compactWindow = window;
     }
     // Which backend may serve this entry (operator decision 2026-09-16,
-    // runner/src/routing.ts). Refused — never ignored — on an endpoint with
-    // one machine behind it: an operator who wrote a routing block on a
+    // runner/src/routing.ts). Refused — never ignored — off OpenRouter, where
+    // there is one machine behind the endpoint or (OpenCode Go) the provider routes: an operator who wrote a routing block on a
     // Cerebras or CLI entry believed the run was pinned, and config that does
     // nothing is what every strict-key rule in this file exists to prevent.
     if (e.routing !== undefined) {
       if (driver !== "openai" || !(e.apiBase === undefined || isOpenRouterBase(e.apiBase))) {
         fail(
           `${where}: entry ${e.model}: routing is an OpenRouter setting — this entry runs on ` +
-            `${driver === "openai" ? String(e.apiBase) : `the ${driver} CLI`}, which has one backend and nothing to route between`,
+            `${driver === "openai" ? String(e.apiBase) : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
         );
       }
       // NORMALISED, not merely checked: the shorthands (`"Z.AI"`, `["Z.AI"]`)
@@ -929,8 +930,7 @@ export function parseFleet(raw: unknown, opts: ParseFleetOptions = {}): FleetCon
   // launch so that `--status`, the spawned argv and the run's own config all
   // say the same thing an operator can read off one line. An entry that states
   // its own routing keeps it whole — the two are alternatives, never merged —
-  // and an entry on an endpoint with one backend is left alone, because a
-  // routing block there is refused, not defaulted.
+  // and an entry off OpenRouter is left alone, because a routing block there is refused, not defaulted.
   if (policy.routing !== undefined) {
     for (const [name, e] of Object.entries(roster)) {
       if (e.routing !== undefined) continue;
@@ -1170,7 +1170,7 @@ export function driverOf(roster: Record<string, FleetRosterEntry>, name: string)
 export function formatConcurrency(max: Record<string, number>, policy: Pick<SchedulingPolicy, "subscriptions">): string | undefined {
   const caps = Object.entries(max).map(([d, n]) => `${d} <= ${n}`);
   if (caps.length === 0) return undefined;
-  const lanes = policy.subscriptions;
+  const lanes = claudeLanesOf(policy.subscriptions);
   const subs =
     lanes.length > 1
       ? `; ${lanes.length} subscriptions: ${lanes.join(", ")} — a claude run needs room on its own lane AND under claude-code`

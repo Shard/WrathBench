@@ -403,7 +403,7 @@ describe("parseFleet", () => {
     expect(config.roster["glm"]!.routing).toEqual({ order: ["Z.AI", "Together"], allowFallbacks: false });
   });
 
-  test("routing is refused on an endpoint with one backend behind it", () => {
+  test("routing is refused off OpenRouter", () => {
     // Cerebras is a base URL of its own, not an OpenRouter route: a routing
     // block there would be config that does nothing, and the operator who
     // wrote it believed the run was pinned.
@@ -421,7 +421,7 @@ describe("parseFleet", () => {
           },
         }),
       ),
-    ).toThrow(/routing is an OpenRouter setting/);
+    ).toThrow(/routing is an OpenRouter setting.*single-backend or \(OpenCode Go\) routed by its provider/);
     expect(() =>
       parseFleet(fleetJson([], { roster: { son: { tier: "t1", model: "sonnet", driver: "claude-code", routing: "Anthropic" } } })),
     ).toThrow(/routing is an OpenRouter setting/);

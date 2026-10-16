@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isStaleRun, modelStates, type RunFact } from "../runner/src/models";
+import { claudeLanesOf, isStaleRun, modelStates, type RunFact } from "../runner/src/models";
 import type { SubscriptionUsage } from "../runner/src/subscription-usage";
 import { projectEntry, projectFleet, SUBSCRIPTION_WAIT_WHY } from "../runner/viewer/public-projection";
 import type { EntrySummary, FleetResponse } from "../runner/viewer/api-types";
@@ -277,6 +277,47 @@ describe("--status", () => {
     expect(lines[1]).toContain("the fleet container's thresholds, off its state file; this shell's env reads scored 70%");
     expect(lines.find((l) => l.includes(CODEX))).toMatch(/5h 85% \(resets .*\); observed 1m ago — scored HELD until .*, freeplay open/);
     expect(lines.find((l) => l.includes(LANE1))).toContain("no observation — open");
+  });
+});
+
+describe("a Codex home named in policy.subscriptions", () => {
+  // policy.subscriptions lists Claude tokens and Codex homes alike (a roster
+  // entry may only pin a lane it names); a home is a Codex lane, never a Claude one.
+  const mixed = {
+    accounts: { pool: ["RUNNER", "RUNNER2"] },
+    roster: {
+      son: { tier: "t1", model: "sonnet", driver: "claude-code" },
+      cx: { tier: "t1", model: "gpt-5.5", driver: "codex" },
+    },
+    policy: { subscriptions: ["CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME", "CODEX_HOME_2"] },
+  };
+  const config = parseFleet(mixed, { env: {} });
+  const job = (over: Partial<FleetJob>): FleetJob => ({ refs: ["son"], ref: "son", episode: "e90", repeat: 1, name: "son-e90", enabled: true, source: "queue", ...over });
+
+  test("--status lists each home under codex and only the tokens under claude-code", () => {
+    const gate = subscriptionGate([], T, NOW);
+    expect(gateLanes(gate, config.roster, config.policy.subscriptions)).toEqual([
+      "claude-code:CLAUDE_CODE_OAUTH_TOKEN",
+      "codex:CODEX_HOME",
+      "codex:CODEX_HOME_2",
+    ]);
+    // No codex entry in the roster: no codex lane to show.
+    const claudeOnly = parseFleet({ ...mixed, roster: { son: mixed.roster.son } }, { env: {} });
+    expect(gateLanes(gate, claudeOnly.roster, claudeOnly.policy.subscriptions)).toEqual(["claude-code:CLAUDE_CODE_OAUTH_TOKEN"]);
+  });
+
+  test("it is a hold too: a claude job whose only Claude lane is held is held, not slipped onto the home", () => {
+    const gate = subscriptionGate([reading(LANE1, 90)], T, NOW);
+    expect(jobHoldOf(job({}), config.roster, config.policy.subscriptions, gate)).toStartWith("subscription gate: claude-code:CLAUDE_CODE_OAUTH_TOKEN");
+    const states = modelStates({ runsDir: "/nonexistent", roster: rosterModels(config.roster), runs: [], sidecar: { version: 1, cleared: {} }, now: NOW, policy: config.policy });
+    const p = planTick(config, states, () => undefined, "20300101", [], [], undefined, new Map(), new Set(), [], [], gate);
+    expect(p.policy.find((x) => x.job.ref === "son")).toBeUndefined();
+    expect(p.heldPicks.find((h) => h.name === "son")!.why).toStartWith("subscription gate: claude-code:CLAUDE_CODE_OAUTH_TOKEN");
+  });
+
+  test("a list naming only homes still leaves claude the default lane", () => {
+    expect(claudeLanesOf(["CODEX_HOME"])).toEqual(["CLAUDE_CODE_OAUTH_TOKEN"]);
+    expect(claudeLanesOf(["CLAUDE_CODE_OAUTH_TOKEN_2", "CODEX_HOME_2"])).toEqual(["CLAUDE_CODE_OAUTH_TOKEN_2"]);
   });
 });
 

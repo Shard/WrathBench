@@ -565,7 +565,7 @@ export function resolve(specs: RosterSpec[], stamp: string): Resolved[] {
       // operator who wrote one believed the run was pinned.
       if (driver !== "openai" || !isOpenRouterBase(apiBase)) {
         throw new Error(
-          `roster entry ${s.model}: routing is an OpenRouter setting — this entry runs on ${driver === "openai" ? apiBase : `the ${driver} CLI`}, which has one backend and nothing to route between`,
+          `roster entry ${s.model}: routing is an OpenRouter setting — this entry runs on ${driver === "openai" ? apiBase : `the ${driver} CLI`}, which is single-backend or (OpenCode Go) routed by its provider`,
         );
       }
     }
