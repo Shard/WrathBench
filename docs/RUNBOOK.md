@@ -1034,8 +1034,10 @@ Read the detail: it names what failed, and the script's output has the tail.
 Then:
 
 1. **The drain did not complete** (a job still alive, a fleet or run pod still
-   listed, or a pod listing that failed). Nothing was smoked and the server
-   was not touched by this window. Check `data/runs/fleet-<stamp>.jsonl` for
+   listed, or a pod listing that failed). Nothing was smoked, but the window
+   only opens once the cluster carries this tree's tag, so the new build is
+   already live, or rolling out, and unverified. The fleet's own gate still
+   smokes it before anything spawns. Check `data/runs/fleet-<stamp>.jsonl` for
    why the supervisor did not exit cleanly (a roster that ignored SIGTERM, a
    runner past its 60s backstop), or the named pod, then run the window again.
 2. **The worldserver never answered ready.** The rollout or the module is the

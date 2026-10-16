@@ -24,7 +24,8 @@ The pieces that make up WrathBench include:
 git clone --recurse-submodules git@github.com:Shard/WrathBench.git && cd WrathBench
 mkdir -p data/{client,wiki,runs,collector,etc,logs,codex}
 # place the server data directory at data/client
-cp .env.example .env   # set WRATHBENCH_MODULE_SECRET (openssl rand -hex 32) and a model key
+echo "WRATHBENCH_MODULE_SECRET=$(openssl rand -hex 32)" >> .env
+# add the model key your run will use, e.g. OPENROUTER_KEY=... (.env.example lists the names)
 docker compose --env-file .env -f infra/compose.yml up -d --build
 ```
 

@@ -20,10 +20,14 @@ From the repository root, on a fresh machine:
 ```
 mkdir -p data/{client,wiki,runs,etc,logs,collector,codex}
 # place an AzerothCore server data directory (dbc/ maps/ vmaps/ mmaps/) at data/client
-cp .env.example .env
-# set WRATHBENCH_MODULE_SECRET in .env to the output of `openssl rand -hex 32`
+echo "WRATHBENCH_MODULE_SECRET=$(openssl rand -hex 32)" >> .env
+# add the model key your run will use, e.g. OPENROUTER_KEY=...
 docker compose --env-file .env -f infra/compose.yml up -d --build
 ```
+
+`.env.example` lists every name `.env` may carry. Copy only the lines you set:
+Bun reads an empty `NAME=` line as an empty value, not as unset, and an empty
+`WRATHBENCH_MODULE_URL` sends a run to no module at all.
 
 The `mkdir` is not optional. The server containers run as uid 1000 and Docker
 creates a missing bind-mount source as root, so without it the AzerothCore
