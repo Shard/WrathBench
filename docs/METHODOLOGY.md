@@ -188,8 +188,8 @@ and the provider that actually served a request are recorded on first
 observation, never revised, and excluded from the tuple's equality test; old
 runs are back-filled at *read* time, never written back — read differently,
 not relabelled. The wiki bundle's identity has the same standing: it says
-which file a run read, while what groups is the minor bump a text-changing
-rebuild ships with.
+which file a run read, and so which side of a text-changing rebuild a run sits
+on; the rebuild itself ships as a patch within the series.
 
 **Routing is pinned, and it is config** (2026-09-16). One slug served by six
 backends is six machines and six caches, not one measurement. The default is
@@ -302,9 +302,10 @@ wrong answer in precisely the case the field exists to fix. **The build may
 ask the world DB whether an id exists, and nothing else**; the agent still
 sees wiki text and only wiki text. Rules and counters: `wiki/README.md`.
 
-**A bundle rebuild that changes page text ships with a harness minor bump**,
-like any other change to what the model could read; the bundle's
-self-description is stamped into the tuple so the bump is falsifiable.
+**Within a harness series, a bundle rebuild that changes page text ships as
+a patch** (operator, 2026-10-16). The bundle's self-description is stamped on
+every run, and its build time marks which runs read the text before the
+rebuild and which after.
 
 ## Known limitations
 

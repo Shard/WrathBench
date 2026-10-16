@@ -133,8 +133,10 @@ lives in docs/METHODOLOGY.md "The reference bundle".
   agent still sees wiki text and only wiki text. The honest residue is one bit per
   admitted page — that the page's own claim checks out — which buys the agent
   nothing a search of the page did not.
-- **A rebuild is a harness minor bump.** The reference surface changes for every lane
-  at once, so runs before and after are not comparable on what the model could read.
+- **A rebuild that changes page text is a patch within the harness series**
+  (operator, 2026-10-16). The reference surface changes for every lane at once,
+  so the bundle's `built_at`, stamped on every run, is what tells the runs
+  before a rebuild from the runs after it.
 - **Every rule counts itself in `meta`, and the counters close.** Six admission and
   drop reasons plus `empty_pages` account for every page the parser yields except
   those that were a `#REDIRECT` at the cutoff, asserted as an identity by the build
@@ -179,15 +181,19 @@ lives in docs/METHODOLOGY.md "The reference bundle".
   it. Everything else still goes: money (`cost`), reputation, faction and race
   icons, and `coords`, which would hand back the yards `wikiCoords` withholds.
   A rendered name is held to the same era rules as prose: one whose qualifier
-  the title rules place in a later world — `(Cataclysm)`, `(Gilneas)`, matched
-  as the whole qualifier against the lists `post-wrath.ts` already holds — is
-  left out, and so are the names in a paragraph or line the era phrase rules
-  read as the later world once its names are in; either way the text is what it
-  was before. Names never move a page in or out: `build.ts` decides membership
-  with rendering off, so the page set is the one the template-free strip gave.
-  `meta.inline_links_rendered` counts the names written, and
+  the title rules place in a later world — `(Cataclysm)`, `(Gilneas)`,
+  `(Worgen)`, matched as the whole qualifier against the lists `post-wrath.ts`
+  already holds — is left out, and so are the names in a paragraph or line the
+  era phrase rules read as the later world once its names are in; either way the
+  text is what it was before. The phrase rules also read `[[links]]` as their
+  labels now, so "after [[The Shattering]]" is caught as what it says. Neither
+  ever moves a page in or out: `build.ts` decides membership with rendering and
+  the link reading off, so the page set is the one the template-free strip
+  gave, and a page whose only prose the link reading caught stays as an empty
+  row. `meta.inline_links_rendered` counts the names written,
   `inline_links_screened_qualifier` and `inline_links_screened_era` the ones
-  each screen held back; a bundle built before the rule has none of these keys.
+  each screen held back, and `paragraphs_dropped_on_links` what the link
+  reading cut; a bundle built before the rule has none of these keys.
 - Three things are lifted off the raw wikitext **before** the strip, because they
   live in the templates the strip removes:
   - **Coordinates** (`extractCoords`): `{{coords|x|y|zone}}` and infobox

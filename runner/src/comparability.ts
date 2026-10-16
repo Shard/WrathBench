@@ -118,10 +118,10 @@ export const comparabilitySchema = z.object({
   /**
    * Which reference bundle the run read, off its `meta` table: schema version,
    * build time, dump, and the era cutoff its prose was taken at. An
-   * *annotation*, not a grouping key of its own — a bundle whose page text
-   * changes is a behaviour change, and behaviour changes are already grouped by
-   * the harness series, so a text-changing rebuild is paired with a harness
-   * minor bump and this field is the evidence of what that bump was about.
+   * *annotation*, not a grouping key of its own — a text-changing rebuild
+   * ships as a patch within the harness series (docs/METHODOLOGY.md, "The
+   * reference bundle"), and this field's build time is what marks the runs
+   * that read the text before it from the runs that read it after.
    * Note that `sameComparability` compares every stamped field and so is
    * stricter: a rebuild between launch and resume restamps. Null when there
    * was no bundle; absent on tuples stamped before the field existed.
