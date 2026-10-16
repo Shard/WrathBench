@@ -45,7 +45,7 @@ import {
   type StartingCharacter,
 } from "../runner/src/models";
 
-/** Set by the `fleet` compose service; see run-roster's inContainer(). */
+/** Set where the runner image runs the fleet or an episode: the chart's fleet, runner and run pods, and compose's `fleet` service; see run-roster's inContainer(). */
 export const CONTAINER = process.env["WRATHBENCH_IN_CONTAINER"] === "1";
 export const REPO_ROOT = dirname(import.meta.dir);
 export const RUNS_DIR = join(REPO_ROOT, "data", "runs");
@@ -248,7 +248,7 @@ export interface FleetState {
   startedAt: number;
   /** Refreshed every tick. The only honest liveness signal across a namespace. */
   heartbeatAt?: number;
-  /** True when the supervisor is the `fleet` compose service, not a host process. */
+  /** True when the supervisor runs in the fleet container (the chart's `fleet` Deployment, or compose's `fleet` service), not as a host process. */
   containerized?: boolean;
   /**
    * Set while a preflight sequence is running against `identity`. The gate

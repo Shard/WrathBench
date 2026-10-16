@@ -13,7 +13,8 @@
  * in the abbey -> logout -> POST /character-delete of the probe character.
  *
  * Run:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-quest.ts
+ *   bun wb smoke module-quest
+ *   bun wb --local smoke module-quest   # the quickstart
  */
 
 const BASE = moduleBase();

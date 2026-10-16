@@ -3,7 +3,7 @@
  * the backpack and every worn bag, and equipment is readable off
  * `state.inventory` by slot.
  *
- * End to end against a booted worldserver, from inside the compose network:
+ * End to end against a booted worldserver, from inside the container network:
  * a fresh Human Warrior in Northshire -> the login create blocks arrive ->
  *   1. `bag().totalSlots` is 16 (no worn bags) and `bags` is empty;
  *   2. `freeSlots` is `16 - items.length`, every item is addressed as the
@@ -27,7 +27,8 @@
  * the end. Budget: ~15s.
  *
  * Run standalone (defaults to the PROBE account):
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/inventory.ts
+ *   bun wb smoke inventory
+ *   bun wb --local smoke inventory   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

@@ -315,12 +315,13 @@ const RUNNER_ENTRY = join(REPO_ROOT, "runner", "src", "run.ts");
 // --------------------------------------------------------------- where am I
 //
 // Two homes, one code path. On the HOST the roster shells out to
-// `infra/run-episode.sh`, which docker-compose-execs the runner container —
-// that is how it has always worked and it stays byte-identical. Inside the
-// runner image (the `fleet` compose service) there is no docker CLI
+// `infra/run-episode.sh`, which docker-compose-execs the quickstart's runner
+// container — that is how it has always worked and it stays byte-identical.
+// Inside the runner image (the fleet container: the chart's `fleet`
+// Deployment, or compose's `fleet` service) there is no docker CLI
 // and no container to exec into: the runner is a sibling process, so the
 // roster spawns `bun runner/src/run.ts` directly, talks to the module over the
-// compose network itself, and signals its own child.
+// container network itself, and signals its own child.
 //
 // The flag is explicit rather than sniffed (`command -v docker` would also be
 // absent on a host without Docker, which is a different situation and deserves

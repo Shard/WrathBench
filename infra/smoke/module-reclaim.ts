@@ -27,7 +27,8 @@
  * caller should.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/module-reclaim.ts
+ *   bun wb smoke module-reclaim
+ *   bun wb --local smoke module-reclaim   # the quickstart
  */
 
 import { authHeaders } from "./lib/auth";

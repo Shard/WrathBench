@@ -1,13 +1,15 @@
 /**
  * Put a logged-out smoke character into a named scenario.
  *
- *   docker compose -f infra/compose.yml run --rm --no-deps fixtures \
- *     --account SMOKE3 --character Smoketram --scenario tram-ironforge
- *
- * or, from inside a container that can reach the db:
- *
  *   bun infra/fixtures/apply.ts --account SMOKE3 --character Smoketram \
  *     --scenario tram-ironforge [--wait-ms 90000] [--dry-run]
+ *
+ * from inside a container that can reach the db: the cluster's runner pod
+ * (`kubectl -n wrathbench exec deploy/wrathbench-runner -- bun infra/fixtures/apply.ts …`),
+ * or on the quickstart
+ *
+ *   docker compose -f infra/compose.yml run --rm --no-deps fixtures \
+ *     --account SMOKE3 --character Smoketram --scenario tram-ironforge
  *
  * Why direct SQL
  * --------------

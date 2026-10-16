@@ -755,7 +755,7 @@ export function openConfigStore(path: string = configDbPath(), opts: OpenOptions
 
 /** The one line every reader prints for an empty store. */
 export const EMPTY_STORE_HINT =
-  "config store empty — seed it: bun runner/src/config-store.ts seed infra/fleet.example.json, or add entries on /config";
+  "config store empty — seed it: bun wb config seed infra/fleet.example.json, or add entries on /config";
 
 /**
  * What a read of the store found. Three states, and the difference between the

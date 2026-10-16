@@ -48,13 +48,17 @@
  * and the arc are sequential, and their sum must close under the gate's
  * `preflight.timeoutMs`.
  *
- * Run. The DB env the fixture tool needs is on the `runner` service itself
- * (compose.yml's *wb-db anchor), so only a non-default account needs a flag:
+ * Run. The DB env the fixture tool needs is on the runner itself (the chart's
+ * dbEnv, compose.yml's *wb-db anchor), so by hand nothing is added:
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/kill-credit.ts [--character Smokekc]
+ *   bun wb smoke kill-credit [--character Smokekc]
+ *   bun wb --local smoke kill-credit [--character Smokekc]   # the quickstart
  *
- * The preflight gate runs it as SMOKE2 (`-e MODULE_ACCOUNT=SMOKE2`); by hand it
- * logs in as PROBE.
+ * The preflight gate runs it as SMOKE2 (MODULE_ACCOUNT=SMOKE2); by hand it
+ * logs in as PROBE. Another account is MODULE_ACCOUNT in the runner's
+ * environment, which `bun wb` does not carry: `kubectl -n wrathbench exec
+ * deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE2 bun
+ * infra/smoke/kill-credit.ts`.
  */
 
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";

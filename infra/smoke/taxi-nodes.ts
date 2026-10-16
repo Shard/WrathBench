@@ -29,7 +29,8 @@
  * Run from inside the network (the runner service carries the DB env the
  * fixture tool needs; MODULE_ACCOUNT defaults to PROBE):
  *
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/taxi-nodes.ts
+ *   bun wb smoke taxi-nodes
+ *   bun wb --local smoke taxi-nodes   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

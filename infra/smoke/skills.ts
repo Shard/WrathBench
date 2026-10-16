@@ -12,7 +12,8 @@
  * named, Defense at level*5 max -> logout and delete.
  *
  * Run from inside the network:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/skills.ts
+ *   bun wb smoke skills
+ *   bun wb --local smoke skills   # the quickstart
  */
 
 import { connect } from "../../sdk/src/index";

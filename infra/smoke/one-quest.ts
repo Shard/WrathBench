@@ -9,7 +9,8 @@
  * the SDK surface, so if it starts growing game logic, the helper is missing.
  *
  * Run:
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/one-quest.ts
+ *   bun wb smoke one-quest
+ *   bun wb --local smoke one-quest   # the quickstart
  */
 
 import { probeName } from "./lib/name";

@@ -11,7 +11,7 @@
  *   bun infra/publish-dashboard.ts --once   # one pass, then exit (backfill, smoke)
  *   bun infra/publish-dashboard.ts --loop   # a pass every interval (the service)
  *
- * Env, matching the compose `publisher` service and docs/RUNBOOK.md
+ * Env, matching the chart's publisher Deployment, compose's `publisher` service and docs/RUNBOOK.md
  * ("Public dashboard"):
  *   WRATHBENCH_RUNS_DIR             default data/runs
  *   WRATHBENCH_CONFIG_DB            the config store; default $WRATHBENCH_DATA/config.sqlite, else data/config.sqlite

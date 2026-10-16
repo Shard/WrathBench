@@ -138,7 +138,7 @@ export async function handleConfigRequest(req: Request, url: URL, path: string, 
   }
   if (!present && method !== "GET") {
     return json(
-      { error: `no config store at ${dbPath} — seed it first: bun runner/src/config-store.ts seed infra/fleet.example.json` },
+      { error: `no config store at ${dbPath} — seed it first: bun wb config seed infra/fleet.example.json` },
       409,
     );
   }
@@ -300,7 +300,7 @@ async function handleDrafts(
     return json({ error: `${method} ${where} is not a draft route` }, 405);
   }
   if (!present) {
-    return json({ error: `no config store at ${dbPath} — seed it first: bun runner/src/config-store.ts seed infra/fleet.example.json` }, 409);
+    return json({ error: `no config store at ${dbPath} — seed it first: bun wb config seed infra/fleet.example.json` }, 409);
   }
 
   if (verb === "fetch") {

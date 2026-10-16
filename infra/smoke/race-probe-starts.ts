@@ -21,11 +21,14 @@
  * Nothing is asserted about which quest or which NPC: the gate is that each
  * start plays, not that it plays a particular way.
  *
- *   kubectl -n wrathbench exec deploy/wrathbench-runner -- bun infra/smoke/race-probe-starts.ts
- *   docker compose -f infra/compose.yml exec runner bun infra/smoke/race-probe-starts.ts
+ *   bun wb smoke race-probe-starts
+ *   bun wb --local smoke race-probe-starts   # the quickstart
  *
  * `SMOKE_STARTS=orc,undead` runs a subset. Account: MODULE_ACCOUNT, default
  * PROBE (never a pool account: the characters are left standing between runs).
+ * Both are the runner's environment, which `bun wb` does not carry:
+ * `kubectl -n wrathbench exec deploy/wrathbench-runner -- env
+ * SMOKE_STARTS=orc,undead bun infra/smoke/race-probe-starts.ts`.
  */
 
 import { connect, type WrathClient } from "../../sdk/src/index";

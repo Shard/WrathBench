@@ -30,8 +30,10 @@
  * realm, so a name tied to the account cannot be taken by a run of this smoke on
  * another account. `--character <Name>` overrides it.
  *
- * Run:
- *   docker compose -f infra/compose.yml exec -e MODULE_ACCOUNT=SMOKE runner bun infra/smoke/preflight.ts
+ * Run as the gate's SMOKE account. MODULE_ACCOUNT is the runner's environment,
+ * which `bun wb` does not carry (`bun wb smoke preflight` logs in as PROBE):
+ *   kubectl -n wrathbench exec deploy/wrathbench-runner -- env MODULE_ACCOUNT=SMOKE bun infra/smoke/preflight.ts
+ *   docker compose -f infra/compose.yml exec -e MODULE_ACCOUNT=SMOKE runner bun infra/smoke/preflight.ts   # the quickstart
  */
 
 import { authHeaders } from "./lib/auth";

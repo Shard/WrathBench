@@ -4302,7 +4302,7 @@ describe("the read-only views read what is running, not every job the supervisor
     expect([...runningRefsOf(running)]).toEqual(["codex-sol-61"]);
     // The models table gives the real reason, and the fix it needs.
     const line = formatModels(states, runningRefsOf(running), NOW).find((l) => l.includes("gemma-4-31b"))!;
-    expect(line).toContain("no: tainted on e90 (3 failed attempts) — clear with --clear-model gemma-4-31b");
+    expect(line).toContain("no: tainted on e90 (3 failed attempts) — clear with bun wb fleet clear-model gemma-4-31b");
     // Reading every row as running is what hid it.
     expect(formatModels(states, runningRefsOf(live), NOW).find((l) => l.includes("gemma-4-31b"))).toContain("no: running (one character per model)");
     // The account row: the exited job is not shown, so RUNNER reads free; the live one is.

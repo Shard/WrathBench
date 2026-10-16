@@ -19,6 +19,10 @@ each runs. The cluster is the default target, and a command that reads the
 data volume runs in the runner pod. `bun wb --local …` targets the quickstart
 stack where a command has a compose form.
 
+`infra/run-episode.sh`, which `bun wb run episode` runs, stays a shell script
+so the quickstart needs no Bun on the host: on its compose path every `bun`
+runs inside the runner container, and the host needs only bash and Docker.
+
 ## Try it on one machine
 
 From the repository root, on a fresh machine:

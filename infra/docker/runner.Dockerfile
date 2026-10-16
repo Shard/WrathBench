@@ -3,7 +3,7 @@
 # cluster has no bind mount to supply it).
 #
 # git is here for one reason: the fleet supervisor runs INSIDE this image
-# (compose service `fleet`) and stamps every episode with
+# (the fleet container), and on the quickstart it stamps every episode with
 # `git describe` off the bind-mounted repo, exactly as infra/run-episode.sh
 # does on the host. Without it a containerised supervisor would have to trust a
 # stamp written at `up` time, which goes stale the moment a tracked file is
