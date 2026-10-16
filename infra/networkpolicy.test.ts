@@ -31,6 +31,8 @@ type Doc = { kind?: string; metadata?: { name?: string; labels?: Record<string, 
 
 const BASE = ["--namespace", "wrathbench", "--set", "image.registry=harbor.example/wrathbench", "--set", "image.tag=harness-0.5-1-gabcdef0"];
 const KUBE_API = ["--set", "networkPolicy.kubeApi[0].cidr=10.43.0.1/32", "--set", "networkPolicy.kubeApi[0].port=443", "--set", "networkPolicy.kubeApi[1].cidr=192.0.2.10/32", "--set", "networkPolicy.kubeApi[1].port=6443"];
+/** `helm template` runs synchronously and can take longer than bun's default 5 s on a loaded CI runner. */
+const HELM_TEST_MS = 30_000;
 const ON = ["--set", "networkPolicy.enabled=true", ...KUBE_API, "--set", "localModelHosts={192.0.2.20:1234}"];
 
 function render(extra: string[]): { code: number; stderr: string; docs: Doc[] } {
@@ -97,7 +99,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
     const example = Bun.spawnSync([helm!, "template", "wrathbench", chart, "-f", join(chart, "values.example.yaml"), "--set", "image.tag=ci-lint"], { stdout: "pipe", stderr: "pipe" });
     expect(example.exitCode).toBe(0);
     expect(example.stdout.toString()).not.toContain("kind: NetworkPolicy");
-  });
+  }, HELM_TEST_MS);
 
   test("select the pods they are about: each workload's pod template, and a run pod whatever image or command its arm names", () => {
     const { code, docs } = render(ON);
@@ -122,7 +124,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       graceMs: EPISODE_TERM_GRACE_MS,
     });
     for (const [k, v] of Object.entries(policy(docs, "run").spec.podSelector.matchLabels)) expect([k, pod.metadata.labels![k]]).toEqual([k, v]);
-  });
+  }, HELM_TEST_MS);
 
   test("give the fleet and run pods no ingress, and leave the viewer reachable through its Ingress", () => {
     const { docs } = render(ON);
@@ -132,7 +134,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       expect(p.spec.ingress ?? []).toEqual([]);
     }
     for (const name of ["viewer", "publisher", "collector"]) expect(policy(docs, name).spec.policyTypes).toEqual(["Egress"]);
-  });
+  }, HELM_TEST_MS);
 
   test("let the fleet and run pods reach the module, DNS, TCP 443 off the LAN and the self-hosted model server, and nothing in the cluster but that", () => {
     const { docs } = render(ON);
@@ -151,7 +153,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       // A UDP socket goes nowhere but DNS.
       expect([name, admits(p, { ip: PUBLIC, port: 443, protocol: "UDP" })]).toEqual([name, false]);
     }
-  });
+  }, HELM_TEST_MS);
 
   test("let only the fleet reach the API server and MySQL", () => {
     const { docs } = render(ON);
@@ -162,7 +164,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
     }
     expect(admits(fleet, { component: "db", port: 3306 })).toBe(true);
     expect(admits(run, { component: "db", port: 3306 })).toBe(false);
-  });
+  }, HELM_TEST_MS);
 
   test("give the viewer, publisher and collector only what each one talks to", () => {
     const { docs } = render(ON);
@@ -178,7 +180,7 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       expect([p.metadata.name, admits(p, { ip: "192.0.2.20", port: 1234 })]).toEqual([p.metadata.name, false]);
     }
     expect([admits(collector, { component: "worldserver", port: 8086 }), admits(collector, { ip: PUBLIC, port: 443 })]).toEqual([false, false]);
-  });
+  }, HELM_TEST_MS);
 
   test("refuse to render rather than open wider: no API address, or a model host that is not IPv4:port", () => {
     const noApi = render(["--set", "networkPolicy.enabled=true"]);
@@ -193,5 +195,5 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
     const noFleet = render(["--set", "networkPolicy.enabled=true", "--set", "fleet.enabled=false"]);
     expect(noFleet.code).toBe(0);
     expect(policies(noFleet.docs).map((p) => p.metadata.name).sort()).toEqual(["wrathbench-collector", "wrathbench-publisher", "wrathbench-viewer"]);
-  });
+  }, HELM_TEST_MS);
 });

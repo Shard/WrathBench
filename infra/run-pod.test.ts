@@ -737,6 +737,8 @@ describe("the chart's run-pod template", () => {
   });
 
   const helm = Bun.which("helm");
+  /** `helm template` runs synchronously and can take longer than bun's default 5 s on a loaded CI runner. */
+  const HELM_TEST_MS = 30_000;
 
   test.skipIf(helm === null)("rendered, every WrathBench-image pod carries the chart-wide pull Secrets, and run pods add their own once each", () => {
     const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/wrathbench", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "imagePullSecrets={wrathbench-harbor-pull}", "--set", "runPods.imagePullSecrets={ghcr-pull,wrathbench-harbor-pull}"], { stdout: "pipe", stderr: "pipe" });
@@ -768,7 +770,7 @@ describe("the chart's run-pod template", () => {
     }
     const plainCm = plainDocs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template");
     expect((JSON.parse(plainCm!.data!["pod.json"]!) as Pod).spec["imagePullSecrets"]).toBeUndefined();
-  });
+  }, HELM_TEST_MS);
 
   test.skipIf(helm === null)("rendered, the template builds a pod the env builder accepts, with only this driver's secrets", () => {
     const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/library", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "runPods.allowedImages={harbor.example/library/wrathbench-runner,ghcr.io/shard/wrathbench-runner}", "--set", "runPods.imagePullSecrets={ghcr-pull}"], { stdout: "pipe", stderr: "pipe" });
@@ -796,7 +798,7 @@ describe("the chart's run-pod template", () => {
     expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "WRATHBENCH_MODULE_SECRET"]);
     expect(pod.spec.containers[0]!.command).toEqual(["/usr/bin/tini", "--", "bun", "runner/src/run.ts"]);
     expect(pod.spec.volumes!.map((v) => v.name)).toEqual(["data", "tmp"]);
-  });
+  }, HELM_TEST_MS);
 
   test.skipIf(helm === null)("rendered, localModelHosts reaches every pod that parses the config and every run pod, which run.ts checks an LM Studio pair against", () => {
     // run.ts refuses a key towards a host the provider table does not pair it
@@ -827,5 +829,5 @@ describe("the chart's run-pod template", () => {
     expect(env["WRATHBENCH_LOCAL_MODEL_HOSTS"]).toEqual({ name: "WRATHBENCH_LOCAL_MODEL_HOSTS", value: want });
     expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["LMSTUDIO_KEY", "WRATHBENCH_MODULE_SECRET"]);
     expect(Object.keys(env).some((n) => n.startsWith("ANTHROPIC_"))).toBe(false);
-  });
+  }, HELM_TEST_MS);
 });
