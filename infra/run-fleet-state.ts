@@ -11,7 +11,10 @@
 
 import { openRunDb } from "../runner/src/rundb";
 import { type FleetRead, readFleetConfig } from "../runner/src/config-store";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statfsSync, statSync } from "node:fs";
+import { readCodexThread } from "../runner/src/codex-rollout";
+import { DEFAULT_CODEX_HOME_ENV, isCodexHomeEnvName } from "../runner/src/config";
+import { HEARTBEAT_DEAD_MS } from "../runner/src/trajectory";
 import { dirname, isAbsolute, join } from "node:path";
 import {
   type EpisodeId,
@@ -191,6 +194,82 @@ export function smokePath(script: string, root: string = REPO_ROOT): string {
  */
 export function runHasImageRecord(runId: string, runsDir: string = RUNS_DIR): boolean {
   return existsSync(join(runsDir, runId, IMAGE_RECORD_FILE));
+}
+
+/** A Codex home this process can reach: the lane variable that names it, and its real path. */
+export interface CodexHome {
+  env: string;
+  path: string;
+}
+
+/**
+ * The Codex homes this process can reach: `CODEX_HOME`, and each
+ * `CODEX_HOME_N` that `policy.subscriptions` names (`isCodexHomeEnvName`),
+ * read from `env`, kept only when set to a directory that exists here, and
+ * one entry per real path (two variables may name one directory).
+ */
+export function codexHomesOf(subscriptions: readonly string[], env: Record<string, string | undefined> = process.env): CodexHome[] {
+  const names = [DEFAULT_CODEX_HOME_ENV, ...subscriptions.filter((s) => s !== DEFAULT_CODEX_HOME_ENV && isCodexHomeEnvName(s))];
+  const seen = new Set<string>();
+  const out: CodexHome[] = [];
+  for (const name of names) {
+    const value = env[name];
+    if (value === undefined || value.length === 0) continue;
+    let path: string;
+    try {
+      path = realpathSync(value);
+      if (!statSync(path).isDirectory()) continue;
+    } catch {
+      continue; // not mounted in this container
+    }
+    if (seen.has(path)) continue;
+    seen.add(path);
+    out.push({ env: name, path });
+  }
+  return out;
+}
+
+/**
+ * The rollouts the sweep must keep: the recorded thread (`CODEX_THREAD_FILE`)
+ * of every codex run with a live owner: a fresh heartbeat or the `live`
+ * reading. A run that has just paused or ended is no longer `live` but is
+ * still reading its rollout while it unwinds, and its heartbeat says so (a
+ * runner beats from its start and removes the file on a clean exit; a
+ * terminated run in a live roster owns nothing). `unrecorded` is every such run
+ * with no thread on record — one whose first turn has not started a thread
+ * yet, or a runner from before the record — and while there is one the sweep
+ * cannot tell its rollout from a dead one's.
+ */
+export function liveCodexThreads(
+  runs: readonly Pick<RunFact, "runId" | "driver" | "live" | "heartbeatAt" | "archived">[],
+  o: { runsDir?: string; now: number; threadOf?: (runId: string) => string | undefined },
+): { keep: Set<string>; unrecorded: string[] } {
+  const runsDir = o.runsDir ?? RUNS_DIR;
+  const threadOf = o.threadOf ?? ((id: string) => readCodexThread(join(runsDir, id)));
+  const keep = new Set<string>();
+  const unrecorded: string[] = [];
+  for (const f of runs) {
+    if (f.driver !== "codex" || f.archived === true) continue;
+    const beating = f.heartbeatAt != null && o.now - f.heartbeatAt < HEARTBEAT_DEAD_MS;
+    if (!f.live && !beating) continue;
+    const thread = threadOf(f.runId);
+    if (thread === undefined) unrecorded.push(f.runId);
+    else keep.add(thread.toLowerCase());
+  }
+  return { keep, unrecorded };
+}
+
+/** "16% of 4.9G used" for the volume a directory sits on, or undefined when it cannot be read. */
+export function volumeUsage(path: string): string | undefined {
+  try {
+    const s = statfsSync(path);
+    const total = s.blocks * s.bsize;
+    if (!(total > 0)) return undefined;
+    const used = total - s.bfree * s.bsize;
+    return `${Math.round((used / total) * 100)}% of ${(total / 1024 ** 3).toFixed(1)}G used`;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Does this pid have a live child (an episode in flight)? /proc scan. */

@@ -1601,6 +1601,13 @@ rule the Claude lanes follow); per-lane `codex:<ENV NAME>` keys and a place in
 entry rides the default lane unless its `subscription` pins another
 directory's variable by hand.
 
+The CLI never deletes a thread's rollout (`sessions/**/rollout-*.jsonl`), so
+the fleet deletes them, never archiving one (the trajectory holds all the
+driver read off it): the driver at a thread change and at its episode's end,
+and an hourly supervisor sweep for any rollout unwritten for two hours that is
+no live run's recorded thread (`<run-dir>/codex-thread.json`). Nothing else in
+the home is touched, so `thread_history_1.sqlite` still grows.
+
 ### The subscription usage gate
 
 A subscription bills a flat plan whose allowance is metered in rolling

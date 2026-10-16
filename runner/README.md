@@ -431,7 +431,13 @@ and differs only where the CLI does:
   after the first names it too, and one `codex_result` per turn carries the
   turn's status and usage. Exec is itself a client of the CLI's in-process
   app server and drops most of what that server says; what the driver needs
-  of it comes back from the thread's rollout instead (below). The standalone
+  of it comes back from the thread's rollout instead (below). The CLI never
+  deletes a rollout, so the driver does once that thread is done with — an
+  old thread's after the turn that moved off it, every one at the episode's
+  end after the last read — and names the thread it is on in
+  `<run-dir>/codex-thread.json`, which the supervisor's hourly sweep keeps
+  (docs/RUNBOOK.md, "The Codex lane"). Nothing resumes a thread across
+  episodes: a resumed run starts a new one. The standalone
   `codex app-server` would add a long-lived process and typed errors
   (`codexErrorInfo`, a retry flag, misalignment steers); it stays parked while
   upstream marks it experimental and unsupported for production.
@@ -780,8 +786,8 @@ files: the claude-code transcript under `<run-dir>/claude-config/projects/`
 and the Codex rollout under `$CODEX_HOME/sessions/`. Those files hold the
 CLI's record of each tool result and of each prompt, and the CLI writes them,
 not the runner. What the runner reads back from them (a compaction summary)
-reaches only the trajectory, scrubbed, and the files are left as the CLI
-wrote them. Neither CLI holds the secret in its environment (`childEnv` is an
+reaches only the trajectory, scrubbed, and the files are never rewritten
+(a Codex rollout is deleted once its thread is done with; "The codex driver", above). Neither CLI holds the secret in its environment (`childEnv` is an
 allowlist, and the MCP server runs in the runner), so what the model is sent
 was the only way in.
 
