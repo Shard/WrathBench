@@ -176,6 +176,7 @@ import {
   readPauseSidecar,
   REPO_ROOT,
   rereadFleet,
+  RUN_FACTS_CACHE,
   RUNS_DIR,
   SERVER_STATE_PATH,
   type ServerState,
@@ -203,6 +204,8 @@ import {
   parseModelsSidecar,
   readModelsSidecar,
   readRunFacts,
+  runFactCache,
+  type RunFact,
   schedulability,
   serializeModelsSidecar,
   type CountCache,
@@ -854,6 +857,21 @@ async function main(): Promise<void> {
    * The facts are the same either way.
    */
   const factCounts: CountCache = new Map();
+  /**
+   * Terminated runs' facts, kept on disk across restarts: without it a boot
+   * counted every trajectory in the tree before its first spawn (36s on the
+   * live runs directory, 32s of it runs that had ended). With it a boot reads
+   * in full only the runs that have not ended. Same facts either way.
+   */
+  const factCache = runFactCache(RUN_FACTS_CACHE);
+  let factCacheFailure: string | undefined;
+  /** Every run's facts, archive included, through both caches; a store that cannot be read or written is said once. */
+  const readFacts = (): RunFact[] => {
+    const runs = readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true, counts: factCounts, facts: factCache });
+    if (factCache.failure !== undefined && factCache.failure !== factCacheFailure) say(`run facts cache: ${factCache.failure}`);
+    factCacheFailure = factCache.failure;
+    return runs;
+  };
 
   /** Why a job is not runnable on the defer ladder, or undefined. Reads its own sidecar. */
   const jobCooling = (job: FleetJob): string | undefined => {
@@ -895,7 +913,7 @@ async function main(): Promise<void> {
     // this supervisor's own processes is playing it, or a live job holds its
     // account (the same guards the stale sweep applies, for the same reason).
     const runs = implicitPauses({
-      runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true, counts: factCounts }),
+      runs: readFacts(),
       campaigns: cfg.campaigns,
       running: new Set([...procs.values()].filter((p) => !p.exited).flatMap((p) => p.runIds)),
       busyAccounts: new Set(
@@ -1639,10 +1657,11 @@ async function main(): Promise<void> {
   }
 
   // The gate first: it reads no run facts, and the first read of them below
-  // counts every trajectory on disk, about 35s on the live runs directory.
+  // counts every trajectory of a run that has not ended (all of them, on a
+  // boot with no fact cache: about 35s on the live runs directory).
   let mayStart = await checkGate(config.preflight);
   // Fail fast on anything that would fail at spawn time, still before any
-  // spawn. The read goes through the loop's own cache, so the first tick
+  // spawn. The read goes through the loop's own caches, so the first tick
   // reuses it instead of counting every trajectory a second time.
   planTick(
     config,
@@ -1650,7 +1669,7 @@ async function main(): Promise<void> {
       runsDir: RUNS_DIR,
       roster: rosterModels(config.roster),
       policy: config.policy,
-      runs: readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true, counts: factCounts }),
+      runs: readFacts(),
     }),
     () => undefined,
     stampToday,
