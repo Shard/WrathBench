@@ -80,6 +80,11 @@ export interface WrathOnlyResult {
   /** How many paragraphs were dropped by the phrase rules. */
   paragraphsDropped: number;
   /**
+   * The subset of `paragraphsDropped` the rules caught only by reading
+   * `[[links]]` as their labels, which they do with rendering on.
+   */
+  paragraphsDroppedOnLinks: number;
+  /**
    * Out-of-world sections trimmed, by normalised heading, so a rebuild says
    * exactly what went. Sections dropped because nothing survived in them are
    * counted under `EMPTY_SECTION_KEY` rather than under a real heading name.
@@ -345,6 +350,21 @@ function nearWord(text: string, anchor: RegExp, other: RegExp, window: number): 
   return false;
 }
 
+/**
+ * Prose with each `[[link]]` read as the label the strip leaves (a file or
+ * category link as nothing), so a rule sees "after The Shattering" where the
+ * wikitext says "after [[The Shattering]]".
+ */
+function withLinkLabels(prose: string): string {
+  let s = prose;
+  for (let i = 0; i < 3 && s.includes("[["); i++) {
+    s = s.replace(/\[\[([^[\]]*)\]\]/g, (_whole, inner: string) =>
+      /^\s*:?\s*(file|image|category|media)\s*:/i.test(inner) ? " " : inner.slice(inner.lastIndexOf("|") + 1),
+    );
+  }
+  return s;
+}
+
 /** A paragraph's prose: its template calls removed, so infobox fields do not count. */
 function proseOf(paragraph: string): string {
   let s = paragraph;
@@ -385,6 +405,7 @@ export function dropPostWrath(wikitext: string, opts: CutOptions = {}): WrathOnl
       text: wikitext,
       sectionsDropped: 0,
       paragraphsDropped: 0,
+      paragraphsDroppedOnLinks: 0,
       sectionsTrimmedBy: {},
     };
   }
@@ -402,6 +423,7 @@ export function dropPostWrath(wikitext: string, opts: CutOptions = {}): WrathOnl
     text: empties.text,
     sectionsDropped: sections.sectionsDropped,
     paragraphsDropped: paragraphs.paragraphsDropped,
+    paragraphsDroppedOnLinks: paragraphs.paragraphsDroppedOnLinks,
     sectionsTrimmedBy,
   };
 }
@@ -591,15 +613,30 @@ export function dropPostWrathParagraphs(
 ): {
   text: string;
   paragraphsDropped: number;
+  paragraphsDroppedOnLinks: number;
 } {
   if (!PARAGRAPH_PREFILTER.test(wikitext)) {
-    return { text: wikitext, paragraphsDropped: 0 };
+    return { text: wikitext, paragraphsDropped: 0, paragraphsDroppedOnLinks: 0 };
   }
   const render = opts.inlineLinks !== false;
   const blocks = wikitext.split(/\n[ \t]*\n/);
   const kept: string[] = [];
   let paragraphsDropped = 0;
+  let droppedOnLinks = 0;
   let screened = 0;
+  /**
+   * Does a rule fire on this paragraph's or line's own prose? With rendering
+   * on, the prose is also read with its `[[links]]` as the labels the strip
+   * leaves, so "after [[The Shattering]]" reads as what it says. With rendering
+   * off it is the reading the page set is decided on, unchanged.
+   */
+  const fires = (prose: string, rules: { test: (prose: string) => boolean }[]): "plain" | "links" | null => {
+    if (prose.length === 0) return null;
+    if (rules.some((rule) => rule.test(prose))) return "plain";
+    if (!render) return null;
+    const linked = withLinkLabels(prose);
+    return linked !== prose && rules.some((rule) => rule.test(linked)) ? "links" : null;
+  };
   /**
    * The same rules again, on the text with link templates rendered as the
    * names the strip will write. A paragraph or line that reads as the later
@@ -613,13 +650,15 @@ export function dropPostWrathParagraphs(
     rules: { test: (prose: string) => boolean }[],
   ): boolean => {
     if (!render) return false;
-    const named = proseWithInlineLinks(raw).trim();
-    return named !== prose && rules.some((rule) => rule.test(named));
+    const named = withLinkLabels(proseWithInlineLinks(raw)).trim();
+    return named !== withLinkLabels(prose) && rules.some((rule) => rule.test(named));
   };
   for (const original of blocks) {
     const prose = proseOf(original).trim();
-    if (prose.length > 0 && POST_WRATH_PARAGRAPH.some((rule) => rule.test(prose))) {
+    const paragraphFires = fires(prose, POST_WRATH_PARAGRAPH);
+    if (paragraphFires !== null) {
       paragraphsDropped++;
+      if (paragraphFires === "links") droppedOnLinks++;
       continue;
     }
     let block = original;
@@ -633,8 +672,10 @@ export function dropPostWrathParagraphs(
     const keptLines: string[] = [];
     for (const line of lines) {
       const lineProse = proseOf(line).trim();
-      if (lineProse.length > 0 && POST_WRATH_LINE.some((rule) => rule.test(lineProse))) {
+      const lineFires = fires(lineProse, POST_WRATH_LINE);
+      if (lineFires !== null) {
         paragraphsDropped++;
+        if (lineFires === "links") droppedOnLinks++;
         continue;
       }
       if (laterOnlyWithNames(line, lineProse, POST_WRATH_LINE)) {
@@ -649,6 +690,8 @@ export function dropPostWrathParagraphs(
     }
     kept.push(keptLines.join("\n"));
   }
-  if (paragraphsDropped === 0 && screened === 0) return { text: wikitext, paragraphsDropped: 0 };
-  return { text: kept.join("\n\n"), paragraphsDropped };
+  if (paragraphsDropped === 0 && screened === 0) {
+    return { text: wikitext, paragraphsDropped: 0, paragraphsDroppedOnLinks: 0 };
+  }
+  return { text: kept.join("\n\n"), paragraphsDropped, paragraphsDroppedOnLinks: droppedOnLinks };
 }

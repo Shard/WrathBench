@@ -89,6 +89,7 @@ describe("sections", () => {
       text: plain,
       sectionsDropped: 0,
       paragraphsDropped: 0,
+      paragraphsDroppedOnLinks: 0,
       sectionsTrimmedBy: {},
     });
   });
@@ -385,6 +386,29 @@ describe("out-of-world sections", () => {
     expect(stripWikitext(dropPostWrath(page, { inlineLinks: false }).text, { inlineLinks: false })).toBe(
       "Lead lorem.\nA reward from , sold by .\nSold by here.",
     );
+  });
+
+  test("with rendering on, the phrase rules read a link as its label", () => {
+    // The template-free reading sees "[[The Shattering]]" and never fired; read
+    // as the strip renders it, the paragraph is the later world's and goes.
+    const page = [
+      "Lead lorem.",
+      "",
+      "This quest was replaced by {{quest|Example Quest Beta}} after [[The Shattering]].",
+    ].join("\n");
+    const cut = dropPostWrath(page);
+    expect(cut.paragraphsDropped).toBe(1);
+    expect(cut.paragraphsDroppedOnLinks).toBe(1);
+    expect(stripWikitext(cut.text)).toBe("Lead lorem.");
+    // Rendering off is the reading the page set is decided on, unchanged.
+    const plain = dropPostWrath(page, { inlineLinks: false });
+    expect(plain.paragraphsDropped).toBe(0);
+    expect(stripWikitext(plain.text, { inlineLinks: false })).toBe(
+      "Lead lorem.\nThis quest was replaced by after The Shattering.",
+    );
+    // A piped link reads as its label, never as its target.
+    const piped = "Lorem in [[Example Expansion|Cataclysm]] dolor.\n\nKept lorem, in [[Cataclysm|the next one]].";
+    expect(stripWikitext(dropPostWrath(piped).text)).toBe("Kept lorem, in the next one.");
   });
 
   test("a line that a line rule catches only through its name keeps it out", () => {

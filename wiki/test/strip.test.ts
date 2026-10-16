@@ -204,7 +204,11 @@ Lorem ipsum dolor sit amet.`;
     expect(stripWikitext("By {{npc||Example Person Gamma (Gilneas Example Hold)}}.")).toBe(
       "By Example Person Gamma (Gilneas Example Hold).",
     );
-    expect(stripWikitext("By {{npc||Example Person Gamma (Worgen)}}.")).toBe("By Example Person Gamma (Worgen).");
+    expect(stripWikitext("By {{npc||Example Person Gamma (Goblin)}}.")).toBe("By Example Person Gamma (Goblin).");
+    // `(Worgen)` is the worgen starting zone's version of a thing; a bare
+    // worgen in a name is this world's.
+    expect(stripWikitext("From {{quest|Example Quest Alpha (Worgen)}}.")).toBe("From .");
+    expect(stripWikitext("Slay {{mob|Example Worgen Eta}}.")).toBe("Slay Example Worgen Eta.");
   });
 
   test("a screened call strips exactly as it did before link templates rendered", () => {

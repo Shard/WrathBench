@@ -318,6 +318,13 @@ export const METRICS = {
     help: "Post-Wrath paragraphs cut inside kept pages, before the strip.",
     identity: { role: "none" },
   },
+  paragraphs_dropped_on_links: {
+    help:
+      "The part of `paragraphs_dropped` the phrase rules caught only by reading `[[links]]` " +
+      "as their labels. Page membership is decided without that reading, so these change a " +
+      "row's text and never whether the row exists.",
+    identity: { role: "none" },
+  },
   sections_trimmed: {
     help:
       "Out-of-world sections cut inside surviving pages — a separate cut from the era " +
@@ -449,8 +456,10 @@ const SUMMARY = [
       `dropped:     ${n.pages_dropped_post_cutoff} post-cutoff, ${n.pages_dropped_post_wrath} post-Wrath, ${n.pages_dropped_meta} out-of-game`,
   },
   {
-    uses: ["sections_dropped", "paragraphs_dropped"],
-    render: (n) => `  sections:  ${n.sections_dropped}, paragraphs: ${n.paragraphs_dropped}`,
+    uses: ["sections_dropped", "paragraphs_dropped", "paragraphs_dropped_on_links"],
+    render: (n) =>
+      `  sections:  ${n.sections_dropped}, paragraphs: ${n.paragraphs_dropped} ` +
+      `(${n.paragraphs_dropped_on_links} read through their links)`,
   },
   {
     uses: ["sections_trimmed"],
@@ -753,6 +762,7 @@ async function main(): Promise<void> {
     const cut = dropPostWrath(source);
     n.sections_dropped += cut.sectionsDropped;
     n.paragraphs_dropped += cut.paragraphsDropped;
+    n.paragraphs_dropped_on_links += cut.paragraphsDroppedOnLinks;
     for (const [heading, n] of Object.entries(cut.sectionsTrimmedBy)) {
       sectionsTrimmedBy[heading] = (sectionsTrimmedBy[heading] ?? 0) + n;
     }
@@ -762,10 +772,10 @@ async function main(): Promise<void> {
     // were before link templates rendered (`PLAIN`), so a rendered name changes
     // what a row says and never whether it exists: a page the era cuts emptied
     // stays dropped even when a list of names would now survive them.
-    const decidingText =
-      stripped.inlineLinks === 0 && stripped.screenedByQualifier === 0 && stripped.screenedByEra === 0
-        ? text
-        : stripWikitext(dropPostWrath(source, PLAIN).text, PLAIN);
+    // The plain reading is only recomputed when rendering changed something.
+    const renderingMattered =
+      stripped.inlineLinks + stripped.screenedByQualifier + stripped.screenedByEra + cut.paragraphsDroppedOnLinks > 0;
+    const decidingText = renderingMattered ? stripWikitext(dropPostWrath(source, PLAIN).text, PLAIN) : text;
     if (decidingText.length === 0) {
       // Which cut emptied it decides whether the page is dropped or kept.
       //
@@ -784,7 +794,9 @@ async function main(): Promise<void> {
     const emptied = text.length === 0;
     if (emptied) {
       n.empty_pages++;
-      if (stripWikitext(source, PLAIN).length > 0) n.pages_emptied_by_trim++;
+      // The trim's subset is read on the plain reading too: a row the link
+      // reading emptied had prose the trim never touched.
+      if (decidingText.length === 0 && stripWikitext(source, PLAIN).length > 0) n.pages_emptied_by_trim++;
     }
     writer.addPage(page.title, page.ns, text, coords, ids, quest);
     if (!emptied) {

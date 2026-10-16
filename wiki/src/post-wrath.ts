@@ -376,10 +376,9 @@ export function categoryTitleIsPostWrath(ns: number, title: string): boolean {
  * No new words: the qualifier is the disambiguation a title carries, so it is
  * matched against the lists the title rules already hold — an expansion
  * parenthetical, a later zone or feature as a category title names one, or a
- * coined zone. It has to be the **whole** qualifier, never a word inside one,
- * because a qualifier that only mentions a place (`(Battle for …)`) is the old
- * world's as often as not. `(Worgen)` and `(Goblin)` are not on any list: both
- * are this world's NPCs.
+ * coined zone — plus `POST_WRATH_QUALIFIERS` below. It has to be the **whole**
+ * qualifier, never a word inside one, because a qualifier that only mentions a
+ * place (`(Battle for …)`) is the old world's as often as not.
  */
 export function nameHasPostWrathQualifier(name: string): boolean {
   const m = /\(([^()]+)\)\s*$/.exec(name);
@@ -388,9 +387,20 @@ export function nameHasPostWrathQualifier(name: string): boolean {
   return (
     TITLE_PARENTHETICAL.test(`(${qualifier})`) ||
     POST_WRATH_TITLE_SUBJECTS.includes(qualifier) ||
-    POST_WRATH_TITLES.has(qualifier)
+    POST_WRATH_TITLES.has(qualifier) ||
+    POST_WRATH_QUALIFIERS.has(qualifier)
   );
 }
+
+/**
+ * Later-world qualifiers that are on no title list, because as a title they
+ * name this world too. `(Worgen)` disambiguates the worgen starting zone's
+ * version of a quest (Cataclysm, operator 2026-10-16); worgen themselves are this
+ * world's NPCs — Duskwood, Grizzly Hills — which is why the word is not a
+ * category-title subject above, where it would take `Category:Worgen` with it.
+ * `(Goblin)` is not here: on this dump it names Goblin Engineering, this world's.
+ */
+const POST_WRATH_QUALIFIERS: ReadonlySet<string> = new Set(["worgen"]);
 
 /**
  * Zone names Cataclysm **coined**, as a main-namespace page's whole title.
