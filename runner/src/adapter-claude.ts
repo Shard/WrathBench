@@ -656,6 +656,7 @@ export async function runClaudeEpisode(o: ClaudeEpisodeOptions): Promise<LoopOut
     reflect: builder.reflect,
     episodic: o.episodic,
     turn: () => builder.currentTurn,
+    secrets: trajectory,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({

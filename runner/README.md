@@ -526,10 +526,13 @@ then slim ones, and every reader takes either (`runner/viewer/tail.ts` reads a
 slim record's stored counts, and its raw view rebuilds the request through the
 same code). Old trajectories are never rewritten.
 
-A secret the trajectory scrubs (`Trajectory.redact`) that reached a message
-fails the replay of every request whose prompt held it: the record has
-`[redacted]` where the request had the secret. That was already true of a full
-record, which could not reproduce those bytes either.
+Tool results and the context message are scrubbed of the secrets the
+trajectory scrubs (`Trajectory.redact`) before a request is built ("The
+sandbox"), so a request and its record carry the same `[redacted]`. A
+registered secret that reached a message any other way would fail the replay
+of every request whose prompt held it: the record has `[redacted]` where the
+request had the secret. That was already true of a full record, which could
+not reproduce those bytes either.
 
 ## The sandbox
 
@@ -584,31 +587,38 @@ but the module's: a readable error ahead of the kernel's, and the one check
 that does look at the host — a second layer, not the boundary.
 
 The session secret in what a snippet prints: the child holds the run's leased
-secret (`WRATHBENCH_SECRET`) and a snippet can print it. The model gets it
-back in the snippet's result as printed. Everywhere the runner writes it, it
-is `[redacted]`: the trajectory scrubs every record against the secrets
-registered with it (`leaseRunSecret` registers this one before the child
-exists), and the host pipes the child's stdout and stderr and writes them to
-its own a line at a time with the secret replaced (`src/redact.ts`), so
-neither the job log nor the pod log carries it. The crash notice's stderr
-tail is a model-facing text and keeps what the child wrote; the trajectory's
-copy of it is scrubbed like any record.
+secret (`WRATHBENCH_SECRET`) and a snippet can print it. The model reads
+`[redacted]` where it was. Every tool result, on every driver, and every
+turn's context message is scrubbed against the secrets registered with the
+trajectory before the model reads it (`callTool` in `src/tools.ts`,
+`ContextBuilder.build`). That covers a secret a snippet returned, logged or
+threw, the crash notice's stderr tail, a chat line that echoed it and the
+scratchpad. The model loses nothing by it: the SDK holds the secret, and the
+model never has to type it. The record of each result is that same text.
+Everywhere else the runner writes the secret, it is `[redacted]` too:
+- The trajectory scrubs every record against the same list
+  (`leaseRunSecret` registers this one before the child exists).
+- The host pipes the child's stdout and stderr and writes them to its own a
+  line at a time with the secret replaced (`src/redact.ts`), so neither the
+  job log nor the pod log carries it.
+- It scrubs the stderr tail the crash notice quotes before cutting it.
+- It scrubs what a snippet writes to the scratchpad before storing it, so the
+  pad the model is shown is the pad `edit_scratchpad` matches against.
 
-On the CLI drivers one copy stays out of reach: the CLI's own record of each
-tool result, in the claude-code session transcript under
-`<run-dir>/claude-config/projects/` and in the Codex rollout under
-`$CODEX_HOME/sessions/`. The CLI writes those files, not the runner. What the
-runner reads back from them (a compaction summary) reaches only the
-trajectory, scrubbed. The files themselves are left as the CLI wrote them.
-Rewriting a rollout would change the thread `exec resume` rebuilds. The
-transcript holds the value for the life of the session whatever happens at
-its end. And a CLI switch that keeps the session off disk would take the
-compaction summary and `exec resume` with it. Neither CLI holds the secret in
-its environment (`childEnv` is an allowlist, and the MCP server runs in the
-runner), so the CLI's environment snapshots cannot carry it. Keeping it out of
-those files altogether would mean redacting the tool result the model reads,
-and that would change what the model sees; it is not done. The secret
-authenticates only its own run's session. A termination revokes it
+That scrub is also what keeps the secret out of the CLI drivers' own session
+files: the claude-code transcript under `<run-dir>/claude-config/projects/`
+and the Codex rollout under `$CODEX_HOME/sessions/`. Those files hold the
+CLI's record of each tool result and of each prompt, and the CLI writes them,
+not the runner. What the runner reads back from them (a compaction summary)
+reaches only the trajectory, scrubbed, and the files are left as the CLI
+wrote them. Neither CLI holds the secret in its environment (`childEnv` is an
+allowlist, and the MCP server runs in the runner), so what the model is sent
+was the only way in.
+
+What no scrub catches is a piece of the secret: where a cut the child makes
+before the host sees the text falls inside it (a logged line or a returned
+value past 4,000 characters), or where a snippet prints it in parts. The
+secret authenticates only its own run's session. A termination revokes it
 (`releaseSessionSecret`); a pause does not, so a paused run's copy stays valid
 until the resume re-leases the token, which rotates it.
 

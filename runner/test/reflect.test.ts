@@ -48,6 +48,7 @@ import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import { Trajectory, readTrajectory } from "../src/trajectory";
 import { requestsOf, userMessagesOf } from "./fixtures/requests";
 import { Watchdogs } from "../src/watchdogs";
+import { SecretRedactor } from "../src/redact";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -88,6 +89,7 @@ function makeCtx(state: { resting?: boolean; taxiFlight?: boolean; level?: numbe
     episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
     reflect: new ReflectGate(),
     turn: () => 7,
+    secrets: new SecretRedactor(),
     sessionLive: () => true,
   };
   return { ctx, state, dir };

@@ -12,6 +12,7 @@ import { Trajectory, readTrajectory } from "../src/trajectory";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import type { ActionHintNote } from "../src/sandbox/ipc";
 import { renderActionHints, type ToolContext } from "../src/tools";
+import { SecretRedactor } from "../src/redact";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -51,6 +52,7 @@ function makeCtx(sandbox: SandboxHost = fakeSandbox()): { ctx: ToolContext; scra
     reflect: new ReflectGate(),
     episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
     turn: () => 1,
+    secrets: new SecretRedactor(),
   };
   return { ctx, scratchpad };
 }
@@ -240,6 +242,7 @@ describe("McpServer", () => {
       reflect: new ReflectGate(),
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       turn: () => 1,
+      secrets: new SecretRedactor(),
     };
     let recorded: unknown;
     const server = new McpServer(ctx, {

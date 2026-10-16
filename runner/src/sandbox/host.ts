@@ -100,8 +100,10 @@ export interface SandboxHostOptions {
    * pre-auth module) sends the child in with no credential.
    *
    * Also the value scrubbed from everything the child writes to stdout and
-   * stderr before the runner passes it on (`logSink`): it is the only secret
-   * the child holds, so it is the only one the child can print.
+   * stderr before the runner passes it on (`logSink`), from the stderr tail
+   * the crash notice quotes, and from what a snippet writes to the
+   * scratchpad: it is the only secret the child holds, so it is the only one
+   * the child can print.
    */
   secret?: string;
   /**
@@ -231,7 +233,7 @@ export class SandboxHost {
   private stderr: { tail: string; done: Promise<void> } = { tail: "", done: Promise.resolve() };
   /** Both of the current child's output pumps, settled once each has written what it held. */
   private drained: Promise<void> = Promise.resolve();
-  /** Scrubs the child's output on its way to `logSink`; it knows only `opts.secret`. */
+  /** Scrubs the child's output, its crash tail and its pad writes; it knows only `opts.secret`. */
   private readonly redactor = new SecretRedactor();
 
   constructor(private readonly opts: SandboxHostOptions) {
@@ -338,8 +340,11 @@ export class SandboxHost {
         this.abandonedEvals.clear();
       },
     });
+    // Scrubbed before it is cut, every read: a secret split across two reads
+    // is whole once the second is appended, and whole when it is replaced, so
+    // neither this cut nor the notice's shorter one can leave a piece of it.
     stderr.done = this.pump(this.proc.stderr, "stderr", (text) => {
-      stderr.tail = (stderr.tail + text).slice(-4_000);
+      stderr.tail = this.redactor.scrub(stderr.tail + text).slice(-4_000);
     });
     this.drained = Promise.all([stderr.done, this.pump(this.proc.stdout, "stdout")]).then(() => undefined);
     await this.ready;
@@ -348,9 +353,8 @@ export class SandboxHost {
   /**
    * Mirror one of the child's output streams to the runner's, scrubbed of the
    * child's secret on the way (`ScrubbedStream`). `onRaw` sees the text as the
-   * child wrote it: the stderr tail kept from it feeds the crash notice the
-   * model reads, which the redaction leaves as it was (the trajectory scrubs
-   * its own copy of the notice, like every record).
+   * child wrote it, unheld; the stderr tail it keeps for the crash notice is
+   * scrubbed as it accumulates (`start`).
    */
   private async pump(stream: unknown, name: "stdout" | "stderr", onRaw?: (text: string) => void): Promise<void> {
     if (!(stream instanceof ReadableStream)) return;
@@ -405,7 +409,11 @@ export class SandboxHost {
             // reports it (`collectPadRefusals` in entry.ts). A resolved
             // `{ truncated }` the model never read is how notes vanished.
             const write = msg.method === "scratchpad_write";
-            const res = write ? pad.write(msg.params.content ?? "") : pad.append(msg.params.content ?? "");
+            // Scrubbed before it is stored: the pad is shown to the model
+            // every turn, and the text it is shown must be the text
+            // `edit_scratchpad` can match.
+            const content = this.redactor.scrub(msg.params.content ?? "");
+            const res = write ? pad.write(content) : pad.append(content);
             if (res.ok) reply(true, { chars: res.chars });
             else reply(false, undefined, overCapText(write ? "scratchpad.write" : "scratchpad.append", res.chars));
           }

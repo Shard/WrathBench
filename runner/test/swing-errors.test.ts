@@ -25,6 +25,7 @@ import { SandboxHost } from "../src/sandbox/host";
 import type { EventSummary } from "../src/sandbox/ipc";
 import { Scratchpad } from "../src/scratchpad";
 import { callTool, type ToolContext } from "../src/tools";
+import { SecretRedactor } from "../src/redact";
 import { PROSE_OPCODES, redactProseText, redactProseValue } from "../viewer/redact-prose";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -119,6 +120,7 @@ describe("melee swing errors reach the model like any other combat event", () =>
       reflect: new ReflectGate(),
       episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
       turn: () => 1,
+      secrets: new SecretRedactor(),
     };
     const tool = await callTool(ctx, "recent_events", {});
     expect(tool.isError).toBeFalsy();

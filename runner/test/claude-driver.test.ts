@@ -20,6 +20,7 @@ import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { harnessVersion, HARNESS_VERSION_FALLBACK } from "../src/version";
 import { Watchdogs } from "../src/watchdogs";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
+import { LEAKED_SECRET, LEAKY_PAD, LEAKY_RESULT_AS_READ, leakyCrashNotice, leakySnippetResult } from "./fixtures/leaky-snippet";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -392,6 +393,31 @@ describe("claude-code driver", () => {
     const transcript = join(runDir, "claude-config", "projects", "-tmp-fake", "fake-session.jsonl");
     expect(readFileSync(transcript, "utf8")).toContain(secret);
   }, 30_000);
+
+  test("a registered secret a snippet returned, logged or threw reaches the CLI as [redacted], as do a notice's and the pad's", async () => {
+    // What the CLI is sent is what it keeps in its session transcript, which
+    // the runner does not write: the scrub has to come before the MCP result.
+    const { runDir, recordPath, trajectory, options } = setupEpisode("tools", { maxTurns: 1 });
+    trajectory.redact(LEAKED_SECRET);
+    const notices = [leakyCrashNotice()];
+    Object.assign(options.sandbox, {
+      evalSnippet: () => Promise.resolve(leakySnippetResult()),
+      drainNotices: () => notices.splice(0),
+    });
+    writeFileSync(join(runDir, "scratchpad.md"), LEAKY_PAD, "utf8");
+    await runClaudeEpisode(options);
+    trajectory.close();
+    const record = readRecord(recordPath);
+    const results = record["toolResults"] as { content: { text: string }[]; isError: boolean }[];
+    expect(results.map((r) => r.content[0]!.text)).toEqual([LEAKY_RESULT_AS_READ]);
+    expect(results[0]!.isError).toBe(true);
+    const context = (record["userMessages"] as string[])[0]!;
+    expect(context).toContain("Last stderr: dumping [redacted]");
+    expect(context).toContain("key: [redacted]");
+    expect(JSON.stringify(record)).not.toContain(LEAKED_SECRET);
+    expect(readTrajectory(runDir).find((r) => r.t === "snippet_result")?.["text"]).toBe(LEAKY_RESULT_AS_READ);
+    expect(readFileSync(join(runDir, "trajectory.jsonl"), "utf8")).not.toContain(LEAKED_SECRET);
+  }, 20_000);
 
   test("a compaction a turn's usage predicts is asked about before it, against the model's reported window", async () => {
     // A 300k window is a 267k threshold; 200k + 2 × 100k crosses it after turn 2.

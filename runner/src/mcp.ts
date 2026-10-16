@@ -222,6 +222,7 @@ async function main(): Promise<void> {
     reflect: new ClosedWindowReflectGate(),
     episodic: new EpisodicLog(join(runDir, "episodic.jsonl")),
     turn: () => 0, // MCP mode has no driver turn to stamp
+    secrets: trajectory,
     onEpisodicEntry: (entry) => trajectory.append({ t: "episodic", ...entry }),
     onEventsServed: (events, folded) =>
       trajectory.append({

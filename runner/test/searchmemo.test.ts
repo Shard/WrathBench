@@ -14,6 +14,7 @@ import { EpisodicLog } from "../src/episodic";
 import { ReflectGate } from "../src/reflect";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost } from "../src/sandbox/host";
+import { SecretRedactor } from "../src/redact";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -60,6 +61,7 @@ function context(wiki?: Database): ToolContext {
     reflect: new ReflectGate(),
     episodic: new EpisodicLog(join(dir, "episodic.jsonl")),
     turn: () => 1,
+    secrets: new SecretRedactor(),
   };
 }
 
