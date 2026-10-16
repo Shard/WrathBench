@@ -205,23 +205,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the lootCorpse
-    // line's refused status (a loot the server refuses settles at once with
-    // the reason instead of timing out), in the operator's shorter wording
-    // (2026-10-16); it is in every rendering, so it moved every row.
+    // any rendering fails here. The last edit to move them is the state
+    // line's objective kinds gaining "explore" (an exploration objective has
+    // a row in state.quest(id).objectives, issue #115); it is in every
+    // rendering, so it moved every row.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:ff486e78c87b5ee6", off: "sha256:8525e5e9ef5e81c3" },
-        cli: { on: "sha256:a9d385dedfd52c37", off: "sha256:f1631bc330912243" },
+        wrathbench: { on: "sha256:c97877408a428fc0", off: "sha256:9425d09e7baf6c2f" },
+        cli: { on: "sha256:8d3dab50f9cd0fe4", off: "sha256:0754bad6bcc70931" },
       },
       e90: {
-        wrathbench: { on: "sha256:b1a6ca638741db49", off: "sha256:2cef8879e5463236" },
-        cli: { on: "sha256:72f748036a4e6435", off: "sha256:d734133abec5b64e" },
+        wrathbench: { on: "sha256:d15c6917ac78750a", off: "sha256:3c4b2c3d421710fe" },
+        cli: { on: "sha256:9d3a92cc5139ca7b", off: "sha256:86bbcf62fe5d670e" },
       },
       e360: {
-        wrathbench: { on: "sha256:90293b759d8bf765", off: "sha256:6b4938bc5afbaaf1" },
-        cli: { on: "sha256:324f186960e8167c", off: "sha256:79d9a0b8eef39268" },
+        wrathbench: { on: "sha256:60a59323f81ebe1e", off: "sha256:a55bd1077bec0975" },
+        cli: { on: "sha256:09e0fcd1c038bbf8", off: "sha256:4b9b44b639c343b9" },
       },
     };
     const episodes = [
