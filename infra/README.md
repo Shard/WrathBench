@@ -108,35 +108,49 @@ what compose sets; change compose.
 
 ## Bootstrap
 
-`infra/bootstrap/bootstrap.ts` runs on Bun between `db-import` and the servers.
-It does two things, idempotently:
+`infra/bootstrap/bootstrap.ts` runs on Bun after `db-import`: the chart's
+`bootstrap` Job on every install and upgrade, compose's `bootstrap` service
+before the servers on the quickstart. It does two things, idempotently:
 
-1. Upserts the `auth.realmlist` row for realm 1, pointing it at the
-   `worldserver` compose hostname, and deletes any other realm row.
+1. Upserts the `auth.realmlist` row for realm 1 at the configured address
+   (loopback, for a port-forwarded client), and deletes any other realm row.
 2. Ensures an account (`RUNNER` / `RUNNER` by default) exists with the
    configured password, computing the SRP6 salt and verifier the same way
    `AccountMgr::CreateAccount` does.
 
 The smoke probes that hold a session for minutes (`infra/smoke/module-quest.ts`)
 use a second account `PROBE` so they never contend with `RUNNER` for the
-one-live-session-per-account limit. On a fresh machine create it once with:
+one-live-session-per-account limit. Create it, and every extra account
+(`SHAKEOUT`, `RUNNER2`, `SMOKE2`), by name:
 
-    docker compose -f infra/compose.yml run --rm \
+    bun wb accounts ensure PROBE SHAKEOUT
+
+That is `bootstrap.ts --accounts-only` in the runner pod (`bun wb --local …` on
+the quickstart). It creates each named account that is missing, with its name
+as its password, and writes nothing else: no realm row, no account that
+already exists. A plain `bootstrap.ts` in the runner pod would re-advertise the
+realm at the file's defaults, because the pod carries none of the Job's realm
+settings; wb refuses the command while the deployed image predates the flag.
+The quickstart without Bun on the host can use the `bootstrap` service instead,
+which runs the whole bootstrap with the named account as the configured one
+(so it also re-upserts the realm row from compose's settings, and resets that
+account's password if it differs):
+
+    docker compose -f infra/compose.yml run --rm --no-deps \
       -e WRATHBENCH_ACCOUNT_USER=PROBE -e WRATHBENCH_ACCOUNT_PASSWORD=PROBE \
       bootstrap
 
-Every extra account is made the same way — `SHAKEOUT`, `RUNNER2`, `SHAKEOUT2`.
-It is a pure auth-database write, so it is safe on a running server (add
-`--no-deps` to keep `compose run` from touching `db-import`), but the account is
-not usable by the module until it is in `AC_WRATH_BENCH_ACCOUNTS`, which is read
-when the worldserver container is created.
+Either is a pure auth-database write, safe on a running server, but the account
+is not usable by the module until it is in the module's allowlist
+(`worldserver.accounts` in the chart's values, `AC_WRATH_BENCH_ACCOUNTS` in
+compose), which is read when the worldserver is recreated.
 
 `bootstrap.ts` writes SQL directly rather than using SOAP or the worldserver
 console. SOAP cannot create the *first* account — `ACSoap.cpp` requires the caller to be
 `SEC_ADMINISTRATOR` and the base auth schema seeds no accounts at all — and it
 would mean enabling a privileged control path into the world, which the harness
-deliberately does not have. The console (`docker compose attach worldserver`,
-then `account create ...`, which is what AzerothCore's docker README tells you
+deliberately does not have. The console (attaching to the worldserver, then
+`account create ...`, which is what AzerothCore's docker README tells you
 to do by hand) is interactive, races the world load, and is not idempotent.
 The cost of direct SQL is a small reimplementation of SRP6, pinned to
 `src/common/Cryptography/Authentication/SRP6.cpp`; if AzerothCore changes that
@@ -144,7 +158,10 @@ derivation, logins fail at the authserver and `bootstrap.ts` is where to look.
 
 The runner account is an ordinary player with no `account_access` row. The
 agent gets no GM privileges by contract (`docs/CONTRACTS.md`). A GM operator
-account for inspecting the world is created by `infra/spectator-account.ts`.
+account for inspecting the world is created by `infra/spectator-account.ts`,
+with the password on stdin so it is never on a command line:
+
+    read -rs P && printf '%s\n' "$P" | bun wb accounts spectator
 
 Override the defaults with `WRATHBENCH_ACCOUNT_USER`,
 `WRATHBENCH_ACCOUNT_PASSWORD`, `WRATHBENCH_REALM_NAME`, and

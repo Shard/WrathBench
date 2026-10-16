@@ -1145,13 +1145,23 @@ in the module's allowlist — `worldserver.accounts` in the chart's values
 which the module reads **only at worldserver recreate**. A smoke bound to an
 account the running module does not permit gets 403 `account_not_permitted`,
 the gate fails, and no job spawns until it is fixed, so a new gate account is
-added at a recreate and not before. The `bootstrap` service creates one (an
-idempotent auth-DB upsert, safe with the server running):
+added at a recreate and not before. `bun wb accounts ensure` creates one (an
+auth-DB insert, safe with the server running), and only the accounts it is
+named:
 
 ```
-docker compose -f infra/compose.yml run --rm --no-deps \
-  -e WRATHBENCH_ACCOUNT_USER=SMOKE2 -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap
+bun wb accounts ensure SMOKE2
 ```
+
+It is `infra/bootstrap/bootstrap.ts --accounts-only` in the runner pod: the
+password is the account's name, an account that exists is left alone, and no
+realm row is written. wb refuses it while the deployed image's `bootstrap.ts`
+predates the flag, because that file would run the whole bootstrap. On the
+quickstart without Bun, compose's `bootstrap` service makes one account by
+running the whole bootstrap with it as the configured account: it re-upserts
+the realm row from compose's own realm settings and resets that account's
+password if it differs: `docker compose -f infra/compose.yml run --rm --no-deps -e
+WRATHBENCH_ACCOUNT_USER=SMOKE2 -e WRATHBENCH_ACCOUNT_PASSWORD=SMOKE2 bootstrap`.
 
 Server identity is the worldserver's boot, read off the shared logs volume
 (`data/logs/Server.log`'s creation time), plus a digest of `/health`'s stable
