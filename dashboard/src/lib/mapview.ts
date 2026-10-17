@@ -170,10 +170,41 @@ const DEFAULT_COL = 31.1;
 /** At or above `TILE_MIN_PX / TILE_PX`, so the default frame draws the native tiles. */
 export const DEFAULT_SCALE = 0.4;
 
-export function defaultView(screen: Screen): View {
+export function defaultView(screen: Screen, map: number = DEFAULT_MAP): View {
+  if (map !== DEFAULT_MAP) return worldView(screen);
   const w = tileToWorld(DEFAULT_ROW, DEFAULT_COL);
   const p = worldToPixel(w.x, w.y);
   return centreOn(screen, p.px, p.py, DEFAULT_SCALE);
+}
+
+/**
+ * The whole 64×64 grid, fitted to the stage. It is what any other map opens
+ * on with nobody to fit to (a `/map?map=1` link on a quiet fleet): nothing
+ * here knows where a continent sits in its grid, and the pyramid draws real
+ * ground at this zoom, so the whole of it is the honest first frame.
+ */
+export function worldView(screen: Screen): View {
+  const side = GRID * TILE_PX;
+  return centreOn(screen, side / 2, side / 2, Math.min(screen.w, screen.h) / side);
+}
+
+/**
+ * The map a `/map?map=<id>` link names, or null. Bare digits only, as the
+ * server's map ids are: anything else is no pin rather than a guess.
+ */
+export function mapParam(raw: string | string[] | undefined): number | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v === undefined || !/^\d{1,9}$/.test(v)) return null;
+  return Number(v);
+}
+
+/**
+ * The chips: every map with someone on it, and the map on screen when nobody
+ * is — a pinned map a reader opened by link still needs a chip, or there is
+ * no way back from it without editing the URL.
+ */
+export function mapChips(maps: readonly [number, number][], active: number): [number, number][] {
+  return maps.some(([id]) => id === active) ? [...maps] : [...maps, [active, 0]];
 }
 
 /** Zoom about a screen point, keeping the world point under it in place. */
@@ -531,8 +562,11 @@ export function mapCounts(list: readonly { map: number }[]): [number, number][] 
  * lets the caller express "stay on this map while it still has an agent"
  * without a derivation that writes to what it reads.
  *
- * Precedence: an operator's chip click, then the replay cursor's own map, then
- * where we already were, then the busiest map in the feed.
+ * Precedence: an operator's pin (a chip click or a `/map?map=<id>` link), then
+ * the replay cursor's own map, then where we already were, then the busiest
+ * map in the feed. A pin holds whether or not anyone is on that map: every map
+ * draws (its tiles, or the lattice where it has none), so a pinned empty map is
+ * a map to look at, not a blank canvas.
  *
  * With nothing to go on it answers `DEFAULT_MAP` rather than "no map". It used
  * to answer null, and the page has no rendering for that: the draw loop filled
@@ -548,7 +582,7 @@ export function chooseMap(
   cursor: number | null,
 ): number {
   const has = (m: number): boolean => maps.some(([id]) => id === m);
-  if (pinned !== null && has(pinned)) return pinned;
+  if (pinned !== null) return pinned;
   if (cursor !== null) return cursor;
   if (prev !== null && has(prev)) return prev;
   return maps.length > 0 ? maps[0]![0] : DEFAULT_MAP;

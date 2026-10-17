@@ -41,7 +41,10 @@ import {
   TILE_MIN_PX,
   levelCellPx,
   levelCells,
+  mapChips,
   mapCounts,
+  mapParam,
+  worldView,
   mapName,
   pipName,
   positionAgeMs,
@@ -580,8 +583,14 @@ describe("chooseMap", () => {
 
   test("a chip click outranks both stickiness and the busiest map", () => {
     expect(chooseMap(MAPS, 0, 1, null)).toBe(1);
-    // A pin for a map nothing is on is ignored rather than blanking the canvas.
-    expect(chooseMap(MAPS, 0, 530, null)).toBe(0);
+  });
+
+  test("a pin holds on a map nobody is on: a `/map?map=530` link on any fleet", () => {
+    // Every map draws — its tiles, or the lattice — so an empty pinned map is
+    // a map to look at, not the blank canvas this once guarded against.
+    expect(chooseMap(MAPS, 0, 530, null)).toBe(530);
+    expect(chooseMap([], null, 1, null)).toBe(1);
+    expect(chooseMap([], 1, 1, null)).toBe(1);
   });
 
   test("the replay cursor's map wins over where we were", () => {
@@ -595,6 +604,72 @@ describe("chooseMap", () => {
     expect(chooseMap(MAPS, first, null, null)).toBe(first);
     const pinned = chooseMap(MAPS, first, 1, null);
     expect(chooseMap(MAPS, pinned, 1, null)).toBe(pinned);
+  });
+});
+
+describe("the map link", () => {
+  test("?map=<id> is bare digits or no pin at all", () => {
+    expect(mapParam("1")).toBe(1);
+    expect(mapParam("0")).toBe(0);
+    expect(mapParam("571")).toBe(571);
+    expect(mapParam(["530", "1"])).toBe(530);
+    for (const bad of [undefined, "", "-1", "1.5", "abc", "1a", " 1", "0x1f", "1e3", "1234567890"]) {
+      expect(mapParam(bad)).toBeNull();
+    }
+  });
+
+  test("the chips keep a way back from a pinned map nobody is on", () => {
+    const busy: [number, number][] = [
+      [0, 3],
+      [1, 1],
+    ];
+    expect(mapChips(busy, 1)).toEqual(busy);
+    expect(mapChips([[0, 3]], 571)).toEqual([
+      [0, 3],
+      [571, 0],
+    ]);
+    // Alone on a quiet fleet there is nothing to switch to: one chip, which the page hides.
+    expect(mapChips([], 1)).toEqual([[1, 0]]);
+  });
+
+  test("another map opens on the whole grid; the default map keeps its starter frame", () => {
+    for (const screen of [
+      { w: 1280, h: 800 },
+      { w: 360, h: 740 },
+    ]) {
+      const v = defaultView(screen, 1);
+      expect(v).toEqual(worldView(screen));
+      const side = 64 * TILE_PX;
+      expect(side * v.scale).toBeLessThanOrEqual(Math.min(screen.w, screen.h) + 1e-9);
+      // The grid's corners are on screen.
+      expect(v.ox).toBeGreaterThanOrEqual(-1e-9);
+      expect(v.oy).toBeGreaterThanOrEqual(-1e-9);
+      expect(v.ox + side * v.scale).toBeLessThanOrEqual(screen.w + 1e-9);
+      expect(v.oy + side * v.scale).toBeLessThanOrEqual(screen.h + 1e-9);
+      expect(defaultView(screen, DEFAULT_MAP)).toEqual(defaultView(screen));
+      expect(defaultView(screen).scale).toBe(DEFAULT_SCALE);
+    }
+  });
+
+  test("a pinned map with nobody on it is the active map, on an empty feed and a busy one", () => {
+    createRoot((dispose) => {
+      const [feed] = createSignal<readonly AgentPosition[]>([]);
+      const [pinned] = createSignal<number | null>(530);
+      const state = createMapState({ feed, track: () => undefined, pinned, selectedId: () => null });
+      expect(state.activeMap()).toBe(530);
+      dispose();
+    });
+    createRoot((dispose) => {
+      const [feed] = createSignal<readonly AgentPosition[]>([agent("a", 0, 0, 0)]);
+      const [pinned] = createSignal<number | null>(1);
+      const state = createMapState({ feed, track: () => undefined, pinned, selectedId: () => null });
+      expect(state.activeMap()).toBe(1);
+      expect(mapChips(state.maps(), state.activeMap())).toEqual([
+        [0, 1],
+        [1, 0],
+      ]);
+      dispose();
+    });
   });
 });
 

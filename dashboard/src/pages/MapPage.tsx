@@ -38,7 +38,7 @@
  */
 
 import { A, useSearchParams } from "@solidjs/router";
-import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
@@ -59,6 +59,7 @@ import {
   replayHrefFor,
 } from "../lib/mapstate";
 import {
+  DEFAULT_MAP,
   STALE_MS,
   TILE_CACHE_MAX,
   type FeedClock,
@@ -73,7 +74,9 @@ import {
   hitTest,
   latticeLines,
   levelCellPx,
+  mapChips,
   mapName,
+  mapParam,
   pipName,
   positionAgeMs,
   project,
@@ -177,12 +180,17 @@ export default function MapPage() {
   /*
    * The route is the page's mode, and the only mode it has: `/map` is live,
    * `/map?run=<id>` is that run's replay. Everything else the page holds —
-   * cursor, playback, the pinned map, the selection, pan and zoom — is
-   * per-frame state that would make the URL churn, so none of it goes here.
-   * The cursor is remembered per run beside the route instead, so coming back
-   * to a replay does not restart it: `lib/cursormemory.ts`.
+   * cursor, playback, the selection, pan and zoom — is per-frame state that
+   * would make the URL churn, so none of it goes here. The cursor is
+   * remembered per run beside the route instead, so coming back to a replay
+   * does not restart it: `lib/cursormemory.ts`.
+   *
+   * The one exception is the pinned map, `?map=<id>`: a chip click is a
+   * deliberate choice, not a frame's worth of state, and a link that opens
+   * Kalimdor has to carry it — chips exist only for maps with someone on
+   * them, so on a quiet fleet the link is the only way to any other map.
    */
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const replayId = (): string | undefined => runParam(params.run);
 
   /* --- sources: the only writable state on the page --- */
@@ -360,7 +368,7 @@ export default function MapPage() {
      * effect: that effect re-runs on every poll tick, and an empty-feed branch
      * there would snap the view back under a reader who had just panned.
      */
-    if (pendingFit) view = defaultView({ w: W, h: H });
+    if (pendingFit) view = defaultView({ w: W, h: H }, untrack(activeMap));
     needsDraw = true;
   }
 
@@ -911,7 +919,13 @@ export default function MapPage() {
      * refresh lands and the fit effect overwrites it, which is the right
      * intermediate: a foreign continent's camera is not.
      */
-    view = defaultView({ w: W, h: H });
+    // The pin is the one piece of state the URL carries, so the clear above
+    // gives it back here: a `/map?map=1` link, opened cold or reached by back
+    // or forward, lands on its map. Read untracked, or a chip click would
+    // re-run this whole swap.
+    const pin = untrack(() => mapParam(params.map));
+    setPinnedMap(pin);
+    view = defaultView({ w: W, h: H }, pin ?? DEFAULT_MAP);
     needsDraw = true;
     if (id === undefined) {
       // Only when leaving a replay, never on a cold load — see createLeftReplay.
@@ -973,8 +987,32 @@ export default function MapPage() {
     on(cursorMap, (map) => {
       if (map === null) return;
       setPinnedMap(null);
+      // A link that still named the old map would reopen it rather than follow.
+      if (params.map !== undefined) setParams({ map: null }, { replace: true });
       pendingFit = true;
     }),
+  );
+
+  /*
+   * A pin arriving by URL after load: the chip click below writes it, and
+   * browser back and forward move it. Deferred, because the route swap above
+   * already seeded the pin the page opened with. A map nobody is on gets its
+   * opening frame now, since the fit effect has no one there to fit to.
+   */
+  createEffect(
+    on(
+      () => params.map,
+      (raw) => {
+        const pin = mapParam(raw);
+        setPinnedMap(pin);
+        pendingFit = true;
+        if (pin !== null && !feedList().some((p) => p.map === pin)) {
+          view = defaultView({ w: W, h: H }, pin);
+          needsDraw = true;
+        }
+      },
+      { defer: true },
+    ),
   );
 
   /*
@@ -987,12 +1025,13 @@ export default function MapPage() {
   createEffect(() => {
     const map = activeMap();
     const list = feedList();
-    if (!pendingFit || list.length === 0) return;
+    if (!pendingFit) return;
+    // Nobody on this map — a quiet fleet, or a map pinned by link — leaves
+    // the opening frame alone and the fit pending for whoever arrives.
+    const here = list.filter((p) => p.map === map);
+    if (here.length === 0) return;
     pendingFit = false;
-    view = fitTo(
-      { w: W, h: H },
-      list.filter((p) => p.map === map),
-    );
+    view = fitTo({ w: W, h: H }, here);
     needsDraw = true;
   });
 
@@ -1115,11 +1154,12 @@ export default function MapPage() {
     needsDraw = true;
   };
 
+  // The URL is written and the pin follows from it (the effect above), so
+  // the address bar is always a link to what is on screen.
   const pickMap = (map: number): void => {
     if (map === activeMap()) return;
-    setPinnedMap(map);
     setSelectedId(null);
-    pendingFit = true;
+    setParams({ map: String(map) }, { replace: true });
   };
 
   return (
@@ -1137,8 +1177,8 @@ export default function MapPage() {
           onWheel={onWheel}
         />
         <div class="map-chips">
-          <Show when={maps().length > 1}>
-            <For each={maps()}>
+          <Show when={mapChips(maps(), activeMap()).length > 1}>
+            <For each={mapChips(maps(), activeMap())}>
               {([map, n]) => (
                 <button
                   class={map === activeMap() ? "on" : ""}
