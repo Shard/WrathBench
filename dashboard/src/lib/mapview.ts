@@ -281,9 +281,9 @@ export function tileLevel(scale: number, screen: Screen, withArt = false): numbe
  */
 
 /** At or below this many screen pixels per ADT, the art covers the minimap entirely. */
-export const ART_FADE_START_PX = 24;
+export const ART_FADE_START_PX = 48;
 /** At or above this many, the art is not drawn and the minimap stands alone. */
-export const ART_FADE_END_PX = 160;
+export const ART_FADE_END_PX = 384;
 
 /** Screen pixels one ADT spans under a scale (a native tile's on-screen size). */
 export function pxPerAdt(scale: number): number {
@@ -295,7 +295,7 @@ export function pxPerAdt(scale: number): number {
  * `ART_FADE_END_PX` and above, a smoothstep between. The step runs in log
  * pixels, because zoom is multiplicative: each wheel notch moves it about the
  * same amount, and the halfway point is the geometric mean of the two ends
- * (about 62 px per ADT with the values above).
+ * (about 136 px per ADT with the values above, near the art's own z1).
  */
 export function minimapAlpha(pxPerAdtNow: number): number {
   if (!(pxPerAdtNow > ART_FADE_START_PX)) return 0;
