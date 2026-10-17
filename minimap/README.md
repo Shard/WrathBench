@@ -217,8 +217,8 @@ The bake over the five extracted maps takes about 10 s and writes 1479 tiles
 | 530 | 234 | 69 | 26 | 10 | 4 | 1 | 15.1 |
 | 571 | 300 | 88 | 24 | 12 | 4 | 1 | 16.4 |
 
-The tram's 12 tiles straddle the grid's centre line, so they split four ways
-at every level up to z5.
+The tram's 12 tiles sit on rows 31–32, either side of the grid's centre line,
+so every level up to z5 keeps two rows of them and z3–z5 hold four tiles each.
 
 How it was verified: z4 mosaics of maps 0 and 1 (16 tiles each) came out north
 up, with coastlines continuous across every tile edge. A z3 tile over Dun
