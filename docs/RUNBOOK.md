@@ -1907,9 +1907,9 @@ rules.
 ### Minimap tiles (a separate step, never automatic)
 
 The snapshot loop uploads JSON only. Tiles go up by hand, from a checkout with
-`data/minimap` populated by the extraction in `minimap/` and its bake of the
-zoomed-out levels (`bun run --cwd minimap bake`, `minimap/README.md`), and only
-when the extraction has changed — the skip-unchanged check is a content hash kept in
+`data/minimap` populated by the extraction in `minimap/` and its bakes of the
+zoomed-out levels and the art layer (`minimap/README.md`), and only when the
+extraction has changed — the skip-unchanged check is a content hash kept in
 `tiles/manifest.json` in the bucket, so a re-run with nothing new PUTs nothing.
 
 ```

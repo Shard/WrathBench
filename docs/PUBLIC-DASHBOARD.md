@@ -88,9 +88,10 @@ Minimap tiles are published by a second, separate script
 snapshot pass: the loop above uploads JSON only, and the tiles are
 uploaded by an explicit operator run. It writes them into the same bucket,
 keyed by the path the viewer already serves so the SPA asks for one URL in
-either shape. The zoomed-out levels baked from them (`minimap/README.md`) go
-up the same way under the same prefix (`tiles/<map>/minimap/<z>/…`), so the
-cache rule, the CORS policy and `robots.txt` cover them with no change. Skip
+either shape. The zoomed-out levels baked from them and the painted art layer
+(`minimap/README.md`) go up the same way under the same prefix
+(`tiles/<map>/minimap/<z>/…`, `tiles/<map>/art/<z>/…`), so the cache rule, the
+CORS policy and `robots.txt` cover them with no change. Skip
 by content hash, held in `tiles/manifest.json` in the bucket and written after
 the objects it names, so a re-run with nothing re-extracted uploads nothing.
 A published tile is world-readable, cacheable and indexable: there is no

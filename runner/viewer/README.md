@@ -362,9 +362,10 @@ zone *name*, and names and model-authored text are published
 (docs/DATA-AND-LEGAL.md, "Trajectory logs").
 
 Tiles come from the minimap extraction in `minimap/`, which writes
-`data/minimap/<mapId>/<row>_<col>.png`, and its bake, which writes the
-zoomed-out levels as `data/minimap/<mapId>/minimap/<z>/<row>_<col>.png` for z
-1..6; `/tiles/` serves both shapes straight from there under the same path,
+`data/minimap/<mapId>/<row>_<col>.png`, and its bakes, which write the
+zoomed-out levels as `data/minimap/<mapId>/minimap/<z>/<row>_<col>.png` and the
+painted art layer as `data/minimap/<mapId>/art/<z>/<row>_<col>.png`, both for z
+1..6; `/tiles/` serves every shape straight from there under the same path,
 integers only (and the layer from a fixed list), and cached for a year since
 they never change (public mode with `WRATHBENCH_VIEWER_TILES_PUBLIC=1` sends a private
 one-hour cache instead — see "What it will not serve"). Nothing extracted yet is a normal state, not an error: a missing tile

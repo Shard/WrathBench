@@ -191,10 +191,11 @@ kubectl -n wrathbench logs -f deployment/wrathbench-publisher
 The public map draws real minimap tiles. They are not
 part of a snapshot pass and never become one — this is the step that puts them
 in the bucket, run from a checkout with `data/minimap` populated by the
-extraction in `minimap/` and the zoomed-out levels its bake writes, with the
-same `S3_*` credentials as the publisher. The levels are keyed under the same
-`/tiles/` prefix (`tiles/<map>/minimap/<z>/<row>_<col>.png`), so rule 3 and the
-CORS policy already cover them:
+extraction in `minimap/` and the zoomed-out levels and art layer its bakes
+write, with the same `S3_*` credentials as the publisher. Those are keyed under
+the same `/tiles/` prefix (`tiles/<map>/minimap/<z>/<row>_<col>.png`,
+`tiles/<map>/art/<z>/<row>_<col>.png`), so rule 3 and the CORS policy already
+cover them:
 
 ```
 bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing

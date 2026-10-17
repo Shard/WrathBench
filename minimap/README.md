@@ -181,12 +181,17 @@ page picks the level whose cells stay near tile size on screen.
 ```
 data/minimap/<mapId>/<row>_<col>.png                 native, the pyramid's level 0
 data/minimap/<mapId>/minimap/<z>/<row>_<col>.png     z = 1..6, row/col < 64 >> z
+data/minimap/<mapId>/art/<z>/<row>_<col>.png         the painted map, z = 1..6 (no level 0)
 ```
 
 The native path does not move: the public bucket and every deployed build
 already address it. The levels sit under a layer directory inside the map's
 own, which keeps the tile root a list of map ids (the publisher walks it as
-one) and leaves room for a second layer of art at the same levels. The
+one), and the painted art layer sits beside them at the same levels and on the
+same grid; transparent where nothing is painted, its finest level is z1, 128
+px per ADT. The map page lays it over the minimap and crossfades the two by
+zoom (`ART_FADE_START_PX` / `ART_FADE_END_PX` in
+`dashboard/src/lib/mapview.ts`). The
 spelling is `lodTileName` in `runner/viewer/worldmap.ts`, which the bake,
 the viewer, the publisher and the dashboard all call; it refuses level 0, so
 nothing built on it can write over a native tile.
