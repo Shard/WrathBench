@@ -119,7 +119,7 @@ function decodeTile(file: string): Pixels {
 }
 
 /** Write via a temp name, so a reader never sees half a tile. */
-function writeTile(file: string, png: Uint8Array): void {
+export function writeTile(file: string, png: Uint8Array): void {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, png);

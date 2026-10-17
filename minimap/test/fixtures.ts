@@ -387,3 +387,42 @@ export function buildWmoRoot(boxes: { min: number[]; max: number[] }[]): Uint8Ar
   new DataView(mohd.buffer).setUint32(4, boxes.length, true);
   return joinBytes([chunk("MVER", floats([17])), chunk("MOHD", mohd), chunk("MOGI", mogi)]);
 }
+
+/** A server area/liquid .map file (map_extractor v9): area uniform or per cell; liquid absent, per cell, or one type for the tile. */
+export function mapBytes(opts: { area: number | number[]; liquid?: number | number[]; version?: number }): Uint8Array {
+  const n = 256; // 16 x 16 cells
+  const areaSize = typeof opts.area === "number" ? 8 : 8 + n * 2;
+  const liquidSize = opts.liquid === undefined ? 0 : typeof opts.liquid === "number" ? 16 : 16 + n * 3;
+  const out = new Uint8Array(44 + areaSize + liquidSize);
+  const v = new DataView(out.buffer);
+  v.setUint32(0, 0x5350414d, true);
+  v.setUint32(4, opts.version ?? 9, true);
+  v.setUint32(8, 12340, true);
+  v.setUint32(12, 44, true);
+  v.setUint32(16, areaSize, true);
+  const ao = 44;
+  v.setUint32(ao, 0x41455241, true);
+  if (typeof opts.area === "number") {
+    v.setUint16(ao + 4, 1, true);
+    v.setUint16(ao + 6, opts.area, true);
+  } else {
+    opts.area.forEach((a, i) => v.setUint16(ao + 8 + i * 2, a, true));
+  }
+  if (opts.liquid !== undefined) {
+    const lo = ao + areaSize;
+    v.setUint32(28, lo, true);
+    v.setUint32(32, liquidSize, true);
+    v.setUint32(lo, 0x51494c4d, true);
+    out[lo + 10] = 129;
+    out[lo + 11] = 129;
+    if (typeof opts.liquid === "number") {
+      out[lo + 4] = 3; // no per-cell type, no heights
+      out[lo + 5] = opts.liquid;
+    } else {
+      out[lo + 4] = 2; // per-cell type, no heights
+      out.set(opts.liquid, lo + 16 + n * 2);
+    }
+  }
+  return out;
+}
+
