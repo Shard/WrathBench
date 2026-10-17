@@ -300,7 +300,7 @@ What was verified, and how:
 3. **Against the minimap.** A z1 art tile at 50% over its four native tiles
    lines up: Coldridge's roads and lakes in Dun Morogh, and Northshire and the
    Goldshire road in Elwynn. Stitched regions line up too: Dun Morogh's lakes,
-   The Loch, the Wetlands delta, Westfall's coast and Stormwind's canals.
+   The Loch, the Wetlands delta and Westfall's coast.
 
 ### The server's area grid (`src/mapfile.ts`)
 
@@ -395,25 +395,37 @@ unfinished: flat placeholder fills with chunk-staircase edges, and the grading
 carries those edges over.
 
 Capitals (AreaTable flag 0x100) are off by default, and the surrounding zone's
-map paints them. `--cities` draws a capital's own map over its terrain cells:
-- Stormwind's plan lines up with the minimap's canals, but its map's blank
-  margin shows on the city's northern cells.
-- Its plan is a scale jump against Elwynn's ring.
-- Ironforge and Undercity have no cells to draw on.
+map paints them. `--cities` draws a capital's own map over its terrain cells.
+On map 0 that was tried and left off, for three reasons:
+- Stormwind's plan cuts through Elwynn's STORMWIND banner.
+- The plan's blank margin shows around it.
+- The plan is a jump in scale against the walled-city icon Elwynn's map
+  already paints there.
 
-What was verified, and how: diagnostics projected each zone's final weight
-back into its own art and drew the 0.5 and 0.05 contours. For Dun Morogh,
-Wetlands, Elwynn, Westfall and Eversong, every baked neighbour label, compass
-rose and frame falls outside. Synthetic tests pin the rest: a label baked on a
-zone's territory but away from its overlay never reaches the output, no frame
-pixel does, the sea takes the art's water colour, and the bake is
-deterministic.
+Ironforge and Undercity have no cells to draw on.
+
+What was verified, and how:
+
+- **Labels.** Fourteen baked labels across seven zone maps were each cropped
+  beside the same world rect of the bake's output: neighbour names, sea names
+  and a compass rose, in Dun Morogh, Elwynn, Westfall, the Wetlands, Redridge,
+  Eversong and the Ghostlands. Twelve are gone. The two that are not are listed
+  below.
+- **Alignment.** A z1 tile laid over its natives lines up (see "Placement").
+- **Synthetic tests** pin the rest:
+  - A label baked on a zone's territory but away from its overlay never
+    reaches the output, and no frame pixel does.
+  - The sea takes the art's water colour.
+  - The bake is deterministic.
 
 What still looks wrong:
 
 - **Straight seams.** Where a territory runs past its own map's frame (Badlands
   west, Elwynn north, the Eastern Plaguelands, Desolace, Silithus) the cut is
-  feathered and wavy but still follows the frame.
+  feathered and wavy but still follows the frame. Where two frames face each
+  other across a border (Desolace's bottom, Feralas's top), both fades leave a
+  strip of parchment between them. The feather is in art pixels, so it is
+  narrower in yards for a zone drawn at a large scale.
 - **Faint label leaks** where a zone's own overlays paint a neighbour's label on
   cells the grid gives that zone: BURNING STEPPES along Redridge's north edge,
   and EASTERN PLAGUELANDS along Ghostlands' south edge.
