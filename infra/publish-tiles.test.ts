@@ -9,6 +9,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { encodePng } from "../minimap/src/png";
+import { bakeMap } from "../minimap/src/bake";
+import { parseTilePath, resolveTilePath } from "../runner/viewer/tiles";
+import { MINIMAP_LAYER, TILE_PX } from "../runner/viewer/worldmap";
+import { levelTilePath } from "../dashboard/src/lib/tiles";
 import {
   TILE_MANIFEST_KEY,
   TILE_PREFIX,
@@ -86,8 +91,70 @@ describe("scanTiles", () => {
     expect(scanTiles(dir).map((t) => t.key)).toEqual([`${TILE_PREFIX}0/43_31.png`]);
   });
 
+  test("finds the baked pyramid levels under each listed layer, keyed as the viewer's path", () => {
+    const dir = root({
+      "0/43_31.png": "a",
+      "0/minimap/1/21_15.png": "b",
+      "0/minimap/6/0_0.png": "c",
+      "571/minimap/3/2_5.png": "d",
+    });
+    expect(scanTiles(dir).map((t) => t.key)).toEqual([
+      `${TILE_PREFIX}0/43_31.png`,
+      `${TILE_PREFIX}0/minimap/1/21_15.png`,
+      `${TILE_PREFIX}0/minimap/6/0_0.png`,
+      `${TILE_PREFIX}571/minimap/3/2_5.png`,
+    ]);
+  });
+
+  test("uploads nothing the viewer would not serve under that exact name", () => {
+    const dir = root({
+      "0/minimap/1/21_15.png": "ok",
+      "0/minimap/1/32_0.png": "row outside level 1's 32x32 grid",
+      "0/minimap/6/0_1.png": "level 6 is one tile",
+      "0/minimap/7/0_0.png": "no level 7",
+      "0/minimap/0/43_31.png": "level 0 is the native path only",
+      "0/minimap/1/21_15.png.tmp": "half-written",
+      "0/minimap/1/021_15.png": "a second spelling",
+      "0/minimap/01/21_15.png": "a second spelling",
+      "0/minimap/notes.txt": "no",
+      "0/art/1/0_0.png": "not a layer the viewer serves",
+      "0/64_0.png": "outside the world grid",
+      "0/043_31.png": "a second spelling",
+      "007/43_31.png": "a second spelling of map 7",
+    });
+    expect(scanTiles(dir).map((t) => t.key)).toEqual([`${TILE_PREFIX}0/minimap/1/21_15.png`]);
+  });
+
   test("a machine that never ran the extraction scans empty rather than throwing", () => {
     expect(scanTiles(join(tmpdir(), "wb-tiles-does-not-exist"))).toEqual([]);
+  });
+});
+
+/*
+ * The four places that know a pyramid tile's path — the bake that writes it,
+ * this script that keys it, the viewer that serves it and the dashboard that
+ * asks for it — checked against each other on one baked fixture rather than
+ * each against its own copy of the shape.
+ */
+describe("one path from the bake to the browser", () => {
+  test("every tile the bake writes is keyed, served and requested at the same path", () => {
+    const dir = tempDir("wb-tiles-bake-");
+    const opaque = new Uint8Array(TILE_PX * TILE_PX * 4).fill(255);
+    mkdirSync(join(dir, "0"), { recursive: true });
+    writeFileSync(join(dir, "0", "43_31.png"), encodePng(opaque, TILE_PX, TILE_PX));
+    writeFileSync(join(dir, "0", "48_32.png"), encodePng(opaque, TILE_PX, TILE_PX));
+    const written = bakeMap(join(dir, "0"), { force: false }).reduce((n, l) => n + l.written, 0);
+
+    const tiles = scanTiles(dir);
+    const levels = tiles.filter((t) => t.key.includes(`/${MINIMAP_LAYER}/`));
+    expect(levels.length).toBe(written);
+    expect(tiles.length).toBe(written + 2);
+    for (const t of tiles) {
+      const path = `/${t.key}`;
+      expect(resolveTilePath(dir, path)).toBe(t.file);
+      const ref = parseTilePath(path)!;
+      expect(levelTilePath(ref.map, ref.lod?.layer ?? MINIMAP_LAYER, ref.lod?.z ?? 0, ref.row, ref.col)).toBe(path);
+    }
   });
 });
 

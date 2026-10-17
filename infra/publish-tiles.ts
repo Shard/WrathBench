@@ -10,10 +10,11 @@
  *   bun infra/publish-tiles.ts --dry-run   # print the plan, upload nothing
  *   bun infra/publish-tiles.ts --upload    # upload what changed
  *
- * Reads only from `data/minimap/<mapId>/<row>_<col>.png` (gitignored, like all
- * of `data/`) and writes only to the bucket. Keys mirror the viewer's own path
- * so the SPA asks for the same URL in both shapes:
- * `tiles/<mapId>/<row>_<col>.png`.
+ * Reads only tiles out of `data/minimap` (gitignored, like all of `data/`) —
+ * the native `<mapId>/<row>_<col>.png` and the baked pyramid levels
+ * `<mapId>/<layer>/<z>/<row>_<col>.png` — and writes only to the bucket. Keys
+ * mirror the viewer's own path so the SPA asks for the same URL in both
+ * shapes: `tiles/<mapId>/<row>_<col>.png`, `tiles/<mapId>/minimap/<z>/…`.
  *
  * Skip-unchanged is by content hash, held in a manifest object in the bucket
  * (`tiles/manifest.json`) rather than in a local state file: a re-extraction on
@@ -31,6 +32,8 @@
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { parseTilePath, tileRefPath } from "../runner/viewer/tiles";
+import { LOD_LAYERS } from "../runner/viewer/worldmap";
 
 // ------------------------------------------------------------------ contracts
 
@@ -43,7 +46,7 @@ export const TILE_CONCURRENCY = 8;
 
 /** One tile on disk. */
 export interface LocalTile {
-  /** Bucket key, e.g. `tiles/0/43_31.png`. */
+  /** Bucket key, e.g. `tiles/0/43_31.png` or `tiles/0/minimap/3/5_3.png`. */
   key: string;
   /** Absolute or cwd-relative path under the minimap root. */
   file: string;
@@ -71,39 +74,50 @@ export interface TileStore {
 // -------------------------------------------------------------------- scanning
 
 const MAP_DIR = /^\d+$/;
+const LEVEL_DIR = /^\d+$/;
 const TILE_FILE = /^\d+_\d+\.png$/;
+
+function list(dir: string): string[] {
+  try {
+    return readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Every tile under the minimap root, as bucket keys.
  *
- * Strict on names — bare integers only, exactly what `runner/viewer/tiles.ts`
- * will parse back out of a request path — so anything else the directory
- * happens to hold (a README, an extraction log, a half-written temp file) is
- * not something this script can upload.
+ * Strict on names: a file is a tile only if `runner/viewer/tiles.ts` would
+ * parse its path back out of a request *and* spell it the same way — so a
+ * README, an extraction log, a half-written temp file, a level outside its
+ * range, a layer the viewer does not serve or a second spelling of a tile
+ * (`043_31.png`) is not something this script can upload. The walk reads only
+ * a map's own files and the directories of the listed layers.
  */
 export function scanTiles(root: string): LocalTile[] {
-  let maps: string[];
-  try {
-    maps = readdirSync(root);
-  } catch {
-    return [];
-  }
   const out: LocalTile[] = [];
-  for (const map of maps.sort()) {
+  const add = (rel: string, file: string): void => {
+    const ref = parseTilePath(`/${TILE_PREFIX}${rel}`);
+    if (ref === null || tileRefPath(ref) !== `/${TILE_PREFIX}${rel}`) return;
+    const stat = statSync(file);
+    if (!stat.isFile()) return;
+    out.push({ key: `${TILE_PREFIX}${rel}`, file, size: stat.size });
+  };
+  for (const map of list(root)) {
     if (!MAP_DIR.test(map)) continue;
     const dir = join(root, map);
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      continue;
+    for (const name of list(dir)) {
+      if (TILE_FILE.test(name)) add(`${map}/${name}`, join(dir, name));
     }
-    for (const name of entries.sort()) {
-      if (!TILE_FILE.test(name)) continue;
-      const file = join(dir, name);
-      const stat = statSync(file);
-      if (!stat.isFile()) continue;
-      out.push({ key: `${TILE_PREFIX}${map}/${name}`, file, size: stat.size });
+    for (const layer of LOD_LAYERS) {
+      for (const z of list(join(dir, layer))) {
+        if (!LEVEL_DIR.test(z)) continue;
+        const levelDir = join(dir, layer, z);
+        for (const name of list(levelDir)) {
+          if (TILE_FILE.test(name)) add(`${map}/${layer}/${z}/${name}`, join(levelDir, name));
+        }
+      }
     }
   }
   return out;
