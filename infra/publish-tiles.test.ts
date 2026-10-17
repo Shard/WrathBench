@@ -96,13 +96,17 @@ describe("scanTiles", () => {
       "0/43_31.png": "a",
       "0/minimap/1/21_15.png": "b",
       "0/minimap/6/0_0.png": "c",
+      "0/art/1/21_15.png": "e",
       "571/minimap/3/2_5.png": "d",
+      "571/art/6/0_0.png": "f",
     });
     expect(scanTiles(dir).map((t) => t.key)).toEqual([
       `${TILE_PREFIX}0/43_31.png`,
       `${TILE_PREFIX}0/minimap/1/21_15.png`,
       `${TILE_PREFIX}0/minimap/6/0_0.png`,
+      `${TILE_PREFIX}0/art/1/21_15.png`,
       `${TILE_PREFIX}571/minimap/3/2_5.png`,
+      `${TILE_PREFIX}571/art/6/0_0.png`,
     ]);
   });
 
@@ -117,7 +121,8 @@ describe("scanTiles", () => {
       "0/minimap/1/021_15.png": "a second spelling",
       "0/minimap/01/21_15.png": "a second spelling",
       "0/minimap/notes.txt": "no",
-      "0/art/1/0_0.png": "not a layer the viewer serves",
+      "0/terrain/1/0_0.png": "not a layer the viewer serves",
+      "0/art/0/43_31.png": "the art has no level 0",
       "0/64_0.png": "outside the world grid",
       "0/043_31.png": "a second spelling",
       "007/43_31.png": "a second spelling of map 7",

@@ -87,8 +87,12 @@ export function tileName(row: number, col: number): string {
  * `TILE_PX` square but covers 2^z × 2^z ADTs, so level `LOD_MAX` is the whole
  * 64×64 world in one tile. Level 0 is the native tile and keeps the path
  * `tileName` gives it under its map's directory; levels 1 and up live beside
- * it under a layer directory, `<layer>/<z>/<row>_<col>.png`, so a second
- * layer of art can sit at the same levels without moving the first.
+ * it under a layer directory, `<layer>/<z>/<row>_<col>.png`.
+ *
+ * Two layers share those levels and that grid. `minimap` is the client's
+ * minimap baked down from the native tiles. `art` is the painted world and
+ * zone map stitched over the same grid, transparent where nothing is
+ * painted; it has no level 0, so z1 (128 px per ADT) is its finest.
  *
  * The bake in `minimap/` writes these paths, the viewer's tile route serves
  * them, the tile publisher keys them and the dashboard requests them, all
@@ -99,11 +103,14 @@ export function tileName(row: number, col: number): string {
 export const LOD_MAX = 6;
 
 /** The layers that carry a pyramid, by the directory each lives under. */
-export const LOD_LAYERS = ["minimap"] as const;
+export const LOD_LAYERS = ["minimap", "art"] as const;
 export type LodLayer = (typeof LOD_LAYERS)[number];
 
-/** The layer the native tiles belong to. */
+/** The layer the native tiles belong to: its level 0 is `tileName`. */
 export const MINIMAP_LAYER: LodLayer = "minimap";
+
+/** The painted map, levels 1..`LOD_MAX` only. */
+export const ART_LAYER: LodLayer = "art";
 
 /** Tiles per side at pyramid level `z` (64 at level 0, 1 at `LOD_MAX`). */
 export function lodGrid(z: number): number {

@@ -80,6 +80,14 @@ describe("the pyramid's levels", () => {
     expect(() => levelTilePath(0, "minimap", 1, 32, 0)).toThrow();
   });
 
+  test("the art layer has levels 1..6 under its own directory and no level 0", () => {
+    expect(levelTilePath(0, "art", 1, 21, 15)).toBe("/tiles/0/art/1/21_15.png");
+    expect(levelTilePath(1, "art", 6, 0, 0)).toBe(`/tiles/1/${lodTileName("art", 6, 0, 0)}`);
+    // Level 0 is the minimap's native tile and nothing else: the art never
+    // silently falls back to it.
+    expect(() => levelTilePath(0, "art", 0, 43, 31)).toThrow();
+  });
+
   test("a level goes to the same host as a native tile, and a withheld build asks for neither", () => {
     const path = levelTilePath(1, "minimap", 3, 2, 5);
     expect(tileUrlFor(DATA, DATA, path)).toBe(`${DATA}/tiles/1/minimap/3/2_5.png`);

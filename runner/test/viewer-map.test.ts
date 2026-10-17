@@ -174,6 +174,8 @@ describe("pyramid tile paths", () => {
     // Level 0 is the native tile and only ever `tileName`: a pyramid writer
     // cannot be made to emit it.
     expect(() => lodTileName("minimap", 0, 43, 31)).toThrow();
+    expect(() => lodTileName("art", 0, 43, 31)).toThrow();
+    expect(lodTileName("art", 1, 21, 15)).toBe("art/1/21_15.png");
     expect(() => lodTileName("minimap", LOD_MAX + 1, 0, 0)).toThrow();
     expect(() => lodTileName("minimap", 1.5, 0, 0)).toThrow();
     expect(() => lodTileName("minimap", 1, 32, 0)).toThrow();
@@ -185,6 +187,8 @@ describe("pyramid tile paths", () => {
     const ref = parseTilePath("/tiles/0/minimap/3/5_3.png");
     expect(ref).toEqual({ map: 0, row: 5, col: 3, lod: { layer: "minimap", z: 3 } });
     expect(tileRefPath(ref!)).toBe(`/tiles/0/${lodTileName("minimap", 3, 5, 3)}`);
+    expect(parseTilePath("/tiles/1/art/2/9_5.png")).toEqual({ map: 1, row: 9, col: 5, lod: { layer: "art", z: 2 } });
+    expect(tileRefPath(parseTilePath("/tiles/1/art/2/9_5.png")!)).toBe(`/tiles/1/${lodTileName("art", 2, 9, 5)}`);
     expect(parseTilePath("/tiles/571/minimap/6/0_0.png")).toEqual({
       map: 571,
       row: 0,
@@ -201,7 +205,11 @@ describe("pyramid tile paths", () => {
       "/tiles/0/minimap/7/0_0.png",
       "/tiles/0/minimap/1/32_0.png", // level 1 is 32×32
       "/tiles/0/minimap/6/0_1.png", // level 6 is one tile
-      "/tiles/0/art/1/0_0.png", // not a layer yet
+      "/tiles/0/terrain/1/0_0.png", // not a layer
+      "/tiles/0/art/0/43_31.png", // the art has no level 0
+      "/tiles/0/art/7/0_0.png",
+      "/tiles/0/art/1/32_0.png",
+      "/tiles/0/Art/1/0_0.png",
       "/tiles/0/Minimap/1/0_0.png",
       "/tiles/0/minimap/-1/0_0.png",
       "/tiles/0/minimap/1.5/0_0.png",

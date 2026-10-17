@@ -14,7 +14,8 @@
  * the native `<mapId>/<row>_<col>.png` and the baked pyramid levels
  * `<mapId>/<layer>/<z>/<row>_<col>.png` — and writes only to the bucket. Keys
  * mirror the viewer's own path so the SPA asks for the same URL in both
- * shapes: `tiles/<mapId>/<row>_<col>.png`, `tiles/<mapId>/minimap/<z>/…`.
+ * shapes: `tiles/<mapId>/<row>_<col>.png`, `tiles/<mapId>/<layer>/<z>/…` for
+ * each layer in `LOD_LAYERS` (`minimap`, `art`).
  *
  * Skip-unchanged is by content hash, held in a manifest object in the bucket
  * (`tiles/manifest.json`) rather than in a local state file: a re-extraction on
