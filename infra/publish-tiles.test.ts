@@ -163,6 +163,34 @@ describe("one path from the bake to the browser", () => {
   });
 });
 
+/*
+ * The art layer is re-baked at the same keys, and no object can carry a
+ * Cache-Control, so a pass names the maps whose art it changed: those are the
+ * prefixes the operator purges at the edge.
+ */
+describe("art changes are reported for the purge", () => {
+  test("only the maps whose art a pass uploads, and none when the art is unchanged", async () => {
+    const dir = root({
+      "0/43_31.png": "native",
+      "0/minimap/1/21_15.png": "level",
+      "0/art/1/21_15.png": "art-0",
+      "1/art/2/9_5.png": "art-1",
+      "571/minimap/2/1_1.png": "level",
+    });
+    const store = fakeStore();
+    const first = await publishTiles(scanTiles(dir), store, { now: 1, log: () => {} });
+    expect(first.artMaps).toEqual([0, 1]);
+    // Nothing re-baked: nothing to purge.
+    const again = await publishTiles(scanTiles(dir), store, { now: 2, log: () => {} });
+    expect(again.artMaps).toEqual([]);
+    // Map 1's art re-baked at the same key: map 1 alone.
+    writeFileSync(join(dir, "1/art/2/9_5.png"), "art-1, tuned");
+    const tuned = await publishTiles(scanTiles(dir), store, { dryRun: true, log: () => {} });
+    expect(tuned.uploaded).toBe(1);
+    expect(tuned.artMaps).toEqual([1]);
+  });
+});
+
 describe("the manifest", () => {
   test("round-trips, and refuses keys outside the tile prefix", () => {
     const json = renderTileManifest({ [`${TILE_PREFIX}0/1_2.png`]: "hash" }, 5);
@@ -205,7 +233,7 @@ describe("publishTiles", () => {
     const store = fakeStore();
     const report = await publishTiles(scanTiles(dir), store, { now: 7 });
 
-    expect(report).toEqual({ uploaded: 2, skipped: 0, bytes: 3, orphans: 0, manifestEntries: null });
+    expect(report).toEqual({ uploaded: 2, skipped: 0, bytes: 3, orphans: 0, manifestEntries: null, artMaps: [] });
     expect(store.puts.at(-1)).toBe(TILE_MANIFEST_KEY);
     expect(store.objects.get(`${TILE_PREFIX}0/43_31.png`)?.contentType).toBe("image/png");
     // Keys are the viewer's path verbatim: no hash in the key, because the SPA
@@ -220,7 +248,7 @@ describe("publishTiles", () => {
     store.puts.length = 0;
 
     const report = await publishTiles(scanTiles(dir), store, { now: 8 });
-    expect(report).toEqual({ uploaded: 0, skipped: 1, bytes: 0, orphans: 0, manifestEntries: 1 });
+    expect(report).toEqual({ uploaded: 0, skipped: 1, bytes: 0, orphans: 0, manifestEntries: 1, artMaps: [] });
     // Not even the manifest is spared a re-read, but nothing is re-PUT except
     // it — the whole point is that a no-op run costs no class-A ops per tile.
     expect(store.puts).toEqual([TILE_MANIFEST_KEY]);

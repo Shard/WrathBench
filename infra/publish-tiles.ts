@@ -17,6 +17,15 @@
  * shapes: `tiles/<mapId>/<row>_<col>.png`, `tiles/<mapId>/<layer>/<z>/…` for
  * each layer in `LOD_LAYERS` (`minimap`, `art`).
  *
+ * No object carries a Cache-Control: Bun's S3 writer has no option for one
+ * (its write options stop at type, disposition, encoding, storage class and
+ * ACL), and the zone's `/tiles/` cache rules set the edge and browser TTLs by
+ * path whatever an object says (`infra/cloudflare/README.md`). That matters
+ * for the art layer, which is re-baked at the same keys while its look is
+ * tuned: what reaches readers after a re-bake is decided at the edge, so a
+ * pass reports which maps' art it changed, and those are the prefixes to
+ * purge.
+ *
  * Skip-unchanged is by content hash, held in a manifest object in the bucket
  * (`tiles/manifest.json`) rather than in a local state file: a re-extraction on
  * another machine rewrites every mtime without changing a byte, and the point
@@ -33,7 +42,7 @@
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { parseTilePath, tileRefPath } from "../runner/viewer/tiles";
+import { isRevalidatedTile, parseTilePath, tileRefPath } from "../runner/viewer/tiles";
 import { LOD_LAYERS } from "../runner/viewer/worldmap";
 
 // ------------------------------------------------------------------ contracts
@@ -198,6 +207,22 @@ export interface TilePublishReport {
    * a number.
    */
   manifestEntries: number | null;
+  /**
+   * Maps whose art layer this pass uploads (or would): the art is re-baked at
+   * the same keys, so each one is a `tiles/<map>/art/` prefix the edge has to
+   * be purged of before readers see the new painting.
+   */
+  artMaps: number[];
+}
+
+/** The maps among `tiles` whose keys are art-layer tiles, ascending. */
+export function artMapsOf(tiles: readonly { key: string }[]): number[] {
+  const maps = new Set<number>();
+  for (const t of tiles) {
+    const ref = parseTilePath(`/${t.key}`);
+    if (ref !== null && isRevalidatedTile(ref)) maps.add(ref.map);
+  }
+  return [...maps].sort((a, b) => a - b);
 }
 
 /**
@@ -229,6 +254,7 @@ export async function publishTiles(
     bytes,
     orphans: plan.orphans.length,
     manifestEntries: raw === null ? null : Object.keys(manifest).length,
+    artMaps: artMapsOf(plan.upload),
   };
   if (opts.dryRun === true) return report;
 
@@ -305,4 +331,11 @@ if (import.meta.main) {
     `publish-tiles: ${verb} ${report.uploaded}, skipped ${report.skipped} unchanged, ` +
       `${(report.bytes / 1024 / 1024).toFixed(2)} MiB, ${report.orphans} orphan(s)`,
   );
+  if (report.artMaps.length > 0) {
+    // Same keys, new paintings: the edge keeps the old ones until purged.
+    console.log(
+      `publish-tiles: art changed on map(s) ${report.artMaps.join(", ")} — purge ` +
+        `${report.artMaps.map((m) => `/tiles/${m}/art/`).join(", ")} at the edge (infra/cloudflare/README.md, step 6)`,
+    );
+  }
 }

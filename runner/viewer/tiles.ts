@@ -24,10 +24,20 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { GRID, LOD_LAYERS, LOD_MAX, type LodLayer, lodGrid, lodTileName, tileName } from "./worldmap";
+import { ART_LAYER, GRID, LOD_LAYERS, LOD_MAX, type LodLayer, lodGrid, lodTileName, tileName } from "./worldmap";
 
 /** Tiles are immutable once extracted: cache them for a year. */
 export const TILE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+
+/**
+ * The art layer is the exception. Its look is tuned by re-baking it at the
+ * same paths, so a year-long immutable copy would keep showing a painting the
+ * bake has since replaced. It is stored but checked before every use: with
+ * the ETag and Last-Modified the route sends beside it, an unchanged tile
+ * costs a 304, and a re-bake shows on the next load.
+ */
+export const ART_TILE_CACHE_CONTROL = "public, no-cache";
+export const ART_TILE_PUBLIC_CACHE_CONTROL = "private, no-cache";
 
 /**
  * What a public-mode deployment sends instead, when the operator has opted
@@ -101,13 +111,54 @@ export function tileRefPath(ref: TileRef): string {
 }
 
 /**
- * The file a tile request names, or null if the path is invalid or no such
- * tile was extracted. The returned path is built from the parsed integers and
- * the layer list, not from the request string.
+ * The file a tile request names and what it is, or null if the path is
+ * invalid or no such tile was extracted. The file path is built from the
+ * parsed integers and the layer list, not from the request string.
  */
-export function resolveTilePath(root: string, path: string): string | null {
+export function resolveTile(root: string, path: string): { file: string; ref: TileRef } | null {
   const ref = parseTilePath(path);
   if (ref === null) return null;
   const file = join(root, relativePath(ref));
-  return existsSync(file) ? file : null;
+  return existsSync(file) ? { file, ref } : null;
+}
+
+/** `resolveTile`'s file alone. */
+export function resolveTilePath(root: string, path: string): string | null {
+  return resolveTile(root, path)?.file ?? null;
+}
+
+/** Whether a tile is re-baked in place and so revalidated rather than cached for good. */
+export function isRevalidatedTile(ref: TileRef): boolean {
+  return ref.lod?.layer === ART_LAYER;
+}
+
+/**
+ * Validators for a tile file, from its size and modification time. A bake
+ * writes through a temp file and a rename, so a re-bake always moves the
+ * mtime and with it the tag; reading the bytes to hash them on every request
+ * would buy nothing more.
+ */
+export function tileValidators(stat: { size: number; mtimeMs: number }): { etag: string; lastModified: string } {
+  return {
+    etag: `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`,
+    lastModified: new Date(Math.floor(stat.mtimeMs / 1000) * 1000).toUTCString(),
+  };
+}
+
+/**
+ * Whether a conditional request already holds the current tile. If-None-Match
+ * wins over If-Modified-Since when both are sent, as RFC 9110 has it; tags
+ * compare weakly, which is all a GET needs.
+ */
+export function tileNotModified(headers: Headers, v: { etag: string; lastModified: string }): boolean {
+  const inm = headers.get("if-none-match");
+  if (inm !== null) {
+    const strip = (t: string): string => t.trim().replace(/^W\//, "");
+    const want = strip(v.etag);
+    return inm.split(",").some((t) => t.trim() === "*" || strip(t) === want);
+  }
+  const ims = headers.get("if-modified-since");
+  if (ims === null) return false;
+  const since = Date.parse(ims);
+  return Number.isFinite(since) && Date.parse(v.lastModified) <= since;
 }

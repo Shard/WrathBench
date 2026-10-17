@@ -191,7 +191,10 @@ one), and the painted art layer sits beside them at the same levels and on the
 same grid; transparent where nothing is painted, its finest level is z1, 128
 px per ADT. The map page lays it over the minimap and crossfades the two by
 zoom (`ART_FADE_START_PX` / `ART_FADE_END_PX` in
-`dashboard/src/lib/mapview.ts`). The
+`dashboard/src/lib/mapview.ts`). Because the art is re-baked in place while its
+look is tuned, the viewer revalidates it instead of caching it for a year, and
+a public re-bake needs a purge of `/tiles/<map>/art/`
+(`infra/cloudflare/README.md`, step 6). The
 spelling is `lodTileName` in `runner/viewer/worldmap.ts`, which the bake,
 the viewer, the publisher and the dashboard all call; it refuses level 0, so
 nothing built on it can write over a native tile.

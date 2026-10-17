@@ -100,7 +100,9 @@ covers the app hostname only. What that leaves open is a crawler directive with
 no bearing on what the site shows (`infra/cloudflare/README.md`, "Open, and the
 operator's"). The tiles are cached by a `/tiles/*` zone rule at a 1-day TTL,
 short because a re-extraction reuses the keys rather than addressing them by
-content. The build flag that points the map at them, and why it is a flag of
+content. The art layer is re-baked at the same keys while its look is tuned,
+so it has a rule of its own with a browser TTL of minutes. A re-bake is purged
+by prefix, and the publisher names which maps' art it changed. The build flag that points the map at them, and why it is a flag of
 its own, is `dashboard/README.md`'s.
 
 ### Bucket layout, atomicity, freshness
