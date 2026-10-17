@@ -18,8 +18,10 @@ the operator's figure in GitHub issue #66.
   `usage` block when the provider sends one: `prompt_tokens`,
   `completion_tokens`, `cached_tokens`, `cache_write_tokens`,
   `reasoning_tokens`, and OpenRouter's own `cost` in credits. OpenCode Go
-  sends no `cost`, so a run there carries an expected figure from its
-  `PROVIDER_PRICES` row and no actual one. The record also names
+  and DeepSeek's own platform send no `cost`, so a run there carries an
+  expected figure from its `PROVIDER_PRICES` row and no actual one. DeepSeek
+  bills double in weekday peak hours, which a dated row cannot express, so
+  its row holds the off-peak rate and says so. The record also names
   the serving `provider` when the body reports one, or OpenCode's response
   headers do (`x-opencode-endpoint-id`, with the upstream's own model id beside
   it), and the first one seen is

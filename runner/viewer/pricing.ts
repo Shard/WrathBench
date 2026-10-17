@@ -453,6 +453,18 @@ export const PROVIDER_PRICES: readonly ProviderPriceRow[] = [
     source: "catalogue",
     note: "models.dev registry listing for the opencode-go provider, read 2026-09-04 (model released the same day). The endpoint reported usage.cost 0 on every live response that day, so the published rate and the observed charge disagree: the actual figure beside this one is the provider's own word, and this is what the listing says it would cost if billed — a free alpha preview is the likely reading, but neither a free nor a billed alpha is asserted here. Append a dated window the day the bill changes",
   },
+  {
+    id: "deepseek/deepseek-flash",
+    apiBase: "https://api.deepseek.com/v1",
+    model: "deepseek-flash",
+    // DeepSeek's own platform. Its responses carry no charge, and its price
+    // moves by time of day, which a date window cannot say: these are the
+    // off-peak rates, and a cache miss bills at the input rate.
+    windows: [{ input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0.15 }],
+    asOf: "2026-10-17",
+    source: "list",
+    note: "DeepSeek published off-peak price for deepseek-flash, read 2026-10-17 (DeepSeek's floating id, V4.1-Flash-1017 from that day). Peak hours, 01:00–04:00 and 06:00–10:00 UTC Monday to Friday outside Chinese public holidays, bill double, so a run that spans them cost up to twice this figure; weekends are off-peak throughout. Metered against the operator's DeepSeek balance",
+  },
   // OpenCode Go at its documented chat base. Go's usage limits are dollar
   // amounts and its chat responses carry no `usage.cost`, so the listing is
   // the only figure these runs get. The free Go slugs (`-free`) need no row.

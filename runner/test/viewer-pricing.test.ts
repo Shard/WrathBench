@@ -379,6 +379,18 @@ describe("the hand-held provider table", () => {
     expect(c.expected.note).toContain("disagree");
   });
 
+  test("a run on DeepSeek's own platform is priced at the off-peak list rate, and the row says peak bills double", () => {
+    const ds: PriceableRun = { model: "deepseek-flash", apiBase: "https://api.deepseek.com/v1", platform: "api.deepseek.com", driver: "openai", harness: "wrathbench" };
+    const p = priceFor(ds)!;
+    expect(p.id).toBe("deepseek/deepseek-flash");
+    expect([p.input, p.output, p.cacheRead, p.cacheWrite]).toEqual([0.15, 0.6, 0.003, 0.15]);
+    expect(p.source).toBe("list");
+    expect(p.asIfMetered).toBe(false);
+    expect(p.note).toContain("bill double");
+    // The same id elsewhere is not this row.
+    expect(providerPrice({ model: "deepseek-flash", apiBase: "https://openrouter.ai/api/v1" })).toBeNull();
+  });
+
   test("the two OpenCode surfaces share a host and are told apart by path, never by platform", () => {
     // `platformOfBase` discards the path, so both `/zen/v1` (free tier) and
     // `/zen/go/v1` (pay-as-you-go) report platform `opencode.ai`. The table
