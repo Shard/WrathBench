@@ -19,7 +19,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { tileBasesFromEnv, tilePath, tileUrl } from "../src/lib/tiles";
+import { lodTileName } from "../../runner/viewer/worldmap";
+import { levelTilePath, tileBasesFromEnv, tilePath, tileUrl, tileUrlFor } from "../src/lib/tiles";
 
 const SRC = join(import.meta.dir, "..", "src");
 const DATA = "https://wrathbench-data.shard.page";
@@ -67,6 +68,34 @@ describe("when the operator turns them on, the base is where they come from", ()
   });
 });
 
+describe("the pyramid's levels", () => {
+  test("level 0 of the minimap is the native tile, at its unchanged path", () => {
+    expect(levelTilePath(0, "minimap", 0, 43, 31)).toBe(tilePath(0, 43, 31));
+  });
+
+  test("levels 1..6 are spelled by the viewer's own lodTileName", () => {
+    expect(levelTilePath(0, "minimap", 1, 21, 15)).toBe(`/tiles/0/${lodTileName("minimap", 1, 21, 15)}`);
+    expect(levelTilePath(571, "minimap", 6, 0, 0)).toBe("/tiles/571/minimap/6/0_0.png");
+    expect(() => levelTilePath(0, "minimap", 7, 0, 0)).toThrow();
+    expect(() => levelTilePath(0, "minimap", 1, 32, 0)).toThrow();
+  });
+
+  test("the art layer has levels 1..6 under its own directory and no level 0", () => {
+    expect(levelTilePath(0, "art", 1, 21, 15)).toBe("/tiles/0/art/1/21_15.png");
+    expect(levelTilePath(1, "art", 6, 0, 0)).toBe(`/tiles/1/${lodTileName("art", 6, 0, 0)}`);
+    // Level 0 is the minimap's native tile and nothing else: the art never
+    // silently falls back to it.
+    expect(() => levelTilePath(0, "art", 0, 43, 31)).toThrow();
+  });
+
+  test("a level goes to the same host as a native tile, and a withheld build asks for neither", () => {
+    const path = levelTilePath(1, "minimap", 3, 2, 5);
+    expect(tileUrlFor(DATA, DATA, path)).toBe(`${DATA}/tiles/1/minimap/3/2_5.png`);
+    expect(tileUrlFor("", "", path)).toBe("/tiles/1/minimap/3/2_5.png");
+    expect(tileUrlFor("", DATA, path)).toBeNull();
+  });
+});
+
 describe("both bases come from the build's env, and nothing else", () => {
   test("unset, blank and non-string are all empty", () => {
     expect(tileBasesFromEnv({})).toEqual({ tiles: "", snapshot: "" });
@@ -94,9 +123,12 @@ describe("one place builds it", () => {
 
   test("the map honours the withheld case rather than firing requests that 404", () => {
     // Two guards, and the outer one is what keeps a withheld build from
-    // creating an Image per visible cell on every pan.
+    // creating an Image per visible cell, at any pyramid level, on every pan.
     const src = readFileSync(join(SRC, "pages", "MapPage.tsx"), "utf8");
-    expect(src).toContain("const useTiles = !NO_TILE_BASE && g.size >= TILE_MIN_PX;");
-    expect(src).toMatch(/const src = tileSrc\(map, row, col\);\s*\n\s*if \(src !== null\) \{/);
+    // Both layers sit behind the one guard: the art is never asked for either.
+    expect(src).toMatch(
+      /if \(NO_TILE_BASE\) \{\s*drawLattice\(ctx, 0, true\);\s*return;\s*\}[\s\S]*drawLevel\(ctx, map, MINIMAP_LAYER, f\.minimap\);[\s\S]*drawLevel\(art, map, ART_LAYER, f\.art\);/,
+    );
+    expect(src).toMatch(/const src = tileSrc\(map, layer, z, row, col\);\s*\n\s*if \(src !== null\) \{/);
   });
 });

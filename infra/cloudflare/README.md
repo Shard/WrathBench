@@ -106,7 +106,7 @@ the dashboard does the same thing if you would rather not scope a token for it.
 The app and the data are different origins, so without this every fetch the
 SPA makes fails in the browser with nothing in the bucket's logs to show for it.
 
-### 4. Add the three cache rules
+### 4. Add the four cache rules
 
 Zone `shard.page` → **Caching → Cache Rules**, in this order (first match wins).
 Cloudflare does **not** cache JSON by default, so without these every public
@@ -121,14 +121,26 @@ request is a billed read against the bucket.
    year**, **Browser TTL 1 year**. These are content-addressed and never
    rewritten under their own key, so a long TTL is safe by construction.
 3. **Tiles** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path
-   starts with "/tiles/"` → eligible for cache, **Edge TTL 1 day**, **Browser
-   TTL 1 day**. Not content-addressed: a re-extraction reuses the same keys, so
-   a day is the window in which a re-upload is not yet visible, and a purge of
-   the prefix closes it sooner.
+   starts with "/tiles/"` *and* `URI Path does not contain "/art/"` → eligible
+   for cache, **Edge TTL 1 day**, **Browser TTL 1 day**. Not content-addressed:
+   a re-extraction reuses the same keys, so a day is the window in which a
+   re-upload is not yet visible, and a purge of the prefix closes it sooner.
+4. **Art tiles** — `Hostname equals wrathbench-data.shard.page` *and* `URI
+   Path starts with "/tiles/"` *and* `URI Path contains "/art/"` → eligible for
+   cache, **Edge TTL 1 day**, **Browser TTL 5 minutes**. The painted art layer
+   is re-baked at the same keys while its look is tuned, so rule 3's day in
+   the browser would show a reader the old painting long after the purge in
+   step 6 has cleared the edge. R2 sends an ETag and Last-Modified with each
+   object, so the browser's recheck after five minutes is a conditional
+   request rather than a fresh download. Rules 3 and 4 do not overlap, so
+   their order does not matter.
 
-All three rules set the TTL **explicitly by path** rather than respecting an origin
+All four rules set the TTL **explicitly by path** rather than respecting an origin
 header, and that is not a style choice: no published object carries a
-`Cache-Control` at all, because Bun's S3 writer cannot send one. "Respect origin
+`Cache-Control` at all, because Bun's S3 writer cannot send one (Bun 1.4's
+write options stop at type, disposition, encoding, storage class and ACL).
+Even an object that did carry one would be overridden on these paths, since
+each rule sets both the edge and the browser TTL. "Respect origin
 TTL" would therefore respect nothing.
 
 **A missing cache rule is the only way this shape costs money.** Without it every
@@ -191,17 +203,34 @@ kubectl -n wrathbench logs -f deployment/wrathbench-publisher
 The public map draws real minimap tiles. They are not
 part of a snapshot pass and never become one — this is the step that puts them
 in the bucket, run from a checkout with `data/minimap` populated by the
-extraction in `minimap/`, with the same `S3_*` credentials as the publisher:
+extraction in `minimap/` and the zoomed-out levels and art layer its bakes
+write, with the same `S3_*` credentials as the publisher. Those are keyed under
+the same `/tiles/` prefix (`tiles/<map>/minimap/<z>/<row>_<col>.png`,
+`tiles/<map>/art/<z>/<row>_<col>.png`), so rule 3 and the CORS policy already
+cover them:
 
 ```
 bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
 bun infra/publish-tiles.ts --upload
 ```
 
+Art tiles are opt-in: a pass uploads them only with `--include-art`, which
+nothing passes on its own (not `bun ship --tiles`), and whether they are
+published is pending the operator's decision. A routine pass says how many it
+left out.
+
 `bun ship --tiles` runs the same upload as part of a deploy. The skip-unchanged
 manifest (`tiles/manifest.json`) lives in the bucket, so a re-run with nothing
-re-extracted PUTs nothing; a re-extraction reuses keys, so a re-upload wants a
-purge of the `/tiles/` prefix to beat rule 3's day.
+re-extracted PUTs nothing; a re-extraction (and the `bake --force` that has to
+follow it) reuses keys, so a re-upload wants a purge of the `/tiles/` prefix to
+beat rule 3's day.
+
+Once art is published, an art re-bake is the common case of that, since the
+art's look is tuned in place. An `--include-art` upload ends by naming the
+maps whose art it changed (`art changed
+on map(s) …`). Purge `/tiles/<map>/art/` for each of those. The edge then
+serves the new painting at once, and a browser that already holds the old one
+picks it up within rule 4's five minutes.
 
 Then set `WRATHBENCH_TILES_BASE=https://wrathbench-data.shard.page` in `.env`,
 which is what makes the build in step 7 ask for them. It is a separate flag from
@@ -250,7 +279,8 @@ curl -sI https://wrathbench-data.shard.page/v1/manifest.json | grep -i 'cf-cache
 The second (repeat) request must say `cf-cache-status: HIT` and
 `cache-control: ...max-age=30`. A `MISS`, `DYNAMIC` or `BYPASS` on the repeat
 means rule 1 is not in effect. Repeat against a
-`/v1/snap/<ver>/runs.json` key for the year.
+`/v1/snap/<ver>/runs.json` key for the year, and, once art is published,
+against a `/tiles/<map>/art/…` key for rule 4's five minutes (`max-age=300`).
 
 **The generation**, read through the public hostname rather than the S3 API:
 

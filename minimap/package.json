@@ -7,6 +7,8 @@
   "module": "src/extract.ts",
   "scripts": {
     "extract": "bun src/extract.ts",
+    "bake": "bun src/bake.ts",
+    "bake-art": "bun src/artbake.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit -p ."
   }

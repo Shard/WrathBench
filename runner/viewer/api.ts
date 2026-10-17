@@ -97,10 +97,15 @@ import { hostAllowlist, hostGuard } from "./host-guard";
 import { writeGuard } from "./write-guard";
 import { e90TokenProfile } from "./drafts";
 import {
+  ART_TILE_CACHE_CONTROL,
+  ART_TILE_PUBLIC_CACHE_CONTROL,
   TILE_CACHE_CONTROL,
   TILE_PUBLIC_CACHE_CONTROL,
   TILE_PUBLIC_ROBOTS,
-  resolveTilePath,
+  isRevalidatedTile,
+  resolveTile,
+  tileNotModified,
+  tileValidators,
 } from "./tiles";
 import { SEGMENT_MARKS, playtimeMs, segmentsFrom } from "./sessions";
 import {
@@ -1650,21 +1655,35 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // deployment in.
       const asPublic = publicMode && tilesPublic;
       if (publicMode && !asPublic) return withheld();
-      const file = resolveTilePath(tilesDir, path);
+      const hit = resolveTile(tilesDir, path);
       // A tile that was never extracted is a 404 the client expects and draws
       // around; it is not an error worth a body. A miss is never cached: the
       // extraction may write that tile a minute from now.
-      if (file === null) {
+      if (hit === null) {
         return new Response("no such tile", {
           status: 404,
           ...(asPublic ? { headers: { "x-robots-tag": TILE_PUBLIC_ROBOTS } } : {}),
         });
       }
-      return new Response(Bun.file(file), {
+      const robots: Record<string, string> = asPublic ? { "x-robots-tag": TILE_PUBLIC_ROBOTS } : {};
+      // The art is re-baked in place, so it revalidates (`tiles.ts`); every
+      // other tile is immutable and needs no validator.
+      if (isRevalidatedTile(hit.ref)) {
+        const v = tileValidators(statSync(hit.file));
+        const headers = {
+          "cache-control": asPublic ? ART_TILE_PUBLIC_CACHE_CONTROL : ART_TILE_CACHE_CONTROL,
+          etag: v.etag,
+          "last-modified": v.lastModified,
+          ...robots,
+        };
+        if (tileNotModified(req.headers, v)) return new Response(null, { status: 304, headers });
+        return new Response(Bun.file(hit.file), { headers: { "content-type": "image/png", ...headers } });
+      }
+      return new Response(Bun.file(hit.file), {
         headers: {
           "content-type": "image/png",
           "cache-control": asPublic ? TILE_PUBLIC_CACHE_CONTROL : TILE_CACHE_CONTROL,
-          ...(asPublic ? { "x-robots-tag": TILE_PUBLIC_ROBOTS } : {}),
+          ...robots,
         },
       });
     }

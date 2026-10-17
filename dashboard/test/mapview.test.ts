@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
-import { TILE_PX, TILE_SIZE, worldToPixel } from "../../runner/viewer/worldmap";
+import { LOD_MAX, TILE_PX, TILE_SIZE, lodGrid, worldToPixel } from "../../runner/viewer/worldmap";
 import { positionsAt } from "../src/lib/replay";
 import {
   type Pip,
@@ -31,17 +31,34 @@ import {
   hueOf,
   latticeLines,
   STALE_MS,
+  ART_FADE_END_PX,
+  ART_FADE_START_PX,
+  TILE_CACHE_MAX,
+  artLevel,
+  frameLevels,
+  minimapAlpha,
+  pxPerAdt,
   TILE_MIN_PX,
+  levelCellPx,
+  levelCells,
+  mapChips,
   mapCounts,
+  mapParam,
+  worldView,
   mapName,
   pipName,
   positionAgeMs,
   project,
   stepPips,
   syncPips,
+  tileLevel,
   visibleGrid,
   worldPerPixel,
   zoomAt,
+  pinchView,
+  isDoubleTap,
+  DOUBLE_TAP_MS,
+  DOUBLE_TAP_PX,
 } from "../src/lib/mapview";
 
 /* The reactive build of solid-js stands behind this name for every dashboard
@@ -186,6 +203,57 @@ describe("zoomAt", () => {
   });
 });
 
+describe("pinchView", () => {
+  const v = { scale: 0.4, ox: 33, oy: -12 };
+  const world = (view: { scale: number; ox: number; oy: number }, p: { x: number; y: number }) => ({ px: (p.x - view.ox) / view.scale, py: (p.y - view.oy) / view.scale });
+
+  test("the ground under each finger stays under it as they spread", () => {
+    const from = [{ x: 100, y: 200 }, { x: 200, y: 200 }] as const;
+    const to = [{ x: 50, y: 200 }, { x: 250, y: 200 }] as const;
+    const next = pinchView(v, from, to);
+    expect(next.scale).toBeCloseTo(0.8, 9);
+    for (const i of [0, 1] as const) {
+      expect(world(next, to[i]).px).toBeCloseTo(world(v, from[i]).px, 6);
+      expect(world(next, to[i]).py).toBeCloseTo(world(v, from[i]).py, 6);
+    }
+  });
+
+  test("two fingers moving together pan without zooming", () => {
+    const from = [{ x: 100, y: 100 }, { x: 160, y: 140 }] as const;
+    const to = [{ x: 130, y: 90 }, { x: 190, y: 130 }] as const;
+    const next = pinchView(v, from, to);
+    expect(next.scale).toBe(v.scale);
+    expect(next.ox).toBeCloseTo(v.ox + 30, 9);
+    expect(next.oy).toBeCloseTo(v.oy - 10, 9);
+  });
+
+  test("the midpoint's ground follows the midpoint when the zoom hits the clamp", () => {
+    const top = { scale: MAX_SCALE, ox: 0, oy: 0 };
+    const from = [{ x: 100, y: 100 }, { x: 110, y: 100 }] as const;
+    const to = [{ x: 0, y: 150 }, { x: 400, y: 150 }] as const;
+    const next = pinchView(top, from, to);
+    expect(next.scale).toBe(MAX_SCALE);
+    expect(world(next, { x: 200, y: 150 }).px).toBeCloseTo(world(top, { x: 105, y: 100 }).px, 6);
+  });
+
+  test("fingers that start on one spot do not divide by zero", () => {
+    const p = { x: 10, y: 10 };
+    const next = pinchView(v, [p, p], [{ x: 0, y: 0 }, { x: 40, y: 0 }]);
+    expect(next.scale).toBe(v.scale);
+    expect(Number.isFinite(next.ox) && Number.isFinite(next.oy)).toBe(true);
+  });
+});
+
+describe("isDoubleTap", () => {
+  test("a second tap soon after and close by is a double tap", () => {
+    const first = { x: 100, y: 100, t: 1000 };
+    expect(isDoubleTap(null, first)).toBe(false);
+    expect(isDoubleTap(first, { x: 110, y: 95, t: 1000 + DOUBLE_TAP_MS })).toBe(true);
+    expect(isDoubleTap(first, { x: 110, y: 95, t: 1001 + DOUBLE_TAP_MS })).toBe(false);
+    expect(isDoubleTap(first, { x: 100 + DOUBLE_TAP_PX + 1, y: 100, t: 1100 })).toBe(false);
+  });
+});
+
 describe("visibleGrid", () => {
   test("never asks for a tile outside the 64×64 world", () => {
     const g = visibleGrid({ scale: 0.02, ox: 500, oy: 500 }, SCREEN);
@@ -199,6 +267,195 @@ describe("visibleGrid", () => {
     const g = visibleGrid({ scale: 1, ox: 5000, oy: 5000 }, SCREEN);
     expect(g.row0).toBe(0);
     expect(g.col0).toBe(0);
+  });
+
+  test("at a pyramid level it counts that level's cells and clamps to that level's grid", () => {
+    const view = { scale: 0.05, ox: -200, oy: -300 };
+    const g = visibleGrid(view, SCREEN, 3);
+    expect(g.size).toBeCloseTo(TILE_PX * 8 * 0.05, 9);
+    expect(g.row1).toBeLessThan(lodGrid(3));
+    expect(g.col1).toBeLessThan(lodGrid(3));
+    // The level-3 cell under a screen point holds the native cell under it.
+    const native = visibleGrid(view, SCREEN, 0);
+    expect(g.row0).toBe(native.row0 >> 3);
+    expect(g.col0).toBe(native.col0 >> 3);
+    const world = visibleGrid({ scale: 0.01, ox: 0, oy: 0 }, SCREEN, LOD_MAX);
+    expect(world).toMatchObject({ row0: 0, row1: 0, col0: 0, col1: 0 });
+  });
+});
+
+/*
+ * Which pyramid level a frame draws. The two promises are that the native
+ * tiles draw exactly where they used to on an ordinary screen, and that no
+ * level ever puts more on screen than the tile cache holds — together with the
+ * coarser level drawn under it while it loads — on any screen at any zoom.
+ */
+describe("tileLevel", () => {
+  const SCREENS = {
+    phone: { w: 360, h: 740 },
+    laptop: { w: 1280, h: 800 },
+    hd: { w: 1920, h: 1080 },
+    qhd: { w: 2560, h: 1440 },
+    uhd: { w: 3840, h: 2160 },
+    uhd8k: { w: 7680, h: 4320 },
+  };
+  const SCALES: number[] = [];
+  for (let s = MIN_SCALE; s <= MAX_SCALE; s *= 1.07) SCALES.push(s);
+  SCALES.push(MAX_SCALE, TILE_MIN_PX / TILE_PX);
+
+  test("native tiles from TILE_MIN_PX up on an ordinary screen, as before the pyramid", () => {
+    for (const screen of [SCREENS.phone, SCREENS.laptop, SCREENS.hd]) {
+      for (const s of SCALES) {
+        if (s * TILE_PX >= TILE_MIN_PX) expect(tileLevel(s, screen)).toBe(0);
+        else expect(tileLevel(s, screen)).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("a level and the one above it always fit the cache, on every screen at every zoom", () => {
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of SCALES) {
+        const z = tileLevel(s, screen);
+        expect(z).toBeGreaterThanOrEqual(0);
+        expect(z).toBeLessThanOrEqual(LOD_MAX);
+        expect(levelCells(z, s, screen) + levelCells(z + 1, s, screen)).toBeLessThanOrEqual(TILE_CACHE_MAX);
+      }
+    }
+  });
+
+  test("it is the finest level that does: a finer one is too small or too many", () => {
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of SCALES) {
+        const z = tileLevel(s, screen);
+        if (z === 0) continue;
+        const finer = z - 1;
+        const tooSmall = levelCellPx(s, finer) < TILE_MIN_PX;
+        const tooMany = levelCells(finer, s, screen) + levelCells(z, s, screen) > TILE_CACHE_MAX;
+        expect(tooSmall || tooMany).toBe(true);
+      }
+    }
+  });
+
+  test("a pyramid level's cells stay at least TILE_MIN_PX until the world is one tile", () => {
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of SCALES) {
+        const z = tileLevel(s, screen);
+        if (z < LOD_MAX) expect(levelCellPx(s, z)).toBeGreaterThanOrEqual(TILE_MIN_PX);
+      }
+    }
+  });
+
+  test("the worst case it budgets for bounds every pan", () => {
+    // levelCells is offset-free on purpose (a pan never changes the level);
+    // check it really is an upper bound of what visibleGrid hands the renderer.
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of [0.011, 0.03, 0.1, 0.2, 0.38, 1, 3]) {
+        const z = tileLevel(s, screen);
+        for (const [ox, oy] of [
+          [0, 0],
+          [-1234.5, -987.25],
+          [-7000.3, -4000.9],
+          [313.7, -2222.2],
+        ] as [number, number][]) {
+          const g = visibleGrid({ scale: s, ox: ox * s * 10, oy: oy * s * 10 }, screen, z);
+          const n = (g.row1 - g.row0 + 1) * (g.col1 - g.col0 + 1);
+          expect(n).toBeLessThanOrEqual(levelCells(z, s, screen));
+        }
+      }
+    }
+  });
+
+  test("with the art drawn too, both layers and both underlays share the one cache", () => {
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of SCALES) {
+        const z = tileLevel(s, screen, true);
+        const a = artLevel(z);
+        const total =
+          levelCells(z, s, screen) + levelCells(z + 1, s, screen) + levelCells(a, s, screen) + levelCells(a + 1, s, screen);
+        expect(total).toBeLessThanOrEqual(TILE_CACHE_MAX);
+      }
+    }
+  });
+
+  test("the art's share does not move the native switch on an ordinary screen", () => {
+    for (const screen of [SCREENS.phone, SCREENS.laptop, SCREENS.hd]) {
+      expect(tileLevel(TILE_MIN_PX / TILE_PX, screen, true)).toBe(0);
+    }
+  });
+
+  test("zoomed right out the whole world is one tile, and a continent overview is real ground", () => {
+    expect(tileLevel(MIN_SCALE, SCREENS.laptop)).toBe(LOD_MAX);
+    // Eastern Kingdoms (~42 tiles tall) fills a laptop stage at about 0.07:
+    // level 3, eight ADTs a tile, not the bare lattice this used to be.
+    expect(tileLevel(0.07, SCREENS.laptop)).toBe(3);
+  });
+});
+
+/*
+ * The crossfade between the painted map and the minimap. Its two numbers are
+ * the tuning knobs; these pin the shape, not the numbers, so retuning them is
+ * a one-line edit that keeps this suite green.
+ */
+describe("the art/minimap crossfade", () => {
+  test("all art at and below the start, all minimap at and above the end", () => {
+    expect(minimapAlpha(0)).toBe(0);
+    expect(minimapAlpha(ART_FADE_START_PX)).toBe(0);
+    expect(minimapAlpha(ART_FADE_START_PX / 2)).toBe(0);
+    expect(minimapAlpha(ART_FADE_END_PX)).toBe(1);
+    expect(minimapAlpha(ART_FADE_END_PX * 10)).toBe(1);
+    expect(minimapAlpha(Number.NaN)).toBe(0);
+  });
+
+  test("rises monotonically and smoothly, halfway at the geometric mean of the ends", () => {
+    let prev = 0;
+    for (let p = ART_FADE_START_PX; p <= ART_FADE_END_PX; p *= 1.01) {
+      const a = minimapAlpha(p);
+      expect(a).toBeGreaterThanOrEqual(prev);
+      // Smooth: no step bigger than a gentle notch anywhere along the way.
+      expect(a - prev).toBeLessThan(0.02);
+      prev = a;
+    }
+    expect(minimapAlpha(Math.sqrt(ART_FADE_START_PX * ART_FADE_END_PX))).toBeCloseTo(0.5, 9);
+    // Flat at both ends, so neither end of the fade shows as a kink.
+    expect(minimapAlpha(ART_FADE_START_PX * 1.01)).toBeLessThan(0.001);
+    expect(minimapAlpha(ART_FADE_END_PX / 1.01)).toBeGreaterThan(0.999);
+  });
+
+  test("pixels per ADT is a native tile's on-screen size", () => {
+    expect(pxPerAdt(1)).toBe(TILE_PX);
+    expect(pxPerAdt(0.25)).toBe(64);
+  });
+
+  test("the art is never asked for at level 0: its finest is z1, scaled up at the native zoom", () => {
+    expect(artLevel(0)).toBe(1);
+    expect(artLevel(1)).toBe(1);
+    expect(artLevel(4)).toBe(4);
+  });
+
+  test("a frame draws the minimap always and the art only while it has weight", () => {
+    // Every scale here is derived from the two fade constants, so retuning
+    // them is a one-line edit that leaves this test meaning the same thing.
+    const screen = { w: 1280, h: 800 };
+    const zoomedIn = frameLevels(ART_FADE_END_PX / TILE_PX, screen);
+    expect(zoomedIn.art).toBeNull();
+    expect(zoomedIn.minimapAlpha).toBe(1);
+    // Halfway through the fade both layers draw, the art at its own level.
+    const mid = frameLevels(Math.sqrt(ART_FADE_START_PX * ART_FADE_END_PX) / TILE_PX, screen);
+    expect(mid.minimapAlpha).toBeGreaterThan(0);
+    expect(mid.minimapAlpha).toBeLessThan(1);
+    expect(mid.art).toBe(artLevel(mid.minimap));
+    // Zoomed out past the start: the art covers everything it paints, and the
+    // minimap still draws under it for wherever it does not.
+    const continent = frameLevels(ART_FADE_START_PX / 2 / TILE_PX, screen);
+    expect(continent.minimapAlpha).toBe(0);
+    expect(continent.art).toBe(artLevel(continent.minimap));
+    expect(continent.minimap).toBeGreaterThan(0);
+    // At the native zoom, while the art is still fading out, it draws z1 scaled up.
+    if (TILE_MIN_PX < ART_FADE_END_PX) {
+      const native = frameLevels(TILE_MIN_PX / TILE_PX, screen);
+      expect(native.minimap).toBe(0);
+      expect(native.art).toBe(1);
+    }
   });
 });
 
@@ -318,11 +575,13 @@ describe("the empty map's default view", () => {
   const DESKTOP = { w: 1280, h: 800 };
   const PHONE = { w: 360, h: 740 };
 
-  test("draws tiles rather than the bare lattice", () => {
-    // The whole point of not framing the continent: below this a 256px tile is
-    // suppressed and the reader gets an empty grid where a map should be.
+  test("draws the native tiles, the full-detail map of where characters start", () => {
+    // Every zoom draws real ground now; this frame is the one where it is the
+    // native tiles rather than a baked level.
     expect(DEFAULT_SCALE * TILE_PX).toBeGreaterThanOrEqual(TILE_MIN_PX);
     expect(defaultView(DESKTOP).scale).toBe(DEFAULT_SCALE);
+    expect(tileLevel(DEFAULT_SCALE, DESKTOP)).toBe(0);
+    expect(tileLevel(DEFAULT_SCALE, PHONE)).toBe(0);
   });
 
   test("holds the starter zones on screen at both sizes", () => {
@@ -379,8 +638,14 @@ describe("chooseMap", () => {
 
   test("a chip click outranks both stickiness and the busiest map", () => {
     expect(chooseMap(MAPS, 0, 1, null)).toBe(1);
-    // A pin for a map nothing is on is ignored rather than blanking the canvas.
-    expect(chooseMap(MAPS, 0, 530, null)).toBe(0);
+  });
+
+  test("a pin holds on a map nobody is on: a `/map?map=530` link on any fleet", () => {
+    // Every map draws — its tiles, or the lattice — so an empty pinned map is
+    // a map to look at, not the blank canvas this once guarded against.
+    expect(chooseMap(MAPS, 0, 530, null)).toBe(530);
+    expect(chooseMap([], null, 1, null)).toBe(1);
+    expect(chooseMap([], 1, 1, null)).toBe(1);
   });
 
   test("the replay cursor's map wins over where we were", () => {
@@ -394,6 +659,72 @@ describe("chooseMap", () => {
     expect(chooseMap(MAPS, first, null, null)).toBe(first);
     const pinned = chooseMap(MAPS, first, 1, null);
     expect(chooseMap(MAPS, pinned, 1, null)).toBe(pinned);
+  });
+});
+
+describe("the map link", () => {
+  test("?map=<id> is bare digits or no pin at all", () => {
+    expect(mapParam("1")).toBe(1);
+    expect(mapParam("0")).toBe(0);
+    expect(mapParam("571")).toBe(571);
+    expect(mapParam(["530", "1"])).toBe(530);
+    for (const bad of [undefined, "", "-1", "1.5", "abc", "1a", " 1", "0x1f", "1e3", "1234567890"]) {
+      expect(mapParam(bad)).toBeNull();
+    }
+  });
+
+  test("the chips keep a way back from a pinned map nobody is on", () => {
+    const busy: [number, number][] = [
+      [0, 3],
+      [1, 1],
+    ];
+    expect(mapChips(busy, 1)).toEqual(busy);
+    expect(mapChips([[0, 3]], 571)).toEqual([
+      [0, 3],
+      [571, 0],
+    ]);
+    // Alone on a quiet fleet there is nothing to switch to: one chip, which the page hides.
+    expect(mapChips([], 1)).toEqual([[1, 0]]);
+  });
+
+  test("another map opens on the whole grid; the default map keeps its starter frame", () => {
+    for (const screen of [
+      { w: 1280, h: 800 },
+      { w: 360, h: 740 },
+    ]) {
+      const v = defaultView(screen, 1);
+      expect(v).toEqual(worldView(screen));
+      const side = 64 * TILE_PX;
+      expect(side * v.scale).toBeLessThanOrEqual(Math.min(screen.w, screen.h) + 1e-9);
+      // The grid's corners are on screen.
+      expect(v.ox).toBeGreaterThanOrEqual(-1e-9);
+      expect(v.oy).toBeGreaterThanOrEqual(-1e-9);
+      expect(v.ox + side * v.scale).toBeLessThanOrEqual(screen.w + 1e-9);
+      expect(v.oy + side * v.scale).toBeLessThanOrEqual(screen.h + 1e-9);
+      expect(defaultView(screen, DEFAULT_MAP)).toEqual(defaultView(screen));
+      expect(defaultView(screen).scale).toBe(DEFAULT_SCALE);
+    }
+  });
+
+  test("a pinned map with nobody on it is the active map, on an empty feed and a busy one", () => {
+    createRoot((dispose) => {
+      const [feed] = createSignal<readonly AgentPosition[]>([]);
+      const [pinned] = createSignal<number | null>(530);
+      const state = createMapState({ feed, track: () => undefined, pinned, selectedId: () => null });
+      expect(state.activeMap()).toBe(530);
+      dispose();
+    });
+    createRoot((dispose) => {
+      const [feed] = createSignal<readonly AgentPosition[]>([agent("a", 0, 0, 0)]);
+      const [pinned] = createSignal<number | null>(1);
+      const state = createMapState({ feed, track: () => undefined, pinned, selectedId: () => null });
+      expect(state.activeMap()).toBe(1);
+      expect(mapChips(state.maps(), state.activeMap())).toEqual([
+        [0, 1],
+        [1, 0],
+      ]);
+      dispose();
+    });
   });
 });
 
@@ -664,6 +995,16 @@ describe("replayHrefFor", () => {
  */
 
 describe("latticeLines", () => {
+  test("at a pyramid level the lines are that level's cell boundaries", () => {
+    const view = { scale: 0.05, ox: 0, oy: 0 };
+    const l = latticeLines(view, SCREEN, 2);
+    const size = TILE_PX * 4 * 0.05;
+    expect(l.xs[1]! - l.xs[0]!).toBeCloseTo(size, 9);
+    expect(l.ys[1]! - l.ys[0]!).toBeCloseTo(size, 9);
+    // The whole level-2 world is 16 cells a side: never more than 17 lines.
+    expect(latticeLines({ scale: 0.01, ox: 0, oy: 0 }, SCREEN, 2).xs.length).toBe(17);
+  });
+
   test("the whole world is 130 segments, not 4096 rects", () => {
     // Zoomed out below the tile threshold the old loop stroked every cell of the
     // 64×64 grid; one line per boundary is 65 + 65.

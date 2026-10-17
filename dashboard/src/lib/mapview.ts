@@ -13,7 +13,7 @@
  */
 
 import type { AgentPosition } from "@viewer/api-types";
-import { GRID, TILE_PX, TILE_SIZE, tileToWorld, worldToPixel } from "@viewer/worldmap";
+import { GRID, LOD_MAX, TILE_PX, TILE_SIZE, lodGrid, tileToWorld, worldToPixel } from "@viewer/worldmap";
 import { effortLabel, modelDisplay } from "./format";
 
 export const MIN_SCALE = 0.01;
@@ -73,8 +73,18 @@ export function mapName(map: number): string {
   return MAP_NAMES[map] ?? `map ${map}`;
 }
 
-/** Below this on-screen tile size a 256px tile carries no information. */
+/**
+ * The smallest a 256px tile is drawn on screen. Below it the map draws the
+ * next pyramid level up instead, whose tile covers four times the ground at
+ * the same pixel count (`tileLevel`).
+ */
 export const TILE_MIN_PX = 96;
+
+/**
+ * Tile images the map page keeps, misses included: an LRU, so a pan does not
+ * re-request what it just drew and an unextracted tile is asked for once.
+ */
+export const TILE_CACHE_MAX = 512;
 
 export interface View {
   scale: number;
@@ -139,30 +149,62 @@ export function fitTo(screen: Screen, list: readonly Placeable[], pad = 240): Vi
  * Where the map looks when it has nothing to look at.
  *
  * An empty feed is the ordinary state of a quiet fleet, and it is what a first
- * visitor hits; the page has to draw a map anyway. `fitTo`'s empty branch is
- * the wrong answer for it — the whole world at 0.06 is four times under
- * `TILE_MIN_PX`, so every tile is suppressed and the reader gets a bare
- * lattice. A continent overview of Eastern Kingdoms has the same problem: at
- * roughly 0.1 no tile is drawn either. There is no zoom at which "the whole
- * continent" and "real tiles" are both true, so the default frames the place
- * instead of the continent.
+ * visitor hits; the page has to draw a map anyway. It frames the starter
+ * country every character begins in: Dun Morogh (Anvilmar, row 43.7) and
+ * Elwynn (Northshire and Stormwind, row ~48.7) sit five tiles apart on the
+ * same column, and a frame centred between them holds both — on a phone as
+ * well as a desktop — at a scale where the native tiles draw, so the first
+ * thing a reader sees is the full-detail map of where characters start. When
+ * a position arrives the ordinary fit takes over and this is forgotten.
  *
- * That place is the starter country every character begins in: Dun Morogh
- * (Anvilmar, row 43.7) and Elwynn (Northshire and Stormwind, row ~48.7) sit
- * five tiles apart on the same column, and a frame centred between them holds
- * both at a scale where tiles draw — on a phone as well as a desktop. When a
- * position arrives the ordinary fit takes over and this is forgotten.
+ * Zooming out from it now shows real ground at every scale, the whole
+ * continent included, from the baked pyramid (`tileLevel`). That used to be
+ * impossible — below `TILE_MIN_PX` the page drew a bare lattice — and was
+ * then part of the reason the default frames a place and not the continent.
+ * A continent overview would now be a real choice of default; this one is
+ * kept for the reason above.
  */
 export const DEFAULT_MAP = 0;
 const DEFAULT_ROW = 46.2;
 const DEFAULT_COL = 31.1;
-/** Above `TILE_MIN_PX / TILE_PX`, so the default frame draws tiles and not the lattice. */
+/** At or above `TILE_MIN_PX / TILE_PX`, so the default frame draws the native tiles. */
 export const DEFAULT_SCALE = 0.4;
 
-export function defaultView(screen: Screen): View {
+export function defaultView(screen: Screen, map: number = DEFAULT_MAP): View {
+  if (map !== DEFAULT_MAP) return worldView(screen);
   const w = tileToWorld(DEFAULT_ROW, DEFAULT_COL);
   const p = worldToPixel(w.x, w.y);
   return centreOn(screen, p.px, p.py, DEFAULT_SCALE);
+}
+
+/**
+ * The whole 64×64 grid, fitted to the stage. It is what any other map opens
+ * on with nobody to fit to (a `/map?map=1` link on a quiet fleet): nothing
+ * here knows where a continent sits in its grid, and the pyramid draws real
+ * ground at this zoom, so the whole of it is the honest first frame.
+ */
+export function worldView(screen: Screen): View {
+  const side = GRID * TILE_PX;
+  return centreOn(screen, side / 2, side / 2, Math.min(screen.w, screen.h) / side);
+}
+
+/**
+ * The map a `/map?map=<id>` link names, or null. Bare digits only, as the
+ * server's map ids are: anything else is no pin rather than a guess.
+ */
+export function mapParam(raw: string | string[] | undefined): number | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v === undefined || !/^\d{1,9}$/.test(v)) return null;
+  return Number(v);
+}
+
+/**
+ * The chips: every map with someone on it, and the map on screen when nobody
+ * is — a pinned map a reader opened by link still needs a chip, or there is
+ * no way back from it without editing the URL.
+ */
+export function mapChips(maps: readonly [number, number][], active: number): [number, number][] {
+  return maps.some(([id]) => id === active) ? [...maps] : [...maps, [active, 0]];
 }
 
 /** Zoom about a screen point, keeping the world point under it in place. */
@@ -175,13 +217,165 @@ export function zoomAt(view: View, sx: number, sy: number, factor: number): View
   };
 }
 
-/** The inclusive tile range a view puts on screen, clamped to the world grid. */
+/** One finger on screen, in canvas pixels. */
+export interface Touch {
+  x: number;
+  y: number;
+}
+
+/**
+ * A two-finger pinch, measured from where it started rather than frame by
+ * frame, so rounding never accumulates: the view scales by how far the fingers
+ * have spread, and the world point that was under their midpoint follows the
+ * midpoint, which is a pan when the spread does not change.
+ */
+export function pinchView(start: View, from: readonly [Touch, Touch], to: readonly [Touch, Touch]): View {
+  const d0 = Math.hypot(from[1].x - from[0].x, from[1].y - from[0].y);
+  const d1 = Math.hypot(to[1].x - to[0].x, to[1].y - to[0].y);
+  const factor = d0 < 1 ? 1 : d1 / d0;
+  const m0 = { x: (from[0].x + from[1].x) / 2, y: (from[0].y + from[1].y) / 2 };
+  const m1 = { x: (to[0].x + to[1].x) / 2, y: (to[0].y + to[1].y) / 2 };
+  const z = zoomAt(start, m0.x, m0.y, factor);
+  return { scale: z.scale, ox: z.ox + (m1.x - m0.x), oy: z.oy + (m1.y - m0.y) };
+}
+
+/** How close in time and place a second tap must land to zoom in, as a phone map does. */
+export const DOUBLE_TAP_MS = 300;
+export const DOUBLE_TAP_PX = 30;
+
+export function isDoubleTap(prev: (Touch & { t: number }) | null, now: Touch & { t: number }): boolean {
+  return prev !== null && now.t - prev.t <= DOUBLE_TAP_MS && Math.hypot(now.x - prev.x, now.y - prev.y) <= DOUBLE_TAP_PX;
+}
+
+/** How wide one cell of pyramid level `z` is on screen under a scale. */
+export function levelCellPx(scale: number, z: number): number {
+  return TILE_PX * 2 ** z * scale;
+}
+
+/**
+ * The most cells of level `z` a screen can hold at a scale, wherever it is
+ * panned: an interval of length L meets at most ceil(L / cell) + 1 cells, and
+ * never more than the level's grid has. Independent of the offset on purpose,
+ * so a pan never changes the level and the level never flickers under a drag.
+ */
+export function levelCells(z: number, scale: number, screen: Screen): number {
+  if (z > LOD_MAX) return 0;
+  const cell = levelCellPx(scale, z);
+  const n = lodGrid(z);
+  const across = Math.min(n, Math.ceil(screen.w / cell) + 1);
+  const down = Math.min(n, Math.ceil(screen.h / cell) + 1);
+  return across * down;
+}
+
+/**
+ * Which pyramid level a frame draws: the finest whose cells are at least
+ * `TILE_MIN_PX` on screen and whose cells, together with the next level up's,
+ * fit in the tile cache. Level 0 is the native tiles and `LOD_MAX` one tile
+ * for the world, which always fits.
+ *
+ * The next level up is counted because it is what the page draws under a
+ * level that is still loading, so both have to stay cached through a zoom in
+ * either direction; with only this level counted, a large screen would evict
+ * the underlay it is drawing from. On a 1280×800 or 1920×1080 stage that
+ * second condition never binds and the native tiles draw from `TILE_MIN_PX`
+ * up exactly as before. On a larger one it moves the switch to the native
+ * tiles to a slightly closer zoom: a 4K stage at 96px cells can meet nearly
+ * a thousand native cells, which overran the cache before this existed.
+ *
+ * With `withArt` the painted layer is drawn too, at `artLevel(z)` with its own
+ * level above as underlay, and its cells count against the same cache: one
+ * budget for everything a frame asks for.
+ */
+export function tileLevel(scale: number, screen: Screen, withArt = false): number {
+  const cells = (z: number): number => levelCells(z, scale, screen) + levelCells(z + 1, scale, screen);
+  for (let z = 0; z < LOD_MAX; z++) {
+    if (levelCellPx(scale, z) < TILE_MIN_PX) continue;
+    if (cells(z) + (withArt ? cells(artLevel(z)) : 0) <= TILE_CACHE_MAX) return z;
+  }
+  return LOD_MAX;
+}
+
+/*
+ * The painted map and the minimap, crossfaded by zoom.
+ *
+ * Zoomed out, the painted world and zone map reads as a map where the minimap
+ * reads as noise; zoomed in, the minimap is the ground a character actually
+ * walks on. In between the two are blended by how many screen pixels one ADT
+ * takes up. The art is drawn over the minimap with the complement of the
+ * minimap's weight, which is the same blend as the minimap over the art
+ * wherever both have paint — and where the art has none (a map with no art,
+ * an unpainted corner, a tile still loading) the minimap simply shows at full
+ * strength, with no per-map bookkeeping to get wrong.
+ *
+ * Tuning the fade is these two numbers.
+ */
+
+/** At or below this many screen pixels per ADT, the art covers the minimap entirely. */
+export const ART_FADE_START_PX = 48;
+/** At or above this many, the art is not drawn and the minimap stands alone. */
+export const ART_FADE_END_PX = 384;
+
+/** Screen pixels one ADT spans under a scale (a native tile's on-screen size). */
+export function pxPerAdt(scale: number): number {
+  return TILE_PX * scale;
+}
+
+/**
+ * The minimap's weight in the blend: 0 at `ART_FADE_START_PX` and below, 1 at
+ * `ART_FADE_END_PX` and above, a smoothstep between. The step runs in log
+ * pixels, because zoom is multiplicative: each wheel notch moves it about the
+ * same amount, and the halfway point is the geometric mean of the two ends
+ * (about 136 px per ADT with the values above, near the art's own z1).
+ */
+export function minimapAlpha(pxPerAdtNow: number): number {
+  if (!(pxPerAdtNow > ART_FADE_START_PX)) return 0;
+  if (pxPerAdtNow >= ART_FADE_END_PX) return 1;
+  const t = Math.log(pxPerAdtNow / ART_FADE_START_PX) / Math.log(ART_FADE_END_PX / ART_FADE_START_PX);
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * The art's level when the minimap draws at `z`: the same level, except that
+ * the art has no level 0, so at the native zoom it draws its finest, z1 (128
+ * px per ADT), scaled up as far as `ART_FADE_END_PX`, where it stops.
+ */
+export function artLevel(z: number): number {
+  return Math.max(1, z);
+}
+
+/** What one frame draws: the minimap's level, the art's (null when it is not drawn), and the blend. */
+export interface FrameLevels {
+  minimap: number;
+  art: number | null;
+  /** The minimap's weight; the art is drawn over it at `1 - minimapAlpha`. */
+  minimapAlpha: number;
+}
+
+/**
+ * Both layers' levels for a frame. The minimap is always drawn — it is what
+ * shows wherever the art has nothing — and the art whenever it has any weight
+ * at all; both are chosen together so their cells and underlays share the one
+ * cache (`tileLevel`).
+ */
+export function frameLevels(scale: number, screen: Screen): FrameLevels {
+  const alpha = minimapAlpha(pxPerAdt(scale));
+  const withArt = alpha < 1;
+  const z = tileLevel(scale, screen, withArt);
+  return { minimap: z, art: withArt ? artLevel(z) : null, minimapAlpha: alpha };
+}
+
+/**
+ * The inclusive cell range a view puts on screen at pyramid level `z`, clamped
+ * to that level's grid. Level 0 is the native ADT grid.
+ */
 export function visibleGrid(
   view: View,
   screen: Screen,
+  z = 0,
 ): { row0: number; row1: number; col0: number; col1: number; size: number } {
-  const size = TILE_PX * view.scale;
-  const clamp = (v: number): number => Math.min(GRID - 1, Math.max(0, v));
+  const size = levelCellPx(view.scale, z);
+  const last = lodGrid(z) - 1;
+  const clamp = (v: number): number => Math.min(last, Math.max(0, v));
   return {
     col0: clamp(Math.floor(-view.ox / size)),
     col1: clamp(Math.floor((screen.w - view.ox) / size)),
@@ -192,13 +386,15 @@ export function visibleGrid(
 }
 
 /**
- * The fallback lattice as two runs of lines rather than one rect per cell.
+ * The fallback lattice as two runs of lines rather than one rect per cell, at
+ * pyramid level `z`'s cell size.
  *
- * Below `TILE_MIN_PX` no tile is drawn, so no cell can be covered and the whole
- * lattice is one stroked path: the 64x64 world used to put up to 4096
- * `strokeRect` calls into a pan's frame budget, and this is at most 130
- * segments. Above the threshold the caller still strokes per
- * cell, because there a drawn tile must suppress its own cell's outline.
+ * Where nothing is drawn into a cell — a build with no tile host, or a
+ * pyramid level, whose tiles go on top — the whole lattice is one stroked
+ * path: the 64x64 world used to put up to 4096 `strokeRect` calls into a
+ * pan's frame budget, and this is at most 130 segments. With native tiles the
+ * caller still strokes per cell, because there a drawn tile must suppress its
+ * own cell's outline.
  *
  * `x0`/`x1` and `y0`/`y1` are the extent to span: the lines cover exactly the
  * clamped grid box `visibleGrid` reports, so the lattice stops at the world's
@@ -212,8 +408,9 @@ export function visibleGrid(
 export function latticeLines(
   view: View,
   screen: Screen,
+  z = 0,
 ): { xs: number[]; ys: number[]; x0: number; x1: number; y0: number; y1: number } {
-  const g = visibleGrid(view, screen);
+  const g = visibleGrid(view, screen, z);
   const xs: number[] = [];
   const ys: number[] = [];
   for (let col = g.col0; col <= g.col1 + 1; col++) xs.push(col * g.size + view.ox + 0.5);
@@ -395,8 +592,11 @@ export function mapCounts(list: readonly { map: number }[]): [number, number][] 
  * lets the caller express "stay on this map while it still has an agent"
  * without a derivation that writes to what it reads.
  *
- * Precedence: an operator's chip click, then the replay cursor's own map, then
- * where we already were, then the busiest map in the feed.
+ * Precedence: an operator's pin (a chip click or a `/map?map=<id>` link), then
+ * the replay cursor's own map, then where we already were, then the busiest
+ * map in the feed. A pin holds whether or not anyone is on that map: every map
+ * draws (its tiles, or the lattice where it has none), so a pinned empty map is
+ * a map to look at, not a blank canvas.
  *
  * With nothing to go on it answers `DEFAULT_MAP` rather than "no map". It used
  * to answer null, and the page has no rendering for that: the draw loop filled
@@ -412,7 +612,7 @@ export function chooseMap(
   cursor: number | null,
 ): number {
   const has = (m: number): boolean => maps.some(([id]) => id === m);
-  if (pinned !== null && has(pinned)) return pinned;
+  if (pinned !== null) return pinned;
   if (cursor !== null) return cursor;
   if (prev !== null && has(prev)) return prev;
   return maps.length > 0 ? maps[0]![0] : DEFAULT_MAP;

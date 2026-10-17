@@ -117,7 +117,9 @@ one line: the Bun process owns everything that needs the filesystem,
 the SPA owns everything that is UI.
 
 - `runner/viewer/` serves a read-only JSON API under `/api`, an SSE tail per
-  run, minimap tiles from `data/minimap/`, and the built SPA as static files. Every database is
+  run, minimap tiles from `data/minimap/` (the native tiles, the
+  downsampled levels baked from them, and the painted world-map art baked
+  onto the same grid), and the built SPA as static files. Every database is
   opened readonly, so a run being written inside the container is never
   disturbed. Bearer tokens are stripped from anything that forwards a raw
   record. `WRATHBENCH_VIEWER_PUBLIC=1` withholds raw entries and tiles — the
@@ -131,7 +133,17 @@ the SPA owns everything that is UI.
   view draws minimap tiles decoded from the client's own MPQs into
   `data/minimap/` (gitignored) on plain canvas behind a position-feed interface,
   so replay can later plug a trajectory reader into the renderer that serves
-  live runs. It imports modules from the viewer rather than copying them, so
+  live runs. Zoomed out it draws a level of a pyramid baked from those tiles
+  instead, chosen per frame so the cells on screen stay near tile size and
+  inside the page's tile cache. That is what lets a continent overview show
+  ground rather than an empty grid, and the cached level above a cell is
+  drawn under it while it loads. The levels sit under a layer directory
+  (`<map>/minimap/<z>/`), and the painted world and zone map shares them as
+  a second layer (`<map>/art/<z>/`). The page lays the art over the minimap
+  and crossfades the two by screen pixels per ADT: the painted map reads as a
+  map at continent scale, and the minimap is the ground a character walks on
+  up close. Where the art has nothing, the minimap shows at full strength
+  (`minimap/README.md`, `dashboard/src/lib/mapview.ts`). It imports modules from the viewer rather than copying them, so
   drift between the two sides is a compile error. It is the only place in the
   repository with a dependency graph; the harness itself still runs with no
   build step. Without a build on disk there is no fallback UI.
@@ -232,7 +244,7 @@ Tooling to turn a locally held wiki dump into a searchable bundle the runner can
 
 ### minimap/ (Bun/TypeScript, MIT)
 
-Tooling for local map assets used by the viewer. The assets themselves are supplied outside the repository under `data/` and are not part of the MIT-licensed WrathBench source.
+Tooling for local map assets used by the viewer: the extractor that decodes the client's minimap tiles and the bake that downsamples them into the zoomed-out levels. The assets themselves are supplied outside the repository under `data/` and are not part of the MIT-licensed WrathBench source.
 
 ### infra/
 

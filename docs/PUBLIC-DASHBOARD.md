@@ -88,7 +88,12 @@ Minimap tiles are published by a second, separate script
 snapshot pass: the loop above uploads JSON only, and the tiles are
 uploaded by an explicit operator run. It writes them into the same bucket,
 keyed by the path the viewer already serves so the SPA asks for one URL in
-either shape. Skip
+either shape. The zoomed-out levels baked from them (`minimap/README.md`) go
+up the same way under the same prefix (`tiles/<map>/minimap/<z>/…`), so the
+cache rule, the CORS policy and `robots.txt` cover them with no change. The
+painted art layer (`tiles/<map>/art/<z>/…`) is opt-in: the publisher uploads
+it only with `--include-art`, and whether it is published is pending the
+operator's decision. Skip
 by content hash, held in `tiles/manifest.json` in the bucket and written after
 the objects it names, so a re-run with nothing re-extracted uploads nothing.
 A published tile is world-readable, cacheable and indexable: there is no
@@ -97,7 +102,9 @@ covers the app hostname only. What that leaves open is a crawler directive with
 no bearing on what the site shows (`infra/cloudflare/README.md`, "Open, and the
 operator's"). The tiles are cached by a `/tiles/*` zone rule at a 1-day TTL,
 short because a re-extraction reuses the keys rather than addressing them by
-content. The build flag that points the map at them, and why it is a flag of
+content. Once published, the art layer, re-baked at the same keys while its
+look is tuned, has a rule of its own with a browser TTL of minutes; a re-bake
+is purged by prefix, and the publisher names which maps' art it changed. The build flag that points the map at them, and why it is a flag of
 its own, is `dashboard/README.md`'s.
 
 ### Bucket layout, atomicity, freshness

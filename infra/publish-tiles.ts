@@ -9,11 +9,28 @@
  *
  *   bun infra/publish-tiles.ts --dry-run   # print the plan, upload nothing
  *   bun infra/publish-tiles.ts --upload    # upload what changed
+ *   … --include-art                         # the art layer too (off by default)
  *
- * Reads only from `data/minimap/<mapId>/<row>_<col>.png` (gitignored, like all
- * of `data/`) and writes only to the bucket. Keys mirror the viewer's own path
- * so the SPA asks for the same URL in both shapes:
- * `tiles/<mapId>/<row>_<col>.png`.
+ * The painted art layer is opt-in: whether it is published is pending the
+ * operator's decision, so a pass leaves every `<map>/art/` tile out and says
+ * how many it left unless `--include-art` is given. Nothing that calls this
+ * script passes it (`bun ship --tiles` does not).
+ *
+ * Reads only tiles out of `data/minimap` (gitignored, like all of `data/`) —
+ * the native `<mapId>/<row>_<col>.png` and the baked pyramid levels
+ * `<mapId>/<layer>/<z>/<row>_<col>.png` — and writes only to the bucket. Keys
+ * mirror the viewer's own path so the SPA asks for the same URL in both
+ * shapes: `tiles/<mapId>/<row>_<col>.png`, `tiles/<mapId>/<layer>/<z>/…` for
+ * each layer in `LOD_LAYERS` (`minimap`, `art`).
+ *
+ * No object carries a Cache-Control: Bun's S3 writer has no option for one
+ * (its write options stop at type, disposition, encoding, storage class and
+ * ACL), and the zone's `/tiles/` cache rules set the edge and browser TTLs by
+ * path whatever an object says (`infra/cloudflare/README.md`). That matters
+ * for the art layer, which is re-baked at the same keys while its look is
+ * tuned: what reaches readers after a re-bake is decided at the edge, so a
+ * pass reports which maps' art it changed, and those are the prefixes to
+ * purge.
  *
  * Skip-unchanged is by content hash, held in a manifest object in the bucket
  * (`tiles/manifest.json`) rather than in a local state file: a re-extraction on
@@ -31,6 +48,8 @@
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { isRevalidatedTile, parseTilePath, tileRefPath } from "../runner/viewer/tiles";
+import { LOD_LAYERS } from "../runner/viewer/worldmap";
 
 // ------------------------------------------------------------------ contracts
 
@@ -43,7 +62,7 @@ export const TILE_CONCURRENCY = 8;
 
 /** One tile on disk. */
 export interface LocalTile {
-  /** Bucket key, e.g. `tiles/0/43_31.png`. */
+  /** Bucket key, e.g. `tiles/0/43_31.png` or `tiles/0/minimap/3/5_3.png`. */
   key: string;
   /** Absolute or cwd-relative path under the minimap root. */
   file: string;
@@ -71,42 +90,68 @@ export interface TileStore {
 // -------------------------------------------------------------------- scanning
 
 const MAP_DIR = /^\d+$/;
+const LEVEL_DIR = /^\d+$/;
 const TILE_FILE = /^\d+_\d+\.png$/;
+
+function list(dir: string): string[] {
+  try {
+    return readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Every tile under the minimap root, as bucket keys.
  *
- * Strict on names — bare integers only, exactly what `runner/viewer/tiles.ts`
- * will parse back out of a request path — so anything else the directory
- * happens to hold (a README, an extraction log, a half-written temp file) is
- * not something this script can upload.
+ * Strict on names: a file is a tile only if `runner/viewer/tiles.ts` would
+ * parse its path back out of a request *and* spell it the same way — so a
+ * README, an extraction log, a half-written temp file, a level outside its
+ * range, a layer the viewer does not serve or a second spelling of a tile
+ * (`043_31.png`) is not something this script can upload. The walk reads only
+ * a map's own files and the directories of the listed layers.
  */
 export function scanTiles(root: string): LocalTile[] {
-  let maps: string[];
-  try {
-    maps = readdirSync(root);
-  } catch {
-    return [];
-  }
   const out: LocalTile[] = [];
-  for (const map of maps.sort()) {
+  const add = (rel: string, file: string): void => {
+    const ref = parseTilePath(`/${TILE_PREFIX}${rel}`);
+    if (ref === null || tileRefPath(ref) !== `/${TILE_PREFIX}${rel}`) return;
+    const stat = statSync(file);
+    if (!stat.isFile()) return;
+    out.push({ key: `${TILE_PREFIX}${rel}`, file, size: stat.size });
+  };
+  for (const map of list(root)) {
     if (!MAP_DIR.test(map)) continue;
     const dir = join(root, map);
-    let entries: string[];
-    try {
-      entries = readdirSync(dir);
-    } catch {
-      continue;
+    for (const name of list(dir)) {
+      if (TILE_FILE.test(name)) add(`${map}/${name}`, join(dir, name));
     }
-    for (const name of entries.sort()) {
-      if (!TILE_FILE.test(name)) continue;
-      const file = join(dir, name);
-      const stat = statSync(file);
-      if (!stat.isFile()) continue;
-      out.push({ key: `${TILE_PREFIX}${map}/${name}`, file, size: stat.size });
+    for (const layer of LOD_LAYERS) {
+      for (const z of list(join(dir, layer))) {
+        if (!LEVEL_DIR.test(z)) continue;
+        const levelDir = join(dir, layer, z);
+        for (const name of list(levelDir)) {
+          if (TILE_FILE.test(name)) add(`${map}/${layer}/${z}/${name}`, join(levelDir, name));
+        }
+      }
     }
   }
   return out;
+}
+
+/**
+ * The tiles a pass publishes, and the art tiles it withholds. Art is opt-in
+ * (see the header); everything else always goes.
+ */
+export function selectTiles(all: readonly LocalTile[], opts: { art: boolean }): { tiles: LocalTile[]; artWithheld: LocalTile[] } {
+  const tiles: LocalTile[] = [];
+  const artWithheld: LocalTile[] = [];
+  for (const t of all) {
+    const ref = parseTilePath(`/${t.key}`);
+    if (!opts.art && ref !== null && isRevalidatedTile(ref)) artWithheld.push(t);
+    else tiles.push(t);
+  }
+  return { tiles, artWithheld };
 }
 
 /** Parse whatever is in the bucket into a manifest. A bad one is simply empty. */
@@ -183,6 +228,22 @@ export interface TilePublishReport {
    * a number.
    */
   manifestEntries: number | null;
+  /**
+   * Maps whose art layer this pass uploads (or would): the art is re-baked at
+   * the same keys, so each one is a `tiles/<map>/art/` prefix the edge has to
+   * be purged of before readers see the new painting.
+   */
+  artMaps: number[];
+}
+
+/** The maps among `tiles` whose keys are art-layer tiles, ascending. */
+export function artMapsOf(tiles: readonly { key: string }[]): number[] {
+  const maps = new Set<number>();
+  for (const t of tiles) {
+    const ref = parseTilePath(`/${t.key}`);
+    if (ref !== null && isRevalidatedTile(ref)) maps.add(ref.map);
+  }
+  return [...maps].sort((a, b) => a - b);
 }
 
 /**
@@ -192,7 +253,14 @@ export interface TilePublishReport {
 export async function publishTiles(
   local: LocalTile[],
   store: TileStore,
-  opts: { dryRun?: boolean; now?: number; concurrency?: number; log?: (line: string) => void } = {},
+  opts: {
+    dryRun?: boolean;
+    now?: number;
+    concurrency?: number;
+    log?: (line: string) => void;
+    /** On disk but held back this pass (the art, unless opted in): not orphans. */
+    withheld?: readonly LocalTile[];
+  } = {},
 ): Promise<TilePublishReport> {
   const log = opts.log ?? ((line: string): void => console.log(line));
   const raw = await store.getText(TILE_MANIFEST_KEY);
@@ -206,7 +274,9 @@ export async function publishTiles(
     hashes.set(tile.key, hashBytes(await Bun.file(tile.file).bytes()));
   });
 
-  const plan = planTileUploads(local, manifest, hashes);
+  const held = new Set((opts.withheld ?? []).map((t) => t.key));
+  const fullPlan = planTileUploads(local, manifest, hashes);
+  const plan = { ...fullPlan, orphans: fullPlan.orphans.filter((k) => !held.has(k)) };
   const bytes = plan.upload.reduce((sum, t) => sum + t.size, 0);
   const report: TilePublishReport = {
     uploaded: plan.upload.length,
@@ -214,6 +284,7 @@ export async function publishTiles(
     bytes,
     orphans: plan.orphans.length,
     manifestEntries: raw === null ? null : Object.keys(manifest).length,
+    artMaps: artMapsOf(plan.upload),
   };
   if (opts.dryRun === true) return report;
 
@@ -241,12 +312,14 @@ if (import.meta.main) {
   };
 
   const args = process.argv.slice(2);
-  const dryRun = args.length === 1 && args[0] === "--dry-run";
-  const upload = args.length === 1 && args[0] === "--upload";
-  if (!dryRun && !upload) fail("usage: bun infra/publish-tiles.ts --dry-run | --upload");
+  const includeArt = args.includes("--include-art");
+  const mode = args.filter((a) => a !== "--include-art");
+  const dryRun = mode.length === 1 && mode[0] === "--dry-run";
+  const upload = mode.length === 1 && mode[0] === "--upload";
+  if (!dryRun && !upload) fail("usage: bun infra/publish-tiles.ts --dry-run | --upload [--include-art]");
 
   const root = Bun.env.WRATHBENCH_MINIMAP_DIR ?? "data/minimap";
-  const local = scanTiles(root);
+  const { tiles: local, artWithheld } = selectTiles(scanTiles(root), { art: includeArt });
   if (local.length === 0) fail(`no tiles under ${root} (run the extraction in minimap/ first)`);
 
   for (const name of ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const) {
@@ -279,7 +352,10 @@ if (import.meta.main) {
   };
 
   console.log(`publish-tiles: ${local.length} tile(s) under ${root} -> ${Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET}`);
-  const report = await publishTiles(local, store, { dryRun });
+  if (artWithheld.length > 0) {
+    console.log(`publish-tiles: ${artWithheld.length} art tile(s) left out (art is opt-in: --include-art)`);
+  }
+  const report = await publishTiles(local, store, { dryRun, withheld: artWithheld });
   const verb = dryRun ? "would upload" : "uploaded";
   console.log(
     report.manifestEntries === null
@@ -290,4 +366,11 @@ if (import.meta.main) {
     `publish-tiles: ${verb} ${report.uploaded}, skipped ${report.skipped} unchanged, ` +
       `${(report.bytes / 1024 / 1024).toFixed(2)} MiB, ${report.orphans} orphan(s)`,
   );
+  if (report.artMaps.length > 0) {
+    // Same keys, new paintings: the edge keeps the old ones until purged.
+    console.log(
+      `publish-tiles: art changed on map(s) ${report.artMaps.join(", ")} — purge ` +
+        `${report.artMaps.map((m) => `/tiles/${m}/art/`).join(", ")} at the edge (infra/cloudflare/README.md, step 6)`,
+    );
+  }
 }

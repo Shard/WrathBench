@@ -1907,7 +1907,8 @@ rules.
 ### Minimap tiles (a separate step, never automatic)
 
 The snapshot loop uploads JSON only. Tiles go up by hand, from a checkout with
-`data/minimap` populated by the extraction in `minimap/`, and only when the
+`data/minimap` populated by the extraction in `minimap/` and its bakes of the
+zoomed-out levels and the art layer (`minimap/README.md`), and only when the
 extraction has changed — the skip-unchanged check is a content hash kept in
 `tiles/manifest.json` in the bucket, so a re-run with nothing new PUTs nothing.
 
@@ -1923,6 +1924,12 @@ re-extraction. Two things go with it: `WRATHBENCH_TILES_BASE` in `.env`, without
 which the built site asks for nothing, and — after a re-extraction, since the
 keys are reused — a purge of the `/tiles/` prefix, or the tiles cache rule's
 day (`infra/cloudflare/README.md`) has to pass before readers see the new ones.
+Art tiles are opt-in (`--include-art`, which `bun wb site ship --tiles` does
+not pass), and whether they are published is pending the operator's decision.
+Once they are, the art is re-baked in place while its look is tuned, so an
+`--include-art` upload ends by naming the maps whose art it changed. Purge `/tiles/<map>/art/` for
+each, and the art's own cache rule brings browsers up to date within minutes
+(`infra/cloudflare/README.md`, steps 4 and 6).
 
 ### Start the loop, then deploy the SPA
 
