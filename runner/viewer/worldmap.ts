@@ -82,6 +82,50 @@ export function tileName(row: number, col: number): string {
   return `${row}_${col}.png`;
 }
 
+/*
+ * The downsampled pyramid over the native tiles. A level-z tile is still
+ * `TILE_PX` square but covers 2^z × 2^z ADTs, so level `LOD_MAX` is the whole
+ * 64×64 world in one tile. Level 0 is the native tile and keeps the path
+ * `tileName` gives it under its map's directory; levels 1 and up live beside
+ * it under a layer directory, `<layer>/<z>/<row>_<col>.png`, so a second
+ * layer of art can sit at the same levels without moving the first.
+ *
+ * The bake in `minimap/` writes these paths, the viewer's tile route serves
+ * them, the tile publisher keys them and the dashboard requests them, all
+ * through `lodTileName` — one spelling, so the four cannot drift apart.
+ */
+
+/** The coarsest pyramid level: one tile for the whole grid. */
+export const LOD_MAX = 6;
+
+/** The layers that carry a pyramid, by the directory each lives under. */
+export const LOD_LAYERS = ["minimap"] as const;
+export type LodLayer = (typeof LOD_LAYERS)[number];
+
+/** The layer the native tiles belong to. */
+export const MINIMAP_LAYER: LodLayer = "minimap";
+
+/** Tiles per side at pyramid level `z` (64 at level 0, 1 at `LOD_MAX`). */
+export function lodGrid(z: number): number {
+  return GRID >> z;
+}
+
+/**
+ * Where a pyramid tile lives, relative to its map's directory.
+ *
+ * Only levels 1..`LOD_MAX`, and throws on anything else, so nothing built on it
+ * can write over or ask for a native tile under a pyramid name: level 0 is
+ * `tileName` and only `tileName`.
+ */
+export function lodTileName(layer: LodLayer, z: number, row: number, col: number): string {
+  if (!Number.isInteger(z) || z < 1 || z > LOD_MAX) throw new Error(`pyramid level ${z} is not 1..${LOD_MAX}`);
+  const n = lodGrid(z);
+  if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0 || row >= n || col >= n) {
+    throw new Error(`tile ${row}_${col} is outside level ${z}'s ${n}×${n} grid`);
+  }
+  return `${layer}/${z}/${tileName(row, col)}`;
+}
+
 /**
  * The inclusive tile range covering a pixel rectangle, clamped to the grid.
  *

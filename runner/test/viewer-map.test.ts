@@ -8,11 +8,14 @@ import { localRunStore, type RunStore } from "../viewer/clickhouse";
 import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
 import { trackFrom } from "../viewer/results";
 import { readStates } from "../viewer/runs";
-import { parseTilePath, resolveTilePath } from "../viewer/tiles";
+import { parseTilePath, resolveTilePath, tileRefPath } from "../viewer/tiles";
 import {
   GRID,
+  LOD_MAX,
   TILE_PX,
   coordToTile,
+  lodGrid,
+  lodTileName,
   pixelToWorld,
   tileToCoord,
   tileToWorld,
@@ -153,6 +156,79 @@ describe("tile paths", () => {
     expect(resolveTilePath(root, "/tiles/0/44_31.png")).toBeNull();
     expect(resolveTilePath(root, "/tiles/0/../secret.txt")).toBeNull();
     expect(resolveTilePath(join(root, "nope"), "/tiles/0/43_31.png")).toBeNull();
+  });
+});
+
+/* ---------- the pyramid's paths ---------- */
+
+describe("pyramid tile paths", () => {
+  test("a level's grid halves per level, down to one tile for the world", () => {
+    expect(lodGrid(0)).toBe(GRID);
+    expect(lodGrid(1)).toBe(32);
+    expect(lodGrid(LOD_MAX)).toBe(1);
+  });
+
+  test("lodTileName spells levels 1..LOD_MAX and refuses level 0 and anything outside the level's grid", () => {
+    expect(lodTileName("minimap", 1, 21, 15)).toBe("minimap/1/21_15.png");
+    expect(lodTileName("minimap", LOD_MAX, 0, 0)).toBe("minimap/6/0_0.png");
+    // Level 0 is the native tile and only ever `tileName`: a pyramid writer
+    // cannot be made to emit it.
+    expect(() => lodTileName("minimap", 0, 43, 31)).toThrow();
+    expect(() => lodTileName("minimap", LOD_MAX + 1, 0, 0)).toThrow();
+    expect(() => lodTileName("minimap", 1.5, 0, 0)).toThrow();
+    expect(() => lodTileName("minimap", 1, 32, 0)).toThrow();
+    expect(() => lodTileName("minimap", 6, 0, 1)).toThrow();
+    expect(() => lodTileName("minimap", 2, -1, 0)).toThrow();
+  });
+
+  test("a well-formed pyramid path parses, and its canonical path is the one lodTileName spells", () => {
+    const ref = parseTilePath("/tiles/0/minimap/3/5_3.png");
+    expect(ref).toEqual({ map: 0, row: 5, col: 3, lod: { layer: "minimap", z: 3 } });
+    expect(tileRefPath(ref!)).toBe(`/tiles/0/${lodTileName("minimap", 3, 5, 3)}`);
+    expect(parseTilePath("/tiles/571/minimap/6/0_0.png")).toEqual({
+      map: 571,
+      row: 0,
+      col: 0,
+      lod: { layer: "minimap", z: 6 },
+    });
+    // The native path is untouched and its canonical form is itself.
+    expect(tileRefPath(parseTilePath("/tiles/0/43_31.png")!)).toBe("/tiles/0/43_31.png");
+  });
+
+  test("a level outside 1..LOD_MAX, a layer not on the list, or a cell outside the level's grid is rejected", () => {
+    for (const p of [
+      "/tiles/0/minimap/0/43_31.png", // level 0 exists only as the native path
+      "/tiles/0/minimap/7/0_0.png",
+      "/tiles/0/minimap/1/32_0.png", // level 1 is 32×32
+      "/tiles/0/minimap/6/0_1.png", // level 6 is one tile
+      "/tiles/0/art/1/0_0.png", // not a layer yet
+      "/tiles/0/Minimap/1/0_0.png",
+      "/tiles/0/minimap/-1/0_0.png",
+      "/tiles/0/minimap/1.5/0_0.png",
+      "/tiles/0/minimap/1/0_0.png/x",
+      "/tiles/0/minimap/1/0_0.jpg",
+      "/tiles/0/minimap/../1/0_0.png",
+      "/tiles/0/minimap/1/../0_0.png",
+      "/tiles/0/minimap%2f1/0_0.png",
+      "/tiles/0/minimap/1",
+      "/tiles/minimap/1/0_0.png",
+      "/tiles/a/minimap/1/0_0.png",
+    ])
+      expect(parseTilePath(p)).toBeNull();
+  });
+
+  test("resolveTilePath finds a baked level under its layer and nothing beside it", () => {
+    const root = tempDir("wrathbench-lod-");
+    mkdirSync(join(root, "0", "minimap", "2"), { recursive: true });
+    writeFileSync(join(root, "0", lodTileName("minimap", 2, 10, 7)), new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(join(root, "0", "minimap", "secret.txt"), "not a tile");
+    expect(resolveTilePath(root, "/tiles/0/minimap/2/10_7.png")).toBe(join(root, "0", "minimap", "2", "10_7.png"));
+    // A leading zero names the same file: the path is rebuilt from the integer.
+    expect(resolveTilePath(root, "/tiles/0/minimap/02/10_7.png")).toBe(join(root, "0", "minimap", "2", "10_7.png"));
+    expect(resolveTilePath(root, "/tiles/0/minimap/2/10_8.png")).toBeNull();
+    expect(resolveTilePath(root, "/tiles/0/minimap/secret.txt")).toBeNull();
+    // The same name at level 0 is a different file, and not this one.
+    expect(resolveTilePath(root, "/tiles/0/10_7.png")).toBeNull();
   });
 });
 

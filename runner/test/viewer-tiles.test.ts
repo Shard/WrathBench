@@ -4,7 +4,8 @@
  * `WRATHBENCH_VIEWER_TILES_PUBLIC=1` is opt-in and only ever loosens public
  * mode: without it a public viewer answers 403 as it always has, and a private
  * viewer is untouched either way — including its cache header, which a client
- * has been told is good for a year.
+ * has been told is good for a year. A pyramid level is the same bytes by
+ * another route, so it takes every one of those rules unchanged.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -26,6 +27,8 @@ function fixture(): { runsDir: string; tilesDir: string } {
   mkdirSync(runsDir);
   mkdirSync(join(tilesDir, "0"), { recursive: true });
   writeFileSync(join(tilesDir, "0", "43_31.png"), PNG);
+  mkdirSync(join(tilesDir, "0", "minimap", "3"), { recursive: true });
+  writeFileSync(join(tilesDir, "0", "minimap", "3", "5_3.png"), PNG);
   return { runsDir, tilesDir };
 }
 
@@ -40,6 +43,9 @@ function handleFor(opts: { publicMode: boolean; tilesPublic?: boolean }): (req: 
   });
 }
 
+/** A native tile and a pyramid level: every rule below holds for both. */
+const TILES = ["/tiles/0/43_31.png", "/tiles/0/minimap/3/5_3.png"];
+
 const get = async (
   handle: (req: Request) => Promise<Response>,
   path: string,
@@ -48,28 +54,43 @@ const get = async (
 describe("tiles in public mode", () => {
   test("withheld by default, exactly as before", async () => {
     for (const handle of [handleFor({ publicMode: true }), handleFor({ publicMode: true, tilesPublic: false })]) {
-      const res = await get(handle, "/tiles/0/43_31.png");
-      expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: "withheld in public mode" });
+      for (const path of TILES) {
+        const res = await get(handle, path);
+        expect(res.status).toBe(403);
+        expect(await res.json()).toEqual({ error: "withheld in public mode" });
+      }
     }
   });
 
   test("served with private caching and noindex when the flag is on", async () => {
     const handle = handleFor({ publicMode: true, tilesPublic: true });
-    const res = await get(handle, "/tiles/0/43_31.png");
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("image/png");
-    expect(res.headers.get("cache-control")).toBe(TILE_PUBLIC_CACHE_CONTROL);
-    expect(res.headers.get("cache-control")).toBe("private, max-age=3600");
-    expect(res.headers.get("x-robots-tag")).toBe("noindex");
-    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+    for (const path of TILES) {
+      const res = await get(handle, path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("image/png");
+      expect(res.headers.get("cache-control")).toBe(TILE_PUBLIC_CACHE_CONTROL);
+      expect(res.headers.get("cache-control")).toBe("private, max-age=3600");
+      expect(res.headers.get("x-robots-tag")).toBe("noindex");
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+    }
   });
 
   test("the flag opens no listing and no path outside the tile root", async () => {
     const handle = handleFor({ publicMode: true, tilesPublic: true });
     // (`..` is normalised away by the URL parser before the route sees it;
     // path validation itself is pinned in viewer-map.test.ts and unchanged.)
-    for (const path of ["/tiles/", "/tiles/0/", "/tiles/0", "/tiles/0/64_0.png", "/tiles/0/44_31.png"]) {
+    for (const path of [
+      "/tiles/",
+      "/tiles/0/",
+      "/tiles/0",
+      "/tiles/0/64_0.png",
+      "/tiles/0/44_31.png",
+      "/tiles/0/minimap/",
+      "/tiles/0/minimap/3/",
+      "/tiles/0/minimap/0/43_31.png",
+      "/tiles/0/minimap/3/8_0.png",
+      "/tiles/0/minimap/3/5_4.png",
+    ]) {
       const res = await get(handle, path);
       expect(res.status).toBe(404);
       // A miss must never be cached: the extraction may write that tile next.
@@ -82,11 +103,13 @@ describe("tiles outside public mode", () => {
   test("served with the year-long immutable cache, flag or no flag", async () => {
     for (const tilesPublic of [undefined, true, false]) {
       const handle = handleFor({ publicMode: false, ...(tilesPublic === undefined ? {} : { tilesPublic }) });
-      const res = await get(handle, "/tiles/0/43_31.png");
-      expect(res.status).toBe(200);
-      expect(res.headers.get("cache-control")).toBe(TILE_CACHE_CONTROL);
-      // The private viewer is nobody's crawl target and gains no header.
-      expect(res.headers.get("x-robots-tag")).toBeNull();
+      for (const path of TILES) {
+        const res = await get(handle, path);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("cache-control")).toBe(TILE_CACHE_CONTROL);
+        // The private viewer is nobody's crawl target and gains no header.
+        expect(res.headers.get("x-robots-tag")).toBeNull();
+      }
     }
   });
 });
