@@ -375,23 +375,29 @@ describe("the art/minimap crossfade", () => {
   });
 
   test("a frame draws the minimap always and the art only while it has weight", () => {
+    // Every scale here is derived from the two fade constants, so retuning
+    // them is a one-line edit that leaves this test meaning the same thing.
     const screen = { w: 1280, h: 800 };
     const zoomedIn = frameLevels(ART_FADE_END_PX / TILE_PX, screen);
     expect(zoomedIn.art).toBeNull();
     expect(zoomedIn.minimapAlpha).toBe(1);
-    expect(zoomedIn.minimap).toBe(0);
-    // At the native zoom with the art still fading out, the art draws z1.
-    const native = frameLevels(TILE_MIN_PX / TILE_PX, screen);
-    expect(native.minimap).toBe(0);
-    expect(native.art).toBe(1);
-    expect(native.minimapAlpha).toBeGreaterThan(0);
-    expect(native.minimapAlpha).toBeLessThan(1);
-    // Zoomed out: the art covers everything it paints, the minimap still draws
-    // under it for wherever it does not.
-    const continent = frameLevels(0.07, screen);
+    // Halfway through the fade both layers draw, the art at its own level.
+    const mid = frameLevels(Math.sqrt(ART_FADE_START_PX * ART_FADE_END_PX) / TILE_PX, screen);
+    expect(mid.minimapAlpha).toBeGreaterThan(0);
+    expect(mid.minimapAlpha).toBeLessThan(1);
+    expect(mid.art).toBe(artLevel(mid.minimap));
+    // Zoomed out past the start: the art covers everything it paints, and the
+    // minimap still draws under it for wherever it does not.
+    const continent = frameLevels(ART_FADE_START_PX / 2 / TILE_PX, screen);
     expect(continent.minimapAlpha).toBe(0);
-    expect(continent.art).toBe(continent.minimap);
-    expect(continent.minimap).toBe(3);
+    expect(continent.art).toBe(artLevel(continent.minimap));
+    expect(continent.minimap).toBeGreaterThan(0);
+    // At the native zoom, while the art is still fading out, it draws z1 scaled up.
+    if (TILE_MIN_PX < ART_FADE_END_PX) {
+      const native = frameLevels(TILE_MIN_PX / TILE_PX, screen);
+      expect(native.minimap).toBe(0);
+      expect(native.art).toBe(1);
+    }
   });
 });
 
