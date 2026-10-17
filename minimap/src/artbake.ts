@@ -17,7 +17,7 @@
  * `--data` is the data root the other inputs default under: the client
  * archives at `client-source/Data`, the DBCs at `client/dbc`, the server's
  * area grid at `client/maps`, and the tile root (which must already hold the
- * native minimap tiles, read for the gap fill) at `minimap`.
+ * native minimap tiles: the art is opaque over every one of them) at `minimap`.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
@@ -57,7 +57,11 @@ export interface ArtParams {
   /** Unclaimed ground is paper out to this many yards from a zone's land, then fades to clear over `gapFade`. */
   gapReach: number;
   gapFade: number;
-  /** The sea fill: full out to this many yards from the coast, then fading to clear over `seaFade`. */
+  /**
+   * The sea fill: full out to `seaReach` yards from the coast, then fading to clear over
+   * `seaFade` — and opaque over every ADT with a native minimap tile, fading over `seaFade`
+   * beyond those.
+   */
   seaReach: number;
   seaFade: number;
   /** How far from its own painted interior a zone's art is trusted, art px: on land, at sea. */
@@ -115,6 +119,8 @@ export interface ArtSources {
   mapFile(mapId: number, row: number, col: number): Uint8Array | undefined;
   /** The native minimap tile (256px RGBA), or null. */
   minimap(mapId: number, row: number, col: number): Pixels | null;
+  /** Whether the map has a native minimap tile for this ADT (cheap; no decode). */
+  hasMinimap(mapId: number, row: number, col: number): boolean;
 }
 
 /** Colours the bake measured from the art; printed so a bake can be judged. */
@@ -293,8 +299,18 @@ export function renderArt(mapId: number, src: ArtSources, params: ArtParams = DE
     }
   }
   if (adts.size === 0) return empty;
+  // The minimap's own tiles: wherever the art is clear the map page shows them at full
+  // strength, so the art must cover every one of them (see `covered` below).
+  const minimapAdts = new Set<number>();
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      if (!src.hasMinimap(mapId, r, c)) continue;
+      minimapAdts.add(r * GRID + c);
+      tr0 = Math.min(tr0, r); tr1 = Math.max(tr1, r); tc0 = Math.min(tc0, c); tc1 = Math.max(tc1, c);
+    }
+  }
 
-  // The cell region: the terrain's bounding box, and room for the sea to fade out past it.
+  // The cell region: the terrain's and the minimap's bounding box, and room for the sea to fade out past it.
   const marginAdt = Math.ceil((P.seaReach + P.seaFade) / TILE_SIZE) + 1;
   const cr0 = Math.max(0, (tr0 - marginAdt) * CELLS), cc0 = Math.max(0, (tc0 - marginAdt) * CELLS);
   const cr1 = Math.min(GRID * CELLS, (tr1 + 1 + marginAdt) * CELLS), cc1 = Math.min(GRID * CELLS, (tc1 + 1 + marginAdt) * CELLS);
@@ -480,23 +496,39 @@ export function renderArt(mapId: number, src: ArtSources, params: ArtParams = DE
     }
   }
   const dClaim = chamfer(painted, W, H, CELL_YARDS), dOcean = chamfer(ocean, W, H, CELL_YARDS);
+  // `covered`: cells of an ADT that has a native minimap tile. The map page draws the minimap
+  // at full strength wherever the art is clear, so the backdrop is opaque over all of them and
+  // fades out over seaFade beyond: unused ground there is parchment (the zone maps paint
+  // Outland's void that way too), anything else sea. `coverage` is that opacity, kept unblurred
+  // so it is exactly 1 on every covered cell.
+  const covered = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const gr = cr0 + Math.floor(i / W), gc = cc0 + (i % W);
+    covered[i] = minimapAdts.has(Math.floor(gr / CELLS) * GRID + Math.floor(gc / CELLS)) ? 1 : 0;
+  }
+  const dCover = chamfer(covered, W, H, CELL_YARDS), coverage = new Float32Array(N);
+  // held at 1 for one cell past the covered set, so the bilinear read is exactly 1 on every covered pixel
+  for (let i = 0; i < N; i++) coverage[i] = 1 - smooth((dCover[i]! - CELL_YARDS * Math.SQRT2) / P.seaFade);
   // `nearSea`: cells the sea may cover — ocean, and anything unclaimed within reach of ocean.
-  // Off the terrain, ground opacity follows the distance from zone land alone, so it is edged
-  // by the zones and never by where the ADTs stop.
+  // Off the terrain, ground opacity follows the distance from zone land (and the minimap's
+  // coverage) alone, so it is edged by those and never by where the ADTs stop.
   const seaWide = P.seaReach + P.seaFade + 3 * TILE_SIZE;
-  const landF = new Float32Array(N), groundRaw = new Float32Array(N), visible = new Uint8Array(N), nearSea = new Uint8Array(N);
+  const landF = new Float32Array(N), groundRaw = new Float32Array(N), visible = new Uint8Array(N), nearSea = new Uint8Array(N), groundish = new Uint8Array(N);
   for (let i = 0; i < N; i++) {
     landF[i] = land[i]!;
     nearSea[i] = ocean[i] || (!painted[i] && dOcean[i]! <= seaWide) ? 1 : 0;
-    const groundish = present[i] ? ground[i]! : !nearSea[i];
-    const g = groundish ? 1 - smooth((dClaim[i]! - P.gapReach) / P.gapFade) : 0;
-    groundRaw[i] = g;
-    visible[i] = g >= 0.5 ? 1 : 0;
+    groundish[i] = present[i] ? ground[i]! : nearSea[i] ? 0 : 1;
+    const near = groundish[i] ? 1 - smooth((dClaim[i]! - P.gapReach) / P.gapFade) : 0;
+    groundRaw[i] = groundish[i] ? Math.max(near, coverage[i]!) : 0;
+    // the coast the sea is measured from: ground near zones, and real terrain under the coverage
+    // (a covered tile with no terrain behind it is filled, but is not a coast)
+    visible[i] = near >= 0.5 || (groundish[i] && present[i] && covered[i]) ? 1 : 0;
   }
   const shore = chamfer(visible, W, H, CELL_YARDS);
   const seaRaw = new Float32Array(N), deepRaw = new Float32Array(N);
   for (let i = 0; i < N; i++) {
-    seaRaw[i] = nearSea[i] ? (1 - groundRaw[i]!) * (1 - smooth((shore[i]! - P.seaReach) / P.seaFade)) : 0;
+    const nearCoast = nearSea[i] ? 1 - smooth((shore[i]! - P.seaReach) / P.seaFade) : 0;
+    seaRaw[i] = (1 - groundRaw[i]!) * (groundish[i] ? nearCoast : Math.max(nearCoast, coverage[i]!));
     deepRaw[i] = 1 - 0.15 * smooth(shore[i]! / 2500);
   }
   const claimable = gaussBlur(landF, W, H, 1.5), groundness = gaussBlur(groundRaw, W, H, 1.5), reach = gaussBlur(reachRaw, W, H, 1.5);
@@ -644,8 +676,11 @@ export function renderArt(mapId: number, src: ArtSources, params: ArtParams = DE
           const tot = Math.min(1, painted);
           const Lg = bilinear(groundness, W, H, fy, fx);
           const seaAlpha = bilinear(seaOpacity, W, H, fy, fx);
-          const back = (1 - tot) * (Lg + (1 - Lg) * seaAlpha);
-          // (Lg is the ground's opacity: 1 on ground near zones, fading to 0 on far unused terrain)
+          // Lg is the ground's opacity: 1 on ground near zones or under the minimap's coverage,
+          // fading to 0 on far unused terrain. Under the coverage the backdrop is opaque whatever
+          // the blurred fields say.
+          const wGround = Lg, wSea = (1 - Lg) * seaAlpha;
+          const back = (1 - tot) * Math.min(1, Math.max(wGround + wSea, bilinear(coverage, W, H, fy, fx)));
           const alpha = tot + back;
           if (alpha < 0.5 / 255) continue;
 
@@ -685,10 +720,11 @@ export function renderArt(mapId: number, src: ArtSources, params: ArtParams = DE
                 lb = paper[2] * shade * grain * (1 - kappa) + mb * hue * kappa;
               }
             }
-            const bw = back / (Lg + (1 - Lg) * seaAlpha);
-            r += bw * (Lg * lr + (1 - Lg) * seaAlpha * sr);
-            g += bw * (Lg * lg + (1 - Lg) * seaAlpha * sg);
-            b += bw * (Lg * lb + (1 - Lg) * seaAlpha * sb);
+            const den = wGround + wSea;
+            const kg = den > 1e-4 ? wGround / den : 0, ks = den > 1e-4 ? wSea / den : 1;
+            r += back * (kg * lr + ks * sr);
+            g += back * (kg * lg + ks * sg);
+            b += back * (kg * lb + ks * sb);
           }
           const a8 = Math.round(Math.min(1, alpha) * 255);
           if (a8 === 0) continue;
@@ -830,6 +866,7 @@ function main(): void {
       const f = join(mapsDir, mapFileName(m, r, c));
       return existsSync(f) ? new Uint8Array(readFileSync(f)) : undefined;
     },
+    hasMinimap: (m, r, c) => existsSync(join(root, String(m), `${r}_${c}.png`)),
     minimap: (m, r, c) => {
       const f = join(root, String(m), `${r}_${c}.png`);
       if (!existsSync(f)) return null;

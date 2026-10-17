@@ -81,7 +81,8 @@ The art bake reads more:
 - `data/client/dbc/WorldMapArea.dbc`, `WorldMapOverlay.dbc` and `AreaTable.dbc`.
 - `data/client/maps/*.map`, the server's per-ADT area and liquid grid
   (AzerothCore's map extractor output).
-- The native minimap tiles, only for `--gap minimap`.
+- The native minimap tiles: which ADTs have one (the art covers every one of
+  them, see "Seams"), and their pixels for `--gap minimap`.
 
 ## Output and the tile convention
 
@@ -382,13 +383,20 @@ Per output pixel:
   - **Sea** is where the server says ocean (and the terrain-less cells near
     it). It is coloured with the zone maps' own water: the median of cool
     pixels (blue at least 0.8 of red) over sea and lake cells, measured at bake
-    time. It is full out to 3 ADTs from the coast and fades to clear over 2
-    more, so at continent zoom the outline is the coast, not the ADT grid.
-    Outland has no ocean, so no sea.
+    time. It is full out to 3 ADTs from the coast, a shade deeper offshore.
   - **Unpainted land** is parchment: the mean colour of the zones' painted
     rings, measured at bake time. It fills out to 450 yards from land some art
-    can paint and fades over 450 more. Unused terrain far from any zone
-    (Outland's void, the north of map 0) is left clear, edged by the zones.
+    can paint and fades over 450 more.
+  - **The minimap's coverage.** The map page draws the minimap at full
+    strength wherever the art is clear. So the backdrop is also opaque over
+    every ADT that has a native minimap tile, read from the tile root at bake
+    time. There, unused ground is parchment (the Outland maps paint their void
+    that way too) and anything else is sea.
+  - **The opaque extent** is therefore the union of 3 ADTs past the coast and
+    every ADT with a minimap tile. It fades to clear over the 2 ADTs beyond
+    that. Coverage is held at 1 for one cell past the last covered one, so
+    bilinear sampling cannot dip below opaque at a covered tile's corner.
+    Where no minimap tile and no coast is near, the art is clear.
 
 `--gap minimap` shades the parchment with the minimap's ground instead. It is
 not the default because unpainted land is exactly where the minimap is
@@ -417,7 +425,14 @@ What was verified, and how:
   - A label baked on a zone's territory but away from its overlay never
     reaches the output, and no frame pixel does.
   - The sea takes the art's water colour.
+  - Every z1 pixel of an ADT with a minimap tile is opaque, even far from
+    any coast. Past the coverage the art fades to clear over the fade width,
+    and the gap between coverage and coast stays clear.
   - The bake is deterministic.
+- **On the real bake**, every z1 pixel over all 3636 native minimap ADTs is
+  opaque. Composited over the minimap pyramid at z3 and z4 (what the map page
+  draws at continent zoom), no minimap pixel shows through on any of the four
+  maps.
 
 What still looks wrong:
 
@@ -431,18 +446,23 @@ What still looks wrong:
   cells the grid gives that zone: BURNING STEPPES along Redridge's north edge,
   and EASTERN PLAGUELANDS along Ghostlands' south edge.
 - **The parchment fill** is flat beside the painted rings.
+- **The outline at continent zoom** is the minimap's coverage wherever that
+  reaches past the coast. It is softened by the fade, but it is the ADT grid:
+  Northrend's coverage is one rectangle of sea, Outland's a stepped block of
+  parchment, and Kalimdor has a small square of sea far to the north-west
+  (the minimap tiles around GM Island).
 - **A strip of ocean** on 530, between Outland and Quel'Thalas, draws a small
   sea of its own.
 
-The bake over maps 0, 1, 530 and 571 takes about 110 s and writes 1745 tiles
-(160 MiB):
+The bake over maps 0, 1, 530 and 571 takes about 140 s and writes 2248 tiles
+(177 MiB):
 
 | map | z1 | z2 | z3 | z4 | z5 | z6 | MiB |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 284 | 83 | 27 | 8 | 4 | 1 | 39.2 |
-| 1 | 359 | 102 | 33 | 11 | 4 | 1 | 49.4 |
-| 530 | 334 | 98 | 32 | 10 | 4 | 1 | 40.7 |
-| 571 | 241 | 71 | 23 | 9 | 4 | 1 | 30.9 |
+| 0 | 305 | 87 | 27 | 8 | 4 | 1 | 38.0 |
+| 1 | 439 | 119 | 36 | 12 | 4 | 1 | 52.0 |
+| 530 | 446 | 124 | 34 | 11 | 4 | 1 | 48.2 |
+| 571 | 413 | 119 | 36 | 12 | 4 | 1 | 38.8 |
 
 ## Relationship to the viewer
 

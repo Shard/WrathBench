@@ -120,7 +120,7 @@ const MAP = 7;
  * bakes a magenta "neighbour label" on parchment inside its own territory but
  * far from its overlay — the case the own mask exists for.
  */
-function world(): ArtSources {
+function world(minimapAdts: ReadonlySet<string> = new Set()): ArtSources {
   const files = new Map<string, Uint8Array>();
   const areas: MapArea[] = [
     { id: 1, mapId: MAP, areaId: 100, name: "ZoneA", left: 600, right: -1800, top: 300, bottom: -1300 },
@@ -170,6 +170,7 @@ function world(): ArtSources {
     areaTable,
     mapFile: (m, r, c) => (m === MAP ? terrain.get(`${r}_${c}`) : undefined),
     minimap: () => null,
+    hasMinimap: (m, r, c) => m === MAP && minimapAdts.has(`${r}_${c}`),
   };
 }
 
@@ -255,6 +256,29 @@ describe("renderArt over a synthetic world", () => {
 
   test("a map with no terrain renders nothing", () => {
     expect(renderArt(MAP + 1, src, PARAMS).tiles.size).toBe(0);
+  });
+});
+
+describe("the minimap's coverage", () => {
+  // two minimap tiles far north of the terrain (rows 24-25), well beyond the coast's sea fade
+  const tiles = renderArt(MAP, world(new Set(["24_33", "25_33"])), PARAMS).tiles;
+  const alphaAt = (row: number, col: number) => pixelAt(tiles, (32 - row) * TILE_SIZE, (32 - col) * TILE_SIZE)[3]!;
+
+  test("every pixel of an ADT with a minimap tile is opaque, so the minimap never shows through", () => {
+    // every z1 pixel of both ADTs, corners included (bilinear reads dip there first)
+    for (const row of [24, 25]) {
+      for (let k = 0; k < 128; k++) {
+        for (let j = 0; j < 128; j++) expect(alphaAt(row + (k + 0.5) / 128, 33 + (j + 0.5) / 128)).toBe(255);
+      }
+    }
+  });
+
+  test("beyond the coverage it fades out over seaFade, and between it and the coast stays clear", () => {
+    expect(alphaAt(23.5, 33.5)).toBeGreaterThan(0);
+    expect(alphaAt(23.5, 33.5)).toBeLessThan(255);
+    expect(alphaAt(22.5, 33.5)).toBe(0);
+    expect(alphaAt(28.5, 33.5)).toBe(0);
+    expect(alphaAt(24.5, 31.5)).toBe(0);
   });
 });
 
