@@ -214,14 +214,20 @@ bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
 bun infra/publish-tiles.ts --upload
 ```
 
+Art tiles are opt-in: a pass uploads them only with `--include-art`, which
+nothing passes on its own (not `bun ship --tiles`), and whether they are
+published is pending the operator's decision. A routine pass says how many it
+left out.
+
 `bun ship --tiles` runs the same upload as part of a deploy. The skip-unchanged
 manifest (`tiles/manifest.json`) lives in the bucket, so a re-run with nothing
 re-extracted PUTs nothing; a re-extraction (and the `bake --force` that has to
 follow it) reuses keys, so a re-upload wants a purge of the `/tiles/` prefix to
 beat rule 3's day.
 
-An art re-bake is the common case of that, since the art's look is tuned in
-place. The upload ends by naming the maps whose art it changed (`art changed
+Once art is published, an art re-bake is the common case of that, since the
+art's look is tuned in place. An `--include-art` upload ends by naming the
+maps whose art it changed (`art changed
 on map(s) …`). Purge `/tiles/<map>/art/` for each of those. The edge then
 serves the new painting at once, and a browser that already holds the old one
 picks it up within rule 4's five minutes.
