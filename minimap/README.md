@@ -25,6 +25,17 @@ Flags: `--map <ids>`, `--force`, `--limit <n>`, `--out <dir>` (default
 `data/minimap`), `--client <dir>` (default
 `data/client-source/Data`).
 
+Then bake the zoomed-out levels from what it wrote (see "The LOD pyramid"
+below):
+
+```
+bun run --cwd minimap bake                 # every map directory under data/minimap
+bun minimap/src/bake.ts --map 0 --force    # one map, rewriting existing levels
+```
+
+Flags: `--map <ids>`, `--force`, `--out <dir>` (the tile root it reads and
+writes, default `data/minimap`).
+
 Idempotent: a tile that already exists is skipped unless `--force`. A full
 extraction of the four continents takes about 17 s and produces 3636 tiles /
 ~104 MiB; map 369 adds 12 tiles / 214 KiB on top.
@@ -158,10 +169,67 @@ What was verified, and how — the same standard the ADT orientation was held to
    entirely under the other sign. Overlaying all 34 on the finished composite
    puts every one of them on a track or a station platform.
 
+## The LOD pyramid
+
+The map page draws a native tile only while it is at least 96px on screen.
+Below that a continent is more tiles than the page's cache holds, so a
+zoomed-out map used to be a lattice of empty boxes. `src/bake.ts` gives every
+zoom something real to draw: levels z = 1..6, each tile still 256×256 but
+covering 2^z × 2^z ADTs, so z = 6 is the whole 64×64 world in one tile. The
+page picks the level whose cells stay near tile size on screen.
+
+```
+data/minimap/<mapId>/<row>_<col>.png                 native, the pyramid's level 0
+data/minimap/<mapId>/minimap/<z>/<row>_<col>.png     z = 1..6, row/col < 64 >> z
+```
+
+The native path does not move: the public bucket and every deployed build
+already address it. The levels sit under a layer directory inside the map's
+own, which keeps the tile root a list of map ids (the publisher walks it as
+one) and leaves room for a second layer of art at the same levels. The
+spelling is `lodTileName` in `runner/viewer/worldmap.ts`, which the bake,
+the viewer, the publisher and the dashboard all call; it refuses level 0, so
+nothing built on it can write over a native tile.
+
+Each level is a 2×2 box filter of the one below. Colour is weighted by alpha
+and alpha is averaged. The ADT tiles are opaque, so this changes nothing for
+them, but the Deeprun Tram's composite has transparent corners, and an
+unweighted mean would darken its outline one level up. A missing child is a
+transparent quadrant, and a tile with nothing opaque in it is not written, so
+a level holds exactly the tiles that cover terrain.
+
+Every level is computed from the one below in memory on every run, and
+`--force` decides only whether existing files are rewritten. Building level
+z + 1 from a skipped file instead would build it on bytes the current natives
+may no longer agree with. The output is byte-deterministic, so a re-bake that
+changed nothing uploads nothing. After a re-extraction, run `bake --force`,
+then `publish-tiles --upload`, then purge `/tiles/`
+(`infra/cloudflare/README.md`).
+
+The bake over the five extracted maps takes about 10 s and writes 1479 tiles
+(79.6 MiB):
+
+| map | z1 | z2 | z3 | z4 | z5 | z6 | MiB |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 193 | 55 | 18 | 6 | 4 | 1 | 19.0 |
+| 1 | 282 | 78 | 26 | 11 | 4 | 1 | 29.0 |
+| 369 | 8 | 6 | 4 | 4 | 4 | 1 | 0.1 |
+| 530 | 234 | 69 | 26 | 10 | 4 | 1 | 15.1 |
+| 571 | 300 | 88 | 24 | 12 | 4 | 1 | 16.4 |
+
+The tram's 12 tiles straddle the grid's centre line, so they split four ways
+at every level up to z5.
+
+How it was verified: z4 mosaics of maps 0 and 1 (16 tiles each) came out north
+up, with coastlines continuous across every tile edge. A z3 tile over Dun
+Morogh matches its four z2 children, and a z1 tile matches its four natives,
+compared side by side. Synthetic tests pin the quadrant order, the alpha
+weighting, the whole-world tile's placement of each native, and idempotence.
+
 ## Relationship to the viewer
 
-`runner/viewer/worldmap.ts` owns the transform and `runner/viewer/tiles.ts`
-serves `data/minimap/<mapId>/<row>_<col>.png`. Both agree with what this tool
-writes. The orientation in `worldToPixel` could not be verified until an
+`runner/viewer/worldmap.ts` owns the transform and the pyramid's spelling, and
+`runner/viewer/tiles.ts` serves both shapes above under `/tiles/<mapId>/`.
+Both agree with what this tool writes. The orientation in `worldToPixel` could not be verified until an
 extraction rendered a known zone — the Northshire Abbey check above is that
 verification, and it confirms the existing code rather than changing it.
