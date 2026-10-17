@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { AgentPosition, TrackResponse } from "../../runner/viewer/api-types";
-import { TILE_PX, TILE_SIZE, worldToPixel } from "../../runner/viewer/worldmap";
+import { LOD_MAX, TILE_PX, TILE_SIZE, lodGrid, worldToPixel } from "../../runner/viewer/worldmap";
 import { positionsAt } from "../src/lib/replay";
 import {
   type Pip,
@@ -31,7 +31,10 @@ import {
   hueOf,
   latticeLines,
   STALE_MS,
+  TILE_CACHE_MAX,
   TILE_MIN_PX,
+  levelCellPx,
+  levelCells,
   mapCounts,
   mapName,
   pipName,
@@ -39,6 +42,7 @@ import {
   project,
   stepPips,
   syncPips,
+  tileLevel,
   visibleGrid,
   worldPerPixel,
   zoomAt,
@@ -200,6 +204,109 @@ describe("visibleGrid", () => {
     expect(g.row0).toBe(0);
     expect(g.col0).toBe(0);
   });
+
+  test("at a pyramid level it counts that level's cells and clamps to that level's grid", () => {
+    const view = { scale: 0.05, ox: -200, oy: -300 };
+    const g = visibleGrid(view, SCREEN, 3);
+    expect(g.size).toBeCloseTo(TILE_PX * 8 * 0.05, 9);
+    expect(g.row1).toBeLessThan(lodGrid(3));
+    expect(g.col1).toBeLessThan(lodGrid(3));
+    // The level-3 cell under a screen point holds the native cell under it.
+    const native = visibleGrid(view, SCREEN, 0);
+    expect(g.row0).toBe(native.row0 >> 3);
+    expect(g.col0).toBe(native.col0 >> 3);
+    const world = visibleGrid({ scale: 0.01, ox: 0, oy: 0 }, SCREEN, LOD_MAX);
+    expect(world).toMatchObject({ row0: 0, row1: 0, col0: 0, col1: 0 });
+  });
+});
+
+/*
+ * Which pyramid level a frame draws. The two promises are that the native
+ * tiles draw exactly where they used to on an ordinary screen, and that no
+ * level ever puts more on screen than the tile cache holds — together with the
+ * coarser level drawn under it while it loads — on any screen at any zoom.
+ */
+describe("tileLevel", () => {
+  const SCREENS = {
+    phone: { w: 360, h: 740 },
+    laptop: { w: 1280, h: 800 },
+    hd: { w: 1920, h: 1080 },
+    qhd: { w: 2560, h: 1440 },
+    uhd: { w: 3840, h: 2160 },
+    uhd8k: { w: 7680, h: 4320 },
+  };
+  const SCALES: number[] = [];
+  for (let s = MIN_SCALE; s <= MAX_SCALE; s *= 1.07) SCALES.push(s);
+  SCALES.push(MAX_SCALE, TILE_MIN_PX / TILE_PX);
+
+  test("native tiles from TILE_MIN_PX up on an ordinary screen, as before the pyramid", () => {
+    for (const screen of [SCREENS.phone, SCREENS.laptop, SCREENS.hd]) {
+      for (const s of SCALES) {
+        if (s * TILE_PX >= TILE_MIN_PX) expect(tileLevel(s, screen)).toBe(0);
+        else expect(tileLevel(s, screen)).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("a level and the one above it always fit the cache, on every screen at every zoom", () => {
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of SCALES) {
+        const z = tileLevel(s, screen);
+        expect(z).toBeGreaterThanOrEqual(0);
+        expect(z).toBeLessThanOrEqual(LOD_MAX);
+        expect(levelCells(z, s, screen) + levelCells(z + 1, s, screen)).toBeLessThanOrEqual(TILE_CACHE_MAX);
+      }
+    }
+  });
+
+  test("it is the finest level that does: a finer one is too small or too many", () => {
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of SCALES) {
+        const z = tileLevel(s, screen);
+        if (z === 0) continue;
+        const finer = z - 1;
+        const tooSmall = levelCellPx(s, finer) < TILE_MIN_PX;
+        const tooMany = levelCells(finer, s, screen) + levelCells(z, s, screen) > TILE_CACHE_MAX;
+        expect(tooSmall || tooMany).toBe(true);
+      }
+    }
+  });
+
+  test("a pyramid level's cells stay at least TILE_MIN_PX until the world is one tile", () => {
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of SCALES) {
+        const z = tileLevel(s, screen);
+        if (z < LOD_MAX) expect(levelCellPx(s, z)).toBeGreaterThanOrEqual(TILE_MIN_PX);
+      }
+    }
+  });
+
+  test("the worst case it budgets for bounds every pan", () => {
+    // levelCells is offset-free on purpose (a pan never changes the level);
+    // check it really is an upper bound of what visibleGrid hands the renderer.
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of [0.011, 0.03, 0.1, 0.2, 0.38, 1, 3]) {
+        const z = tileLevel(s, screen);
+        for (const [ox, oy] of [
+          [0, 0],
+          [-1234.5, -987.25],
+          [-7000.3, -4000.9],
+          [313.7, -2222.2],
+        ] as [number, number][]) {
+          const g = visibleGrid({ scale: s, ox: ox * s * 10, oy: oy * s * 10 }, screen, z);
+          const n = (g.row1 - g.row0 + 1) * (g.col1 - g.col0 + 1);
+          expect(n).toBeLessThanOrEqual(levelCells(z, s, screen));
+        }
+      }
+    }
+  });
+
+  test("zoomed right out the whole world is one tile, and a continent overview is real ground", () => {
+    expect(tileLevel(MIN_SCALE, SCREENS.laptop)).toBe(LOD_MAX);
+    // Eastern Kingdoms (~42 tiles tall) fills a laptop stage at about 0.07:
+    // level 3, eight ADTs a tile, not the bare lattice this used to be.
+    expect(tileLevel(0.07, SCREENS.laptop)).toBe(3);
+  });
 });
 
 describe("hitTest", () => {
@@ -318,11 +425,13 @@ describe("the empty map's default view", () => {
   const DESKTOP = { w: 1280, h: 800 };
   const PHONE = { w: 360, h: 740 };
 
-  test("draws tiles rather than the bare lattice", () => {
-    // The whole point of not framing the continent: below this a 256px tile is
-    // suppressed and the reader gets an empty grid where a map should be.
+  test("draws the native tiles, the full-detail map of where characters start", () => {
+    // Every zoom draws real ground now; this frame is the one where it is the
+    // native tiles rather than a baked level.
     expect(DEFAULT_SCALE * TILE_PX).toBeGreaterThanOrEqual(TILE_MIN_PX);
     expect(defaultView(DESKTOP).scale).toBe(DEFAULT_SCALE);
+    expect(tileLevel(DEFAULT_SCALE, DESKTOP)).toBe(0);
+    expect(tileLevel(DEFAULT_SCALE, PHONE)).toBe(0);
   });
 
   test("holds the starter zones on screen at both sizes", () => {
@@ -664,6 +773,16 @@ describe("replayHrefFor", () => {
  */
 
 describe("latticeLines", () => {
+  test("at a pyramid level the lines are that level's cell boundaries", () => {
+    const view = { scale: 0.05, ox: 0, oy: 0 };
+    const l = latticeLines(view, SCREEN, 2);
+    const size = TILE_PX * 4 * 0.05;
+    expect(l.xs[1]! - l.xs[0]!).toBeCloseTo(size, 9);
+    expect(l.ys[1]! - l.ys[0]!).toBeCloseTo(size, 9);
+    // The whole level-2 world is 16 cells a side: never more than 17 lines.
+    expect(latticeLines({ scale: 0.01, ox: 0, oy: 0 }, SCREEN, 2).xs.length).toBe(17);
+  });
+
   test("the whole world is 130 segments, not 4096 rects", () => {
     // Zoomed out below the tile threshold the old loop stroked every cell of the
     // 64×64 grid; one line per boundary is 65 + 65.

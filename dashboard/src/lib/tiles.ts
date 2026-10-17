@@ -1,7 +1,8 @@
 /**
  * Whether a minimap tile can be fetched at all, and if so from where.
  *
- * The private viewer serves `/tiles/<map>/<row>_<col>.png` off `data/minimap/`
+ * The private viewer serves `/tiles/<map>/<row>_<col>.png`, and the baked
+ * pyramid levels under `/tiles/<map>/minimap/<z>/`, off `data/minimap/`
  * (`runner/viewer/tiles.ts`), same-origin with the SPA. The Gated preview
  * served the SPA and the bucket from one Worker behind one password, so the
  * same relative path resolved there too and the map page could hard-code it.
@@ -35,16 +36,30 @@
  * degrade to the grid.
  */
 
+import { type LodLayer, MINIMAP_LAYER, lodTileName } from "@viewer/worldmap";
+
 /**
- * The path a tile lives at, under whatever host serves it. The viewer's route
- * and the bucket's key share this shape by design, so one path works in both.
+ * The path a native tile lives at, under whatever host serves it. The viewer's
+ * route and the bucket's key share this shape by design, so one path works in
+ * both.
  */
 export function tilePath(map: number, row: number, col: number): string {
   return `/tiles/${map}/${row}_${col}.png`;
 }
 
 /**
- * The URL for one tile, or `null` when this build must not ask for one.
+ * The path of a tile at any level of a layer's pyramid. The minimap's level 0
+ * is the native tile at its original path; every other level is spelled by
+ * `lodTileName`, the one function the bake, the viewer and the publisher also
+ * call — which throws for level 0 of any other layer rather than guess.
+ */
+export function levelTilePath(map: number, layer: LodLayer, z: number, row: number, col: number): string {
+  if (z === 0 && layer === MINIMAP_LAYER) return tilePath(map, row, col);
+  return `/tiles/${map}/${lodTileName(layer, z, row, col)}`;
+}
+
+/**
+ * The URL for a tile path, or `null` when this build must not ask for one.
  *
  * - `tilesBase` set: that host serves them, trailing slashes trimmed the way
  *   `createSnapshotClient` trims its own base.
@@ -52,14 +67,19 @@ export function tilePath(map: number, row: number, col: number): string {
  *   `null`, and the grid is drawn.
  * - both unset: the private viewer, same-origin.
  */
-export function tileUrl(tilesBase: string, snapshotBase: string, map: number, row: number, col: number): string | null {
+export function tileUrlFor(tilesBase: string, snapshotBase: string, path: string): string | null {
   const tiles = trim(tilesBase);
-  if (tiles !== "") return `${tiles}${tilePath(map, row, col)}`;
+  if (tiles !== "") return `${tiles}${path}`;
   // Whether this is a public build is `client.ts`'s own test — the base
   // *trimmed of whitespace only*, so a bare `/` is a public build served from
   // its own origin and not a private one. Stripping the slash first would read
   // that as private and start requesting tiles.
-  return snapshotBase.trim() === "" ? tilePath(map, row, col) : null;
+  return snapshotBase.trim() === "" ? path : null;
+}
+
+/** `tileUrlFor` a native tile. */
+export function tileUrl(tilesBase: string, snapshotBase: string, map: number, row: number, col: number): string | null {
+  return tileUrlFor(tilesBase, snapshotBase, tilePath(map, row, col));
 }
 
 function trim(s: string): string {
@@ -84,7 +104,10 @@ const BASES = tileBasesFromEnv(import.meta.env as unknown as Record<string, unkn
 /** True when no tile base is configured: this build draws the grid and asks for nothing. */
 export const NO_TILE_BASE: boolean = tileUrl(BASES.tiles, BASES.snapshot, 0, 0, 0) === null;
 
-/** What the map page calls. `null` means "draw the grid and make no request". */
-export function tileSrc(map: number, row: number, col: number): string | null {
-  return tileUrl(BASES.tiles, BASES.snapshot, map, row, col);
+/**
+ * What the map page calls, for a tile at any level of a layer. `null` means
+ * "draw the grid and make no request".
+ */
+export function tileSrc(map: number, layer: LodLayer, z: number, row: number, col: number): string | null {
+  return tileUrlFor(BASES.tiles, BASES.snapshot, levelTilePath(map, layer, z, row, col));
 }

@@ -49,6 +49,7 @@ import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/m
 import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
 import { NO_TILE_BASE, tileSrc } from "../lib/tiles";
+import { type LodLayer, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
 import { type Speed, keyBelongsToTarget, nextSpeed, playbackKey, prevSampleBefore, tickMs } from "../lib/playback";
 import {
@@ -59,7 +60,7 @@ import {
 } from "../lib/mapstate";
 import {
   STALE_MS,
-  TILE_MIN_PX,
+  TILE_CACHE_MAX,
   type FeedClock,
   type Pip,
   type View,
@@ -70,12 +71,14 @@ import {
   fitTo,
   hitTest,
   latticeLines,
+  levelCellPx,
   mapName,
   pipName,
   positionAgeMs,
   project,
   stepPips,
   syncPips,
+  tileLevel,
   visibleGrid,
   worldPerPixel,
   zoomAt,
@@ -95,7 +98,6 @@ import {
 import { displayError, logError } from "../lib/errors";
 
 const POLL_MS = 5000;
-const TILE_CACHE_MAX = 512;
 
 /*
  * The pip's own geometry, half again the size it was first drawn at: a logo
@@ -162,7 +164,13 @@ let reduceMotion = false;
 
 interface TileEntry {
   img: HTMLImageElement;
-  ok: boolean;
+  /** Loading, drawable, or known not to exist (a 404, or a build with no tile host). */
+  state: "pending" | "ok" | "missing";
+}
+
+/** One cache key per tile, whatever its layer and level: the native 0_0 and level 1's 0_0 are different tiles. */
+function tileKey(map: number, layer: LodLayer, z: number, row: number, col: number): string {
+  return `${map}/${layer}/${z}/${row}_${col}`;
 }
 
 export default function MapPage() {
@@ -260,12 +268,14 @@ export default function MapPage() {
   let theme = { ...DEFAULT_THEME };
 
   /*
-   * Tiles: an LRU of Image objects with misses remembered in the same map.
-   * Before the extraction has run every visible tile is missing, and an
-   * unremembered miss would re-request dozens of them on every pan.
+   * Tiles: an LRU of Image objects with misses remembered in the same map,
+   * every layer and pyramid level in the one cache. Before the extraction has
+   * run every visible tile is missing, and an unremembered miss would
+   * re-request dozens of them on every pan. `tileLevel` keeps a frame's
+   * level, and the one above it that is drawn while it loads, inside the cap.
    */
-  function tile(map: number, row: number, col: number): TileEntry {
-    const key = `${map}/${row}_${col}`;
+  function tile(map: number, layer: LodLayer, z: number, row: number, col: number): TileEntry {
+    const key = tileKey(map, layer, z, row, col);
     const hit = tiles.get(key);
     if (hit !== undefined) {
       tiles.delete(key);
@@ -273,19 +283,24 @@ export default function MapPage() {
       return hit;
     }
     const img = new Image();
-    const entry: TileEntry = { img, ok: false };
+    const entry: TileEntry = { img, state: "missing" };
     // Null means this build was given no tile host and must not ask for one
     // (`lib/tiles.ts`). Remembered as a miss like any other, so the grid is
     // drawn and nothing is requested.
-    const src = tileSrc(map, row, col);
+    const src = tileSrc(map, layer, z, row, col);
     if (src !== null) {
+      entry.state = "pending";
       img.onload = (): void => {
-        entry.ok = true;
+        entry.state = "ok";
         needsDraw = true;
       };
-      // A miss changes nothing on screen — the fallback square is already there
-      // — and asking for a redraw would re-request every missing tile forever.
-      img.onerror = null;
+      // One redraw per miss, never a re-request: the entry stays cached as
+      // missing. The redraw is what gives a cell that was drawn from a coarser
+      // level while it loaded its lattice square, now that it is known empty.
+      img.onerror = (): void => {
+        entry.state = "missing";
+        needsDraw = true;
+      };
       img.src = src;
     }
     tiles.set(key, entry);
@@ -343,76 +358,143 @@ export default function MapPage() {
     return [...pips.values()].filter((p) => p.data.map === map);
   };
 
+  /** A cached tile, looked at without asking for it or touching its place in the LRU. */
+  function peekTile(map: number, layer: LodLayer, z: number, row: number, col: number): TileEntry | undefined {
+    return tiles.get(tileKey(map, layer, z, row, col));
+  }
+
   function drawGrid(ctx: CanvasRenderingContext2D, map: number): void {
     ctx.fillStyle = theme.grid;
     ctx.fillRect(0, 0, W, H);
-    const g = visibleGrid(view, { w: W, h: H });
-    /*
-     * Zoomed far out a 256px tile carries no information, and the whole 64×64
-     * grid would be on screen at once — more cells than the cache holds, so
-     * every frame would evict and re-request the lot. The threshold also keeps
-     * the visible cell count inside the LRU.
-     *
-     * Where a tile comes from is `lib/tiles.ts`: the private viewer serves
-     * them same-origin, and the public build reads
-     * `VITE_WRATHBENCH_TILES_BASE` for the host holding the `tiles/` prefix.
-     * A build given no host and a tile merely missing draw identically — the
-     * labelled grid below — which is the same state a lab machine that never
-     * ran the extraction is in.
-     */
-    const useTiles = !NO_TILE_BASE && g.size >= TILE_MIN_PX;
     ctx.lineWidth = 1;
     ctx.font = "11px ui-monospace, monospace";
     ctx.textBaseline = "top";
     ctx.strokeStyle = theme.gridline;
     ctx.fillStyle = theme.dim;
-    if (!useTiles) {
-      /*
-       * Below the threshold nothing is drawn into a cell, so nothing can be
-       * covered and the lattice is one path rather than one rect per cell: the
-       * whole world on screen was up to 4096 `strokeRect` calls, and a pan made
-       * that per frame. Shared boundaries now carry one line
-       * where the inset rects carried two, which reads thinner and is the only
-       * visible change.
-       */
-      const l = latticeLines(view, { w: W, h: H });
-      ctx.beginPath();
-      for (const x of l.xs) {
-        ctx.moveTo(x, l.y0);
-        ctx.lineTo(x, l.y1);
-      }
-      for (const y of l.ys) {
-        ctx.moveTo(l.x0, y);
-        ctx.lineTo(l.x1, y);
-      }
-      ctx.stroke();
-      // Labels stay per cell and stay bounded: they need a cell wider than 64px,
-      // which caps them at a screenful.
-      if (g.size > 64) {
-        for (let row = g.row0; row <= g.row1; row++) {
-          for (let col = g.col0; col <= g.col1; col++) {
-            ctx.fillText(`${row}_${col}`, col * g.size + view.ox + 6, row * g.size + view.oy + 5);
-          }
-        }
-      }
+    /*
+     * Where a tile comes from is `lib/tiles.ts`: the private viewer serves
+     * them same-origin, and the public build reads
+     * `VITE_WRATHBENCH_TILES_BASE` for the host holding the `tiles/` prefix.
+     * A build given no host draws the labelled grid at every zoom, which is
+     * the same state a lab machine that never ran the extraction is in.
+     */
+    if (NO_TILE_BASE) {
+      drawLattice(ctx, 0, true);
       return;
     }
-    for (let row = g.row0; row <= g.row1; row++) {
-      for (let col = g.col0; col <= g.col1; col++) {
-        const x = col * g.size + view.ox;
-        const y = row * g.size + view.oy;
-        const t = tile(map, row, col);
-        if (t.ok) {
-          // A hair of overdraw: neighbouring tiles must not show a seam when
-          // the scale puts their edges on a fractional device pixel.
-          ctx.drawImage(t.img, x, y, g.size + 1, g.size + 1);
-          continue;
+    /*
+     * Which level of the pyramid: the native tiles while they are at least
+     * `TILE_MIN_PX` on screen, and zoomed out the baked level whose cells stay
+     * near that size, so real ground shows at every zoom and the cells on
+     * screen never outgrow the cache (`tileLevel`). A pyramid level draws
+     * over the lattice in one pass, so the lattice shows wherever a level has
+     * no ground: ocean and the edge of the world.
+     */
+    const z = tileLevel(view.scale, { w: W, h: H });
+    if (z > 0) drawLattice(ctx, z, false);
+    drawLevel(ctx, map, MINIMAP_LAYER, z);
+  }
+
+  /**
+   * The lattice as one stroked path at level `z`'s cell size, labelled with
+   * the native file names when asked and the cells are wide enough to hold
+   * them. See `latticeLines` for why it is a path and not per-cell rects.
+   */
+  function drawLattice(ctx: CanvasRenderingContext2D, z: number, labels: boolean): void {
+    const l = latticeLines(view, { w: W, h: H }, z);
+    ctx.beginPath();
+    for (const x of l.xs) {
+      ctx.moveTo(x, l.y0);
+      ctx.lineTo(x, l.y1);
+    }
+    for (const y of l.ys) {
+      ctx.moveTo(l.x0, y);
+      ctx.lineTo(l.x1, y);
+    }
+    ctx.stroke();
+    // Labels stay per cell and stay bounded: they need a cell wider than 64px,
+    // which caps them at a screenful.
+    const g = visibleGrid(view, { w: W, h: H }, z);
+    if (labels && g.size > 64) {
+      for (let row = g.row0; row <= g.row1; row++) {
+        for (let col = g.col0; col <= g.col1; col++) {
+          ctx.fillText(`${row}_${col}`, col * g.size + view.ox + 6, row * g.size + view.oy + 5);
         }
-        ctx.strokeRect(x + 0.5, y + 0.5, g.size - 1, g.size - 1);
-        // The label is the file name the extraction would write: it is how an
-        // operator checks orientation where there is no tile to draw.
-        if (g.size > 64) ctx.fillText(`${row}_${col}`, x + 6, y + 5);
       }
+    }
+  }
+
+  /**
+   * One level of one layer, with anything already cached drawn under the
+   * cells still loading, so a zoom never flashes to an empty grid.
+   *
+   * Underneath goes the finest cached level above (a zoom in: the level just
+   * left is still in the cache) and, over that, the cached cells one level
+   * down (a zoom out: the same). Neither is ever requested — a tile that is
+   * not already here is not worth a fetch for the few frames until the real
+   * one lands. A level above that is known missing ends the search, because a
+   * pyramid tile exists wherever any of its children has ground.
+   *
+   * Native tiles (level 0) draw as they always have: a loaded tile fills its
+   * cell, and anything else gets its outline and file-name label — except a
+   * cell still loading that has something cached drawn under it.
+   */
+  function drawLevel(ctx: CanvasRenderingContext2D, map: number, layer: LodLayer, z: number): void {
+    const g = visibleGrid(view, { w: W, h: H }, z);
+    const cells: { row: number; col: number; t: TileEntry }[] = [];
+    for (let row = g.row0; row <= g.row1; row++) {
+      for (let col = g.col0; col <= g.col1; col++) cells.push({ row, col, t: tile(map, layer, z, row, col) });
+    }
+
+    const covered = new Set<TileEntry>();
+    const above = new Map<string, { a: number; row: number; col: number; img: HTMLImageElement }>();
+    const below: { row: number; col: number; img: HTMLImageElement }[] = [];
+    for (const { row, col, t } of cells) {
+      if (t.state !== "pending") continue;
+      for (let a = z + 1; a <= LOD_MAX; a++) {
+        const ar = row >> (a - z);
+        const ac = col >> (a - z);
+        const e = peekTile(map, layer, a, ar, ac);
+        if (e === undefined || e.state === "pending") continue;
+        if (e.state === "ok") {
+          above.set(`${a}/${ar}_${ac}`, { a, row: ar, col: ac, img: e.img });
+          covered.add(t);
+        }
+        break;
+      }
+      if (z === 0) continue;
+      for (let dr = 0; dr < 2; dr++) {
+        for (let dc = 0; dc < 2; dc++) {
+          const e = peekTile(map, layer, z - 1, 2 * row + dr, 2 * col + dc);
+          if (e?.state !== "ok") continue;
+          below.push({ row: 2 * row + dr, col: 2 * col + dc, img: e.img });
+          covered.add(t);
+        }
+      }
+    }
+    // Coarsest first, so the finer cached level wins where both are drawn.
+    for (const u of [...above.values()].sort((p, q) => q.a - p.a)) {
+      const size = levelCellPx(view.scale, u.a);
+      ctx.drawImage(u.img, u.col * size + view.ox, u.row * size + view.oy, size + 1, size + 1);
+    }
+    const half = levelCellPx(view.scale, z - 1);
+    for (const u of below) ctx.drawImage(u.img, u.col * half + view.ox, u.row * half + view.oy, half + 1, half + 1);
+
+    for (const { row, col, t } of cells) {
+      const x = col * g.size + view.ox;
+      const y = row * g.size + view.oy;
+      if (t.state === "ok") {
+        // A hair of overdraw: neighbouring tiles must not show a seam when
+        // the scale puts their edges on a fractional device pixel.
+        ctx.drawImage(t.img, x, y, g.size + 1, g.size + 1);
+        continue;
+      }
+      // A pyramid level drew its lattice underneath already.
+      if (z > 0 || covered.has(t)) continue;
+      ctx.strokeRect(x + 0.5, y + 0.5, g.size - 1, g.size - 1);
+      // The label is the file name the extraction would write: it is how an
+      // operator checks orientation where there is no tile to draw.
+      if (g.size > 64) ctx.fillText(`${row}_${col}`, x + 6, y + 5);
     }
   }
 

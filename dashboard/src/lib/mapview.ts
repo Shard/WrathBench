@@ -13,7 +13,7 @@
  */
 
 import type { AgentPosition } from "@viewer/api-types";
-import { GRID, TILE_PX, TILE_SIZE, tileToWorld, worldToPixel } from "@viewer/worldmap";
+import { GRID, LOD_MAX, TILE_PX, TILE_SIZE, lodGrid, tileToWorld, worldToPixel } from "@viewer/worldmap";
 import { effortLabel, modelDisplay } from "./format";
 
 export const MIN_SCALE = 0.01;
@@ -73,8 +73,18 @@ export function mapName(map: number): string {
   return MAP_NAMES[map] ?? `map ${map}`;
 }
 
-/** Below this on-screen tile size a 256px tile carries no information. */
+/**
+ * The smallest a 256px tile is drawn on screen. Below it the map draws the
+ * next pyramid level up instead, whose tile covers four times the ground at
+ * the same pixel count (`tileLevel`).
+ */
 export const TILE_MIN_PX = 96;
+
+/**
+ * Tile images the map page keeps, misses included: an LRU, so a pan does not
+ * re-request what it just drew and an unextracted tile is asked for once.
+ */
+export const TILE_CACHE_MAX = 512;
 
 export interface View {
   scale: number;
@@ -139,24 +149,25 @@ export function fitTo(screen: Screen, list: readonly Placeable[], pad = 240): Vi
  * Where the map looks when it has nothing to look at.
  *
  * An empty feed is the ordinary state of a quiet fleet, and it is what a first
- * visitor hits; the page has to draw a map anyway. `fitTo`'s empty branch is
- * the wrong answer for it — the whole world at 0.06 is four times under
- * `TILE_MIN_PX`, so every tile is suppressed and the reader gets a bare
- * lattice. A continent overview of Eastern Kingdoms has the same problem: at
- * roughly 0.1 no tile is drawn either. There is no zoom at which "the whole
- * continent" and "real tiles" are both true, so the default frames the place
- * instead of the continent.
+ * visitor hits; the page has to draw a map anyway. It frames the starter
+ * country every character begins in: Dun Morogh (Anvilmar, row 43.7) and
+ * Elwynn (Northshire and Stormwind, row ~48.7) sit five tiles apart on the
+ * same column, and a frame centred between them holds both — on a phone as
+ * well as a desktop — at a scale where the native tiles draw, so the first
+ * thing a reader sees is the full-detail map of where characters start. When
+ * a position arrives the ordinary fit takes over and this is forgotten.
  *
- * That place is the starter country every character begins in: Dun Morogh
- * (Anvilmar, row 43.7) and Elwynn (Northshire and Stormwind, row ~48.7) sit
- * five tiles apart on the same column, and a frame centred between them holds
- * both at a scale where tiles draw — on a phone as well as a desktop. When a
- * position arrives the ordinary fit takes over and this is forgotten.
+ * Zooming out from it now shows real ground at every scale, the whole
+ * continent included, from the baked pyramid (`tileLevel`). That used to be
+ * impossible — below `TILE_MIN_PX` the page drew a bare lattice — and was
+ * then part of the reason the default frames a place and not the continent.
+ * A continent overview would now be a real choice of default; this one is
+ * kept for the reason above.
  */
 export const DEFAULT_MAP = 0;
 const DEFAULT_ROW = 46.2;
 const DEFAULT_COL = 31.1;
-/** Above `TILE_MIN_PX / TILE_PX`, so the default frame draws tiles and not the lattice. */
+/** At or above `TILE_MIN_PX / TILE_PX`, so the default frame draws the native tiles. */
 export const DEFAULT_SCALE = 0.4;
 
 export function defaultView(screen: Screen): View {
@@ -175,13 +186,61 @@ export function zoomAt(view: View, sx: number, sy: number, factor: number): View
   };
 }
 
-/** The inclusive tile range a view puts on screen, clamped to the world grid. */
+/** How wide one cell of pyramid level `z` is on screen under a scale. */
+export function levelCellPx(scale: number, z: number): number {
+  return TILE_PX * 2 ** z * scale;
+}
+
+/**
+ * The most cells of level `z` a screen can hold at a scale, wherever it is
+ * panned: an interval of length L meets at most ceil(L / cell) + 1 cells, and
+ * never more than the level's grid has. Independent of the offset on purpose,
+ * so a pan never changes the level and the level never flickers under a drag.
+ */
+export function levelCells(z: number, scale: number, screen: Screen): number {
+  if (z > LOD_MAX) return 0;
+  const cell = levelCellPx(scale, z);
+  const n = lodGrid(z);
+  const across = Math.min(n, Math.ceil(screen.w / cell) + 1);
+  const down = Math.min(n, Math.ceil(screen.h / cell) + 1);
+  return across * down;
+}
+
+/**
+ * Which pyramid level a frame draws: the finest whose cells are at least
+ * `TILE_MIN_PX` on screen and whose cells, together with the next level up's,
+ * fit in the tile cache. Level 0 is the native tiles and `LOD_MAX` one tile
+ * for the world, which always fits.
+ *
+ * The next level up is counted because it is what the page draws under a
+ * level that is still loading, so both have to stay cached through a zoom in
+ * either direction; with only this level counted, a large screen would evict
+ * the underlay it is drawing from. On a 1280×800 or 1920×1080 stage that
+ * second condition never binds and the native tiles draw from `TILE_MIN_PX`
+ * up exactly as before. On a larger one it moves the switch to the native
+ * tiles to a slightly closer zoom: a 4K stage at 96px cells can meet nearly
+ * a thousand native cells, which overran the cache before this existed.
+ */
+export function tileLevel(scale: number, screen: Screen): number {
+  for (let z = 0; z < LOD_MAX; z++) {
+    if (levelCellPx(scale, z) < TILE_MIN_PX) continue;
+    if (levelCells(z, scale, screen) + levelCells(z + 1, scale, screen) <= TILE_CACHE_MAX) return z;
+  }
+  return LOD_MAX;
+}
+
+/**
+ * The inclusive cell range a view puts on screen at pyramid level `z`, clamped
+ * to that level's grid. Level 0 is the native ADT grid.
+ */
 export function visibleGrid(
   view: View,
   screen: Screen,
+  z = 0,
 ): { row0: number; row1: number; col0: number; col1: number; size: number } {
-  const size = TILE_PX * view.scale;
-  const clamp = (v: number): number => Math.min(GRID - 1, Math.max(0, v));
+  const size = levelCellPx(view.scale, z);
+  const last = lodGrid(z) - 1;
+  const clamp = (v: number): number => Math.min(last, Math.max(0, v));
   return {
     col0: clamp(Math.floor(-view.ox / size)),
     col1: clamp(Math.floor((screen.w - view.ox) / size)),
@@ -192,13 +251,15 @@ export function visibleGrid(
 }
 
 /**
- * The fallback lattice as two runs of lines rather than one rect per cell.
+ * The fallback lattice as two runs of lines rather than one rect per cell, at
+ * pyramid level `z`'s cell size.
  *
- * Below `TILE_MIN_PX` no tile is drawn, so no cell can be covered and the whole
- * lattice is one stroked path: the 64x64 world used to put up to 4096
- * `strokeRect` calls into a pan's frame budget, and this is at most 130
- * segments. Above the threshold the caller still strokes per
- * cell, because there a drawn tile must suppress its own cell's outline.
+ * Where nothing is drawn into a cell — a build with no tile host, or a
+ * pyramid level, whose tiles go on top — the whole lattice is one stroked
+ * path: the 64x64 world used to put up to 4096 `strokeRect` calls into a
+ * pan's frame budget, and this is at most 130 segments. With native tiles the
+ * caller still strokes per cell, because there a drawn tile must suppress its
+ * own cell's outline.
  *
  * `x0`/`x1` and `y0`/`y1` are the extent to span: the lines cover exactly the
  * clamped grid box `visibleGrid` reports, so the lattice stops at the world's
@@ -212,8 +273,9 @@ export function visibleGrid(
 export function latticeLines(
   view: View,
   screen: Screen,
+  z = 0,
 ): { xs: number[]; ys: number[]; x0: number; x1: number; y0: number; y1: number } {
-  const g = visibleGrid(view, screen);
+  const g = visibleGrid(view, screen, z);
   const xs: number[] = [];
   const ys: number[] = [];
   for (let col = g.col0; col <= g.col1 + 1; col++) xs.push(col * g.size + view.ox + 0.5);
