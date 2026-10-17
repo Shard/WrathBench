@@ -36,6 +36,19 @@ bun minimap/src/bake.ts --map 0 --force    # one map, rewriting existing levels
 Flags: `--map <ids>`, `--force`, `--out <dir>` (the tile root it reads and
 writes, default `data/minimap`).
 
+And the painted map over the same levels (see "The painted map" below):
+
+```
+bun run --cwd minimap bake-art             # maps 0, 1, 530, 571
+bun minimap/src/artbake.ts --map 0 --force --data <data dir> --client <client Data dir>
+```
+
+Flags: `--map <ids>`, `--force`, `--data <dir>` (default `data`; the other
+inputs default under it), `--client <dir>` (default `<data>/client-source/Data`),
+`--locale <code>` (default `enUS`), `--out <dir>` (the tile root, default
+`<data>/minimap`, which must already hold the native tiles), `--gap paper|minimap`
+and `--cities` (both below).
+
 Idempotent: a tile that already exists is skipped unless `--force`. A full
 extraction of the four continents takes about 17 s and produces 3636 tiles /
 ~104 MiB; map 369 adds 12 tiles / 214 KiB on top.
@@ -55,6 +68,20 @@ Tests: `bun test minimap/`. Typecheck: `bun run --cwd minimap typecheck`.
   `Northrend` → 571).
 - For a map with no terrain, `World\Maps\<Dir>\<Dir>.wdt` and the WMO root it
   names. See "Maps that are one building" below.
+
+The art bake reads more:
+
+- The same archives plus the locale ones, in client order: the base four, then
+  `<locale>/locale-<locale>`, `expansion-locale-<locale>`, `lichking-locale-<locale>`,
+  then the three patches, then `<locale>/patch-<locale>`, `-2`, `-3`. Every
+  zone's world-map art is in `locale-<locale>.MPQ` — Outland's and Northrend's
+  included; the expansion and lichking locale archives hold none (their
+  listfiles and a direct lookup agree) — and `patch-<locale>.MPQ` re-serves the
+  zones redrawn in 3.x, which is why the locale patches must sit above it.
+- `data/client/dbc/WorldMapArea.dbc`, `WorldMapOverlay.dbc` and `AreaTable.dbc`.
+- `data/client/maps/*.map`, the server's per-ADT area and liquid grid
+  (AzerothCore's map extractor output).
+- The native minimap tiles, only for `--gap minimap`.
 
 ## Output and the tile convention
 
@@ -233,6 +260,176 @@ up, with coastlines continuous across every tile edge. A z3 tile over Dun
 Morogh matches its four z2 children, and a z1 tile matches its four natives,
 compared side by side. Synthetic tests pin the quadrant order, the alpha
 weighting, the whole-world tile's placement of each native, and idempotence.
+
+## The painted map
+
+`src/artbake.ts` stitches every zone's world-map art into one picture on the
+minimap's grid: `<map>/art/<z>/<row>_<col>.png`, z = 1..6, spelled by
+`lodTileName(ART_LAYER, …)`. z1 is 128 px per ADT, about the density the zone
+maps are painted at; higher levels are the same alpha-weighted 2×2 filter as
+the minimap's. Tiles are transparent where nothing is painted and only tiles
+with content are written. The output is byte-deterministic, an existing tile
+is skipped without `--force`, and `--force` also removes tiles a re-bake no
+longer has content for. The map page draws it over the minimap and fades it
+out as you zoom in.
+
+### Placement
+
+A zone's map is 4×3 BLP tiles of 256 (`Interface\WorldMap\<name>\<name>1..12.blp`)
+plus its WorldMapOverlay pieces. The picture is the top-left 1002×668 of that
+1024×768; the rest is padding. Its WorldMapArea row gives the world rect, and
+the art maps onto it linearly:
+
+```
+u = (left − Y) / (left − right) × 1002      world Y (west)  → art x
+v = (top  − X) / (top  − bottom) × 668      world X (north) → art y
+```
+
+Zones are placed on the map they physically sit on (`WorldMapArea.mapId`), not
+the one they are displayed under. Eversong, Ghostlands and Quel'Danas, and the
+Azuremyst isles, are on 530 beside Outland.
+
+What was verified, and how:
+
+1. **The crop.** For every rect checked, `(left − right) / 1002` and
+   `(top − bottom) / 668` (yards per pixel across and down) agree within 0.1%,
+   so the pixels are square only under the 1002×668 crop.
+2. **Landmarks, against our own trajectories.** The dwarf start lands in
+   Coldridge Valley, just above its label, beside the Anvilmar icon. The human
+   start lands beside Northshire Abbey's icon.
+3. **Against the minimap.** A z1 art tile at 50% over its four native tiles
+   lines up: Coldridge's roads and lakes in Dun Morogh, and Northshire and the
+   Goldshire road in Elwynn. Stitched regions line up too: Dun Morogh's lakes,
+   The Loch, the Wetlands delta, Westfall's coast and Stormwind's canals.
+
+### The server's area grid (`src/mapfile.ts`)
+
+Each `data/client/maps/<map:3><row:2><col:2>.map` covers one ADT. The layout
+below was read off the bytes; it is version 9 of the extractor format.
+
+- **Header:** 11 u32: `MAPS`, the version, the build, then an offset and size
+  for each of the area, height, liquid and holes sections.
+- **`AREA`:** a u16 of flags (1 means the whole tile is one area) and a u16
+  area id, then, unless the flag is set, u16[16][16] AreaTable ids.
+- **`MLIQ`:** a u8 of flags (1 means no per-cell type), the tile's u8 liquid
+  flags, a u16 type, the liquid's vertex rectangle and a level. Unless flag 1
+  is set, u16[16][16] entries and u8[16][16] per-cell flags follow: 0x01 water,
+  0x02 ocean.
+
+Every real tile seen with one liquid type for the whole tile spans the full
+vertex grid, so the axis order of that rectangle is untested.
+
+What was verified, and how:
+
+1. **File order.** The first two-digit field spans the same range as the
+   minimap's rows on map 0, and the second the columns. That is the
+   extent-against-extent argument the native tiles were held to.
+2. **In-tile order.** Under the dwarf start the row-major reading gives
+   Coldridge Valley. The transposed reading gives Coldridge Pass, the
+   neighbouring subzone.
+3. **Pixels.** Subzone boundaries drawn from the grid over the minimap follow
+   the terrain. Iceflow Lake, Coldridge Valley and The Loch trace their water.
+   The zone borders follow the snow, grass and red rock between Dun Morogh,
+   Loch Modan and the Badlands, and the grass and wheat between Elwynn and
+   Westfall.
+
+A cell's zone is its AreaTable id walked up the parent chain to the root,
+which is the id WorldMapArea.areaId uses.
+
+Three gotchas:
+
+- Sea areas have zone parents (the Forbidding Sea sits under the Wetlands), so
+  open sea is taken from the ocean liquid flag, not the area.
+- Area 0 marks unused terrain.
+- Ironforge and Undercity have no terrain cells at all: they are interiors.
+
+### Seams
+
+What makes clean seams possible is a mask of each zone's own painted interior,
+not the raster alone. The raster is necessary but not enough. Dun Morogh's map
+bakes the label WETLANDS onto a ridge the server's grid puts inside Dun Morogh,
+so a mask from territory alone shows "WETL…".
+
+The base tiles of a zone map leave its interior blank parchment, and the
+overlay pieces paint it in. So **own** is where an overlay is opaque and
+actually changed the base. The Burning Crusade overlays are large blocks that
+repaint margins and labels unchanged, which is why "changed" is part of the
+test. Labels, compass roses and the painted frame sit on blank parchment away
+from it.
+
+Per output pixel:
+
+- **Validity.** A zone's art counts inside its frame and near its own mask.
+  - The frame is a rounded inset rect: 10 px on three sides, 26 at the bottom,
+    corners of radius 80. The fade is 56 px, pulled inward by noise so a cut is
+    not a ruler line.
+  - On land, the art counts out to 110 px from the own mask, which keeps the
+    painted border mountains. At sea it counts to 35 px, enough for the coastal
+    hatching but not a baked sea name.
+  - Both are smooth functions of the art position, evaluated per pixel.
+- **Territory.**
+  - Land cells belong to the raster's zone.
+  - Sea cells, and area-0 ground, belong to the nearest land's zone within
+    450 yards.
+  - Each zone's territory is blurred at cell scale and then sharpened against
+    the others (shares raised to the third power and renormalised). A boundary
+    comes out as a smooth curve rather than the grid's 33-yard staircase.
+- **Weights.** A zone paints its territory share times its validity. Land its
+  own zone cannot paint goes to the zones whose art can, in proportion to
+  validity to the fourth power, so the hand-over has no hard switch.
+- **The backdrop** takes what is left.
+  - **Sea** is where the server says ocean (and the terrain-less cells near
+    it). It is coloured with the zone maps' own water: the median of cool
+    pixels (blue at least 0.8 of red) over sea and lake cells, measured at bake
+    time. It is full out to 3 ADTs from the coast and fades to clear over 2
+    more, so at continent zoom the outline is the coast, not the ADT grid.
+    Outland has no ocean, so no sea.
+  - **Unpainted land** is parchment: the mean colour of the zones' painted
+    rings, measured at bake time. It fills out to 450 yards from land some art
+    can paint and fades over 450 more. Unused terrain far from any zone
+    (Outland's void, the north of map 0) is left clear, edged by the zones.
+
+`--gap minimap` shades the parchment with the minimap's ground instead. It is
+not the default because unpainted land is exactly where the minimap is
+unfinished: flat placeholder fills with chunk-staircase edges, and the grading
+carries those edges over.
+
+Capitals (AreaTable flag 0x100) are off by default, and the surrounding zone's
+map paints them. `--cities` draws a capital's own map over its terrain cells:
+- Stormwind's plan lines up with the minimap's canals, but its map's blank
+  margin shows on the city's northern cells.
+- Its plan is a scale jump against Elwynn's ring.
+- Ironforge and Undercity have no cells to draw on.
+
+What was verified, and how: diagnostics projected each zone's final weight
+back into its own art and drew the 0.5 and 0.05 contours. For Dun Morogh,
+Wetlands, Elwynn, Westfall and Eversong, every baked neighbour label, compass
+rose and frame falls outside. Synthetic tests pin the rest: a label baked on a
+zone's territory but away from its overlay never reaches the output, no frame
+pixel does, the sea takes the art's water colour, and the bake is
+deterministic.
+
+What still looks wrong:
+
+- **Straight seams.** Where a territory runs past its own map's frame (Badlands
+  west, Elwynn north, the Eastern Plaguelands, Desolace, Silithus) the cut is
+  feathered and wavy but still follows the frame.
+- **Faint label leaks** where a zone's own overlays paint a neighbour's label on
+  cells the grid gives that zone: BURNING STEPPES along Redridge's north edge,
+  and EASTERN PLAGUELANDS along Ghostlands' south edge.
+- **The parchment fill** is flat beside the painted rings.
+- **A strip of ocean** on 530, between Outland and Quel'Thalas, draws a small
+  sea of its own.
+
+The bake over maps 0, 1, 530 and 571 takes about 110 s and writes 1745 tiles
+(160 MiB):
+
+| map | z1 | z2 | z3 | z4 | z5 | z6 | MiB |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 284 | 83 | 27 | 8 | 4 | 1 | 39.2 |
+| 1 | 359 | 102 | 33 | 11 | 4 | 1 | 49.4 |
+| 530 | 334 | 98 | 32 | 10 | 4 | 1 | 40.7 |
+| 571 | 241 | 71 | 23 | 9 | 4 | 1 | 30.9 |
 
 ## Relationship to the viewer
 
