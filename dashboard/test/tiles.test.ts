@@ -125,7 +125,10 @@ describe("one place builds it", () => {
     // Two guards, and the outer one is what keeps a withheld build from
     // creating an Image per visible cell, at any pyramid level, on every pan.
     const src = readFileSync(join(SRC, "pages", "MapPage.tsx"), "utf8");
-    expect(src).toMatch(/if \(NO_TILE_BASE\) \{\s*drawLattice\(ctx, 0, true\);\s*return;\s*\}[\s\S]*drawLevel\(ctx, map, MINIMAP_LAYER, z\);/);
+    // Both layers sit behind the one guard: the art is never asked for either.
+    expect(src).toMatch(
+      /if \(NO_TILE_BASE\) \{\s*drawLattice\(ctx, 0, true\);\s*return;\s*\}[\s\S]*drawLevel\(ctx, map, MINIMAP_LAYER, f\.minimap\);[\s\S]*drawLevel\(art, map, ART_LAYER, f\.art\);/,
+    );
     expect(src).toMatch(/const src = tileSrc\(map, layer, z, row, col\);\s*\n\s*if \(src !== null\) \{/);
   });
 });

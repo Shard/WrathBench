@@ -31,7 +31,13 @@ import {
   hueOf,
   latticeLines,
   STALE_MS,
+  ART_FADE_END_PX,
+  ART_FADE_START_PX,
   TILE_CACHE_MAX,
+  artLevel,
+  frameLevels,
+  minimapAlpha,
+  pxPerAdt,
   TILE_MIN_PX,
   levelCellPx,
   levelCells,
@@ -301,11 +307,91 @@ describe("tileLevel", () => {
     }
   });
 
+  test("with the art drawn too, both layers and both underlays share the one cache", () => {
+    for (const screen of Object.values(SCREENS)) {
+      for (const s of SCALES) {
+        const z = tileLevel(s, screen, true);
+        const a = artLevel(z);
+        const total =
+          levelCells(z, s, screen) + levelCells(z + 1, s, screen) + levelCells(a, s, screen) + levelCells(a + 1, s, screen);
+        expect(total).toBeLessThanOrEqual(TILE_CACHE_MAX);
+      }
+    }
+  });
+
+  test("the art's share does not move the native switch on an ordinary screen", () => {
+    for (const screen of [SCREENS.phone, SCREENS.laptop, SCREENS.hd]) {
+      expect(tileLevel(TILE_MIN_PX / TILE_PX, screen, true)).toBe(0);
+    }
+  });
+
   test("zoomed right out the whole world is one tile, and a continent overview is real ground", () => {
     expect(tileLevel(MIN_SCALE, SCREENS.laptop)).toBe(LOD_MAX);
     // Eastern Kingdoms (~42 tiles tall) fills a laptop stage at about 0.07:
     // level 3, eight ADTs a tile, not the bare lattice this used to be.
     expect(tileLevel(0.07, SCREENS.laptop)).toBe(3);
+  });
+});
+
+/*
+ * The crossfade between the painted map and the minimap. Its two numbers are
+ * the tuning knobs; these pin the shape, not the numbers, so retuning them is
+ * a one-line edit that keeps this suite green.
+ */
+describe("the art/minimap crossfade", () => {
+  test("all art at and below the start, all minimap at and above the end", () => {
+    expect(minimapAlpha(0)).toBe(0);
+    expect(minimapAlpha(ART_FADE_START_PX)).toBe(0);
+    expect(minimapAlpha(ART_FADE_START_PX / 2)).toBe(0);
+    expect(minimapAlpha(ART_FADE_END_PX)).toBe(1);
+    expect(minimapAlpha(ART_FADE_END_PX * 10)).toBe(1);
+    expect(minimapAlpha(Number.NaN)).toBe(0);
+  });
+
+  test("rises monotonically and smoothly, halfway at the geometric mean of the ends", () => {
+    let prev = 0;
+    for (let p = ART_FADE_START_PX; p <= ART_FADE_END_PX; p *= 1.01) {
+      const a = minimapAlpha(p);
+      expect(a).toBeGreaterThanOrEqual(prev);
+      // Smooth: no step bigger than a gentle notch anywhere along the way.
+      expect(a - prev).toBeLessThan(0.02);
+      prev = a;
+    }
+    expect(minimapAlpha(Math.sqrt(ART_FADE_START_PX * ART_FADE_END_PX))).toBeCloseTo(0.5, 9);
+    // Flat at both ends, so neither end of the fade shows as a kink.
+    expect(minimapAlpha(ART_FADE_START_PX * 1.01)).toBeLessThan(0.001);
+    expect(minimapAlpha(ART_FADE_END_PX / 1.01)).toBeGreaterThan(0.999);
+  });
+
+  test("pixels per ADT is a native tile's on-screen size", () => {
+    expect(pxPerAdt(1)).toBe(TILE_PX);
+    expect(pxPerAdt(0.25)).toBe(64);
+  });
+
+  test("the art is never asked for at level 0: its finest is z1, scaled up at the native zoom", () => {
+    expect(artLevel(0)).toBe(1);
+    expect(artLevel(1)).toBe(1);
+    expect(artLevel(4)).toBe(4);
+  });
+
+  test("a frame draws the minimap always and the art only while it has weight", () => {
+    const screen = { w: 1280, h: 800 };
+    const zoomedIn = frameLevels(ART_FADE_END_PX / TILE_PX, screen);
+    expect(zoomedIn.art).toBeNull();
+    expect(zoomedIn.minimapAlpha).toBe(1);
+    expect(zoomedIn.minimap).toBe(0);
+    // At the native zoom with the art still fading out, the art draws z1.
+    const native = frameLevels(TILE_MIN_PX / TILE_PX, screen);
+    expect(native.minimap).toBe(0);
+    expect(native.art).toBe(1);
+    expect(native.minimapAlpha).toBeGreaterThan(0);
+    expect(native.minimapAlpha).toBeLessThan(1);
+    // Zoomed out: the art covers everything it paints, the minimap still draws
+    // under it for wherever it does not.
+    const continent = frameLevels(0.07, screen);
+    expect(continent.minimapAlpha).toBe(0);
+    expect(continent.art).toBe(continent.minimap);
+    expect(continent.minimap).toBe(3);
   });
 });
 

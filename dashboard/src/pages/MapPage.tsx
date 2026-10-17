@@ -49,7 +49,7 @@ import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/m
 import { restPhase, statusStamp } from "../lib/reflect";
 import { resolvePowerType } from "../lib/unitframe";
 import { NO_TILE_BASE, tileSrc } from "../lib/tiles";
-import { type LodLayer, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
+import { type LodLayer, ART_LAYER, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
 import { type Speed, keyBelongsToTarget, nextSpeed, playbackKey, prevSampleBefore, tickMs } from "../lib/playback";
 import {
@@ -69,6 +69,7 @@ import {
   defaultView,
   emptySideNote,
   fitTo,
+  frameLevels,
   hitTest,
   latticeLines,
   levelCellPx,
@@ -78,7 +79,6 @@ import {
   project,
   stepPips,
   syncPips,
-  tileLevel,
   visibleGrid,
   worldPerPixel,
   zoomAt,
@@ -266,6 +266,14 @@ export default function MapPage() {
   let W = 0;
   let H = 0;
   let theme = { ...DEFAULT_THEME };
+  /*
+   * The art layer is drawn here at full strength and then laid over the map
+   * in one blit at its blend weight. Drawing its tiles straight onto the map
+   * at partial alpha would double the weight wherever two draws overlap — the
+   * hair of overdraw between neighbouring tiles, a coarser tile under one
+   * still loading — and show as a grid across the art.
+   */
+  const artCanvas = document.createElement("canvas");
 
   /*
    * Tiles: an LRU of Image objects with misses remembered in the same map,
@@ -338,6 +346,9 @@ export default function MapPage() {
     canvas.height = Math.round(H * dpr);
     const ctx = canvas.getContext("2d");
     ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    artCanvas.width = canvas.width;
+    artCanvas.height = canvas.height;
+    artCanvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
     /*
      * Until something has been fitted the view is the default framing, and it
      * depends on the stage, so it is recomputed here rather than once at mount:
@@ -386,13 +397,25 @@ export default function MapPage() {
      * Which level of the pyramid: the native tiles while they are at least
      * `TILE_MIN_PX` on screen, and zoomed out the baked level whose cells stay
      * near that size, so real ground shows at every zoom and the cells on
-     * screen never outgrow the cache (`tileLevel`). A pyramid level draws
+     * screen never outgrow the cache (`frameLevels`). A pyramid level draws
      * over the lattice in one pass, so the lattice shows wherever a level has
      * no ground: ocean and the edge of the world.
+     *
+     * Then the painted map over it, weighted by zoom: all art zoomed out, all
+     * minimap zoomed in, a blend between. Where the art has nothing — a map
+     * with none, an unpainted corner, a tile not loaded yet — nothing is laid
+     * over the minimap and it shows at full strength.
      */
-    const z = tileLevel(view.scale, { w: W, h: H });
-    if (z > 0) drawLattice(ctx, z, false);
-    drawLevel(ctx, map, MINIMAP_LAYER, z);
+    const f = frameLevels(view.scale, { w: W, h: H });
+    if (f.minimap > 0) drawLattice(ctx, f.minimap, false);
+    drawLevel(ctx, map, MINIMAP_LAYER, f.minimap);
+    const art = artCanvas.getContext("2d");
+    if (f.art === null || art === null) return;
+    art.clearRect(0, 0, W, H);
+    drawLevel(art, map, ART_LAYER, f.art);
+    ctx.globalAlpha = 1 - f.minimapAlpha;
+    ctx.drawImage(artCanvas, 0, 0, W, H);
+    ctx.globalAlpha = 1;
   }
 
   /**

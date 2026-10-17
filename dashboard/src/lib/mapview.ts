@@ -220,13 +220,87 @@ export function levelCells(z: number, scale: number, screen: Screen): number {
  * up exactly as before. On a larger one it moves the switch to the native
  * tiles to a slightly closer zoom: a 4K stage at 96px cells can meet nearly
  * a thousand native cells, which overran the cache before this existed.
+ *
+ * With `withArt` the painted layer is drawn too, at `artLevel(z)` with its own
+ * level above as underlay, and its cells count against the same cache: one
+ * budget for everything a frame asks for.
  */
-export function tileLevel(scale: number, screen: Screen): number {
+export function tileLevel(scale: number, screen: Screen, withArt = false): number {
+  const cells = (z: number): number => levelCells(z, scale, screen) + levelCells(z + 1, scale, screen);
   for (let z = 0; z < LOD_MAX; z++) {
     if (levelCellPx(scale, z) < TILE_MIN_PX) continue;
-    if (levelCells(z, scale, screen) + levelCells(z + 1, scale, screen) <= TILE_CACHE_MAX) return z;
+    if (cells(z) + (withArt ? cells(artLevel(z)) : 0) <= TILE_CACHE_MAX) return z;
   }
   return LOD_MAX;
+}
+
+/*
+ * The painted map and the minimap, crossfaded by zoom.
+ *
+ * Zoomed out, the painted world and zone map reads as a map where the minimap
+ * reads as noise; zoomed in, the minimap is the ground a character actually
+ * walks on. In between the two are blended by how many screen pixels one ADT
+ * takes up. The art is drawn over the minimap with the complement of the
+ * minimap's weight, which is the same blend as the minimap over the art
+ * wherever both have paint — and where the art has none (a map with no art,
+ * an unpainted corner, a tile still loading) the minimap simply shows at full
+ * strength, with no per-map bookkeeping to get wrong.
+ *
+ * Tuning the fade is these two numbers.
+ */
+
+/** At or below this many screen pixels per ADT, the art covers the minimap entirely. */
+export const ART_FADE_START_PX = 24;
+/** At or above this many, the art is not drawn and the minimap stands alone. */
+export const ART_FADE_END_PX = 160;
+
+/** Screen pixels one ADT spans under a scale (a native tile's on-screen size). */
+export function pxPerAdt(scale: number): number {
+  return TILE_PX * scale;
+}
+
+/**
+ * The minimap's weight in the blend: 0 at `ART_FADE_START_PX` and below, 1 at
+ * `ART_FADE_END_PX` and above, a smoothstep between. The step runs in log
+ * pixels, because zoom is multiplicative: each wheel notch moves it about the
+ * same amount, and the halfway point is the geometric mean of the two ends
+ * (about 62 px per ADT with the values above).
+ */
+export function minimapAlpha(pxPerAdtNow: number): number {
+  if (!(pxPerAdtNow > ART_FADE_START_PX)) return 0;
+  if (pxPerAdtNow >= ART_FADE_END_PX) return 1;
+  const t = Math.log(pxPerAdtNow / ART_FADE_START_PX) / Math.log(ART_FADE_END_PX / ART_FADE_START_PX);
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * The art's level when the minimap draws at `z`: the same level, except that
+ * the art has no level 0, so at the native zoom it draws its finest, z1 (128
+ * px per ADT), scaled up as far as `ART_FADE_END_PX`, where it stops.
+ */
+export function artLevel(z: number): number {
+  return Math.max(1, z);
+}
+
+/** What one frame draws: the minimap's level, the art's (null when it is not drawn), and the blend. */
+export interface FrameLevels {
+  minimap: number;
+  art: number | null;
+  /** The minimap's weight; the art is drawn over it at `1 - minimapAlpha`. */
+  minimapAlpha: number;
+}
+
+/**
+ * Both layers' levels for a frame. The minimap is always drawn — it is what
+ * shows wherever the art has nothing — and the art whenever it has any weight
+ * at all; both are chosen together so their cells and underlays share the one
+ * cache (`tileLevel`).
+ */
+export function frameLevels(scale: number, screen: Screen): FrameLevels {
+  const alpha = minimapAlpha(pxPerAdt(scale));
+  const withArt = alpha < 1;
+  const z = tileLevel(scale, screen, withArt);
+  return { minimap: z, art: withArt ? artLevel(z) : null, minimapAlpha: alpha };
 }
 
 /**
