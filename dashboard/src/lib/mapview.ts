@@ -217,6 +217,36 @@ export function zoomAt(view: View, sx: number, sy: number, factor: number): View
   };
 }
 
+/** One finger on screen, in canvas pixels. */
+export interface Touch {
+  x: number;
+  y: number;
+}
+
+/**
+ * A two-finger pinch, measured from where it started rather than frame by
+ * frame, so rounding never accumulates: the view scales by how far the fingers
+ * have spread, and the world point that was under their midpoint follows the
+ * midpoint, which is a pan when the spread does not change.
+ */
+export function pinchView(start: View, from: readonly [Touch, Touch], to: readonly [Touch, Touch]): View {
+  const d0 = Math.hypot(from[1].x - from[0].x, from[1].y - from[0].y);
+  const d1 = Math.hypot(to[1].x - to[0].x, to[1].y - to[0].y);
+  const factor = d0 < 1 ? 1 : d1 / d0;
+  const m0 = { x: (from[0].x + from[1].x) / 2, y: (from[0].y + from[1].y) / 2 };
+  const m1 = { x: (to[0].x + to[1].x) / 2, y: (to[0].y + to[1].y) / 2 };
+  const z = zoomAt(start, m0.x, m0.y, factor);
+  return { scale: z.scale, ox: z.ox + (m1.x - m0.x), oy: z.oy + (m1.y - m0.y) };
+}
+
+/** How close in time and place a second tap must land to zoom in, as a phone map does. */
+export const DOUBLE_TAP_MS = 300;
+export const DOUBLE_TAP_PX = 30;
+
+export function isDoubleTap(prev: (Touch & { t: number }) | null, now: Touch & { t: number }): boolean {
+  return prev !== null && now.t - prev.t <= DOUBLE_TAP_MS && Math.hypot(now.x - prev.x, now.y - prev.y) <= DOUBLE_TAP_PX;
+}
+
 /** How wide one cell of pyramid level `z` is on screen under a scale. */
 export function levelCellPx(scale: number, z: number): number {
   return TILE_PX * 2 ** z * scale;

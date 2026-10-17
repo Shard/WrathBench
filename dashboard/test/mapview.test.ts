@@ -55,6 +55,10 @@ import {
   visibleGrid,
   worldPerPixel,
   zoomAt,
+  pinchView,
+  isDoubleTap,
+  DOUBLE_TAP_MS,
+  DOUBLE_TAP_PX,
 } from "../src/lib/mapview";
 
 /* The reactive build of solid-js stands behind this name for every dashboard
@@ -196,6 +200,57 @@ describe("zoomAt", () => {
     expect(clampScale(1e6)).toBe(MAX_SCALE);
     expect(clampScale(0)).toBe(MIN_SCALE);
     expect(zoomAt({ scale: MAX_SCALE, ox: 0, oy: 0 }, 0, 0, 10).scale).toBe(MAX_SCALE);
+  });
+});
+
+describe("pinchView", () => {
+  const v = { scale: 0.4, ox: 33, oy: -12 };
+  const world = (view: { scale: number; ox: number; oy: number }, p: { x: number; y: number }) => ({ px: (p.x - view.ox) / view.scale, py: (p.y - view.oy) / view.scale });
+
+  test("the ground under each finger stays under it as they spread", () => {
+    const from = [{ x: 100, y: 200 }, { x: 200, y: 200 }] as const;
+    const to = [{ x: 50, y: 200 }, { x: 250, y: 200 }] as const;
+    const next = pinchView(v, from, to);
+    expect(next.scale).toBeCloseTo(0.8, 9);
+    for (const i of [0, 1] as const) {
+      expect(world(next, to[i]).px).toBeCloseTo(world(v, from[i]).px, 6);
+      expect(world(next, to[i]).py).toBeCloseTo(world(v, from[i]).py, 6);
+    }
+  });
+
+  test("two fingers moving together pan without zooming", () => {
+    const from = [{ x: 100, y: 100 }, { x: 160, y: 140 }] as const;
+    const to = [{ x: 130, y: 90 }, { x: 190, y: 130 }] as const;
+    const next = pinchView(v, from, to);
+    expect(next.scale).toBe(v.scale);
+    expect(next.ox).toBeCloseTo(v.ox + 30, 9);
+    expect(next.oy).toBeCloseTo(v.oy - 10, 9);
+  });
+
+  test("the midpoint's ground follows the midpoint when the zoom hits the clamp", () => {
+    const top = { scale: MAX_SCALE, ox: 0, oy: 0 };
+    const from = [{ x: 100, y: 100 }, { x: 110, y: 100 }] as const;
+    const to = [{ x: 0, y: 150 }, { x: 400, y: 150 }] as const;
+    const next = pinchView(top, from, to);
+    expect(next.scale).toBe(MAX_SCALE);
+    expect(world(next, { x: 200, y: 150 }).px).toBeCloseTo(world(top, { x: 105, y: 100 }).px, 6);
+  });
+
+  test("fingers that start on one spot do not divide by zero", () => {
+    const p = { x: 10, y: 10 };
+    const next = pinchView(v, [p, p], [{ x: 0, y: 0 }, { x: 40, y: 0 }]);
+    expect(next.scale).toBe(v.scale);
+    expect(Number.isFinite(next.ox) && Number.isFinite(next.oy)).toBe(true);
+  });
+});
+
+describe("isDoubleTap", () => {
+  test("a second tap soon after and close by is a double tap", () => {
+    const first = { x: 100, y: 100, t: 1000 };
+    expect(isDoubleTap(null, first)).toBe(false);
+    expect(isDoubleTap(first, { x: 110, y: 95, t: 1000 + DOUBLE_TAP_MS })).toBe(true);
+    expect(isDoubleTap(first, { x: 110, y: 95, t: 1001 + DOUBLE_TAP_MS })).toBe(false);
+    expect(isDoubleTap(first, { x: 100 + DOUBLE_TAP_PX + 1, y: 100, t: 1100 })).toBe(false);
   });
 });
 

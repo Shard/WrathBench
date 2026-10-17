@@ -64,6 +64,7 @@ import {
   TILE_CACHE_MAX,
   type FeedClock,
   type Pip,
+  type Touch,
   type View,
   colorOf,
   decimateRoute,
@@ -72,11 +73,13 @@ import {
   fitTo,
   frameLevels,
   hitTest,
+  isDoubleTap,
   latticeLines,
   levelCellPx,
   mapChips,
   mapName,
   mapParam,
+  pinchView,
   pipName,
   positionAgeMs,
   project,
@@ -1122,14 +1125,40 @@ export default function MapPage() {
   });
 
   /* --- interaction --- */
+  // One finger (or the mouse) drags; a second turns the gesture into a pinch
+  // until either of the two lifts, and the finger left behind drags on. A
+  // gesture that ever moved or pinched is never a tap.
   let drag: { x: number; y: number; ox: number; oy: number; moved: boolean } | null = null;
+  let pinch: { ids: [number, number]; from: [Touch, Touch]; view: View } | null = null;
+  let lastTap: (Touch & { t: number }) | null = null;
+  const fingers = new Map<number, Touch>();
 
+  const dragFrom = (p: Touch, moved: boolean): void => {
+    drag = { x: p.x, y: p.y, ox: view.ox, oy: view.oy, moved };
+  };
   const onPointerDown = (e: PointerEvent): void => {
-    drag = { x: e.clientX, y: e.clientY, ox: view.ox, oy: view.oy, moved: false };
+    fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     canvas.setPointerCapture(e.pointerId);
     canvas.classList.add("drag");
+    if (fingers.size === 1) {
+      dragFrom({ x: e.clientX, y: e.clientY }, false);
+    } else if (fingers.size === 2 && pinch === null) {
+      const [a, b] = [...fingers.entries()];
+      pinch = { ids: [a![0], b![0]], from: [a![1], b![1]], view };
+      drag = null;
+    }
   };
   const onPointerMove = (e: PointerEvent): void => {
+    if (!fingers.has(e.pointerId)) return;
+    fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch !== null) {
+      const a = fingers.get(pinch.ids[0]);
+      const b = fingers.get(pinch.ids[1]);
+      if (a === undefined || b === undefined) return;
+      view = pinchView(pinch.view, pinch.from, [a, b]);
+      needsDraw = true;
+      return;
+    }
     if (drag === null) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
@@ -1137,13 +1166,32 @@ export default function MapPage() {
     view = { ...view, ox: drag.ox + dx, oy: drag.oy + dy };
     needsDraw = true;
   };
+  const endPointer = (id: number): void => {
+    fingers.delete(id);
+    if (pinch !== null && pinch.ids.includes(id)) {
+      pinch = null;
+      const rest = [...fingers.values()][0];
+      if (rest !== undefined) dragFrom(rest, true);
+    }
+    if (fingers.size === 0) {
+      drag = null;
+      canvas.classList.remove("drag");
+    }
+  };
   const onPointerUp = (e: PointerEvent): void => {
-    const wasDrag = drag !== null && drag.moved;
-    drag = null;
-    canvas.classList.remove("drag");
-    if (wasDrag) return;
+    const wasTap = fingers.size === 1 && pinch === null && drag !== null && !drag.moved;
+    endPointer(e.pointerId);
+    if (!wasTap) return;
     const r = canvas.getBoundingClientRect();
-    const hit = hitTest(view, onMap(), e.clientX - r.left, e.clientY - r.top, PIP_HIT_R);
+    const tap = { x: e.clientX - r.left, y: e.clientY - r.top, t: e.timeStamp };
+    if (isDoubleTap(lastTap, tap)) {
+      lastTap = null;
+      view = zoomAt(view, tap.x, tap.y, 2);
+      needsDraw = true;
+      return;
+    }
+    lastTap = tap;
+    const hit = hitTest(view, onMap(), tap.x, tap.y, PIP_HIT_R);
     setSelectedId(hit === null ? null : hit.runId);
     needsDraw = true;
   };
@@ -1170,10 +1218,7 @@ export default function MapPage() {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onPointerCancel={() => {
-            drag = null;
-            canvas.classList.remove("drag");
-          }}
+          onPointerCancel={(e) => endPointer(e.pointerId)}
           onWheel={onWheel}
         />
         <div class="map-chips">
