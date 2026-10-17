@@ -191,7 +191,10 @@ kubectl -n wrathbench logs -f deployment/wrathbench-publisher
 The public map draws real minimap tiles. They are not
 part of a snapshot pass and never become one — this is the step that puts them
 in the bucket, run from a checkout with `data/minimap` populated by the
-extraction in `minimap/`, with the same `S3_*` credentials as the publisher:
+extraction in `minimap/` and the zoomed-out levels its bake writes, with the
+same `S3_*` credentials as the publisher. The levels are keyed under the same
+`/tiles/` prefix (`tiles/<map>/minimap/<z>/<row>_<col>.png`), so rule 3 and the
+CORS policy already cover them:
 
 ```
 bun infra/publish-tiles.ts --dry-run    # counts only, uploads nothing
@@ -200,8 +203,9 @@ bun infra/publish-tiles.ts --upload
 
 `bun ship --tiles` runs the same upload as part of a deploy. The skip-unchanged
 manifest (`tiles/manifest.json`) lives in the bucket, so a re-run with nothing
-re-extracted PUTs nothing; a re-extraction reuses keys, so a re-upload wants a
-purge of the `/tiles/` prefix to beat rule 3's day.
+re-extracted PUTs nothing; a re-extraction (and the `bake --force` that has to
+follow it) reuses keys, so a re-upload wants a purge of the `/tiles/` prefix to
+beat rule 3's day.
 
 Then set `WRATHBENCH_TILES_BASE=https://wrathbench-data.shard.page` in `.env`,
 which is what makes the build in step 7 ask for them. It is a separate flag from
