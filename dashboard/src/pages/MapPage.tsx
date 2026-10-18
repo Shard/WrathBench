@@ -52,6 +52,7 @@ import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "../components/UnitFrame";
 import { InventoryPanel } from "../components/Inventory";
+import { sheetReading } from "../lib/inventory";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
@@ -80,12 +81,12 @@ import {
   type Speed,
   DEFAULT_SPEED,
   IDLE_GAP_MS,
-  TRACE_MAX_SPEED,
   idleSpans,
   keyBelongsToTarget,
   nextSpeed,
   playbackKey,
   prevSampleBefore,
+  traceDrives as traceDrivesAt,
 } from "../lib/playback";
 import {
   type ReplayAnchor,
@@ -569,12 +570,8 @@ export default function MapPage() {
     return track() === undefined ? liveClock.at(p) : replayCursor(p);
   }
 
-  /**
-   * Whether the trace places the pips. Always live; in a replay, at speeds
-   * the trace is fetched for, and whenever it is paused — a cursor standing
-   * still fetches the window under it whatever the speed.
-   */
-  const traceDrives = (): boolean => track() === undefined || !playing() || speed() <= TRACE_MAX_SPEED;
+  /** Whether the trace places the pips and fills the sidebar (`traceDrivesAt`). */
+  const traceDrives = (): boolean => traceDrivesAt(track() !== undefined, playing(), speed());
 
   /** Put a pip at a pose; whether that moved it. */
   function place(pip: Pip, map: number, x: number, y: number, o: number | null, flying: boolean): boolean {
@@ -1939,6 +1936,32 @@ export default function MapPage() {
     if (p === null || t === null || !traceDrives()) return null;
     return { unit: store.unitAt(p.runId, t), pose: store.poseAt(p.runId, t), t };
   });
+  /**
+   * The trace's character sheet for the selected run at the same moment, on
+   * the same terms (`TraceStore.sheetAt`). Its own memo rather than a field of
+   * `selectedTrace`, so the panels below see a change only when the sheet's
+   * lists do, not on every tick of the playhead.
+   */
+  const selectedSheet = createMemo(() => {
+    traceRev();
+    const p = selected();
+    const t = sideAt();
+    if (p === null || t === null || !traceDrives()) return null;
+    return store.sheetAt(p.runId, t);
+  });
+  /**
+   * Money and the inventory at the playhead: the sheet's where it says, the
+   * reading's where it does not (`sheetReading`) — live, the position's newest
+   * reading; in a replay, the track's at the cursor. Each kept equal across
+   * ticks while its value is, so the bag and the paperdoll redraw only when
+   * what they show changes.
+   */
+  const shown = createMemo(() => {
+    const p = selected();
+    return p === null ? null : sheetReading(selectedSheet(), { money: p.money, items: p.items });
+  });
+  const shownItems = createMemo(() => shown()?.items ?? null);
+  const shownMoney = createMemo(() => shown()?.money ?? null);
   /** The bars' numbers: the trace's where it answers, the reading's where it does not (`gaugesOf`). */
   const gauges = createMemo(() => {
     const p = selected();
@@ -2084,20 +2107,22 @@ export default function MapPage() {
                   </div>
                 )}
               </Show>
+              {/* At the playhead from the trace's sheet where it says (`shown`), the reading's otherwise. */}
               <div class="k">money</div>
-              <div class="v mono">{fmtMoney(p().money)}</div>
+              <div class="v mono">{fmtMoney(shownMoney())}</div>
               <div class="k">quests completed</div>
               <div class="v mono">{num(p().questsCompleted)}</div>
               {/*
                 Inventory: the bag opens over the sidebar rather
-                than widening it, and the paperdoll sits under it. A replay
-                cursor reads the newest sample behind it (`lib/replay.ts`), and
-                before the first one there is nothing to show — which the null
-                line says rather than drawing empty bags.
+                than widening it, and the paperdoll sits under it. The trace's
+                sheet at the playhead where it answers; otherwise the newest
+                reading — live, the position's; in a replay, the one behind the
+                cursor (`lib/replay.ts`). Before the first there is nothing to
+                show, which the null line says rather than drawing empty bags.
               */}
               <div class="k">inventory</div>
               <div class="v">
-                <Show when={p().items} fallback={<span class="inv-note">{fmtItems(p().items, false)}</span>}>
+                <Show when={shownItems()} fallback={<span class="inv-note">{fmtItems(shownItems(), false)}</span>}>
                   {(items) => <InventoryPanel items={items()} />}
                 </Show>
               </div>

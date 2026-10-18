@@ -46,6 +46,16 @@ export const DEFAULT_SPEED: Speed = 60;
  */
 export const TRACE_MAX_SPEED = 60;
 
+/**
+ * Whether the trace answers for the playhead — the pip, the unit frame and
+ * the sidebar's sheet — rather than the coarse reading: always live, and in a
+ * replay whenever it is paused (a cursor standing still fetches the window
+ * under it whatever the speed) or plays at `TRACE_MAX_SPEED` or slower.
+ */
+export function traceDrives(replay: boolean, playing: boolean, speed: number): boolean {
+  return !replay || !playing || speed <= TRACE_MAX_SPEED;
+}
+
 /** The next speed in the cycle; the fastest wraps to 1×. */
 export function nextSpeed(speed: Speed): Speed {
   const i = SPEEDS.indexOf(speed);

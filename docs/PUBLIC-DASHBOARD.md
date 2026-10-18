@@ -230,7 +230,10 @@ at the edge.
   about 5 KB (2 KB gzip). The sheet adds no PUT: it rides the segment.
 - **The sheet went out before a page reads it** (operator, 2026-10-18), the
   one exception to "What is published" below. A window that closed without it
-  could never gain it, so a later reader would have nothing to play back.
+  could never gain it, so a later reader would have nothing to play back. The
+  map's sidebar now reads its money, equipment, carried items and durability;
+  the worn bags, quest log, reputation, skills and turn-ins still wait on a
+  page.
 - **Runs before the recorder** have no `trace` table. Their tracks carry no
   `trace` field, so their bytes and keys are what they were, and nothing is
   backfilled.
@@ -860,7 +863,11 @@ are disallowed rather than served with terms attached.
 
 A run page and the map sidebar draw item icons and tooltips, and the way they
 do it is a link to `https://www.wowhead.com/wotlk/item=<entry>` decorated in
-the reader's browser by Wowhead's public tooltip script. The sidebar's unit
+the reader's browser by Wowhead's public tooltip script. Where the trace's sheet
+says an item has a random property, the link carries it as `?rand=<id>`
+(negative for a random suffix), which the script reads off the link and asks
+its tooltip service for, so the tooltip names the roll; the number is the one
+the sheet already publishes. The sidebar's unit
 frame draws a traced character's buffs and the spell it is casting the same
 way, as links to `https://www.wowhead.com/wotlk/spell=<id>`: the trace carries
 the spell id and nothing else. So a visitor to those
