@@ -116,10 +116,16 @@ describe("sandbox network confinement", () => {
     const host = makeHost();
     const code = `const net = require("node:net"); const s = net.connect(${other.port}, "127.0.0.1"); s.once("connect", () => { console.log("OPEN"); process.exit(0); }); s.once("error", (e) => { console.log(e.code); process.exit(0); });`;
     const res = await host.evalSnippet(
-      `const p = Bun.spawn([process.execPath, "-e", ${JSON.stringify(code)}], { stdout: "pipe", stderr: "pipe" }); const out = await new Response(p.stdout).text(); await p.exited; return out.trim();`,
+      `const p = Bun.spawn([process.execPath, "-e", ${JSON.stringify(code)}], { stdout: "pipe", stderr: "pipe" }); const out = await new Response(p.stdout).text(); await p.exited; return JSON.stringify({ out: out.trim(), code: p.exitCode });`,
     );
     expect(res.ok).toBe(true);
-    expect(unquote(res.value)).toBe("EACCES");
+    // The new process has a pid of its own, and the ruleset grants /proc only
+    // for the child's pid, so a re-exec'd bun does not even start (it cannot
+    // read its own /proc entry); if it did, it would still be in the domain
+    // and its connect would be EACCES. Either way it never connects.
+    const r = JSON.parse(unquote(res.value)) as { out: string; code: number };
+    expect(r.out).not.toBe("OPEN");
+    expect(r.out === "EACCES" || (r.out === "" && r.code !== 0)).toBe(true);
   });
 
   test.skipIf(landlockAbi() < 6)("scoped (ABI 6): the child cannot signal the host process", async () => {
