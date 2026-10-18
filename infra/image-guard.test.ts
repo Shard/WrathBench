@@ -9,7 +9,7 @@
  * fills from the repository's .env.
  */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tempDirs } from "./temp-dirs";
 
@@ -178,15 +178,18 @@ function scan(files: Record<string, string>, env: Record<string, string> = {}) {
     stderr: "pipe",
     env: { ...BASE_ENV, PATH: `${join(dir, "bin")}:${BASE_ENV.PATH}`, FAKE_LOG: log, FAKE_IMAGE_ROOT: tree(files), ...env },
   });
-  return { code: proc.exitCode ?? -1, out: proc.stdout.toString() + proc.stderr.toString(), calls: Bun.file(log).text() };
+  // Read now, while the directory exists: the script has exited. An async read started here and
+  // left unawaited by a test that never looks at it opens the file later, and after the last test
+  // the file's afterAll has removed it: ENOENT, unhandled, inside whichever test file runs next.
+  return { code: proc.exitCode ?? -1, out: proc.stdout.toString() + proc.stderr.toString(), calls: readFileSync(log, "utf8") };
 }
 
 describe("image-guard on an image", () => {
-  test("a clean image passes, and the container it read is removed", async () => {
+  test("a clean image passes, and the container it read is removed", () => {
     const r = scan({ "wrathbench/package.json": "{}", "wrathbench/.env.example": "KEY=\n" });
     expect(r.code).toBe(0);
     expect(r.out).toContain("clean");
-    expect(await r.calls).toContain("docker rm -f fake-container");
+    expect(r.calls).toContain("docker rm -f fake-container");
   });
 
   test("a secret-shaped path refuses the image and is named without its content", () => {

@@ -166,8 +166,17 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
     // Operator decision 2026-10-01: explain, never clamp — the snippet still
     // runs out (nothing shortened the sleep), and the note names the sleep,
     // the ceiling, and that it can never finish inside one snippet.
+    //
+    // The ceiling-long sleep starts 150ms in, not at once. Started at once it
+    // ends a few ms after the host's 300ms timer is due, and a host event loop
+    // late by that much (a GC pause in a full-suite process) sees the child's
+    // 'slept' reply first and takes it: the snippet passes. Bun handles the
+    // waiting reply before the overdue timer every time the loop is stalled
+    // across the deadline. 150ms in leaves 150ms of slack on both sides: the
+    // host may be that late, and the child may start the sleep that late and
+    // still have it waiting when the abort arrives.
     const host = makeHost(300);
-    const res = await host.evalSnippet("await sleep(300, { wake: false }); 'slept'");
+    const res = await host.evalSnippet("await sleep(150, { wake: false }); await sleep(300, { wake: false }); 'slept'");
     expect(res.ok).toBe(false);
     expect(res.timedOut).toBe(true);
     expect(res.error).toContain(
@@ -190,9 +199,11 @@ describe("sandbox sleep(): the timer that says why it woke", () => {
 
   test("a shorter sleep started with less than it asked for left is named against this snippet only", async () => {
     // 550ms fits a 600ms ceiling, so "can never finish inside one snippet"
-    // would be false of it; started ~100ms in, it could not finish in this one.
+    // would be false of it; started ~300ms in, it could not finish in this one.
+    // 300ms in, it ends 250ms after the ceiling and starts 300ms before it:
+    // slack on both sides of the race the test above describes.
     const host = makeHost(600);
-    const res = await host.evalSnippet("await sleep(100, { wake: false }); await sleep(550, { wake: false }); 'slept'");
+    const res = await host.evalSnippet("await sleep(300, { wake: false }); await sleep(550, { wake: false }); 'slept'");
     expect(res.timedOut).toBe(true);
     expect(res.error).toMatch(
       /a sleep\(550\) was still waiting when this was abandoned: it was asked for 550ms when this snippet had \d+ms of its 600ms time limit left, so it could never finish inside this snippet\./,
