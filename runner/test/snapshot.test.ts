@@ -555,7 +555,7 @@ describe("renderSnapshot", () => {
     expect(body.entries[5]!.text).toContain('"body":"[redacted]"');
     expect(body.entries[6]).toMatchObject({ reason: "episode-limit", detail: SURVIVES.terminationDetail });
     // The `meta` entry is the skeleton plus the run's own stamps: no config.
-    expect(Object.keys(body.entries[0]!).sort()).toEqual(["end", "harnessVersion", "i", "runId", "start", "t", "ts"]);
+    expect(Object.keys(body.entries[0]!).sort()).toEqual(["harnessVersion", "i", "runId", "t", "ts"]);
 
     const pad = out.artifacts.find((a) => a.path.startsWith(`v1/run/${DEAD_RUN}/`) && a.path.endsWith("/scratchpad.json"));
     expect(pad).toBeDefined();
@@ -579,17 +579,22 @@ describe("renderSnapshot", () => {
     const listed = JSON.parse(out.artifacts.find((a) => a.path === out.snap["runs.json"])!.body) as {
       runs: {
         runId: string;
-        character: string | null;
-        pauseReason: string | null;
-        terminationDetail: string | null;
         snapshot?: { detail: string; track: string; entries?: string; scratchpad?: string };
       }[];
     };
     expect(listed.runs).toHaveLength(2);
+    // The listing is the fleet table's join and the pointers; the row-level
+    // facts (the paused token, the termination detail, the character's name)
+    // are on the run's own detail.
     const dead = listed.runs.find((r) => r.runId === DEAD_RUN)!;
-    expect(dead.pauseReason).toBe("paused");
-    expect(dead.terminationDetail).toBe(SURVIVES.terminationDetail);
-    expect(dead.character).toBe(CHARACTER_NAME);
+    const published = ["comparability", "cost", "level", "playtimeMs", "resolvedModel", "runId", "snapshot", "tokens", "tps", "xp"];
+    expect(Object.keys(dead).every((k) => published.includes(k))).toBe(true);
+    const detail = JSON.parse(out.artifacts.find((a) => a.path === dead.snapshot!.detail)!.body) as {
+      run: { pauseReason: string | null; terminationDetail: string | null; character: string | null };
+    };
+    expect(detail.run.pauseReason).toBe("paused");
+    expect(detail.run.terminationDetail).toBe(SURVIVES.terminationDetail);
+    expect(detail.run.character).toBe(CHARACTER_NAME);
     for (const row of listed.runs) {
       expect(row.snapshot).toBeDefined();
       for (const which of ["detail", "track", "entries", "scratchpad"] as const) {

@@ -17,6 +17,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type {
   ApiInfoResponse,
   CampaignsResponse,
@@ -408,7 +410,9 @@ const RUN_ROW_KEYS = [
   "driver",
   "harness",
   "shakeout",
-  "objective",
+  // no `objective`, `apiBase`, `mtime`, `bytes`, `raceName`, `className`: the
+  // first two are always null on a public row, the next two are the file's,
+  // the last two repeat `characterLabel`; no public page reads any of them.
   "campaign",
   "cell",
   "campaignVersion",
@@ -416,14 +420,11 @@ const RUN_ROW_KEYS = [
   "extra",
   "character",
   "race",
-  "raceName",
   "class",
-  "className",
   "characterLabel",
   "platform",
   "resolvedModel",
   "cliVersion",
-  "apiBase",
   "harnessVersion",
   "comparability",
   ...under("comparability", COMPARABILITY_KEYS),
@@ -438,8 +439,6 @@ const RUN_ROW_KEYS = [
   "money",
   "questsCompleted",
   "items",
-  "mtime",
-  "bytes",
   "live",
   // no `error`: a caught exception's message can carry paths
 ];
@@ -454,37 +453,33 @@ const TOKENS_KEYS = [
   "turns",
 ];
 const TPS_KEYS = ["overall", "recent", "replies", "recentReplies"];
-const COST_FIGURE_KEYS = [
-  "usd",
-  "basis",
-  "asIfMetered",
-  "breakdown",
-  ...under("breakdown", ["input", "output", "cacheRead", "cacheWrite"]),
-  "priceId",
-  "asOf",
-  "note",
-];
-const COST_VIEW_KEYS = [
-  ...COST_FIGURE_KEYS,
-  "actual",
-  ...under("actual", COST_FIGURE_KEYS),
-  "expected",
-  ...under("expected", COST_FIGURE_KEYS),
-];
+// No `breakdown`: no public page reads the per-component dollars.
+const COST_FIGURE_KEYS = ["usd", "basis", "asIfMetered", "priceId", "asOf", "note"];
+// No top-level mirror of `expected`: the pages read `actual` and `expected`.
+const COST_VIEW_KEYS = ["actual", ...under("actual", COST_FIGURE_KEYS), "expected", ...under("expected", COST_FIGURE_KEYS)];
+// What the fleet table reads of a run (`fleetRows`), and the pointers: the
+// published `runs.json` row, nothing more.
 const RUN_LIST_ROW_KEYS = [
-  ...RUN_ROW_KEYS,
+  "runId",
+  "resolvedModel",
+  "level",
+  "xp",
+  "playtimeMs",
   "tokens",
-  ...under("tokens", TOKENS_KEYS),
+  "tokens.totalTokens",
   "tps",
   ...under("tps", TPS_KEYS),
   "cost",
-  ...under("cost", COST_VIEW_KEYS),
-  "firstTs",
-  "lastTs",
-  "playtimeMs",
-  "modelResponses",
+  "cost.actual",
+  ...under("cost.actual", ["usd", "basis", "note"]),
+  "comparability",
+  "comparability.budget",
+  "comparability.budget.episodeMs",
   // no `snapshot`: only the renderer stamps it, after projection
 ];
+// The run page's chart reads three fields of a sample; the character route
+// (`STATE_KEYS`) serves the whole frame.
+const CHART_SAMPLE_KEYS = ["ts", "level", "xp"];
 const STATE_KEYS = ["ts", "level", "xp", "map", "x", "y", "z", "eventCount", "lastSeq", "turn",
   // The player frame's numbers: public on every surface that
   // carries a state sample, as they are on the positions feed.
@@ -496,18 +491,14 @@ const RESULT_RUN_KEYS = [
   "runId",
   "model",
   "resolvedModel",
-  "cliVersion",
   // Which CLI drove the run: already public on `RunRow.driver`, and the
   // character view's header reads it from here.
   "driver",
-  "platform",
   "harnessVersion",
   "harnessSeries",
   "extra",
   "race",
-  "raceName",
   "class",
-  "className",
   "characterLabel",
   "campaign",
   "cell",
@@ -516,10 +507,9 @@ const RESULT_RUN_KEYS = [
   "effort",
   "compactWindow",
   "harness",
-  "promptHash",
-  "serverBuild",
-  "wikiCoords",
-  "wiki",
+  // no `platform`, `cliVersion`, `promptHash`, `serverBuild`, `wikiCoords`,
+  // `wiki`, `raceName`, `className`: the run page reads the first six off the
+  // run's own row and tuple, and none is read off a result row.
   "episode",
   "episodeSource",
   "episodeOverride",
@@ -547,9 +537,9 @@ const RESULT_RUN_KEYS = [
   "tokens",
   ...under("tokens", TOKENS_KEYS),
   "actualCost",
-  ...under("actualCost", COST_FIGURE_KEYS),
+  ...under("actualCost", ["usd", "basis", "asIfMetered", "note"]),
   "expectedCost",
-  ...under("expectedCost", COST_FIGURE_KEYS),
+  ...under("expectedCost", ["usd", "basis", "asIfMetered"]),
   "billing",
   "areas",
   ...under("areas", ["startArea", "distinctAreas", "leftStartArea", "capitalZone", "zoneMarks", "areaMarks"]),
@@ -573,6 +563,24 @@ describe("the attribution line", () => {
   });
 });
 
+/** A run row as the published detail carries it: where the row-level withholdings are checked. */
+function runRowOf(over: Partial<RunRow> = {}): RunRow {
+  return projectRunDetail(
+    smuggle<RunDetailResponse>({
+      run: { ...runRowFixture(), ...over },
+      states: [],
+      total: 0,
+      tokens: tokensFixture(),
+      cost: costViewFixture(),
+      playtimeMs: 1,
+    }),
+  ).run;
+}
+
+function fixtureBudget(): ComparabilityView["budget"] {
+  return runRowFixture().comparability!.budget;
+}
+
 describe("projectRuns", () => {
   test("emits exactly the allowlist and none of the poisoned values (projectRuns)", () => {
     const input: RunsResponse = smuggle<RunsResponse>({ runs: [runListRowFixture()] });
@@ -581,8 +589,19 @@ describe("projectRuns", () => {
     assertClean(JSON.stringify(out));
   });
 
-  test("withholds by value, not by renaming: the fields read null", () => {
+  test("a listing row is the fleet table's join and nothing else: no field a page reads off another object", () => {
     const row = projectRuns({ runs: [runListRowFixture()] }).runs[0]!;
+    expect(row.runId).toBeDefined();
+    for (const gone of ["items", "objective", "apiBase", "terminationDetail", "pauseReason", "character", "characterLabel", "model", "mtime", "bytes", "firstTs", "lastTs", "modelResponses", "driver", "harnessVersion"]) {
+      expect(gone in row).toBe(false);
+    }
+    // The estimate and the per-component dollars stay on the run's own page.
+    expect(Object.keys(row.cost!)).toEqual(["actual"]);
+    expect(row.comparability).toEqual({ budget: { episodeMs: fixtureBudget().episodeMs } });
+  });
+
+  test("withholds by value, not by renaming: the fields read null", () => {
+    const row = runRowOf();
     expect(row.items).toEqual([
       { name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
       { name: SURVIVES.itemName, count: 2, equipped: false, itemId: 2589, quality: 1, slot: 23, bag: 255 },
@@ -591,15 +610,18 @@ describe("projectRuns", () => {
     // Back-compat: an old-shape row keeps its three keys rather than gaining
     // four undefined ones — absence is what "unobserved" looks like on the wire.
     expect(Object.keys(row.items![2]!)).toEqual(["name", "count", "equipped"]);
-    expect(row.objective).toBeNull();
-    expect(row.apiBase).toBeNull();
+    // Always-null on a public row, so not emitted at all.
+    expect("objective" in row).toBe(false);
+    expect("apiBase" in row).toBe(false);
     expect(row.terminationDetail).toBe(SURVIVES.terminationDetail);
     // The paused signal survives as a fixed token, never as the free text.
     expect(row.pauseReason).toBe("paused");
     // What the label layer needs survives — and so does the name itself.
     expect(row.character).toBe(CHARACTER_NAME);
     expect(row.characterLabel).toBe("Dwarf Hunter");
-    expect(row.raceName).toBe("Dwarf");
+    // The label already names the pair.
+    expect("raceName" in row).toBe(false);
+    expect("className" in row).toBe(false);
     expect(row.terminationReason).toBe("episode-limit");
   });
 
@@ -614,7 +636,7 @@ describe("projectRuns", () => {
 
   test("a launch-failed stub's detail is the launcher's text, registry host and API URL included: withheld, the reason crosses", () => {
     const detail = "run pod create refused: POST https://kubernetes.default.svc/api/v1/namespaces/wrathbench/pods: 403 Forbidden — harbor.example/library/wrathbench-runner:harness-0.5-1";
-    const row = projectRuns({ runs: [{ ...runListRowFixture(), terminationReason: "launch-failed", terminationDetail: detail }] }).runs[0]!;
+    const row = runRowOf({ terminationReason: "launch-failed", terminationDetail: detail });
     expect(row.terminationReason).toBe("launch-failed");
     expect(row.terminationDetail).toBeNull();
     expect(JSON.stringify(row)).not.toContain("harbor.example");
@@ -622,16 +644,13 @@ describe("projectRuns", () => {
   });
 
   test("a run that never paused stays null: the token marks paused runs only", () => {
-    const input = { runs: [{ ...runListRowFixture(), pauseReason: null }] };
-    expect(projectRuns(input).runs[0]!.pauseReason).toBeNull();
+    expect(runRowOf({ pauseReason: null }).pauseReason).toBeNull();
   });
 
   test("the stall pause crosses as itself, so the public site can say stalled; every other reason is still the token", () => {
-    const stalled = { runs: [{ ...runListRowFixture(), terminationReason: null, pauseReason: STALL_PAUSE }] };
-    expect(projectRuns(stalled).runs[0]!.pauseReason).toBe("observation-stalled");
+    expect(runRowOf({ terminationReason: null, pauseReason: STALL_PAUSE }).pauseReason).toBe("observation-stalled");
     for (const other of ["rate-limited", "operator-pause", `${STALL_PAUSE}: with words after it`]) {
-      const row = projectRuns({ runs: [{ ...runListRowFixture(), terminationReason: null, pauseReason: other }] }).runs[0]!;
-      expect(row.pauseReason).toBe("paused");
+      expect(runRowOf({ terminationReason: null, pauseReason: other }).pauseReason).toBe("paused");
     }
     const results = resultsFixture();
     results.runs[0]!.pauseReason = STALL_PAUSE;
@@ -686,7 +705,7 @@ describe("projectRunDetail", () => {
         "run",
         ...under("run", RUN_ROW_KEYS),
         "states",
-        ...under("states[]", STATE_KEYS),
+        ...under("states[]", CHART_SAMPLE_KEYS),
         "total",
         "tokens",
         ...under("tokens", TOKENS_KEYS),
@@ -843,7 +862,7 @@ describe("projectPositions and projectTrack", () => {
           ...under("status", ["turn", "level", "zone", "text", "ts"]),
           "reflecting",
         ]),
-        ...under("positions[].move", ["ts", "map", "x", "y", "z", "target", "status"]),
+        ...under("positions[].move", ["ts", "map", "x", "y", "target", "status"]),
       ]),
     );
     assertClean(JSON.stringify(out));
@@ -866,7 +885,7 @@ describe("projectPositions and projectTrack", () => {
       class: 4,
     });
     // The destination and the unit's name both travel.
-    expect(out.positions[0]!.move).toEqual({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: SURVIVES.targetName, status: null });
+    expect<unknown>(out.positions[0]!.move).toEqual({ ts: 1200, map: 0, x: -6200, y: 400, target: SURVIVES.targetName, status: null });
   });
 
   test("track: exactly the allowlist; the character name survives", () => {
@@ -916,7 +935,7 @@ describe("projectPositions and projectTrack", () => {
           "items[].itemId", "items[].quality", "items[].slot",
         ]),
         "moves",
-        ...under("moves[]", ["ts", "map", "x", "y", "z", "target", "status"]),
+        ...under("moves[]", ["ts", "map", "x", "y", "target", "status"]),
         "character",
         ...under("character", ["characterId", "attempt", "attempts", "previous", "next"]),
         "travel",
@@ -1421,28 +1440,16 @@ describe("projectModels", () => {
       "counted",
       "attempts",
       "extras",
-      "otherSeries",
       "target",
       "bestLevel",
-      "reachedL5",
-      "lastEnded",
-      "lastReason",
-      "runIds",
+      // no `otherSeries`, `reachedL5`, `lastEnded`, `lastReason`, `runIds`: the roster table prints
+      // the counts and the target, and the run list under it is `runs`.
     ];
     const MODEL_RUN_KEYS = [
       "runId",
       "episode",
       "episodeOverride",
-      "harnessVersion",
-      "harnessSeries",
-      "extra",
-      "race",
-      "raceName",
-      "class",
-      "className",
       "characterLabel",
-      "resolvedModel",
-      "startedAt",
       "endedAt",
       "durationMs",
       "bestLevel",
@@ -1450,7 +1457,8 @@ describe("projectModels", () => {
       "live",
       "counted",
       "cost",
-      ...under("cost", COST_VIEW_KEYS),
+      // the panel prints the provider's figure; the estimate is on the run's page
+      ...under("cost", ["actual", ...under("actual", COST_FIGURE_KEYS)]),
     ];
     const tierKeys = (t: string): string[] => [
       `policy.tiers.${t}`,
@@ -1740,18 +1748,18 @@ describe("projectEntries", () => {
     for (const v of [SURVIVES.itemName, SURVIVES.terminationDetail, SURVIVES.zoneName, SURVIVES.statusText, SURVIVES.npcName]) {
       expect(text).toContain(v);
     }
-    expect(keyPaths(out.entries[0])).toEqual(allow(["i", "t", "ts", "start", "end", "runId", "harnessVersion", "startedAt"]));
-    expect(keyPaths(out.entries[1])).toEqual(allow(["i", "t", "ts", "start", "end", "driver", "harness", "systemPromptChars"]));
-    expect(keyPaths(out.entries[2])).toEqual(allow(["i", "t", "ts", "start", "end", "turn", "type", "subtype", "estimated_tokens"]));
+    expect(keyPaths(out.entries[0])).toEqual(allow(["i", "t", "ts", "runId", "harnessVersion", "startedAt"]));
+    expect(keyPaths(out.entries[1])).toEqual(allow(["i", "t", "ts", "driver", "harness", "systemPromptChars"]));
+    expect(keyPaths(out.entries[2])).toEqual(allow(["i", "t", "ts", "turn", "type", "subtype", "estimated_tokens"]));
     // The batch itself never ships; the tally does.
-    expect(keyPaths(out.entries[3])).toEqual(allow(["i", "t", "ts", "start", "end", "via", "count", "opcodes"]));
-    expect(keyPaths(out.entries[4])).toEqual(allow(["i", "t", "ts", "start", "end", "reason", "episodeElapsedMs"]));
+    expect(keyPaths(out.entries[3])).toEqual(allow(["i", "t", "ts", "via", "count", "opcodes"]));
+    expect(keyPaths(out.entries[4])).toEqual(allow(["i", "t", "ts", "reason", "episodeElapsedMs"]));
     expect(out.entries[5]).toMatchObject({
       level: 2,
       zone: 12,
       items: [{ name: SURVIVES.itemName, count: 2, equipped: false, itemId: 2589, quality: 1, slot: 24, bag: 255 }],
     });
-    expect(keyPaths(out.entries[7])).toEqual(allow(["i", "t", "ts", "start", "end", "turn"]));
+    expect(keyPaths(out.entries[7])).toEqual(allow(["i", "t", "ts", "turn"]));
     expect(out.from).toBe(0);
     expect(out.total).toBe(6);
   });
@@ -1777,7 +1785,7 @@ describe("projectEntries", () => {
     assertClean(JSON.stringify(out));
     expect(keyPaths(out.entries[0])).toEqual(
       allow([
-        "i", "t", "ts", "start", "end", "kind", "leashChanged",
+        "i", "t", "ts", "kind", "leashChanged",
         "before", ...under("before", COMPARABILITY_KEYS),
         "after", ...under("after", COMPARABILITY_KEYS),
       ]),
@@ -1810,10 +1818,10 @@ describe("projectEntries", () => {
     const out = projectEntries(input as never);
     expect(JSON.stringify(out)).not.toContain("PRIVATE-SUMMARY");
     expect(keyPaths(out.entries[0])).toEqual(
-      allow(["i", "t", "ts", "start", "end", "turn", "kind", "trigger", "preTokens", "postTokens", "durationMs"]),
+      allow(["i", "t", "ts", "turn", "kind", "trigger", "preTokens", "postTokens", "durationMs"]),
     );
     expect(out.entries[0]).toMatchObject({ preTokens: 447_305, postTokens: 77_759, durationMs: 118_938 });
-    expect(keyPaths(out.entries[1])).toEqual(allow(["i", "t", "ts", "start", "end", "turn", "kind"]));
+    expect(keyPaths(out.entries[1])).toEqual(allow(["i", "t", "ts", "turn", "kind"]));
   });
 
   // The feed times a call from its writer's dispatch stamp; without it here the
@@ -1830,7 +1838,7 @@ describe("projectEntries", () => {
     const out = projectEntries(input as never);
     assertClean(JSON.stringify(out));
     expect(keyPaths(out.entries[0])).toEqual(
-      allow(["i", "t", "ts", "start", "end", "turn", "call", "name", "args", "args.code", "dispatchTs"]),
+      allow(["i", "t", "ts", "turn", "call", "name", "args", "args.code", "dispatchTs"]),
     );
     expect(out.entries[0]).toMatchObject({ call: 7, dispatchTs: 400 });
   });
@@ -1890,7 +1898,7 @@ describe("projectEntries", () => {
     const out = projectEntry(withRaw);
     expect(out).toEqual(projectEntry(plain));
     expect(keyPaths(out)).toEqual(
-      allow(["i", "t", "ts", "start", "end", "turn", "text", "tools", "outChars", "usage", ...under("usage", ["prompt", "completion", "cachedRead", "cost"])]),
+      allow(["i", "t", "ts", "turn", "text", "tools"]),
     );
     const text = JSON.stringify(out);
     for (const k of ["usageRaw", "prompt_cache_hit_tokens", "prompt_cache_miss_tokens", "cost_details"]) expect(text).not.toContain(k);
@@ -1932,7 +1940,7 @@ describe("the action log in a public window", () => {
     expect(text).toContain(SURVIVES.questTitle);
     expect(keyPaths(out)).toEqual(
       allow([
-        "i", "t", "ts", "start", "end", "turn", "callTs", "routine", "dropped", "dropped.say", "actions",
+        "i", "t", "ts", "turn", "callTs", "routine", "dropped", "dropped.say", "actions",
         ...under("actions[]", ["ts", "action", "args", "status", "ms", "error", "hint", "names", "count", "lastTs", "auto"]),
         ...under("actions[].args", ["spellId", "targetGuid", "questId"]),
         ...under("actions[].names", ["spell", "target", "quest"]),
@@ -1943,5 +1951,115 @@ describe("the action log in a public window", () => {
     // A module code passes; a runtime failure string becomes a fixed token.
     expect(notes[0]!["error"]).toBe("spell_not_known");
     expect(notes[2]!["error"]).toBe("transport");
+  });
+});
+
+/* ------------------------------------------------------ what is published --- */
+
+describe("a snippet call's code is published once", () => {
+  const entry = (over: Record<string, unknown>): never => ({ ts: 1, start: 0, end: 1, ...over }) as never;
+  const window = (entries: unknown[]): Record<string, unknown>[] =>
+    projectEntries({ from: 0, total: entries.length, entries: entries as never }).entries as unknown as Record<string, unknown>[];
+
+  test("the call keeps its name, stamps and dispatch time, and loses the copy of the code the snippet record beside it says", () => {
+    const out = window([
+      entry({ i: 0, t: "tool_call", turn: 3, call: 1, name: "run_snippet", args: { code: "return 1" }, dispatchTs: 40 }),
+      entry({ i: 1, t: "snippet", turn: 3, call: 1, code: "return 1" }),
+    ]);
+    expect(out[0]).toEqual({ i: 0, t: "tool_call", ts: 1, turn: 3, call: 1, name: "run_snippet", dispatchTs: 40 });
+    expect(out[1]!["code"]).toBe("return 1");
+  });
+
+  test("a call whose snippet is not next, differs, or belongs to another turn or call keeps its code", () => {
+    const call = { i: 0, t: "tool_call", turn: 3, name: "run_snippet", args: { code: "return 1" } };
+    // No snippet after it (the window ends, or the next record is something else).
+    expect(window([entry(call)])[0]!["args"]).toEqual({ code: "return 1" });
+    expect(window([entry(call), entry({ i: 1, t: "state", level: 1 })])[0]!["args"]).toEqual({ code: "return 1" });
+    // A snippet that says something else.
+    expect(window([entry(call), entry({ i: 1, t: "snippet", turn: 3, code: "return 2" })])[0]!["args"]).toEqual({ code: "return 1" });
+    // The dashboard's own pairing rule: a turn or call index that disagrees is no pair.
+    expect(window([entry(call), entry({ i: 1, t: "snippet", turn: 4, code: "return 1" })])[0]!["args"]).toEqual({ code: "return 1" });
+    expect(window([entry({ ...call, call: 1 }), entry({ i: 1, t: "snippet", turn: 3, call: 2, code: "return 1" })])[0]!["args"]).toEqual({ code: "return 1" });
+  });
+
+  test("a call's summary clip of the snippet's code is the same copy: dropped when the clip is of that code, kept when it is not", () => {
+    const code = "x".repeat(2500);
+    const clip = `${code.slice(0, 2000)}\n… 500 more characters`;
+    const call = { i: 0, t: "tool_call", turn: 3, name: "run_snippet", clipped: true };
+    const kept = window([entry({ ...call, args: { code: clip } }), entry({ i: 1, t: "snippet", turn: 3, code })]);
+    expect(kept[0]!["args"]).toBeUndefined();
+    expect(kept[0]!["clipped"]).toBe(true);
+    // A clip of other code, or with the wrong count, is not this snippet's.
+    const other = window([entry({ ...call, args: { code: clip } }), entry({ i: 1, t: "snippet", turn: 3, code: "y".repeat(2500) })]);
+    expect(other[0]!["args"]).toEqual({ code: clip });
+    const miscount = window([entry({ ...call, args: { code: clip } }), entry({ i: 1, t: "snippet", turn: 3, code: code + "z" })]);
+    expect(miscount[0]!["args"]).toEqual({ code: clip });
+  });
+
+  test("a call's other arguments still ship, and a tool with no snippet is untouched", () => {
+    const out = window([
+      entry({ i: 0, t: "tool_call", turn: 3, name: "run_snippet", args: { code: "x", timeoutMs: 5 } }),
+      entry({ i: 1, t: "snippet", turn: 3, code: "x" }),
+      entry({ i: 2, t: "tool_call", turn: 4, name: "edit_scratchpad", args: { old: "a", new: "b" } }),
+      entry({ i: 3, t: "tool_result", turn: 4, name: "edit_scratchpad", text: "ok" }),
+    ]);
+    expect(out[0]!["args"]).toEqual({ timeoutMs: 5 });
+    expect(out[2]!["args"]).toEqual({ old: "a", new: "b" });
+  });
+
+  test("the published window is a fixed point of its own projection", () => {
+    const once = projectEntries({
+      from: 0,
+      total: 2,
+      entries: [
+        entry({ i: 0, t: "tool_call", turn: 3, name: "run_snippet", args: { code: "return 1" } }),
+        entry({ i: 1, t: "snippet", turn: 3, code: "return 1" }),
+      ] as never,
+    });
+    expect(projectEntries(once)).toEqual(once);
+  });
+
+  test("the raw line's byte range, a request's and a reply's bookkeeping and an events batch's tallies are not published", () => {
+    const out = window([
+      entry({ i: 0, t: "request", turn: 1, adapter: "openai", messageCount: 4, systemChars: 90, promptChars: 1200, usage: { prompt: 9 } }),
+      entry({ i: 1, t: "response", turn: 1, text: "hi", tools: ["run_snippet"], outChars: 2, usage: { completion: 3, cost: 0.1 } }),
+      entry({ i: 2, t: "events_served", via: "tool", count: 2, opcodes: ["SMSG_X×2"], ambient: 5, moreOpcodes: 1, folded: 3 }),
+    ]);
+    expect(Object.keys(out[0]!).sort()).toEqual(["i", "messageCount", "promptChars", "t", "ts", "turn"]);
+    expect(Object.keys(out[1]!).sort()).toEqual(["i", "t", "text", "tools", "ts", "turn"]);
+    expect(Object.keys(out[2]!).sort()).toEqual(["count", "i", "moreOpcodes", "opcodes", "t", "ts", "via"]);
+  });
+});
+
+describe("no public page reads what the projection leaves out", () => {
+  // Fields whose names appear nowhere in the dashboard's source as a property
+  // read, at the audit (docs/PUBLIC-DASHBOARD.md, "What is published"). A page
+  // that starts to read one has to put it back in the projection first, and
+  // this fails until it does. Names that other objects also carry are not
+  // listed: a name scan cannot tell them apart, and the types
+  // (`PublicRunListRow`, `ChartSample`) carry those.
+  const LEFT_OUT = [
+    "raceName", "className", "outChars", "systemChars", "adapter", "ambient", "folded",
+    "reachedL5", "lastEnded", "lastReason", "otherSeries", "mtime", "firstTs",
+  ];
+
+  function sources(dir: string): string[] {
+    const out: string[] = [];
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) out.push(...sources(path));
+      else if (/\.(ts|tsx)$/.test(name) && !/\.test\./.test(name)) out.push(path);
+    }
+    return out;
+  }
+
+  test("the dashboard's source does not read them", () => {
+    const text = sources(join(import.meta.dir, "../../dashboard/src")).map((f) => [f, readFileSync(f, "utf8")] as const);
+    const reads: string[] = [];
+    for (const key of LEFT_OUT) {
+      const read = new RegExp(`(\\.\\??${key}\\b|\\b${key}\\??:|\\["${key}"\\]|[{,]\\s*${key}\\s*[,}=])`);
+      for (const [f, t] of text) if (read.test(t)) reads.push(`${key} in ${f}`);
+    }
+    expect(reads).toEqual([]);
   });
 });

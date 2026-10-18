@@ -154,7 +154,7 @@ describe("shapes", () => {
           characterLabel: "Dwarf Hunter", platform: "openrouter", resolvedModel: "claude-sonnet-5", cliVersion: "2.1.239",
           apiBase: null, harnessVersion: "harness-0.2",
           startedAt: 1, endedAt: null, terminationReason: null, terminationDetail: null,
-          pauseReason: null, level: 4, xp: 10, money: 0, questsCompleted: 2, items: null, mtime: 5,
+          pauseReason: null, level: 4, xp: 0, money: 0, questsCompleted: 2, items: null, mtime: 5,
           bytes: 9, live: true, tokens: null, cost: null, firstTs: 1, lastTs: 2, playtimeMs: 1,
           modelResponses: 3,
         },
@@ -163,7 +163,7 @@ describe("shapes", () => {
     const got = await createClient({ fetch: stub(payload).fetch }).runs();
     expect(got.runs[0]!.level).toBe(4);
     // A recorded zero is a value, not a gap: it must survive the round trip.
-    expect(got.runs[0]!.money).toBe(0);
+    expect(got.runs[0]!.xp).toBe(0);
   });
 
   test("an absent fleet reads as present:false with no jobs", async () => {

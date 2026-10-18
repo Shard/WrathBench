@@ -538,14 +538,19 @@ describe("a run resumed in place", () => {
     expect(character.character.totals.questsCompleted).toBe(5);
   });
 
-  test("public mode serves the sessions and the per-sample count too", async () => {
+  test("public mode serves the sessions and the whole run's count, and the chart's samples without the per-sample count", async () => {
     const { runs, id } = resumedInPlaceFixture();
     const detail = (await (await api(runs, true)(new Request(`http://x/api/run/${id}`))).json()) as {
-      states: { questsCompleted?: number | null }[];
+      run: { questsCompleted: number | null };
+      states: Record<string, unknown>[];
       sessions?: unknown[];
     };
     expect(detail.sessions).toHaveLength(2);
-    expect(detail.states.map((s) => s.questsCompleted)).toEqual([1, 3, 0, 2]);
+    // The sum across the restart is the server's, applied before the projection;
+    // the samples the run page's chart reads are when, the level and the XP.
+    expect(detail.run.questsCompleted).toBe(5);
+    expect(detail.states).toHaveLength(4);
+    for (const s of detail.states) expect(Object.keys(s).sort()).toEqual(["level", "ts", "xp"]);
   });
 });
 

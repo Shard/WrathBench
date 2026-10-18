@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
 import { ConfigStore, splitFleet } from "../src/config-store";
-import type { CampaignsResponse, RunsResponse } from "../viewer/api-types";
+import type { CampaignsResponse, ResultsResponse, RunDetailResponse, RunsResponse } from "../viewer/api-types";
 import { checkedIn, defsBlock, definition, seedPublished } from "./fixtures/campaigns";
 
 const dirs: string[] = [];
@@ -244,11 +244,19 @@ describe("/api/runs keeps every stamp, on and off the page", () => {
     expect(((await res.json()) as RunsResponse).runs.map((r) => r.runId)).toEqual(["fleet-a"]);
   });
 
-  test("the public listing carries the version and the arm, and not the roster name", async () => {
+  test("the public results and run page carry the version and the arm, and not the roster name", async () => {
+    // The public `/api/runs` is the fleet table's few fields now: the stamps a
+    // reader matches a run to its campaign pane by are on the results row and
+    // on the run's own page.
     const f = fixture([stamped("fleet-a")]);
-    const res = await handleFor(f, true)(new Request("http://x/api/runs"));
-    const row = ((await res.json()) as RunsResponse).runs.find((r) => r.runId === "fleet-a")!;
-    expect(row).toMatchObject({ campaign: "race-probe", campaignVersion: 1, arm: "base" });
-    expect(row.ref).toBeUndefined();
+    const handle = handleFor(f, true);
+    const results = (await (await handle(new Request("http://x/api/results?episode=all&includeOverrides=1"))).json()) as ResultsResponse;
+    expect(results.runs.find((r) => r.runId === "fleet-a")).toMatchObject({ campaign: "race-probe", campaignVersion: 1, arm: "base" });
+    const detail = (await (await handle(new Request("http://x/api/run/fleet-a"))).json()) as RunDetailResponse;
+    expect(detail.run).toMatchObject({ campaign: "race-probe", campaignVersion: 1, arm: "base" });
+    expect(detail.run.ref).toBeUndefined();
+    const listed = ((await (await handle(new Request("http://x/api/runs"))).json()) as { runs: Record<string, unknown>[] }).runs.find((r) => r.runId === "fleet-a")!;
+    expect(listed["ref"]).toBeUndefined();
+    expect(listed["arm"]).toBeUndefined();
   });
 });

@@ -12,9 +12,8 @@
  */
 
 import { For, Show, createMemo } from "solid-js";
-import type { StatePoint } from "@viewer/api-types";
 import { scaleLinear } from "../lib/chart";
-import { xpChartModel } from "../lib/runview";
+import { xpChartModel, type ChartSample } from "../lib/runview";
 import { VB_W } from "./ChartParts";
 
 /** Elapsed wall-clock label for an x tick: "mm:ss", or "Hh Mm" past an hour — shorter than `fmtElapsed`, which is a reading, not a tick. */
@@ -36,7 +35,7 @@ const FULL = { w: VB_W, h: 200, m: { top: 12, right: 14, bottom: 24, left: 48 },
 const COMPACT = { w: 300, h: 100, m: { top: 6, right: 6, bottom: 16, left: 26 }, ticks: 1, tickY: 13 };
 
 export function XpChart(props: {
-  states: readonly StatePoint[];
+  states: readonly ChartSample[];
   startedAt: number | null;
   endedAt: number | null;
   episodeMs: number | null;

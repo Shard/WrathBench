@@ -286,9 +286,10 @@ const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "scratch
  *
  * - **Its files**, by size and mtime. Every per-run route reads a run's own
  *   files or the store rows the collector derives from them.
- * - **Its listing row** as this pass projected it, which is the store's view
- *   of the run (so a collector still catching up moves it) and carries the
- *   cost the detail repeats.
+ * - **Its listing row** as the viewer served it, not as it is published (the
+ *   published row is the few fields the fleet table reads): the store's view of
+ *   the run, so a collector still catching up moves it, and the cost the detail
+ *   repeats.
  * - **Its character's rows**, for a run in a chain of attempts. A freeplay
  *   attempt's detail and track name its neighbours and carry the chain's
  *   totals, so a successor appearing or a live attempt progressing changes a
@@ -305,7 +306,7 @@ const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "scratch
  * from. Cold is judged on the wall clock, never the render's `now`, which only
  * stamps `generatedAt`.
  */
-function coldFingerprint(runsDir: string, row: RunListRow, character: string, wall: number): string | null {
+function coldFingerprint(runsDir: string, row: { runId: string }, character: string, wall: number): string | null {
   const parts = [JSON.stringify(row), character];
   for (const name of RUN_INPUT_FILES) {
     let st: { size: number; mtimeMs: number };
@@ -447,7 +448,12 @@ export function createRenderer(
     // Everything below is projected the moment it is parsed, so no unprojected
     // body exists past this block for a later step to serialize by mistake.
     const info = projectInfo(await get<ApiInfoResponse>("/api/info"));
-    const runs = projectRuns(await get<RunsResponse>("/api/runs"));
+    const listing = await get<RunsResponse>("/api/runs");
+    const runs = projectRuns(listing);
+    // The listing as the viewer served it, by run, for the cold fingerprint: the
+    // published row is only what the fleet table reads, and a store row moving
+    // a field it no longer carries (a termination, a pause) must still move it.
+    const served = new Map(listing.runs.map((r) => [r.runId, r]));
     const results = projectResults(await get<ResultsResponse>("/api/results?episode=all&includeOverrides=1"));
     const ladders: [string, ResultsResponse][] = [];
     // `probing` has no ladder (operator, 2026-08-29; the reason is at
@@ -527,8 +533,9 @@ export function createRenderer(
         for (let i = next++; i < group.length; i = next++) {
           const row = group[i]!;
           const id = encodeURIComponent(row.runId);
-          // Before the row is stamped, so the fingerprint sees the listing's own row.
-          const fingerprint = holds === undefined ? null : coldFingerprint(opts.runsDir, row, characterOf(row.runId), wall);
+          // The listing's own row, as served, not the published one.
+          const fingerprint =
+            holds === undefined ? null : coldFingerprint(opts.runsDir, served.get(row.runId) ?? row, characterOf(row.runId), wall);
           const cold = fingerprint === null ? undefined : coldRuns.get(row.runId);
           if (
             cold !== undefined &&

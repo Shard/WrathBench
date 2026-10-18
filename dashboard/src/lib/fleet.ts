@@ -15,7 +15,7 @@
 
 import type { FleetJobView, FleetPausedView, FleetResponse, FleetServerView, TpsFacts } from "@viewer/api-types";
 import { costMark, fmtDuration, fmtTps, modelDisplay } from "./format";
-import type { RunListRow } from "@viewer/api-types";
+import type { PublicRunListRow } from "@viewer/public-projection";
 
 /** The supervisor writes a heartbeat every tick (60s); past three ticks it is gone, not quiet. */
 export const HEARTBEAT_STALE_MS = 180_000;
@@ -414,7 +414,7 @@ function stateOf(job: FleetJobView, windowOpen: boolean): FleetRowState {
  * as the episodes page shows it — never the estimate, and null for any of the
  * ways there is none (no run, unreadable trajectory, a provider that reports no cost).
  */
-function actualUsd(run: RunListRow | undefined): number | null {
+function actualUsd(run: PublicRunListRow | undefined): number | null {
   const c = run?.cost?.actual ?? null;
   return c === null || c.basis === "none" ? null : c.usd;
 }
@@ -428,7 +428,7 @@ function actualUsd(run: RunListRow | undefined): number | null {
  * shows, so the two cannot disagree. A job whose run is not in that feed still
  * gets its row; it is a launch the trajectory has not caught up with.
  */
-export function fleetRows(fleet: FleetResponse, runs: readonly RunListRow[]): FleetRow[] {
+export function fleetRows(fleet: FleetResponse, runs: readonly PublicRunListRow[]): FleetRow[] {
   const byId = new Map(runs.map((r) => [r.runId, r]));
   const rows: FleetRow[] = [];
   const busy = new Set<string>();
