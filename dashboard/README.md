@@ -129,6 +129,12 @@ state samples, the run not being driven — plays in one second at any speed
 that would take longer, which is what kept the old one-sample-per-tick scale
 free of dead air. At 60× and below, and whenever paused, the pip and the unit
 frame come from the trace's segments near the cursor; faster, from the track.
+The span is the track's points and the trace together, and the route is drawn
+from the trace's frames wherever a loaded window covers it, so a short run
+with one 60 s point still scrubs and draws its path. A run still going has
+its newest minutes only in the open tail, which the replay reads from the
+run's index (publicly, its position in `live.json`) on the live map's cadence
+while there is one.
 
 **The unit frame** reads the trace state at the playhead: health, power,
 level and experience (a gauge the trace has withheld stays unobserved rather

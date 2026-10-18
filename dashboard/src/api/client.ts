@@ -25,6 +25,7 @@ import type {
   PositionsResponse,
   RunDetailResponse,
   RunsResponse,
+  TraceIndexResponse,
   TraceSegment,
   TrackResponse,
 } from "@viewer/api-types";
@@ -277,6 +278,12 @@ export function createClient(opts: ClientOptions = {}) {
      */
     traceSegment: async (id: string, t0: number): Promise<TraceSegment> =>
       await get<TraceSegment>(`/api/run/${encodeURIComponent(id)}/trace/${traceWindow(t0)}`),
+    /**
+     * A run's trace index: its closed windows and its open tail. What a replay
+     * of a run still going reads its newest minutes from.
+     */
+    traceIndex: (id: string): Promise<TraceIndexResponse> =>
+      get<TraceIndexResponse>(`/api/run/${encodeURIComponent(id)}/trace`),
     /**
      * How `positions()` is made, for the live map's delay: rendered on request,
      * so a reading is as fresh as the poll that fetched it, behind a memo

@@ -39,7 +39,7 @@ import type { AgentPosition, TrackResponse } from "../api/client";
 import { shortRunId, stamp } from "../lib/format";
 import { replayHref, replayHrefFor } from "../lib/mapstate";
 import { colorOf, pipName } from "../lib/mapview";
-import { type Speed, playbackClock, prevSampleBefore, progressOf } from "../lib/playback";
+import { type Span, type Speed, playbackClock, prevSampleBefore, progressOf } from "../lib/playback";
 import { nextSampleAfter, trackSpan } from "../lib/replay";
 import { SNAPSHOT_MODE } from "../api/client";
 import { InfoHint } from "./InfoHint";
@@ -66,6 +66,12 @@ export interface PlayBarProps {
   /** The live poll's failure, already rendered for display. */
   feedError: string | undefined;
   cursor: number;
+  /**
+   * What the scrubber covers, when the page knows more than the track's
+   * points: the trace's span joins it (a short trace-era run can have one
+   * point and minutes of trace). Absent, the points' own span.
+   */
+  span?: Span | null;
   playing: boolean;
   speed: Speed;
   /** Live: how many characters the feed shows, and how many the series hid. */
@@ -83,7 +89,9 @@ export interface PlayBarProps {
 }
 
 export function PlayBar(props: PlayBarProps) {
-  const span = createMemo(() => (props.track === undefined ? null : trackSpan(props.track.points)));
+  const span = createMemo(() =>
+    props.span !== undefined ? props.span : props.track === undefined ? null : trackSpan(props.track.points),
+  );
   /** A replay is scrubbable only where its samples span some time. */
   const scrubbable = (): boolean => {
     const sp = span();
@@ -187,7 +195,7 @@ export function PlayBar(props: PlayBarProps) {
                   )}
                 </Show>
                 <span class="grow" />
-                <Show when={t().points.length > 0}>
+                <Show when={span() !== null}>
                   <span class="dim mono playbar-stamp" title="the cursor's wall-clock time">
                     {stamp(props.cursor)}
                   </span>
@@ -203,7 +211,7 @@ export function PlayBar(props: PlayBarProps) {
         <Show when={props.track}>
           {(t) => (
             <div class="playbar-row transport">
-              <Show when={t().points.length > 0} fallback={<span class="dim">no recorded positions</span>}>
+              <Show when={span() !== null} fallback={<span class="dim">no recorded positions</span>}>
                 <button
                   class="tbtn"
                   title="previous sample (←)"

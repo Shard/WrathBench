@@ -88,7 +88,9 @@ import {
   createTraceStore,
   horizonOf,
   ingestPositions,
+  ingestIndex,
   ingestTrack,
+  replaySpan,
   liveCadence,
   replayCursorAt,
   replayReach,
@@ -350,9 +352,11 @@ export default function MapPage() {
     selectedId,
   });
 
+  /** What the replay scrubs over: the points and the trace together (`replaySpan`). */
   const span = createMemo(() => {
+    traceRev();
     const t = track();
-    return t === undefined ? null : trackSpan(t.points);
+    return t === undefined ? null : replaySpan(t, store);
   });
   /** The replay's idle stretches, compressed in playback (`advanceCursor`). Once per track. */
   const idle = createMemo(() => {
@@ -364,6 +368,22 @@ export default function MapPage() {
     const sp = span();
     return sp !== null && sp.to > sp.from;
   };
+  /**
+   * Set while a freshly loaded replay's cursor is still at its start and the
+   * reader has not moved it: the trace's span arrives after the track and can
+   * begin before its first point, and the replay should open where the
+   * record does.
+   */
+  let followStart = false;
+  /* The cursor stays inside the span as the trace's half of it arrives and tightens. */
+  createEffect(
+    on(span, (sp) => {
+      if (sp === null || untrack(playing)) return;
+      const c = untrack(cursor);
+      const next = followStart ? sp.from : Math.min(sp.to, Math.max(sp.from, c));
+      if (next !== c) setCursor(next);
+    }),
+  );
 
   let canvas!: HTMLCanvasElement;
   let stage!: HTMLDivElement;
@@ -561,14 +581,15 @@ export default function MapPage() {
    * Ask the store for the windows the playhead is about to reach, on a timer
    * rather than per frame: in a replay the replayed run's, live only the runs
    * drawn on the map on screen — the public data host rate-limits these, and
-   * a character on another continent is not looked at.
+   * a character on another continent is not looked at. A replay also takes
+   * its first and last listed windows, which bound its span to the frames.
    */
   function pumpTraces(): void {
     const t = playheadAt(performance.now());
     if (t === null) return;
     const tr = track();
     if (tr !== undefined) {
-      if (traceDrives()) store.pump(tr.runId, t, fetchSegment, replayReach(speed()));
+      if (traceDrives()) store.pump(tr.runId, t, fetchSegment, { ...replayReach(speed()), ends: true });
       return;
     }
     for (const pip of onMap()) store.pump(pip.runId, t, fetchSegment, LIVE_REACH);
@@ -774,9 +795,12 @@ export default function MapPage() {
    * The prefix follows the cursor signal, a tenth of a second behind the
    * frame's playhead — at 600× that is a whole sample — so the points between
    * and the pip itself are joined on here, by the same rules: no line across a
-   * teleport or onto another map.
+   * teleport or onto another map. A pip the trace places is joined by its own
+   * trail instead: a line from the coarse sample before it would cut across
+   * the path it actually walked.
    */
   function routeToPip(tr: TrackResponse, map: number, t: number, pip: Pip | undefined): RouteRun[] {
+    if (pip !== undefined && pip.o !== null) return [];
     const kinds = segmentKinds();
     const runs = routeUpTo(tr.points, kinds, map, t, Math.max(0, indexAt(tr.points, cursor())));
     const i = indexAt(tr.points, t);
@@ -1269,6 +1293,29 @@ export default function MapPage() {
       if (returningToLive) feed.refresh();
       return;
     }
+    /*
+     * A run still going, or inside the minute its last window settles, has
+     * its newest minutes only in the open tail, which the track does not
+     * carry: read the run's index (publicly, its place in the fast lane) with
+     * the track, and again on the live map's cadence for as long as there is
+     * a tail. A window that closes meanwhile is listed by the next read and
+     * the tail moves on past it (`setTail` keeps the old one until it lands).
+     */
+    let tailTimer: ReturnType<typeof setInterval> | undefined;
+    onCleanup(() => clearInterval(tailTimer));
+    const refreshTail = (): void => {
+      api.traceIndex(id).then(
+        (index) => {
+          if (mine !== trackToken) return;
+          ingestIndex(store, id, index);
+          if (index.tail === null) clearInterval(tailTimer);
+        },
+        (e: unknown) => {
+          logError("map replay trace", e);
+          if ((e as { status?: unknown }).status === 404) clearInterval(tailTimer);
+        },
+      );
+    };
     void api
       .track(id)
       .then((t) => {
@@ -1276,11 +1323,16 @@ export default function MapPage() {
         // The run's closed windows, the only ones its replay will ask for.
         // A track from before the recorder lists none and plays coarse.
         ingestTrack(store, t);
+        refreshTail();
+        tailTimer = setInterval(refreshTail, POLL_MS);
         setTrack(t);
         // Where this run was last left off, if it was — see cursormemory.ts.
         // The route effect above has just cleared the cursor, so this is the
-        // one place a loaded track's cursor is chosen.
-        setCursor(cursorMemory.resume(t));
+        // one place a loaded track's cursor is chosen. At the start, it
+        // follows the start the trace reports (`followStart`).
+        const resumed = cursorMemory.resume(t);
+        followStart = resumed === (trackSpan(t.points)?.from ?? 0);
+        setCursor(resumed);
         pendingFit = true;
         needsDraw = true;
       })
@@ -1289,6 +1341,37 @@ export default function MapPage() {
         if (mine === trackToken) setReplayError(displayError(e));
       });
   });
+
+  /**
+   * The replayed character at the cursor: the track's reading (`positionsAt`),
+   * placed where the trace has it when the trace drives. Before the run's
+   * first 60 s point — a short trace-era run can have one, after minutes of
+   * trace, or none — the reading is the first point's, or the track's own
+   * identity, so the pip and the sidebar exist wherever the trace does.
+   */
+  function replayFeedAt(t: TrackResponse, ts: number): AgentPosition[] {
+    traceRev();
+    const pose = traceDrives() ? store.poseAt(t.runId, ts) : null;
+    if (pose === null) return positionsAt(t, ts);
+    const first = t.points[0];
+    const [reading] = positionsAt(t, first === undefined ? ts : Math.max(ts, first.ts));
+    const base: AgentPosition = reading ?? {
+      runId: t.runId,
+      character: t.characterName,
+      model: t.model,
+      map: pose.map,
+      x: pose.x,
+      y: pose.y,
+      ts,
+      level: null,
+      xp: null,
+      money: null,
+      questsCompleted: null,
+      items: null,
+      harnessVersion: t.harnessVersion,
+    };
+    return [{ ...base, map: pose.map, x: pose.x, y: pose.y }];
+  }
 
   /** Each traced live run's map at the playhead, as one string, so it only "changes" when a map does. */
   const tracedMaps = createMemo(() => {
@@ -1311,7 +1394,7 @@ export default function MapPage() {
   createEffect(() => {
     const t = track();
     if (t !== undefined) {
-      const list = positionsAt(t, cursor());
+      const list = replayFeedAt(t, cursor());
       // A replayed sample's age is not a freshness claim; the plain arithmetic applies.
       feedClock = null;
       syncPips(pips, list, true);
@@ -1403,13 +1486,34 @@ export default function MapPage() {
     return t === undefined ? [] : classifySegments(t);
   });
 
-  /* The drawn route, recomputed when its inputs move rather than per frame. */
+  /*
+   * The drawn route, recomputed when its inputs move rather than per frame:
+   * the trace's own frames wherever a loaded segment answers, and the 60 s
+   * points for the steps no loaded segment covers at both ends — so a
+   * trace-era run with one point still draws the path it walked, and an old
+   * run draws what it always did.
+   */
   createEffect(() => {
+    traceRev();
     const t = track();
     const kinds = segmentKinds();
     const map = activeMap();
     const ts = cursor();
-    route = t === undefined ? [] : routeUpTo(t.points, kinds, map, ts);
+    const sp = span();
+    if (t === undefined) {
+      route = [];
+    } else {
+      const id = t.runId;
+      const coarse = routeUpTo(t.points, kinds, map, ts, 0, (i) => store.covers(id, t.points[i]!.ts) && store.covers(id, t.points[i + 1]!.ts));
+      const fine: RouteRun[] =
+        sp === null
+          ? []
+          : store
+              .path(id, sp.from, ts)
+              .filter((r) => r.map === map)
+              .map((r) => ({ kind: r.flight ? "flight" : "walk", points: r.points }));
+      route = [...coarse, ...fine];
+    }
     routeColor = colorOf(t?.runId ?? "");
     needsDraw = true;
   });
@@ -1424,6 +1528,7 @@ export default function MapPage() {
   const seek = (ts: number): void => {
     const t = track();
     if (t === undefined) return;
+    followStart = false;
     setCursor(ts);
     cursorMemory.remember(t.runId, ts);
   };
@@ -1466,6 +1571,7 @@ export default function MapPage() {
       return;
     }
     if (cursor() >= span()!.to) seek(span()!.from);
+    followStart = false;
     setPlaying(true);
   };
 
@@ -1653,6 +1759,7 @@ export default function MapPage() {
           replayError={replayError()}
           feedError={feed.error === undefined ? undefined : displayError(feed.error)}
           cursor={cursor()}
+          span={span()}
           playing={playing()}
           speed={speed()}
           count={count()}

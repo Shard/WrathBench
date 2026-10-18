@@ -30,6 +30,7 @@
 import type {
   AgentPosition,
   PositionsResponse,
+  TraceIndexResponse,
   TraceSegment,
   TraceState,
   TraceTarget,
@@ -48,6 +49,7 @@ import {
   windowOf,
 } from "@viewer/trace";
 import { type Span, advanceCursor } from "./playback";
+import { trackSpan } from "./replay";
 
 export type { TracePose, TraceState, TraceTarget };
 
@@ -88,10 +90,15 @@ export function replayReach(speed: number): Reach {
 
 export type SegmentFetcher = (runId: string, t0: number) => Promise<TraceSegment>;
 
-/** How far around a playhead to fetch: back (a trail) and ahead (the next window, before it is reached). */
+/**
+ * How far around a playhead to fetch: back (a trail), ahead (the next window,
+ * before it is reached), and the run's first and last listed windows, which
+ * bound a replay's span exactly (`TraceStore.extent`).
+ */
 export interface Reach {
   back?: number;
   ahead?: number;
+  ends?: boolean;
 }
 
 export interface TraceStoreOptions {
@@ -138,6 +145,21 @@ export interface TraceStore {
   /** The path walked over `[from, to]`, split where a line would lie: at a cut, a change of map, a held gap. */
   trail: (runId: string, from: number, to: number) => TrailRun[];
   /**
+   * The same over whatever is loaded, wherever `to` falls: a replay's route.
+   * No line crosses a window that is not here, because the frames either side
+   * are further apart than `GAP_MS`.
+   */
+  path: (runId: string, from: number, to: number) => TrailRun[];
+  /** Whether a loaded segment (or the tail) answers for `t`. */
+  covers: (runId: string, t: number) => boolean;
+  /**
+   * The span the run's trace covers: from its first listed window's first
+   * frame to the last frame or state change of the newest it holds. Until a
+   * window at either end is loaded that end is its window's edge, so the
+   * span only ever tightens to the frames once they arrive. Null with no trace.
+   */
+  extent: (runId: string) => { from: number; to: number } | null;
+  /**
    * The listed windows worth fetching for a playhead at `t`, most urgent
    * first: its own window, those back to `t − reach.back`, then the next
    * listed one once the playhead is within `reach.ahead` of it. Never a window
@@ -174,6 +196,13 @@ interface RunTrace {
   sorted: number[];
   closed: Map<number, DecodedSegment>;
   tail: DecodedSegment | null;
+  /**
+   * The tail before the last one, kept for the windows it held until they
+   * arrive closed: a window leaves the tail the moment it is listed, and
+   * without this the playhead inside it would fall back to the coarse track
+   * for the round trip it takes to fetch.
+   */
+  retired: DecodedSegment | null;
   /** The tail as it arrived, so an unchanged one is not decoded again every poll. */
   tailKey: string | null;
   inflight: Set<number>;
@@ -195,9 +224,23 @@ const lruKey = (runId: string, t0: number): string => `${runId}\n${t0}`;
  */
 function assemble(run: RunTrace): Assembled {
   const closed = [...run.closed.values()].sort((a, b) => a.t0 - b.t0);
-  let tailFrom = run.tail === null ? Infinity : run.tail.t0;
-  for (const s of closed) if (s.t0 <= tailFrom && s.t1 > tailFrom) tailFrom = s.t1;
+  /** Where a tail starting at `t0` takes over: past the closed windows that run on from there. */
+  const pastClosed = (t0: number): number => {
+    let from = t0;
+    for (const s of closed) if (s.t0 <= from && s.t1 > from) from = s.t1;
+    return from;
+  };
+  const tailFrom = run.tail === null ? Infinity : pastClosed(run.tail.t0);
   const pieces: Piece[] = closed.filter((s) => s.t0 < tailFrom).map((s) => ({ from: s.t0, to: s.t1, seg: s }));
+  if (run.retired !== null) {
+    // Up to the next closed window, or the current tail, whichever is first.
+    const from = pastClosed(run.retired.t0);
+    const next = closed.find((s) => s.t0 > from);
+    const to = Math.min(next?.t0 ?? Infinity, run.tail?.t0 ?? Infinity, tailFrom);
+    if (from < to) pieces.push({ from, to, seg: run.retired });
+    else run.retired = null;
+  }
+  pieces.sort((a, b) => a.from - b.from);
   if (run.tail !== null) pieces.push({ from: tailFrom, to: Infinity, seg: run.tail });
 
   const frames: TraceFrame[] = [];
@@ -208,6 +251,7 @@ function assemble(run: RunTrace): Assembled {
     // earlier — would only repeat them (or step back in time to say it).
     const joined = p.from === prevTo;
     for (const f of p.seg.frames) {
+      if (f.t >= p.to) break;
       if (f.t < p.from && (joined || p.from > p.seg.t0)) continue;
       const last = frames[frames.length - 1];
       if (last !== undefined && f.t <= last.t) {
@@ -260,6 +304,7 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
         sorted: [],
         closed: new Map(),
         tail: null,
+        retired: null,
         tailKey: null,
         inflight: new Set(),
         retryAt: new Map(),
@@ -346,6 +391,7 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
       if (tail === null) {
         const run = runs.get(runId);
         if (run === undefined || run.tail === null) return;
+        run.retired = run.tail;
         run.tail = null;
         run.tailKey = null;
         changed(run);
@@ -361,6 +407,9 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
         // A version this decoder cannot read is no trace at all, not a wrong one.
         return;
       }
+      // The tail moved on: the windows the old one held are listed now, and
+      // it answers for them until they arrive closed (`assemble`).
+      if (run.tail !== null && decoded.t0 > run.tail.t0) run.retired = run.tail;
       run.tail = decoded;
       run.tailKey = key;
       changed(run);
@@ -368,7 +417,7 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
 
     has(runId) {
       const run = runs.get(runId);
-      return run !== undefined && (run.listed.size > 0 || run.tail !== null);
+      return run !== undefined && (run.listed.size > 0 || run.tail !== null || run.retired !== null);
     },
 
     poseAt(runId, t) {
@@ -395,6 +444,40 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
       return trailOf(at.a.frames, from, to);
     },
 
+    path(runId, from, to) {
+      const run = runs.get(runId);
+      if (run === undefined || to <= from) return [];
+      return trailOf(assembled(run).frames, from, to);
+    },
+
+    covers(runId, t) {
+      const run = runs.get(runId);
+      return run !== undefined && assembled(run).pieces.some((p) => t >= p.from && t < p.to);
+    },
+
+    extent(runId) {
+      const run = runs.get(runId);
+      if (run === undefined) return null;
+      const a = assembled(run);
+      const first = run.sorted[0] ?? run.retired?.t0 ?? run.tail?.t0;
+      if (first === undefined) return null;
+      // The first frame the window under the start has, once it is here.
+      const head = a.pieces.find((p) => first >= p.from && first < p.to);
+      const firstFrame = head?.seg.frames.find((f) => f.t >= first);
+      const from = firstFrame?.t ?? first;
+      // The newest thing held: a frame or a state change, in any piece.
+      let to = from;
+      for (const p of a.pieces) {
+        to = Math.max(to, p.seg.frames.at(-1)?.t ?? -Infinity, p.seg.events.at(-1)?.t ?? -Infinity);
+      }
+      // A listed window not here yet still has a reach: its edge, until it
+      // lands — unless a tail, current or retired, already holds it.
+      const last = run.sorted.at(-1);
+      const held = tailCovers(run, last ?? 0) || (run.retired !== null && (last ?? 0) >= run.retired.t0);
+      if (last !== undefined && !run.closed.has(last) && !held) to = Math.max(to, last + run.segMs);
+      return { from, to };
+    },
+
     wanted(runId, t, reach = {}) {
       const run = runs.get(runId);
       if (run === undefined) return [];
@@ -409,6 +492,9 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
       // rows, or not be published yet, and a guess at it is a cached 404.
       const next = run.sorted.find((w) => w > here);
       if (next !== undefined && next - t <= (reach.ahead ?? Infinity) && ok(next)) out.push(next);
+      if (reach.ends === true) {
+        for (const w of [run.sorted[0], run.sorted.at(-1)]) if (w !== undefined && ok(w) && !out.includes(w)) out.push(w);
+      }
       return out;
     },
 
@@ -575,6 +661,29 @@ export function ingestPositions(store: TraceStore, positions: readonly AgentPosi
 export function ingestTrack(store: TraceStore, track: TrackResponse): void {
   store.retain([track.runId]);
   if (track.trace !== undefined) store.list(track.runId, track.trace.segMs, unpackSegs(track.trace.segs, track.trace.segMs));
+}
+
+/**
+ * What a replay scrubs over: the track's 60 s points and the trace together.
+ * A short trace-era run can have one point and minutes of fine trace, and a
+ * run still going has its newest minutes only in the tail, so the points
+ * alone would leave it unscrubbable or cut short.
+ */
+export function replaySpan(track: TrackResponse, store: TraceStore): Span | null {
+  const points = trackSpan(track.points);
+  const trace = store.extent(track.runId);
+  if (points === null || trace === null) return points ?? trace;
+  return { from: Math.min(points.from, trace.from), to: Math.max(points.to, trace.to) };
+}
+
+/**
+ * A replayed run's index into the store: the closed windows it lists, and its
+ * open tail — the newest minutes of a run still going, or one inside the
+ * minute its last window settles, which no closed window holds yet.
+ */
+export function ingestIndex(store: TraceStore, runId: string, index: Pick<TraceIndexResponse, "segMs" | "segs" | "tail">): void {
+  store.list(runId, index.segMs, unpackSegs(index.segs, index.segMs));
+  store.setTail(runId, index.tail);
 }
 
 /* ---------------------------------------------------------- live clock --- */
