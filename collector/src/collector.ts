@@ -68,6 +68,11 @@ export class Collector {
     return this.ingester.countScannerOf(runId);
   }
 
+  /** The totals scanner a run's next re-derivation folds into (`Ingester.totalsScannerOf`), for a test or a probe. */
+  totalsScannerOf(runId: string): ReturnType<Ingester["totalsScannerOf"]> {
+    return this.ingester.totalsScannerOf(runId);
+  }
+
   /** Forget every offset, so the next pass reads every run from byte zero. */
   replayFromZero(): void {
     this.deps.offsets.reset();
@@ -99,8 +104,9 @@ export class Collector {
       if (before !== undefined && before === entry.sig) {
         /*
          * Nothing in this run has moved since the last pass, so there is
-         * nothing to read — and it is not being written, so its resumable
-         * totals scanner is holding marks for a file that is finished.
+         * nothing to read. Its resumable scanners are kept through a quiet
+         * stretch — a model can think for minutes — and dropped once the run
+         * has been quiet for `SCANNER_QUIET_MS`.
          */
         this.ingester.forget(entry.runId);
         continue;
