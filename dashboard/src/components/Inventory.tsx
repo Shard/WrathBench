@@ -410,8 +410,9 @@ const QUEST_STATUS_CLASS: Readonly<Record<QuestStatus, string | undefined>> = {
  * One quest: its Wowhead link, then its objectives as `have / need` while it
  * is in progress, and once it is not, its status alone in its status's colour.
  * A complete quest's objectives are met on the server's word, and the carried
- * count cannot always show that (a key sits on the keyring, which the sheet
- * does not read), so its numbers would only be a way to contradict it.
+ * count cannot always show that (a key on the keyring reads 0 wherever the
+ * module did not serve the keyring), so its numbers would only be a way to
+ * contradict it.
  *
  * Keyed by the quest id, not by the row: the anchor is made once per quest
  * and only the progress beside it follows the playhead. The script renames a

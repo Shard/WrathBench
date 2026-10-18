@@ -69,8 +69,11 @@ export interface TraceState {
  * - `bags` `[slot, itemId, numSlots]`: the worn bags, slots 19-22.
  * - `inv` `[bag, slot, itemId, count?, rand?]`: what is carried, addressed as
  *   the item actions take it (the backpack is bag 255, slots 23-38; a worn
- *   bag is its own slot 19-22, with slots from 0). `count` is absent for 1
- *   unless `rand` follows it.
+ *   bag is its own slot 19-22, with slots from 0), and the keyring and the
+ *   currency tokens as bag 255 at their own slots, 86-117 and 118-149: every
+ *   place the server counts toward a quest's items. Never the bank (39-73)
+ *   or the vendor buyback slots (74-85). `count` is absent for 1 unless
+ *   `rand` follows it.
  * - `dur` `[slot, cur, max]`: an equipped item's durability, for items that
  *   have one.
  * - `quests` `[slot, questId, state, c0?, c1?, c2?, c3?]`: the quest log's

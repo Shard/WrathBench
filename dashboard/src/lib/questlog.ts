@@ -13,13 +13,15 @@
  *  - a creature, gameobject or event objective is its counter against the
  *    quest's count for that counter, the four in the log's order;
  *  - a collect objective has no counter in the log at all. Its progress is
- *    what is carried — equipped, worn bags, the backpack and the worn bags'
- *    contents, as the server's `Player::GetItemCount(id, false)` counts it and
- *    the SDK's `questObjectives` reads it — capped at the count needed, as the
- *    server keeps it (`AdjustQuestReqItemCount`). The server also counts the
- *    keyring, which the sheet does not read, so a key reads 0; the panel
- *    shows objectives only while a quest is in progress, so a complete
- *    quest's key is never shown as missing;
+ *    what is carried — equipped, worn bags, the backpack, the worn bags'
+ *    contents, the keyring and the currency tokens (bag 255, slots 86-149),
+ *    as the server's `Player::GetItemCount(id, false)` counts it — capped at
+ *    the count needed, as the server keeps it (`AdjustQuestReqItemCount`).
+ *    The bag grid leaves the keyring and the currency slots out, as the 60 s
+ *    reading does (`sheetItems`); only this count reads them. A key reads 0
+ *    where the sheet did not see the keyring (a module that does not serve
+ *    it); the panel shows objectives only while a quest is in progress, so a
+ *    complete quest's key is never shown as missing;
  *  - the state is the slot's `QuestSlotStateMask` (AzerothCore `Player.h`):
  *    bit 1 complete, bit 2 failed;
  *  - a quest the segment carries no counts for has no objectives rather than
@@ -72,7 +74,11 @@ function statusOf(state: number): QuestStatus {
   return "active";
 }
 
-/** Stacks carried per item id, wherever the server counts them for a quest; null when any of those lists is not observed. */
+/**
+ * Stacks carried per item id, wherever the server counts them for a quest —
+ * every `inv` row, the keyring and the currency slots among them — null when
+ * any of those lists is not observed.
+ */
 function carriedCounts(sheet: SheetQuests): Map<number, number> | null {
   const { equip, bags, inv } = sheet;
   if (equip === null || bags === null || inv === null) return null;

@@ -232,8 +232,10 @@ at the edge.
   one exception to "What is published" below. A window that closed without it
   could never gain it, so a later reader would have nothing to play back. The
   map's sidebar now reads its money, equipment, carried items, durability,
-  quest log and turn-ins, and counts the worn bags toward a quest's items;
-  reputation and skills still wait on a page.
+  quest log and turn-ins, and counts the worn bags, the keyring and the
+  currency tokens toward a quest's items (the bag grid shows neither of the
+  last two, as the 60 s reading does not); reputation and skills still wait
+  on a page.
 - **Runs before the recorder** have no `trace` table. Their tracks carry no
   `trace` field, so their bytes and keys are what they were, and nothing is
   backfilled.
@@ -464,11 +466,15 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   state and raw counters, visible reputation as faction id and standing,
   skills as id, value and maximum, and turn-ins by quest id. Each row is
   rebuilt as integers no wider than its kind, and only at a position a
-  character carries, so the bank never passes, whoever wrote it. Beside them
+  character carries: equipment (slots 0-18), the worn bags (19-22) and their
+  contents, the backpack (bag 255, 23-38), the keyring (86-117) and the
+  currency tokens (118-149), everywhere the server counts toward a quest's
+  items. So the bank (39-73) and the vendor buyback slots (74-85) never pass,
+  whoever wrote them. Beside them
   are two dictionaries for exactly the ids the segment references: an item's
   quality and template name (names are names; the random suffix stays a
   number), and a quest's required counts, numbers only. Withheld: the bank,
-  item text of every kind (descriptions, readable text, enchant lines), any
+  the vendor buyback slots, item text of every kind (descriptions, readable text, enchant lines), any
   guid, an item's creator, and mail, trade and group, which the trace never
   records. Quest titles and objectives are not carried; the map's quest log
   links each quest id, and the reader's browser asks Wowhead for its name

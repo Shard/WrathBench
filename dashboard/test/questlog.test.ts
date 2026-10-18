@@ -193,6 +193,25 @@ describe("the quest log at the playhead", () => {
     store.setTail(RUN, projectTraceSegment(seg(walk(W, SHEET), W)));
     expect(logAt(store, W + 1000)).toEqual(log);
   });
+
+  test("a key on the keyring and tokens in the currency slots count, as the server counts them, privately and in public", () => {
+    // 906: a key to collect (on the keyring, bag 255 slot 86) and ten tokens (four in currency slot 118, two in the backpack).
+    const KEY = 5004;
+    const TOKEN = 5005;
+    const names = { ...NAMES, [KEY]: [1, "Fixture Key"], [TOKEN]: [1, "Fixture Token"] } as Record<number, TraceItemName>;
+    const dict: TraceDictLookup = { item: (id) => names[id], quest: (id) => (id === 906 ? [0, 0, 0, 0, [KEY, 1], [TOKEN, 10]] : REQS[id]) };
+    const sheet = { ...SHEET, inv: [...SHEET.inv, [255, 25, TOKEN, 2], [255, 86, KEY], [255, 118, TOKEN, 4]], quests: [[0, 906, 0]] };
+    const want = [
+      { have: 1, need: 1, itemId: KEY, name: "Fixture Key" },
+      { have: 6, need: 10, itemId: TOKEN, name: "Fixture Token" },
+    ];
+    for (const project of [false, true]) {
+      const store = createTraceStore();
+      const s = seg(walk(W, sheet), W, dict);
+      store.setTail(RUN, project ? projectTraceSegment(s) : s);
+      expect(logAt(store, W + 1000)).toEqual([{ questId: 906, slot: 0, status: "active", objectives: want }]);
+    }
+  });
 });
 
 describe("turn-ins in the loaded window", () => {
