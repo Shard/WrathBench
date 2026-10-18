@@ -71,7 +71,7 @@ reports `NOT RUNNING`. Finished runs get no rows there: the run directories and
 
 ```
 bun wb inspect live                                  # every run with a heartbeat, one line each
-bun wb inspect run <run-id> [--since 2h]             # verdict, level, counts, errors by class, sizes, trace
+bun wb inspect run <run-id> [--since 2h]             # verdict, level, quests across restarts, counts, errors by class, sizes, trace
 bun wb inspect trajectory <run-id> --errors --last 10
 bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
 bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op

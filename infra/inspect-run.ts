@@ -455,6 +455,46 @@ function lastState(db: Database): StateRow | null {
   return db.query(`SELECT ${cols.map(pick).join(", ")} FROM state ORDER BY ts DESC LIMIT 1`).get() as StateRow | null;
 }
 
+/** One process's stretch of the quest count: when its first sample was taken, and its last count. */
+export interface QuestStretch {
+  from: number;
+  last: number;
+}
+
+/**
+ * The run's quest count across restarts, and the stretches it is summed from.
+ *
+ * The recorded count is the running process's own, so it reads zero again
+ * after a resume or a sandbox restart; a drop marks one, and the run's count
+ * is every stretch's last count added up. The viewer's `questsAcrossRestarts`
+ * (`runner/viewer/results.ts`) is the same fold, copied because this file
+ * imports nothing, and the test pins the two to the same answer. Null when no
+ * sample carried a count.
+ */
+export function questStretches(samples: readonly { ts: number; quests: number | null }[]): { total: number; stretches: QuestStretch[] } | null {
+  const stretches: QuestStretch[] = [];
+  for (const s of samples) {
+    if (s.quests === null) continue;
+    const cur = stretches[stretches.length - 1];
+    if (cur === undefined || s.quests < cur.last) stretches.push({ from: s.ts, last: s.quests });
+    else cur.last = s.quests;
+  }
+  return stretches.length === 0 ? null : { total: stretches.reduce((n, s) => n + s.last, 0), stretches };
+}
+
+function questLine(db: Database, runId: string): string | null {
+  if (!hasTable(db, "state") || !columns(db, "state").has("quests_completed")) return null;
+  const rows = db
+    .query("SELECT ts, quests_completed AS quests FROM state WHERE run_id = ? AND quests_completed IS NOT NULL ORDER BY ts")
+    .all(runId) as { ts: number; quests: number | null }[];
+  const q = questStretches(rows);
+  if (q === null) return null;
+  const restarts = q.stretches.length - 1;
+  const newest = q.stretches[q.stretches.length - 1]!.last;
+  const head = `${q.total} over the run${restarts > 0 ? `, summed across ${restarts} restart(s); the newest sample reads ${newest}` : ""}`;
+  return restarts > 0 ? `${head} · ${q.stretches.map((s) => `from ${clock(s.from).slice(0, 11)} ${s.last}`).join(" · ")}` : head;
+}
+
 interface Activity {
   records: number;
   kinds: Map<string, number>;
@@ -531,13 +571,15 @@ export function inspectRun(runId: string, opts: Options & { since: number | null
       const parts = [
         `L${st.level ?? "?"} ${st.xp ?? "?"}xp${st.next_level_xp != null ? ` of ${st.next_level_xp}` : ""}`,
         money(st.money) !== null ? `money ${money(st.money)}` : null,
-        st.quests_completed != null ? `quests ${st.quests_completed}` : null,
         st.zone != null ? `zone ${st.zone}` : null,
         st.turn != null ? `turn ${st.turn}` : null,
         `sampled ${fmtAge(opts.now - st.ts)} ago`,
       ].filter((b): b is string => b !== null);
       say("level", parts.join(" · "));
     }
+    // The newest sample's count is its process's, so the run's is its own line.
+    const quests = db === null ? null : questLine(db, runId);
+    if (quests !== null) say("quests", quests);
 
     const traj = join(dir, "trajectory.jsonl");
     if (!existsSync(traj)) say("activity", "no trajectory.jsonl");

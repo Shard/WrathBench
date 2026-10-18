@@ -15,6 +15,7 @@ import {
   resultRunOf,
   levelMarks,
   mapsOf,
+  questsAcrossRestarts,
   trackFrom,
   turnsUsable,
   unscoredReason,
@@ -215,6 +216,26 @@ describe("mapsOf / trackFrom", () => {
     expect(track.points.some((p) => "items" in p)).toBe(false);
     // A track of a run that recorded no inventory carries the field nowhere.
     expect("inv" in trackFrom([state({ ts: 1, map: 0, x: 1, y: 2 })])).toBe(false);
+  });
+
+  test("each point carries the run's quest count so far, continued across a resume that starts the recorded one again", () => {
+    const states = [
+      state({ ts: 1, map: 0, x: 1, y: 2, questsCompleted: 0 }),
+      state({ ts: 2, map: 0, x: 1, y: 2, questsCompleted: 4 }),
+      // The stretch's last count rides a sample with no position: it is not lost with the sample.
+      state({ ts: 3, questsCompleted: 6 }),
+      // Resumed in place: the new process counts from zero.
+      state({ ts: 4, map: 0, x: 1, y: 2, questsCompleted: 0 }),
+      // A sample with no count carries the run's count on.
+      state({ ts: 5, map: 0, x: 1, y: 2 }),
+      state({ ts: 6, map: 0, x: 1, y: 2, questsCompleted: 3 }),
+    ];
+    const { points } = trackFrom(states);
+    expect(points.map((p) => p.questsCompleted)).toEqual([0, 4, 6, 6, 9]);
+    // The replay's end is the run page's figure.
+    expect(points.at(-1)!.questsCompleted).toBe(questsAcrossRestarts(states)!);
+    // A run recorded before the column has no count anywhere: null, never zero.
+    expect(trackFrom([state({ ts: 1, map: 0, x: 1, y: 2 })]).points[0]!.questsCompleted).toBeNull();
   });
 
   test("a stored inventory the parser cannot read is a reading of empty bags, as it was on the point", () => {

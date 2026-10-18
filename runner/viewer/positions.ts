@@ -27,7 +27,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
 import { runRowOf, type RunStore } from "./clickhouse";
-import { listRuns, readMoves } from "./runs";
+import { listRuns, readMoves, readQuestCounts } from "./runs";
+import { questsAcrossRestarts } from "./results";
 import { readPositionTrace } from "./trace-db";
 import { nearbyFresh } from "./nearby-ring";
 
@@ -235,6 +236,10 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
   const pos = readLatestPosition(runsDir, run.runId);
   if (pos === null) return null;
   if (now - pos.ts > windowMs) return null;
+  // The row's quest count is its newest sample's, which a resume starts again
+  // at zero: the feed carries the whole run's instead, as the run page does,
+  // so every `run.questsCompleted` below reads the sum.
+  run = { ...run, questsCompleted: questsAcrossRestarts(readQuestCounts(runsDir, run.runId)) ?? run.questsCompleted };
   // One range read over the last few windows (`trace-db.ts`); null on a run
   // that recorded no trace, which leaves the field off.
   const trace = readPositionTrace(runsDir, run.runId, now);

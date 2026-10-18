@@ -554,6 +554,16 @@ Published and unread, left as they were because each is stated as public above
 or is the operator's to decide: the `campaignVersion` and `arm` stamps on a
 result row and a run's row (for matching a run to its campaign pane).
 
+**The map's quest count is the run's.** A live position's `questsCompleted` in
+`live.json`, and each point's in a track, is summed across the counter's
+restarts as the run's detail is (`runner/viewer/README.md`): the recorded count
+is its process's own and reads zero again after every resume, which a freeplay
+character goes through most days. A track's points carried null before, so the
+replay's sidebar read "—". Every run that recorded a count changes its track's
+bytes, so the release re-keys those runs once, all four objects (the old set is
+pruned as usual), and a run from before the column keeps its key. The shape is
+unchanged, so a site on any build reads the new numbers.
+
 **A track's inventory is patches** (`inv`, `runner/viewer/track-inv.ts`): each
 change as the slots that moved, where the track used to carry the whole
 inventory on every point it changed on. That took a level-43 character's track
