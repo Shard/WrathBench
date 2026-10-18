@@ -9,6 +9,10 @@
  * recorded before the recorder shipped has none — those read as no trace at
  * all, never as an error.
  *
+ * A segment's item names and quest requirements come from the run's
+ * `trace_dict`, one point lookup per id the segment references; a run
+ * recorded before that table existed encodes its ids without them.
+ *
  * Every read is a range over the `(run_id, ts)` index: a segment's window plus
  * its `CONTEXT_MS` lead, the feed's last few windows, or — for the list of
  * closed windows — one seek per window rather than a scan of a week's rows.
@@ -19,7 +23,19 @@ import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { openRunDb } from "../src/rundb";
 import type { PositionTrace, TraceIndexResponse, TraceSegment, TrackTrace } from "./api-types";
-import { CONTEXT_MS, SEG_MS, encodeSegment, isClosed, packSegs, tailStart, windowOf, type TraceRow } from "./trace";
+import {
+  CONTEXT_MS,
+  SEG_MS,
+  encodeSegment,
+  isClosed,
+  itemNameOf,
+  packSegs,
+  questReqOf,
+  tailStart,
+  windowOf,
+  type TraceDictLookup,
+  type TraceRow,
+} from "./trace";
 
 /** How many closed windows the position feed names, newest last. */
 export const RECENT_WINDOWS = 3;
@@ -58,6 +74,34 @@ function withTrace<T>(runsDir: string, runId: string, none: T, fn: (db: Database
 }
 
 const numOrNull = (v: unknown): number | null => (typeof v === "number" ? v : null);
+
+/**
+ * The run's trace dictionary (`trace_dict`: item names and quest
+ * requirements), answered per id for the encoder, or undefined on a run
+ * recorded before it existed. Only the ids a segment references are asked.
+ */
+function dictOf(db: Database, runId: string): TraceDictLookup | undefined {
+  try {
+    const cols = new Set((db.query(`PRAGMA table_info(trace_dict)`).all() as { name?: unknown }[]).map((r) => String(r.name)));
+    if (!["run_id", "kind", "id", "data"].every((c) => cols.has(c))) return undefined;
+  } catch {
+    return undefined;
+  }
+  const one = db.query(`SELECT data FROM trace_dict WHERE run_id = ? AND kind = ? AND id = ?`);
+  const read = (kind: string, id: number): unknown => {
+    const r = one.get(runId, kind, id) as { data?: unknown } | null;
+    if (typeof r?.data !== "string") return undefined;
+    try {
+      return JSON.parse(r.data) as unknown;
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    item: (id) => itemNameOf(read("item", id)),
+    quest: (id) => questReqOf(read("quest", id)),
+  };
+}
 
 /** The run's rows with `ts` in `[from, to)`, in write order — the codec's input. */
 function rowsBetween(db: Database, runId: string, from: number, to: number): TraceRow[] {
@@ -118,10 +162,10 @@ function lastTs(db: Database, runId: string): number | null {
  * until it settled, and a reader would have a five-minute hole. Null when no
  * row has landed since the last closed window.
  */
-function tailOf(rows: readonly TraceRow[], runId: string, now: number): TraceSegment | null {
+function tailOf(rows: readonly TraceRow[], runId: string, now: number, dict: TraceDictLookup | undefined): TraceSegment | null {
   const t0 = tailStart(now);
   if (!rows.some((r) => r.ts >= t0)) return null;
-  return encodeSegment(rows, { run: runId, t0, t1: windowOf(now) + SEG_MS });
+  return encodeSegment(rows, { run: runId, t0, t1: windowOf(now) + SEG_MS }, dict);
 }
 
 /** `GET /api/run/<id>/trace`: the closed windows that have rows, and the tail. */
@@ -132,7 +176,7 @@ export function readTraceIndex(runsDir: string, runId: string, now: number): Tra
     return {
       segMs: SEG_MS,
       segs: packSegs(windowsBefore(db, runId, start)),
-      tail: tailOf(rowsBetween(db, runId, start - CONTEXT_MS, Number.MAX_SAFE_INTEGER), runId, now),
+      tail: tailOf(rowsBetween(db, runId, start - CONTEXT_MS, Number.MAX_SAFE_INTEGER), runId, now, dictOf(db, runId)),
       now,
     };
   });
@@ -154,7 +198,7 @@ export function readTraceSegment(
     const t1 = t0 + SEG_MS;
     const rows = rowsBetween(db, runId, t0 - CONTEXT_MS, t1);
     if (!rows.some((r) => r.ts >= t0)) return null;
-    return { segment: encodeSegment(rows, { run: runId, t0, t1 }), closed: isClosed(t0, now) };
+    return { segment: encodeSegment(rows, { run: runId, t0, t1 }, dictOf(db, runId)), closed: isClosed(t0, now) };
   });
 }
 
@@ -170,7 +214,7 @@ export function readPositionTrace(runsDir: string, runId: string, now: number): 
     const start = tailStart(now);
     const rows = rowsBetween(db, runId, start - CONTEXT_MS, Number.MAX_SAFE_INTEGER);
     const recent = [...new Set(rows.filter((r) => r.ts < start).map((r) => windowOf(r.ts)))].sort((a, b) => a - b);
-    const tail = tailOf(rows, runId, now);
+    const tail = tailOf(rows, runId, now, dictOf(db, runId));
     if (recent.length === 0 && tail === null) return null;
     return { segMs: SEG_MS, recent: recent.slice(-RECENT_WINDOWS), tail };
   });

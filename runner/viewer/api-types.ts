@@ -2252,7 +2252,49 @@ export interface TraceState {
   cast: TraceCast | null;
 }
 
-/** One state change: `[ms from t0, kind, value]`, the kind a `TraceState` key. */
+/** `[slot, itemId]` or `[slot, itemId, rand]`: equipment slots 0-18. */
+export type TraceEquipRow = [slot: number, itemId: number, ...rand: number[]];
+/** `[slot, itemId, numSlots]`: a worn bag, slots 19-22. */
+export type TraceBagRow = [slot: number, itemId: number, numSlots: number];
+/** `[bag, slot, itemId]`, `[bag, slot, itemId, count]` or `[bag, slot, itemId, count, rand]`: a carried item. */
+export type TraceInvRow = [bag: number, slot: number, itemId: number, ...countRand: number[]];
+/** `[slot, cur, max]`: an equipped item's durability. */
+export type TraceDurRow = [slot: number, cur: number, max: number];
+/** `[slot, questId, state]` and up to four objective counters: one quest-log slot's raw fields. */
+export type TraceQuestRow = [slot: number, questId: number, state: number, ...counters: number[]];
+/** `[factionId, standing]`: a visible faction. */
+export type TraceRepRow = [factionId: number, standing: number];
+/** `[skillId, value, max]`. */
+export type TraceSkillRow = [skillId: number, value: number, max: number];
+
+/**
+ * The character sheet the trace carries beside the unit state, as numbers
+ * and ids (`runner/src/trace-row.ts` is the contract and documents each
+ * row). Null is not observed, and a segment from before the sheet was
+ * recorded carries none of these keys, which also reads as null: "not
+ * recorded", never "empty".
+ */
+export interface TraceSheet {
+  money: number | null;
+  equip: TraceEquipRow[] | null;
+  bags: TraceBagRow[] | null;
+  inv: TraceInvRow[] | null;
+  dur: TraceDurRow[] | null;
+  quests: TraceQuestRow[] | null;
+  rep: TraceRepRow[] | null;
+  skills: TraceSkillRow[] | null;
+}
+
+/** An item as a segment names it: its quality (null when the query did not say) and its template's name. */
+export type TraceItemName = [quality: number | null, name: string];
+
+/**
+ * A quest's required counts: the four counter objectives in the log's
+ * counter order, then `[itemId, count]` per item to collect. Numbers only.
+ */
+export type TraceQuestReq = [number, number, number, number, ...[itemId: number, count: number][]];
+
+/** One state change: `[ms from t0, kind, value]`, the kind a `TraceState` or `TraceSheet` key, or `qdone`. */
 export type TraceEventWire = [number, string, unknown];
 
 /**
@@ -2266,7 +2308,8 @@ export type TraceEventWire = [number, string, unknown];
 export interface TraceKeyframe {
   p: [number, number, number, number, number] | null;
   pt?: number;
-  s: Partial<TraceState>;
+  /** Every `TraceState` key, and each `TraceSheet` key that is observed. */
+  s: Partial<TraceState & TraceSheet>;
   f?: [number, number, number, number, number];
 }
 
@@ -2291,6 +2334,10 @@ export interface TraceSegment {
   /** `[sample, map, x, y, z, ms]`: a taxi takeoff, its destination and duration. */
   flights: [number, number, number, number, number, number][];
   ev: TraceEventWire[];
+  /** The items the sheet references, by id; absent when it references none. */
+  items?: Record<string, TraceItemName>;
+  /** The quests the sheet's log references, by id: their required counts. */
+  qreq?: Record<string, TraceQuestReq>;
 }
 
 /** Window `t0`s as runs of consecutive windows: `[firstT0, count]`. */

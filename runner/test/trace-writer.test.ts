@@ -10,7 +10,17 @@ import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
 import { TraceWriter, traceWindowStart } from "../src/trace";
-import { emptyTraceState, TRACE_WINDOW_MS, type TraceDrain, type TraceRow, type TraceState } from "../src/trace-row";
+import {
+  emptyTraceSheet,
+  emptyTraceState,
+  TRACE_WINDOW_MS,
+  type TraceDict,
+  type TraceDrain,
+  type TraceKeyData,
+  type TraceRow,
+  type TraceState,
+} from "../src/trace-row";
+import { encodeSegment, sheetAt, decodeSegment, type TraceRow as ViewerRow } from "../viewer/trace";
 import { readTrajectory, Trajectory } from "../src/trajectory";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -39,7 +49,7 @@ function rig() {
     trajectory,
     writer,
     logged,
-    push: (rows: TraceRow[], dropped = 0) => queue.push({ rows, dropped }),
+    push: (rows: TraceRow[], dropped = 0, dict?: TraceDict) => queue.push({ rows, dropped, ...(dict !== undefined ? { dict } : {}) }),
     at: (t: number) => {
       clock = t;
     },
@@ -138,10 +148,13 @@ describe("trace writer", () => {
     r.push([key(W0 + 500, 90, null)]);
     await r.writer.drain();
     // A row stamped into W2 arrives first (the child's clock is its own),
-    // then one stamped into W1: the W1 key must not claim to be older than
-    // the W2 position already folded.
+    // then, a drain later, one stamped into W1: the W1 key must not claim to
+    // be older than the W2 position already folded. (Inside one drain the
+    // rows are written in ts order, so the case needs two.)
     r.at(W0 + 9_000);
-    r.push([pos(W2 + 100, 50), pos(W1 + 100, 40)]);
+    r.push([pos(W2 + 100, 50)]);
+    await r.writer.drain();
+    r.push([pos(W1 + 100, 40)]);
     await r.writer.drain();
     const keys = r.rows().filter((x) => x.kind === "key");
     expect(keys.map((x) => x.ts).sort((a, b) => a - b)).toEqual([W0 + 500, W2, W2 + 100]);
@@ -184,6 +197,85 @@ describe("trace writer", () => {
     expect((host as unknown as { proc: unknown }).proc).toBeNull();
     expect(existsSync(join(dir, "trace.jsonl"))).toBe(false);
     trajectory.close();
+  });
+
+  test("the sheet folds patch by patch into each window's key, and a key already out keeps the lists it stated", async () => {
+    const r = rig();
+    const sheetKey: TraceRow = { ...key(W0 + 500, 90, [0, 1, 2, 3, 0.5]), data: { ...(key(0, 90, null).data as TraceState), ...emptyTraceSheet(), money: 10, inv: [[255, 23, 100]], quests: [] } };
+    // One drain across the boundary, with a patch after it: the W1 key is
+    // written before the patch is folded, and must not see it.
+    r.at(W1 + 3_000);
+    r.push([
+      sheetKey,
+      state(W0 + 1_000, { inv: [[255, 24, 200, 3]], money: 15 } as Partial<TraceState>),
+      pos(W1 + 100, 9),
+      state(W1 + 200, { inv: [[255, 23]], quests: [[0, 77, 0, 1]], qdone: [76] } as Partial<TraceState>),
+    ]);
+    await r.writer.drain();
+    const keys = r.rows().filter((x) => x.kind === "key");
+    expect(keys.map((x) => x.ts)).toEqual([W0 + 500, W1]);
+    const w1 = keys[1]!.data as TraceKeyData;
+    expect(w1.money).toBe(15);
+    expect(w1.inv).toEqual([
+      [255, 23, 100],
+      [255, 24, 200, 3],
+    ]);
+    expect(w1.quests).toEqual([]);
+    expect(w1.equip).toBeNull();
+    // A turn-in is an event: no key carries one.
+    expect(Object.hasOwn(w1, "qdone")).toBe(false);
+    // The next window's key has the patch.
+    r.at(W2 + 1_000);
+    r.push([]);
+    await r.writer.drain();
+    const w2 = r.rows().filter((x) => x.kind === "key")[2]!.data as TraceKeyData;
+    expect(w2.inv).toEqual([[255, 24, 200, 3]]);
+    expect(w2.quests).toEqual([[0, 77, 0, 1]]);
+    r.trajectory.close();
+  });
+
+  test("a state row observed before a key already written lands at that key, so the key cannot take it back", async () => {
+    const r = rig();
+    r.push([{ ...key(W0 + 500, 90, null), data: { ...(key(0, 90, null).data as TraceState), ...emptyTraceSheet(), money: 10 } }]);
+    await r.writer.drain();
+    // The clock crosses W1: the idle drain keys it from the fold (money 10).
+    r.at(W1 + 2_000);
+    r.push([]);
+    await r.writer.drain();
+    // The child had seen money change just before the boundary, and latched
+    // it a drain late (the sheet is read at most once a second).
+    r.push([state(W1 - 200, { money: 25 } as Partial<TraceState>)]);
+    await r.writer.drain();
+    const rows = r.rows();
+    expect(rows.map((x) => [x.kind, x.ts])).toEqual([
+      ["key", W0 + 500],
+      ["key", W1],
+      ["state", W1],
+    ]);
+    // Read back the way the viewer reads it: from W1 on, the change holds.
+    const text: ViewerRow[] = rows.map((x) => ({ ...x, map: x.map ?? null, x: x.x ?? null, y: x.y ?? null, z: x.z ?? null, o: x.o ?? null, data: x.data === null || x.data === undefined ? null : JSON.stringify(x.data) }));
+    const seg = decodeSegment(encodeSegment(text, { run: "run-test", t0: W1, t1: W2 }));
+    expect(sheetAt(seg, W1 + 1).money).toBe(25);
+    expect(sheetAt(seg, W2 - 1).money).toBe(25);
+    r.trajectory.close();
+  });
+
+  test("a drain's names go to trace_dict once per id, scrubbed like every string the trajectory writes", async () => {
+    const r = rig();
+    r.trajectory.redact("hunter2-secret-value");
+    r.push([key(W0 + 500, 90, null)], 0, { items: [[100, 2, "Blade of hunter2-secret-value"], [101, null, "Pouch"]], quests: [[77, [8, 0, 0, 0, [101, 4]]]] });
+    await r.writer.drain();
+    // A drain with names and no rows still writes them; a re-sent id replaces its entry.
+    r.push([], 0, { items: [[101, 1, "Pouch"]] });
+    await r.writer.drain();
+    expect(r.trajectory.traceDict("run-test")).toEqual([
+      { kind: "item", id: 100, data: [2, "Blade of [redacted]"] },
+      { kind: "item", id: 101, data: [1, "Pouch"] },
+      { kind: "quest", id: 77, data: [8, 0, 0, 0, [101, 4]] },
+    ]);
+    // Never in trajectory.jsonl.
+    expect(readTrajectory(r.dir).some((x) => JSON.stringify(x).includes("Pouch"))).toBe(false);
+    r.trajectory.close();
   });
 
   test("the window of a timestamp is its UTC-aligned 300 000 ms start", () => {
