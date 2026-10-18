@@ -151,6 +151,16 @@ export function isClosed(t0: number, now: number, segMs = SEG_MS): boolean {
   return t0 < tailStart(now, segMs);
 }
 
+/**
+ * A closed window's object key in the public bucket, the one place it is built:
+ * the publisher uploads to it and the snapshot client fetches it, so the two
+ * cannot drift. The run id is encoded as every other per-run key is
+ * (`snapshot.ts`), so an id with a reserved character still names one object.
+ */
+export function traceSegmentKey(runId: string, t0: number): string {
+  return `v1/run/${encodeURIComponent(runId)}/trace/${t0}.json`;
+}
+
 /** Window `t0`s to runs of consecutive windows, sorted and deduplicated. */
 export function packSegs(t0s: readonly number[], segMs = SEG_MS): TraceSegRuns {
   const out: TraceSegRuns = [];

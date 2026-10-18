@@ -53,6 +53,7 @@ import type {
 } from "@viewer/api-types";
 import type { PublicFleetResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
+import { traceSegmentKey } from "@viewer/trace";
 import { ApiError, getJson, sweepExpired, traceWindow, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 
@@ -433,7 +434,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      * a 404 the edge then caches for a day.
      */
     traceSegment: async (id: string, t0: number): Promise<TraceSegment> =>
-      await memo<TraceSegment>(artifactUrl(`v1/run/${encodeURIComponent(id)}/trace/${traceWindow(t0)}.json`)),
+      await memo<TraceSegment>(artifactUrl(traceSegmentKey(id, Number(traceWindow(t0))))),
     feedCadence: { renderMs: SNAPSHOT_RENDER_MS, cacheMs: ttl + SNAPSHOT_EDGE_TTL_MS },
     /*
      * A character is assembled here rather than published as an artifact of its
