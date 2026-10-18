@@ -15,7 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow } from "@viewer/trace";
 import type { ItemSample, TraceItemName, TraceQuestReq, TraceSegment } from "../../runner/viewer/api-types";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
-import { carried, paperdoll, sheetItems, sheetReading, type InvItem } from "../src/lib/inventory";
+import { carried, carriedCount, paperdoll, sheetItems, sheetReading, type InvItem } from "../src/lib/inventory";
 import { TRACE_MAX_SPEED, traceDrives } from "../src/lib/playback";
 import { createTraceStore } from "../src/lib/traceplayer";
 import { itemUrl } from "../src/lib/wowhead";
@@ -214,6 +214,18 @@ describe("the sheet as the panels' rows", () => {
     const items = sheetItems(view().sheet, view().items)!;
     expect(items.some((i) => i.itemId === 2001)).toBe(false);
     expect(items.filter((i) => !i.equipped)).toHaveLength(2);
+  });
+
+  test("the keyring and the currency slots have no square: they are not on the 60 s reading, and only a quest counts them", () => {
+    const names = { ...NAMES, 3004: [1, "Fixture Key"], 3005: [1, "Fixture Token"] } as Record<number, TraceItemName>;
+    const withKeys = view({ inv: [...SHEET.inv, [255, 86, 3004], [255, 117, 3004], [255, 118, 3005, 12], [255, 149, 3005]] }, names);
+    const items = sheetItems(withKeys.sheet, withKeys.items)!;
+    // The same rows as the sheet without them, and the bag button's count with them.
+    expect(items.map((i) => [i.bag, i.slot, i.itemId])).toEqual(sheetItems(view().sheet, view().items)!.map((i) => [i.bag, i.slot, i.itemId]));
+    expect(items.some((i) => i.itemId === 3004 || i.itemId === 3005)).toBe(false);
+    expect(carriedCount(items)).toBe(2);
+    // The sheet itself still holds them, where the quest log reads them.
+    expect(withKeys.sheet.inv!.filter((r) => r[0] === 255 && r[1] >= 86)).toHaveLength(4);
   });
 
   test("an id the dictionary does not name reads as the state line labels it, and still links", () => {

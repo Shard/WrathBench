@@ -184,6 +184,60 @@ describe("trace recorder: the character sheet", () => {
     r.rec.stop();
   });
 
+  test("the keyring and the currency slots are carried, as bag 255 at their own slots; the bank and the buyback slots are never read", () => {
+    const KEY = 61020;
+    const TOKEN = 61021;
+    const BANKED = 61022;
+    const SOLD = 61023;
+    const r = rig();
+    r.rec.start();
+    r.drain();
+    login(r, 1_100_000);
+    // Each slot a guid, each guid a created item: what is not read is not
+    // missing an item, it is never looked at.
+    const slots: [slot: number, lo: number, entry: number, count: number][] = [
+      [39, 20, BANKED, 1],
+      [66, 21, BANKED, 1],
+      [73, 22, BANKED, 1],
+      [74, 23, SOLD, 1],
+      [85, 24, SOLD, 1],
+      [86, 25, KEY, 1],
+      [117, 26, KEY, 1],
+      [118, 27, TOKEN, 12],
+      [149, 28, TOKEN, 3],
+    ];
+    const fields: Record<string, number> = {};
+    for (const [slot, lo] of slots) {
+      fields[`invSlot${slot}Lo`] = lo;
+      fields[`invSlot${slot}Hi`] = HI;
+    }
+    r.update(
+      [
+        { update: "values", guid: SELF, fields },
+        ...slots.map(([, lo, entry, count]) => r.create(itemGuid(lo), "item", count === 1 ? { entry } : { entry, stackCount: count })),
+      ],
+      1_100_100,
+    );
+    r.at(1_102_000);
+    r.rec.poll();
+    const [delta] = r.sheetRows(r.drain());
+    expect(delta!.inv).toEqual([
+      [19, 2, RING],
+      [255, 23, STONE, 5],
+      [255, 86, KEY],
+      [255, 117, KEY],
+      [255, 118, TOKEN, 12],
+      [255, 149, TOKEN, 3],
+    ]);
+    // A key moved off the keyring is a removal at its slot, like any other.
+    r.values(SELF, { invSlot117Lo: 0, invSlot117Hi: 0 }, 1_103_000);
+    r.at(1_105_000);
+    r.rec.poll();
+    const [moved] = r.sheetRows(r.drain());
+    expect(moved!.inv).toEqual([[255, 117]]);
+    r.rec.stop();
+  });
+
   test("a change is a patch: a looted stack is one row, a moved item two, a removal its key alone, and nothing unchanged is resent", () => {
     const r = rig();
     r.rec.start();

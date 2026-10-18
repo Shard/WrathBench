@@ -150,7 +150,8 @@ answers for it: live, paused, and in a replay at 60× or slower
 panels' rows by `sheetItems` in `src/lib/inventory.ts`). That puts the public
 sidebar in step with the pip, where the position's newest reading ran the
 publish delay ahead of it. The sheet's rows are the ones the 60 s reading
-carries, worn bags left out as there, plus each item's random property, which
+carries, worn bags, the keyring and the currency slots left out as there,
+plus each item's random property, which
 the Wowhead link carries (`itemUrl`), and a worn item's durability, on its
 square's tooltip. The sheet names an item by its template, so where the
 tooltip script is blocked a suffixed item shows its base name. The same array
@@ -180,12 +181,14 @@ no quest title and publishes none; where the script is blocked the row reads
 objective as `have / need`. A creature or gameobject objective is its counter
 against the quest's count (`qreq`). A collect objective has no counter in the
 log, so it is what is carried — equipped, the worn bags themselves, the
-backpack and their contents, as the server counts it — capped at the count
-needed; the keyring is not in the sheet, so a key reads 0 until its quest
-completes. Once a quest is not in progress the row shows its status instead:
+backpack and their contents, the keyring and the currency tokens, as the
+server counts it — capped at the count needed. The bag grid leaves the keyring
+and the currency slots out, as the 60 s reading does; only this count reads
+them. Once a quest is not in progress the row shows its status instead:
 complete in `--ok`, failed in `--err` (the slot state's bits 1 and 2), turned
 in in `--ok-muted`. A complete quest's objectives are met on the server's word,
-and a carried count that cannot see a key would only contradict it. A quest
+and a carried count that cannot always see a key (a module that does not serve
+the keyring) would only contradict it. A quest
 with no counts in its segment shows nothing beside it rather than zeros, as
 does one whose only objective has no counter (exploration, a scripted event).
 Nothing coarser records the log, so wherever the sheet cannot say — faster

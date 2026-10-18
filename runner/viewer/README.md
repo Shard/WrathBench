@@ -398,7 +398,11 @@ with the same code. `trace-db.ts` is the reads, all ranges over the
 
 The same rows carry the character sheet: money, equipment, worn bags, what is
 carried, durability, the quest log's ids and counters, visible reputation,
-skills and turn-ins, as numbers. A segment states each part whole in its
+skills and turn-ins, as numbers. What is carried is the backpack (bag 255,
+slots 23-38), the worn bags' contents, the keyring (bag 255, 86-117) and the
+currency tokens (bag 255, 118-149): everywhere the server counts toward a
+quest's items. The bank (39-73) and the vendor buyback slots (74-85) are never
+read. A segment states each part whole in its
 keyframe and as patches after it (the rows that changed, and a key alone for
 one that went), and `sheetAt` folds it at a playhead, apart from `stateAt` so
 the unit frame's per-frame read never copies an inventory. The item names and
@@ -427,7 +431,8 @@ file's size and mtime, which is what keeps the publisher from opening every
 run's sqlite on every pass. In public mode a segment crosses
 `projectTraceSegment`: no `target`. Deaths are public (operator, 2026-10-18), so
 `dead`, `ghost` and the gauges at a corpse pass. The sheet passes as numbers
-with its items' template names (operator, 2026-10-18), and never the bank.
+with its items' template names (operator, 2026-10-18), and never the bank or
+the vendor buyback slots.
 
 ## Nearby units: the live map's ring
 
