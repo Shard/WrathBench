@@ -63,7 +63,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { WrathClient } from "@wrathbench/sdk";
+import { WrathClient, type StreamEvent } from "@wrathbench/sdk";
+import { keepsAnswer, reparseFrame } from "./client-cache";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
@@ -1319,6 +1320,49 @@ traceRecorder.start();
 const nearbyRecorder = new NearbyRecorder({ state: client.state, events: client.events });
 nearbyRecorder.start();
 
+// ------------------------------------------------------------ client cache
+
+/**
+ * The client's query-answer cache, kept across a restart the way a client
+ * keeps its on-disk cache (`client-cache.ts`). Each answer the SDK folds is
+ * forwarded to the host as it arrives — this process cannot write the run
+ * directory — and a starting child is handed what the host holds before it
+ * is ready (`seedClientCache`).
+ */
+client.events.onAny((event) => {
+  if (!keepsAnswer(event)) return;
+  send({
+    t: "client_cache",
+    frames: [{ seq: event.seq, opcode: event.opcode, opcodeId: event.opcodeId, ts: event.ts, data: event.data }],
+  });
+});
+
+/**
+ * Fold the host's cached answers into the SDK cache through the SDK's own
+ * `apply`, the path a live frame takes, so each map holds exactly what it held
+ * before the restart, `seq` and `ts` included. Straight into the cache and
+ * nowhere else: not the event stream (`events.recent()`, the turn's event
+ * window), not the recorders, not the client-parity queries, none of which
+ * these frames are new to. The cache's own stream counters are put back as
+ * they were, because the HUD prints them and no event has arrived.
+ */
+function seedClientCache(frames: readonly unknown[]): void {
+  const state = client.state;
+  const { eventCount, lastSeq, lastTs } = state;
+  for (const raw of frames) {
+    const frame = reparseFrame(raw);
+    if (frame === null) continue;
+    try {
+      state.apply(frame as StreamEvent);
+    } catch {
+      // One answer that will not fold costs that one name, not the seed.
+    }
+  }
+  state.eventCount = eventCount;
+  state.lastSeq = lastSeq;
+  state.lastTs = lastTs;
+}
+
 type StreamEventOf = ReturnType<typeof client.events.recent>[number];
 
 function eventSummary(e: StreamEventOf): EventSummary {
@@ -1479,6 +1523,9 @@ function handle(msg: HostToChild | HostcallResult): void {
       }
       return;
     }
+    case "client_cache_seed":
+      seedClientCache(msg.frames);
+      return;
     case "hostcall_result": {
       const pending = hostcallPending.get(msg.id);
       if (pending) {

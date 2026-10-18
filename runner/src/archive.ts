@@ -53,6 +53,7 @@ import { listRuns, runDir } from "../viewer/runs";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { countModelResponses } from "./models";
 import { removeNearbyRing } from "./nearby";
+import { CLIENT_CACHE_FILE } from "./sandbox/client-cache";
 
 /** How recently a run must have been touched to count as possibly live. */
 export const HELD_MS = 10 * 60_000;
@@ -60,7 +61,7 @@ export const HELD_MS = 10 * 60_000;
 /** Age of the most recently written artefact of a run, or null when it has none. */
 export function runActivityAge(dir: string, now: number): number | null {
   let newest: number | null = null;
-  for (const name of ["trajectory.jsonl", "run.sqlite", "meta.json", "scratchpad.md"]) {
+  for (const name of ["trajectory.jsonl", "run.sqlite", "meta.json", "scratchpad.md", CLIENT_CACHE_FILE]) {
     try {
       const m = statSync(join(dir, name)).mtimeMs;
       if (newest === null || m > newest) newest = m;
