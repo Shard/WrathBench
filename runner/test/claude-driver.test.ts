@@ -20,6 +20,7 @@ import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { harnessVersion, HARNESS_VERSION_FALLBACK } from "../src/version";
 import { Watchdogs } from "../src/watchdogs";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
+import { emptyTraceState, type TraceDrain } from "../src/trace-row";
 import { LEAKED_SECRET, LEAKY_PAD, LEAKY_RESULT_AS_READ, leakyCrashNotice, leakySnippetResult } from "./fixtures/leaky-snippet";
 import { tempDirs } from "./fixtures/temp-dirs";
 
@@ -581,6 +582,21 @@ describe("claude-code driver", () => {
     // and it happened inside a single driver turn
     expect(records.filter((r) => r.t === "request")).toHaveLength(1);
     expect(trajectory.runRow("run-test")?.["termination_reason"]).toBe("episode-limit");
+    trajectory.close();
+  }, 30_000);
+
+  test("the state ticker drains the trace during a turn: the rows land through this driver too", async () => {
+    const { trajectory, options } = setupEpisode("long-turn", { watchdogs: { episodeMs: 300 } });
+    const drains: TraceDrain[] = [
+      { rows: [{ ts: 1_000, kind: "key", map: null, x: null, y: null, z: null, o: null, data: emptyTraceState() }], dropped: 0 },
+      { rows: [{ ts: 2_000, kind: "pos", map: 0, x: 1, y: 2, z: 3, o: 0.5, data: { jump: 1 } }], dropped: 0 },
+    ];
+    Object.assign(options.sandbox, { traceDrain: () => Promise.resolve(drains.shift() ?? { rows: [], dropped: 0 }) });
+    const outcome = await runClaudeEpisode({ ...options, watchdogTickMs: 25, killGraceMs: 200 });
+    expect(outcome.kind === "terminated" && outcome.reason).toBe("episode-limit");
+    const rows = trajectory.traceRows("run-test");
+    expect(rows[0]!.kind).toBe("key");
+    expect(rows.filter((r) => r.kind === "pos")).toEqual([{ ts: 2_000, kind: "pos", map: 0, x: 1, y: 2, z: 3, o: 0.5, data: { jump: 1 } }]);
     trajectory.close();
   }, 30_000);
 

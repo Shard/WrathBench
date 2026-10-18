@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { ScrubbedStream, SecretRedactor } from "../redact";
 import { overCapText, type Scratchpad } from "../scratchpad";
+import type { TraceDrain } from "../trace-row";
 import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, FlightSignal, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
@@ -712,6 +713,31 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "action_hints rpc failed");
     return (res.value ?? []) as ActionHintNote[];
+  }
+
+  /**
+   * Drain the trace recorder's buffer (`trace-recorder.ts`): the position and
+   * state rows the child latched since the last drain, and how many its cap
+   * dropped. Destructive like `deathSignals`, and owned by one caller — the
+   * trace writer the state ticker runs (`trace.ts`).
+   *
+   * Never spawns a child, unlike `stateSnapshot`: with none running there is
+   * nothing to drain, and a paused run must not get a sandbox out of its
+   * ticker. Null says so; an empty drain from a live child is `{ rows: [] }`.
+   * Bounded by `pingGraceMs` for the reason `drainActionHints` is.
+   */
+  async traceDrain(): Promise<TraceDrain | null> {
+    if (this.proc === null) return null;
+    await this.ready;
+    if (this.proc === null) return null;
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "trace_drain", params: {} },
+      this.opts.pingGraceMs,
+    );
+    if (!res.ok) throw new Error(res.error ?? "trace_drain rpc failed");
+    const v = (res.value ?? {}) as Partial<TraceDrain>;
+    return { rows: Array.isArray(v.rows) ? v.rows : [], dropped: typeof v.dropped === "number" ? v.dropped : 0 };
   }
 
   /** JSON-safe snapshot of the child's StateCache. */

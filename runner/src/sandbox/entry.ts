@@ -67,6 +67,7 @@ import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
+import { TraceRecorder } from "./trace-recorder";
 import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, FlightSignal, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
 const MODULE_URL = process.env["WRATHBENCH_MODULE_URL"] ?? "http://worldserver:8086";
@@ -1293,6 +1294,20 @@ client.events.onAny((event) => {
   });
 });
 
+// ----------------------------------------------------------- trace recorder
+
+/**
+ * The character's own position and state, latched as they change for the
+ * host's state ticker to drain (`trace-recorder.ts`; the row contract is
+ * `../trace-row.ts`). Record only: a snippet cannot reach it, and nothing it
+ * reads is an observation the cache did not already hold. Registered here,
+ * after the client's own state fold and the watchers above, so its hooks see
+ * a cache that already has each event in it. Its opening key row is this
+ * child's: a restart is a new process and a new key.
+ */
+const traceRecorder = new TraceRecorder({ state: client.state, events: client.events });
+traceRecorder.start();
+
 type StreamEventOf = ReturnType<typeof client.events.recent>[number];
 
 function eventSummary(e: StreamEventOf): EventSummary {
@@ -1442,7 +1457,9 @@ function handle(msg: HostToChild | HostcallResult): void {
                   ? drainFlightSignals()
                 : msg.method === "action_hints"
                   ? drainHints()
-                  : stateSnapshot();
+                  : msg.method === "trace_drain"
+                    ? traceRecorder.drain()
+                    : stateSnapshot();
         send({ t: "rpc_result", id: msg.id, ok: true, value });
       } catch (err) {
         send({ t: "rpc_result", id: msg.id, ok: false, error: String(err) });

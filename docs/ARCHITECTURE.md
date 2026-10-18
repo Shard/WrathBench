@@ -382,6 +382,15 @@ Every episode starts with a freshly created character at level 1 in its starting
 
 - Run metadata and periodic state in `bun:sqlite` under `data/runs/`.
 - Trajectories as JSONL next to it.
+- The trace: the character's own position at observation cadence (about 1 Hz
+  while moving) and its state on change, in the same sqlite (`trace`) and in
+  its own `trace.jsonl`, for playback. The sandbox child records it off the
+  SDK's own cache and event stream (`runner/src/sandbox/trace-recorder.ts`)
+  and the state ticker drains it on every driver (`runner/src/trace.ts`); the
+  row contract is `runner/src/trace-row.ts`. Record only: the model sees none
+  of it, the scorer reads none of it, and the collector does not tail it —
+  copying a 1 Hz feed into the store as unknown trajectory lines is the shape
+  that has put ClickHouse out of memory before.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.
 - A single-node ClickHouse holding a **derived, disposable** copy of all of it,
   filled by `collector/`.

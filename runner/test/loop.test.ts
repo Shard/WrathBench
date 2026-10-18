@@ -14,6 +14,7 @@ import { EpisodicLog } from "../src/episodic";
 import { Scratchpad } from "../src/scratchpad";
 import type { SandboxHost, SnippetResult } from "../src/sandbox/host";
 import type { ActionHintNote } from "../src/sandbox/ipc";
+import { emptyTraceState, type TraceDrain } from "../src/trace-row";
 import { renderActionHints } from "../src/tools";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
@@ -506,6 +507,37 @@ describe("runLoop", () => {
     expect(rows.length).toBeGreaterThanOrEqual(3);
     // Mid-request samples carry the turn in flight, not "before the first".
     expect(rows.every((r) => r["turn"] === 1)).toBe(true);
+    options.trajectory.close();
+  });
+
+  test("the ticker drains the trace off the same clock, and the rows land beside the state samples", async () => {
+    // The trace (trace.ts) rides the state ticker: what the sandbox's recorder
+    // latched comes home on every tick, on this driver as on the CLI ones,
+    // without the loop sampling anything extra for it.
+    const slow: ChatAdapter = {
+      label: "slow",
+      complete: async (): Promise<AdapterOutcome> => {
+        await new Promise((r) => setTimeout(r, 120));
+        return { kind: "stub-complete" };
+      },
+    };
+    const { options } = setup(slow);
+    const drains: TraceDrain[] = [
+      { rows: [{ ts: 1_000, kind: "key", map: null, x: null, y: null, z: null, o: null, data: emptyTraceState() }], dropped: 0 },
+      { rows: [{ ts: 2_000, kind: "pos", map: 0, x: 1, y: 2, z: 3, o: 0.5, data: { jump: 1 } }], dropped: 0 },
+    ];
+    let drained = 0;
+    Object.assign(options.sandbox, {
+      traceDrain: () => {
+        drained += 1;
+        return Promise.resolve(drains.shift() ?? { rows: [], dropped: 0 });
+      },
+    });
+    await runLoop({ ...options, stateTickMs: 10 });
+    expect(drained).toBeGreaterThanOrEqual(2);
+    const rows = options.trajectory.traceRows("run-test");
+    expect(rows.filter((r) => r.kind === "pos")).toEqual([{ ts: 2_000, kind: "pos", map: 0, x: 1, y: 2, z: 3, o: 0.5, data: { jump: 1 } }]);
+    expect(rows[0]!.kind).toBe("key");
     options.trajectory.close();
   });
 
