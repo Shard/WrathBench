@@ -1,0 +1,5 @@
+# `bun test` run from runner/ reads this file instead of the root's, so the
+# runner's two preloads are named here as well: the same checkout guard and the
+# same pinned-away config store a root run gets (see the root bunfig.toml).
+[test]
+preload = ["./test/preload-checkout.ts", "./test/preload-config-store.ts"]
