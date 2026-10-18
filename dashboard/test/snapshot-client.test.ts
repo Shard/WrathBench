@@ -583,6 +583,18 @@ describe("per-run artifacts", () => {
     const c = createSnapshotClient(BASE, { ttlMs: 30_000 });
     expect(c.feedCadence).toEqual({ renderMs: SNAPSHOT_RENDER_MS, cacheMs: 30_000 + SNAPSHOT_EDGE_TTL_MS });
   });
+
+  test("a run's trace index is its place in the fast lane, and empty for a run not in it", async () => {
+    const t0 = 1_760_000_100_000;
+    const tail = { v: 1, run: "r1", t0, t1: t0 + 300_000, q: { p: 10, o: 1024 }, k: { p: null, s: {} }, dt: [], x: [], y: [], z: [], o: [], cuts: [], flights: [], ev: [] };
+    const positions = { positions: [{ runId: "r1", trace: { segMs: 300_000, recent: [t0 - 600_000, t0 - 300_000], tail } }] };
+    const b = bucket({ [`${BASE}/v1/live.json`]: { generatedAt: GENERATED_AT, fleet: { present: false }, positions } });
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    expect(await c.traceIndex("r1")).toEqual({ segMs: 300_000, segs: [[t0 - 600_000, 2]], tail, now: GENERATED_AT });
+    expect(await c.traceIndex("gone")).toEqual({ segMs: 300_000, segs: [], tail: null, now: GENERATED_AT });
+    // One read of the fast lane between them; no index object is ever asked for.
+    expect(b.urls).toEqual([`${BASE}/v1/live.json`]);
+  });
 });
 
 describe("the entries window", () => {

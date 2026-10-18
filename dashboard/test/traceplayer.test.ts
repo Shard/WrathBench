@@ -23,8 +23,10 @@ import {
   createLiveClock,
   createTraceStore,
   horizonOf,
+  ingestIndex,
   ingestPositions,
   ingestTrack,
+  replaySpan,
   liveCadence,
   marginOf,
   replayCursorAt,
@@ -312,6 +314,80 @@ describe("unit state", () => {
     expect(mid.state.cast).toEqual({ spellId: 133, endsAt: W + 7_000 });
     expect(mid.castFrom).toBe(W + 4_000);
     expect(store.unitAt(RUN, W + 8_000)?.castFrom).toBeNull();
+  });
+});
+
+describe("replaying a short or unfinished run", () => {
+  // A smoke run: it walked for four minutes inside one window, and the state
+  // ticker wrote one 60 s point.
+  const start = W + 20_000;
+  const rows = walk(start, start + 240_000);
+  const onePoint = (trace?: TrackResponse["trace"]): TrackResponse =>
+    ({
+      runId: RUN,
+      characterName: null,
+      model: null,
+      harnessVersion: null,
+      points: [{ ts: start + 60_000, map: 0, x: 60, y: 0, level: 1, xp: 0, money: null, questsCompleted: null, turn: null }],
+      ...(trace === undefined ? {} : { trace }),
+    }) as TrackResponse;
+
+  test("one point and one closed window: scrubbable over the window's frames, its path drawn", async () => {
+    const track = onePoint({ segMs: SEG_MS, segs: [[W, 1]] });
+    const store = createTraceStore();
+    ingestTrack(store, track);
+    // Before the window lands the span reaches its edges, and the store asks for it.
+    expect(replaySpan(track, store)).toEqual({ from: W, to: W + SEG_MS });
+    expect(store.wanted(RUN, start + 60_000, { ends: true })).toEqual([W]);
+    await store.load(RUN, W, fetcher(new Map([[W, seg(rows, W)]])));
+    const span = replaySpan(track, store)!;
+    expect(span).toEqual({ from: start, to: start + 239_000 });
+    expect(span.to).toBeGreaterThan(span.from);
+    for (const t of [start + 1_500, start + 120_500, span.to]) {
+      expect(store.poseAt(RUN, t)?.x).toBeCloseTo(truth(start, Math.min(t, span.to)), 1);
+    }
+    const path = store.path(RUN, span.from, start + 100_000);
+    expect(path.length).toBe(1);
+    expect(path[0]!.points.at(-1)!.x).toBeCloseTo(100, 1);
+    expect(store.covers(RUN, start + 60_000)).toBe(true);
+  });
+
+  test("one point and only a tail, the window still open: scrubbable over the tail", () => {
+    const track = onePoint();
+    const store = createTraceStore();
+    ingestTrack(store, track);
+    expect(replaySpan(track, store)).toEqual({ from: start + 60_000, to: start + 60_000 });
+    ingestIndex(store, RUN, { segMs: SEG_MS, segs: [], tail: seg(rows.filter((r) => r.ts < start + 180_000), W) });
+    const span = replaySpan(track, store)!;
+    expect(span).toEqual({ from: start, to: start + 179_000 });
+    expect(store.poseAt(RUN, start + 90_000)?.x).toBeCloseTo(90, 1);
+    expect(store.wanted(RUN, start + 90_000, { ends: true })).toEqual([]);
+  });
+
+  test("the tail's window closing keeps the cursor where it was, before and after the closed copy lands", async () => {
+    const track = onePoint();
+    const store = createTraceStore();
+    ingestTrack(store, track);
+    ingestIndex(store, RUN, { segMs: SEG_MS, segs: [], tail: seg(rows, W) });
+    const cursor = start + 200_000;
+    const before = store.poseAt(RUN, cursor)!.x;
+    const spanBefore = replaySpan(track, store)!;
+    // Settled: the window is listed and the run has no tail any more.
+    ingestIndex(store, RUN, { segMs: SEG_MS, segs: [[W, 1]], tail: null });
+    expect(store.poseAt(RUN, cursor)?.x).toBe(before);
+    expect(replaySpan(track, store)).toEqual(spanBefore);
+    expect(store.wanted(RUN, cursor)).toEqual([W]);
+    await store.load(RUN, W, fetcher(new Map([[W, seg(rows, W)]])));
+    expect(store.poseAt(RUN, cursor)?.x).toBeCloseTo(before, 1);
+    expect(replaySpan(track, store)).toEqual(spanBefore);
+    // Or it moved on to the next window: the same, with the new tail beyond.
+    const moving = createTraceStore();
+    const longer = walk(start, W + SEG_MS + 60_000);
+    moving.setTail(RUN, seg(longer.filter((r) => r.ts < W + SEG_MS), W, W + 2 * SEG_MS));
+    const x = moving.poseAt(RUN, cursor)!.x;
+    ingestIndex(moving, RUN, { segMs: SEG_MS, segs: [[W, 1]], tail: seg(longer, W + SEG_MS) });
+    expect(moving.poseAt(RUN, cursor)?.x).toBe(x);
+    expect(moving.poseAt(RUN, W + SEG_MS + 30_000)?.x).toBeCloseTo(truth(start, W + SEG_MS + 30_000), 1);
   });
 });
 

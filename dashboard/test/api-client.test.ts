@@ -109,6 +109,12 @@ describe("paths", () => {
     expect(s.calls.length).toBe(1);
   });
 
+  test("a run's trace index is its run's trace path", async () => {
+    const s = stub({ segMs: 300_000, segs: [], tail: null, now: 0 });
+    await createClient({ fetch: s.fetch }).traceIndex("a b");
+    expect(s.calls.map((x) => x.url)).toEqual(["/api/run/a%20b/trace"]);
+  });
+
   test("the live feed says it renders on request", () => {
     expect(createClient().feedCadence).toEqual({ renderMs: 0, cacheMs: LIVE_TTL_MS });
   });

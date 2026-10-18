@@ -48,12 +48,13 @@ import type {
   RunDetailResponse,
   RunsResponse,
   SnapshotEnvelope,
+  TraceIndexResponse,
   TraceSegment,
   TrackResponse,
 } from "@viewer/api-types";
 import type { PublicFleetResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
-import { traceSegmentKey } from "@viewer/trace";
+import { SEG_MS, packSegs, traceSegmentKey } from "@viewer/trace";
 import { ApiError, getJson, sweepExpired, traceWindow, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 
@@ -435,6 +436,22 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      */
     traceSegment: async (id: string, t0: number): Promise<TraceSegment> =>
       await memo<TraceSegment>(artifactUrl(traceSegmentKey(id, Number(traceWindow(t0))))),
+    /*
+     * There is no published index: a live run's is its position in the fast
+     * lane, whose `recent` windows are in the bucket and whose tail rides
+     * inline. A run not in it is not live, and its track's `segs` are the
+     * whole of its trace — an index with no windows and no tail adds nothing.
+     */
+    traceIndex: async (id: string): Promise<TraceIndexResponse> => {
+      const l = await live();
+      const trace = l.positions.positions.find((p) => p.runId === id)?.trace;
+      return {
+        segMs: trace?.segMs ?? SEG_MS,
+        segs: packSegs(trace?.recent ?? [], trace?.segMs ?? SEG_MS),
+        tail: trace?.tail ?? null,
+        now: l.generatedAt,
+      };
+    },
     feedCadence: { renderMs: SNAPSHOT_RENDER_MS, cacheMs: ttl + SNAPSHOT_EDGE_TTL_MS },
     /*
      * A character is assembled here rather than published as an artifact of its

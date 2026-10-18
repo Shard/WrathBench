@@ -332,19 +332,21 @@ export function routeUpTo(
   map: number,
   ts: number,
   from = 0,
+  skip?: (i: number) => boolean,
 ): RouteRun[] {
   const out: RouteRun[] = [];
   let open: RouteRun | null = null;
   // The cursor's index is a binary search, so the walk is bounded by the route
   // actually drawn rather than by the length of the track. `from` starts it
   // later: the map's per-frame stretch from the drawn route's end to the pip
-  // walks only those few points.
+  // walks only those few points. `skip` leaves out the steps something finer
+  // draws instead (the map's trace).
   const end = indexAt(points, ts);
   for (let i = Math.max(0, from); i < end; i++) {
     const a = points[i]!;
     const b = points[i + 1]!;
     const kind = kinds[i] ?? "walk";
-    if (kind === "teleport" || a.map !== map || b.map !== map) {
+    if (kind === "teleport" || a.map !== map || b.map !== map || skip?.(i) === true) {
       open = null;
       continue;
     }
