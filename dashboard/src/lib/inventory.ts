@@ -122,22 +122,25 @@ export type SheetInventory = Pick<TraceSheet, "equip" | "inv" | "dur">;
 type Names = ReadonlyMap<number, TraceItemName>;
 type Row = readonly number[];
 
-/**
- * What one dictionary has built: the last lists and their rows, so a sheet
- * whose lists did not change gets the same array back, and a row that did not
- * change keeps its object. The codec's fold keeps a row it did not touch as
- * the same array, so identity is the whole test.
- */
+/** What one dictionary last built, so a sheet whose lists are the same arrays gets the same array back. */
 interface Built {
   equip: Row[] | null;
   inv: Row[] | null;
   dur: Row[] | null;
   out: InvItem[];
-  rows: WeakMap<Row, { dur: Row | undefined; item: InvItem }>;
 }
 
 /** Per segment dictionary: the names are a segment's, and one segment's rows are read against its own. */
 const builds = new WeakMap<Names, Built>();
+
+/**
+ * The newest build's rows by what they say, and its array. The live tail is
+ * decoded afresh on every poll and a window again when it closes, each time
+ * as new arrays and a new dictionary; a row that says the same thing keeps
+ * its object across that, and a list that does keeps its array.
+ */
+let lastRows = new Map<string, InvItem>();
+let lastOut: InvItem[] = [];
 
 /**
  * The label a row is shown by, as the 60 s state line writes one
@@ -175,28 +178,33 @@ function rowItem(names: Names, row: Row, worn: boolean, dur: Row | undefined): I
  * caller reads as "the sheet cannot say" and falls back from, never as empty
  * bags.
  *
- * The same array comes back while the lists stay the same arrays (a frame,
- * a money change), and an unchanged row keeps its object, so the bag and the
- * paperdoll redraw only what moved and keep the icons Wowhead put in them.
+ * The same array comes back while the lists say the same thing — a frame, a
+ * money change, the live tail polled again, a window arriving closed — and a
+ * row that did not change keeps its object, so the bag and the paperdoll
+ * redraw only what moved and keep the icons Wowhead put in them.
  */
 export function sheetItems(sheet: SheetInventory, names: Names): InvItem[] | null {
   const { equip, inv, dur } = sheet;
   if (equip === null || inv === null) return null;
-  const last = builds.get(names);
-  if (last !== undefined && last.equip === equip && last.inv === inv && last.dur === dur) return last.out;
-  const rows = last?.rows ?? new WeakMap<Row, { dur: Row | undefined; item: InvItem }>();
+  const hit = builds.get(names);
+  if (hit !== undefined && hit.equip === equip && hit.inv === inv && hit.dur === dur) return hit.out;
   const durOf = new Map<number, Row>();
   for (const d of dur ?? []) durOf.set(d[0]!, d);
+  const rows = new Map<string, InvItem>();
   const one = (row: Row, worn: boolean): InvItem => {
     const d = worn ? durOf.get(row[0]!) : undefined;
-    const hit = rows.get(row);
-    if (hit !== undefined && hit.dur === d) return hit.item;
-    const item = rowItem(names, row, worn, d);
-    rows.set(row, { dur: d, item });
+    const id = worn ? row[1]! : row[2]!;
+    // Everything the row is built from: its numbers, its durability and its name.
+    const key = JSON.stringify([worn, row, d ?? null, id > 0 ? (names.get(id) ?? null) : null]);
+    const item = rows.get(key) ?? lastRows.get(key) ?? rowItem(names, row, worn, d);
+    rows.set(key, item);
     return item;
   };
-  const out = [...equip.map((r) => one(r, true)), ...inv.map((r) => one(r, false))];
-  builds.set(names, { equip, inv, dur, out, rows });
+  const built = [...equip.map((r) => one(r, true)), ...inv.map((r) => one(r, false))];
+  const out = built.length === lastOut.length && built.every((it, i) => it === lastOut[i]) ? lastOut : built;
+  lastRows = rows;
+  lastOut = out;
+  builds.set(names, { equip, inv, dur, out });
   return out;
 }
 

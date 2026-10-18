@@ -154,8 +154,9 @@ carries, worn bags left out as there, plus each item's random property, which
 the Wowhead link carries (`itemUrl`), and a worn item's durability, on its
 square's tooltip. The sheet names an item by its template, so where the
 tooltip script is blocked a suffixed item shows its base name. The same array
-comes back while the sheet's lists stay the same and an unchanged row keeps its
-object, so a money change or a frame redraws nothing in the bag.
+comes back while the sheet's lists say the same thing, across a re-polled tail
+and a window arriving closed too, and an unchanged row keeps its object, so a
+money change or a frame redraws nothing in the bag.
 
 Wherever the sheet cannot say, the sidebar shows the coarse reading instead
 (`sheetReading`): faster than 60×, with no trace loaded at the playhead, in a

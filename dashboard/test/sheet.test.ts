@@ -160,6 +160,25 @@ describe("the store folds the sheet at the playhead", () => {
     expect(b.find((i) => i.name === "Fixture Ring")).toBe(a.find((i) => i.name === "Fixture Ring"));
   });
 
+  test("a window decoded again — the live tail polled anew, then arriving closed — gives back the very same array", async () => {
+    const store = createTraceStore();
+    const tail = (upTo: number) => seg(ROWS.filter((r) => r.ts < upTo), W);
+    store.setTail(RUN, tail(W + 20_000));
+    const a = itemsOf(store, W + 10_000)!;
+    // The next poll: a new tail, decoded afresh, new arrays and a new dictionary.
+    store.setTail(RUN, tail(W + 25_000));
+    expect(itemsOf(store, W + 20_000)).toBe(a);
+    // The window closes and arrives as a segment of its own.
+    store.list(RUN, SEG_MS, [W]);
+    await store.load(RUN, W, async () => segs.get(W)!);
+    store.setTail(RUN, null);
+    expect(itemsOf(store, W + 20_000)).toBe(a);
+    // A change past it: a new array, the rows that did not change the same objects.
+    const b = itemsOf(store, W + 40_000)!;
+    expect(b).not.toBe(a);
+    expect(b.find((i) => i.itemId === 3002)).toBe(a.find((i) => i.itemId === 3002));
+  });
+
   test("a listed window still loading answers null, and the sidebar keeps the reading", async () => {
     const store = createTraceStore();
     store.list(RUN, SEG_MS, [A, W]);
