@@ -653,6 +653,13 @@ export type RunSink = (artifacts: readonly SnapshotArtifact[]) => Promise<void>;
  */
 export interface PublishedView {
   traceSegment(runId: string, t0: number): boolean;
+  /**
+   * Whether the bucket holds an immutable key, by the engine's record. A
+   * renderer may skip a run whose inputs have not moved only when every object
+   * its row points at is still here: a PUT that failed, or a prune that took
+   * the version, puts it back in the render.
+   */
+  object(path: string): boolean;
 }
 
 /**
@@ -784,7 +791,10 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
     streamedFailures.push(...(await uploadWave(artifacts, "run", "")));
   };
 
-  const result = await render(sink, { traceSegment: (runId, t0) => hasTraceSegment(state, runId, t0) });
+  const result = await render(sink, {
+    traceSegment: (runId, t0) => hasTraceSegment(state, runId, t0),
+    object: (path) => state.uploaded[path] !== undefined,
+  });
   report.gen = result.gen;
   assertResult(result, seen);
   if (streamedFailures.length > 0) throw new PublishError("run", streamedFailures);

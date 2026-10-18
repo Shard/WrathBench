@@ -1580,6 +1580,19 @@ describe("trace segments", () => {
     expect(state.traceSegs).toEqual({ runA: [[T0, 1]] });
   });
 
+  test("the renderer's view of the bucket answers for objects by the engine's own record", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const seen: boolean[] = [];
+    const render: PassRenderer = async (sink, published) => {
+      seen.push(published.object("v1/run/runA/v1/detail.json"));
+      return await withSegments(snapshot("gen1", [{ id: "runA", ver: "v1" }]), [])(sink, published);
+    };
+    await publishPass(render, store, state);
+    await publishPass(render, store, state);
+    expect(seen).toEqual([false, true]);
+  });
+
   test("needsPut reads a segment's presence off the window record, never off a hash", () => {
     const state = emptyState();
     state.traceSegs["runA"] = [[T0, 2]];

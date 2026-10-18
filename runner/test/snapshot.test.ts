@@ -1035,3 +1035,126 @@ describe("trace segments in a pass", () => {
 function out(result: SnapshotResult): string[] {
   return result.artifacts.map((a) => a.path);
 }
+
+/* ---------------------------------------------------------- cold runs --- */
+
+describe("cold runs", () => {
+  /**
+   * A public handle that records every per-run path it is asked. `fresh`
+   * swaps the viewer behind it for a new one, as a pass five minutes on finds
+   * the listing's fifteen-second window long expired.
+   */
+  function counting(runs: string): { asked: string[]; handle: (req: Request) => Promise<Response>; fresh: () => void } {
+    const make = (): ReturnType<typeof createApi> =>
+      createApi({ runsDir: runs, tilesDir: join(runs, "tiles-unused"), publicMode: true, moduleUrl: "http://127.0.0.1:1" });
+    let api = make();
+    const asked: string[] = [];
+    return {
+      asked,
+      handle: async (req) => {
+        const p = new URL(req.url).pathname;
+        if (p.startsWith("/api/run/")) asked.push(p);
+        return await api(req);
+      },
+      fresh: () => {
+        api = make();
+      },
+    };
+  }
+  /** A view of a bucket holding `keys` and every trace window. */
+  const holding = (keys: ReadonlySet<string>) => ({ traceSegment: () => true, object: (k: string) => keys.has(k) });
+  const keysOf = (r: SnapshotResult): Set<string> => new Set(r.artifacts.map((a) => a.path));
+
+  test("a cold run whose inputs have not moved is published from the keys it rendered to, without a render", async () => {
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const first = await render(111, undefined, holding(new Set()));
+    expect(asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(true);
+    asked.length = 0;
+    const second = await render(222, undefined, holding(keysOf(first)));
+    expect(asked).toEqual([]);
+    expect(second.artifacts.some((a) => a.path.startsWith("v1/run/"))).toBe(false);
+    // What the pass publishes is what a full render publishes.
+    expect(rowOf(second, DEAD_RUN).snapshot).toEqual(rowOf(first, DEAD_RUN).snapshot);
+    expect(second.snap).toEqual(first.snap);
+    expect(second.gen).toBe(first.gen);
+  });
+
+  test("it renders again when a file moves, when the bucket lost one of its keys, and with no view of the bucket", async () => {
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const first = await render(111, undefined, holding(new Set()));
+    const keys = keysOf(first);
+    const rendered = (): boolean => asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`));
+
+    // A key the bucket no longer holds (a failed PUT, a prune) puts the run back in the render.
+    asked.length = 0;
+    const lost = new Set(keys);
+    lost.delete(rowOf(first, DEAD_RUN).snapshot.detail!);
+    const again = await render(222, undefined, holding(lost));
+    expect(rendered()).toBe(true);
+    expect(out(again)).toContain(rowOf(first, DEAD_RUN).snapshot.detail!);
+
+    // No view of the bucket: nothing is skipped.
+    asked.length = 0;
+    await render(333);
+    expect(rendered()).toBe(true);
+
+    // A file that changed, even one put back to an old mtime.
+    writeFileSync(join(runs, DEAD_RUN, "scratchpad.md"), "plan: something else entirely\n");
+    const past = new Date(Date.now() - 60 * 60_000);
+    utimesSync(join(runs, DEAD_RUN, "scratchpad.md"), past, past);
+    asked.length = 0;
+    const moved = await render(444, undefined, holding(keys));
+    expect(rendered()).toBe(true);
+    expect(rowOf(moved, DEAD_RUN).snapshot.scratchpad).not.toBe(rowOf(first, DEAD_RUN).snapshot.scratchpad);
+  });
+
+  test("a run that is not cold is rendered every pass", async () => {
+    const runs = fixture();
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const first = await render(111, undefined, holding(new Set()));
+    asked.length = 0;
+    await render(222, undefined, holding(keysOf(first)));
+    expect(asked.some((p) => p.startsWith(`/api/run/${LIVE_RUN}`))).toBe(true);
+    expect(asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(false);
+  });
+
+  test("a finished attempt renders again when its character moves, so its neighbours are never stale", async () => {
+    const runs = tempDir("snapshot-cold-chain-");
+    writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true, episode: "freeplay" });
+    writeRun(runs, LIVE_RUN, { terminated: true, stateTs: 1600, old: true, continuedFrom: DEAD_RUN, episode: "freeplay" });
+    const { asked, handle, fresh } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const first = await render(111, undefined, holding(new Set()));
+    // A third attempt continues the second; neither earlier attempt's files move.
+    writeRun(runs, "snap-run-third", { terminated: true, stateTs: 1700, old: true, continuedFrom: LIVE_RUN, episode: "freeplay" });
+    fresh();
+    asked.length = 0;
+    const second = await render(222, undefined, holding(keysOf(first)));
+    expect(asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(true);
+    expect((trackOfIn(second, LIVE_RUN) as { character: { next: string } }).character.next).toBe("snap-run-third");
+  });
+
+  test("through the publisher: a second pass over a tree of finished runs renders and uploads none of them", async () => {
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const puts: string[] = [];
+    const store: ObjectStore = { put: async (path) => void puts.push(path), delete: async () => {} };
+    const state = emptyState();
+    const pass = async (): Promise<void> => {
+      await publishPass(async (sink, published) => await render(Date.now(), { sink, batch: 1 }, published), store, state);
+    };
+    await pass();
+    expect(puts.some((p) => p.startsWith(`v1/run/${DEAD_RUN}/`))).toBe(true);
+    puts.length = 0;
+    asked.length = 0;
+    await pass();
+    expect(asked).toEqual([]);
+    expect(puts.filter((p) => p.startsWith("v1/run/"))).toEqual([]);
+  });
+});

@@ -83,6 +83,23 @@ reading in windows rather than whole files, is what puts a pass over a
 1,016-run tree at 0.78 GB peak RSS rather than 4.4 GB. Credentials are one R2
 key pair scoped to the one bucket, held only by the publisher.
 
+A finished run is not rendered again once it has gone cold. That means all
+its files have been still for 15 minutes (`COLD_MS`), past the live window,
+the trace's settling and the collector's catch-up. A pass skips it, pointing
+its row at the keys it rendered to last time, when three things hold: its
+files' sizes and mtimes are unchanged, its listing row is unchanged, and so are
+the rows of every attempt in its character. The bucket must also still hold
+every object the row names, by the engine's record. A failed PUT or a pruned
+version therefore puts the run back in the render. The one input a fingerprint
+cannot see is code, and new code means a new process, which remembers nothing
+and renders everything once.
+
+The skip was added because rendering cold runs was most of a pass. On the
+fleet a pass took about 120 s. Nearly all of that was the per-run phase over
+some 580 runs: about 5,000 store queries returning about 600 MB, and about
+16 GB of trajectory reads, since a streamed pass releases each run's entry
+index. Almost every run landed on keys the bucket already held.
+
 Minimap tiles are published by a second, separate script
 (`infra/publish-tiles.ts`). It is never part of a
 snapshot pass: the loop above uploads JSON only, and the tiles are

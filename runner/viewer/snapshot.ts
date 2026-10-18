@@ -47,8 +47,10 @@
  * would make every render a new version even when nothing changed.
  */
 
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createApi, type ApiHandle } from "./api";
+import { lineageIndex } from "./lineage";
 import { EPISODE_IDS } from "../src/episodes";
 import type {
   ApiInfoResponse,
@@ -60,7 +62,9 @@ import type {
   ModelsResponse,
   PositionsResponse,
   ResultsResponse,
+  ResultRun,
   RunDetailResponse,
+  RunListRow,
   RunsResponse,
   TraceSegment,
   TrackResponse,
@@ -238,13 +242,62 @@ export interface RunStream {
 }
 
 /**
- * Which trace windows the bucket already holds (`infra/publish-core.ts`,
- * `PublishedView`). A segment the bucket has is neither fetched nor rendered
- * again; without one, every closed window of every run is — the shape of a
- * first pass, a `--once` backfill and every test.
+ * What the bucket already holds (`infra/publish-core.ts`, `PublishedView`).
+ * A trace segment the bucket has is neither fetched nor rendered again, and a
+ * cold run whose objects it holds may be skipped whole (`coldFingerprint`).
+ * Without a view, everything is rendered: the shape of a first pass, a
+ * `--once` backfill and every test that does not pass one.
  */
 export interface PublishedTrace {
   traceSegment(runId: string, t0: number): boolean;
+  /** Whether the bucket holds this key. Optional: a view without it skips no run. */
+  object?(path: string): boolean;
+}
+
+/**
+ * How long all of a run's files must have been still before a pass may skip
+ * it. Past every clock a run's objects read: the listing's live window (two
+ * minutes), a trace window's settling (its end plus a minute), and the
+ * collector's poll that brings the store level with the files.
+ */
+export const COLD_MS = 15 * 60_000;
+
+/** The files the per-run routes read. A run's derived-store rows are derived from these. */
+const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "scratchpad.md"] as const;
+
+/**
+ * Everything a cold run's four objects are a function of, hashed, or null when
+ * the run is not cold.
+ *
+ * - **Its files**, by size and mtime. Every per-run route reads a run's own
+ *   files or the store rows the collector derives from them.
+ * - **Its listing row** as this pass projected it, which is the store's view
+ *   of the run (so a collector still catching up moves it) and carries the
+ *   cost the detail repeats.
+ * - **Its character's rows**, for a run in a chain of attempts. A freeplay
+ *   attempt's detail and track name its neighbours and carry the chain's
+ *   totals, so a successor appearing or a live attempt progressing changes a
+ *   finished attempt's objects without touching its files.
+ *
+ * What is left is code — the projection, the codec, the price table — and that
+ * changes only with a new process, which starts with nothing remembered. Cold
+ * is judged on the wall clock, never the render's `now`, which only stamps
+ * `generatedAt`.
+ */
+function coldFingerprint(runsDir: string, row: RunListRow, character: string, wall: number): string | null {
+  const parts = [JSON.stringify(row), character];
+  for (const name of RUN_INPUT_FILES) {
+    let st: { size: number; mtimeMs: number };
+    try {
+      st = statSync(join(runsDir, row.runId, name));
+    } catch {
+      parts.push(`${name} -`);
+      continue;
+    }
+    if (st.mtimeMs > wall - COLD_MS) return null;
+    parts.push(`${name} ${st.size} ${st.mtimeMs}`);
+  }
+  return hash12(parts.join("\n"));
 }
 
 /** A trace segment's key: under the run, addressed by its window (`publish-core.ts`). */
@@ -295,6 +348,25 @@ export function createRenderer(
     typeof (handle as Partial<ApiHandle>).release === "function"
       ? (runId): void => (handle as ApiHandle).release(runId)
       : undefined;
+
+  /**
+   * What each cold run rendered to, by run: the fingerprint of its inputs, the
+   * keys its row pointed at, and the trace windows its track listed.
+   *
+   * A pass used to render every run in the listing — four routes each, every
+   * trajectory re-scanned (the streamed pass releases them) and a handful of
+   * store queries apiece — to land almost all of them on keys the bucket
+   * already held. Measured on the fleet, that was ~5,000 store queries and
+   * ~16 GB of reads a pass for some 580 runs, nearly all of them long
+   * finished. A run whose fingerprint is the one it rendered under, and whose
+   * objects the bucket still holds, is now published by pointing its row at
+   * them again. That is what a render would have produced, by the
+   * fingerprint's own argument, without making it.
+   *
+   * Per process, like the handle: a restart, which is also the only way the
+   * code a render runs can change, starts empty and renders everything once.
+   */
+  const coldRuns = new Map<string, { fingerprint: string; snapshot: NonNullable<RunListRow["snapshot"]>; trace: number[] | null }>();
 
   /** A route that must answer, or the pass is not a snapshot. */
   const get = async <T>(path: string): Promise<T> => {
@@ -394,6 +466,36 @@ export function createRenderer(
     const groupSize =
       stream === undefined || !Number.isFinite(stream.batch) ? Math.max(1, rows.length) : Math.max(1, Math.floor(stream.batch));
     const artifacts: SnapshotArtifact[] = [];
+    /*
+     * Each run's character, as the rows of all its attempts: part of a chained
+     * run's cold fingerprint, built once a pass off the results already in hand
+     * (the same rows the public character page derives the chain from). A run
+     * of one attempt has none.
+     */
+    const lineage = lineageIndex(results.runs);
+    const attemptsOf = new Map<string, ResultRun[]>();
+    for (const r of results.runs) {
+      const l = lineage.get(r.runId);
+      if (l === undefined || l.attempts < 2) continue;
+      const list = attemptsOf.get(l.characterId) ?? [];
+      list.push(r);
+      attemptsOf.set(l.characterId, list);
+    }
+    const characterText = new Map<string, string>();
+    const characterOf = (runId: string): string => {
+      const id = lineage.get(runId)?.characterId;
+      const list = id === undefined ? undefined : attemptsOf.get(id);
+      if (id === undefined || list === undefined) return "";
+      let text = characterText.get(id);
+      if (text === undefined) {
+        text = JSON.stringify([...list].sort((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0)));
+        characterText.set(id, text);
+      }
+      return text;
+    };
+    // Only a pass that can see the bucket may skip: it must know the objects are still there.
+    const holds = published?.object?.bind(published);
+    const wall = Date.now();
     for (let start = 0; start < rows.length; start += groupSize) {
       const group = rows.slice(start, start + groupSize);
       const perRun: (SnapshotArtifact[] | undefined)[] = new Array(group.length);
@@ -402,6 +504,19 @@ export function createRenderer(
         for (let i = next++; i < group.length; i = next++) {
           const row = group[i]!;
           const id = encodeURIComponent(row.runId);
+          // Before the row is stamped, so the fingerprint sees the listing's own row.
+          const fingerprint = holds === undefined ? null : coldFingerprint(opts.runsDir, row, characterOf(row.runId), wall);
+          const cold = fingerprint === null ? undefined : coldRuns.get(row.runId);
+          if (
+            cold !== undefined &&
+            cold.fingerprint === fingerprint &&
+            Object.values(cold.snapshot).every((key) => holds!(key)) &&
+            (cold.trace ?? []).every((t0) => published!.traceSegment(row.runId, t0))
+          ) {
+            row.snapshot = cold.snapshot;
+            if (cold.trace !== null) traceListed.set(row.runId, new Set(cold.trace));
+            continue;
+          }
           const [detail, track, entries, scratchpad] = await Promise.all([
             getIfPresent<RunDetailResponse>(`/api/run/${id}`).then((b) => (b === null ? null : projectRunDetail(b))),
             getIfPresent<TrackResponse>(`/api/run/${id}/track`).then((b) => (b === null ? null : projectTrack(b))),
@@ -472,6 +587,15 @@ export function createRenderer(
             ...segments,
           ];
           row.snapshot = paths;
+          // Remembered whatever this pass's upload does: a later pass skips
+          // only once the bucket holds every key, so a failed PUT renders again.
+          if (fingerprint !== null) {
+            coldRuns.set(row.runId, {
+              fingerprint,
+              snapshot: paths,
+              trace: track.trace === undefined ? null : unpackSegs(track.trace.segs, track.trace.segMs),
+            });
+          } else coldRuns.delete(row.runId);
         }
       };
       await Promise.all(Array.from({ length: Math.min(RUN_CONCURRENCY, group.length) }, worker));
