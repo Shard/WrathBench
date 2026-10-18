@@ -404,8 +404,8 @@ A run from before the recorder has no table, and every one of these answers as
 the bytes it always was. The track's window list is memoised on the database
 file's size and mtime, which is what keeps the publisher from opening every
 run's sqlite on every pass. In public mode a segment crosses
-`projectTraceSegment`: no `dead`, `ghost` or `target`, and no gauges while the
-character is down.
+`projectTraceSegment`: no `target`. Deaths are public (operator, 2026-10-18), so
+`dead`, `ghost` and the gauges at a corpse pass.
 
 ## Nearby units: the live map's ring
 
@@ -433,7 +433,7 @@ In public mode the window crosses `projectNearby`: creatures only — no other
 player, nothing another player owns, charms or drives, nothing while it
 targets another player or their pet — with the state cut to entry, name, type,
 level, health, dead, service roles, the quest marker and "targets this
-character", and the whole layer empty while the character is down. Creature
+character". The layer stays lit while the character is down. Creature
 guids stay, so a unit two characters see draws once. The position feed's
 `nearby` flag is not projected: nothing publishes a window yet.
 

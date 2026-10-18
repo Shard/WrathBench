@@ -230,15 +230,17 @@ describe("the trace routes", () => {
     expect((await get(handle, `/api/run/no-such-run/trace/${open}`)).status).toBe(404);
   });
 
-  test("in public mode a segment crosses the projection: no death, no ghost, no target", async () => {
+  test("in public mode a segment crosses the projection: the death is there, the target is not", async () => {
     const res = await get(publicHandle, `/api/run/r-live/trace/${open - 3 * SEG_MS}`);
     const body = await res.text();
-    expect(body).not.toContain('"dead"');
-    expect(body).not.toContain('"ghost"');
+    const seg = JSON.parse(body) as TraceSegment;
+    // Deaths are public (operator, 2026-10-18).
+    expect(seg.ev.some((e) => e[1] === "dead" && e[2] === true)).toBe(true);
+    expect(seg.ev.some((e) => e[1] === "hp" && e[2] === 0)).toBe(true);
     expect(body).not.toContain('"target"');
     expect(body).not.toContain("player");
     const idx = await (await get(publicHandle, "/api/run/r-live/trace")).text();
-    expect(idx).not.toContain('"dead"');
+    expect(idx).not.toContain('"target"');
   });
 
   test("the track lists the closed windows, and a run with no trace carries no field", async () => {

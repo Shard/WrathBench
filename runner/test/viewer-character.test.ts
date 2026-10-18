@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import type { CostFigure, ResultRun, TokenTotals } from "../viewer/api-types";
+import type { CostFigure, DeathFacts, ResultRun, TokenTotals } from "../viewer/api-types";
 import { characterViewOf } from "../viewer/character";
 import { projectRunDetail } from "../viewer/public-projection";
 
@@ -516,9 +516,11 @@ describe("the public projection of a character", () => {
     );
   });
 
-  test("a pause reason becomes the token, and the death figures are withheld whole", () => {
+  test("a pause reason becomes the token, and the deaths are the count the card prints", () => {
     expect(projected?.runs[0]?.pauseReason).toBe("paused");
-    expect(projected?.totals.deaths).toBeUndefined();
+    // Deaths are public (operator, 2026-10-18): the character's total ships,
+    // and the per-attempt count, which no page reads, does not.
+    expect(projected?.totals.deaths).toEqual({ deaths: 2 } as DeathFacts);
     expect(projected?.runs.every((r) => r.deaths === undefined)).toBe(true);
   });
 });

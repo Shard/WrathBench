@@ -463,11 +463,10 @@ describe("the play bar across the route swap", () => {
         mount,
       );
       // Behind the hint, not on the page; this suite is the private build.
-      expect(mount.querySelector(".playbar .info-hint")?.getAttribute("title")).toBe(routeNote(false));
+      expect(mount.querySelector(".playbar .info-hint")?.getAttribute("title")).toBe(routeNote());
       expect(mount.textContent).not.toContain("flight path");
-      expect(routeNote(false)).toContain("graveyard");
-      // Releases are withheld from the public feed with the deaths.
-      expect(routeNote(true)).not.toContain("graveyard");
+      // Releases ship publicly with the deaths, so both builds promise the gap.
+      expect(routeNote()).toContain("graveyard");
       dispose();
     } finally {
       restore();

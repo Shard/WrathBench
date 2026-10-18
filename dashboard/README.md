@@ -137,10 +137,10 @@ run's index (publicly, its position in `live.json`) on the live map's cadence
 while there is one.
 
 **The unit frame** reads the trace state at the playhead: health, power,
-level and experience (a gauge the trace has withheld stays unobserved rather
-than being filled from the 60 s sample beside it — publicly, that is a
-character who is down), a cast bar, combat, mounted, flying and resting
-badges, the target's health where it is published, and the buffs row: spell
+level and experience (a gauge the trace did not observe stays unobserved
+rather than being filled from the 60 s sample beside it, and the health bar
+reads dead at a corpse), a cast bar, combat, mounted, flying, resting and
+ghost badges, the target's health where it is published, and the buffs row: spell
 icons as Wowhead links (`src/lib/wowhead.ts`), stacks, and the time left.
 
 **Fetching is listed-only.** A segment is requested only for a `t0` a

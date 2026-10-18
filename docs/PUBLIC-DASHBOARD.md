@@ -413,36 +413,36 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
 - **The safe core ships, less what no page reads** ("What is published", below):
   the `ResultRun` layer is ids, numbers and model identifiers — levels, XP,
   areas and achievements as ids, taxi facts, costs, tokens.
-- **A track's travel marks ship, its graveyard releases do not.** The
-  replay draws flights in their own colour and leaves a gap at a teleport
-  from the track's `travel` list, read off the trajectory at request time
-  (`dashboard/src/lib/replay.ts`). Its flight takeoffs and landings and its
-  hearthstone uses ship as kinds and timestamps, facts the safe core and the
-  action log already carry. A release is one mark per death, so it is
-  withheld with the deaths: the public route breaks at a graveyard port only
-  where the speed backstop catches it. The track is hashed into the run's key
-  with the rest, so a replay published before the marks existed is re-keyed
-  once and draws them: the old URL is cached for a year and cannot be corrected
-  in place. That re-uploads every object of every run once, and the old set is
+- **Deaths are public** (operator, 2026-10-18), everywhere a page shows them.
+  A run's death count, its releases and resurrects and each death's turn ship
+  on its `detail.json` (`projectDeaths`; a death site's position and zone stay
+  off, as no page reads them), and a character's total on its card; the
+  death, release and resurrect milestones were already in the entries window.
+  Every run is re-keyed once by it, as it was for the travel marks.
+- **A track's travel marks ship.** The replay draws flights in their own
+  colour and leaves a gap at a teleport from the track's `travel` list, read
+  off the trajectory at request time (`dashboard/src/lib/replay.ts`). Its
+  flight takeoffs and landings, its hearthstone uses and its graveyard
+  releases ship as kinds and timestamps, facts the safe core, the action log
+  and the deaths already carry. The track is hashed into the run's key with
+  the rest, so a replay published before the marks existed is re-keyed once and
+  draws them: the old URL is cached for a year and cannot be corrected in
+  place. That re-uploads every object of every run once, and the old set is
   pruned as above.
 
-- **The trace ships positions and the unit frame, not deaths or targets.**
-  A segment (`projectTraceSegment`) keeps positions, cuts, flights, health
-  and power, level and XP, aura spell ids with stacks and expiry, the combat,
-  mounted, taxi and resting flags, and a cast's spell. A cut says the
-  character did not travel there and never why, so a graveyard port reads like
-  a hearth. Withheld: the `dead` and `ghost` flags, aura flags, and the
-  `target`, which names another unit, and a player target with its health is
-  another player's whereabouts. The gauges are withheld while the character is
-  down, whether dead, a ghost or at 0 health. They read as unobserved from that
-  moment and come back at their values on revival, so the trace draws no
-  health bar emptying at a corpse. The `tail` in `live.json` crosses the same
-  projector. **Residual, stated plainly**: the positions themselves are
-  published, so the place a character stopped, the cut to a graveyard and the
-  walk back are on the map. They already are at 60 s resolution in the track,
-  whose points also carry a `health` of 0 when a sample landed on a death.
-  Whether deaths should withhold the positions around them too is the
-  operator's open question, not decided here.
+- **The trace ships positions and the unit frame, deaths included, not
+  targets.** A segment (`projectTraceSegment`) keeps positions, cuts,
+  flights, health and power, level and XP, aura spell ids with stacks and
+  expiry, the combat, mounted, taxi, dead, ghost and resting flags, and a
+  cast's spell, so a death reads as it happened: health at 0, the ghost, the
+  Ghost aura on the corpse run and Resurrection Sickness after a spirit
+  healer. Withheld: aura flags, and the `target`, which names another unit,
+  and a player target with its health is another player's whereabouts. A
+  window published before deaths were public is immutable and carries no
+  `dead` or `ghost` and blank gauges while the character was down; the
+  projector passes such a window back unchanged, so the bucket's verifier
+  still reads it as a fixed point. The `tail` in `live.json` crosses the
+  same projector.
 
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),

@@ -25,6 +25,7 @@ import type {
   ComparabilityView,
   CostFigure,
   CostView,
+  DeathFacts,
   EpisodesResponse,
   FleetAccountView,
   FleetJobView,
@@ -696,6 +697,19 @@ describe("projectRunDetail", () => {
       sessions: [smuggle({ start: 1000, end: 2000 }), smuggle({ start: 9000, end: null })],
       achievements: { earned: 2, points: 20, ids: [6, 12] },
       taxi: { flights: 1 },
+      deaths: smuggle({
+        deaths: 1,
+        releases: 1,
+        resurrects: 1,
+        first: null,
+        last: null,
+        sites: [
+          smuggle({
+            ts: 1500, turn: 3, position: { map: 0, x: -6230, y: 381, z: 385, source: "death_spot" as const },
+            zone: 1, area: 132, released: false,
+          }),
+        ],
+      }),
       tps: { overall: 12.5, recent: 20, replies: 4, recentReplies: 2 },
       reflections: [smuggle({ fromTurn: 5, toTurn: 9 }), smuggle({ fromTurn: 12, toTurn: null })],
     });
@@ -718,6 +732,11 @@ describe("projectRunDetail", () => {
         ...under("achievements", ["earned", "points", "ids"]),
         "taxi",
         "taxi.flights",
+        // Deaths are public (operator, 2026-10-18): the counts and the turns
+        // the milestones row prints, and nothing of a site no page reads.
+        "deaths",
+        ...under("deaths", ["deaths", "releases", "resurrects", "sites"]),
+        "deaths.sites[].turn",
         "tps",
         ...under("tps", TPS_KEYS),
         "reflections",
@@ -731,6 +750,7 @@ describe("projectRunDetail", () => {
       { fromTurn: 5, toTurn: 9 },
       { fromTurn: 12, toTurn: null },
     ]);
+    expect(out.deaths).toEqual({ deaths: 1, releases: 1, resurrects: 1, sites: [{ turn: 3 }] } as DeathFacts);
   });
 
   test("spells, talents and trades project whole: ids, counts and turns, nothing nameable", () => {
@@ -773,11 +793,18 @@ describe("projectRunDetail", () => {
       spells: null,
       talents: null,
       trades: null,
+      deaths: null,
     });
     const out = projectRunDetail(input);
     expect(out.spells).toBeNull();
     expect(out.talents).toBeNull();
     expect(out.trades).toBeNull();
+    expect(out.deaths).toBeNull();
+    // A body from before deaths were public has none, and re-projects to itself.
+    const { deaths: _gone, ...older } = input;
+    const again = projectRunDetail(older as RunDetailResponse);
+    expect("deaths" in again).toBe(false);
+    expect(projectRunDetail(again)).toEqual(again);
   });
 });
 
@@ -912,12 +939,14 @@ describe("projectPositions and projectTrack", () => {
       // The character's neighbours: run ids and two counters, each
       // already public on every runs row, and nothing smuggled beside them.
       character: smuggle({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" }),
-      // Flights and hearths as kinds and timestamps; the release is a death.
+      // Flights, hearths and releases as kinds and timestamps; a kind the
+      // projection does not know stays behind.
       travel: [
         smuggle({ kind: "taxi", ts: 1300 }),
         smuggle({ kind: "taxi_landed", ts: 1400 }),
         smuggle({ kind: "release", ts: 1500 }),
         smuggle({ kind: "hearth", ts: 1600 }),
+        smuggle({ kind: "portal" as "taxi", ts: 1700 }),
       ],
     });
     const out = projectTrack(input);
@@ -945,10 +974,11 @@ describe("projectPositions and projectTrack", () => {
     assertClean(JSON.stringify(out));
     expect(out.characterName).toBe(CHARACTER_NAME);
     expect(out.moves![0]!.target).toBe(SURVIVES.targetName);
-    // Deaths are withheld whole, and a graveyard release is one per death.
+    // Deaths are public (operator, 2026-10-18), so the graveyard release ships.
     expect(out.travel).toEqual([
       { kind: "taxi", ts: 1300 },
       { kind: "taxi_landed", ts: 1400 },
+      { kind: "release", ts: 1500 },
       { kind: "hearth", ts: 1600 },
     ]);
     expect(out.points[0]).toMatchObject({ health: 140, maxHealth: 220, powerType: 3, nextLevelXp: 2100 });
@@ -1030,9 +1060,9 @@ function traceSegmentFixture(): TraceSegment {
 }
 
 describe("projectTraceSegment", () => {
-  test("emits exactly the allowlist: positions, cuts, flights and the public state; dead, ghost and target never", () => {
+  test("emits exactly the allowlist: positions, cuts, flights and the public state, deaths included; target never", () => {
     const out = projectTraceSegment(traceSegmentFixture());
-    const PUBLIC_STATE = ["hp", "hpMax", "pw", "pwMax", "pwType", "level", "xp", "xpMax", "auras", "combat", "mounted", "taxi", "resting", "cast"];
+    const PUBLIC_STATE = ["hp", "hpMax", "pw", "pwMax", "pwType", "level", "xp", "xpMax", "auras", "combat", "mounted", "taxi", "dead", "ghost", "resting", "cast"];
     expect(keyPaths(out)).toEqual(
       allow([
         "v", "run", "t0", "t1", "q", "q.p", "q.o",
@@ -1043,7 +1073,7 @@ describe("projectTraceSegment", () => {
       ]),
     );
     assertClean(JSON.stringify(out));
-    expect(out.k.s).toMatchObject({ hp: 1200, combat: true, cast: { spellId: 133, endsAt: 1_760_000_103_000 } });
+    expect(out.k.s).toMatchObject({ hp: 1200, combat: true, dead: false, ghost: false, cast: { spellId: 133, endsAt: 1_760_000_103_000 } });
     // An aura's flags stay behind, and so does the element smuggled after them.
     expect(out.k.s.auras).toEqual([[1126, 1, 1_760_001_600_000]]);
     // A cut carries its map and never a reason; a flight its six numbers.
@@ -1056,48 +1086,76 @@ describe("projectTraceSegment", () => {
       [300, "hp", 1100],
       [500, "cast", null],
     ]);
-    for (const withheld of ['"dead"', '"ghost"', '"target"', '"mood"', "player"]) expect(JSON.stringify(out)).not.toContain(withheld);
+    for (const withheld of ['"target"', '"mood"', "player"]) expect(JSON.stringify(out)).not.toContain(withheld);
   });
 
-  test("the gauges go blank while the character is down and come back at their values, whatever order the keys arrived in", () => {
+  test("a death is published: the flags, the gauges at the corpse, and the Ghost aura and Resurrection Sickness", () => {
     const seg = traceSegmentFixture();
     const t0 = seg.t0;
+    const sickness = [15007, 1, t0 + 640_000, 0x80];
     seg.ev = [
-      [1000, "hp", 300],
-      // Down: health first, the flag in the same row after it.
       [2000, "hp", 0],
       [2000, "dead", true],
-      [3000, "ghost", true],
-      [3000, "dead", true],
-      // A ghost's health is still reported; it must not leak.
+      [2000, "target", { kind: "player", hpPct: 40 }],
       [4000, "hp", 1],
-      [5000, "pw", 0],
-      // Revived: health in the row before the flags clear.
+      [4000, "auras", [[8326, 1, 0, 0x80]]],
+      [4000, "dead", false],
+      [4000, "ghost", true],
       [6000, "hp", 600],
+      [6000, "auras", [sickness]],
       [6000, "ghost", false],
-      [6000, "dead", false],
-      [7000, "hp", 650],
     ];
     const out = projectTraceSegment(seg);
     expect(out.ev).toEqual([
-      [1000, "hp", 300],
-      [2000, "hp", null],
-      [2000, "hpMax", null],
-      [2000, "pw", null],
-      [2000, "pwMax", null],
-      [2000, "pwType", null],
+      [2000, "hp", 0],
+      [2000, "dead", true],
+      [4000, "hp", 1],
+      [4000, "auras", [[8326, 1, 0]]],
+      [4000, "dead", false],
+      [4000, "ghost", true],
       [6000, "hp", 600],
-      [6000, "hpMax", 1200],
-      [6000, "pw", 0],
-      [6000, "pwMax", 1000],
-      [6000, "pwType", 0],
-      [7000, "hp", 650],
+      [6000, "auras", [[15007, 1, t0 + 640_000]]],
+      [6000, "ghost", false],
     ]);
-    // A segment that opens down opens blank.
+    // A segment that opens down says so, gauges and all.
     const downAtStart = traceSegmentFixture();
-    downAtStart.k.s = { ...downAtStart.k.s, dead: true };
-    expect(projectTraceSegment(downAtStart).k.s).toMatchObject({ hp: null, hpMax: null, pw: null, pwMax: null, pwType: null, level: 14 });
-    expect(t0).toBe(1_760_000_100_000);
+    downAtStart.k.s = { ...downAtStart.k.s, hp: 1, ghost: true, auras: [[8326, 1, 0]] };
+    expect(projectTraceSegment(downAtStart).k.s).toMatchObject({ hp: 1, hpMax: 1200, dead: false, ghost: true, auras: [[8326, 1, 0]] });
+    expect(JSON.stringify(out)).not.toContain('"target"');
+  });
+
+  test("a segment published before deaths were public re-projects to itself", () => {
+    // What the bucket already holds, immutable for a year: no `dead` or
+    // `ghost` anywhere, and the gauges blanked over a down window. The
+    // release's verifier re-projects every one of them.
+    const old = {
+      v: 1,
+      run: "fixture-run-1",
+      t0: 1_760_000_100_000,
+      t1: 1_760_000_400_000,
+      q: { p: 10, o: 1024 },
+      k: {
+        p: [0, -94604, 621, 563, 195],
+        s: {
+          hp: 1200, hpMax: 1200, pw: 900, pwMax: 1000, pwType: 0, level: 14, xp: 3200, xpMax: 9800,
+          auras: [[1126, 1, 1_760_001_600_000]], combat: false, mounted: false, taxi: false, resting: false, cast: null,
+        },
+      },
+      dt: [400],
+      x: [26],
+      y: [65],
+      z: [1],
+      o: [-1],
+      cuts: [],
+      flights: [],
+      ev: [
+        [2000, "hp", null],
+        [2000, "hpMax", null],
+        [6000, "hp", 600],
+        [6000, "hpMax", 1200],
+      ],
+    } as unknown as TraceSegment;
+    expect(projectTraceSegment(old)).toEqual(old);
   });
 
   test("is a fixed point on its own output, as publish-accept's re-projection requires", () => {
