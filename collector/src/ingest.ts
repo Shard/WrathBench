@@ -26,7 +26,7 @@ import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { openRunDb } from "../../runner/src/rundb";
-import { RUN_TOTALS_DERIVATION, RunTotalsScanner, namesSecretKey, redactJsonText, redactRawLine, redactSecrets } from "../../runner/viewer/tail";
+import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
 import type { Batcher } from "./batch";
@@ -84,18 +84,6 @@ function real(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-/**
- * A trajectory line as `events.raw` keeps it: verbatim, unless it names a
- * secret key. A `meta` record written before the runner stopped copying the
- * config into it whole carries a session token under `config.token` — the
- * run's own is struck by value before this (`strikeSessionToken`), and this
- * catches any other — so a `--replay` rewrites such rows redacted the way the
- * viewer serves them (`redactRawLine`).
- */
-function rawWithoutSecrets(text: string): string {
-  return namesSecretKey(text) ? redactRawLine(text) : text;
-}
-
 /** (size, mtime) of a file, or null when it is not there. */
 function sigOf(path: string): { sig: string; size: number; mtime: number } | null {
   try {
@@ -126,14 +114,21 @@ export class Ingester {
       run: false,
       totals: false,
     };
-    // Read once per pass: the value struck from every line this run stores.
+    /*
+     * The store's one session-token strike: read once per pass from meta.json
+     * and struck by value from every text this run's rows copy — each
+     * trajectory and episodic line, meta.json itself, `config_json`. A
+     * backstop for runs recorded before the token stopped reaching the record
+     * (in the `meta` record and `config_json`, and wherever a snippet logged a
+     * module reply that echoed it), so a `--replay` cleans the store.
+     */
     const token = strikableSessionToken(dir, runId);
     out.trajectoryLines = await this.tailTrajectory(runId, dir, token);
     out.episodicLines = await this.tailEpisodic(runId, dir, token);
     const sqlite = await this.readSqlite(runId, dir);
     out.states = sqlite.states;
     out.moves = sqlite.moves;
-    out.run = await this.writeRunRow(runId, dir, archived);
+    out.run = await this.writeRunRow(runId, dir, archived, token);
     out.totals = await this.writeTotals(runId, dir);
     return out;
   }
@@ -166,14 +161,14 @@ export class Ingester {
       const text = strikeSessionToken(line.text, token);
       const parsed = parseLine(text);
       if (!parsed.ok) {
-        await this.deps.batcher.add("events", unparseableRow(ctx, rawWithoutSecrets(text)));
+        await this.deps.batcher.add("events", unparseableRow(ctx, text));
         count++;
         continue;
       }
       if (TURN_KINDS.has(parsed.t)) {
         await this.deps.batcher.add("turns", turnRow(ctx, parsed.rec, text));
       } else {
-        await this.deps.batcher.add("events", eventRow(ctx, parsed.rec, rawWithoutSecrets(text)));
+        await this.deps.batcher.add("events", eventRow(ctx, parsed.rec, text));
         if (parsed.t === "milestone") {
           await this.deps.batcher.add("milestones", milestoneRow(ctx, parsed.rec, text));
         }
@@ -330,10 +325,9 @@ export class Ingester {
    *
    * `meta_json` and `config_json` are copies, and meta.json holds the run's
    * module session token (the one place the runner keeps it, for `--resume`),
-   * so both are stored with every secret-named value redacted
-   * (`redactJsonText`): byte for byte otherwise.
+   * so both are stored with it struck (`ingestRun`): byte for byte otherwise.
    */
-  private async writeRunRow(runId: string, dir: string, archived: boolean): Promise<boolean> {
+  private async writeRunRow(runId: string, dir: string, archived: boolean, token: string | null): Promise<boolean> {
     const metaPath = join(dir, "meta.json");
     const dbPath = join(dir, "run.sqlite");
     const jsonlPath = join(dir, "trajectory.jsonl");
@@ -393,10 +387,10 @@ export class Ingester {
       pause_reason: str(r["pause_reason"]),
       reflecting_since: int(r["reflecting_since"]),
       config_json:
-        redactJsonText(str(r["config_json"])) ||
-        (Object.keys(config).length > 0 ? JSON.stringify(redactSecrets(config)) : ""),
+        strikeSessionToken(str(r["config_json"]), token) ||
+        (Object.keys(config).length > 0 ? strikeSessionToken(JSON.stringify(config), token) : ""),
       comparability_json: meta["comparability"] === undefined ? "" : JSON.stringify(meta["comparability"]),
-      meta_json: redactJsonText(metaText, 2),
+      meta_json: strikeSessionToken(metaText, token),
       trajectory_bytes: jsonlSig?.size ?? 0,
       trajectory_mtime: jsonlSig?.mtime ?? 0,
       ingested_at: this.deps.now(),

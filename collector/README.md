@@ -9,16 +9,15 @@ the runner does not know this service exists. Drop the ClickHouse database,
 delete `data/collector.sqlite`, run `--replay`, and everything comes back.
 
 It holds no copy of a run's module session token. meta.json keeps the token,
-because `--resume` reads it back; runs recorded by an older build also carry
-it in their `meta` records and in `run.sqlite`'s `config_json`; and any run's
-trajectory can quote it, because the module names it in its action replies
-and a snippet that logs one records it in its result. So the token is struck
-by value from every trajectory and `episodic.jsonl` line before the line is
-read (`runner/src/session-token.ts`), every value under a secret-named key is
-redacted from `meta_json`, `config_json` and an `events` row's `raw`, and
-everything else is copied byte for byte. A `--replay` therefore cleans a store
-an older collector filled, once the merge has dropped the superseded rows
-(`OPTIMIZE TABLE … FINAL` forces it).
+because `--resume` reads it back, and nothing else the runner writes now
+carries it; but runs recorded by an older build do, in their `meta` records,
+in `run.sqlite`'s `config_json`, and wherever a snippet logged a module reply
+that echoed it. As a backstop for those, the collector strikes the run's
+token by value from every text it copies — each trajectory and
+`episodic.jsonl` line before it is read, `meta_json`, `config_json`
+(`runner/src/session-token.ts`) — and copies everything else byte for byte.
+A `--replay` therefore cleans a store an older collector filled, once the
+merge has dropped the superseded rows (`OPTIMIZE TABLE … FINAL` forces it).
 
 ## Running it
 

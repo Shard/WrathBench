@@ -1,17 +1,18 @@
 /**
  * A run's module session token, as a value to strike from the copies of its
- * record that leave the runs volume.
+ * record that leave the runs volume: a backstop for runs recorded before the
+ * token stopped reaching the record, not the fix.
  *
  * The runner keeps the token in meta.json, its one home, for `--resume`
- * (`Trajectory.writeMeta`). It still reaches the trajectory another way: the
- * module names the token in nearly every action reply, a snippet that logs a
- * reply puts it in that snippet's result, and the result is recorded as the
- * model saw it. That record stays as it is — it is what the model read. The
- * copies are what this is for: the collector strikes it from every line it
- * stores, and the viewer in public mode from every body that carries a run's
- * model-written text (the run's own routes, the live map's status lines, a
- * character's attempts), so neither the derived store nor the public site
- * holds one.
+ * (`Trajectory.writeMeta`). The trajectory is not meant to carry it: the
+ * runner keeps it out of the record, and the module out of its action
+ * replies. Older trajectories do carry it: in their `meta` records
+ * and `config_json`, and wherever a snippet logged a module reply that echoed
+ * it, recorded as the model saw it. Those files are never rewritten, and they
+ * are re-ingested and re-rendered, so each copy strikes it once: the collector
+ * from every text it stores (`collector/src/ingest.ts`), and the viewer's
+ * public boundary from every public body that carries a run's text
+ * (`publicText`, `runner/viewer/api.ts`).
  *
  * On its own the token is not a capability (the module also wants the run's
  * lease secret or the operator's bearer, `module/src/WbManager.cpp`), but it is

@@ -86,7 +86,7 @@ import {
 import { NEARBY_SPAN_MS } from "./nearby";
 import { readNearbyWindow } from "./nearby-ring";
 import { scrubPathsText } from "./scrub-paths";
-import { strikableSessionToken, strikeSessionToken, strikeSessionTokens } from "../src/session-token";
+import { strikableSessionToken, strikeSessionTokens } from "../src/session-token";
 import { SEG_MS } from "./trace";
 import { readTraceIndex, readTraceSegment, traceSegsMemo } from "./trace-db";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
@@ -653,24 +653,26 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * `/scratchpad`, the model's own notes, published as written
    * (docs/DATA-AND-LEGAL.md, "Trajectory logs", operator 2026-08-30).
    */
-  const pub = <T>(body: T, project: (b: T) => unknown): Response =>
-    json(publicMode ? project(body) : body);
+  const pub = <T>(body: T, project: (b: T) => unknown, runIds: readonly string[] = []): Response =>
+    json(publicMode ? struckFor(project(body), runIds) : body);
+  const struckFor = (projected: unknown, runIds: readonly string[]): unknown =>
+    runIds.length === 0 ? projected : JSON.parse(publicText(JSON.stringify(projected), runIds));
   /**
-   * A projected body with the session token of every run it is about struck
-   * by value (`runner/src/session-token.ts`), for the public bodies that carry
-   * model-written text: the module echoes the token in its action replies, so
-   * a model can put it in anything it writes. The per-run routes do the same
-   * for their one run below. Read fresh from each run's meta.json, so a run
-   * that started a second ago is covered too.
+   * The public boundary's one session-token strike (`runner/src/session-token.ts`),
+   * a backstop for runs recorded while the module still echoed the token in its
+   * action replies: a model that logged one carried it into its own text, and
+   * those trajectories keep it. Every public body that carries a run's
+   * model-written text names its runs to `pub` (or, for the scratchpad, here),
+   * and each run's token is read fresh from its meta.json and struck by value.
    */
-  const struck = (body: unknown, runIds: readonly string[]): unknown => {
+  const publicText = (text: string, runIds: readonly string[]): string => {
     const tokens: string[] = [];
     for (const id of runIds) {
       const d = runDir(runsDir, id);
       const t = d === null ? null : strikableSessionToken(d, id);
       if (t !== null) tokens.push(t);
     }
-    return tokens.length === 0 ? body : JSON.parse(strikeSessionTokens(JSON.stringify(body), tokens));
+    return strikeSessionTokens(text, tokens);
   };
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
@@ -1186,7 +1188,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (path === "/api/positions") {
       const positions = await positionsFromStore(store, runsDir);
       // A position's status is the character's last `log_status` line, as written.
-      return pub({ positions }, (b) => struck(projectPositions(b), positions.map((p) => p.runId)));
+      return pub({ positions }, projectPositions, positions.map((p) => p.runId));
     }
     if (path === "/api/episodes") return await episodesResponse();
     /* The model-facing tool list, off `TOOLS` at request time (`tools.ts`); harness text only. */
@@ -1334,7 +1336,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // clock skew across a relaunch would otherwise move a sample past one.
       states.sort((x, y) => x.attempt - y.attempt || x.ts - y.ts);
       const body: CharacterResponse = { character: view, states };
-      return pub(body, (b) => struck(projectCharacterResponse(b), view.runs.map((r) => r.runId)));
+      return pub(body, projectCharacterResponse, view.runs.map((r) => r.runId));
     }
 
     const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
@@ -1344,18 +1346,6 @@ export function createApi(opts: ApiOptions): ApiHandle {
     const dir = runDir(runsDir, runId);
     if (dir === null) return notFound(`no such run: ${runId}`);
     const tail = tailFor(runId, dir);
-    /*
-     * The run's own session token, struck from every per-run body a public
-     * handle serves (`session-token.ts`): the module echoes it in its action
-     * replies, a snippet that logs one records it in its result, and the
-     * entries, the detail, the track and the scratchpad are what the snapshot
-     * publishes. Null in private mode, so the operator's bodies are the bytes
-     * they always were.
-     */
-    const runToken = publicMode ? strikableSessionToken(dir, runId) : null;
-    const runJson = (body: unknown): Response =>
-      json(runToken === null ? body : JSON.parse(strikeSessionToken(JSON.stringify(body), runToken)));
-    const pubRun = <T>(body: T, project: (b: T) => unknown): Response => runJson(publicMode ? project(body) : body);
 
     if (rest === "" || rest === "/") {
       await scan(runId, tail);
@@ -1464,7 +1454,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // falls back from, the same shape the facts above take.
         ...(character === null ? {} : { character }),
       };
-      return pubRun(body, projectRunDetail);
+      return pub(body, projectRunDetail, [runId]);
     }
 
     if (rest === "/track") {
@@ -1528,7 +1518,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // none, so a track from before the recorder is the bytes it was.
         ...(trace === null ? {} : { trace }),
       };
-      return pubRun(body, projectTrack);
+      return pub(body, projectTrack, [runId]);
     }
 
     if (rest === "/trace") {
@@ -1578,7 +1568,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const page = { from, total, entries: tail.entries.slice(from, from + limit) };
       // Public mode serves the same window the snapshot publishes: each entry
       // through the per-type allowlist and the game-prose redactor.
-      return runJson(publicMode ? projectEntries(page) : page);
+      return pub(page, projectEntries, [runId]);
     }
 
     const rawMatch = /^\/raw\/(\d+)$/.exec(rest);
@@ -1599,7 +1589,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (rest === "/scratchpad") {
       const text = readScratchpad(runsDir, runId);
       if (text === null) return notFound("no scratchpad");
-      return new Response(publicMode ? strikeSessionToken(scrubPathsText(text), runToken) : text, {
+      return new Response(publicMode ? publicText(scrubPathsText(text), [runId]) : text, {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }

@@ -551,12 +551,11 @@ the module bearer token out of it (meta.json is the token's one home, for
 summariser would otherwise copy it wholesale into both `/entries?from=0` and
 `/raw/0`. Redaction is keyed on field name at any depth
 and applied at the two places a raw record can reach a client (`summarize` and
-`TrajectoryTail.raw`). A key rule cannot catch the token where the module
-echoed it into an action reply a snippet logged, so a public handle also
-strikes it by value from every body that carries a run's model-written text —
-the run's own routes, each position's status on `/api/positions`, a
-character's attempts (`runner/src/session-token.ts`); the operator's handle
-serves the record as the model saw it. `apiKeyEnv` is deliberately kept: it names an environment
+`TrajectoryTail.raw`). Older runs also carry the token where the module echoed
+it into an action reply a snippet logged, which a key rule cannot catch, so
+the public boundary strikes it by value as a backstop (`publicText`): every
+public body that carries a run's text names its runs to `pub`. The operator's
+handle serves the record as the model saw it. `apiKeyEnv` is deliberately kept: it names an environment
 variable, and the value of that variable is never written to the trajectory.
 
 `WRATHBENCH_VIEWER_PUBLIC=1` makes the whole handle a boundary rather than a

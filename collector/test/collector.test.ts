@@ -429,14 +429,26 @@ describe("what the store must never hold", () => {
     expect(termination?.["raw"]).toBe(fileLine);
   });
 
-  test("a torn line that names a secret key is withheld, not copied", async () => {
+  test("a torn line is struck too: the strike is by value, before anything parses", async () => {
     const runsDir = tmpRoot();
-    const dir = writeRun(runsDir, "run-torn");
+    const dir = writeOldRun(runsDir, "run-torn");
     appendFileSync(join(dir, "trajectory.jsonl"), `{"t":"meta","config":{"token":"${TOKEN}"\n`);
     const { collector, sink } = collectorOver(runsDir);
     await collector.pass();
     const bad = rowsOf(sink, "events").find((r) => r["kind"] === "unparseable");
-    expect(String(bad?.["raw"]).includes(TOKEN)).toBe(false);
+    expect(bad?.["raw"]).toBe(`{"t":"meta","config":{"token":"[redacted]"`);
+  });
+
+  test("a run from before token hardening keeps its id: a token that was the run id is never struck", async () => {
+    const runsDir = tmpRoot();
+    const runId = "run-20260820-101010";
+    const dir = writeRun(runsDir, runId);
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(dir, "meta.json"), `${JSON.stringify({ ...meta, config: { ...(meta["config"] as object), token: runId } }, null, 2)}\n`);
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    expect(String(rowsOf(sink, "runs")[0]?.["meta_json"])).toContain(`"token": "${runId}"`);
+    expect(rowsOf(sink, "turns").every((r) => r["run_id"] === runId)).toBe(true);
   });
 });
 
