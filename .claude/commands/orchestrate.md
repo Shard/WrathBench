@@ -6,11 +6,14 @@ decisions in this session.
 
 ## Delegation policy
 
-- **Fable subagents**: delicate or foundational work — module C++ (packet
-  handling, WorldSession semantics), protocol/contract changes, anything where
-  a wrong judgement is expensive. Serialize module agents (shared files).
-- **Opus subagents**: general development — SDK, runner, wiki, infra tooling,
-  web UIs, docs. Parallel tracks are fine when files don't overlap.
+- **Opus subagents**: the default for development: SDK, runner, viewer,
+  dashboard, infra, docs, and most module C++ too. Opus is strong enough for
+  nearly everything. Parallel tracks are fine when files don't overlap.
+- **Fable subagents**: only the trickiest work, where Opus has already struggled
+  or a wrong judgement would be very costly and hard to undo: subtle
+  WorldSession or packet semantics, a contract or methodology-shaped design, a
+  data-loss hazard with no clear proof. Use it rarely and say why.
+  Serialize module agents (shared files), whichever model runs them.
 - **Sonnet subagents**: light research and log sifting — trajectory mining,
   module-log analysis, wiki lookups, census reviews. Fan out 2–4 read-only
   analysts and synthesize their reports yourself.
