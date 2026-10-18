@@ -9,7 +9,7 @@
  * of `data/runs/<id>/nearby/`. They are their own contract, apart from the
  * trace's (`trace-row.ts`), because what they feed is live only: the ring holds
  * the last `NEARBY_RING_MS` and is deleted when the process stops (`nearby.ts`
- * says how), it is never written to `run.sqlite`, `trace.jsonl` or
+ * says how), it is never written to `run.sqlite` or
  * `trajectory.jsonl`, and no collector, replay or scorer reads it.
  *
  * Nothing in it is new observation. The recorder reads the SDK's own state
