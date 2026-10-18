@@ -32,6 +32,7 @@ import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { ContextEvents, DeathSignal, FlightSignal } from "./sandbox/ipc";
 import type { Scratchpad } from "./scratchpad";
 import type { ItemSample, Trajectory } from "./trajectory";
+import { TraceWriter } from "./trace";
 import type { Watchdogs } from "./watchdogs";
 
 /**
@@ -281,9 +282,28 @@ export class ContextBuilder {
   /** The sample in flight, if any; concurrent callers share it. */
   private sampling: Promise<SnapshotLike | null> | null = null;
   private readonly now: () => number;
+  /**
+   * The trace writer (`trace.ts`), drained by the state ticker beside the
+   * sample. It lives on the builder for the reason the reflection gate does:
+   * this is the one object every driver hands the ticker, so the trace is
+   * recorded on each of them by construction rather than by per-driver wiring.
+   * It never calls `sampleState` and drains none of the loop's own signals.
+   */
+  readonly trace: TraceWriter;
 
   constructor(private readonly o: ContextBuilderOptions) {
     this.now = o.now ?? Date.now;
+    this.trace = new TraceWriter({
+      runId: o.config.runId,
+      trajectory: o.trajectory,
+      sandbox: o.sandbox as Pick<SandboxHost, "traceDrain"> | { traceDrain?: undefined },
+      now: this.now,
+    });
+  }
+
+  /** Drain the sandbox's trace buffer into the record (`TraceWriter.drain`). Never samples. */
+  drainTrace(): Promise<void> {
+    return this.trace.drain();
   }
 
   /**
@@ -985,6 +1005,13 @@ export interface StateTickerOptions {
  * is unref'd, so it can never hold the process open, and the returned stop must
  * be called on every exit path — a live ticker outliving `runLoop` would write
  * to a closed trajectory.
+ *
+ * Each tick also drains the trace (`ContextBuilder.drainTrace`, `trace.ts`)
+ * after the sample: the sandbox child latches the character's position and
+ * state as they change, and this is the clock that carries them into the
+ * record on every driver. The drain is inside the tick's promise, so the stop
+ * waits for it the way it waits for the sample, and a drain never starts a
+ * sandbox (`SandboxHost.traceDrain`).
  */
 export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
   let sampling: Promise<unknown> | null = null;
@@ -992,6 +1019,8 @@ export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
     if (sampling !== null || o.stopped()) return;
     sampling = o.builder
       .sampleState()
+      .catch(() => null)
+      .then(() => o.builder.drainTrace())
       .catch(() => null)
       .finally(() => {
         sampling = null;

@@ -33,6 +33,7 @@ import { platformOf } from "./platform";
 import { SecretRedactor } from "./redact";
 import type { ActionNote } from "./sandbox/ipc";
 import type { SubscriptionUsage } from "./subscription-usage";
+import type { TraceRow } from "./trace-row";
 
 export interface StateLine {
   level?: number | undefined;
@@ -513,6 +514,19 @@ CREATE TABLE IF NOT EXISTS move (
   -- The module's verdict; NULL on the row that records the dispatch itself.
   status TEXT
 );
+-- The trace (trace-row.ts): the character's own position at observation
+-- cadence and its state on change, for playback. Its own table for the
+-- reason move is: state is what the scorer reads, and a trace row is not a
+-- sample the scorer counts. Append-only; ts-indexed because a reader asks for
+-- one 300 000 ms window at a time.
+CREATE TABLE IF NOT EXISTS trace (
+  run_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  map INTEGER, x REAL, y REAL, z REAL, o REAL,
+  data TEXT
+);
+CREATE INDEX IF NOT EXISTS trace_run_ts ON trace(run_id, ts);
 `;
 
 /**
@@ -561,6 +575,8 @@ const STATE_ADDED_COLUMNS: Record<string, string> = {
 export class Trajectory {
   readonly dir: string;
   readonly jsonlPath: string;
+  /** `trace.jsonl`: the trace's own evidence file (`recordTrace`). */
+  readonly tracePath: string;
   private readonly db: Database;
   private readonly secrets = new SecretRedactor();
   private readonly now: () => number;
@@ -579,6 +595,7 @@ export class Trajectory {
     this.now = opts.now ?? Date.now;
     mkdirSync(dir, { recursive: true });
     this.jsonlPath = join(dir, "trajectory.jsonl");
+    this.tracePath = join(dir, "trace.jsonl");
     this.db = openRunDb(join(dir, "run.sqlite"));
     this.db.exec(SCHEMA);
     this.migrateTable("run", RUN_ADDED_COLUMNS);
@@ -611,6 +628,63 @@ export class Trajectory {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(runId, m.ts ?? this.now(), m.moveId ?? null, m.map ?? null, m.x, m.y, m.z, m.target ?? null, m.status ?? null);
+  }
+
+  /**
+   * One drain of trace rows (`trace-row.ts`), in order, to the `trace` table
+   * and to `trace.jsonl` as `{ t: "trace", ts, kind, ... }` lines. Not to
+   * trajectory.jsonl: the collector copies every trajectory line it does not
+   * know into the store, and a 1 Hz position feed is tens of thousands of
+   * rows per character per day. Its own file keeps the evidence record whole
+   * and the collector untouched. One transaction per drain; the rows hold
+   * numbers and booleans only, so there is nothing to scrub.
+   */
+  recordTrace(runId: string, rows: readonly TraceRow[]): void {
+    if (rows.length === 0) return;
+    const insert = this.db.query(
+      `INSERT INTO trace (run_id, ts, kind, map, x, y, z, o, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    let lines = "";
+    this.db.transaction(() => {
+      for (const r of rows) {
+        const data = r.data === undefined || r.data === null ? null : JSON.stringify(r.data);
+        insert.run(runId, r.ts, r.kind, r.map ?? null, r.x ?? null, r.y ?? null, r.z ?? null, r.o ?? null, data);
+        const line: Record<string, unknown> = { t: "trace", ts: r.ts, kind: r.kind };
+        if (r.map !== undefined && r.map !== null) line["map"] = r.map;
+        if (r.x !== undefined && r.x !== null) line["x"] = r.x;
+        if (r.y !== undefined && r.y !== null) line["y"] = r.y;
+        if (r.z !== undefined && r.z !== null) line["z"] = r.z;
+        if (r.o !== undefined && r.o !== null) line["o"] = r.o;
+        if (r.data !== undefined && r.data !== null) line["data"] = r.data;
+        lines += `${JSON.stringify(line)}\n`;
+      }
+    })();
+    appendFileSync(this.tracePath, lines, "utf8");
+  }
+
+  /** Every trace row of a run, oldest first; `data` parsed. For tests and in-process readers. */
+  traceRows(runId: string): TraceRow[] {
+    return (
+      this.db.query(`SELECT ts, kind, map, x, y, z, o, data FROM trace WHERE run_id = ? ORDER BY ts, rowid`).all(runId) as {
+        ts: number;
+        kind: TraceRow["kind"];
+        map: number | null;
+        x: number | null;
+        y: number | null;
+        z: number | null;
+        o: number | null;
+        data: string | null;
+      }[]
+    ).map((r) => ({
+      ts: r.ts,
+      kind: r.kind,
+      map: r.map,
+      x: r.x,
+      y: r.y,
+      z: r.z,
+      o: r.o,
+      data: r.data === null ? null : (JSON.parse(r.data) as TraceRow["data"]),
+    }));
   }
 
   /** One action-log flush (`ActionsLine`). JSONL only: no reader needs it in sqlite. */
