@@ -558,6 +558,27 @@ public body that carries a run's text names its runs to `pub`. The operator's
 handle serves the record as the model saw it. `apiKeyEnv` is deliberately kept: it names an environment
 variable, and the value of that variable is never written to the trajectory.
 
+The strike only reaches a body that names its runs, and only the token. So
+the publisher scans every body once more on its way to the bucket
+(`SecretScanner`, `runner/src/secret-scan.ts`, called from
+`infra/publish-core.ts`), and a body with a finding is not written. It looks
+for every secret the publisher can name by value — the credentials in its own
+environment, and each run's session token read fresh from the run's meta.json
+every pass — and for credential shapes no one can name: provider key prefixes,
+JWT and OAuth tokens, cloud access key ids, private-key headers, `Bearer`
+credentials, and 32 or more hex characters right after a word like "token",
+"secret" or "key". It fails closed the way a failed upload does: the other
+objects still land, the manifest does not flip, and the site stays on the last
+generation that passed. The pass's log line and the state file's `secretScan`
+name each withheld object, the rule and the count, never the matched text;
+the scan clears when a pass comes through clean. Known values are matched in
+one rolling-hash pass whatever their number, and the shapes in one regular
+expression pass. A full local render of 346 runs (1,288 objects, 46 MB)
+scanned in about a second with no findings. A credential too weak to match
+without hitting ordinary text (shorter than twenty characters and one
+character class, such as a default password) is not matched by value, and the
+publisher names it at startup.
+
 `WRATHBENCH_VIEWER_PUBLIC=1` makes the whole handle a boundary rather than a
 set of routes an operator has to remember (GitHub issue #30): every
 `/api` body is emitted through `pub`, which projects it in public mode with the

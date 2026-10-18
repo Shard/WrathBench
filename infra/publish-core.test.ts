@@ -8,6 +8,7 @@ import {
   DEFAULT_KEEP_RUN_VERSIONS,
   describeReport,
   emptyState,
+  errorText,
   hashBody,
   LIVE_PATH,
   loadState,
@@ -20,6 +21,7 @@ import {
   publishPass,
   PublishError,
   saveState,
+  SecretScanHit,
   sleepMs,
   waveOf,
   type ObjectStore,
@@ -30,6 +32,7 @@ import {
   type SnapshotResult,
   type StateIo,
 } from "./publish-core";
+import { SecretScanner } from "../runner/src/secret-scan";
 
 /**
  * The engine's whole job is ordering, diffing and pruning, and all three are
@@ -736,6 +739,96 @@ describe("a failed wave aborts before the flip", () => {
     store.failPuts.add(LIVE_PATH);
     await expect(publish(snapshot("gen1", []), store, state)).rejects.toThrow(PublishError);
     expect(store.puts()).not.toContain(MANIFEST_PATH);
+  });
+});
+
+// ----------------------------------------------------------------- secret scan
+
+describe("a body the secret scan refuses is never written", () => {
+  /** A secret-shaped value assembled from parts, so this file holds none. */
+  const LEAK = ["sk", "or", "v1", "0123456789abcdef".repeat(4)].join("-");
+  const scanner = new SecretScanner();
+  const scan = (body: string): ReturnType<SecretScanner["scan"]> => scanner.scan(body);
+
+  test("a per-run body with a finding is withheld, its siblings land, and the manifest does not flip", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const result = snapshot("gen1", [
+      { id: "runA", ver: "v1" },
+      { id: "runB", ver: "v1", payload: `the model printed ${LEAK}` },
+    ]);
+    const err = await publish(result, store, state, { scan }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(PublishError);
+    expect((err as PublishError).failures.map((f) => f.path).sort()).toEqual(["v1/run/runB/v1/detail.json", "v1/run/runB/v1/track.json"]);
+    expect((err as PublishError).failures[0]?.error).toBeInstanceOf(SecretScanHit);
+    // Nothing carrying the value reached the bucket, and no flip happened.
+    for (const body of store.objects.values()) expect(body.includes(LEAK)).toBe(false);
+    expect(store.puts()).not.toContain("v1/run/runB/v1/detail.json");
+    expect(store.puts()).not.toContain(MANIFEST_PATH);
+    expect(state.uploaded["v1/run/runA/v1/detail.json"]).toBeDefined();
+    expect(state.uploaded["v1/run/runB/v1/detail.json"]).toBeUndefined();
+    // The status names the object and the rule, never the value.
+    expect(state.secretScan?.withheld).toEqual([
+      { path: "v1/run/runB/v1/detail.json", findings: [{ rule: "openrouter-key", count: 1 }] },
+      { path: "v1/run/runB/v1/track.json", findings: [{ rule: "openrouter-key", count: 1 }] },
+    ]);
+    expect(JSON.stringify(state).includes(LEAK)).toBe(false);
+    expect(errorText(err).includes(LEAK)).toBe(false);
+    expect(errorText(err)).toContain("withheld by the secret scan (openrouter-key ×1)");
+  });
+
+  test("an aggregate or live.json with a finding stops the flip, and the bucket keeps the last clean generation", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state, { scan });
+
+    store.reset();
+    const err = await publish(snapshot("gen2", [{ id: "runA", ver: "v1" }], `aggregate with ${LEAK}`), store, state, { scan }).catch((e: unknown) => e);
+    expect((err as PublishError).wave).toBe("aggregate");
+    expect(store.puts()).not.toContain(MANIFEST_PATH);
+    expect(store.objects.get(MANIFEST_PATH)).toContain("gen1");
+    expect(state.lastGen).toBe("gen1");
+  });
+
+  test("the log line names the object and the rule; a clean pass reports what it scanned and clears the withheld list", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const lines: string[] = [];
+    const dirty = snapshot("gen1", [{ id: "runA", ver: "v1", payload: LEAK }]);
+    await publish(dirty, store, state, { scan, log: (l) => lines.push(l) }).catch(() => undefined);
+    expect(lines).toContain("publish: v1/run/runA/v1/detail.json withheld by the secret scan (openrouter-key ×1)");
+    expect(lines.join("\n").includes(LEAK)).toBe(false);
+
+    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state, { scan });
+    expect(report.flipped).toBe(true);
+    expect(report.scanned).toBe(report.put.length);
+    expect(state.secretScan?.withheld).toEqual([]);
+    expect(describeReport(report)).toContain(`${report.put.length} scanned clean`);
+  });
+
+  test("a key the bucket already holds is not re-read: the scan costs nothing on an idle pass", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }]), store, state, { scan });
+    let scanned = 0;
+    const counting = (body: string): ReturnType<SecretScanner["scan"]> => {
+      scanned++;
+      return scanner.scan(body);
+    };
+    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1" }], "aggregate", "later"), store, state, { scan: counting });
+    // Only live.json moved, so only live.json was written, and scanned.
+    expect(report.put).toEqual([LIVE_PATH]);
+    expect(scanned).toBe(1);
+  });
+
+  test("without a scan the engine writes as before, and records no scan status", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const report = await publish(snapshot("gen1", [{ id: "runA", ver: "v1", payload: LEAK }]), store, state);
+    expect(report.flipped).toBe(true);
+    expect(report.scanned).toBeUndefined();
+    expect(state.secretScan).toBeUndefined();
   });
 });
 

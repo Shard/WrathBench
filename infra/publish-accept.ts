@@ -82,6 +82,7 @@ import {
 import { REDACTED_PROSE } from "../runner/viewer/redact-prose";
 import { LOCAL_PATH_ROOTS } from "../runner/viewer/scrub-paths";
 import { unpackSegs } from "../runner/viewer/trace";
+import { describeFindings, SecretScanner } from "../runner/src/secret-scan";
 import { LIVE_PATH, MANIFEST_PATH, classifyPath, traceSegmentPath } from "./publish-core";
 
 /* ------------------------------------------------------------- the source --- */
@@ -248,9 +249,12 @@ const FS_PATH = new RegExp(
 /** A host fact: an address or a port where a public reader should see a label. */
 const HOST_FACT = /\b(?:https?:\/\/(?:\d{1,3}\.){3}\d{1,3}|https?:\/\/localhost|https?:\/\/[A-Za-z0-9.-]+:\d{2,5})/;
 
-/** Credential shapes, from the providers this project actually holds keys for. */
-const CREDENTIAL =
-  /\b(?:Bearer\s+[A-Za-z0-9._~+/-]{12,}|sk-[A-Za-z0-9_-]{16,}|csk-[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,})/;
+/**
+ * Credential shapes: the publisher's own scan (`runner/src/secret-scan.ts`),
+ * shapes only, since the verifier knows no secret values. A finding names the
+ * rule, never an excerpt of what matched.
+ */
+const CREDENTIAL = new SecretScanner();
 
 /**
  * A wiki dump archive by name, as the bundle's `source` stamp carries it
@@ -370,10 +374,10 @@ export function scanBody(key: string, body: unknown): { findings: Finding[]; res
     if (fs !== null) where.push({ kind: "filesystem-path", key, at: path, detail: excerpt(s, fs.index) });
     const host = HOST_FACT.exec(s);
     if (host !== null) where.push({ kind: "host-fact", key, at: path, detail: excerpt(s, host.index) });
-    const cred = CREDENTIAL.exec(s);
+    const cred = CREDENTIAL.scan(s);
     // A credential is never inside the residual: the model has no business
     // holding one, and a match there would be a leak whoever typed it.
-    if (cred !== null) findings.push({ kind: "credential", key, at: path, detail: excerpt(s, cred.index) });
+    if (cred.length > 0) findings.push({ kind: "credential", key, at: path, detail: describeFindings(cred) });
     const tile = TILE_REFERENCE.exec(s);
     if (tile !== null) findings.push({ kind: "tile-reference", key, at: path, detail: excerpt(s, tile.index) });
     const dump = WIKI_DUMP_SOURCE.exec(s);
