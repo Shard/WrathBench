@@ -31,6 +31,7 @@ import {
   type TraceSegment,
   type TraceState,
 } from "../viewer/trace";
+import { projectTraceSegment } from "../viewer/public-projection";
 
 /** A window boundary well inside the epoch-ms range real rows carry. */
 const T0 = 1_760_000_100_000;
@@ -508,5 +509,23 @@ describe("size", () => {
     expect(gz).toBeLessThan(4_000);
     // The context bound the viewer reads is three windows.
     expect(CONTEXT_MS).toBe(3 * SEG_MS);
+  });
+
+  test("a window of solid combat, with the target's health re-emitted four times a second", () => {
+    // The recorder re-emits `target` on every hpPct change, so a long fight is
+    // the private segment's worst case; the public one drops the target whole.
+    const rows = realisticWindow();
+    for (let ts = T0 + 1000; ts < T0 + SEG_MS; ts += 250) {
+      rows.push(state(ts + 13, { target: { kind: "creature", entry: 299, hpPct: 100 - Math.floor(((ts - T0) % 30_000) / 300) } }));
+      if ((ts - T0) % 2000 === 1000) rows.push(state(ts + 17, { hp: 400 + ((ts - T0) % 700), pw: (ts - T0) % 1000 }));
+    }
+    const seg = encodeSegment(rows, W);
+    const body = JSON.stringify(seg);
+    const gz = gzipSync(Buffer.from(body)).length;
+    const pub = JSON.stringify(projectTraceSegment(seg));
+    const pubGz = gzipSync(Buffer.from(pub)).length;
+    console.log(`trace segment, solid combat: ${seg.ev.length} events -> private ${body.length} B raw, ${gz} B gzipped; public ${pub.length} B raw, ${pubGz} B gzipped`);
+    expect(body.length).toBeLessThan(120_000);
+    expect(pub.length).toBeLessThan(20_000);
   });
 });
