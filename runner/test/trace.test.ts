@@ -25,6 +25,7 @@ import {
   segRunsHas,
   stateAt,
   tailStart,
+  traceSegmentKey,
   unpackSegs,
   windowOf,
   type TraceRow,
@@ -169,6 +170,11 @@ describe("trace module", () => {
 /* ------------------------------------------------------------ windows --- */
 
 describe("windows", () => {
+  test("a segment's public key encodes the run id like every per-run key", () => {
+    expect(traceSegmentKey("fleet-a-b-20261018-a2", T0)).toBe(`v1/run/fleet-a-b-20261018-a2/trace/${T0}.json`);
+    expect(traceSegmentKey("odd id/#1", T0)).toBe(`v1/run/odd%20id%2F%231/trace/${T0}.json`);
+  });
+
   test("windows are UTC-aligned five-minute boundaries", () => {
     expect(SEG_MS).toBe(300_000);
     expect(windowOf(T0)).toBe(T0);

@@ -69,7 +69,7 @@ import type {
   TraceSegment,
   TrackResponse,
 } from "./api-types";
-import { unpackSegs } from "./trace";
+import { traceSegmentKey, unpackSegs } from "./trace";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
@@ -319,11 +319,6 @@ function coldFingerprint(runsDir: string, row: RunListRow, character: string, wa
     parts.push(`${name} ${st.size} ${st.mtimeMs}`);
   }
   return hash12(parts.join("\n"));
-}
-
-/** A trace segment's key: under the run, addressed by its window (`publish-core.ts`). */
-export function traceSegmentKey(runId: string, t0: number): string {
-  return `v1/run/${runId}/trace/${t0}.json`;
 }
 
 /**
