@@ -48,11 +48,12 @@ import type {
   RunDetailResponse,
   RunsResponse,
   SnapshotEnvelope,
+  TraceSegment,
   TrackResponse,
 } from "@viewer/api-types";
 import type { PublicFleetResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
-import { ApiError, getJson, sweepExpired, type Client } from "./client";
+import { ApiError, getJson, sweepExpired, traceWindow, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 
 /**
@@ -76,6 +77,18 @@ export const SNAPSHOT_TTL_MS = 30_000;
  * two with nothing new, a push has actually been missed.
  */
 export const SNAPSHOT_STALE_MS = 600_000;
+
+/**
+ * How often a new `live.json` lands: the publisher sleeps its interval
+ * (`WRATHBENCH_PUBLISH_INTERVAL_MS`, five minutes) between passes and a pass
+ * takes one to two, so about seven. The live map's delay starts from this and
+ * then learns the real period from the horizons it sees (`createLiveClock`),
+ * so a change of cadence costs a few passes of holding, not a broken map.
+ */
+export const SNAPSHOT_RENDER_MS = 420_000;
+
+/** The edge's `max-age` on the two mutable objects, which the client memo sits behind. */
+export const SNAPSHOT_EDGE_TTL_MS = 30_000;
 
 /** The server's own `?episode=` default, reproduced client-side. */
 const DEFAULT_EPISODE: EpisodeIdView = "e90";
@@ -412,6 +425,16 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
     ladder: (episode: EpisodeIdView): Promise<ResultsResponse> =>
       snap<ResultsResponse>(`ladder-${encodeURIComponent(episode)}.json`),
     track: async (id: string): Promise<TrackResponse> => await memo<TrackResponse>(await pointer(id, "track")),
+    /*
+     * A closed trace window is immutable and keyed by its window rather than
+     * by a content version, so its key is built, not looked up — which is
+     * safe only because the player asks for a `t0` solely once `live.json`'s
+     * `recent` or a published track's `segs` has listed it. An unlisted key is
+     * a 404 the edge then caches for a day.
+     */
+    traceSegment: async (id: string, t0: number): Promise<TraceSegment> =>
+      await memo<TraceSegment>(artifactUrl(`v1/run/${encodeURIComponent(id)}/trace/${traceWindow(t0)}.json`)),
+    feedCadence: { renderMs: SNAPSHOT_RENDER_MS, cacheMs: ttl + SNAPSHOT_EDGE_TTL_MS },
     /*
      * A character is assembled here rather than published as an artifact of its
      * own, because every part of it is already in the bucket: the chain and its

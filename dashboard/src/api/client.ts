@@ -25,8 +25,10 @@ import type {
   PositionsResponse,
   RunDetailResponse,
   RunsResponse,
+  TraceSegment,
   TrackResponse,
 } from "@viewer/api-types";
+import type { FeedCadence } from "../lib/traceplayer";
 import { createSnapshotClient, type SnapshotSource } from "./snapshot-client";
 
 export type {
@@ -120,6 +122,9 @@ export interface ClientOptions {
  */
 export const LIVE_TTL_MS = 4_000;
 
+/** The live API's positions, as the map's delay reads them (`liveCadence`). */
+const LIVE_FEED_CADENCE: FeedCadence = { renderMs: 0, cacheMs: LIVE_TTL_MS };
+
 /** One memoised in-flight or settled fetch. */
 interface CacheEntry {
   at: number;
@@ -160,6 +165,17 @@ export async function getJson<T>(url: string, f: typeof globalThis.fetch = globa
     throw new ApiError(res.status, `${url}: ${detail}`);
   }
   return (await res.json()) as T;
+}
+
+/**
+ * A trace window's `t0`, as a path segment, or a rejection. The player only
+ * asks for windows a feed listed (`lib/traceplayer.ts`), so anything that is
+ * not a whole epoch millisecond here is a bug upstream, and a URL built from
+ * it would be a request for something that cannot exist.
+ */
+export function traceWindow(t0: number): string {
+  if (!Number.isSafeInteger(t0) || t0 < 0) throw new ApiError(400, `not a trace window: ${String(t0)}`);
+  return String(t0);
 }
 
 /** The shared `?episode=`/`?includeOverrides=`/`?harness=` query. */
@@ -255,6 +271,18 @@ export function createClient(opts: ClientOptions = {}) {
     /** One run's recorded track, for map replay. */
     track: (id: string): Promise<TrackResponse> =>
       get<TrackResponse>(`/api/run/${encodeURIComponent(id)}/track`),
+    /**
+     * One closed trace window. Only ever a `t0` a position's `recent` or a
+     * track's `segs` listed — the player enforces that, not this.
+     */
+    traceSegment: async (id: string, t0: number): Promise<TraceSegment> =>
+      await get<TraceSegment>(`/api/run/${encodeURIComponent(id)}/trace/${traceWindow(t0)}`),
+    /**
+     * How `positions()` is made, for the live map's delay: rendered on request,
+     * so a reading is as fresh as the poll that fetched it, behind a memo
+     * shorter than any poll.
+     */
+    feedCadence: LIVE_FEED_CADENCE,
     run: (id: string): Promise<RunDetailResponse> =>
       get<RunDetailResponse>(`/api/run/${encodeURIComponent(id)}`),
     /**

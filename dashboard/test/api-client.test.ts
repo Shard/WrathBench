@@ -96,6 +96,22 @@ describe("paths", () => {
   test("the stream URL is derived, not fetched", () => {
     expect(createClient().streamUrl("a b")).toBe("/api/run/a%20b/stream");
   });
+
+  test("a trace window is its run's path and its t0, and nothing else is asked for", async () => {
+    const s = stub({});
+    const c = createClient({ fetch: s.fetch });
+    await c.traceSegment("a b", 1_760_000_100_000);
+    expect(s.calls.map((x) => x.url)).toEqual(["/api/run/a%20b/trace/1760000100000"]);
+    for (const bad of [Number.NaN, 1.5, -300_000, Number.MAX_SAFE_INTEGER + 2]) {
+      const err = (await c.traceSegment("r1", bad).catch((e: unknown) => e)) as ApiError;
+      expect(err).toBeInstanceOf(ApiError);
+    }
+    expect(s.calls.length).toBe(1);
+  });
+
+  test("the live feed says it renders on request", () => {
+    expect(createClient().feedCadence).toEqual({ renderMs: 0, cacheMs: LIVE_TTL_MS });
+  });
 });
 
 describe("errors", () => {

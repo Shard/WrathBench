@@ -19,9 +19,10 @@
  * belong to; the retail path would resolve the same numbers to different items.
  */
 
-/** Where the script and the item pages live. One place spells each. */
+/** Where the script and the item and spell pages live. One place spells each. */
 const SCRIPT_SRC = "https://wow.zamimg.com/js/tooltips.js";
 const ITEM_BASE = "https://www.wowhead.com/wotlk/item=";
+const SPELL_BASE = "https://www.wowhead.com/wotlk/spell=";
 
 /**
  * The link for one item entry.
@@ -32,6 +33,17 @@ const ITEM_BASE = "https://www.wowhead.com/wotlk/item=";
 export function itemUrl(entry: number): string | null {
   if (!Number.isInteger(entry) || entry <= 0) return null;
   return `${ITEM_BASE}${entry}`;
+}
+
+/**
+ * The link for one spell id: a buff, a debuff, or a cast in progress on the
+ * unit frame. The same arrangement as an item's — the trace carries the id
+ * the server sent, and the reader's browser asks Wowhead for the icon and the
+ * tooltip — so the frame holds no spell art and no spell text.
+ */
+export function spellUrl(spellId: number): string | null {
+  if (!Number.isInteger(spellId) || spellId <= 0) return null;
+  return `${SPELL_BASE}${spellId}`;
 }
 
 /**

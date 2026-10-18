@@ -41,6 +41,8 @@ import type {
 } from "../../runner/viewer/api-types";
 import { ApiError } from "../src/api/client";
 import {
+  SNAPSHOT_EDGE_TTL_MS,
+  SNAPSHOT_RENDER_MS,
   SNAPSHOT_STALE_MS,
   createSnapshotClient,
   projectResults,
@@ -561,6 +563,25 @@ describe("per-run artifacts", () => {
     const err = (await c.track("unpublished").catch((e: unknown) => e)) as ApiError;
     expect(err.status).toBe(404);
     expect(err.message).toContain("no published track");
+  });
+
+  test("a trace window is read at its window's key, envelope and all, and nothing else is built", async () => {
+    const t0 = 1_760_000_100_000;
+    const seg = { v: 1, run: "r 1", t0, t1: t0 + 300_000, q: { p: 10, o: 1024 }, k: { p: null, s: {} }, dt: [], x: [], y: [], z: [], o: [], cuts: [], flights: [], ev: [] };
+    const b = bucket({
+      [`${BASE}/v1/run/r%201/trace/${t0}.json`]: { generatedAt: GENERATED_AT, attribution: ATTRIBUTION, ...seg },
+    });
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    expect((await c.traceSegment("r 1", t0)).t0).toBe(t0);
+    // The segment's own envelope counts toward the banner like any artifact's.
+    expect(c.snapshot.state().generatedAt).toBe(GENERATED_AT);
+    expect(await c.traceSegment("r 1", 1.5).catch((e: unknown) => (e as ApiError).status)).toBe(400);
+    expect(b.urls).toEqual([`${BASE}/v1/run/r%201/trace/${t0}.json`]);
+  });
+
+  test("the fast lane says how often it lands and how long its caches hold it", () => {
+    const c = createSnapshotClient(BASE, { ttlMs: 30_000 });
+    expect(c.feedCadence).toEqual({ renderMs: SNAPSHOT_RENDER_MS, cacheMs: 30_000 + SNAPSHOT_EDGE_TTL_MS });
   });
 });
 

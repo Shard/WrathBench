@@ -15,27 +15,107 @@ import type { TrackPoint } from "@viewer/api-types";
 import { fmtElapsed } from "./format";
 import { indexAt } from "./replay";
 
-/** The tick at 1×: one recorded sample every quarter second, so a 6h run scrubs in ~30s. */
-export const BASE_TICK_MS = 250;
-
 /**
- * The speeds playback offers, as multiples of the base tick. Ticks rather than
- * wall time: a track's samples are spaced by the harness's state cadence, not
- * evenly, and "one sample per tick" is the only rate that reads the same across
- * two runs an operator is comparing.
+ * The speeds playback offers, as multiples of the run's own clock: 1× is the
+ * character in real time, and each step is about an order of magnitude, so a
+ * 90-minute run is watchable at 60× (a minute and a half) and a nine-day
+ * freeplay character at 3600× (about four minutes with its pauses skipped).
+ *
+ * Wall time, not samples. It used to be one recorded sample per 250 ms tick,
+ * which had no dead air but no time either: a character's minute in the
+ * starter zone and its ten minutes on a flight path took the same quarter
+ * second, and with a trace there is no "sample" to step — positions arrive
+ * about once a second. What kept the old scale free of dead air, the record's
+ * long gaps, is `idleSpans`' job now.
  */
-export const SPEEDS = [1, 2, 4, 8] as const;
+export const SPEEDS = [1, 10, 60, 600, 3600] as const;
 export type Speed = (typeof SPEEDS)[number];
 
-/** The interval between samples at a given speed. */
-export function tickMs(speed: Speed): number {
-  return Math.round(BASE_TICK_MS / speed);
-}
+/**
+ * Where a replay starts: one recorded state sample (60 s) a second, near the
+ * old scale's 240×, but the fastest that still plays from the trace
+ * (`TRACE_MAX_SPEED`), so a replay opens on the fine movement.
+ */
+export const DEFAULT_SPEED: Speed = 60;
 
-/** The next speed in the cycle; 8× wraps to 1×. */
+/**
+ * The fastest speed that draws the pip from trace segments. Past it a
+ * five-minute segment would go by in under half a second — a fetch per blink
+ * for detail nobody can see at that rate — so the coarse track points, time
+ * interpolated, carry it.
+ */
+export const TRACE_MAX_SPEED = 60;
+
+/** The next speed in the cycle; the fastest wraps to 1×. */
 export function nextSpeed(speed: Speed): Speed {
   const i = SPEEDS.indexOf(speed);
   return SPEEDS[(i + 1) % SPEEDS.length]!;
+}
+
+/**
+ * A gap in the record longer than this is idle: the state ticker writes a
+ * sample every 60 s for as long as the run is being driven, so two missing in
+ * a row means it was not — paused, between processes, or down. Freeplay
+ * characters sit in such gaps for hours (one of 7,788 s is on the record).
+ */
+export const IDLE_GAP_MS = 150_000;
+
+/**
+ * How long an idle span takes to play, whatever its length and whatever the
+ * speed — unless the speed would get through it sooner. Long enough to see
+ * the pip stand still, which is what happened, and no longer.
+ */
+export const IDLE_PLAY_MS = 1_000;
+
+/** The idle stretches of a record: every gap between consecutive samples longer than `IDLE_GAP_MS`. */
+export function idleSpans(points: readonly { ts: number }[]): Span[] {
+  const out: Span[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const from = points[i - 1]!.ts;
+    const to = points[i]!.ts;
+    if (to - from > IDLE_GAP_MS) out.push({ from, to });
+  }
+  return out;
+}
+
+/**
+ * Where the cursor is after `wallMs` of playback from `from` at `speed`, with
+ * every idle span compressed to `IDLE_PLAY_MS`. A monotonic piecewise-linear
+ * warp of wall time onto the run's clock: the speed outside the spans, and
+ * inside one whichever is faster of the speed and the span's length over
+ * `IDLE_PLAY_MS`. Pure, so the playhead is a function of how long it has
+ * played rather than a sum of frames — see `replayCursorAt`.
+ *
+ * `idle` is `idleSpans`' output: sorted, and not overlapping.
+ */
+export function advanceCursor(from: number, wallMs: number, speed: number, idle: readonly Span[]): number {
+  let t = from;
+  let left = Math.max(0, wallMs);
+  // The first span that ends after the cursor; a binary search, because a
+  // long freeplay record has hundreds of them and this runs every frame.
+  let lo = 0;
+  let hi = idle.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (idle[mid]!.to <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let i = lo; left > 0; i++) {
+    const span = idle[i];
+    if (span === undefined) return t + left * speed;
+    if (t < span.from) {
+      const need = (span.from - t) / speed;
+      if (need >= left) return t + left * speed;
+      t = span.from;
+      left -= need;
+    }
+    const rate = Math.max(speed, (span.to - span.from) / IDLE_PLAY_MS);
+    const need = (span.to - t) / rate;
+    if (need >= left) return t + left * rate;
+    t = span.to;
+    left -= need;
+  }
+  return t;
 }
 
 /**

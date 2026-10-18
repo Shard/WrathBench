@@ -27,6 +27,7 @@ import {
   defaultView,
   emptySideNote,
   fitTo,
+  headingOnScreen,
   hitTest,
   hueOf,
   latticeLines,
@@ -456,6 +457,19 @@ describe("the art/minimap crossfade", () => {
       expect(native.minimap).toBe(0);
       expect(native.art).toBe(1);
     }
+  });
+});
+
+describe("headingOnScreen", () => {
+  // WoW's facing: 0 is north (+x), and it turns west (+y) from there.
+  const view = { scale: 0.4, ox: 17, oy: -9 };
+  test("north is up the screen and west is to its left, at any view", () => {
+    const n = headingOnScreen(view, 100, 200, 0);
+    expect(n.dx).toBeCloseTo(0, 6);
+    expect(n.dy).toBeCloseTo(-1, 6);
+    const w = headingOnScreen(view, 100, 200, Math.PI / 2);
+    expect(w.dx).toBeCloseTo(-1, 6);
+    expect(w.dy).toBeCloseTo(0, 6);
   });
 });
 

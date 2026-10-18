@@ -10,15 +10,15 @@
 import { describe, expect, test } from "bun:test";
 import type { TrackPoint } from "../../runner/viewer/api-types";
 import {
-  BASE_TICK_MS,
+  DEFAULT_SPEED,
   SPEEDS,
+  TRACE_MAX_SPEED,
   keyBelongsToTarget,
   nextSpeed,
   playbackClock,
   playbackKey,
   prevSampleBefore,
   progressOf,
-  tickMs,
 } from "../src/lib/playback";
 
 function point(ts: number): TrackPoint {
@@ -74,15 +74,16 @@ describe("progressOf / playbackClock", () => {
 });
 
 describe("speeds", () => {
-  test("the cycle wraps and every speed shortens the tick", () => {
-    expect(nextSpeed(1)).toBe(2);
-    expect(nextSpeed(8)).toBe(1);
-    let last = BASE_TICK_MS + 1;
+  test("the cycle climbs and wraps, the default is one of them, and the trace plays up to it", () => {
+    expect(nextSpeed(1)).toBe(10);
+    expect(nextSpeed(3600)).toBe(1);
+    let last = 0;
     for (const s of SPEEDS) {
-      expect(tickMs(s)).toBeLessThan(last);
-      last = tickMs(s);
+      expect(s).toBeGreaterThan(last);
+      last = s;
     }
-    expect(tickMs(1)).toBe(BASE_TICK_MS);
+    expect(SPEEDS).toContain(DEFAULT_SPEED);
+    expect(DEFAULT_SPEED).toBeLessThanOrEqual(TRACE_MAX_SPEED);
   });
 });
 
