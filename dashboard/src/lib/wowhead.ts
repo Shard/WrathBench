@@ -19,10 +19,11 @@
  * belong to; the retail path would resolve the same numbers to different items.
  */
 
-/** Where the script and the item and spell pages live. One place spells each. */
+/** Where the script and the item, spell and quest pages live. One place spells each. */
 const SCRIPT_SRC = "https://wow.zamimg.com/js/tooltips.js";
 const ITEM_BASE = "https://www.wowhead.com/wotlk/item=";
 const SPELL_BASE = "https://www.wowhead.com/wotlk/spell=";
+const QUEST_BASE = "https://www.wowhead.com/wotlk/quest=";
 
 /**
  * The link for one item entry, and the instance's random property when it has
@@ -50,6 +51,18 @@ export function itemUrl(entry: number, rand?: number | null): string | null {
 export function spellUrl(spellId: number): string | null {
   if (!Number.isInteger(spellId) || spellId <= 0) return null;
   return `${SPELL_BASE}${spellId}`;
+}
+
+/**
+ * The link for one quest id: a row of the map's quest log. The trace records
+ * the id and its counters and never the title, so this link is the only place
+ * a quest's name can come from: the panel asks the script to rename it
+ * (`data-wh-rename-link`, against the page-wide `renameLinks: false`), and
+ * where the script never arrives the row reads `quest <id>`.
+ */
+export function questUrl(questId: number): string | null {
+  if (!Number.isInteger(questId) || questId <= 0) return null;
+  return `${QUEST_BASE}${questId}`;
 }
 
 /**
@@ -110,8 +123,10 @@ export function qualityColor(quality: number | null | undefined): string | null 
  *
  * `renameLinks: false` matters most: left on, the script replaces our link
  * text with the item's name, which would wipe the fallback text we rely on
- * when the script never arrives. `iconizeLinks` and `iconSize` set what a link
- * with no per-link attribute gets; the grid overrides both per cell.
+ * when the script never arrives. A quest link is the one exception, per link:
+ * its fallback is only the id, so it asks to be renamed (`questUrl`).
+ * `iconizeLinks` and `iconSize` set what a link with no per-link attribute
+ * gets; the grid overrides both per cell, and the script iconizes no quest.
  */
 export function wowheadConfig(): Record<string, unknown> {
   return { colorLinks: true, iconizeLinks: true, renameLinks: false, iconSize: "medium" };
