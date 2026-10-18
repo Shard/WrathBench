@@ -66,6 +66,7 @@ import {
 } from "../viewer/public-projection";
 import { summarize } from "../viewer/tail";
 import { STALL_PAUSE } from "../src/lapse";
+import { SecretScanner } from "../src/secret-scan";
 
 /* ------------------------------------------------------------- poisons --- */
 
@@ -1390,6 +1391,22 @@ describe("projectTraceSegment: the character sheet", () => {
     expect(projectTraceSegment(once)).toEqual(once);
     // The money event at 6 s repeats 12 400: dropped.
     expect(once.ev.filter((e) => e[1] === "money")).toEqual([[1_000, "money", 12_400]]);
+  });
+
+  test("its item names do not trip the publisher's secret scan, which would withhold the segment and fail the pass", () => {
+    // Names that put a credential word right before the segment's numbers.
+    const seg = sheetSegmentFixture();
+    seg.items = {
+      501: [2, "Skeleton Key"],
+      502: [3, "Token of Passage"],
+      600: [1, "Secret Stash Bag"],
+      701: [1, "Auth Seal 0123456789abcdef"],
+      702: [0, "Standard Bearer Longbowmanship"],
+      703: [1, "Tusk-Carved Totem"],
+    } as unknown as TraceSegment["items"];
+    const out = JSON.stringify(projectTraceSegment(seg));
+    expect(out).toContain("Skeleton Key");
+    expect(new SecretScanner([]).scan(out)).toEqual([]);
   });
 
   test("a segment without a sheet gains no sheet key and no dictionary", () => {
