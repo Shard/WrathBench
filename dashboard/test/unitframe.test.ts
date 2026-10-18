@@ -4,13 +4,22 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import type { TraceState } from "../../runner/viewer/api-types";
+import { emptyTraceState } from "../../runner/viewer/trace";
 import {
   XP_FOR_LEVEL,
+  auraLeft,
+  auraViews,
   barReading,
+  castReading,
   classPowerType,
+  gaugesOf,
   healthReading,
   isDead,
   percentOf,
+  sameAuras,
+  targetReading,
+  unitFlags,
   xpCellTitle,
   powerToken,
   powerTypeOf,
@@ -138,5 +147,88 @@ describe("xpCellTitle — the reading a compact bar cannot print inside itself",
     expect(xpCellTitle(9, 500, 1000)).toBe("level 9 — 500 / 1,000 xp into the level (50%)");
     // Including at the cap, where the table has nothing to offer.
     expect(xpCellTitle(80, 500, 1000)).toBe("level 80 — 500 / 1,000 xp into the level (50%)");
+  });
+});
+
+/* --- the trace's half --- */
+
+const state = (over: Partial<TraceState> = {}): TraceState => ({ ...emptyTraceState(), ...over });
+const reading = { level: 7, xp: 300, nextLevelXp: 3600, health: 90, maxHealth: 120, power: 40, maxPower: 100, powerType: 0 };
+
+describe("gaugesOf", () => {
+  test("the reading alone where the trace has nothing to say", () => {
+    expect(gaugesOf(reading, null)).toEqual(reading);
+  });
+
+  test("the trace's gauges by pair, and its null kept — a public gauge is withheld while down", () => {
+    const g = gaugesOf(reading, state({ hp: null, hpMax: null, pw: 10, pwMax: 50, pwType: 1, level: 8, xp: 20, xpMax: 4500 }));
+    expect([g.health, g.maxHealth]).toEqual([null, null]);
+    expect([g.power, g.maxPower, g.powerType]).toEqual([10, 50, 1]);
+    expect([g.level, g.xp, g.nextLevelXp]).toEqual([8, 20, 4500]);
+  });
+
+  test("level and xp fall back field by field", () => {
+    const g = gaugesOf(reading, state({ hp: 5, hpMax: 10 }));
+    expect([g.level, g.xp, g.nextLevelXp]).toEqual([7, 300, 3600]);
+    expect(g.powerType).toBe(0);
+  });
+
+  test("dead only when the trace says so: a public segment's absent flag decodes to false", () => {
+    expect(gaugesOf(reading, state({ dead: true })).dead).toBe(true);
+    expect("dead" in gaugesOf(reading, state({ dead: false }))).toBe(false);
+  });
+});
+
+describe("auras", () => {
+  test("in the server's order, the run-out dropped, a second copy told apart, a debuff by its flag", () => {
+    const views = auraViews(
+      [
+        [1243, 1, 0],
+        [774, 3, 50_000, 0x80 | 0x01],
+        [774, 1, 60_000],
+        [139, 1, 9_000],
+      ],
+      10_000,
+    );
+    expect(views.map((v) => v.key)).toEqual(["1243", "774", "774#1"]);
+    expect(views.map((v) => v.debuff)).toEqual([false, true, false]);
+    expect(views[1]!.stacks).toBe(3);
+  });
+
+  test("a row is the same row while no cell changes", () => {
+    const a = auraViews([[1243, 1, 0]], 0);
+    expect(sameAuras(a, auraViews([[1243, 1, 0]], 5_000))).toBe(true);
+    expect(sameAuras(a, auraViews([[1243, 2, 0]], 5_000))).toBe(false);
+  });
+
+  test("time left the client's way, and nothing for no expiry", () => {
+    expect(auraLeft(0, 5)).toBe("");
+    expect(auraLeft(42_000, 0)).toBe("42s");
+    expect(auraLeft(299_000, 0)).toBe("5m");
+    expect(auraLeft(7_200_000, 0)).toBe("2h");
+    expect(auraLeft(1_000, 5_000)).toBe("0s");
+  });
+});
+
+describe("the cast bar", () => {
+  test("filled from its start to its end, and gone once it has ended", () => {
+    const c = { spellId: 133, endsAt: 4_000 };
+    expect(castReading(c, 1_000, 2_500)).toEqual({ spellId: 133, pct: 50, text: "1.5s" });
+    expect(castReading(c, null, 2_500)?.pct).toBe(0);
+    expect(castReading(c, 1_000, 4_000)).toBeNull();
+    expect(castReading(null, null, 0)).toBeNull();
+  });
+});
+
+describe("flags and target", () => {
+  test("the states, in a fixed order", () => {
+    expect(unitFlags(state({ resting: true, combat: true, taxi: true, mounted: true }))).toEqual(["combat", "mounted", "flying", "resting"]);
+    expect(unitFlags(state())).toEqual([]);
+  });
+
+  test("a target only when there is one, its health unobserved when not sent", () => {
+    expect(targetReading(null)).toBeNull();
+    expect(targetReading({ kind: "creature", entry: 299, hpPct: 40 })).toEqual({ pct: 40, text: "creature 299", title: "target · 40%", observed: true });
+    expect(targetReading({ kind: "player" })?.observed).toBe(false);
   });
 });

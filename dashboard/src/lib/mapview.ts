@@ -515,12 +515,23 @@ export function colorOf(runId: string): string {
 /* --- the renderer's pip state, kept pure so Solid never has to own it --- */
 
 /**
- * A drawn agent: its newest reading, and where it is *currently drawn*, which
- * lags the reading while the pip walks toward it.
+ * A drawn agent: its newest reading, and where it is *currently drawn* — which
+ * lags the reading while the pip walks toward it, and on a run with a trace
+ * is wherever the trace puts it at the playhead (`lib/traceplayer.ts`).
  */
 export interface Pip extends Placeable {
   runId: string;
   data: AgentPosition;
+  /**
+   * The map it is drawn on. The reading's, except where the trace places the
+   * pip: a public playhead runs minutes behind the newest reading, and a
+   * character that has changed continent since is still on the old one there.
+   */
+  map: number;
+  /** Facing in radians, WoW's way (`atan2(dy, dx)` in world axes), when the trace knows it. */
+  o: number | null;
+  /** On a flight path at the playhead, by the trace. */
+  flying: boolean;
 }
 
 /**
@@ -545,7 +556,7 @@ export function syncPips(
     seen.add(p.runId);
     const existing = pips.get(p.runId);
     if (existing === undefined) {
-      pips.set(p.runId, { runId: p.runId, data: p, x: p.x, y: p.y });
+      pips.set(p.runId, { runId: p.runId, data: p, x: p.x, y: p.y, map: p.map, o: null, flying: false });
       continue;
     }
     existing.data = p;
@@ -554,12 +565,30 @@ export function syncPips(
     if (snap) {
       existing.x = p.x;
       existing.y = p.y;
+      existing.map = p.map;
     }
   }
   for (const id of [...pips.keys()]) if (!seen.has(id)) pips.delete(id);
 }
 
-/** A plain lerp toward the newest reading: a pip walks rather than teleports. */
+/**
+ * The screen direction a world facing points in, as a unit vector. Projected
+ * rather than read as a canvas angle, because the world's axes are not the
+ * screen's: +x is north and up the screen, +y is west and to its left.
+ */
+export function headingOnScreen(view: View, x: number, y: number, o: number): { dx: number; dy: number } {
+  const a = project(view, x, y);
+  const b = project(view, x + Math.cos(o), y + Math.sin(o));
+  const dx = b.sx - a.sx;
+  const dy = b.sy - a.sy;
+  const len = Math.hypot(dx, dy);
+  return len === 0 ? { dx: 0, dy: 0 } : { dx: dx / len, dy: dy / len };
+}
+
+/**
+ * A plain lerp toward the newest reading: a pip walks rather than teleports.
+ * What a pip with no trace does between readings; a traced one is placed.
+ */
 export function stepPips(list: readonly Pip[], rate = 0.18): boolean {
   let moving = false;
   for (const pip of list) {

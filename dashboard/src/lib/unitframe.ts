@@ -17,6 +17,8 @@
  * the SDK holds.
  */
 
+import type { TraceAura, TraceCast, TraceState, TraceTarget } from "@viewer/api-types";
+
 /** 3.3.5a power type ids, as `UNIT_FIELD_BYTES_0` carries them. */
 export type PowerType = "mana" | "rage" | "focus" | "energy" | "runic";
 
@@ -157,4 +159,170 @@ export function xpCellTitle(
   const next = xpToNext(level, nextLevelXp);
   if (next === null || next <= 0) return `${head} — ${fmtInt(xp)} xp into the level, which has no recorded total`;
   return `${head} — ${fmtInt(xp)} / ${fmtInt(next)} xp into the level (${Math.round(percentOf(xp, next))}%)`;
+}
+
+/* --- the trace's half of the frame (`lib/traceplayer.ts` reads the state) --- */
+
+/** The numbers the bars draw, wherever they came from. */
+export interface Gauges {
+  level: number | null | undefined;
+  xp: number | null | undefined;
+  nextLevelXp: number | null | undefined;
+  health: number | null | undefined;
+  maxHealth: number | null | undefined;
+  power: number | null | undefined;
+  maxPower: number | null | undefined;
+  powerType: number | null | undefined;
+  /** Only ever `true` or absent: see `gaugesOf`. */
+  dead?: true;
+}
+
+/** The fields a position or a track point carries for the frame. */
+export type GaugeSource = Partial<Omit<Gauges, "dead">>;
+
+/**
+ * The frame's numbers at the playhead: the trace's state where the trace
+ * answers for that moment, the reading's (an `AgentPosition`, or the track
+ * point a replay cursor stands on) where it does not.
+ *
+ * The gauges come by pair, never mixed — a trace's hp over a 60 s sample's
+ * max is a bar no observation drew — and while the trace answers, its null is
+ * kept rather than filled from the reading: on the public site a gauge is
+ * withheld while the character is down (`projectTraceSegment`), and a health
+ * bar filled in from the sample beside it would draw the death the
+ * projection exists to keep off the page. Level and xp are never withheld,
+ * so those fall back field by field.
+ *
+ * `dead` is passed only when the trace says so. A public segment carries no
+ * `dead` at all and the decoder reads that as `false`, which `isDead` would
+ * take as a positive "alive" over the hp inference.
+ */
+export function gaugesOf(reading: GaugeSource, state: TraceState | null): Gauges {
+  if (state === null) {
+    return {
+      level: reading.level,
+      xp: reading.xp,
+      nextLevelXp: reading.nextLevelXp,
+      health: reading.health,
+      maxHealth: reading.maxHealth,
+      power: reading.power,
+      maxPower: reading.maxPower,
+      powerType: reading.powerType,
+    };
+  }
+  const xpFromTrace = state.xp !== null;
+  return {
+    level: state.level ?? reading.level,
+    xp: xpFromTrace ? state.xp : reading.xp,
+    nextLevelXp: xpFromTrace ? state.xpMax : reading.nextLevelXp,
+    health: state.hp,
+    maxHealth: state.hpMax,
+    power: state.pw,
+    maxPower: state.pwMax,
+    powerType: state.pwType ?? reading.powerType,
+    ...(state.dead ? { dead: true as const } : {}),
+  };
+}
+
+/** One aura as the buffs row draws it. `key` is unique within the row, so a cell keeps its link across updates. */
+export interface AuraView {
+  key: string;
+  spellId: number;
+  stacks: number;
+  /** Epoch ms; 0 is no expiry. */
+  expiresAt: number;
+  /** The aura's own negative flag, which only a private segment carries. */
+  debuff: boolean;
+}
+
+/** `AFLAG_NEGATIVE`, in the flags byte `SMSG_AURA_UPDATE` sends per aura. */
+const AURA_NEGATIVE = 0x80;
+
+/**
+ * The buffs row at `t`: in the order the server sent them, without the ones
+ * whose time ran out before the update removing them arrived. A spell on the
+ * unit twice (two casters' copies) keeps both, told apart by key.
+ */
+export function auraViews(auras: readonly TraceAura[], t: number): AuraView[] {
+  const seen = new Map<number, number>();
+  const out: AuraView[] = [];
+  for (const [spellId, stacks, expiresAt, flags] of auras) {
+    if (expiresAt > 0 && expiresAt <= t) continue;
+    const n = seen.get(spellId) ?? 0;
+    seen.set(spellId, n + 1);
+    out.push({
+      key: n === 0 ? String(spellId) : `${spellId}#${n}`,
+      spellId,
+      stacks,
+      expiresAt,
+      debuff: flags !== undefined && (flags & AURA_NEGATIVE) !== 0,
+    });
+  }
+  return out;
+}
+
+/** Whether two rows draw the same cells: the same keys with the same stacks and expiry. */
+export function sameAuras(a: readonly AuraView[], b: readonly AuraView[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((x, i) => {
+    const y = b[i]!;
+    return x.key === y.key && x.stacks === y.stacks && x.expiresAt === y.expiresAt && x.debuff === y.debuff;
+  });
+}
+
+/** An aura's time left, the client's way: seconds under a minute, then minutes, then hours; empty for no expiry. */
+export function auraLeft(expiresAt: number, t: number): string {
+  if (expiresAt <= 0) return "";
+  const s = Math.max(0, Math.ceil((expiresAt - t) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.round(m / 60)}h`;
+}
+
+/** A cast in progress, as its bar draws it. */
+export interface CastReading {
+  spellId: number;
+  /** 0–100; 0 when its start is not on the record. */
+  pct: number;
+  /** The time left, to a tenth of a second. */
+  text: string;
+}
+
+/**
+ * The cast bar at `t`, from the cast and the moment the record shows it
+ * starting (`TraceUnit.castFrom`). Nothing once its end has passed: the update
+ * clearing it can land a tick after the spell went off.
+ */
+export function castReading(cast: TraceCast | null, from: number | null, t: number): CastReading | null {
+  if (cast === null || t >= cast.endsAt) return null;
+  const pct = from === null || cast.endsAt <= from ? 0 : percentOf(t - from, cast.endsAt - from);
+  return { spellId: cast.spellId, pct, text: `${((cast.endsAt - t) / 1000).toFixed(1)}s` };
+}
+
+/** The states the frame names beside the bars. */
+export type UnitFlag = "combat" | "mounted" | "flying" | "resting" | "ghost";
+
+/** Which of them hold, in a fixed order. `ghost` is private: a public segment never says. */
+export function unitFlags(state: TraceState): UnitFlag[] {
+  const out: UnitFlag[] = [];
+  if (state.combat) out.push("combat");
+  if (state.mounted) out.push("mounted");
+  if (state.taxi) out.push("flying");
+  if (state.resting) out.push("resting");
+  if (state.ghost) out.push("ghost");
+  return out;
+}
+
+/**
+ * The target's bar: its kind and, for a creature, the entry the server gave,
+ * with its health. Null with no target — and always on the public site, which
+ * withholds it.
+ */
+export function targetReading(target: TraceTarget | null): BarReading | null {
+  if (target === null) return null;
+  const name = target.kind === "creature" && target.entry !== undefined ? `creature ${target.entry}` : target.kind;
+  if (target.hpPct === undefined) return { pct: 0, text: name, title: "target", observed: false };
+  const pct = Math.min(100, Math.max(0, target.hpPct));
+  return { pct, text: name, title: `target · ${Math.round(pct)}%`, observed: true };
 }

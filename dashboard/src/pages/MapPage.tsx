@@ -23,10 +23,18 @@
  * rather than a second cluster of controls appearing in a corner. Its
  * arithmetic is `lib/playback.ts`; this file only wires it.
  *
- * Canvas drawing sits outside Solid's reactivity on purpose. Pips interpolate
- * toward their newest reading every frame, so the draw loop is a
- * requestAnimationFrame with its own mutable state; Solid owns the sidebar, the
- * chips and the header, which change once per poll.
+ * Canvas drawing sits outside Solid's reactivity on purpose. Pips move every
+ * frame, so the draw loop is a requestAnimationFrame with its own mutable
+ * state; Solid owns the sidebar, the chips and the header, which change once
+ * per poll or a few times a second.
+ *
+ * Where a run recorded a trace, a pip is *placed* every frame rather than
+ * walked toward its newest reading: the trace player (`lib/traceplayer.ts`)
+ * says where the character was at the playhead, and the playhead is one clock
+ * for the whole map — live, a delay behind the feed sized from its cadence;
+ * in a replay, the cursor at a wall-clock speed. A run with no trace, and any
+ * moment the trace cannot answer for, draws as it did: a live pip lerps to its
+ * reading, a replayed one is time-interpolated along the 60 s track.
  *
  * That seam is now enforced rather than intended. The signals below are the
  * only writable state; everything the page displays is derived from them in
@@ -47,11 +55,44 @@ import { InventoryPanel } from "../components/Inventory";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
-import { resolvePowerType } from "../lib/unitframe";
+import {
+  type UnitFlag,
+  auraViews,
+  castReading,
+  gaugesOf,
+  resolvePowerType,
+  sameAuras,
+  targetReading,
+  unitFlags,
+} from "../lib/unitframe";
 import { NO_TILE_BASE, tileSrc } from "../lib/tiles";
 import { type LodLayer, ART_LAYER, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
-import { type Speed, keyBelongsToTarget, nextSpeed, playbackKey, prevSampleBefore, tickMs } from "../lib/playback";
+import {
+  type Speed,
+  DEFAULT_SPEED,
+  IDLE_GAP_MS,
+  TRACE_MAX_SPEED,
+  idleSpans,
+  keyBelongsToTarget,
+  nextSpeed,
+  playbackKey,
+  prevSampleBefore,
+} from "../lib/playback";
+import {
+  type ReplayAnchor,
+  type TrailRun,
+  LIVE_REACH,
+  TRAIL_MS,
+  createLiveClock,
+  createTraceStore,
+  horizonOf,
+  ingestPositions,
+  ingestTrack,
+  liveCadence,
+  replayCursorAt,
+  replayReach,
+} from "../lib/traceplayer";
 import {
   clearReplayState,
   createLeftReplay,
@@ -72,6 +113,7 @@ import {
   emptySideNote,
   fitTo,
   frameLevels,
+  headingOnScreen,
   hitTest,
   isDoubleTap,
   latticeLines,
@@ -95,15 +137,38 @@ import { useClock } from "../lib/clock";
 import {
   type RouteRun,
   classifySegments,
+  indexAt,
   nextSampleAfter,
   positionsAt,
   routeUpTo,
   runParam,
+  trackPoseAt,
   trackSpan,
 } from "../lib/replay";
 import { displayError, logError } from "../lib/errors";
 
 const POLL_MS = 5000;
+
+/**
+ * How often the per-frame playhead reaches Solid: the replay cursor while it
+ * plays (the scrubber, the clock, the route and the sidebar), and the live
+ * playhead (the sidebar's unit frame). The canvas reads the playhead itself
+ * every frame; at frame rate these would rebuild the route sixty times a
+ * second for no visible gain.
+ */
+const CURSOR_TICK_MS = 100;
+const PLAYHEAD_TICK_MS = 250;
+/** How often the page asks the trace store for the windows the playhead is about to reach. */
+const PUMP_MS = 1000;
+/** A fading trail redraws at least this often, so it fades behind a pip standing still. */
+const TRAIL_FRAME_MS = 250;
+/** The trail's opacity next to the pip; it fades to nothing `TRAIL_MS` back. */
+const TRAIL_ALPHA = 0.7;
+/** The heading mark: how far past the puck its tip reaches, and how wide its base is. */
+const HEADING_LEN = 7;
+const HEADING_HALF = 4;
+/** Below this a pose has not moved, in yards and radians: a pip standing still asks for no redraw. */
+const STILL = 1e-3;
 
 /*
  * The pip's own geometry, half again the size it was first drawn at: a logo
@@ -202,13 +267,40 @@ export default function MapPage() {
   const [playing, setPlaying] = createSignal(false);
   // Playback speed is a viewer preference, not replay state: it survives the
   // swap on purpose, so it is not among the writables `clearReplayState` resets.
-  const [speed, setSpeed] = createSignal<Speed>(1);
+  const [speed, setSpeed] = createSignal<Speed>(DEFAULT_SPEED);
   const [replayError, setReplayError] = createSignal<string | undefined>(undefined);
   const [feedList, setFeedList] = createSignal<readonly AgentPosition[]>([]);
   const [pinnedMap, setPinnedMap] = createSignal<number | null>(null);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   // The sidebar's "last update" ages between polls, so it needs its own tick.
   const ageTick = useClock();
+  /*
+   * The live playhead as the sidebar reads it, a few times a second, and the
+   * trace store's change count, so what the sidebar derives from the store
+   * re-reads it when a segment lands. Both written only by the frame loop.
+   */
+  const [playhead, setPlayhead] = createSignal<number | null>(null);
+  const [traceRev, setTraceRev] = createSignal(0);
+
+  /*
+   * The trace: one store for whichever mode the page is in (the live feed's
+   * runs, or the replayed one), and the live clock, re-made on every route
+   * swap. The delay is derived from how the client says its feed is made, so
+   * the private viewer and the public bucket run the same formula
+   * (`liveCadence`): about 12 s here, about 9 minutes there.
+   */
+  let traceChanged = true;
+  const store = createTraceStore({
+    onChange: () => {
+      traceChanged = true;
+      needsDraw = true;
+    },
+  });
+  const cadence = liveCadence(api.feedCadence, POLL_MS);
+  let liveClock = createLiveClock(cadence);
+  /** Set while a replay plays: where and when it started, at what speed. */
+  let replayAnchor: ReplayAnchor | null = null;
+  const fetchSegment = (runId: string, t0: number) => api.traceSegment(runId, t0);
 
   // The live feed keeps its 5s poll, and answers with nothing while a replay
   // owns the map — one feed reaches the renderer, never two. The envelope's
@@ -216,13 +308,25 @@ export default function MapPage() {
   // late through no fault of the agents, and the pips' stale dimming has to
   // age readings against the snapshot's own clock rather than this browser's
   // (`positionAgeMs`). The private build carries no envelope and a null clock.
+  //
+  // Every answer — a repeat included, which `poll` does not pass on — goes to
+  // the trace store and the live clock here, at receipt: the clock is
+  // anchored to the moment the data arrived, not to when a render got to it.
   const feed = poll(
     () =>
       replayId() === undefined
-        ? api.positions().then((p) => ({
-            positions: p.positions,
-            clock: p.generatedAt === undefined ? null : { generatedAt: p.generatedAt, fetchedAt: Date.now() },
-          }))
+        ? api.positions().then((p) => {
+            if (replayId() === undefined) {
+              const arrival = horizonOf(p, Date.now(), performance.now());
+              ingestPositions(store, p.positions);
+              if (arrival !== null) liveClock.arrive(arrival);
+              queueMicrotask(pumpTraces);
+            }
+            return {
+              positions: p.positions,
+              clock: p.generatedAt === undefined ? null : { generatedAt: p.generatedAt, fetchedAt: Date.now() },
+            };
+          })
         : Promise.resolve({ positions: [] as AgentPosition[], clock: null as FeedClock | null }),
     POLL_MS,
   );
@@ -249,6 +353,11 @@ export default function MapPage() {
   const span = createMemo(() => {
     const t = track();
     return t === undefined ? null : trackSpan(t.points);
+  });
+  /** The replay's idle stretches, compressed in playback (`advanceCursor`). Once per track. */
+  const idle = createMemo(() => {
+    const t = track();
+    return t === undefined ? [] : idleSpans(t.points);
   });
   /** A replay is scrubbable only where its samples span some time. */
   const scrubbable = (): boolean => {
@@ -375,10 +484,95 @@ export default function MapPage() {
     needsDraw = true;
   }
 
+  /** On the map as drawn: a traced pip's map is its pose's, which can be minutes behind its reading's. */
   const onMap = (): Pip[] => {
     const map = activeMap();
-    return [...pips.values()].filter((p) => p.data.map === map);
+    return [...pips.values()].filter((p) => p.map === map);
   };
+
+  /* --- the playhead, and the pips placed at it --- */
+
+  /** The replay's precise cursor at `performance.now()` = `p`, while it plays; the cursor signal otherwise. */
+  function replayCursor(p: number): number {
+    const sp = span();
+    if (replayAnchor === null || sp === null) return cursor();
+    return replayCursorAt(replayAnchor, p, idle(), sp.to);
+  }
+
+  /** The one clock every pip is placed by: live, the delayed playhead; in a replay, the cursor. Null live before any feed. */
+  function playheadAt(p: number): number | null {
+    return track() === undefined ? liveClock.at(p) : replayCursor(p);
+  }
+
+  /**
+   * Whether the trace places the pips. Always live; in a replay, at speeds
+   * the trace is fetched for, and whenever it is paused — a cursor standing
+   * still fetches the window under it whatever the speed.
+   */
+  const traceDrives = (): boolean => track() === undefined || !playing() || speed() <= TRACE_MAX_SPEED;
+
+  /** Put a pip at a pose; whether that moved it. */
+  function place(pip: Pip, map: number, x: number, y: number, o: number | null, flying: boolean): boolean {
+    const moved =
+      pip.map !== map ||
+      Math.abs(pip.x - x) > STILL ||
+      Math.abs(pip.y - y) > STILL ||
+      (o === null) !== (pip.o === null) ||
+      (o !== null && pip.o !== null && Math.abs(o - pip.o) > STILL) ||
+      pip.flying !== flying;
+    pip.map = map;
+    pip.x = x;
+    pip.y = y;
+    pip.o = o;
+    pip.flying = flying;
+    return moved;
+  }
+
+  /**
+   * Every pip, placed for the frame at playhead `t`: by the trace where it
+   * answers, by the coarse track in a replay where it does not, and walked
+   * toward its newest reading otherwise. Whether anything moved.
+   */
+  function placePips(t: number | null): boolean {
+    const tr = track();
+    const fine = traceDrives();
+    let moved = false;
+    const walking: Pip[] = [];
+    for (const pip of pips.values()) {
+      const pose = t !== null && fine ? store.poseAt(pip.runId, t) : null;
+      if (pose !== null) {
+        moved = place(pip, pose.map, pose.x, pose.y, pose.o, pose.flying) || moved;
+        continue;
+      }
+      const coarse = tr !== undefined && t !== null ? trackPoseAt(tr.points, segmentKinds(), t, IDLE_GAP_MS) : null;
+      if (coarse !== null) {
+        moved = place(pip, coarse.map, coarse.x, coarse.y, null, false) || moved;
+        continue;
+      }
+      pip.map = pip.data.map;
+      pip.o = null;
+      pip.flying = false;
+      walking.push(pip);
+    }
+    return stepPips(walking) || moved;
+  }
+
+  /**
+   * Ask the store for the windows the playhead is about to reach, on a timer
+   * rather than per frame: in a replay the replayed run's, live only the runs
+   * drawn on the map on screen — the public data host rate-limits these, and
+   * a character on another continent is not looked at.
+   */
+  function pumpTraces(): void {
+    const t = playheadAt(performance.now());
+    if (t === null) return;
+    const tr = track();
+    if (tr !== undefined) {
+      if (traceDrives()) store.pump(tr.runId, t, fetchSegment, replayReach(speed()));
+      return;
+    }
+    for (const pip of onMap()) store.pump(pip.runId, t, fetchSegment, LIVE_REACH);
+  }
 
   /** A cached tile, looked at without asking for it or touching its place in the LRU. */
   function peekTile(map: number, layer: LodLayer, z: number, row: number, col: number): TileEntry | undefined {
@@ -576,6 +770,28 @@ export default function MapPage() {
   }
 
   /**
+   * The route from where the cached prefix ends to the pip, for this frame.
+   * The prefix follows the cursor signal, a tenth of a second behind the
+   * frame's playhead — at 600× that is a whole sample — so the points between
+   * and the pip itself are joined on here, by the same rules: no line across a
+   * teleport or onto another map.
+   */
+  function routeToPip(tr: TrackResponse, map: number, t: number, pip: Pip | undefined): RouteRun[] {
+    const kinds = segmentKinds();
+    const runs = routeUpTo(tr.points, kinds, map, t, Math.max(0, indexAt(tr.points, cursor())));
+    const i = indexAt(tr.points, t);
+    const a = tr.points[i];
+    if (a === undefined || pip === undefined || pip.map !== map || a.map !== map) return runs;
+    const kind = kinds[i] ?? "walk";
+    if (kind === "teleport") return runs;
+    const last = runs[runs.length - 1];
+    const end = last?.points[last.points.length - 1];
+    if (last !== undefined && last.kind === kind && end?.x === a.x && end.y === a.y) last.points.push({ x: pip.x, y: pip.y });
+    else runs.push({ kind, points: [{ x: a.x, y: a.y }, { x: pip.x, y: pip.y }] });
+    return runs;
+  }
+
+  /**
    * Where each agent is trying to get to: a dashed line from the pip to the
    * destination of its current or last move, and a marker labelled with what
    * the move was aimed at.
@@ -586,11 +802,11 @@ export default function MapPage() {
    * module refused it or the walk broke down; `lib/mapintent.ts` owns that
    * reading and the staleness bounds, and this only paints.
    */
-  function drawIntents(ctx: CanvasRenderingContext2D, list: Pip[], mapId: number): boolean {
+  function drawIntents(ctx: CanvasRenderingContext2D, list: Pip[], mapId: number, cursorNow: number | null): boolean {
     // The feed's own clock, not the wall clock: a replayed intention was
     // recorded hours or months ago, and ageing it against `Date.now()` would
     // drop every one of them as stale. Live, the two are the same thing.
-    const now = replayId() === undefined ? Date.now() : cursor();
+    const now = replayId() === undefined || cursorNow === null ? Date.now() : cursorNow;
     let drew = false;
     ctx.textBaseline = "middle";
     ctx.font = "11px ui-monospace, monospace";
@@ -716,12 +932,66 @@ export default function MapPage() {
     ctx.restore();
   }
 
-  function drawPips(ctx: CanvasRenderingContext2D, list: Pip[], sel: AgentPosition | null): void {
+  /**
+   * The trail behind a traced pip: the last `TRAIL_MS` of its path, fading
+   * out behind it, in the run's colour and `FLIGHT` where it flew. A cut ends
+   * a stretch without a line (`TraceStore.trail`), so a hearth jumps cleanly.
+   */
+  function drawTrails(ctx: CanvasRenderingContext2D, list: Pip[], map: number, t: number): boolean {
+    let drew = false;
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    for (const pip of list) {
+      if (pip.o === null) continue;
+      const runs: TrailRun[] = store.trail(pip.runId, t - TRAIL_MS, t);
+      for (const run of runs) {
+        if (run.map !== map) continue;
+        ctx.strokeStyle = run.flight ? FLIGHT : colorOf(pip.runId);
+        let a = project(view, run.points[0]!.x, run.points[0]!.y);
+        for (let i = 1; i < run.points.length; i++) {
+          const p = run.points[i]!;
+          const b = project(view, p.x, p.y);
+          const age = t - (run.points[i - 1]!.t + p.t) / 2;
+          ctx.globalAlpha = TRAIL_ALPHA * Math.max(0, 1 - age / TRAIL_MS);
+          ctx.beginPath();
+          ctx.moveTo(a.sx, a.sy);
+          ctx.lineTo(b.sx, b.sy);
+          ctx.stroke();
+          a = b;
+          drew = true;
+        }
+      }
+    }
+    ctx.restore();
+    return drew;
+  }
+
+  /** A small wedge just outside the pip, pointing where the character faces. */
+  function drawHeading(ctx: CanvasRenderingContext2D, pip: Pip, sx: number, sy: number, r: number): void {
+    if (pip.o === null) return;
+    const d = headingOnScreen(view, pip.x, pip.y, pip.o);
+    if (d.dx === 0 && d.dy === 0) return;
+    const tip = r + HEADING_LEN;
+    const base = r + 1;
+    ctx.beginPath();
+    ctx.moveTo(sx + d.dx * tip, sy + d.dy * tip);
+    ctx.lineTo(sx + d.dx * base - d.dy * HEADING_HALF, sy + d.dy * base + d.dx * HEADING_HALF);
+    ctx.lineTo(sx + d.dx * base + d.dy * HEADING_HALF, sy + d.dy * base - d.dx * HEADING_HALF);
+    ctx.closePath();
+    ctx.fillStyle = pip.flying ? FLIGHT : colorOf(pip.runId);
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = theme.bg;
+    ctx.stroke();
+  }
+
+  function drawPips(ctx: CanvasRenderingContext2D, list: Pip[], sel: AgentPosition | null, cursorNow: number | null): void {
     const now = Date.now();
     // Staleness is against the feed's own clock: the cursor in a replay, where
     // every sample is hours or months old on the wall and none of them is
     // "stale" — the character was exactly there, then. Live, the two agree.
-    const ageRef = replayId() === undefined ? now : cursor();
+    const ageRef = replayId() === undefined || cursorNow === null ? now : cursorNow;
     ctx.textBaseline = "middle";
     ctx.font = "12px ui-monospace, monospace";
     for (const pip of list) {
@@ -774,6 +1044,9 @@ export default function MapPage() {
       ctx.globalAlpha = stale ? 0.4 : 1;
       ctx.fillStyle = theme.fg;
       ctx.fillText(name, p.sx + edge + 3, p.sy + 1);
+      // Over the label rather than under it: a character facing east would
+      // otherwise lose its heading to its own name.
+      drawHeading(ctx, pip, p.sx, p.sy, logo !== null ? (on ? PUCK_R_SEL : PUCK_R) : on ? DOT_R_SEL : DOT_R);
       ctx.globalAlpha = 1;
       if (pip.data.reflecting === true) {
         const ph = restPhase(now, reduceMotion);
@@ -809,17 +1082,58 @@ export default function MapPage() {
     });
 
     let raf = 0;
+    let lastCursorTick = -Infinity;
+    let lastPlayheadTick = -Infinity;
+    let lastDraw = -Infinity;
+    let trailsShown = false;
+    /*
+     * The frame's playhead out to Solid, throttled (`CURSOR_TICK_MS`,
+     * `PLAYHEAD_TICK_MS`), and the end of a replay. The only writes the loop
+     * makes to signals, and nothing the loop reads is derived from them within
+     * the frame.
+     */
+    const tickSignals = (p: number, t: number | null): void => {
+      if (traceChanged) {
+        traceChanged = false;
+        setTraceRev((n) => n + 1);
+      }
+      if (t === null) return;
+      if (track() === undefined) {
+        if (p - lastPlayheadTick >= PLAYHEAD_TICK_MS) {
+          lastPlayheadTick = p;
+          setPlayhead(t);
+        }
+        return;
+      }
+      if (replayAnchor === null) return;
+      const sp = span();
+      if (sp !== null && t >= sp.to) {
+        setPlaying(false);
+        seek(sp.to);
+        return;
+      }
+      if (p - lastCursorTick >= CURSOR_TICK_MS) {
+        lastCursorTick = p;
+        setCursor(t);
+      }
+    };
     const frame = (): void => {
+      const p = performance.now();
+      const t = playheadAt(p);
+      tickSignals(p, t);
       const ctx = canvas.getContext("2d");
       if (ctx !== null) {
+        const moving = placePips(t);
         const list = onMap();
-        const moving = stepPips(list);
         // A drifting rest glyph is the one mark that changes with nothing else
         // changing, so it has to keep the loop drawing; under reduced motion it
-        // is static and asks for nothing.
-        const resting = list.some((p) => p.data.reflecting === true);
-        if (needsDraw || moving || (resting && !reduceMotion)) {
+        // is static and asks for nothing. A trail fades behind a pip standing
+        // still, which wants a frame now and then, not sixty a second.
+        const resting = list.some((pip) => pip.data.reflecting === true);
+        const fading = trailsShown && p - lastDraw >= TRAIL_FRAME_MS;
+        if (needsDraw || moving || fading || (resting && !reduceMotion)) {
           needsDraw = false;
+          lastDraw = p;
           ctx.clearRect(0, 0, W, H);
           // There is always a map to draw: `chooseMap` falls back to the
           // default continent, so an empty feed gets tiles rather than the flat
@@ -830,16 +1144,21 @@ export default function MapPage() {
           // the prefix only when the cursor or map moves, and `drawnRoute`
           // decimates that to screen resolution only when the zoom changes.
           // Recomputing either per pointer-move frame is the one thing in this
-          // loop that scales with the length of a run.
+          // loop that scales with the length of a run. The stretch from where
+          // it ends to the pip is the frame's own, a handful of points.
           drawRoute(ctx, drawnRoute());
-          const intents = drawIntents(ctx, list, map);
+          const tr = track();
+          if (tr !== undefined && t !== null) drawRoute(ctx, routeToPip(tr, map, t, list[0]));
+          trailsShown = t !== null && traceDrives() && drawTrails(ctx, list, map, t);
+          const intents = drawIntents(ctx, list, map, t);
           if (intents || resting) drawIntentLegend(ctx, intents, resting);
-          drawPips(ctx, list, selected());
+          drawPips(ctx, list, selected(), t);
         }
       }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
+    const pumpTimer = setInterval(pumpTraces, PUMP_MS);
 
     /*
      * The transport's keyboard, on the document so it works with the canvas
@@ -874,6 +1193,7 @@ export default function MapPage() {
 
     onCleanup(() => {
       cancelAnimationFrame(raf);
+      clearInterval(pumpTimer);
       ro.disconnect();
       mq?.removeEventListener("change", readTheme);
       motionMq?.removeEventListener("change", readMotion);
@@ -912,6 +1232,12 @@ export default function MapPage() {
     pips.clear();
     route = [];
     pendingFit = true;
+    // The trace goes with the rest: neither mode's segments, clock or anchor
+    // means anything in the other.
+    store.retain([]);
+    liveClock = createLiveClock(cadence);
+    replayAnchor = null;
+    setPlayhead(null);
     /*
      * The camera goes back to the default with the rest of it. `pendingFit`
      * alone would not do it: nothing re-reads the flag until a feed arrives or
@@ -939,6 +1265,9 @@ export default function MapPage() {
       .track(id)
       .then((t) => {
         if (mine !== trackToken) return;
+        // The run's closed windows, the only ones its replay will ask for.
+        // A track from before the recorder lists none and plays coarse.
+        ingestTrack(store, t);
         setTrack(t);
         // Where this run was last left off, if it was — see cursormemory.ts.
         // The route effect above has just cleared the cursor, so this is the
@@ -951,6 +1280,16 @@ export default function MapPage() {
         logError("map replay", e);
         if (mine === trackToken) setReplayError(displayError(e));
       });
+  });
+
+  /** Each traced live run's map at the playhead, as one string, so it only "changes" when a map does. */
+  const tracedMaps = createMemo(() => {
+    traceRev();
+    const at = playhead();
+    if (at === null || track() !== undefined) return "";
+    return feedPositions()
+      .map((p) => `${p.runId}:${store.poseAt(p.runId, at)?.map ?? ""}`)
+      .join("|");
   });
 
   /*
@@ -970,7 +1309,16 @@ export default function MapPage() {
       syncPips(pips, list, true);
       setFeedList(list);
     } else {
-      const list = feedPositions();
+      // Where the trace has the playhead, the reading stands where the pip is
+      // drawn — on the public site minutes behind the newest sample — so the
+      // chips, the counts and the fit agree with the pips. Re-run when a
+      // traced run changes map, not on every playhead tick.
+      tracedMaps();
+      const at = untrack(playhead);
+      const list = feedPositions().map((p) => {
+        const pose = at === null ? null : store.poseAt(p.runId, at);
+        return pose === null ? p : { ...p, map: pose.map, x: pose.x, y: pose.y };
+      });
       feedClock = feed.latest?.clock ?? null;
       syncPips(pips, list);
       setFeedList(list);
@@ -1071,17 +1419,22 @@ export default function MapPage() {
     setCursor(ts);
     cursorMemory.remember(t.runId, ts);
   };
+  /** Stop where the playhead is now, not where the throttled cursor last said. */
+  const halt = (): void => {
+    if (replayAnchor !== null) setCursor(replayCursor(performance.now()));
+    setPlaying(false);
+  };
   const stepBack = (): void => {
     const t = track();
     if (t === undefined) return;
-    setPlaying(false);
+    halt();
     const prev = prevSampleBefore(t.points, cursor());
     if (prev !== undefined) seek(prev.ts);
   };
   const stepForward = (): void => {
     const t = track();
     if (t === undefined) return;
-    setPlaying(false);
+    halt();
     const next = nextSampleAfter(t.points, cursor());
     if (next !== undefined) seek(next.ts);
   };
@@ -1094,34 +1447,40 @@ export default function MapPage() {
   /**
    * Play from the end starts over: a transport whose play button does nothing
    * because the cursor happens to be on the last sample reads as broken.
+   * A pause is a deliberate stop, so it is where the cursor is remembered.
    */
   const togglePlay = (): void => {
     const t = track();
     if (t === undefined || !scrubbable()) return;
     if (playing()) {
-      setPlaying(false);
+      halt();
+      seek(cursor());
       return;
     }
-    if (nextSampleAfter(t.points, cursor()) === undefined) seek(span()!.from);
+    if (cursor() >= span()!.to) seek(span()!.from);
     setPlaying(true);
   };
 
   /*
-   * Playback: one recorded sample per tick, so a 6h run scrubs in ~30s at 1×.
-   * The successor is a binary search rather than a scan — at four ticks a
-   * second over a long track the scan was the page's largest repeated cost.
-   * The speed is read here so a change mid-play restarts the interval.
+   * Playback on the run's own clock at the chosen speed (`SPEEDS`), its idle
+   * gaps compressed: an anchor — where it started, when, how fast — that the
+   * frame loop reads the playhead off (`replayCursorAt`) and ends at the last
+   * sample. Never a tick that adds to the cursor, so a tab put away and
+   * brought back finds the replay where the time says. A speed change mid-play
+   * continues from the playhead at the new speed.
    */
   createEffect(() => {
-    if (!playing()) return;
-    const t = track();
-    if (t === undefined) return;
-    const timer = setInterval(() => {
-      const next = nextSampleAfter(t.points, cursor());
-      if (next === undefined) setPlaying(false);
-      else seek(next.ts);
-    }, tickMs(speed()));
-    onCleanup(() => clearInterval(timer));
+    if (!playing()) {
+      replayAnchor = null;
+      return;
+    }
+    const s = speed();
+    untrack(() => {
+      const now = performance.now();
+      const from = replayAnchor === null ? cursor() : replayCursor(now);
+      replayAnchor = { cursor: from, at: now, speed: s };
+    });
+    needsDraw = true;
   });
 
   /* --- interaction --- */
@@ -1202,6 +1561,50 @@ export default function MapPage() {
     needsDraw = true;
   };
 
+  /* --- the selected character at the playhead, for the sidebar --- */
+
+  /** The sidebar's playhead: the cursor in a replay, the live playhead's throttled copy otherwise. */
+  const sideAt = (): number | null => (track() !== undefined ? cursor() : playhead());
+  /** What the trace says about the selected run at that moment; null where it has nothing, or does not drive. */
+  const selectedTrace = createMemo(() => {
+    traceRev();
+    const p = selected();
+    const t = sideAt();
+    if (p === null || t === null || !traceDrives()) return null;
+    return { unit: store.unitAt(p.runId, t), pose: store.poseAt(p.runId, t), t };
+  });
+  /** The bars' numbers: the trace's where it answers, the reading's where it does not (`gaugesOf`). */
+  const gauges = createMemo(() => {
+    const p = selected();
+    return p === null ? null : gaugesOf(p, selectedTrace()?.unit?.state ?? null);
+  });
+  // Kept equal across ticks unless a cell actually changes, so the icons the
+  // Wowhead script decorated stay put while their time counts down.
+  const auras = createMemo(
+    () => {
+      const s = selectedTrace();
+      return s?.unit === null || s === null ? [] : auraViews(s.unit.state.auras, s.t);
+    },
+    [],
+    { equals: sameAuras },
+  );
+  const flags = createMemo<UnitFlag[]>(
+    () => {
+      const u = selectedTrace()?.unit;
+      return u === null || u === undefined ? [] : unitFlags(u.state);
+    },
+    [],
+    { equals: (a, b) => a.join() === b.join() },
+  );
+  const cast = createMemo(() => {
+    const s = selectedTrace();
+    return s === null || s.unit === null ? null : castReading(s.unit.state.cast, s.unit.castFrom, s.t);
+  });
+  const target = createMemo(() => {
+    const u = selectedTrace()?.unit;
+    return u === null || u === undefined ? null : targetReading(u.state.target);
+  });
+
   // The URL is written and the pin follows from it (the effect above), so
   // the address bar is always a link to what is on screen.
   const pickMap = (map: number): void => {
@@ -1278,18 +1681,28 @@ export default function MapPage() {
                 <ModelIcon model={p().model} />
                 <span title={p().model ?? ""}>{p().model === null ? "—" : modelDisplay(p().model!)}</span>
               </div>
-              <div class="v">
-                <UnitFrame
-                  level={p().level}
-                  xp={p().xp}
-                  nextLevelXp={p().nextLevelXp}
-                  health={p().health}
-                  maxHealth={p().maxHealth}
-                  power={p().power}
-                  maxPower={p().maxPower}
-                  powerType={resolvePowerType(p().powerType, p().class)}
-                />
-              </div>
+              <Show when={gauges()}>
+                {(g) => (
+                  <div class="v">
+                    <UnitFrame
+                      level={g().level}
+                      xp={g().xp}
+                      nextLevelXp={g().nextLevelXp}
+                      health={g().health}
+                      maxHealth={g().maxHealth}
+                      power={g().power}
+                      maxPower={g().maxPower}
+                      powerType={resolvePowerType(g().powerType, p().class)}
+                      dead={g().dead}
+                      cast={cast()}
+                      target={target()}
+                      flags={flags()}
+                      auras={auras()}
+                      now={selectedTrace()?.t}
+                    />
+                  </div>
+                )}
+              </Show>
               <div class="k">money</div>
               <div class="v mono">{fmtMoney(p().money)}</div>
               <div class="k">quests completed</div>
@@ -1307,13 +1720,14 @@ export default function MapPage() {
                   {(items) => <InventoryPanel items={items()} />}
                 </Show>
               </div>
+              {/* Where the pip is drawn: the trace's pose at the playhead when it has one. */}
               <div class="k">map</div>
-              <div class="v" title={`map ${p().map}`}>
-                {mapName(p().map)}
+              <div class="v" title={`map ${selectedTrace()?.pose?.map ?? p().map}`}>
+                {mapName(selectedTrace()?.pose?.map ?? p().map)}
               </div>
               <div class="k">position</div>
               <div class="v mono">
-                {p().x.toFixed(1)}, {p().y.toFixed(1)}
+                {(selectedTrace()?.pose?.x ?? p().x).toFixed(1)}, {(selectedTrace()?.pose?.y ?? p().y).toFixed(1)}
               </div>
               <div class="k">last update</div>
               {/*

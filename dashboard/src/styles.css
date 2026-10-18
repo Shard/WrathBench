@@ -872,6 +872,21 @@ button.update:hover { background: var(--panel); }
                display: inline-flex; align-items: center; justify-content: center;
                font-size: var(--fs-xs); font-weight: 700; color: var(--bar-text); background: var(--xp);
                border: 1px solid var(--bar-border); box-shadow: inset 0 1px 0 rgba(255,255,255,.3); }
+/*
+ * What a trace adds to the frame: the cast bar (the client's yellow), the
+ * target's health, the states as badges, and the buffs row. The squares are
+ * the inventory's `.inv-cell` over a spell link, smaller; the time left under
+ * each is `.inv-note`. A debuff is told by its border, which only a private
+ * segment carries the flag for.
+ */
+.bar.cast .bar-fill { background-color: var(--warn); }
+.cast-row .inv-cell { width: 18px; height: 18px; }
+.unit-flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.badge.combat { color: var(--err); border-color: var(--err); }
+.auras { display: flex; flex-wrap: wrap; gap: 4px 3px; margin-top: 2px; }
+.auras > span { display: inline-flex; flex-direction: column; align-items: center; min-width: 26px; }
+.auras .inv-cell { width: 26px; height: 26px; }
+.inv-cell.debuff { border-color: var(--err); }
 
 /* --- the homepage (pages/Home.tsx) --- */
 /* Prose width for the explainer; the rest of the dashboard is tables and wants the full width. */

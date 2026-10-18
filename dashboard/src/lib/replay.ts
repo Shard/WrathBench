@@ -331,13 +331,16 @@ export function routeUpTo(
   kinds: readonly SegmentKind[],
   map: number,
   ts: number,
+  from = 0,
 ): RouteRun[] {
   const out: RouteRun[] = [];
   let open: RouteRun | null = null;
   // The cursor's index is a binary search, so the walk is bounded by the route
-  // actually drawn rather than by the length of the track.
+  // actually drawn rather than by the length of the track. `from` starts it
+  // later: the map's per-frame stretch from the drawn route's end to the pip
+  // walks only those few points.
   const end = indexAt(points, ts);
-  for (let i = 0; i < end; i++) {
+  for (let i = Math.max(0, from); i < end; i++) {
     const a = points[i]!;
     const b = points[i + 1]!;
     const kind = kinds[i] ?? "walk";
@@ -352,6 +355,41 @@ export function routeUpTo(
     open.points.push({ x: b.x, y: b.y });
   }
   return out;
+}
+
+/** Where the coarse track puts the character at an instant, between its samples. */
+export interface TrackPose {
+  map: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * The character at `ts` from the 60 s track points alone: the replay's pip
+ * for a run with no trace, and for any run at a speed past the trace's.
+ *
+ * Interpolated in time between the samples either side, so the pip moves at
+ * the run's own pace instead of stepping a sample at a time — but only where
+ * a line between them is honest, which is what `kinds` already says for the
+ * route: across a walk or a flight, not across a teleport, a change of map or
+ * an idle gap (`idleGapMs`), where it holds the earlier sample until the
+ * later one. Null before the first sample.
+ */
+export function trackPoseAt(
+  points: readonly TrackPoint[],
+  kinds: readonly SegmentKind[],
+  ts: number,
+  idleGapMs: number,
+): TrackPose | null {
+  const i = indexAt(points, ts);
+  if (i < 0) return null;
+  const a = points[i]!;
+  const b = points[i + 1];
+  const hold = { map: a.map, x: a.x, y: a.y };
+  if (b === undefined || b.ts <= a.ts) return hold;
+  if (kinds[i] === "teleport" || a.map !== b.map || b.ts - a.ts > idleGapMs) return hold;
+  const f = (ts - a.ts) / (b.ts - a.ts);
+  return { map: a.map, x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
 }
 
 /**

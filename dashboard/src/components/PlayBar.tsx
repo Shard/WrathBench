@@ -267,7 +267,7 @@ export function PlayBar(props: PlayBarProps) {
                 <span class="tclock mono">{clock().total}</span>
                 <button
                   class="tbtn speed mono"
-                  title="playback speed: samples per tick"
+                  title="playback speed, against the run's own clock; idle gaps are skipped"
                   disabled={!scrubbable()}
                   onClick={() => props.onCycleSpeed()}
                 >

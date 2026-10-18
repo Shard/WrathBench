@@ -45,9 +45,10 @@ import {
  * Keep every `a.inv-link` under `root` labelled with whether Wowhead got to it.
  *
  * Attribute changes are not observed, so the class this writes cannot feed the
- * observer its own next mutation.
+ * observer its own next mutation. Exported for the unit frame's spell squares,
+ * which are the same cells over spell links.
  */
-function watchDecoration(root: HTMLElement): () => void {
+export function watchDecoration(root: HTMLElement): () => void {
   const mark = (): void => {
     for (const a of Array.from(root.querySelectorAll("a.inv-link"))) {
       a.classList.toggle("decorated", isDecorated(a));
