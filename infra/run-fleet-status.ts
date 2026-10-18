@@ -81,12 +81,14 @@ import {
   runHasImageRecord,
   pidAlive,
   readPauseSidecar,
+  readReportFacts,
   resolveStatePath,
   runProgress,
   RUNS_DIR,
   smokePath,
   STATE_PATH,
   type StateJob,
+  unarchived,
   volumeUsage,
 } from "./run-fleet-state";
 import { readMeta } from "../runner/src/trajectory";
@@ -114,7 +116,6 @@ import {
   type ModelState,
   modelStates,
   outstandingWork,
-  readRunFacts,
   rosterClass,
   type RunFact,
   schedulability,
@@ -781,9 +782,13 @@ export function printStatus(): void {
   }
   if (config !== undefined) for (const line of formatGate(state?.preflight, config.preflight)) console.log(`  ${line}`);
 
+  // Every run's facts, once (`readReportFacts`): the projection and the
+  // characters read them whole, archive included, as the tick does; the paused
+  // runs are the runs directory's alone (`unarchived`).
+  const facts = readReportFacts();
   // The projection, once: the models table reads it, and so does every job's
   // progress toward its `repeat` (archive included, as the supervisor counts).
-  const projected = config !== undefined ? modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }) : [];
+  const projected = config !== undefined ? modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: facts }) : [];
   const counted = countedFrom(projected);
 
   // (b) accounts: pinned first, then the pool, each with the job on it.
@@ -798,7 +803,7 @@ export function printStatus(): void {
   const aliveRunIds = new Set([...aliveJobs.values()].flatMap((j) => j.runIds ?? []));
   const aliveAccounts = new Set([...aliveJobs.values()].map((j) => j.account.toUpperCase()));
   const runFacts = implicitPauses({
-    runs: readRunFacts(RUNS_DIR),
+    runs: unarchived(facts),
     ...(config !== undefined ? { campaigns: config.campaigns } : {}),
     running: aliveRunIds,
     busyAccounts: aliveAccounts,
@@ -1005,7 +1010,7 @@ export function printStatus(): void {
     for (const r of resumePlan.resume) {
       occupants.set(r.account.toUpperCase(), { ref: r.job.ref, unlimited: pausesOnDrain(r.job) && config.roster[r.job.ref]?.idle === "unlimited" });
     }
-    const characters = charactersFrom(readRunFacts(RUNS_DIR, Date.now(), { includeArchived: true }), config.roster);
+    const characters = charactersFrom(facts, config.roster);
     for (const line of formatCharacters(config.roster, characters, occupants, running)) console.log(`  ${line}`);
     /*
      * How much of the schedule is left, bounded by whether anything else
@@ -1324,7 +1329,8 @@ export function formatArgvBlock(
   ];
 }
 
-export function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string): void {
+/** `facts` is the caller's `readReportFacts`, when it already made one; otherwise this reads its own. */
+export function printDryRun(config: FleetConfig, cliUntil: string | undefined, stampToday: string, facts?: readonly RunFact[]): void {
   console.log(`--- fleet plan (dry run; nothing spawned, nothing written) ---`);
   // The running supervisor, read the way --status reads it: this is the next
   // tick's plan, so what it already has in flight keeps its account and model.
@@ -1343,7 +1349,7 @@ export function printDryRun(config: FleetConfig, cliUntil: string | undefined, s
   }
   // The tick's own read: a verdict-less run is a paused one unless a live job holds it.
   const runs = implicitPauses({
-    runs: readRunFacts(RUNS_DIR, now, { includeArchived: true }),
+    runs: facts ?? readReportFacts(now),
     campaigns: config.campaigns,
     running: new Set([...jobs.values()].flatMap((j) => j.runIds ?? [])),
     busyAccounts: new Set([...jobs.values()].map((j) => j.account.toUpperCase())),

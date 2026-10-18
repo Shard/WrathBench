@@ -1342,9 +1342,13 @@ export function runFactCacheVersion(): string {
   return runFactCacheVersionMemo;
 }
 
-/** The kept facts of terminated runs at `path`, for a caller that reads every run on a timer. */
-export function runFactCache(path: string): RunFactCache {
-  return new RunFactCache(path, runFactCacheVersion());
+/**
+ * The kept facts of terminated runs at `path`, for a caller that reads every
+ * run on a timer; `readOnly` for a one-shot reader beside it, which is served
+ * the same and writes nothing.
+ */
+export function runFactCache(path: string, opts: { readOnly?: boolean } = {}): RunFactCache {
+  return new RunFactCache(path, runFactCacheVersion(), opts);
 }
 
 /** The files `readRunFact` reads, and the heartbeat it stats: a kept fact is good while none of them has moved. */
