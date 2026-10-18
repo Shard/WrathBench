@@ -51,7 +51,7 @@ function startModuleStub(): { url: string; subscribes: () => number; stop(): Pro
         });
       }
       if (url.pathname === "/action") {
-        return Response.json({ ok: true, token: "t" });
+        return Response.json({ ok: true });
       }
       return new Response("not found", { status: 404 });
     },

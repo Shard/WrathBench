@@ -30,10 +30,10 @@ function fakeFetch(script: { list: Reply[]; del: Reply[] }) {
 }
 
 const enumOf = (...chars: { name: string; guid: string; level?: number }[]) => ({
-  body: { ok: true, token: "t", enum: { count: chars.length, characters: chars } },
+  body: { ok: true, enum: { count: chars.length, characters: chars } },
 });
 const refused = { status: 409, body: { ok: false, error: "account_in_use" } };
-const deleted = (name: string) => ({ body: { ok: true, token: "t", character: name, deleted: true } });
+const deleted = (name: string) => ({ body: { ok: true, character: name, deleted: true } });
 const timeout = { status: 504, body: { ok: false, error: "timeout" } };
 
 const base = { moduleUrl: "http://module", token: "tok", account: "RUNNER", sleep: () => Promise.resolve() };

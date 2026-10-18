@@ -41,7 +41,7 @@ function startModuleStub(): { url: string; bodies: Record<string, unknown>[] } {
         return srv.upgrade(req, { data: { token: "" } }) ? undefined : new Response("no", { status: 400 });
       }
       if (url.pathname === "/session" && req.method === "POST") {
-        return Response.json({ ok: true, token: TOKEN, account: "RUNNER", character: "Fenwick", guid: 7, inWorld: true });
+        return Response.json({ ok: true, account: "RUNNER", character: "Fenwick", guid: 7, inWorld: true });
       }
       if (url.pathname === "/action") {
         return req.json().then((raw) => {
@@ -54,7 +54,7 @@ function startModuleStub(): { url: string; bodies: Record<string, unknown>[] } {
               { status: 409 },
             );
           }
-          return Response.json({ ok: true, action, token: TOKEN });
+          return Response.json({ ok: true, action });
         });
       }
       return new Response("not found", { status: 404 });
