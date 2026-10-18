@@ -482,27 +482,39 @@ export function QuestLog(props: { rows: readonly QuestRow[] }) {
 /**
  * The buttons, for the places that show a whole character.
  *
- * `null` items is a run that recorded no inventory at all, which is not an
- * empty bag; the caller decides what to say about that and this renders
- * nothing for it. The quest log is drawn only where the trace's sheet carries
- * it (`questLog`): it has no coarser reading to stand in, so where the sheet
- * cannot say there is no button rather than an empty log.
+ * `null` items is an inventory not observed, which is not an empty bag: in
+ * place of the two buttons is `missing`, the caller's word for that. The
+ * quest log is drawn only where the trace's sheet carries it (`questLog`): it
+ * has no coarser reading to stand in, so where the sheet cannot say there is
+ * no button rather than an empty log. The two are independent: a sheet that
+ * has the log and not yet the bags (the stretch after a sandbox restart, live,
+ * where the feed carries no inventory to fall back to) still has its quest
+ * button beside `missing`.
  */
-export function InventoryPanel(props: { items: readonly InvItem[] | null | undefined; quests?: readonly QuestRow[] | null }) {
+export function InventoryPanel(props: {
+  items: readonly InvItem[] | null | undefined;
+  quests?: readonly QuestRow[] | null;
+  missing?: string;
+}) {
   const [status, setStatus] = createSignal<WowheadStatus>("pending");
   onMount(() => {
     loadWowhead();
     onCleanup(onWowheadStatus(setStatus));
   });
+  const missing = (): JSX.Element => <span class="inv-note">{props.missing ?? "inventory not recorded"}</span>;
   return (
-    <Show when={props.items} fallback={<div class="inv-note">inventory not recorded</div>}>
-      {(items) => (
-        <div class="inventory">
-          <BagGrid items={items()} status={status()} />
-          <Equipment items={items()} status={status()} />
-          <Show when={props.quests}>{(rows) => <QuestLog rows={rows()} />}</Show>
-        </div>
-      )}
+    <Show when={props.items || props.quests} fallback={missing()}>
+      <div class="inventory">
+        <Show when={props.items} fallback={missing()}>
+          {(items) => (
+            <>
+              <BagGrid items={items()} status={status()} />
+              <Equipment items={items()} status={status()} />
+            </>
+          )}
+        </Show>
+        <Show when={props.quests}>{(rows) => <QuestLog rows={rows()} />}</Show>
+      </div>
     </Show>
   );
 }

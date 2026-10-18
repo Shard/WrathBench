@@ -198,7 +198,11 @@ turned in since the playhead's five-minute window began. Each row is a link to
 `quest=<id>` that asks Wowhead's script to rename it, because the trace records
 no quest title and publishes none; where the script is blocked the row reads
 `quest <id>`. Beside the link, while the quest is in progress, is each
-objective as `have / need`. A creature or gameobject objective is its counter
+objective as `have / need`, all in one cell. Where the title and that cell do
+not both fit on one line of the 320 px panel, the cell drops to its own line
+under the title, at the right, and wraps there between objectives: side by
+side, a wrapped title's last line sat beside the cell's last line, and a
+four-item quest read as one objective at full count. A creature or gameobject objective is its counter
 against the quest's count (`qreq`). A collect objective has no counter in the
 log, so it is what is carried — equipped, the worn bags themselves, the
 backpack and their contents, the keyring and the currency tokens, as the
@@ -214,7 +218,10 @@ does one whose only objective has no counter (exploration, a scripted event).
 Nothing coarser records the log, so wherever the sheet cannot say — faster
 than 60×, nothing loaded at the playhead, a segment from before the sheet, a
 restart's unobserved stretch — there is no quest button rather than an empty
-log. Rows are keyed by quest id, so the anchor the script renamed survives a
+log. The button does not wait on the bags: a sheet that has its log and not
+yet the equipment or the bags, live after a sandbox restart where the feed has
+no inventory to fall back to, reads "—" for the inventory and still has the
+quest button beside it. Rows are keyed by quest id, so the anchor the script renamed survives a
 counter change. Reputation and skills, which the sheet also carries, have no
 panel yet.
 

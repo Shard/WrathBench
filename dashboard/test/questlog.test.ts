@@ -15,6 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, type TraceDictLookup, type TraceRow } from "@viewer/trace";
 import type { TraceItemName, TraceQuestReq, TraceSegment } from "../../runner/viewer/api-types";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
+import { sheetReading } from "../src/lib/inventory";
 import { QUEST_STATUS_LABEL, objectiveText, questLog, questsInLog, type QuestRow } from "../src/lib/questlog";
 import { createTraceStore } from "../src/lib/traceplayer";
 
@@ -310,6 +311,21 @@ describe("where the sheet cannot say there is no quest log", () => {
     await store.load(RUN, W, async () => seg(walk(W, SHEET), W));
     expect(store.sheetAt(RUN, A + 1000)).toBeNull();
     expect(logAt(store, A + 1000)).toBeNull();
+  });
+
+  test("a half sheet, the log back and the bags not yet: the log still reads, and the inventory falls back on its own", () => {
+    // Live after a sandbox restart: the feed carries no inventory, so the fallback reading is null.
+    const store = tailOf(walk(W, { ...SHEET, equip: null, bags: null, inv: null }));
+    const view = store.sheetAt(RUN, W + 1000)!;
+    expect(sheetReading(view, { money: 7, items: null }).items).toBeNull();
+    const log = logAt(store, W + 1000)!;
+    expect(questsInLog(log)).toBe(6);
+    // A counter reads; what is carried is not known yet.
+    expect(log.find((q) => q.questId === 900)!.objectives).toEqual([
+      { have: 2, need: 6 },
+      { have: 0, need: 10 },
+    ]);
+    expect(log.find((q) => q.questId === 901)!.objectives).toEqual([{ have: null, need: 8, itemId: 5001, name: "Fixture Pelt" }]);
   });
 
   test("an observed empty log is a value: an empty list, and a 0 on the button", () => {
