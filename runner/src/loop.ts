@@ -6,6 +6,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { AdapterError, type ChatAdapter } from "./adapter";
 import {
   CONTEXT_POLICY,
@@ -32,6 +33,7 @@ import type { HarnessNotice, SandboxHost } from "./sandbox/host";
 import type { ContextEvents, DeathSignal, FlightSignal } from "./sandbox/ipc";
 import type { Scratchpad } from "./scratchpad";
 import type { ItemSample, Trajectory } from "./trajectory";
+import { NearbyWriter } from "./nearby";
 import { TraceWriter } from "./trace";
 import type { Watchdogs } from "./watchdogs";
 
@@ -290,6 +292,13 @@ export class ContextBuilder {
    * It never calls `sampleState` and drains none of the loop's own signals.
    */
   readonly trace: TraceWriter;
+  /**
+   * The live map's ring of nearby units (`nearby.ts`), drained by the same
+   * ticker for the same reason. It is not the record: it takes no trajectory,
+   * writes only the run directory's `nearby/`, and is removed when the ticker
+   * stops.
+   */
+  readonly nearby: NearbyWriter;
 
   constructor(private readonly o: ContextBuilderOptions) {
     this.now = o.now ?? Date.now;
@@ -299,11 +308,21 @@ export class ContextBuilder {
       sandbox: o.sandbox as Pick<SandboxHost, "traceDrain"> | { traceDrain?: undefined },
       now: this.now,
     });
+    this.nearby = new NearbyWriter({
+      runDir: typeof o.config.runsDir === "string" ? join(o.config.runsDir, o.config.runId) : null,
+      sandbox: o.sandbox as Pick<SandboxHost, "nearbyDrain"> | { nearbyDrain?: undefined },
+      now: this.now,
+    });
   }
 
   /** Drain the sandbox's trace buffer into the record (`TraceWriter.drain`). Never samples. */
   drainTrace(): Promise<void> {
     return this.trace.drain();
+  }
+
+  /** Drain the sandbox's nearby buffer into the live map's ring (`NearbyWriter.drain`). Never samples. */
+  drainNearby(): Promise<void> {
+    return this.nearby.drain();
   }
 
   /**
@@ -1011,7 +1030,9 @@ export interface StateTickerOptions {
  * state as they change, and this is the clock that carries them into the
  * record on every driver. The drain is inside the tick's promise, so the stop
  * waits for it the way it waits for the sample, and a drain never starts a
- * sandbox (`SandboxHost.traceDrain`).
+ * sandbox (`SandboxHost.traceDrain`). The nearby ring (`nearby.ts`) is drained
+ * last, the same way; it is the live map's and not the record, so the stop
+ * removes it once the last tick has settled.
  */
 export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
   let sampling: Promise<unknown> | null = null;
@@ -1021,6 +1042,8 @@ export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
       .sampleState()
       .catch(() => null)
       .then(() => o.builder.drainTrace())
+      .catch(() => null)
+      .then(() => o.builder.drainNearby())
       .catch(() => null)
       .finally(() => {
         sampling = null;
@@ -1036,6 +1059,7 @@ export function startStateTicker(o: StateTickerOptions): () => Promise<void> {
   return async () => {
     clearInterval(timer);
     await sampling?.catch(() => undefined);
+    o.builder.nearby.close();
   };
 }
 

@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { ScrubbedStream, SecretRedactor } from "../redact";
 import { overCapText, type Scratchpad } from "../scratchpad";
+import type { NearbyDrain } from "../nearby-row";
 import type { TraceDrain } from "../trace-row";
 import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, FlightSignal, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
@@ -738,6 +739,31 @@ export class SandboxHost {
     if (!res.ok) throw new Error(res.error ?? "trace_drain rpc failed");
     const v = (res.value ?? {}) as Partial<TraceDrain>;
     return { rows: Array.isArray(v.rows) ? v.rows : [], dropped: typeof v.dropped === "number" ? v.dropped : 0 };
+  }
+
+  /**
+   * Drain the nearby recorder's buffer (`nearby-recorder.ts`): the rows about
+   * the units in view since the last drain, how many its cap dropped, and how
+   * far its poll has looked. Owned by one caller, the ring writer the state
+   * ticker runs (`../nearby.ts`), and like `traceDrain` it never spawns a
+   * child: with none running it answers null.
+   */
+  async nearbyDrain(): Promise<NearbyDrain | null> {
+    if (this.proc === null) return null;
+    await this.ready;
+    if (this.proc === null) return null;
+    const id = this.nextId++;
+    const res = await this.request<{ t: "rpc_result"; id: number; ok: boolean; value?: unknown; error?: string }>(
+      { t: "rpc", id, method: "nearby_drain", params: {} },
+      this.opts.pingGraceMs,
+    );
+    if (!res.ok) throw new Error(res.error ?? "nearby_drain rpc failed");
+    const v = (res.value ?? {}) as Partial<NearbyDrain>;
+    return {
+      rows: Array.isArray(v.rows) ? v.rows : [],
+      dropped: typeof v.dropped === "number" ? v.dropped : 0,
+      through: typeof v.through === "number" ? v.through : 0,
+    };
   }
 
   /** JSON-safe snapshot of the child's StateCache. */

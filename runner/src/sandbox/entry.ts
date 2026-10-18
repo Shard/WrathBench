@@ -67,6 +67,7 @@ import { WrathClient } from "@wrathbench/sdk";
 import { compileSnippet } from "./rewrite";
 import { toJsonSafe } from "../jsonsafe";
 import { CONTEXT_POLICY, foldUiOpenWindows, PLAYER_FLAGS_GHOST } from "../context";
+import { NearbyRecorder } from "./nearby-recorder";
 import { TraceRecorder } from "./trace-recorder";
 import type { ActionBatch, ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, FlightSignal, HostToChild, HostcallResult, LogEntry, MoveIntentNote } from "./ipc";
 
@@ -1308,6 +1309,16 @@ client.events.onAny((event) => {
 const traceRecorder = new TraceRecorder({ state: client.state, events: client.events });
 traceRecorder.start();
 
+/**
+ * The units around the character, for the live map's ring and nothing else
+ * (`nearby-recorder.ts`; the row contract is `../nearby-row.ts`). The same
+ * posture as the trace recorder above: record only, unreachable from a
+ * snippet, a reader of the cache that sends nothing. Its opening key is this
+ * child's, so a restart restates the scene.
+ */
+const nearbyRecorder = new NearbyRecorder({ state: client.state, events: client.events });
+nearbyRecorder.start();
+
 type StreamEventOf = ReturnType<typeof client.events.recent>[number];
 
 function eventSummary(e: StreamEventOf): EventSummary {
@@ -1459,7 +1470,9 @@ function handle(msg: HostToChild | HostcallResult): void {
                   ? drainHints()
                   : msg.method === "trace_drain"
                     ? traceRecorder.drain()
-                    : stateSnapshot();
+                    : msg.method === "nearby_drain"
+                      ? nearbyRecorder.drain()
+                      : stateSnapshot();
         send({ t: "rpc_result", id: msg.id, ok: true, value });
       } catch (err) {
         send({ t: "rpc_result", id: msg.id, ok: false, error: String(err) });

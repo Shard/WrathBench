@@ -397,6 +397,14 @@ Every episode starts with a freshly created character at level 1 in its starting
   a window (the chart's
   `worldserver.logRetention`, default three days; docs/RUNBOOK.md "Server log
   retention"), not part of the evidence record below.
+- Not persisted: the units around a live character, for the live map. The
+  sandbox child records them off the same cache
+  (`runner/src/sandbox/nearby-recorder.ts`, contract
+  `runner/src/nearby-row.ts`) and the state ticker appends them to a ring of
+  one-minute files under the run's `nearby/` (`runner/src/nearby.ts`): about
+  15 minutes, unlinked as they age, deleted on every pause, stop and exit and
+  swept at start, never in `run.sqlite`, `trace.jsonl`, `trajectory.jsonl` or
+  the store. It is a delay line for a reader a few seconds behind, not a record.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.
 - A single-node ClickHouse holding a **derived, disposable** copy of all of it,
   filled by `collector/`.
