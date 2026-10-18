@@ -306,7 +306,7 @@ describe("the public boundary", () => {
     expect(JSON.stringify(projectNearby(priv()))).not.toContain('"7"');
   });
 
-  test("a unit is withheld while it targets another player, and the layer is empty while the character is down", () => {
+  test("a unit is withheld while it targets another player, and the layer stays lit while the character is down", () => {
     const d = decodeNearby(projectNearby(priv()));
     const ids = (t: number) => nearbyAt(d, t).map((u) => u.id).sort();
     expect(ids(T0 + 1000)).toContain(WOLF);
@@ -315,11 +315,10 @@ describe("the public boundary", () => {
     const back = nearbyAt(d, T0 + 6500).find((u) => u.id === WOLF)!;
     expect(back.x).toBeCloseTo(30, 5);
     expect(back.s.tgs).toBe(true);
-    expect(ids(T0 + 9000)).toEqual([]);
-    expect(ids(T0 + 11_000)).toEqual([]);
-    // Up again: the vendor is where its spline left it while the layer was dark.
-    const vendor = nearbyAt(d, T0 + 12_500).find((u) => u.id === VENDOR)!;
-    expect(vendor.y).toBeCloseTo(9, 5);
+    // Deaths are public (operator, 2026-10-18): down, the units stay, and the
+    // vendor walks its spline in view.
+    expect(ids(T0 + 9000)).toEqual([VENDOR, WOLF, guid(42, 7)].sort());
+    expect(nearbyAt(d, T0 + 11_000).find((u) => u.id === VENDOR)!.y).toBeCloseTo(9, 5);
     expect(ids(T0 + 12_500)).toEqual([VENDOR, WOLF, guid(42, 7)].sort());
   });
 

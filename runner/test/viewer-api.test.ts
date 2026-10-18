@@ -1487,11 +1487,11 @@ describe("comparability, /api/results and /api/run/<id>/track", () => {
       { kind: "release", ts: 1700 },
       { kind: "hearth", ts: 1800 },
     ]);
-    // Public mode withholds the release with the rest of the deaths.
+    // Public mode ships the release with the rest of the deaths (operator, 2026-10-18).
     const pub = (await (await api(runs, true)(new Request(`http://x/api/run/${RUN_ID}/track`))).json()) as {
       travel: { kind: string }[];
     };
-    expect(pub.travel.map((m) => m.kind)).toEqual(["taxi", "taxi_landed", "hearth"]);
+    expect(pub.travel.map((m) => m.kind)).toEqual(["taxi", "taxi_landed", "release", "hearth"]);
   });
 
   test("the new routes leak no secret either", async () => {

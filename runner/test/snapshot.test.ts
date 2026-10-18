@@ -937,7 +937,8 @@ describe("trace segments in a pass", () => {
       const body = JSON.parse(a.body) as TraceSegment & { attribution: string };
       expect(body.attribution).toBe(PUBLIC_ATTRIBUTION);
       expect(body.v).toBe(1);
-      for (const withheld of ['"dead"', '"ghost"', '"target"', '"player"']) expect(a.body).not.toContain(withheld);
+      // Deaths are public (operator, 2026-10-18); the target never is.
+      for (const withheld of ['"target"', '"player"']) expect(a.body).not.toContain(withheld);
     }
     // live.json's recent windows are segments this pass wrote, and the tail rides inline.
     const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body).positions as PositionsResponse;
@@ -945,7 +946,8 @@ describe("trace segments in a pass", () => {
     expect(pos.trace!.recent.length).toBeGreaterThan(0);
     for (const t0 of pos.trace!.recent) expect(segmentPaths(out, LIVE_RUN)).toContain(`v1/run/${LIVE_RUN}/trace/${t0}.json`);
     expect(pos.trace!.tail).not.toBeNull();
-    expect(JSON.stringify(pos.trace!.tail)).not.toContain('"dead"');
+    // The tail crosses the same projector: the target stays behind.
+    expect(JSON.stringify(pos.trace!.tail)).not.toContain('"target"');
   });
 
   test("runs from before the recorder publish no segment and no trace field, so nothing of theirs is re-keyed", async () => {

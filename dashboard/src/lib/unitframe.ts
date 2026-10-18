@@ -187,15 +187,16 @@ export type GaugeSource = Partial<Omit<Gauges, "dead">>;
  *
  * The gauges come by pair, never mixed — a trace's hp over a 60 s sample's
  * max is a bar no observation drew — and while the trace answers, its null is
- * kept rather than filled from the reading: on the public site a gauge is
- * withheld while the character is down (`projectTraceSegment`), and a health
- * bar filled in from the sample beside it would draw the death the
- * projection exists to keep off the page. Level and xp are never withheld,
- * so those fall back field by field.
+ * kept rather than filled from the reading: it is a gauge the trace did not
+ * observe (or, in a public segment published before deaths were public, one
+ * withheld while the character was down), and a bar filled in from the sample
+ * beside it would draw what no observation saw. Level and xp fall back field
+ * by field.
  *
- * `dead` is passed only when the trace says so. A public segment carries no
- * `dead` at all and the decoder reads that as `false`, which `isDead` would
- * take as a positive "alive" over the hp inference.
+ * `dead` is passed only when the trace says so. A segment published before
+ * deaths were public carries no `dead` at all and the decoder reads that as
+ * `false`, which `isDead` would take as a positive "alive" over the hp
+ * inference.
  */
 export function gaugesOf(reading: GaugeSource, state: TraceState | null): Gauges {
   if (state === null) {
@@ -303,7 +304,7 @@ export function castReading(cast: TraceCast | null, from: number | null, t: numb
 /** The states the frame names beside the bars. */
 export type UnitFlag = "combat" | "mounted" | "flying" | "resting" | "ghost";
 
-/** Which of them hold, in a fixed order. `ghost` is private: a public segment never says. */
+/** Which of them hold, in a fixed order. */
 export function unitFlags(state: TraceState): UnitFlag[] {
   const out: UnitFlag[] = [];
   if (state.combat) out.push("combat");

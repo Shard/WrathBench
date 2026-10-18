@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { CONTEXT_MS, SEG_MS, encodeSegment, tailStart, type TraceRow } from "@viewer/trace";
-import type { AgentPosition, TraceSegment, TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
+import type { AgentPosition, TraceAura, TraceSegment, TrackPoint, TrackResponse } from "../../runner/viewer/api-types";
 import {
   CATCHUP_RATE,
   DRAIN_MS,
@@ -34,7 +34,7 @@ import {
 } from "../src/lib/traceplayer";
 import { IDLE_GAP_MS, IDLE_PLAY_MS, SPEEDS, advanceCursor, idleSpans, nextSpeed } from "../src/lib/playback";
 import { classifySegments, trackPoseAt } from "../src/lib/replay";
-import { gaugesOf, targetReading, unitFlags } from "../src/lib/unitframe";
+import { auraViews, gaugesOf, healthReading, targetReading, unitFlags } from "../src/lib/unitframe";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 
 const RUN = "run-a";
@@ -392,31 +392,39 @@ describe("replaying a short or unfinished run", () => {
 });
 
 describe("a public segment", () => {
-  test("a death withheld by the projection stays withheld through the player and the frame", () => {
+  test("a death published by the projection reaches the player and the frame, and the target does not", () => {
+    // Killed, released (Ghost on), and raised by a spirit healer (Resurrection Sickness on).
+    const GHOST: TraceAura = [8326, 1, 0];
+    const SICK: TraceAura = [15007, 1, W + 640_000];
     const rows = [
       key(W, 0, { target: { kind: "player", hpPct: 30 } }),
       pos(W, 0),
       stateRow(W + 2_000, { hp: 0, dead: true }),
-      stateRow(W + 20_000, { ghost: true, dead: false, hp: 1 }),
-      stateRow(W + 40_000, { ghost: false, hp: 50 }),
+      stateRow(W + 20_000, { ghost: true, dead: false, hp: 1, auras: [GHOST] }),
+      stateRow(W + 40_000, { ghost: false, hp: 50, auras: [SICK] }),
     ];
     const store = createTraceStore();
     store.setTail(RUN, projectTraceSegment(seg(rows, W)));
-    // The 60 s sample beside it says the character is at 0: the frame must not use it.
     const reading = { level: 5, xp: 10, nextLevelXp: 400, health: 0, maxHealth: 100, power: 0, maxPower: 50, powerType: 0 };
     const alive = store.unitAt(RUN, W + 1_000)!.state;
     expect(alive.hp).toBe(100);
     expect(targetReading(alive.target)).toBeNull();
-    for (const t of [W + 5_000, W + 25_000]) {
-      const down = store.unitAt(RUN, t)!.state;
-      expect(down.hp).toBeNull();
-      const g = gaugesOf(reading, down);
-      expect(g.health).toBeNull();
-      expect(g.maxHealth).toBeNull();
-      expect("dead" in g).toBe(false);
-      expect(unitFlags(down)).not.toContain("ghost");
-    }
-    expect(store.unitAt(RUN, W + 45_000)!.state.hp).toBe(50);
+    // Dead at the corpse: the bar at 0 of its max, and the frame says dead.
+    const dead = store.unitAt(RUN, W + 5_000)!.state;
+    const g = gaugesOf(reading, dead);
+    expect(g).toMatchObject({ health: 0, maxHealth: 100, dead: true });
+    expect(healthReading(g.health, g.maxHealth, g.dead)).toMatchObject({ dead: true, title: "dead" });
+    // The corpse run: the ghost badge and the Ghost aura, as the private frame shows them.
+    const ghost = store.unitAt(RUN, W + 25_000)!.state;
+    expect(unitFlags(ghost)).toContain("ghost");
+    expect(gaugesOf(reading, ghost)).toMatchObject({ health: 1, maxHealth: 100 });
+    expect(auraViews(ghost.auras, W + 25_000).map((a) => a.spellId)).toEqual([GHOST[0]]);
+    // Raised by the spirit healer: up, and Resurrection Sickness in the buffs row.
+    const up = store.unitAt(RUN, W + 45_000)!.state;
+    expect(up.hp).toBe(50);
+    expect(unitFlags(up)).not.toContain("ghost");
+    expect(auraViews(up.auras, W + 45_000).map((a) => a.spellId)).toEqual([SICK[0]]);
+    expect(targetReading(up.target)).toBeNull();
   });
 });
 

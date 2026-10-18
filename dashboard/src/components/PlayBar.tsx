@@ -41,18 +41,13 @@ import { replayHref, replayHrefFor } from "../lib/mapstate";
 import { colorOf, pipName } from "../lib/mapview";
 import { type Span, type Speed, playbackClock, prevSampleBefore, progressOf } from "../lib/playback";
 import { nextSampleAfter, trackSpan } from "../lib/replay";
-import { SNAPSHOT_MODE } from "../api/client";
 import { InfoHint } from "./InfoHint";
 
-/**
- * What the replayed route's colours and gaps mean (`classifySegments`). The
- * public build is never sent a graveyard release — releases are withheld with
- * the deaths — so it does not promise a gap there.
- */
-export function routeNote(publicBuild: boolean): string {
+/** What the replayed route's colours and gaps mean (`classifySegments`), the same on both builds. */
+export function routeNote(): string {
   return (
     "The route: the run's own colour where it moved under its own power, blue on a flight path, " +
-    `and no line across a hearthstone, ${publicBuild ? "" : "a release to a graveyard, "}a portal or a change of map.`
+    "and no line across a hearthstone, a release to a graveyard, a portal or a change of map."
   );
 }
 
@@ -160,7 +155,7 @@ export function PlayBar(props: PlayBarProps) {
                 <span class="dim">
                   · {t().points.length} {t().points.length === 1 ? "position" : "positions"}
                 </span>
-                <InfoHint label="about the route" text={routeNote(SNAPSHOT_MODE)} />
+                <InfoHint label="about the route" text={routeNote()} />
                 <Show when={t().character}>
                   {(s) => (
                     <span class="attempt-steps">

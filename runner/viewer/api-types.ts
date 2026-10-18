@@ -1059,10 +1059,9 @@ export interface CharacterAttempt {
   expectedCost: CostFigure | null;
   /**
    * Deaths on this attempt. **Optional, and absent from the public
-   * projection**: `RunDetailResponse.deaths` is withheld there whole (corpse
-   * positions), so the character withholds the count with it rather than opening
-   * a second door onto the same fact. Absent is "this viewer does not answer",
-   * which is not the claim `null` makes.
+   * projection**, where no page reads it (the totals carry the character's).
+   * Absent is "this viewer does not answer", which is not the claim `null`
+   * makes.
    */
   deaths?: number | null;
   flights: number | null;
@@ -1142,7 +1141,7 @@ export interface CharacterTotals {
   money: number | null;
   achievements: AchievementFacts | null;
   /** Tallies: counts summed, marks concatenated in attempt order. */
-  /** Withheld in public mode, as `RunDetailResponse.deaths` is; see `CharacterAttempt.deaths`. */
+  /** Publicly the count alone, which is what the character card prints. */
   deaths?: DeathFacts | null;
   taxi: TaxiFacts | null;
   spells: SpellFacts | null;
@@ -2151,8 +2150,7 @@ export interface TrackResponse extends SnapshotEnvelope {
    * The flight, hearth and graveyard marks, oldest first (`TrackTravelMark`).
    * Optional: an older viewer and a snapshot published before this carry
    * none, and the replay then breaks its line on map changes, the moves'
-   * typed teleports and its speed backstop alone. The public projection drops
-   * `release` with the rest of the deaths.
+   * typed teleports and its speed backstop alone.
    */
   travel?: TrackTravelMark[];
   /**

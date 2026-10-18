@@ -45,10 +45,9 @@
  *   its `resumeAfter` and with a fixed `why`, and an errored `claude_result`
  *   ships without its text, which is the CLI's limit message.
  * - Minimap tiles are Blizzard bytes and never leave through a snapshot.
- * - From the trace (`projectTraceSegment`): the `dead` and `ghost` flags and
- *   the gauges while the character is down, because deaths are withheld whole,
- *   and the `target`, which names another unit — another player, with its
- *   health, is another player's whereabouts. A cut never says why.
+ * - From the trace (`projectTraceSegment`): the `target`, which names another
+ *   unit — another player, with its health, is another player's whereabouts.
+ *   A cut never says why. Deaths are public (operator, 2026-10-18).
  * The rule when a field is arguable: withhold.
  */
 
@@ -67,6 +66,8 @@ import type {
   ComparabilityView,
   CostFigure,
   CostView,
+  DeathFacts,
+  DeathSite,
   EntriesResponse,
   EntrySummary,
   EpisodeIdView,
@@ -328,8 +329,7 @@ function projectTaxi(t: TaxiFacts): TaxiFacts {
  * Spells, talents and trades. Numbers only — spell and talent ids,
  * counts, turn indices and the timestamps the run's own rows already carry.
  * Nothing here can name anything: the record never held a spell name, a talent
- * name or a trading partner, which is why these can be projected whole while
- * `deaths` (corpse positions) is not projected at all.
+ * name or a trading partner, which is why these can be projected whole.
  */
 function projectSpells(f: SpellFacts): SpellFacts {
   return {
@@ -338,6 +338,21 @@ function projectSpells(f: SpellFacts): SpellFacts {
     ids: [...f.ids],
     marks: f.marks.map((m) => ({ id: m.id, ts: m.ts, turn: m.turn })),
   };
+}
+
+/**
+ * A run's deaths as the run page's milestones row prints them: the three
+ * counts and each death's turn. Deaths are public (operator, 2026-10-18); a
+ * site's position, zone and the `first`/`last` ends are left out because no
+ * page reads them.
+ */
+function projectDeaths(f: DeathFacts): DeathFacts {
+  return lean<DeathFacts>({
+    deaths: f.deaths,
+    releases: f.releases,
+    resurrects: f.resurrects,
+    sites: f.sites.map((s) => lean<DeathSite>({ turn: s.turn })),
+  });
 }
 
 function projectTalents(f: TalentFacts): TalentFacts {
@@ -1129,10 +1144,9 @@ export function projectFleet(f: FleetResponse): PublicFleetResponse {
  * Everything here is already public elsewhere: run ids and the lineage between
  * them ride on every listing (`projectRunRow.continuedFrom`), and the figures
  * are the same levels, playtime, tokens and cost `projectResultRun` ships per
- * attempt. Two things are withheld, and both for a reason this file already
- * states: a pause reason becomes the fixed token, and the death figures are
- * dropped whole — `RunDetailResponse.deaths` is not projected at all (corpse
- * positions), so the character does not open a second door onto the same fact.
+ * attempt. A pause reason becomes the fixed token, for the reason this file
+ * already states, and the attempt's death count is not emitted: no page reads
+ * it, and the totals carry the character's.
  */
 function projectCharacterAttempt(a: CharacterAttempt): CharacterAttempt {
   return {
@@ -1176,6 +1190,9 @@ function projectCharacterTotals(t: CharacterTotals): CharacterTotals {
     level: t.level,
     money: t.money,
     achievements: t.achievements === null ? null : projectAchievements(t.achievements),
+    // The count the character card prints. Absent stays absent: an older
+    // body has none, and a null in its place would be a different claim.
+    ...(t.deaths !== undefined ? { deaths: t.deaths === null ? null : lean<DeathFacts>({ deaths: t.deaths.deaths }) } : {}),
     taxi: t.taxi === null ? null : projectTaxi(t.taxi),
     spells: t.spells === null || t.spells === undefined ? null : projectSpells(t.spells),
     talents: t.talents === null || t.talents === undefined ? null : projectTalents(t.talents),
@@ -1238,6 +1255,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
       ? { achievements: d.achievements === null ? null : projectAchievements(d.achievements) }
       : {}),
     ...(d.taxi !== undefined ? { taxi: d.taxi === null ? null : projectTaxi(d.taxi) } : {}),
+    ...(d.deaths !== undefined ? { deaths: d.deaths === null ? null : projectDeaths(d.deaths) } : {}),
     ...(d.spells !== undefined ? { spells: d.spells === null ? null : projectSpells(d.spells) } : {}),
     ...(d.talents !== undefined ? { talents: d.talents === null ? null : projectTalents(d.talents) } : {}),
     ...(d.trades !== undefined ? { trades: d.trades === null ? null : projectTrades(d.trades) } : {}),
@@ -1251,7 +1269,7 @@ export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
 }
 
 function publicTravel(m: TrackTravelMark): boolean {
-  return m.kind === "taxi" || m.kind === "taxi_landed" || m.kind === "hearth";
+  return m.kind === "taxi" || m.kind === "taxi_landed" || m.kind === "hearth" || m.kind === "release";
 }
 
 function projectTravel(m: TrackTravelMark): TrackTravelMark {
@@ -1290,11 +1308,10 @@ export function projectTrack(t: TrackResponse): TrackResponse {
     ),
     // As on the live feed.
     moves: (t.moves ?? []).map(projectMove),
-    // Flights and hearths, as kinds and timestamps: the flight count already
-    // ships in the safe core and the hearthstone dispatch in the action log.
-    // A graveyard release does not — it is one mark per death, and deaths are
-    // withheld whole (`projectRunDetail`), so it would be a second door onto
-    // the same fact. Absent stays absent: it is what an older track says.
+    // Flights, hearths and graveyard releases, as kinds and timestamps: the
+    // flight count already ships in the safe core, the hearthstone dispatch in
+    // the action log, and the releases with the deaths (`projectRunDetail`).
+    // Absent stays absent: it is what an older track says.
     ...(t.travel === undefined ? {} : { travel: t.travel.filter(publicTravel).map(projectTravel) }),
     // The character's neighbours: run ids and two counters, every one of them
     // already public on `runs.json` and on the run page's attempt strip. Field
@@ -1320,9 +1337,10 @@ export function projectTrack(t: TrackResponse): TrackResponse {
 
 /**
  * The trace state keys a public segment carries, in the codec's order.
- * Withheld, by not being listed: `dead` and `ghost` (deaths are withheld whole,
- * `projectRunDetail`), and `target` (another unit's identity, and through a
- * player target another player's whereabouts).
+ * Withheld, by not being listed: `target` (another unit's identity, and
+ * through a player target another player's whereabouts). Deaths are public
+ * (operator, 2026-10-18): `dead`, `ghost`, the gauges at a corpse and the
+ * Ghost aura all pass.
  */
 const PUBLIC_TRACE_KEYS = [
   "hp",
@@ -1337,22 +1355,20 @@ const PUBLIC_TRACE_KEYS = [
   "combat",
   "mounted",
   "taxi",
+  "dead",
+  "ghost",
   "resting",
   "cast",
 ] as const satisfies readonly TraceStateKey[];
 const PUBLIC_TRACE_KEY_SET: ReadonlySet<string> = new Set(PUBLIC_TRACE_KEYS);
 
 /**
- * The gauges, withheld while the character is down. A health bar reading 0,
- * then blank, then full again at a graveyard is a death drawn second by
- * second, so publicly the gauges read null (unobserved) from the moment the
- * character is dead, a ghost, or at 0 health, and come back at their current
- * values when it is none of those.
+ * The keys a keyframe carries only where the segment it came from did. A
+ * segment published before deaths were public has neither, it is immutable,
+ * and its own re-projection must give it back as it is; the decoder reads the
+ * missing key as false, which is what the older projection said.
  */
-const TRACE_GAUGES = ["hp", "hpMax", "pw", "pwMax", "pwType"] as const;
-const TRACE_GAUGE_SET: ReadonlySet<string> = new Set(TRACE_GAUGES);
-
-const isDown = (s: TraceState): boolean => s.dead || s.ghost || s.hp === 0;
+const TRACE_KEYS_IF_PRESENT: ReadonlySet<string> = new Set(["dead", "ghost"]);
 
 /** One public key's value, rebuilt: an aura's flags and a cast's extras do not travel. */
 function publicTraceValue(key: TraceStateKey, v: unknown): unknown {
@@ -1378,39 +1394,35 @@ const tupleList = <T extends number[]>(a: unknown, width: number): T[] =>
  * One trace segment (`runner/viewer/trace.ts`), field by field.
  *
  * Positions, cuts and flights pass as numbers — a cut says that the character
- * did not travel there and never why, so a graveyard port reads like a
- * hearth. The state crosses `PUBLIC_TRACE_KEYS` and the down rule above: the
- * private keyframe and events are replayed in order, so the public stream
- * withholds exactly what the rule says at every moment and no more, and an
- * event that would only repeat what the public stream already says is dropped.
- * A fixed point on its own output, like every projector here.
+ * did not travel there and never why. The state crosses `PUBLIC_TRACE_KEYS`:
+ * the private keyframe and events are replayed in order, and an event that
+ * would only repeat what the public stream already says (an aura change that
+ * only moved its flags) is dropped. A fixed point on its own output, like
+ * every projector here.
  */
 export function projectTraceSegment(seg: TraceSegment): TraceSegment {
-  const priv = stateOf(seg.k?.s);
-  let down = isDown(priv);
+  const raw = seg.k?.s;
+  const priv = stateOf(raw);
+  const has = (key: string): boolean => raw !== null && typeof raw === "object" && Object.hasOwn(raw, key);
   const s: Partial<TraceState> = {};
   const said = new Map<string, string>();
   for (const key of PUBLIC_TRACE_KEYS) {
-    const v = TRACE_GAUGE_SET.has(key) && down ? null : publicTraceValue(key, priv[key]);
+    if (TRACE_KEYS_IF_PRESENT.has(key) && !has(key)) continue;
+    const v = publicTraceValue(key, priv[key]);
     (s as Record<string, unknown>)[key] = v;
     said.set(key, JSON.stringify(v));
   }
   const ev: TraceEventWire[] = [];
-  const say = (ms: number, key: string, v: unknown): void => {
-    const j = JSON.stringify(v);
-    if (said.get(key) === j) return;
-    said.set(key, j);
-    ev.push([ms, key, v]);
-  };
   for (const e of Array.isArray(seg.ev) ? seg.ev : []) {
     if (!Array.isArray(e) || typeof e[0] !== "number" || !Number.isFinite(e[0]) || !isStateKey(e[1])) continue;
+    if (!PUBLIC_TRACE_KEY_SET.has(e[1])) continue;
     const v = sanitizeStateValue(e[1], e[2]);
     if (v === undefined) continue;
-    (priv as unknown as Record<string, unknown>)[e[1]] = v;
-    const nowDown = isDown(priv);
-    if (PUBLIC_TRACE_KEY_SET.has(e[1]) && !(TRACE_GAUGE_SET.has(e[1]) && nowDown)) say(e[0], e[1], publicTraceValue(e[1], v));
-    if (nowDown !== down) for (const g of TRACE_GAUGES) say(e[0], g, nowDown ? null : priv[g]);
-    down = nowDown;
+    const pub = publicTraceValue(e[1], v);
+    const j = JSON.stringify(pub);
+    if (said.get(e[1]) === j) continue;
+    said.set(e[1], j);
+    ev.push([e[0], e[1], pub]);
   }
   const k = seg.k ?? { p: null, s: {} };
   const p = numTuple<[number, number, number, number, number]>(k.p, 5);
@@ -1526,8 +1538,8 @@ function nearbyUnitPublic(u: PrivateUnit, self: NearbySelfView, units: ReadonlyM
  * The private rows filtered to what the public may see, moment by moment:
  * each unit enters when the rules first let it and leaves the instant they
  * stop (an `out`, then an `in` with its whole public state and current motion
- * when they let it again), and while the character is down the layer is empty
- * — a ghost's view gives the death away (spirit healers show only to the dead).
+ * when they let it again). The character being down changes nothing here:
+ * deaths are public (operator, 2026-10-18), spirit healers and all.
  */
 function publicNearbyRows(rows: readonly NearbyRingRow[]): NearbyRingRow[] {
   const out: NearbyRingRow[] = [];
@@ -1536,7 +1548,7 @@ function publicNearbyRows(rows: readonly NearbyRingRow[]): NearbyRingRow[] {
   const shown = new Set<string>();
   const visible = (id: string): boolean => {
     const u = units.get(id);
-    return u !== undefined && !self.down && nearbyUnitPublic(u, self, units);
+    return u !== undefined && nearbyUnitPublic(u, self, units);
   };
   const pub = (id: string, u: PrivateUnit): NearbyRingUnit => ({ id, ty: u.ty, s: publicNearbyState(u.s), m: u.m });
   const publicSelf = (): NearbySelfView => ({ ...emptySelf(), map: self.map });
@@ -1640,8 +1652,8 @@ function publicNearbyRows(rows: readonly NearbyRingRow[]): NearbyRingRow[] {
  * the operator's decisions of 2026-10-18: creatures only — no other player,
  * no unit another player owns, charms or drives, and none while it targets
  * another player or their pet — with the state cut to `PUBLIC_NEARBY_KEYS`
- * (so the target only as "targets this character"), and nothing at all while
- * the character is down. The self keeps only its map. Creature guids and
+ * (so the target only as "targets this character"). The self keeps only its
+ * map. Creature guids and
  * entries stay: they are wire ids every client in range receives, and they
  * are what lets one NPC two characters see draw once.
  *
