@@ -19,13 +19,42 @@
  * subscription (`events.on`), never a consuming queue the model's event
  * batches also draw from.
  *
+ * The character sheet (`trace-sheet.ts`) is the one part that is not cheap
+ * to read at level 43 — sixty-odd carried items, 25 quest slots, 128 skill
+ * slots — so it is read only after a packet that can change it (an update or
+ * destroy, a faction packet), at most once every `TRACE_SHEET_MIN_GAP_MS`,
+ * and its changes go in a 'state' row of their own. It stays unobserved
+ * (`null`) until this process has folded the character's own create block:
+ * a restarted child reattaches to its session with a `WB_SESSION_STATE` that
+ * restates the position and the level and nothing else, and the cache's
+ * empty bags then mean "not seen", not "empty". Reputation waits the same
+ * way for the login's `SMSG_INITIALIZE_FACTIONS`. Item names and quest
+ * requirements go to the host once per id (`TraceDict`), and turn-ins
+ * (`qdone`) as the server's receipts arrive.
+ *
  * Bounded: the buffer drops its oldest rows past `cap` and counts the drops,
  * which the host logs. A child whose host stopped draining for an hour loses
  * the oldest hour's rows, not its memory.
  */
 
 import type { AuraEntry, EventStream, Observed, StateCache, StreamEvent, WorldPosition } from "@wrathbench/sdk";
-import { emptyTraceState, type TraceDrain, type TraceFlight, type TraceRow, type TraceState, type TraceTargetKind } from "../trace-row";
+import {
+  emptyTraceSheet,
+  emptyTraceState,
+  SHEET_KEY_LEN,
+  SHEET_KEYS,
+  sheetPatch,
+  type TraceDict,
+  type TraceDrain,
+  type TraceFlight,
+  type TraceRepRow,
+  type TraceRow,
+  type TraceSheet,
+  type TraceSheetDelta,
+  type TraceState,
+  type TraceTargetKind,
+} from "../trace-row";
+import { itemEntry, questReq, readSheet, readVisibleReputation, sheetItemIds, type SheetReading } from "./trace-sheet";
 
 /** The two `unitFlags` bits the SDK does not decode and the trace reads itself. */
 export const UNIT_FLAG_IN_COMBAT = 0x00080000;
@@ -39,10 +68,16 @@ export const TRACE_POS_MIN_GAP_MS = 250;
 export const TRACE_POS_MIN_YARDS = 0.05;
 /** Rows held for the host before the oldest are dropped. */
 export const TRACE_BUFFER_CAP = 4096;
+/** The character sheet is read at most this often, and only after a packet that can change it. */
+export const TRACE_SHEET_MIN_GAP_MS = 1_000;
+
+/** The packets after which the sheet is read again: what moves a field, an item, a container or a faction. */
+const SHEET_OPCODES = ["SMSG_UPDATE_OBJECT", "SMSG_DESTROY_OBJECT"] as const;
+const FACTION_OPCODES = ["SMSG_INITIALIZE_FACTIONS", "SMSG_SET_FACTION_STANDING", "SMSG_SET_FACTION_VISIBLE"] as const;
 
 /** The slice of the SDK client the recorder reads. Structural, so a test can hand it a cache it fed itself. */
 export interface TraceSource {
-  state: Pick<StateCache, "self" | "aurasOf" | "nearby">;
+  state: Pick<StateCache, "self" | "aurasOf" | "nearby" | "items" | "quests" | "questCompletions" | "reputation">;
   events: Pick<EventStream, "on">;
 }
 
@@ -50,6 +85,17 @@ export interface TraceRecorderOptions extends TraceSource {
   now?: () => number;
   pollMs?: number;
   cap?: number;
+  sheetGapMs?: number;
+}
+
+/** Whether an update carries a create block for the character itself. */
+function createsSelf(data: unknown, self: string | undefined): boolean {
+  const objects = (data as { objects?: unknown } | null)?.objects;
+  if (!Array.isArray(objects)) return false;
+  for (const b of objects as { update?: unknown; self?: unknown; guid?: unknown }[]) {
+    if (b?.update === "create" && (b.self === true || (self !== undefined && b.guid === self))) return true;
+  }
+  return false;
 }
 
 /** The own spline as `SMSG_MONSTER_MOVE` last gave it, until something takes the character off it. */
@@ -134,12 +180,33 @@ export class TraceRecorder {
   /** `taxiFlight` as the last poll read it, to see its rising edge. */
   private lastTaxi = false;
 
+  private readonly sheetGapMs: number;
+  /** The sheet as last emitted; the sheet poll diffs against it. */
+  private lastSheet: TraceSheet = emptyTraceSheet();
+  /** This process has folded the character's own create block / the login's faction list. */
+  private selfCreated = false;
+  private factionsSeen = false;
+  /** A packet that can change the sheet, or the reputation, arrived since the last read. */
+  private sheetDirty = true;
+  private repDirty = true;
+  private lastSheetRead = -Infinity;
+  /** The visible reputation as last read, kept between faction packets. */
+  private rep: { rows: TraceRepRow[]; ts: number } | null = null;
+  /** How many of the cache's turn-ins are already a `qdone`. */
+  private turnIns = 0;
+  /** Ids already named to the host, ids waiting on their query answer, and the names not yet drained. */
+  private readonly named = { items: new Set<number>(), quests: new Set<number>() };
+  private readonly waiting = { items: new Set<number>(), quests: new Set<number>() };
+  private namesDirty = false;
+  private dict: Required<TraceDict> = { items: [], quests: [] };
+
   constructor(o: TraceRecorderOptions) {
     this.state = o.state;
     this.events = o.events;
     this.now = o.now ?? Date.now;
     this.pollMs = o.pollMs ?? TRACE_POLL_MS;
     this.cap = o.cap ?? TRACE_BUFFER_CAP;
+    this.sheetGapMs = o.sheetGapMs ?? TRACE_SHEET_MIN_GAP_MS;
   }
 
   /**
@@ -149,6 +216,8 @@ export class TraceRecorder {
    */
   start(): void {
     this.hook();
+    // Turn-ins the cache already held were someone else's to record.
+    this.turnIns = this.state.questCompletions.length;
     this.emitKey(this.now());
     this.timer = setInterval(() => this.poll(), this.pollMs);
     this.timer.unref?.();
@@ -160,12 +229,15 @@ export class TraceRecorder {
     for (const off of this.unsubscribe.splice(0)) off();
   }
 
-  /** Hand the host everything latched since the last drain, and how many rows the cap dropped. */
+  /** Hand the host everything latched since the last drain, how many rows the cap dropped, and the ids first named. */
   drain(): TraceDrain {
     const rows = this.rows.splice(0, this.rows.length);
     const dropped = this.dropped;
     this.dropped = 0;
-    return { rows, dropped };
+    const { items, quests } = this.dict;
+    if (items.length === 0 && quests.length === 0) return { rows, dropped };
+    this.dict = { items: [], quests: [] };
+    return { rows, dropped, dict: { ...(items.length > 0 ? { items } : {}), ...(quests.length > 0 ? { quests } : {}) } };
   }
 
   private push(row: TraceRow): void {
@@ -249,6 +321,75 @@ export class TraceRecorder {
     });
     // Sent only to the casting client, so it is always ours.
     on("SMSG_CAST_FAILED", castEnded);
+    // The sheet: read again after what can change it. The character's own
+    // create block is what makes its slots, log and skills observed.
+    for (const op of SHEET_OPCODES) {
+      on(op, (e) => {
+        this.sheetDirty = true;
+        if (!this.selfCreated && op === "SMSG_UPDATE_OBJECT" && createsSelf(e.data, this.state.self.guid)) this.selfCreated = true;
+      });
+    }
+    for (const op of FACTION_OPCODES) {
+      on(op, () => {
+        if (op === "SMSG_INITIALIZE_FACTIONS") this.factionsSeen = true;
+        this.repDirty = true;
+      });
+    }
+    on("SMSG_ITEM_QUERY_SINGLE_RESPONSE", () => {
+      this.namesDirty = true;
+    });
+    on("SMSG_QUEST_QUERY_RESPONSE", () => {
+      this.namesDirty = true;
+    });
+  }
+
+  /**
+   * The sheet as the cache holds it now, with the newest `ts` behind each
+   * key: `null` for whatever this process has not observed. Reputation is
+   * re-read only after a faction packet.
+   */
+  private readSheetNow(): SheetReading {
+    const reading: SheetReading = this.selfCreated ? readSheet(this.state) : { sheet: emptyTraceSheet(), ts: {} };
+    if (this.factionsSeen) {
+      if (this.repDirty || this.rep === null) this.rep = readVisibleReputation(this.state);
+      reading.sheet.rep = this.rep.rows;
+      if (this.rep.ts > 0) reading.ts.rep = this.rep.ts;
+    }
+    this.sheetDirty = false;
+    this.repDirty = false;
+    this.lastSheetRead = this.now();
+    this.nameIds(reading.sheet);
+    return reading;
+  }
+
+  /** Queue the dictionary entries a sheet's ids need, each once; an id whose query is not answered yet waits for it. */
+  private nameIds(sheet: TraceSheet): void {
+    for (const id of sheetItemIds(sheet)) if (!this.named.items.has(id)) this.waiting.items.add(id);
+    for (const r of sheet.quests ?? []) if (!this.named.quests.has(r[1])) this.waiting.quests.add(r[1]);
+    this.resolveNames();
+  }
+
+  private resolveNames(): void {
+    for (const id of this.waiting.quests) {
+      const req = questReq(this.state, id);
+      if (req === undefined) continue;
+      this.waiting.quests.delete(id);
+      this.named.quests.add(id);
+      this.dict.quests.push([id, req]);
+      // The items it asks for are named too when the cache knows them, so a
+      // reader can say what is collected before any is carried.
+      for (let i = 4; i < req.length; i++) {
+        const itemId = (req[i] as [number, number])[0];
+        if (!this.named.items.has(itemId)) this.waiting.items.add(itemId);
+      }
+    }
+    for (const id of this.waiting.items) {
+      const entry = itemEntry(this.state, id);
+      if (entry === undefined) continue;
+      this.waiting.items.delete(id);
+      this.named.items.add(id);
+      this.dict.items.push(entry);
+    }
   }
 
   /** The full state as the cache holds it now, with the newest `ts` behind each key. */
@@ -348,6 +489,7 @@ export class TraceRecorder {
   /** A full-state row at the position last known, and a fresh baseline for the deltas after it. */
   private emitKey(ts: number): void {
     const { state } = this.read();
+    const { sheet } = this.readSheetNow();
     const pos = this.state.self.position?.value ?? this.lastPos;
     this.push({
       ts,
@@ -357,9 +499,10 @@ export class TraceRecorder {
       y: pos?.y ?? null,
       z: pos?.z ?? null,
       o: pos?.o ?? null,
-      data: state,
+      data: { ...state, ...sheet },
     });
     this.last = state;
+    this.lastSheet = sheet;
     this.lastTaxi = state.taxi;
     this.jumpPending = true;
     this.heldPos = undefined;
@@ -393,6 +536,48 @@ export class TraceRecorder {
   poll(): void {
     this.pollPosition();
     this.pollState();
+    this.pollSheet();
+  }
+
+  /**
+   * The sheet's changes since it was last emitted, as one 'state' row of
+   * patches stamped with the newest observation behind them, and the
+   * turn-ins since the last poll. The sheet is read only when a packet has
+   * dirtied it and the last read is `sheetGapMs` old.
+   */
+  private pollSheet(): void {
+    const delta: TraceSheetDelta = {};
+    let newest = 0;
+    // Turn-ins: the server's receipt is the observation itself, so it needs
+    // no create block. The list only grows within a process.
+    const done = this.state.questCompletions;
+    if (done.length > this.turnIns) {
+      const fresh = done.slice(this.turnIns);
+      delta.qdone = fresh.map((c) => c.questId);
+      for (const c of fresh) if (c.ts > newest) newest = c.ts;
+    }
+    this.turnIns = done.length;
+    if ((this.sheetDirty || this.repDirty) && this.now() - this.lastSheetRead >= this.sheetGapMs) {
+      const { sheet, ts } = this.readSheetNow();
+      const last = this.lastSheet;
+      if (sheet.money !== last.money) {
+        delta.money = sheet.money;
+        if ((ts.money ?? 0) > newest) newest = ts.money ?? 0;
+      }
+      for (const key of SHEET_KEYS) {
+        if (key === "money") continue;
+        const patch = sheetPatch(last[key], sheet[key], SHEET_KEY_LEN[key]);
+        if (patch === undefined) continue;
+        delta[key] = patch;
+        if ((ts[key] ?? 0) > newest) newest = ts[key] ?? 0;
+      }
+      this.lastSheet = sheet;
+    } else if (this.namesDirty) {
+      this.resolveNames();
+    }
+    this.namesDirty = false;
+    if (Object.keys(delta).length === 0) return;
+    this.push({ ts: newest > 0 ? newest : this.now(), kind: "state", data: delta });
   }
 
   private pollPosition(): void {

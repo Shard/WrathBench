@@ -33,7 +33,7 @@ import { platformOf } from "./platform";
 import { SecretRedactor } from "./redact";
 import type { ActionNote } from "./sandbox/ipc";
 import type { SubscriptionUsage } from "./subscription-usage";
-import type { TraceRow } from "./trace-row";
+import type { TraceDict, TraceRow } from "./trace-row";
 
 export interface StateLine {
   level?: number | undefined;
@@ -527,6 +527,17 @@ CREATE TABLE IF NOT EXISTS trace (
   data TEXT
 );
 CREATE INDEX IF NOT EXISTS trace_run_ts ON trace(run_id, ts);
+-- What the trace's ids are shown by (trace-row.ts TraceDict), once per id per
+-- run: kind 'item' is [quality, name], the item template's name; kind 'quest'
+-- is the quest's required counts, numbers only. A segment carries the entries
+-- its rows reference, so it decodes alone.
+CREATE TABLE IF NOT EXISTS trace_dict (
+  run_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  id INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (run_id, kind, id)
+);
 `;
 
 /**
@@ -633,20 +644,39 @@ export class Trajectory {
    * trajectory line it does not know into the store, and a 1 Hz position feed
    * is tens of thousands of rows per character per day. Not to a file of its
    * own either: a `trace.jsonl` beside the table held the same rows and had no
-   * reader. One transaction per drain; the rows hold numbers and booleans
-   * only, so there is nothing to scrub.
+   * reader. One transaction per drain. The rows hold numbers and booleans
+   * only; the drain's dictionary (`TraceDict`) holds item names, the one
+   * string the trace keeps, and they cross `scrub` like every other string
+   * this writes. An entry already held is replaced, so a quality learned
+   * late is kept.
    */
-  recordTrace(runId: string, rows: readonly TraceRow[]): void {
-    if (rows.length === 0) return;
+  recordTrace(runId: string, rows: readonly TraceRow[], dict?: TraceDict): void {
+    const items = dict?.items ?? [];
+    const quests = dict?.quests ?? [];
+    if (rows.length === 0 && items.length === 0 && quests.length === 0) return;
     const insert = this.db.query(
       `INSERT INTO trace (run_id, ts, kind, map, x, y, z, o, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const name = this.db.query(`INSERT OR REPLACE INTO trace_dict (run_id, kind, id, data) VALUES (?, ?, ?, ?)`);
     this.db.transaction(() => {
       for (const r of rows) {
         const data = r.data === undefined || r.data === null ? null : JSON.stringify(r.data);
         insert.run(runId, r.ts, r.kind, r.map ?? null, r.x ?? null, r.y ?? null, r.z ?? null, r.o ?? null, data);
       }
+      for (const [id, quality, text] of items) name.run(runId, "item", id, JSON.stringify([quality, this.scrub(text)]));
+      for (const [id, req] of quests) name.run(runId, "quest", id, JSON.stringify(req));
     })();
+  }
+
+  /** The run's trace dictionary, `data` parsed. For tests and in-process readers. */
+  traceDict(runId: string): { kind: string; id: number; data: unknown }[] {
+    return (
+      this.db.query(`SELECT kind, id, data FROM trace_dict WHERE run_id = ? ORDER BY kind, id`).all(runId) as {
+        kind: string;
+        id: number;
+        data: string;
+      }[]
+    ).map((r) => ({ kind: r.kind, id: r.id, data: JSON.parse(r.data) as unknown }));
   }
 
   /** Every trace row of a run, oldest first; `data` parsed. For tests and in-process readers. */

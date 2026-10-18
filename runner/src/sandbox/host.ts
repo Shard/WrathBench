@@ -762,8 +762,9 @@ export class SandboxHost {
 
   /**
    * Drain the trace recorder's buffer (`trace-recorder.ts`): the position and
-   * state rows the child latched since the last drain, and how many its cap
-   * dropped. Destructive like `deathSignals`, and owned by one caller — the
+   * state rows the child latched since the last drain, how many its cap
+   * dropped, and the item and quest ids it named for the first time
+   * (`TraceDict`). Destructive like `deathSignals`, and owned by one caller — the
    * trace writer the state ticker runs (`trace.ts`).
    *
    * Never spawns a child, unlike `stateSnapshot`: with none running there is
@@ -782,7 +783,9 @@ export class SandboxHost {
     );
     if (!res.ok) throw new Error(res.error ?? "trace_drain rpc failed");
     const v = (res.value ?? {}) as Partial<TraceDrain>;
-    return { rows: Array.isArray(v.rows) ? v.rows : [], dropped: typeof v.dropped === "number" ? v.dropped : 0 };
+    const drained: TraceDrain = { rows: Array.isArray(v.rows) ? v.rows : [], dropped: typeof v.dropped === "number" ? v.dropped : 0 };
+    if (v.dict !== null && typeof v.dict === "object") drained.dict = v.dict;
+    return drained;
   }
 
   /**

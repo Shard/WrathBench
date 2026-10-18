@@ -232,10 +232,12 @@ describe("the trace end to end", () => {
 
     // Every recorded state, at its moment: fold the stored rows as the writer
     // does and ask the codec at each row's time.
+    // The unit keys only: the sheet rides the same rows and `sheetAt` reads it.
+    const unit = (d: object): Partial<WriterState> => Object.fromEntries(Object.entries(d).filter(([k]) => (STATE_KEYS as readonly string[]).includes(k)));
     let fold = writerEmptyState();
     for (const r of stored) {
-      if (r.kind === "key") fold = { ...writerEmptyState(), ...(r.data as WriterState) };
-      else if (r.kind === "state") fold = { ...fold, ...(r.data as Partial<WriterState>) };
+      if (r.kind === "key") fold = { ...writerEmptyState(), ...unit(r.data as object) };
+      else if (r.kind === "state") fold = { ...fold, ...unit(r.data as object) };
       else continue;
       expect(stateAt(segOf(r.ts), r.ts)).toEqual(fold);
     }
