@@ -9,7 +9,7 @@
  * asserted here against a whole-file read, which is the definition of right.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -177,6 +177,63 @@ describe("countRecordsCached (resumable)", () => {
     // And it keeps resuming from there.
     appendFileSync(p, rec(10));
     expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(2);
+  });
+
+  /**
+   * A file that is not the one the scanner read must be counted whole. Each
+   * replacement below is laid out so that resuming at the old file's offset —
+   * all a size check could do — gives a different answer from the whole file.
+   */
+  describe("a file that is not the one the scanner read", () => {
+    const rec = (ts: number): string => `${JSON.stringify({ t: "response", ts })}\n`;
+    /** A line of exactly `n` bytes, newline included, that is no response. */
+    const pad = (n: number): string => {
+      const head = JSON.stringify({ t: "meta", pad: "" });
+      return `${head.slice(0, -2)}${"x".repeat(n - head.length - 1)}"}\n`;
+    };
+
+    test("replaced by a rename, larger than the one read: counted whole, not folded on from the old offset", () => {
+      const p = join(dir, "replaced-larger.jsonl");
+      const cache: CountCache = new Map();
+      const a = rec(1) + rec(2);
+      writeFileSync(p, a);
+      expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(2);
+      // Its first |a| bytes hold no response; resuming there would say 2 + 1.
+      const b = pad(a.length) + rec(3);
+      expect(Buffer.byteLength(pad(a.length))).toBe(a.length);
+      writeFileSync(`${p}.new`, b);
+      renameSync(`${p}.new`, p);
+      expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(1);
+      expect(countRecords(p, KINDS)!.get("response")).toBe(1);
+    });
+
+    test("replaced at the same size: a new inode is counted whole, not served the old answer", () => {
+      const p = join(dir, "replaced-same.jsonl");
+      const cache: CountCache = new Map();
+      const a = rec(1) + rec(2);
+      writeFileSync(p, a);
+      expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(2);
+      writeFileSync(`${p}.new`, pad(a.length));
+      renameSync(`${p}.new`, p);
+      expect(statSync(p).size).toBe(Buffer.byteLength(a));
+      expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(0);
+    });
+
+    test("rotated: moved away and started again at the path, then grown past the old size", () => {
+      const p = join(dir, "rotated.jsonl");
+      const cache: CountCache = new Map();
+      const a = rec(1) + rec(2) + rec(3);
+      writeFileSync(p, a);
+      expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(3);
+      renameSync(p, `${p}.1`);
+      // The new file passes the old size before the next poll; the old offset lands mid-line.
+      writeFileSync(p, pad(a.length + 7) + rec(4) + rec(5));
+      expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(2);
+      // And it resumes incrementally on the new file from there.
+      appendFileSync(p, rec(6));
+      expect(countRecordsCached(cache, p, KINDS)!.get("response")).toBe(3);
+      expect(countRecords(p, KINDS)!.get("response")).toBe(3);
+    });
   });
 
   test("a cache entry is not reused for a different set of kinds", () => {

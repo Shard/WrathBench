@@ -1130,8 +1130,15 @@ export function tallyRecords(path: string, kinds: readonly string[], opts: { pau
   return new RecordCountScanner(path, kinds, opts).countOnce();
 }
 
+/** A kept scanner, and the file it was built on: the inode and device it read. */
+export interface CountEntry {
+  scanner: RecordCountScanner;
+  ino: number;
+  dev: number;
+}
+
 /** Scanners a caller keeps between polls, keyed by trajectory path. */
-export type CountCache = Map<string, RecordCountScanner>;
+export type CountCache = Map<string, CountEntry>;
 
 /** The resumable form of `countRecords` (`tallyRecordsCached`). */
 export function countRecordsCached(cache: CountCache, path: string, kinds: readonly string[]): Map<string, number> | null {
@@ -1145,9 +1152,18 @@ export function countRecordsCached(cache: CountCache, path: string, kinds: reado
  * The truncation check lives here rather than inside `scan`, because a scanner
  * that has read past the end of its own file cannot answer for it at all: the
  * only safe response is a new scanner, and only the holder of the cache can
- * make one. Same for a caller that changes what it asks for — the counts a
+ * make one. Same for a file that is not the one the scanner read — rotated,
+ * or replaced by a rename at any size, which a size check alone would fold on
+ * from the old file's offset — so the entry carries the inode and device it
+ * was built on. Same for a caller that changes what it asks for: the counts a
  * scanner carries are the counts of the kinds it was built with, and it folds
  * a streak only if it was built to.
+ *
+ * The file is checked before it is read, not after. A replacement landing
+ * between that stat and the scanner's own open is one poll's answer; every
+ * caller polls again, and the replaced file's size or mtime has moved, so its
+ * next read starts fresh here. The supervisor re-reads every tick; the
+ * collector re-derives whenever a trajectory's (size, mtime) moves.
  */
 export function tallyRecordsCached(
   cache: CountCache,
@@ -1155,27 +1171,29 @@ export function tallyRecordsCached(
   kinds: readonly string[],
   opts: { pauseStreak?: boolean } = {},
 ): RecordTally | null {
-  let size: number;
+  let st: { size: number; ino: number; dev: number };
   try {
-    size = statSync(path).size;
+    st = statSync(path);
   } catch {
     cache.delete(path);
     return null;
   }
-  let scanner = cache.get(path);
+  let entry = cache.get(path);
   const usable =
-    scanner !== undefined &&
-    size >= scanner.size &&
-    scanner.pauseStreak === (opts.pauseStreak === true) &&
-    scanner.kinds.length === kinds.length &&
-    scanner.kinds.every((k, i) => k === kinds[i]);
+    entry !== undefined &&
+    entry.ino === st.ino &&
+    entry.dev === st.dev &&
+    st.size >= entry.scanner.size &&
+    entry.scanner.pauseStreak === (opts.pauseStreak === true) &&
+    entry.scanner.kinds.length === kinds.length &&
+    entry.scanner.kinds.every((k, i) => k === kinds[i]);
   if (!usable) {
-    scanner = new RecordCountScanner(path, kinds, opts);
-    cache.set(path, scanner);
+    entry = { scanner: new RecordCountScanner(path, kinds, opts), ino: st.ino, dev: st.dev };
+    cache.set(path, entry);
   }
   // `scanAsWhole`, not `scan`: the cache is an optimisation, never a different
   // answer, and a whole-file read counts a final record with no newline.
-  return scanner!.scanAsWhole();
+  return entry!.scanner.scanAsWhole();
 }
 
 /**

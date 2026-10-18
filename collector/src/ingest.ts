@@ -27,7 +27,7 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { openRunDb } from "../../runner/src/rundb";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
-import { readRunFact } from "../../runner/src/models";
+import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
 import type { Batcher } from "./batch";
 import type { OffsetStore } from "./offsets";
@@ -74,6 +74,21 @@ export interface IngestResult {
  */
 type ScannerCache = Map<string, RunTotalsScanner>;
 
+/**
+ * How long a run's record-count scanner outlives the last read of its
+ * trajectory. `readRunFact` counts the trajectory's records on every
+ * re-derivation; with a kept scanner (`CountCache`) a poll folds only the bytes
+ * appended since the last one (a 417 MB live freeplay trajectory was counted
+ * whole every five seconds). Unlike the totals scanners it is kept across a
+ * quiet pass — a model can think for minutes with nothing written, and
+ * dropping it there would count the whole file again on the next write — and
+ * dropped once the run has been quiet this long, when its run is no longer
+ * listed, or when its trajectory moves (archived). A paused run that resumes
+ * later than this is counted whole once, then incrementally again; so is
+ * every live run after a restart. The same answers either way.
+ */
+export const COUNT_SCANNER_QUIET_MS = 10 * 60_000;
+
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
@@ -96,12 +111,39 @@ function sigOf(path: string): { sig: string; size: number; mtime: number } | nul
 
 export class Ingester {
   private readonly scanners: ScannerCache = new Map();
+  /** `readRunFact`'s record-count scanners, by trajectory path. */
+  private readonly counts: CountCache = new Map();
+  /** Each run's trajectory path in `counts`, and when it was last read there. */
+  private readonly countRuns = new Map<string, { path: string; readAt: number }>();
 
   constructor(private readonly deps: IngestDeps) {}
 
-  /** Drop a finished run's scanner; called when a pass finds nothing new. */
+  /**
+   * A pass found nothing new in this run: drop its totals scanner, and its
+   * count scanner once the run has been quiet for `COUNT_SCANNER_QUIET_MS`.
+   */
   forget(runId: string): void {
     this.scanners.delete(runId);
+    const c = this.countRuns.get(runId);
+    if (c !== undefined && this.deps.now() - c.readAt >= COUNT_SCANNER_QUIET_MS) this.dropCounts(runId);
+  }
+
+  /** Drop the count scanners of runs a pass no longer lists: deleted, or gone from the tree. */
+  retainListed(listed: ReadonlySet<string>): void {
+    for (const runId of [...this.countRuns.keys()]) if (!listed.has(runId)) this.dropCounts(runId);
+  }
+
+  /** The count scanner a run's next re-derivation would fold into, if any: for a test or a probe. */
+  countScannerOf(runId: string): RecordCountScanner | undefined {
+    const c = this.countRuns.get(runId);
+    return c === undefined ? undefined : this.counts.get(c.path)?.scanner;
+  }
+
+  private dropCounts(runId: string): void {
+    const c = this.countRuns.get(runId);
+    if (c === undefined) return;
+    this.counts.delete(c.path);
+    this.countRuns.delete(runId);
   }
 
   async ingestRun(runId: string, dir: string, archived: boolean): Promise<IngestResult> {
@@ -431,11 +473,16 @@ export class Ingester {
      * verdict after the viewer stops opening run directories.
      */
     let fact: unknown = null;
+    // One count scanner per run, under the path it reads: a run that moved
+    // (archived) leaves its old one behind, and starts a new one there.
+    const kept = this.countRuns.get(runId);
+    if (kept !== undefined && kept.path !== path) this.counts.delete(kept.path);
+    this.countRuns.set(runId, { path, readAt: this.deps.now() });
     try {
       // `readRunFact` joins (parent, runId) itself, and an archived run lives
       // one level down — so the parent of THIS directory is what it is told,
       // never the configured runs dir.
-      fact = readRunFact(dirname(dir), runId, this.deps.now());
+      fact = readRunFact(dirname(dir), runId, this.deps.now(), { counts: this.counts });
     } catch {
       fact = null;
     }
