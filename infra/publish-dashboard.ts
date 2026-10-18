@@ -18,6 +18,7 @@
  *   WRATHBENCH_PUBLISH_STATE        default data/publish/state.json
  *   WRATHBENCH_PUBLISH_INTERVAL_MS  default 60000
  *   WRATHBENCH_PUBLISH_BATCH        default 8; runs projected per upload flush
+ *   WRATHBENCH_PUBLISH_FULL_RENDER_MS  default 21600000 (6 h); the longest a cold run goes unrendered
  *   WRATHBENCH_MODULE_URL           optional; names the worldserver build on info.json
  *   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT
  *                                   Bun.S3Client's own names, autoloaded from .env
@@ -33,7 +34,7 @@
 import { existsSync } from "node:fs";
 import { S3Client } from "bun";
 import type { ResultRun } from "../runner/viewer/api-types";
-import { createRenderer } from "../runner/viewer/snapshot";
+import { createRenderer, FULL_RENDER_MS } from "../runner/viewer/snapshot";
 import { HOME_EPISODE } from "../dashboard/src/lib/homeladder";
 import { OG_KEY, renderOgPng } from "./og-render";
 import { ROBOTS_KEY, ROBOTS_TXT } from "./robots";
@@ -56,6 +57,12 @@ const INTERVAL_MS = Number(Bun.env.WRATHBENCH_PUBLISH_INTERVAL_MS ?? "60000");
  * leaves readers idle, and a larger one only holds more at once.
  */
 const BATCH = Number(Bun.env.WRATHBENCH_PUBLISH_BATCH ?? "8");
+/**
+ * How long a cold run may go unrendered (`FULL_RENDER_MS`, six hours): the
+ * bound on how stale an input the skip cannot see leaves its objects.
+ */
+const FULL_RENDER_ENV = Bun.env.WRATHBENCH_PUBLISH_FULL_RENDER_MS;
+const FULL_RENDER = FULL_RENDER_ENV === undefined ? FULL_RENDER_MS : Number(FULL_RENDER_ENV);
 const MODULE_URL = Bun.env.WRATHBENCH_MODULE_URL;
 
 function fail(message: string): never {
@@ -76,6 +83,9 @@ if (!Number.isFinite(INTERVAL_MS) || INTERVAL_MS < 1000) {
 }
 if (!Number.isInteger(BATCH) || BATCH < 1) {
   fail(`WRATHBENCH_PUBLISH_BATCH=${Bun.env.WRATHBENCH_PUBLISH_BATCH} is not a whole number of runs (1 or more)`);
+}
+if (!Number.isFinite(FULL_RENDER) || FULL_RENDER < 0) {
+  fail(`WRATHBENCH_PUBLISH_FULL_RENDER_MS=${FULL_RENDER_ENV} is not a duration in ms (0 renders every run every pass)`);
 }
 // S3Client also honours AWS_*-style names; this check covers the documented
 // contract, so a half-filled .env fails here with the runbook's names rather
@@ -104,6 +114,7 @@ const store: ObjectStore = {
 // `ApiHandle.release`.
 const renderer = createRenderer({
   runsDir: RUNS_DIR,
+  fullRenderMs: FULL_RENDER,
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
 });
 

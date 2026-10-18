@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   createRenderer,
+  FULL_RENDER_MS,
   hash12,
   IMMUTABLE_CACHE,
   MUTABLE_CACHE,
@@ -1110,6 +1111,43 @@ describe("cold runs", () => {
     const moved = await render(444, undefined, holding(keys));
     expect(rendered()).toBe(true);
     expect(rowOf(moved, DEAD_RUN).snapshot.scratchpad).not.toBe(rowOf(first, DEAD_RUN).snapshot.scratchpad);
+  });
+
+  test("a cold run is rendered in full at least every six hours, whatever its fingerprint says", async () => {
+    expect(FULL_RENDER_MS).toBe(6 * 60 * 60_000);
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const start = Date.now();
+    let wall = start;
+    const render = createRenderer({ runsDir: runs, api: handle, clock: () => wall });
+    const rendered = (): boolean => asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`));
+    const first = await render(111, undefined, holding(new Set()));
+    const keys = keysOf(first);
+    // Skipped while the last full render is under six hours old…
+    for (const later of [60 * 60_000, FULL_RENDER_MS - 1]) {
+      asked.length = 0;
+      wall = start + later;
+      await render(222, undefined, holding(keys));
+      expect(`${later}: ${rendered()}`).toBe(`${later}: false`);
+    }
+    // …rendered in full at six, landing on the same keys…
+    asked.length = 0;
+    wall = start + FULL_RENDER_MS;
+    const full = await render(333, undefined, holding(keys));
+    expect(rendered()).toBe(true);
+    expect(rowOf(full, DEAD_RUN).snapshot).toEqual(rowOf(first, DEAD_RUN).snapshot);
+    // …and skipped again for six hours after that one.
+    asked.length = 0;
+    wall += 60_000;
+    await render(444, undefined, holding(keys));
+    expect(rendered()).toBe(false);
+    // The bound is a renderer option: at 0, every pass renders everything.
+    const always = counting(runs);
+    const eager = createRenderer({ runsDir: runs, api: always.handle, fullRenderMs: 0 });
+    const once = await eager(111, undefined, holding(new Set()));
+    always.asked.length = 0;
+    await eager(222, undefined, holding(keysOf(once)));
+    expect(always.asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(true);
   });
 
   test("a run that is not cold is rendered every pass", async () => {

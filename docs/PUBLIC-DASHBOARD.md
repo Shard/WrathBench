@@ -90,9 +90,21 @@ its row at the keys it rendered to last time, when three things hold: its
 files' sizes and mtimes are unchanged, its listing row is unchanged, and so are
 the rows of every attempt in its character. The bucket must also still hold
 every object the row names, by the engine's record. A failed PUT or a pruned
-version therefore puts the run back in the render. The one input a fingerprint
-cannot see is code, and new code means a new process, which remembers nothing
-and renders everything once.
+version therefore puts the run back in the render.
+
+Some inputs the fingerprint cannot see:
+
+- code: the projection, the redaction and scrub lists, the codec and
+  `model-cost`;
+- the OpenRouter price table, read once at start and rewritten by
+  `sync-prices`;
+- a store row the listing row does not reflect;
+- lineage as the viewer's own listing sees it.
+
+A restart covers code and prices, since a new process remembers nothing and
+renders everything once. Every run is also rendered in full at least every six
+hours (`WRATHBENCH_PUBLISH_FULL_RENDER_MS`), which bounds the rest. The keys are
+content-addressed, so a full render that finds nothing changed uploads nothing.
 
 The skip was added because rendering cold runs was most of a pass. On the
 fleet a pass took about 120 s. Nearly all of that was the per-run phase over

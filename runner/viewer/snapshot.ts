@@ -181,7 +181,22 @@ export interface RendererOptions {
    * which is what a plain function injected by a test is.
    */
   api?: ((req: Request) => Promise<Response>) | ApiHandle;
+  /**
+   * The longest a cold run goes without being rendered in full
+   * (`FULL_RENDER_MS` by default). The bound on how stale an input the cold
+   * fingerprint cannot see may leave a run's objects.
+   */
+  fullRenderMs?: number;
+  /** The wall clock cold runs are judged on; `Date.now` but in tests. */
+  clock?: () => number;
 }
+
+/**
+ * Every run is rendered in full at least this often, skipped or not. The keys
+ * are content-addressed, so a full render that finds nothing changed uploads
+ * nothing; one that finds a change the fingerprint missed publishes it.
+ */
+export const FULL_RENDER_MS = 6 * 60 * 60_000;
 
 /**
  * How many runs are in flight at once in the per-run pass.
@@ -279,10 +294,16 @@ const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "scratch
  *   totals, so a successor appearing or a live attempt progressing changes a
  *   finished attempt's objects without touching its files.
  *
- * What is left is code — the projection, the codec, the price table — and that
- * changes only with a new process, which starts with nothing remembered. Cold
- * is judged on the wall clock, never the render's `now`, which only stamps
- * `generatedAt`.
+ * **Not watched**, and bounded instead by a full render every
+ * `FULL_RENDER_MS`. Code is the main one: the projection, the redaction and
+ * path-scrub lists, the codec, `model-cost`. So is the OpenRouter price table,
+ * read once at start, which `sync-prices` rewrites. A new process brings in
+ * both, and it starts with nothing remembered. Beyond those: a store row the
+ * listing row does not reflect (a re-ingest that changes a run's state series
+ * but not its totals), and lineage as the viewer's own fifteen-second listing
+ * sees it, where it differs from the projected results the chain rows come
+ * from. Cold is judged on the wall clock, never the render's `now`, which only
+ * stamps `generatedAt`.
  */
 function coldFingerprint(runsDir: string, row: RunListRow, character: string, wall: number): string | null {
   const parts = [JSON.stringify(row), character];
@@ -365,8 +386,15 @@ export function createRenderer(
    *
    * Per process, like the handle: a restart, which is also the only way the
    * code a render runs can change, starts empty and renders everything once.
+   * And an entry stands for at most `fullRenderMs`, so every run is rendered
+   * in full that often whatever its fingerprint says.
    */
-  const coldRuns = new Map<string, { fingerprint: string; snapshot: NonNullable<RunListRow["snapshot"]>; trace: number[] | null }>();
+  const coldRuns = new Map<
+    string,
+    { fingerprint: string; snapshot: NonNullable<RunListRow["snapshot"]>; trace: number[] | null; renderedAt: number }
+  >();
+  const fullRenderMs = opts.fullRenderMs ?? FULL_RENDER_MS;
+  const clock = opts.clock ?? Date.now;
 
   /** A route that must answer, or the pass is not a snapshot. */
   const get = async <T>(path: string): Promise<T> => {
@@ -495,7 +523,7 @@ export function createRenderer(
     };
     // Only a pass that can see the bucket may skip: it must know the objects are still there.
     const holds = published?.object?.bind(published);
-    const wall = Date.now();
+    const wall = clock();
     for (let start = 0; start < rows.length; start += groupSize) {
       const group = rows.slice(start, start + groupSize);
       const perRun: (SnapshotArtifact[] | undefined)[] = new Array(group.length);
@@ -510,6 +538,8 @@ export function createRenderer(
           if (
             cold !== undefined &&
             cold.fingerprint === fingerprint &&
+            // The safety net under everything the fingerprint cannot see.
+            wall - cold.renderedAt < fullRenderMs &&
             Object.values(cold.snapshot).every((key) => holds!(key)) &&
             (cold.trace ?? []).every((t0) => published!.traceSegment(row.runId, t0))
           ) {
@@ -594,6 +624,7 @@ export function createRenderer(
               fingerprint,
               snapshot: paths,
               trace: track.trace === undefined ? null : unpackSegs(track.trace.segs, track.trace.segMs),
+              renderedAt: wall,
             });
           } else coldRuns.delete(row.runId);
         }
