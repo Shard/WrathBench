@@ -124,6 +124,23 @@ describe("paths", () => {
   test("the live feed says it renders on request", () => {
     expect(createClient().feedCadence).toEqual({ renderMs: 0, cacheMs: LIVE_TTL_MS });
   });
+
+  test("a run's scratchpad is its run's scratchpad path, read as the text it is served as", async () => {
+    // The viewer serves the file's own text/plain, not JSON: a body that is
+    // not JSON at all must come back whole, as the published shape.
+    const pad = "# Plan\n- [ ] turn in {quests}\n<b>not markup</b>";
+    const s = stub(pad);
+    expect(await createClient({ fetch: s.fetch }).scratchpad("a b")).toEqual({ text: pad });
+    expect(s.calls).toEqual([{ url: "/api/run/a%20b/scratchpad", method: "GET" }]);
+  });
+
+  test("a run with no scratchpad is a 404 the page can tell apart", async () => {
+    const c = createClient({ fetch: stub({ error: "no scratchpad" }, 404).fetch });
+    const err = (await c.scratchpad("r1").catch((e: unknown) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+    expect(err.message).toContain("no scratchpad");
+  });
 });
 
 describe("errors", () => {

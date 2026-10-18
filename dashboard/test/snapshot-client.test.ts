@@ -198,6 +198,9 @@ const ENTRIES = {
 
 const TRACK: TrackResponse = { runId: "r1", characterName: null, model: "m", harnessVersion: "harness-0.4", points: [] };
 
+/** The run's published scratchpad: the file's text, whole, in the envelope. */
+const PAD = { generatedAt: GENERATED_AT, attribution: ATTRIBUTION, text: "# Plan\n- [ ] train at level 4\n" };
+
 /** The whole bucket a happy-path test reads, with the runs listing's pointers. */
 function fullBucket(runs: ResultRun[] = [run()]): Bucket {
   return bucket({
@@ -229,6 +232,7 @@ function fullBucket(runs: ResultRun[] = [run()]): Bucket {
     [`${BASE}/v1/run/r1/7/detail.json`]: DETAIL,
     [`${BASE}/v1/run/r1/7/track.json`]: TRACK,
     [`${BASE}/v1/run/r1/7/entries.json`]: ENTRIES,
+    [`${BASE}/v1/run/r1/7/scratchpad.json`]: PAD,
     [`${BASE}/v1/run/older/3/detail.json`]: { ...DETAIL, run: { runId: "older" } },
     [`${BASE}/v1/run/older/3/track.json`]: { ...TRACK, runId: "older" },
   });
@@ -628,6 +632,62 @@ describe("the entries window", () => {
   });
 });
 
+/*
+ * The scratchpad is listed-only like a trace window: the data host's edge
+ * caches a 404 for a day, so a key no listing row named must never be asked
+ * for — not for a run that wrote no pad, not for an older snapshot, not for a
+ * run the listing does not hold.
+ */
+describe("the scratchpad", () => {
+  test("is the object the run's listing row names, envelope and all", async () => {
+    const b = fullBucket();
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    expect((await c.scratchpad("r1")).text).toBe(PAD.text);
+    expect(b.urls.filter((u) => u.includes("scratchpad"))).toEqual([`${BASE}/v1/run/r1/7/scratchpad.json`]);
+  });
+
+  test("a row that names none is a 404 from here, and no scratchpad key is requested", async () => {
+    const b = fullBucket();
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    for (const id of ["older", "unpublished", "gone"]) {
+      const err = (await c.scratchpad(id).catch((e: unknown) => e)) as ApiError;
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.status).toBe(404);
+    }
+    expect(b.urls.filter((u) => u.includes("scratchpad"))).toEqual([]);
+  });
+
+  test("a new version of the run is read at the new key its row names", async () => {
+    const listing = (ver: string): unknown => ({
+      generatedAt: GENERATED_AT,
+      runs: [{ runId: "r1", snapshot: { detail: `v1/run/r1/${ver}/detail.json`, track: `v1/run/r1/${ver}/track.json`, scratchpad: `v1/run/r1/${ver}/scratchpad.json` } }],
+    });
+    const objects: Record<string, unknown> = {
+      [`${BASE}/v1/manifest.json`]: { gen: GEN, artifacts: MANIFEST_ARTIFACTS, generatedAt: GENERATED_AT },
+      [snapUrl("runs.json")]: listing("7"),
+      [`${BASE}/v1/run/r1/7/scratchpad.json`]: PAD,
+      [`${BASE}/v1/run/r1/8/scratchpad.json`]: { ...PAD, text: "# Plan\n- [x] train at level 4\n" },
+    };
+    const b = bucket(objects);
+    let clock = 0;
+    const c = createSnapshotClient(BASE, { fetch: b.fetch, now: () => clock, ttlMs: 30_000 });
+    expect((await c.scratchpad("r1")).text).toBe(PAD.text);
+    // The next pass lists a new runs.json, whose row names the run's new version.
+    objects[`${BASE}/v1/manifest.json`] = {
+      gen: "g-43",
+      artifacts: { ...MANIFEST_ARTIFACTS, "runs.json": "v1/snap/v-runs-2/runs.json" },
+      generatedAt: GENERATED_AT + 420_000,
+    };
+    objects[`${BASE}/v1/snap/v-runs-2/runs.json`] = listing("8");
+    clock = 30_000;
+    expect((await c.scratchpad("r1")).text).toBe("# Plan\n- [x] train at level 4\n");
+    expect(b.urls.filter((u) => u.includes("scratchpad"))).toEqual([
+      `${BASE}/v1/run/r1/7/scratchpad.json`,
+      `${BASE}/v1/run/r1/8/scratchpad.json`,
+    ]);
+  });
+});
+
 describe("what a bucket cannot serve", () => {
   test("raw is 403, the way the viewer's public mode answers", async () => {
     const c = createSnapshotClient(BASE, { fetch: fullBucket().fetch });
@@ -678,6 +738,19 @@ describe("the public build's call sites", () => {
     expect(src).toMatch(
       /detailPoll\.latest[\s\S]{0,900}if \(SNAPSHOT_MODE\) \{\s*setTokens\(next\.tokens\);\s*setTotal\(next\.total\);\s*if \(feedPublished\(\)\) void loadWindow\(\)/,
     );
+  });
+
+  test("the scratchpad moves with the polled detail, and its absence or failure is never a banner", () => {
+    // No tail carries the pad in either build, so the detail poll is what
+    // re-reads it: each tick privately, each new version publicly (the poll
+    // only reports a body that changed, and a new version is a new detail).
+    const src = read("../src/pages/RunDetail.tsx");
+    expect(src).toMatch(/detailPoll\.latest[\s\S]{0,1600}\n\s*loadPad\(\);\n\s*\}\);/);
+    const at = src.indexOf("const loadPad");
+    expect(at).toBeGreaterThan(-1);
+    const loader = src.slice(at, src.indexOf("\n  };", at));
+    expect(loader).toContain("e.status === 404");
+    expect(loader).not.toContain("setError");
   });
 
   test("the map asks lib/tiles for a URL rather than hard-coding the path", () => {
