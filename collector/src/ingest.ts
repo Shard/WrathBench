@@ -26,7 +26,7 @@ import { existsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { openRunDb } from "../../runner/src/rundb";
-import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
+import { RUN_TOTALS_DERIVATION, RunTotalsScanner, namesSecretKey, redactJsonText, redactRawLine, redactSecrets } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
 import type { Batcher } from "./batch";
 import type { OffsetStore } from "./offsets";
@@ -80,6 +80,17 @@ function int(v: unknown): number | null {
 }
 function real(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * A trajectory line as `events.raw` keeps it: verbatim, unless it names a
+ * secret key. A `meta` record written before the runner stopped copying the
+ * config's module session token into it carries that token, and the store is
+ * a copy that must not hold one, so a `--replay` rewrites such rows redacted
+ * the way the viewer serves them (`redactRawLine`).
+ */
+function rawWithoutSecrets(text: string): string {
+  return namesSecretKey(text) ? redactRawLine(text) : text;
 }
 
 /** (size, mtime) of a file, or null when it is not there. */
@@ -147,14 +158,14 @@ export class Ingester {
       if (line.text.length === 0) continue;
       const parsed = parseLine(line.text);
       if (!parsed.ok) {
-        await this.deps.batcher.add("events", unparseableRow(ctx, line.text));
+        await this.deps.batcher.add("events", unparseableRow(ctx, rawWithoutSecrets(line.text)));
         count++;
         continue;
       }
       if (TURN_KINDS.has(parsed.t)) {
         await this.deps.batcher.add("turns", turnRow(ctx, parsed.rec, line.text));
       } else {
-        await this.deps.batcher.add("events", eventRow(ctx, parsed.rec, line.text));
+        await this.deps.batcher.add("events", eventRow(ctx, parsed.rec, rawWithoutSecrets(line.text)));
         if (parsed.t === "milestone") {
           await this.deps.batcher.add("milestones", milestoneRow(ctx, parsed.rec, line.text));
         }
@@ -306,6 +317,11 @@ export class Ingester {
    * two and rewrites the row when either moved. The trajectory's own size and
    * mtime ride along, because liveness is decided from that mtime and a reader
    * of this store must be able to decide it without touching the tree.
+   *
+   * `meta_json` and `config_json` are copies, and meta.json holds the run's
+   * module session token (the one place the runner keeps it, for `--resume`),
+   * so both are stored with every secret-named value redacted
+   * (`redactJsonText`): byte for byte otherwise.
    */
   private async writeRunRow(runId: string, dir: string, archived: boolean): Promise<boolean> {
     const metaPath = join(dir, "meta.json");
@@ -366,9 +382,11 @@ export class Ingester {
       termination_detail: str(r["termination_detail"]),
       pause_reason: str(r["pause_reason"]),
       reflecting_since: int(r["reflecting_since"]),
-      config_json: str(r["config_json"]) || (Object.keys(config).length > 0 ? JSON.stringify(config) : ""),
+      config_json:
+        redactJsonText(str(r["config_json"])) ||
+        (Object.keys(config).length > 0 ? JSON.stringify(redactSecrets(config)) : ""),
       comparability_json: meta["comparability"] === undefined ? "" : JSON.stringify(meta["comparability"]),
-      meta_json: metaText,
+      meta_json: redactJsonText(metaText, 2),
       trajectory_bytes: jsonlSig?.size ?? 0,
       trajectory_mtime: jsonlSig?.mtime ?? 0,
       ingested_at: this.deps.now(),

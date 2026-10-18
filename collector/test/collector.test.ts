@@ -8,7 +8,8 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../../runner/src/trajectory";
@@ -354,6 +355,60 @@ describe("what the store must not lose", () => {
     appendFileSync(join(dir, "trajectory.jsonl"), `,"turn":3}\n`);
     await collector.pass();
     expect(rowsOf(sink, "turns")).toHaveLength(before + 1);
+  });
+});
+
+describe("what the store must never hold", () => {
+  const TOKEN = "tok-fedcba9876543210fedcba9876543210";
+
+  /**
+   * A run as an older build left it — the module session token in meta.json
+   * (where it still is), in its `meta` record and in `config_json` — so a
+   * `--replay` over it is what cleans the store.
+   */
+  function writeOldRun(runsDir: string, runId: string): string {
+    const dir = writeRun(runsDir, runId);
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as Record<string, unknown>;
+    const config = { ...(meta["config"] as Record<string, unknown>), token: TOKEN };
+    writeFileSync(join(dir, "meta.json"), `${JSON.stringify({ ...meta, config }, null, 2)}\n`);
+    appendFileSync(join(dir, "trajectory.jsonl"), `${JSON.stringify({ ts: 2_000, t: "meta", ...meta, config })}\n`);
+    const db = new Database(join(dir, "run.sqlite"));
+    db.query(`UPDATE run SET config_json = ? WHERE run_id = ?`).run(JSON.stringify(config), runId);
+    db.close();
+    return dir;
+  }
+
+  test("a run's session token reaches no table, and every copy keeps the rest byte for byte", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeOldRun(runsDir, "run-tok");
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    for (const [table, rows] of sink.tables) expect({ table, leaked: JSON.stringify(rows).includes(TOKEN) }).toEqual({ table, leaked: false });
+
+    const [row] = rowsOf(sink, "runs");
+    const onDisk = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { config: Record<string, unknown> };
+    // meta.json as written, two spaces and all, with the one value replaced.
+    expect(row?.["meta_json"]).toBe(`${JSON.stringify({ ...onDisk, config: { ...onDisk.config, token: "[redacted]" } }, null, 2)}\n`);
+    expect(JSON.parse(String(row?.["config_json"]))).toEqual({ ...onDisk.config, token: "[redacted]" });
+    const metaLine = rowsOf(sink, "events").find((r) => r["kind"] === "meta" && Number(r["ts"]) === 2_000);
+    expect((JSON.parse(String(metaLine?.["raw"])) as { config: Record<string, unknown> }).config).toEqual({
+      ...onDisk.config,
+      token: "[redacted]",
+    });
+    // A line that names no secret key is the line as written.
+    const termination = rowsOf(sink, "events").find((r) => r["kind"] === "termination");
+    const fileLine = readFileSync(join(dir, "trajectory.jsonl"), "utf8").split("\n").find((l) => l.includes(`"t":"termination"`));
+    expect(termination?.["raw"]).toBe(fileLine);
+  });
+
+  test("a torn line that names a secret key is withheld, not copied", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeRun(runsDir, "run-torn");
+    appendFileSync(join(dir, "trajectory.jsonl"), `{"t":"meta","config":{"token":"${TOKEN}"\n`);
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const bad = rowsOf(sink, "events").find((r) => r["kind"] === "unparseable");
+    expect(String(bad?.["raw"]).includes(TOKEN)).toBe(false);
   });
 });
 

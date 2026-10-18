@@ -722,6 +722,17 @@ export class Trajectory {
     this.db.query(`UPDATE run SET reflecting_since = ? WHERE run_id = ?`).run(since, this.runId);
   }
 
+  /**
+   * The run's identity, to its three places: meta.json whole, the `run` row,
+   * and a `meta` record in the trajectory.
+   *
+   * The module session token goes to meta.json only. It is the bearer secret
+   * for the run's game session, and the readers that need it — `--resume`
+   * reattaching, the roster releasing a session, the viewer striking it out of
+   * an error message — all read meta.json. The record and `config_json` carry
+   * the rest of the config without it (`withoutSessionToken`), so the
+   * trajectory, the row and the store that copies both hold no copy of it.
+   */
   writeMeta(meta: RunMeta): void {
     this.runId = meta.runId;
     const safe = JSON.parse(this.scrub(jsonLine(meta))) as RunMeta;
@@ -746,7 +757,7 @@ export class Trajectory {
         meta.resolved?.cliVersion ?? null,
         meta.resolved?.provider ?? null,
         meta.config.continuedFrom ?? null,
-        this.scrub(jsonLine(meta.config)),
+        this.scrub(jsonLine(withoutSessionToken(meta.config))),
       );
     /*
      * No window is open at a process boundary. `reflect.ts`: "A resumed run
@@ -756,7 +767,7 @@ export class Trajectory {
      * otherwise leave the column standing and read as reflecting forever.
      */
     this.setReflectingSince(null);
-    this.append({ t: "meta", ...meta });
+    this.append({ t: "meta", ...meta, config: withoutSessionToken(meta.config) });
   }
 
   /**
@@ -1064,6 +1075,15 @@ export function readTrajectory(dir: string): TrajectoryRecord[] {
     }
   }
   return out;
+}
+
+/**
+ * A run config without its module session token: the config as every copy but
+ * meta.json holds it (`Trajectory.writeMeta`).
+ */
+export function withoutSessionToken<C extends { token?: unknown }>(config: C): Omit<C, "token"> {
+  const { token: _token, ...rest } = config;
+  return rest;
 }
 
 export function readMeta(dir: string): RunMeta | null {

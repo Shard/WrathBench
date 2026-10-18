@@ -265,6 +265,33 @@ export function redactRawLine(line: string): string {
   return JSON.stringify(redactSecrets(parsed));
 }
 
+/** Whether JSON text names a secret key anywhere, so a copier knows it must look inside. */
+export function namesSecretKey(text: string): boolean {
+  for (const k of SECRET_KEYS) if (text.includes(`"${k}"`)) return true;
+  return false;
+}
+
+/**
+ * JSON text as a store that copies a file or a column whole may keep it: every
+ * secret-named value replaced (`redactSecrets`). Text that names no secret key
+ * comes back byte for byte. Text that does is re-serialised with `space`, which
+ * reproduces a `JSON.stringify` file exactly apart from the values replaced
+ * (meta.json is written with two spaces and a closing newline, `config_json`
+ * compact). Text that names one and will not parse cannot be inspected, so it
+ * is withheld as "".
+ */
+export function redactJsonText(text: string, space?: number): string {
+  if (!namesSecretKey(text)) return text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return "";
+  }
+  const out = JSON.stringify(redactSecrets(parsed), null, space);
+  return text.endsWith("\n") ? `${out}\n` : out;
+}
+
 /**
  * Build the display summary for one raw record.
  *
