@@ -14,7 +14,7 @@
     "bun": "1.4.0"
   },
   "scripts": {
-    "test": "bun test --parallel=8 --no-isolate --timeout=20000",
+    "test": "bun runner/test/preload-checkout.ts && bun test --parallel=8 --no-isolate --timeout=20000",
     "wb": "bun infra/wb.ts",
     "typecheck": "for p in sdk runner infra dashboard wiki minimap collector; do tsc --noEmit -p $p || exit 1; done",
     "docs:api": "bun run sdk/generate-api-docs.ts",

@@ -3,7 +3,9 @@
  * 1 before any test file loads, rather than a failure per file or per snippet
  * child far from the cause. See fixtures/checkout.ts for why a missing or
  * borrowed `node_modules` is refused rather than worked around. First in every
- * preload list, because the others import from `node_modules`.
+ * preload list, because the others import from `node_modules`. The root
+ * `test` script also runs this file on its own ahead of `bun test --parallel`,
+ * whose workers would each run the preload and print the line once per file.
  */
 
 import { resolve } from "node:path";
