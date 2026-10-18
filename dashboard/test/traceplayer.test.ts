@@ -32,6 +32,8 @@ import {
 } from "../src/lib/traceplayer";
 import { IDLE_GAP_MS, IDLE_PLAY_MS, SPEEDS, advanceCursor, idleSpans, nextSpeed } from "../src/lib/playback";
 import { classifySegments, trackPoseAt } from "../src/lib/replay";
+import { gaugesOf, targetReading, unitFlags } from "../src/lib/unitframe";
+import { projectTraceSegment } from "../../runner/viewer/public-projection";
 
 const RUN = "run-a";
 /** A window boundary, well clear of zero so context reads stay positive. */
@@ -310,6 +312,35 @@ describe("unit state", () => {
     expect(mid.state.cast).toEqual({ spellId: 133, endsAt: W + 7_000 });
     expect(mid.castFrom).toBe(W + 4_000);
     expect(store.unitAt(RUN, W + 8_000)?.castFrom).toBeNull();
+  });
+});
+
+describe("a public segment", () => {
+  test("a death withheld by the projection stays withheld through the player and the frame", () => {
+    const rows = [
+      key(W, 0, { target: { kind: "player", hpPct: 30 } }),
+      pos(W, 0),
+      stateRow(W + 2_000, { hp: 0, dead: true }),
+      stateRow(W + 20_000, { ghost: true, dead: false, hp: 1 }),
+      stateRow(W + 40_000, { ghost: false, hp: 50 }),
+    ];
+    const store = createTraceStore();
+    store.setTail(RUN, projectTraceSegment(seg(rows, W)));
+    // The 60 s sample beside it says the character is at 0: the frame must not use it.
+    const reading = { level: 5, xp: 10, nextLevelXp: 400, health: 0, maxHealth: 100, power: 0, maxPower: 50, powerType: 0 };
+    const alive = store.unitAt(RUN, W + 1_000)!.state;
+    expect(alive.hp).toBe(100);
+    expect(targetReading(alive.target)).toBeNull();
+    for (const t of [W + 5_000, W + 25_000]) {
+      const down = store.unitAt(RUN, t)!.state;
+      expect(down.hp).toBeNull();
+      const g = gaugesOf(reading, down);
+      expect(g.health).toBeNull();
+      expect(g.maxHealth).toBeNull();
+      expect("dead" in g).toBe(false);
+      expect(unitFlags(down)).not.toContain("ghost");
+    }
+    expect(store.unitAt(RUN, W + 45_000)!.state.hp).toBe(50);
   });
 });
 

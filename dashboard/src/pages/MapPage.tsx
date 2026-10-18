@@ -811,7 +811,15 @@ export default function MapPage() {
     ctx.textBaseline = "middle";
     ctx.font = "11px ui-monospace, monospace";
     for (const pip of list) {
-      const move = intentToDraw(pip.data.move, mapId, now, feedClock);
+      // A live pip the trace places stands at the playhead, on the public site
+      // minutes behind the newest reading the move came with: a move recorded
+      // after that moment has not happened yet where the pip is, and one
+      // before it is aged from the playhead, not from now.
+      const placed = replayId() === undefined && pip.o !== null && cursorNow !== null;
+      if (placed && (pip.data.move?.ts ?? -Infinity) > cursorNow) continue;
+      const move = placed
+        ? intentToDraw(pip.data.move, mapId, cursorNow, null)
+        : intentToDraw(pip.data.move, mapId, now, feedClock);
       if (move === null) continue;
       const from = project(view, pip.x, pip.y);
       const to = project(view, move.x, move.y);
