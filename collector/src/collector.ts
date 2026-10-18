@@ -63,6 +63,11 @@ export class Collector {
     });
   }
 
+  /** The count scanner a run's next re-derivation folds into (`Ingester.countScannerOf`), for a test or a probe. */
+  countScannerOf(runId: string): ReturnType<Ingester["countScannerOf"]> {
+    return this.ingester.countScannerOf(runId);
+  }
+
   /** Forget every offset, so the next pass reads every run from byte zero. */
   replayFromZero(): void {
     this.deps.offsets.reset();
@@ -80,6 +85,7 @@ export class Collector {
       runs: 0,
       totals: 0,
     };
+    const listed = new Set<string>();
     for (const entry of listRunDirs(this.deps.cfg.runsDir, (runId, skipped, kept) => {
       if (this.reportedDuplicates.has(runId)) return;
       this.reportedDuplicates.add(runId);
@@ -88,6 +94,7 @@ export class Collector {
       );
     })) {
       stats.seen++;
+      listed.add(entry.runId);
       const before = this.lastSeen.get(entry.runId);
       if (before !== undefined && before === entry.sig) {
         /*
@@ -110,6 +117,7 @@ export class Collector {
       if (r.run) stats.runs++;
       if (r.totals) stats.totals++;
     }
+    this.ingester.retainListed(listed);
     await this.batcher.flushAll();
     return stats;
   }
