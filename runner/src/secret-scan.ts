@@ -205,7 +205,7 @@ const SECRET_NAME = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)(?:
 
 /**
  * Too weak to be worth matching: shorter than twenty characters and drawn
- * from one character class ("wrathbench", "password"). Such a value matches
+ * from one character class ("password", "changeme"). Such a value matches
  * ordinary text everywhere it appears, and anything that guessable is not a
  * secret the scanner can keep — it is a credential to rotate.
  */

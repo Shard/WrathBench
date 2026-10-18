@@ -122,7 +122,7 @@ describe("where the known values come from", () => {
       S3_ACCESS_KEY_ID: hex(32),
       WRATHBENCH_MODULE_SECRET: hex(64),
       MYSQL_PWD: `${strong}3`,
-      CLICKHOUSE_PASSWORD: "wrathbench",
+      CLICKHOUSE_PASSWORD: "changeme",
       SSL_KEY_FILE: "/etc/ssl/private/key.pem",
       TOKEN_ENV: "CLAUDE_CODE_OAUTH_TOKEN_2",
       CLICKHOUSE_URL: `http://user:${strong}4@clickhouse:8123`,
