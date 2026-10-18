@@ -944,6 +944,11 @@ export interface AgentPosition {
    * reason: an older feed says nothing, and nothing is not "reflecting".
    */
   reflecting?: boolean;
+  /**
+   * The fine-grained trace near now (`PositionTrace`). Absent on a run that
+   * recorded none, and on a feed or snapshot from before the recorder.
+   */
+  trace?: PositionTrace;
 }
 
 /** A run row as the listing serves it: the row plus whole-file totals. */
@@ -2137,6 +2142,143 @@ export interface TrackResponse extends SnapshotEnvelope {
    * `release` with the rest of the deaths.
    */
   travel?: TrackTravelMark[];
+  /**
+   * The run's closed trace windows (`TrackTrace`). Absent — not empty — on a
+   * run that recorded no trace, which is every run from before the recorder,
+   * so their tracks serve and publish exactly the bytes they did before.
+   */
+  trace?: TrackTrace;
+}
+
+/* --------------------------------------------------------------- trace --- */
+
+/*
+ * The fine-grained trace (`runner/viewer/trace.ts` is the codec and the format
+ * spec): positions at about 1 Hz and the unit state beside them, packed one
+ * segment per run per UTC-aligned five-minute window. The shapes live here
+ * with every other wire shape because the viewer serves them and the
+ * dashboard decodes them.
+ */
+
+/**
+ * One aura: `[spellId, stacks, expiresAt, flags]`, `expiresAt` in epoch ms and
+ * 0 for none. A public segment carries the first three only.
+ */
+export type TraceAura = [number, number, number] | [number, number, number, number];
+
+/** What the character has targeted: its kind, and for a creature its entry and health. */
+export interface TraceTarget {
+  kind: "creature" | "player" | "object" | "other";
+  entry?: number;
+  hpPct?: number;
+}
+
+/** A cast in progress; `endsAt` is epoch ms. */
+export interface TraceCast {
+  spellId: number;
+  endsAt: number;
+}
+
+/**
+ * The unit state the trace records. Every key is present in a keyframe; null
+ * is unobserved. Fixed by the recorder's contract (`runner/src/` writes the
+ * rows), so a key is added here only alongside it.
+ */
+export interface TraceState {
+  hp: number | null;
+  hpMax: number | null;
+  pw: number | null;
+  pwMax: number | null;
+  /** 0 mana, 1 rage, 3 energy, 6 runic power. */
+  pwType: number | null;
+  level: number | null;
+  xp: number | null;
+  xpMax: number | null;
+  auras: TraceAura[];
+  combat: boolean;
+  mounted: boolean;
+  taxi: boolean;
+  dead: boolean;
+  ghost: boolean;
+  resting: boolean;
+  target: TraceTarget | null;
+  cast: TraceCast | null;
+}
+
+/** One state change: `[ms from t0, kind, value]`, the kind a `TraceState` key. */
+export type TraceEventWire = [number, string, unknown];
+
+/**
+ * The state at a segment's `t0`, and where the character stood.
+ *
+ * `p` is `[map, x, y, z, o]` quantised (`TraceSegment.q`), or null when no
+ * position was known. `pt` is when that position was observed, in ms from
+ * `t0` (absent is 0: interpolated to `t0` itself). `f` is a flight still in
+ * the air at `t0`: `[map, x, y, z, ms]`, its destination and the ms left.
+ */
+export interface TraceKeyframe {
+  p: [number, number, number, number, number] | null;
+  pt?: number;
+  s: Partial<TraceState>;
+  f?: [number, number, number, number, number];
+}
+
+/** One run × one window, columnar. The full spec is the comment atop `trace.ts`. */
+export interface TraceSegment {
+  v: number;
+  run: string;
+  t0: number;
+  t1: number;
+  /** Quantisation: `p` units per yard, `o` units per turn. */
+  q: { p: number; o: number };
+  k: TraceKeyframe;
+  /** Per sample: ms since the previous one (the first since `t0`). */
+  dt: number[];
+  /** Per sample: integer deltas in `1/q.p` yd and `1/q.o` turn. */
+  x: number[];
+  y: number[];
+  z: number[];
+  o: number[];
+  /** `[sample, map]`: a sample reached by a jump or onto another map. */
+  cuts: [number, number][];
+  /** `[sample, map, x, y, z, ms]`: a taxi takeoff, its destination and duration. */
+  flights: [number, number, number, number, number, number][];
+  ev: TraceEventWire[];
+}
+
+/** Window `t0`s as runs of consecutive windows: `[firstT0, count]`. */
+export type TraceSegRuns = [number, number][];
+
+/**
+ * `GET /api/run/<id>/trace`: which windows have a segment, and the open tail.
+ *
+ * `segs` lists the closed windows that have rows; each is
+ * `/api/run/<id>/trace/<t0>`. `tail` is everything after the last closed
+ * window, encoded so far — one window, or two while the newest closed one is
+ * still settling — or null when there is none.
+ */
+export interface TraceIndexResponse {
+  segMs: number;
+  segs: TraceSegRuns;
+  tail: TraceSegment | null;
+  now: number;
+}
+
+/** The closed windows, as a track carries them. */
+export interface TrackTrace {
+  segMs: number;
+  segs: TraceSegRuns;
+}
+
+/**
+ * A live agent's trace on the position feed: the newest closed windows and the
+ * tail, so the live map reads one shape privately and publicly.
+ */
+export interface PositionTrace {
+  segMs: number;
+  /** Up to the last three closed windows with rows, oldest first. */
+  recent: number[];
+  tail: TraceSegment | null;
 }
 
 /**

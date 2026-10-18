@@ -28,6 +28,7 @@ import {
   projectFleet,
   projectInfo,
   projectPositions,
+  projectTraceSegment,
   projectRunDetail,
   projectRuns,
   projectTrack,
@@ -354,6 +355,54 @@ describe("verifyPublication", () => {
     const second = await verifyPublication(withHeader);
     expect(second.cache.find((c) => c.key === LIVE_PATH)!.cacheControl).toBe("public, max-age=30");
     expect(second.findings).toEqual([]);
+  });
+
+  /** The clean bucket with a trace: two windows on the track, the older one named by live.json. */
+  function tracedBucket(): MemorySource {
+    const src = cleanBucket();
+    const T0 = 1_760_000_100_000;
+    const seg = (t0: number): Record<string, unknown> =>
+      projectTraceSegment({
+        v: 1, run: RUN_ID, t0, t1: t0 + 300_000, q: { p: 10, o: 1024 },
+        k: { p: [0, 1, 2, 3, 4], s: { hp: 10, hpMax: 10 } },
+        dt: [1000], x: [1], y: [1], z: [0], o: [0], cuts: [], flights: [], ev: [[1000, "hp", 9]],
+      }) as unknown as Record<string, unknown>;
+    poison(src, `${RUN_BASE}/track.json`, (b) => void (b["trace"] = { segMs: 300_000, segs: [[T0, 2]] }));
+    poison(src, LIVE_PATH, (b) => {
+      b["positions"] = projectPositions({
+        positions: [
+          {
+            runId: RUN_ID, character: "Fixturely", model: "test/model", map: 0, x: 1, y: 2, ts: 1000, level: 3, xp: 4,
+            money: 5, questsCompleted: 6, items: null, harnessVersion: "h",
+            trace: { segMs: 300_000, recent: [T0], tail: null },
+          },
+        ],
+      });
+    });
+    src.objects.set(`v1/run/${RUN_ID}/trace/${T0}.json`, envelope(seg(T0)));
+    src.objects.set(`v1/run/${RUN_ID}/trace/${T0 + 300_000}.json`, envelope(seg(T0 + 300_000)));
+    return src;
+  }
+
+  test("the segments live.json names and each track's newest are walked and re-projected", async () => {
+    const src = tracedBucket();
+    const report = await verifyPublication(src);
+    expect(report.findings).toEqual([]);
+    expect(src.reads).toContain(`v1/run/${RUN_ID}/trace/1760000100000.json`);
+    expect(src.reads).toContain(`v1/run/${RUN_ID}/trace/1760000400000.json`);
+    expect(report.objects).toBe(10);
+  });
+
+  test("a named segment that is not there is a missing object, and a poisoned one a finding", async () => {
+    const gone = tracedBucket();
+    gone.objects.delete(`v1/run/${RUN_ID}/trace/1760000400000.json`);
+    expect((await verifyPublication(gone)).missing).toEqual([`v1/run/${RUN_ID}/trace/1760000400000.json`]);
+    const leaky = poison(tracedBucket(), `v1/run/${RUN_ID}/trace/1760000100000.json`, (b) => {
+      (b["k"] as { s: Record<string, unknown> }).s["target"] = { kind: "player" };
+      (b["ev"] as unknown[]).push([2000, "dead", true]);
+    });
+    const report = await verifyPublication(leaky);
+    expect(report.findings.some((f) => f.key.endsWith("/trace/1760000100000.json"))).toBe(true);
   });
 });
 

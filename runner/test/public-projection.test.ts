@@ -40,6 +40,8 @@ import type {
   RunsResponse,
   TokenTotals,
   TrackResponse,
+  TraceIndexResponse,
+  TraceSegment,
 } from "../viewer/api-types";
 import {
   PUBLIC_ATTRIBUTION,
@@ -55,6 +57,8 @@ import {
   projectEntries,
   projectEntry,
   projectTrack,
+  projectTraceIndex,
+  projectTraceSegment,
 } from "../viewer/public-projection";
 import { summarize } from "../viewer/tail";
 import { STALL_PAUSE } from "../src/lapse";
@@ -949,6 +953,160 @@ describe("projectPositions and projectTrack", () => {
     expect("character" in out).toBe(false);
     // Nor travel marks: absent is what an older track says, not "none".
     expect("travel" in out).toBe(false);
+    // Nor a trace: a run from before the recorder keeps its bytes, and its key.
+    expect("trace" in out).toBe(false);
+  });
+
+  test("track: the trace window list ships as numbers, and nothing smuggled beside it", () => {
+    const out = projectTrack(
+      smuggle<TrackResponse>({
+        runId: "fixture-run-1",
+        characterName: CHARACTER_NAME,
+        model: "test/model",
+        harnessVersion: "harness-0.5-1-gabc",
+        points: [],
+        trace: smuggle({ segMs: 300_000, segs: [[1_760_000_100_000, 3, POISON.smuggled] as unknown as [number, number]] }),
+      }),
+    );
+    expect(out.trace).toEqual({ segMs: 300_000, segs: [[1_760_000_100_000, 3]] });
+    assertClean(JSON.stringify(out));
+  });
+});
+
+/* -------------------------------------------------------------- trace --- */
+
+/** A private segment as the viewer encodes it, poisoned everywhere a key can hide. */
+function traceSegmentFixture(): TraceSegment {
+  const t0 = 1_760_000_100_000;
+  const full = {
+    hp: 1200, hpMax: 1200, pw: 900, pwMax: 1000, pwType: 0, level: 14, xp: 3200, xpMax: 9800,
+    auras: [[1126, 1, t0 + 1_500_000, 19, POISON.smuggled]],
+    combat: true, mounted: false, taxi: false, dead: false, ghost: false, resting: false,
+    target: smuggle({ kind: "player", entry: 7, hpPct: 55 }),
+    cast: smuggle({ spellId: 133, endsAt: t0 + 3000 }),
+    smuggledKey: POISON.smuggled,
+  };
+  return smuggle<TraceSegment>({
+    v: 1,
+    run: "fixture-run-1",
+    t0,
+    t1: t0 + 300_000,
+    q: smuggle({ p: 10, o: 1024 }),
+    k: smuggle({ p: [0, -94604, 621, 563, 195], pt: -400, s: full, f: [0, -90000, 0, 600, 60_000] }) as unknown as TraceSegment["k"],
+    dt: [400, 1000, 1000],
+    x: [26, 26, 22],
+    y: [65, 65, 63],
+    z: [1, -1, 2],
+    o: [-1, 5, 13],
+    cuts: [[2, 0, POISON.smuggled] as unknown as [number, number]],
+    flights: [[1, 0, 1000, 2000, 30, 120_000, 99] as unknown as [number, number, number, number, number, number]],
+    ev: [
+      [100, "target", { kind: "creature", entry: 299, hpPct: 100 }],
+      [200, "mood", POISON.smuggled],
+      [300, "hp", 1100],
+      [400, "auras", [[1126, 1, t0 + 1_500_000, 21]]],
+      [500, "cast", null],
+    ],
+  });
+}
+
+describe("projectTraceSegment", () => {
+  test("emits exactly the allowlist: positions, cuts, flights and the public state; dead, ghost and target never", () => {
+    const out = projectTraceSegment(traceSegmentFixture());
+    const PUBLIC_STATE = ["hp", "hpMax", "pw", "pwMax", "pwType", "level", "xp", "xpMax", "auras", "combat", "mounted", "taxi", "resting", "cast"];
+    expect(keyPaths(out)).toEqual(
+      allow([
+        "v", "run", "t0", "t1", "q", "q.p", "q.o",
+        "k", "k.p", "k.pt", "k.s", "k.f",
+        ...under("k.s", PUBLIC_STATE),
+        "k.s.cast.spellId", "k.s.cast.endsAt",
+        "dt", "x", "y", "z", "o", "cuts", "flights", "ev",
+      ]),
+    );
+    assertClean(JSON.stringify(out));
+    expect(out.k.s).toMatchObject({ hp: 1200, combat: true, cast: { spellId: 133, endsAt: 1_760_000_103_000 } });
+    // An aura's flags stay behind, and so does the element smuggled after them.
+    expect(out.k.s.auras).toEqual([[1126, 1, 1_760_001_600_000]]);
+    // A cut carries its map and never a reason; a flight its six numbers.
+    expect(out.cuts).toEqual([[2, 0]]);
+    expect(out.flights).toEqual([[1, 0, 1000, 2000, 30, 120_000]]);
+    expect(out.k.p).toEqual([0, -94604, 621, 563, 195]);
+    // The target event and the unknown kind are gone; an aura change that only
+    // moved the flags says nothing new in public, so it is gone too.
+    expect(out.ev).toEqual([
+      [300, "hp", 1100],
+      [500, "cast", null],
+    ]);
+    for (const withheld of ['"dead"', '"ghost"', '"target"', '"mood"', "player"]) expect(JSON.stringify(out)).not.toContain(withheld);
+  });
+
+  test("the gauges go blank while the character is down and come back at their values, whatever order the keys arrived in", () => {
+    const seg = traceSegmentFixture();
+    const t0 = seg.t0;
+    seg.ev = [
+      [1000, "hp", 300],
+      // Down: health first, the flag in the same row after it.
+      [2000, "hp", 0],
+      [2000, "dead", true],
+      [3000, "ghost", true],
+      [3000, "dead", true],
+      // A ghost's health is still reported; it must not leak.
+      [4000, "hp", 1],
+      [5000, "pw", 0],
+      // Revived: health in the row before the flags clear.
+      [6000, "hp", 600],
+      [6000, "ghost", false],
+      [6000, "dead", false],
+      [7000, "hp", 650],
+    ];
+    const out = projectTraceSegment(seg);
+    expect(out.ev).toEqual([
+      [1000, "hp", 300],
+      [2000, "hp", null],
+      [2000, "hpMax", null],
+      [2000, "pw", null],
+      [2000, "pwMax", null],
+      [2000, "pwType", null],
+      [6000, "hp", 600],
+      [6000, "hpMax", 1200],
+      [6000, "pw", 0],
+      [6000, "pwMax", 1000],
+      [6000, "pwType", 0],
+      [7000, "hp", 650],
+    ]);
+    // A segment that opens down opens blank.
+    const downAtStart = traceSegmentFixture();
+    downAtStart.k.s = { ...downAtStart.k.s, dead: true };
+    expect(projectTraceSegment(downAtStart).k.s).toMatchObject({ hp: null, hpMax: null, pw: null, pwMax: null, pwType: null, level: 14 });
+    expect(t0).toBe(1_760_000_100_000);
+  });
+
+  test("is a fixed point on its own output, as publish-accept's re-projection requires", () => {
+    const once = projectTraceSegment(traceSegmentFixture());
+    expect(projectTraceSegment(once)).toEqual(once);
+    const seg = traceSegmentFixture();
+    seg.ev = [[2000, "hp", 0], [2000, "dead", true], [6000, "hp", 600], [6000, "dead", false]];
+    const down = projectTraceSegment(seg);
+    expect(projectTraceSegment(down)).toEqual(down);
+  });
+
+  test("the same allowlist reaches the position feed's tail and the index's", () => {
+    const tail = traceSegmentFixture();
+    const positions = projectPositions({
+      positions: [
+        {
+          runId: "fixture-run-1", character: CHARACTER_NAME, model: "test/model", map: 0, x: 1, y: 2, ts: 1000,
+          level: 3, xp: 4, money: 5, questsCompleted: 6, items: null, harnessVersion: "harness-0.5-1-gabc",
+          trace: smuggle({ segMs: 300_000, recent: [1, 2, POISON.smuggled as unknown as number], tail }),
+        },
+      ],
+    });
+    expect(positions.positions[0]!.trace).toEqual({ segMs: 300_000, recent: [1, 2, 0], tail: projectTraceSegment(tail) });
+    assertClean(JSON.stringify(positions));
+    const idx = projectTraceIndex(smuggle<TraceIndexResponse>({ segMs: 300_000, segs: [[1, 2]], tail, now: 9 }));
+    expect(keyPaths(idx).filter((k) => !k.startsWith("tail."))).toEqual(allow(["segMs", "segs", "tail", "now"]));
+    expect(idx.tail).toEqual(projectTraceSegment(tail));
+    assertClean(JSON.stringify(idx));
   });
 });
 

@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   createRenderer,
+  FULL_RENDER_MS,
   hash12,
   IMMUTABLE_CACHE,
   MUTABLE_CACHE,
@@ -30,6 +31,8 @@ import {
 import { createApi } from "../viewer/api";
 import { emptyState, publishPass, type ObjectStore } from "../../infra/publish-core";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
+import type { PositionsResponse, TraceSegment } from "../viewer/api-types";
+import { SEG_MS, unpackSegs, windowOf } from "../viewer/trace";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -868,5 +871,328 @@ describe("createRenderer", () => {
       // A batch of one really is one run at a time, not the whole tree at once.
       if (batch === 1) expect(batches.length).toBeGreaterThan(1);
     }
+  });
+});
+
+/* -------------------------------------------------------------- trace --- */
+
+/**
+ * Give a fixture run a `trace` table in the recorder's schema: a walk at 1 Hz
+ * over the last three windows to a moment ago, the host's key row at each
+ * window's start, and a death with a player target in the oldest window — the
+ * three things the public segment must not carry.
+ */
+function addTrace(runs: string, runId: string, opts: { rows?: boolean } = {}): { windows: number[]; closed: number[] } {
+  const db = new Database(join(runs, runId, "run.sqlite"));
+  db.exec(`CREATE TABLE IF NOT EXISTS trace (run_id TEXT NOT NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL,
+             map INTEGER, x REAL, y REAL, z REAL, o REAL, data TEXT);
+           CREATE INDEX IF NOT EXISTS trace_run_ts ON trace(run_id, ts);`);
+  const now = Date.now();
+  const open = windowOf(now);
+  const insert = db.query(`INSERT INTO trace (run_id, ts, kind, map, x, y, z, o, data) VALUES (?,?,?,?,?,?,?,?,?)`);
+  if (opts.rows !== false) {
+    let x = -6240;
+    for (let ts = open - 3 * SEG_MS; ts < now - 1_000; ts += 1000) {
+      if (ts % SEG_MS === 0) insert.run(runId, ts, "key", 0, x, 380, 385, 0, JSON.stringify({ hp: 100, hpMax: 100, level: 3 }));
+      x += 0.7;
+      insert.run(runId, ts + 1, "pos", 0, x, 380, 385, 0, null);
+      if (ts === open - 3 * SEG_MS + 60_000) {
+        insert.run(runId, ts + 2, "state", null, null, null, null, null, JSON.stringify({ hp: 0, dead: true, target: { kind: "player", hpPct: 5 } }));
+      }
+      if (ts === open - 3 * SEG_MS + 90_000) insert.run(runId, ts + 2, "state", null, null, null, null, null, JSON.stringify({ hp: 60, dead: false, target: null }));
+    }
+  }
+  db.close();
+  // The windows that have rows, and the two of them closed at any render
+  // after this one: the newest may or may not have settled by then, so a test
+  // reads what the render's own track lists rather than a clock of its own.
+  return { windows: [open - 3 * SEG_MS, open - 2 * SEG_MS, open - SEG_MS], closed: [open - 3 * SEG_MS, open - 2 * SEG_MS] };
+}
+
+const segmentPaths = (out: SnapshotResult, runId: string): string[] =>
+  out.artifacts.map((a) => a.path).filter((p) => p.startsWith(`v1/run/${runId}/trace/`)).sort();
+const segmentPathsOf = (runId: string, t0s: readonly number[]): string[] => t0s.map((t0) => `v1/run/${runId}/trace/${t0}.json`).sort();
+/** The windows a pass's published track lists for a run. */
+const listedIn = (out: SnapshotResult, runId: string): number[] =>
+  unpackSegs((trackOfIn(out, runId) as { trace: { segs: [number, number][] } }).trace.segs);
+
+describe("trace segments in a pass", () => {
+  test("each closed window publishes once, immutable and projected, and the track and live.json list only those", async () => {
+    const runs = fixture();
+    const trace = addTrace(runs, LIVE_RUN);
+    const out = await render(runs, 111);
+    const listed = listedIn(out, LIVE_RUN);
+    // Every window the track lists has its segment in the pass, and no other does.
+    expect(segmentPaths(out, LIVE_RUN)).toEqual(segmentPathsOf(LIVE_RUN, listed));
+    for (const t0 of trace.closed) expect(listed).toContain(t0);
+    for (const t0 of listed) expect(trace.windows).toContain(t0);
+    for (const p of segmentPaths(out, LIVE_RUN)) {
+      const a = out.artifacts.find((x) => x.path === p)!;
+      expect(a.cacheControl).toBe(IMMUTABLE_CACHE);
+      const body = JSON.parse(a.body) as TraceSegment & { attribution: string };
+      expect(body.attribution).toBe(PUBLIC_ATTRIBUTION);
+      expect(body.v).toBe(1);
+      for (const withheld of ['"dead"', '"ghost"', '"target"', '"player"']) expect(a.body).not.toContain(withheld);
+    }
+    // live.json's recent windows are segments this pass wrote, and the tail rides inline.
+    const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body).positions as PositionsResponse;
+    const pos = live.positions.find((p) => p.runId === LIVE_RUN)!;
+    expect(pos.trace!.recent.length).toBeGreaterThan(0);
+    for (const t0 of pos.trace!.recent) expect(segmentPaths(out, LIVE_RUN)).toContain(`v1/run/${LIVE_RUN}/trace/${t0}.json`);
+    expect(pos.trace!.tail).not.toBeNull();
+    expect(JSON.stringify(pos.trace!.tail)).not.toContain('"dead"');
+  });
+
+  test("runs from before the recorder publish no segment and no trace field, so nothing of theirs is re-keyed", async () => {
+    const runs = fixture();
+    const before = await render(runs, 111);
+    expect(out(before).filter((p) => p.includes("/trace/"))).toEqual([]);
+    expect("trace" in trackOfIn(before, DEAD_RUN)).toBe(false);
+    const live = JSON.parse(before.artifacts.find((a) => a.path === "v1/live.json")!.body).positions as PositionsResponse;
+    for (const p of live.positions) expect("trace" in p).toBe(false);
+    // A run whose recorder made the table and wrote nothing reads the same.
+    addTrace(runs, DEAD_RUN, { rows: false });
+    const past = new Date(Date.now() - 60 * 60_000);
+    utimesSync(join(runs, DEAD_RUN, "run.sqlite"), past, past);
+    const after = await render(runs, 222);
+    expect(rowOf(after, DEAD_RUN).snapshot).toEqual(rowOf(before, DEAD_RUN).snapshot);
+  });
+
+  test("a window the bucket already holds is neither fetched nor rendered again", async () => {
+    const runs = fixture();
+    const trace = addTrace(runs, LIVE_RUN);
+    const asked: string[] = [];
+    const api = createApi({ runsDir: runs, tilesDir: join(runs, "tiles-unused"), publicMode: true, moduleUrl: "http://127.0.0.1:1" });
+    const counting = async (req: Request): Promise<Response> => {
+      if (new URL(req.url).pathname.includes("/trace/")) asked.push(new URL(req.url).pathname);
+      return await api(req);
+    };
+    // The bucket holds the older of the two windows sure to be closed.
+    const held = new Set([trace.closed[0]!]);
+    const out = await createRenderer({ runsDir: runs, api: counting })(111, undefined, {
+      traceSegment: (runId, t0) => runId === LIVE_RUN && held.has(t0),
+    });
+    const listed = listedIn(out, LIVE_RUN);
+    const fresh = listed.filter((t0) => !held.has(t0));
+    expect(fresh.length).toBeGreaterThan(0);
+    expect(segmentPaths(out, LIVE_RUN)).toEqual(segmentPathsOf(LIVE_RUN, fresh));
+    expect(asked.sort()).toEqual(fresh.map((t0) => `/api/run/${LIVE_RUN}/trace/${t0}`).sort());
+    // The track still lists every window, held or new.
+    for (const t0 of held) expect(listed).toContain(t0);
+  });
+
+  test("a segment gone mid-pass drops its run, and live.json names none of its windows", async () => {
+    const runs = fixture();
+    addTrace(runs, LIVE_RUN);
+    const api = createApi({ runsDir: runs, tilesDir: join(runs, "tiles-unused"), publicMode: true, moduleUrl: "http://127.0.0.1:1" });
+    const losing = async (req: Request): Promise<Response> =>
+      new URL(req.url).pathname.includes("/trace/") ? new Response("{}", { status: 404 }) : await api(req);
+    const out = await createRenderer({ runsDir: runs, api: losing })(111);
+    expect(out.artifacts.some((a) => a.path.startsWith(`v1/run/${LIVE_RUN}/`))).toBe(false);
+    expect(rowOf(out, LIVE_RUN).snapshot).toBeUndefined();
+    const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body).positions as PositionsResponse;
+    expect(live.positions.find((p) => p.runId === LIVE_RUN)!.trace!.recent).toEqual([]);
+  });
+
+  test("published: a second pass PUTs no segment again, and the bucket holds every window the track lists", async () => {
+    const runs = fixture();
+    addTrace(runs, LIVE_RUN);
+    const bucket = new Map<string, string>();
+    const puts: string[] = [];
+    const store: ObjectStore = {
+      put: async (path, body) => {
+        puts.push(path);
+        bucket.set(path, body);
+      },
+      delete: async (path) => void bucket.delete(path),
+    };
+    const state = emptyState();
+    const render = createRenderer({ runsDir: runs });
+    /** One pass; what it hands back is the run objects it streamed, so a test can read each pass's track. */
+    const pass = async (): Promise<SnapshotResult> => {
+      const streamed: SnapshotArtifact[] = [];
+      const keep = async (batch: SnapshotArtifact[], sink: (b: SnapshotArtifact[]) => Promise<void>): Promise<void> => {
+        streamed.push(...batch);
+        await sink(batch);
+      };
+      await publishPass(async (sink, published) => await render(Date.now(), { sink: (b) => keep(b, sink), batch: 1 }, published), store, state);
+      return { gen: "", snap: {}, artifacts: streamed };
+    };
+    const first = await pass();
+    const segs = puts.filter((p) => p.includes("/trace/"));
+    expect(segs.sort()).toEqual(segmentPathsOf(LIVE_RUN, listedIn(first, LIVE_RUN)));
+    // Segments land before live.json, which lists them.
+    expect(Math.max(...segs.map((p) => puts.indexOf(p)))).toBeLessThan(puts.indexOf("v1/live.json"));
+    puts.length = 0;
+    const second = await pass();
+    // Nothing the first pass wrote is written again; a window that settled in
+    // between is the only segment the second may add.
+    for (const p of puts.filter((p) => p.includes("/trace/"))) expect(segs).not.toContain(p);
+    for (const t0 of listedIn(second, LIVE_RUN)) expect(bucket.has(`v1/run/${LIVE_RUN}/trace/${t0}.json`)).toBe(true);
+  });
+});
+
+/** Every path a pass rendered. */
+function out(result: SnapshotResult): string[] {
+  return result.artifacts.map((a) => a.path);
+}
+
+/* ---------------------------------------------------------- cold runs --- */
+
+describe("cold runs", () => {
+  /**
+   * A public handle that records every per-run path it is asked. `fresh`
+   * swaps the viewer behind it for a new one, as a pass five minutes on finds
+   * the listing's fifteen-second window long expired.
+   */
+  function counting(runs: string): { asked: string[]; handle: (req: Request) => Promise<Response>; fresh: () => void } {
+    const make = (): ReturnType<typeof createApi> =>
+      createApi({ runsDir: runs, tilesDir: join(runs, "tiles-unused"), publicMode: true, moduleUrl: "http://127.0.0.1:1" });
+    let api = make();
+    const asked: string[] = [];
+    return {
+      asked,
+      handle: async (req) => {
+        const p = new URL(req.url).pathname;
+        if (p.startsWith("/api/run/")) asked.push(p);
+        return await api(req);
+      },
+      fresh: () => {
+        api = make();
+      },
+    };
+  }
+  /** A view of a bucket holding `keys` and every trace window. */
+  const holding = (keys: ReadonlySet<string>) => ({ traceSegment: () => true, object: (k: string) => keys.has(k) });
+  const keysOf = (r: SnapshotResult): Set<string> => new Set(r.artifacts.map((a) => a.path));
+
+  test("a cold run whose inputs have not moved is published from the keys it rendered to, without a render", async () => {
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const first = await render(111, undefined, holding(new Set()));
+    expect(asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(true);
+    asked.length = 0;
+    const second = await render(222, undefined, holding(keysOf(first)));
+    expect(asked).toEqual([]);
+    expect(second.artifacts.some((a) => a.path.startsWith("v1/run/"))).toBe(false);
+    // What the pass publishes is what a full render publishes.
+    expect(rowOf(second, DEAD_RUN).snapshot).toEqual(rowOf(first, DEAD_RUN).snapshot);
+    expect(second.snap).toEqual(first.snap);
+    expect(second.gen).toBe(first.gen);
+  });
+
+  test("it renders again when a file moves, when the bucket lost one of its keys, and with no view of the bucket", async () => {
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const first = await render(111, undefined, holding(new Set()));
+    const keys = keysOf(first);
+    const rendered = (): boolean => asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`));
+
+    // A key the bucket no longer holds (a failed PUT, a prune) puts the run back in the render.
+    asked.length = 0;
+    const lost = new Set(keys);
+    lost.delete(rowOf(first, DEAD_RUN).snapshot.detail!);
+    const again = await render(222, undefined, holding(lost));
+    expect(rendered()).toBe(true);
+    expect(out(again)).toContain(rowOf(first, DEAD_RUN).snapshot.detail!);
+
+    // No view of the bucket: nothing is skipped.
+    asked.length = 0;
+    await render(333);
+    expect(rendered()).toBe(true);
+
+    // A file that changed, even one put back to an old mtime.
+    writeFileSync(join(runs, DEAD_RUN, "scratchpad.md"), "plan: something else entirely\n");
+    const past = new Date(Date.now() - 60 * 60_000);
+    utimesSync(join(runs, DEAD_RUN, "scratchpad.md"), past, past);
+    asked.length = 0;
+    const moved = await render(444, undefined, holding(keys));
+    expect(rendered()).toBe(true);
+    expect(rowOf(moved, DEAD_RUN).snapshot.scratchpad).not.toBe(rowOf(first, DEAD_RUN).snapshot.scratchpad);
+  });
+
+  test("a cold run is rendered in full at least every six hours, whatever its fingerprint says", async () => {
+    expect(FULL_RENDER_MS).toBe(6 * 60 * 60_000);
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const start = Date.now();
+    let wall = start;
+    const render = createRenderer({ runsDir: runs, api: handle, clock: () => wall });
+    const rendered = (): boolean => asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`));
+    const first = await render(111, undefined, holding(new Set()));
+    const keys = keysOf(first);
+    // Skipped while the last full render is under six hours old…
+    for (const later of [60 * 60_000, FULL_RENDER_MS - 1]) {
+      asked.length = 0;
+      wall = start + later;
+      await render(222, undefined, holding(keys));
+      expect(`${later}: ${rendered()}`).toBe(`${later}: false`);
+    }
+    // …rendered in full at six, landing on the same keys…
+    asked.length = 0;
+    wall = start + FULL_RENDER_MS;
+    const full = await render(333, undefined, holding(keys));
+    expect(rendered()).toBe(true);
+    expect(rowOf(full, DEAD_RUN).snapshot).toEqual(rowOf(first, DEAD_RUN).snapshot);
+    // …and skipped again for six hours after that one.
+    asked.length = 0;
+    wall += 60_000;
+    await render(444, undefined, holding(keys));
+    expect(rendered()).toBe(false);
+    // The bound is a renderer option: at 0, every pass renders everything.
+    const always = counting(runs);
+    const eager = createRenderer({ runsDir: runs, api: always.handle, fullRenderMs: 0 });
+    const once = await eager(111, undefined, holding(new Set()));
+    always.asked.length = 0;
+    await eager(222, undefined, holding(keysOf(once)));
+    expect(always.asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(true);
+  });
+
+  test("a run that is not cold is rendered every pass", async () => {
+    const runs = fixture();
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const first = await render(111, undefined, holding(new Set()));
+    asked.length = 0;
+    await render(222, undefined, holding(keysOf(first)));
+    expect(asked.some((p) => p.startsWith(`/api/run/${LIVE_RUN}`))).toBe(true);
+    expect(asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(false);
+  });
+
+  test("a finished attempt renders again when its character moves, so its neighbours are never stale", async () => {
+    const runs = tempDir("snapshot-cold-chain-");
+    writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true, episode: "freeplay" });
+    writeRun(runs, LIVE_RUN, { terminated: true, stateTs: 1600, old: true, continuedFrom: DEAD_RUN, episode: "freeplay" });
+    const { asked, handle, fresh } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const first = await render(111, undefined, holding(new Set()));
+    // A third attempt continues the second; neither earlier attempt's files move.
+    writeRun(runs, "snap-run-third", { terminated: true, stateTs: 1700, old: true, continuedFrom: LIVE_RUN, episode: "freeplay" });
+    fresh();
+    asked.length = 0;
+    const second = await render(222, undefined, holding(keysOf(first)));
+    expect(asked.some((p) => p.startsWith(`/api/run/${DEAD_RUN}`))).toBe(true);
+    expect((trackOfIn(second, LIVE_RUN) as { character: { next: string } }).character.next).toBe("snap-run-third");
+  });
+
+  test("through the publisher: a second pass over a tree of finished runs renders and uploads none of them", async () => {
+    const runs = fixture(false);
+    const { asked, handle } = counting(runs);
+    const render = createRenderer({ runsDir: runs, api: handle });
+    const puts: string[] = [];
+    const store: ObjectStore = { put: async (path) => void puts.push(path), delete: async () => {} };
+    const state = emptyState();
+    const pass = async (): Promise<void> => {
+      await publishPass(async (sink, published) => await render(Date.now(), { sink, batch: 1 }, published), store, state);
+    };
+    await pass();
+    expect(puts.some((p) => p.startsWith(`v1/run/${DEAD_RUN}/`))).toBe(true);
+    puts.length = 0;
+    asked.length = 0;
+    await pass();
+    expect(asked).toEqual([]);
+    expect(puts.filter((p) => p.startsWith("v1/run/"))).toEqual([]);
   });
 });

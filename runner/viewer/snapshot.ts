@@ -26,6 +26,11 @@
  * - `v1/snap/<ver>/<name>` and `v1/run/<id>/<ver>/…` are content-addressed and
  *   immutable: a re-render of unchanged input lands on the same keys, so a
  *   client may cache them forever.
+ * - `v1/run/<id>/trace/<t0>.json` is one closed trace window
+ *   (`runner/viewer/trace.ts`), immutable because a closed window never
+ *   changes. The run's track lists them and `live.json` names the newest; both
+ *   are written after them, and each is rendered once — the publisher passes
+ *   in which windows the bucket already holds.
  *
  * Each aggregate carries its OWN `<ver>` (operator, 2026-09-04, GitHub issue
  * #38). One hash over the whole set meant a single live run taking a turn
@@ -42,8 +47,10 @@
  * would make every render a new version even when nothing changed.
  */
 
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createApi, type ApiHandle } from "./api";
+import { lineageIndex } from "./lineage";
 import { EPISODE_IDS } from "../src/episodes";
 import type {
   ApiInfoResponse,
@@ -55,10 +62,14 @@ import type {
   ModelsResponse,
   PositionsResponse,
   ResultsResponse,
+  ResultRun,
   RunDetailResponse,
+  RunListRow,
   RunsResponse,
+  TraceSegment,
   TrackResponse,
 } from "./api-types";
+import { unpackSegs } from "./trace";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
@@ -73,6 +84,7 @@ import {
   projectRunDetail,
   projectRuns,
   projectTrack,
+  projectTraceSegment,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
 
@@ -169,7 +181,22 @@ export interface RendererOptions {
    * which is what a plain function injected by a test is.
    */
   api?: ((req: Request) => Promise<Response>) | ApiHandle;
+  /**
+   * The longest a cold run goes without being rendered in full
+   * (`FULL_RENDER_MS` by default). The bound on how stale an input the cold
+   * fingerprint cannot see may leave a run's objects.
+   */
+  fullRenderMs?: number;
+  /** The wall clock cold runs are judged on; `Date.now` but in tests. */
+  clock?: () => number;
 }
+
+/**
+ * Every run is rendered in full at least this often, skipped or not. The keys
+ * are content-addressed, so a full render that finds nothing changed uploads
+ * nothing; one that finds a change the fingerprint missed publishes it.
+ */
+export const FULL_RENDER_MS = 6 * 60 * 60_000;
 
 /**
  * How many runs are in flight at once in the per-run pass.
@@ -230,6 +257,76 @@ export interface RunStream {
 }
 
 /**
+ * What the bucket already holds (`infra/publish-core.ts`, `PublishedView`).
+ * A trace segment the bucket has is neither fetched nor rendered again, and a
+ * cold run whose objects it holds may be skipped whole (`coldFingerprint`).
+ * Without a view, everything is rendered: the shape of a first pass, a
+ * `--once` backfill and every test that does not pass one.
+ */
+export interface PublishedTrace {
+  traceSegment(runId: string, t0: number): boolean;
+  /** Whether the bucket holds this key. Optional: a view without it skips no run. */
+  object?(path: string): boolean;
+}
+
+/**
+ * How long all of a run's files must have been still before a pass may skip
+ * it. Past every clock a run's objects read: the listing's live window (two
+ * minutes), a trace window's settling (its end plus a minute), and the
+ * collector's poll that brings the store level with the files.
+ */
+export const COLD_MS = 15 * 60_000;
+
+/** The files the per-run routes read. A run's derived-store rows are derived from these. */
+const RUN_INPUT_FILES = ["meta.json", "trajectory.jsonl", "run.sqlite", "scratchpad.md"] as const;
+
+/**
+ * Everything a cold run's four objects are a function of, hashed, or null when
+ * the run is not cold.
+ *
+ * - **Its files**, by size and mtime. Every per-run route reads a run's own
+ *   files or the store rows the collector derives from them.
+ * - **Its listing row** as this pass projected it, which is the store's view
+ *   of the run (so a collector still catching up moves it) and carries the
+ *   cost the detail repeats.
+ * - **Its character's rows**, for a run in a chain of attempts. A freeplay
+ *   attempt's detail and track name its neighbours and carry the chain's
+ *   totals, so a successor appearing or a live attempt progressing changes a
+ *   finished attempt's objects without touching its files.
+ *
+ * **Not watched**, and bounded instead by a full render every
+ * `FULL_RENDER_MS`. Code is the main one: the projection, the redaction and
+ * path-scrub lists, the codec, `model-cost`. So is the OpenRouter price table,
+ * read once at start, which `sync-prices` rewrites. A new process brings in
+ * both, and it starts with nothing remembered. Beyond those: a store row the
+ * listing row does not reflect (a re-ingest that changes a run's state series
+ * but not its totals), and lineage as the viewer's own fifteen-second listing
+ * sees it, where it differs from the projected results the chain rows come
+ * from. Cold is judged on the wall clock, never the render's `now`, which only
+ * stamps `generatedAt`.
+ */
+function coldFingerprint(runsDir: string, row: RunListRow, character: string, wall: number): string | null {
+  const parts = [JSON.stringify(row), character];
+  for (const name of RUN_INPUT_FILES) {
+    let st: { size: number; mtimeMs: number };
+    try {
+      st = statSync(join(runsDir, row.runId, name));
+    } catch {
+      parts.push(`${name} -`);
+      continue;
+    }
+    if (st.mtimeMs > wall - COLD_MS) return null;
+    parts.push(`${name} ${st.size} ${st.mtimeMs}`);
+  }
+  return hash12(parts.join("\n"));
+}
+
+/** A trace segment's key: under the run, addressed by its window (`publish-core.ts`). */
+export function traceSegmentKey(runId: string, t0: number): string {
+  return `v1/run/${runId}/trace/${t0}.json`;
+}
+
+/**
  * Build a renderer that can run pass after pass over one viewer handle.
  *
  * The handle is the reason this exists. `createApi` keeps its trajectory
@@ -245,7 +342,9 @@ export interface RunStream {
  * are made — see `RunStream` — and then leaves them out of the result it
  * returns, which is otherwise identical.
  */
-export function createRenderer(opts: RendererOptions): (now?: number, stream?: RunStream) => Promise<SnapshotResult> {
+export function createRenderer(
+  opts: RendererOptions,
+): (now?: number, stream?: RunStream, published?: PublishedTrace) => Promise<SnapshotResult> {
   const handle =
     opts.api ??
     createApi({
@@ -270,6 +369,32 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     typeof (handle as Partial<ApiHandle>).release === "function"
       ? (runId): void => (handle as ApiHandle).release(runId)
       : undefined;
+
+  /**
+   * What each cold run rendered to, by run: the fingerprint of its inputs, the
+   * keys its row pointed at, and the trace windows its track listed.
+   *
+   * A pass used to render every run in the listing — four routes each, every
+   * trajectory re-scanned (the streamed pass releases them) and a handful of
+   * store queries apiece — to land almost all of them on keys the bucket
+   * already held. Measured on the fleet, that was ~5,000 store queries and
+   * ~16 GB of reads a pass for some 580 runs, nearly all of them long
+   * finished. A run whose fingerprint is the one it rendered under, and whose
+   * objects the bucket still holds, is now published by pointing its row at
+   * them again. That is what a render would have produced, by the
+   * fingerprint's own argument, without making it.
+   *
+   * Per process, like the handle: a restart, which is also the only way the
+   * code a render runs can change, starts empty and renders everything once.
+   * And an entry stands for at most `fullRenderMs`, so every run is rendered
+   * in full that often whatever its fingerprint says.
+   */
+  const coldRuns = new Map<
+    string,
+    { fingerprint: string; snapshot: NonNullable<RunListRow["snapshot"]>; trace: number[] | null; renderedAt: number }
+  >();
+  const fullRenderMs = opts.fullRenderMs ?? FULL_RENDER_MS;
+  const clock = opts.clock ?? Date.now;
 
   /** A route that must answer, or the pass is not a snapshot. */
   const get = async <T>(path: string): Promise<T> => {
@@ -312,8 +437,17 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     return scrubPathsText(await res.text());
   };
 
-  return async function render(nowArg?: number, stream?: RunStream): Promise<SnapshotResult> {
+  return async function render(nowArg?: number, stream?: RunStream, published?: PublishedTrace): Promise<SnapshotResult> {
     const now = nowArg ?? Date.now();
+    /*
+     * Every trace window a run's published track lists, by run: the ones the
+     * bucket held before this pass and the ones this pass renders into the run
+     * wave. `live.json` is written after that wave, and its `recent` windows
+     * are cut to these, so it can never name a segment the bucket does not
+     * hold — a reader that followed one would cache the 404 at the edge for a
+     * day.
+     */
+    const traceListed = new Map<string, ReadonlySet<number>>();
 
     // Everything below is projected the moment it is parsed, so no unprojected
     // body exists past this block for a later step to serialize by mistake.
@@ -360,6 +494,36 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     const groupSize =
       stream === undefined || !Number.isFinite(stream.batch) ? Math.max(1, rows.length) : Math.max(1, Math.floor(stream.batch));
     const artifacts: SnapshotArtifact[] = [];
+    /*
+     * Each run's character, as the rows of all its attempts: part of a chained
+     * run's cold fingerprint, built once a pass off the results already in hand
+     * (the same rows the public character page derives the chain from). A run
+     * of one attempt has none.
+     */
+    const lineage = lineageIndex(results.runs);
+    const attemptsOf = new Map<string, ResultRun[]>();
+    for (const r of results.runs) {
+      const l = lineage.get(r.runId);
+      if (l === undefined || l.attempts < 2) continue;
+      const list = attemptsOf.get(l.characterId) ?? [];
+      list.push(r);
+      attemptsOf.set(l.characterId, list);
+    }
+    const characterText = new Map<string, string>();
+    const characterOf = (runId: string): string => {
+      const id = lineage.get(runId)?.characterId;
+      const list = id === undefined ? undefined : attemptsOf.get(id);
+      if (id === undefined || list === undefined) return "";
+      let text = characterText.get(id);
+      if (text === undefined) {
+        text = JSON.stringify([...list].sort((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0)));
+        characterText.set(id, text);
+      }
+      return text;
+    };
+    // Only a pass that can see the bucket may skip: it must know the objects are still there.
+    const holds = published?.object?.bind(published);
+    const wall = clock();
     for (let start = 0; start < rows.length; start += groupSize) {
       const group = rows.slice(start, start + groupSize);
       const perRun: (SnapshotArtifact[] | undefined)[] = new Array(group.length);
@@ -368,6 +532,21 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
         for (let i = next++; i < group.length; i = next++) {
           const row = group[i]!;
           const id = encodeURIComponent(row.runId);
+          // Before the row is stamped, so the fingerprint sees the listing's own row.
+          const fingerprint = holds === undefined ? null : coldFingerprint(opts.runsDir, row, characterOf(row.runId), wall);
+          const cold = fingerprint === null ? undefined : coldRuns.get(row.runId);
+          if (
+            cold !== undefined &&
+            cold.fingerprint === fingerprint &&
+            // The safety net under everything the fingerprint cannot see.
+            wall - cold.renderedAt < fullRenderMs &&
+            Object.values(cold.snapshot).every((key) => holds!(key)) &&
+            (cold.trace ?? []).every((t0) => published!.traceSegment(row.runId, t0))
+          ) {
+            row.snapshot = cold.snapshot;
+            if (cold.trace !== null) traceListed.set(row.runId, new Set(cold.trace));
+            continue;
+          }
           const [detail, track, entries, scratchpad] = await Promise.all([
             getIfPresent<RunDetailResponse>(`/api/run/${id}`).then((b) => (b === null ? null : projectRunDetail(b))),
             getIfPresent<TrackResponse>(`/api/run/${id}/track`).then((b) => (b === null ? null : projectTrack(b))),
@@ -381,6 +560,31 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
           // mid-pass; a row must never point at part of a set, so all are
           // dropped together.
           if (detail === null || track === null || entries === null) continue;
+          /*
+           * The run's closed trace windows the bucket does not hold yet, each its
+           * own immutable object. Only listed windows are asked for, so a 404 is
+           * the run going away mid-pass, and the run is dropped like any other
+           * half going missing: its track lists these, and must not land
+           * without them. A run with no trace lists none and costs nothing here.
+           */
+          const segments: SnapshotArtifact[] = [];
+          let segmentMissing = false;
+          for (const t0 of track.trace === undefined ? [] : unpackSegs(track.trace.segs, track.trace.segMs)) {
+            if (published?.traceSegment(row.runId, t0) === true) continue;
+            const seg = await getIfPresent<TraceSegment>(`/api/run/${id}/trace/${t0}`);
+            if (seg === null) {
+              segmentMissing = true;
+              break;
+            }
+            segments.push({
+              path: traceSegmentKey(row.runId, t0),
+              body: envelope(projectTraceSegment(seg)),
+              contentType: "application/json",
+              cacheControl: IMMUTABLE_CACHE,
+            });
+          }
+          if (segmentMissing) continue;
+          if (track.trace !== undefined) traceListed.set(row.runId, new Set(unpackSegs(track.trace.segs, track.trace.segMs)));
           // The version covers everything the row points at, so a window that
           // grew, a scratchpad rewritten, or a track that gained a field
           // (`travel`) between two identical details still lands on a new key
@@ -409,8 +613,20 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
             immutable(paths.track, envelope(track)),
             immutable(paths.entries!, envelope(entries)),
             ...(paths.scratchpad === undefined ? [] : [immutable(paths.scratchpad, envelope({ text: scratchpad }))]),
+            // In the same batch, so in the same run wave as the track listing them.
+            ...segments,
           ];
           row.snapshot = paths;
+          // Remembered whatever this pass's upload does: a later pass skips
+          // only once the bucket holds every key, so a failed PUT renders again.
+          if (fingerprint !== null) {
+            coldRuns.set(row.runId, {
+              fingerprint,
+              snapshot: paths,
+              trace: track.trace === undefined ? null : unpackSegs(track.trace.segs, track.trace.segMs),
+              renderedAt: wall,
+            });
+          } else coldRuns.delete(row.runId);
         }
       };
       await Promise.all(Array.from({ length: Math.min(RUN_CONCURRENCY, group.length) }, worker));
@@ -463,7 +679,7 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
       },
       {
         path: "v1/live.json",
-        body: JSON.stringify({ generatedAt: now, attribution: PUBLIC_ATTRIBUTION, fleet, positions }),
+        body: JSON.stringify({ generatedAt: now, attribution: PUBLIC_ATTRIBUTION, fleet, positions: livePositions(positions, traceListed) }),
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,
       },
@@ -481,6 +697,30 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     ];
 
     return { gen, snap: paths, artifacts: out };
+  };
+}
+
+/**
+ * The projected position feed as `live.json` carries it: each position's
+ * `recent` trace windows cut to the ones its run's published track lists.
+ *
+ * The feed is read at the top of a pass and the tracks after it, and a window
+ * only ever closes, so in practice the cut removes nothing; it is what makes
+ * "`live.json` names only segments in the bucket" a property of the code rather
+ * than of the timing — a run whose track was dropped mid-pass names none. The
+ * copy is of an already-projected position, and the trace is rebuilt field by
+ * field rather than spread.
+ */
+function livePositions(positions: PositionsResponse, listed: ReadonlyMap<string, ReadonlySet<number>>): PositionsResponse {
+  return {
+    positions: positions.positions.map((p) => {
+      if (p.trace === undefined) return p;
+      const known = listed.get(p.runId);
+      return {
+        ...p,
+        trace: { segMs: p.trace.segMs, recent: p.trace.recent.filter((t0) => known?.has(t0) === true), tail: p.trace.tail },
+      };
+    }),
   };
 }
 

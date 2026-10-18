@@ -83,6 +83,35 @@ reading in windows rather than whole files, is what puts a pass over a
 1,016-run tree at 0.78 GB peak RSS rather than 4.4 GB. Credentials are one R2
 key pair scoped to the one bucket, held only by the publisher.
 
+A finished run is not rendered again once it has gone cold. That means all
+its files have been still for 15 minutes (`COLD_MS`), past the live window,
+the trace's settling and the collector's catch-up. A pass skips it, pointing
+its row at the keys it rendered to last time, when three things hold: its
+files' sizes and mtimes are unchanged, its listing row is unchanged, and so are
+the rows of every attempt in its character. The bucket must also still hold
+every object the row names, by the engine's record. A failed PUT or a pruned
+version therefore puts the run back in the render.
+
+Some inputs the fingerprint cannot see:
+
+- code: the projection, the redaction and scrub lists, the codec and
+  `model-cost`;
+- the OpenRouter price table, read once at start and rewritten by
+  `sync-prices`;
+- a store row the listing row does not reflect;
+- lineage as the viewer's own listing sees it.
+
+A restart covers code and prices, since a new process remembers nothing and
+renders everything once. Every run is also rendered in full at least every six
+hours (`WRATHBENCH_PUBLISH_FULL_RENDER_MS`), which bounds the rest. The keys are
+content-addressed, so a full render that finds nothing changed uploads nothing.
+
+The skip was added because rendering cold runs was most of a pass. On the
+fleet a pass took about 120 s. Nearly all of that was the per-run phase over
+some 580 runs: about 5,000 store queries returning about 600 MB, and about
+16 GB of trajectory reads, since a streamed pass releases each run's entry
+index. Almost every run landed on keys the bucket already held.
+
 Minimap tiles are published by a second, separate script
 (`infra/publish-tiles.ts`). It is never part of a
 snapshot pass: the loop above uploads JSON only, and the tiles are
@@ -111,9 +140,10 @@ its own, is `dashboard/README.md`'s.
 
 ```
 /v1/manifest.json                    mutable   max-age=30   { gen, artifacts: {name: key}, generatedAt }
-/v1/live.json                        mutable   max-age=30   fleet + positions fast lane
+/v1/live.json                        mutable   max-age=30   fleet + positions fast lane, trace tails inline
 /v1/snap/<ver>/runs.json …           immutable max-age=1y   one aggregate, at its own content version
 /v1/run/<id>/<ver>/detail.json …     immutable max-age=1y   per-run detail and track
+/v1/run/<id>/trace/<t0>.json         immutable max-age=1y   one closed five-minute trace window
 ```
 
 Everything except the two mutable files is immutable and addressed by its own
@@ -156,6 +186,57 @@ publisher second; between the two the site is correct on both shapes.
 Worst-case staleness is push cadence + edge TTL, about six minutes at the
 five-minute cadence. If that ever matters, a cache-purge API call on the two
 mutable URLs after each push tightens it to the push cadence.
+
+### Trace segments
+
+A run the trace recorder drove has positions at about 1 Hz and the unit state
+beside them, packed one segment per run per UTC-aligned five-minute window
+(`runner/viewer/trace.ts` is the codec and the format). That is what lets the
+map play a character back as movement rather than a pip that jumps once a pass.
+A segment is published once, when its window closes, at
+`v1/run/<id>/trace/<t0>.json`, and is immutable like the content-addressed
+objects but addressed by its window: a closed window never changes. Closed
+means a minute (`SETTLE_MS`) past its end, so a row the recorder drains late
+still lands in it. A row that arrived after the PUT would be gone for a year
+at the edge.
+
+- **Listed, never guessed.** The run's `track.json` gains `trace: {segMs,
+  segs}`, the windows as runs of `[firstT0, count]`, and each live position in
+  `live.json` gains `trace: {segMs, recent, tail}`: the last three closed
+  windows, and the tail, everything since, inline. A reader fetches only a
+  window one of those lists. The edge caches a 404 for a day, so asking for one
+  speculatively would hide it after it lands.
+- **Before what lists it.** Segments go up in the run wave, before the
+  aggregates and both mutable files. A failed one fails the pass, so no
+  `live.json` and no manifest naming it is written. The renderer also cuts
+  `live.json`'s `recent` to the windows a published track lists, so the
+  property does not rest on timing.
+- **Rendered once.** The state file records each run's published windows as
+  the same packed runs (`traceSegs`), not as a hash per key. A pass asks the
+  viewer only for windows it does not hold, so a week-long run's two thousand
+  segments are neither re-read nor re-encoded. Throwing the state file away
+  costs one re-upload of every segment, the same repair as for every other key.
+- **Never pruned.** No version supersedes a window, so none is surplus. They
+  accumulate: about 6 KB a segment raw, so roughly 50 MB per character-month
+  of continuous play against R2's 10 GB free storage.
+- **Runs before the recorder** have no `trace` table. Their tracks carry no
+  `trace` field, so their bytes and keys are what they were, and nothing is
+  backfilled.
+- **A published segment cannot be corrected in place.** A content-addressed
+  run object moves to a new key when its projection changes. A segment's key
+  is its window, so a change to the codec or to `projectTraceSegment` reaches
+  only windows that close after it ships. Two things hold the old ones: the
+  edge caches them for a year, and `traceSegs` keeps them from being PUT again.
+  Correcting published windows takes three things together: a new key prefix
+  the reader moves to (`trace2/`), a cleared `traceSegs`, and a purge of the
+  old prefix. A change to the content boundary is therefore one to settle
+  before segments go out, not after.
+
+One trace-specific cache fact: segments sit under `/v1/run/`, so the zone's
+immutable rule and its rate limit (60 requests per 10 seconds per IP) cover
+them. A replay asks for one segment per five minutes of play, so even 60×
+playback is about one request every five seconds. A player should prefetch
+around the cursor, not a whole run.
 
 ### Data plane: R2 behind a custom domain with a cache rule
 
@@ -319,6 +400,24 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   once and draws them: the old URL is cached for a year and cannot be corrected
   in place. That re-uploads every object of every run once, and the old set is
   pruned as above.
+
+- **The trace ships positions and the unit frame, not deaths or targets.**
+  A segment (`projectTraceSegment`) keeps positions, cuts, flights, health
+  and power, level and XP, aura spell ids with stacks and expiry, the combat,
+  mounted, taxi and resting flags, and a cast's spell. A cut says the
+  character did not travel there and never why, so a graveyard port reads like
+  a hearth. Withheld: the `dead` and `ghost` flags, aura flags, and the
+  `target`, which names another unit, and a player target with its health is
+  another player's whereabouts. The gauges are withheld while the character is
+  down, whether dead, a ghost or at 0 health. They read as unobserved from that
+  moment and come back at their values on revival, so the trace draws no
+  health bar emptying at a corpse. The `tail` in `live.json` crosses the same
+  projector. **Residual, stated plainly**: the positions themselves are
+  published, so the place a character stopped, the cut to a graveyard and the
+  walk back are on the map. They already are at 60 s resolution in the track,
+  whose points also carry a `health` of 0 when a sample landed on a death.
+  Whether deaths should withhold the positions around them too is the
+  operator's open question, not decided here.
 
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
@@ -584,6 +683,17 @@ is the documented repair for exactly this.
 
 The entire write cost is live runs, and the two levers on it are the cadence
 and per-aggregate addressing.
+
+A steady pass now makes 14 PUTs. Passes
+run about every 6.7 minutes, because a pass takes one to two minutes on top of
+the interval. That is about 90k class-A ops a month. Trace segments add one PUT
+per live character per closed window, and that count does not depend on the
+cadence: a window closes every five minutes, whenever the pass that uploads it
+runs. A character live around the clock adds 288 a day, about **8.6k a month**.
+Three such characters take the month to about 116k, roughly 12% of the free
+tier. Nothing else per pass moves: the tail rides inside the `live.json` PUT
+already made, and the window list inside a `track.json` a live run rewrites
+every pass anyway.
 
 Unverified at research time (primary pages blocked from the research
 environment; confirm before relying on them): the exact Pro-plan feature

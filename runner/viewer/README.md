@@ -376,6 +376,37 @@ draws as a labelled grid square, so the map works on a machine that has never
 run the extraction. The public site's tiles are a separate upload
 (`docs/RUNBOOK.md`, "Public dashboard").
 
+## The trace: positions second by second
+
+A run recorded by the trace recorder has a `trace` table in its `run.sqlite`:
+positions at about 1 Hz and the unit state beside them (health, power, auras,
+combat, a cast, a flight). `trace.ts` is the codec — one segment per run per
+UTC-aligned five-minute window, columnar and delta-encoded, with its format at
+the top of the file — and it imports nothing, so the dashboard's player decodes
+with the same code. `trace-db.ts` is the reads, all ranges over the
+`(run_id, ts)` index.
+
+- `/api/run/<id>/trace` is the index: `segs`, the closed windows that have
+  rows as runs of `[firstT0, count]`, and `tail`, everything after them
+  encoded so far. A window closes `SETTLE_MS` (a minute) after it ends, so a
+  row the recorder drains late still lands in it; until then it is in the
+  tail, which is why the tail spans two windows for that minute.
+- `/api/run/<id>/trace/<t0>` is one window. A closed one never changes and is
+  sent with a year's immutable cache; the open one is sent `no-store`; one
+  with no rows is a 404.
+- `/api/run/<id>/track` gains `trace: {segMs, segs}` and each live position on
+  `/api/positions` gains `trace: {segMs, recent, tail}` — the last three closed
+  windows and the tail, from one range read — so the live map and the replay
+  read one shape, privately and publicly.
+
+A run from before the recorder has no table, and every one of these answers as
+"no trace": an empty index, a 404, and no `trace` field at all, so its track is
+the bytes it always was. The track's window list is memoised on the database
+file's size and mtime, which is what keeps the publisher from opening every
+run's sqlite on every pass. In public mode a segment crosses
+`projectTraceSegment`: no `dead`, `ghost` or `target`, and no gauges while the
+character is down.
+
 ## How it handles big files
 
 `request` entries embed the model's message array (the whole of it on an older

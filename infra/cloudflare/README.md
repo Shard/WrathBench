@@ -120,6 +120,10 @@ request is a billed read against the bucket.
    starts with "/v1/snap/" or "/v1/run/"` → eligible for cache, **Edge TTL 1
    year**, **Browser TTL 1 year**. These are content-addressed and never
    rewritten under their own key, so a long TTL is safe by construction.
+   Trace segments (`/v1/run/<id>/trace/<t0>.json`) match this rule as they
+   are. Each one is addressed by a closed window rather than by a content
+   version, and is written once a minute after the window ends, so it is just
+   as immutable and needs no rule of its own.
 3. **Tiles** — `Hostname equals wrathbench-data.shard.page` *and* `URI Path
    starts with "/tiles/"` *and* `URI Path does not contain "/art/"` → eligible
    for cache, **Edge TTL 1 day**, **Browser TTL 1 day**. Not content-addressed:
@@ -160,7 +164,12 @@ Free plan's allowance):
 
 A run page fetches a handful of objects under `/v1/run/`, so a reader clicking
 through runs never reaches the limit; a crawler pulling every run's detail
-does within its first second. Together with the data hostname's own
+does within its first second. The map's trace player reads segments under the
+same prefix, at one object per five minutes of play. A replay at 60× needs
+about one every five seconds. The live map needs up to three per live
+character when it opens, which a fleet of twenty would spend in one go. So the
+limit stands as it is, provided the player fetches only the windows its
+playhead is about to reach, never a whole run or every character at once. Together with the data hostname's own
 `robots.txt` (`infra/robots.ts`, published by the publisher at start-up) this is
 the whole crawler posture: the headline material is open, the transcripts are
 disallowed by directive and throttled at the edge. The zone's AI crawler

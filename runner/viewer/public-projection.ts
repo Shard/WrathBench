@@ -45,6 +45,10 @@
  *   its `resumeAfter` and with a fixed `why`, and an errored `claude_result`
  *   ships without its text, which is the CLI's limit message.
  * - Minimap tiles are Blizzard bytes and never leave through a snapshot.
+ * - From the trace (`projectTraceSegment`): the `dead` and `ghost` flags and
+ *   the gauges while the character is down, because deaths are withheld whole,
+ *   and the `target`, which names another unit — another player, with its
+ *   health, is another player's whereabouts. A cut never says why.
  * The rule when a field is arguable: withhold.
  */
 
@@ -104,11 +108,21 @@ import type {
   TrackResponse,
   TrackTravelMark,
   Square,
+  PositionTrace,
+  TraceAura,
+  TraceCast,
+  TraceEventWire,
+  TraceIndexResponse,
+  TraceSegment,
+  TraceSegRuns,
+  TraceState,
+  TrackTrace,
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
+import { isStateKey, sanitizeStateValue, stateOf, type TraceStateKey } from "./trace";
 
 /**
  * The attribution line every published artifact carries.
@@ -566,6 +580,9 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         // A harness fact about this run's own loop, with nothing of the world
         // in it: whether the model is spending this turn thinking.
         reflecting: a.reflecting ?? false,
+        // The newest windows and the tail, the tail through the segment
+        // projection. Absent stays absent: a run with no trace says nothing.
+        ...(a.trace === undefined ? {} : { trace: projectPositionTrace(a.trace) }),
       }),
     ),
   });
@@ -1197,6 +1214,151 @@ export function projectTrack(t: TrackResponse): TrackResponse {
             next: t.character.next,
           },
         }),
+    // Which windows have a published segment. Absent stays absent: a run with
+    // no trace keeps the bytes, and so the key, it had before the recorder.
+    ...(t.trace === undefined ? {} : { trace: projectTrackTrace(t.trace) }),
+  });
+}
+
+/* --------------------------------------------------------------- trace --- */
+
+/**
+ * The trace state keys a public segment carries, in the codec's order.
+ * Withheld, by not being listed: `dead` and `ghost` (deaths are withheld whole,
+ * `projectRunDetail`), and `target` (another unit's identity, and through a
+ * player target another player's whereabouts).
+ */
+const PUBLIC_TRACE_KEYS = [
+  "hp",
+  "hpMax",
+  "pw",
+  "pwMax",
+  "pwType",
+  "level",
+  "xp",
+  "xpMax",
+  "auras",
+  "combat",
+  "mounted",
+  "taxi",
+  "resting",
+  "cast",
+] as const satisfies readonly TraceStateKey[];
+const PUBLIC_TRACE_KEY_SET: ReadonlySet<string> = new Set(PUBLIC_TRACE_KEYS);
+
+/**
+ * The gauges, withheld while the character is down. A health bar reading 0,
+ * then blank, then full again at a graveyard is a death drawn second by
+ * second, so publicly the gauges read null (unobserved) from the moment the
+ * character is dead, a ghost, or at 0 health, and come back at their current
+ * values when it is none of those.
+ */
+const TRACE_GAUGES = ["hp", "hpMax", "pw", "pwMax", "pwType"] as const;
+const TRACE_GAUGE_SET: ReadonlySet<string> = new Set(TRACE_GAUGES);
+
+const isDown = (s: TraceState): boolean => s.dead || s.ghost || s.hp === 0;
+
+/** One public key's value, rebuilt: an aura's flags and a cast's extras do not travel. */
+function publicTraceValue(key: TraceStateKey, v: unknown): unknown {
+  if (key === "auras") return (v as TraceAura[]).map((a): TraceAura => [a[0], a[1], a[2]]);
+  if (key === "cast") return v === null ? null : { spellId: (v as TraceCast).spellId, endsAt: (v as TraceCast).endsAt };
+  return v;
+}
+
+const finiteNums = (a: unknown): number[] =>
+  Array.isArray(a) ? a.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : 0)) : [];
+/** A fixed-width numeric tuple, or null when `a` is not an array at all. */
+function numTuple<T extends number[]>(a: unknown, width: number): T | null {
+  if (!Array.isArray(a)) return null;
+  return Array.from({ length: width }, (_, i) => {
+    const v = (a as unknown[])[i];
+    return typeof v === "number" && Number.isFinite(v) ? v : 0;
+  }) as T;
+}
+const tupleList = <T extends number[]>(a: unknown, width: number): T[] =>
+  Array.isArray(a) ? a.map((t) => numTuple<T>(t, width)).filter((t): t is T => t !== null) : [];
+
+/**
+ * One trace segment (`runner/viewer/trace.ts`), field by field.
+ *
+ * Positions, cuts and flights pass as numbers — a cut says that the character
+ * did not travel there and never why, so a graveyard port reads like a
+ * hearth. The state crosses `PUBLIC_TRACE_KEYS` and the down rule above: the
+ * private keyframe and events are replayed in order, so the public stream
+ * withholds exactly what the rule says at every moment and no more, and an
+ * event that would only repeat what the public stream already says is dropped.
+ * A fixed point on its own output, like every projector here.
+ */
+export function projectTraceSegment(seg: TraceSegment): TraceSegment {
+  const priv = stateOf(seg.k?.s);
+  let down = isDown(priv);
+  const s: Partial<TraceState> = {};
+  const said = new Map<string, string>();
+  for (const key of PUBLIC_TRACE_KEYS) {
+    const v = TRACE_GAUGE_SET.has(key) && down ? null : publicTraceValue(key, priv[key]);
+    (s as Record<string, unknown>)[key] = v;
+    said.set(key, JSON.stringify(v));
+  }
+  const ev: TraceEventWire[] = [];
+  const say = (ms: number, key: string, v: unknown): void => {
+    const j = JSON.stringify(v);
+    if (said.get(key) === j) return;
+    said.set(key, j);
+    ev.push([ms, key, v]);
+  };
+  for (const e of Array.isArray(seg.ev) ? seg.ev : []) {
+    if (!Array.isArray(e) || typeof e[0] !== "number" || !Number.isFinite(e[0]) || !isStateKey(e[1])) continue;
+    const v = sanitizeStateValue(e[1], e[2]);
+    if (v === undefined) continue;
+    (priv as unknown as Record<string, unknown>)[e[1]] = v;
+    const nowDown = isDown(priv);
+    if (PUBLIC_TRACE_KEY_SET.has(e[1]) && !(TRACE_GAUGE_SET.has(e[1]) && nowDown)) say(e[0], e[1], publicTraceValue(e[1], v));
+    if (nowDown !== down) for (const g of TRACE_GAUGES) say(e[0], g, nowDown ? null : priv[g]);
+    down = nowDown;
+  }
+  const k = seg.k ?? { p: null, s: {} };
+  const p = numTuple<[number, number, number, number, number]>(k.p, 5);
+  const f = numTuple<[number, number, number, number, number]>(k.f, 5);
+  return scrubPathsValue<TraceSegment>({
+    v: seg.v,
+    run: seg.run,
+    t0: seg.t0,
+    t1: seg.t1,
+    q: { p: seg.q.p, o: seg.q.o },
+    k: {
+      p,
+      ...(typeof k.pt === "number" && Number.isFinite(k.pt) && k.pt !== 0 ? { pt: k.pt } : {}),
+      s,
+      ...(f === null ? {} : { f }),
+    },
+    dt: finiteNums(seg.dt),
+    x: finiteNums(seg.x),
+    y: finiteNums(seg.y),
+    z: finiteNums(seg.z),
+    o: finiteNums(seg.o),
+    cuts: tupleList<[number, number]>(seg.cuts, 2),
+    flights: tupleList<[number, number, number, number, number, number]>(seg.flights, 6),
+    ev,
+  });
+}
+
+const projectSegRuns = (runs: TraceSegRuns): TraceSegRuns => tupleList<[number, number]>(runs, 2);
+
+function projectTrackTrace(t: TrackTrace): TrackTrace {
+  return { segMs: t.segMs, segs: projectSegRuns(t.segs) };
+}
+
+function projectPositionTrace(t: PositionTrace): PositionTrace {
+  return { segMs: t.segMs, recent: finiteNums(t.recent), tail: t.tail === null ? null : projectTraceSegment(t.tail) };
+}
+
+/** `GET /api/run/<id>/trace` in public mode: the window list, and the tail through the segment projection. */
+export function projectTraceIndex(i: TraceIndexResponse): TraceIndexResponse {
+  return scrubPathsValue<TraceIndexResponse>({
+    segMs: i.segMs,
+    segs: projectSegRuns(i.segs),
+    tail: i.tail === null ? null : projectTraceSegment(i.tail),
+    now: i.now,
   });
 }
 
