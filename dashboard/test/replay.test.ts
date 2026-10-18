@@ -77,6 +77,16 @@ describe("positionsAt", () => {
   test("before the first recorded position there is nothing to draw", () => {
     expect(positionsAt(TRACK, 1)).toEqual([]);
   });
+
+  test("the quest count is the track's at the cursor, so the replay's end reads the run's", () => {
+    // Points as the viewer builds them: the run's count so far, across a resume (`trackFrom`).
+    const counts = [4, 6, 9];
+    const track: TrackResponse = { ...TRACK, points: TRACK.points.map((p, i) => ({ ...p, questsCompleted: counts[i]! })) };
+    expect(positionsAt(track, 150)[0]?.questsCompleted).toBe(4);
+    expect(positionsAt(track, trackSpan(track.points)!.to)[0]?.questsCompleted).toBe(9);
+    // A track published before the count was filled reads as not recorded.
+    expect(positionsAt(TRACK, 300)[0]?.questsCompleted).toBeNull();
+  });
 });
 
 describe("trackSpan / routeUpTo / mapsVisited", () => {

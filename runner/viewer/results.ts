@@ -133,8 +133,16 @@ export function trackFrom(
   let pending: string | null = null;
   let published: string | null = null;
   const readings: { point: number; items: ItemSample[] }[] = [];
+  /*
+   * The quest count is the whole run's at each point, summed across the
+   * restarts the recorded one starts again at (`questTally`): so the end of a
+   * replay reads what the run page does. Every sample feeds it, positioned or
+   * not, so a stretch's last count before a drop is never skipped.
+   */
+  const quests = questTally();
   for (const s of states) {
     while (at < itemRows.length && itemRows[at]!.ts <= s.ts) pending = itemRows[at++]!.items;
+    const questsCompleted = quests(s.questsCompleted);
     if (s.map === null || s.x === null || s.y === null) continue;
     if (pending !== null && pending !== published) {
       published = pending;
@@ -148,10 +156,10 @@ export function trackFrom(
       level: s.level,
       xp: s.xp,
       money: null,
-      questsCompleted: null,
+      questsCompleted,
       turn: s.turn,
-      // Unlike money and quests above, the frame's numbers are carried: replay
-      // draws the same unit frame the live map does, and they are on the row.
+      // Unlike money above, the frame's numbers are carried: replay draws the
+      // same unit frame the live map does, and they are on the row.
       health: s.health ?? null,
       maxHealth: s.maxHealth ?? null,
       power: s.power ?? null,
@@ -227,17 +235,31 @@ export function xpEarned(states: readonly StatePoint[]): number | null {
  *
  * A lower bound by at most what a stretch completed after its last sample.
  * Null when no sample carried a count — never 0, which is a real reading.
+ * The fold is `questTally`'s, so a reader that wants the count sample by
+ * sample (the replay track) cannot disagree with this one about the end.
  */
-export function questsAcrossRestarts(states: readonly StatePoint[]): number | null {
+export function questsAcrossRestarts(states: readonly Pick<StatePoint, "questsCompleted">[]): number | null {
+  const tally = questTally();
+  let total: number | null = null;
+  for (const s of states) total = tally(s.questsCompleted);
+  return total;
+}
+
+/**
+ * `questsAcrossRestarts` one sample at a time: fed each sample's count in
+ * time order, it answers the run's count so far. A sample with no count
+ * changes nothing and answers the count before it; null until one has.
+ */
+export function questTally(): (count: number | null | undefined) => number | null {
   let done = 0;
   let current: number | null = null;
-  for (const s of states) {
-    const q = s.questsCompleted;
-    if (q === null || q === undefined) continue;
-    if (current !== null && q < current) done += current;
-    current = q;
-  }
-  return current === null ? null : done + current;
+  return (q) => {
+    if (q !== null && q !== undefined) {
+      if (current !== null && q < current) done += current;
+      current = q;
+    }
+    return current === null ? null : done + current;
+  };
 }
 
 /**

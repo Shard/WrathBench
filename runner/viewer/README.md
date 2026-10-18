@@ -158,12 +158,22 @@ flat line. A boundary is a recorded mark, never a gap between samples.
 The quest count is the one recorded figure a resume restarts. `quests_completed`
 on a state sample is the running process's own count, so it reads zero again
 after a resume and after a sandbox restart inside a session, and the newest
-sample says nothing about the run. Within a process it only grows, so where a
-route holds the run's series — `/api/run/<id>` and the results rows — the
+sample says nothing about the run. Within a process it only grows, so the
 run's count is summed across every drop (`questsAcrossRestarts`, a lower bound
-by whatever a stretch completed after its last sample). The fleet listing and
-the map feed read the newest sample, which on a resumed run is the count since
-the resume.
+by whatever a stretch completed after its last sample) everywhere a reader is
+shown it: `/api/run/<id>` and the results rows, the map feed (each live run's
+counts read off its `run.sqlite`, two columns, `readQuestCounts`), and the
+replay track, whose every point carries the run's count up to it from the same
+fold (`questTally`), so the end of a replay reads what the run page does. Only
+the fleet listing's row is the newest sample, which on a resumed run is the
+count since the resume; `bun wb inspect run` prints each stretch.
+
+The trace's `qdone` turn-ins do not feed that count. They are the server's
+receipts and exact where the 60 s fold is a lower bound, so mixing them in
+would make the map disagree with the results page; they exist only since the
+character sheet, so a run that crossed that release would be counted two ways;
+and they are per window, so a total would be a fold over every segment of the
+run. The quest log panel shows them, as turn-ins since its window began.
 
 Tokens per second (`tps`, on the listing rows and on `/api/run/<id>`) is output
 tokens over the wall time of the model's REPLIES, never over the run's elapsed

@@ -12,7 +12,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { StatePoint } from "../viewer/api-types";
-import { questsAcrossRestarts } from "../viewer/results";
+import { questsAcrossRestarts, questTally } from "../viewer/results";
 import { activeMsUntil, playtimeMs, segmentsFrom, sessionClock } from "../viewer/sessions";
 
 const HOUR = 3_600_000;
@@ -132,5 +132,13 @@ describe("questsAcrossRestarts", () => {
     expect(questsAcrossRestarts(counts(null, undefined))).toBeNull();
     expect(questsAcrossRestarts([])).toBeNull();
     expect(questsAcrossRestarts(counts(0, 0))).toBe(0);
+  });
+
+  test("the running tally answers the count so far, and ends where the total does", () => {
+    // The replay track's form: one answer per sample, a missing count carrying the one before.
+    const q = [null, 0, 8, undefined, 0, 3, 8, 0, 2, 0];
+    const tally = questTally();
+    expect(q.map((v) => tally(v))).toEqual([null, 0, 8, 8, 8, 11, 16, 16, 18, 18]);
+    expect(questsAcrossRestarts(counts(...q))).toBe(18);
   });
 });

@@ -12,7 +12,9 @@
  * Both carry a character sheet on the trace (money, worn and carried items, a
  * quest log with one quest in progress and one complete, a turn-in), the 60 s
  * state line, snippets and tool calls with one failure each, a harness notice
- * and a scratchpad.
+ * and a scratchpad. The state line's quest count starts again at zero halfway
+ * (`questsAt`), as a resumed process's does, so the map's quest figure shows
+ * the run's sum (3) where the newest sample says 1.
  */
 
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
@@ -154,6 +156,16 @@ function traceRows(spec: Spec, from: number, to: number, keyAtFrom = true): Trac
   return rows;
 }
 
+/**
+ * The recorded quest count at fraction `f` of a run: its first process turns
+ * in two, a restart halfway starts the count again, and the second turns in
+ * one. The run's count is 3 by the end; the newest sample's is 1.
+ */
+function questsAt(f: number): number {
+  if (f < 0.5) return f > 0.35 ? 2 : f > 0.2 ? 1 : 0;
+  return f > 0.7 ? 1 : 0;
+}
+
 function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory {
   const dir = join(runsDir, spec.runId);
   mkdirSync(dir, { recursive: true });
@@ -187,7 +199,7 @@ function writeRun(runsDir: string, spec: Spec, ended: number | null): Trajectory
       ...p,
       z: CENTRE.z,
       money: 2500 + Math.floor((t - spec.startedAt) / 60_000) * 7,
-      questsCompleted: t - spec.startedAt > (until - spec.startedAt) * 0.6 ? 1 : 0,
+      questsCompleted: questsAt((t - spec.startedAt) / Math.max(1, until - spec.startedAt)),
       turn: ++turn,
       health: 180,
       maxHealth: 200,

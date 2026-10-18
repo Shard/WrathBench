@@ -419,7 +419,8 @@ export interface RunRow {
    * The newest sample's quest count on a listing row. That counter is the
    * running process's own and starts again at a resume, so `/api/run/<id>`,
    * which holds the run's series, serves the whole run's sum instead
-   * (`questsAcrossRestarts`, as on `ResultRun.questsCompleted`).
+   * (`questsAcrossRestarts`, as on `ResultRun.questsCompleted`), and so do
+   * the map feed and the replay track.
    */
   questsCompleted: number | null;
   /**
@@ -906,6 +907,11 @@ export interface AgentPosition {
   level: number | null;
   xp: number | null;
   money: number | null;
+  /**
+   * Quests turned in over the whole run, summed across the counter's restarts
+   * (`questsAcrossRestarts`), as on `ResultRun.questsCompleted`; on a replay,
+   * the run's count up to the point.
+   */
   questsCompleted: number | null;
   /** The newest recorded inventory; see `RunRow.items`. */
   items: ItemSample[] | null;
@@ -2047,6 +2053,12 @@ export interface TrackPoint {
   level: number | null;
   xp: number | null;
   money: number | null;
+  /**
+   * The run's quest count up to this point, summed across the counter's
+   * restarts (`questTally`), so the last point's is the run page's figure.
+   * Null before any sample carried one, and on every point of a track
+   * published before it was filled.
+   */
   questsCompleted: number | null;
   turn: number | null;
   /**

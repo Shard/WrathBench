@@ -583,6 +583,36 @@ describe("readPositions", () => {
     expect(readPositions(runsDir, NOW).map((p) => p.runId)).toEqual(["b", "a"]);
   });
 
+  test("the quest count is the run's, summed across the resumes that start the recorded one again", () => {
+    const runsDir = fixture([
+      {
+        // A freeplay run resumed in place twice: its processes counted 12 and
+        // 3, and the one running now has counted 2, which is all the newest
+        // sample says.
+        id: "resumed",
+        states: [
+          [NOW - 600_000, 30, 1, 0, 1, 2, 3, 5, 9],
+          // A stretch's last count on a sample with no position still counts.
+          [NOW - 540_000, 30, 2, null, null, null, null, 5, 12],
+          [NOW - 480_000, 30, 3, 0, 1, 2, 3, 5, 0],
+          [NOW - 420_000, 30, 4, 0, 1, 2, 3, 5, 3],
+          [NOW - 120_000, 30, 5, 0, 1, 2, 3, 5, 0],
+          [NOW - 60_000, 30, 6, 0, 1, 2, 3, 5, null],
+          [NOW - 5_000, 30, 7, 0, 1, 2, 3, 5, 2],
+        ],
+      },
+      // No sample carried a count: not recorded, never zero.
+      { id: "uncounted", states: [[NOW - 5_000, 4, 900, 0, 1, 2, 3, 1, null]] },
+    ]);
+    const byId = new Map(readPositions(runsDir, NOW).map((p) => [p.runId, p]));
+    expect(byId.get("resumed")?.questsCompleted).toBe(17);
+    expect(byId.get("uncounted")?.questsCompleted).toBeNull();
+    // `live.json` carries the same figure.
+    expect(projectPositions({ positions: [...byId.values()] }).positions.find((p) => p.runId === "resumed")?.questsCompleted).toBe(17);
+    // And the replay track's last point reads it too.
+    expect(trackFrom(readStates(runsDir, "resumed")).points.at(-1)?.questsCompleted).toBe(17);
+  });
+
   test("a run whose nearby ring is being written is flagged, privately only", () => {
     const now = Date.now();
     const runsDir = fixture([
@@ -718,5 +748,23 @@ describe("positionsFromStore", () => {
       runRows: async () => (await inner.runRows()).map((r) => (r.run_id === "live-a" ? { ...r, archived: 1 } : r)),
     };
     expect((await positionsFromStore(store, runsDir, NOW)).map((p) => p.runId)).toEqual(["live-b"]);
+  });
+
+  test("both feeds carry the run's quest count across a resume, where the store's row has the newest sample's", async () => {
+    const runsDir = tempDir("wrathbench-map-resumed-");
+    writeRun(runsDir, "resumed", { stateTs: NOW - 300_000 });
+    // The fleet resumed it in place: a new process, whose count starts at zero.
+    let clock = NOW - 120_000;
+    const traj = new Trajectory(join(runsDir, "resumed"), { now: () => clock });
+    for (const [ts, q] of [[NOW - 120_000, 0], [NOW - 60_000, 1], [NOW - 2_000, 2]] as const) {
+      clock = ts;
+      traj.recordState("resumed", { level: 4, xp: 130, map: 0, x: -6240, y: 380, z: 380, money: 71, questsCompleted: q });
+    }
+    traj.close();
+    const store = localRunStore(runsDir);
+    expect((await store.latestStates()).get("resumed")?.questsCompleted).toBe(2);
+    const fromStore = await positionsFromStore(store, runsDir, NOW);
+    expect(fromStore.map((p) => p.questsCompleted)).toEqual([5]);
+    expect(JSON.stringify(fromStore)).toBe(JSON.stringify(readPositions(runsDir, NOW)));
   });
 });

@@ -462,6 +462,28 @@ export function readStates(runsDir: string, runId: string): StatePoint[] {
 }
 
 /**
+ * One run's recorded quest counts, oldest first, for the map feed to total
+ * across restarts (`questsAcrossRestarts`) the way the run page does. Two
+ * columns rather than `readStates`, which the feed would pay `items` for on
+ * every poll; empty where the schema predates the column.
+ */
+export function readQuestCounts(runsDir: string, runId: string): Pick<StatePoint, "questsCompleted">[] {
+  const db = openReadonly(join(runsDir, runId));
+  if (db === null) return [];
+  try {
+    if (!stateColumns(db).has("quests_completed")) return [];
+    const rows = db
+      .query(`SELECT quests_completed AS q FROM state WHERE run_id = ? AND quests_completed IS NOT NULL ORDER BY ts`)
+      .all(runId) as { q: unknown }[];
+    return rows.map((r) => ({ questsCompleted: num(r.q) }));
+  } catch {
+    return [];
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * One run's `items` samples, oldest first, skipping the samples that carried
  * none — the fallback `readStates` is, for the same reason and in the same
  * place: a run the collector has not reached yet still replays.
