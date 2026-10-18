@@ -88,6 +88,61 @@ predicate, over both the table and the graph. The one exemption that stands is
 the harness series, because a character is durable across series and cutting
 its older attempts would report a long-lived character as attempt 1.
 
+## The map's player
+
+A run the trace recorder drove (`runner/viewer/trace.ts`) is drawn by one
+clock-driven player, `src/lib/traceplayer.ts`, the same in the live map and in
+a replay: every frame each pip is placed where the trace puts the character at
+the playhead, with a heading wedge from its facing and a trail of the last
+90 s fading out behind it (flights in `--flight`; a cut ends the trail, so a
+hearth jumps cleanly). Both clocks run off `performance.now()` from an anchor
+rather than adding up frames, so a tab put away and brought back is where the
+time says. A run with no trace — every run before the recorder, and any
+moment the trace cannot answer for while a window loads — draws as before:
+a live pip walks to its newest reading, a replayed one is time-interpolated
+along the 60 s track.
+
+**Live, the playhead is a jitter buffer** a delay `D` behind the feed. `D` is
+the expected period between the feed's horizons, plus the most a horizon can
+be held up between its render and the tab, plus a margin of a tenth of the
+period (2 s at least). Each client states how its feed is made
+(`feedCadence`), so the formula is one and the inputs differ:
+
+- the viewer renders on request, so a horizon is as fresh as the 5 s poll and
+  at worst one 5 s recorder drain old: about 12 s;
+- the public `live.json` lands about every seven minutes, behind a 30 s memo,
+  a 30 s edge TTL and a poll: about 9 minutes.
+
+The period is learned from the horizons it sees — the longest of the last four
+gaps, an outage ignored. On each arrival the playhead aims at `D` behind; one
+within a deadband carries on at 1×, one further behind catches up at 1.5×,
+and one more than `D` behind (a waking tab, a publisher back from a stop)
+jumps. Between arrivals it never passes the data's end: a pip that catches up
+holds there until the next arrival, which resumes it. The public horizon is
+the snapshot's `generatedAt`; the private feed carries no clock, so its
+horizon is the newest thing in it, never this browser's time.
+
+**A replay plays on the run's own clock** at 1×, 10×, 60× (the default),
+600× or 3600×, so a 90-minute run takes 90 s at 60× and a nine-day character
+a few minutes at 3600×. A gap of more than 150 s in the track — two missed
+state samples, the run not being driven — plays in one second at any speed
+that would take longer, which is what kept the old one-sample-per-tick scale
+free of dead air. At 60× and below, and whenever paused, the pip and the unit
+frame come from the trace's segments near the cursor; faster, from the track.
+
+**The unit frame** reads the trace state at the playhead: health, power,
+level and experience (a gauge the trace has withheld stays unobserved rather
+than being filled from the 60 s sample beside it — publicly, that is a
+character who is down), a cast bar, combat, mounted, flying and resting
+badges, the target's health where it is published, and the buffs row: spell
+icons as Wowhead links (`src/lib/wowhead.ts`), stacks, and the time left.
+
+**Fetching is listed-only.** A segment is requested only for a `t0` a
+position's `recent` or a track's `segs` listed — the public edge caches a 404
+for a day — and within the data host's rate limit: the live map fetches for
+the runs on the continent on screen, the playhead's window and the next one
+in its last minute, at most four in flight.
+
 ## The replay's route
 
 The map's replay draws the route behind the pip in the run's colour, a flight

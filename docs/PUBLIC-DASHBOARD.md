@@ -238,6 +238,19 @@ them. A replay asks for one segment per five minutes of play, so even 60×
 playback is about one request every five seconds. A player should prefetch
 around the cursor, not a whole run.
 
+The reader is `dashboard/src/lib/traceplayer.ts`, and it is written to that
+budget. The live map fetches only for the runs drawn on the continent on
+screen: the window under the playhead, and the next listed one in the last
+minute before the playhead reaches it, with at most four requests in flight
+for the page. A replay fetches the cursor's window and prefetches the next
+listed one about five wall seconds ahead, and only at 60× or slower; faster,
+it plays the track's 60 s points. Either way a `t0` is requested only once a
+list named it. The public live map runs about nine minutes behind real time,
+because a `live.json` lands about every seven: the delay is the publish
+period plus the two 30 s caches, a poll and a margin, with the period learned
+from the `generatedAt`s the page sees (`dashboard/README.md`, "The map's
+player"). That is the price of movement rather than a jump per pass.
+
 ### Data plane: R2 behind a custom domain with a cache rule
 
 R2 has free egress and a free tier (10 GB stored, 10M reads, 1M writes per
@@ -729,9 +742,12 @@ are disallowed rather than served with terms attached.
 
 A run page and the map sidebar draw item icons and tooltips, and the way they
 do it is a link to `https://www.wowhead.com/wotlk/item=<entry>` decorated in
-the reader's browser by Wowhead's public tooltip script. So a visitor to those
-two pages fetches `https://wow.zamimg.com/js/tooltips.js` and, per item, icon
-art from `wow.zamimg.com` and tooltip JSON from `nether.wowhead.com`. Those are
+the reader's browser by Wowhead's public tooltip script. The sidebar's unit
+frame draws a traced character's buffs and the spell it is casting the same
+way, as links to `https://www.wowhead.com/wotlk/spell=<id>`: the trace carries
+the spell id and nothing else. So a visitor to those
+two pages fetches `https://wow.zamimg.com/js/tooltips.js` and, per item or
+spell, icon art from `wow.zamimg.com` and tooltip JSON from `nether.wowhead.com`. Those are
 the only third-party origins the application asks for, alongside the
 Cloudflare Web Analytics script (`static.cloudflareinsights.com`) — cookieless,
 and appended at startup by `dashboard/src/main.tsx` on the public build only,
