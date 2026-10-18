@@ -702,7 +702,6 @@ export function projectPositions(p: PositionsResponse): PositionsResponse {
         xp: a.xp,
         money: a.money,
         questsCompleted: a.questsCompleted,
-        items: projectItems(a.items),
         harnessVersion: a.harnessVersion,
         // The player frame's numbers: what any onlooker's client would show
         // above a character it can see, and nothing about the host or the run.

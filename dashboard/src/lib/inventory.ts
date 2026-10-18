@@ -228,14 +228,14 @@ export interface SheetReading {
 
 /**
  * The sidebar's money and inventory at the playhead: the trace's sheet where
- * it says, and the coarse reading where it does not — the position's newest
- * reading live, the track's at the cursor in a replay. `view` is null where
+ * it says, and the coarse reading where it does not — live, the position's
+ * money and no inventory (the feed carries none); in a replay, the track's
+ * reading at the cursor. `view` is null where
  * the trace does not drive (a replay playing faster than its segments are
  * fetched for) or cannot answer (nothing loaded there), and a sheet key is
  * null where it was not recorded: a segment from before the sheet, or the
  * stretch after a sandbox restart before the character's own create block.
- * Either way the reading stands, so the panel never goes blank where the
- * reading had something. An empty list is an observation and stands.
+ * Either way the reading stands. An empty list is an observation and stands.
  */
 export function sheetReading(
   view: { sheet: SheetInventory & Pick<TraceSheet, "money">; items: Names } | null,

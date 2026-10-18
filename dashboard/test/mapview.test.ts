@@ -523,7 +523,6 @@ function agent(runId: string, map: number, x: number, y: number): AgentPosition 
     xp: 100,
     money: null,
     questsCompleted: null,
-    items: null,
     harnessVersion: "harness-0.2",
   };
 }
@@ -1176,7 +1175,7 @@ describe("mapName", () => {
 
 describe("pipName", () => {
   const at = (over: Partial<AgentPosition>): AgentPosition =>
-    ({ runId: "fleet-sub-fable-none-freeplay-claude-fable-5-none-20260829-a2", character: null, model: null, map: 0, x: 0, y: 0, ts: 0, level: null, xp: null, money: null, questsCompleted: null, items: null, harnessVersion: null, ...over }) as AgentPosition;
+    ({ runId: "fleet-sub-fable-none-freeplay-claude-fable-5-none-20260829-a2", character: null, model: null, map: 0, x: 0, y: 0, ts: 0, level: null, xp: null, money: null, questsCompleted: null, harnessVersion: null, ...over }) as AgentPosition;
 
   test("the character's name is what the map calls a pip", () => {
     expect(pipName(at({ character: "Thorgrima", model: "claude-fable-5" }))).toBe("Thorgrima");

@@ -53,7 +53,6 @@ function live(runId: string, map: number): AgentPosition {
     xp: 100,
     money: null,
     questsCompleted: null,
-    items: null,
     harnessVersion: "harness-0.2",
   };
 }

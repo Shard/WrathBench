@@ -375,7 +375,7 @@ describe("verifyPublication", () => {
         positions: [
           {
             runId: RUN_ID, character: "Fixturely", model: "test/model", map: 0, x: 1, y: 2, ts: 1000, level: 3, xp: 4,
-            money: 5, questsCompleted: 6, items: null, harnessVersion: "h",
+            money: 5, questsCompleted: 6, harnessVersion: "h",
             trace: { segMs: 300_000, recent: [T0], tail: null },
           },
         ],

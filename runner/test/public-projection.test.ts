@@ -881,9 +881,6 @@ describe("projectPositions and projectTrack", () => {
           "xp",
           "money",
           "questsCompleted",
-          "items",
-          "items[].name", "items[].count", "items[].equipped",
-          "items[].itemId", "items[].quality", "items[].slot", "items[].bag",
           "harnessVersion",
           "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
           "class",
@@ -897,9 +894,9 @@ describe("projectPositions and projectTrack", () => {
     );
     assertClean(JSON.stringify(out));
     expect(out.positions[0]!.character).toBe(CHARACTER_NAME);
-    expect(out.positions[0]!.items).toEqual([
-      { name: SURVIVES.itemName, count: 1, equipped: false, itemId: 6948, quality: 1, slot: 23, bag: 255 },
-    ]);
+    // An inventory a feed still carries does not pass: the sidebar reads the
+    // trace's character sheet at the playhead, and this reading ran ahead of it.
+    expect(Object.keys(out.positions[0]!)).not.toContain("items");
     // The model's own words and the zone name ship (names and model text are
     // published); the smuggled key beside them does not.
     expect(out.positions[0]!.status).toEqual({ turn: 11, level: 3, zone: SURVIVES.statusZone, text: SURVIVES.statusText, ts: 1300 });
@@ -1242,7 +1239,7 @@ describe("projectTraceSegment", () => {
       positions: [
         {
           runId: "fixture-run-1", character: CHARACTER_NAME, model: "test/model", map: 0, x: 1, y: 2, ts: 1000,
-          level: 3, xp: 4, money: 5, questsCompleted: 6, items: null, harnessVersion: "harness-0.5-1-gabc",
+          level: 3, xp: 4, money: 5, questsCompleted: 6, harnessVersion: "harness-0.5-1-gabc",
           trace: smuggle({ segMs: 300_000, recent: [1, 2, POISON.smuggled as unknown as number], tail }),
         },
       ],

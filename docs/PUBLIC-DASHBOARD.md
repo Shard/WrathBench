@@ -565,6 +565,18 @@ every run that recorded an inventory once, all four of its objects (a full
 re-upload of those runs; the old set is pruned as usual), and a run that
 recorded none keeps its key.
 
+**A live position carries no inventory.** The map's sidebar reads what a live
+character wears and carries off the trace's character sheet at the playhead,
+and the position's newest reading beside it ran the publish delay ahead of the
+pip; it was also most of `live.json` (about 7 KB of 17 KB with one live
+character). A live character the sheet cannot answer for — a run recorded
+before the sheet, or the stretch after a sandbox restart before its own create
+block — shows no inventory rather than one from minutes ahead. The run row's
+newest reading (`items` on the row in `detail.json`, the run page's
+"carrying") is unchanged. This shipped only once the site read the sheet and the publisher
+wrote it; a site on an older build shows "—" for the live inventory until it
+reloads.
+
 ## What the ladder shows
 
 Each row's headline numbers are still maxima over a model's counted runs, and
