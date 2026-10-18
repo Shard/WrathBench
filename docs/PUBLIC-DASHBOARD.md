@@ -876,8 +876,9 @@ to `https://www.wowhead.com/wotlk/quest=<id>`, and that link alone asks the
 script to rename it (`data-wh-rename-link`), so the row shows the quest's
 title; the trace records no title and nothing publishes one, so where the
 script is blocked the row reads `quest <id>`. The panel is portalled and
-exists only while it is open, so its quest links are fetched for only then,
-one tooltip request per quest. So a visitor to those
+exists only while it is open, so its quest links are fetched for only then:
+one tooltip request per quest the first time, none on opening it again in
+the same page load. So a visitor to those
 two pages fetches `https://wow.zamimg.com/js/tooltips.js` and, per item,
 spell or quest, icon art from `wow.zamimg.com` (none for a quest) and tooltip
 JSON from `nether.wowhead.com`. Those are
