@@ -224,13 +224,13 @@ function startModuleStub(): { url: string; stop(): Promise<void> } {
         return srv.upgrade(req, { data: { token: "" } }) ? undefined : new Response("no", { status: 400 });
       }
       if (url.pathname === "/session" && req.method === "POST") {
-        return Response.json({ ok: true, token: "t", account: "RUNNER", character: "Fenwick", guid: 7, inWorld: true });
+        return Response.json({ ok: true, account: "RUNNER", character: "Fenwick", guid: 7, inWorld: true });
       }
       if (url.pathname === "/action") {
         return req.json().then((body) => {
           const action = String((body as { action?: string }).action);
           return Response.json(
-            action === "move_to" ? { ok: true, action, token: "t", moveId: ++moveId } : { ok: true, action, token: "t" },
+            action === "move_to" ? { ok: true, action, moveId: ++moveId } : { ok: true, action },
           );
         });
       }

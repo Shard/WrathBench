@@ -60,13 +60,13 @@ function fakeModule(chars: { name: string; guid: string }[]) {
     fetch: async (req) => {
       const path = new URL(req.url).pathname;
       if (path === "/characters") {
-        return Response.json({ ok: true, token: "t", enum: { count: chars.length, characters: chars } });
+        return Response.json({ ok: true, enum: { count: chars.length, characters: chars } });
       }
       if (path === "/character-delete") {
         const body = (await req.json()) as { character: string };
         deleted.push(body.character);
         chars = chars.filter((c) => c.name !== body.character);
-        return Response.json({ ok: true, token: "t", character: body.character, deleted: true });
+        return Response.json({ ok: true, character: body.character, deleted: true });
       }
       return new Response("not found", { status: 404 });
     },
