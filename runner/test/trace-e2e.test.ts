@@ -22,29 +22,44 @@ import type { SandboxHost } from "../src/sandbox/host";
 import { TraceRecorder } from "../src/sandbox/trace-recorder";
 import { TraceWriter } from "../src/trace";
 import {
+  applySheetPatch as writerApplyPatch,
+  emptyTraceSheet as writerEmptySheet,
   emptyTraceState as writerEmptyState,
+  SHEET_KEY_LEN as WRITER_SHEET_KEY_LEN,
+  SHEET_KEYS as WRITER_SHEET_KEYS,
+  sheetPatch as writerSheetPatch,
   TRACE_WINDOW_MS,
+  type TraceDict as WriterDict,
   type TraceKind,
+  type TraceQuestReq as WriterQuestReq,
   type TraceRow as WriterRow,
+  type TraceSheet as WriterSheet,
   type TraceState as WriterState,
 } from "../src/trace-row";
 import { Trajectory } from "../src/trajectory";
-import type { TraceState as ViewerState } from "../viewer/api-types";
+import type { TraceItemName, TraceQuestReq as ViewerQuestReq, TraceSheet as ViewerSheet, TraceState as ViewerState } from "../viewer/api-types";
+import { projectTraceSegment } from "../viewer/public-projection";
 import {
   GAP_MS,
   Q_O,
   SEG_MS,
   SETTLE_MS,
+  SHEET_KEY_LEN,
+  SHEET_KEYS,
   STATE_KEYS,
+  applySheetPatch,
   decodeSegment,
+  emptyTraceSheet as viewerEmptySheet,
   emptyTraceState as viewerEmptyState,
   sampleAt,
+  sheetAt,
+  sheetPatch,
   stateAt,
   unpackSegs,
   type DecodedSegment,
   type TraceRow as ViewerRow,
 } from "../viewer/trace";
-import { readTraceIndex, readTraceSegment } from "../viewer/trace-db";
+import { readPositionTrace, readTraceIndex, readTraceSegment } from "../viewer/trace-db";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -80,6 +95,25 @@ describe("the two spellings of the contract", () => {
     // `data` is parsed on the writer's side and the column's text on the codec's.
     expect(pin<ViewerRow["data"] extends string | null ? true : false>()).toBe(true);
     expect(TRACE_WINDOW_MS).toBe(SEG_MS);
+  });
+
+  test("the sheet is one contract in both spellings: the same keys, rows, key lengths and patch rule", () => {
+    expect(pin<Equal<WriterSheet, ViewerSheet>>()).toBe(true);
+    expect(pin<Equal<WriterQuestReq, ViewerQuestReq>>()).toBe(true);
+    // A drain's item entry is the id and then exactly what a segment's `items` holds per id.
+    expect(pin<NonNullable<WriterDict["items"]>[number] extends [number, ...TraceItemName] ? true : false>()).toBe(true);
+    expect([...SHEET_KEYS]).toEqual([...WRITER_SHEET_KEYS]);
+    expect(SHEET_KEY_LEN).toEqual(WRITER_SHEET_KEY_LEN);
+    expect(viewerEmptySheet()).toEqual(writerEmptySheet());
+    // The unit keys and the sheet's never overlap, so a key row's data splits cleanly.
+    expect(STATE_KEYS.some((k) => (SHEET_KEYS as readonly string[]).includes(k))).toBe(false);
+    // The two patch implementations agree, on a list that adds, changes and removes.
+    const a = [[255, 23, 1, 2], [255, 24, 5], [19, 0, 7]];
+    const b = [[19, 0, 7], [255, 23, 1, 3], [255, 30, 9]];
+    const p = sheetPatch(a, b, 2);
+    expect(p).toEqual(writerSheetPatch(a, b, 2)!);
+    expect(applySheetPatch(a, p!, 2)).toEqual(writerApplyPatch(a, p!, 2)!);
+    expect(applySheetPatch(a, p!, 2)).toEqual([[19, 0, 7], [255, 23, 1, 3], [255, 30, 9]]);
   });
 });
 
@@ -249,5 +283,148 @@ describe("the trace end to end", () => {
     expect(stateAt(segOf(TAKEOFF + 65_000), TAKEOFF + 65_000).taxi).toBe(false);
     // The second window's keyframe is the host's key: the state at W1, whole.
     expect(segs[1]!.key).toMatchObject({ hp: 101, level: 5, pwType: 0, combat: false });
+  });
+
+  test("the character sheet: recorder, writer, run.sqlite, the viewer's reads, the codec and the public projection give back the cache's own sheet at every moment", async () => {
+    const runs = tempDir("trace-e2e-sheet-");
+    const trajectory = new Trajectory(join(runs, RUN));
+    const events = new EventStream({ url: "ws://worldserver:8086/events", token: "t", reconnect: false });
+    const cache = new StateCache({ seed: { guid: "7", name: "Fenwick" } });
+    events.onAny((e) => cache.apply(e));
+    let clock = W0 + 270_000;
+    const rec = new TraceRecorder({ state: cache, events, now: () => clock, pollMs: 60_000 });
+    let seq = 1;
+    const feed = (opcode: string, data: unknown, ts: number): void => {
+      clock = ts;
+      events.ingest(JSON.stringify({ seq: seq++, opcode, opcodeId: 1, ts, data }));
+    };
+    const update = (objects: unknown[], ts: number): void => feed("SMSG_UPDATE_OBJECT", { blocks: objects.length, objects }, ts);
+    const HI = 0x4000_0000;
+    const guid = (lo: number): string => ((BigInt(HI) << 32n) | BigInt(lo)).toString(10);
+    const item = (lo: number, fields: Record<string, number>) => ({ update: "create", guid: guid(lo), objectType: "item", fields });
+    const named = (itemId: number, name: string, ts: number): void => feed("SMSG_ITEM_QUERY_SINGLE_RESPONSE", { itemId, found: true, name, quality: 1 }, ts);
+
+    const writer = new TraceWriter({
+      runId: RUN,
+      trajectory,
+      sandbox: { traceDrain: () => Promise.resolve(rec.drain()) } as unknown as SandboxHost,
+      now: () => clock,
+      log: () => {},
+    });
+    let lastDrain = clock;
+    let x = -8949;
+    /** One second of play: a step, a poll per 250 ms, a drain every 5 s. */
+    const second = async (): Promise<void> => {
+      const end = clock + 1_000;
+      x += 3;
+      feed("WB_MOVE_PROGRESS", { moveId: 1, pos: { x, y: -132, z: 83.5, o: 1 } }, clock + 1);
+      for (let t = clock; t < end; t += 250) {
+        clock = t;
+        rec.poll();
+      }
+      clock = end;
+      if (clock - lastDrain >= 5_000) {
+        await writer.drain();
+        lastDrain = clock;
+      }
+    };
+    /** What the cache itself says the sheet is, through the SDK's own joins: the truth to compare with. */
+    const truth = (): Record<string, unknown> => ({
+      money: cache.money?.value ?? 0,
+      // In key order (bag, then slot), as the trace keeps every list; the SDK lists the backpack first.
+      inv: cache.bag().items.map((b) => [b.bag, b.slot, b.itemId, b.count ?? 1]).sort((a, b) => a[0]! - b[0]! || a[1]! - b[1]!),
+      equip: cache.inventory.filter((i) => i.slot <= 18).map((i) => [i.slot, i.itemId]),
+      quests: cache.questLog.map((q) => [q.slot, q.questId, q.state, ...q.counts]),
+    });
+    const truths: { t: number; at: ReturnType<typeof truth> }[] = [];
+    const mark = (): void => {
+      truths.push({ t: clock, at: truth() });
+    };
+
+    rec.start();
+    feed("SMSG_LOGIN_VERIFY_WORLD", { map: 0, x, y: -132, z: 83.5, o: 1 }, W0 + 271_000);
+    update(
+      [
+        { update: "create", guid: "7", objectType: "player", self: true, fields: { level: 9, health: 300, maxHealth: 300, money: 900, invSlot0Lo: 1, invSlot0Hi: HI, invSlot19Lo: 2, invSlot19Hi: HI, invSlot23Lo: 3, invSlot23Hi: HI, quest0Id: 4100, quest0State: 0, quest0CountsLo: 1 } },
+        item(1, { entry: 51001, stackCount: 1, durability: 30, maxDurability: 30 }),
+        { update: "create", guid: guid(2), objectType: "container", fields: { entry: 51002, numSlots: 4, bagSlot1Lo: 4, bagSlot1Hi: HI } },
+        item(3, { entry: 51003, stackCount: 7 }),
+        item(4, { entry: 51004, stackCount: 1 }),
+      ],
+      W0 + 271_100,
+    );
+    for (const [id, name] of [[51001, "Test Blade"], [51002, "Test Pouch"], [51003, "Test Stone"], [51004, "Test Ring"]] as const) named(id, name, W0 + 271_200);
+    mark();
+    // Loot, a stack growing, money just before the boundary, a turn-in after it, a sale.
+    const script: [number, () => void][] = [
+      [W0 + 285_000, () => {
+        update([item(5, { entry: 51005, stackCount: 2 })], clock);
+        update([{ update: "values", guid: "7", fields: { invSlot24Lo: 5, invSlot24Hi: HI, quest0CountsLo: 2 } }], clock);
+        named(51005, "Test Token", clock);
+      }],
+      [W0 + 299_700, () => update([{ update: "values", guid: "7", fields: { money: 950 } }], clock)],
+      [W1 + 5_000, () => update([{ update: "values", guid: guid(3), fields: { stackCount: 9 } }], clock)],
+      [W1 + 10_000, () => {
+        feed("SMSG_QUESTGIVER_QUEST_COMPLETE", { questId: 4100, xp: 200, money: 40 }, clock);
+        update([{ update: "values", guid: "7", fields: { quest0Id: 0, money: 990, invSlot24Lo: 0, invSlot24Hi: 0 } }], clock);
+      }],
+      [W1 + 15_000, () => update([{ update: "values", guid: guid(1), fields: { durability: 12 } }], clock)],
+      [W1 + 20_000, () => update([{ update: "values", guid: guid(2), fields: { bagSlot1Lo: 0, bagSlot1Hi: 0 } }], clock)],
+    ];
+    for (const [at, change] of script) {
+      while (clock + 1_000 <= at) await second();
+      clock = at;
+      change();
+      mark();
+    }
+    while (clock < W1 + 30_000) await second();
+    await writer.drain();
+    rec.stop();
+
+    // The run's names are in run.sqlite, each once.
+    expect(trajectory.traceDict(RUN).filter((d) => d.kind === "item").map((d) => d.id)).toEqual([51001, 51002, 51003, 51004, 51005]);
+
+    // The viewer, once both windows have settled; then the public projection of the same.
+    const now = W1 + SEG_MS + SETTLE_MS;
+    const read = (t0: number): DecodedSegment => decodeSegment(JSON.parse(JSON.stringify(readTraceSegment(runs, RUN, t0, now)!.segment)));
+    const segs = [read(W0), read(W1)];
+    const pub = [W0, W1].map((t0) => decodeSegment(JSON.parse(JSON.stringify(projectTraceSegment(readTraceSegment(runs, RUN, t0, now)!.segment)))));
+    const segOf = (list: DecodedSegment[], t: number): DecodedSegment => list.find((s) => t >= s.t0 && t < s.t1)!;
+
+    // At every change, a second after it (the sheet is read at most once a
+    // second and stamped with when the cache saw it), and just before the next:
+    // the sheet the segment folds to is the cache's own, privately and publicly.
+    const shape = (s: ReturnType<typeof sheetAt>): unknown => ({
+      money: s.money,
+      inv: (s.inv ?? []).map((r) => [r[0], r[1], r[2], r[3] ?? 1]),
+      equip: (s.equip ?? []).map((r) => [r[0], r[1]]),
+      quests: (s.quests ?? []).map((r) => [r[0], r[1], r[2], r[3] ?? 0, r[4] ?? 0, r[5] ?? 0, r[6] ?? 0]),
+    });
+    for (let i = 0; i < truths.length; i++) {
+      const { t, at } = truths[i]!;
+      const next = truths[i + 1]?.t ?? W1 + 30_000;
+      for (const probe of [t + 1_000, next - 1]) {
+        if (probe < W0 + 272_000) continue;
+        expect({ probe: probe - W0, sheet: shape(sheetAt(segOf(segs, probe), probe)) }).toEqual({ probe: probe - W0, sheet: at });
+        expect(sheetAt(segOf(pub, probe), probe)).toEqual(sheetAt(segOf(segs, probe), probe));
+      }
+    }
+    // The money observed 300 ms before the boundary was latched after the host
+    // keyed W1: it stands from W1 on, never taken back by that key.
+    expect(sheetAt(segs[1]!, W1).money).toBe(950);
+    // The turn-in, as an event, once; durability as it fell.
+    expect(sheetAt(segs[1]!, W1 + 12_000).qdone).toEqual([4100]);
+    expect(sheetAt(segs[1]!, W1 + 16_000).dur).toEqual([[0, 12, 30]]);
+    // Each segment names what it references, privately and publicly the same.
+    expect([...segs[0]!.items.keys()]).toEqual([51001, 51002, 51003, 51004, 51005]);
+    expect(pub[0]!.items).toEqual(segs[0]!.items);
+    expect(segs[1]!.items.get(51004)).toEqual([1, "Test Ring"]);
+
+    // The live tail carries the same sheet in its keyframe.
+    const live = readPositionTrace(runs, RUN, W1 + 25_000)!;
+    const tail = decodeSegment(JSON.parse(JSON.stringify(live.tail)));
+    expect(shape(sheetAt(tail, W1 + 21_500))).toEqual(truths.at(-1)!.at);
+    expect(readTraceIndex(runs, RUN, W1 + 25_000).tail!.items).toBeDefined();
+    trajectory.close();
   });
 });

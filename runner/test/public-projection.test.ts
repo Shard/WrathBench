@@ -1254,6 +1254,152 @@ describe("projectTraceSegment", () => {
   });
 });
 
+/**
+ * A segment carrying the character sheet, with everything the public one must
+ * not: bank rows (slots 39-73, and a bank bag's contents), a guid and a
+ * creator's name riding a row, a bank key and other players' things as
+ * smuggled keys, item text beside a name, and a name for an id nothing
+ * references. Ids and names are invented.
+ */
+function sheetSegmentFixture(): TraceSegment {
+  const seg = traceSegmentFixture();
+  seg.k.s = {
+    ...seg.k.s,
+    money: 12_345,
+    equip: [[0, 501], [15, 502, -12], [40, 503]],
+    bags: [[19, 600, 6], [67, 601, 10]],
+    inv: [
+      [19, 0, 701, 3, 0, "Made by Otherplayer"],
+      [255, 23, 702],
+      [255, 45, 704, 20],
+      [68, 2, 705],
+      [255, 24, "4611686018427387905", 1],
+    ],
+    dur: [[0, 40, 50], [15, 0, 75]],
+    quests: [[0, 900, 1, 8, 1], [30, 901, 0]],
+    rep: [[72, 120]],
+    skills: [[43, 31, 60]],
+    bank: [[255, 39, 704, 20]],
+    trade: { partner: "Otherplayer", items: [[1, 703]] },
+  } as unknown as TraceSegment["k"]["s"];
+  seg.ev = [
+    ...seg.ev,
+    [1_000, "inv", [[255, 25, 703]]],
+    [1_000, "money", 12_400],
+    // A patch only at withheld positions says nothing in public.
+    [2_000, "inv", [[255, 46, 704, 5], [67, 0]]],
+    [3_000, "qdone", [900]],
+    [3_500, "qdone", [900, "Quest Title"]],
+    [3_000, "quests", [[0]]],
+    [4_000, "dur", [[0, 0, 50]]],
+    [5_000, "bank", [[255, 40, 703]]],
+    [5_000, "mail", [{ from: "Otherplayer", body: POISON.smuggled }]],
+    [6_000, "money", 12_400],
+  ];
+  seg.items = {
+    501: [2, "Test Blade"],
+    502: [3, "Test Bow"],
+    600: [1, "Test Pouch"],
+    601: [1, "Test Bank Bag"],
+    701: [1, "Test Stone", "flavour text the client prints", POISON.smuggled],
+    702: [0, "Test Scrap"],
+    703: [1, "Test Token"],
+    704: [1, "Test Herb"],
+    705: [1, "Test Banked Thing"],
+    888: [4, "Test Unreferenced"],
+    906: [1, "x".repeat(200)],
+  } as unknown as TraceSegment["items"];
+  seg.qreq = {
+    900: [8, 1, 0, 0, [704, 5], [906, 1]],
+    901: [1, 0, 0, 0],
+    902: [1, 0, 0, 0, "Kill the thing"],
+  } as unknown as TraceSegment["qreq"];
+  return seg;
+}
+
+describe("projectTraceSegment: the character sheet", () => {
+  test("publishes money, equipment, bags, what is carried, durability, quests, reputation, skills and turn-ins as numbers, with the referenced items' names", () => {
+    const out = projectTraceSegment(sheetSegmentFixture());
+    expect(out.k.s).toMatchObject({
+      money: 12_345,
+      equip: [[0, 501], [15, 502, -12]],
+      bags: [[19, 600, 6]],
+      inv: [[19, 0, 701, 3, 0], [255, 23, 702]],
+      dur: [[0, 40, 50], [15, 0, 75]],
+      quests: [[0, 900, 1, 8, 1]],
+      rep: [[72, 120]],
+      skills: [[43, 31, 60]],
+    });
+    expect(out.ev.filter((e) => !["target", "mood", "hp", "auras", "cast"].includes(e[1]))).toEqual([
+      [1_000, "inv", [[255, 25, 703]]],
+      [1_000, "money", 12_400],
+      [3_000, "qdone", [900]],
+      // The same quest again is a second turn-in, never a repeat to drop.
+      [3_500, "qdone", [900]],
+      [3_000, "quests", [[0]]],
+      [4_000, "dur", [[0, 0, 50]]],
+    ]);
+    expect(out.items).toEqual({
+      501: [2, "Test Blade"],
+      502: [3, "Test Bow"],
+      600: [1, "Test Pouch"],
+      701: [1, "Test Stone"],
+      702: [0, "Test Scrap"],
+      703: [1, "Test Token"],
+      704: [1, "Test Herb"],
+    });
+    expect(out.qreq).toEqual({ 900: [8, 1, 0, 0, [704, 5], [906, 1]] });
+    // Top-level and keyframe keys, exactly.
+    expect(Object.keys(out).sort()).toEqual(allow(["v", "run", "t0", "t1", "q", "k", "dt", "x", "y", "z", "o", "cuts", "flights", "ev", "items", "qreq"]));
+    const PUBLIC_STATE = ["hp", "hpMax", "pw", "pwMax", "pwType", "level", "xp", "xpMax", "auras", "combat", "mounted", "taxi", "dead", "ghost", "resting", "cast"];
+    const SHEET = ["money", "equip", "bags", "inv", "dur", "quests", "rep", "skills"];
+    expect(Object.keys(out.k.s).sort()).toEqual(allow([...PUBLIC_STATE, ...SHEET]));
+    assertClean(JSON.stringify(out));
+  });
+
+  test("withholds the bank: slots 39-73, a bank bag and its contents, and a bank key smuggled into the keyframe or the events", () => {
+    const out = projectTraceSegment(sheetSegmentFixture());
+    const text = JSON.stringify(out);
+    expect(Object.hasOwn(out.k.s, "bank")).toBe(false);
+    expect(out.ev.some((e) => e[1] === "bank")).toBe(false);
+    expect(out.k.s.equip).not.toContainEqual([40, 503]);
+    expect(out.k.s.bags).not.toContainEqual([67, 601, 10]);
+    expect(out.k.s.inv!.some((r) => r[0] === 68 || (r[0] === 255 && r[1] >= 39))).toBe(false);
+    // The patch that only touched a bank slot and a bank bag is gone whole.
+    expect(out.ev.some((e) => e[0] === 2_000)).toBe(false);
+    for (const banked of ["Test Bank Bag", "Test Banked Thing", "601", "705"]) expect(text).not.toContain(banked);
+  });
+
+  test("withholds item text, and anything naming another player: no description, no creator, no guid, no mail or trade, no unreferenced or over-long name", () => {
+    const out = projectTraceSegment(sheetSegmentFixture());
+    const text = JSON.stringify(out);
+    for (const withheld of ["flavour text", "Made by", "Otherplayer", "4611686018427387905", "Test Unreferenced", "x".repeat(129), "Kill the thing", "Quest Title", '"mail"', '"trade"', "partner"]) {
+      expect(text).not.toContain(withheld);
+    }
+    // A row is numbers no wider than its key's: the creator riding an inv row is cut off.
+    expect(out.k.s.inv![0]).toEqual([19, 0, 701, 3, 0]);
+    // An item's entry is its quality and template name, nothing after them.
+    expect(out.items![701]).toEqual([1, "Test Stone"]);
+    // A quest's needs are numbers: one with text is not published at all.
+    expect(Object.hasOwn(out.qreq!, 902)).toBe(false);
+    assertClean(text);
+  });
+
+  test("is a fixed point with the sheet, and a sheet the public stream already states is never said twice", () => {
+    const once = projectTraceSegment(sheetSegmentFixture());
+    expect(projectTraceSegment(once)).toEqual(once);
+    // The money event at 6 s repeats 12 400: dropped.
+    expect(once.ev.filter((e) => e[1] === "money")).toEqual([[1_000, "money", 12_400]]);
+  });
+
+  test("a segment without a sheet gains no sheet key and no dictionary", () => {
+    const out = projectTraceSegment(traceSegmentFixture());
+    for (const k of ["money", "equip", "bags", "inv", "dur", "quests", "rep", "skills"]) expect(Object.hasOwn(out.k.s, k)).toBe(false);
+    expect(out.items).toBeUndefined();
+    expect(out.qreq).toBeUndefined();
+  });
+});
+
 describe("projectEpisodes", () => {
   test("emits exactly the allowlist", () => {
     const input: EpisodesResponse = smuggle<EpisodesResponse>({

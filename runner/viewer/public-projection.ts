@@ -47,7 +47,9 @@
  * - Minimap tiles are Blizzard bytes and never leave through a snapshot.
  * - From the trace (`projectTraceSegment`): the `target`, which names another
  *   unit — another player, with its health, is another player's whereabouts.
- *   A cut never says why. Deaths are public (operator, 2026-10-18).
+ *   A cut never says why. Deaths are public (operator, 2026-10-18). The
+ *   character sheet ships as numbers and its items' template names (operator,
+ *   2026-10-18), and never the bank, any item text, or a guid.
  * The rule when a field is arguable: withhold.
  */
 
@@ -120,6 +122,8 @@ import type {
   TraceEventWire,
   TraceIndexResponse,
   TraceSegment,
+  TraceItemName,
+  TraceQuestReq,
   TraceSegRuns,
   TraceState,
   TrackTrace,
@@ -131,7 +135,22 @@ import { EPISODE_IDS } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
-import { isStateKey, sanitizeStateValue, stateOf, type TraceStateKey } from "./trace";
+import {
+  applySheetPatch,
+  isSheetKind,
+  isStateKey,
+  itemNameOf,
+  QDONE,
+  questReqOf,
+  sanitizeStateValue,
+  SHEET_KEY_LEN,
+  SHEET_KEYS,
+  sheetOf,
+  sheetPatch,
+  stateOf,
+  type TraceSheetKey,
+  type TraceStateKey,
+} from "./trace";
 import {
   NEARBY_VERSION,
   emptyNearbyWindow,
@@ -1412,6 +1431,91 @@ const PUBLIC_TRACE_KEY_SET: ReadonlySet<string> = new Set(PUBLIC_TRACE_KEYS);
  */
 const TRACE_KEYS_IF_PRESENT: ReadonlySet<string> = new Set(["dead", "ghost"]);
 
+/**
+ * The character sheet a public segment carries (operator, 2026-10-18):
+ * money, equipment, worn bags, what is carried, durability, the quest log's
+ * ids, state and counters, visible reputation, skills and turn-ins, as
+ * numbers, with the name and quality of each item it references and the
+ * counts each of its quests needs. Published ahead of the page that will
+ * read it, by the same decision: a segment cannot be amended once out, so a
+ * window that closed without its sheet would never have one.
+ *
+ * Every row is rebuilt as integers no wider than its key's row, and kept only
+ * at a position a character carries: equipment 0-18, worn bags 19-22, the
+ * backpack (bag 255, slots 23-38) and a worn bag's own slots. The bank (slots
+ * 39-73, and anything in a bank bag) never passes, whoever put it there; the
+ * recorder does not read it. Nothing in the sheet names anyone: no guid, no
+ * creator, no text but an item's template name.
+ */
+const PUBLIC_SHEET_KEYS = SHEET_KEYS satisfies readonly TraceSheetKey[];
+const SHEET_ROW_WIDTH: { readonly [K in Exclude<TraceSheetKey, "money">]: number } = { equip: 3, bags: 3, inv: 5, dur: 3, quests: 7, rep: 2, skills: 3 };
+/** An item's name longer than this is not a name; the entry is withheld. */
+const ITEM_NAME_MAX = 128;
+
+const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
+
+/** Whether a sheet row sits where a character carries things. */
+function carriedAt(key: Exclude<TraceSheetKey, "money">, row: readonly number[]): boolean {
+  const [a, b] = row as [number, number | undefined];
+  switch (key) {
+    case "equip":
+    case "dur":
+      return a >= 0 && a <= 18;
+    case "bags":
+      return a >= 19 && a <= 22;
+    case "inv":
+      return b !== undefined && ((a === 255 && b >= 23 && b <= 38) || (a >= 19 && a <= 22 && b >= 0 && b < 36));
+    case "quests":
+      return a >= 0 && a < 25;
+    case "rep":
+    case "skills":
+      return true;
+  }
+}
+
+/** A list's public rows: integer tuples at most the key's width, at a carried position; null stays null. */
+function publicSheetRows(key: Exclude<TraceSheetKey, "money">, v: unknown, patch: boolean): number[][] | null | undefined {
+  if (v === null) return null;
+  if (!Array.isArray(v)) return undefined;
+  const keyLen = SHEET_KEY_LEN[key];
+  const out: number[][] = [];
+  for (const r of v as unknown[]) {
+    if (!Array.isArray(r) || r.length < (patch ? keyLen : keyLen + 1)) continue;
+    const row = (r as unknown[]).slice(0, SHEET_ROW_WIDTH[key]);
+    if (row.every(isInt) && carriedAt(key, row as number[])) out.push(row as number[]);
+  }
+  return out;
+}
+
+/** The sheet's dictionaries for exactly the ids the public rows reference: numbers, and an item's quality and name. */
+function publicSheetDicts(seg: TraceSegment, itemIds: Set<number>, questIds: Set<number>): Pick<TraceSegment, "items" | "qreq"> {
+  const srcQ = seg.qreq !== null && typeof seg.qreq === "object" && !Array.isArray(seg.qreq) ? seg.qreq : {};
+  const srcI = seg.items !== null && typeof seg.items === "object" && !Array.isArray(seg.items) ? seg.items : {};
+  const qreq: Record<string, TraceQuestReq> = {};
+  for (const id of [...questIds].sort((a, b) => a - b)) {
+    const req = Object.hasOwn(srcQ, id) ? questReqOf(srcQ[id]) : undefined;
+    if (req === undefined || !req.flat().every(isInt)) continue;
+    qreq[id] = req;
+    for (const p of req.slice(4) as [number, number][]) if (p[0] > 0) itemIds.add(p[0]);
+  }
+  const items: Record<string, TraceItemName> = {};
+  for (const id of [...itemIds].sort((a, b) => a - b)) {
+    const entry = Object.hasOwn(srcI, id) ? itemNameOf(srcI[id]) : undefined;
+    if (entry === undefined || entry[1].length > ITEM_NAME_MAX || (entry[0] !== null && !isInt(entry[0]))) continue;
+    items[id] = [entry[0], entry[1]];
+  }
+  return { ...(Object.keys(items).length > 0 ? { items } : {}), ...(Object.keys(qreq).length > 0 ? { qreq } : {}) };
+}
+
+/** The item and quest ids public sheet rows reference. */
+function sheetRefs(key: TraceSheetKey, rows: readonly (readonly number[])[], itemIds: Set<number>, questIds: Set<number>): void {
+  const at = key === "inv" ? 2 : key === "equip" || key === "bags" ? 1 : -1;
+  for (const r of rows) {
+    if (at >= 0 && r.length > at && r[at]! > 0) itemIds.add(r[at]!);
+    if (key === "quests" && r.length > 1 && r[1]! > 0) questIds.add(r[1]!);
+  }
+}
+
 /** One public key's value, rebuilt: an aura's flags and a cast's extras do not travel. */
 function publicTraceValue(key: TraceStateKey, v: unknown): unknown {
   if (key === "auras") return (v as TraceAura[]).map((a): TraceAura => [a[0], a[1], a[2]]);
@@ -1454,9 +1558,53 @@ export function projectTraceSegment(seg: TraceSegment): TraceSegment {
     (s as Record<string, unknown>)[key] = v;
     said.set(key, JSON.stringify(v));
   }
+  // The sheet: the observed keys whole, as public rows. A public fold per key
+  // turns each private patch into the one the public stream needs, and drops
+  // a patch that changes nothing there (a row only at a withheld position).
+  const sheet = sheetOf(raw);
+  const pubSheet: Partial<Record<TraceSheetKey, number | number[][] | null>> = {};
+  const itemIds = new Set<number>();
+  const questIds = new Set<number>();
+  for (const key of PUBLIC_SHEET_KEYS) {
+    if (sheet[key] === null) continue;
+    if (key === "money") {
+      if (!isInt(sheet.money)) continue;
+      pubSheet.money = sheet.money;
+    } else {
+      const rows = publicSheetRows(key, sheet[key], false) ?? [];
+      pubSheet[key] = rows;
+      sheetRefs(key, rows, itemIds, questIds);
+    }
+    (s as Record<string, unknown>)[key] = pubSheet[key];
+  }
   const ev: TraceEventWire[] = [];
   for (const e of Array.isArray(seg.ev) ? seg.ev : []) {
-    if (!Array.isArray(e) || typeof e[0] !== "number" || !Number.isFinite(e[0]) || !isStateKey(e[1])) continue;
+    if (!Array.isArray(e) || typeof e[0] !== "number" || !Number.isFinite(e[0])) continue;
+    if (isSheetKind(e[1])) {
+      const kind = e[1];
+      if (kind === QDONE) {
+        const ids = Array.isArray(e[2]) ? (e[2] as unknown[]).filter((id): id is number => isInt(id) && id > 0) : [];
+        // Turn-ins append: the same quest twice is two, so no repeat is dropped.
+        if (ids.length > 0) ev.push([e[0], kind, ids]);
+      } else if (kind === "money") {
+        const v = e[2];
+        if ((v !== null && !isInt(v)) || (Object.hasOwn(pubSheet, "money") && pubSheet.money === v)) continue;
+        pubSheet.money = v;
+        ev.push([e[0], kind, v]);
+      } else {
+        const patch = publicSheetRows(kind, e[2], true);
+        if (patch === undefined) continue;
+        const before = (pubSheet[kind] ?? null) as number[][] | null;
+        const after = applySheetPatch(before, patch, SHEET_KEY_LEN[kind]);
+        const eff = sheetPatch(before, after, SHEET_KEY_LEN[kind]);
+        if (eff === undefined) continue;
+        pubSheet[kind] = after;
+        ev.push([e[0], kind, eff]);
+        if (eff !== null) sheetRefs(kind, eff, itemIds, questIds);
+      }
+      continue;
+    }
+    if (!isStateKey(e[1])) continue;
     if (!PUBLIC_TRACE_KEY_SET.has(e[1])) continue;
     const v = sanitizeStateValue(e[1], e[2]);
     if (v === undefined) continue;
@@ -1489,6 +1637,7 @@ export function projectTraceSegment(seg: TraceSegment): TraceSegment {
     cuts: tupleList<[number, number]>(seg.cuts, 2),
     flights: tupleList<[number, number, number, number, number, number]>(seg.flights, 6),
     ev,
+    ...publicSheetDicts(seg, itemIds, questIds),
   });
 }
 
