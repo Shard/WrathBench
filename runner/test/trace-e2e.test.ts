@@ -15,6 +15,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { EventStream, StateCache } from "@wrathbench/sdk";
 import type { SandboxHost } from "../src/sandbox/host";
@@ -179,6 +180,10 @@ describe("the trace end to end", () => {
     expect(stored.some((r) => r.kind === "key" && r.ts === W1)).toBe(true);
     expect(stored.filter((r) => r.kind === "flight")).toHaveLength(1);
     expect(stored.some((r) => r.kind === "pos" && (r.data as { jump?: number } | null)?.jump === 1 && r.ts === HEARTH)).toBe(true);
+
+    // run.sqlite is the trace's one home: every row the viewer reads back
+    // below came from there, and nothing else in the run directory holds one.
+    expect(readdirSync(join(runs, RUN)).filter((f) => f !== "run.sqlite" && f !== "trajectory.jsonl")).toEqual([]);
 
     // The viewer, once both windows have settled.
     const now = W1 + SEG_MS + SETTLE_MS;
