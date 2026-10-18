@@ -525,7 +525,10 @@ inventory on every point it changed on. That took a level-43 character's track
 from 30.3 MB to 5.7 MB, and a live run's track is re-uploaded on every pass.
 Unlike the trim above, an older dashboard cannot read the new shape, so the
 dashboard reads both and, as with the manifest, the site deploys first and the
-publisher second. The release re-keys every run's track once.
+publisher second. A run's objects share one version, so the release re-keys
+every run that recorded an inventory once, all four of its objects (a full
+re-upload of those runs; the old set is pruned as usual), and a run that
+recorded none keeps its key.
 
 ## What the ladder shows
 
