@@ -776,10 +776,11 @@ Everywhere else the runner writes the secret, it is `[redacted]` too:
   (`leaseRunSecret` registers this one before the child exists).
 - The host pipes the child's stdout and stderr and writes them to its own a
   line at a time with the secret replaced (`src/redact.ts`), so neither the
-  job log nor the pod log carries it. The child folds what it mirrors there:
-  a line repeated back to back is printed once and then as a count
-  (`sandbox/entry.ts`, `mirror`), because a model's loop printing one line
-  forever is what filled a job log to gigabytes.
+  job log nor the pod log carries it. It folds that log copy after the scrub:
+  a line repeated back to back is written once and then as a count
+  (`sandbox/log-fold.ts`), because a model's loop printing one line forever is
+  what filled a job log to gigabytes. The stderr tail a crash notice quotes to
+  the model is read before the fold, as the child wrote it.
 - It scrubs the stderr tail the crash notice quotes before cutting it.
 - It scrubs what a snippet writes to the scratchpad before storing it, so the
   pad the model is shown is the pad `edit_scratchpad` matches against.

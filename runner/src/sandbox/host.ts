@@ -17,6 +17,7 @@
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { ScrubbedStream, SecretRedactor } from "../redact";
+import { RepeatFolder } from "./log-fold";
 import { overCapText, type Scratchpad } from "../scratchpad";
 import type { NearbyDrain } from "../nearby-row";
 import type { TraceDrain } from "../trace-row";
@@ -208,6 +209,9 @@ function defaultLogSink(stream: "stdout" | "stderr", text: string): void {
 /** How many evals' links the host keeps for routines still dispatching under them. */
 const EVAL_LINKS_MAX = 256;
 
+/** How often a repeat still going is counted in the log (`RepeatFolder.flush`), so a reader of a live log sees it. */
+const LOG_FOLD_FLUSH_MS = 60_000;
+
 export class SandboxHost {
   private proc: Subprocess | null = null;
   private markReady: () => void = () => {};
@@ -361,10 +365,15 @@ export class SandboxHost {
   private async pump(stream: unknown, name: "stdout" | "stderr", onRaw?: (text: string) => void): Promise<void> {
     if (!(stream instanceof ReadableStream)) return;
     const sink = this.opts.logSink ?? defaultLogSink;
+    // Scrubbed, then folded (`RepeatFolder`): the log copy only. `onRaw`, and
+    // with it the stderr tail a crash notice quotes, sees the stream as written.
+    const fold = new RepeatFolder((text) => sink(name, text));
     const out = new ScrubbedStream(
       (text) => this.redactor.scrub(text),
-      (text) => sink(name, text),
+      (text) => fold.push(text),
     );
+    const tick = setInterval(() => fold.flush(), LOG_FOLD_FLUSH_MS);
+    tick.unref();
     const decoder = new TextDecoder();
     try {
       for await (const chunk of stream) {
@@ -375,8 +384,10 @@ export class SandboxHost {
     } catch {
       // stream torn down with the process; the tail keeps what we saw
     } finally {
+      clearInterval(tick);
       out.push(decoder.decode());
       out.end();
+      fold.end();
     }
   }
 

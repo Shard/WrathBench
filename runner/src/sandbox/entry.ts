@@ -491,54 +491,17 @@ function pushLog(level: LogEntry["level"], text: string): void {
 }
 
 const realConsole = { ...console };
-
-/*
- * The child's own stdout and stderr, which the host mirrors into the runner's
- * (`SandboxHost.pump`: the fleet job's log, or the run pod's), get the fold
- * `pushLog` gives a result, for the same reason. A routine stuck in a loop
- * printed "Target … is not a valid hostile or is dead" 85,000 times in 8 MB of
- * one supervisor log, which grew to 1.69 GB, and another log was 99% "blocked
- * bad moveTo in stuck routine". Now a line is printed once, its repeats are
- * counted, and the count is printed as one line when a different line
- * arrives, when a snippet's logs are drained, every
- * `MIRROR_REPEAT_FLUSH_MS` while the loop goes on, and at exit. The result's
- * own log (`pushLog`) is unchanged: it never saw the mirror.
- */
-const MIRROR_REPEAT_FLUSH_MS = 60_000;
-let mirrorLast: { level: LogEntry["level"]; text: string } | null = null;
-let mirrorRepeats = 0;
-
-function mirror(level: LogEntry["level"], text: string, args: unknown[]): void {
-  if (mirrorLast !== null && mirrorLast.level === level && mirrorLast.text === text) {
-    mirrorRepeats++;
-    return;
-  }
-  flushMirrorRepeats();
-  mirrorLast = { level, text };
-  realConsole[level]?.(...args);
-}
-
-function flushMirrorRepeats(): void {
-  if (mirrorRepeats === 0 || mirrorLast === null) return;
-  realConsole[mirrorLast.level]?.(`[sandbox] the line above repeated ×${mirrorRepeats} more`);
-  mirrorRepeats = 0;
-}
-
-setInterval(flushMirrorRepeats, MIRROR_REPEAT_FLUSH_MS).unref();
-process.on("exit", flushMirrorRepeats);
-
 for (const level of ["log", "info", "warn", "error", "debug"] as const) {
   console[level] = (...args: unknown[]): void => {
     const text = args
       .map((a) => (typeof a === "string" ? a : Bun.inspect(a, { depth: 4 })))
       .join(" ");
     pushLog(level, text);
-    mirror(level, text, args);
+    realConsole[level]?.(...args);
   };
 }
 
 function drainLogs(): LogEntry[] {
-  flushMirrorRepeats();
   return logBuf.splice(0, logBuf.length);
 }
 
