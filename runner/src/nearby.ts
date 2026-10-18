@@ -12,7 +12,7 @@
  *
  * Live only, which is a property of where it does not go as much as of how
  * long it lasts:
- * - never `run.sqlite`, `trace.jsonl` or `trajectory.jsonl` — it takes no
+ * - never `run.sqlite` or `trajectory.jsonl` — it takes no
  *   trajectory at all — so no collector, replay, scorer or scheduler reads it;
  * - files that ended more than `NEARBY_RING_MS` ago are unlinked on every tick;
  * - the directory is removed when the ticker stops (every pause, stop and exit

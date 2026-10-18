@@ -545,11 +545,17 @@ the whole entry with the key omitted for a clear.
 
 ### What it will not serve
 
-The `meta` trajectory entry embeds the whole run config, bearer token included,
-which the generic summariser would otherwise copy wholesale into both
-`/entries?from=0` and `/raw/0`. Redaction is keyed on field name at any depth
+The `meta` trajectory entry embeds the whole run config. The runner now keeps
+the module bearer token out of it (meta.json is the token's one home, for
+`--resume`), but every run recorded before that carries it, and the generic
+summariser would otherwise copy it wholesale into both `/entries?from=0` and
+`/raw/0`. Redaction is keyed on field name at any depth
 and applied at the two places a raw record can reach a client (`summarize` and
-`TrajectoryTail.raw`). `apiKeyEnv` is deliberately kept: it names an environment
+`TrajectoryTail.raw`). Older runs also carry the token where the module echoed
+it into an action reply a snippet logged, which a key rule cannot catch, so
+the public boundary strikes it by value as a backstop (`publicText`): every
+public body that carries a run's text names its runs to `pub`. The operator's
+handle serves the record as the model saw it. `apiKeyEnv` is deliberately kept: it names an environment
 variable, and the value of that variable is never written to the trajectory.
 
 `WRATHBENCH_VIEWER_PUBLIC=1` makes the whole handle a boundary rather than a

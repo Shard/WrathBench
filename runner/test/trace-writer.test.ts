@@ -1,11 +1,11 @@
 /**
  * The trace writer (`trace.ts`): the host's fold over what the child's
- * recorder latched, the per-window key rows, and the two places every row
- * lands (run.sqlite `trace`, `trace.jsonl`) — and the one it never does
- * (trajectory.jsonl, which the collector tails).
+ * recorder latched, the per-window key rows, and the one place every row
+ * lands (run.sqlite `trace`) — never trajectory.jsonl, which the collector
+ * tails, and never a file of its own.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { SandboxHost } from "../src/sandbox/host";
 import { Scratchpad } from "../src/scratchpad";
@@ -44,13 +44,6 @@ function rig() {
       clock = t;
     },
     rows: () => trajectory.traceRows("run-test"),
-    jsonl: (): Record<string, unknown>[] =>
-      existsSync(join(dir, "trace.jsonl"))
-        ? readFileSync(join(dir, "trace.jsonl"), "utf8")
-            .split("\n")
-            .filter((l) => l.length > 0)
-            .map((l) => JSON.parse(l) as Record<string, unknown>)
-        : [],
   };
 }
 
@@ -68,7 +61,7 @@ const pos = (ts: number, x: number, jump = false): TraceRow => ({ ts, kind: "pos
 const state = (ts: number, data: Partial<TraceState>): TraceRow => ({ ts, kind: "state", data });
 
 describe("trace writer", () => {
-  test("rows land in sqlite and trace.jsonl, as {t:'trace'} lines, and never in trajectory.jsonl", async () => {
+  test("rows land in sqlite only: never in trajectory.jsonl, and no trace.jsonl beside it", async () => {
     const r = rig();
     r.push([key(W0 + 500, 90, [0, 1, 2, 3, 0.5]), pos(W0 + 1_000, 5), state(W0 + 1_500, { hp: 80 })]);
     await r.writer.drain();
@@ -78,12 +71,8 @@ describe("trace writer", () => {
     expect((rows[0]!.data as TraceState).hp).toBe(90);
     expect(rows[1]).toEqual({ ts: W0 + 1_000, kind: "pos", map: 0, x: 5, y: 0, z: 10, o: 1, data: null });
     expect(rows[2]).toEqual({ ts: W0 + 1_500, kind: "state", map: null, x: null, y: null, z: null, o: null, data: { hp: 80 } });
-    const lines = r.jsonl();
-    expect(lines).toHaveLength(3);
-    expect(lines[0]).toMatchObject({ t: "trace", ts: W0 + 500, kind: "key", map: 0, x: 1 });
-    expect(lines[1]).toEqual({ t: "trace", ts: W0 + 1_000, kind: "pos", map: 0, x: 5, y: 0, z: 10, o: 1 });
-    expect(lines[2]).toEqual({ t: "trace", ts: W0 + 1_500, kind: "state", data: { hp: 80 } });
     expect(readTrajectory(r.dir).filter((x) => x.t === "trace")).toEqual([]);
+    expect(existsSync(join(r.dir, "trace.jsonl"))).toBe(false);
     r.trajectory.close();
   });
 

@@ -244,6 +244,20 @@ describe("sandbox evaluation", () => {
     expect(crash!.text).toContain("doom marker 42");
   }, 15_000);
 
+  test("the crash notice quotes the stderr the child wrote, every repeat of it, while the log copy is folded", async () => {
+    let logged = "";
+    const host = makeHost({ logSink: (stream, text) => void (stream === "stderr" ? (logged += text) : undefined) });
+    const res = await host.evalSnippet(
+      'for (let i = 0; i < 4; i++) console.error("stuck again"); await sleep(20); process.exit(9);',
+    );
+    expect(res.restarted).toBe(true);
+    const crash = host.drainNotices().find((n) => n.kind === "sandbox_restarted")!;
+    // What the model reads: the tail as the child wrote it, unfolded.
+    expect(crash.text).toContain("Last stderr: stuck again\nstuck again\nstuck again\nstuck again\n");
+    await host.stop();
+    expect(logged).toBe("stuck again\n[sandbox] the line above repeated ×3 more\n");
+  }, 15_000);
+
   test("scratchpad helpers bridge to the host-owned file", async () => {
     const host = makeHost();
     const write = await host.evalSnippet('await scratchpad.write("# notes\\nline one")');
@@ -780,6 +794,28 @@ describe("background fault storm control (morning-laguna-2)", () => {
     expect(res.logs.length).toBe(2);
     expect(res.logs[0]!.text).toBe("same line ×25");
     expect(res.logs[1]!.text).toBe("different");
+  });
+
+  test("the child's mirrored stdout prints a repeated line once and its count, not every copy", async () => {
+    const logged = { stdout: "", stderr: "" };
+    const host = makeHost({ logSink: (stream, text) => void (logged[stream] += text) });
+    const res = await host.evalSnippet(
+      [
+        'for (let i = 0; i < 1000; i++) console.log("Target 0x1 is not a valid hostile or is dead.");',
+        'console.log("different");',
+        'for (let i = 0; i < 3; i++) console.error("stuck");',
+      ].join("\n"),
+    );
+    expect(res.ok).toBe(true);
+    // The result's own log is the fold it always was.
+    expect(res.logs.map((l) => l.text)).toEqual(["Target 0x1 is not a valid hostile or is dead. ×1000", "different", "stuck ×3"]);
+    // The pumps flush when the child's streams end.
+    await host.stop();
+    expect(logged.stdout).toBe(
+      "Target 0x1 is not a valid hostile or is dead.\n[sandbox] the line above repeated ×999 more\ndifferent\n",
+    );
+    // A run still repeating when the snippet's logs are drained is counted then.
+    expect(logged.stderr).toBe("stuck\n[sandbox] the line above repeated ×2 more\n");
   });
 });
 

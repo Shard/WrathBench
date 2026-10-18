@@ -8,8 +8,8 @@
  *                      the fresh user message and points at the rest of the
  *                      prompt, which the file already holds
  *                      (`request-record.ts`; `replay.ts` rebuilds it).
- *   run.sqlite         run metadata row + periodic state rows, for querying
- *                      across runs without parsing JSONL.
+ *   run.sqlite         run metadata row, periodic state rows, movement rows
+ *                      and the trace, for querying without parsing JSONL.
  *   meta.json          the run config + harness version, for `--resume`.
  *   scratchpad.md      owned by Scratchpad, lives in the same directory.
  *
@@ -575,8 +575,6 @@ const STATE_ADDED_COLUMNS: Record<string, string> = {
 export class Trajectory {
   readonly dir: string;
   readonly jsonlPath: string;
-  /** `trace.jsonl`: the trace's own evidence file (`recordTrace`). */
-  readonly tracePath: string;
   private readonly db: Database;
   private readonly secrets = new SecretRedactor();
   private readonly now: () => number;
@@ -595,7 +593,6 @@ export class Trajectory {
     this.now = opts.now ?? Date.now;
     mkdirSync(dir, { recursive: true });
     this.jsonlPath = join(dir, "trajectory.jsonl");
-    this.tracePath = join(dir, "trace.jsonl");
     this.db = openRunDb(join(dir, "run.sqlite"));
     this.db.exec(SCHEMA);
     this.migrateTable("run", RUN_ADDED_COLUMNS);
@@ -631,35 +628,25 @@ export class Trajectory {
   }
 
   /**
-   * One drain of trace rows (`trace-row.ts`), in order, to the `trace` table
-   * and to `trace.jsonl` as `{ t: "trace", ts, kind, ... }` lines. Not to
-   * trajectory.jsonl: the collector copies every trajectory line it does not
-   * know into the store, and a 1 Hz position feed is tens of thousands of
-   * rows per character per day. Its own file keeps the evidence record whole
-   * and the collector untouched. One transaction per drain; the rows hold
-   * numbers and booleans only, so there is nothing to scrub.
+   * One drain of trace rows (`trace-row.ts`), in order, to the `trace` table:
+   * the trace's one home. Not to trajectory.jsonl: the collector copies every
+   * trajectory line it does not know into the store, and a 1 Hz position feed
+   * is tens of thousands of rows per character per day. Not to a file of its
+   * own either: a `trace.jsonl` beside the table held the same rows and had no
+   * reader. One transaction per drain; the rows hold numbers and booleans
+   * only, so there is nothing to scrub.
    */
   recordTrace(runId: string, rows: readonly TraceRow[]): void {
     if (rows.length === 0) return;
     const insert = this.db.query(
       `INSERT INTO trace (run_id, ts, kind, map, x, y, z, o, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    let lines = "";
     this.db.transaction(() => {
       for (const r of rows) {
         const data = r.data === undefined || r.data === null ? null : JSON.stringify(r.data);
         insert.run(runId, r.ts, r.kind, r.map ?? null, r.x ?? null, r.y ?? null, r.z ?? null, r.o ?? null, data);
-        const line: Record<string, unknown> = { t: "trace", ts: r.ts, kind: r.kind };
-        if (r.map !== undefined && r.map !== null) line["map"] = r.map;
-        if (r.x !== undefined && r.x !== null) line["x"] = r.x;
-        if (r.y !== undefined && r.y !== null) line["y"] = r.y;
-        if (r.z !== undefined && r.z !== null) line["z"] = r.z;
-        if (r.o !== undefined && r.o !== null) line["o"] = r.o;
-        if (r.data !== undefined && r.data !== null) line["data"] = r.data;
-        lines += `${JSON.stringify(line)}\n`;
       }
     })();
-    appendFileSync(this.tracePath, lines, "utf8");
   }
 
   /** Every trace row of a run, oldest first; `data` parsed. For tests and in-process readers. */
@@ -735,6 +722,17 @@ export class Trajectory {
     this.db.query(`UPDATE run SET reflecting_since = ? WHERE run_id = ?`).run(since, this.runId);
   }
 
+  /**
+   * The run's identity, to its three places: meta.json whole, the `run` row,
+   * and a `meta` record in the trajectory.
+   *
+   * The module session token goes to meta.json only. It is the bearer secret
+   * for the run's game session, and the readers that need it — `--resume`
+   * reattaching, the roster releasing a session, the viewer striking it out of
+   * an error message — all read meta.json. The record and `config_json` carry
+   * the rest of the config without it (`withoutSessionToken`), so the
+   * trajectory, the row and the store that copies both hold no copy of it.
+   */
   writeMeta(meta: RunMeta): void {
     this.runId = meta.runId;
     const safe = JSON.parse(this.scrub(jsonLine(meta))) as RunMeta;
@@ -759,7 +757,7 @@ export class Trajectory {
         meta.resolved?.cliVersion ?? null,
         meta.resolved?.provider ?? null,
         meta.config.continuedFrom ?? null,
-        this.scrub(jsonLine(meta.config)),
+        this.scrub(jsonLine(withoutSessionToken(meta.config))),
       );
     /*
      * No window is open at a process boundary. `reflect.ts`: "A resumed run
@@ -769,7 +767,7 @@ export class Trajectory {
      * otherwise leave the column standing and read as reflecting forever.
      */
     this.setReflectingSince(null);
-    this.append({ t: "meta", ...meta });
+    this.append({ t: "meta", ...meta, config: withoutSessionToken(meta.config) });
   }
 
   /**
@@ -1077,6 +1075,15 @@ export function readTrajectory(dir: string): TrajectoryRecord[] {
     }
   }
   return out;
+}
+
+/**
+ * A run config without its module session token: the config as every copy but
+ * meta.json holds it (`Trajectory.writeMeta`).
+ */
+export function withoutSessionToken<C extends { token?: unknown }>(config: C): Omit<C, "token"> {
+  const { token: _token, ...rest } = config;
+  return rest;
 }
 
 export function readMeta(dir: string): RunMeta | null {

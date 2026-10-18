@@ -8,6 +8,17 @@ evidence record and the only write path; nothing here ever writes to them, and
 the runner does not know this service exists. Drop the ClickHouse database,
 delete `data/collector.sqlite`, run `--replay`, and everything comes back.
 
+It holds no copy of a run's module session token. meta.json keeps the token,
+because `--resume` reads it back, and nothing else the runner writes now
+carries it; but runs recorded by an older build do, in their `meta` records,
+in `run.sqlite`'s `config_json`, and wherever a snippet logged a module reply
+that echoed it. As a backstop for those, the collector strikes the run's
+token by value from every text it copies — each trajectory and
+`episodic.jsonl` line before it is read, `meta_json`, `config_json`
+(`runner/src/session-token.ts`) — and copies everything else byte for byte.
+A `--replay` therefore cleans a store an older collector filled, once the
+merge has dropped the superseded rows (`OPTIMIZE TABLE … FINAL` forces it).
+
 ## Running it
 
 ```sh
@@ -53,11 +64,12 @@ owns on disk and is as disposable as the store itself.
 
 Not tailed, on purpose:
 
-- the trace (`run.sqlite` `trace` and `trace.jsonl`,
-  `runner/src/trace-row.ts`). It is a ~1 Hz position feed per live character,
-  and it has its own file precisely so it never arrives here as tens of
-  thousands of unknown trajectory lines a day; its readers encode it from the
-  run directory.
+- the trace (`run.sqlite` `trace`, `runner/src/trace-row.ts`). It is a ~1 Hz
+  position feed per live character, and it has its own table precisely so it
+  never arrives here as tens of thousands of unknown trajectory lines a day;
+  its readers encode it from the run directory. Runs recorded before that
+  table was its only home also carry a `trace.jsonl` holding the same rows;
+  nothing reads it.
 - the nearby ring (`nearby/<t0>.jsonl`, `runner/src/nearby-row.ts`): the units
   around a live character for the live map, about 15 minutes of one-minute
   files that the runner unlinks as they age and deletes when the run stops.

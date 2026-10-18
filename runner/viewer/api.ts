@@ -86,6 +86,7 @@ import {
 import { NEARBY_SPAN_MS } from "./nearby";
 import { readNearbyWindow } from "./nearby-ring";
 import { scrubPathsText } from "./scrub-paths";
+import { strikableSessionToken, strikeSessionTokens } from "../src/session-token";
 import { SEG_MS } from "./trace";
 import { readTraceIndex, readTraceSegment, traceSegsMemo } from "./trace-db";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
@@ -652,8 +653,27 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * `/scratchpad`, the model's own notes, published as written
    * (docs/DATA-AND-LEGAL.md, "Trajectory logs", operator 2026-08-30).
    */
-  const pub = <T>(body: T, project: (b: T) => unknown): Response =>
-    json(publicMode ? project(body) : body);
+  const pub = <T>(body: T, project: (b: T) => unknown, runIds: readonly string[] = []): Response =>
+    json(publicMode ? struckFor(project(body), runIds) : body);
+  const struckFor = (projected: unknown, runIds: readonly string[]): unknown =>
+    runIds.length === 0 ? projected : JSON.parse(publicText(JSON.stringify(projected), runIds));
+  /**
+   * The public boundary's one session-token strike (`runner/src/session-token.ts`),
+   * a backstop for runs recorded while the module still echoed the token in its
+   * action replies: a model that logged one carried it into its own text, and
+   * those trajectories keep it. Every public body that carries a run's
+   * model-written text names its runs to `pub` (or, for the scratchpad, here),
+   * and each run's token is read fresh from its meta.json and struck by value.
+   */
+  const publicText = (text: string, runIds: readonly string[]): string => {
+    const tokens: string[] = [];
+    for (const id of runIds) {
+      const d = runDir(runsDir, id);
+      const t = d === null ? null : strikableSessionToken(d, id);
+      if (t !== null) tokens.push(t);
+    }
+    return strikeSessionTokens(text, tokens);
+  };
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
@@ -1165,7 +1185,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const body: RunsResponse = { runs: await listWithTotals() };
       return pub(body, projectRuns);
     }
-    if (path === "/api/positions") return pub({ positions: await positionsFromStore(store, runsDir) }, projectPositions);
+    if (path === "/api/positions") {
+      const positions = await positionsFromStore(store, runsDir);
+      // A position's status is the character's last `log_status` line, as written.
+      return pub({ positions }, projectPositions, positions.map((p) => p.runId));
+    }
     if (path === "/api/episodes") return await episodesResponse();
     /* The model-facing tool list, off `TOOLS` at request time (`tools.ts`); harness text only. */
     if (path === "/api/tools") return pub(toolsResponse(), projectTools);
@@ -1312,7 +1336,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // clock skew across a relaunch would otherwise move a sample past one.
       states.sort((x, y) => x.attempt - y.attempt || x.ts - y.ts);
       const body: CharacterResponse = { character: view, states };
-      return pub(body, projectCharacterResponse);
+      return pub(body, projectCharacterResponse, view.runs.map((r) => r.runId));
     }
 
     const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);
@@ -1430,7 +1454,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // falls back from, the same shape the facts above take.
         ...(character === null ? {} : { character }),
       };
-      return pub(body, projectRunDetail);
+      return pub(body, projectRunDetail, [runId]);
     }
 
     if (rest === "/track") {
@@ -1494,7 +1518,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // none, so a track from before the recorder is the bytes it was.
         ...(trace === null ? {} : { trace }),
       };
-      return pub(body, projectTrack);
+      return pub(body, projectTrack, [runId]);
     }
 
     if (rest === "/trace") {
@@ -1544,7 +1568,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const page = { from, total, entries: tail.entries.slice(from, from + limit) };
       // Public mode serves the same window the snapshot publishes: each entry
       // through the per-type allowlist and the game-prose redactor.
-      return json(publicMode ? projectEntries(page) : page);
+      return pub(page, projectEntries, [runId]);
     }
 
     const rawMatch = /^\/raw\/(\d+)$/.exec(rest);
@@ -1565,7 +1589,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (rest === "/scratchpad") {
       const text = readScratchpad(runsDir, runId);
       if (text === null) return notFound("no scratchpad");
-      return new Response(publicMode ? scrubPathsText(text) : text, {
+      return new Response(publicMode ? publicText(scrubPathsText(text), [runId]) : text, {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }

@@ -8,7 +8,8 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Trajectory } from "../../runner/src/trajectory";
@@ -19,7 +20,8 @@ import { OffsetStore } from "../src/offsets";
 import { memorySink } from "../src/sink";
 import { splitStatements } from "../src/schema";
 import { tailLines } from "../src/tailer";
-import { parseLine, turnRow, usageOf, TURN_KINDS } from "../src/lines";
+import { EPISODIC_ENTRY_KIND, parseLine, turnRow, usageOf, TURN_KINDS } from "../src/lines";
+import { EpisodicLog } from "../../runner/src/episodic";
 import { retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
@@ -326,6 +328,22 @@ describe("what the store must not lose", () => {
     expect(bad?.["raw"]).toBe("{not json at all");
   });
 
+  test("an episodic entry as the runner writes it lands with its stamp and turn, not as unparseable", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeRun(runsDir, "run-ep");
+    // The runner's own writer: `{ ts, turn, level?, zone?, text }`, no `t`.
+    new EpisodicLog(join(dir, "episodic.jsonl")).append({ ts: 4_000, turn: 7, level: 3, zone: "Dun Morogh", text: "heading to Kharanos" });
+    appendFileSync(join(dir, "episodic.jsonl"), "{torn\n");
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const rows = rowsOf(sink, "episodic");
+    const entry = rows.find((r) => Number(r["ts"]) === 4_000);
+    expect(entry).toMatchObject({ kind: EPISODIC_ENTRY_KIND, turn: 7 });
+    expect((JSON.parse(String(entry?.["raw"])) as { text: string }).text).toBe("heading to Kharanos");
+    // A line that is not an entry is still kept, and says so.
+    expect(rows.find((r) => r["raw"] === "{torn")).toMatchObject({ kind: "unparseable", ts: 0 });
+  });
+
   test("a record kind nobody has written before still lands", async () => {
     const runsDir = tmpRoot();
     const dir = writeRun(runsDir, "run-g");
@@ -354,6 +372,83 @@ describe("what the store must not lose", () => {
     appendFileSync(join(dir, "trajectory.jsonl"), `,"turn":3}\n`);
     await collector.pass();
     expect(rowsOf(sink, "turns")).toHaveLength(before + 1);
+  });
+});
+
+describe("what the store must never hold", () => {
+  const TOKEN = "tok-fedcba9876543210fedcba9876543210";
+
+  /**
+   * A run as an older build left it — the module session token in meta.json
+   * (where it still is), in its `meta` record and in `config_json` — so a
+   * `--replay` over it is what cleans the store. Plus the copies any build
+   * still records: the module's echo of the token in a logged action reply,
+   * which lands in a snippet's result, and a status line that quotes it.
+   */
+  function writeOldRun(runsDir: string, runId: string): string {
+    const dir = writeRun(runsDir, runId);
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as Record<string, unknown>;
+    const config = { ...(meta["config"] as Record<string, unknown>), token: TOKEN };
+    writeFileSync(join(dir, "meta.json"), `${JSON.stringify({ ...meta, config }, null, 2)}\n`);
+    appendFileSync(join(dir, "trajectory.jsonl"), `${JSON.stringify({ ts: 2_000, t: "meta", ...meta, config })}\n`);
+    appendFileSync(
+      join(dir, "trajectory.jsonl"),
+      `${JSON.stringify({ ts: 2_100, t: "snippet_result", turn: 2, name: "eval_snippet", isError: false, text: `{ ok: true, action: "stop", token: "${TOKEN}" }` })}\n`,
+    );
+    appendFileSync(join(dir, "episodic.jsonl"), `${JSON.stringify({ ts: 2_200, turn: 2, text: `session ${TOKEN} parked` })}\n`);
+    const db = new Database(join(dir, "run.sqlite"));
+    db.query(`UPDATE run SET config_json = ? WHERE run_id = ?`).run(JSON.stringify(config), runId);
+    db.close();
+    return dir;
+  }
+
+  test("a run's session token reaches no table, and every copy keeps the rest byte for byte", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeOldRun(runsDir, "run-tok");
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    for (const [table, rows] of sink.tables) expect({ table, leaked: JSON.stringify(rows).includes(TOKEN) }).toEqual({ table, leaked: false });
+
+    const [row] = rowsOf(sink, "runs");
+    const onDisk = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as { config: Record<string, unknown> };
+    // meta.json as written, two spaces and all, with the one value replaced.
+    expect(row?.["meta_json"]).toBe(`${JSON.stringify({ ...onDisk, config: { ...onDisk.config, token: "[redacted]" } }, null, 2)}\n`);
+    expect(JSON.parse(String(row?.["config_json"]))).toEqual({ ...onDisk.config, token: "[redacted]" });
+    const metaLine = rowsOf(sink, "events").find((r) => r["kind"] === "meta" && Number(r["ts"]) === 2_000);
+    expect((JSON.parse(String(metaLine?.["raw"])) as { config: Record<string, unknown> }).config).toEqual({
+      ...onDisk.config,
+      token: "[redacted]",
+    });
+    // The echo is struck by value, in the row's raw line and in its typed columns alike.
+    const echo = rowsOf(sink, "turns").find((r) => r["kind"] === "snippet_result" && Number(r["ts"]) === 2_100);
+    expect((JSON.parse(String(echo?.["raw"])) as { text: string }).text).toBe(`{ ok: true, action: "stop", token: "[redacted]" }`);
+    expect(rowsOf(sink, "episodic").some((r) => String(r["raw"]).includes("session [redacted] parked"))).toBe(true);
+    // A line that names no secret key is the line as written.
+    const termination = rowsOf(sink, "events").find((r) => r["kind"] === "termination");
+    const fileLine = readFileSync(join(dir, "trajectory.jsonl"), "utf8").split("\n").find((l) => l.includes(`"t":"termination"`));
+    expect(termination?.["raw"]).toBe(fileLine);
+  });
+
+  test("a torn line is struck too: the strike is by value, before anything parses", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeOldRun(runsDir, "run-torn");
+    appendFileSync(join(dir, "trajectory.jsonl"), `{"t":"meta","config":{"token":"${TOKEN}"\n`);
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const bad = rowsOf(sink, "events").find((r) => r["kind"] === "unparseable");
+    expect(bad?.["raw"]).toBe(`{"t":"meta","config":{"token":"[redacted]"`);
+  });
+
+  test("a run from before token hardening keeps its id: a token that was the run id is never struck", async () => {
+    const runsDir = tmpRoot();
+    const runId = "run-20260820-101010";
+    const dir = writeRun(runsDir, runId);
+    const meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(dir, "meta.json"), `${JSON.stringify({ ...meta, config: { ...(meta["config"] as object), token: runId } }, null, 2)}\n`);
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    expect(String(rowsOf(sink, "runs")[0]?.["meta_json"])).toContain(`"token": "${runId}"`);
+    expect(rowsOf(sink, "turns").every((r) => r["run_id"] === runId)).toBe(true);
   });
 });
 

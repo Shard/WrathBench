@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRunConfig } from "../src/config";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
@@ -37,6 +38,29 @@ describe("Trajectory", () => {
     expect(meta?.config.driver).toBe("stub");
     const row = traj.runRow("run-x");
     expect(row?.["harness_version"]).toBe("0.0.0-test");
+    traj.close();
+  });
+
+  test("the module session token is kept in meta.json only: the record and config_json carry the rest of the config", () => {
+    const dir = tempRunDir();
+    const traj = new Trajectory(dir);
+    const token = "tok-0123456789abcdef0123456789abcdef";
+    const config = loadRunConfig({ runId: "run-t", driver: "stub", model: "irrelevant", token });
+    traj.writeMeta({ runId: "run-t", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    // A pause mark rewrites both through the same writer.
+    traj.pauseWithMark("run-t", { reason: "operator-pause", at: 9, episodeElapsedMs: 4 }, { runId: "run-t", harnessVersion: "0.0.0-test", startedAt: 5, config });
+    // `--resume`, the roster's session release and the viewer's error scrub read it here.
+    expect(readMeta(dir)?.config.token).toBe(token);
+    const metas = readTrajectory(dir).filter((r) => r.t === "meta");
+    expect(metas).toHaveLength(2);
+    for (const m of metas) {
+      expect((m["config"] as Record<string, unknown>)["model"]).toBe("irrelevant");
+      expect("token" in (m["config"] as Record<string, unknown>)).toBe(false);
+    }
+    const configJson = String(traj.runRow("run-t")?.["config_json"]);
+    expect((JSON.parse(configJson) as Record<string, unknown>)["model"]).toBe("irrelevant");
+    expect(configJson.includes(token)).toBe(false);
+    expect(readFileSync(join(dir, "trajectory.jsonl"), "utf8").includes(token)).toBe(false);
     traj.close();
   });
 

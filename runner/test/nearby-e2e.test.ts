@@ -2,15 +2,15 @@
  * Nearby units end to end, on the real code at every step: the sandbox
  * child's recorder over a real SDK cache fed hand-written frames, the host's
  * `ContextBuilder` draining it into the ring the way the state ticker does, a
- * real `Trajectory` writing `run.sqlite`, `trace.jsonl` and `trajectory.jsonl`
- * beside it, the viewer's ring reader and codec decoding what the map polls,
+ * real `Trajectory` writing `run.sqlite` (the trace included) and
+ * `trajectory.jsonl` beside it, the viewer's ring reader and codec decoding what the map polls,
  * and the real ticker's stop.
  *
  * What it proves is the boundary, not the drawing:
  * - the recorder reads the cache and the broadcast hook and nothing else — its
  *   source throws on any action, raw opcode, consuming queue or other read;
  * - a canary name that exists only in the nearby input reaches the ring and no
- *   file outside it: not `run.sqlite`, `trace.jsonl`, `trajectory.jsonl` or
+ *   file outside it: not `run.sqlite`, `trajectory.jsonl` or
  *   `meta.json`, and `run.sqlite` gains no table;
  * - the ring holds at most its reach, unlinks the rest as it goes, and is gone
  *   when the ticker stops;
@@ -163,13 +163,18 @@ describe("nearby end to end: the ring is the only place the units go", () => {
     expect(ringText).toContain(CANARY);
     expect(ringText).toContain(CANARY_PLAYER);
 
-    // The record: the trace and the trajectory exist and were written, and
-    // neither the canaries nor any ring row is in them.
+    // The record: the trace (in run.sqlite, its one home) and the trajectory
+    // exist and were written, and neither the canaries nor any ring row is in them.
     scene.trajectory.close();
     const outside = filesUnder(scene.dir).filter((p) => !p.startsWith("nearby/"));
-    expect(outside).toContain("trace.jsonl");
     expect(outside).toContain("trajectory.jsonl");
     expect(outside).toContain("run.sqlite");
+    const traced = new Database(join(scene.dir, "run.sqlite"), { readonly: true });
+    try {
+      expect((traced.query(`SELECT COUNT(*) AS n FROM trace`).get() as { n: number }).n).toBeGreaterThan(0);
+    } finally {
+      traced.close();
+    }
     for (const p of outside) {
       const bytes = readFileSync(join(scene.dir, p));
       for (const needle of [CANARY, CANARY_PLAYER, "Invented Beast", '"kind":"mv"', '"kind":"tick"']) {
