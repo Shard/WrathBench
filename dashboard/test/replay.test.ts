@@ -157,35 +157,47 @@ describe("runParam", () => {
 });
 
 describe("the inventory a replay shows is the newest reading behind the cursor", () => {
-  // A track carries `items` only where the sample changed, so scrubbing past a
-  // change has to walk back rather than blank the panel (`TrackPoint.items`).
-  const carriedFwd: TrackPoint[] = [
+  const cloth = (count: number) => [{ name: "Linen Cloth", count, equipped: false, itemId: 2589, quality: 1, slot: 23, bag: 255 }];
+  // Two shapes, because the site ships before the release that changes the
+  // track: the points carrying each reading whole, and `inv`'s patches.
+  const old: TrackPoint[] = [
     point(1, 0, 0, 0),
-    { ...point(2, 0, 0, 0), items: [{ name: "Linen Cloth", count: 3, equipped: false }] },
+    { ...point(2, 0, 0, 0), items: cloth(3) },
     point(3, 0, 0, 0),
-    { ...point(4, 0, 0, 0), items: [{ name: "Linen Cloth", count: 9, equipped: false }] },
+    { ...point(4, 0, 0, 0), items: cloth(9) },
     point(5, 0, 0, 0),
   ];
+  const patched: Pick<TrackResponse, "points" | "inv"> = {
+    points: [1, 2, 3, 4, 5].map((ts) => point(ts, 0, 0, 0)),
+    inv: { items: [["Linen Cloth", 2589, 1]], at: [[1, [[255, 23, 0, 3]]], [3, [[255, 23, 0, 9]]]] },
+  };
 
-  test("before the first reading it is not observed, which is not empty bags", () => {
-    expect(itemsAt(carriedFwd, 0)).toBeNull();
-    expect(itemsAt(carriedFwd, -1)).toBeNull();
+  for (const [shape, track] of [["a track from before inv", { points: old }], ["inv", patched]] as const) {
+    test(`${shape}: before the first reading it is not observed, which is not empty bags`, () => {
+      expect(itemsAt(track, 0)).toBeNull();
+      expect(itemsAt(track, -1)).toBeNull();
+    });
+
+    test(`${shape}: a point with no reading keeps the last one`, () => {
+      expect(itemsAt(track, 2)).toEqual(cloth(3));
+      expect(itemsAt(track, 4)).toEqual(cloth(9));
+      expect(itemsAt(track, 99)).toEqual(cloth(9));
+    });
+
+    test(`${shape}: the feed the map draws carries it, so a replay pip shows what a live one does`, () => {
+      const t: TrackResponse = { ...TRACK, ...track };
+      expect(positionsAt(t, 3)[0]?.items?.[0]?.count).toBe(3);
+      expect(positionsAt(t, 1)[0]?.items).toBeNull();
+    });
+  }
+
+  test("the two shapes agree point for point", () => {
+    for (let i = -1; i < 6; i++) expect(JSON.stringify(itemsAt(patched, i))).toBe(JSON.stringify(itemsAt({ points: old }, i)));
   });
 
-  test("a point with no reading keeps the last one", () => {
-    expect(itemsAt(carriedFwd, 2)?.[0]?.count).toBe(3);
-    expect(itemsAt(carriedFwd, 4)?.[0]?.count).toBe(9);
-  });
-
-  test("the feed the map draws carries it, so a replay pip shows what a live one does", () => {
-    const track: TrackResponse = { ...TRACK, points: carriedFwd };
-    expect(positionsAt(track, 3)[0]?.items?.[0]?.count).toBe(3);
-    expect(positionsAt(track, 1)[0]?.items).toBeNull();
-  });
-
-  test("a track from before the field existed shows nothing, and does not throw", () => {
-    expect(itemsAt([point(1, 0, 0, 0)], 0)).toBeNull();
-    expect(itemsAt([], 0)).toBeNull();
+  test("a track with no inventory shows nothing, and does not throw", () => {
+    expect(itemsAt({ points: [point(1, 0, 0, 0)] }, 0)).toBeNull();
+    expect(itemsAt({ points: [] }, 0)).toBeNull();
   });
 });
 

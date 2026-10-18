@@ -399,7 +399,8 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   body fields `ActionRequest` declares, and the client-cache `names` they
   carry pass like the others; a `say` text or raw payload in `args` is
   model-authored, the residual above.
-- **Names pass**: `items[].name`, a move's `target`, a position's episodic
+- **Names pass**: `items[].name` and a track inventory's item names
+  (`inv.items`), a move's `target`, a position's episodic
   `status` (text and zone name) and `terminationDetail`.
 - **Still projected out**: the operator `objective`, `apiBase`, `pauseReason`
   free text (a fixed `"paused"` token stays), model last-error message text,
@@ -517,6 +518,14 @@ because the build reads none of what was left out.
 Published and unread, left as they were because each is stated as public above
 or is the operator's to decide: the `campaignVersion` and `arm` stamps on a
 result row and a run's row (for matching a run to its campaign pane).
+
+**A track's inventory is patches** (`inv`, `runner/viewer/track-inv.ts`): each
+change as the slots that moved, where the track used to carry the whole
+inventory on every point it changed on. That took a level-43 character's track
+from 30.3 MB to 5.7 MB, and a live run's track is re-uploaded on every pass.
+Unlike the trim above, an older dashboard cannot read the new shape, so the
+dashboard reads both and, as with the manifest, the site deploys first and the
+publisher second. The release re-keys every run's track once.
 
 ## What the ladder shows
 

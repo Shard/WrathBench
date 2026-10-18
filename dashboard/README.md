@@ -143,6 +143,14 @@ reads dead at a corpse), a cast bar, combat, mounted, flying, resting and
 ghost badges, the target's health where it is published, and the buffs row: spell
 icons as Wowhead links (`src/lib/wowhead.ts`), stacks, and the time left.
 
+**The inventory** in a replay's sidebar is the track's newest reading at or
+before the cursor (`itemsAt` in `src/lib/replay.ts`), folded from the track's
+patches by the viewer's own codec (`@viewer/track-inv`). It keeps a reading
+every 64 patches and hands back the same array while the cursor stays between
+two changes, so the bag and the paperdoll redraw only when the inventory
+does. A track published before the patches carries each reading whole on its
+points, and is read as it is.
+
 **Fetching is listed-only.** A segment is requested only for a `t0` a
 position's `recent` or a track's `segs` listed — the public edge caches a 404
 for a day — and within the data host's rate limit: the live map fetches for

@@ -38,10 +38,13 @@ import type {
   TaxiFacts,
   TokenTotals,
   StateItemsRow,
+  ItemSample,
   TrackPoint,
+  TrackResponse,
   TradeFacts,
 } from "./api-types";
 import { itemSamplesOf } from "./runs";
+import { encodeInventory } from "./track-inv";
 import { activeMsUntil, type ActiveSegment } from "./sessions";
 
 /**
@@ -102,7 +105,8 @@ export function mapsOf(states: readonly StatePoint[]): number[] {
 }
 
 /**
- * A run's recorded track, for map replay.
+ * A run's recorded track, for map replay: its points, and the inventory along
+ * them (`TrackResponse.inv`), absent when no sample recorded one.
  *
  * Only samples that actually carried a position: a sample may record level and
  * xp with no coordinates, and interpolating through it would draw a line the
@@ -111,12 +115,13 @@ export function mapsOf(states: readonly StatePoint[]): number[] {
 export function trackFrom(
   states: readonly StatePoint[],
   itemRows: readonly StateItemsRow[] = [],
-): TrackPoint[] {
+): Pick<TrackResponse, "points" | "inv"> {
   const out: TrackPoint[] = [];
   /*
    * The inventory is on its own rows because it is read by its own query, and
-   * it is published on change rather than on every point: the whole inventory
-   * per sample would be most of the response and nearly all of it repetition.
+   * it is published on change, as a patch onto the reading before, rather than
+   * on every point: the whole inventory per sample would be most of the
+   * response and nearly all of it repetition (`track-inv.ts`).
    *
    * The join is "newest reading at or before this point", which also covers the
    * sample that changed the inventory without carrying a position — the change
@@ -127,11 +132,14 @@ export function trackFrom(
   let at = 0;
   let pending: string | null = null;
   let published: string | null = null;
+  const readings: { point: number; items: ItemSample[] }[] = [];
   for (const s of states) {
     while (at < itemRows.length && itemRows[at]!.ts <= s.ts) pending = itemRows[at++]!.items;
     if (s.map === null || s.x === null || s.y === null) continue;
-    const changed = pending !== null && pending !== published;
-    if (changed) published = pending;
+    if (pending !== null && pending !== published) {
+      published = pending;
+      readings.push({ point: out.length, items: itemSamplesOf(pending) ?? [] });
+    }
     out.push({
       ts: s.ts,
       map: s.map,
@@ -150,10 +158,10 @@ export function trackFrom(
       maxPower: s.maxPower ?? null,
       powerType: s.powerType ?? null,
       nextLevelXp: s.nextLevelXp ?? null,
-      ...(changed ? { items: itemSamplesOf(pending!) ?? [] } : {}),
     });
   }
-  return out;
+  const inv = encodeInventory(readings);
+  return inv === null ? { points: out } : { points: out, inv };
 }
 
 /**

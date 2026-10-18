@@ -7,7 +7,8 @@
  * the cursor maths and the route the map traces are testable with no canvas.
  */
 
-import type { AgentPosition, TrackPoint, TrackResponse, TrackTravelMark } from "@viewer/api-types";
+import type { AgentPosition, ItemSample, TrackPoint, TrackResponse, TrackTravelMark } from "@viewer/api-types";
+import { inventoryAt } from "@viewer/track-inv";
 import { intentAt } from "./mapintent";
 
 /** Index of the last point at or before `ts`, or -1 when the cursor precedes all. */
@@ -56,7 +57,7 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       // only where it changed, so the sidebar shows the newest one at or before
       // the cursor. Null before the first reading — not yet observed, which is
       // not the same as empty bags.
-      items: itemsAt(track.points, i),
+      items: itemsAt(track, i),
       // The player frame as that sample recorded it; a track
       // from before the columns existed carries nulls and draws unobserved.
       health: p.health ?? null,
@@ -76,12 +77,18 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
 /**
  * The inventory standing at point `i`: the newest reading at or before it.
  *
- * A track carries `items` only on the points where it changed (`TrackPoint`),
- * so scrubbing backwards past a change has to walk back to the last reading
- * rather than showing nothing. Null means no point up to here carried one,
- * which is "not yet observed" and is what the panel says in words.
+ * A track holds a reading only where it changed, so scrubbing backwards past a
+ * change has to reach back to the last one rather than showing nothing. Null
+ * means no reading up to here, which is "not yet observed" and is what the
+ * panel says in words.
+ *
+ * Two shapes, because the site ships before the release that changes the
+ * track: `inv`, the readings as patches (`@viewer/track-inv` folds them), and
+ * a track published before it, whose points carry each reading whole.
  */
-export function itemsAt(points: readonly TrackPoint[], i: number): NonNullable<TrackPoint["items"]> | null {
+export function itemsAt(track: Pick<TrackResponse, "points" | "inv">, i: number): ItemSample[] | null {
+  if (track.inv !== undefined) return inventoryAt(track.inv, i);
+  const points = track.points;
   for (let k = Math.min(i, points.length - 1); k >= 0; k--) {
     const items = points[k]!.items;
     if (items !== undefined) return items;
