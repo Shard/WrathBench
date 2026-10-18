@@ -19,6 +19,16 @@ import type { ActiveSegment, StatePoint } from "@viewer/api-types";
 import { activeMsUntil, sessionClock } from "@viewer/sessions";
 import { fmtTokens, stamp } from "./format";
 
+/**
+ * What the chart reads of a state sample: when, the level and the XP within it.
+ * The run's published `states` carry exactly these three (docs/PUBLIC-DASHBOARD.md,
+ * "What is published"), so the chart, the session clock and the XP model are
+ * typed against them and a fourth field cannot be read without being added to
+ * the projection first. A character's samples (a full `StatePoint`) are
+ * assignable.
+ */
+export type ChartSample = Pick<StatePoint, "ts" | "level" | "xp">;
+
 /** One point on the cumulative-xp curve: sample time and reconstructed total. */
 export interface XpPoint {
   ts: number;
@@ -53,11 +63,11 @@ export interface XpChartModel {
  * cannot make a "cumulative" line dip.
  */
 export function xpChartModel(
-  states: readonly StatePoint[],
+  states: readonly ChartSample[],
   opts: { startedAt: number | null; endedAt: number | null; episodeMs: number | null; now: number },
 ): XpChartModel {
   const samples = states
-    .filter((s): s is StatePoint & { level: number; xp: number } => s.level !== null && s.level > 0 && s.xp !== null)
+    .filter((s): s is ChartSample & { level: number; xp: number } => s.level !== null && s.level > 0 && s.xp !== null)
     .sort((a, b) => a.ts - b.ts);
 
   const points: XpPoint[] = [];
@@ -99,7 +109,7 @@ export function xpChartModel(
 
 /** What `XpChart` is drawn from: the samples, their window, and the seams. */
 export interface RunChartInput {
-  states: StatePoint[];
+  states: ChartSample[];
   startedAt: number | null;
   endedAt: number | null;
   now: number;
@@ -121,7 +131,7 @@ export interface RunChartInput {
  * on the wall clock from its start, as every run used to be.
  */
 export function runChartInput(
-  states: readonly StatePoint[],
+  states: readonly ChartSample[],
   run: { startedAt: number | null; endedAt: number | null; live: boolean },
   sessions: readonly ActiveSegment[] | undefined,
   playtime: number | null,

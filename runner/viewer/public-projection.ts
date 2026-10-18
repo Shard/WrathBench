@@ -140,6 +140,24 @@ import {
 } from "./nearby";
 
 /**
+ * What is published is what the public dashboard reads (operator, 2026-10-18).
+ *
+ * A field no public page reads is not emitted, however harmless it looks: it
+ * is bytes in the bucket and, as one leaked session token showed, a place for
+ * something that should never have left to ride out. Where the shared type
+ * (`api-types.ts`) still declares a field this file leaves out, the projector
+ * builds its object through `lean`, so the object literal is still checked
+ * against the shape's real field names while the omission is stated in one
+ * place. The audit that chose each omission, and the readers it checked, is
+ * `docs/PUBLIC-DASHBOARD.md` ("What is published"); a source scan in
+ * `runner/test/public-projection.test.ts` fails the day a dashboard file starts
+ * reading one of them.
+ */
+function lean<T>(v: Partial<T>): T {
+  return v as T;
+}
+
+/**
  * The attribution line every published artifact carries.
  * Wording is the operator's (approved verbatim, 2026-08-30; docs/DATA-AND-LEGAL.md,
  * "Scale and framing"): change it only with the operator's sign-off.
@@ -235,15 +253,7 @@ function projectCostFigure(c: CostFigure): CostFigure {
     usd: c.usd,
     basis: c.basis,
     asIfMetered: c.asIfMetered,
-    breakdown:
-      c.breakdown === null
-        ? null
-        : {
-            input: c.breakdown.input,
-            output: c.breakdown.output,
-            cacheRead: c.breakdown.cacheRead,
-            cacheWrite: c.breakdown.cacheWrite,
-          },
+    // `breakdown` (per-component dollars) is not emitted: no page reads it.
     priceId: c.priceId,
     asOf: c.asOf,
     // The pricing layer's own sentence ("no price on file", ...), never game text.
@@ -255,9 +265,14 @@ function projectCostFigure(c: CostFigure): CostFigure {
   };
 }
 
+/**
+ * `actual` and `expected`, the two figures every page reads. The top-level
+ * fields the live API keeps beside them (a second copy of `expected`, for older
+ * consumers) are not emitted: nothing public reads them, and on a list of every
+ * run they were a third of the cost bytes.
+ */
 function projectCostView(c: CostView): CostView {
-  // Spreading here is safe: the spread source is itself a freshly built allowlist.
-  return { ...projectCostFigure(c), actual: projectCostFigure(c.actual), expected: projectCostFigure(c.expected) };
+  return { actual: projectCostFigure(c.actual), expected: projectCostFigure(c.expected) };
 }
 
 function projectStatePoint(s: StatePoint): StatePoint {
@@ -283,6 +298,17 @@ function projectStatePoint(s: StatePoint): StatePoint {
     // resumed in place be totalled across the restart.
     questsCompleted: s.questsCompleted ?? null,
   };
+}
+
+/**
+ * The run page's XP chart samples: when, the level and the XP within it.
+ * `ChartSample` in the dashboard is the type its readers are written against
+ * (`lib/runview.ts`), so a field added there is a decision, not a drift. The
+ * full sample (position, frame, turn) is `projectStatePoint`'s, and rides on
+ * the character route, where the unit frame reads it.
+ */
+function projectChartSample(s: StatePoint): StatePoint {
+  return lean<StatePoint>({ ts: s.ts, level: s.level, xp: s.xp });
 }
 
 /** A run's sessions: two timestamps each, the same clock every row already carries. */
@@ -371,7 +397,7 @@ function projectItems(items: ItemSample[] | null): ItemSample[] | null {
 }
 
 function projectRunRow(r: RunRow): RunRow {
-  return {
+  return lean<RunRow>({
     runId: r.runId,
     model: r.model,
     driver: r.driver,
@@ -379,8 +405,9 @@ function projectRunRow(r: RunRow): RunRow {
     shakeout: r.shakeout,
     // The operator objective is withheld: free prose that can quote the world.
     // Its existence still shows — `shakeout` and `comparability.objective` say
-    // why the run is unscored without saying what it was told.
-    objective: null,
+    // why the run is unscored without saying what it was told. The key itself
+    // is not emitted either: a field that is always null says nothing, and
+    // no page reads it.
     campaign: r.campaign,
     cell: r.cell,
     // The version and arm a probe was stamped with: without them a public
@@ -390,17 +417,16 @@ function projectRunRow(r: RunRow): RunRow {
     ...(r.arm !== undefined ? { arm: r.arm } : {}),
     extra: r.extra,
     character: r.character,
+    // The ids; `characterLabel` is the name the pair resolves to, and
+    // `raceName`/`className` would say it a second time.
     race: r.race,
-    raceName: r.raceName,
     class: r.class,
-    className: r.className,
     characterLabel: r.characterLabel,
     platform: r.platform,
     resolvedModel: r.resolvedModel,
     cliVersion: r.cliVersion,
-    // The raw base URL is withheld: a LAN endpoint is host topology. The
-    // derived `platform` label above is what public pages render.
-    apiBase: null,
+    // The raw base URL (`apiBase`) is withheld: a LAN endpoint is host
+    // topology. The derived `platform` label above is what public pages render.
     harnessVersion: r.harnessVersion,
     comparability: r.comparability === null ? null : projectComparability(r.comparability),
     startedAt: r.startedAt,
@@ -420,23 +446,60 @@ function projectRunRow(r: RunRow): RunRow {
     money: r.money,
     questsCompleted: r.questsCompleted,
     items: projectItems(r.items),
-    mtime: r.mtime,
-    bytes: r.bytes,
+    // `mtime` and `bytes` are the file's, for the private viewer's change
+    // detection; no public page reads them. `live` is the fact they stand for.
     live: r.live,
     // `error` (a caught exception's message) is withheld: it can carry paths.
-  };
+  });
 }
 
-function projectRunListRow(r: RunListRow): RunListRow {
+/**
+ * A `runs.json` row as published. One page reads this index, the fleet table
+ * (`fleetRows` in the dashboard joins it to the supervisor's jobs by run id for
+ * level, xp, tokens, speed, cost and the episode clock), and the snapshot
+ * client follows its `snapshot` pointers to a run's objects. Everything else a
+ * listing row carries is on `results.json` and the run's own `detail.json`,
+ * where the pages that show it read it; repeated here it was most of a
+ * two-megabyte object that moves on every pass with a live run.
+ *
+ * `Pick` of the shared shape, so the dashboard's consumer is typed against
+ * exactly this and the compiler is what says it reads nothing else.
+ */
+export type PublicRunListRow = Pick<RunListRow, "runId" | "resolvedModel" | "level" | "xp" | "playtimeMs" | "snapshot"> & {
+  tokens: Pick<TokenTotals, "totalTokens"> | null;
+  tps?: TpsFacts | null;
+  /** The provider's own figure: the fleet table never shows the estimate. */
+  cost: { actual: Pick<CostFigure, "usd" | "basis" | "note" | "backfill"> } | null;
+  comparability: { budget: Pick<ComparabilityView["budget"], "episodeMs"> } | null;
+};
+
+export interface PublicRunsResponse extends Omit<RunsResponse, "runs"> {
+  runs: PublicRunListRow[];
+}
+
+function projectRunListRow(r: RunListRow): PublicRunListRow {
   return {
-    ...projectRunRow(r),
-    tokens: r.tokens === null ? null : projectTokenTotals(r.tokens),
-    ...(r.tps !== undefined ? { tps: r.tps === null ? null : projectTps(r.tps) } : {}),
-    cost: r.cost === null ? null : projectCostView(r.cost),
-    firstTs: r.firstTs,
-    lastTs: r.lastTs,
+    runId: r.runId,
+    resolvedModel: r.resolvedModel,
+    level: r.level,
+    xp: r.xp,
     playtimeMs: r.playtimeMs,
-    modelResponses: r.modelResponses,
+    tokens: r.tokens === null ? null : { totalTokens: r.tokens.totalTokens },
+    ...(r.tps !== undefined ? { tps: r.tps === null ? null : projectTps(r.tps) } : {}),
+    cost:
+      r.cost === null
+        ? null
+        : {
+            actual: {
+              usd: r.cost.actual.usd,
+              basis: r.cost.actual.basis,
+              note: r.cost.actual.note,
+              ...(r.cost.actual.backfill !== undefined
+                ? { backfill: { reportedUsd: r.cost.actual.backfill.reportedUsd, usd: r.cost.actual.backfill.usd, turns: r.cost.actual.backfill.turns } }
+                : {}),
+            },
+          },
+    comparability: r.comparability === null ? null : { budget: { episodeMs: r.comparability.budget.episodeMs } },
     // `snapshot` is not carried over: the renderer stamps its own paths after
     // projection, and an input claiming some is not to be believed.
   };
@@ -446,21 +509,41 @@ function projectLevelMark(l: LevelMark): LevelMark {
   return { level: l.level, ts: l.ts, turn: l.turn, playtimeMs: l.playtimeMs };
 }
 
+/**
+ * The two cost figures of a result row, to what the ladder, the runs table and
+ * the character page read: the chart's reading takes `basis`, `usd`,
+ * `asIfMetered` and the backfill mark from either (`runCostReading`), and the
+ * runs table prints the actual figure's `note` in its tooltip. The list-price
+ * date, the price row and the estimate's own note belong to a single run's page
+ * (`detail.json`), and were about half of this object's cost bytes.
+ */
+function projectResultActual(c: CostFigure): CostFigure {
+  return lean<CostFigure>({
+    usd: c.usd,
+    basis: c.basis,
+    asIfMetered: c.asIfMetered,
+    note: c.note,
+    ...(c.backfill !== undefined
+      ? { backfill: { reportedUsd: c.backfill.reportedUsd, usd: c.backfill.usd, turns: c.backfill.turns } }
+      : {}),
+  });
+}
+
+function projectResultExpected(c: CostFigure): CostFigure {
+  return lean<CostFigure>({ usd: c.usd, basis: c.basis, asIfMetered: c.asIfMetered });
+}
+
 function projectResultRun(r: ResultRun): ResultRun {
-  return {
+  return lean<ResultRun>({
     runId: r.runId,
     model: r.model,
     ...(r.resolvedModel !== undefined ? { resolvedModel: r.resolvedModel } : {}),
-    ...(r.cliVersion !== undefined ? { cliVersion: r.cliVersion } : {}),
     ...(r.driver !== undefined ? { driver: r.driver } : {}),
-    platform: r.platform,
     harnessVersion: r.harnessVersion,
     harnessSeries: r.harnessSeries,
     extra: r.extra,
     race: r.race,
-    raceName: r.raceName,
     class: r.class,
-    className: r.className,
     characterLabel: r.characterLabel,
     campaign: r.campaign,
     cell: r.cell,
@@ -469,10 +552,10 @@ function projectResultRun(r: ResultRun): ResultRun {
     effort: r.effort,
     ...(r.compactWindow != null ? { compactWindow: r.compactWindow } : {}),
     harness: r.harness,
-    promptHash: r.promptHash,
-    serverBuild: r.serverBuild,
-    wikiCoords: r.wikiCoords,
-    ...(r.wiki !== undefined ? { wiki: r.wiki } : {}),
+    // Not emitted: `platform`, `cliVersion`, `promptHash`, `serverBuild`,
+    // `wikiCoords`, `wiki` and `raceName`/`className`. The run page reads the
+    // first six off the run's own row and tuple, and `characterLabel` is the
+    // pair's name; no page reads them off a result row.
     episode: r.episode,
     episodeSource: r.episodeSource,
     episodeOverride: r.episodeOverride,
@@ -495,9 +578,9 @@ function projectResultRun(r: ResultRun): ResultRun {
     playtimeMs: r.playtimeMs,
     ...(r.sessions !== undefined ? { sessions: projectSessions(r.sessions) } : {}),
     tokens: r.tokens === null ? null : projectTokenTotals(r.tokens),
-    actualCost: r.actualCost === null ? null : projectCostFigure(r.actualCost),
+    actualCost: r.actualCost === null ? null : projectResultActual(r.actualCost),
     ...(r.expectedCost !== undefined
-      ? { expectedCost: r.expectedCost === null ? null : projectCostFigure(r.expectedCost) }
+      ? { expectedCost: r.expectedCost === null ? null : projectResultExpected(r.expectedCost) }
       : {}),
     ...(r.billing !== undefined ? { billing: r.billing } : {}),
     ...(r.areas !== undefined ? { areas: r.areas === null ? null : projectAreas(r.areas) } : {}),
@@ -512,7 +595,7 @@ function projectResultRun(r: ResultRun): ResultRun {
     pauseReason: pausedToken(r.pauseReason),
     continuedFrom: r.continuedFrom,
     stillborn: r.stillborn,
-  };
+  });
 }
 
 /* ----------------------------------------------------------- responses --- */
@@ -537,8 +620,8 @@ export function projectInfo(i: ApiInfoResponse): ApiInfoResponse {
   });
 }
 
-export function projectRuns(r: RunsResponse): RunsResponse {
-  return scrubPathsValue<RunsResponse>({ runs: r.runs.map(projectRunListRow) });
+export function projectRuns(r: RunsResponse): PublicRunsResponse {
+  return scrubPathsValue<PublicRunsResponse>({ runs: r.runs.map(projectRunListRow) });
 }
 
 /**
@@ -548,7 +631,9 @@ export function projectRuns(r: RunsResponse): RunsResponse {
  * field, or a smuggled key, happened to be sitting on the object.
  */
 function projectMove(m: MoveIntentView): MoveIntentView {
-  return { ts: m.ts, map: m.map, x: m.x, y: m.y, z: m.z, target: m.target, status: m.status };
+  // No `z`: the map marks a destination on the plane and the intent line names
+  // the target or its x, y.
+  return lean<MoveIntentView>({ ts: m.ts, map: m.map, x: m.x, y: m.y, target: m.target, status: m.status });
 }
 
 /**
@@ -792,29 +877,27 @@ export function projectCampaigns(c: CampaignsResponse): PublicCampaignsResponse 
 
 const TIER_IDS: readonly TierView[] = ["t0", "t1", "t2"];
 
+/**
+ * One run in a model's detail panel: the columns the panel prints. The version,
+ * series and extra flag, the character's ids and its served model, and the
+ * start time are on the run's own page and the results listing; the panel
+ * lists the run, its character label, how it ended and what it cost. Of the
+ * cost only `actual`, the figure the panel prints.
+ */
 function projectModelRun(r: ModelRunView): ModelRunView {
-  return {
+  return lean<ModelRunView>({
     runId: r.runId,
     episode: r.episode,
     episodeOverride: r.episodeOverride,
-    harnessVersion: r.harnessVersion,
-    harnessSeries: r.harnessSeries,
-    extra: r.extra,
-    ...(r.race !== undefined ? { race: r.race } : {}),
-    ...(r.raceName !== undefined ? { raceName: r.raceName } : {}),
-    ...(r.class !== undefined ? { class: r.class } : {}),
-    ...(r.className !== undefined ? { className: r.className } : {}),
     ...(r.characterLabel !== undefined ? { characterLabel: r.characterLabel } : {}),
-    ...(r.resolvedModel !== undefined ? { resolvedModel: r.resolvedModel } : {}),
-    startedAt: r.startedAt,
     endedAt: r.endedAt,
     durationMs: r.durationMs,
     bestLevel: r.bestLevel,
     terminationReason: r.terminationReason,
     live: r.live,
     counted: r.counted,
-    ...(r.cost !== undefined ? { cost: r.cost === null ? null : projectCostView(r.cost) } : {}),
-  };
+    ...(r.cost !== undefined ? { cost: r.cost === null ? null : { actual: projectCostFigure(r.cost.actual) } } : {}),
+  });
 }
 
 function projectModelRow(row: ModelRowView): ModelRowView {
@@ -824,18 +907,16 @@ function projectModelRow(row: ModelRowView): ModelRowView {
   for (const id of EPISODE_IDS) {
     const e = row.perEpisode[id];
     if (e === undefined) continue;
-    perEpisode[id] = {
+    // Not emitted: `otherSeries`, `reachedL5`, `lastEnded`, `lastReason` and
+    // `runIds`. The roster table prints the counts and the target; the run
+    // list under it is `runs`.
+    perEpisode[id] = lean<ModelEpisodeView>({
       counted: e.counted,
       attempts: e.attempts,
       extras: e.extras,
-      otherSeries: e.otherSeries,
       target: e.target,
       bestLevel: e.bestLevel,
-      reachedL5: e.reachedL5,
-      lastEnded: e.lastEnded,
-      lastReason: e.lastReason,
-      runIds: [...e.runIds],
-    };
+    });
   }
   return {
     name: row.name,
@@ -1147,7 +1228,7 @@ export function projectCharacterResponse(c: CharacterResponse): CharacterRespons
 export function projectRunDetail(d: RunDetailResponse): RunDetailResponse {
   return scrubPathsValue<RunDetailResponse>({
     run: projectRunRow(d.run),
-    states: d.states.map(projectStatePoint),
+    states: d.states.map(projectChartSample),
     total: d.total,
     tokens: projectTokenTotals(d.tokens),
     cost: projectCostView(d.cost),
@@ -1602,11 +1683,19 @@ export function projectNearby(w: NearbyWindow): NearbyWindow {
  *   `claudeTurn` carries the numbers).
  * - `events_served`: the raw batch, which the summary never carries; the
  *   opcode tally is the public fact.
+ *
+ * Left out because the run page reads nothing of them (operator, 2026-10-18):
+ * the raw line's byte range (`start`, `end`), which only the private viewer's
+ * raw links use; a request's `adapter`, `systemChars` and `usage` and a
+ * response's `outChars` and `usage`, where the page prints the counts the turn
+ * header names and the reply's text; an events batch's `ambient` and `folded`
+ * tallies; and a snippet call's code, which the snippet record beside it
+ * already says (`projectEntries`).
  */
 const ENTRY_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  request: ["adapter", "messageCount", "systemChars", "promptChars", "usage"],
-  events_served: ["via", "count", "opcodes", "ambient", "moreOpcodes", "folded"],
-  response: ["text", "tools", "outChars", "usage"],
+  request: ["messageCount", "promptChars"],
+  events_served: ["via", "count", "opcodes", "moreOpcodes"],
+  response: ["text", "tools"],
   snippet: ["code"],
   tool_call: ["name", "args", "dispatchTs"],
   snippet_result: ["name", "isError", "text", "reflect"],
@@ -1748,8 +1837,8 @@ function isComparabilityTuple(v: unknown): v is ComparabilityView {
  * rather than being copied whole, so the tuple's withheld fields are withheld
  * at every depth.
  */
-export function projectEntry(e: EntrySummary): EntrySummary {
-  const out: EntrySummary = { i: e.i, t: e.t, ts: e.ts, start: e.start, end: e.end };
+export function projectEntry(e: EntrySummary, codeIsRepeated = false): EntrySummary {
+  const out = lean<EntrySummary>({ i: e.i, t: e.t, ts: e.ts });
   if (typeof e["turn"] === "number") out["turn"] = e["turn"];
   if (typeof e["call"] === "number") out["call"] = e["call"];
   if (e.clipped === true) out.clipped = true;
@@ -1759,6 +1848,13 @@ export function projectEntry(e: EntrySummary): EntrySummary {
     // spent subscription's names when it resets, which stays the operator's.
     if (e.t === "claude_result" && k === "text" && e["isError"] === true) continue;
     const v = e[k];
+    if (codeIsRepeated && e.t === "tool_call" && k === "args") {
+      // The call's `code` is the snippet record's own; what else the call
+      // carried (nothing, for run_snippet) still ships.
+      const rest = Object.entries(v as Record<string, unknown>).filter(([a]) => a !== "code");
+      if (rest.length > 0) out[k] = plain(Object.fromEntries(rest));
+      continue;
+    }
     out[k] =
       k === "items" && e.t === "state"
         ? projectItems(v as ItemSample[] | null)
@@ -1773,6 +1869,45 @@ export function projectEntry(e: EntrySummary): EntrySummary {
   return scrubPathsValue<EntrySummary>(redactGameProse(out));
 }
 
+/**
+ * Whether a tool call's `args.code` is the very text of the `snippet` record
+ * that follows it, so publishing both says the code twice.
+ *
+ * `run_snippet` is a tool call whose only argument is the code, and the runner
+ * writes the code again as the next record. The run page draws one card from
+ * the two and prints the snippet's (`lib/feedgroup.ts`, `takeCall`: the record
+ * strictly after the call, matched on turn and call index), reading the call's
+ * args only when no snippet pairs with it. So a copy is dropped only where that
+ * pairing holds in the window as published, the same test the page applies,
+ * and the call's text is the snippet's own, or the summary's clip of it (the
+ * first characters, then how many more: `clip` in `tail.ts`): a call whose
+ * snippet is not next, or says something else, keeps its code. About a sixth
+ * of an entries window was this copy.
+ */
+const CLIPPED_COPY = /^([\s\S]*)\n… (\d+) more characters$/;
+
+function isCopyOf(copy: string, whole: string): boolean {
+  if (copy === whole) return true;
+  const m = CLIPPED_COPY.exec(copy);
+  return m !== null && whole.startsWith(m[1]!) && m[1]!.length + Number(m[2]) === whole.length;
+}
+
+function codeRepeatedBy(call: EntrySummary, next: EntrySummary | undefined): boolean {
+  if (call.t !== "tool_call" || next === undefined || next.t !== "snippet") return false;
+  const args = call["args"];
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return false;
+  const code = (args as Record<string, unknown>)["code"];
+  if (typeof code !== "string" || typeof next["code"] !== "string" || !isCopyOf(code, next["code"])) return false;
+  if (typeof call["turn"] === "number" && typeof next["turn"] === "number" && call["turn"] !== next["turn"]) return false;
+  if (typeof call["call"] === "number" && typeof next["call"] === "number" && call["call"] !== next["call"]) return false;
+  return true;
+}
+
 export function projectEntries(r: EntriesResponse): EntriesResponse {
-  return scrubPathsValue<EntriesResponse>({ from: r.from, total: r.total, entries: r.entries.map((e) => projectEntry(e as EntrySummary)) as EntriesResponse["entries"] });
+  const raw = r.entries as EntrySummary[];
+  return scrubPathsValue<EntriesResponse>({
+    from: r.from,
+    total: r.total,
+    entries: raw.map((e, i) => projectEntry(e, codeRepeatedBy(e, raw[i + 1]))) as EntriesResponse["entries"],
+  });
 }

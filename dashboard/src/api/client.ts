@@ -24,7 +24,6 @@ import type {
   ModelsResponse,
   PositionsResponse,
   RunDetailResponse,
-  RunsResponse,
   NearbyWindow,
   TraceIndexResponse,
   TraceSegment,
@@ -79,6 +78,7 @@ export type {
   TokenTotals,
   TpsFacts,
 } from "@viewer/api-types";
+import type { PublicRunsResponse } from "@viewer/public-projection";
 
 /** Thrown for any non-2xx. Carries the status so a page can tell 404 from 500. */
 export class ApiError extends Error {
@@ -235,7 +235,7 @@ export function createClient(opts: ClientOptions = {}) {
      * response is archived by the runner as it terminates, so there is nothing
      * to filter here.
      */
-    runs: (): Promise<RunsResponse> => get<RunsResponse>("/api/runs"),
+    runs: (): Promise<PublicRunsResponse> => get<PublicRunsResponse>("/api/runs"),
     positions: (): Promise<PositionsResponse> => get<PositionsResponse>("/api/positions"),
     fleet: (): Promise<FleetResponse> => get<FleetResponse>("/api/fleet"),
     /**

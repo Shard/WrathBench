@@ -87,7 +87,8 @@ A finished run is not rendered again once it has gone cold. That means all
 its files have been still for 15 minutes (`COLD_MS`), past the live window,
 the trace's settling and the collector's catch-up. A pass skips it, pointing
 its row at the keys it rendered to last time, when three things hold: its
-files' sizes and mtimes are unchanged, its listing row is unchanged, and so are
+files' sizes and mtimes are unchanged, its listing row as the viewer served it
+(not the few fields `runs.json` publishes of it) is unchanged, and so are
 the rows of every attempt in its character. The bucket must also still hold
 every object the row names, by the engine's record. A failed PUT or a pruned
 version therefore puts the run back in the render.
@@ -407,9 +408,9 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   generates them at character creation, so they are not game text; the
   `characterLabel` race/class pair, resolved from ids by our own tables, is
   shown beside them.
-- **The safe core ships whole**: the `ResultRun` layer is ids, numbers and
-  model identifiers — levels, XP, areas and achievements as ids, taxi facts,
-  costs, tokens.
+- **The safe core ships, less what no page reads** ("What is published", below):
+  the `ResultRun` layer is ids, numbers and model identifiers — levels, XP,
+  areas and achievements as ids, taxi facts, costs, tokens.
 - **A track's travel marks ship, its graveyard releases do not.** The
   replay draws flights in their own colour and leaves a gap at a teleport
   from the track's `travel` list, read off the trajectory at request time
@@ -445,6 +446,76 @@ The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
 asserted against the exact allowlisted key set, fixture-based and green from
 a bare clone like everything else.
+
+### What is published
+
+The bucket holds what the public dashboard reads and nothing else (operator,
+2026-10-18). A field no page reads is bytes in the bucket and a place for
+something that should never have left to ride out: a session token reached the
+run feed inside a field nobody was looking at. Redacting a field that is
+published for no reason is the wrong cure, so the projectors name the fields
+the pages read, and the shared types (`api-types.ts`) may declare more than a
+snapshot carries.
+
+Chosen by an audit of every published object against the dashboard's source
+(property reads through `dashboard/src`, `lib/`, the snapshot client and the
+`@viewer` modules it imports), checked in a browser with each fetched body
+wrapped in a read-recording proxy, and read one more time for anything the
+proxy cannot see (hover content, popovers, branches no fixture reaches). What a
+pass leaves out, and who reads what is left:
+
+- **`runs.json` is the fleet table's join and the pointers.** `fleetRows`
+  reads level, xp, tokens, speed, the provider's cost figure, playtime, the
+  episode budget and the served model; the snapshot client follows `snapshot`.
+  Typed as `PublicRunListRow`, and `fleetRows` is typed against it, so the
+  compiler says it reads nothing else. Every other listing field is on
+  `results.json` or the run's own `detail.json`, where the page that shows it
+  reads it. This was two megabytes that move on every pass with a live run.
+- **A run's `detail.json` states are the chart's three fields** (`ts`,
+  `level`, `xp`, typed as `ChartSample`), and its cost is `actual` and
+  `expected`, not a third copy of `expected` beside them. The row drops
+  `objective` and `apiBase` (always null), the file's `mtime` and `bytes`, and
+  `raceName`/`className`, which `characterLabel` already says. The run's whole
+  quest count is the server's sum across restarts, applied before the
+  projection, so the per-sample count is not needed to total it.
+- **Entries lose the raw line's byte range** (`start`, `end`, which only the
+  private viewer's raw links use), a request's `adapter`, `systemChars` and
+  `usage`, a response's `outChars` and `usage`, an events batch's `ambient` and
+  `folded`, and **a snippet call's copy of its code**: `run_snippet`'s only
+  argument is the code, the runner writes it again as the next record, and the
+  page prints that one (`lib/feedgroup.ts` pairs them by adjacency, turn and
+  call index). The copy is dropped only where that pairing holds in the window
+  as published, with equal text, which is also what keeps the projection a
+  fixed point of itself. About a sixth of an entries window was this copy.
+- **Cost figures carry no per-component `breakdown`** anywhere. A result row's
+  figures carry what the ladder, the runs table and the character page read
+  (the actual figure's note for a tooltip, `basis`, `usd`, `asIfMetered`, the
+  backfill mark; the estimate's `basis`, `usd`, `asIfMetered`); the price row
+  and its date are on a single run's page. A model's run list carries `actual`
+  only, which is the column it prints.
+- **A result row** also leaves out `platform`, `cliVersion`, `promptHash`,
+  `serverBuild`, `wikiCoords`, `wiki` and `raceName`/`className`: the run page
+  reads the first six off the run's own row and tuple.
+- **Models** leave out, per run, the version and series, the character's ids,
+  the served model and the start time, and per tier `otherSeries`,
+  `reachedL5`, `lastEnded`, `lastReason` and the run ids; the roster table
+  prints the counts and the target, and the run list is its own.
+- **A move's `z`** (on the live feed and in a track): the map marks a
+  destination on the plane.
+
+`runner/test/public-projection.test.ts` pins each of these and scans the
+dashboard's source for the unambiguous names, so a page that starts to read one
+fails there until the projection carries it again. Nothing about a trace
+segment, a run's character, the leaderboards' numbers or anything the model sees
+changed. The run objects are content-addressed, so shipping this re-keys every
+run's objects once (a full re-upload; the old set is pruned as usual), and a
+site still on the previous dashboard build reads the trimmed bodies unchanged,
+because the build reads none of what was left out.
+
+Published and unread, left as they were because each is stated as public above
+or is the operator's to decide: a run's `scratchpad.json` (no page fetches it;
+"ships whole" above) and the `campaignVersion` and `arm` stamps on a result row
+and a run's row (for matching a run to its campaign pane).
 
 ## What the ladder shows
 

@@ -614,8 +614,12 @@ export interface CostFigure {
   usd: number | null;
   basis: "reported" | "list-price" | "none";
   asIfMetered: boolean;
-  /** Per-component dollars, when the figure was computed. Null when reported. */
-  breakdown: CostBreakdown | null;
+  /**
+   * Per-component dollars, when the figure was computed. Null when reported.
+   * Absent from every published snapshot: no public page reads it
+   * (docs/PUBLIC-DASHBOARD.md, "What is published").
+   */
+  breakdown?: CostBreakdown | null;
   /** The price row the figure was computed at, and when that row was taken.
    * Both null unless `basis` is `list-price` — a reported figure has no table
    * behind it. The date is on the wire rather than baked into a display string
@@ -683,10 +687,12 @@ export interface CostCoverage {
  *   attempted, even when `actual` exists, so the two can be compared and a
  *   stale price row shows up as a divergence rather than as silence.
  *
- * The top-level fields are `expected`, kept for one release so older consumers
- * keep working. Read `actual`/`expected` in new code.
+ * The top-level fields are `expected` again, kept for older consumers of the
+ * live API. Read `actual`/`expected`. The published snapshot omits them (no
+ * public page reads them), so they are optional here: a reader that wants one
+ * must say what it does when the body comes from a bucket.
  */
-export interface CostView extends CostFigure {
+export interface CostView extends Partial<CostFigure> {
   actual: CostFigure;
   expected: CostFigure;
 }
@@ -2494,9 +2500,11 @@ export interface ModelRunView {
   /**
    * The run's cost, attached by the route from the same memoised trajectory
    * totals the listing uses. Optional because the projection this view is built
-   * from (`runner/src/models.ts`) does not know about prices.
+   * from (`runner/src/models.ts`) does not know about prices. Only `actual`: the
+   * panel prints the provider's figure, and the published snapshot carries
+   * nothing else of it.
    */
-  cost?: CostView | null;
+  cost?: Pick<CostView, "actual"> | null;
 }
 
 /** The last error a model died of, off the end of that run's trajectory. */

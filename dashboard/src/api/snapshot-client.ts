@@ -46,14 +46,13 @@ import type {
   PositionsResponse,
   ResultsResponse,
   RunDetailResponse,
-  RunsResponse,
   SnapshotEnvelope,
   TraceIndexResponse,
   TraceSegment,
   NearbyWindow,
   TrackResponse,
 } from "@viewer/api-types";
-import type { PublicFleetResponse } from "@viewer/public-projection";
+import type { PublicFleetResponse, PublicRunsResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
 import { SEG_MS, packSegs, traceSegmentKey } from "@viewer/trace";
 import { emptyNearbyWindow } from "@viewer/nearby";
@@ -356,7 +355,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
    * words the viewer uses.
    */
   async function pointer(id: string, which: "detail" | "track" | "entries" | "scratchpad"): Promise<string> {
-    const artifact = await snap<RunsResponse>("runs.json");
+    const artifact = await snap<PublicRunsResponse>("runs.json");
     const row = artifact.runs.find((r) => r.runId === id);
     if (row === undefined) throw new ApiError(404, `no such run: ${id}`);
     const path = row.snapshot?.[which];
@@ -377,7 +376,7 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
 
   const client: Client = {
     info: (): Promise<ApiInfoResponse> => snap<ApiInfoResponse>("info.json"),
-    runs: (): Promise<RunsResponse> => snap<RunsResponse>("runs.json"),
+    runs: (): Promise<PublicRunsResponse> => snap<PublicRunsResponse>("runs.json"),
     /*
      * Both halves of the fast lane ride in one object, so the map's pips and
      * the fleet table cannot show two different moments.

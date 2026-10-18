@@ -288,10 +288,12 @@ describe("verifyPublication", () => {
       }
     }
     // …while the names beside them survived (docs/DATA-AND-LEGAL.md, 2026-08-30).
-    const runs = src.objects.get("v1/snap/bbbbbbbbbbbb/runs.json")!;
-    expect(runs).toContain("Worn Shortsword");
-    expect(runs).toContain("Goldshire");
-    expect(runs).toContain('"pauseReason":"paused"');
+    // They are on the run's own page: the listing carries the fleet table's few fields.
+    const detail = src.objects.get(`${RUN_BASE}/detail.json`)!;
+    expect(detail).toContain("Worn Shortsword");
+    expect(detail).toContain("Goldshire");
+    expect(detail).toContain('"pauseReason":"paused"');
+    expect(src.objects.get("v1/snap/bbbbbbbbbbbb/runs.json")!).not.toContain("Worn Shortsword");
     const report = await verifyPublication(src);
     expect(report.findings).toEqual([]);
   });
