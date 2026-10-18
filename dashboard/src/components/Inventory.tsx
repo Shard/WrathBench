@@ -63,9 +63,12 @@ export function watchDecoration(root: HTMLElement): () => void {
 const hasEntry = (i: InvItem): boolean => entryOf(i) !== null;
 const linkOf = (i: InvItem): string | null => {
   const e = entryOf(i);
-  return e === null ? null : itemUrl(e);
+  return e === null ? null : itemUrl(e, i.rand);
 };
 const countSuffix = (i: InvItem): string => (i.count > 1 ? ` ×${i.count}` : "");
+/** A worn item's durability, on its square's tooltip, where the trace's sheet carries it. */
+const durabilitySuffix = (i: InvItem): string =>
+  i.durability === null || i.durability === undefined ? "" : ` · durability ${i.durability[0]} / ${i.durability[1]}`;
 
 /** One square: the item's link and its stack count, framed in its quality. */
 function Cell(props: { item: InvItem }) {
@@ -73,7 +76,7 @@ function Cell(props: { item: InvItem }) {
   return (
     <div
       class="inv-cell"
-      title={`${props.item.name}${countSuffix(props.item)}`}
+      title={`${props.item.name}${countSuffix(props.item)}${durabilitySuffix(props.item)}`}
       // The border carries the quality even once an icon covers the middle,
       // which is the only place a decorated cell can still say it.
       style={color() === null ? undefined : { "border-color": color()! }}

@@ -143,13 +143,32 @@ reads dead at a corpse), a cast bar, combat, mounted, flying, resting and
 ghost badges, the target's health where it is published, and the buffs row: spell
 icons as Wowhead links (`src/lib/wowhead.ts`), stacks, and the time left.
 
-**The inventory** in a replay's sidebar is the track's newest reading at or
+**Money and the inventory** in the sidebar come from the trace's character
+sheet at the same playhead as the pip and the unit frame, wherever the trace
+answers for it: live, paused, and in a replay at 60× or slower
+(`TraceStore.sheetAt`, folded by the codec's `sheetAt`, turned into the
+panels' rows by `sheetItems` in `src/lib/inventory.ts`). That puts the public
+sidebar in step with the pip, where the position's newest reading ran the
+publish delay ahead of it. The sheet's rows are the ones the 60 s reading
+carries, worn bags left out as there, plus each item's random property, which
+the Wowhead link carries (`itemUrl`), and a worn item's durability, on its
+square's tooltip. The sheet names an item by its template, so where the
+tooltip script is blocked a suffixed item shows its base name. The same array
+comes back while the sheet's lists stay the same and an unchanged row keeps its
+object, so a money change or a frame redraws nothing in the bag.
+
+Wherever the sheet cannot say, the sidebar shows the coarse reading instead
+(`sheetReading`): faster than 60×, with no trace loaded at the playhead, in a
+segment from before the sheet, and while a key is null — not observed, as after
+a sandbox restart before the character's own create block, never empty bags.
+Live, that reading is the position's newest; in a replay, the track's at or
 before the cursor (`itemsAt` in `src/lib/replay.ts`), folded from the track's
 patches by the viewer's own codec (`@viewer/track-inv`). It keeps a reading
 every 64 patches and hands back the same array while the cursor stays between
 two changes, so the bag and the paperdoll redraw only when the inventory
 does. A track published before the patches carries each reading whole on its
-points, and is read as it is.
+points, and is read as it is. The quest log, reputation and skills the sheet
+also carries have no panel yet.
 
 **Fetching is listed-only.** A segment is requested only for a `t0` a
 position's `recent` or a track's `segs` listed — the public edge caches a 404

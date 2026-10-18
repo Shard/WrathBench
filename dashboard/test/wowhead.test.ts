@@ -63,6 +63,20 @@ describe("an item id becomes a link, and nothing else does", () => {
     expect(itemUrl(-1)).toBeNull();
     expect(itemUrl(1.5)).toBeNull();
     expect(itemUrl(Number.NaN)).toBeNull();
+    expect(itemUrl(0, 1106)).toBeNull();
+  });
+
+  test("a random roll rides the link as the tooltip script reads it, either sign", () => {
+    // Positive is a random property, negative a random suffix: the script
+    // parses `rand` as an integer and asks its tooltip service for that roll.
+    expect(itemUrl(12030, 1106)).toBe("https://www.wowhead.com/wotlk/item=12030?rand=1106");
+    expect(itemUrl(25033, -40)).toBe("https://www.wowhead.com/wotlk/item=25033?rand=-40");
+  });
+
+  test("no roll is the base item's link", () => {
+    for (const rand of [undefined, null, 0, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(itemUrl(6948, rand)).toBe("https://www.wowhead.com/wotlk/item=6948");
+    }
   });
 
   test("an unresolved name still carries its entry", () => {

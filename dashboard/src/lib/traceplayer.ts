@@ -31,6 +31,7 @@ import type {
   AgentPosition,
   PositionsResponse,
   TraceIndexResponse,
+  TraceItemName,
   TraceSegment,
   TraceState,
   TraceTarget,
@@ -42,8 +43,10 @@ import {
   type DecodedSegment,
   type TraceFrame,
   type TracePose,
+  type TraceSheetAt,
   decodeSegment,
   sampleAt,
+  sheetAt as foldSheet,
   stateAt,
   unpackSegs,
   windowOf,
@@ -51,7 +54,7 @@ import {
 import { type Span, advanceCursor } from "./playback";
 import { trackSpan } from "./replay";
 
-export type { TracePose, TraceState, TraceTarget };
+export type { TraceItemName, TracePose, TraceSheetAt, TraceState, TraceTarget };
 
 /* --------------------------------------------------------------- store --- */
 
@@ -119,6 +122,19 @@ export interface TraceUnit {
   castFrom: number | null;
 }
 
+/**
+ * The character sheet at an instant, with the names its ids are shown by.
+ *
+ * The names are the segment's own dictionary, the one that answered for the
+ * instant: a segment names exactly the items it references, so a sheet is
+ * never read against another window's names.
+ */
+export interface TraceSheetView {
+  /** The codec's fold (`sheetAt`): the very object while no sheet event is crossed, a key it lacks null. */
+  sheet: TraceSheetAt;
+  items: ReadonlyMap<number, TraceItemName>;
+}
+
 /** One unbroken stretch of a trail, on one map, all walked or all flown. */
 export interface TrailRun {
   map: number;
@@ -142,6 +158,12 @@ export interface TraceStore {
   poseAt: (runId: string, t: number) => TracePose | null;
   /** The unit state at `t`, on the same terms as `poseAt`. */
   unitAt: (runId: string, t: number) => TraceUnit | null;
+  /**
+   * The character sheet at `t`, on the same terms as `poseAt`. A segment from
+   * before the sheet answers with every key null, which is "not recorded":
+   * the caller falls back to the coarse reading for it, as for a null here.
+   */
+  sheetAt: (runId: string, t: number) => TraceSheetView | null;
   /** The path walked over `[from, to]`, split where a line would lie: at a cut, a change of map, a held gap. */
   trail: (runId: string, from: number, to: number) => TrailRun[];
   /**
@@ -434,6 +456,14 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
       if (at === null) return null;
       const state = stateAt(at.piece.seg, t);
       return { state, castFrom: state.cast === null ? null : castStart(at.a.pieces, at.piece, t, state.cast) };
+    },
+
+    sheetAt(runId, t) {
+      const run = runs.get(runId);
+      if (run === undefined) return null;
+      const at = locate(run, t);
+      if (at === null) return null;
+      return { sheet: foldSheet(at.piece.seg, t), items: at.piece.seg.items };
     },
 
     trail(runId, from, to) {

@@ -25,14 +25,20 @@ const ITEM_BASE = "https://www.wowhead.com/wotlk/item=";
 const SPELL_BASE = "https://www.wowhead.com/wotlk/spell=";
 
 /**
- * The link for one item entry.
+ * The link for one item entry, and the instance's random property when it has
+ * one.
  *
  * Entries are positive integers; anything else is not an id we can link, and
- * the caller renders the name alone.
+ * the caller renders the name alone. `rand` is the item's random property id
+ * as the server sends it, negative for a random suffix: the tooltip script
+ * reads `rand` off the link and asks for that roll, so the tooltip names the
+ * suffix and its stats where the base item's says "<Random enchantment>". Zero
+ * and anything not an integer is no roll, and the link is the base item's.
  */
-export function itemUrl(entry: number): string | null {
+export function itemUrl(entry: number, rand?: number | null): string | null {
   if (!Number.isInteger(entry) || entry <= 0) return null;
-  return `${ITEM_BASE}${entry}`;
+  const roll = typeof rand === "number" && Number.isInteger(rand) && rand !== 0 ? `?rand=${rand}` : "";
+  return `${ITEM_BASE}${entry}${roll}`;
 }
 
 /**
