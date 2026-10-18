@@ -335,7 +335,11 @@ for terminated runs in `data/runs/run-facts.cache.json`, keyed by the size,
 mtime and inode of every file above (not ctime, which the fleet pod's fsGroup
 chown moves at every start) and by the reader's own source, so a boot reads in full only
 the runs that have not ended; any doubt about an entry is a cold read, and
-deleting the file costs one.
+deleting the file costs one. `--status` and `--dry-run` read the same file
+read-only and never write it, so a report beside the supervisor counts only
+the live, paused and verdict-less trajectories. After a release that changes
+the reader, a report reads cold until the new supervisor's first tick
+rewrites the file.
 
 **Signals and exit codes.** SIGTERM is the supervisor's: the run writes its
 `operator-pause` row synchronously, then unwinds, and exits within 60 seconds;

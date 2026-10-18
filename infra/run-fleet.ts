@@ -180,6 +180,7 @@ import {
   PAUSE_PATH,
   type PoolView,
   readPauseSidecar,
+  readReportFacts,
   REPO_ROOT,
   rereadFleet,
   RUN_FACTS_CACHE,
@@ -882,9 +883,11 @@ async function main(): Promise<void> {
   if (wasEmpty) console.error(`run-fleet: ${EMPTY_STORE_HINT}`);
 
   if (args.dryRun) {
+    // One read of every run for the whole report (`readReportFacts`).
+    const facts = readReportFacts();
     // Fail fast on anything that would fail at spawn time.
-    planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy }), () => undefined, stampToday);
-    printDryRun(config, args.until, stampToday);
+    planTick(config, modelStates({ runsDir: RUNS_DIR, roster: rosterModels(config.roster), policy: config.policy, runs: facts }), () => undefined, stampToday);
+    printDryRun(config, args.until, stampToday, facts);
     return;
   }
 
