@@ -2,7 +2,7 @@
  * The trace writer: the host's side of the trace (`trace-row.ts`). On every
  * state-ticker tick (`loop.ts`, `startStateTicker`) it drains what the sandbox
  * child's recorder latched (`sandbox/trace-recorder.ts`) and writes the rows
- * to run.sqlite `trace` and `trace.jsonl` through the trajectory.
+ * to run.sqlite `trace` through the trajectory.
  *
  * It is not the state sample. `sampleState` takes the full snapshot that feeds
  * the HUD, the milestones and the watchdogs, and drains the death and flight

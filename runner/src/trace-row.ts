@@ -5,7 +5,7 @@
  *
  * The shapes here are the storage contract shared with the trace's readers
  * (the segment encoder, the viewer, the publisher): one row per observation in
- * run.sqlite `trace` and in `data/runs/<id>/trace.jsonl`, and the `TraceState`
+ * run.sqlite `trace`, its only home, and the `TraceState`
  * keys a 'key' row carries whole and a 'state' row carries as a delta. They
  * are fixed by that contract; a change here is a change for every reader.
  *

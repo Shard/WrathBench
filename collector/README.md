@@ -53,11 +53,12 @@ owns on disk and is as disposable as the store itself.
 
 Not tailed, on purpose:
 
-- the trace (`run.sqlite` `trace` and `trace.jsonl`,
-  `runner/src/trace-row.ts`). It is a ~1 Hz position feed per live character,
-  and it has its own file precisely so it never arrives here as tens of
-  thousands of unknown trajectory lines a day; its readers encode it from the
-  run directory.
+- the trace (`run.sqlite` `trace`, `runner/src/trace-row.ts`). It is a ~1 Hz
+  position feed per live character, and it has its own table precisely so it
+  never arrives here as tens of thousands of unknown trajectory lines a day;
+  its readers encode it from the run directory. Runs recorded before that
+  table was its only home also carry a `trace.jsonl` holding the same rows;
+  nothing reads it.
 - the nearby ring (`nearby/<t0>.jsonl`, `runner/src/nearby-row.ts`): the units
   around a live character for the live map, about 15 minutes of one-minute
   files that the runner unlinks as they age and deletes when the run stops.
