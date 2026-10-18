@@ -154,7 +154,7 @@ const FLEET: FleetResponse = {
 const POSITIONS: PositionsResponse = {
   positions: [
     { runId: "r1", character: null, model: "m", map: 0, x: 1, y: 2, ts: GENERATED_AT - 1_000,
-      level: 4, xp: 5, money: null, questsCompleted: null, items: null, harnessVersion: "harness-0.4" },
+      level: 4, xp: 5, money: null, questsCompleted: null, harnessVersion: "harness-0.4" },
   ],
 };
 

@@ -565,11 +565,17 @@ describe("renderSnapshot", () => {
       `${SURVIVES.scratchpad}\n${CONTAINER_PATH.published}\n`,
     );
 
-    // The row's item names and the position feed's carry through too.
+    // The row's item names carry through. The live feed carries no inventory:
+    // the map's sidebar reads the trace's character sheet at the playhead.
     const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body) as {
-      positions: { positions: { items: { name: string; count: number; equipped: boolean }[] | null }[] };
+      positions: { positions: Record<string, unknown>[] };
     };
-    expect(live.positions.positions[0]!.items).toEqual([{ name: SURVIVES.itemName, count: 1, equipped: true }]);
+    expect(live.positions.positions.length).toBeGreaterThan(0);
+    for (const p of live.positions.positions) expect(Object.keys(p)).not.toContain("items");
+    const rows = out.artifacts
+      .filter((a) => a.path.endsWith("/detail.json"))
+      .map((a) => (JSON.parse(a.body) as { run: { items: { name: string; count: number; equipped: boolean }[] | null } }).run.items);
+    expect(rows).toContainEqual([{ name: SURVIVES.itemName, count: 1, equipped: true }]);
   });
 
   test("runs.json rows point at the run artifacts; the manifest names a key per aggregate", async () => {

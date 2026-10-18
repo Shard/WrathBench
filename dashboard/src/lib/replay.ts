@@ -53,11 +53,6 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       xp: p.xp,
       money: p.money,
       questsCompleted: p.questsCompleted,
-      // Inventory is carried forward, not per point: the track holds a reading
-      // only where it changed, so the sidebar shows the newest one at or before
-      // the cursor. Null before the first reading — not yet observed, which is
-      // not the same as empty bags.
-      items: itemsAt(track, i),
       // The player frame as that sample recorded it; a track
       // from before the columns existed carries nulls and draws unobserved.
       health: p.health ?? null,
@@ -72,6 +67,17 @@ export function positionsAt(track: TrackResponse, ts: number): AgentPosition[] {
       move: intentAt(track.moves, ts),
     },
   ];
+}
+
+/**
+ * The inventory a replay's sidebar falls back to at the cursor, where the
+ * trace's sheet cannot say: the track's newest reading at or before it. Before
+ * the first point it is the first point's, as the reading beside a pip the
+ * trace places there is (`replayFeedAt` on the map page).
+ */
+export function itemsAtCursor(track: Pick<TrackResponse, "points" | "inv">, ts: number): ItemSample[] | null {
+  const first = track.points[0];
+  return itemsAt(track, indexAt(track.points, first === undefined ? ts : Math.max(ts, first.ts)));
 }
 
 /**

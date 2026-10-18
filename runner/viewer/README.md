@@ -349,6 +349,10 @@ renderer consumes only that array and never touches the run store, which is what
 lets a replay mode plug a trajectory reader into the same shape later. The
 coordinate transform lives on its own in `worldmap.ts` with no imports,
 for the same reason, and the dashboard imports it rather than copying it.
+A position carries no inventory: the map's sidebar reads what a live character
+wears and carries off the trace's character sheet, and the newest reading on
+the feed ran the public delay ahead of the pip; the run row keeps it
+(`/api/run/<id>`, the run page's "carrying").
 
 `/api/run/<id>/track` is the replay's feed: the positioned samples as points,
 and what the character wore and carried along them as `inv`, a reading

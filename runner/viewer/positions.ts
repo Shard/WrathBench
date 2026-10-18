@@ -261,7 +261,6 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
     xp: run.xp,
     money: run.money,
     questsCompleted: run.questsCompleted,
-    items: run.items,
     harnessVersion: run.harnessVersion,
     // The player frame, from the same sample the pip is drawn from.
     health: pos.health,

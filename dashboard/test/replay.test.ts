@@ -20,6 +20,7 @@ import {
   mapsVisited,
   nextSampleAfter,
   itemsAt,
+  itemsAtCursor,
   positionsAt,
   routeUpTo,
   runParam,
@@ -194,10 +195,14 @@ describe("the inventory a replay shows is the newest reading behind the cursor",
       expect(itemsAt(track, 99)).toEqual(cloth(9));
     });
 
-    test(`${shape}: the feed the map draws carries it, so a replay pip shows what a live one does`, () => {
+    test(`${shape}: the sidebar's fallback at a cursor is the reading behind it, read off the track rather than the feed`, () => {
       const t: TrackResponse = { ...TRACK, ...track };
-      expect(positionsAt(t, 3)[0]?.items?.[0]?.count).toBe(3);
-      expect(positionsAt(t, 1)[0]?.items).toBeNull();
+      expect(itemsAtCursor(t, 3.5)?.[0]?.count).toBe(3);
+      expect(itemsAtCursor(t, 4)?.[0]?.count).toBe(9);
+      expect(itemsAtCursor(t, 1)).toBeNull();
+      // Before the first point, the first point's, as the reading beside a pip the trace places there.
+      expect(itemsAtCursor(t, -100)).toBe(itemsAt(t, 0));
+      expect(Object.keys(positionsAt(t, 3)[0]!)).not.toContain("items");
     });
   }
 

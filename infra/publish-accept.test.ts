@@ -375,7 +375,7 @@ describe("verifyPublication", () => {
         positions: [
           {
             runId: RUN_ID, character: "Fixturely", model: "test/model", map: 0, x: 1, y: 2, ts: 1000, level: 3, xp: 4,
-            money: 5, questsCompleted: 6, items: null, harnessVersion: "h",
+            money: 5, questsCompleted: 6, harnessVersion: "h",
             trace: { segMs: 300_000, recent: [T0], tail: null },
           },
         ],
@@ -526,6 +526,37 @@ describe("prohibited content", () => {
     expect(kinds(report.residual)).toEqual(["filesystem-path"]);
     expect(describeAcceptReport(report)).toContain("residual (model-authored");
   });
+
+  /** An `edit_scratchpad` call as `projectEntry` publishes it, appended to the window. */
+  function withScratchpadEdit(src: MemorySource, replacement: string): MemorySource {
+    return poison(src, `${RUN_BASE}/entries.json`, (body) => {
+      (body["entries"] as Record<string, unknown>[]).push({
+        i: 2,
+        t: "tool_call",
+        ts: 1200,
+        name: "edit_scratchpad",
+        args: { old: "## Module\n", new: replacement },
+        dispatchTs: 1200,
+      });
+    });
+  }
+
+  test("a host fact in the model's own scratchpad edit is a residual note, not a finding", async () => {
+    // The scratchpad is the model's own notes and ships whole, and an
+    // `edit_scratchpad` call's `new` is that text before it lands in the pad.
+    const note = "## Module\nPOST http://worldserver:8086/action with header authorization: Bearer <sdk.secret>\n";
+    const report = await verifyPublication(withScratchpadEdit(cleanBucket(), note));
+    expect(report.findings).toEqual([]);
+    expect(report.residual.map((f) => [f.kind, f.at])).toEqual([["host-fact", "entries[2].args.new"]]);
+  });
+
+  test("a credential in the model's own scratchpad edit is still a finding", async () => {
+    const note = "## Module\nPOST http://worldserver:8086/action with sk-ant-oat01-AAAAAAAAAAAAAAAAAAAA\n";
+    const report = await verifyPublication(withScratchpadEdit(cleanBucket(), note));
+    expect(kinds(report.findings)).toEqual(["credential"]);
+    expect(report.findings[0]!.at).toBe("entries[2].args.new");
+    expect(kinds(report.residual)).toEqual(["host-fact"]);
+  });
 });
 
 // ----------------------------------------------------------------- the units
@@ -583,6 +614,62 @@ describe("the checks themselves", () => {
       "wiki-dump-source",
     ]);
     expect(scanBody("k", { a: "I parsed quests.xml and moved on" }).findings).toEqual([]);
+  });
+
+  test("model-authored is a location, not a key name: the same `new` outside a tool call is a finding", () => {
+    const HOST = "POST http://worldserver:8086/action";
+    const ENTRIES = `${RUN_BASE}/entries.json`;
+    const call = { entries: [{ i: 0, t: "tool_call", ts: 1, name: "edit_scratchpad", args: { old: "x", new: HOST } }] };
+    expect(scanBody(ENTRIES, call).findings).toEqual([]);
+    expect(kinds(scanBody(ENTRIES, call).residual)).toEqual(["host-fact"]);
+    // The same path under an entry the model did not write, and the same key on another body.
+    const harness = { entries: [{ i: 0, t: "harness", ts: 1, kind: "x", args: { new: HOST } }] };
+    expect(kinds(scanBody(ENTRIES, harness).findings)).toEqual(["host-fact"]);
+    expect(scanBody(ENTRIES, harness).residual).toEqual([]);
+    expect(kinds(scanBody("v1/snap/x/runs.json", { runs: [{ new: HOST, text: HOST, code: HOST }] }).findings)).toEqual([
+      "host-fact",
+    ]);
+    expect(scanBody("v1/snap/x/runs.json", { runs: [{ new: HOST, text: HOST, code: HOST }] }).findings).toHaveLength(3);
+  });
+
+  test("a harness entry's text and a tool call's parse error are the harness's own, and checked", () => {
+    const HOST = "http://worldserver:8086";
+    const body = {
+      entries: [
+        { i: 0, t: "harness", ts: 1, kind: "session_note", text: `codex reader unavailable: ${HOST}` },
+        { i: 1, t: "tool_call", ts: 2, name: "run_snippet", args: `could not parse the arguments for ${HOST}` },
+      ],
+    };
+    const scan = scanBody(`${RUN_BASE}/entries.json`, body);
+    expect(scan.findings.map((f) => f.at)).toEqual(["entries[0].text", "entries[1].args"]);
+    expect(scan.residual).toEqual([]);
+  });
+
+  test("every model-authored location the projection publishes is a residual note", () => {
+    const HOST = "http://worldserver:8086";
+    const entries = {
+      entries: [
+        { i: 0, t: "response", ts: 1, text: HOST, tools: ["run_snippet"] },
+        { i: 1, t: "claude_result", ts: 1, subtype: "success", isError: false, text: HOST },
+        { i: 2, t: "episodic", ts: 1, level: 3, zone: "Elwynn Forest", text: HOST },
+        { i: 3, t: "snippet", ts: 1, code: `await fetch("${HOST}")` },
+        { i: 4, t: "snippet_result", ts: 1, name: "run_snippet", isError: true, text: HOST },
+        { i: 5, t: "tool_result", ts: 1, name: "read_log", isError: false, text: HOST },
+        // An alias key is what the model sent, before the tool normalised it.
+        { i: 6, t: "tool_call", ts: 1, name: "edit_scratchpad", args: { old_string: HOST, new_string: HOST } },
+        { i: 7, t: "tool_call", ts: 1, name: "write_scratchpad", args: { content: HOST } },
+        { i: 8, t: "actions", ts: 1, actions: [{ ts: 1, action: "say", args: { text: HOST } }] },
+      ],
+    };
+    const scan = scanBody(`${RUN_BASE}/entries.json`, entries);
+    expect(scan.findings).toEqual([]);
+    expect(scan.residual).toHaveLength(10);
+    const live = { positions: { positions: [{ runId: RUN_ID, status: { turn: 1, level: 3, zone: "Elwynn Forest", text: HOST } }] } };
+    expect(scanBody(LIVE_PATH, live).findings).toEqual([]);
+    expect(kinds(scanBody(LIVE_PATH, live).residual)).toEqual(["host-fact"]);
+    // An action note's other fields are the SDK's and the module's, and checked.
+    const hint = { entries: [{ i: 0, t: "actions", ts: 1, actions: [{ ts: 1, action: "say", hint: HOST, args: { text: "hi" } }] }] };
+    expect(kinds(scanBody(`${RUN_BASE}/entries.json`, hint).findings)).toEqual(["host-fact"]);
   });
 
   test("canonical ordering makes the compare about content, not key order", () => {
