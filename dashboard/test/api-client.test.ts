@@ -115,6 +115,12 @@ describe("paths", () => {
     expect(s.calls.map((x) => x.url)).toEqual(["/api/run/a%20b/trace"]);
   });
 
+  test("a run's nearby window is its run's nearby path with the span, a whole number of ms", async () => {
+    const s = stub({});
+    await createClient({ fetch: s.fetch }).nearby("a b", 60_000.4);
+    expect(s.calls.map((x) => x.url)).toEqual(["/api/run/a%20b/nearby?span=60000"]);
+  });
+
   test("the live feed says it renders on request", () => {
     expect(createClient().feedCadence).toEqual({ renderMs: 0, cacheMs: LIVE_TTL_MS });
   });

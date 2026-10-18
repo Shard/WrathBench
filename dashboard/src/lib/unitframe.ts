@@ -316,13 +316,16 @@ export function unitFlags(state: TraceState): UnitFlag[] {
 
 /**
  * The target's bar: its kind and, for a creature, the entry the server gave,
- * with its health. Null with no target — and always on the public site, which
- * withholds it.
+ * with its health — or its name, where the live map's nearby layer holds the
+ * unit the character has targeted (`lib/nearbyplayer.ts`; the trace itself
+ * carries no name by design). Null with no target — and always on the public
+ * site, which withholds it.
  */
-export function targetReading(target: TraceTarget | null): BarReading | null {
+export function targetReading(target: TraceTarget | null, name: string | null = null): BarReading | null {
   if (target === null) return null;
-  const name = target.kind === "creature" && target.entry !== undefined ? `creature ${target.entry}` : target.kind;
-  if (target.hpPct === undefined) return { pct: 0, text: name, title: "target", observed: false };
+  const fallback = target.kind === "creature" && target.entry !== undefined ? `creature ${target.entry}` : target.kind;
+  const label = name ?? fallback;
+  if (target.hpPct === undefined) return { pct: 0, text: label, title: "target", observed: false };
   const pct = Math.min(100, Math.max(0, target.hpPct));
-  return { pct, text: name, title: `target · ${Math.round(pct)}%`, observed: true };
+  return { pct, text: label, title: `target · ${Math.round(pct)}%`, observed: true };
 }
