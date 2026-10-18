@@ -214,6 +214,26 @@ const LAKESHIRE_CHEST_FRONT = { x: -9407.6, y: -2788.4, z: 37.8 };
 // a timed-out fight.
 const AMMEN_RUNTS = { x: -4412.43, y: -11947.3, z: 21.6033 };
 
+// The steep re-plan smoke's starts: points a freeplay character stood on when
+// the module refused its move as `drop` at a 51-58 degree step, read off the
+// module's own move_path rows (the route's first point), and the point each
+// refused move asked for, which the start faces. Level 80 so nothing in
+// Ashenvale (map 1, zone 331) or the Badlands (map 0, zone 3; the server
+// recomputes the zone from the position at login) aggroes or interrupts a
+// walk.
+const STEEP_ASH_LOWLAND = { x: 3200, y: 100, z: 27.99 };
+const STEEP_ASH_LOWLAND_TO = { x: 3190.13, y: -106.667 };
+const STEEP_ASH_CLIMB = { x: 3085.2, y: 89.96, z: 50.63 };
+const STEEP_ASH_CLIMB_TO = { x: 3087.73, y: 71.2 };
+const STEEP_ASH_BAND = { x: 3068.05, y: 146.45, z: 33.85 };
+const STEEP_ASH_BAND_TO = { x: 3008, y: 128 };
+const STEEP_BAD_PLATEAU = { x: -5840, y: -3320, z: 295.87 };
+const STEEP_BAD_PLATEAU_TO = { x: -5897.6, y: -3356.8 };
+const STEEP_BAD_LIP = { x: -6080, y: -3370, z: 292.96 };
+const STEEP_BAD_LIP_TO = { x: -6140, y: -3370 };
+const STEEP_BAD_BASIN = { x: -6050, y: -3300, z: 258.71 };
+const STEEP_BAD_BASIN_TO = { x: -6121.87, y: -3482.93 };
+
 export const SCENARIOS = {
   "mcbride-report": {
     description: "level 5, no money, in front of Marshal McBride with the Northshire chain up to Skirmish at Echo Ridge (21) rewarded (for the read-item smoke: Report to Goldshire hands out a readable letter)",
@@ -435,6 +455,42 @@ export const SCENARIOS = {
       o: facing(VINEYARD_EDGE, VINEYARD_NEAREST_VERMIN),
     },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+  },
+  "steep-ashenvale-lowland": {
+    description: "level 80, no money, on the Ashenvale coastal lowland below the Maestra's Post hills (steep-replan smoke: one climb refusal, one off-mesh point)",
+    level: 80,
+    money: 0,
+    position: { map: 1, zone: 331, ...STEEP_ASH_LOWLAND, o: facing(STEEP_ASH_LOWLAND, STEEP_ASH_LOWLAND_TO) },
+  },
+  "steep-ashenvale-climb": {
+    description: "level 80, no money, at the foot of the most-refused Ashenvale climb edge (steep-replan smoke)",
+    level: 80,
+    money: 0,
+    position: { map: 1, zone: 331, ...STEEP_ASH_CLIMB, o: facing(STEEP_ASH_CLIMB, STEEP_ASH_CLIMB_TO) },
+  },
+  "steep-ashenvale-band": {
+    description: "level 80, no money, below a 52 degree Ashenvale band (steep-replan smoke)",
+    level: 80,
+    money: 0,
+    position: { map: 1, zone: 331, ...STEEP_ASH_BAND, o: facing(STEEP_ASH_BAND, STEEP_ASH_BAND_TO) },
+  },
+  "steep-badlands-plateau": {
+    description: "level 80, no money, on the Loch Modan plateau edge above the Badlands basin (steep-replan smoke: one step down)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 3, ...STEEP_BAD_PLATEAU, o: facing(STEEP_BAD_PLATEAU, STEEP_BAD_PLATEAU_TO) },
+  },
+  "steep-badlands-lip": {
+    description: "level 80, no money, on the lower lip of the Badlands stepped band (steep-replan smoke: one climb refusal)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 3, ...STEEP_BAD_LIP, o: facing(STEEP_BAD_LIP, STEEP_BAD_LIP_TO) },
+  },
+  "steep-badlands-basin": {
+    description: "level 80, no money, in the Badlands basin below its south wall (steep-replan smoke: one climb refusal, one off-mesh point)",
+    level: 80,
+    money: 0,
+    position: { map: 0, zone: 3, ...STEEP_BAD_BASIN, o: facing(STEEP_BAD_BASIN, STEEP_BAD_BASIN_TO) },
   },
 } as const satisfies Record<string, Scenario>;
 
