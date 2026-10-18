@@ -51,6 +51,12 @@ Each source has its own resume rule, because each changes differently:
 Those live in `data/collector.sqlite`, which is the only thing this service
 owns on disk and is as disposable as the store itself.
 
+Not tailed, on purpose: the trace (`run.sqlite` `trace` and `trace.jsonl`,
+`runner/src/trace-row.ts`). It is a ~1 Hz position feed per live character,
+and it has its own file precisely so it never arrives here as tens of
+thousands of unknown trajectory lines a day; its readers encode it from the
+run directory.
+
 A run id is not unique on disk: `runs/<id>/` and `runs/archive/<id>/` can both
 exist and hold different runs, where an attempt was archived and a later launch
 reused the id. Every key here — the offsets, the signatures, every table's
