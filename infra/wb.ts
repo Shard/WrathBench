@@ -217,7 +217,7 @@ export const ENTRIES: readonly Entry[] = [
 
   { group: "site", command: "ship", summary: "build and deploy the public site", ...onHost("infra/deploy-dashboard.sh") },
   { group: "site", command: "og", summary: "render the social card", ...onHost("bun", "infra/render-og.ts") },
-  { group: "site", command: "tiles", summary: "upload changed minimap tiles (--dry-run | --upload) [--include-art]", ...onHost("bun", "infra/publish-tiles.ts") },
+  { group: "site", command: "tiles", summary: "upload changed minimap and art tiles (--dry-run | --upload)", ...onHost("bun", "infra/publish-tiles.ts") },
   { group: "site", command: "verify", summary: "read the public bucket back and check it", ...onHost("bun", "infra/publish-accept.ts") },
 
   { group: "data", command: "prices", summary: "sync OpenRouter list prices into the price file", ...onHost("bun", "infra/sync-prices.ts") },

@@ -22,7 +22,6 @@ import {
   publishTiles,
   renderTileManifest,
   scanTiles,
-  selectTiles,
   type TileStore,
 } from "./publish-tiles";
 import { tempDirs } from "./temp-dirs";
@@ -193,12 +192,12 @@ describe("art changes are reported for the purge", () => {
 });
 
 /*
- * Whether the painted art is published is pending the operator's decision, so
- * it goes up only when a pass is told to, and no caller tells it to.
+ * The painted art is published under the same exception as the minimap tiles
+ * (operator, 2026-10-18), so a pass carries it like any other layer.
  */
-describe("art is opt-in", () => {
-  const tiles = (): ReturnType<typeof scanTiles> =>
-    scanTiles(
+describe("art goes up with the rest", () => {
+  test("every layer is scanned and uploaded in one pass, and the art's maps are named", async () => {
+    const tiles = scanTiles(
       root({
         "0/43_31.png": "native",
         "0/minimap/1/21_15.png": "level",
@@ -206,39 +205,10 @@ describe("art is opt-in", () => {
         "1/art/6/0_0.png": "art",
       }),
     );
-
-  test("left out by default and counted; everything else always goes", () => {
-    const { tiles: kept, artWithheld } = selectTiles(tiles(), { art: false });
-    expect(kept.map((t) => t.key)).toEqual([`${TILE_PREFIX}0/43_31.png`, `${TILE_PREFIX}0/minimap/1/21_15.png`]);
-    expect(artWithheld.map((t) => t.key)).toEqual([`${TILE_PREFIX}0/art/1/21_15.png`, `${TILE_PREFIX}1/art/6/0_0.png`]);
-    expect(selectTiles(tiles(), { art: true }).tiles.length).toBe(4);
-    expect(selectTiles(tiles(), { art: true }).artWithheld).toEqual([]);
-  });
-
-  test("art already in the bucket but withheld this pass is not reported as an orphan", async () => {
-    const all = tiles();
-    const store = fakeStore();
-    await publishTiles(all, store, { now: 1, log: () => {} });
-    const { tiles: kept, artWithheld } = selectTiles(all, { art: false });
-    const routine = await publishTiles(kept, store, { dryRun: true, withheld: artWithheld, log: () => {} });
-    expect(routine.orphans).toBe(0);
-    expect(routine.artMaps).toEqual([]);
-  });
-
-  test("no script that runs the publisher passes --include-art", async () => {
-    const { readdirSync, readFileSync } = await import("node:fs");
-    const here = import.meta.dir;
-    const callers = readdirSync(here)
-      .filter((n) => /\.(ts|sh)$/.test(n) && !n.startsWith("publish-tiles"))
-      .flatMap((n) =>
-        readFileSync(join(here, n), "utf8")
-          .split("\n")
-          // An invocation with flags; `bun wb site tiles` passes the operator's own through.
-          .filter((line) => /publish-tiles\.ts\s+--/.test(line) && !line.trim().startsWith("#")),
-      );
-    // `bun ship --tiles` is one of them, and it must stay one.
-    expect(callers.some((l) => l.includes("publish-tiles.ts --upload"))).toBe(true);
-    for (const line of callers) expect(line).not.toContain("--include-art");
+    expect(tiles.map((t) => t.key)).toContain(`${TILE_PREFIX}1/art/6/0_0.png`);
+    const report = await publishTiles(tiles, fakeStore(), { now: 1, log: () => {} });
+    expect(report.uploaded).toBe(4);
+    expect(report.artMaps).toEqual([0, 1]);
   });
 });
 

@@ -1924,11 +1924,9 @@ re-extraction. Two things go with it: `WRATHBENCH_TILES_BASE` in `.env`, without
 which the built site asks for nothing, and — after a re-extraction, since the
 keys are reused — a purge of the `/tiles/` prefix, or the tiles cache rule's
 day (`infra/cloudflare/README.md`) has to pass before readers see the new ones.
-Art tiles are opt-in (`--include-art`, which `bun wb site ship --tiles` does
-not pass), and whether they are published is pending the operator's decision.
-Once they are, the art is re-baked in place while its look is tuned, so an
-`--include-art` upload ends by naming the maps whose art it changed. Purge `/tiles/<map>/art/` for
-each, and the art's own cache rule brings browsers up to date within minutes
+Art tiles go up in the same pass. The art is re-baked in place while its look
+is tuned, so an upload ends by naming the maps whose art it changed. Purge
+`/tiles/<map>/art/` for each, and the art's own cache rule brings browsers up to date within minutes
 (`infra/cloudflare/README.md`, steps 4 and 6).
 
 ### Start the loop, then deploy the SPA
