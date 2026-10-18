@@ -32,6 +32,21 @@
  * - `ev: [[ms, kind, value]]`: state changes after the keyframe, `ms` from `t0`,
  *   `kind` a `TraceState` key, in recorded order.
  *
+ * **The character sheet** (`TraceSheet`: money, `equip`, `bags`, `inv`, `dur`,
+ * `quests`, `rep`, `skills`) rides the same keyframe and event list, as
+ * numbers and ids. `k.s` holds each observed sheet key whole; one it lacks is
+ * not recorded, never empty. A list's event is a patch, not a value: the rows
+ * that changed, whole, and a row of only its key fields (`[slot]`,
+ * `[bag, slot]`, `[factionId]`, `[skillId]`) for one that went; a list after
+ * null is whole, and a null event is back to unobserved. `qdone` events carry
+ * the quest ids the server confirmed turned in at that moment: they append,
+ * are never compared with what came before, and are in no keyframe. Two
+ * dictionaries make the segment decode alone, each holding exactly the ids
+ * its keyframe and events reference: `items: {id: [quality, name]}`, the item
+ * template's name, and `qreq: {id: [r0, r1, r2, r3, [itemId, n]...]}`, the
+ * counts each quest needs. The unit-state readers (`stateAt`) never see the
+ * sheet; `sheetAt` folds it.
+ *
  * **Versioning.** A decoder ignores keys it does not know and skips events of
  * kinds it does not know, so a field or an event kind is added without a bump;
  * `v` moves only when a meaning changes, and a v1 decoder refuses anything else.
@@ -51,14 +66,29 @@ import type {
   TraceAura,
   TraceCast,
   TraceEventWire,
+  TraceItemName,
   TraceKeyframe,
+  TraceQuestReq,
   TraceSegment,
   TraceSegRuns,
+  TraceSheet,
   TraceState,
   TraceTarget,
 } from "./api-types";
 
-export type { TraceAura, TraceCast, TraceEventWire, TraceKeyframe, TraceSegment, TraceSegRuns, TraceState, TraceTarget };
+export type {
+  TraceAura,
+  TraceCast,
+  TraceEventWire,
+  TraceItemName,
+  TraceKeyframe,
+  TraceQuestReq,
+  TraceSegment,
+  TraceSegRuns,
+  TraceSheet,
+  TraceState,
+  TraceTarget,
+};
 
 export const TRACE_VERSION = 1;
 
@@ -303,6 +333,199 @@ function parseData(text: string | null): Record<string, unknown> | null {
   }
 }
 
+/* --------------------------------------------------------------- sheet --- */
+
+/** `TraceSheet`'s keys, in the order every keyframe and event list uses. */
+export const SHEET_KEYS = ["money", "equip", "bags", "inv", "dur", "quests", "rep", "skills"] as const;
+export type TraceSheetKey = (typeof SHEET_KEYS)[number];
+export type TraceSheetListKey = Exclude<TraceSheetKey, "money">;
+/** The event kind that appends turn-ins and is never state. */
+export const QDONE = "qdone";
+
+/** How many leading fields key a row of each list, and how many fields a row has at most. */
+export const SHEET_KEY_LEN: { readonly [K in TraceSheetListKey]: number } = { equip: 1, bags: 1, inv: 2, dur: 1, quests: 1, rep: 1, skills: 1 };
+const SHEET_ROW_MAX: { readonly [K in TraceSheetListKey]: number } = { equip: 3, bags: 3, inv: 5, dur: 3, quests: 7, rep: 2, skills: 3 };
+/** Which field of a row is an item id, for the dictionary. */
+const ITEM_FIELD: Partial<Record<TraceSheetListKey, number>> = { equip: 1, bags: 1, inv: 2 };
+
+export function emptyTraceSheet(): TraceSheet {
+  return { money: null, equip: null, bags: null, inv: null, dur: null, quests: null, rep: null, skills: null };
+}
+
+/** Whether `kind` names a sheet key, or the turn-in event. */
+export function isSheetKind(kind: unknown): kind is TraceSheetKey | typeof QDONE {
+  return typeof kind === "string" && (kind === QDONE || (SHEET_KEYS as readonly string[]).includes(kind));
+}
+
+const rowKey = (row: readonly number[], keyLen: number): string => (keyLen === 1 ? String(row[0]) : `${row[0]},${row[1]}`);
+const sortRows = <T extends readonly number[]>(rows: T[]): T[] => rows.sort((a, b) => a[0]! - b[0]! || (a[1] ?? 0) - (b[1] ?? 0));
+const sameRow = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * A list's rows rebuilt fresh, each all finite numbers and at most the key's
+ * width; `minLen` is the key length for a patch (a removal is a key alone)
+ * and one past it for a whole list. `undefined` when `v` is not a list, or
+ * is one whose every row was malformed (an empty list is a value; a list of
+ * nothing usable is not).
+ */
+function rowsOf(key: TraceSheetListKey, v: unknown, patch: boolean): number[][] | null | undefined {
+  if (v === null) return null;
+  if (!Array.isArray(v)) return undefined;
+  const keyLen = SHEET_KEY_LEN[key];
+  const minLen = patch ? keyLen : keyLen + 1;
+  const out: number[][] = [];
+  for (const r of v as unknown[]) {
+    if (!Array.isArray(r) || r.length < minLen) continue;
+    const row = (r as unknown[]).slice(0, SHEET_ROW_MAX[key]);
+    if (row.every(finite)) out.push(row as number[]);
+  }
+  return out.length === 0 && v.length > 0 ? undefined : out;
+}
+
+/** A sheet from a keyframe's object: keys it lacks, or carries invalid, read as null. */
+export function sheetOf(o: unknown): TraceSheet {
+  const s = emptyTraceSheet();
+  if (o === null || typeof o !== "object" || Array.isArray(o)) return s;
+  const d = o as Record<string, unknown>;
+  if (finite(d["money"])) s.money = d["money"];
+  for (const key of SHEET_KEYS) {
+    if (key === "money") continue;
+    const rows = rowsOf(key, d[key], false);
+    if (rows !== undefined && rows !== null) setSheet(s, key, dedupe(rows, SHEET_KEY_LEN[key]));
+  }
+  return s;
+}
+
+function setSheet(s: TraceSheet, key: TraceSheetKey, v: unknown): void {
+  (s as unknown as Record<string, unknown>)[key] = v;
+}
+
+/** One row per key, the last one standing, in key order. */
+function dedupe(rows: number[][], keyLen: number): number[][] {
+  const m = new Map<string, number[]>();
+  for (const r of rows) m.set(rowKey(r, keyLen), r);
+  return sortRows([...m.values()]);
+}
+
+/** A list with a patch applied, as a fresh array in key order; the input is never mutated. A null patch is unobserved. */
+export function applySheetPatch(list: readonly (readonly number[])[] | null, patch: readonly (readonly number[])[] | null, keyLen: number): number[][] | null {
+  if (patch === null) return null;
+  const rows = new Map<string, number[]>();
+  for (const r of list ?? []) rows.set(rowKey(r, keyLen), r as number[]);
+  for (const r of patch) {
+    if (r.length < keyLen) continue;
+    if (r.length === keyLen) rows.delete(rowKey(r, keyLen));
+    else rows.set(rowKey(r, keyLen), [...r]);
+  }
+  return sortRows([...rows.values()]);
+}
+
+/** The patch from `a` to `b`, in key order: `undefined` when they are the same, `b` whole after null, null when `b` is. */
+export function sheetPatch(a: readonly (readonly number[])[] | null, b: readonly (readonly number[])[] | null, keyLen: number): number[][] | null | undefined {
+  if (b === null) return a === null ? undefined : null;
+  if (a === null) return b.map((r) => [...r]);
+  const before = new Map<string, readonly number[]>();
+  for (const r of a) before.set(rowKey(r, keyLen), r);
+  const out: number[][] = [];
+  for (const r of b) {
+    const k = rowKey(r, keyLen);
+    const o = before.get(k);
+    before.delete(k);
+    if (o === undefined || !sameRow(o, r)) out.push([...r]);
+  }
+  for (const r of before.values()) out.push(r.slice(0, keyLen));
+  return out.length === 0 ? undefined : sortRows(out);
+}
+
+/** A turn-in event's ids, or `undefined` when `v` is not a list of them. */
+function qdoneOf(v: unknown): number[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const ids = (v as unknown[]).filter(finite);
+  return ids.length === 0 ? undefined : ids;
+}
+
+/** One sheet change, as the event list carries it: a new `money`, a list's effective patch, or turn-ins. */
+export type TraceSheetChange = [TraceSheetKey | typeof QDONE, number | number[][] | number[] | null];
+
+/**
+ * A 'state' row's sheet applied: the new sheet and the changes it actually
+ * made — `money` when it moved, each list's effective patch (rows that
+ * already read so dropped), and the turn-ins, which always count.
+ */
+function mergedSheet(sheet: TraceSheet, data: Record<string, unknown> | null): { sheet: TraceSheet; changes: TraceSheetChange[] } {
+  const changes: TraceSheetChange[] = [];
+  if (data === null) return { sheet, changes };
+  let next: TraceSheet | null = null;
+  for (const key of SHEET_KEYS) {
+    if (!Object.hasOwn(data, key)) continue;
+    if (key === "money") {
+      const v = numOrNull(data[key]);
+      if (v === undefined || v === sheet.money) continue;
+      (next ??= { ...sheet }).money = v;
+      changes.push([key, v]);
+      continue;
+    }
+    const patch = rowsOf(key, data[key], true);
+    if (patch === undefined) continue;
+    const after = applySheetPatch(sheet[key], patch, SHEET_KEY_LEN[key]);
+    const eff = sheetPatch(sheet[key], after, SHEET_KEY_LEN[key]);
+    if (eff === undefined) continue;
+    setSheet((next ??= { ...sheet }), key, after);
+    changes.push([key, eff]);
+  }
+  const done = qdoneOf(data[QDONE]);
+  if (done !== undefined) changes.push([QDONE, done]);
+  return { sheet: next ?? sheet, changes };
+}
+
+/** A mid-window key row's sheet against the running one: what differs, as patches. */
+function sheetDiff(a: TraceSheet, b: TraceSheet): TraceSheetChange[] {
+  const changes: TraceSheetChange[] = [];
+  for (const key of SHEET_KEYS) {
+    if (key === "money") {
+      if (a.money !== b.money) changes.push([key, b.money]);
+      continue;
+    }
+    const eff = sheetPatch(a[key], b[key], SHEET_KEY_LEN[key]);
+    if (eff !== undefined) changes.push([key, eff]);
+  }
+  return changes;
+}
+
+/** Where a segment finds what its ids are shown by: the run's dictionary, answered per id. */
+export interface TraceDictLookup {
+  item(itemId: number): TraceItemName | undefined;
+  quest(questId: number): TraceQuestReq | undefined;
+}
+
+/** An item dictionary entry rebuilt: a finite quality or null, and a string name. */
+export function itemNameOf(v: unknown): TraceItemName | undefined {
+  if (!Array.isArray(v) || typeof v[1] !== "string") return undefined;
+  return [finite(v[0]) ? v[0] : null, v[1]];
+}
+
+/** A quest's required counts rebuilt: four numbers, then `[itemId, count]` pairs. */
+export function questReqOf(v: unknown): TraceQuestReq | undefined {
+  if (!Array.isArray(v) || v.length < 4) return undefined;
+  const head = (v as unknown[]).slice(0, 4);
+  if (!head.every(finite)) return undefined;
+  const req: TraceQuestReq = [head[0] as number, head[1] as number, head[2] as number, head[3] as number];
+  for (const p of (v as unknown[]).slice(4)) if (Array.isArray(p) && finite(p[0]) && finite(p[1])) req.push([p[0], p[1]]);
+  return req;
+}
+
+/** The item and quest ids a sheet, or a change to one, references. */
+function refsOf(lists: Iterable<[TraceSheetKey | typeof QDONE, unknown]>, items: Set<number>, quests: Set<number>): void {
+  for (const [key, v] of lists) {
+    if (key === "money" || key === QDONE || !Array.isArray(v)) continue;
+    const at = ITEM_FIELD[key];
+    for (const r of v as number[][]) {
+      if (at !== undefined && r.length > at && r[at]! > 0) items.add(r[at]!);
+      if (key === "quests" && r.length > 1) quests.add(r[1]!);
+    }
+  }
+}
+
 /* ----------------------------------------------------------- positions --- */
 
 const TURN = 2 * Math.PI;
@@ -384,8 +607,12 @@ function heading(ax: number, ay: number, bx: number, by: number, fallback: numbe
  * positions stay samples). Rows at or after `t1` are ignored. A window with no
  * rows of its own still encodes — to a keyframe and nothing else — so whether
  * that is worth serving is the caller's call.
+ *
+ * `dict` answers the item names and quest requirements the sheet references
+ * (`trace_dict`); without one, or for an id it does not know, the segment
+ * carries the ids alone.
  */
-export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow): TraceSegment {
+export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow, dict?: TraceDictLookup): TraceSegment {
   const { run, t0, t1 } = window;
   // Stable, so rows the caller handed over in rowid order keep it on a tie.
   const sorted = [...rows].filter((r) => finite(r.ts) && r.ts < t1).sort((a, b) => a.ts - b.ts);
@@ -396,17 +623,22 @@ export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow): T
   // The context, folded: the state, the last position sample, a flight with no
   // sample since its takeoff, and the newest key row's position as a last resort.
   let state = emptyTraceState();
+  let sheet = emptyTraceSheet();
   let contextKey = false;
   let lastPos: Pos | null = null;
   let flight: Flight | null = null;
   let keyPos: Pos | null = null;
   for (const r of context) {
     if (r.kind === "key") {
-      state = stateOf(parseData(r.data));
+      const data = parseData(r.data);
+      state = stateOf(data);
+      sheet = sheetOf(data);
       contextKey = true;
       keyPos = posOf(r) ?? keyPos;
     } else if (r.kind === "state") {
-      state = merged(state, parseData(r.data)).state;
+      const data = parseData(r.data);
+      state = merged(state, data).state;
+      sheet = mergedSheet(sheet, data).sheet;
     } else if (r.kind === "pos" || r.kind === "flight") {
       const p = posOf(r);
       if (p === null) continue;
@@ -421,8 +653,11 @@ export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow): T
     const at = inWindow.findIndex((r) => r.kind === "key");
     if (at !== -1) {
       // A key row is the whole state, so the state rows before it inside the
-      // window are already folded into it; their positions stay samples.
-      state = stateOf(parseData(inWindow[at]!.data));
+      // window are already folded into it; their positions stay samples. The
+      // turn-ins among them are events, not state, and are not in it.
+      const data = parseData(inWindow[at]!.data);
+      state = stateOf(data);
+      sheet = sheetOf(data);
       eventsFrom = at + 1;
       if (lastPos === null && keyPos === null && !inWindow.slice(0, at).some(isSample)) keyPos = posOf(inWindow[at]!);
     }
@@ -465,8 +700,10 @@ export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow): T
 
   const kp: [number, number, number, number, number] | null =
     base === null ? null : [base.map, qp(base.x), qp(base.y), qp(base.z ?? 0), qo(base.o ?? 0)];
-  const s: Partial<TraceState> = {};
+  const s: Partial<TraceState & TraceSheet> = {};
   for (const key of STATE_KEYS) setKey(s as TraceState, key, state[key]);
+  // The sheet's observed keys only: one the run never recorded stays absent.
+  for (const key of SHEET_KEYS) if (sheet[key] !== null) setSheet(s as TraceSheet, key, sheet[key]);
   const k: TraceKeyframe = { p: kp, ...(pt !== 0 ? { pt } : {}), s, ...(inFlight !== undefined ? { f: inFlight } : {}) };
 
   // The samples.
@@ -500,8 +737,11 @@ export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow): T
     [prevT, prevMap, prevX, prevY, prevZ, prevO] = [r.ts, p.map, qx, qy, qz, qO];
   }
 
-  // The state changes after the keyframe.
+  // The state changes after the keyframe, and the sheet's.
   const ev: TraceEventWire[] = [];
+  const itemIds = new Set<number>();
+  const questIds = new Set<number>();
+  refsOf(SHEET_KEYS.map((key) => [key, sheet[key]]), itemIds, questIds);
   for (const r of inWindow.slice(eventsFrom)) {
     if (r.kind !== "state" && r.kind !== "key") continue;
     const data = parseData(r.data);
@@ -510,11 +750,49 @@ export function encodeSegment(rows: readonly TraceRow[], window: TraceWindow): T
     const whole = r.kind === "key" ? stateOf(data) : null;
     const prev = state;
     const next = whole === null ? merged(state, data) : { state: whole, changed: STATE_KEYS.filter((key) => !same(whole[key], prev[key])) };
-    for (const key of next.changed) ev.push([int(r.ts - t0), key, next.state[key]]);
+    const ms = int(r.ts - t0);
+    for (const key of next.changed) ev.push([ms, key, next.state[key]]);
     state = next.state;
+    let changes: TraceSheetChange[];
+    if (r.kind === "key") {
+      const wholeSheet = sheetOf(data);
+      changes = sheetDiff(sheet, wholeSheet);
+      sheet = wholeSheet;
+    } else {
+      const m = mergedSheet(sheet, data);
+      changes = m.changes;
+      sheet = m.sheet;
+    }
+    for (const [key, v] of changes) ev.push([ms, key, v]);
+    refsOf(changes, itemIds, questIds);
   }
 
-  return { v: TRACE_VERSION, run, t0, t1, q: { p: Q_POS, o: Q_O }, k, dt, x: xs, y: ys, z: zs, o: os, cuts, flights, ev };
+  const seg: TraceSegment = { v: TRACE_VERSION, run, t0, t1, q: { p: Q_POS, o: Q_O }, k, dt, x: xs, y: ys, z: zs, o: os, cuts, flights, ev };
+  if (dict !== undefined) attachDict(seg, dict, itemIds, questIds);
+  return seg;
+}
+
+/**
+ * The dictionaries for the ids a segment references, in id order: each
+ * quest's required counts, and the names of its items and of the items its
+ * quests ask for. An id the run never named is left out, and so is an empty
+ * dictionary.
+ */
+function attachDict(seg: TraceSegment, dict: TraceDictLookup, itemIds: Set<number>, questIds: Set<number>): void {
+  const qreq: Record<string, TraceQuestReq> = {};
+  for (const id of [...questIds].sort((a, b) => a - b)) {
+    const req = questReqOf(dict.quest(id));
+    if (req === undefined) continue;
+    qreq[id] = req;
+    for (const p of req.slice(4) as [number, number][]) if (p[0] > 0) itemIds.add(p[0]);
+  }
+  const items: Record<string, TraceItemName> = {};
+  for (const id of [...itemIds].sort((a, b) => a - b)) {
+    const name = itemNameOf(dict.item(id));
+    if (name !== undefined) items[id] = name;
+  }
+  if (Object.keys(items).length > 0) seg.items = items;
+  if (Object.keys(qreq).length > 0) seg.qreq = qreq;
 }
 
 /** A partial state row applied: the new state and the keys that actually changed, in key order. */
@@ -576,7 +854,20 @@ export interface DecodedSegment {
   key: TraceState;
   /** State changes, by time. */
   events: TraceEvent[];
+  /** The sheet at `t0`: a key the segment does not carry is null, not recorded. */
+  sheet: TraceSheet;
+  /** The sheet's changes, by time: a list's are patches, `qdone` its turn-ins. Folded by `sheetAt`. */
+  sheetEvents: TraceSheetEvent[];
+  /** The names and qualities of the items it references, and the counts its quests need, by id. */
+  items: ReadonlyMap<number, TraceItemName>;
+  qreq: ReadonlyMap<number, TraceQuestReq>;
 }
+
+/** One sheet change: a new `money`, a list's patch, or the quest ids turned in. */
+export type TraceSheetEvent =
+  | { t: number; kind: "money"; value: number | null }
+  | { t: number; kind: TraceSheetListKey; value: number[][] | null }
+  | { t: number; kind: typeof QDONE; value: number[] };
 
 const numAt = (a: unknown, i: number): number => {
   const v = Array.isArray(a) ? (a as unknown[])[i] : undefined;
@@ -649,14 +940,49 @@ export function decodeSegment(seg: TraceSegment): DecodedSegment {
   }
 
   const events: TraceEvent[] = [];
+  const sheetEvents: TraceSheetEvent[] = [];
   for (const e of Array.isArray(seg.ev) ? seg.ev : []) {
-    if (!Array.isArray(e) || !finite(e[0]) || !isStateKey(e[1])) continue;
-    const value = SANITIZE[e[1]](e[2]);
-    if (value !== undefined) events.push({ t: seg.t0 + e[0], kind: e[1], value } as TraceEvent);
+    if (!Array.isArray(e) || !finite(e[0])) continue;
+    if (isStateKey(e[1])) {
+      const value = SANITIZE[e[1]](e[2]);
+      if (value !== undefined) events.push({ t: seg.t0 + e[0], kind: e[1], value } as TraceEvent);
+      continue;
+    }
+    const ev = sheetEventOf(seg.t0 + e[0], e[1], e[2]);
+    if (ev !== undefined) sheetEvents.push(ev);
   }
   events.sort((a, b) => a.t - b.t);
+  sheetEvents.sort((a, b) => a.t - b.t);
 
-  return { run: seg.run, t0: seg.t0, t1: seg.t1, frames, flights, key: stateOf(seg.k?.s), events };
+  const items = new Map<number, TraceItemName>();
+  for (const [id, v] of Object.entries(isRecord(seg.items) ? seg.items : {})) {
+    const name = itemNameOf(v);
+    if (name !== undefined && finite(Number(id))) items.set(Number(id), name);
+  }
+  const qreq = new Map<number, TraceQuestReq>();
+  for (const [id, v] of Object.entries(isRecord(seg.qreq) ? seg.qreq : {})) {
+    const req = questReqOf(v);
+    if (req !== undefined && finite(Number(id))) qreq.set(Number(id), req);
+  }
+
+  return { run: seg.run, t0: seg.t0, t1: seg.t1, frames, flights, key: stateOf(seg.k?.s), events, sheet: sheetOf(seg.k?.s), sheetEvents, items, qreq };
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** One wire event as a sheet change, sanitized; `undefined` when it is not one. */
+function sheetEventOf(t: number, kind: unknown, v: unknown): TraceSheetEvent | undefined {
+  if (!isSheetKind(kind)) return undefined;
+  if (kind === QDONE) {
+    const ids = qdoneOf(v);
+    return ids === undefined ? undefined : { t, kind, value: ids };
+  }
+  if (kind === "money") {
+    const m = numOrNull(v);
+    return m === undefined ? undefined : { t, kind, value: m };
+  }
+  const rows = rowsOf(kind, v, true);
+  return rows === undefined ? undefined : { t, kind, value: rows };
 }
 
 /* ------------------------------------------------------------ playback --- */
@@ -716,4 +1042,44 @@ export function stateAt(seg: DecodedSegment, t: number): TraceState {
     setKey(s, e.kind, e.value);
   }
   return s;
+}
+
+/** The sheet at a moment, and the quest ids turned in since the segment's `t0`. */
+export interface TraceSheetAt extends TraceSheet {
+  qdone: number[];
+}
+
+/** The last fold `sheetAt` made per segment: how many events it applied, and what it made of them. */
+const sheetMemo = new WeakMap<DecodedSegment, { n: number; at: TraceSheetAt }>();
+
+/**
+ * The sheet at `t`: the keyframe's with every sheet event at or before `t`
+ * applied. Kept apart from `stateAt`, which the unit frame calls every frame
+ * and which copies what it returns: this one is memoised on the events it
+ * has applied, so a frame that crosses none gets the very object the last
+ * one did, and a playhead moving forward applies only what it crossed. Every
+ * list it returns is fresh and never mutated afterwards.
+ */
+export function sheetAt(seg: DecodedSegment, t: number): TraceSheetAt {
+  const evs = seg.sheetEvents;
+  let lo = 0;
+  let hi = evs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (evs[mid]!.t <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  const n = lo;
+  const memo = sheetMemo.get(seg);
+  if (memo !== undefined && memo.n === n) return memo.at;
+  const from = memo !== undefined && memo.n < n ? memo : { n: 0, at: { ...seg.sheet, qdone: [] } };
+  const at: TraceSheetAt = { ...from.at, qdone: [...from.at.qdone] };
+  for (let i = from.n; i < n; i++) {
+    const e = evs[i]!;
+    if (e.kind === QDONE) at.qdone.push(...e.value);
+    else if (e.kind === "money") at.money = e.value;
+    else setSheet(at, e.kind, applySheetPatch(at[e.kind], e.value, SHEET_KEY_LEN[e.kind]));
+  }
+  sheetMemo.set(seg, { n, at });
+  return at;
 }
