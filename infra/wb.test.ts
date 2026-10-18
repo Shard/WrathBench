@@ -204,7 +204,7 @@ describe("where a command runs", () => {
   });
 
   test("a command that drives the cluster has no --local form", () => {
-    for (const [g, c] of [["release", "run"], ["release", "deploy"], ["fleet", "drain"], ["fleet", "resume"], ["fleet", "state"], ["server", "health"]] as const) {
+    for (const [g, c] of [["release", "run"], ["release", "deploy"], ["fleet", "drain"], ["fleet", "resume"], ["fleet", "state"], ["server", "health"], ["server", "log-retention"]] as const) {
       expect(plan(entry(g, c), LOCAL, [])).toHaveProperty("refused");
     }
   });

@@ -949,6 +949,51 @@ the field is omitted from every pod and the deployment behaves as before. Set
 it to a class the cluster defines and the realm outranks whatever else is
 sharing the node when one fills.
 
+### Server log retention
+
+The worldserver's own log goes to the console (`kubectl logs`). What it keeps
+as files on the data PVC is `logs/Errors.log`, held open and rewritten on
+every boot, and the module's audit log, one JSONL per session token under
+`logs/wrathbench`. The audit log is what grows — about 0.6 GB a day per live
+freeplay stream, and it had reached half the volume — and it is kept for a
+window, not for good (docs/CONTRACTS.md "Audit"): `worldserver.logRetention.days`
+in the chart's values, default 3, `0` to disable. The
+`wrathbench-log-retention` CronJob prunes it once a day (`schedule`), from the
+worldserver image, by age. Its own CronJob so that changing the window never
+rolls the worldserver.
+
+What it never does is touch a file the server still holds open. A file is
+deleted only when it is quiet for the window *and* older than the running
+server process: the module writes a line the moment it opens a file, so a file
+the process holds is newer than its start, which the pass reads from `GET
+/health`. A file quiet for the window but younger than the process is emptied
+in place instead — safe for an append-mode writer — and deleted after the next
+restart. With the module unreachable nothing is deleted. The pass is one
+`readdir` and a `stat` per file, reads nothing, and logs counts and bytes,
+never a name: the names are session tokens. A file still being written is
+never trimmed, so a freeplay stream that lives for weeks holds its whole log
+until the run ends, and that file goes with the first pass after the window.
+
+```
+bun wb server log-retention            # dry run inside the worldserver container: counts, bytes, and
+                                       # how many candidates the server holds open (always 0)
+bun wb server log-retention --days 7   # the same for another window
+bun wb server log-retention --apply    # a Job from the CronJob, now; waits and prints its log
+```
+
+To keep one run's audit past the window, copy it out before the pass. The
+token is `config.token` in the run's `meta.json`; it travels on stdin, never
+argv:
+
+```
+token=$(kubectl -n wrathbench exec deploy/wrathbench-runner -- bun -p 'JSON.parse(require("fs").readFileSync("data/runs/<run-id>/meta.json","utf8")).config.token')
+printf '%s\n' "$token" | kubectl -n wrathbench exec -i deploy/wrathbench-worldserver -- sh -c 'read -r t && cat "/azerothcore/env/dist/logs/wrathbench/$t.jsonl"' > <run-id>.audit.jsonl
+```
+
+Or raise `days` in the deploying cluster's values for as long as it is needed.
+The compose quickstart has no retention: its `data/logs` is a bind mount you
+prune yourself.
+
 ### Deploy window (worldserver changes)
 
 A worldserver change reaches the cluster in a release, and `infra/k8s-deploy.sh`

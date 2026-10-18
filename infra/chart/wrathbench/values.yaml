@@ -221,8 +221,9 @@ worldserver:
     limits:
       memory: 8Gi
   # AzerothCore's temp dir (AC_TEMP_DIR), the one path this pod writes that is
-  # not on the data PVC — Server.log goes to the console and Errors.log and the
-  # module's audit trail are evidence, on the volume. It holds nothing in
+  # not on the data PVC — Server.log goes to the console, and Errors.log and
+  # the module's audit log are files on the volume (the audit log under
+  # `logRetention` below). It holds nothing in
   # normal operation; the ceiling is what keeps a crash dump loop from taking
   # the node down with it.
   tempSizeLimit: 2Gi
@@ -233,6 +234,27 @@ worldserver:
   startupProbe:
     periodSeconds: 10
     failureThreshold: 90
+  # How long the module's per-session audit log (logs/wrathbench/<token>.jsonl
+  # on the data PVC) is kept, in days. The log is an operational record for the
+  # window — the smokes read it, a stuck session is diagnosed from it — and
+  # not the long-lived record of a run, which is the trajectory's own `actions`
+  # record (docs/CONTRACTS.md "Audit"). A live freeplay stream writes about
+  # 0.6 GB a day here, so unbounded it was half the volume. Pruned once a day
+  # by templates/log-retention.yaml, by age, and never a file the server still
+  # holds open (files/log-retention.pl says how). 0 or empty disables it and
+  # renders no CronJob. A file still being written is never trimmed: a stream
+  # that lives for weeks keeps its whole log until it ends, and that file goes
+  # with the first pass after the window.
+  logRetention:
+    days: 3
+    schedule: "30 2 * * *"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 256Mi
 
 authserver:
   resources:

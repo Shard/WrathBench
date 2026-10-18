@@ -120,8 +120,11 @@ spec:
             # with per-boot timestamped backups (flag 16) and that tree reached
             # 22 GB; here `kubectl logs` is the history and the runtime rotates
             # it. Errors.log and the module's audit dir are still files, on the
-            # data PVC, because they are evidence (CLAUDE.md: log at the module
-            # boundary).
+            # data PVC (CLAUDE.md: log at the module boundary); the audit dir
+            # is pruned by age by templates/log-retention.yaml, a separate
+            # CronJob so that its window never rolls this pod. Errors.log is
+            # held open by the core for the life of the process and rewritten
+            # on every boot (appender mode `w`), so nothing prunes it.
             - name: AC_APPENDER_SERVER
               value: {{ .Values.worldserver.appenderServer | quote }}
             # mod-wrathbench (module/). Pinned here rather than in the module
