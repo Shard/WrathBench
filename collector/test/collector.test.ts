@@ -20,7 +20,8 @@ import { OffsetStore } from "../src/offsets";
 import { memorySink } from "../src/sink";
 import { splitStatements } from "../src/schema";
 import { tailLines } from "../src/tailer";
-import { parseLine, turnRow, usageOf, TURN_KINDS } from "../src/lines";
+import { EPISODIC_ENTRY_KIND, parseLine, turnRow, usageOf, TURN_KINDS } from "../src/lines";
+import { EpisodicLog } from "../../runner/src/episodic";
 import { retryDelayMs, clickhouseSink, SinkAborted, jsonEachRow } from "../src/sink";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
@@ -325,6 +326,22 @@ describe("what the store must not lose", () => {
     await collector.pass();
     const bad = rowsOf(sink, "events").find((r) => r["kind"] === "unparseable");
     expect(bad?.["raw"]).toBe("{not json at all");
+  });
+
+  test("an episodic entry as the runner writes it lands with its stamp and turn, not as unparseable", async () => {
+    const runsDir = tmpRoot();
+    const dir = writeRun(runsDir, "run-ep");
+    // The runner's own writer: `{ ts, turn, level?, zone?, text }`, no `t`.
+    new EpisodicLog(join(dir, "episodic.jsonl")).append({ ts: 4_000, turn: 7, level: 3, zone: "Dun Morogh", text: "heading to Kharanos" });
+    appendFileSync(join(dir, "episodic.jsonl"), "{torn\n");
+    const { collector, sink } = collectorOver(runsDir);
+    await collector.pass();
+    const rows = rowsOf(sink, "episodic");
+    const entry = rows.find((r) => Number(r["ts"]) === 4_000);
+    expect(entry).toMatchObject({ kind: EPISODIC_ENTRY_KIND, turn: 7 });
+    expect((JSON.parse(String(entry?.["raw"])) as { text: string }).text).toBe("heading to Kharanos");
+    // A line that is not an entry is still kept, and says so.
+    expect(rows.find((r) => r["raw"] === "{torn")).toMatchObject({ kind: "unparseable", ts: 0 });
   });
 
   test("a record kind nobody has written before still lands", async () => {

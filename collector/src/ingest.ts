@@ -36,6 +36,7 @@ import {
   episodicRow,
   eventRow,
   milestoneRow,
+  parseEpisodicLine,
   parseLine,
   turnRow,
   unparseableRow,
@@ -206,7 +207,8 @@ export class Ingester {
       offset = line.endOffset;
       if (line.text.length === 0) continue;
       const text = strikeSessionToken(line.text, token);
-      const parsed = parseLine(text);
+      // Its own parse: an entry carries no `t` (`parseEpisodicLine`).
+      const parsed = parseEpisodicLine(text);
       const rec = parsed.ok ? parsed.rec : { t: "unparseable", ts: 0 };
       await this.deps.batcher.add("episodic", episodicRow(ctx, rec, text));
       count++;

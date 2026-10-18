@@ -204,12 +204,36 @@ export function milestoneRow(ctx: RowContext, rec: Record<string, unknown>, raw:
   };
 }
 
+/**
+ * An `episodic.jsonl` line: one `EpisodicEntry` (`runner/src/episodic.ts`),
+ * `{ ts, turn, level?, zone?, text }`. The file holds one record kind, so its
+ * entries carry no `t`, and `parseLine` — which requires one — would refuse
+ * every real entry; this asks only for the stamp. Loose for the same reason
+ * `trajectoryLine` is: whatever else an entry carries survives in `raw`.
+ */
+export const episodicLine = z.object({ ts: z.number() }).loose();
+
+/** One `episodic.jsonl` line, or `{ ok: false }` when it is not a stamped object. */
+export function parseEpisodicLine(text: string): { ok: true; rec: Record<string, unknown> } | { ok: false } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { ok: false };
+  }
+  const r = episodicLine.safeParse(raw);
+  return r.success ? { ok: true, rec: r.data as Record<string, unknown> } : { ok: false };
+}
+
+/** What an episodic row's `kind` reads for an entry, which names none of its own. */
+export const EPISODIC_ENTRY_KIND = "entry";
+
 export function episodicRow(ctx: RowContext, rec: Record<string, unknown>, raw: string): Record<string, unknown> {
   return {
     run_id: ctx.runId,
     line_no: ctx.lineNo,
     ts: int(rec["ts"]) ?? 0,
-    kind: str(rec["t"]) || str(rec["kind"]),
+    kind: str(rec["t"]) || str(rec["kind"]) || EPISODIC_ENTRY_KIND,
     turn: int(rec["turn"]),
     raw,
     ingested_at: ctx.ingestedAt,
