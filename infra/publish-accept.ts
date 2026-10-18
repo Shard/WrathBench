@@ -12,7 +12,9 @@
  * binary. This walks the live generation instead and answers three questions:
  *
  * 1. **Is the generation complete?** The manifest names a key per aggregate and
- *    `runs.json` names four per run. Every one of them must be fetchable. The
+ *    `runs.json` names four per run; `live.json` names its live runs' newest
+ *    trace segments and each track lists its own, of which the walk takes the
+ *    newest. Every one of them must be fetchable. The
  *    manifest is written last precisely so this cannot be half true, so a miss
  *    here is a real defect and is reported as one.
  * 2. **Does anything in it cross the content boundary?** Two independent
@@ -75,10 +77,12 @@ import {
   projectRuns,
   projectTools,
   projectTrack,
+  projectTraceSegment,
 } from "../runner/viewer/public-projection";
 import { REDACTED_PROSE } from "../runner/viewer/redact-prose";
 import { LOCAL_PATH_ROOTS } from "../runner/viewer/scrub-paths";
-import { LIVE_PATH, MANIFEST_PATH } from "./publish-core";
+import { unpackSegs } from "../runner/viewer/trace";
+import { LIVE_PATH, MANIFEST_PATH, classifyPath, traceSegmentPath } from "./publish-core";
 
 /* ------------------------------------------------------------- the source --- */
 
@@ -456,6 +460,7 @@ function projectorFor(key: string): ((payload: Record<string, unknown>) => unkno
       positions: projectPositions(p["positions"] as unknown as Parameters<typeof projectPositions>[0]),
     });
   }
+  if (classifyPath(key).kind === "trace") return (p) => projectTraceSegment(p as unknown as Parameters<typeof projectTraceSegment>[0]);
   if (key.startsWith("v1/run/")) {
     if (name === "detail.json") return (p) => projectRunDetail(p as unknown as Parameters<typeof projectRunDetail>[0]);
     if (name === "track.json") return (p) => projectTrack(p as unknown as Parameters<typeof projectTrack>[0]);
@@ -673,7 +678,20 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
     const body = await inspect(key);
     if (name === "runs.json") runsBody = body;
   }
-  await inspect(LIVE_PATH);
+  const liveBody = await inspect(LIVE_PATH);
+  /*
+   * Trace segments are named, not walked: a character live for a week lists two
+   * thousand, so the walk takes the ones a reader is sure to ask for — every
+   * window `live.json` names, and each track's newest — which is where a segment
+   * written late or not at all would show first.
+   */
+  const segmentKeys = new Set<string>();
+  const livePositions = (liveBody?.["positions"] as { positions?: unknown } | undefined)?.positions;
+  for (const p of Array.isArray(livePositions) ? livePositions : []) {
+    const pos = p as { runId?: unknown; trace?: { recent?: unknown } };
+    if (typeof pos.runId !== "string" || !Array.isArray(pos.trace?.recent)) continue;
+    for (const t0 of pos.trace.recent) if (typeof t0 === "number") segmentKeys.add(traceSegmentPath(pos.runId, t0));
+  }
 
   const rows = runsBody === null ? [] : ((runsBody["runs"] as unknown[]) ?? []);
   report.runs = rows.length;
@@ -695,11 +713,18 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
         // `entries` and `scratchpad` are optional pointers: a run with no
         // scratchpad.md simply has none, and that is not a missing object.
         if (typeof key !== "string") continue;
-        await inspect(key);
+        const body = await inspect(key);
+        const trace = which === "track" ? (body?.["trace"] as { segMs?: unknown; segs?: unknown } | undefined) : undefined;
+        if (trace !== undefined && typeof trace.segMs === "number" && Array.isArray(trace.segs)) {
+          const newest = unpackSegs(trace.segs as [number, number][], trace.segMs).at(-1);
+          const runId = (row as Record<string, unknown>)["runId"];
+          if (newest !== undefined && typeof runId === "string") segmentKeys.add(traceSegmentPath(runId, newest));
+        }
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 8, Math.max(1, rows.length)) }, worker));
+  for (const key of [...segmentKeys].sort()) await inspect(key);
   report.missing.sort();
   const order = (f: Finding): string => `${f.key} ${f.at} ${f.kind}`;
   report.findings.sort((a, b) => order(a).localeCompare(order(b)));

@@ -45,6 +45,9 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+// The codec's window arithmetic, pure and import-free: the state below records
+// published trace windows in the same packed runs a track lists them in.
+import { segRunsAdd, segRunsHas, type TraceSegRuns } from "../runner/viewer/trace";
 
 // ------------------------------------------------------------------ contracts
 
@@ -122,18 +125,44 @@ export const PENDING_DELETE_CAP = 1000;
 /** What a bucket key is, which decides both its wave and its prunability. */
 export type PathKind =
   | { kind: "run"; runId: string; version: string }
+  | { kind: "trace"; runId: string; t0: number }
   | { kind: "snap"; name: string; version: string }
   | { kind: "mutable" }
   | { kind: "other" };
 
 /**
+ * A trace segment: `v1/run/<id>/trace/<t0>.json`, one closed five-minute window
+ * (`runner/viewer/trace.ts`). Under the run's prefix, so the zone's `/v1/run/`
+ * rules cover it, but not a content version: the window is the address, since a
+ * closed window never changes.
+ */
+const TRACE_SEGMENT = /^v1\/run\/([A-Za-z0-9._-]+)\/trace\/(\d+)\.json$/;
+
+/** A trace segment's bucket key. */
+export function traceSegmentPath(runId: string, t0: number): string {
+  return `${RUN_PREFIX}${runId}/trace/${t0}.json`;
+}
+
+/**
  * Classify a bucket key. Only `run` and `snap` keys are ever prunable — anything
  * unrecognized is left alone rather than guessed at, so a layout change cannot
  * cause the engine to delete objects it does not understand.
+ *
+ * A trace segment is checked first, because its key would otherwise read as a
+ * run object at a version called `trace` — one the keep window never names, so
+ * the pruner would delete every segment the pass after it was written, and the
+ * sink would spend a run's keep-window slot on it.
  */
 export function classifyPath(path: string): PathKind {
   if (path === MANIFEST_PATH || path === LIVE_PATH) return { kind: "mutable" };
+  const trace = TRACE_SEGMENT.exec(path);
+  if (trace !== null) {
+    const t0 = Number(trace[2]);
+    return Number.isSafeInteger(t0) ? { kind: "trace", runId: trace[1]!, t0 } : { kind: "other" };
+  }
   if (path.startsWith(RUN_PREFIX)) {
+    // Any other shape under a run's `trace/` is not a version of the run.
+    if (path.slice(RUN_PREFIX.length).split("/")[1] === "trace") return { kind: "other" };
     const [runId, version, ...rest] = path.slice(RUN_PREFIX.length).split("/");
     if (runId !== undefined && runId !== "" && version !== undefined && version !== "" && rest.length > 0) {
       return { kind: "run", runId, version };
@@ -164,10 +193,15 @@ export type WaveName = (typeof WAVES)[number];
  * Which wave a key belongs to. Anything unrecognized rides with the aggregates
  * — i.e. before the flip — because being written early is always safe and being
  * written after the manifest never is.
+ *
+ * A trace segment rides with its run: before the aggregates and the mutable
+ * files, so `live.json` and the manifest that reaches the run's `track.json`
+ * never name a segment that is not there yet. The track it shares the wave with
+ * is reachable only through that manifest, so their order inside it is free.
  */
 export function waveOf(path: string): WaveName {
   const c = classifyPath(path);
-  if (c.kind === "run") return "run";
+  if (c.kind === "run" || c.kind === "trace") return "run";
   if (c.kind === "mutable") return "mutable";
   return "aggregate";
 }
@@ -201,6 +235,15 @@ export interface PublishState {
   runVersions: Record<string, string[]>;
   /** Prune deletes that failed, retried best-effort on later passes. */
   pendingDeletes: string[];
+  /**
+   * Run id -> the trace windows already in the bucket, as packed runs of
+   * consecutive windows (`[firstT0, count]`). The record behind a trace
+   * segment's key, in place of an `uploaded` entry each: a character live
+   * around the clock closes 288 windows a day, and a hash per segment would
+   * grow this file by that much again every day. Segments are never pruned, so
+   * nothing here is ever removed but by throwing the file away.
+   */
+  traceSegs: Record<string, TraceSegRuns>;
   /** The generation the bucket's manifest last advertised. */
   lastGen?: string;
   /** Epoch ms of that flip. Operational breadcrumb; nothing reads it. */
@@ -208,7 +251,13 @@ export interface PublishState {
 }
 
 export function emptyState(): PublishState {
-  return { version: 1, uploaded: {}, gens: [], snapVersions: {}, runVersions: {}, pendingDeletes: [] };
+  return { version: 1, uploaded: {}, gens: [], snapVersions: {}, runVersions: {}, pendingDeletes: [], traceSegs: {} };
+}
+
+/** Whether the bucket already holds a run's segment for the window at `t0`. */
+export function hasTraceSegment(state: PublishState, runId: string, t0: number): boolean {
+  const runs = state.traceSegs[runId];
+  return runs !== undefined && segRunsHas(runs, t0);
 }
 
 /** sha256 of a body, hex. The only thing diffing compares. */
@@ -241,6 +290,19 @@ export function parseState(json: string): PublishState {
     }
   }
   state.pendingDeletes = asStringArray(raw["pendingDeletes"]);
+  const traceSegs = raw["traceSegs"];
+  if (traceSegs !== null && typeof traceSegs === "object" && !Array.isArray(traceSegs)) {
+    for (const [runId, v] of Object.entries(traceSegs as Record<string, unknown>)) {
+      if (!Array.isArray(v)) continue;
+      // A pair that does not read is a window this pass re-uploads, which is
+      // the state file's failure mode everywhere: redundant PUTs, never a gap.
+      const runs = v.filter(
+        (r): r is [number, number] =>
+          Array.isArray(r) && r.length === 2 && Number.isSafeInteger(r[0]) && Number.isSafeInteger(r[1]) && (r[1] as number) > 0,
+      );
+      if (runs.length > 0) state.traceSegs[runId] = runs.map(([t0, n]): [number, number] => [t0, n]);
+    }
+  }
   if (typeof raw["lastGen"] === "string") state.lastGen = raw["lastGen"];
   if (typeof raw["lastFlipAt"] === "number") state.lastFlipAt = raw["lastFlipAt"];
   return state;
@@ -488,7 +550,9 @@ export interface PublishReport {
  *   never rewritten. This is what makes an idle fleet cost nothing: the bodies
  *   still differ every pass, because each carries a fresh `generatedAt`
  *   envelope, and honouring that difference would re-PUT the whole corpus every
- *   minute for a timestamp nobody reads off an immutable object.
+ *   minute for a timestamp nobody reads off an immutable object. A trace
+ *   segment (`v1/run/<id>/trace/<t0>.json`) is one too, addressed by its closed
+ *   window, and its presence is read off `traceSegs` rather than `uploaded`.
  * - **The manifest** is the flip, and `gen` is the manifest's own content.
  *   Re-writing it for a manifest the bucket already advertises buys nothing and
  *   costs a PUT every pass forever, so an unchanged `gen` skips it — which is
@@ -515,8 +579,11 @@ export interface PublishReport {
  * hash.
  */
 export function needsPut(path: string, bodyHash: () => string, state: PublishState, gen: string): boolean {
-  const kind = classifyPath(path).kind;
-  if (kind === "run" || kind === "snap") return state.uploaded[path] === undefined;
+  const c = classifyPath(path);
+  // A closed window never changes, so a segment is immutable by its key too;
+  // its record is the packed window list rather than `uploaded`.
+  if (c.kind === "trace") return !hasTraceSegment(state, c.runId, c.t0);
+  if (c.kind === "run" || c.kind === "snap") return state.uploaded[path] === undefined;
   if (path === MANIFEST_PATH && gen === state.lastGen && state.uploaded[path] !== undefined) return false;
   return state.uploaded[path] !== bodyHash();
 }
@@ -578,11 +645,22 @@ function assertResult(result: SnapshotResult, seen: Set<string>): void {
 export type RunSink = (artifacts: readonly SnapshotArtifact[]) => Promise<void>;
 
 /**
+ * What the bucket already holds, as far as a renderer needs to know before it
+ * renders: which trace windows are published. A run's segments are the one
+ * artifact a renderer must not re-make every pass — a character live for a
+ * week has two thousand, each a sqlite read and an encode — so it asks here and
+ * renders only the new ones. Read-only over the engine's state.
+ */
+export interface PublishedView {
+  traceSegment(runId: string, t0: number): boolean;
+}
+
+/**
  * A pass, rendered. Given a sink it may stream its per-run artifacts out as it
  * makes them and leave them out of the result; a renderer that ignores the sink
  * simply returns everything, which is what `publish` and every test do.
  */
-export type PassRenderer = (sink: RunSink) => Promise<SnapshotResult>;
+export type PassRenderer = (sink: RunSink, published: PublishedView) => Promise<SnapshotResult>;
 
 /**
  * Publish one rendered pass.
@@ -654,6 +732,13 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
       wave === "mutable" ? 1 : concurrency,
       async (a) => {
         await store.put(a.path, a.body, { contentType: a.contentType, cacheControl: a.cacheControl });
+        const c = classifyPath(a.path);
+        if (c.kind === "trace") {
+          state.traceSegs[c.runId] = segRunsAdd(state.traceSegs[c.runId] ?? [], c.t0);
+          report.put.push(a.path);
+          report.bytes += Buffer.byteLength(a.body, "utf8");
+          return;
+        }
         state.uploaded[a.path] = hashOf(a);
         // A content-addressed key comes back whenever its content does, so a
         // key we just wrote may still be queued from a delete that failed
@@ -685,6 +770,8 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
     const artifacts = [...batch];
     for (const a of artifacts) {
       const c = classifyPath(a.path);
+      // A run's trace segments stream with it, and are no version of it.
+      if (c.kind === "trace") continue;
       // Anything else in the stream would be written before the flip decided it
       // should be — an aggregate out of its wave, or the manifest itself.
       if (c.kind !== "run") throw new Error(`publish: ${a.path} was streamed as a per-run artifact but is not one`);
@@ -697,7 +784,7 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
     streamedFailures.push(...(await uploadWave(artifacts, "run", "")));
   };
 
-  const result = await render(sink);
+  const result = await render(sink, { traceSegment: (runId, t0) => hasTraceSegment(state, runId, t0) });
   report.gen = result.gen;
   assertResult(result, seen);
   if (streamedFailures.length > 0) throw new PublishError("run", streamedFailures);

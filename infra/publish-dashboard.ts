@@ -117,8 +117,11 @@ const renderer = createRenderer({
 // reach into `needsPut`, `classifyPath`, the pruning window and
 // `publish-accept.ts` for one image. `publish-tiles.ts` is the precedent —
 // a PUT of its own, outside the transaction.
-const render: PassRenderer = async (sink) => {
-  const result = await renderer(undefined, { sink, batch: BATCH });
+//
+// `published` is the engine's record of the trace windows already in the
+// bucket, so a pass renders only the segments that closed since the last one.
+const render: PassRenderer = async (sink, published) => {
+  const result = await renderer(undefined, { sink, batch: BATCH }, published);
   await publishCard(result);
   await publishRobots();
   return result;

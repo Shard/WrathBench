@@ -1508,3 +1508,94 @@ describe("a streamed run wave", () => {
     expect(store.puts()[store.puts().length - 1]).toBe(MANIFEST_PATH);
   });
 });
+
+// --------------------------------------------------------------- trace segments
+
+describe("trace segments", () => {
+  const T0 = 1_760_000_100_000;
+  const SEG = 300_000;
+  const segKey = (run: string, t0: number): string => `v1/run/${run}/trace/${t0}.json`;
+  /** A pass that streams one run's objects and the given segments with them, as the renderer does. */
+  const withSegments = (result: SnapshotResult, segs: [string, number][]): PassRenderer => async (sink) => {
+    const run = result.artifacts.filter((a) => classifyPath(a.path).kind === "run");
+    await sink([...run, ...segs.map(([id, t0]) => json(segKey(id, t0), { t0 }))]);
+    return { ...result, artifacts: result.artifacts.filter((a) => classifyPath(a.path).kind !== "run") };
+  };
+
+  test("a segment key is its own kind, rides in the run wave, and is never a run version", () => {
+    expect(classifyPath(segKey("runA", T0))).toEqual({ kind: "trace", runId: "runA", t0: T0 });
+    expect(waveOf(segKey("runA", T0))).toBe("run");
+    // Anything else under a run's trace/ is not understood, so not prunable either.
+    expect(classifyPath("v1/run/runA/trace/latest.json").kind).toBe("other");
+    expect(classifyPath("v1/run/runA/trace/1/2.json").kind).toBe("other");
+  });
+
+  test("a segment is written once, recorded as a window rather than a hash, and the renderer is told", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    const seen: boolean[] = [];
+    const render = (segs: [string, number][]): PassRenderer => async (sink, published) => {
+      seen.push(published.traceSegment("runA", T0));
+      return await withSegments(snapshot("gen1", [{ id: "runA", ver: "v1" }]), segs)(sink, published);
+    };
+    await publishPass(render([["runA", T0], ["runA", T0 + SEG]]), store, state);
+    expect(store.puts()).toContain(segKey("runA", T0));
+    expect(state.traceSegs).toEqual({ runA: [[T0, 2]] });
+    expect(Object.keys(state.uploaded).some((k) => k.includes("/trace/"))).toBe(false);
+    // The run's keep window saw one version, not a version called "trace".
+    expect(state.runVersions).toEqual({ runA: ["v1"] });
+
+    store.reset();
+    // The next pass re-offers both and adds a third: only the third is PUT.
+    await publishPass(render([["runA", T0], ["runA", T0 + SEG], ["runA", T0 + 2 * SEG]]), store, state);
+    expect(store.puts().filter((p) => p.includes("/trace/"))).toEqual([segKey("runA", T0 + 2 * SEG)]);
+    expect(state.traceSegs).toEqual({ runA: [[T0, 3]] });
+    expect(seen).toEqual([false, true]);
+  });
+
+  test("segments are never pruned, however many passes move the run on", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    for (let i = 0; i < 6; i++) {
+      await publishPass(withSegments(snapshot(`gen${i}`, [{ id: "runA", ver: `v${i}` }]), [["runA", T0 + i * SEG]]), store, state);
+    }
+    expect(store.deletes().some((p) => p.includes("/trace/"))).toBe(false);
+    for (let i = 0; i < 6; i++) expect(store.objects.has(segKey("runA", T0 + i * SEG))).toBe(true);
+    expect(planPrune(state).some((p) => p.includes("/trace/"))).toBe(false);
+  });
+
+  test("a segment whose PUT failed is not recorded, so the pass does not flip and the next one writes it", async () => {
+    const store = new FakeStore();
+    const state = emptyState();
+    store.failPuts.add(segKey("runA", T0));
+    const pass = withSegments(snapshot("gen1", [{ id: "runA", ver: "v1" }]), [["runA", T0]]);
+    await expect(publishPass(pass, store, state)).rejects.toThrow(PublishError);
+    // Nothing that could list it was written.
+    expect(store.objects.has(LIVE_PATH)).toBe(false);
+    expect(store.objects.has(MANIFEST_PATH)).toBe(false);
+    expect(state.traceSegs).toEqual({});
+    store.failPuts.clear();
+    await publishPass(pass, store, state);
+    expect(store.objects.has(segKey("runA", T0))).toBe(true);
+    expect(state.traceSegs).toEqual({ runA: [[T0, 1]] });
+  });
+
+  test("needsPut reads a segment's presence off the window record, never off a hash", () => {
+    const state = emptyState();
+    state.traceSegs["runA"] = [[T0, 2]];
+    expect(needsPut(segKey("runA", T0 + SEG), unhashable, state, "g")).toBe(false);
+    expect(needsPut(segKey("runA", T0 + 2 * SEG), unhashable, state, "g")).toBe(true);
+    expect(needsPut(segKey("runB", T0), unhashable, state, "g")).toBe(true);
+  });
+
+  test("the window record round-trips through the state file, and a bad entry is dropped, not trusted", () => {
+    const state = emptyState();
+    state.traceSegs["runA"] = [[T0, 3]];
+    expect(parseState(JSON.stringify(state)).traceSegs).toEqual({ runA: [[T0, 3]] });
+    const raw = { ...state, traceSegs: { runA: [[T0, 3], ["x", 1], [T0, 0]], runB: "nope", runC: [] } };
+    expect(parseState(JSON.stringify(raw)).traceSegs).toEqual({ runA: [[T0, 3]] });
+    // A state written before segments existed reads as none published.
+    const { traceSegs: _omit, ...before } = state;
+    expect(parseState(JSON.stringify(before)).traceSegs).toEqual({});
+  });
+});

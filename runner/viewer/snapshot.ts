@@ -26,6 +26,11 @@
  * - `v1/snap/<ver>/<name>` and `v1/run/<id>/<ver>/…` are content-addressed and
  *   immutable: a re-render of unchanged input lands on the same keys, so a
  *   client may cache them forever.
+ * - `v1/run/<id>/trace/<t0>.json` is one closed trace window
+ *   (`runner/viewer/trace.ts`), immutable because a closed window never
+ *   changes. The run's track lists them and `live.json` names the newest; both
+ *   are written after them, and each is rendered once — the publisher passes
+ *   in which windows the bucket already holds.
  *
  * Each aggregate carries its OWN `<ver>` (operator, 2026-09-04, GitHub issue
  * #38). One hash over the whole set meant a single live run taking a turn
@@ -57,8 +62,10 @@ import type {
   ResultsResponse,
   RunDetailResponse,
   RunsResponse,
+  TraceSegment,
   TrackResponse,
 } from "./api-types";
+import { unpackSegs } from "./trace";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
@@ -73,6 +80,7 @@ import {
   projectRunDetail,
   projectRuns,
   projectTrack,
+  projectTraceSegment,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
 
@@ -230,6 +238,21 @@ export interface RunStream {
 }
 
 /**
+ * Which trace windows the bucket already holds (`infra/publish-core.ts`,
+ * `PublishedView`). A segment the bucket has is neither fetched nor rendered
+ * again; without one, every closed window of every run is — the shape of a
+ * first pass, a `--once` backfill and every test.
+ */
+export interface PublishedTrace {
+  traceSegment(runId: string, t0: number): boolean;
+}
+
+/** A trace segment's key: under the run, addressed by its window (`publish-core.ts`). */
+export function traceSegmentKey(runId: string, t0: number): string {
+  return `v1/run/${runId}/trace/${t0}.json`;
+}
+
+/**
  * Build a renderer that can run pass after pass over one viewer handle.
  *
  * The handle is the reason this exists. `createApi` keeps its trajectory
@@ -245,7 +268,9 @@ export interface RunStream {
  * are made — see `RunStream` — and then leaves them out of the result it
  * returns, which is otherwise identical.
  */
-export function createRenderer(opts: RendererOptions): (now?: number, stream?: RunStream) => Promise<SnapshotResult> {
+export function createRenderer(
+  opts: RendererOptions,
+): (now?: number, stream?: RunStream, published?: PublishedTrace) => Promise<SnapshotResult> {
   const handle =
     opts.api ??
     createApi({
@@ -312,8 +337,17 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     return scrubPathsText(await res.text());
   };
 
-  return async function render(nowArg?: number, stream?: RunStream): Promise<SnapshotResult> {
+  return async function render(nowArg?: number, stream?: RunStream, published?: PublishedTrace): Promise<SnapshotResult> {
     const now = nowArg ?? Date.now();
+    /*
+     * Every trace window a run's published track lists, by run: the ones the
+     * bucket held before this pass and the ones this pass renders into the run
+     * wave. `live.json` is written after that wave, and its `recent` windows
+     * are cut to these, so it can never name a segment the bucket does not
+     * hold — a reader that followed one would cache the 404 at the edge for a
+     * day.
+     */
+    const traceListed = new Map<string, ReadonlySet<number>>();
 
     // Everything below is projected the moment it is parsed, so no unprojected
     // body exists past this block for a later step to serialize by mistake.
@@ -381,6 +415,31 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
           // mid-pass; a row must never point at part of a set, so all are
           // dropped together.
           if (detail === null || track === null || entries === null) continue;
+          /*
+           * The run's closed trace windows the bucket does not hold yet, each its
+           * own immutable object. Only listed windows are asked for, so a 404 is
+           * the run going away mid-pass, and the run is dropped like any other
+           * half going missing: its track lists these, and must not land
+           * without them. A run with no trace lists none and costs nothing here.
+           */
+          const segments: SnapshotArtifact[] = [];
+          let segmentMissing = false;
+          for (const t0 of track.trace === undefined ? [] : unpackSegs(track.trace.segs, track.trace.segMs)) {
+            if (published?.traceSegment(row.runId, t0) === true) continue;
+            const seg = await getIfPresent<TraceSegment>(`/api/run/${id}/trace/${t0}`);
+            if (seg === null) {
+              segmentMissing = true;
+              break;
+            }
+            segments.push({
+              path: traceSegmentKey(row.runId, t0),
+              body: envelope(projectTraceSegment(seg)),
+              contentType: "application/json",
+              cacheControl: IMMUTABLE_CACHE,
+            });
+          }
+          if (segmentMissing) continue;
+          if (track.trace !== undefined) traceListed.set(row.runId, new Set(unpackSegs(track.trace.segs, track.trace.segMs)));
           // The version covers everything the row points at, so a window that
           // grew, a scratchpad rewritten, or a track that gained a field
           // (`travel`) between two identical details still lands on a new key
@@ -409,6 +468,8 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
             immutable(paths.track, envelope(track)),
             immutable(paths.entries!, envelope(entries)),
             ...(paths.scratchpad === undefined ? [] : [immutable(paths.scratchpad, envelope({ text: scratchpad }))]),
+            // In the same batch, so in the same run wave as the track listing them.
+            ...segments,
           ];
           row.snapshot = paths;
         }
@@ -463,7 +524,7 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
       },
       {
         path: "v1/live.json",
-        body: JSON.stringify({ generatedAt: now, attribution: PUBLIC_ATTRIBUTION, fleet, positions }),
+        body: JSON.stringify({ generatedAt: now, attribution: PUBLIC_ATTRIBUTION, fleet, positions: livePositions(positions, traceListed) }),
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,
       },
@@ -481,6 +542,30 @@ export function createRenderer(opts: RendererOptions): (now?: number, stream?: R
     ];
 
     return { gen, snap: paths, artifacts: out };
+  };
+}
+
+/**
+ * The projected position feed as `live.json` carries it: each position's
+ * `recent` trace windows cut to the ones its run's published track lists.
+ *
+ * The feed is read at the top of a pass and the tracks after it, and a window
+ * only ever closes, so in practice the cut removes nothing; it is what makes
+ * "`live.json` names only segments in the bucket" a property of the code rather
+ * than of the timing — a run whose track was dropped mid-pass names none. The
+ * copy is of an already-projected position, and the trace is rebuilt field by
+ * field rather than spread.
+ */
+function livePositions(positions: PositionsResponse, listed: ReadonlyMap<string, ReadonlySet<number>>): PositionsResponse {
+  return {
+    positions: positions.positions.map((p) => {
+      if (p.trace === undefined) return p;
+      const known = listed.get(p.runId);
+      return {
+        ...p,
+        trace: { segMs: p.trace.segMs, recent: p.trace.recent.filter((t0) => known?.has(t0) === true), tail: p.trace.tail },
+      };
+    }),
   };
 }
 
