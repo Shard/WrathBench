@@ -553,9 +553,10 @@ summariser would otherwise copy it wholesale into both `/entries?from=0` and
 and applied at the two places a raw record can reach a client (`summarize` and
 `TrajectoryTail.raw`). A key rule cannot catch the token where the module
 echoed it into an action reply a snippet logged, so a public handle also
-strikes the run's own token by value from every per-run body it serves
-(`runner/src/session-token.ts`); the operator's handle serves the record as
-the model saw it. `apiKeyEnv` is deliberately kept: it names an environment
+strikes it by value from every body that carries a run's model-written text —
+the run's own routes, each position's status on `/api/positions`, a
+character's attempts (`runner/src/session-token.ts`); the operator's handle
+serves the record as the model saw it. `apiKeyEnv` is deliberately kept: it names an environment
 variable, and the value of that variable is never written to the trajectory.
 
 `WRATHBENCH_VIEWER_PUBLIC=1` makes the whole handle a boundary rather than a

@@ -16,7 +16,8 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApi } from "../viewer/api";
-import { loadRunConfig } from "../src/config";
+import { loadRunConfig, newSessionToken } from "../src/config";
+import { EpisodicLog } from "../src/episodic";
 import { Trajectory, readMeta, readTrajectory } from "../src/trajectory";
 import { Collector } from "../../collector/src/collector";
 import { memorySink } from "../../collector/src/sink";
@@ -29,9 +30,12 @@ const RUN_TS = join(import.meta.dir, "..", "src", "run.ts");
 const RUN_ID = "run-homes";
 /** A run from before token hardening: its token was its own run id. */
 const OLD_ID = "run-20260820-101010";
+/** An unterminated run with a fresh position, so it is on the live map. */
+const LIVE_ID = "run-homes-live";
 
 let runsDir = "";
 let token = "";
+let liveToken = "";
 
 /** What a snippet that logged a `move_to` reply leaves in its result. */
 const echo = (t: string): string => `[log] { ok: true, action: "move_to", token: "${t}", moveId: 23 }`;
@@ -67,6 +71,15 @@ beforeAll(async () => {
   traj.writeMeta({ runId: OLD_ID, harnessVersion: "0.0.0-test", startedAt: 1, config: loadRunConfig({ runId: OLD_ID, token: OLD_ID, driver: "stub" }) });
   traj.append({ t: "snippet_result", turn: 1, name: "eval_snippet", isError: false, text: echo(OLD_ID) });
   traj.close();
+
+  // A character on the map right now, whose last status line quotes its token.
+  const live = join(runsDir, LIVE_ID);
+  liveToken = newSessionToken();
+  const lt = new Trajectory(live);
+  lt.writeMeta({ runId: LIVE_ID, harnessVersion: "0.0.0-test", startedAt: Date.now() - 60_000, config: loadRunConfig({ runId: LIVE_ID, token: liveToken, driver: "stub" }) });
+  lt.recordState(LIVE_ID, { level: 3, xp: 120, map: 0, x: -6240, y: 330, z: 383, turn: 4 });
+  lt.close();
+  new EpisodicLog(join(live, "episodic.jsonl")).append({ turn: 4, level: 3, text: `parked, session ${liveToken} still held` });
 }, 30_000);
 
 describe("where a run's facts live", () => {
@@ -122,6 +135,19 @@ describe("the readers get the whole run", () => {
     expect((JSON.parse(old) as { entries: { text?: string }[] }).entries.at(-1)!.text).toBe(echo(OLD_ID));
   });
 
+  test("the live map's status text — what live.json publishes — has the character's token struck; the operator's map keeps it", async () => {
+    const statusOf = async (publicMode: boolean): Promise<{ body: string; text: string | undefined }> => {
+      const api = createApi({ runsDir, tilesDir: join(runsDir, "minimap"), moduleUrl: "http://127.0.0.1:1", publicMode });
+      const body = await get(api, "/api/positions");
+      const p = (JSON.parse(body) as { positions: { runId: string; status?: { text: string } | null }[] }).positions;
+      return { body, text: p.find((x) => x.runId === LIVE_ID)?.status?.text };
+    };
+    const pub = await statusOf(true);
+    expect(pub.text).toBe("parked, session [redacted] still held");
+    expect(pub.body.includes(liveToken)).toBe(false);
+    expect((await statusOf(false)).text).toBe(`parked, session ${liveToken} still held`);
+  });
+
   test("the collector stores every line, and no table holds the token", async () => {
     const sink = memorySink();
     const cfg = readConfig({ runsDir, dataDir: runsDir, stateDb: ":memory:" });
@@ -131,7 +157,14 @@ describe("the readers get the whole run", () => {
     expect(rows("turns").length + rows("events").length).toBe(readTrajectory(join(runsDir, RUN_ID)).length);
     expect(rows("runs")).toHaveLength(1);
     expect(rows("run_totals")).toHaveLength(1);
-    for (const [table, all] of sink.tables) expect({ table, leaked: JSON.stringify(all).includes(token) }).toEqual({ table, leaked: false });
+    for (const [table, all] of sink.tables) {
+      const text = JSON.stringify(all);
+      expect({ table, leaked: text.includes(token) || text.includes(liveToken) }).toEqual({ table, leaked: false });
+    }
+    // The live run's status line, struck and stored as the entry it is.
+    const status = ((sink.tables.get("episodic") ?? []) as Record<string, unknown>[]).find((r) => r["run_id"] === LIVE_ID);
+    expect(status).toMatchObject({ kind: "entry", turn: 4 });
+    expect(String(status?.["raw"])).toContain("session [redacted] still held");
     const echoed = rows("turns").find((r) => r["kind"] === "snippet_result" && String(r["raw"]).includes("move_to"));
     expect((JSON.parse(String(echoed?.["raw"])) as { text: string }).text).toBe(echo("[redacted]"));
     // The old run keeps its id wherever it is written.

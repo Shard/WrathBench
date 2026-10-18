@@ -8,8 +8,10 @@
  * reply puts it in that snippet's result, and the result is recorded as the
  * model saw it. That record stays as it is — it is what the model read. The
  * copies are what this is for: the collector strikes it from every line it
- * stores, and the viewer from every per-run body it serves in public mode, so
- * neither the derived store nor the public site holds one.
+ * stores, and the viewer in public mode from every body that carries a run's
+ * model-written text (the run's own routes, the live map's status lines, a
+ * character's attempts), so neither the derived store nor the public site
+ * holds one.
  *
  * On its own the token is not a capability (the module also wants the run's
  * lease secret or the operator's bearer, `module/src/WbManager.cpp`), but it is
@@ -45,4 +47,11 @@ export function strikableSessionToken(dir: string, runId: string): string | null
  */
 export function strikeSessionToken(text: string, token: string | null): string {
   return token === null ? text : text.replaceAll(token, REDACTED);
+}
+
+/** `text` with each of several runs' tokens struck: a body that is about more than one run. */
+export function strikeSessionTokens(text: string, tokens: readonly string[]): string {
+  let out = text;
+  for (const t of tokens) out = out.replaceAll(t, REDACTED);
+  return out;
 }

@@ -86,7 +86,7 @@ import {
 import { NEARBY_SPAN_MS } from "./nearby";
 import { readNearbyWindow } from "./nearby-ring";
 import { scrubPathsText } from "./scrub-paths";
-import { strikableSessionToken, strikeSessionToken } from "../src/session-token";
+import { strikableSessionToken, strikeSessionToken, strikeSessionTokens } from "../src/session-token";
 import { SEG_MS } from "./trace";
 import { readTraceIndex, readTraceSegment, traceSegsMemo } from "./trace-db";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
@@ -655,6 +655,23 @@ export function createApi(opts: ApiOptions): ApiHandle {
    */
   const pub = <T>(body: T, project: (b: T) => unknown): Response =>
     json(publicMode ? project(body) : body);
+  /**
+   * A projected body with the session token of every run it is about struck
+   * by value (`runner/src/session-token.ts`), for the public bodies that carry
+   * model-written text: the module echoes the token in its action replies, so
+   * a model can put it in anything it writes. The per-run routes do the same
+   * for their one run below. Read fresh from each run's meta.json, so a run
+   * that started a second ago is covered too.
+   */
+  const struck = (body: unknown, runIds: readonly string[]): unknown => {
+    const tokens: string[] = [];
+    for (const id of runIds) {
+      const d = runDir(runsDir, id);
+      const t = d === null ? null : strikableSessionToken(d, id);
+      if (t !== null) tokens.push(t);
+    }
+    return tokens.length === 0 ? body : JSON.parse(strikeSessionTokens(JSON.stringify(body), tokens));
+  };
   const dashboardDir = opts.dashboardDir;
   /** Per-handle, so a test's temp dir never inherits another's build id. */
   const buildCache: { mtime: number; id: string | null } = { mtime: -1, id: null };
@@ -1166,7 +1183,11 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const body: RunsResponse = { runs: await listWithTotals() };
       return pub(body, projectRuns);
     }
-    if (path === "/api/positions") return pub({ positions: await positionsFromStore(store, runsDir) }, projectPositions);
+    if (path === "/api/positions") {
+      const positions = await positionsFromStore(store, runsDir);
+      // A position's status is the character's last `log_status` line, as written.
+      return pub({ positions }, (b) => struck(projectPositions(b), positions.map((p) => p.runId)));
+    }
     if (path === "/api/episodes") return await episodesResponse();
     /* The model-facing tool list, off `TOOLS` at request time (`tools.ts`); harness text only. */
     if (path === "/api/tools") return pub(toolsResponse(), projectTools);
@@ -1313,7 +1334,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // clock skew across a relaunch would otherwise move a sample past one.
       states.sort((x, y) => x.attempt - y.attempt || x.ts - y.ts);
       const body: CharacterResponse = { character: view, states };
-      return pub(body, projectCharacterResponse);
+      return pub(body, (b) => struck(projectCharacterResponse(b), view.runs.map((r) => r.runId)));
     }
 
     const m = /^\/api\/run\/([^/]+)(\/.*)?$/.exec(path);

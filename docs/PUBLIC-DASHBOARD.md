@@ -381,11 +381,12 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   and no live tail publicly: the window advances with the detail poll.
 - **The run's session token, never**: the module names it in its action
   replies, so a snippet that logs one quotes it in the model-authored text
-  above. A public handle strikes the run's own token from every per-run body
-  it serves — detail, entries, track and scratchpad
-  (`runner/src/session-token.ts`) — after projection, so it is struck
-  whichever field carries it. A token too short to be a secret (a run from
-  before token hardening used its run id) is left alone.
+  above. A public handle strikes it by value, after projection, from every
+  body that carries a run's model-written text: the run's own detail, entries,
+  track and scratchpad, each position's episodic status on the live map
+  (`live.json`), and a character's attempts (`runner/src/session-token.ts`).
+  The aggregates carry no model-written text. A token too short to be a
+  secret (a run from before token hardening used its run id) is left alone.
 - **Paths**: a container-internal prefix is made repo-relative — every
   exported projector's output crosses `scrubPathsValue`
   (`runner/viewer/scrub-paths.ts`); the model's text is otherwise as written, and every other absolute path stays "Never".
