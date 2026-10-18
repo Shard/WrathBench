@@ -47,7 +47,7 @@
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { api, type AgentPosition, type TrackResponse } from "../api/client";
+import { SNAPSHOT_MODE, api, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "../components/UnitFrame";
@@ -66,6 +66,14 @@ import {
   unitFlags,
 } from "../lib/unitframe";
 import { NO_TILE_BASE, tileSrc } from "../lib/tiles";
+import {
+  type NearbyDot,
+  LABEL_RANK,
+  NEARBY_FETCH_SPAN_MS,
+  createNearbyStore,
+  cullLabels,
+  nearbyFrameDue,
+} from "../lib/nearbyplayer";
 import { type LodLayer, ART_LAYER, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
 import {
@@ -123,6 +131,11 @@ import {
   mapChips,
   mapName,
   mapParam,
+  NEARBY_DOT_R,
+  NEARBY_HIT_R,
+  nearbyColor,
+  nearbyNamesShown,
+  nearbyShown,
   pinchView,
   pipName,
   positionAgeMs,
@@ -212,7 +225,17 @@ const DEFAULT_THEME = {
   fg: "#d8dee6",
   bg: "#14161a",
   line: "#2b3038",
+  // The nearby layer's classes (`nearbyColor`) and its quest marks.
+  err: "#f7768e",
+  ok: "#9ece6a",
+  accent: "#7aa2f7",
+  warn: "#e0af68",
 };
+/** A nearby unit's label: smaller than a pip's, in the same chip. */
+const NEARBY_FONT = "10px ui-monospace, monospace";
+const NEARBY_MARK_FONT = "700 11px ui-monospace, monospace";
+/** At most this many unhovered names on screen at once, after overlap culling. */
+const NEARBY_LABELS_MAX = 60;
 /**
  * The one colour the map states rather than derives. A failed move is not a
  * run's identity, it is a fact about the move, so it does not take the run's
@@ -283,6 +306,8 @@ export default function MapPage() {
    */
   const [playhead, setPlayhead] = createSignal<number | null>(null);
   const [traceRev, setTraceRev] = createSignal(0);
+  /* The nearby store's change count, for the sidebar's count and target name; written only by the frame loop. */
+  const [nearbyRev, setNearbyRev] = createSignal(0);
 
   /*
    * The trace: one store for whichever mode the page is in (the live feed's
@@ -298,6 +323,20 @@ export default function MapPage() {
       needsDraw = true;
     },
   });
+  /*
+   * The units around each live character (`lib/nearbyplayer.ts`): each run's
+   * newest window, sampled at the same playhead the pips are placed at. Live
+   * and private only — a replay has no units, and nothing publishes them yet.
+   */
+  let nearbyChanged = false;
+  const nearbyStore = createNearbyStore({
+    onChange: () => {
+      nearbyChanged = true;
+      needsDraw = true;
+    },
+  });
+  /** When each run's window was last asked for (`performance.now()`), so a run is asked once a poll. */
+  const nearbyAsked = new Map<string, number>();
   const cadence = liveCadence(api.feedCadence, POLL_MS);
   let liveClock = createLiveClock(cadence);
   /** Set while a replay plays: where and when it started, at what speed. */
@@ -323,6 +362,8 @@ export default function MapPage() {
               ingestPositions(store, p.positions);
               if (arrival !== null) liveClock.arrive(arrival);
               queueMicrotask(pumpTraces);
+              nearbyStore.retain(p.positions.filter((x) => x.nearby === true).map((x) => x.runId));
+              queueMicrotask(() => pumpNearby(true));
             }
             return {
               positions: p.positions,
@@ -470,6 +511,10 @@ export default function MapPage() {
       fg: get("--fg", DEFAULT_THEME.fg),
       bg: get("--bg", DEFAULT_THEME.bg),
       line: get("--line", DEFAULT_THEME.line),
+      err: get("--err", DEFAULT_THEME.err),
+      ok: get("--ok", DEFAULT_THEME.ok),
+      accent: get("--accent", DEFAULT_THEME.accent),
+      warn: get("--warn", DEFAULT_THEME.warn),
     };
     INTENT_FAIL = get("--err", "#f7768e");
     REST_TINT = get("--xp", "#7b3fd6");
@@ -593,6 +638,36 @@ export default function MapPage() {
       return;
     }
     for (const pip of onMap()) store.pump(pip.runId, t, fetchSegment, LIVE_REACH);
+  }
+
+  /**
+   * Ask for the nearby windows the map can show: live, private, zoomed in to
+   * the layer's scale, and only for runs the feed flagged `nearby` whose pip
+   * is on (or near) the screen — typically one to three. Once a poll per run
+   * (`onPoll`), and from the 1 s pump only for a run whose window cannot
+   * answer the playhead (never asked, or left to age while zoomed out), so
+   * zooming in fills the layer without waiting for the next poll.
+   */
+  function pumpNearby(onPoll: boolean): void {
+    if (SNAPSHOT_MODE || track() !== undefined || !nearbyShown(view.scale)) return;
+    const now = performance.now();
+    const t = playheadAt(now);
+    for (const pip of onMap()) {
+      if (pip.data.nearby !== true) continue;
+      const s = project(view, pip.x, pip.y);
+      if (s.sx < -W / 2 || s.sx > W * 1.5 || s.sy < -H / 2 || s.sy > H * 1.5) continue;
+      const last = nearbyAsked.get(pip.runId);
+      const answers = t !== null && nearbyStore.countAt(pip.runId, t) !== null;
+      if (last !== undefined && (now - last < POLL_MS / 2 || (!onPoll && answers))) continue;
+      nearbyAsked.set(pip.runId, now);
+      const id = pip.runId;
+      api.nearby(id, NEARBY_FETCH_SPAN_MS).then(
+        (w) => {
+          if (track() === undefined) nearbyStore.set(id, w);
+        },
+        (e: unknown) => logError("map nearby", e),
+      );
+    }
   }
 
   /** A cached tile, looked at without asking for it or touching its place in the LRU. */
@@ -1018,6 +1093,140 @@ export default function MapPage() {
     ctx.stroke();
   }
 
+  /* The nearby layer as last drawn, in screen pixels, for the hover's hit test; and the unit under the pointer. */
+  let nearbyDrawn: { dot: NearbyDot; sx: number; sy: number }[] = [];
+  let hoveredId: string | null = null;
+  /** Label widths by text, so a city of names is measured once. */
+  const labelWidths = new Map<string, number>();
+  const labelWidth = (ctx: CanvasRenderingContext2D, text: string): number => {
+    let w = labelWidths.get(text);
+    if (w === undefined) {
+      w = ctx.measureText(text).width;
+      if (labelWidths.size > 2000) labelWidths.clear();
+      labelWidths.set(text, w);
+    }
+    return w;
+  };
+
+  /**
+   * The units around the live characters on `map` at playhead `t`, under the
+   * pips: one dot per unit in its class's colour (`nearbyColor`; the dead as a
+   * ring), one path per class; the selected character's own target ringed;
+   * quest marks and names once zoomed in far enough, culled so they overlap
+   * neither each other nor a character's puck and name. The hovered unit's
+   * name is `drawNearbyHover`'s, over the pips.
+   */
+  function drawNearby(ctx: CanvasRenderingContext2D, map: number, t: number, sel: AgentPosition | null, list: Pip[]): void {
+    const dots = nearbyStore.dotsAt(t, map);
+    const drawn: { dot: NearbyDot; sx: number; sy: number }[] = [];
+    for (const dot of dots) {
+      const p = project(view, dot.x, dot.y);
+      if (p.sx < -20 || p.sy < -20 || p.sx > W + 20 || p.sy > H + 20) continue;
+      drawn.push({ dot, sx: p.sx, sy: p.sy });
+    }
+    nearbyDrawn = drawn;
+    if (drawn.length === 0) return;
+    const r = NEARBY_DOT_R;
+    ctx.save();
+    for (const cls of ["other", "service", "player", "engaged"] as const) {
+      ctx.beginPath();
+      let any = false;
+      for (const d of drawn) {
+        if (d.dot.cls !== cls) continue;
+        ctx.moveTo(d.sx + r, d.sy);
+        ctx.arc(d.sx, d.sy, r, 0, Math.PI * 2);
+        any = true;
+      }
+      if (!any) continue;
+      ctx.fillStyle = nearbyColor(cls, theme);
+      ctx.fill();
+    }
+    ctx.beginPath();
+    for (const d of drawn) {
+      if (d.dot.cls !== "dead") continue;
+      ctx.moveTo(d.sx + r, d.sy);
+      ctx.arc(d.sx, d.sy, r, 0, Math.PI * 2);
+    }
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = theme.dim;
+    ctx.stroke();
+    // The selected character's own target, ringed as a selected pip is.
+    const target = sel === null ? null : (nearbyStore.targetAt(sel.runId, t)?.id ?? null);
+    const ringed = target === null ? undefined : drawn.find((d) => d.dot.id === target);
+    if (ringed !== undefined) {
+      ctx.beginPath();
+      ctx.arc(ringed.sx, ringed.sy, r + 3, 0, Math.PI * 2);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = theme.fg;
+      ctx.stroke();
+    }
+    const names = nearbyNamesShown(view.scale);
+    if (names) {
+      ctx.font = NEARBY_MARK_FONT;
+      ctx.textBaseline = "alphabetic";
+      ctx.textAlign = "center";
+      ctx.fillStyle = theme.warn;
+      for (const d of drawn) if (d.dot.quest !== null) ctx.fillText(d.dot.quest, d.sx, d.sy - r - 2);
+      ctx.textAlign = "left";
+    }
+    if (!names) {
+      ctx.restore();
+      return;
+    }
+    // What the pips will draw over the layer: each puck and its name chip.
+    ctx.font = "12px ui-monospace, monospace";
+    const taken = list.map((pip) => {
+      const p = project(view, pip.x, pip.y);
+      return { x: p.sx - PUCK_R_SEL, y: p.sy - PUCK_R_SEL, w: PUCK_R_SEL * 2 + 4 + ctx.measureText(pipName(pip.data)).width + 6, h: PUCK_R_SEL * 2 };
+    });
+    // Names: every one at close zoom but the hovered one, culled by rank.
+    ctx.font = NEARBY_FONT;
+    ctx.textBaseline = "middle";
+    const labelled = drawn
+      .filter((d) => d.dot.id !== hoveredId && d.dot.name !== null && d.dot.name !== "")
+      .map((d) => {
+        const text = d.dot.name!;
+        const rank = d.dot.id === target ? -1 : LABEL_RANK[d.dot.cls];
+        return { x: d.sx + r + 3, y: d.sy - 7, w: labelWidth(ctx, text) + 6, h: 14, rank, text };
+      });
+    for (const i of cullLabels(labelled, NEARBY_LABELS_MAX, taken)) {
+      const b = labelled[i]!;
+      ctx.globalAlpha = 0.75;
+      ctx.fillStyle = theme.bg;
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = theme.fg;
+      ctx.fillText(b.text, b.x + 3, b.y + 7.5);
+    }
+    ctx.restore();
+  }
+
+  /** The hovered unit's name, and its subname and level where known, over everything else. */
+  function drawNearbyHover(ctx: CanvasRenderingContext2D): void {
+    if (hoveredId === null) return;
+    const d = nearbyDrawn.find((x) => x.dot.id === hoveredId);
+    if (d === undefined || d.dot.name === null) return;
+    const text = `${d.dot.name}${d.dot.sub === null ? "" : ` <${d.dot.sub}>`}${d.dot.level === null ? "" : ` ${d.dot.level}`}`;
+    ctx.save();
+    ctx.font = NEARBY_FONT;
+    ctx.textBaseline = "middle";
+    const x = d.sx + NEARBY_DOT_R + 3;
+    const y = d.sy - 7;
+    const w = labelWidth(ctx, text) + 6;
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = theme.bg;
+    ctx.fillRect(x, y, w, 14);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = theme.fg;
+    ctx.fillText(text, x + 3, y + 7.5);
+    ctx.beginPath();
+    ctx.arc(d.sx, d.sy, NEARBY_DOT_R + 2, 0, Math.PI * 2);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = theme.fg;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawPips(ctx: CanvasRenderingContext2D, list: Pip[], sel: AgentPosition | null, cursorNow: number | null): void {
     const now = Date.now();
     // Staleness is against the feed's own clock: the cursor in a replay, where
@@ -1117,6 +1326,7 @@ export default function MapPage() {
     let lastCursorTick = -Infinity;
     let lastPlayheadTick = -Infinity;
     let lastDraw = -Infinity;
+    let lastNearbyDraw = -Infinity;
     let trailsShown = false;
     /*
      * The frame's playhead out to Solid, throttled (`CURSOR_TICK_MS`,
@@ -1128,6 +1338,10 @@ export default function MapPage() {
       if (traceChanged) {
         traceChanged = false;
         setTraceRev((n) => n + 1);
+      }
+      if (nearbyChanged) {
+        nearbyChanged = false;
+        setNearbyRev((n) => n + 1);
       }
       if (t === null) return;
       if (track() === undefined) {
@@ -1163,7 +1377,11 @@ export default function MapPage() {
         // still, which wants a frame now and then, not sixty a second.
         const resting = list.some((pip) => pip.data.reflecting === true);
         const fading = trailsShown && p - lastDraw >= TRAIL_FRAME_MS;
-        if (needsDraw || moving || fading || (resting && !reduceMotion)) {
+        // The units nearly always move, so they redraw on their own, slower
+        // clock (`nearbyFrameDue`) rather than holding the map at frame rate.
+        const nearbyOn = track() === undefined && t !== null && nearbyShown(view.scale) && nearbyStore.size() > 0;
+        const nearbyDue = nearbyOn && nearbyFrameDue(lastNearbyDraw, p);
+        if (needsDraw || moving || fading || nearbyDue || (resting && !reduceMotion)) {
           needsDraw = false;
           lastDraw = p;
           ctx.clearRect(0, 0, W, H);
@@ -1184,13 +1402,21 @@ export default function MapPage() {
           trailsShown = t !== null && traceDrives() && drawTrails(ctx, list, map, t);
           const intents = drawIntents(ctx, list, map, t);
           if (intents || resting) drawIntentLegend(ctx, intents, resting);
+          if (nearbyOn) {
+            lastNearbyDraw = p;
+            drawNearby(ctx, map, t, selected(), list);
+          } else nearbyDrawn = [];
           drawPips(ctx, list, selected(), t);
+          if (nearbyOn) drawNearbyHover(ctx);
         }
       }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
-    const pumpTimer = setInterval(pumpTraces, PUMP_MS);
+    const pumpTimer = setInterval(() => {
+      pumpTraces();
+      pumpNearby(false);
+    }, PUMP_MS);
 
     /*
      * The transport's keyboard, on the document so it works with the canvas
@@ -1267,6 +1493,9 @@ export default function MapPage() {
     // The trace goes with the rest: neither mode's segments, clock or anchor
     // means anything in the other.
     store.retain([]);
+    nearbyStore.retain([]);
+    nearbyAsked.clear();
+    hoveredId = null;
     liveClock = createLiveClock(cadence);
     replayAnchor = null;
     setPlayhead(null);
@@ -1621,8 +1850,31 @@ export default function MapPage() {
       drag = null;
     }
   };
+  /** A mouse over the map with no button down: name the unit under it. */
+  const hover = (e: PointerEvent): void => {
+    if (e.pointerType === "touch") return;
+    const r = canvas.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    let best: string | null = null;
+    let bestD = NEARBY_HIT_R * NEARBY_HIT_R;
+    for (const d of nearbyDrawn) {
+      const dd = (d.sx - x) * (d.sx - x) + (d.sy - y) * (d.sy - y);
+      if (dd <= bestD) {
+        bestD = dd;
+        best = d.dot.id;
+      }
+    }
+    if (best !== hoveredId) {
+      hoveredId = best;
+      needsDraw = true;
+    }
+  };
   const onPointerMove = (e: PointerEvent): void => {
-    if (!fingers.has(e.pointerId)) return;
+    if (!fingers.has(e.pointerId)) {
+      hover(e);
+      return;
+    }
     fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinch !== null) {
       const a = fingers.get(pinch.ids[0]);
@@ -1714,9 +1966,18 @@ export default function MapPage() {
     const s = selectedTrace();
     return s === null || s.unit === null ? null : castReading(s.unit.state.cast, s.unit.castFrom, s.t);
   });
+  /** The selected run's nearby layer at the playhead: how many units it has in view, and its own target among them. */
+  const nearbyHere = createMemo(() => {
+    nearbyRev();
+    const p = selected();
+    const t = sideAt();
+    if (p === null || t === null || track() !== undefined) return null;
+    const count = nearbyStore.countAt(p.runId, t);
+    return count === null ? null : { count, target: nearbyStore.targetAt(p.runId, t) };
+  });
   const target = createMemo(() => {
     const u = selectedTrace()?.unit;
-    return u === null || u === undefined ? null : targetReading(u.state.target);
+    return u === null || u === undefined ? null : targetReading(u.state.target, nearbyHere()?.target?.name ?? null);
   });
 
   // The URL is written and the pin follows from it (the effect above), so
@@ -1736,6 +1997,11 @@ export default function MapPage() {
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={(e) => endPointer(e.pointerId)}
+          onPointerLeave={() => {
+            if (hoveredId === null) return;
+            hoveredId = null;
+            needsDraw = true;
+          }}
           onWheel={onWheel}
         />
         <div class="map-chips">
@@ -1844,6 +2110,19 @@ export default function MapPage() {
               <div class="v mono">
                 {(selectedTrace()?.pose?.x ?? p().x).toFixed(1)}, {(selectedTrace()?.pose?.y ?? p().y).toFixed(1)}
               </div>
+              <Show when={nearbyHere()}>
+                {(n) => (
+                  <>
+                    <div
+                      class="k"
+                      title="units in view: red engaged with the character, green service NPC, blue another player, grey other, ring dead"
+                    >
+                      nearby
+                    </div>
+                    <div class="v mono">{n().count}</div>
+                  </>
+                )}
+              </Show>
               <div class="k">last update</div>
               {/*
                 The pips' own arithmetic (`positionAgeMs`), not the browser's:

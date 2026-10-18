@@ -55,6 +55,16 @@ export const POISON = {
   /** Smoke output embeds paths; the config-rejection error is an errno string. */
   preflightTail: "poison-smoke-tail: /home/operator/wrathbench/infra/smoke/a.ts",
   configRejectedError: "poison ENOENT open '/home/operator/poison/fleet.json'",
+  /**
+   * The live run's nearby ring (`runner/src/nearby-row.ts`): another player and
+   * their pet, both named; a creature's subname; a player's guid on a
+   * creature's target; a charmed creature's name. All withheld by `projectNearby`.
+   */
+  nearbyPlayerName: "Poisonplayer",
+  nearbyPetName: "Poisonpet of another",
+  nearbySubname: "poison-subname Weapon Merchant",
+  nearbyPlayerGuid: "771177117711",
+  nearbyCharmedName: "Poisoncharmed Kobold",
 } as const;
 
 /** The runner generates the character name, so it is not game text: it ships. */
@@ -69,6 +79,8 @@ export const SURVIVES = {
   snippetCode: "await sdk.moveTo(1, 2, 3);",
   responseText: "I will head for the kobold camp next.",
   scratchpad: "plan: talk to Marshal McBride, then Kobold Camp Cleanup",
+  /** A plain creature in the live run's nearby ring: an NPC name, published. */
+  nearbyCreatureName: "Invented Kobold Vermin",
 } as const;
 
 /**
@@ -213,11 +225,46 @@ function writeRun(runs: string, runId: string, opts: { terminated: boolean; stat
   }
 }
 
+/** A creature guid (high 0xF130, entry in bits 24..47) or a pet guid (0xF140). */
+const unitGuid = (entry: number, low: number, high = 0xf130): string => ((BigInt(high) << 48n) | (BigInt(entry) << 24n) | BigInt(low)).toString(10);
+
+/**
+ * The live run's nearby ring, stamped a few seconds before now so the reader's
+ * age gate and a 60 s span both reach it: a key with a plain creature (which
+ * ships), another player, that player's pet, a charmed creature and a vendor
+ * with a subname, then a creature that chases the other player.
+ */
+function writeNearbyRing(dir: string): void {
+  const now = Date.now();
+  const ts = now - 5_000;
+  const t0 = Math.floor(ts / 60_000) * 60_000;
+  const m = (x: number) => ({ k: "pos", t: ts - 100, p: [x, 380, 385, 0] });
+  const rows = [
+    {
+      ts,
+      kind: "key",
+      self: { guid: "7", map: 0, target: null, down: false },
+      units: [
+        { id: unitGuid(6, 1), ty: "creature", s: { entry: 6, name: SURVIVES.nearbyCreatureName, level: 2, hp: 100 }, m: m(-6230) },
+        { id: POISON.nearbyPlayerGuid, ty: "player", s: { name: POISON.nearbyPlayerName, level: 9 }, m: m(-6231) },
+        { id: unitGuid(416, 2, 0xf140), ty: "pet", s: { entry: 416, name: POISON.nearbyPetName, ow: POISON.nearbyPlayerGuid }, m: m(-6232) },
+        { id: unitGuid(40, 3), ty: "creature", s: { entry: 40, name: POISON.nearbyCharmedName, ch: POISON.nearbyPlayerGuid }, m: m(-6233) },
+        { id: unitGuid(1250, 4), ty: "creature", s: { entry: 1250, name: "Invented Vendor", sub: POISON.nearbySubname, nf: 0x80 }, m: m(-6234) },
+      ],
+    },
+    { ts: ts + 1_000, kind: "st", id: unitGuid(6, 1), s: { tg: POISON.nearbyPlayerGuid, tgs: false } },
+    { ts: ts + 2_000, kind: "tick" },
+  ];
+  mkdirSync(join(dir, "nearby"), { recursive: true });
+  writeFileSync(join(dir, "nearby", `${t0}.jsonl`), rows.map((r) => `${JSON.stringify(r)}\n`).join(""));
+}
+
 /** A temp runs directory with one dead run, one live run, and a poisoned fleet state. */
 export function poisonedRunsDir(): string {
   const runs = mkdtempSync(join(tmpdir(), "poisoned-runs-"));
   writeRun(runs, DEAD_RUN, { terminated: true, stateTs: 1500, old: true });
   writeRun(runs, LIVE_RUN, { terminated: false, stateTs: Date.now(), old: false });
+  writeNearbyRing(join(runs, LIVE_RUN));
   writeFileSync(
     join(runs, "fleet-state.json"),
     JSON.stringify({

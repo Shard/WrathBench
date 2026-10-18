@@ -50,11 +50,13 @@ import type {
   SnapshotEnvelope,
   TraceIndexResponse,
   TraceSegment,
+  NearbyWindow,
   TrackResponse,
 } from "@viewer/api-types";
 import type { PublicFleetResponse } from "@viewer/public-projection";
 import { characterViewOf } from "@viewer/character";
 import { SEG_MS, packSegs, traceSegmentKey } from "@viewer/trace";
+import { emptyNearbyWindow } from "@viewer/nearby";
 import { ApiError, getJson, sweepExpired, traceWindow, type Client } from "./client";
 import { fmtAge } from "../lib/format";
 
@@ -452,6 +454,12 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
         now: l.generatedAt,
       };
     },
+    /*
+     * Nothing publishes nearby units yet, so there is nothing to fetch and no
+     * request is made: an empty window, which the map draws as no units. The
+     * public feed never flags a position `nearby`, so the map does not ask.
+     */
+    nearby: (id: string): Promise<NearbyWindow> => Promise.resolve(emptyNearbyWindow(id, Date.now())),
     feedCadence: { renderMs: SNAPSHOT_RENDER_MS, cacheMs: ttl + SNAPSHOT_EDGE_TTL_MS },
     /*
      * A character is assembled here rather than published as an artifact of its

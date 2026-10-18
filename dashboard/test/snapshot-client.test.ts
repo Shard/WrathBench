@@ -579,6 +579,14 @@ describe("per-run artifacts", () => {
     expect(b.urls).toEqual([`${BASE}/v1/run/r%201/trace/${t0}.json`]);
   });
 
+  test("nearby units are not published yet: an empty window, and nothing asked of the bucket", async () => {
+    const b = bucket({});
+    const c = createSnapshotClient(BASE, { fetch: b.fetch });
+    const w = await c.nearby("r1", 60_000);
+    expect(w).toMatchObject({ v: 1, run: "r1", ids: [], ev: [] });
+    expect(b.urls).toEqual([]);
+  });
+
   test("the fast lane says how often it lands and how long its caches hold it", () => {
     const c = createSnapshotClient(BASE, { ttlMs: 30_000 });
     expect(c.feedCadence).toEqual({ renderMs: SNAPSHOT_RENDER_MS, cacheMs: 30_000 + SNAPSHOT_EDGE_TTL_MS });

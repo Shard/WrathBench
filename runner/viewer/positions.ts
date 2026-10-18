@@ -29,6 +29,7 @@ import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./a
 import { runRowOf, type RunStore } from "./clickhouse";
 import { listRuns, readMoves } from "./runs";
 import { readPositionTrace } from "./trace-db";
+import { nearbyFresh } from "./nearby-ring";
 
 /**
  * How stale a position may be and still count as an agent on the map. Longer
@@ -278,6 +279,9 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
     // Where it has been, second by second: the newest closed windows and the
     // tail, so the map can play the last minutes back rather than jump.
     ...(trace === null ? {} : { trace }),
+    // The units around it are being recorded (`nearby-ring.ts`): the map's
+    // cue to ask `/nearby`, so it never asks a run that has none.
+    ...(nearbyFresh(runsDir, run.runId, now) ? { nearby: true as const } : {}),
   };
 }
 

@@ -72,6 +72,11 @@ const JSON_ROUTES = [
   // segment crosses `projectTraceSegment` (runner/test/viewer-trace.test.ts).
   `/api/run/${DEAD_RUN}/trace`,
   `/api/run/${LIVE_RUN}/trace`,
+  // The nearby window answers for every run, one with no ring included; the
+  // live run's ring holds another player, their pet and a charmed creature,
+  // and crosses `projectNearby` (runner/test/viewer-nearby.test.ts).
+  `/api/run/${DEAD_RUN}/nearby`,
+  `/api/run/${LIVE_RUN}/nearby?span=60000`,
   // Universal since: a character for a run with no chain at all, and
   // one for a run that has one — both cross the same projector.
   `/api/character/${DEAD_RUN}`,
@@ -116,6 +121,10 @@ describe("public mode is projected everywhere", () => {
       expect(fleet).toContain(String(POISON_PID));
       const runsBody = await (await get(handle, "/api/runs")).text();
       expect(runsBody).toContain(POISON.apiHost);
+      const nearby = await (await get(handle, `/api/run/${LIVE_RUN}/nearby?span=60000`)).text();
+      for (const v of [POISON.nearbyPlayerName, POISON.nearbyPetName, POISON.nearbySubname, POISON.nearbyPlayerGuid, POISON.nearbyCharmedName]) {
+        expect(nearby).toContain(v);
+      }
     } finally {
       rmSync(runs, { recursive: true, force: true });
     }
@@ -138,6 +147,9 @@ describe("public mode is projected everywhere", () => {
       expect(entries).toContain(SURVIVES.npcName);
       expect(entries).toContain(SURVIVES.snippetCode);
       expect(entries).toContain(SURVIVES.responseText);
+      // An NPC's name around the live character: names and ids ship.
+      const nearby = await (await get(handle, `/api/run/${LIVE_RUN}/nearby?span=60000`)).text();
+      expect(nearby).toContain(SURVIVES.nearbyCreatureName);
       // The scratchpad is the model's own notes and is served in public mode.
       const scratchpad = await (await get(handle, `/api/run/${DEAD_RUN}/scratchpad`)).text();
       expect(scratchpad).toContain(SURVIVES.scratchpad);

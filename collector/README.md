@@ -51,11 +51,18 @@ Each source has its own resume rule, because each changes differently:
 Those live in `data/collector.sqlite`, which is the only thing this service
 owns on disk and is as disposable as the store itself.
 
-Not tailed, on purpose: the trace (`run.sqlite` `trace` and `trace.jsonl`,
-`runner/src/trace-row.ts`). It is a ~1 Hz position feed per live character,
-and it has its own file precisely so it never arrives here as tens of
-thousands of unknown trajectory lines a day; its readers encode it from the
-run directory.
+Not tailed, on purpose:
+
+- the trace (`run.sqlite` `trace` and `trace.jsonl`,
+  `runner/src/trace-row.ts`). It is a ~1 Hz position feed per live character,
+  and it has its own file precisely so it never arrives here as tens of
+  thousands of unknown trajectory lines a day; its readers encode it from the
+  run directory.
+- the nearby ring (`nearby/<t0>.jsonl`, `runner/src/nearby-row.ts`): the units
+  around a live character for the live map, about 15 minutes of one-minute
+  files that the runner unlinks as they age and deletes when the run stops.
+  It is not history, so nothing here may keep it; the scan's fixed file list
+  never names it.
 
 A run id is not unique on disk: `runs/<id>/` and `runs/archive/<id>/` can both
 exist and hold different runs, where an attempt was archived and a later launch

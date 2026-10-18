@@ -6,6 +6,7 @@ import { STALL_PAUSE } from "../src/lapse";
 import { Trajectory } from "../src/trajectory";
 import { localRunStore, type RunStore } from "../viewer/clickhouse";
 import { positionsFromStore, readLatestPosition, readLatestStatus, readPositions, readReflecting } from "../viewer/positions";
+import { projectPositions } from "../viewer/public-projection";
 import { trackFrom } from "../viewer/results";
 import { readStates } from "../viewer/runs";
 import { parseTilePath, resolveTilePath, tileRefPath } from "../viewer/tiles";
@@ -580,6 +581,21 @@ describe("readPositions", () => {
       { id: "b", states: [[NOW - 1_000, 1, 1, 1, 1, 2, 3, 0, 0]] },
     ]);
     expect(readPositions(runsDir, NOW).map((p) => p.runId)).toEqual(["b", "a"]);
+  });
+
+  test("a run whose nearby ring is being written is flagged, privately only", () => {
+    const now = Date.now();
+    const runsDir = fixture([
+      { id: "ringed", states: [[now - 5_000, 4, 900, 0, 1, 2, 3, 0, 0]] },
+      { id: "plain", states: [[now - 5_000, 4, 900, 0, 1, 2, 3, 0, 0]] },
+    ]);
+    const t0 = Math.floor(now / 60_000) * 60_000;
+    mkdirSync(join(runsDir, "ringed", "nearby"));
+    writeFileSync(join(runsDir, "ringed", "nearby", `${t0}.jsonl`), `{"ts":${now},"kind":"tick"}\n`);
+    const byId = new Map(readPositions(runsDir, now).map((p) => [p.runId, p]));
+    expect(byId.get("ringed")?.nearby).toBe(true);
+    expect("nearby" in byId.get("plain")!).toBe(false);
+    expect(projectPositions({ positions: [...byId.values()] }).positions.every((p) => !("nearby" in p))).toBe(true);
   });
 });
 

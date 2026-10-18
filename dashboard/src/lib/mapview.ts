@@ -438,6 +438,58 @@ export function worldPerPixel(scale: number): number {
   return TILE_SIZE / (TILE_PX * scale);
 }
 
+/** Screen pixels per world yard under a scale: the inverse of `worldPerPixel`. */
+export function pxPerYard(scale: number): number {
+  return 1 / worldPerPixel(scale);
+}
+
+/*
+ * The nearby layer (`lib/nearbyplayer.ts`): the units around a live character
+ * draw only once the map is in close enough to tell one from another — about
+ * a pixel a yard, where a character's ~100 yd of view spans a few hundred
+ * pixels — and their names show unhovered only further in still. The map
+ * asks for units under the same gate, so a zoomed-out map fetches none.
+ */
+export const NEARBY_MIN_PX_PER_YD = 1;
+export const NEARBY_NAME_PX_PER_YD = 2.5;
+/** A unit's dot, and how close a pointer must come to name it. */
+export const NEARBY_DOT_R = 3;
+export const NEARBY_HIT_R = 8;
+
+export function nearbyShown(scale: number): boolean {
+  return pxPerYard(scale) >= NEARBY_MIN_PX_PER_YD;
+}
+
+export function nearbyNamesShown(scale: number): boolean {
+  return pxPerYard(scale) >= NEARBY_NAME_PX_PER_YD;
+}
+
+/** The stylesheet tokens a unit's class paints with, as `readTheme` resolves them. */
+export interface NearbyPalette {
+  err: string;
+  ok: string;
+  accent: string;
+  dim: string;
+}
+
+/**
+ * A class's colour: engaged with the character `--err`, a service NPC `--ok`,
+ * another player `--accent`, anything else `--dim`; the dead are a `--dim`
+ * ring (`MapPage.tsx` strokes rather than fills them).
+ */
+export function nearbyColor(cls: "dead" | "engaged" | "player" | "service" | "other", p: NearbyPalette): string {
+  switch (cls) {
+    case "engaged":
+      return p.err;
+    case "service":
+      return p.ok;
+    case "player":
+      return p.accent;
+    default:
+      return p.dim;
+  }
+}
+
 /**
  * Drop route points that would land within `minDist` of the previously kept
  * one, in world units.

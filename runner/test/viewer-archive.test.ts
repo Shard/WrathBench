@@ -158,6 +158,15 @@ describe("the archive directory", () => {
     expect(() => archiveRun(runs, "dead-on-arrival")).toThrow(/already archived/);
   });
 
+  test("the live map's ring is not archived: it is dropped before the move", () => {
+    const runs = fixture();
+    mkdirSync(join(runs, "worked", "nearby"), { recursive: true });
+    writeFileSync(join(runs, "worked", "nearby", "1760000040000.jsonl"), `{"ts":1,"kind":"tick"}\n`);
+    archiveRun(runs, "worked");
+    expect(existsSync(join(runs, ARCHIVE_DIR, "worked", "trajectory.jsonl"))).toBe(true);
+    expect(existsSync(join(runs, ARCHIVE_DIR, "worked", "nearby"))).toBe(false);
+  });
+
   test("a fleet job log names what it recently started; an old record holds nothing", () => {
     const runs = fixture();
     const now = Date.now();

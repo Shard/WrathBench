@@ -117,12 +117,27 @@ import type {
   TraceSegRuns,
   TraceState,
   TrackTrace,
+  NearbySelfView,
+  NearbyStateView,
+  NearbyWindow,
 } from "./api-types";
 import { EPISODE_IDS } from "../src/episodes";
 import { STALL_PAUSE } from "../src/lapse";
 import { redactGameProse } from "./redact-prose";
 import { scrubPathsValue } from "./scrub-paths";
 import { isStateKey, sanitizeStateValue, stateOf, type TraceStateKey } from "./trace";
+import {
+  NEARBY_VERSION,
+  emptyNearbyWindow,
+  emptySelf,
+  encodeNearby,
+  windowRows,
+  type NearbyRingMotion,
+  type NearbyRingRow,
+  type NearbyRingUnit,
+  type NearbyStateKey,
+  type NearbyUnitTypeName,
+} from "./nearby";
 
 /**
  * The attribution line every published artifact carries.
@@ -1360,6 +1375,205 @@ export function projectTraceIndex(i: TraceIndexResponse): TraceIndexResponse {
     tail: i.tail === null ? null : projectTraceSegment(i.tail),
     now: i.now,
   });
+}
+
+/* -------------------------------------------------------------- nearby --- */
+
+/**
+ * The unit state keys a public nearby window carries. Withheld, by not being
+ * listed: the subname (publicly a unit is its name), every guid (`tg`, `ow`,
+ * `ch`: another unit's identity, and through a player another player's
+ * whereabouts), the unit flags, and the 3D fields (display, scale, movement
+ * flags, a player's race, class and gender) until a public reader exists.
+ */
+const PUBLIC_NEARBY_KEYS = ["entry", "name", "ctype", "level", "hp", "df", "nf", "qg", "tgs"] as const satisfies readonly NearbyStateKey[];
+/** Of the dynamic flags only "dead": "tapped" says another player is fighting it, "lootable" whose kill it was. */
+const PUBLIC_DYNAMIC_FLAGS = 0x20;
+/** `UNIT_FLAG_PLAYER_CONTROLLED`: a player is driving it (a pet, a charmed mob, a vehicle). */
+const UNIT_FLAG_PLAYER_CONTROLLED = 0x8;
+
+function guidHigh(guid: string): number | null {
+  try {
+    return Number(BigInt(guid) >> 48n);
+  } catch {
+    return null;
+  }
+}
+
+function publicNearbyState(s: Partial<NearbyStateView>, delta = false): Partial<NearbyStateView> {
+  const out: Record<string, unknown> = {};
+  for (const key of PUBLIC_NEARBY_KEYS) {
+    if (!Object.hasOwn(s, key)) continue;
+    const v = s[key];
+    if (v === undefined || (v === null && !delta)) continue;
+    out[key] = key === "df" && typeof v === "number" ? v & PUBLIC_DYNAMIC_FLAGS : v;
+  }
+  return out as Partial<NearbyStateView>;
+}
+
+interface PrivateUnit {
+  ty: NearbyUnitTypeName;
+  s: Partial<NearbyStateView>;
+  m: NearbyRingMotion | null;
+}
+
+/**
+ * Whether one unit may be drawn publicly at this moment (`projectNearby`):
+ * a creature or a vehicle no other player owns, charms or drives, whose target
+ * is not another player or another player's pet. The character's own guid is
+ * the only "own" there is; with none known, nothing owned or controlled passes.
+ */
+function nearbyUnitPublic(u: PrivateUnit, self: NearbySelfView, units: ReadonlyMap<string, PrivateUnit>): boolean {
+  if (u.ty !== "creature" && u.ty !== "vehicle") return false;
+  const me = self.guid;
+  const mine = (g: string | null | undefined): boolean => g === undefined || g === null || (me !== null && g === me);
+  if (!mine(u.s.ow) || !mine(u.s.ch)) return false;
+  if (((u.s.uf ?? 0) & UNIT_FLAG_PLAYER_CONTROLLED) !== 0 && (me === null || u.s.ow !== me)) return false;
+  const tg = u.s.tg;
+  if (tg !== undefined && tg !== null && tg !== me) {
+    const high = guidHigh(tg);
+    if (high === 0x0000) return false;
+    if (high === 0xf140) {
+      const pet = units.get(tg);
+      if (pet === undefined || me === null || pet.s.ow !== me) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The private rows filtered to what the public may see, moment by moment:
+ * each unit enters when the rules first let it and leaves the instant they
+ * stop (an `out`, then an `in` with its whole public state and current motion
+ * when they let it again), and while the character is down the layer is empty
+ * — a ghost's view gives the death away (spirit healers show only to the dead).
+ */
+function publicNearbyRows(rows: readonly NearbyRingRow[]): NearbyRingRow[] {
+  const out: NearbyRingRow[] = [];
+  let self = emptySelf();
+  let units = new Map<string, PrivateUnit>();
+  const shown = new Set<string>();
+  const visible = (id: string): boolean => {
+    const u = units.get(id);
+    return u !== undefined && !self.down && nearbyUnitPublic(u, self, units);
+  };
+  const pub = (id: string, u: PrivateUnit): NearbyRingUnit => ({ id, ty: u.ty, s: publicNearbyState(u.s), m: u.m });
+  const publicSelf = (): NearbySelfView => ({ ...emptySelf(), map: self.map });
+  /** Bring what is shown in line with the rules now, for every unit. */
+  const reconcile = (ts: number): void => {
+    for (const id of [...shown]) {
+      if (visible(id)) continue;
+      shown.delete(id);
+      out.push({ ts, kind: "out", id });
+    }
+    for (const [id, u] of units) {
+      if (shown.has(id) || !visible(id)) continue;
+      shown.add(id);
+      out.push({ ts, kind: "in", u: pub(id, u) });
+    }
+  };
+  /** One unit changed: show it, drop it, or pass the public part of the change. */
+  const settle = (ts: number, id: string, wasShown: boolean, delta: Partial<NearbyStateView> | null): void => {
+    const now = visible(id);
+    if (wasShown && !now) {
+      shown.delete(id);
+      out.push({ ts, kind: "out", id });
+    } else if (!wasShown && now) {
+      shown.add(id);
+      out.push({ ts, kind: "in", u: pub(id, units.get(id)!) });
+    } else if (now && delta !== null) {
+      const d = publicNearbyState(delta, true);
+      if (Object.keys(d).length > 0) out.push({ ts, kind: "st", id, s: d });
+    }
+  };
+  for (const r of rows) {
+    switch (r.kind) {
+      case "key": {
+        self = { ...r.self };
+        units = new Map(r.units.map((u) => [u.id, { ty: u.ty, s: u.s, m: u.m }]));
+        shown.clear();
+        const list: NearbyRingUnit[] = [];
+        for (const [id, u] of units) {
+          if (!visible(id)) continue;
+          shown.add(id);
+          list.push(pub(id, u));
+        }
+        out.push({ ts: r.ts, kind: "key", self: publicSelf(), units: list });
+        break;
+      }
+      case "in": {
+        const wasShown = shown.has(r.u.id);
+        units.set(r.u.id, { ty: r.u.ty, s: r.u.s, m: r.u.m });
+        if (wasShown) shown.delete(r.u.id);
+        settle(r.ts, r.u.id, false, null);
+        if (r.u.ty === "pet") reconcile(r.ts);
+        break;
+      }
+      case "mv":
+      case "pos": {
+        const u = units.get(r.id);
+        if (u === undefined) break;
+        u.m = r.m;
+        if (shown.has(r.id)) out.push(r);
+        break;
+      }
+      case "st":
+      case "nm": {
+        const u = units.get(r.id);
+        if (u === undefined) break;
+        const delta: Partial<NearbyStateView> = r.kind === "st" ? r.s : { name: r.name };
+        const next: Record<string, unknown> = { ...u.s };
+        for (const [k, v] of Object.entries(r.kind === "st" ? r.s : { name: r.name, ...(r.sub !== undefined ? { sub: r.sub } : {}) })) {
+          if (v === null) delete next[k];
+          else next[k] = v;
+        }
+        u.s = next as Partial<NearbyStateView>;
+        settle(r.ts, r.id, shown.has(r.id), delta);
+        if (u.ty === "pet") reconcile(r.ts);
+        break;
+      }
+      case "out": {
+        const u = units.get(r.id);
+        units.delete(r.id);
+        if (shown.delete(r.id)) out.push(r);
+        if (u?.ty === "pet") reconcile(r.ts);
+        break;
+      }
+      case "self": {
+        const before = self.map;
+        self = { ...self, ...r.self };
+        if (self.map !== before) out.push({ ts: r.ts, kind: "self", self: { map: self.map } });
+        reconcile(r.ts);
+        break;
+      }
+      case "tick":
+        out.push(r);
+        break;
+    }
+  }
+  return out;
+}
+
+/**
+ * One nearby window (`runner/viewer/nearby.ts`) as the public may see it, by
+ * the operator's decisions of 2026-10-18: creatures only — no other player,
+ * no unit another player owns, charms or drives, and none while it targets
+ * another player or their pet — with the state cut to `PUBLIC_NEARBY_KEYS`
+ * (so the target only as "targets this character"), and nothing at all while
+ * the character is down. The self keeps only its map. Creature guids and
+ * entries stay: they are wire ids every client in range receives, and they
+ * are what lets one NPC two characters see draw once.
+ *
+ * The private window is turned back into rows (`windowRows`), filtered moment
+ * by moment, and encoded again over the same span, so a public window is a
+ * window like any other and a fixed point of this function.
+ */
+export function projectNearby(w: NearbyWindow): NearbyWindow {
+  const run = typeof w.run === "string" ? w.run : "";
+  const t0 = typeof w.t0 === "number" && Number.isFinite(w.t0) ? w.t0 : 0;
+  const t1 = typeof w.t1 === "number" && Number.isFinite(w.t1) ? w.t1 : t0;
+  if (w.v !== NEARBY_VERSION) return scrubPathsValue<NearbyWindow>(emptyNearbyWindow(run, t0, t1));
+  return scrubPathsValue<NearbyWindow>(encodeNearby(publicNearbyRows(windowRows(w)), { run, from: t0 }));
 }
 
 /* ------------------------------------------------------------- entries --- */

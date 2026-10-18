@@ -149,6 +149,28 @@ for a day — and within the data host's rate limit: the live map fetches for
 the runs on the continent on screen, the playhead's window and the next one
 in its last minute, at most four in flight.
 
+**The units around a live character** draw under the pips on the private
+live map (`src/lib/nearbyplayer.ts`, over the viewer's nearby codec): each
+run's newest window from `/api/run/<id>/nearby`, sampled at the same playhead
+as the pip, so a creature and the character fighting it line up however far
+behind the feed the map runs. A unit two characters both see is one guid and
+one dot. The colours are packet-field classes, never a reaction looked up in
+client data: engaged with the character `--err`, a service NPC `--ok` (with
+its `!`/`?` quest mark in `--warn`), another player `--accent`, anything else
+`--dim`, the dead a `--dim` ring; the selected character's own target is
+ringed, and its name replaces the entry on the unit frame's target bar.
+Names show on hover at any zoom the layer draws at and, further in, for every
+unit, culled greedily so none overlaps another or a character's puck and name.
+
+The layer draws from about a pixel a yard, and the map asks for windows under
+the same gate: on its 5 s poll (and straight away on zooming in), only for runs
+the feed flagged `nearby` whose pip is on or near the screen. NPCs nearly
+always move, so their motion alone redraws the map at most ten times a second
+rather than at frame rate. Past a window's horizon the layer is empty rather
+than frozen, bar a second of slack for the two pods' clocks. A replay has no
+units: the ring is live only and keeps 15 minutes. The public build asks for
+none either; nothing publishes them yet.
+
 ## The replay's route
 
 The map's replay draws the route behind the pip in the run's colour, a flight

@@ -87,6 +87,7 @@ import { Scratchpad } from "./scratchpad";
 import { goKeyEnvOf, liveOwnerOf, RESUME_REFUSED_EXIT, subscriptionLaneOfConfig } from "./models";
 import { GoUsageGauge, goUsageUrl } from "./opencode-go";
 import { Trajectory, readMeta, startHeartbeat, type PauseMark, type RunMeta } from "./trajectory";
+import { removeNearbyRing } from "./nearby";
 import { harnessVersion } from "./version";
 import { Watchdogs } from "./watchdogs";
 import { className, raceName } from "../viewer/characters";
@@ -574,6 +575,10 @@ async function main(): Promise<void> {
   // From here until the process exits, however it exits short of a SIGKILL.
   const stopHeartbeat = startHeartbeat(runDir, `${hostname()} ${process.pid}`);
   process.on("exit", stopHeartbeat);
+  // The live map's ring is live only (`nearby.ts`): the ticker's stop removes
+  // it on every exit a driver makes, and this catches the ones it does not —
+  // a backstop `process.exit`, a launch that never reached a driver.
+  process.on("exit", () => removeNearbyRing(runDir));
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
   // The episodic log lives beside the scratchpad and survives a pause the same
   // way: it is append-only, so a resumed run reads its own past back.

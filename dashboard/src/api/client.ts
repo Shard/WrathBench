@@ -25,6 +25,7 @@ import type {
   PositionsResponse,
   RunDetailResponse,
   RunsResponse,
+  NearbyWindow,
   TraceIndexResponse,
   TraceSegment,
   TrackResponse,
@@ -284,6 +285,13 @@ export function createClient(opts: ClientOptions = {}) {
      */
     traceIndex: (id: string): Promise<TraceIndexResponse> =>
       get<TraceIndexResponse>(`/api/run/${encodeURIComponent(id)}/trace`),
+    /**
+     * The units around a live character over the last `spanMs`, one window
+     * (`@viewer/nearby`). Asked only for a position the feed flagged `nearby`,
+     * on the map's own poll.
+     */
+    nearby: (id: string, spanMs: number): Promise<NearbyWindow> =>
+      get<NearbyWindow>(`/api/run/${encodeURIComponent(id)}/nearby?span=${Math.max(0, Math.round(spanMs))}`),
     /**
      * How `positions()` is made, for the live map's delay: rendered on request,
      * so a reading is as fresh as the poll that fetched it, behind a memo

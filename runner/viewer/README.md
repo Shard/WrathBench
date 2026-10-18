@@ -407,6 +407,36 @@ run's sqlite on every pass. In public mode a segment crosses
 `projectTraceSegment`: no `dead`, `ghost` or `target`, and no gauges while the
 character is down.
 
+## Nearby units: the live map's ring
+
+A live run also keeps the units around its character — creatures and other
+players in view, where each is going, and the packet fields and query answers
+the map colours and names them by — in a ring of one-minute files under
+`data/runs/<id>/nearby/` (`runner/src/nearby.ts`; the rows are
+`runner/src/nearby-row.ts`). It is live only: about 15 minutes, unlinked as it
+ages, deleted on every pause, stop and exit, never in `run.sqlite`, the trace,
+the trajectory or the store, and never read by a replay. `nearby.ts` here is
+the codec — one columnar window, its format at the top of the file, import-free
+so the dashboard plays it with the same code — and `nearby-ring.ts` the reads.
+
+- `/api/run/<id>/nearby?span=<ms>` is the last `span` (default 60 s, at most
+  the ring's 15 minutes) as one window: a keyframe at its start and every
+  change after it, up to the newest row the child wrote, which is the data's
+  horizon. Uncached, and an empty window rather than a 404 for a run with no
+  ring. Files past the ring's reach are ignored whether or not the writer got
+  to unlink them, so a run killed hard serves nothing stale.
+- A live position on `/api/positions` gains `nearby: true` while its ring is
+  being written (its newest file is under 30 s old), so the map asks only
+  runs that have units to show.
+
+In public mode the window crosses `projectNearby`: creatures only — no other
+player, nothing another player owns, charms or drives, nothing while it
+targets another player or their pet — with the state cut to entry, name, type,
+level, health, dead, service roles, the quest marker and "targets this
+character", and the whole layer empty while the character is down. Creature
+guids stay, so a unit two characters see draws once. The position feed's
+`nearby` flag is not projected: nothing publishes a window yet.
+
 ## How it handles big files
 
 `request` entries embed the model's message array (the whole of it on an older

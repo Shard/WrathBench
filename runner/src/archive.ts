@@ -52,6 +52,7 @@ import { join } from "node:path";
 import { listRuns, runDir } from "../viewer/runs";
 import { ARCHIVE_DIR } from "../viewer/archive-dir";
 import { countModelResponses } from "./models";
+import { removeNearbyRing } from "./nearby";
 
 /** How recently a run must have been touched to count as possibly live. */
 export const HELD_MS = 10 * 60_000;
@@ -284,13 +285,18 @@ export function planRunIds(runsDir: string, ids: readonly string[], now = Date.n
   return { plans, unknown };
 }
 
-/** Move one run directory under `archive/`. Never overwrites. */
+/**
+ * Move one run directory under `archive/`. Never overwrites. The live map's
+ * ring (`nearby.ts`) is dropped first: it is a delay line for a run being
+ * watched, and an archived run is not one.
+ */
 export function archiveRun(runsDir: string, runId: string): string {
   const from = join(runsDir, runId);
   const root = join(runsDir, ARCHIVE_DIR);
   mkdirSync(root, { recursive: true });
   const to = join(root, runId);
   if (existsSync(to)) throw new Error(`already archived: ${to}`);
+  removeNearbyRing(from);
   renameSync(from, to);
   return to;
 }
