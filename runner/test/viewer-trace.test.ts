@@ -183,6 +183,46 @@ describe("trace-db: windows", () => {
 
 /* -------------------------------------------------------------- routes --- */
 
+describe("trace-db: the sheet's dictionary", () => {
+  const sheetRows = (): Row[] =>
+    walk(W, W + 60_000, (ts) =>
+      ts === W
+        ? [[ts + 2, "state", null, { money: 5, inv: [[255, 23, 61001, 2]], quests: [[0, 7001, 0, 1]] }]]
+        : ts === W + 30_000
+          ? [[ts + 2, "state", null, { inv: [[255, 24, 61002]] }]]
+          : [],
+    );
+
+  test("a segment names exactly the items and quests it references from trace_dict; one the run never named stays an id", () => {
+    const runs = tempDir("trace-dict-");
+    const dir = writeRun(runs, "r-dict", sheetRows());
+    const db = new Database(join(dir, "run.sqlite"));
+    db.run(`CREATE TABLE trace_dict (run_id TEXT NOT NULL, kind TEXT NOT NULL, id INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (run_id, kind, id))`);
+    const put = db.query(`INSERT INTO trace_dict VALUES (?, ?, ?, ?)`);
+    put.run("r-dict", "item", 61001, JSON.stringify([1, "Test Stone"]));
+    put.run("r-dict", "item", 61009, JSON.stringify([1, "Test Token"]));
+    put.run("r-dict", "item", 69999, JSON.stringify([4, "Test Unreferenced"]));
+    put.run("r-dict", "quest", 7001, JSON.stringify([8, 0, 0, 0, [61009, 3]]));
+    put.run("other-run", "item", 61002, JSON.stringify([1, "Another Run's Name"]));
+    db.close();
+    const seg = readTraceSegment(runs, "r-dict", W, W + 2 * SEG_MS)!.segment;
+    expect(seg.items).toEqual({ 61001: [1, "Test Stone"], 61009: [1, "Test Token"] });
+    expect(seg.qreq).toEqual({ 7001: [8, 0, 0, 0, [61009, 3]] });
+    expect(JSON.stringify(seg)).not.toContain("Another Run");
+    const d = decodeSegment(seg);
+    expect(d.sheetEvents.map((e) => e.kind)).toEqual(["money", "inv", "quests", "inv"]);
+  });
+
+  test("a run recorded before trace_dict existed encodes its ids without names, never failing", () => {
+    const runs = tempDir("trace-dict-old-");
+    writeRun(runs, "r-old-sheet", sheetRows());
+    const seg = readTraceSegment(runs, "r-old-sheet", W, W + 2 * SEG_MS)!.segment;
+    expect(seg.items).toBeUndefined();
+    expect(seg.ev.some((e) => e[1] === "inv")).toBe(true);
+    expect(readPositionTrace(runs, "r-old-sheet", W + 30_000)!.tail!.items).toBeUndefined();
+  });
+});
+
 describe("the trace routes", () => {
   const now = Date.now();
   const open = windowOf(now);

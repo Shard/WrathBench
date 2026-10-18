@@ -396,6 +396,17 @@ the top of the file — and it imports nothing, so the dashboard's player decode
 with the same code. `trace-db.ts` is the reads, all ranges over the
 `(run_id, ts)` index.
 
+The same rows carry the character sheet: money, equipment, worn bags, what is
+carried, durability, the quest log's ids and counters, visible reputation,
+skills and turn-ins, as numbers. A segment states each part whole in its
+keyframe and as patches after it (the rows that changed, and a key alone for
+one that went), and `sheetAt` folds it at a playhead, apart from `stateAt` so
+the unit frame's per-frame read never copies an inventory. The item names and
+quest requirements live once per id in `trace_dict`; every read joins the ones
+a segment references into its `items` and `qreq`. A segment from before the
+sheet has none of its keys, which reads as "not recorded", never as empty
+bags.
+
 - `/api/run/<id>/trace` is the index: `segs`, the closed windows that have
   rows as runs of `[firstT0, count]`, and `tail`, everything after them
   encoded so far. A window closes `SETTLE_MS` (a minute) after it ends, so a
@@ -415,7 +426,8 @@ the bytes it always was. The track's window list is memoised on the database
 file's size and mtime, which is what keeps the publisher from opening every
 run's sqlite on every pass. In public mode a segment crosses
 `projectTraceSegment`: no `target`. Deaths are public (operator, 2026-10-18), so
-`dead`, `ghost` and the gauges at a corpse pass.
+`dead`, `ghost` and the gauges at a corpse pass. The sheet passes as numbers
+with its items' template names (operator, 2026-10-18), and never the bank.
 
 ## Nearby units: the live map's ring
 

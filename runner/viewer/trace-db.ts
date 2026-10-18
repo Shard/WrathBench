@@ -9,6 +9,10 @@
  * recorded before the recorder shipped has none — those read as no trace at
  * all, never as an error.
  *
+ * A segment's item names and quest requirements come from the run's
+ * `trace_dict`, one point lookup per id the segment references; a run
+ * recorded before that table existed encodes its ids without them.
+ *
  * Every read is a range over the `(run_id, ts)` index: a segment's window plus
  * its `CONTEXT_MS` lead, the feed's last few windows, or — for the list of
  * closed windows — one seek per window rather than a scan of a week's rows.

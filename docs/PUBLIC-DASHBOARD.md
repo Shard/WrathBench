@@ -194,6 +194,11 @@ A run the trace recorder drove has positions at about 1 Hz and the unit state
 beside them, packed one segment per run per UTC-aligned five-minute window
 (`runner/viewer/trace.ts` is the codec and the format). That is what lets the
 map play a character back as movement rather than a pip that jumps once a pass.
+Since the character sheet joined it, a segment also says what the character
+had at any moment in the window: money, equipment, worn bags, what it carried,
+durability, the quest log's counters, reputation, skills and turn-ins, whole
+in the keyframe and as patches after it, with the names of the items it
+references.
 A segment is published once, when its window closes, at
 `v1/run/<id>/trace/<t0>.json`, and is immutable like the content-addressed
 objects but addressed by its window: a closed window never changes. Closed
@@ -218,8 +223,14 @@ at the edge.
   segments are neither re-read nor re-encoded. Throwing the state file away
   costs one re-upload of every segment, the same repair as for every other key.
 - **Never pruned.** No version supersedes a window, so none is surplus. They
-  accumulate: about 6 KB a segment raw, so roughly 50 MB per character-month
-  of continuous play against R2's 10 GB free storage.
+  accumulate. A level-43 character with full bags, measured on its real
+  windows: about 13 KB a public segment raw (3 KB gzip) before the sheet and
+  about 19 KB (6 KB gzip) with it, so roughly 160 MB per character-month of
+  continuous play against R2's 10 GB free storage. A level-7 character's are
+  about 5 KB (2 KB gzip). The sheet adds no PUT: it rides the segment.
+- **The sheet went out before a page reads it** (operator, 2026-10-18), the
+  one exception to "What is published" below. A window that closed without it
+  could never gain it, so a later reader would have nothing to play back.
 - **Runs before the recorder** have no `trace` table. Their tracks carry no
   `trace` field, so their bytes and keys are what they were, and nothing is
   backfilled.
@@ -444,6 +455,20 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   projector passes such a window back unchanged, so the bucket's verifier
   still reads it as a fixed point. The `tail` in `live.json` crosses the
   same projector.
+- **The trace's character sheet ships as numbers and item names**
+  (operator, 2026-10-18). Money, equipment with its random property id, worn
+  bags, carried items, durability (public with deaths), the quest log's ids,
+  state and raw counters, visible reputation as faction id and standing,
+  skills as id, value and maximum, and turn-ins by quest id. Each row is
+  rebuilt as integers no wider than its kind, and only at a position a
+  character carries, so the bank never passes, whoever wrote it. Beside them
+  are two dictionaries for exactly the ids the segment references: an item's
+  quality and template name (names are names; the random suffix stays a
+  number), and a quest's required counts, numbers only. Withheld: the bank,
+  item text of every kind (descriptions, readable text, enchant lines), any
+  guid, an item's creator, and mail, trade and group, which the trace never
+  records. Quest titles and objectives are not carried; a reader links the
+  quest id.
 
 The projection gets the heaviest testing in the tree: fixture responses
 with poisoned fields (including keys smuggled through open signatures),
