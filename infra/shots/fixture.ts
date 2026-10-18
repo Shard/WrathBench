@@ -10,7 +10,8 @@
  *                  hours of trace to replay
  *
  * Both carry a character sheet on the trace (money, worn and carried items, a
- * quest log with one quest in progress and one complete, a turn-in), the 60 s
+ * quest log with one quest that completes, one in progress and one of four
+ * items to collect, two never found, and a turn-in), the 60 s
  * state line, snippets and tool calls with one failure each, a harness notice
  * and a scratchpad. The state line's quest count starts again at zero halfway
  * (`questsAt`), as a resumed process's does, so the map's quest figure shows
@@ -39,10 +40,14 @@ const DICT: TraceDict = {
     [1004, 0, "Invented Pelt"],
     [1005, 1, "Invented Ration"],
     [1006, 1, "Invented Satchel"],
+    [1007, 1, "Invented Bolt"],
+    [1008, 1, "Invented Cloak"],
   ],
   quests: [
     [9001, [8, 0, 0, 0]],
     [9002, [0, 0, 0, 0, [1004, 5]]],
+    // Four items to collect, two of them never found: the shape whose row is too long for one line beside a long title.
+    [9004, [0, 0, 0, 0, [1007, 1], [1005, 1], [1008, 1], [1004, 5]]],
   ],
 };
 
@@ -88,6 +93,7 @@ function keyData(level: number, xp: number, pelts: number, money: number, comple
     quests: [
       [0, 9001, complete ? 1 : 0, complete ? 8 : 3],
       [1, 9002, 0],
+      [2, 9004, 0],
     ],
     rep: [[72, 1200]],
     skills: [[43, 30, 40]],

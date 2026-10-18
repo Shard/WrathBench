@@ -1107,11 +1107,15 @@ button.update:hover { background: var(--panel); }
 .inv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px;
             font-size: var(--fs-sm);
             min-width: min(240px, calc(100vw - 48px)); max-width: min(320px, calc(100vw - 32px)); }
-.inv-list li { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+/* A name and its count share a line only where both fit whole; otherwise the
+   count drops to its own line under the name, at the right, and wraps there.
+   So a wrapped name's tail never sits beside a wrapped count's tail, which
+   read as a row of its own ("Fur Cloak … 10 / 10" for a four-objective quest). */
+.inv-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; justify-content: space-between; }
 .inv-list-name { overflow-wrap: anywhere; }
 .inv-list-link { text-decoration: none; }
 .inv-list-link:hover .inv-list-name { text-decoration: underline; }
-.inv-list-count { color: var(--dim); font-variant-numeric: tabular-nums; }
+.inv-list-count { color: var(--dim); font-variant-numeric: tabular-nums; margin-left: auto; }
 .inv-grid + .inv-list { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
 
 /* The bag button, and the popover it opens. Hover on a desktop, tap anywhere. */

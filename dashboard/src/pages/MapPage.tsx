@@ -2118,13 +2118,13 @@ export default function MapPage() {
                 the track's newest reading behind the cursor (`lib/replay.ts`).
                 Where neither says there is nothing to show, which the null
                 line says rather than drawing empty bags.
-                The quest log beside them is the sheet's alone (`shownQuests`).
+                The quest log beside them is the sheet's alone (`shownQuests`),
+                and does not wait on the bags: a sheet with the log and not yet
+                the bags draws the null line and the quest button.
               */}
               <div class="k">inventory</div>
               <div class="v">
-                <Show when={shownItems()} fallback={<span class="inv-note">{fmtItems(shownItems(), false)}</span>}>
-                  {(items) => <InventoryPanel items={items()} quests={shownQuests()} />}
-                </Show>
+                <InventoryPanel items={shownItems()} quests={shownQuests()} missing={fmtItems(null, false)} />
               </div>
               {/* Where the pip is drawn: the trace's pose at the playhead when it has one. */}
               <div class="k">map</div>

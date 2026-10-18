@@ -16,6 +16,7 @@ import { Window } from "happy-dom";
 import { render } from "solid-js/web";
 import { createServer } from "vite";
 import solid from "vite-plugin-solid";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { QuestRow } from "../src/lib/questlog";
 
@@ -143,6 +144,46 @@ describe("the quest button and its panel", () => {
     }
   });
 
+  test("the button does not wait on the bags: a sheet with the log and not yet the bags draws both the null word and the button", async () => {
+    const { document, restore } = installDom();
+    try {
+      const { InventoryPanel } = await loadInventory();
+      // Live after a sandbox restart: the log is back, the bags are not, and the feed carries no inventory.
+      const [items, setItems] = createSignal<[] | null>(null);
+      const [quests, setQuests] = createSignal<QuestRow[] | null>(null);
+      const mount = document.createElement("div");
+      document.body.append(mount);
+      const dispose = render(
+        () =>
+          createComponent(InventoryPanel, {
+            get items() {
+              return items();
+            },
+            get quests() {
+              return quests();
+            },
+            missing: "—",
+          }),
+        mount,
+      );
+      const note = (): string[] => Array.from(mount.querySelectorAll(".inv-note")).map((n) => n.textContent ?? "");
+      // Neither observed: the word alone, as before.
+      expect(labels(mount)).toEqual([]);
+      expect(note()).toEqual(["—"]);
+      expect(mount.querySelector(".inventory")).toBeNull();
+      setQuests(LOG);
+      expect(labels(mount)).toEqual(["? 5 quests"]);
+      expect(note()).toEqual(["—"]);
+      // The bags arrive: their buttons take the word's place.
+      setItems([]);
+      expect(labels(mount)).toEqual(["0 carrying", "0 equipped", "? 5 quests"]);
+      expect(note()).toEqual([]);
+      dispose();
+    } finally {
+      restore();
+    }
+  });
+
   test("each row links its quest for the script to name, its progress beside it while in progress, its status in its colour after", async () => {
     const { document, restore } = installDom();
     try {
@@ -206,5 +247,57 @@ describe("the quest button and its panel", () => {
     } finally {
       restore();
     }
+  });
+});
+
+describe("a long title beside several objectives", () => {
+  /** A collect quest of four items, the last at full count: the shape that read as a one-objective quest when both halves wrapped. */
+  const LONG: QuestRow = {
+    questId: 906,
+    slot: 2,
+    status: "active",
+    objectives: [
+      { have: 0, need: 1, itemId: 5101, name: "Fixture Bolt" },
+      { have: 1, need: 1, itemId: 5102, name: "Fixture Thread" },
+      { have: 0, need: 1, itemId: 5103, name: "Fixture Cloak" },
+      { have: 10, need: 10, itemId: 5104, name: "Fixture Fur" },
+    ],
+  };
+
+  test("the row is the title and one cell of every objective, so the objectives move together", async () => {
+    const { document, restore } = installDom();
+    try {
+      const { QuestLog } = await loadInventory();
+      const mount = document.createElement("div");
+      document.body.append(mount);
+      const dispose = render(() => createComponent(QuestLog, { rows: [LONG] }), mount);
+      (mount.querySelector(".popover-button") as HTMLButtonElement).click();
+      const li = document.body.querySelector(".bag-popover li")!;
+      // The script's rename, by hand: a title long enough to wrap in the panel.
+      li.querySelector("a.inv-list-link")!.innerHTML = "<span>Fixture Trapper's Long Yeti Fur Cloak of Many Words</span>";
+      expect(Array.from(li.children).map((c) => c.getAttribute("class"))).toEqual(["inv-list-link", "inv-list-count"]);
+      expect(li.querySelector(".inv-list-count")!.textContent).toBe(nb("0 / 1 · 1 / 1 · 0 / 1 · 10 / 10"));
+      dispose();
+    } finally {
+      restore();
+    }
+  });
+
+  test("in a 320 px panel the objectives drop under the title rather than pair their last line with its last line", () => {
+    // happy-dom does no layout, so the rule is what the classes carry; `bun wb dashboard shots` shows it drawn.
+    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    const body = (selector: string): string => {
+      const m = new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css);
+      expect(m).not.toBeNull();
+      return m![1]!;
+    };
+    expect(body(".inv-list")).toMatch(/max-width:\s*min\(320px/);
+    const li = body(".inv-list li");
+    // Wrap the row, not just its halves: the count takes a line of its own when the two do not fit side by side.
+    expect(li).toMatch(/flex-wrap:\s*wrap/);
+    // No gap between the title's line and the dropped objectives, so they read as one row, not two.
+    expect(li).toMatch(/gap:\s*0 8px/);
+    // Dropped, the objectives keep the right-hand column the counts sit in.
+    expect(body(".inv-list-count")).toMatch(/margin-left:\s*auto/);
   });
 });
