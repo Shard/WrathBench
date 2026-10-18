@@ -28,6 +28,7 @@ import { join } from "node:path";
 import type { AgentPosition, CharacterStatus, MoveIntentView, RunRow } from "./api-types";
 import { runRowOf, type RunStore } from "./clickhouse";
 import { listRuns, readMoves } from "./runs";
+import { readPositionTrace } from "./trace-db";
 
 /**
  * How stale a position may be and still count as an agent on the map. Longer
@@ -233,6 +234,9 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
   const pos = readLatestPosition(runsDir, run.runId);
   if (pos === null) return null;
   if (now - pos.ts > windowMs) return null;
+  // One range read over the last few windows (`trace-db.ts`); null on a run
+  // that recorded no trace, which leaves the field off.
+  const trace = readPositionTrace(runsDir, run.runId, now);
   return {
     runId: run.runId,
     character: run.character,
@@ -271,6 +275,9 @@ function positionOf(runsDir: string, run: RunRow, now: number, windowMs: number)
     // reason: staleness is the reader's call, not the feed's.
     status: readLatestStatus(runsDir, run.runId),
     reflecting: readReflecting(runsDir, run.runId),
+    // Where it has been, second by second: the newest closed windows and the
+    // tail, so the map can play the last minutes back rather than jump.
+    ...(trace === null ? {} : { trace }),
   };
 }
 

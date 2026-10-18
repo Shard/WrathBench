@@ -79,8 +79,12 @@ import {
   projectRuns,
   projectTools,
   projectTrack,
+  projectTraceIndex,
+  projectTraceSegment,
 } from "./public-projection";
 import { scrubPathsText } from "./scrub-paths";
+import { SEG_MS } from "./trace";
+import { readTraceIndex, readTraceSegment, traceSegsMemo } from "./trace-db";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
 import {
   factOf,
@@ -661,6 +665,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
     return seriesCache.value;
   };
   const worldserver = worldserverIdentity(opts.moduleUrl ?? "http://127.0.0.1:8086");
+
+  /** Each run's closed trace windows, for its track (see `release` for why it is never dropped). */
+  const traceSegs = traceSegsMemo();
 
   /** One tail per run, shared by every reader; scans are serialised per run. */
   const tails = new Map<string, TrajectoryTail>();
@@ -1445,6 +1452,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       // Same threshold as the detail route's, for the same reason: a bar with
       // no attempt either side of it has nothing to step to.
       const character = whole !== null && whole.attempts > 1 ? whole : null;
+      const trace = traceSegs(runsDir, runId, Date.now());
       // The travel marks ride the same incremental tail the run page reads, so
       // a replay opened after the page — and every publisher pass, which asks
       // for both — pays nothing for them; a cold replay pays the page's scan.
@@ -1479,8 +1487,36 @@ export function createApi(opts: ApiOptions): ApiHandle {
                 next: character.next,
               },
             }),
+        // The closed trace windows, each `/trace/<t0>`. Absent on a run with
+        // none, so a track from before the recorder is the bytes it was.
+        ...(trace === null ? {} : { trace }),
       };
       return pub(body, projectTrack);
+    }
+
+    if (rest === "/trace") {
+      // The trace index: the closed windows and the tail so far. Never cached:
+      // the tail moves with every drain.
+      return pub(readTraceIndex(runsDir, runId, Date.now()), projectTraceIndex);
+    }
+
+    const traceMatch = /^\/trace\/(\d+)$/.exec(rest);
+    if (traceMatch !== null) {
+      const t0 = Number(traceMatch[1]);
+      if (!Number.isSafeInteger(t0) || t0 % SEG_MS !== 0) return notFound("no such trace window");
+      const found = readTraceSegment(runsDir, runId, t0, Date.now());
+      if (found === null) return notFound("no trace in that window");
+      /*
+       * A closed window is settled (`SETTLE_MS` past its end), so its segment
+       * can never change and is cached as an immutable asset is; the window
+       * still open or settling is served as it stands, uncached.
+       */
+      return new Response(JSON.stringify(publicMode ? projectTraceSegment(found.segment) : found.segment), {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": found.closed ? "public, max-age=31536000, immutable" : "no-store",
+        },
+      });
     }
 
     if (rest === "/entries") {
@@ -1576,11 +1612,13 @@ export function createApi(opts: ApiOptions): ApiHandle {
    * also per-run in the strict sense — only `/api/run/<id>` and its feed touch
    * one — so dropping it costs nothing else this pass.
    *
-   * It is now the ONLY per-run memo this handle holds. The run rows, the
-   * state series and the per-run totals used to be memoised here because each
-   * one cost a file open or a whole-file scan; they are rows in the derived
-   * store now, and a cache in front of a query would only be a second thing
-   * that can be wrong about a live run.
+   * It is now the only heavy per-run memo this handle holds. The run rows,
+   * the state series and the per-run totals used to be memoised here because
+   * each one cost a file open or a whole-file scan; they are rows in the
+   * derived store now, and a cache in front of a query would only be a second
+   * thing that can be wrong about a live run. The one other, the trace window
+   * list (`traceSegsMemo`), is a few numbers per run and is kept on purpose:
+   * it is what spares a pass a `run.sqlite` open per run.
    */
   const release = (runId: string): void => {
     tails.delete(runId);

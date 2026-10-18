@@ -68,6 +68,10 @@ const JSON_ROUTES = [
   `/api/run/${LIVE_RUN}`,
   `/api/run/${LIVE_RUN}/track`,
   `/api/run/${LIVE_RUN}/entries?limit=200`,
+  // The trace index answers for every run, one with no trace included; a
+  // segment crosses `projectTraceSegment` (runner/test/viewer-trace.test.ts).
+  `/api/run/${DEAD_RUN}/trace`,
+  `/api/run/${LIVE_RUN}/trace`,
   // Universal since: a character for a run with no chain at all, and
   // one for a run that has one — both cross the same projector.
   `/api/character/${DEAD_RUN}`,
