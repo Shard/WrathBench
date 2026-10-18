@@ -1,0 +1,101 @@
+{{- /*
+Server log retention: a daily CronJob that prunes the module's per-session
+audit log (`logs/wrathbench/<token>.jsonl` on the data PVC) by age.
+
+The audit log is an operational record kept for a window, not evidence kept
+for good (docs/CONTRACTS.md "Audit"); the per-run record of what went on the
+wire is the trajectory's `actions` record. A live freeplay stream writes about
+0.6 GB a day here and nothing else bounded it, so the directory had reached
+half the volume.
+
+A separate Job, not a sidecar or a change to the worldserver's own template,
+so that turning the window up or down never restarts the world. It runs from
+the worldserver image because that is where perl is (the image has no curl,
+no bun), with the same uid and the same `logs` subPath the server writes. The
+rules that keep it off a file the server still holds open are in
+files/log-retention.pl. The secret is for GET /health only (the server's
+start time is one of the two rules) and never reaches a manifest or argv.
+
+`worldserver.logRetention.days: 0` (or empty) renders nothing.
+*/ -}}
+{{- $r := .Values.worldserver.logRetention | default dict -}}
+{{- if gt (int ($r.days | default 0)) 0 }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-log-retention
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-retention
+data:
+  log-retention.pl: |
+{{ .Files.Get "files/log-retention.pl" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-log-retention
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-retention
+spec:
+  schedule: {{ $r.schedule | default "30 2 * * *" | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # A pass that fails waits for tomorrow's; retrying it sooner would only
+      # repeat the same refusal against the same files.
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            {{- include "wrathbench.podLabels" . | nindent 12 }}
+            app.kubernetes.io/component: log-retention
+        spec:
+          restartPolicy: Never
+          {{- with .Values.priorityClassName }}
+          priorityClassName: {{ . }}
+          {{- end }}
+          nodeSelector: {{ toYaml .Values.nodeSelector | nindent 12 }}
+          securityContext: {{- include "wrathbench.podSecurityContext" . | nindent 12 }}
+          {{- include "wrathbench.imagePullSecrets" . | nindent 10 }}
+          automountServiceAccountToken: false
+          containers:
+            - name: log-retention
+              image: {{ include "wrathbench.image.worldserver" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext: {{- include "wrathbench.containerSecurityContext" . | nindent 16 }}
+              # Lowest CPU and I/O priority: the realm and a live run share
+              # this node and this volume. `-t` keeps ionice from failing the
+              # job where the idle class is refused.
+              command: ["nice", "-n", "19", "ionice", "-c", "3", "-t", "perl", "/opt/wrathbench/log-retention.pl"]
+              env:
+                - name: WRATHBENCH_AUDIT_DIR
+                  value: /azerothcore/env/dist/logs/wrathbench
+                - name: WRATHBENCH_LOG_RETENTION_DAYS
+                  value: {{ $r.days | quote }}
+                - name: WRATHBENCH_MODULE_HOST
+                  value: "worldserver:8086"
+                - name: WRATHBENCH_MODULE_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.envSecretName }}
+                      key: WRATHBENCH_MODULE_SECRET
+              resources: {{ toYaml $r.resources | nindent 16 }}
+              volumeMounts:
+                - name: data
+                  mountPath: /azerothcore/env/dist/logs
+                  subPath: logs
+                - name: script
+                  mountPath: /opt/wrathbench
+                  readOnly: true
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ include "wrathbench.fullname" . }}-data
+            - name: script
+              configMap:
+                name: {{ include "wrathbench.fullname" . }}-log-retention
+{{- end }}

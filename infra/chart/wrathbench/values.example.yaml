@@ -118,6 +118,17 @@ worldserver:
   startupProbe:
     periodSeconds: 10
     failureThreshold: 90
+  # Days the module's audit log is kept; 0 renders no CronJob.
+  logRetention:
+    days: 3
+    schedule: "30 2 * * *"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+        ephemeral-storage: 256Mi
+      limits:
+        memory: 256Mi
 
 authserver:
   resources:

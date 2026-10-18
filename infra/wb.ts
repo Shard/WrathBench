@@ -193,6 +193,7 @@ export const ENTRIES: readonly Entry[] = [
 
   { group: "server", command: "health", summary: "the module's health census, read inside the worldserver", ...clusterOnly("infra/module-health.sh") },
   { group: "server", command: "restart-viewer", summary: "rollout restart the viewer, then check it answers", ...clusterOnly("infra/viewer-restart.sh") },
+  { group: "server", command: "log-retention", takes: "[--days n | --apply]", summary: "what the audit-log retention pass would prune now, as counts and bytes; --apply runs it", ...clusterOnly("infra/log-retention.sh") },
 
   // Both write game accounts, so neither has a default: `ensure` creates only
   // the accounts it is given, and `spectator` only with a password on stdin.
