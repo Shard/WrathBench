@@ -3,7 +3,8 @@
  * child's recorder over a real SDK cache fed hand-written frames, the host's
  * `ContextBuilder` draining it into the ring the way the state ticker does, a
  * real `Trajectory` writing `run.sqlite`, `trace.jsonl` and `trajectory.jsonl`
- * beside it, and the real ticker's stop.
+ * beside it, the viewer's ring reader and codec decoding what the map polls,
+ * and the real ticker's stop.
  *
  * What it proves is the boundary, not the drawing:
  * - the recorder reads the cache and the broadcast hook and nothing else — its
@@ -12,7 +13,9 @@
  *   file outside it: not `run.sqlite`, `trace.jsonl`, `trajectory.jsonl` or
  *   `meta.json`, and `run.sqlite` gains no table;
  * - the ring holds at most its reach, unlinks the rest as it goes, and is gone
- *   when the ticker stops.
+ *   when the ticker stops;
+ * - what the viewer serves from it is what the recorder saw: every unit, its
+ *   name, and each spline ending where the packet said.
  */
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -30,6 +33,8 @@ import { Trajectory } from "../src/trajectory";
 import { Watchdogs } from "../src/watchdogs";
 import { SELF_GUID, guardedSource, nearbyRig, playerGuid, unitGuid } from "./fixtures/nearby-frames";
 import { tempDirs } from "./fixtures/temp-dirs";
+import { NEARBY_SPAN_MS, decodeNearby, nearbyAt, type NearbyWindow } from "../viewer/nearby";
+import { readNearbyWindow } from "../viewer/nearby-ring";
 
 const tempDir = tempDirs();
 
@@ -187,6 +192,42 @@ describe("nearby end to end: the ring is the only place the units go", () => {
     // The recorder read the cache's three fields and the broadcast hook, and
     // nothing else: its source throws on everything else, and it never threw.
     expect([...scene.guarded.reads].sort()).toEqual(["events.on", "state.creatures", "state.nearby", "state.self"]);
+    scene.nearby.stop();
+    scene.trace.stop();
+  }, 60_000);
+
+  test("the viewer reads back what the recorder saw: the units, their names, and where each spline puts them", async () => {
+    const runs = tempDir("nearby-e2e-viewer-");
+    const seen: { clock: number; window: ReturnType<typeof readNearbyWindow> }[] = [];
+    const scene = await driveScene(runs, 3, (clock) => {
+      // What the live map's poll asks for, as the drains land.
+      if (seen.length < 40) seen.push({ clock, window: readNearbyWindow(runs, RUN, NEARBY_SPAN_MS, clock) });
+    });
+    const last = readNearbyWindow(runs, RUN, NEARBY_SPAN_MS, scene.clock());
+    const d = decodeNearby(JSON.parse(JSON.stringify(last)) as NearbyWindow);
+    expect(d.t0).toBe(scene.clock() - NEARBY_SPAN_MS);
+    expect(d.t1).toBeGreaterThanOrEqual(scene.clock() - 500);
+    // 120 creatures and the walker, at the keyframe and at the horizon.
+    for (const t of [d.t0, d.t1]) expect(nearbyAt(d, t)).toHaveLength(121);
+    const named = nearbyAt(d, d.t1);
+    expect(named.filter((u) => u.s.name === CANARY)).toHaveLength(20);
+    expect(named.find((u) => u.ty === "player")!.s.name).toBe(CANARY_PLAYER);
+    // Every spline the scene fed in the window, played where it ends once it has.
+    const r = scene.guarded.source.state.nearby;
+    let checked = 0;
+    for (const obj of r.values()) {
+      const m = obj.motion;
+      if (m === undefined || m.value.destination === undefined || m.ts + 2_000 > d.t1 || m.ts < d.t0) continue;
+      const at = nearbyAt(d, m.ts + 2_000).find((u) => u.id === obj.guid);
+      expect(at).toBeDefined();
+      expect(Math.abs(at!.x - m.value.destination.x)).toBeLessThanOrEqual(0.06);
+      expect(Math.abs(at!.y - m.value.destination.y)).toBeLessThanOrEqual(0.06);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(20);
+    // Each poll's window was a window: decodable, keyed, never empty once the ring was.
+    for (const s of seen) expect(decodeNearby(s.window).units.length).toBeGreaterThan(0);
+    scene.trajectory.close();
     scene.nearby.stop();
     scene.trace.stop();
   }, 60_000);

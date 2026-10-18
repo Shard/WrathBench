@@ -81,7 +81,10 @@ import {
   projectTrack,
   projectTraceIndex,
   projectTraceSegment,
+  projectNearby,
 } from "./public-projection";
+import { NEARBY_SPAN_MS } from "./nearby";
+import { readNearbyWindow } from "./nearby-ring";
 import { scrubPathsText } from "./scrub-paths";
 import { SEG_MS } from "./trace";
 import { readTraceIndex, readTraceSegment, traceSegsMemo } from "./trace-db";
@@ -1517,6 +1520,19 @@ export function createApi(opts: ApiOptions): ApiHandle {
           "cache-control": found.closed ? "public, max-age=31536000, immutable" : "no-store",
         },
       });
+    }
+
+    if (rest === "/nearby") {
+      /*
+       * The units around a live character, for the live map: the last `span`
+       * ms of the run's ring (`nearby-ring.ts`, at most its reach), one
+       * window. Never cached — the ring moves every drain — and an empty
+       * window, not a 404, for a run with none: no units is a state. In public
+       * mode the window crosses `projectNearby`.
+       */
+      const spanParam = Number(url.searchParams.get("span") ?? NEARBY_SPAN_MS);
+      const span = Number.isFinite(spanParam) ? spanParam : NEARBY_SPAN_MS;
+      return pub(readNearbyWindow(runsDir, runId, span, Date.now()), projectNearby);
     }
 
     if (rest === "/entries") {

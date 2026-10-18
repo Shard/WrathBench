@@ -949,6 +949,13 @@ export interface AgentPosition {
    * recorded none, and on a feed or snapshot from before the recorder.
    */
   trace?: PositionTrace;
+  /**
+   * True when the run's nearby ring (`/api/run/<id>/nearby`) is being written:
+   * its newest file was touched within `NEARBY_FRESH_MS`. Absent otherwise, so
+   * the map asks for units only where there are some. Private: the public
+   * projection does not carry it until the public map has something to fetch.
+   */
+  nearby?: true;
 }
 
 /** A run row as the listing serves it: the row plus whole-file totals. */
@@ -2279,6 +2286,95 @@ export interface PositionTrace {
   /** Up to the last three closed windows with rows, oldest first. */
   recent: number[];
   tail: TraceSegment | null;
+}
+
+/* ------------------------------------------------------------- nearby --- */
+
+/**
+ * What a nearby window says about one unit besides where it is
+ * (`runner/viewer/nearby.ts`; the recorder's contract is
+ * `runner/src/nearby-row.ts`, pinned compatible by `runner/test/nearby-e2e.test.ts`).
+ * Absent keys are unobserved. A public window carries `entry`, `name`, `ctype`,
+ * `level`, `hp`, `df`, `nf`, `qg` and `tgs` only.
+ */
+export interface NearbyStateView {
+  entry: number | null;
+  name: string | null;
+  sub: string | null;
+  ctype: number | null;
+  level: number | null;
+  /** Health as a percentage, 0–100. */
+  hp: number | null;
+  uf: number | null;
+  df: number | null;
+  nf: number | null;
+  qg: number | null;
+  tg: string | null;
+  /** The unit targets the character this window is about. */
+  tgs: boolean | null;
+  ow: string | null;
+  ch: string | null;
+  disp: number | null;
+  scale: number | null;
+  mf: number | null;
+  race: number | null;
+  cls: number | null;
+  gender: number | null;
+}
+
+/** The character a window is about: which map its units are on, and (privately) who it is and targets. */
+export interface NearbySelfView {
+  guid: string | null;
+  map: number | null;
+  target: string | null;
+  down: boolean;
+}
+
+/**
+ * A unit's motion, quantised (`NearbyWindow.q`): `[kind, t, x, y, z, o]`, with
+ * `dx, dy, dz, ms` appended on a spline. `kind` is 0 a position sample, 1 a
+ * spline from `x, y, z` by `dx, dy, dz` over `ms`, 2 a hold; `t` is ms from the
+ * window's `t0` (negative when the motion began before it); `o` is -1 when the
+ * packet carried no facing.
+ */
+export type NearbyMotionWire = number[];
+
+/** One event: `[ms from t0, unit index or -1 for the self, kind, value]`. */
+export type NearbyEventWire = [number, number, string, unknown];
+
+/** One run's nearby units over a span, columnar. The full spec is the comment atop `nearby.ts`. */
+export interface NearbyWindow {
+  v: number;
+  run: string;
+  /** The keyframe's instant, and the data's horizon (the child's last poll). */
+  t0: number;
+  t1: number;
+  q: { p: number; o: number };
+  /** The unit table: guid and type code (0 creature, 1 pet, 2 vehicle, 3 player) per index. */
+  ids: string[];
+  ty: number[];
+  k: {
+    self: Partial<NearbySelfView>;
+    u: number[];
+    s: Partial<NearbyStateView>[];
+    m: NearbyMotionWire[];
+  };
+  /**
+   * Per motion row: ms since the previous row (the first since `t0`), the
+   * motion's own time relative to its row, the unit, the kind, position deltas
+   * from that unit's previous keyframe-or-column position, and the facing.
+   */
+  dt: number[];
+  mt: number[];
+  u: number[];
+  mk: number[];
+  x: number[];
+  y: number[];
+  z: number[];
+  o: number[];
+  /** `[motion, dx, dy, dz, ms]`: a spline's destination as a delta from its start. */
+  sp: [number, number, number, number, number][];
+  ev: NearbyEventWire[];
 }
 
 /**
