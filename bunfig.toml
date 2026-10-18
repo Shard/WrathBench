@@ -1,7 +1,22 @@
-# `bun test` from the root runs every workspace's suite in one process, so the
-# dashboard's Solid redirect has to be installed here too — bun reads its config
-# from the working directory, and dashboard/bunfig.toml is not consulted from
-# here. See dashboard/test/preload-solid.ts for what it does and why.
+# `bun test` from the root runs every workspace's suite, so the dashboard's
+# Solid redirect has to be installed here too — bun reads its config from the
+# working directory, and dashboard/bunfig.toml is not consulted from here. See
+# dashboard/test/preload-solid.ts for what it does and why.
+#
+# `bun run test` (package.json) is the same suite over eight workers, the local
+# loop: about a minute on the 16-core box against about four in one process.
+# The wall clock is the slowest file's (infra/fleet-update.test.ts), so more
+# workers buy nothing and only crowd a machine other suites share.
+# `--no-isolate` keeps one module registry per worker across its files, as the
+# single process always did; a fresh one per file boots Vite and Babel cold in
+# every Vite-mounted dashboard test. `--timeout=20000` widens bun's per-test
+# hang guard, 5 s, because workers share the cores: a CPU-bound test's wall
+# time scales with its share (record-count-parity's 2.1 s generated-input
+# check took 4.5 s with two suites running at once), and the guard catches
+# hangs, not slowness; the tests that race a clock keep their own deadlines.
+# CI runs plain `bun test`, one process and the 5 s guard: on its four vCPUs,
+# eight workers slowed that same check to 9.5 s. Neither option can be set
+# here: bun reads `parallel` only from the command line.
 [test]
 # `preload-checkout.ts` goes first: it refuses, in one line, a checkout whose
 # node_modules is missing or linked from another checkout, which the other two
