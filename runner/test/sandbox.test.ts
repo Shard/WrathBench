@@ -781,6 +781,28 @@ describe("background fault storm control (morning-laguna-2)", () => {
     expect(res.logs[0]!.text).toBe("same line ×25");
     expect(res.logs[1]!.text).toBe("different");
   });
+
+  test("the child's mirrored stdout prints a repeated line once and its count, not every copy", async () => {
+    const logged = { stdout: "", stderr: "" };
+    const host = makeHost({ logSink: (stream, text) => void (logged[stream] += text) });
+    const res = await host.evalSnippet(
+      [
+        'for (let i = 0; i < 1000; i++) console.log("Target 0x1 is not a valid hostile or is dead.");',
+        'console.log("different");',
+        'for (let i = 0; i < 3; i++) console.error("stuck");',
+      ].join("\n"),
+    );
+    expect(res.ok).toBe(true);
+    // The result's own log is the fold it always was.
+    expect(res.logs.map((l) => l.text)).toEqual(["Target 0x1 is not a valid hostile or is dead. ×1000", "different", "stuck ×3"]);
+    // The pumps flush when the child's streams end.
+    await host.stop();
+    expect(logged.stdout).toBe(
+      "Target 0x1 is not a valid hostile or is dead.\n[sandbox] the line above repeated ×999 more\ndifferent\n",
+    );
+    // A run still repeating when the snippet's logs are drained is counted then.
+    expect(logged.stderr).toBe("stuck\n[sandbox] the line above repeated ×2 more\n");
+  });
 });
 
 /**
