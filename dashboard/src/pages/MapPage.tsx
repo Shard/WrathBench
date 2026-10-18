@@ -165,8 +165,8 @@ const TRAIL_FRAME_MS = 250;
 /** The trail's opacity next to the pip; it fades to nothing `TRAIL_MS` back. */
 const TRAIL_ALPHA = 0.7;
 /** The heading mark: how far past the puck its tip reaches, and how wide its base is. */
-const HEADING_LEN = 7;
-const HEADING_HALF = 4;
+const HEADING_LEN = 9;
+const HEADING_HALF = 5;
 /** Below this a pose has not moved, in yards and radians: a pip standing still asks for no redraw. */
 const STILL = 1e-3;
 
