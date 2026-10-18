@@ -1489,9 +1489,9 @@ export function createApi(opts: ApiOptions): ApiHandle {
         characterName: run.character,
         model: run.model,
         harnessVersion: run.harnessVersion,
-        // The inventory rides the track on change (see `TrackPoint.items`), so
-        // the replay pip can show what the live pip shows.
-        points: trackFrom(await statesOfRun(runId), await stateItemsOfRun(runId)),
+        // The points, and the inventory along them as patches (`inv`), so the
+        // replay pip can show what the live pip shows.
+        ...trackFrom(await statesOfRun(runId), await stateItemsOfRun(runId)),
         // The intentions beside the track: same run, different cadence.
         moves: await (async () => {
           // Same fallback as the track's own points: a run whose moves the

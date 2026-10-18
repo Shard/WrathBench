@@ -2066,21 +2066,49 @@ export interface TrackPoint {
   /** The XP bar's denominator, as the client shows it. */
   nextLevelXp?: number | null;
   /**
-   * What the character was wearing and carrying, so a replay pip can show what
-   * a live pip shows.
-   *
-   * **Carried forward, not per point.** It appears only on the points where the
-   * sample changed — the first point that has a reading, and every point after
-   * one where the inventory differed from the last one published. Holding the
-   * whole inventory on every point would be most of the response and nearly all
-   * of it repetition. So a reader keeps the last `items` it saw as it scrubs; a
-   * point without the field means "unchanged", never "empty bags", and a point
-   * before the first reading means "not yet observed".
-   *
-   * Absent throughout on a track served or published before this shipped, and
-   * on a run whose samples recorded no inventory at all.
+   * The inventory as a track served and published before `TrackResponse.inv`
+   * carried it, read only from a track that old: the whole inventory on each
+   * point where the stored sample changed, a point without the field meaning
+   * "unchanged" and one before the first reading "not yet observed". The
+   * viewer no longer writes it.
    */
   items?: ItemSample[];
+}
+
+/**
+ * One item a track's inventory names: `[name, itemId, quality]`, null where
+ * the stored row carried none. Keyed by the whole triple, not the id: a
+ * random suffix is stored in the name, so one id can carry two names at once.
+ */
+export type TrackInvItem = [name: string, itemId: number | null, quality: number | null];
+
+/**
+ * A slot filled, in a patch: `item` indexes `TrackInventory.items`, and
+ * `count` is there only when the stack is not 1. `bag` is -1 for a worn item
+ * (`slot` the equipment slot 0-18), else the carried pair `ItemSample` names.
+ */
+export type TrackInvRow = [bag: number, slot: number, item: number] | [bag: number, slot: number, item: number, count: number];
+
+/** A slot emptied, in a patch. */
+export type TrackInvGone = [bag: number, slot: number];
+
+/**
+ * One reading, on the index of the point it surfaces at: a patch onto the
+ * reading before it (onto empty bags for the first), or `null` and the reading
+ * whole, as stored, where a patch cannot say it.
+ */
+export type TrackInvEntry = [point: number, patch: (TrackInvRow | TrackInvGone)[]] | [point: number, patch: null, whole: ItemSample[]];
+
+/**
+ * What the character wore and carried along a track, as changes
+ * (`runner/viewer/track-inv.ts` is the codec and the format; `inventoryAt`
+ * reads it). Built at read time from the same stored samples the points come
+ * from, so nothing about what is recorded changed.
+ */
+export interface TrackInventory {
+  items: TrackInvItem[];
+  /** The readings, oldest first; a point before the first has none yet observed. */
+  at: TrackInvEntry[];
 }
 
 /**
@@ -2133,6 +2161,14 @@ export interface TrackResponse extends SnapshotEnvelope {
   model: string | null;
   harnessVersion: string | null;
   points: TrackPoint[];
+  /**
+   * What the character wore and carried, so a replay pip can show what a live
+   * pip shows: a reading wherever the stored sample changed, as a patch onto
+   * the one before (`TrackInventory`). Absent on a run whose samples recorded
+   * no inventory, and on a track served or published before it existed, whose
+   * points carry `items` instead.
+   */
+  inv?: TrackInventory;
   /**
    * The character this run is an attempt of, when it is one: the play bar's
    * previous/next steps. Optional — an older viewer and an older snapshot

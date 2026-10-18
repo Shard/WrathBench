@@ -340,6 +340,16 @@ lets a replay mode plug a trajectory reader into the same shape later. The
 coordinate transform lives on its own in `worldmap.ts` with no imports,
 for the same reason, and the dashboard imports it rather than copying it.
 
+`/api/run/<id>/track` is the replay's feed: the positioned samples as points,
+and what the character wore and carried along them as `inv`, a reading
+wherever the stored inventory changed, written as the slots that moved since
+the reading before. `track-inv.ts` is the codec and the format, import-free so
+the dashboard folds with the same code. The whole inventory on every changed
+point was most of a long run's track (24.7 of a level-43 character's 30.3 MB,
+re-uploaded by the publisher on every pass while the run was live), and the
+patches say the same readings in 136 KB. It is built at read time from the
+same samples, so nothing about what is recorded changed.
+
 `/api/run/<id>` also carries `reflections`: the turns the run spent reflecting,
 as half-open `[fromTurn, toTurn)` ranges off its `reflect_window` records, with
 `toTurn` null when the window ran to the end of the run. Half-open because both

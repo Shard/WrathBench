@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import type { RunRow, StatePoint } from "../viewer/api-types";
 import { activeMsUntil } from "../viewer/sessions";
+import { inventoryAt } from "../viewer/track-inv";
 import {
   resultRunOf,
   levelMarks,
@@ -167,7 +168,7 @@ describe("mapsOf / trackFrom", () => {
   });
 
   test("the track keeps only samples that carried a position", () => {
-    const points = trackFrom([
+    const { points } = trackFrom([
       state({ ts: 1, map: 0, x: 1, y: 2, level: 3, turn: 7 }),
       state({ ts: 2, level: 4 }),
       state({ ts: 3, map: 0, x: 5, y: 6 }),
@@ -182,7 +183,7 @@ describe("mapsOf / trackFrom", () => {
       { name: "Worn Mace", count: 1, equipped: true, slot: 16, itemId: 5956, quality: 1 },
       { name: "Linen Cloth", count: 3, equipped: false, slot: 23, bag: 255, itemId: 2589, quality: 1 },
     ]);
-    const points = trackFrom(
+    const track = trackFrom(
       [
         // Before the first reading: nothing observed yet.
         state({ ts: 1, map: 0, x: 1, y: 2 }),
@@ -199,17 +200,26 @@ describe("mapsOf / trackFrom", () => {
         { ts: 7, seq: 3, items: more },
       ],
     );
-    expect(points.map((p) => p.items?.length)).toEqual([undefined, 1, undefined, 2]);
-    expect(points[1]!.items![0]).toEqual({
+    // A reading on the second point and on the fourth, each a patch onto the one before.
+    expect(track.inv!.at.map((e) => e[0])).toEqual([1, 3]);
+    expect(track.points.map((p) => inventoryAt(track.inv!, track.points.indexOf(p))?.length ?? null)).toEqual([null, 1, 1, 2]);
+    expect(inventoryAt(track.inv!, 1)![0]).toEqual({
       name: "Worn Mace",
       count: 1,
       equipped: true,
-      slot: 16,
       itemId: 5956,
       quality: 1,
+      slot: 16,
     });
+    // The points carry no inventory of their own any more.
+    expect(track.points.some((p) => "items" in p)).toBe(false);
     // A track of a run that recorded no inventory carries the field nowhere.
-    expect(trackFrom([state({ ts: 1, map: 0, x: 1, y: 2 })])[0]!.items).toBeUndefined();
+    expect("inv" in trackFrom([state({ ts: 1, map: 0, x: 1, y: 2 })])).toBe(false);
+  });
+
+  test("a stored inventory the parser cannot read is a reading of empty bags, as it was on the point", () => {
+    const track = trackFrom([state({ ts: 2, map: 0, x: 1, y: 2 })], [{ ts: 1, seq: 1, items: "not json" }]);
+    expect(inventoryAt(track.inv!, 0)).toEqual([]);
   });
 });
 

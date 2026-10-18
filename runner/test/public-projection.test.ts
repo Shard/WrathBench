@@ -42,6 +42,7 @@ import type {
   RunRow,
   RunsResponse,
   TokenTotals,
+  TrackInventory,
   TrackResponse,
   TraceIndexResponse,
   TraceSegment,
@@ -925,14 +926,24 @@ describe("projectPositions and projectTrack", () => {
         smuggle({
           ts: 1000, map: 0, x: -6240, y: 380, level: 1, xp: 0, money: 0, questsCompleted: 0, turn: 1,
           health: 140, maxHealth: 220, power: 30, maxPower: 100, powerType: 3, nextLevelXp: 2100,
-          items: [smuggle({ name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 })],
         }),
-        // A point the inventory did not change on carries no `items` at all.
         smuggle({
           ts: 2000, map: 0, x: -6230, y: 381, level: 1, xp: 5, money: 0, questsCompleted: 0, turn: 2,
           health: 140, maxHealth: 220, power: 30, maxPower: 100, powerType: 3, nextLevelXp: 2100,
         }),
       ],
+      // The inventory as patches, poisoned in every place a value can ride:
+      // an item's extra element, a row's, an entry's, and a whole reading's row.
+      inv: smuggle({
+        items: [
+          [SURVIVES.itemName, 5956, 1, POISON.smuggled],
+          [SURVIVES.itemName, "5956" as unknown as number, { smuggledKey: POISON.smuggled } as unknown as number],
+        ] as unknown as TrackInventory["items"],
+        at: [
+          [0, [[-1, 16, 0, POISON.smuggled as unknown as number, 7]]],
+          [1, null, [smuggle({ name: SURVIVES.itemName, count: 2, equipped: false, itemId: 5956, quality: 1, slot: 23, bag: 255 })], POISON.smuggled],
+        ] as unknown as TrackInventory["at"],
+      }),
       moves: [
         smuggle({ ts: 1200, map: 0, x: -6200, y: 400, z: 380, target: SURVIVES.targetName, status: "arrived" }),
       ],
@@ -960,9 +971,11 @@ describe("projectPositions and projectTrack", () => {
         ...under("points[]", [
           "ts", "map", "x", "y", "level", "xp", "money", "questsCompleted", "turn",
           "health", "maxHealth", "power", "maxPower", "powerType", "nextLevelXp",
-          "items", "items[].name", "items[].count", "items[].equipped",
-          "items[].itemId", "items[].quality", "items[].slot",
         ]),
+        "inv",
+        "inv.items",
+        "inv.at",
+        ...under("inv.at[][][]", ["name", "count", "equipped", "itemId", "quality", "slot", "bag"]),
         "moves",
         ...under("moves[]", ["ts", "map", "x", "y", "target", "status"]),
         "character",
@@ -982,13 +995,65 @@ describe("projectPositions and projectTrack", () => {
       { kind: "hearth", ts: 1600 },
     ]);
     expect(out.points[0]).toMatchObject({ health: 140, maxHealth: 220, powerType: 3, nextLevelXp: 2100 });
-    // The inventory is published where it changed, and "unchanged" stays the
-    // absence of the field rather than an empty list the reader would misread.
-    expect(out.points[0]!.items).toEqual([
-      { name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
-    ]);
-    expect("items" in out.points[1]!).toBe(false);
+    // The inventory passes as names and numbers, each tuple at its own width,
+    // and a value of the wrong kind reads as unobserved rather than riding along.
+    expect(out.inv).toEqual({
+      items: [[SURVIVES.itemName, 5956, 1], [SURVIVES.itemName, null, null]],
+      at: [
+        [0, [[-1, 16, 0, 0]]],
+        [1, null, [{ name: SURVIVES.itemName, count: 2, equipped: false, itemId: 5956, quality: 1, slot: 23, bag: 255 }]],
+      ],
+    });
+    expect(out.points.some((p) => "items" in p)).toBe(false);
     expect(out.character).toEqual({ characterId: "a1", attempt: 2, attempts: 3, previous: "a1", next: "a3" });
+  });
+
+  test("track: an inventory entry off the track, or a row naming no item, is dropped, and the result re-projects to itself", () => {
+    const input = smuggle<TrackResponse>({
+      runId: "fixture-run-1",
+      characterName: CHARACTER_NAME,
+      model: "test/model",
+      harnessVersion: "harness-0.5-1-gabc",
+      points: [
+        { ts: 1000, map: 0, x: 1, y: 2, level: 1, xp: 0, money: null, questsCompleted: null, turn: 1 },
+        { ts: 2000, map: 0, x: 1, y: 2, level: 1, xp: 0, money: null, questsCompleted: null, turn: 2 },
+      ],
+      inv: {
+        items: [[SURVIVES.itemName, 5956, 1]],
+        at: [
+          [0, [[255, 23, 0], [255, 24, 3], [255, 25, 0.5], [255, 26], [7]]],
+          [1.5, [[255, 23]]],
+          [2, [[255, 23]]],
+          [-1, [[255, 23]]],
+          [1, null, "not rows"],
+        ] as unknown as TrackInventory["at"],
+      },
+    });
+    const out = projectTrack(input);
+    expect(out.inv).toEqual({ items: [[SURVIVES.itemName, 5956, 1]], at: [[0, [[255, 23, 0], [255, 26]]], [1, null, []]] });
+    expect(projectTrack(out)).toEqual(out);
+  });
+
+  test("track: a track published before the inventory was patches re-projects to itself", () => {
+    const input = smuggle<TrackResponse>({
+      runId: "fixture-run-1",
+      characterName: CHARACTER_NAME,
+      model: "test/model",
+      harnessVersion: "harness-0.5-1-gabc",
+      points: [
+        smuggle({
+          ts: 1000, map: 0, x: 1, y: 2, level: 1, xp: 0, money: null, questsCompleted: null, turn: 1,
+          items: [smuggle({ name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 })],
+        }),
+        { ts: 2000, map: 0, x: 1, y: 2, level: 1, xp: 0, money: null, questsCompleted: null, turn: 2 },
+      ],
+    });
+    const out = projectTrack(input);
+    expect(out.points[0]!.items).toEqual([{ name: SURVIVES.itemName, count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 }]);
+    expect("items" in out.points[1]!).toBe(false);
+    expect("inv" in out).toBe(false);
+    assertClean(JSON.stringify(out));
+    expect(projectTrack(out)).toEqual(out);
   });
 
   test("track: a run with no character carries no field at all, as an older track does", () => {
@@ -1004,6 +1069,8 @@ describe("projectPositions and projectTrack", () => {
     expect("travel" in out).toBe(false);
     // Nor a trace: a run from before the recorder keeps its bytes, and its key.
     expect("trace" in out).toBe(false);
+    // Nor an inventory: a run that recorded none has none to patch.
+    expect("inv" in out).toBe(false);
   });
 
   test("track: the trace window list ships as numbers, and nothing smuggled beside it", () => {

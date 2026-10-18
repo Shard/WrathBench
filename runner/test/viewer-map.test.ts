@@ -513,7 +513,7 @@ describe("readPositions", () => {
     const runsDir = fixture([
       { id: "track-hp", states: [[NOW - 5000, 4, 900, 0, 1, 2, 3, 1, 1]], gauges: [140, 220, 30, 100, 3, 2100] },
     ]);
-    const [p] = trackFrom(readStates(runsDir, "track-hp"));
+    const [p] = trackFrom(readStates(runsDir, "track-hp")).points;
     expect(p).toMatchObject({
       health: 140,
       maxHealth: 220,
@@ -524,7 +524,7 @@ describe("readPositions", () => {
     });
     // A run recorded before the columns reads them as unobserved, not zero.
     const old = fixture([{ id: "track-old", states: [[NOW - 5000, 4, 900, 0, 1, 2, 3, 1, 1]] }]);
-    expect(trackFrom(readStates(old, "track-old"))[0]).toMatchObject({ health: null, maxPower: null });
+    expect(trackFrom(readStates(old, "track-old")).points[0]).toMatchObject({ health: null, maxPower: null });
   });
 
   test("a terminated run is not on the map, however fresh its last position", () => {

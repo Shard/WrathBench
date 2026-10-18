@@ -106,6 +106,11 @@ import type {
   TrackPoint,
   TradeFacts,
   MoveIntentView,
+  TrackInvEntry,
+  TrackInvGone,
+  TrackInvItem,
+  TrackInventory,
+  TrackInvRow,
   TrackResponse,
   TrackTravelMark,
   Square,
@@ -1276,6 +1281,42 @@ function projectTravel(m: TrackTravelMark): TrackTravelMark {
   return { kind: m.kind, ts: m.ts };
 }
 
+const intIn = (v: unknown, below: number): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v < below;
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const finiteOr0 = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+/**
+ * A track's inventory (`TrackInventory`) under the same rules as an item row
+ * (`projectItems`): the name passes, and so do the id, the quality, where it
+ * sits and how many, all numbers. Rebuilt field by field, so nothing rides a
+ * tuple or an entry it was not part of. An entry on a point the track does not
+ * have, or a patch row naming an item the table does not, is dropped.
+ */
+function projectInventory(inv: TrackInventory, points: number): TrackInventory {
+  const items: TrackInvItem[] = (Array.isArray(inv.items) ? inv.items : []).map((d): TrackInvItem => {
+    const [name, itemId, quality] = Array.isArray(d) ? d : [];
+    return [typeof name === "string" ? name : "", numOrNull(itemId), numOrNull(quality)];
+  });
+  const row = (r: unknown): TrackInvRow | TrackInvGone | null => {
+    if (!Array.isArray(r) || r.length < 2) return null;
+    const at: TrackInvGone = [finiteOr0(r[0]), finiteOr0(r[1])];
+    if (r.length === 2) return at;
+    if (!intIn(r[2], items.length)) return null;
+    return r.length === 3 ? [at[0], at[1], r[2]] : [at[0], at[1], r[2], finiteOr0(r[3])];
+  };
+  const at: TrackInvEntry[] = [];
+  for (const e of Array.isArray(inv.at) ? inv.at : []) {
+    if (!Array.isArray(e) || !intIn(e[0], points)) continue;
+    if (e[1] === null) {
+      const whole = Array.isArray(e[2]) ? e[2].filter((i) => typeof (i as Partial<ItemSample> | null)?.name === "string") : [];
+      at.push([e[0], null, projectItems(whole as ItemSample[]) ?? []]);
+    } else if (Array.isArray(e[1])) {
+      at.push([e[0], e[1].map(row).filter((r): r is TrackInvRow | TrackInvGone => r !== null)]);
+    }
+  }
+  return { items, at };
+}
+
 export function projectTrack(t: TrackResponse): TrackResponse {
   return scrubPathsValue<TrackResponse>({
     runId: t.runId,
@@ -1300,12 +1341,13 @@ export function projectTrack(t: TrackResponse): TrackResponse {
         maxPower: p.maxPower ?? null,
         powerType: p.powerType ?? null,
         nextLevelXp: p.nextLevelXp ?? null,
-        // Only where the sample changed, as the track serves it: the field's
-        // absence is "unchanged", so filling it in on every point here would
-        // be a different claim as well as a much larger file.
+        // A track published before `inv` carries its inventory here, and
+        // re-projects to itself; the viewer no longer writes it.
         ...(p.items === undefined ? {} : { items: projectItems(p.items) ?? [] }),
       }),
     ),
+    // The inventory along the track, as patches; absent on a run that recorded none.
+    ...(t.inv === undefined ? {} : { inv: projectInventory(t.inv, t.points.length) }),
     // As on the live feed.
     moves: (t.moves ?? []).map(projectMove),
     // Flights, hearths and graveyard releases, as kinds and timestamps: the
