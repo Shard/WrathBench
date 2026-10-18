@@ -67,6 +67,31 @@ pods. A supervisor that has been gone for more than three ticks
 reports `NOT RUNNING`. Finished runs get no rows there: the run directories and
 `fleet-<stamp>.jsonl` are the record.
 
+### Inspect a run
+
+```
+bun wb inspect live                                  # every run with a heartbeat, one line each
+bun wb inspect run <run-id> [--since 2h]             # verdict, level, counts, errors by class, sizes, trace
+bun wb inspect trajectory <run-id> --errors --last 10
+bun wb inspect audit <run-id> [--op WB_MOVE_RESULT [--status S]] [--since 1h]
+bun wb inspect audit <run-id> --summary --op move_path,WB_MOVE_RESULT   # move verdicts by op
+bun wb inspect publisher [<run-id>]                  # last flip, versions per run, the secret scan, last passes
+```
+
+All read-only and bounded by default: a trajectory line is never printed
+whole, only capped fields of it. A run is live when its row has neither a
+termination nor a pause; one with neither whose heartbeat is older than two
+minutes has lost its process and reads `ownerless`. The session token is
+struck from everything printed, older trajectories included. The audit log's
+files are named after it, so `inspect audit` reads the token from the run's
+`meta.json`, hands it on stdin to `infra/inspect-audit.pl` inside the
+worldserver container, which reduces the files there, and prints counts or
+struck records and never a file name. `live`, `run` and `trajectory` are
+`infra/inspect-run.ts` in the runner pod, which imports nothing outside
+`bun:sqlite` and `node:*`; before a release ships it, the same file runs in the
+pod from stdin:
+`kubectl -n wrathbench exec -i deploy/wrathbench-runner -- bun run - run <run-id> < infra/inspect-run.ts`.
+
 ### Where the config lives
 
 **The sqlite config store is the only fleet config.** The
@@ -986,7 +1011,8 @@ bun wb server log-retention --days 7   # the same for another window
 bun wb server log-retention --apply    # a Job from the CronJob, now; waits and prints its log
 ```
 
-To keep one run's audit past the window, copy it out before the pass: its
+To read one run's audit while it is kept, `bun wb inspect audit <run-id>`
+("Inspect a run", above). To keep one past the window, copy it out before the pass: its
 files in order, the undated one first should it have one, then the days
 ascending. The token is `config.token` in the run's `meta.json`; it travels on
 stdin, never argv:
