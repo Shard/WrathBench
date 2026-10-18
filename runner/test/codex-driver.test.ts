@@ -812,6 +812,25 @@ describe("codex driver", () => {
     paused.trajectory.close();
   }, 40_000);
 
+  test("codexArgs: no shell reaches the model, on the first turn or a resumed one", () => {
+    // `sandbox_mode="read-only"` restricts writes, not reads: a shell under it
+    // could read the lane's auth.json, which sits in the CLI's own home. So
+    // both shell surfaces are switched off by name, and nothing else the
+    // pinned CLI offers returns a file's bytes (verified against 0.159.3 with
+    // a local capture server: `view_image` refuses non-image data, the
+    // code-mode `exec` has no file system or network, `apply_patch` only
+    // reports whether a whole line matched before the sandbox refuses it).
+    const base = { instructionsPath: "/i.md", bunBin: "/usr/bin/bun", bridgePath: "/b.ts", mcpPort: 1 };
+    for (const args of [codexArgs(base), codexArgs({ ...base, threadId: "t-1" })]) {
+      const disabled = args.filter((_, i) => args[i - 1] === "--disable");
+      expect(disabled).toContain("shell_tool");
+      expect(disabled).toContain("unified_exec");
+      const cfg = args.filter((_, i) => args[i - 1] === "-c");
+      expect(cfg).toContain('sandbox_mode="read-only"');
+      expect(cfg).toContain('approval_policy="never"');
+    }
+  });
+
   test("codexArgs: the verified flag set, resume threading, TOML-quoted paths", () => {
     const base = { instructionsPath: "/runs/x/codex-instructions.md", bunBin: "/usr/bin/bun", bridgePath: "/repo/runner/src/mcp-bridge.ts", mcpPort: 40123 };
     const first = codexArgs({ ...base, model: "gpt-6-astra", effort: "high" });

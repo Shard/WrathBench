@@ -90,6 +90,7 @@ import {
   volumeUsage,
 } from "./run-fleet-state";
 import { readMeta } from "../runner/src/trajectory";
+import { maskCredentialShapes } from "../runner/src/secret-scan";
 import { accountHeldBy } from "./run-roster";
 import { readImageRecord } from "./run-pod";
 import { type CampaignFile, runCampaignFile } from "../runner/src/campaign-file";
@@ -196,10 +197,6 @@ export function formatPaused(listed: readonly PausedListing[], detailOf?: (l: Pa
   ];
 }
 
-/** Credential shapes (as `publish-accept.ts` checks for), and a JWT. */
-const CREDENTIAL_SHAPES =
-  /\b(?:Bearer\s+[A-Za-z0-9._~+/-]{12,}|sk-[A-Za-z0-9_-]{16,}|csk-[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})/g;
-
 /**
  * A pause's detail — the CLI's own stderr line for an `infrastructure-failed`
  * pause — as one line of at most `max` characters: whitespace collapsed, the
@@ -213,7 +210,7 @@ export function pauseDetailLine(detail: string | undefined | null, max = 120): s
   s = s.replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(?:ERROR|WARN|INFO|DEBUG|TRACE)\s+/, "");
   s = s.replace(/^[a-z_][a-z0-9_]*(?:::[a-z_][a-z0-9_]*)+:\s+/, "");
   s = s.replace(/(?<![\w.~-])\/(?:[^\s/;:,"']+\/)+[^\s/;:,"']*/g, "…");
-  s = s.replace(CREDENTIAL_SHAPES, "[masked]");
+  s = maskCredentialShapes(s);
   if (s.length === 0) return undefined;
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }

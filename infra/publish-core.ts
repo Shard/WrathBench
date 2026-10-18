@@ -40,6 +40,15 @@
  * because a leaked object costs a fraction of a cent and a failed publish costs
  * a minute of staleness.
  *
+ * **A body that fails the secret scan is never written.** When the caller
+ * passes `scan`, every body is scanned on its way to `put` (only the ones a
+ * pass actually writes: an immutable key the bucket holds was scanned when it
+ * was written), and a body with a finding is withheld exactly like a failed
+ * upload: nothing else stops, and the manifest is not flipped, so the public
+ * site stays on the last generation that passed. What was withheld, by path,
+ * rule and count — never the matched text — is in the log and in the state
+ * file's `secretScan`, until a pass comes through clean.
+ *
  * `docs/PUBLIC-DASHBOARD.md` is the design this implements.
  */
 
@@ -48,6 +57,7 @@ import { dirname } from "node:path";
 // The codec's window arithmetic, pure and import-free: the state below records
 // published trace windows in the same packed runs a track lists them in.
 import { segRunsAdd, segRunsHas, type TraceSegRuns } from "../runner/viewer/trace";
+import { describeFindings, type ScanFinding } from "../runner/src/secret-scan";
 
 // ------------------------------------------------------------------ contracts
 
@@ -248,6 +258,18 @@ export interface PublishState {
   lastGen?: string;
   /** Epoch ms of that flip. Operational breadcrumb; nothing reads it. */
   lastFlipAt?: number;
+  /**
+   * The last pass's secret scan, when the publisher scans: when it ran, how
+   * many bodies it scanned, and every object it withheld with the rules that
+   * matched. Status for the operator, rewritten every pass; never read back.
+   */
+  secretScan?: SecretScanStatus;
+}
+
+export interface SecretScanStatus {
+  at: number;
+  scanned: number;
+  withheld: { path: string; findings: ScanFinding[] }[];
 }
 
 export function emptyState(): PublishState {
@@ -397,6 +419,20 @@ export function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * A body the secret scan refused: it was not written. The message names the
+ * rules and their counts, never what they matched.
+ */
+export class SecretScanHit extends Error {
+  readonly findings: ScanFinding[];
+
+  constructor(findings: ScanFinding[]) {
+    super(`withheld by the secret scan (${describeFindings(findings)})`);
+    this.name = "SecretScanHit";
+    this.findings = findings;
+  }
+}
+
 /** A PUT wave that did not complete. Carries every failure, not just the first. */
 export class PublishError extends Error {
   readonly wave: WaveName;
@@ -520,6 +556,12 @@ export interface PublishOptions extends PruneLimits {
   /** Where the engine's few narrative lines go. Silent by default. */
   log?: (line: string) => void;
   now?: () => number;
+  /**
+   * The secret scan every body passes before it is written: the findings, or
+   * none for a clean body (`SecretScanner.scan`, runner/src/secret-scan.ts).
+   * Absent writes without scanning, as tests of the engine alone do.
+   */
+  scan?: (body: string) => readonly ScanFinding[];
 }
 
 export interface PublishReport {
@@ -536,6 +578,8 @@ export interface PublishReport {
   deleteFailures: string[];
   /** Whether the bucket's manifest now advertises `gen`. */
   flipped: boolean;
+  /** Bodies the secret scan read this pass, when there is one. */
+  scanned?: number;
 }
 
 /**
@@ -715,6 +759,15 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
   };
 
   const report: PublishReport = { gen: "", put: [], unchanged: 0, bytes: 0, deleted: [], deleteFailures: [], flipped: false };
+  // Rewritten every pass the scan runs, failed passes included: the loop
+  // saves the state either way, so this is what the operator reads.
+  const scan = opts.scan;
+  let scanStatus: SecretScanStatus | undefined;
+  if (scan !== undefined) {
+    scanStatus = { at: now(), scanned: 0, withheld: [] };
+    state.secretScan = scanStatus;
+    report.scanned = 0;
+  }
 
   /**
    * Upload what of `inWave` the bucket does not already hold, counting the
@@ -738,6 +791,16 @@ export async function publishPass(render: PassRenderer, store: ObjectStore, stat
       todo,
       wave === "mutable" ? 1 : concurrency,
       async (a) => {
+        if (scan !== undefined && scanStatus !== undefined) {
+          const findings = [...scan(a.body)];
+          scanStatus.scanned++;
+          report.scanned = scanStatus.scanned;
+          if (findings.length > 0) {
+            scanStatus.withheld.push({ path: a.path, findings });
+            log(`publish: ${a.path} ${new SecretScanHit(findings).message}`);
+            throw new SecretScanHit(findings);
+          }
+        }
         await store.put(a.path, a.body, { contentType: a.contentType, cacheControl: a.cacheControl });
         const c = classifyPath(a.path);
         if (c.kind === "trace") {
@@ -911,6 +974,7 @@ async function runPrune(
 /** The one line a pass is worth in a log. */
 export function describeReport(report: PublishReport): string {
   const parts = [`${report.put.length} put`, `${(report.bytes / 1024).toFixed(1)} KiB`, `${report.unchanged} unchanged`];
+  if (report.scanned !== undefined) parts.push(`${report.scanned} scanned clean`);
   if (report.deleted.length > 0) parts.push(`${report.deleted.length} pruned`);
   if (report.deleteFailures.length > 0) parts.push(`${report.deleteFailures.length} deletes deferred`);
   parts.push(report.flipped ? "manifest flipped" : "no flip");

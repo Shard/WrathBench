@@ -745,8 +745,14 @@ marked `auto`. Record-only; why and the size are in `docs/ARCHITECTURE.md`,
 Confinement: the child is exec'd under a Linux Landlock ruleset
 (`src/sandbox/confine.ts`, whose `confinementPlan` is the one place the rules
 live) that the kernel enforces whatever API a snippet uses. Filesystem: reads
-of the interpreter, `runner/`, `sdk/`, `node_modules/` and the manifests, so
-`.env`, the repo root, the home directory and `/tmp` answer `EACCES`. Exec:
+of the interpreter, `runner/`, `sdk/`, `node_modules/` and the manifests, the
+child's own `/proc` entry and a few system-wide `/proc` files, and five `/dev`
+nodes, so `.env`, the repo root, the home directory, `/tmp`, `/dev/shm` and
+every other process's `/proc` entry answer `EACCES`. The last matters because
+`/proc/<pid>/environ` is already refused across a Landlock domain but
+`/proc/<pid>/cmdline` is not: without the narrowing a snippet could read the
+argv of every process it can see, which on a desktop is every process on the
+machine. Exec:
 only the bun binary and its ELF loader, so `/bin/sh`, `curl` and every other
 binary are `EACCES` at spawn (nothing in the sandbox needs to spawn). TCP:
 connect only to the port in the run's module URL — the one port the SDK's HTTP

@@ -23,6 +23,13 @@
  *   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT
  *                                   Bun.S3Client's own names, autoloaded from .env
  *
+ * Secret scan: every body is scanned before it is written (`SecretScanner`,
+ * runner/src/secret-scan.ts), against the credentials in this process's own
+ * environment, every run's session token, and the credential shapes. A body
+ * with a finding is withheld and the pass does not flip (publish-core.ts);
+ * the log and the state file's `secretScan` say which object and which rule,
+ * never the value.
+ *
  * Cache-control: the artifact contract carries a per-object header, but Bun's
  * S3 writer cannot send Cache-Control (S3Options has `type` and encodings
  * only, as of 1.4), so objects land without it and the Cloudflare cache rule
@@ -39,6 +46,7 @@ import { HOME_EPISODE } from "../dashboard/src/lib/homeladder";
 import { OG_KEY, renderOgPng } from "./og-render";
 import { ROBOTS_KEY, ROBOTS_TXT } from "./robots";
 import { publishLoop, type ObjectStore, type PassRenderer, type SnapshotResult } from "./publish-core";
+import { describeFindings, envSecrets, runTokenSecrets, SecretScanner } from "../runner/src/secret-scan";
 
 const RUNS_DIR = Bun.env.WRATHBENCH_RUNS_DIR ?? "data/runs";
 const STATE_PATH = Bun.env.WRATHBENCH_PUBLISH_STATE ?? "data/publish/state.json";
@@ -118,6 +126,15 @@ const renderer = createRenderer({
   ...(MODULE_URL !== undefined ? { moduleUrl: MODULE_URL } : {}),
 });
 
+// The secret scan's known values: this process's own credentials, read once
+// (the environment does not change under a running process), and every run's
+// session token, read fresh each pass so a run that started since is covered.
+const ownSecrets = envSecrets(Bun.env);
+const scanner = new SecretScanner(ownSecrets.secrets);
+const refreshScanner = (): void => {
+  scanner.setKnown([...ownSecrets.secrets, ...runTokenSecrets(RUNS_DIR)]);
+};
+
 // The streaming shape: every `BATCH` runs, the artifacts just projected go
 // straight to the engine's run wave and are dropped. Same objects, same order,
 // same manifest — the pass simply never holds the whole tree at once.
@@ -132,6 +149,7 @@ const renderer = createRenderer({
 // `published` is the engine's record of the trace windows already in the
 // bucket, so a pass renders only the segments that closed since the last one.
 const render: PassRenderer = async (sink, published) => {
+  refreshScanner();
   const result = await renderer(undefined, { sink, batch: BATCH }, published);
   await publishCard(result);
   await publishRobots();
@@ -179,6 +197,13 @@ async function publishCard(result: SnapshotResult): Promise<void> {
       log(`publish: no ladder-${HOME_EPISODE}.json in this pass — the card is unchanged`);
       return;
     }
+    // The card draws text off the ladder before the aggregate wave scans it,
+    // so it is scanned here first: a ladder the scan would withhold draws no card.
+    const findings = scanner.scan(artifact.body);
+    if (findings.length > 0) {
+      log(`publish: the card was not updated — its ladder is withheld by the secret scan (${describeFindings(findings)})`);
+      return;
+    }
     const runs = (JSON.parse(artifact.body) as { runs?: ResultRun[] }).runs ?? [];
     const card = renderOgPng(runs);
     if (card.stamp === cardStamp) return;
@@ -200,12 +225,17 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 const log = (line: string): void => console.log(`${new Date().toISOString()} ${line}`);
 log(`publishing ${RUNS_DIR} -> ${Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET} (${mode}, every ${INTERVAL_MS}ms, ${BATCH} runs per flush)`);
+log(
+  `secret scan: ${ownSecrets.secrets.length} credential(s) of this process's own and every run's session token, by value, and the credential shapes` +
+    (ownSecrets.skipped.length > 0 ? `; not matched by value, too weak or not a value: ${ownSecrets.skipped.join(", ")}` : ""),
+);
 
 const summary = await publishLoop(render, store, STATE_PATH, {
   intervalMs: INTERVAL_MS,
   once: mode === "once",
   signal: abort.signal,
   log,
+  scan: (body) => scanner.scan(body),
 });
 log(`done: ${summary.passes} passes, ${summary.published} published, ${summary.failed} failed`);
 process.exit(summary.passes > 0 && summary.failed === summary.passes ? 1 : 0);
