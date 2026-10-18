@@ -303,22 +303,54 @@ const WITHHELD_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Strings the model wrote, by the key they arrive under.
+ * Where the model's own words sit in a published body: the surfaces
+ * docs/PUBLIC-DASHBOARD.md calls the residual. A filesystem-path, host-fact or
+ * wiki-dump-source hit at one of these is a residual note, not a finding; a
+ * credential is a finding wherever it is.
  *
- * `text` and `code` are the model's turn text, its snippet source, the
- * scratchpad body, an episodic line, and the tool-result text it formatted —
- * exactly the surfaces docs/PUBLIC-DASHBOARD.md calls the residual. A scan hit inside one
- * of these is reported as a residual note rather than a finding.
+ * Matched by location, never by a bare key name, so a harness field that
+ * shares a name with one of these (a `harness` entry's `text`, a `new` or an
+ * `old` anywhere else) is still checked. A location is `<object name>:<path>`,
+ * and inside `entries.json` the entry's type stands in for its index. The list
+ * is read off the projection's allowlists (`ENTRY_FIELDS`, `projectActionNotes`,
+ * `projectStatus`) and the scratchpad's own key:
+ * - a turn's `text`, a CLI turn's closing `text`, a snippet's `code`, an
+ *   episodic line, and a snippet's or tool's result `text`;
+ * - every string under a tool call's `args`: the model's tool input as sent,
+ *   alias and unknown keys included (`write_scratchpad`'s `content`,
+ *   `edit_scratchpad`'s `old` and `new`, `log_status`'s `text`, a query). A
+ *   string that IS the `args` is the loop's own parse error, and is checked;
+ * - an action note's `say` text and raw payload;
+ * - the scratchpad, and each live position's episodic status.
  */
-const MODEL_AUTHORED: ReadonlySet<string> = new Set(["text", "code"]);
+const MODEL_AUTHORED: readonly RegExp[] = [
+  /^entries\.json:(?:response|claude_result|episodic|snippet_result|tool_result)\.text$/,
+  /^entries\.json:snippet\.code$/,
+  /^entries\.json:tool_call\.args[.[]/,
+  /^entries\.json:actions\.actions\[\d+\]\.args\.(?:text|payload)(?:\[\d+\])*$/,
+  /^scratchpad\.json:text$/,
+  /^live\.json:positions\.positions\[\d+\]\.status\.text$/,
+];
+
+/** Whether the string at `path` in the object `key` is the model's own, by `MODEL_AUTHORED`. */
+function modelAuthored(key: string, body: unknown, path: string): boolean {
+  const name = key.split("/").at(-1) ?? "";
+  let where = `${name}:${path}`;
+  const entry = name === "entries.json" ? /^entries\[(\d+)\]\.(.+)$/.exec(path) : null;
+  if (entry !== null) {
+    const t = (valueAt(body, `entries[${entry[1]}]`) as { t?: unknown } | undefined)?.t;
+    where = `${name}:${typeof t === "string" ? t : "?"}.${entry[2]}`;
+  }
+  return MODEL_AUTHORED.some((r) => r.test(where));
+}
 
 /** Walk every string in a parsed body, with the JSON path that reached it. */
-function walkStrings(value: unknown, at: string, visit: (path: string, key: string, s: string) => void): void {
+function walkStrings(value: unknown, at: string, visit: (path: string, s: string) => void): void {
   if (typeof value === "string") return;
   if (Array.isArray(value)) {
     value.forEach((v, i) => {
       const path = `${at}[${i}]`;
-      if (typeof v === "string") visit(path, lastKey(at), v);
+      if (typeof v === "string") visit(path, v);
       else walkStrings(v, path, visit);
     });
     return;
@@ -326,15 +358,9 @@ function walkStrings(value: unknown, at: string, visit: (path: string, key: stri
   if (value === null || typeof value !== "object") return;
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     const path = at === "" ? k : `${at}.${k}`;
-    if (typeof v === "string") visit(path, k, v);
+    if (typeof v === "string") visit(path, v);
     else walkStrings(v, path, visit);
   }
-}
-
-/** The object key an array path sits under, so `entries[3]` reports as `entries`. */
-function lastKey(at: string): string {
-  const tail = at.split(".").at(-1) ?? "";
-  return tail.replace(/\[\d+\]$/, "");
 }
 
 /** Walk every (path, key, value) pair, strings included, for the key-level rules. */
@@ -368,8 +394,8 @@ export function scanBody(key: string, body: unknown): { findings: Finding[]; res
   const findings: Finding[] = [];
   const residual: Finding[] = [];
 
-  walkStrings(body, "", (path, k, s) => {
-    const where = MODEL_AUTHORED.has(k) ? residual : findings;
+  walkStrings(body, "", (path, s) => {
+    const where = modelAuthored(key, body, path) ? residual : findings;
     const fs = FS_PATH.exec(s);
     if (fs !== null) where.push({ kind: "filesystem-path", key, at: path, detail: excerpt(s, fs.index) });
     const host = HOST_FACT.exec(s);
