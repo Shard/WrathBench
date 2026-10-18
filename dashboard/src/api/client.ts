@@ -25,6 +25,7 @@ import type {
   PositionsResponse,
   RunDetailResponse,
   NearbyWindow,
+  ScratchpadResponse,
   TraceIndexResponse,
   TraceSegment,
   TrackResponse,
@@ -155,18 +156,31 @@ export function sweepExpired(cache: Map<string, { at: number }>, now: number, tt
  */
 export async function getJson<T>(url: string, f: typeof globalThis.fetch = globalThis.fetch): Promise<T> {
   const res = await f(url, { headers: { accept: "application/json" } });
-  if (!res.ok) {
-    // The API answers errors as `{ error }`; a proxy or a bucket in the way may not.
-    let detail = `${res.status}`;
-    try {
-      const body = (await res.json()) as { error?: unknown };
-      if (typeof body.error === "string") detail = body.error;
-    } catch {
-      /* a non-JSON error body is still an error */
-    }
-    throw new ApiError(res.status, `${url}: ${detail}`);
-  }
+  if (!res.ok) throw await errorOf(url, res);
   return (await res.json()) as T;
+}
+
+/**
+ * The same GET for the one route that answers in text: the scratchpad, which
+ * the viewer serves as the file's own `text/plain`. Its errors are the API's
+ * JSON `{ error }` like any other route's.
+ */
+export async function getText(url: string, f: typeof globalThis.fetch = globalThis.fetch): Promise<string> {
+  const res = await f(url, { headers: { accept: "text/plain" } });
+  if (!res.ok) throw await errorOf(url, res);
+  return await res.text();
+}
+
+async function errorOf(url: string, res: Response): Promise<ApiError> {
+  // The API answers errors as `{ error }`; a proxy or a bucket in the way may not.
+  let detail = `${res.status}`;
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    if (typeof body.error === "string") detail = body.error;
+  } catch {
+    /* a non-JSON error body is still an error */
+  }
+  return new ApiError(res.status, `${url}: ${detail}`);
 }
 
 /**
@@ -214,13 +228,13 @@ export function createClient(opts: ClientOptions = {}) {
    * (the ladder's episode) or sit on a 5s feed, so neither can be served
    * anything older than the page's own cadence already allows.
    */
-  function get<T>(path: string): Promise<T> {
+  function get<T>(path: string, read: (url: string, f: typeof globalThis.fetch) => Promise<T> = getJson): Promise<T> {
     const url = `${opts.base ?? ""}${path}`;
     const at = clock();
     sweepExpired(cache, at, ttl);
     const hit = cache.get(url);
     if (hit !== undefined && at - hit.at < ttl) return hit.value as Promise<T>;
-    const value = getJson<T>(url, f);
+    const value = read(url, f);
     cache.set(url, { at, value });
     void value.catch(() => {
       if (cache.get(url)?.value === value) cache.delete(url);
@@ -312,6 +326,13 @@ export function createClient(opts: ClientOptions = {}) {
       if (from !== undefined) q.set("from", String(from));
       return get<EntriesResponse>(`/api/run/${encodeURIComponent(id)}/entries?${q.toString()}`);
     },
+    /**
+     * The run's scratchpad, the model's own notes as it last wrote them. A run
+     * that never wrote one is a 404.
+     */
+    scratchpad: async (id: string): Promise<ScratchpadResponse> => ({
+      text: await get(`/api/run/${encodeURIComponent(id)}/scratchpad`, getText),
+    }),
     /** The raw JSONL line for one entry, secrets already stripped server-side. */
     raw: async (id: string, i: number): Promise<string> => {
       // Not memoised: one raw line is fetched when a reader opens it, never polled.

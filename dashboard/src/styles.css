@@ -761,6 +761,15 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
 .side-status .reflecting { margin-left: 6px; color: var(--xp); font-style: italic; font-weight: 700;
                            text-transform: none; letter-spacing: 0; }
 
+/*
+ * The run's scratchpad (components/Scratchpad.tsx): the model's notes as
+ * written, up to 32k chars. Its own scroll box, so a long pad costs the sidebar
+ * a bounded height; and `anywhere`, so one unbroken line wraps inside the
+ * panel instead of widening the page on a phone.
+ */
+pre.block.scratchpad { max-height: 60vh; overflow-y: auto; overflow-wrap: anywhere; min-width: 0;
+                       font-size: var(--fs-sm); line-height: 1.45; }
+
 @media (max-width: 900px) {
   .page.runview { height: auto; }
   .runview-cols { flex-direction: column; min-height: 0; }

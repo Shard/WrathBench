@@ -40,6 +40,7 @@ import {
 import { subscribeTail } from "../api/live";
 import {
   api,
+  ApiError,
   rawPath,
   SNAPSHOT_MODE,
   type ApiInfoResponse,
@@ -59,6 +60,7 @@ import { AttemptStrip, CharacterTotalsCard } from "../components/CharacterCards"
 import { Coins, QuestCount } from "../components/CharacterFacts";
 import { XpBar } from "../components/UnitFrame";
 import { InventoryPanel } from "../components/Inventory";
+import { ScratchpadPanel } from "../components/Scratchpad";
 import { characterSeriesLabel, stitchCharacter, type CharacterSeries } from "../lib/ladder";
 import { fmtAge, fmtCost, fmtDuration, fmtElapsed, fmtItems, fmtLatency, fmtTokens, fmtToolCallBudget, fmtTps, modelDisplay, resolvedLabel, shortHarness, shortRunId, stamp } from "../lib/format";
 import { groupFeed, type CallGroup, type FeedGroup, type ResponseGroup, type TurnGroup } from "../lib/feedgroup";
@@ -189,6 +191,24 @@ export default function RunDetail() {
    * public projection would have to learn to carry.
    */
   const [lineage, setLineage] = createSignal<Lineage | undefined>(undefined);
+  /*
+   * The run's scratchpad, or null for a run that has none (yet). A string, so
+   * a re-read that brings back the same pad changes nothing on the page. Read
+   * once with the detail and again on each detail change of a live run: every
+   * poll tick privately, and publicly each new version of the run, whose
+   * listing row then names the new pad. Its absence is never an error and its
+   * failure never a banner — the pad is one panel, not the page.
+   */
+  const [pad, setPad] = createSignal<string | null>(null);
+  const loadPad = (): void => {
+    void api
+      .scratchpad(params.id)
+      .then((p) => setPad(p.text))
+      .catch((e: unknown) => {
+        if (e instanceof ApiError && e.status === 404) setPad(null);
+        else logError("run scratchpad", e);
+      });
+  };
 
   /*
    * The log column is the scroll container, not the window: with the two-column
@@ -300,6 +320,7 @@ export default function RunDetail() {
       .models()
       .then((m) => setRoster(m.models))
       .catch(() => undefined);
+    loadPad();
 
     void api
       .run(params.id)
@@ -393,6 +414,8 @@ export default function RunDetail() {
               setTotal(next.total);
               if (feedPublished()) void loadWindow().catch(() => undefined);
             }
+            // The pad has no tail in either build; it moves with the detail.
+            loadPad();
           });
         });
         // Only a live run needs the tail; a finished one never grows again.
@@ -946,6 +969,9 @@ export default function RunDetail() {
                       </div>
                     </div>
                   </div>
+
+                  {/* The model's own notes, under the figures about the run. Absent for a run with none. */}
+                  <Show when={pad()}>{(text) => <ScratchpadPanel text={text()} />}</Show>
 
                   <h2 class="section">milestones</h2>
                   <Milestones detail={detail()} />

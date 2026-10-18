@@ -370,7 +370,9 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   snippet's value and its console objects (`Bun.inspect`, read in place) —
   and the gossip option text the SDK quotes in its own hints and errors.
   Quest titles, item, NPC, zone and spell names and
-  every id remain. The run's `scratchpad.json` ships whole beside it.
+  every id remain. The run's `scratchpad.json` ships whole beside it, and
+  the run page shows it as plain text, never parsed as markup (a page reads
+  only the key its listing row names, so a run with no pad requests nothing).
   **Residual, stated plainly**: model-authored text — turn text, snippet
   code, the scratchpad, the episodic status, the words of console lines,
   objects the model rebuilt under keys of its own, and any tool result the
@@ -513,9 +515,8 @@ site still on the previous dashboard build reads the trimmed bodies unchanged,
 because the build reads none of what was left out.
 
 Published and unread, left as they were because each is stated as public above
-or is the operator's to decide: a run's `scratchpad.json` (no page fetches it;
-"ships whole" above) and the `campaignVersion` and `arm` stamps on a result row
-and a run's row (for matching a run to its campaign pane).
+or is the operator's to decide: the `campaignVersion` and `arm` stamps on a
+result row and a run's row (for matching a run to its campaign pane).
 
 ## What the ladder shows
 

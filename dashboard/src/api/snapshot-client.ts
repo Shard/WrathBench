@@ -46,6 +46,7 @@ import type {
   PositionsResponse,
   ResultsResponse,
   RunDetailResponse,
+  ScratchpadResponse,
   SnapshotEnvelope,
   TraceIndexResponse,
   TraceSegment,
@@ -524,6 +525,15 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
      */
     entries: async (id: string): Promise<EntriesResponse> =>
       await memo<EntriesResponse>(await pointer(id, "entries")),
+    /*
+     * The scratchpad the listing names for the run's current version, and only
+     * that one. A row with no pointer — a run that never wrote a pad, or a
+     * snapshot from before pads were published — is a 404 from `pointer`
+     * before anything is requested: a guessed key would be a 404 the edge then
+     * caches for a day.
+     */
+    scratchpad: async (id: string): Promise<ScratchpadResponse> =>
+      await memo<ScratchpadResponse>(await pointer(id, "scratchpad")),
     /*
      * Raw trajectory lines are the unprojected record — the run config, the
      * whole message array, every packet — and stay in the lab.
