@@ -77,6 +77,7 @@
  * the same command without `--from` (and needs no DB env at all).
  */
 
+import { readdir } from "node:fs/promises";
 import { probeName } from "./lib/name";
 import { connect, type MovePoint, type MoveResult, type UnitView } from "../../sdk/src/index";
 import { applyScenario, ensureFixtureCharacter, type FixtureContext } from "./lib/fixture";
@@ -90,8 +91,9 @@ const ACCOUNT = process.env.MODULE_ACCOUNT ?? "PROBE";
 // Session tokens must be at least 32 characters (POST /session rejects
 // shorter ones with weak_token); randomUUID keeps them unguessable too.
 const TOKEN = `smoke-travel-${crypto.randomUUID()}`;
-// The module's per-session audit (WrathBench.AuditDir, `<token>.jsonl`), as
-// the runner container sees the repo mount. Leg 4 reads it for the
+// The module's per-session audit (WrathBench.AuditDir, one
+// `<token>.<YYYY-MM-DD>.jsonl` per UTC day; module/PROTOCOL.md "Audit log"),
+// as the runner container sees the repo mount. Leg 4 reads it for the
 // `move_transport_leg` boarding record.
 const AUDIT_DIR = process.env.WRATHBENCH_AUDIT_DIR ?? "/wrathbench/data/logs/wrathbench";
 
@@ -488,16 +490,29 @@ async function board(leg: string, dir: Direction, firstVariant: "point" | "guid"
   throw new LegFailure(`${leg}: not aboard within ${secs(BOARDING_BOUND_MS)} (${attempts} attempts)`);
 }
 
-/** The module's audit rows for this session with the given op. */
+/**
+ * The module's audit rows for this session with the given op, read across the
+ * session's files in order: a legacy undated `<token>.jsonl` first, should one
+ * remain, then the day files ascending (a session that crosses midnight UTC
+ * has two).
+ */
 async function auditRows(op: string): Promise<Record<string, unknown>[]> {
-  const path = `${AUDIT_DIR}/${TOKEN.replace(/[^A-Za-z0-9_-]/g, "_")}.jsonl`;
-  const file = Bun.file(path);
-  if (!(await file.exists())) throw new LegFailure(`audit file ${path} is not readable from here (set WRATHBENCH_AUDIT_DIR)`);
+  const stem = TOKEN.replace(/[^A-Za-z0-9_-]/g, "_");
+  let names: string[];
+  try {
+    names = await readdir(AUDIT_DIR);
+  } catch {
+    throw new LegFailure(`audit dir ${AUDIT_DIR} is not readable from here (set WRATHBENCH_AUDIT_DIR)`);
+  }
+  const files = names.filter((n) => n.startsWith(stem) && /^(\.\d{4}-\d{2}-\d{2})?\.jsonl$/.test(n.slice(stem.length))).sort();
+  if (files.length === 0) throw new LegFailure(`no audit file for this session under ${AUDIT_DIR} (set WRATHBENCH_AUDIT_DIR)`);
   const rows: Record<string, unknown>[] = [];
-  for (const line of (await file.text()).split("\n")) {
-    if (!line) continue;
-    const row = JSON.parse(line) as { kind: string; payload: Record<string, unknown> };
-    if (row.kind === "action" && row.payload?.op === op) rows.push(row.payload);
+  for (const name of files) {
+    for (const line of (await Bun.file(`${AUDIT_DIR}/${name}`).text()).split("\n")) {
+      if (!line) continue;
+      const row = JSON.parse(line) as { kind: string; payload: Record<string, unknown> };
+      if (row.kind === "action" && row.payload?.op === op) rows.push(row.payload);
+    }
   }
   return rows;
 }

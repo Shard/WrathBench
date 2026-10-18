@@ -2,12 +2,14 @@
  * The server log retention pass (chart/wrathbench/files/log-retention.pl),
  * run against a fixture directory with a fake module behind it, and the chart
  * that schedules it. What is pinned is the rule set the pass is allowed to
- * act on: a file quiet for the window and older than the server process is
- * deleted; one quiet for the window but younger than the process is emptied
- * in place and never unlinked; a file the server holds open is never touched;
- * with no server start known nothing is deleted; a disabled window changes
- * nothing; and no output ever carries a file name, because the names are
- * session tokens.
+ * act on: a day file dated before today (UTC) and quiet for the window is
+ * deleted whatever the server's start, with the date read from the end of the
+ * name because a token may carry dots; today's day file and a legacy undated
+ * file are deleted only when quiet for the window and older than the server
+ * process, emptied in place and never unlinked when younger; a file the
+ * server holds open is never touched; with no server start known only past
+ * days are deleted; a disabled window changes nothing; and no output ever
+ * carries a file name, because the names are session tokens.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -24,6 +26,8 @@ const DAY = 86_400;
 const SECRET = "port-secret-for-the-test-0123456789abcdef";
 /** Session tokens as the module names them: 32 hex characters. */
 const token = () => Array.from({ length: 32 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
+/** The module's day-file date: YYYY-MM-DD in UTC, for a unix time. */
+const utcDate = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
 
 /** The fake module: GET /health with the port secret answers startedAtMs; anything else 401. */
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -49,23 +53,29 @@ interface Fixture {
 }
 
 /**
- * now - 4 d: the server started. Four files, one per rule, plus a directory
- * and a symlink the pass must step over.
+ * now - 4 d: the server started. Seven files, one per rule — four legacy
+ * undated ones, as the module named them before day files, and three day
+ * files — plus a directory and a symlink the pass must step over.
  */
 function fixture(now: number): Fixture {
   const dir = tempDir("wb-log-retention-");
   startedAtMs = (now - 4 * DAY) * 1000;
-  const mk = (role: string, ageDays: number, bytes: number): string => {
-    const path = join(dir, `${token()}.jsonl`);
+  const mk = (name: string, ageDays: number, bytes: number): string => {
+    const path = join(dir, name);
     writeFileSync(path, "x".repeat(bytes));
     utimesSync(path, now - ageDays * DAY, now - ageDays * DAY);
     return path;
   };
   const files = {
-    fresh: mk("fresh", 0.5, 100), // within the window
-    closedBeforeStart: mk("closedBeforeStart", 5, 1000), // quiet, older than the process: deleted
-    quietSinceStart: mk("quietSinceStart", 3.5, 500), // quiet, younger than the process: truncated
-    emptySinceStart: mk("emptySinceStart", 3.5, 0), // already empty: waits for a restart
+    fresh: mk(`${token()}.jsonl`, 0.5, 100), // within the window
+    closedBeforeStart: mk(`${token()}.jsonl`, 5, 1000), // quiet, older than the process: deleted
+    quietSinceStart: mk(`${token()}.jsonl`, 3.5, 500), // quiet, younger than the process: truncated
+    emptySinceStart: mk(`${token()}.jsonl`, 3.5, 0), // already empty: waits for a restart
+    // A past day's file, quiet for the window though younger than the process: deleted, the writer never reopens a past date.
+    pastDay: mk(`${token()}.${utcDate(now - 2 * DAY)}.jsonl`, 3.5, 700),
+    // The same, for a token that carries dots and a date-shaped part of its own: only the end of the name is the date.
+    pastDayDottedToken: mk(`2099-12-31.${token()}.${utcDate(now - 2 * DAY)}.jsonl`, 3.5, 300),
+    todayDated: mk(`${token()}.${utcDate(now)}.jsonl`, 0.5, 200), // today's day file: within the window
   };
   mkdirSync(join(dir, "a-directory"));
   symlinkSync(files.closedBeforeStart, join(dir, `${token()}.jsonl`));
@@ -106,21 +116,25 @@ function expectNoNames(f: Fixture, r: { out: string; err: string }): void {
 }
 
 describe.skipIf(perl === null)("the retention pass", () => {
-  test("deletes what is quiet and older than the server, empties what is quiet but younger, keeps the rest", async () => {
+  test("deletes past days and what is quiet and older than the server, empties what is quiet but younger, keeps the rest", async () => {
     const now = Math.floor(Date.now() / 1000);
     const f = fixture(now);
     const r = await run(f.dir, {});
     expect(r.code, r.err).toBe(0);
     expect(existsSync(f.files.closedBeforeStart!)).toBe(false);
+    expect(existsSync(f.files.pastDay!)).toBe(false);
+    expect(existsSync(f.files.pastDayDottedToken!)).toBe(false);
     expect(existsSync(f.files.quietSinceStart!)).toBe(true);
     expect(size(f.files.quietSinceStart!)).toBe(0);
     expect(size(f.files.fresh!)).toBe(100);
+    expect(size(f.files.todayDated!)).toBe(200);
     expect(existsSync(f.files.emptySinceStart!)).toBe(true);
     expect(existsSync(join(f.dir, "a-directory"))).toBe(true);
-    expect(count(r.out, "deleted")).toBe(1);
+    expect(count(r.out, "deleted")).toBe(3);
+    expect(line(r.out, "deleted")).toContain("2 past day file(s)");
     expect(line(r.out, "deleted")).toContain("0.00 GB");
     expect(count(r.out, "truncated")).toBe(1);
-    expect(count(r.out, "kept")).toBe(1);
+    expect(count(r.out, "kept")).toBe(2);
     expect(count(r.out, "empty")).toBe(1);
     expect(r.out).toContain("1 live session(s)");
     expect(r.out).not.toContain("dry run");
@@ -132,33 +146,36 @@ describe.skipIf(perl === null)("the retention pass", () => {
     const f = fixture(now);
     const r = await run(f.dir, { DRY_RUN: "1" });
     expect(r.code, r.err).toBe(0);
-    expect(count(r.out, "deleted")).toBe(1);
+    expect(count(r.out, "deleted")).toBe(3);
     expect(count(r.out, "truncated")).toBe(1);
     expect(r.out).toContain("dry run: nothing was changed");
     expect(size(f.files.closedBeforeStart!)).toBe(1000);
+    expect(size(f.files.pastDay!)).toBe(700);
     expect(size(f.files.quietSinceStart!)).toBe(500);
     expectNoNames(f, r);
   });
 
-  test("a file the named process holds open is never touched, whatever its age", async () => {
+  test("a file the named process holds open is never touched, whatever its age or date", async () => {
     const now = Math.floor(Date.now() / 1000);
     const f = fixture(now);
-    const fd = openSync(f.files.closedBeforeStart!, "a");
+    const fds = [openSync(f.files.closedBeforeStart!, "a"), openSync(f.files.pastDay!, "a")];
     try {
       const r = await run(f.dir, { WRATHBENCH_RETENTION_HOLDER_PID: String(process.pid) });
       expect(r.code, r.err).toBe(0);
       expect(existsSync(f.files.closedBeforeStart!)).toBe(true);
       expect(size(f.files.closedBeforeStart!)).toBe(1000);
-      expect(count(r.out, "held")).toBe(1);
-      expect(count(r.out, "deleted")).toBe(0);
+      expect(size(f.files.pastDay!)).toBe(700);
+      expect(count(r.out, "held")).toBe(2);
+      expect(count(r.out, "deleted")).toBe(1);
+      expect(existsSync(f.files.pastDayDottedToken!)).toBe(false);
       expect(count(r.out, "truncated")).toBe(1);
       expectNoNames(f, r);
     } finally {
-      closeSync(fd);
+      for (const fd of fds) closeSync(fd);
     }
   });
 
-  test("with the server start unknown nothing is deleted, only emptied", async () => {
+  test("with the server start unknown only past days are deleted; the rest is emptied", async () => {
     const now = Math.floor(Date.now() / 1000);
     const cases: Record<string, string>[] = [{ WRATHBENCH_MODULE_HOST: "127.0.0.1:1" }, { WRATHBENCH_MODULE_SECRET: "wrong" }, { WRATHBENCH_MODULE_SECRET: "" }];
     for (const env of cases) {
@@ -166,11 +183,14 @@ describe.skipIf(perl === null)("the retention pass", () => {
       const r = await run(f.dir, env);
       expect(r.code, r.err).toBe(0);
       expect(r.out).toContain("server start unknown");
-      expect(count(r.out, "deleted")).toBe(0);
+      expect(count(r.out, "deleted")).toBe(2);
+      expect(line(r.out, "deleted")).toContain("2 past day file(s)");
+      expect(existsSync(f.files.pastDay!)).toBe(false);
       expect(count(r.out, "truncated")).toBe(2);
       expect(existsSync(f.files.closedBeforeStart!)).toBe(true);
       expect(size(f.files.closedBeforeStart!)).toBe(0);
       expect(size(f.files.fresh!)).toBe(100);
+      expect(size(f.files.todayDated!)).toBe(200);
       expectNoNames(f, r);
     }
     expect(line((await run(fixture(now).dir, { WRATHBENCH_MODULE_SECRET: "wrong" })).out, "log retention")).toContain("401");
@@ -195,9 +215,23 @@ describe.skipIf(perl === null)("the retention pass", () => {
     const f = fixture(now);
     const r = await run(f.dir, { WRATHBENCH_LOG_RETENTION_DAYS: "7" });
     expect(r.code, r.err).toBe(0);
-    expect(count(r.out, "kept")).toBe(4);
+    expect(count(r.out, "kept")).toBe(7);
     expect(count(r.out, "deleted")).toBe(0);
     expect(size(f.files.closedBeforeStart!)).toBe(1000);
+    expect(size(f.files.pastDay!)).toBe(700);
+  });
+
+  test("today's day file follows the undated rules: quiet for a short window but younger than the server, it is emptied, not deleted", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const f = fixture(now);
+    const r = await run(f.dir, { WRATHBENCH_LOG_RETENTION_DAYS: "0.25" });
+    expect(r.code, r.err).toBe(0);
+    expect(existsSync(f.files.todayDated!)).toBe(true);
+    expect(size(f.files.todayDated!)).toBe(0);
+    expect(existsSync(f.files.pastDay!)).toBe(false);
+    expect(count(r.out, "deleted")).toBe(3);
+    expect(count(r.out, "truncated")).toBe(3);
+    expectNoNames(f, r);
   });
 
   test("an unreadable directory is a failure, not a silent pass", async () => {

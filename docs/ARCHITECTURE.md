@@ -391,9 +391,10 @@ Every episode starts with a freshly created character at level 1 in its starting
   of it, the scorer reads none of it, and the collector does not tail it —
   copying a 1 Hz feed into the store as unknown trajectory lines is the shape
   that has put ClickHouse out of memory before.
-- The module's audit log: one JSONL per session token under `logs/wrathbench`
-  on the same volume, written by the worldserver and held open for the
-  session's life. An operational record kept for a window (the chart's
+- The module's audit log: one JSONL per session token and UTC day under
+  `logs/wrathbench` on the same volume, written by the worldserver, which
+  rolls a live session's file at midnight UTC. An operational record kept for
+  a window (the chart's
   `worldserver.logRetention`, default three days; docs/RUNBOOK.md "Server log
   retention"), not part of the evidence record below.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.

@@ -234,17 +234,18 @@ worldserver:
   startupProbe:
     periodSeconds: 10
     failureThreshold: 90
-  # How long the module's per-session audit log (logs/wrathbench/<token>.jsonl
-  # on the data PVC) is kept, in days. The log is an operational record for the
+  # How long the module's per-session audit log (one
+  # logs/wrathbench/<token>.<YYYY-MM-DD>.jsonl per UTC day on the data PVC) is
+  # kept, in days. The log is an operational record for the
   # window — the smokes read it, a stuck session is diagnosed from it — and
   # not the long-lived record of a run, which is the trajectory's own `actions`
   # record (docs/CONTRACTS.md "Audit"). A live freeplay stream writes about
   # 0.6 GB a day here, so unbounded it was half the volume. Pruned once a day
-  # by templates/log-retention.yaml, by age, and never a file the server still
-  # holds open (files/log-retention.pl says how). 0 or empty disables it and
-  # renders no CronJob. A file still being written is never trimmed: a stream
-  # that lives for weeks keeps its whole log until it ends, and that file goes
-  # with the first pass after the window.
+  # by templates/log-retention.yaml, by age, and never a file the server will
+  # still write to (files/log-retention.pl says how). 0 or empty disables it
+  # and renders no CronJob. A live session rolls to a new file at midnight
+  # UTC, so a stream that lives for weeks holds about `days + 1` days of
+  # audit at any time, never its whole log.
   logRetention:
     days: 3
     schedule: "30 2 * * *"

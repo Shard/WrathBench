@@ -1,6 +1,7 @@
 {{- /*
 Server log retention: a daily CronJob that prunes the module's per-session
-audit log (`logs/wrathbench/<token>.jsonl` on the data PVC) by age.
+audit log (one `logs/wrathbench/<token>.<YYYY-MM-DD>.jsonl` per UTC day on
+the data PVC) by age.
 
 The audit log is an operational record kept for a window, not evidence kept
 for good (docs/CONTRACTS.md "Audit"); the per-run record of what went on the
@@ -12,7 +13,7 @@ A separate Job, not a sidecar or a change to the worldserver's own template,
 so that turning the window up or down never restarts the world. It runs from
 the worldserver image because that is where perl is (the image has no curl,
 no bun), with the same uid and the same `logs` subPath the server writes. The
-rules that keep it off a file the server still holds open are in
+rules that keep it off a file the server will still write to are in
 files/log-retention.pl. The secret is for GET /health only (the server's
 start time is one of the two rules) and never reaches a manifest or argv.
 
