@@ -28,6 +28,7 @@ import { Database } from "bun:sqlite";
 import { openRunDb } from "../../runner/src/rundb";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner, namesSecretKey, redactJsonText, redactRawLine, redactSecrets } from "../../runner/viewer/tail";
 import { readRunFact } from "../../runner/src/models";
+import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
 import type { Batcher } from "./batch";
 import type { OffsetStore } from "./offsets";
 import {
@@ -85,9 +86,10 @@ function real(v: unknown): number | null {
 /**
  * A trajectory line as `events.raw` keeps it: verbatim, unless it names a
  * secret key. A `meta` record written before the runner stopped copying the
- * config's module session token into it carries that token, and the store is
- * a copy that must not hold one, so a `--replay` rewrites such rows redacted
- * the way the viewer serves them (`redactRawLine`).
+ * config into it whole carries a session token under `config.token` — the
+ * run's own is struck by value before this (`strikeSessionToken`), and this
+ * catches any other — so a `--replay` rewrites such rows redacted the way the
+ * viewer serves them (`redactRawLine`).
  */
 function rawWithoutSecrets(text: string): string {
   return namesSecretKey(text) ? redactRawLine(text) : text;
@@ -123,8 +125,10 @@ export class Ingester {
       run: false,
       totals: false,
     };
-    out.trajectoryLines = await this.tailTrajectory(runId, dir);
-    out.episodicLines = await this.tailEpisodic(runId, dir);
+    // Read once per pass: the value struck from every line this run stores.
+    const token = strikableSessionToken(dir, runId);
+    out.trajectoryLines = await this.tailTrajectory(runId, dir, token);
+    out.episodicLines = await this.tailEpisodic(runId, dir, token);
     const sqlite = await this.readSqlite(runId, dir);
     out.states = sqlite.states;
     out.moves = sqlite.moves;
@@ -135,7 +139,7 @@ export class Ingester {
 
   // ------------------------------------------------------------- trajectory
 
-  private async tailTrajectory(runId: string, dir: string): Promise<number> {
+  private async tailTrajectory(runId: string, dir: string, token: string | null): Promise<number> {
     const path = join(dir, "trajectory.jsonl");
     const st = sigOf(path);
     if (st === null) return 0;
@@ -156,18 +160,21 @@ export class Ingester {
       lineNo++;
       offset = line.endOffset;
       if (line.text.length === 0) continue;
-      const parsed = parseLine(line.text);
+      // Before anything reads it, so every column of every row is the struck
+      // text; the offsets are the file's, so nothing downstream moves.
+      const text = strikeSessionToken(line.text, token);
+      const parsed = parseLine(text);
       if (!parsed.ok) {
-        await this.deps.batcher.add("events", unparseableRow(ctx, rawWithoutSecrets(line.text)));
+        await this.deps.batcher.add("events", unparseableRow(ctx, rawWithoutSecrets(text)));
         count++;
         continue;
       }
       if (TURN_KINDS.has(parsed.t)) {
-        await this.deps.batcher.add("turns", turnRow(ctx, parsed.rec, line.text));
+        await this.deps.batcher.add("turns", turnRow(ctx, parsed.rec, text));
       } else {
-        await this.deps.batcher.add("events", eventRow(ctx, parsed.rec, rawWithoutSecrets(line.text)));
+        await this.deps.batcher.add("events", eventRow(ctx, parsed.rec, rawWithoutSecrets(text)));
         if (parsed.t === "milestone") {
-          await this.deps.batcher.add("milestones", milestoneRow(ctx, parsed.rec, line.text));
+          await this.deps.batcher.add("milestones", milestoneRow(ctx, parsed.rec, text));
         }
       }
       count++;
@@ -182,7 +189,7 @@ export class Ingester {
     return count;
   }
 
-  private async tailEpisodic(runId: string, dir: string): Promise<number> {
+  private async tailEpisodic(runId: string, dir: string, token: string | null): Promise<number> {
     const path = join(dir, "episodic.jsonl");
     const st = sigOf(path);
     if (st === null) return 0;
@@ -198,9 +205,10 @@ export class Ingester {
       lineNo++;
       offset = line.endOffset;
       if (line.text.length === 0) continue;
-      const parsed = parseLine(line.text);
+      const text = strikeSessionToken(line.text, token);
+      const parsed = parseLine(text);
       const rec = parsed.ok ? parsed.rec : { t: "unparseable", ts: 0 };
-      await this.deps.batcher.add("episodic", episodicRow(ctx, rec, line.text));
+      await this.deps.batcher.add("episodic", episodicRow(ctx, rec, text));
       count++;
     }
     await this.deps.batcher.flushAll();

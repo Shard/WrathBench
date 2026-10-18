@@ -86,6 +86,7 @@ import {
 import { NEARBY_SPAN_MS } from "./nearby";
 import { readNearbyWindow } from "./nearby-ring";
 import { scrubPathsText } from "./scrub-paths";
+import { strikableSessionToken, strikeSessionToken } from "../src/session-token";
 import { SEG_MS } from "./trace";
 import { readTraceIndex, readTraceSegment, traceSegsMemo } from "./trace-db";
 import { isValidRunId, LIVE_WINDOW_MS, readMoves, readRun, readScratchpad, readStateItems, readStates, runDir } from "./runs";
@@ -1322,6 +1323,18 @@ export function createApi(opts: ApiOptions): ApiHandle {
     const dir = runDir(runsDir, runId);
     if (dir === null) return notFound(`no such run: ${runId}`);
     const tail = tailFor(runId, dir);
+    /*
+     * The run's own session token, struck from every per-run body a public
+     * handle serves (`session-token.ts`): the module echoes it in its action
+     * replies, a snippet that logs one records it in its result, and the
+     * entries, the detail, the track and the scratchpad are what the snapshot
+     * publishes. Null in private mode, so the operator's bodies are the bytes
+     * they always were.
+     */
+    const runToken = publicMode ? strikableSessionToken(dir, runId) : null;
+    const runJson = (body: unknown): Response =>
+      json(runToken === null ? body : JSON.parse(strikeSessionToken(JSON.stringify(body), runToken)));
+    const pubRun = <T>(body: T, project: (b: T) => unknown): Response => runJson(publicMode ? project(body) : body);
 
     if (rest === "" || rest === "/") {
       await scan(runId, tail);
@@ -1430,7 +1443,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // falls back from, the same shape the facts above take.
         ...(character === null ? {} : { character }),
       };
-      return pub(body, projectRunDetail);
+      return pubRun(body, projectRunDetail);
     }
 
     if (rest === "/track") {
@@ -1494,7 +1507,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
         // none, so a track from before the recorder is the bytes it was.
         ...(trace === null ? {} : { trace }),
       };
-      return pub(body, projectTrack);
+      return pubRun(body, projectTrack);
     }
 
     if (rest === "/trace") {
@@ -1544,7 +1557,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
       const page = { from, total, entries: tail.entries.slice(from, from + limit) };
       // Public mode serves the same window the snapshot publishes: each entry
       // through the per-type allowlist and the game-prose redactor.
-      return json(publicMode ? projectEntries(page) : page);
+      return runJson(publicMode ? projectEntries(page) : page);
     }
 
     const rawMatch = /^\/raw\/(\d+)$/.exec(rest);
@@ -1565,7 +1578,7 @@ export function createApi(opts: ApiOptions): ApiHandle {
     if (rest === "/scratchpad") {
       const text = readScratchpad(runsDir, runId);
       if (text === null) return notFound("no scratchpad");
-      return new Response(publicMode ? scrubPathsText(text) : text, {
+      return new Response(publicMode ? strikeSessionToken(scrubPathsText(text), runToken) : text, {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }

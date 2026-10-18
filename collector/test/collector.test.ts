@@ -364,7 +364,9 @@ describe("what the store must never hold", () => {
   /**
    * A run as an older build left it — the module session token in meta.json
    * (where it still is), in its `meta` record and in `config_json` — so a
-   * `--replay` over it is what cleans the store.
+   * `--replay` over it is what cleans the store. Plus the copies any build
+   * still records: the module's echo of the token in a logged action reply,
+   * which lands in a snippet's result, and a status line that quotes it.
    */
   function writeOldRun(runsDir: string, runId: string): string {
     const dir = writeRun(runsDir, runId);
@@ -372,6 +374,11 @@ describe("what the store must never hold", () => {
     const config = { ...(meta["config"] as Record<string, unknown>), token: TOKEN };
     writeFileSync(join(dir, "meta.json"), `${JSON.stringify({ ...meta, config }, null, 2)}\n`);
     appendFileSync(join(dir, "trajectory.jsonl"), `${JSON.stringify({ ts: 2_000, t: "meta", ...meta, config })}\n`);
+    appendFileSync(
+      join(dir, "trajectory.jsonl"),
+      `${JSON.stringify({ ts: 2_100, t: "snippet_result", turn: 2, name: "eval_snippet", isError: false, text: `{ ok: true, action: "stop", token: "${TOKEN}" }` })}\n`,
+    );
+    appendFileSync(join(dir, "episodic.jsonl"), `${JSON.stringify({ ts: 2_200, turn: 2, text: `session ${TOKEN} parked` })}\n`);
     const db = new Database(join(dir, "run.sqlite"));
     db.query(`UPDATE run SET config_json = ? WHERE run_id = ?`).run(JSON.stringify(config), runId);
     db.close();
@@ -395,6 +402,10 @@ describe("what the store must never hold", () => {
       ...onDisk.config,
       token: "[redacted]",
     });
+    // The echo is struck by value, in the row's raw line and in its typed columns alike.
+    const echo = rowsOf(sink, "turns").find((r) => r["kind"] === "snippet_result" && Number(r["ts"]) === 2_100);
+    expect((JSON.parse(String(echo?.["raw"])) as { text: string }).text).toBe(`{ ok: true, action: "stop", token: "[redacted]" }`);
+    expect(rowsOf(sink, "episodic").some((r) => String(r["raw"]).includes("session [redacted] parked"))).toBe(true);
     // A line that names no secret key is the line as written.
     const termination = rowsOf(sink, "events").find((r) => r["kind"] === "termination");
     const fileLine = readFileSync(join(dir, "trajectory.jsonl"), "utf8").split("\n").find((l) => l.includes(`"t":"termination"`));
