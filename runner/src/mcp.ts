@@ -20,6 +20,7 @@ import { EpisodicLog } from "./episodic";
 import { ClosedWindowReflectGate } from "./reflect";
 import { appendPendingActionHints, callTool, coerceToolArgs, toolsFor, type ToolContext } from "./tools";
 import { leaseRunSecret } from "./module-auth";
+import { CLIENT_CACHE_FILE, ClientCacheStore } from "./sandbox/client-cache";
 import { SandboxHost } from "./sandbox/host";
 import { Scratchpad } from "./scratchpad";
 import { Trajectory } from "./trajectory";
@@ -188,6 +189,9 @@ async function main(): Promise<void> {
   const runDir = join(config.runsDir, runId);
   const trajectory = new Trajectory(runDir);
   const scratchpad = new Scratchpad(join(runDir, "scratchpad.md"));
+  // The client cache survives a sandbox restart here as in `run.ts`.
+  const clientCache = new ClientCacheStore(join(runDir, CLIENT_CACHE_FILE));
+  process.on("exit", () => clientCache.flush());
   trajectory.writeMeta({ runId, harnessVersion: harnessVersion(), startedAt: Date.now(), config });
 
   // The session secret for this token (module/PROTOCOL.md, "Authentication");
@@ -206,9 +210,10 @@ async function main(): Promise<void> {
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
     onActions: (flush) => trajectory.recordActions(flush),
+    clientCache,
   });
 
-  const wiki = config.wiki ? openWikiBundle(config.wikiBundle) : undefined;
+  const wiki =config.wiki ? openWikiBundle(config.wikiBundle) : undefined;
 
   const ctx: ToolContext = {
     sandbox,

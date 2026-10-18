@@ -21,6 +21,7 @@ import { RepeatFolder } from "./log-fold";
 import { overCapText, type Scratchpad } from "../scratchpad";
 import type { NearbyDrain } from "../nearby-row";
 import type { TraceDrain } from "../trace-row";
+import type { ClientCacheStore } from "./client-cache";
 import type { ActionHintNote, ActionNote, ChildToHost, ContextEvents, DeathSignal, EventSummary, EvalResultMsg, FlightSignal, HostToChild, HostcallResult, LogEntry } from "./ipc";
 
 export interface SnippetResult {
@@ -135,6 +136,14 @@ export interface SandboxHostOptions {
    * only: nothing in it reaches the model.
    */
   onActions?: (flush: ActionsFlush) => void;
+  /**
+   * The client's query-answer cache for this run (`client-cache.ts`): every
+   * answer the child forwards is kept here, and every child this host starts
+   * is seeded from it before it is ready, so a restart loses no name the
+   * session was already given — as a client's on-disk cache never does.
+   * Undefined keeps nothing, and every child starts with an empty cache.
+   */
+  clientCache?: ClientCacheStore;
   now?: () => number;
 }
 
@@ -268,7 +277,14 @@ export class SandboxHost {
   }
 
   async start(): Promise<void> {
-    if (this.proc !== null) return;
+    // A child already starting is waited for, not raced: whatever a second
+    // caller sends must queue behind the client-cache seed the host sends as
+    // the child reports ready (`onMessage`), or an eval could connect and
+    // fold events into a cache that is not seeded yet.
+    if (this.proc !== null) {
+      await this.ready;
+      return;
+    }
     this.ready = new Promise((r) => {
       this.markReady = r;
     });
@@ -337,7 +353,10 @@ export class SandboxHost {
                 (tail ? ` Last stderr: ${tail}\n` : " ") +
                 STATE_LOSS_RECOVERY,
             );
-            this.markReady(); // never leave a start() awaiting a dead child
+            // Never leave a start() awaiting a dead child — this child's
+            // start(), by its own resolver: the field may already belong to
+            // the respawn, whose ready must wait for its seed (`onMessage`).
+            markReady();
           };
           void Promise.race([stderr.done, new Promise((r) => setTimeout(r, 100))]).then(emit);
         }
@@ -393,8 +412,22 @@ export class SandboxHost {
 
   private onMessage(msg: ChildToHost, markReady: () => void): void {
     switch (msg.t) {
-      case "ready":
+      case "ready": {
+        // Seed first, ready second: the seed is then the first message this
+        // child handles, ahead of every eval and rpc that waited for ready.
+        const frames = this.opts.clientCache?.snapshot() ?? [];
+        if (frames.length > 0) {
+          try {
+            this.proc?.send({ t: "client_cache_seed", frames } satisfies HostToChild);
+          } catch {
+            // A child that died as it started is the onExit path's to report.
+          }
+        }
         markReady();
+        return;
+      }
+      case "client_cache":
+        this.opts.clientCache?.add(msg.frames);
         return;
       case "result":
       case "pong":
@@ -792,7 +825,10 @@ export class SandboxHost {
   async stop(): Promise<void> {
     const proc = this.proc;
     this.proc = null;
-    if (proc === null) return;
+    if (proc === null) {
+      this.opts.clientCache?.flush();
+      return;
+    }
     try {
       proc.send({ t: "shutdown" } satisfies HostToChild);
     } catch {
@@ -809,6 +845,9 @@ export class SandboxHost {
     // The child is gone and its pipes are closing: give the pumps a moment to
     // write what they still hold, such as a last line with no newline.
     await Promise.race([drained, new Promise((r) => setTimeout(r, 250))]);
+    // The child is gone, with whatever answers it forwarded on its way out:
+    // the cache is on disk before the process that holds it goes.
+    this.opts.clientCache?.flush();
   }
 }
 

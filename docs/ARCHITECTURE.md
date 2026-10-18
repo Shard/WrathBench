@@ -405,6 +405,14 @@ Every episode starts with a freshly created character at level 1 in its starting
   15 minutes, unlinked as they age, deleted on every pause, stop and exit and
   swept at start, never in `run.sqlite`, `trajectory.jsonl` or
   the store. It is a delay line for a reader a few seconds behind, not a record.
+- The client's query-answer cache, `client-cache.json`: the creature, game
+  object, item, quest, player and pet name, and page and letter answers this
+  run's event stream carried, kept by the sandbox host
+  (`runner/src/sandbox/client-cache.ts`) so a restarted child and a resumed run
+  start with them, as a client's on-disk cache (WDB) survives a restart —
+  operator decision of 2026-10-18, because a restart reattaches to a module
+  session that never asks for an entry twice. A new run, a continuation
+  included, starts without one, and the collector does not read it.
 - Server state in the AzerothCore databases; the server is authoritative for XP, level, deaths, quests, gold.
 - A single-node ClickHouse holding a **derived, disposable** copy of all of it,
   filled by `collector/`.

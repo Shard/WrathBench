@@ -81,6 +81,7 @@ import {
 import { STALL_PAUSE, SUBSCRIPTION_PAUSE } from "./lapse";
 import { runLoop, type StopRequest } from "./loop";
 import { continuedSessionNote, freshCharacterNote, resumeSessionNote } from "./prompt";
+import { CLIENT_CACHE_FILE, ClientCacheStore } from "./sandbox/client-cache";
 import { SandboxHost } from "./sandbox/host";
 import { EpisodicLog } from "./episodic";
 import { Scratchpad } from "./scratchpad";
@@ -583,6 +584,13 @@ async function main(): Promise<void> {
   // The episodic log lives beside the scratchpad and survives a pause the same
   // way: it is append-only, so a resumed run reads its own past back.
   const episodic = new EpisodicLog(join(runDir, "episodic.jsonl"));
+  // The client's query-answer cache (`sandbox/client-cache.ts`): kept across a
+  // sandbox restart and a resume as a client keeps its on-disk cache, and
+  // never copied into another run — a continuation's new session asks the
+  // server for every entry again. The exit hook covers the exits that never
+  // reach `sandbox.stop()`.
+  const clientCache = new ClientCacheStore(join(runDir, CLIENT_CACHE_FILE));
+  process.on("exit", () => clientCache.flush());
   // The predecessor's notes come along: the scratchpad is the durable memory,
   // and a continuation that started with an empty one would be a stranger to
   // its own character. The `existsSync` guard is now belt and braces: a fresh
@@ -833,6 +841,7 @@ async function main(): Promise<void> {
     pingGraceMs: config.sandboxPingGraceMs,
     onNotice: (n) => trajectory.append({ t: "harness", ...n }),
     onActions: (flush) => trajectory.recordActions(flush),
+    clientCache,
   });
   /*
    * The episode clock continues from where the last segment left it: a
