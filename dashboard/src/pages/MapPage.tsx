@@ -154,6 +154,7 @@ import {
   type RouteRun,
   classifySegments,
   indexAt,
+  itemsAtCursor,
   nextSampleAfter,
   positionsAt,
   routeUpTo,
@@ -1593,7 +1594,6 @@ export default function MapPage() {
       xp: null,
       money: null,
       questsCompleted: null,
-      items: null,
       harnessVersion: t.harnessVersion,
     };
     return [{ ...base, map: pose.map, x: pose.x, y: pose.y }];
@@ -1951,14 +1951,17 @@ export default function MapPage() {
   });
   /**
    * Money and the inventory at the playhead: the sheet's where it says, the
-   * reading's where it does not (`sheetReading`) — live, the position's newest
-   * reading; in a replay, the track's at the cursor. Each kept equal across
-   * ticks while its value is, so the bag and the paperdoll redraw only when
-   * what they show changes.
+   * reading's where it does not (`sheetReading`) — live, the position's money
+   * and no inventory, which the feed no longer carries; in a replay, the
+   * track's reading at the cursor. Each kept equal across ticks while its
+   * value is, so the bag and the paperdoll redraw only when what they show
+   * changes.
    */
   const shown = createMemo(() => {
     const p = selected();
-    return p === null ? null : sheetReading(selectedSheet(), { money: p.money, items: p.items });
+    if (p === null) return null;
+    const t = track();
+    return sheetReading(selectedSheet(), { money: p.money, items: t === undefined ? null : itemsAtCursor(t, cursor()) });
   });
   const shownItems = createMemo(() => shown()?.items ?? null);
   const shownMoney = createMemo(() => shown()?.money ?? null);
@@ -2115,10 +2118,10 @@ export default function MapPage() {
               {/*
                 Inventory: the bag opens over the sidebar rather
                 than widening it, and the paperdoll sits under it. The trace's
-                sheet at the playhead where it answers; otherwise the newest
-                reading — live, the position's; in a replay, the one behind the
-                cursor (`lib/replay.ts`). Before the first there is nothing to
-                show, which the null line says rather than drawing empty bags.
+                sheet at the playhead where it answers; otherwise, in a replay,
+                the track's newest reading behind the cursor (`lib/replay.ts`).
+                Where neither says there is nothing to show, which the null
+                line says rather than drawing empty bags.
               */}
               <div class="k">inventory</div>
               <div class="v">

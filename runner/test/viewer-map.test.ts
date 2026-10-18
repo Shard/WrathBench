@@ -433,7 +433,6 @@ describe("readPositions", () => {
       xp: 900,
       money: 12345,
       questsCompleted: 7,
-      items: null,
       harnessVersion: "harness-0.2",
       // A fixture written before the player-frame columns existed reads them as
       // unobserved — null, never zero.
@@ -452,23 +451,18 @@ describe("readPositions", () => {
     });
   });
 
-  test("the popout carries the newest recorded inventory, null before the column existed", () => {
+  test("the feed carries no inventory, however much the state line recorded: the sidebar reads the trace's sheet", () => {
     const items = JSON.stringify([
       { name: "Worn Mace", count: 1, equipped: true, itemId: 5956, quality: 1, slot: 16 },
       { name: "Tough Jerky", count: 5, equipped: false, itemId: 117, quality: 1, slot: 23, bag: 255 },
-      // A row from before those fields existed, read back as it was written.
-      { name: "Tunic", count: 1, equipped: true },
     ]);
     const runsDir = fixture([
       { id: "live-items", states: [[NOW - 5000, 4, 900, 0, -6240, 380, 380, 1, 0]], items },
       { id: "live-bare", states: [[NOW - 4000, 4, 900, 0, -6240, 380, 380, 1, 0]] },
     ]);
-    const byId = new Map(readPositions(runsDir, NOW).map((p) => [p.runId, p]));
-    expect(byId.get("live-items")?.items).toEqual(JSON.parse(items));
-    // Absence survives the read: an unobserved field is not filled in with a
-    // zero, which would name slot 0 and a poor-quality item nobody saw.
-    expect(Object.keys(byId.get("live-items")!.items![2]!)).toEqual(["name", "count", "equipped"]);
-    expect(byId.get("live-bare")?.items).toBeNull();
+    const feed = readPositions(runsDir, NOW);
+    expect(feed.map((p) => p.runId).sort()).toEqual(["live-bare", "live-items"]);
+    for (const p of feed) expect(Object.keys(p)).not.toContain("items");
   });
 
   test("the unit frame's numbers ride the sample the pip is drawn from", () => {
@@ -678,7 +672,7 @@ describe("positionsFromStore", () => {
       status: { turn: 7, text: "heading for the inn" },
       reflecting: true,
     });
-    expect(fromStore[1]!.items).toHaveLength(1);
+    expect(Object.keys(fromStore[1]!)).not.toContain("items");
   });
 
   test("the listing is the store's: a run it does not list is not opened, whatever is on disk", async () => {

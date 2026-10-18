@@ -140,7 +140,6 @@ const LIVE: AgentPosition = {
   xp: 100,
   money: null,
   questsCompleted: null,
-  items: null,
   harnessVersion: "harness-0.5",
 };
 

@@ -515,7 +515,6 @@ function agent(runId: string, map: number, x: number, y: number): AgentPosition 
     xp: 100,
     money: null,
     questsCompleted: null,
-    items: null,
     harnessVersion: "harness-0.2",
   };
 }

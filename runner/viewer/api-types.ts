@@ -907,8 +907,11 @@ export interface AgentPosition {
   xp: number | null;
   money: number | null;
   questsCompleted: number | null;
-  /** The newest recorded inventory; see `RunRow.items`. */
-  items: ItemSample[] | null;
+  /*
+   * No inventory: the map's sidebar reads what the character wears and
+   * carries off the trace's character sheet at the playhead (`trace`), and
+   * the newest reading here ran the public delay ahead of the pip beside it.
+   */
   harnessVersion: string | null;
   /**
    * The newest recorded movement intention, when the run has one. Optional

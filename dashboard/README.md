@@ -162,8 +162,9 @@ Wherever the sheet cannot say, the sidebar shows the coarse reading instead
 (`sheetReading`): faster than 60×, with no trace loaded at the playhead, in a
 segment from before the sheet, and while a key is null — not observed, as after
 a sandbox restart before the character's own create block, never empty bags.
-Live, that reading is the position's newest; in a replay, the track's at or
-before the cursor (`itemsAt` in `src/lib/replay.ts`), folded from the track's
+Live, the feed carries money but no inventory, so a live character the sheet
+cannot answer for reads "—"; in a replay, the reading is the track's at or
+before the cursor (`itemsAtCursor` in `src/lib/replay.ts`), folded from the track's
 patches by the viewer's own codec (`@viewer/track-inv`). It keeps a reading
 every 64 patches and hands back the same array while the cursor stays between
 two changes, so the bag and the paperdoll redraw only when the inventory
