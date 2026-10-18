@@ -124,21 +124,23 @@ export function centreOn(screen: Screen, px: number, py: number, scale: number):
  *
  * An empty list has no box to fit and gets the whole world at a readable zoom;
  * a single agent has a zero-size box and gets a close-up rather than a division
- * by zero.
+ * by zero. A position that is not a finite number has no place to frame and is
+ * left out, so the camera never lands on NaN; with none left the list is empty.
  */
 export function fitTo(screen: Screen, list: readonly Placeable[], pad = 240): View {
-  if (list.length === 0) return centreOn(screen, (GRID * TILE_PX) / 2, (GRID * TILE_PX) / 2, 0.06);
   let x0 = Infinity;
   let y0 = Infinity;
   let x1 = -Infinity;
   let y1 = -Infinity;
   for (const p of list) {
     const q = worldToPixel(p.x, p.y);
+    if (!Number.isFinite(q.px) || !Number.isFinite(q.py)) continue;
     x0 = Math.min(x0, q.px);
     x1 = Math.max(x1, q.px);
     y0 = Math.min(y0, q.py);
     y1 = Math.max(y1, q.py);
   }
+  if (x0 > x1) return centreOn(screen, (GRID * TILE_PX) / 2, (GRID * TILE_PX) / 2, 0.06);
   const bw = x1 - x0 + pad * 2;
   const bh = y1 - y0 + pad * 2;
   const scale = clampScale(Math.min(screen.w / bw, screen.h / bh));

@@ -111,6 +111,7 @@ import {
   createMapState,
   replayHrefFor,
 } from "../lib/mapstate";
+import { createMapFit } from "../lib/mapfit";
 import {
   DEFAULT_MAP,
   STALE_MS,
@@ -443,11 +444,28 @@ export default function MapPage() {
   let routeDrawn: RouteRun[] = [];
   let routeSrc: RouteRun[] | null = null;
   let routeScale = 0;
-  /* Fitting is deliberate, not reactive — see the fit effect for why. */
-  let pendingFit = true;
   let needsDraw = true;
   let W = 0;
   let H = 0;
+  /*
+   * Fitting is deliberate, not reactive: on the first map to appear, a track
+   * load, a chip click, and a replay's cursor crossing to another continent
+   * (`lib/mapfit.ts`, which says why a crossing fits on the spot).
+   */
+  const mapFit = createMapFit({
+    activeMap,
+    feed: feedList,
+    cursorMap,
+    fit: (here) => {
+      view = fitTo({ w: W, h: H }, here);
+      needsDraw = true;
+    },
+    onCross: () => {
+      setPinnedMap(null);
+      // A link that still named the old map would reopen it rather than follow.
+      if (params.map !== undefined) setParams({ map: null }, { replace: true });
+    },
+  });
   let theme = { ...DEFAULT_THEME };
   /*
    * The art layer is drawn here at full strength and then laid over the map
@@ -541,13 +559,13 @@ export default function MapPage() {
      * depends on the stage, so it is recomputed here rather than once at mount:
      * the first `ResizeObserver` callback is where the real size arrives, and a
      * phone rotated on an empty map would otherwise keep a frame built for the
-     * other orientation. `pendingFit` is exactly the "nothing has claimed the
+     * other orientation. A pending fit is exactly the "nothing has claimed the
      * view yet" flag — once a feed consumes it this leaves the view alone, so a
      * pan survives a resize as before. It deliberately does not live in the fit
      * effect: that effect re-runs on every poll tick, and an empty-feed branch
      * there would snap the view back under a reader who had just panned.
      */
-    if (pendingFit) view = defaultView({ w: W, h: H }, untrack(activeMap));
+    if (mapFit.pending()) view = defaultView({ w: W, h: H }, untrack(activeMap));
     needsDraw = true;
   }
 
@@ -1487,7 +1505,7 @@ export default function MapPage() {
     });
     pips.clear();
     route = [];
-    pendingFit = true;
+    mapFit.ask();
     // The trace goes with the rest: neither mode's segments, clock or anchor
     // means anything in the other.
     store.retain([]);
@@ -1498,7 +1516,7 @@ export default function MapPage() {
     replayAnchor = null;
     setPlayhead(null);
     /*
-     * The camera goes back to the default with the rest of it. `pendingFit`
+     * The camera goes back to the default with the rest of it. The ask above
      * alone would not do it: nothing re-reads the flag until a feed arrives or
      * the stage resizes, so leaving a replay onto a quiet fleet would keep the
      * replay's continent framing while the map underneath became the default
@@ -1560,7 +1578,7 @@ export default function MapPage() {
         const resumed = cursorMemory.resume(t);
         followStart = resumed === (trackSpan(t.points)?.from ?? 0);
         setCursor(resumed);
-        pendingFit = true;
+        mapFit.ask();
         needsDraw = true;
       })
       .catch((e: unknown) => {
@@ -1645,28 +1663,14 @@ export default function MapPage() {
   });
 
   /*
-   * Following the cursor across a continent is the honest behaviour: the
-   * character is not on the map the operator was looking at any more, so the
-   * chip they pinned stops applying and the view refits.
-   *
-   * Terminates: cursorMap changes → this writes pinnedMap → activeMap
-   * recomputes from maps/pinned/cursorMap → writes nothing.
-   */
-  createEffect(
-    on(cursorMap, (map) => {
-      if (map === null) return;
-      setPinnedMap(null);
-      // A link that still named the old map would reopen it rather than follow.
-      if (params.map !== undefined) setParams({ map: null }, { replace: true });
-      pendingFit = true;
-    }),
-  );
-
-  /*
    * A pin arriving by URL after load: the chip click below writes it, and
    * browser back and forward move it. Deferred, because the route swap above
-   * already seeded the pin the page opened with. A map nobody is on gets its
-   * opening frame now, since the fit effect has no one there to fit to.
+   * already seeded the pin the page opened with. The fit is made on the spot
+   * (`askNow`): a pin that leaves the map on screen as it was, such as the one
+   * a cursor crossing drops or a step back onto the map already showing, wakes
+   * no fit effect, and the ask would otherwise wait for an unrelated change. A
+   * map nobody is on gets its opening frame instead, since there is no one
+   * there to fit to.
    */
   createEffect(
     on(
@@ -1674,7 +1678,7 @@ export default function MapPage() {
       (raw) => {
         const pin = mapParam(raw);
         setPinnedMap(pin);
-        pendingFit = true;
+        mapFit.askNow();
         if (pin !== null && !feedList().some((p) => p.map === pin)) {
           view = defaultView({ w: W, h: H }, pin);
           needsDraw = true;
@@ -1683,26 +1687,6 @@ export default function MapPage() {
       { defer: true },
     ),
   );
-
-  /*
-   * Fitting the view, on the three occasions someone asked for it: the first
-   * map to appear, a track load, and a chip click. Deliberately *not* on every
-   * change of `activeMap` — an unrelated agent logging out can flip which map
-   * is busiest, and yanking a panned view out from under an operator for that
-   * would be hostile.
-   */
-  createEffect(() => {
-    const map = activeMap();
-    const list = feedList();
-    if (!pendingFit) return;
-    // Nobody on this map — a quiet fleet, or a map pinned by link — leaves
-    // the opening frame alone and the fit pending for whoever arrives.
-    const here = list.filter((p) => p.map === map);
-    if (here.length === 0) return;
-    pendingFit = false;
-    view = fitTo({ w: W, h: H }, here);
-    needsDraw = true;
-  });
 
   /*
    * How each step of the track was travelled, once per track: the

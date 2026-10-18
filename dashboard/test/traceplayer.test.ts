@@ -33,7 +33,7 @@ import {
   replayReach,
 } from "../src/lib/traceplayer";
 import { IDLE_GAP_MS, IDLE_PLAY_MS, SPEEDS, advanceCursor, idleSpans, nextSpeed } from "../src/lib/playback";
-import { classifySegments, trackPoseAt } from "../src/lib/replay";
+import { classifySegments, positionsAt, trackPoseAt } from "../src/lib/replay";
 import { auraViews, gaugesOf, healthReading, targetReading, unitFlags } from "../src/lib/unitframe";
 import { projectTraceSegment } from "../../runner/viewer/public-projection";
 
@@ -350,6 +350,25 @@ describe("replaying a short or unfinished run", () => {
     expect(path.length).toBe(1);
     expect(path[0]!.points.at(-1)!.x).toBeCloseTo(100, 1);
     expect(store.covers(RUN, start + 60_000)).toBe(true);
+  });
+
+  test("past the newest window with no tail the trace has no answer, and the track's own point stands", async () => {
+    // The track's last point is two windows on from the only listed one, and
+    // there is no tail: the span's end is the track's, and the trace says nothing there.
+    const end = W + 2 * SEG_MS + 30_000;
+    const track: TrackResponse = {
+      ...onePoint({ segMs: SEG_MS, segs: [[W, 1]] }),
+      points: [...onePoint().points, { ts: end, map: 1, x: -4025.4, y: -3787.6, level: 1, xp: 0, money: null, questsCompleted: null, turn: null }],
+    };
+    const store = createTraceStore();
+    ingestTrack(store, track);
+    await store.load(RUN, W, fetcher(new Map([[W, seg(rows, W)]])));
+    const span = replaySpan(track, store)!;
+    expect(span.to).toBe(end);
+    expect(store.poseAt(RUN, span.to)).toBeNull();
+    // What the map places instead: the track's reading, and its coarse pose.
+    expect(positionsAt(track, span.to)[0]).toMatchObject({ map: 1, x: -4025.4, y: -3787.6 });
+    expect(trackPoseAt(track.points, classifySegments(track), span.to, IDLE_GAP_MS)).toEqual({ map: 1, x: -4025.4, y: -3787.6 });
   });
 
   test("one point and only a tail, the window still open: scrubbable over the tail", () => {
