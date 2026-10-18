@@ -398,7 +398,7 @@ export function BagGrid(props: { items: readonly InvItem[]; status: WowheadStatu
   );
 }
 
-/** A row's progress is drawn in its status's colour: the stylesheet's own utility classes. */
+/** The colour a row's status is drawn in: the stylesheet's own utility classes. */
 const QUEST_STATUS_CLASS: Readonly<Record<QuestStatus, string | undefined>> = {
   active: undefined,
   complete: "ok",
@@ -407,8 +407,11 @@ const QUEST_STATUS_CLASS: Readonly<Record<QuestStatus, string | undefined>> = {
 };
 
 /**
- * One quest: its Wowhead link, then its objectives as `have / need` in its
- * status's colour, or the status alone where it has none to show.
+ * One quest: its Wowhead link, then its objectives as `have / need` while it
+ * is in progress, and once it is not, its status alone in its status's colour.
+ * A complete quest's objectives are met on the server's word, and the carried
+ * count cannot always show that (a key sits on the keyring, which the sheet
+ * does not read), so its numbers would only be a way to contradict it.
  *
  * Keyed by the quest id, not by the row: the anchor is made once per quest
  * and only the progress beside it follows the playhead. The script renames a
@@ -419,7 +422,7 @@ function QuestEntry(props: { questId: number; row: QuestRow | undefined }) {
   const href = questUrl(props.questId);
   const fallback = `quest ${props.questId}`;
   const status = (): QuestStatus => props.row?.status ?? "active";
-  const objectives = (): readonly QuestObjective[] => props.row?.objectives ?? [];
+  const objectives = (): readonly QuestObjective[] => (status() === "active" ? (props.row?.objectives ?? []) : []);
   return (
     <li>
       <Show when={href} fallback={<span class="inv-list-name">{fallback}</span>}>

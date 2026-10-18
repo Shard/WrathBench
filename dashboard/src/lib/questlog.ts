@@ -16,7 +16,10 @@
  *    what is carried — equipped, worn bags, the backpack and the worn bags'
  *    contents, as the server's `Player::GetItemCount(id, false)` counts it and
  *    the SDK's `questObjectives` reads it — capped at the count needed, as the
- *    server keeps it (`AdjustQuestReqItemCount`);
+ *    server keeps it (`AdjustQuestReqItemCount`). The server also counts the
+ *    keyring, which the sheet does not read, so a key reads 0; the panel
+ *    shows objectives only while a quest is in progress, so a complete
+ *    quest's key is never shown as missing;
  *  - the state is the slot's `QuestSlotStateMask` (AzerothCore `Player.h`):
  *    bit 1 complete, bit 2 failed;
  *  - a quest the segment carries no counts for has no objectives rather than
@@ -171,9 +174,13 @@ export function questsInLog(rows: readonly QuestRow[]): number {
   return rows.reduce((n, q) => (q.status === "turnedIn" ? n : n + 1), 0);
 }
 
-/** One objective as the panel prints it: `have / need`, a dash for a have that was not observed. */
+/**
+ * One objective as the panel prints it: `have / need`, a dash for a have that
+ * was not observed. Its spaces do not break, so a quest with several
+ * objectives wraps between them and never inside one.
+ */
 export function objectiveText(o: QuestObjective): string {
-  return `${o.have ?? "—"} / ${o.need}`;
+  return `${o.have ?? "—"} / ${o.need}`;
 }
 
 /** What a status is called, on its row's tooltip and in place of objectives a row does not have. */

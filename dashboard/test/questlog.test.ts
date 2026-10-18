@@ -130,7 +130,8 @@ describe("the quest log at the playhead", () => {
       { have: 2, need: 6 },
       { have: 0, need: 10 },
     ]);
-    expect(quest(900).objectives!.map(objectiveText)).toEqual(["2 / 6", "0 / 10"]);
+    // No-break spaces: a row of several objectives wraps between them, never inside one.
+    expect(quest(900).objectives!.map(objectiveText)).toEqual(["2 / 6", "0 / 10"]);
   });
 
   test("an item objective has no counter: it is what is carried — backpack, a worn bag's slots, equipment, the worn bag itself — capped at the count needed", () => {
@@ -308,6 +309,6 @@ describe("where the sheet cannot say there is no quest log", () => {
       { have: 1, need: 4 },
       { have: null, need: 1, itemId: 2001 },
     ]);
-    expect(log[0]!.objectives!.map(objectiveText)).toEqual(["1 / 4", "— / 1"]);
+    expect(log[0]!.objectives!.map(objectiveText)).toEqual(["1 / 4", "— / 1"]);
   });
 });

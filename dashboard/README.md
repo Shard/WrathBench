@@ -176,13 +176,17 @@ quests", over the same sheet at the same playhead (`questLog` in
 turned in since the playhead's five-minute window began. Each row is a link to
 `quest=<id>` that asks Wowhead's script to rename it, because the trace records
 no quest title and publishes none; where the script is blocked the row reads
-`quest <id>`. Beside the link is each objective as `have / need`. A creature or
-gameobject objective is its counter against the quest's count (`qreq`). A
-collect objective has no counter in the log, so it is what is carried —
-equipped, the worn bags themselves, the backpack and their contents, as the
-server counts it — capped at the count needed. Complete is drawn in `--ok`,
-failed in `--err` (the slot state's bits 1 and 2), turned in in `--ok-muted`. A
-quest with no counts in its segment shows its state alone rather than zeros, as
+`quest <id>`. Beside the link, while the quest is in progress, is each
+objective as `have / need`. A creature or gameobject objective is its counter
+against the quest's count (`qreq`). A collect objective has no counter in the
+log, so it is what is carried — equipped, the worn bags themselves, the
+backpack and their contents, as the server counts it — capped at the count
+needed; the keyring is not in the sheet, so a key reads 0 until its quest
+completes. Once a quest is not in progress the row shows its status instead:
+complete in `--ok`, failed in `--err` (the slot state's bits 1 and 2), turned
+in in `--ok-muted`. A complete quest's objectives are met on the server's word,
+and a carried count that cannot see a key would only contradict it. A quest
+with no counts in its segment shows nothing beside it rather than zeros, as
 does one whose only objective has no counter (exploration, a scripted event).
 Nothing coarser records the log, so wherever the sheet cannot say — faster
 than 60×, nothing loaded at the playhead, a segment from before the sheet, a

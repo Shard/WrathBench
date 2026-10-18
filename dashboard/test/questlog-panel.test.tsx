@@ -99,6 +99,9 @@ const LOG: QuestRow[] = [
   { questId: 899, slot: null, status: "turnedIn", objectives: null },
 ];
 
+/** An objective's text as printed: its spaces do not break, so a row wraps only between objectives. */
+const nb = (s: string): string => s.replace(/ \/ /g, " / ");
+
 /** Each button as it reads: its spans' text, the drawn icons having none. */
 const labels = (root: ParentNode): string[] =>
   Array.from(root.querySelectorAll(".popover-button")).map((b) =>
@@ -140,7 +143,7 @@ describe("the quest button and its panel", () => {
     }
   });
 
-  test("each row links its quest for the script to name, its progress beside it in its status's colour", async () => {
+  test("each row links its quest for the script to name, its progress beside it while in progress, its status in its colour after", async () => {
     const { document, restore } = installDom();
     try {
       const { QuestLog } = await loadInventory();
@@ -170,13 +173,14 @@ describe("the quest button and its panel", () => {
       expect(link.querySelector(".inv-list-count")).toBeNull();
 
       const progress = (li: Element) => li.querySelector(".inv-list-count > span")!;
-      expect(progress(items[0]!).textContent).toBe("1 / 3");
+      expect(progress(items[0]!).textContent).toBe(nb("1 / 3"));
       expect(progress(items[0]!).querySelector("span")!.getAttribute("title")).toBe("Fixture Fang");
-      expect(progress(items[1]!).textContent).toBe("2 / 6 · 0 / 10");
+      expect(progress(items[1]!).textContent).toBe(nb("2 / 6 · 0 / 10"));
       expect(progress(items[1]!).getAttribute("class")).toBeNull();
       expect(progress(items[2]!).textContent).toBe("complete");
       expect(progress(items[2]!).getAttribute("class")).toBe("ok");
-      expect(progress(items[3]!).textContent).toBe("1 / 4");
+      // Out of progress, the status alone: a failed quest's counts are not what it is.
+      expect(progress(items[3]!).textContent).toBe("failed");
       expect(progress(items[3]!).getAttribute("class")).toBe("err");
       expect(items[3]!.querySelector(".inv-list-count")!.getAttribute("title")).toBe("failed");
       // No counts recorded for it: nothing beside the link, rather than zeros.
@@ -195,9 +199,9 @@ describe("the quest button and its panel", () => {
       const after = Array.from(panel.querySelectorAll("li"));
       expect(after[0]!.querySelector("a")).toBe(link);
       expect(link.textContent).toBe("Fixture Quest");
-      expect(progress(after[0]!).textContent).toBe("3 / 3");
+      expect(progress(after[0]!).textContent).toBe("complete");
       expect(progress(after[0]!).getAttribute("class")).toBe("ok");
-      expect(progress(after[1]!).textContent).toBe("3 / 6 · 0 / 10");
+      expect(progress(after[1]!).textContent).toBe(nb("3 / 6 · 0 / 10"));
       dispose();
     } finally {
       restore();
