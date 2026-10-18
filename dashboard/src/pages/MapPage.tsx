@@ -53,6 +53,7 @@ import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "../components/UnitFrame";
 import { InventoryPanel } from "../components/Inventory";
 import { sheetReading } from "../lib/inventory";
+import { questLog } from "../lib/questlog";
 import { cursorMemory } from "../lib/cursormemory";
 import { intentLabel, intentToDraw, intentTone, type IntentTone } from "../lib/mapintent";
 import { restPhase, statusStamp } from "../lib/reflect";
@@ -1962,6 +1963,17 @@ export default function MapPage() {
   });
   const shownItems = createMemo(() => shown()?.items ?? null);
   const shownMoney = createMemo(() => shown()?.money ?? null);
+  /**
+   * The quest log at the playhead, only where the sheet carries it: nothing
+   * coarser records the log, so where the sheet cannot say (faster than 60×,
+   * nothing loaded there, before the sheet, a restart's unobserved stretch)
+   * there is no quest button at all. The same array while the log says the
+   * same thing (`questLog`).
+   */
+  const shownQuests = createMemo(() => {
+    const v = selectedSheet();
+    return v === null ? null : questLog(v.sheet, v.qreq, v.items);
+  });
   /** The bars' numbers: the trace's where it answers, the reading's where it does not (`gaugesOf`). */
   const gauges = createMemo(() => {
     const p = selected();
@@ -2119,11 +2131,12 @@ export default function MapPage() {
                 reading — live, the position's; in a replay, the one behind the
                 cursor (`lib/replay.ts`). Before the first there is nothing to
                 show, which the null line says rather than drawing empty bags.
+                The quest log beside them is the sheet's alone (`shownQuests`).
               */}
               <div class="k">inventory</div>
               <div class="v">
                 <Show when={shownItems()} fallback={<span class="inv-note">{fmtItems(shownItems(), false)}</span>}>
-                  {(items) => <InventoryPanel items={items()} />}
+                  {(items) => <InventoryPanel items={items()} quests={shownQuests()} />}
                 </Show>
               </div>
               {/* Where the pip is drawn: the trace's pose at the playhead when it has one. */}

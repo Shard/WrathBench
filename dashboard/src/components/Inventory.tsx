@@ -2,7 +2,8 @@
  * What the character wears and carries, drawn the way a client draws it.
  *
  * Two buttons over one inventory sample — "N carrying" and "N equipped" —
- * each opening a popover on hover or a tap. Buttons rather than panels because
+ * each opening a popover on hover or a tap, and on the map a third, "N
+ * quests", over the trace's quest log. Buttons rather than panels because
  * this sits in a run card and a map sidebar, and a paperdoll inline spends
  * that whole column on something a reader looks at occasionally.
  *
@@ -21,10 +22,18 @@
  * pass is what decorates.
  */
 
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 import { type InvItem, carried, carriedCount, paperdoll, splitLinked } from "../lib/inventory";
 import { type Placement, popoverPlacement, popoverStyle } from "../lib/popover";
+import {
+  QUEST_STATUS_LABEL,
+  type QuestObjective,
+  type QuestRow,
+  type QuestStatus,
+  objectiveText,
+  questsInLog,
+} from "../lib/questlog";
 import {
   PAPERDOLL_BOTTOM,
   PAPERDOLL_LEFT,
@@ -36,6 +45,7 @@ import {
   loadWowhead,
   onWowheadStatus,
   qualityColor,
+  questUrl,
   refreshLinks,
   slotLabel,
   slotShort,
@@ -181,7 +191,7 @@ const [sticky, setSticky] = createSignal(false);
  * sidebar's scroll area — a full paperdoll showed four rows — and no amount of
  * z-index fixes a clip.
  */
-function Popover(props: { icon: string; count: number; label: string; children: JSX.Element }) {
+function Popover(props: { icon: JSX.Element; count: number; label: string; children: JSX.Element }) {
   const me = Symbol(props.label);
   const open = () => active() === me;
   const [place, setPlace] = createSignal<Placement>({ below: true, offset: 0, left: 0, maxHeight: 320 });
@@ -282,7 +292,7 @@ function Popover(props: { icon: string; count: number; label: string; children: 
           }
         }}
       >
-        <span class={`bag-icon ${props.icon}`} aria-hidden="true" />
+        {props.icon}
         <span class="bag-count">{props.count}</span>
         <span class="bag-label">{props.label}</span>
       </button>
@@ -343,7 +353,7 @@ export function Equipment(props: { items: readonly InvItem[]; status: WowheadSta
   const doll = createMemo(() => paperdoll(props.items));
   const worn = createMemo(() => props.items.filter((i) => i.equipped));
   return (
-    <Popover icon="worn" count={worn().length} label="equipped">
+    <Popover icon={<span class="bag-icon worn" aria-hidden="true" />} count={worn().length} label="equipped">
       {/*
         A doll of empty frames is the worst of both: once the script has failed
         the squares can never be filled, so the sheet degrades to the same list
@@ -380,7 +390,7 @@ export function Equipment(props: { items: readonly InvItem[]; status: WowheadSta
 export function BagGrid(props: { items: readonly InvItem[]; status: WowheadStatus }) {
   const rows = createMemo(() => carried(props.items));
   return (
-    <Popover icon="bag" count={carriedCount(props.items)} label="carrying">
+    <Popover icon={<span class="bag-icon bag" aria-hidden="true" />} count={carriedCount(props.items)} label="carrying">
       <Show when={rows().length > 0} fallback={<div class="inv-note">bags empty</div>}>
         <Items items={rows()} status={props.status} />
       </Show>
@@ -388,14 +398,93 @@ export function BagGrid(props: { items: readonly InvItem[]; status: WowheadStatu
   );
 }
 
+/** A row's progress is drawn in its status's colour: the stylesheet's own utility classes. */
+const QUEST_STATUS_CLASS: Readonly<Record<QuestStatus, string | undefined>> = {
+  active: undefined,
+  complete: "ok",
+  failed: "err",
+  turnedIn: "ok-muted",
+};
+
 /**
- * Both buttons, for the places that show a whole character.
+ * One quest: its Wowhead link, then its objectives as `have / need` in its
+ * status's colour, or the status alone where it has none to show.
+ *
+ * Keyed by the quest id, not by the row: the anchor is made once per quest
+ * and only the progress beside it follows the playhead. The script renames a
+ * link by replacing what is inside it, so an anchor rebuilt on every counter
+ * would read `quest <id>` again until the next refresh.
+ */
+function QuestEntry(props: { questId: number; row: QuestRow | undefined }) {
+  const href = questUrl(props.questId);
+  const fallback = `quest ${props.questId}`;
+  const status = (): QuestStatus => props.row?.status ?? "active";
+  const objectives = (): readonly QuestObjective[] => props.row?.objectives ?? [];
+  return (
+    <li>
+      <Show when={href} fallback={<span class="inv-list-name">{fallback}</span>}>
+        {(h) => (
+          <a class="inv-list-link" href={h()} target="_blank" rel="noreferrer" data-wh-rename-link="true">
+            <span class="inv-list-name">{fallback}</span>
+          </a>
+        )}
+      </Show>
+      <span class="inv-list-count" title={QUEST_STATUS_LABEL[status()]}>
+        <span class={QUEST_STATUS_CLASS[status()]}>
+          <Show when={objectives().length > 0} fallback={status() === "active" ? "" : QUEST_STATUS_LABEL[status()]}>
+            <For each={objectives()}>
+              {(o, i) => (
+                <>
+                  {i() > 0 ? " · " : ""}
+                  <span title={o.itemId === undefined ? undefined : (o.name ?? `item ${o.itemId}`)}>{objectiveText(o)}</span>
+                </>
+              )}
+            </For>
+          </Show>
+        </span>
+      </span>
+    </li>
+  );
+}
+
+const sameIds = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((id, i) => id === b[i]);
+
+/** The rows, one per quest id; a new id since the panel opened is a link the script has not seen yet. */
+function QuestList(props: { rows: readonly QuestRow[] }) {
+  const ids = createMemo(() => props.rows.map((q) => q.questId), undefined, { equals: sameIds });
+  const byId = createMemo(() => new Map(props.rows.map((q) => [q.questId, q] as const)));
+  createEffect(on(ids, () => refreshLinks(), { defer: true }));
+  return (
+    <ul class="inv-list">
+      <For each={ids()}>{(id) => <QuestEntry questId={id} row={byId().get(id)} />}</For>
+    </ul>
+  );
+}
+
+/**
+ * The quest log at the playhead: how many quests it holds, and a panel of
+ * them in log-slot order, then any turned in since the trace's window began.
+ */
+export function QuestLog(props: { rows: readonly QuestRow[] }) {
+  return (
+    <Popover icon={<span class="quest-mark" aria-hidden="true">?</span>} count={questsInLog(props.rows)} label="quests">
+      <Show when={props.rows.length > 0} fallback={<div class="inv-note">log empty</div>}>
+        <QuestList rows={props.rows} />
+      </Show>
+    </Popover>
+  );
+}
+
+/**
+ * The buttons, for the places that show a whole character.
  *
  * `null` items is a run that recorded no inventory at all, which is not an
  * empty bag; the caller decides what to say about that and this renders
- * nothing for it.
+ * nothing for it. The quest log is drawn only where the trace's sheet carries
+ * it (`questLog`): it has no coarser reading to stand in, so where the sheet
+ * cannot say there is no button rather than an empty log.
  */
-export function InventoryPanel(props: { items: readonly InvItem[] | null | undefined }) {
+export function InventoryPanel(props: { items: readonly InvItem[] | null | undefined; quests?: readonly QuestRow[] | null }) {
   const [status, setStatus] = createSignal<WowheadStatus>("pending");
   onMount(() => {
     loadWowhead();
@@ -407,6 +496,7 @@ export function InventoryPanel(props: { items: readonly InvItem[] | null | undef
         <div class="inventory">
           <BagGrid items={items()} status={status()} />
           <Equipment items={items()} status={status()} />
+          <Show when={props.quests}>{(rows) => <QuestLog rows={rows()} />}</Show>
         </div>
       )}
     </Show>

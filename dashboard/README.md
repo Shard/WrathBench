@@ -168,8 +168,28 @@ patches by the viewer's own codec (`@viewer/track-inv`). It keeps a reading
 every 64 patches and hands back the same array while the cursor stays between
 two changes, so the bag and the paperdoll redraw only when the inventory
 does. A track published before the patches carries each reading whole on its
-points, and is read as it is. The quest log, reputation and skills the sheet
-also carries have no panel yet.
+points, and is read as it is.
+
+**The quest log** is a third button beside the bag and the paperdoll, "N
+quests", over the same sheet at the same playhead (`questLog` in
+`src/lib/questlog.ts`). Its panel lists the log in slot order, then any quest
+turned in since the playhead's five-minute window began. Each row is a link to
+`quest=<id>` that asks Wowhead's script to rename it, because the trace records
+no quest title and publishes none; where the script is blocked the row reads
+`quest <id>`. Beside the link is each objective as `have / need`. A creature or
+gameobject objective is its counter against the quest's count (`qreq`). A
+collect objective has no counter in the log, so it is what is carried —
+equipped, the worn bags themselves, the backpack and their contents, as the
+server counts it — capped at the count needed. Complete is drawn in `--ok`,
+failed in `--err` (the slot state's bits 1 and 2), turned in in `--ok-muted`. A
+quest with no counts in its segment shows its state alone rather than zeros, as
+does one whose only objective has no counter (exploration, a scripted event).
+Nothing coarser records the log, so wherever the sheet cannot say — faster
+than 60×, nothing loaded at the playhead, a segment from before the sheet, a
+restart's unobserved stretch — there is no quest button rather than an empty
+log. Rows are keyed by quest id, so the anchor the script renamed survives a
+counter change. Reputation and skills, which the sheet also carries, have no
+panel yet.
 
 **Fetching is listed-only.** A segment is requested only for a `t0` a
 position's `recent` or a track's `segs` listed — the public edge caches a 404
@@ -233,8 +253,9 @@ surprise, and nothing server-side may follow them into the browser bundle.
 `bun test` from the repo root runs them with everything else. They cover the
 pure layer — view maths and pip placement, the API client's paths, encoding and
 error mapping — plus a few focused component checks: the shared chart axis, the
-map's play bar across a route swap, the campaigns page across its routes, and
-the run page's scratchpad panel against a hostile pad.
+map's play bar across a route swap, the campaigns page across its routes, the
+run page's scratchpad panel against a hostile pad, and the map's quest button
+and its rows across a counter change.
 Those use the small `happy-dom` harness to mount the components through Vite;
 the rest of the suite does not need a DOM.
 

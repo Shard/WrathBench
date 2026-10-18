@@ -32,6 +32,7 @@ import {
   onWowheadStatus,
   parseEntryFromName,
   qualityColor,
+  questUrl,
   refreshLinks,
   resetWowheadStatus,
   slotLabel,
@@ -100,6 +101,23 @@ describe("an item id becomes a link, and nothing else does", () => {
     expect(entryOf({ itemId: null, name: "item 4540" })).toBe(4540);
     // A run from before the id column, with a name that did resolve: no link.
     expect(entryOf({ name: "Hearthstone" })).toBeNull();
+  });
+});
+
+describe("a quest id becomes a link, and is the only name the quest log has", () => {
+  test("the Wrath dataset's quest page", () => {
+    expect(questUrl(783)).toBe("https://www.wowhead.com/wotlk/quest=783");
+  });
+
+  test("a non-id is not a link", () => {
+    for (const id of [0, -1, 1.5, Number.NaN]) expect(questUrl(id)).toBeNull();
+  });
+
+  test("the page keeps its own link text; a quest link alone asks the script for the name", () => {
+    // Page-wide, links are never renamed, so an item keeps its fallback name;
+    // the quest log's anchors set `data-wh-rename-link`, which the script
+    // reads per link over the page-wide setting.
+    expect(wowheadConfig().renameLinks).toBe(false);
   });
 });
 
