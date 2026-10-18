@@ -193,6 +193,15 @@ at the edge.
 - **Runs before the recorder** have no `trace` table. Their tracks carry no
   `trace` field, so their bytes and keys are what they were, and nothing is
   backfilled.
+- **A published segment cannot be corrected in place.** A content-addressed
+  run object moves to a new key when its projection changes. A segment's key
+  is its window, so a change to the codec or to `projectTraceSegment` reaches
+  only windows that close after it ships. Two things hold the old ones: the
+  edge caches them for a year, and `traceSegs` keeps them from being PUT again.
+  Correcting published windows takes three things together: a new key prefix
+  the reader moves to (`trace2/`), a cleared `traceSegs`, and a purge of the
+  old prefix. A change to the content boundary is therefore one to settle
+  before segments go out, not after.
 
 One trace-specific cache fact: segments sit under `/v1/run/`, so the zone's
 immutable rule and its rate limit (60 requests per 10 seconds per IP) cover
@@ -376,8 +385,9 @@ copy-and-delete projection is not statically bounded. The rules, mapped to
   health bar emptying at a corpse. The `tail` in `live.json` crosses the same
   projector. **Residual, stated plainly**: the positions themselves are
   published, so the place a character stopped, the cut to a graveyard and the
-  walk back are on the map, as they already are at 60 s resolution in the
-  track. Whether deaths should withhold the positions around them too is the
+  walk back are on the map. They already are at 60 s resolution in the track,
+  whose points also carry a `health` of 0 when a sample landed on a death.
+  Whether deaths should withhold the positions around them too is the
   operator's open question, not decided here.
 
 The projection gets the heaviest testing in the tree: fixture responses
@@ -645,7 +655,7 @@ is the documented repair for exactly this.
 The entire write cost is live runs, and the two levers on it are the cadence
 and per-aggregate addressing.
 
-Measured on the cluster since, a steady pass makes 14 PUTs. Passes
+A steady pass now makes 14 PUTs. Passes
 run about every 6.7 minutes, because a pass takes one to two minutes on top of
 the interval. That is about 90k class-A ops a month. Trace segments add one PUT
 per live character per closed window, and that count does not depend on the

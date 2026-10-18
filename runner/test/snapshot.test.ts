@@ -31,7 +31,7 @@ import { createApi } from "../viewer/api";
 import { emptyState, publishPass, type ObjectStore } from "../../infra/publish-core";
 import { PUBLIC_ATTRIBUTION } from "../viewer/public-projection";
 import type { PositionsResponse, TraceSegment } from "../viewer/api-types";
-import { SEG_MS, tailStart, unpackSegs, windowOf } from "../viewer/trace";
+import { SEG_MS, unpackSegs, windowOf } from "../viewer/trace";
 import { tempDirs } from "./fixtures/temp-dirs";
 
 const tempDir = tempDirs();
@@ -881,7 +881,7 @@ describe("createRenderer", () => {
  * window's start, and a death with a player target in the oldest window — the
  * three things the public segment must not carry.
  */
-function addTrace(runs: string, runId: string, opts: { rows?: boolean } = {}): number[] {
+function addTrace(runs: string, runId: string, opts: { rows?: boolean } = {}): { windows: number[]; closed: number[] } {
   const db = new Database(join(runs, runId, "run.sqlite"));
   db.exec(`CREATE TABLE IF NOT EXISTS trace (run_id TEXT NOT NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL,
              map INTEGER, x REAL, y REAL, z REAL, o REAL, data TEXT);
@@ -902,19 +902,29 @@ function addTrace(runs: string, runId: string, opts: { rows?: boolean } = {}): n
     }
   }
   db.close();
-  // The closed windows: those a minute or more past their end.
-  return [open - 3 * SEG_MS, open - 2 * SEG_MS, open - SEG_MS].filter((t0) => t0 < tailStart(now));
+  // The windows that have rows, and the two of them closed at any render
+  // after this one: the newest may or may not have settled by then, so a test
+  // reads what the render's own track lists rather than a clock of its own.
+  return { windows: [open - 3 * SEG_MS, open - 2 * SEG_MS, open - SEG_MS], closed: [open - 3 * SEG_MS, open - 2 * SEG_MS] };
 }
 
 const segmentPaths = (out: SnapshotResult, runId: string): string[] =>
   out.artifacts.map((a) => a.path).filter((p) => p.startsWith(`v1/run/${runId}/trace/`)).sort();
+const segmentPathsOf = (runId: string, t0s: readonly number[]): string[] => t0s.map((t0) => `v1/run/${runId}/trace/${t0}.json`).sort();
+/** The windows a pass's published track lists for a run. */
+const listedIn = (out: SnapshotResult, runId: string): number[] =>
+  unpackSegs((trackOfIn(out, runId) as { trace: { segs: [number, number][] } }).trace.segs);
 
 describe("trace segments in a pass", () => {
   test("each closed window publishes once, immutable and projected, and the track and live.json list only those", async () => {
     const runs = fixture();
-    const closed = addTrace(runs, LIVE_RUN);
+    const trace = addTrace(runs, LIVE_RUN);
     const out = await render(runs, 111);
-    expect(segmentPaths(out, LIVE_RUN)).toEqual(closed.map((t0) => `v1/run/${LIVE_RUN}/trace/${t0}.json`).sort());
+    const listed = listedIn(out, LIVE_RUN);
+    // Every window the track lists has its segment in the pass, and no other does.
+    expect(segmentPaths(out, LIVE_RUN)).toEqual(segmentPathsOf(LIVE_RUN, listed));
+    for (const t0 of trace.closed) expect(listed).toContain(t0);
+    for (const t0 of listed) expect(trace.windows).toContain(t0);
     for (const p of segmentPaths(out, LIVE_RUN)) {
       const a = out.artifacts.find((x) => x.path === p)!;
       expect(a.cacheControl).toBe(IMMUTABLE_CACHE);
@@ -923,8 +933,6 @@ describe("trace segments in a pass", () => {
       expect(body.v).toBe(1);
       for (const withheld of ['"dead"', '"ghost"', '"target"', '"player"']) expect(a.body).not.toContain(withheld);
     }
-    const track = trackOfIn(out, LIVE_RUN) as { trace?: { segMs: number; segs: [number, number][] } };
-    expect(unpackSegs(track.trace!.segs)).toEqual(closed);
     // live.json's recent windows are segments this pass wrote, and the tail rides inline.
     const live = JSON.parse(out.artifacts.find((a) => a.path === "v1/live.json")!.body).positions as PositionsResponse;
     const pos = live.positions.find((p) => p.runId === LIVE_RUN)!;
@@ -951,21 +959,25 @@ describe("trace segments in a pass", () => {
 
   test("a window the bucket already holds is neither fetched nor rendered again", async () => {
     const runs = fixture();
-    const closed = addTrace(runs, LIVE_RUN);
+    const trace = addTrace(runs, LIVE_RUN);
     const asked: string[] = [];
     const api = createApi({ runsDir: runs, tilesDir: join(runs, "tiles-unused"), publicMode: true, moduleUrl: "http://127.0.0.1:1" });
     const counting = async (req: Request): Promise<Response> => {
       if (new URL(req.url).pathname.includes("/trace/")) asked.push(new URL(req.url).pathname);
       return await api(req);
     };
-    const held = new Set(closed.slice(0, -1));
+    // The bucket holds the older of the two windows sure to be closed.
+    const held = new Set([trace.closed[0]!]);
     const out = await createRenderer({ runsDir: runs, api: counting })(111, undefined, {
       traceSegment: (runId, t0) => runId === LIVE_RUN && held.has(t0),
     });
-    expect(segmentPaths(out, LIVE_RUN)).toEqual([`v1/run/${LIVE_RUN}/trace/${closed.at(-1)}.json`]);
-    expect(asked).toEqual([`/api/run/${LIVE_RUN}/trace/${closed.at(-1)}`]);
+    const listed = listedIn(out, LIVE_RUN);
+    const fresh = listed.filter((t0) => !held.has(t0));
+    expect(fresh.length).toBeGreaterThan(0);
+    expect(segmentPaths(out, LIVE_RUN)).toEqual(segmentPathsOf(LIVE_RUN, fresh));
+    expect(asked.sort()).toEqual(fresh.map((t0) => `/api/run/${LIVE_RUN}/trace/${t0}`).sort());
     // The track still lists every window, held or new.
-    expect(unpackSegs((trackOfIn(out, LIVE_RUN) as { trace: { segs: [number, number][] } }).trace.segs)).toEqual(closed);
+    for (const t0 of held) expect(listed).toContain(t0);
   });
 
   test("a segment gone mid-pass drops its run, and live.json names none of its windows", async () => {
@@ -983,7 +995,7 @@ describe("trace segments in a pass", () => {
 
   test("published: a second pass PUTs no segment again, and the bucket holds every window the track lists", async () => {
     const runs = fixture();
-    const closed = addTrace(runs, LIVE_RUN);
+    addTrace(runs, LIVE_RUN);
     const bucket = new Map<string, string>();
     const puts: string[] = [];
     const store: ObjectStore = {
@@ -995,18 +1007,27 @@ describe("trace segments in a pass", () => {
     };
     const state = emptyState();
     const render = createRenderer({ runsDir: runs });
-    const pass = async (): Promise<void> => {
-      await publishPass(async (sink, published) => await render(Date.now(), { sink, batch: 1 }, published), store, state);
+    /** One pass; what it hands back is the run objects it streamed, so a test can read each pass's track. */
+    const pass = async (): Promise<SnapshotResult> => {
+      const streamed: SnapshotArtifact[] = [];
+      const keep = async (batch: SnapshotArtifact[], sink: (b: SnapshotArtifact[]) => Promise<void>): Promise<void> => {
+        streamed.push(...batch);
+        await sink(batch);
+      };
+      await publishPass(async (sink, published) => await render(Date.now(), { sink: (b) => keep(b, sink), batch: 1 }, published), store, state);
+      return { gen: "", snap: {}, artifacts: streamed };
     };
-    await pass();
+    const first = await pass();
     const segs = puts.filter((p) => p.includes("/trace/"));
-    expect(segs.sort()).toEqual(closed.map((t0) => `v1/run/${LIVE_RUN}/trace/${t0}.json`).sort());
+    expect(segs.sort()).toEqual(segmentPathsOf(LIVE_RUN, listedIn(first, LIVE_RUN)));
     // Segments land before live.json, which lists them.
     expect(Math.max(...segs.map((p) => puts.indexOf(p)))).toBeLessThan(puts.indexOf("v1/live.json"));
     puts.length = 0;
-    await pass();
-    expect(puts.filter((p) => p.includes("/trace/"))).toEqual([]);
-    for (const t0 of closed) expect(bucket.has(`v1/run/${LIVE_RUN}/trace/${t0}.json`)).toBe(true);
+    const second = await pass();
+    // Nothing the first pass wrote is written again; a window that settled in
+    // between is the only segment the second may add.
+    for (const p of puts.filter((p) => p.includes("/trace/"))) expect(segs).not.toContain(p);
+    for (const t0 of listedIn(second, LIVE_RUN)) expect(bucket.has(`v1/run/${LIVE_RUN}/trace/${t0}.json`)).toBe(true);
   });
 });
 

@@ -1887,7 +1887,7 @@ Its environment is the compose service's, and the two must stay in agreement:
 | --- | --- | --- |
 | `WRATHBENCH_RUNS_DIR` | `data/runs` | the evidence record, read-only |
 | `WRATHBENCH_CONFIG_DB` | `data/config.sqlite` (the default; unset under compose) | the config store's roster names the models the pages label |
-| `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed |
+| `WRATHBENCH_PUBLISH_STATE` | `data/publish/state.json` | what was uploaded last, so a pass PUTs only what changed. Deleting it is the repair for a bad immutable object, and since the trace it also re-uploads every published trace segment in one pass: 288 a day for each character a trace recorded, which for a long freeplay fleet is tens of thousands of PUTs at once |
 | `WRATHBENCH_PUBLISH_INTERVAL_MS` | `60000` in the script; the chart and compose set `300000` | `--loop` cadence. Five minutes is a cost choice, not a freshness one — a pass writes ~24 objects regardless of cadence, so 60s measured ~1.2M R2 class-A ops/month against a 1M free tier and 300s is ~240k. The harness's own floor is 30–60s, so a faster push would buy little anyway |
 | `WRATHBENCH_PUBLISH_BATCH` | `8` | runs projected before the pass uploads them, drops the bodies and releases those runs' entry indexes from the viewer handle. The pass's memory dial: measured peak RSS over the 1,016-run tree is 1.08 GB at 25, 0.78 GB at 8 and 0.59 GB at 1, all inside 60–67s, against 4.4 GB without the batching. Eight matches the per-run read pool's width — smaller leaves readers idle, larger only holds more at once |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | the publisher's R2 key pair | `.env`, never argv |
