@@ -22,6 +22,12 @@
  * still unwinding beside a new one) each rename a whole file of their own;
  * whichever lands last wins, and every entry in it is checked against the
  * files on disk again before it is served.
+ *
+ * A one-shot reader beside the supervisor (`--status`, `--dry-run`) opens it
+ * `readOnly`: it is served exactly as a writer is, and never writes. Its
+ * misses are not its to keep, and a file it renamed in could be one the
+ * running supervisor no longer reads (another reader version), which would
+ * cost that supervisor a cold read on its next tick.
  */
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
@@ -36,14 +42,17 @@ export class RunFactCache {
   readonly path: string;
   /** The reader's identity (`runFactCacheVersion`): a file written by another reader is not read. */
   readonly version: string;
+  /** Served like any other, never written: `flush` is a no-op. */
+  readonly readOnly: boolean;
   private entries: Map<string, Entry> | undefined;
   private dirty = false;
   /** Why the last load or flush fell back, for a caller that logs it; undefined after one that did not. */
   failure: string | undefined;
 
-  constructor(path: string, version: string) {
+  constructor(path: string, version: string, opts: { readOnly?: boolean } = {}) {
     this.path = path;
     this.version = version;
+    this.readOnly = opts.readOnly === true;
   }
 
   private load(): Map<string, Entry> {
@@ -109,7 +118,7 @@ export class RunFactCache {
 
   /** Write the entries if anything changed. Best effort: a store that cannot be written costs the next process a cold read, nothing else. */
   flush(): void {
-    if (!this.dirty || this.entries === undefined) return;
+    if (this.readOnly || !this.dirty || this.entries === undefined) return;
     const tmp = `${this.path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     try {
       writeFileSync(tmp, JSON.stringify({ version: this.version, entries: Object.fromEntries(this.entries) }));

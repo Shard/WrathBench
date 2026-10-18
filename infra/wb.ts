@@ -85,6 +85,8 @@ export const GROUPS: Readonly<Record<string, string>> = {
   site: "the public site",
   data: "prices and logos this checkout carries",
   chart: "checks on the Helm chart",
+  inspect: "read-only views of runs, the audit log and the publisher; bounded, never a token",
+  dashboard: "the dashboard rendered here over fixture runs: both builds, headless screenshots",
 };
 
 /** Runs in the runner: the pod on a cluster, compose's `runner` container under --local. */
@@ -126,6 +128,7 @@ const BOOTSTRAP = "infra/bootstrap/bootstrap.ts";
 const SPECTATOR = "infra/spectator-account.ts";
 const RUN_FLEET = "infra/run-fleet.ts";
 const FLEET_UPDATE = "infra/fleet-update.sh";
+const INSPECT_RUN = "infra/inspect-run.ts";
 
 /**
  * The table. Help and dispatch both read it and nothing else, so they cannot
@@ -225,6 +228,46 @@ export const ENTRIES: readonly Entry[] = [
   { group: "data", command: "logos", summary: "fetch the model logos the lineup names (--check: drift only)", ...onHost("bun", "infra/fetch-model-logos.ts") },
 
   { group: "chart", command: "check", summary: "the database pods do not roll when only the release moves", ...onHost("infra/chart/stable-pod-templates.sh") },
+
+  { group: "inspect", command: "live", summary: "every run with a heartbeat: live, or left cold by a killed process", ...inRunner("bun", INSPECT_RUN, "live") },
+  {
+    group: "inspect",
+    command: "run",
+    takes: "<run-id> [--since D]",
+    summary: "live, paused, ended or ownerless; level, counts, errors by class, sizes, trace",
+    ...inRunner("bun", INSPECT_RUN, "run"),
+  },
+  {
+    group: "inspect",
+    command: "trajectory",
+    takes: "<run-id> [--last N] [--errors] [--grep RE] [--all] [--since D]",
+    summary: "one capped line per snippet or tool call with its result, newest last",
+    ...inRunner("bun", INSPECT_RUN, "trajectory"),
+  },
+  {
+    group: "inspect",
+    command: "audit",
+    takes: "<run-id> [--op X[,Y] [--status S] [--last N | --summary]] [--since D] [--until D]",
+    summary: "the module audit log, counts per op and status or the last records, reduced where it lives",
+    cluster: { place: "host", argv: ["bun", "infra/inspect-audit.ts", "--k8s"] },
+    local: { place: "host", argv: ["bun", "infra/inspect-audit.ts"] },
+  },
+  {
+    group: "inspect",
+    command: "publisher",
+    takes: "[<run-id>]",
+    summary: "the publisher's state: last flip, versions per run, the secret scan, the last passes",
+    cluster: { place: "host", argv: ["bun", "infra/inspect-publisher.ts", "--k8s"] },
+    local: { place: "host", argv: ["bun", "infra/inspect-publisher.ts"] },
+  },
+
+  {
+    group: "dashboard",
+    command: "shots",
+    takes: "[--run DIR]… [--path P]… [--out DIR] [--serve]",
+    summary: "fixture runs, a private viewer and a public build here, then named headless screenshots",
+    ...onHost("bun", "infra/dashboard-shots.ts"),
+  },
 ];
 
 /** The repository file a form runs: the first `.ts` or `.sh` in its argv. */

@@ -130,6 +130,17 @@ interface Built {
   out: InvItem[];
 }
 
+/** The backpack's last slot: past it, bag 255 is the keyring (86-117) and the currency tokens (118-149). */
+const BACKPACK_LAST_SLOT = 38;
+
+/**
+ * Whether a carried row sits in a bag, the backpack or a worn bag, where the
+ * 60 s reading has it (`bag()` in the SDK). The keyring and the currency slots
+ * are not on the reading and have no square in the grid; only a quest's count
+ * reads them (`questlog.ts`).
+ */
+const inABag = (row: Row): boolean => row[0] !== 255 || row[1]! <= BACKPACK_LAST_SLOT;
+
 /** Per segment dictionary: the names are a segment's, and one segment's rows are read against its own. */
 const builds = new WeakMap<Names, Built>();
 
@@ -173,8 +184,9 @@ function rowItem(names: Names, row: Row, worn: boolean, dur: Row | undefined): I
 /**
  * The sheet's equipment and carried items as the panels' rows: the same rows
  * the 60 s reading would have given (`itemSample`), plus each item's random
- * property and a worn item's durability. Worn bags are not among them, as they
- * are not on the reading. Null when either list is not recorded, which the
+ * property and a worn item's durability. Worn bags are not among them, nor
+ * the keyring and the currency slots, as none of them is on the reading.
+ * Null when either list is not recorded, which the
  * caller reads as "the sheet cannot say" and falls back from, never as empty
  * bags.
  *
@@ -200,7 +212,7 @@ export function sheetItems(sheet: SheetInventory, names: Names): InvItem[] | nul
     rows.set(key, item);
     return item;
   };
-  const built = [...equip.map((r) => one(r, true)), ...inv.map((r) => one(r, false))];
+  const built = [...equip.map((r) => one(r, true)), ...inv.filter(inABag).map((r) => one(r, false))];
   const out = built.length === lastOut.length && built.every((it, i) => it === lastOut[i]) ? lastOut : built;
   lastRows = rows;
   lastOut = out;

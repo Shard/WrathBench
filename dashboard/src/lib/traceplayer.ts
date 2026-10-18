@@ -32,6 +32,7 @@ import type {
   PositionsResponse,
   TraceIndexResponse,
   TraceItemName,
+  TraceQuestReq,
   TraceSegment,
   TraceState,
   TraceTarget,
@@ -54,7 +55,7 @@ import {
 import { type Span, advanceCursor } from "./playback";
 import { trackSpan } from "./replay";
 
-export type { TraceItemName, TracePose, TraceSheetAt, TraceState, TraceTarget };
+export type { TraceItemName, TracePose, TraceQuestReq, TraceSheetAt, TraceState, TraceTarget };
 
 /* --------------------------------------------------------------- store --- */
 
@@ -123,16 +124,18 @@ export interface TraceUnit {
 }
 
 /**
- * The character sheet at an instant, with the names its ids are shown by.
+ * The character sheet at an instant, with the names its ids are shown by and
+ * the counts its quests need.
  *
- * The names are the segment's own dictionary, the one that answered for the
- * instant: a segment names exactly the items it references, so a sheet is
- * never read against another window's names.
+ * Both are the segment's own dictionaries, the ones that answered for the
+ * instant: a segment names exactly the items and quests it references, so a
+ * sheet is never read against another window's.
  */
 export interface TraceSheetView {
   /** The codec's fold (`sheetAt`): the very object while no sheet event is crossed, a key it lacks null. */
   sheet: TraceSheetAt;
   items: ReadonlyMap<number, TraceItemName>;
+  qreq: ReadonlyMap<number, TraceQuestReq>;
 }
 
 /** One unbroken stretch of a trail, on one map, all walked or all flown. */
@@ -463,7 +466,7 @@ export function createTraceStore(opts: TraceStoreOptions = {}): TraceStore {
       if (run === undefined) return null;
       const at = locate(run, t);
       if (at === null) return null;
-      return { sheet: foldSheet(at.piece.seg, t), items: at.piece.seg.items };
+      return { sheet: foldSheet(at.piece.seg, t), items: at.piece.seg.items, qreq: at.piece.seg.qreq };
     },
 
     trail(runId, from, to) {

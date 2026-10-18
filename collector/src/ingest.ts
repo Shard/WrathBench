@@ -27,7 +27,7 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { openRunDb } from "../../runner/src/rundb";
 import { RUN_TOTALS_DERIVATION, RunTotalsScanner } from "../../runner/viewer/tail";
-import { readRunFact } from "../../runner/src/models";
+import { type CountCache, readRunFact, type RecordCountScanner } from "../../runner/src/models";
 import { strikableSessionToken, strikeSessionToken } from "../../runner/src/session-token";
 import type { Batcher } from "./batch";
 import type { OffsetStore } from "./offsets";
@@ -63,16 +63,40 @@ export interface IngestResult {
 }
 
 /**
- * Resumable totals scanners, one per live run, held for the process's life.
+ * What the collector keeps between passes for one run: the trajectory it read
+ * (path, inode, device), when it last read it, and its resumable totals
+ * scanner. The run's record-count scanner, `readRunFact`'s, sits in `counts`
+ * under the same path.
  *
- * A live trajectory grows on every poll, and `RunTotals` is a whole-file
- * derivation, so without this the collector would re-read a 669 MB file every
- * five seconds. The scanner keeps its accumulators and folds only the bytes
- * appended since its last read. A restart loses them and the next growth
- * re-reads that run from zero — exactly the cost the viewer pays today, and
- * only for runs that are still being written.
+ * A live trajectory grows on every poll, and both `RunTotals` and
+ * `readRunFact`'s record count are whole-file derivations, so without these the
+ * collector would re-read a 400 MB file every five seconds. Each scanner keeps
+ * its accumulators and folds only the bytes appended since its last read.
  */
-type ScannerCache = Map<string, RunTotalsScanner>;
+interface KeptRun {
+  path: string;
+  ino: number;
+  dev: number;
+  readAt: number;
+  /** Absent after a scan that threw: the next derivation starts it again. */
+  totals?: RunTotalsScanner;
+}
+
+/**
+ * How long a run's scanners outlive the last read of its trajectory. They are
+ * kept across a quiet pass — a model can think for minutes with nothing
+ * written, and dropping them there would read the whole file again on the
+ * next write (~2 s for a 417 MB trajectory's totals) — and dropped once the run
+ * has been quiet this long, when it is no longer listed, or when its
+ * trajectory is another file: moved (archived), rotated or replaced (another
+ * inode or device), or shorter than what was read. A paused run that resumes
+ * later than this, and every live run after a restart, is read whole once and
+ * incrementally from there. The same answers either way. A kept totals scanner
+ * holds ~0.5–2% of its trajectory's bytes, so the window costs that across
+ * every run a pass re-derives: a replay of a ~15 GB runs tree holds a few
+ * hundred MB for ten minutes.
+ */
+export const SCANNER_QUIET_MS = 10 * 60_000;
 
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
@@ -84,24 +108,51 @@ function real(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-/** (size, mtime) of a file, or null when it is not there. */
-function sigOf(path: string): { sig: string; size: number; mtime: number } | null {
+/** (size, mtime) of a file, and which file it is (inode, device); null when it is not there. */
+function sigOf(path: string): { sig: string; size: number; mtime: number; ino: number; dev: number } | null {
   try {
     const st = statSync(path);
-    return { sig: `${st.size}:${st.mtimeMs}`, size: st.size, mtime: st.mtimeMs };
+    return { sig: `${st.size}:${st.mtimeMs}`, size: st.size, mtime: st.mtimeMs, ino: st.ino, dev: st.dev };
   } catch {
     return null;
   }
 }
 
 export class Ingester {
-  private readonly scanners: ScannerCache = new Map();
+  /** Each run's kept scanners and the file they read (`KeptRun`). */
+  private readonly runs = new Map<string, KeptRun>();
+  /** `readRunFact`'s record-count scanners, by trajectory path. */
+  private readonly counts: CountCache = new Map();
 
   constructor(private readonly deps: IngestDeps) {}
 
-  /** Drop a finished run's scanner; called when a pass finds nothing new. */
+  /** A pass found nothing new in this run: drop its scanners once it has been quiet for `SCANNER_QUIET_MS`. */
   forget(runId: string): void {
-    this.scanners.delete(runId);
+    const r = this.runs.get(runId);
+    if (r !== undefined && this.deps.now() - r.readAt >= SCANNER_QUIET_MS) this.drop(runId);
+  }
+
+  /** Drop the scanners of runs a pass no longer lists: deleted, or gone from the tree. */
+  retainListed(listed: ReadonlySet<string>): void {
+    for (const runId of [...this.runs.keys()]) if (!listed.has(runId)) this.drop(runId);
+  }
+
+  /** The count scanner a run's next re-derivation would fold into, if any: for a test or a probe. */
+  countScannerOf(runId: string): RecordCountScanner | undefined {
+    const r = this.runs.get(runId);
+    return r === undefined ? undefined : this.counts.get(r.path)?.scanner;
+  }
+
+  /** The totals scanner a run's next re-derivation would fold into, if any: for a test or a probe. */
+  totalsScannerOf(runId: string): RunTotalsScanner | undefined {
+    return this.runs.get(runId)?.totals;
+  }
+
+  private drop(runId: string): void {
+    const r = this.runs.get(runId);
+    if (r === undefined) return;
+    this.counts.delete(r.path);
+    this.runs.delete(runId);
   }
 
   async ingestRun(runId: string, dir: string, archived: boolean): Promise<IngestResult> {
@@ -411,17 +462,25 @@ export class Ingester {
     const sig = `d${RUN_TOTALS_DERIVATION}:${st.sig}`;
     if (this.deps.offsets.signature(runId, "totals") === sig) return false;
 
-    let scanner = this.scanners.get(runId);
-    // A scanner that has read past the current size saw a different file.
-    if (scanner === undefined || scanner.size > st.size) {
-      scanner = new RunTotalsScanner(path);
-      this.scanners.set(runId, scanner);
+    let run = this.runs.get(runId);
+    // Another file than the one read: moved (archived), rotated, or replaced
+    // by a rename at any size. Both scanners start over on it.
+    if (run !== undefined && (run.path !== path || run.ino !== st.ino || run.dev !== st.dev)) {
+      this.drop(runId);
+      run = undefined;
     }
+    if (run === undefined) {
+      run = { path, ino: st.ino, dev: st.dev, readAt: this.deps.now() };
+      this.runs.set(runId, run);
+    }
+    run.readAt = this.deps.now();
+    // A scanner that has read past the current size saw a different file.
+    if (run.totals === undefined || run.totals.size > st.size) run.totals = new RunTotalsScanner(path);
     let totals: unknown;
     try {
-      totals = await scanner.scan();
+      totals = await run.totals.scan();
     } catch {
-      this.scanners.delete(runId);
+      run.totals = undefined;
       return false;
     }
     /*
@@ -435,7 +494,7 @@ export class Ingester {
       // `readRunFact` joins (parent, runId) itself, and an archived run lives
       // one level down — so the parent of THIS directory is what it is told,
       // never the configured runs dir.
-      fact = readRunFact(dirname(dir), runId, this.deps.now());
+      fact = readRunFact(dirname(dir), runId, this.deps.now(), { counts: this.counts });
     } catch {
       fact = null;
     }

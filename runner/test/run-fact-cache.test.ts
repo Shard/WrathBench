@@ -197,4 +197,26 @@ describe("the run-fact cache is never a different answer", () => {
     expect(runs).toStrictEqual(cold(dir, now));
     expect(facts.failure).toContain("could not write");
   });
+
+  test("a read-only cache is served exactly as a writer is, and never writes", () => {
+    const dir = runsDirWithRuns();
+    const cachePath = join(dir, "run-facts.cache.json");
+    const now = settled();
+    const plain = cold(dir, now);
+    const readOnly = () => readRunFacts(dir, now, { includeArchived: true, facts: runFactCache(cachePath, { readOnly: true }) });
+    // No file: a cold read, and none is made, where a writer would keep four.
+    expect(readOnly()).toStrictEqual(plain);
+    expect(existsSync(cachePath)).toBe(false);
+    // The writer's file: served (a kept fact rewritten under its key comes back as written), and left as it was.
+    cached(dir, cachePath, now);
+    tamper(cachePath, RUNS[0]!.runId, { bestLevel: 99 });
+    const before = readFileSync(cachePath, "utf8");
+    expect(readOnly().find((f) => f.runId === RUNS[0]!.runId)?.bestLevel).toBe(99);
+    expect(readFileSync(cachePath, "utf8")).toBe(before);
+    // Another reader's file, which a writer replaces: a cold read, and still left as it was.
+    writeFileSync(cachePath, JSON.stringify({ version: "another-reader", entries: {} }));
+    expect(readOnly()).toStrictEqual(plain);
+    expect(readFileSync(cachePath, "utf8")).toBe(JSON.stringify({ version: "another-reader", entries: {} }));
+    expect(readdirSync(dir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
 });

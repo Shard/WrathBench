@@ -13,6 +13,8 @@ import {
   BAG_GUID,
   BAG_NUM_SLOTS,
   BAGGED_GUID,
+  BAGGED_GUID_HI,
+  BAGGED_GUID_LO,
   wornBagSlot,
   wornBagCreate,
   wornBagQuery,
@@ -1964,6 +1966,88 @@ describe("state cache: quest objectives from the quest query", () => {
     expect(c.quest(QUEST_ID)!.objectives!.at(-1)).toMatchObject({ kind: "collect", have: 0, done: false });
   });
 
+  /** One values update on self: the given `invSlot<n>` halves, nothing else. */
+  const selfSlots = (seq: number, slots: Record<number, [lo: number, hi: number]>) => ({
+    seq,
+    opcode: "SMSG_UPDATE_OBJECT",
+    opcodeId: 0x0a9,
+    ts: 1_700_000_000_000 + seq,
+    data: {
+      blocks: 1,
+      objects: [
+        {
+          update: "values",
+          guid: SELF_GUID,
+          fields: Object.fromEntries(Object.entries(slots).flatMap(([s, [lo, hi]]) => [[`invSlot${s}Lo`, lo], [`invSlot${s}Hi`, hi]])),
+        },
+      ],
+    },
+  });
+
+  test("a collect objective counts a key on the keyring, as the server's item count does", () => {
+    // Before, the count read only `inventory` (stopping at the bank bags) and
+    // `bag()`: a key on the keyring (86-117) read have 0 while it was carried.
+    const c = withWorld([questAccepted, questQueryResponse(), selfSlots(36, { 86: [ITEM_GUID_LO, ITEM_GUID_HI] }), itemCreate]);
+    expect(c.quest(QUEST_ID)!.objectives!.at(-1)).toMatchObject({ kind: "collect", have: 5, done: true });
+    // The views and their shapes are unchanged: no view lists the keyring.
+    expect(c.inventory).toEqual([]);
+    expect(c.bag().items).toEqual([]);
+  });
+
+  test("a collect objective counts tokens in the currency slots, and adds them to the rest", () => {
+    // Currency slot 118 alone: the stack of 5.
+    const token = withWorld([questAccepted, questQueryResponse(), selfSlots(36, { 118: [ITEM_GUID_LO, ITEM_GUID_HI] }), itemCreate]);
+    expect(token.quest(QUEST_ID)!.objectives!.at(-1)).toMatchObject({ kind: "collect", have: 5, done: true });
+    // The keyring's first slot holding the stack of 5 and the last currency
+    // slot (149) a stack of 2: both count, 7.
+    const both = withWorld([
+      questAccepted,
+      questQueryResponse(),
+      selfSlots(36, { 86: [ITEM_GUID_LO, ITEM_GUID_HI], 149: [BAGGED_GUID_LO, BAGGED_GUID_HI] }),
+      itemCreate,
+      wornBagCreate,
+    ]);
+    expect(both.quest(QUEST_ID)!.objectives!.at(-1)).toMatchObject({ kind: "collect", have: 7, done: true });
+    // A slot emptied again is gone from the count.
+    const emptied = withWorld([
+      questAccepted,
+      questQueryResponse(),
+      selfSlots(36, { 118: [ITEM_GUID_LO, ITEM_GUID_HI] }),
+      itemCreate,
+      selfSlots(39, { 118: [0, 0] }),
+    ]);
+    expect(emptied.quest(QUEST_ID)!.objectives!.at(-1)).toMatchObject({ kind: "collect", have: 0, done: false });
+  });
+
+  test("a collect objective counts neither a bank slot nor a bank bag's contents, and not the buyback slots", () => {
+    // GetItemCount(id, false): the bank (39-66), the bank bags (67-73) and
+    // what is in them never count; nor does an item sold to a vendor (74-85).
+    const c = withWorld([
+      questAccepted,
+      questQueryResponse(),
+      selfSlots(36, { 39: [ITEM_GUID_LO, ITEM_GUID_HI], 67: [BAG_GUID_LO, BAG_GUID_HI] }),
+      itemCreate,
+      wornBagCreate,
+    ]);
+    // The bank view sees all of it: 5 in bank slot 39, 2 inside the bank bag.
+    expect(c.bank().items.map((i) => [i.bag, i.slot, i.count])).toEqual([
+      [255, 39, 5],
+      [67, 2, 2],
+    ]);
+    expect(c.quest(QUEST_ID)!.objectives!.at(-1)).toMatchObject({ kind: "collect", have: 0, done: false });
+    const sold = withWorld([questAccepted, questQueryResponse(), selfSlots(36, { 74: [ITEM_GUID_LO, ITEM_GUID_HI] }), itemCreate]);
+    expect(sold.quest(QUEST_ID)!.objectives!.at(-1)).toMatchObject({ kind: "collect", have: 0, done: false });
+    // Carried beside the bank, only the carried stack counts.
+    const mixed = withWorld([
+      questAccepted,
+      questQueryResponse(),
+      selfSlots(36, { 23: [BAGGED_GUID_LO, BAGGED_GUID_HI], 39: [ITEM_GUID_LO, ITEM_GUID_HI] }),
+      itemCreate,
+      wornBagCreate,
+    ]);
+    expect(mixed.quest(QUEST_ID)!.objectives!.at(-1)).toMatchObject({ kind: "collect", have: 2, done: false });
+  });
+
   test("the answer arriving before the log entry still joins; the template is never pruned", () => {
     const c = withWorld([questQueryResponse(), questAccepted]);
     expect(c.quest(QUEST_ID)?.title).toBe("Kobold Camp Cleanup");
@@ -3143,6 +3227,21 @@ describe("pets, group, mail, bank, trade", () => {
     expect(cache.bag().items).toEqual([]);
     expect(cache.inventory.map((i) => i.slot)).toEqual([40, 67]);
     expect(cache.snapshot().bank.items).toHaveLength(2);
+  });
+
+  test("keyring and currency slots 86-149 land in self.fields by name and stay out of every view", () => {
+    const selfValues = (seq: number, fields: Record<string, number>) => frame(seq, "SMSG_UPDATE_OBJECT", { blocks: 1, objects: [{ update: "values", guid: SELF_GUID, fields }] });
+    const cache = StateCache.replay(
+      toEvents([...loginSequence, selfValues(50, { invSlot86Lo: ITEM_GUID_LO, invSlot86Hi: ITEM_GUID_HI, invSlot149Lo: 0, invSlot149Hi: 0 }), itemCreate, itemQuery]),
+      { seed: SEED },
+    );
+    expect(cache.self.fields.get("invSlot86Lo")?.value).toBe(ITEM_GUID_LO);
+    expect(cache.self.fields.get("invSlot86Hi")?.value).toBe(ITEM_GUID_HI);
+    expect(cache.self.fields.get("invSlot149Lo")?.value).toBe(0);
+    // The model-facing views are unchanged: `inventory` stops at the bank bags, `bag()` at the worn bags.
+    expect(cache.inventory).toEqual([]);
+    expect(cache.bag().items).toEqual([]);
+    expect(cache.bank().items).toEqual([]);
   });
 
   test("trade status and both sides of the window fold into trade(); a cancel closes it", () => {

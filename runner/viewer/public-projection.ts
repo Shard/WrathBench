@@ -1441,9 +1441,11 @@ const TRACE_KEYS_IF_PRESENT: ReadonlySet<string> = new Set(["dead", "ghost"]);
  *
  * Every row is rebuilt as integers no wider than its key's row, and kept only
  * at a position a character carries: equipment 0-18, worn bags 19-22, the
- * backpack (bag 255, slots 23-38) and a worn bag's own slots. The bank (slots
- * 39-73, and anything in a bank bag) never passes, whoever put it there; the
- * recorder does not read it. Nothing in the sheet names anyone: no guid, no
+ * backpack (bag 255, slots 23-38), a worn bag's own slots, the keyring (bag
+ * 255, slots 86-117) and the currency tokens (bag 255, slots 118-149). The
+ * bank (slots 39-73, and anything in a bank bag) and the vendor buyback slots
+ * (74-85) never pass, whoever put them there; the recorder reads neither.
+ * Nothing in the sheet names anyone: no guid, no
  * creator, no text but an item's template name.
  */
 const PUBLIC_SHEET_KEYS = SHEET_KEYS satisfies readonly TraceSheetKey[];
@@ -1453,7 +1455,12 @@ const ITEM_NAME_MAX = 128;
 
 const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 
-/** Whether a sheet row sits where a character carries things. */
+/**
+ * Whether a sheet row sits where a character carries things: equipment, the
+ * worn bags and their contents, the backpack (bag 255, 23-38), the keyring
+ * (86-117) and the currency tokens (118-149). Never the bank (39-73) or the
+ * vendor buyback slots (74-85).
+ */
 function carriedAt(key: Exclude<TraceSheetKey, "money">, row: readonly number[]): boolean {
   const [a, b] = row as [number, number | undefined];
   switch (key) {
@@ -1463,7 +1470,7 @@ function carriedAt(key: Exclude<TraceSheetKey, "money">, row: readonly number[])
     case "bags":
       return a >= 19 && a <= 22;
     case "inv":
-      return b !== undefined && ((a === 255 && b >= 23 && b <= 38) || (a >= 19 && a <= 22 && b >= 0 && b < 36));
+      return b !== undefined && ((a === 255 && ((b >= 23 && b <= 38) || (b >= 86 && b <= 149))) || (a >= 19 && a <= 22 && b >= 0 && b < 36));
     case "quests":
       return a >= 0 && a < 25;
     case "rep":

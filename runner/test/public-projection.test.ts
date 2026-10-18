@@ -45,6 +45,7 @@ import type {
   TrackInventory,
   TrackResponse,
   TraceIndexResponse,
+  TraceInvRow,
   TraceSegment,
 } from "../viewer/api-types";
 import {
@@ -1366,6 +1367,32 @@ describe("projectTraceSegment: the character sheet", () => {
     // The patch that only touched a bank slot and a bank bag is gone whole.
     expect(out.ev.some((e) => e[0] === 2_000)).toBe(false);
     for (const banked of ["Test Bank Bag", "Test Banked Thing", "601", "705"]) expect(text).not.toContain(banked);
+  });
+
+  test("carries the keyring (bag 255, 86-117) and the currency tokens (118-149); the bank (39-73) and the buyback slots (74-85) never pass, at either edge", () => {
+    const seg = sheetSegmentFixture();
+    const KEY = 710;
+    const TOKEN = 711;
+    const BANKED = 712;
+    const SOLD = 713;
+    const carried: TraceInvRow[] = [[255, 86, KEY], [255, 117, KEY], [255, 118, TOKEN, 12], [255, 149, TOKEN, 3]];
+    const withheld = [[255, 39, BANKED], [255, 66, BANKED], [255, 73, BANKED], [255, 74, SOLD], [255, 85, SOLD], [255, 150, SOLD]];
+    seg.k.s = { ...seg.k.s, inv: [[255, 23, 702], ...withheld, ...carried] } as TraceSegment["k"]["s"];
+    seg.ev = [
+      // A patch: a key added, a token stack's count, a key gone (its key alone); and the same at withheld slots.
+      [7_000, "inv", [[255, 87, KEY], [255, 118, TOKEN, 13], [255, 86], [255, 40, BANKED], [255, 75, SOLD], [255, 74]]],
+      // A patch only at withheld slots says nothing in public.
+      [8_000, "inv", [[255, 39], [255, 85, SOLD]]],
+    ];
+    seg.items = { 702: [0, "Test Scrap"], [KEY]: [1, "Test Key"], [TOKEN]: [1, "Test Coin"], [BANKED]: [1, "Test Banked"], [SOLD]: [1, "Test Sold"] } as TraceSegment["items"];
+    const out = projectTraceSegment(seg);
+    expect(out.k.s.inv).toEqual([[255, 23, 702], ...carried]);
+    // In key order, as every public patch is.
+    expect(out.ev.filter((e) => e[1] === "inv")).toEqual([[7_000, "inv", [[255, 86], [255, 87, KEY], [255, 118, TOKEN, 13]]]]);
+    expect(out.items).toEqual({ 702: [0, "Test Scrap"], [KEY]: [1, "Test Key"], [TOKEN]: [1, "Test Coin"] });
+    const text = JSON.stringify(out);
+    for (const w of ["Test Banked", "Test Sold", String(BANKED), String(SOLD)]) expect(text).not.toContain(w);
+    expect(projectTraceSegment(out)).toEqual(out);
   });
 
   test("withholds item text, and anything naming another player: no description, no creator, no guid, no mail or trade, no unreferenced or over-long name", () => {

@@ -2,7 +2,10 @@
  * The character sheet as the trace recorder reads it (`trace-recorder.ts`;
  * the shapes are `../trace-row.ts`): money, equipment, worn bags, what is
  * carried, durability, the quest log, skills and visible reputation, off the
- * SDK's state cache and nothing else.
+ * SDK's state cache and nothing else. What is carried is everywhere the
+ * server counts toward a quest's items (`Player::GetItemCount(id, false)`):
+ * the backpack, the worn bags' contents, the keyring and the currency token
+ * slots. Never the bank, never the vendor buyback slots.
  *
  * It reads the raw fields the SDK's own views are built from, never the
  * views. `questLog` re-walks every carried item for each collect objective
@@ -12,7 +15,10 @@
  * the slot guids, each item object's entry, stack count, random property and
  * durability, and each container's slots, directly. The slot numbering and
  * the guid packing are the SDK's (`state.ts`, `guid.ts`), copied here
- * because the SDK does not export them.
+ * because the SDK does not export them. The SDK's views do not read the
+ * keyring or the currency slots at all; their fields arrive by name from a
+ * module that serves them (`module/PROTOCOL.md`), and an older module's
+ * absent fields read as no rows.
  *
  * Every read returns the newest observation time behind each key, so a
  * change is stamped with when the cache saw it, not when the poll ran.
@@ -36,11 +42,23 @@ import {
 /** The slice of the cache the sheet is read from. */
 export type SheetSource = Pick<StateCache, "self" | "nearby" | "items" | "quests" | "reputation">;
 
-/** `invSlot<n>`: equipment 0-18, worn bags 19-22, backpack 23-38; the bank (39-73) is not read. */
+/**
+ * `invSlot<n>`: equipment 0-18, worn bags 19-22, backpack 23-38, keyring
+ * 86-117 (`PLAYER_FIELD_KEYRING_SLOT_1`) and currency tokens 118-149
+ * (`PLAYER_FIELD_CURRENCYTOKEN_SLOT_1`). The bank (39-73) and the vendor
+ * buyback slots (74-85) between them are never read.
+ */
 const EQUIP_LAST_SLOT = 18;
 const BAG_FIRST_SLOT = 19;
 const BAG_LAST_SLOT = 22;
 const BACKPACK_LAST_SLOT = 38;
+const KEYRING_FIRST_SLOT = 86;
+const CURRENCY_LAST_SLOT = 149;
+/** Every slot read, in order: 0-38, then 86-149. */
+const INV_SLOTS: readonly number[] = [
+  ...Array.from({ length: BACKPACK_LAST_SLOT + 1 }, (_, i) => i),
+  ...Array.from({ length: CURRENCY_LAST_SLOT - KEYRING_FIRST_SLOT + 1 }, (_, i) => KEYRING_FIRST_SLOT + i),
+];
 /** The bag id the item actions take for the backpack. */
 const BACKPACK_BAG = 255;
 /** `PLAYER_QUEST_LOG_1_1` .. `_25_1`. */
@@ -51,8 +69,8 @@ const SKILL_SLOTS = 128;
 const CONTAINER_SLOTS = 36;
 
 const names = (n: number, f: (i: number) => string): string[] => Array.from({ length: n }, (_, i) => f(i));
-const INV_LO = names(BACKPACK_LAST_SLOT + 1, (i) => `invSlot${i}Lo`);
-const INV_HI = names(BACKPACK_LAST_SLOT + 1, (i) => `invSlot${i}Hi`);
+const INV_LO = names(CURRENCY_LAST_SLOT + 1, (i) => `invSlot${i}Lo`);
+const INV_HI = names(CURRENCY_LAST_SLOT + 1, (i) => `invSlot${i}Hi`);
 const BAG_LO = names(CONTAINER_SLOTS, (i) => `bagSlot${i}Lo`);
 const BAG_HI = names(CONTAINER_SLOTS, (i) => `bagSlot${i}Hi`);
 const QUEST_ID = names(QUEST_LOG_SLOTS, (i) => `quest${i}Id`);
@@ -122,7 +140,7 @@ export function readSheet(state: SheetSource): SheetReading {
     inv.push(r !== 0 ? [bag, slot, itemId, n, r] : n !== 1 ? [bag, slot, itemId, n] : [bag, slot, itemId]);
     stamp("inv", Math.max(slotTs, item?.entry?.ts ?? 0, count?.ts ?? 0, rand?.ts ?? 0));
   };
-  for (let slot = 0; slot <= BACKPACK_LAST_SLOT; slot++) {
+  for (const slot of INV_SLOTS) {
     const lo = self.get(INV_LO[slot]!);
     const hi = self.get(INV_HI[slot]!);
     if (lo === undefined && hi === undefined) continue;
@@ -167,6 +185,7 @@ export function readSheet(state: SheetSource): SheetReading {
         carried(slot, n, state.nearby.get(inner), inTs);
       }
     } else {
+      // The backpack, the keyring and the currency slots: all bag 255, at their own slot numbers.
       stamp("inv", slotTs);
       if (guid !== "0") carried(BACKPACK_BAG, slot, item, slotTs);
     }

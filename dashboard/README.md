@@ -66,6 +66,25 @@ client implements the same `Client` interface, so no page knows which one it is
 talking to. Every page keeps the poll interval stated at its call site; a memo
 inside the client is what keeps a fast poller off the network.
 
+**Screenshots** — both builds side by side over runs no one else sees:
+
+```
+bun wb dashboard shots --out <dir>                    # private-*.png and public-*.png, and facts.json
+bun wb dashboard shots --run <run-dir> --path /runs --viewport 390x844
+bun wb dashboard shots --serve                        # the same stack, no browser: URLs until Ctrl-C
+```
+
+`infra/dashboard-shots.ts` writes invented fixture runs (or copies the run
+directories it is given), serves them through the viewer's own `createApi`
+with a private build, runs one publisher pass into a local bucket for a public
+build, and drives a headless Chromium over the DevTools protocol to named
+states: `home`, `run-live`, `map-live`, `map-live-selected` and `map-replay`.
+Wowhead's tooltip script is stubbed and every other third party refused, so a
+page renders as it does where the script is blocked; `--real-wowhead` lets it
+through. Nothing reads the operator's ClickHouse, config store or runs. For
+states that need clicks, import `startRig` and drive `rig.page(...)` from a
+script.
+
 ## The ladder's derivations
 
 The scored ladder's row ordering — highest rung, then the `(level, xp)` pair,
@@ -150,7 +169,8 @@ answers for it: live, paused, and in a replay at 60× or slower
 panels' rows by `sheetItems` in `src/lib/inventory.ts`). That puts the public
 sidebar in step with the pip, where the position's newest reading ran the
 publish delay ahead of it. The sheet's rows are the ones the 60 s reading
-carries, worn bags left out as there, plus each item's random property, which
+carries, worn bags, the keyring and the currency slots left out as there,
+plus each item's random property, which
 the Wowhead link carries (`itemUrl`), and a worn item's durability, on its
 square's tooltip. The sheet names an item by its template, so where the
 tooltip script is blocked a suffixed item shows its base name. The same array
@@ -169,8 +189,34 @@ patches by the viewer's own codec (`@viewer/track-inv`). It keeps a reading
 every 64 patches and hands back the same array while the cursor stays between
 two changes, so the bag and the paperdoll redraw only when the inventory
 does. A track published before the patches carries each reading whole on its
-points, and is read as it is. The quest log, reputation and skills the sheet
-also carries have no panel yet.
+points, and is read as it is.
+
+**The quest log** is a third button beside the bag and the paperdoll, "N
+quests", over the same sheet at the same playhead (`questLog` in
+`src/lib/questlog.ts`). Its panel lists the log in slot order, then any quest
+turned in since the playhead's five-minute window began. Each row is a link to
+`quest=<id>` that asks Wowhead's script to rename it, because the trace records
+no quest title and publishes none; where the script is blocked the row reads
+`quest <id>`. Beside the link, while the quest is in progress, is each
+objective as `have / need`. A creature or gameobject objective is its counter
+against the quest's count (`qreq`). A collect objective has no counter in the
+log, so it is what is carried — equipped, the worn bags themselves, the
+backpack and their contents, the keyring and the currency tokens, as the
+server counts it — capped at the count needed. The bag grid leaves the keyring
+and the currency slots out, as the 60 s reading does; only this count reads
+them. Once a quest is not in progress the row shows its status instead:
+complete in `--ok`, failed in `--err` (the slot state's bits 1 and 2), turned
+in in `--ok-muted`. A complete quest's objectives are met on the server's word,
+and a carried count that cannot always see a key (a module that does not serve
+the keyring) would only contradict it. A quest
+with no counts in its segment shows nothing beside it rather than zeros, as
+does one whose only objective has no counter (exploration, a scripted event).
+Nothing coarser records the log, so wherever the sheet cannot say — faster
+than 60×, nothing loaded at the playhead, a segment from before the sheet, a
+restart's unobserved stretch — there is no quest button rather than an empty
+log. Rows are keyed by quest id, so the anchor the script renamed survives a
+counter change. Reputation and skills, which the sheet also carries, have no
+panel yet.
 
 **Fetching is listed-only.** A segment is requested only for a `t0` a
 position's `recent` or a track's `segs` listed — the public edge caches a 404
@@ -234,8 +280,9 @@ surprise, and nothing server-side may follow them into the browser bundle.
 `bun test` from the repo root runs them with everything else. They cover the
 pure layer — view maths and pip placement, the API client's paths, encoding and
 error mapping — plus a few focused component checks: the shared chart axis, the
-map's play bar across a route swap, the campaigns page across its routes, and
-the run page's scratchpad panel against a hostile pad.
+map's play bar across a route swap, the campaigns page across its routes, the
+run page's scratchpad panel against a hostile pad, and the map's quest button
+and its rows across a counter change.
 Those use the small `happy-dom` harness to mount the components through Vite;
 the rest of the suite does not need a DOM.
 

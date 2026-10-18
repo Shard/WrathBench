@@ -821,7 +821,10 @@ function streakOf(s: StreakFold): number {
   return s.turn ? own : s.closed + own;
 }
 
-function foldStreak(s: StreakFold, rec: { t: string; reason?: unknown; notBefore?: unknown }): void {
+/** A record a scanner watches, as far as the counts and the streak read it. */
+type WatchedRecord = { t: string; reason?: unknown; notBefore?: unknown };
+
+function foldStreak(s: StreakFold, rec: WatchedRecord): void {
   if (rec.t === MODEL_RESPONSE_RECORD) s.turn = true;
   else if (rec.t === PAUSE_RECORD) s.pause ||= pauseCountsOnLadder(rec);
   else if (rec.t === RESUME_RECORD) {
@@ -884,7 +887,10 @@ export interface RecordTally {
  * `runner/viewer/tail.ts`, but not the same code — that one reads
  * asynchronously through `Bun.file`, and this path is sync all the way up
  * through the fleet supervisor. Splitting happens on bytes, which is safe
- * because 0x0A cannot occur inside a UTF-8 multi-byte sequence.
+ * because 0x0A cannot occur inside a UTF-8 multi-byte sequence. The bytes are
+ * searched for the prefilter's needles rather than walked one at a time, and
+ * only the lines a needle falls in are cut out (`foldLines`): the same lines,
+ * in the same order, as taking every line and dropping the ones without one.
  *
  * `from` starts the count at a byte other than zero, and nothing before it is
  * read: the roster counts one attempt's turns as the records past the size the
@@ -939,10 +945,15 @@ export class RecordCountScanner {
   }
 
   /** The record a line holds when it is one this scanner watches, else null. */
-  private recordOf(line: Buffer): { t: string; reason?: unknown; notBefore?: unknown } | null {
+  private recordOf(line: Buffer): WatchedRecord | null {
     if (line.length === 0) return null;
     // Cheap prefilter, then the honest parse: the `t` key can sit anywhere.
     if (!this.needles.some((n) => line.includes(n))) return null;
+    return this.parsed(line);
+  }
+
+  /** The parse alone, for a line already known to carry a needle. */
+  private parsed(line: Buffer): WatchedRecord | null {
     let rec: { t?: unknown; reason?: unknown; notBefore?: unknown } | null;
     try {
       rec = JSON.parse(line.toString("utf8")) as { t?: unknown; reason?: unknown; notBefore?: unknown } | null;
@@ -955,7 +966,10 @@ export class RecordCountScanner {
 
   /** One line into a set of counts and a streak: the scanner's own, or a copy of them. */
   private apply(line: Buffer, counts: Map<string, number>, streak: StreakFold): void {
-    const rec = this.recordOf(line);
+    this.applyRecord(this.recordOf(line), counts, streak);
+  }
+
+  private applyRecord(rec: WatchedRecord | null, counts: Map<string, number>, streak: StreakFold): void {
     if (rec === null) return;
     // Pre-seeded with exactly the kinds asked for, so a line counts toward at most one.
     const n = counts.get(rec.t);
@@ -967,16 +981,31 @@ export class RecordCountScanner {
     this.apply(line, this.counts, this.streak);
   }
 
-  /** Fold a buffer of appended bytes, answering the trailing partial line. */
-  private fold(buf: Buffer): Buffer {
-    let from = 0;
-    for (let i = 0; i < buf.length; i++) {
-      if (buf[i] !== NEWLINE) continue;
-      this.take(buf.subarray(from, i));
-      this.consumed += i - from + 1; // the newline
-      from = i + 1;
+  /**
+   * Fold the complete lines of `buf` from `from` (a line start) through `end`
+   * (the index of its last newline). Only the lines that carry a needle are
+   * cut out and parsed: every other line is one `recordOf` drops unparsed
+   * (empty, or no needle in it), so not cutting it out is the same answer.
+   * Each needle is found by a native search that passes over any byte at most
+   * once, and the lines are taken in file order, which the streak fold
+   * depends on. A byte loop over every line cost ~36 s for the cluster's
+   * ~15 GB of trajectories.
+   */
+  private foldLines(buf: Buffer, from: number, end: number): void {
+    const needles = this.needles;
+    const next = needles.map((n) => buf.indexOf(n, from));
+    for (;;) {
+      let at = -1;
+      for (const p of next) if (p !== -1 && (at === -1 || p < at)) at = p;
+      // A needle holds no newline, so one that starts past `end` is in the partial tail.
+      if (at === -1 || at > end) break;
+      const start = buf.lastIndexOf(NEWLINE, at) + 1;
+      const stop = buf.indexOf(NEWLINE, at);
+      this.applyRecord(this.parsed(buf.subarray(start, stop)), this.counts, this.streak);
+      // The line is taken once, whatever else it carries: search on from the next one.
+      for (let k = 0; k < next.length; k++) if (next[k] !== -1 && next[k]! <= stop) next[k] = buf.indexOf(needles[k]!, stop + 1);
     }
-    return buf.subarray(from);
+    this.consumed += end + 1 - from;
   }
 
   /**
@@ -999,19 +1028,41 @@ export class RecordCountScanner {
     try {
       fd = openSync(this.path, "r");
       const chunk = Buffer.allocUnsafe(this.chunk);
-      let carry = this.pending;
+      // The partial line, as the reads delivered it: joined once, when its
+      // newline arrives, not re-joined and re-walked on every read it spans.
+      const carry: Buffer[] = this.pending.length === 0 ? [] : [this.pending];
+      let carried = this.pending.length;
       this.pending = EMPTY;
-      let pos = this.consumed + carry.length;
+      let pos = this.consumed + carried;
       while (pos < size) {
         const n = this.read(fd, chunk, 0, Math.min(this.chunk, size - pos), pos);
         if (n <= 0) break;
         pos += n;
         const fresh = chunk.subarray(0, n);
-        const rest = this.fold(carry.length === 0 ? fresh : Buffer.concat([carry, fresh]));
+        const first = fresh.indexOf(NEWLINE);
         // The read buffer is reused, so anything held past this iteration is copied.
-        carry = rest.length === 0 ? EMPTY : Buffer.from(rest);
+        if (first === -1) {
+          carry.push(Buffer.from(fresh));
+          carried += n;
+          continue;
+        }
+        let from = 0;
+        if (carried > 0) {
+          const line = Buffer.concat([...carry, fresh.subarray(0, first)]);
+          this.take(line);
+          this.consumed += line.length + 1; // the newline
+          carry.length = 0;
+          carried = 0;
+          from = first + 1;
+        }
+        const last = fresh.lastIndexOf(NEWLINE);
+        if (last >= from) this.foldLines(fresh, from, last);
+        if (last + 1 < n) {
+          carry.push(Buffer.from(fresh.subarray(last + 1)));
+          carried = n - last - 1;
+        }
       }
-      this.pending = carry;
+      this.pending = carried === 0 ? EMPTY : carry.length === 1 ? carry[0]! : Buffer.concat(carry);
     } catch (e) {
       this.failed = e;
       return null;
@@ -1079,8 +1130,15 @@ export function tallyRecords(path: string, kinds: readonly string[], opts: { pau
   return new RecordCountScanner(path, kinds, opts).countOnce();
 }
 
+/** A kept scanner, and the file it was built on: the inode and device it read. */
+export interface CountEntry {
+  scanner: RecordCountScanner;
+  ino: number;
+  dev: number;
+}
+
 /** Scanners a caller keeps between polls, keyed by trajectory path. */
-export type CountCache = Map<string, RecordCountScanner>;
+export type CountCache = Map<string, CountEntry>;
 
 /** The resumable form of `countRecords` (`tallyRecordsCached`). */
 export function countRecordsCached(cache: CountCache, path: string, kinds: readonly string[]): Map<string, number> | null {
@@ -1094,9 +1152,18 @@ export function countRecordsCached(cache: CountCache, path: string, kinds: reado
  * The truncation check lives here rather than inside `scan`, because a scanner
  * that has read past the end of its own file cannot answer for it at all: the
  * only safe response is a new scanner, and only the holder of the cache can
- * make one. Same for a caller that changes what it asks for — the counts a
+ * make one. Same for a file that is not the one the scanner read — rotated,
+ * or replaced by a rename at any size, which a size check alone would fold on
+ * from the old file's offset — so the entry carries the inode and device it
+ * was built on. Same for a caller that changes what it asks for: the counts a
  * scanner carries are the counts of the kinds it was built with, and it folds
  * a streak only if it was built to.
+ *
+ * The file is checked before it is read, not after. A replacement landing
+ * between that stat and the scanner's own open is one poll's answer; every
+ * caller polls again, and the replaced file's size or mtime has moved, so its
+ * next read starts fresh here. The supervisor re-reads every tick; the
+ * collector re-derives whenever a trajectory's (size, mtime) moves.
  */
 export function tallyRecordsCached(
   cache: CountCache,
@@ -1104,27 +1171,29 @@ export function tallyRecordsCached(
   kinds: readonly string[],
   opts: { pauseStreak?: boolean } = {},
 ): RecordTally | null {
-  let size: number;
+  let st: { size: number; ino: number; dev: number };
   try {
-    size = statSync(path).size;
+    st = statSync(path);
   } catch {
     cache.delete(path);
     return null;
   }
-  let scanner = cache.get(path);
+  let entry = cache.get(path);
   const usable =
-    scanner !== undefined &&
-    size >= scanner.size &&
-    scanner.pauseStreak === (opts.pauseStreak === true) &&
-    scanner.kinds.length === kinds.length &&
-    scanner.kinds.every((k, i) => k === kinds[i]);
+    entry !== undefined &&
+    entry.ino === st.ino &&
+    entry.dev === st.dev &&
+    st.size >= entry.scanner.size &&
+    entry.scanner.pauseStreak === (opts.pauseStreak === true) &&
+    entry.scanner.kinds.length === kinds.length &&
+    entry.scanner.kinds.every((k, i) => k === kinds[i]);
   if (!usable) {
-    scanner = new RecordCountScanner(path, kinds, opts);
-    cache.set(path, scanner);
+    entry = { scanner: new RecordCountScanner(path, kinds, opts), ino: st.ino, dev: st.dev };
+    cache.set(path, entry);
   }
   // `scanAsWhole`, not `scan`: the cache is an optimisation, never a different
   // answer, and a whole-file read counts a final record with no newline.
-  return scanner!.scanAsWhole();
+  return entry!.scanner.scanAsWhole();
 }
 
 /**
@@ -1342,9 +1411,13 @@ export function runFactCacheVersion(): string {
   return runFactCacheVersionMemo;
 }
 
-/** The kept facts of terminated runs at `path`, for a caller that reads every run on a timer. */
-export function runFactCache(path: string): RunFactCache {
-  return new RunFactCache(path, runFactCacheVersion());
+/**
+ * The kept facts of terminated runs at `path`, for a caller that reads every
+ * run on a timer; `readOnly` for a one-shot reader beside it, which is served
+ * the same and writes nothing.
+ */
+export function runFactCache(path: string, opts: { readOnly?: boolean } = {}): RunFactCache {
+  return new RunFactCache(path, runFactCacheVersion(), opts);
 }
 
 /** The files `readRunFact` reads, and the heartbeat it stats: a kept fact is good while none of them has moved. */

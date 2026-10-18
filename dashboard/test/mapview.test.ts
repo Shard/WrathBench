@@ -171,6 +171,14 @@ describe("centreOn and fitTo", () => {
     expect(s.sy).toBeCloseTo(SCREEN.h / 2, 5);
   });
 
+  test("a position that is not a number is left out, and the camera never lands on NaN", () => {
+    const v = fitTo(SCREEN, [{ x: Number.NaN, y: 0 }, ANVILMAR, { x: 0, y: Number.POSITIVE_INFINITY }]);
+    expect(v).toEqual(fitTo(SCREEN, [ANVILMAR]));
+    const none = fitTo(SCREEN, [{ x: Number.NaN, y: Number.NaN }]);
+    expect(none).toEqual(fitTo(SCREEN, []));
+    for (const n of [none.scale, none.ox, none.oy]) expect(Number.isFinite(n)).toBe(true);
+  });
+
   test("every agent in a spread lands on screen", () => {
     const list = [ANVILMAR, { x: -5000, y: -1200 }, { x: -7000, y: 900 }];
     const v = fitTo(SCREEN, list);

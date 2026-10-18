@@ -43,7 +43,9 @@ import {
   type ModelsSidecar,
   type ModelState,
   modelStates,
+  readRunFacts,
   type RunFact,
+  runFactCache,
   type RunPodsMode,
   type StartingCharacter,
 } from "../runner/src/models";
@@ -64,6 +66,30 @@ export const SERVER_STATE_PATH = join(RUNS_DIR, "server-state.json");
 export const PAUSE_PATH = join(RUNS_DIR, "fleet-pause.json");
 /** Terminated runs' facts, kept across restarts (`runFactCache`); safe to delete, which costs one cold read. */
 export const RUN_FACTS_CACHE = join(RUNS_DIR, "run-facts.cache.json");
+
+/**
+ * Every run's facts, archive included, for a one-shot report (`--status`,
+ * `--dry-run`): read once, and served from the supervisor's kept facts
+ * wherever they still hold, without ever writing them (`runFactCache`'s
+ * `readOnly`). Same facts as a cold `readRunFacts` either way.
+ *
+ * A report read the whole tree cold, and `--status` did it three times: over
+ * the cluster's ~15 GB of trajectories that was ~110 s, nearly all of it
+ * counting the records of runs that ended long ago. The read the report still
+ * makes in full is the runs that have not ended (live, paused, never given a
+ * verdict), which no reader keeps. With no cache file, or one another reader
+ * version wrote (after a release that changed the reader, until the new
+ * supervisor's first tick rewrites it), it is one cold read.
+ */
+export function readReportFacts(now = Date.now(), runsDir = RUNS_DIR, cachePath = RUN_FACTS_CACHE): RunFact[] {
+  return readRunFacts(runsDir, now, { includeArchived: true, facts: runFactCache(cachePath, { readOnly: true }) });
+}
+
+/** The facts an archive-less `readRunFacts` answers, out of an archive-inclusive read: the same runs, in the same order. Pure. */
+export function unarchived(facts: readonly RunFact[]): RunFact[] {
+  return facts.filter((f) => f.archived !== true);
+}
+
 /**
  * The projection the rest of a tick must read once its sweep has ended runs.
  * `sidecar` is the operator's clear list; omitted it is read from
