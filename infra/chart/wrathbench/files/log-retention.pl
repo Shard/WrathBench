@@ -1,39 +1,51 @@
 #!/usr/bin/perl
 # Server log retention: the module's per-session audit log, pruned by age.
 #
-# The worldserver writes one JSONL file per session token under
-# WrathBench.AuditDir and holds it open for the session's life. The chart's
-# log-retention CronJob (templates/log-retention.yaml) runs this once a day
-# from the worldserver image, which is where perl is, against the same `logs`
-# subPath of the data PVC. `bun wb server log-retention` runs the same file,
-# over stdin, inside the worldserver container as a dry run.
+# The worldserver writes one JSONL file per session token and UTC day under
+# WrathBench.AuditDir, `<token>.<YYYY-MM-DD>.jsonl`, rolling to the next day's
+# at the first record after midnight UTC (module/PROTOCOL.md "Audit log").
+# The chart's log-retention CronJob (templates/log-retention.yaml) runs this
+# once a day from the worldserver image, which is where perl is, against the
+# same `logs` subPath of the data PVC. `bun wb server log-retention` runs the
+# same file, over stdin, inside the worldserver container as a dry run.
 #
 # Why perl and not `find -mtime -delete`: the one thing retention must never
-# do is unlink a file the server still holds open — the server would keep
+# do is unlink a file the server will still write to — the server would keep
 # writing into an inode nobody can see, the disk would not come back until the
-# session ended, and the session's record would go with it. Age alone does not
-# prove a file closed: a session whose run died without logging out stands
-# idle in the world with its file open and nothing to write. Two rules close
-# that, and both need more than find:
+# session ended, and the session's record would go with it. Three rules keep
+# it off such a file, and each needs more than find:
 #
-#   delete   a file quiet for the window AND last written before the current
-#            server process started. The server writes a `session_create`
-#            line the moment it opens a file, so a file the running process
-#            holds has an mtime after its start; one older than the start is
-#            held by nobody. The start comes from the module's GET /health
-#            (`startedAtMs`), with the port secret.
-#   truncate a file quiet for the window but written since the start: it is
-#            almost certainly closed, and if it is not, the writer opened it
-#            O_APPEND, so emptying it in place loses nothing that follows and
-#            frees the space now. The empty file is deleted by the first rule
-#            after the next server restart.
+#   delete   a day file dated before today (UTC) that is quiet for the window.
+#            The writer only ever opens the current day's file and never a
+#            past date, so a past day's file gets no further write by
+#            construction, whatever the server's start time; a session that
+#            went idle before midnight may still hold the descriptor, and the
+#            unlinked inode goes with its next record, which rolls the file.
+#   delete   an undated `<token>.jsonl` (the form before day files; left over
+#            until it ages out) quiet for the window AND last written before
+#            the current server process started. Such a file was held for its
+#            session's life, and age alone did not prove it closed: a session
+#            whose run died without logging out stands idle in the world with
+#            its file open and nothing to write. The server writes a
+#            `session_create` line the moment it opens a file, so a file the
+#            running process holds has an mtime after its start; one older
+#            than the start is held by nobody. The start comes from the
+#            module's GET /health (`startedAtMs`), with the port secret. The
+#            same rule covers today's day file, which can only be quiet for
+#            the window under a window shorter than a day.
+#   truncate what the second rule reaches but cannot delete, written since
+#            the start: it is almost certainly closed, and if it is not, the
+#            writer opened it O_APPEND, so emptying it in place loses nothing
+#            that follows and frees the space now. The empty file is deleted
+#            by the second rule after the next server restart.
 #
-# With the server unreachable nothing is deleted, only truncated. Inside the
-# worldserver container (the dry run) /proc/1 is the server itself, and a file
-# any of its descriptors point at is never touched whatever the rules say; the
-# dry run reports that count, so a non-zero `held` under `delete` would be the
-# proof failing. One readdir, one stat per file, no content read; unlink and
-# truncate are metadata operations.
+# With the server unreachable only past days are deleted; the rest is
+# truncated. Inside the worldserver container (the dry run) /proc/1 is the
+# server itself, and a file any of its descriptors point at is never touched
+# whatever the rules say; the dry run reports that count, so a non-zero
+# `held` would be a session idle across midnight (harmless) or, for an
+# undated file, the proof failing. One readdir, one stat per file, no content
+# read; unlink and truncate are metadata operations.
 #
 # File names are session tokens. Nothing here prints one or passes one to
 # another program: counts and bytes only.
@@ -62,6 +74,7 @@ if ($days eq '' || $days !~ /^\d+(?:\.\d+)?$/ || $days == 0) {
 my $window = $days * 86400;
 my $now    = time;
 my $cutoff = $now - $window;
+my $today  = strftime('%Y-%m-%d', gmtime $now);    # the day file the writer opens now; any earlier date is closed to it
 
 # --- the server's start, from the module -----------------------------------
 my ($started, $sessions, $health_note);
@@ -127,8 +140,8 @@ if (defined $holder && opendir my $fdd, "/proc/$holder/fd") {
 
 # --- the pass ---------------------------------------------------------------
 opendir my $dh, $dir or do { print STDERR "log retention: cannot read the audit dir: $!\n"; exit 1 };
-my %n = map { $_ => 0 } qw(deleted truncated kept empty held failed);
-my %b = map { $_ => 0 } qw(deleted truncated kept held);
+my %n = map { $_ => 0 } qw(deleted pastday truncated kept empty held failed);
+my %b = map { $_ => 0 } qw(deleted pastday truncated kept held);
 for my $name (readdir $dh) {
     next if $name eq '.' || $name eq '..';
     my $path = "$dir/$name";
@@ -137,8 +150,12 @@ for my $name (readdir $dh) {
     my ($dev, $ino, $size, $mtime) = @st[0, 1, 7, 9];
     if ($mtime > $cutoff) { $n{kept}++; $b{kept} += $size; next }
     if ($held{"$dev:$ino"}) { $n{held}++; $b{held} += $size; next }
-    if (defined $started && $mtime < $started - $margin) {
-        if ($dry || unlink $path) { $n{deleted}++; $b{deleted} += $size } else { $n{failed}++ }
+    # The date is the name's last dotted part before .jsonl: a token may carry
+    # dots of its own, so nothing earlier in the name is read.
+    my ($date) = $name =~ /\.(\d{4}-\d{2}-\d{2})\.jsonl\z/;
+    my $pastday = defined $date && $date lt $today;
+    if ($pastday || (defined $started && $mtime < $started - $margin)) {
+        if ($dry || unlink $path) { $n{deleted}++; $b{deleted} += $size; if ($pastday) { $n{pastday}++; $b{pastday} += $size } } else { $n{failed}++ }
         next;
     }
     if ($size == 0) { $n{empty}++; next }
@@ -150,9 +167,9 @@ closedir $dh;
 my $gb = sub { sprintf '%.2f GB', $_[0] / 1e9 };
 my $server = defined $started
     ? 'server started ' . strftime('%Y-%m-%dT%H:%M:%SZ', gmtime $started) . (defined $sessions ? ", $sessions live session(s)" : '')
-    : "server start unknown ($health_note): nothing deleted this run, quiet files truncated";
+    : "server start unknown ($health_note): only past days deleted this run, other quiet files truncated";
 print "log retention: window ${days}d, $server\n";
-printf "  deleted:   %5d files, %s  (quiet for the window, closed before the server started)\n", $n{deleted}, $gb->($b{deleted});
+printf "  deleted:   %5d files, %s  (quiet for the window: %d past day file(s), %s; the rest closed before the server started)\n", $n{deleted}, $gb->($b{deleted}), $n{pastday}, $gb->($b{pastday});
 printf "  truncated: %5d files, %s  (quiet for the window, written since the server started: emptied in place, deleted after the next restart)\n", $n{truncated}, $gb->($b{truncated});
 printf "  kept:      %5d files, %s  (written within the window)\n", $n{kept}, $gb->($b{kept});
 printf "  empty:     %5d files              (already emptied, awaiting a server restart)\n", $n{empty};

@@ -9,8 +9,10 @@
 # The dry run is the CronJob's own script (infra/chart/wrathbench/files/
 # log-retention.pl) sent over stdin into the worldserver container, where
 # /proc/1 is the server: beside its counts it reports how many of the files it
-# would delete that process still holds open, which is the check the rules
-# rest on and should always read zero. The window defaults to the deployed
+# would otherwise touch that process still holds open. A past day's file a
+# session idle since before midnight still holds is harmless (its next record
+# rolls the file); an undated one would be the rules' proof failing, and the
+# count of those should always read zero. The window defaults to the deployed
 # CronJob's (`worldserver.logRetention.days`), or 3 where none is deployed yet.
 # Nothing here names a file: the directory holds session tokens.
 set -Eeuo pipefail
@@ -25,7 +27,7 @@ while [[ $# -gt 0 ]]; do
     --days) DAYS="${2:-}"; shift 2 ;;
     --namespace|-n) NAMESPACE="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "log-retention: unknown argument $1" >&2; exit 2 ;;
   esac
 done
