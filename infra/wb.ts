@@ -234,7 +234,7 @@ export const ENTRIES: readonly Entry[] = [
     group: "inspect",
     command: "run",
     takes: "<run-id> [--since D]",
-    summary: "live, paused, ended or ownerless; level, counts, errors by class, sizes, trace",
+    summary: "live, paused, ended or ownerless; level, quests across restarts, counts, errors by class, sizes, trace",
     ...inRunner("bun", INSPECT_RUN, "run"),
   },
   {

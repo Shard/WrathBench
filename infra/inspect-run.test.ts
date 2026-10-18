@@ -13,6 +13,7 @@ import { loadRunConfig, MIN_TOKEN_LENGTH as RUNNER_MIN_TOKEN_LENGTH } from "../r
 import { REDACTED as RUNNER_REDACTED } from "../runner/src/redact";
 import { HEARTBEAT_DEAD_MS as RUNNER_HEARTBEAT_DEAD_MS, Trajectory } from "../runner/src/trajectory";
 import { ARCHIVE_DIR as VIEWER_ARCHIVE_DIR } from "../runner/viewer/archive-dir";
+import { questsAcrossRestarts } from "../runner/viewer/results";
 import {
   ARCHIVE_DIR,
   DEFAULT_WIDTH,
@@ -21,6 +22,7 @@ import {
   main,
   MIN_TOKEN_LENGTH,
   parseSince,
+  questStretches,
   REDACTED,
   verdictOf,
 } from "./inspect-run";
@@ -107,6 +109,14 @@ describe("the constants it shares with the runner", () => {
     expect(ARCHIVE_DIR).toBe(VIEWER_ARCHIVE_DIR);
   });
 
+  test("the quest fold is the viewer's: the same total from the same counts", () => {
+    const cases: (number | null)[][] = [[0, 12, 60, 60, 0, 0, 1, 2], [0, 8, 0, 3, 8, 0, 2, 0], [3, null, 5], [0, 0], [null], []];
+    for (const q of cases) {
+      const total = questStretches(q.map((quests, ts) => ({ ts, quests })))?.total ?? null;
+      expect(total).toBe(questsAcrossRestarts(q.map((questsCompleted) => ({ questsCompleted }))));
+    }
+  });
+
   test("the file imports bun:sqlite and node:* only, so it runs from stdin in any runner image", () => {
     const src = readFileSync(join(import.meta.dir, "inspect-run.ts"), "utf8");
     const specs = [...src.matchAll(/^import[^"]*"([^"]+)"/gm)].map((m) => m[1]);
@@ -162,6 +172,7 @@ describe("inspect run", () => {
     const at = (label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
     expect(at("level")).toContain("L4 300xp");
     expect(at("level")).toContain("money 1g 23s 45c");
+    expect(at("quests")).toBe("quests     3 over the run");
     expect(at("character")).toContain("Testwick on TESTACCT");
     expect(at("activity")).toContain("6 snippets");
     expect(at("errors")).toContain("snippets 2/6: ");
@@ -172,6 +183,24 @@ describe("inspect run", () => {
     expect(at("files")).toContain("trajectory.jsonl");
     expect(at("trace")).toContain("no rows");
     expect(at("nearby")).toContain("none");
+  });
+
+  test("the quest count is the run's across a resume, each process's stretch beside it", () => {
+    const runsDir = tmp("inspect-run-quests-");
+    // Counted 1, 2, 3 from 11:01; resumed at 11:31 by a process whose count starts again at zero.
+    const dir = makeRun(runsDir, "run-resumed", "live");
+    let clock = NOW - 30 * 60_000;
+    const traj = new Trajectory(dir, { now: () => clock });
+    for (const q of [0, 4]) {
+      clock += 60_000;
+      traj.recordState("run-resumed", { level: 4, xp: 400, questsCompleted: q });
+    }
+    traj.close();
+    const r = inspect(["run", "run-resumed", "--runs-dir", runsDir]);
+    const at = (label: string): string => r.out.find((l) => l.startsWith(label)) ?? "";
+    expect(at("quests")).toBe("quests     7 over the run, summed across 1 restart(s); the newest sample reads 4 · from 01-02 11:01 3 · from 01-02 11:31 4");
+    // The newest sample's own count is not the level line's to state.
+    expect(at("level")).not.toContain("quests");
   });
 
   test("--since counts only what came after", () => {

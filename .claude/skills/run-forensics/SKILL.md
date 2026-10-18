@@ -13,7 +13,7 @@ Reference: `docs/RUNBOOK.md`, "Inspect a run".
 
 ```
 bun wb inspect live                                   # every run with a heartbeat: live, or ownerless
-bun wb inspect run <run-id> [--since 2h]              # verdict, model, level/xp, counts, errors by class, sizes, trace, nearby
+bun wb inspect run <run-id> [--since 2h]              # verdict, model, level/xp, quests across restarts, counts, errors by class, sizes, trace, nearby
 bun wb inspect trajectory <run-id> --last 20          # one line per snippet or tool call with its result
 bun wb inspect trajectory <run-id> --errors --last 10
 bun wb inspect trajectory <run-id> --grep 'moveTo|too_far' --since 30m
