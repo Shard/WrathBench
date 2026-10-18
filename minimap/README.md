@@ -221,9 +221,8 @@ px per ADT. The map page lays it over the minimap and crossfades the two by
 zoom (`ART_FADE_START_PX` / `ART_FADE_END_PX` in
 `dashboard/src/lib/mapview.ts`). Because the art is re-baked in place while its
 look is tuned, the viewer revalidates it instead of caching it for a year.
-The tile publisher uploads art only with `--include-art`; whether it is
-published is pending the operator's decision (`infra/cloudflare/README.md`,
-step 6). The
+The tile publisher uploads the art with the rest of the tiles
+(`infra/cloudflare/README.md`, step 6). The
 spelling is `lodTileName` in `runner/viewer/worldmap.ts`, which the bake,
 the viewer, the publisher and the dashboard all call; it refuses level 0, so
 nothing built on it can write over a native tile.

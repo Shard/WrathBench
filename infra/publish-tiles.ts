@@ -9,12 +9,10 @@
  *
  *   bun infra/publish-tiles.ts --dry-run   # print the plan, upload nothing
  *   bun infra/publish-tiles.ts --upload    # upload what changed
- *   … --include-art                         # the art layer too (off by default)
  *
- * The painted art layer is opt-in: whether it is published is pending the
- * operator's decision, so a pass leaves every `<map>/art/` tile out and says
- * how many it left unless `--include-art` is given. Nothing that calls this
- * script passes it (`bun ship --tiles` does not).
+ * The painted art layer goes up with the rest: the operator published it on
+ * 2026-10-18 under the same exception as the minimap tiles
+ * (docs/DATA-AND-LEGAL.md).
  *
  * Reads only tiles out of `data/minimap` (gitignored, like all of `data/`) —
  * the native `<mapId>/<row>_<col>.png` and the baked pyramid levels
@@ -139,21 +137,6 @@ export function scanTiles(root: string): LocalTile[] {
   return out;
 }
 
-/**
- * The tiles a pass publishes, and the art tiles it withholds. Art is opt-in
- * (see the header); everything else always goes.
- */
-export function selectTiles(all: readonly LocalTile[], opts: { art: boolean }): { tiles: LocalTile[]; artWithheld: LocalTile[] } {
-  const tiles: LocalTile[] = [];
-  const artWithheld: LocalTile[] = [];
-  for (const t of all) {
-    const ref = parseTilePath(`/${t.key}`);
-    if (!opts.art && ref !== null && isRevalidatedTile(ref)) artWithheld.push(t);
-    else tiles.push(t);
-  }
-  return { tiles, artWithheld };
-}
-
 /** Parse whatever is in the bucket into a manifest. A bad one is simply empty. */
 export function parseTileManifest(json: string | null): TileManifest {
   if (json === null) return {};
@@ -258,8 +241,6 @@ export async function publishTiles(
     now?: number;
     concurrency?: number;
     log?: (line: string) => void;
-    /** On disk but held back this pass (the art, unless opted in): not orphans. */
-    withheld?: readonly LocalTile[];
   } = {},
 ): Promise<TilePublishReport> {
   const log = opts.log ?? ((line: string): void => console.log(line));
@@ -274,9 +255,7 @@ export async function publishTiles(
     hashes.set(tile.key, hashBytes(await Bun.file(tile.file).bytes()));
   });
 
-  const held = new Set((opts.withheld ?? []).map((t) => t.key));
-  const fullPlan = planTileUploads(local, manifest, hashes);
-  const plan = { ...fullPlan, orphans: fullPlan.orphans.filter((k) => !held.has(k)) };
+  const plan = planTileUploads(local, manifest, hashes);
   const bytes = plan.upload.reduce((sum, t) => sum + t.size, 0);
   const report: TilePublishReport = {
     uploaded: plan.upload.length,
@@ -312,14 +291,12 @@ if (import.meta.main) {
   };
 
   const args = process.argv.slice(2);
-  const includeArt = args.includes("--include-art");
-  const mode = args.filter((a) => a !== "--include-art");
-  const dryRun = mode.length === 1 && mode[0] === "--dry-run";
-  const upload = mode.length === 1 && mode[0] === "--upload";
-  if (!dryRun && !upload) fail("usage: bun infra/publish-tiles.ts --dry-run | --upload [--include-art]");
+  const dryRun = args.length === 1 && args[0] === "--dry-run";
+  const upload = args.length === 1 && args[0] === "--upload";
+  if (!dryRun && !upload) fail("usage: bun infra/publish-tiles.ts --dry-run | --upload");
 
   const root = Bun.env.WRATHBENCH_MINIMAP_DIR ?? "data/minimap";
-  const { tiles: local, artWithheld } = selectTiles(scanTiles(root), { art: includeArt });
+  const local = scanTiles(root);
   if (local.length === 0) fail(`no tiles under ${root} (run the extraction in minimap/ first)`);
 
   for (const name of ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET", "S3_ENDPOINT"] as const) {
@@ -352,10 +329,7 @@ if (import.meta.main) {
   };
 
   console.log(`publish-tiles: ${local.length} tile(s) under ${root} -> ${Bun.env.S3_BUCKET ?? Bun.env.AWS_BUCKET}`);
-  if (artWithheld.length > 0) {
-    console.log(`publish-tiles: ${artWithheld.length} art tile(s) left out (art is opt-in: --include-art)`);
-  }
-  const report = await publishTiles(local, store, { dryRun, withheld: artWithheld });
+  const report = await publishTiles(local, store, { dryRun });
   const verb = dryRun ? "would upload" : "uploaded";
   console.log(
     report.manifestEntries === null

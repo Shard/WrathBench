@@ -91,9 +91,9 @@ keyed by the path the viewer already serves so the SPA asks for one URL in
 either shape. The zoomed-out levels baked from them (`minimap/README.md`) go
 up the same way under the same prefix (`tiles/<map>/minimap/<z>/…`), so the
 cache rule, the CORS policy and `robots.txt` cover them with no change. The
-painted art layer (`tiles/<map>/art/<z>/…`) is opt-in: the publisher uploads
-it only with `--include-art`, and whether it is published is pending the
-operator's decision. Skip
+painted art layer (`tiles/<map>/art/<z>/…`) goes up in the same pass, under
+the same exception (`docs/DATA-AND-LEGAL.md`), with its own browser TTL
+because it is re-baked in place. Skip
 by content hash, held in `tiles/manifest.json` in the bucket and written after
 the objects it names, so a re-run with nothing re-extracted uploads nothing.
 A published tile is world-readable, cacheable and indexable: there is no
