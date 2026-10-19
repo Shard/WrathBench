@@ -44,7 +44,7 @@ import {
   messageChars,
   rebuildSlimRequest,
   requestStatsOf,
-  slimRequestV1,
+  slimRequest,
   systemTextMatches,
   windowEntryIndices,
 } from "../src/request-record";
@@ -2382,7 +2382,7 @@ export class TrajectoryTail {
     i: number,
     rec: Record<string, unknown>,
   ): Promise<{ ok: boolean; error?: string; messages?: unknown[] }> {
-    const slim = slimRequestV1(rec);
+    const slim = slimRequest(rec);
     if (typeof slim === "string") return { ok: false, error: slim };
     let systemText = slim.systemText;
     if (systemText === undefined) {

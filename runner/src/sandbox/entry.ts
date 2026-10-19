@@ -4,9 +4,10 @@
  *
  * ### What a snippet sees (the whole ambient surface, documented once, here)
  *
- *   sdk         the WrathClient for this session (constructed, not connected)
- *   state       alias for sdk.state (the StateCache)
- *   events      alias for sdk.events (the EventStream)
+ *   sdk         the WrathClient for this session (constructed, not connected),
+ *               and the only path to the module. Assigning to it is ignored.
+ *   state       alias for sdk.state (the StateCache); a getter, like `sdk`
+ *   events      alias for sdk.events (the EventStream); a getter, like `sdk`
  *   connect()   open the event stream; call before createSession. A no-op while
  *               the stream is open, and a reopen once it is not — including
  *               after something closed it
@@ -36,16 +37,25 @@
  *
  * ### Network posture — stated honestly
  *
- * The kernel holds the boundary: this process runs under the Landlock ruleset
- * `confine.ts` applied before exec, which allows TCP connections to the module
- * URL's port and no other, no bind, no exec of any binary but bun, and no
- * signal outside its domain. Those rules are per port, not per host: which
- * hosts the port is reached on, and anything that is not TCP (UDP, raw
- * sockets), is the deployment's network policy — docs/CONTRACTS.md says what
- * that leaves. In-process we additionally replace `fetch` and `WebSocket` with
- * versions that refuse any host other than the module's: a readable error
- * ahead of the kernel's `EACCES`, and a check on the host, which Landlock
- * cannot make. It is the second layer, not the boundary.
+ * The module is reachable only through the ambient client's own transport
+ * (operator, 2026-10-19; docs/CONTRACTS.md). The client is handed the real
+ * `fetch` and `WebSocket`, captured before the globals are replaced; the
+ * leased credential it authenticates with is read from the environment once,
+ * then struck from it, and lives in a `#`-private field a snippet cannot read
+ * off `sdk`. So a snippet that builds its own `fetch`, `WebSocket` or
+ * `WrathClient` has no credential and no way to send: `globalThis.fetch` and
+ * `globalThis.WebSocket` refuse every host, the module's included, with a
+ * readable one-line reason.
+ *
+ * The kernel holds the boundary under that: this process runs under the
+ * Landlock ruleset `confine.ts` applied before exec, which allows TCP
+ * connections to the module URL's port and no other, no bind, no exec of any
+ * binary but bun, and no signal outside its domain. Those rules are per port,
+ * not per host: which hosts the port is reached on, and anything that is not
+ * TCP (UDP, raw sockets), is the deployment's network policy — docs/CONTRACTS.md
+ * says what that leaves. `node:net`/`Bun.connect`/`Bun.fetch` can still open
+ * the module's port there, but with no credential to read they authenticate
+ * nothing. The in-process guard is the readable layer, not the boundary.
  *
  * ### Timeouts
  *
@@ -94,6 +104,15 @@ const ACCOUNT = ACCOUNT_ENV !== undefined && ACCOUNT_ENV.length > 0 ? ACCOUNT_EN
 // module, or running this file by hand), and the client sends no header.
 const SECRET_ENV = process.env["WRATHBENCH_SECRET"];
 const SECRET = SECRET_ENV !== undefined && SECRET_ENV.length > 0 ? SECRET_ENV : undefined;
+// Read once, above, into the one client this process will build — then struck
+// from the environment so snippet code cannot read it back. `process.env` and
+// `Bun.env` are the same store, and a snippet can print either; the leased
+// secret and the bound account are credentials the ambient client holds, not
+// values the model may read (docs/CONTRACTS.md, the per-token secret scope;
+// operator, 2026-10-19). The token stays: it names the session, authenticates
+// nothing without the secret, and the client exposes it as `sdk.token`.
+delete process.env["WRATHBENCH_SECRET"];
+delete process.env["WRATHBENCH_ACCOUNT"];
 const VALUE_MAX_CHARS = 4_000;
 const LOG_MAX_CHARS = 4_000;
 
@@ -106,6 +125,20 @@ const send = (msg: ChildToHost): void => {
 };
 
 // ------------------------------------------------------------ network guard
+//
+// The module is reachable only through the ambient client's own transport. The
+// client is handed `realFetch` and `RealWebSocket` directly (captured here,
+// below, before the globals are replaced), and `globalThis.fetch` /
+// `globalThis.WebSocket` are then replaced with versions that refuse every
+// host — the module's included. A snippet that builds its own `fetch`,
+// `WebSocket` or `WrathClient` against the module therefore cannot send to it:
+// the only module connection is `sdk`'s (docs/CONTRACTS.md, the per-token
+// secret scope; operator, 2026-10-19). This is the readable, in-process layer;
+// the kernel's per-port TCP rule (`confine.ts`) is still the boundary, and
+// `node:net`/`Bun.connect`/`Bun.fetch` can still open the module's port there —
+// but with no credential to read (above) such a connection authenticates
+// nothing. Other hosts are refused here as before, ahead of the kernel's
+// `EACCES`.
 
 const allowedHosts = new Set<string>();
 try {
@@ -115,8 +148,19 @@ try {
 }
 
 const realFetch = globalThis.fetch;
+const RealWebSocket = globalThis.WebSocket;
 type FetchInput = Parameters<typeof fetch>[0];
-const guardedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response> => {
+
+const SNIPPET_NET_REFUSAL =
+  "use the ambient sdk, state and events; snippets may not open their own connection to the module.";
+
+/**
+ * The client's own transport: `realFetch`, bounded to the module host so a
+ * stray URL inside the SDK cannot reach elsewhere. Not installed as a global —
+ * it is passed to the one client this process builds, and snippet code never
+ * holds it. `watchedFetch` (the move watch and action log) wraps this.
+ */
+const moduleFetch = ((input: FetchInput, init?: RequestInit): Promise<Response> => {
   const url = new URL(
     typeof input === "string" || input instanceof URL ? String(input) : (input as Request).url,
   );
@@ -127,18 +171,33 @@ const guardedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response>
   }
   return realFetch(input, init);
 }) as typeof fetch;
+
+// `globalThis.fetch` for snippet code: every host refused, the module's too.
+const guardedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response> => {
+  let host = "that host";
+  try {
+    host = new URL(
+      typeof input === "string" || input instanceof URL ? String(input) : (input as Request).url,
+    ).host;
+  } catch {
+    // unparsable: still refused, named generically
+  }
+  return Promise.reject(new Error(`sandbox: fetch to ${host} is not available — ${SNIPPET_NET_REFUSAL}`));
+}) as typeof fetch;
 globalThis.fetch = guardedFetch;
 
-const RealWebSocket = globalThis.WebSocket;
-class GuardedWebSocket extends RealWebSocket {
-  // The second argument is passed through untouched: the SDK's event stream
-  // hands Bun its `Authorization` header there.
-  constructor(url: string | URL, init?: string | string[] | object) {
-    const host = new URL(String(url)).host;
-    if (!allowedHosts.has(host)) {
-      throw new Error(`sandbox: WebSocket to ${host} is not permitted (module only)`);
+// Not a subclass of `RealWebSocket`: it never opens a socket, it refuses, so
+// there is nothing to `super()` to. The ambient client's stream uses
+// `RealWebSocket` directly (injected as `webSocketImpl`, below).
+class GuardedWebSocket {
+  constructor(url: string | URL, _init?: string | string[] | object) {
+    let host = "that host";
+    try {
+      host = new URL(String(url)).host;
+    } catch {
+      // unparsable: still refused, named generically
     }
-    super(url, init as string[] | undefined);
+    throw new Error(`sandbox: WebSocket to ${host} is not available — ${SNIPPET_NET_REFUSAL}`);
   }
 }
 globalThis.WebSocket = GuardedWebSocket as unknown as typeof WebSocket;
@@ -400,9 +459,10 @@ function isActionPost(input: FetchInput, init?: RequestInit): boolean {
 }
 
 /**
- * `guardedFetch` plus the move watch and the action log. Passed to the client
- * explicitly rather than installed globally, so a snippet's own `fetch` is not
- * read here.
+ * `moduleFetch` (the module-host transport) plus the move watch and the action
+ * log. Passed to the client explicitly rather than installed globally, so this
+ * is the client's own path and a snippet's `globalThis.fetch` — which refuses
+ * every host — is not read here.
  */
 const watchedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response> => {
   let note: MoveIntentNote | null = null;
@@ -418,7 +478,7 @@ const watchedFetch = ((input: FetchInput, init?: RequestInit): Promise<Response>
   } catch {
     // Not JSON, or not ours to read: the request is untouched either way.
   }
-  const res = guardedFetch(input, init);
+  const res = moduleFetch(input, init);
   if (note === null && logged === null) return res;
   return res.then(
     async (r) => {
@@ -572,6 +632,10 @@ const client = new WrathClient({
   signal: currentSignal,
   deadline: currentDeadline,
   fetchImpl: watchedFetch,
+  // The real WebSocket, captured before `globalThis.WebSocket` was replaced
+  // with the refusing guard: this is the ambient client's own event stream,
+  // the one module connection a snippet cannot open for itself.
+  events: { webSocketImpl: RealWebSocket },
 });
 
 // The module's verdict on a move, whoever issued it: an awaited `moveTo`
@@ -1127,9 +1191,6 @@ function wait(options?: { on?: WaitOn | readonly WaitOn[]; maxMs?: number }): Pr
 }
 
 const ambient: Record<string, unknown> = {
-  sdk: client,
-  state: client.state,
-  events: client.events,
   API_MD_PATH,
   /**
    * Open the event stream, reading the stream itself for whether it is already
@@ -1173,6 +1234,20 @@ Object.defineProperty(globalThis, "signal", {
   configurable: true,
   enumerable: true,
 });
+
+// `sdk`, `state` and `events` are getters over the one client, not values, so a
+// snippet cannot lose the session by overwriting them. A cleanup snippet that
+// set `sdk = null` (and a `.close()` sweep over every binding) is how one
+// freeplay run went on sampling a dead session while the model, having nulled
+// its only handle, built a second client to carry on (#74). The no-op setter
+// swallows the assignment — and the copy-back a `let sdk = …` leaves behind
+// (rewrite.ts) — so the next access returns the live client; `connect()`
+// reopens the stream under it. The getters are not the credential boundary (the
+// `#secret` field and the net guard are); they keep the session reachable.
+for (const name of ["sdk", "state", "events"] as const) {
+  const get = name === "sdk" ? (): unknown => client : name === "state" ? (): unknown => client.state : (): unknown => client.events;
+  Object.defineProperty(globalThis, name, { get, set: () => {}, configurable: true, enumerable: true });
+}
 
 // ---------------------------------------------------------------- evaluate
 

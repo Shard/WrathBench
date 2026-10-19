@@ -29,7 +29,7 @@ import {
   HistoryRebuilder,
   isSlimRequest,
   rebuildSlimRequest,
-  slimRequestV1,
+  slimRequest,
   systemTextMatches,
 } from "./request-record";
 
@@ -94,7 +94,7 @@ export class Replayer {
       this.report.failures.push(verdict);
       return { verdict, ...(messages !== undefined ? { messages } : {}) };
     };
-    const slim = slimRequestV1(rec);
+    const slim = slimRequest(rec);
     if (typeof slim === "string") return fail(slim);
     if (slim.window.to === 0) {
       this.history.reset();

@@ -639,6 +639,49 @@ prefix that goes over the wire). The HUD state summary is a fixed-format
 presentation of already-observed fields, never new observation; a field no
 event carried reads `unobserved`.
 
+The message window keeps up to `MESSAGE_WINDOW_MAX` (48) messages, each up to
+`WINDOW_MESSAGE_CHARS` (4,000) characters, and trims the oldest
+`MESSAGE_WINDOW_TRIM` (24) in one block. Once a trim has happened, the tool
+results of the window's older block are folded (`messageWindowFold`,
+`foldToolResult`; operator, 2026-10-19), each to one line:
+
+```
+[folded by harness] <tool> <args>: <ok|error>[, <n>ms], <m> chars
+```
+
+`<args>` is the call's argument string as sent, whitespace runs made one
+space, cut at `FOLD_ARGS_CHARS` (80) with `…`; `<n>ms` is the duration a
+snippet result opens with, and no other tool reports one; `<m>` is the length
+of the whole result, which the trajectory keeps in full. The fold boundary is
+the raw cut plus one trim block, snapped back to the start of a turn, so:
+
+- It moves only on the request the cut moves on. Between trims the folded
+  part is the same messages rendered the same way and the verbatim part only
+  grows at its tail, so the request is byte-stable to the end of the window and
+  the fold costs no cache miss beyond the trim's own.
+- The raw cut leaves more than one block above it, so the boundary always falls
+  in the turn before last or earlier, and the last two turns are verbatim on
+  every request: a hint is read in full on the request it arrives in and the
+  one after, the trim's included.
+
+The assistant messages, snippet code included, stay as the model sent them.
+Re-rendered over six local fixed-loop runs, the fold of results alone cuts
+5–17% of the prompt characters per request, and the code in the folded block
+is larger than the results beside it in four of the six, so folding it too
+would take that to roughly 20–45%. It is kept because it is the model's own turn
+— a call shown back truncated invites truncated calls — and because the
+sandbox keeps a snippet's top-level bindings, so the code is the window's only
+record of what has been defined. The fold is a harness rule, identical for
+every model; nothing is summarised and nothing is scaled per model. The
+history holds each result's `isError` for the line and never sends it. The
+`trim_pending` and `window_trimmed` notices name the fold, the latter with how
+many results it folded, and the prompt's context sentence says older tool
+results are folded.
+
+The CLI drivers (claude-code, codex) keep and compact their own conversation;
+neither the trim nor the fold applies to them, and their prompt sentence
+describes their own regime instead.
+
 The system prompt states that this is the complete, unmodified 3.3.5a world —
 every zone, city, road, flight path, boat and tram a player could use exists
 and is reachable, and nothing has been walled off for the benchmark. It names
@@ -701,8 +744,8 @@ message is its `response` record's `message`, each tool message its
 read positionally off the response it answers. So the record carries:
 
 ```json
-{"ts":…,"t":"request","turn":30,"adapter":"openai-compatible:…","slim":1,
- "systemHash":"sha256:…16 hex","window":{"from":24,"to":49,"fromTurn":13,"cap":4000},
+{"ts":…,"t":"request","turn":30,"adapter":"openai-compatible:…","slim":2,
+ "systemHash":"sha256:…16 hex","window":{"from":24,"to":49,"fromTurn":13,"cap":4000,"fold":24},
  "user":"[turn 30] Goal: …","requestHash":"sha256:…64 hex",
  "messageCount":27,"systemChars":15012,"promptChars":59321}
 ```
@@ -712,7 +755,12 @@ read positionally off the response it answers. So the record carries:
   history's length, so `to: 0` opens a segment (a resumed run starts with an
   empty history), read off the writer's own state rather than inferred from
   `resume` or `meta` records. `fromTurn` is the turn whose response opens the
-  window; `cap` is the per-message cap it was cut with.
+  window; `cap` is the per-message cap it was cut with; `fold` is how many of
+  the window's messages, from its start, lie in its folded part ("The context,
+  the prompt and the scratchpad tools"). It counts from `from`, not from the
+  history's start, because the viewer walks a window back from its request and
+  holds nothing below it, and the replay takes it as recorded, never
+  recomputed.
 - `systemText` — the system prompt itself — rides on a segment's first request,
   and again whenever its hash changes; `systemHash` is `promptHash()`, the
   function the comparability tuple stamps, so it equals the run's
@@ -730,7 +778,9 @@ and if the rebuild would not reproduce the bytes it writes the whole message
 array instead (with `slimFallback` naming why) plus a `harness` record of kind
 `request_replay_mismatch`: a slim record is only written when it is known to
 replay. A build that changes how a request is put together from these parts
-writes a new `slim` version and keeps this one's rebuild.
+(the cap's suffix, the fold's line or its constants, the message shapes)
+writes a new `slim` version and keeps this one's rebuild: `slim: 1`, written
+before the fold, has no `fold` and rebuilds as a window with nothing folded.
 
 `src/replay.ts` rebuilds every slim request of a run from the trajectory alone,
 streaming the file, and checks each against `requestHash`; a mismatch is

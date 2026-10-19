@@ -16,8 +16,10 @@ import {
   formatStateSummary,
   messageWindow,
   messageWindowCut,
+  messageWindowFold,
   trimExpected,
   type ChatMessage,
+  type HistoryMessage,
   type SnapshotLike,
 } from "./context";
 import { REFLECT_BREAKER_NOTICE, ReflectGate, restingOf, taxiFlightOf } from "./reflect";
@@ -1075,7 +1077,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
 
   // Append-only. The model-visible window is a pure function of it: no trim
   // state accumulates, so a rebuilt history cuts identically.
-  const history: ChatMessage[] = [];
+  const history: HistoryMessage[] = [];
   const pendingNotices: HarnessNotice[] = [...(o.initialNotices ?? [])];
   const builder = new ContextBuilder({
     config,
@@ -1135,6 +1137,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
    * window shrank says so in its own `[harness notices]`.
    */
   let lastCut = 0;
+  /** Where the window's folded part ended last turn (`messageWindowFold`); it moves with the cut. */
+  let lastFold = 0;
   /**
    * The system prompt text this process last wrote onto a request record.
    * Null until the first request, so every process segment carries the text
@@ -1190,6 +1194,7 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
       // own pure cut function — the notice is an input to `assembleContext`
       // like every other, and assembly stays pure.
       const cut = messageWindowCut(history);
+      const fold = messageWindowFold(history);
       // The pre-trim prompt (METHODOLOGY, "An episodic log, asked for at each
       // trim"): the trigger is the trim itself, not a cadence. `trimExpected`
       // is exact — the crossing has already happened and the cut lags one turn
@@ -1201,19 +1206,27 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           ts: o.now?.() ?? Date.now(),
           kind: "trim_pending",
           text:
-            "Older conversation will be trimmed after this turn. Record a short status entry — " +
+            "Older conversation will be trimmed, and older tool results folded to one-line records, after this turn. " +
+            "Record a short status entry — " +
             "what you are doing and how it is going — with log_status.",
         });
       }
       if (cut > lastCut) {
         const dropped = cut - lastCut;
+        // The results this trim folded: those still in the window that were
+        // verbatim last turn. The fold only ever moves on a trim, so this is
+        // the one notice that can say so.
+        let folded = 0;
+        for (let k = Math.max(cut, lastFold); k < fold; k++) if (history[k]!.role === "tool") folded++;
+        const foldNote = folded > 0 ? `, ${folded} older tool result${folded === 1 ? "" : "s"} folded to one-line records` : "";
         pendingNotices.push({
           ts: o.now?.() ?? Date.now(),
           kind: "window_trimmed",
-          text: `Older conversation was trimmed (${dropped} message${dropped === 1 ? "" : "s"} dropped); your scratchpad is your memory.`,
+          text: `Older conversation was trimmed (${dropped} message${dropped === 1 ? "" : "s"} dropped${foldNote}); your scratchpad is your memory.`,
         });
         lastCut = cut;
       }
+      lastFold = fold;
       const contextText = await builder.build(turn, pendingNotices);
       // The sample above may have been the one that found the observation
       // stalled, and the pause it asked for wins before a request is written.
@@ -1244,7 +1257,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
         adapter: o.adapter.label,
         messages,
         history,
-        from: messageWindowCut(history),
+        from: cut,
+        foldTo: fold,
         withSystemText: systemText !== lastSystemText,
       });
       trajectory.append(record as { t: string });
@@ -1407,7 +1421,8 @@ export async function runLoop(o: LoopOptions): Promise<LoopOutcome> {
           if (o.sandbox.totalRestarts > restartsBefore) watchdogs.noteSandboxRestart();
           else if (result.isError !== true) watchdogs.noteSnippetSuccess();
         }
-        history.push({ role: "tool", content: result.text, tool_call_id: tc.id });
+        // `isError` is the history's own, for the fold's line; the window never sends it.
+        history.push({ role: "tool", content: result.text, tool_call_id: tc.id, isError: result.isError ?? false });
       }
 
       // 6. bookkeeping and pacing

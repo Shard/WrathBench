@@ -69,10 +69,10 @@ describe("off is master", () => {
   // Computed from master's prompt.ts before this branch: the prompt every run
   // without the options renders, by harness, tier and wiki.
   const MASTER: { episode?: EpisodeId; harness: Harness; wiki: boolean; hash: string; chars?: number }[] = [
-    { harness: "wrathbench", wiki: true, hash: "sha256:c97877408a428fc0", chars: 19_171 },
+    { harness: "wrathbench", wiki: true, hash: "sha256:13b8c3a352fa1662", chars: 19_232 },
     { harness: "claude-code", wiki: true, hash: "sha256:8d3dab50f9cd0fe4" },
     { harness: "codex", wiki: true, hash: "sha256:8d3dab50f9cd0fe4" },
-    { episode: "e90", harness: "wrathbench", wiki: true, hash: "sha256:d15c6917ac78750a" },
+    { episode: "e90", harness: "wrathbench", wiki: true, hash: "sha256:a17ac395e1dc047d" },
     { episode: "probing", harness: "claude-code", wiki: false, hash: "sha256:0754bad6bcc70931" },
   ];
 
@@ -117,7 +117,7 @@ describe("off is master", () => {
     expect(JSON.stringify(explicitOff)).toBe(JSON.stringify(plain));
     const tuple = comparabilityOf(plain, "harness-0.5-1-gabc", null, null);
     expect("wake" in tuple).toBe(false);
-    expect(tuple.promptHash).toBe("sha256:c97877408a428fc0");
+    expect(tuple.promptHash).toBe("sha256:13b8c3a352fa1662");
   });
 
   test("the CLI drivers' flags and env are master's with both off", () => {
@@ -161,7 +161,7 @@ describe("the options, as an arm sets them", () => {
     const tuple = comparabilityOf(c, "harness-0.5-1-gabc", null, null);
     expect(tuple.wake).toEqual(TURN_END);
     expect(Object.keys(tuple).at(-1)).toBe("wake");
-    expect(tuple.promptHash).not.toBe("sha256:c97877408a428fc0");
+    expect(tuple.promptHash).not.toBe("sha256:13b8c3a352fa1662");
   });
 
   test("a scored episode refuses the options", () => {

@@ -6,10 +6,12 @@
  * invented.
  */
 import { describe, expect, test } from "bun:test";
-import { encodeNearby, type NearbyRingRow, type NearbyRingUnit } from "@viewer/nearby";
-import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "../src/lib/nearbyplayer";
+import { PUBLIC_NEARBY_SPAN_MS, encodeNearby, type NearbyRingRow, type NearbyRingUnit } from "@viewer/nearby";
+import { cullLabels, classOf, createNearbyStore, nearbyFrameDue, placeLabel, questMark, NEARBY_FRAME_MS, NEARBY_SLACK_MS } from "../src/lib/nearbyplayer";
 import { NEARBY_MIN_PX_PER_YD, NEARBY_NAME_PX_PER_YD, nearbyNamesShown, nearbyShown, pxPerYard } from "../src/lib/mapview";
 import { targetReading } from "../src/lib/unitframe";
+import { createLiveClock, horizonOf, liveCadence } from "../src/lib/traceplayer";
+import { createSnapshotClient } from "../src/api/snapshot-client";
 
 const T0 = 1_760_000_040_000;
 const guid = (entry: number, low: number): string => ((0xf130n << 48n) | (BigInt(entry) << 24n) | BigInt(low)).toString(10);
@@ -75,6 +77,24 @@ describe("one dot per guid", () => {
     expect(targetReading({ kind: "creature", entry: 299, hpPct: 50 }, "Invented Wolf")).toMatchObject({ text: "Invented Wolf", pct: 50 });
     expect(targetReading({ kind: "creature", entry: 299, hpPct: 50 })).toMatchObject({ text: "creature 299" });
   });
+
+  test("the hovered unit's label goes beside its dot on the first side clear of the pips, else where it covers least", () => {
+    const at = (box: { x: number; y: number }) => [box.x, box.y];
+    // Nothing in the way: on the right, as the culled names are.
+    expect(at(placeLabel(100, 100, 3, 60, 14, []))).toEqual([106, 93]);
+    // A character's puck and name to the right: on the left.
+    const pip = { x: 90, y: 83, w: 120, h: 34 };
+    expect(at(placeLabel(100, 100, 3, 60, 14, [pip]))).toEqual([34, 93]);
+    // Both sides taken: below, then above.
+    const left = { x: 0, y: 83, w: 95, h: 34 };
+    expect(at(placeLabel(100, 100, 3, 60, 14, [pip, left]))).toEqual([70, 106]);
+    const below = { x: 0, y: 105, w: 300, h: 40 };
+    expect(at(placeLabel(100, 100, 3, 60, 14, [pip, left, below]))).toEqual([70, 80]);
+    // Covered on every side: the side that covers least of them.
+    const everywhere = [pip, left, below, { x: 0, y: 70, w: 300, h: 12 }];
+    const placed = placeLabel(100, 100, 3, 60, 14, everywhere);
+    expect(at(placed)).toEqual([70, 80]);
+  });
 });
 
 describe("classes come from packet fields", () => {
@@ -129,5 +149,63 @@ describe("the throttle and the zoom gates", () => {
     expect(nearbyNamesShown(at(NEARBY_NAME_PX_PER_YD) * 0.99)).toBe(false);
     expect(nearbyNamesShown(at(NEARBY_NAME_PX_PER_YD))).toBe(true);
     expect(NEARBY_NAME_PX_PER_YD).toBeGreaterThan(NEARBY_MIN_PX_PER_YD);
+  });
+});
+
+describe("the public layer", () => {
+  /** The map's own poll (`POLL_MS` in `src/pages/MapPage.tsx`). */
+  const POLL_MS = 5_000;
+  const cadence = liveCadence(createSnapshotClient("https://data.invalid").feedCadence, POLL_MS);
+
+  /**
+   * Passes `periodMs` apart (± `jitterMs`), each reaching the tab `ageMs`
+   * after it was rendered. From one arrival to the next, every second: how
+   * far behind the pass in hand the playhead reaches, and how far past it.
+   */
+  function reach(periodMs: number, jitterMs: number, ageMs: (k: number) => number): { early: number; late: number } {
+    const clock = createLiveClock(cadence);
+    let g = 1_760_000_000_000;
+    let early = 0;
+    let late = -Infinity;
+    for (let k = 0; k < 40; k++) {
+      const at = g + ageMs(k);
+      clock.arrive(horizonOf({ generatedAt: g, positions: [] }, at, at)!);
+      const next = g + periodMs + (k % 2 === 0 ? jitterMs : -jitterMs);
+      for (let p = at; p < next + ageMs(k + 1); p += 1_000) {
+        const t = clock.at(p)!;
+        early = Math.max(early, g - t);
+        late = Math.max(late, t - g);
+      }
+      g = next;
+    }
+    return { early, late };
+  }
+
+  test("a pass's window reaches back as far as the public map's playhead goes before the next pass lands", () => {
+    // The nominal cadence, an uneven one, and slow publishers; caches fresh, at their worst, and mixed.
+    for (const [period, jitter] of [
+      [420_000, 0],
+      [400_000, 60_000],
+      [480_000, 0],
+      [600_000, 0],
+    ] as const) {
+      for (const age of [() => 0, () => 65_000, (k: number) => (k % 3) * 30_000]) {
+        const { early, late } = reach(period, jitter, age);
+        expect(early).toBeLessThanOrEqual(PUBLIC_NEARBY_SPAN_MS);
+        expect(late).toBeLessThanOrEqual(0);
+      }
+    }
+  });
+
+  test("the same window handed in again is not decoded again; a newer one is", () => {
+    let changes = 0;
+    const store = createNearbyStore({ onChange: () => changes++ });
+    const w = windowOf("7", [unit(WOLF, { name: "Invented Wolf" }, 0)]);
+    store.set("a", w);
+    store.set("a", w);
+    expect(changes).toBe(1);
+    store.set("a", windowOf("7", [unit(WOLF, { name: "Invented Wolf" }, 1)], [], T0 + 20_000));
+    expect(changes).toBe(2);
+    expect(store.dotsAt(T0 + 15_000, 0)[0]).toMatchObject({ x: 1 });
   });
 });

@@ -105,7 +105,7 @@ const BODY_TAIL = `Act through tools every turn; text without a tool call does n
 export function contextSentence(harness: Harness): string {
   switch (harness) {
     case "wrathbench":
-      return "Older conversation is trimmed aggressively — the scratchpad is your memory, not the chat history.";
+      return "Older conversation is trimmed aggressively, and older tool results are folded to one-line records first — the scratchpad is your memory, not the chat history.";
     case "claude-code":
     case "codex":
       return CLI_SCAFFOLD_CONTEXT_SENTENCE;

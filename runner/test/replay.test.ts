@@ -114,6 +114,57 @@ describe("a stub-driven run replays byte for byte", () => {
     }
   });
 
+  test("the run folded aged tool results, and the records say where", () => {
+    const requests = readTrajectory(run.dir).filter((r) => r.t === "request");
+    const folds = requests.map((r) => (r["window"] as { fold?: number }).fold);
+    expect(requests.every((r) => r["slim"] === 2)).toBe(true);
+    expect(folds.every((f) => typeof f === "number")).toBe(true);
+    expect(folds.filter((f) => f! > 0).length).toBeGreaterThan(5);
+    // The bytes sent carry the folded lines the records point at.
+    requests.forEach((r, k) => {
+      const sent = JSON.parse(run.sent[k]!) as ChatMessage[];
+      const folded = sent.filter((m) => m.role === "tool" && String(m.content).startsWith("[folded by harness] "));
+      expect(folded.length > 0).toBe(folds[k]! > 0);
+    });
+  });
+
+  test("the bytes handed to the adapter are a stable prefix between trims", () => {
+    // The cache claim as the provider sees it: while the window's start holds,
+    // each request without its fresh user message opens the next one.
+    const requests = readTrajectory(run.dir).filter((r) => r.t === "request");
+    let compared = 0;
+    for (let k = 1; k < requests.length; k++) {
+      const a = requests[k - 1]!["window"] as { from: number; to: number };
+      const b = requests[k]!["window"] as { from: number; to: number };
+      if (b.to === 0 || a.from !== b.from) continue;
+      const prev = JSON.parse(run.sent[k - 1]!) as ChatMessage[];
+      const next = JSON.parse(run.sent[k]!) as ChatMessage[];
+      expect(next.slice(0, prev.length - 1)).toEqual(prev.slice(0, -1));
+      compared++;
+    }
+    expect(compared).toBeGreaterThan(30);
+  });
+
+  test("a version 1 record, which folded nothing, still rebuilds", async () => {
+    // The shape written before the fold: what the pre-fold builds wrote for
+    // the same requests is these records without `fold`, at `slim: 1`.
+    let rewritten = 0;
+    const { report } = await replayTampered((ls) =>
+      ls.map((l) => {
+        const r = JSON.parse(l) as Record<string, unknown>;
+        const w = r["window"] as { fold?: number } | undefined;
+        if (r["t"] !== "request" || w?.fold !== 0) return l;
+        rewritten++;
+        delete w.fold;
+        r["slim"] = 1;
+        return JSON.stringify(r);
+      }),
+    );
+    expect(rewritten).toBeGreaterThan(10);
+    expect(report.failures).toEqual([]);
+    expect(report.verified).toBe(report.slim);
+  });
+
   test("the record's hash is of the bytes that were sent, and its counts are theirs", () => {
     const requests = readTrajectory(run.dir).filter((r) => r.t === "request");
     requests.forEach((r, k) => {
@@ -155,6 +206,23 @@ describe("a tampered trajectory fails the replay where it was tampered", () => {
     });
     expect(report.failures.length).toBeGreaterThan(0);
     expect(report.failures[0]).toMatchObject({ line: lineOf(segment1Turn("request", 3)), segment: 1, turn: 3 });
+    expect(report.failures[0]!.detail).toContain("request hash mismatch");
+  });
+
+  test("an edited fold count fails exactly its own request", async () => {
+    // The replay takes the fold as recorded; it never recomputes it, so a
+    // count that is off by one turn is a request that was not the one sent.
+    const target = lines.findIndex((l) => {
+      const r = JSON.parse(l) as Record<string, unknown>;
+      return r["t"] === "request" && ((r["window"] as { fold?: number }).fold ?? 0) > 0;
+    });
+    const { report } = await replayTampered((ls) => {
+      ls[target] = rewrite(ls[target]!, (r) => {
+        (r["window"] as { fold: number }).fold = 0;
+      });
+      return ls;
+    });
+    expect(report.failures.map((f) => f.line)).toEqual([target + 1]);
     expect(report.failures[0]!.detail).toContain("request hash mismatch");
   });
 
@@ -309,11 +377,11 @@ describe("the writer's own check", () => {
 
   test("a request that is [system, ...window, user] is written slim", () => {
     const messages: ChatMessage[] = [{ role: "system", content: system }, ...history, { role: "user", content: "u" }];
-    const { record, mismatch } = fixedLoopRequestRecord({ turn: 2, adapter: "a", messages, history, from: 0, withSystemText: false });
+    const { record, mismatch } = fixedLoopRequestRecord({ turn: 2, adapter: "a", messages, history, from: 0, foldTo: 0, withSystemText: false });
     expect(mismatch).toBeNull();
     expect(isSlimRequest(record)).toBe(true);
     expect(record["requestHash"]).toBe(requestHash(messages));
-    expect(record["window"]).toEqual({ from: 0, to: 2, fromTurn: 1, cap: 4_000 });
+    expect(record["window"]).toEqual({ from: 0, to: 2, fromTurn: 1, cap: 4_000, fold: 0 });
     expect("systemText" in record).toBe(false);
   });
 
@@ -325,7 +393,7 @@ describe("the writer's own check", () => {
       ...history,
       { role: "user", content: "u" },
     ];
-    const { record, mismatch } = fixedLoopRequestRecord({ turn: 2, adapter: "a", messages: odd, history, from: 0, withSystemText: false });
+    const { record, mismatch } = fixedLoopRequestRecord({ turn: 2, adapter: "a", messages: odd, history, from: 0, foldTo: 0, withSystemText: false });
     expect(mismatch).toContain("does not reproduce");
     expect(isSlimRequest(record)).toBe(false);
     expect(record["messages"]).toEqual(odd);
@@ -339,6 +407,7 @@ describe("the writer's own check", () => {
       messages: [{ role: "system", content: system }, { role: "user", content: "u1" }],
       history: [],
       from: 0,
+      foldTo: 0,
       withSystemText: true,
     }).record;
     const later: ChatMessage[] = [
@@ -352,6 +421,7 @@ describe("the writer's own check", () => {
       messages: [{ role: "system", content: system }, ...later, { role: "user", content: "u3" }],
       history: later,
       from: 0,
+      foldTo: 0,
       withSystemText: false,
     }).record;
     const replayer = new Replayer();

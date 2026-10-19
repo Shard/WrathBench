@@ -100,13 +100,18 @@ describe("sandbox filesystem confinement", () => {
       const env = sandboxChildEnv(process.env, { WRATHBENCH_SECRET: "leased" });
       expect(env["WRATHBENCH_MODULE_SECRET"]).toBeUndefined();
       expect(env["WRATHBENCH_SECRET"]).toBe("leased");
-      // And the child as actually spawned.
+      // And the child as actually spawned: the leased secret crosses into the
+      // spawn env (the client reads it once) but entry.ts strikes it before any
+      // snippet runs, so a snippet reads neither it nor the port secret
+      // (#74; operator, 2026-10-19).
       const host = makeHost({ secret: "leased-session-secret" });
       const res = await host.evalSnippet(
-        'JSON.stringify({ s: process.env.WRATHBENCH_SECRET, m: process.env.WRATHBENCH_MODULE_SECRET ?? null })',
+        'JSON.stringify({ s: process.env.WRATHBENCH_SECRET ?? null, m: process.env.WRATHBENCH_MODULE_SECRET ?? null })',
       );
       expect(res.ok).toBe(true);
-      expect(JSON.parse(JSON.parse(res.value ?? '""') as string)).toEqual({ s: "leased-session-secret", m: null });
+      expect(JSON.parse(JSON.parse(res.value ?? '""') as string)).toEqual({ s: null, m: null });
+      // The session still works: the client kept the secret before it was struck.
+      expect((await host.evalSnippet("typeof sdk.createSession")).value).toBe('"function"');
     } finally {
       if (prev === undefined) delete process.env["WRATHBENCH_MODULE_SECRET"];
       else process.env["WRATHBENCH_MODULE_SECRET"] = prev;

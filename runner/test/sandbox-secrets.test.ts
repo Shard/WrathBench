@@ -144,6 +144,7 @@ const read = (label, path) => {
 const env = JSON.stringify(process.env);
 if (env.includes(${JSON.stringify(MARK)})) marks.push("process.env");
 out.ownLeaseInEnv = process.env.WRATHBENCH_SECRET === ${JSON.stringify(OWN_LEASE)};
+out.sdkCreate = typeof sdk.createSession;
 read("self/environ", "/proc/self/environ");
 read("self/status", "/proc/self/status");
 const pids = ${JSON.stringify(o.pids)};
@@ -178,9 +179,13 @@ describe("no secret is within a snippet's reach", () => {
     const { marks, out } = JSON.parse(JSON.parse(raw) as string) as { marks: string[]; out: Record<string, unknown> };
     expect(marks).toEqual([]);
 
-    // Positive controls: the child is confined, not broken. Its own lease is
-    // the one credential it holds, and its own /proc entry reads.
-    expect(out["ownLeaseInEnv"]).toBe(true);
+    // Positive controls: the child is confined, not broken. Its own /proc entry
+    // reads and the ambient sdk works. The lease the child authenticates with is
+    // not even in its own environment any more: entry.ts strikes it at startup,
+    // so a snippet cannot read it back and build another client (#74; operator,
+    // 2026-10-19). The client kept it in a #-private field before it was struck.
+    expect(out["ownLeaseInEnv"]).toBe(false);
+    expect(out["sdkCreate"]).toBe("function");
     expect(out["self/environ"]).toBe("READ");
     expect(out["self/status"]).toBe("READ");
 
@@ -203,9 +208,15 @@ describe("no secret is within a snippet's reach", () => {
     const host = makeHost(OWN_LEASE);
     const names = JSON.parse(JSON.parse((await host.evalSnippet("JSON.stringify(Object.keys(process.env).sort())")).value ?? '""') as string) as string[];
     for (const name of [...PARENT_ENV, "CODEX_HOME"]) expect(names).not.toContain(name);
-    // What it does get: the plumbing and the four values the host passes.
+    // Nor the leased secret or the bound account: the host passes them in the
+    // spawn env but entry.ts strikes them at startup, so neither is in the
+    // running child's environment (#74; operator, 2026-10-19).
+    expect(names).not.toContain("WRATHBENCH_SECRET");
+    expect(names).not.toContain("WRATHBENCH_ACCOUNT");
+    // What it does get: the plumbing and the two values the host passes that
+    // are not credentials (module URL and the session token).
     for (const name of names) {
-      expect(["PATH", "HOME", "TMPDIR", "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "WRATHBENCH_SECRET", "WRATHBENCH_ACCOUNT", "NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE"]).toContain(name);
+      expect(["PATH", "HOME", "TMPDIR", "WRATHBENCH_MODULE_URL", "WRATHBENCH_TOKEN", "NODE_CHANNEL_FD", "NODE_CHANNEL_SERIALIZATION_MODE"]).toContain(name);
     }
   });
 });

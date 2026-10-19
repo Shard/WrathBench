@@ -78,7 +78,8 @@ bun wb dashboard shots --serve                        # the same stack, no brows
 directories it is given), serves them through the viewer's own `createApi`
 with a private build, runs one publisher pass into a local bucket for a public
 build, and drives a headless Chromium over the DevTools protocol to named
-states: `home`, `run-live`, `map-live`, `map-live-selected` and `map-replay`.
+states: `home`, `run-live`, `map-live`, `map-live-selected`, `map-live-nearby`
+and `map-replay`.
 Wowhead's tooltip script is stubbed and every other third party refused, so a
 page renders as it does where the script is blocked; `--real-wowhead` lets it
 through. Nothing reads the operator's ClickHouse, config store or runs. For
@@ -243,6 +244,9 @@ its `!`/`?` quest mark in `--warn`), another player `--accent`, anything else
 ringed, and its name replaces the entry on the unit frame's target bar.
 Names show on hover at any zoom the layer draws at and, further in, for every
 unit, culled greedily so none overlaps another or a character's puck and name.
+The hovered name is never culled, so it moves instead: right of its dot, else
+left, below or above, whichever first keeps clear of the pucks and their names
+(`placeLabel`).
 
 The layer draws from about a pixel a yard, and the map asks for windows under
 the same gate: on its 5 s poll (and straight away on zooming in), only for runs
@@ -250,8 +254,10 @@ the feed flagged `nearby` whose pip is on or near the screen. NPCs nearly
 always move, so their motion alone redraws the map at most ten times a second
 rather than at frame rate. Past a window's horizon the layer is empty rather
 than frozen, bar a second of slack for the two pods' clocks. A replay has no
-units: the ring is live only and keeps 15 minutes. The public build asks for
-none either; nothing publishes them yet.
+units: the ring is live only and keeps 15 minutes. The public build draws the
+same layer from the windows `live.json` carries (`api/snapshot-client.ts`),
+one per live run, with no request of its own: creatures only, and no target
+ring, since the public window does not say whom the character targets.
 
 ## The replay's route
 

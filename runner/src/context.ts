@@ -7,7 +7,8 @@
  *   [ system prompt ]
  *   [ the message window: recent assistant / tool messages, each capped at
  *     WINDOW_MESSAGE_CHARS, cut at assistant boundaries so tool-call pairs
- *     stay intact ]
+ *     stay intact; the tool results of its older block folded to one-line
+ *     records (`foldToolResult`), its most recent block verbatim ]
  *   [ one fresh user message assembled by `assembleContext`:
  *       goal line, harness notices, state summary, last EVENT_WINDOW events,
  *       scratchpad ]
@@ -21,6 +22,17 @@
  * is applied one turn after the crossing that earns it (`laggedLength`), so the
  * turn before a trim can be told that it is the last one; the window therefore
  * sits at most one turn's growth above the ceiling, for that one turn.
+ *
+ * The fold rides the same block grid (operator, 2026-10-19). Once a trim has
+ * happened, the window's older block — the messages before the raw cut plus one
+ * MESSAGE_WINDOW_TRIM, snapped back to a turn's start — keeps its assistant
+ * messages as they were and replaces each tool result with one deterministic
+ * line naming the tool, its arguments cut short, ok or error, and the
+ * snippet's duration (`messageWindowFold`). The boundary moves only when the
+ * cut does, so the folded prefix is as byte-stable as the cut and costs no
+ * cache miss of its own; and the snap back keeps a result verbatim on the turn
+ * it arrives and the turn after, the trim turn included. Nothing is summarised:
+ * the line is a pure function of the call and the result.
  *
  * Older per-turn user context messages are dropped entirely — they are
  * regenerated, never accumulated. Determinism: `assembleContext` is a pure
@@ -58,6 +70,12 @@ export const CONTEXT_POLICY = {
    * much was cut so it can print less and re-run.
    */
   WINDOW_MESSAGE_CHARS: 4_000,
+  /**
+   * Max chars of a call's arguments on a folded tool result's line
+   * (`foldToolResult`). Short on purpose: the call itself stays in the window
+   * as the model sent it, so the line only has to say which call it answers.
+   */
+  FOLD_ARGS_CHARS: 80,
   /** Chat / notification tail lengths inside the state summary. */
   CHAT_TAIL: 10,
   NOTIFICATION_TAIL: 5,
@@ -862,6 +880,14 @@ export interface ChatMessage {
 }
 
 /**
+ * A message as the loop's history stores it: a `ChatMessage`, and on a tool
+ * result whether it was an error — the `isError` its result record carries,
+ * which the fold's line states. Never sent: every message leaves the window
+ * through `windowMessage`, which drops it.
+ */
+export type HistoryMessage = ChatMessage & { isError?: boolean };
+
+/**
  * The index into the full history at which the model-visible window starts.
  *
  * Pure in `history.length` and the message roles, and monotone non-decreasing
@@ -881,7 +907,7 @@ export interface ChatMessage {
  * the next trim and drift the boundaries away from the block grid, so an
  * incrementally trimmed window and a rebuilt one would disagree.
  */
-export function messageWindowCut(history: ChatMessage[]): number {
+export function messageWindowCut(history: readonly ChatMessage[]): number {
   let cut = messageWindowRawCut(laggedLength(history));
   while (cut < history.length && history[cut]!.role !== "assistant") cut++;
   return cut;
@@ -908,7 +934,7 @@ export function messageWindowCut(history: ChatMessage[]): number {
  * length is), and still a pure function of the stored history, so a rebuilt
  * history cuts identically.
  */
-function laggedLength(history: ChatMessage[]): number {
+function laggedLength(history: readonly ChatMessage[]): number {
   return history.length - lastTurnGrowth(history);
 }
 
@@ -931,7 +957,7 @@ export function messageWindowRawCut(len: number): number {
  *
  * A pure function of the history, so a rebuilt history predicts identically.
  */
-export function lastTurnGrowth(history: ChatMessage[]): number {
+export function lastTurnGrowth(history: readonly ChatMessage[]): number {
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i]!.role === "assistant") return history.length - i;
   }
@@ -948,7 +974,7 @@ export function lastTurnGrowth(history: ChatMessage[]): number {
  * whatever the model's per-turn message count does. Nothing here predicts a
  * turn that has not happened yet.
  */
-export function trimExpected(history: ChatMessage[]): boolean {
+export function trimExpected(history: readonly ChatMessage[]): boolean {
   return messageWindowRawCut(history.length) > messageWindowRawCut(laggedLength(history));
 }
 
@@ -967,16 +993,111 @@ export function capWindowMessage(m: ChatMessage, max: number = CONTEXT_POLICY.WI
 }
 
 /**
+ * Where the folded part of the window ends: an index into the full history,
+ * never below `messageWindowCut`. Messages in `[cut, fold)` have their tool
+ * results folded (`foldToolResult`); from `fold` on the window is verbatim.
+ * Pure in the stored history, like the cut.
+ *
+ * Nothing folds before the first trim. After it, the boundary is the raw cut
+ * plus one MESSAGE_WINDOW_TRIM — the block the next trim will drop — snapped
+ * *back* to the assistant message that opens its turn, so a turn is folded
+ * whole or not at all. Both halves of the choice are load-bearing:
+ *
+ * - It is a step function of the raw cut, so it moves only on the request the
+ *   cut moves on. Between trims the folded messages are the same messages
+ *   rendered the same way and the verbatim ones are only appended to: the
+ *   request is byte-stable to the end of the window, as it is without the
+ *   fold, and the fold pays no cache miss of its own.
+ * - Snapping back keeps the last two turns verbatim on every request. The raw
+ *   cut of the lagged length `L` leaves more than MESSAGE_WINDOW_TRIM messages
+ *   above it once it is past zero (`messageWindowRawCut` stops at the first
+ *   multiple that fits), so `rawCut + TRIM < L`: the boundary lies inside the
+ *   turn before last or earlier, and snapping back to that turn's start folds
+ *   nothing of it or after it. So a result is full text on the request it
+ *   arrives in and on the one after, whatever the turn sizes — a hint the
+ *   model is meant to act on is never folded before it has been read twice.
+ */
+export function messageWindowFold(history: readonly ChatMessage[]): number {
+  const raw = messageWindowRawCut(laggedLength(history));
+  const cut = messageWindowCut(history);
+  if (raw === 0) return cut;
+  let fold = Math.min(raw + CONTEXT_POLICY.MESSAGE_WINDOW_TRIM, history.length);
+  while (fold > cut && history[fold]?.role !== "assistant") fold--;
+  return Math.max(fold, cut);
+}
+
+/**
+ * A tool result's folded line. Deterministic, and a function of the call and
+ * the result alone:
+ *
+ *   [folded by harness] <tool> <args>: <ok|error>[, <n>ms], <m> chars
+ *
+ * `<args>` is the call's argument string as the model sent it, every run of
+ * whitespace made one space, cut at FOLD_ARGS_CHARS with "…"; `<n>ms` is the
+ * duration a snippet result opens with (`ok (12ms)`), absent for every other
+ * tool, which reports none; `<m>` is the length of the whole result. The
+ * marker says the harness wrote the line, so it never reads as the tool's own
+ * output. The call itself is not touched: it stays in the window as it was
+ * sent.
+ */
+export function foldToolResult(call: { name: string; arguments: string } | undefined, m: HistoryMessage): ChatMessage {
+  const max = CONTEXT_POLICY.FOLD_ARGS_CHARS;
+  const text = typeof m.content === "string" ? m.content : "";
+  const flat = (call?.arguments ?? "").replace(/\s+/g, " ").trim();
+  const args = flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  const duration = call?.name === "run_snippet" ? /^(?:ok|error) \((\d+)ms\)/.exec(text)?.[1] : undefined;
+  const line =
+    `[folded by harness] ${call?.name ?? "?"}${args.length > 0 ? ` ${args}` : ""}: ` +
+    `${m.isError === true ? "error" : "ok"}${duration !== undefined ? `, ${duration}ms` : ""}, ${text.length} chars`;
+  return { ...windowMessage(m), content: line };
+}
+
+/** A history message as it is sent: everything but the history's own `isError`. */
+function windowMessage(m: HistoryMessage): ChatMessage {
+  if (!("isError" in m)) return m;
+  const { isError: _isError, ...sent } = m;
+  return sent;
+}
+
+/**
+ * A window as it is sent: the tool results among its first `fold` messages
+ * folded, every other message capped, and nothing but `ChatMessage` fields.
+ * The one rendering the loop, the writer's self-check and the replay share.
+ *
+ * A tool result is matched to its call by position after the assistant
+ * message it follows, the way the loop answers calls — never by
+ * `tool_call_id`, which an adapter may leave empty or repeat. A window opens
+ * on an assistant message, as every cut does.
+ */
+export function renderWindow(
+  window: readonly HistoryMessage[],
+  fold: number,
+  cap: number = CONTEXT_POLICY.WINDOW_MESSAGE_CHARS,
+): ChatMessage[] {
+  let calls: readonly { function: { name: string; arguments: string } }[] = [];
+  let answered = 0;
+  return window.map((m, i) => {
+    if (m.role === "assistant") {
+      calls = m.tool_calls ?? [];
+      answered = 0;
+    } else if (m.role === "tool") {
+      const call = calls[answered++]?.function;
+      if (i < fold) return foldToolResult(call, m);
+    }
+    return capWindowMessage(windowMessage(m), cap);
+  });
+}
+
+/**
  * The model-visible message window for a full history. Pure.
  *
- * The cap is applied here, on the way out, rather than to the stored history:
- * the trajectory records tool results in full, so capping at push time would
- * leave the in-memory history holding different bytes than a history rebuilt
- * from the log, and the two would stop windowing identically.
+ * The cap and the fold are applied here, on the way out, rather than to the
+ * stored history: the trajectory records tool results in full, so shaping
+ * them at push time would leave the in-memory history holding different bytes
+ * than a history rebuilt from the log, and the two would stop windowing
+ * identically.
  */
-export function messageWindow(history: ChatMessage[]): ChatMessage[] {
+export function messageWindow(history: readonly HistoryMessage[]): ChatMessage[] {
   const cut = messageWindowCut(history);
-  // A lambda, not `.map(capWindowMessage)`: map's second argument is the index,
-  // which would land in the cap's `max` parameter.
-  return (cut === 0 ? history : history.slice(cut)).map((m) => capWindowMessage(m));
+  return renderWindow(history.slice(cut), messageWindowFold(history) - cut);
 }
