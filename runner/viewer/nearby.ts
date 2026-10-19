@@ -67,6 +67,22 @@ export const Q_O = 1024;
 /** What a window reaches back by default, and the most a request may ask: the ring's own reach. */
 export const NEARBY_SPAN_MS = 60_000;
 export const NEARBY_SPAN_MAX_MS = 15 * 60_000;
+/**
+ * What the window `live.json` carries for each live run reaches back: what
+ * the public live map's playhead needs from one pass to the next, and no more.
+ *
+ * The public map plays a delay behind the newest `live.json`
+ * (`createLiveClock` in `dashboard/src/lib/traceplayer.ts`): a pass's period
+ * (about 420 s), plus the client memo, the edge TTL and a poll (65 s), plus a
+ * tenth of the period (42 s), so about 8.8 minutes, and from there it runs
+ * forward toward the pass's own horizon. Run against the live clock, the
+ * furthest back the playhead goes behind the pass in hand is about 9 minutes
+ * at the nominal cadence and 11 with passes ten minutes apart; twelve covers
+ * both. A slower publisher, or a playhead still catching up after an outage,
+ * shows an empty layer for a while rather than an old one. The live clock's
+ * test pins the stretch inside it (`dashboard/test/nearbyplayer.test.ts`).
+ */
+export const PUBLIC_NEARBY_SPAN_MS = 12 * 60_000;
 /** A ring whose newest file was touched within this is being written. */
 export const NEARBY_FRESH_MS = 30_000;
 /** Two position samples further apart than this are held, not walked between. */

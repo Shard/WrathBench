@@ -476,7 +476,18 @@ targets another player or their pet — with the state cut to entry, name, type,
 level, health, dead, service roles, the quest marker and "targets this
 character". The layer stays lit while the character is down. Creature
 guids stay, so a unit two characters see draws once. The position feed's
-`nearby` flag is not projected: nothing publishes a window yet.
+`nearby` flag is projected too.
+
+The public site gets the same window, live only. Each publisher pass reads
+the last `PUBLIC_NEARBY_SPAN_MS` (twelve minutes: what the public map's
+playhead, about nine minutes behind, needs until the next pass lands) of every
+run the feed flags, straight after the feed, and `live.json` carries it inline
+by run id (`projectLiveNearby`: through `projectNearby`, for flagged runs
+only, cut to the span). The flag in `live.json` is kept only where the window
+is. Nothing else in the bucket names a unit, so the next pass after a run's
+ring goes overwrites its window with nothing, and no history of positions
+accumulates anywhere (docs/PUBLIC-DASHBOARD.md, "The units around a live
+run").
 
 ## How it handles big files
 
