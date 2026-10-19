@@ -8,17 +8,31 @@
  */
 
 import { connect, type MoveResult, type WrathClient } from "../../../sdk/src/index";
-import { LEADER_ROLE, LOADOUTS, PARTY_LEVEL, PARTY_MONEY, PARTY_ROLES, partyCharacterName, type PartyRole } from "../../fixtures/loadouts";
-import { DEFAULT_PARTY_ACCOUNTS } from "../../fixtures/stage-party";
+import { LOADOUT_IDS, PARTY_LEVEL, PARTY_MONEY, loadoutFor, type Loadout } from "../../fixtures/loadouts";
+import { DEFAULT_PARTY_ACCOUNTS, defaultStageRequest, type StageRequest } from "../../fixtures/stage-party";
 import { MOONBROOK } from "../../fixtures/scenarios";
 
-export type PartyMember = { role: PartyRole; account: string; character: string };
+export type PartyMember = { member: string; account: string; character: string; loadout: Loadout };
 
-/** The default party: PARTY1..PARTY5 in role order, or MODULE_PARTY_ACCOUNTS (comma-separated) in that order. */
-export function defaultParty(env: Record<string, string | undefined> = process.env): PartyMember[] {
+/**
+ * The smokes' party: the stager's default request (PARTY1..PARTY5, one of
+ * each loadout, the tank first and leading), or MODULE_PARTY_ACCOUNTS
+ * (comma-separated) in that order. The request is what the roster would
+ * send, so the smokes exercise the contract the fleet uses.
+ */
+export function smokeRequest(tag: string, env: Record<string, string | undefined> = process.env): StageRequest {
   const accounts = (env["MODULE_PARTY_ACCOUNTS"] ?? DEFAULT_PARTY_ACCOUNTS.join(",")).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  if (accounts.length !== PARTY_ROLES.length) throw new Error(`MODULE_PARTY_ACCOUNTS names ${accounts.length} accounts; a party is ${PARTY_ROLES.length}`);
-  return PARTY_ROLES.map((role, i) => ({ role, account: accounts[i]!, character: partyCharacterName(role, accounts[i]!) }));
+  if (accounts.length !== LOADOUT_IDS.length) throw new Error(`MODULE_PARTY_ACCOUNTS names ${accounts.length} accounts; a party is ${LOADOUT_IDS.length}`);
+  return defaultStageRequest({ party: `smoke-${tag}`, campaign: `smoke-${tag}`, accounts });
+}
+
+/** The members of a request, with their loadouts; the first leads. */
+export function membersOf(req: StageRequest): PartyMember[] {
+  return req.members.map((m) => {
+    const l = loadoutFor(m);
+    if (typeof l === "string") throw new Error(l);
+    return { member: m.member, account: m.account, character: m.character, loadout: l };
+  });
 }
 
 export const dist2d = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -46,11 +60,11 @@ async function until<T>(what: string, ms: number, read: () => T | undefined): Pr
  * state cache the way a run's own client sees it at login: level, position,
  * the loadout's items in their equipment slots, the role's key spells, the
  * preset talents in SMSG_TALENTS_INFO, the money, the supplies in the bags,
- * and the group listing the other members with the tank leading.
+ * and the group listing the other members with the first one leading.
  */
 export async function assertStagedMember(c: WrathClient, m: PartyMember, party: readonly PartyMember[], log: (s: string) => void): Promise<void> {
-  const l = LOADOUTS[m.role];
-  const who = `${m.character} (${m.role})`;
+  const l = m.loadout;
+  const who = `${m.character} (${l.label})`;
   const level = await until(`${who} level`, 15_000, () => c.state.self.level?.value);
   if (level !== PARTY_LEVEL) throw new Error(`${who} is level ${level}, expected ${PARTY_LEVEL}`);
 
@@ -88,7 +102,7 @@ export async function assertStagedMember(c: WrathClient, m: PartyMember, party: 
   if (bag.bags.length < l.bags.length) throw new Error(`${who} wears ${bag.bags.length} bags, expected at least ${l.bags.length}`);
 
   if (party.length > 1) {
-    const leader = party.find((p) => p.role === LEADER_ROLE) ?? party[0]!;
+    const leader = party[0]!;
     const others = party.filter((p) => p !== m).map((p) => p.character);
     const g = await until(`${who} SMSG_GROUP_LIST at login`, 15_000, () => {
       const s = c.state.group();

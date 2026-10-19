@@ -99,8 +99,6 @@ export type Scenario = {
    * skill is added: the loader keeps the stored value and recomputes the max.
    */
   maxSkills?: boolean;
-  /** `characters.ammoId`: the ammo item template a hunter fires (an entry, never a guid). */
-  ammoId?: number;
 };
 
 /** 2010-01-01 00:00 UTC: a fixed, obviously-fixture date, so builds stay pure. */
@@ -607,7 +605,6 @@ export function validateScenario(scenario: Scenario): void {
     scenario.talents === undefined || new Set(scenario.talents).size === scenario.talents.length,
     "talents must not repeat a spell",
   );
-  assert(scenario.ammoId === undefined || (Number.isInteger(scenario.ammoId) && scenario.ammoId > 0), "ammoId must be a positive item entry");
 }
 
 /** `characters.taximask` is 14 u32 words in 3.3.5 (TaxiMaskSize); node n sets bit n-1. */

@@ -1986,26 +1986,53 @@ the module are all read when the worldserver is recreated:
    - `bun wb smoke party-staging --keep`, last of all, stages the party, checks
      every member at login, and leaves the party staged. It has to be last:
      every staging deletes whatever the party accounts hold.
-5. The one-time reaping proof. Staged items carry guids the live server
+5. The one-time reaping proof runs at the next ordinary release window (the
+   operator's ruling of 2026-10-19). Staged items carry guids the live server
    allocated, so the next boot's one-time DELETEs above its watermark must not
-   touch them. That boot cannot be the window's own recreate: SOAP exists only
-   after it, so nothing can be staged before it. It has to be the next
-   recreate. That can be a second deploy window, or a worldserver restart with
-   the fleet drained and no run live. Which one is the operator's call. After
-   it, run `bun wb smoke party-staging --recheck`. It repeats the checks on
-   what survived the boot and then deletes the five characters. Leave the party
-   accounts alone until then. From then on, the construction is the proof.
-6. `deadmines-entry` joins the deploy smokes while the campaign is enabled.
+   touch them. That boot cannot be the turn-on window's own recreate, because
+   SOAP exists only after it and nothing can be staged before it. Leave the
+   party accounts alone until then: a staging or a fresh party launch would
+   delete the kept party. In that next window, once the worldserver has been
+   recreated and before the fleet resumes, run
+   `bun wb smoke party-staging --recheck`. It repeats the checks on what
+   survived the boot and then deletes the five characters. From then on, the
+   construction is the proof.
+6. Until the recheck has passed, the first party campaign runs with
+   `resume: false`. A paused party is then never resumed onto characters
+   whose survival across a boot is still unproven; each attempt is staged
+   fresh instead.
+7. `deadmines-entry` joins the deploy smokes while the campaign is enabled.
 
 To turn it off, set `staging.enabled` back to false in another window. The
 policy, the port and the env go away. The PARTY and STAGER accounts stay in
 auth, where they are harmless.
 
-**Restaging** happens before each fresh party launch. The fleet's party mode
-calls `stageParty`. By hand, in the runner pod, run
-`bun infra/fixtures/stage-party.ts [--campaign <id>] [--accounts …] [--roles …]`.
-It deletes every character on the party accounts, so never run it while a
-party run holds those accounts. The five members are staged in parallel.
+**Restaging** happens before each fresh party launch, never on a resume.
+The roster runs `bun infra/fixtures/stage-party.ts --request -` with one
+request on stdin (`infra/party-stager.ts` holds the contract). The request
+has the party id, campaign, version, scenario and level, and per member the
+member id, role word, race, class, character name, account and run id. The
+first member leads. The definition names the characters and the stager
+creates them under those names. Each member wears the loadout of its race and
+class (`infra/fixtures/loadouts.ts`): a Human Warrior tank, a Dwarf Priest
+healer, and as damage a Human Mage, a Human Rogue and a Dwarf Paladin. The
+paladin is Retribution and replaced the hunter by the operator's call of
+2026-10-19, so no pet is ever staged. A member of any other race and class,
+or a level other than 20, is refused before anything is touched. The script
+exits 0 when the party is staged and formed with no session open. Its last
+stdout line is then `{"ok":true,"detail":…}`. Otherwise the reason is the
+last line on stderr: exit 1 for a staging that failed, 2 for a refused
+request. By hand, in the runner pod:
+
+```
+bun infra/fixtures/stage-party.ts --example | bun infra/fixtures/stage-party.ts --request -
+```
+
+This stages the default party: PARTY1 to PARTY5, one of each loadout, named
+from the account (`Tankpartyb` on PARTY1). The smokes use the same request.
+Every staging deletes every character on the party accounts, so never run one
+while a party run holds those accounts. The five members are staged in
+parallel.
 The duration has not been measured yet; it is a few logins and logout saves
 per member. A failure names the step and the member. If a
 member does not wear its loadout at login, the loader refused an item and

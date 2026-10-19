@@ -34,7 +34,7 @@
 
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { assertStagedMember, defaultParty, deleteMembers, loginMember } from "./lib/party";
+import { assertStagedMember, deleteMembers, loginMember, membersOf, smokeRequest } from "./lib/party";
 import { stageParty } from "../fixtures/stage-party";
 import type { WrathClient } from "../../sdk/src/index";
 
@@ -43,7 +43,8 @@ const argv = Bun.argv.slice(2);
 for (const a of argv) if (a !== "--keep" && a !== "--recheck") throw new Error(`unknown argument ${a}; usage: party-staging [--keep] [--recheck]`);
 const KEEP = argv.includes("--keep");
 const RECHECK = argv.includes("--recheck");
-const party = defaultParty();
+const request = smokeRequest("party-staging");
+const party = membersOf(request);
 
 const started = Date.now();
 const log = (m: string) => console.log(`[party-staging +${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${m}`);
@@ -54,9 +55,9 @@ try {
   if (RECHECK) {
     log(`--recheck: checking the party staged before the recreate, ${party.map((m) => m.character).join(", ")}`);
   } else {
-    const staged = await stageParty({ campaign: "smoke-party-staging", accounts: party.map((m) => m.account), roles: party.map((m) => m.role), log });
-    if (!staged.ok) throw new Error(`staging failed at ${staged.step}${staged.member ? ` (${staged.member.character} on ${staged.member.account})` : ""}: ${staged.error}`);
-    log(`staged in ${Math.round(staged.ms / 1000)}s; ${staged.leader.character} leads`);
+    const staged = await stageParty(request, { log });
+    if (!staged.ok) throw new Error(`staging failed: ${staged.reason}`);
+    log(staged.detail);
   }
 
   // All five at once, as the party's runs log in.

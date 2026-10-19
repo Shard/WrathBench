@@ -1,8 +1,12 @@
 /**
  * The party eval's loadouts (docs/proposals/GROUP-PLAY.md §3): five
  * Alliance characters at level 20, a warrior tank, a priest healer, and a
- * mage, a rogue and a hunter, in quest-level greens, with talents preset per
- * role and standing in Moonbrook. Data plus the pure checks over it; the
+ * mage, a rogue and a paladin, in quest-level greens, with talents preset
+ * per role and standing in Moonbrook. The third damage dealer was a hunter
+ * until the operator's call of 2026-10-19 made it a Retribution paladin, so
+ * no pet ever needs staging (a pet is a `character_pet` row numbered from a
+ * generator the server seeds at boot, the same class of problem as item
+ * guids). Data plus the pure checks over it; the
  * stager (`stage-party.ts`) is what puts a character into one.
  *
  * Operator tooling, like the rest of this directory: nothing in `runner/` or
@@ -21,34 +25,41 @@
  *   carries required level 0, so item level and quest level are the
  *   constraint instead. Every piece is wearable by its class and race at 20
  *   with the proficiencies the character starts with (`playercreateinfo_skills`:
- *   the warrior has mail and shields, the hunter leather until 40, the rogue
- *   daggers, the priest and mage staves and wands).
+ *   the warrior and paladin have mail, the warrior shields, the paladin
+ *   two-handed maces, the rogue daggers, the priest and mage staves and wands).
  * - Spells are the class trainer's, read from the world DB at staging time
  *   (`trainer_spell` for `trainerId` up to the party level: the table the
  *   pinned core loads, `ObjectMgr::LoadTrainers`; the design named the
  *   pre-port `npc_trainer`, which the core no longer reads), plus the spells
- *   the class's level-10 quests teach, which no trainer lists: the warrior's
- *   Defensive Stance, Taunt and Sunder Armor (quest reward spell 8121) and the
- *   hunter's Tame Beast, Call Pet, Dismiss Pet, Revive Pet and Feed Pet (1579,
- *   5300). None of these trainers' entries up to level 20 is a learn-effect
- *   spell (checked against Spell.dbc offline), so every row the query returns
- *   is the spell itself; the stager cannot re-check that in the pod, which
- *   mounts no client data.
+ *   the class quests teach by level 20, which no trainer lists: the warrior's
+ *   Defensive Stance, Taunt and Sunder Armor (the level-10 quests' reward
+ *   spell 8121) and the paladin's Redemption (7328, the level-12 quest). A
+ *   trainer entry can be a learn-effect spell that teaches others rather
+ *   than being one; the pod mounts no client data to tell, so each such entry
+ *   up to level 20 was resolved against Spell.dbc offline and is listed in
+ *   `trainerLearns`. Only the paladin's trainer has any: Judgement (10321),
+ *   which teaches Judgement of Light and Seal of Righteousness, and Summon
+ *   Warhorse (13820), which teaches the mount and Apprentice Riding and is
+ *   left out (`trainerExclude`): no other member rides at 20.
  * - Talents: eleven points (levels 10-20), one tree per role, every tier and
  *   prerequisite legal, each row the spell of the rank taken.
- * - The hunter has no pet. A pet is a `character_pet` row numbered from a
- *   generator the server seeds at boot, the same class of problem as item
- *   guids, so none is staged; the hunter knows Tame Beast and may tame one.
  */
 
 import { accountFixtureName } from "../smoke/lib/fixture";
 import type { Scenario } from "./scenarios";
-import { DEADMINES_ENTRANCE_TRIGGER, MOONBROOK, SENTINEL_HILL_BIND, WESTFALL_ZONE, facing } from "./scenarios";
 
-export const PARTY_ROLES = ["tank", "healer", "mage", "rogue", "hunter"] as const;
-export type PartyRole = (typeof PARTY_ROLES)[number];
+/**
+ * The five loadouts, one per class. A loadout id is not a party role: the
+ * fleet's party definition gives each member one of three role words (`tank`,
+ * `healer`, `damage`, runner/src/party.ts) and a race and class, and the
+ * stager picks the loadout by race and class (`loadoutFor`).
+ */
+export const LOADOUT_IDS = ["tank", "healer", "mage", "rogue", "paladin"] as const;
+export type LoadoutId = (typeof LOADOUT_IDS)[number];
+/** The party definition's role words (runner/src/party.ts PARTY_ROLES). */
+export type PartyRoleWord = "tank" | "healer" | "damage";
 
-export const isPartyRole = (s: string): s is PartyRole => (PARTY_ROLES as readonly string[]).includes(s);
+export const isLoadoutId = (s: string): s is LoadoutId => (LOADOUT_IDS as readonly string[]).includes(s);
 
 /** The party's level, and the talent points it has: one a level from 10. */
 export const PARTY_LEVEL = 20;
@@ -94,7 +105,9 @@ export type TalentPick = {
 };
 
 export type Loadout = {
-  role: PartyRole;
+  id: LoadoutId;
+  /** The role word a party definition gives a member wearing this loadout. */
+  partyRole: PartyRoleWord;
   race: number;
   class: number;
   /** For logs and the launch note: "Human Warrior". */
@@ -105,16 +118,18 @@ export type Loadout = {
   trainerId: number;
   /** Spells a class quest teaches, which no trainer lists. */
   questSpells: readonly { spell: number; name: string }[];
+  /** Trainer entries that are learn-effect spells, and the spells each teaches (Spell.dbc, read offline). */
+  trainerLearns?: Readonly<Record<number, readonly number[]>>;
+  /** Trainer entries left out on purpose, each with its reason in the loadout. */
+  trainerExclude?: readonly number[];
   /** What the staging smoke checks in the spellbook (highest ranks a level-20 character holds). */
   keySpells: readonly number[];
   talents: readonly TalentPick[];
   gear: readonly GearLine[];
   /** Worn in the first free bag slots (19-22). */
   bags: readonly StockLine[];
-  /** Added once the bags are worn: food, drink, potions, ammunition. */
+  /** Added once the bags are worn: food, drink, potions. */
   supplies: readonly StockLine[];
-  /** `characters.ammoId` for a ranged class that fires ammunition. */
-  ammoId?: number;
 };
 
 const WOOLEN_BAG: StockLine = { item: 4240, name: "Woolen Bag", count: 1 };
@@ -123,11 +138,11 @@ const MUTTON_CHOP = (count: number): StockLine => ({ item: 3770, name: "Mutton C
 const ICE_COLD_MILK = (count: number): StockLine => ({ item: 1179, name: "Ice Cold Milk", count });
 const HEALING_POTION = (count: number): StockLine => ({ item: 929, name: "Healing Potion", count });
 const LESSER_MANA_POTION = (count: number): StockLine => ({ item: 3385, name: "Lesser Mana Potion", count });
-const HEAVY_SHOT = 2519;
 
-export const LOADOUTS: Readonly<Record<PartyRole, Loadout>> = {
+export const LOADOUTS: Readonly<Record<LoadoutId, Loadout>> = {
   tank: {
-    role: "tank",
+    id: "tank",
+    partyRole: "tank",
     race: 1,
     class: 1,
     label: "Human Warrior",
@@ -161,7 +176,8 @@ export const LOADOUTS: Readonly<Record<PartyRole, Loadout>> = {
     supplies: [MUTTON_CHOP(20), HEALING_POTION(5)],
   },
   healer: {
-    role: "healer",
+    id: "healer",
+    partyRole: "healer",
     race: 3,
     class: 5,
     label: "Dwarf Priest",
@@ -191,7 +207,8 @@ export const LOADOUTS: Readonly<Record<PartyRole, Loadout>> = {
     supplies: [ICE_COLD_MILK(20), LESSER_MANA_POTION(5)],
   },
   mage: {
-    role: "mage",
+    id: "mage",
+    partyRole: "damage",
     race: 1,
     class: 8,
     label: "Human Mage",
@@ -222,7 +239,8 @@ export const LOADOUTS: Readonly<Record<PartyRole, Loadout>> = {
     supplies: [LESSER_MANA_POTION(5)],
   },
   rogue: {
-    role: "rogue",
+    id: "rogue",
+    partyRole: "damage",
     race: 1,
     class: 4,
     label: "Human Rogue",
@@ -253,45 +271,56 @@ export const LOADOUTS: Readonly<Record<PartyRole, Loadout>> = {
     bags: BAGS,
     supplies: [MUTTON_CHOP(20), HEALING_POTION(5)],
   },
-  hunter: {
-    role: "hunter",
+  paladin: {
+    id: "paladin",
+    partyRole: "damage",
     race: 3,
-    class: 3,
-    label: "Dwarf Hunter",
-    namePrefix: "Hunt",
-    trainerId: 7,
-    questSpells: [
-      { spell: 1515, name: "Tame Beast" },
-      { spell: 883, name: "Call Pet" },
-      { spell: 2641, name: "Dismiss Pet" },
-      { spell: 982, name: "Revive Pet" },
-      { spell: 6991, name: "Feed Pet" },
-    ],
-    keySpells: [14282, 14318, 1499, 2643, 1515, 883],
-    // Marksmanship 11: Lethal Shots 5, Mortal Shots 5, Aimed Shot 1.
+    class: 2,
+    label: "Dwarf Paladin",
+    namePrefix: "Pala",
+    trainerId: 3,
+    questSpells: [{ spell: 7328, name: "Redemption" }],
+    // Judgement teaches Judgement of Light and Seal of Righteousness.
+    trainerLearns: { 10321: [20271, 21084] },
+    // Summon Warhorse (13820 / the Draenei trainer's 34768) teaches the mount
+    // and Apprentice Riding: no other member rides at 20, so it is not staged.
+    trainerExclude: [13820, 34768],
+    keySpells: [20271, 26573, 879, 19750, 20217, 7328],
+    // Retribution 11: Benediction 5, Heart of the Crusader 3, Improved Judgements 2, Seal of Command 1.
     talents: [
-      { talentId: 1344, tab: 363, row: 0, col: 2, rank: 5, maxRank: 5, spell: 19431, name: "Lethal Shots" },
-      { talentId: 1349, tab: 363, row: 1, col: 2, rank: 5, maxRank: 5, spell: 19490, name: "Mortal Shots" },
-      { talentId: 1345, tab: 363, row: 2, col: 2, rank: 1, maxRank: 1, spell: 19434, name: "Aimed Shot", dependsOn: { talentId: 1349, rank: 5 } },
+      { talentId: 1407, tab: 381, row: 0, col: 2, rank: 5, maxRank: 5, spell: 20105, name: "Benediction" },
+      { talentId: 1464, tab: 381, row: 1, col: 1, rank: 3, maxRank: 3, spell: 20337, name: "Heart of the Crusader" },
+      { talentId: 1631, tab: 381, row: 1, col: 0, rank: 2, maxRank: 2, spell: 25957, name: "Improved Judgements" },
+      { talentId: 1481, tab: 381, row: 2, col: 2, rank: 1, maxRank: 1, spell: 20375, name: "Seal of Command" },
     ],
     gear: [
-      { item: 24347, name: "Vest of the Dragon Slayer", slot: SLOT.chest },
-      { item: 26026, name: "Ornately Tooled Belt", slot: SLOT.waist },
-      { item: 26021, name: "Vindicator's Leather Chaps", slot: SLOT.legs },
-      { item: 26025, name: "Technician's Boots", slot: SLOT.feet },
-      { item: 1302, name: "Black Whelp Gloves", slot: SLOT.hands },
-      { item: 3582, name: "Acidproof Cloak", slot: SLOT.back },
-      { item: 6094, name: "Piercing Axe", slot: SLOT.mainHand, twoHand: true },
-      { item: 15205, name: "Owlsight Rifle", slot: SLOT.ranged },
+      { item: 24348, name: "Tunic of the Dragon Slayer", slot: SLOT.chest },
+      { item: 15404, name: "Breakwater Girdle", slot: SLOT.waist },
+      { item: 2906, name: "Darkshire Mail Leggings", slot: SLOT.legs },
+      { item: 26037, name: "Lightweight Mesh Boots", slot: SLOT.feet },
+      { item: 3559, name: "Night Watch Gauntlets", slot: SLOT.hands },
+      { item: 3235, name: "Ring of Scorn", slot: SLOT.finger1 },
+      { item: 3561, name: "Resilient Poncho", slot: SLOT.back },
+      { item: 6093, name: "Orc Crusher", slot: SLOT.mainHand, twoHand: true },
     ],
     bags: BAGS,
-    supplies: [MUTTON_CHOP(20), ICE_COLD_MILK(20), { item: HEAVY_SHOT, name: "Heavy Shot", count: 1000 }],
-    ammoId: HEAVY_SHOT,
+    supplies: [MUTTON_CHOP(20), ICE_COLD_MILK(20), HEALING_POTION(5)],
   },
 };
 
-/** The member who leads, invites the others, and is named the party leader in the objective. */
-export const LEADER_ROLE: PartyRole = "tank";
+/**
+ * The loadout for a member of this race and class, or why there is none.
+ * The gear is chosen for the race and class's starting proficiencies, so
+ * race and class must both match; the role word must be the
+ * loadout's, so a definition cannot stage a healer's gear on its "damage".
+ */
+export function loadoutFor(member: { race: number; class: number; role: string }): Loadout | string {
+  const l = Object.values(LOADOUTS).find((x) => x.class === member.class);
+  if (!l) return `no loadout for class ${member.class}; the loadouts are ${Object.values(LOADOUTS).map((x) => `${x.label} (race ${x.race}, class ${x.class})`).join(", ")}`;
+  if (l.race !== member.race) return `the class ${member.class} loadout is a ${l.label} (race ${l.race}); the member is race ${member.race}`;
+  if (l.partyRole !== member.role) return `the ${l.label} loadout plays "${l.partyRole}"; the member's role is "${member.role}"`;
+  return l;
+}
 
 /**
  * A member's character name: the role's prefix and the account's letters
@@ -300,30 +329,33 @@ export const LEADER_ROLE: PartyRole = "tank";
  * names are realm-global; deriving from the account keeps two accounts from
  * ever asking for the same one.
  */
-export function partyCharacterName(role: PartyRole, account: string): string {
-  return accountFixtureName(LOADOUTS[role].namePrefix, account);
+export function partyCharacterName(id: LoadoutId, account: string): string {
+  return accountFixtureName(LOADOUTS[id].namePrefix, account);
 }
 
 /**
- * The member's scenario: the party level in Moonbrook, facing the mine,
- * hearth at Sentinel Hill, an empty quest log, the trainer's spells (read at
- * staging time) and the quest-taught ones, the role's talents, skills at the
- * level's cap, and the ammunition a hunter fires.
+ * The member's scenario: the request's fixture scenario (where it stands,
+ * where it hearths; `moonbrook-mine` for the Deadmines) at the party level,
+ * with the loadout's money, an empty quest log, the trainer's spells (read at
+ * staging time, learn-effect entries resolved) and the quest-taught ones, the
+ * role's talents, and skills at the level's cap. The base scenario's own
+ * level, money, spells and talents are not used: the loadout is the member.
  */
-export function partyScenario(loadout: Loadout, trainerSpells: readonly number[]): Scenario {
-  const spells = [...new Set([...trainerSpells, ...loadout.questSpells.map((s) => s.spell)])].sort((a, b) => a - b);
+export function partyScenario(loadout: Loadout, trainerSpells: readonly number[], base: Scenario, level = PARTY_LEVEL): Scenario {
+  const exclude = new Set(loadout.trainerExclude ?? []);
+  const taught = trainerSpells.filter((s) => !exclude.has(s)).flatMap((s) => loadout.trainerLearns?.[s] ?? [s]);
+  const spells = [...new Set([...taught, ...loadout.questSpells.map((s) => s.spell)])].sort((a, b) => a - b);
   return {
-    description: `party ${loadout.role}: level ${PARTY_LEVEL} ${loadout.label} in Moonbrook facing the Deadmines entrance, homebind Sentinel Hill, ${loadout.talents.length} talents, ${spells.length} spells`,
-    level: PARTY_LEVEL,
+    description: `party ${loadout.id}: level ${level} ${loadout.label} at the scenario's spot (${base.description}), ${loadout.talents.length} talents, ${spells.length} spells`,
+    level,
     xp: 0,
     money: PARTY_MONEY,
-    position: { map: 0, zone: WESTFALL_ZONE, ...MOONBROOK, o: facing(MOONBROOK, DEADMINES_ENTRANCE_TRIGGER) },
-    homebind: SENTINEL_HILL_BIND,
+    position: base.position,
+    ...(base.homebind ? { homebind: base.homebind } : {}),
     clearQuests: true,
     spells,
     talents: loadout.talents.map((t) => t.spell),
     maxSkills: true,
-    ...(loadout.ammoId !== undefined ? { ammoId: loadout.ammoId } : {}),
   };
 }
 
@@ -335,7 +367,7 @@ export function partyScenario(loadout: Loadout, trainerSpells: readonly number[]
  */
 export function validateLoadout(l: Loadout): string[] {
   const errors: string[] = [];
-  const where = `loadout ${l.role}`;
+  const where = `loadout ${l.id}`;
   // Talents: points, one row per talent, ranks, tiers, prerequisites.
   const total = l.talents.reduce((n, t) => n + t.rank, 0);
   if (total > PARTY_TALENT_POINTS) errors.push(`${where}: ${total} talent points, a level ${PARTY_LEVEL} character has ${PARTY_TALENT_POINTS}`);
@@ -373,7 +405,6 @@ export function validateLoadout(l: Loadout): string[] {
   for (const id of [...l.gear.map((g) => g.item), ...l.bags.map((b) => b.item), ...l.supplies.map((s) => s.item), ...l.keySpells, ...l.questSpells.map((s) => s.spell)]) {
     if (!Number.isInteger(id) || id <= 0) errors.push(`${where}: id ${id} is not a positive integer`);
   }
-  if (l.ammoId !== undefined && !l.supplies.some((s) => s.item === l.ammoId)) errors.push(`${where}: ammoId ${l.ammoId} is not among the supplies`);
   return errors;
 }
 
@@ -393,18 +424,18 @@ export type TalentFrame = {
  */
 export function checkTalentsAgainstFrame(l: Loadout, frame: TalentFrame): string[] {
   const errors: string[] = [];
-  if (frame.class !== l.class) errors.push(`talent frame is for class ${frame.class}, the ${l.role} is class ${l.class}`);
+  if (frame.class !== l.class) errors.push(`talent frame is for class ${frame.class}, the ${l.id} is class ${l.class}`);
   for (const t of l.talents) {
     const tab = frame.tabs.find((x) => x.tabId === t.tab);
     const entry = tab?.talents.find((x) => x.talentId === t.talentId);
     if (!tab || !entry) {
-      errors.push(`${l.role}: talent ${t.talentId} (${t.name}) is not in tab ${t.tab} of this class's frame`);
+      errors.push(`${l.id}: talent ${t.talentId} (${t.name}) is not in tab ${t.tab} of this class's frame`);
       continue;
     }
-    if (entry.row !== t.row || entry.col !== t.col) errors.push(`${l.role}: ${t.name} sits at tier ${entry.row} column ${entry.col} in the frame, the preset says ${t.row}/${t.col}`);
-    if (entry.maxRank !== t.maxRank) errors.push(`${l.role}: ${t.name} has ${entry.maxRank} ranks in the frame, the preset says ${t.maxRank}`);
+    if (entry.row !== t.row || entry.col !== t.col) errors.push(`${l.id}: ${t.name} sits at tier ${entry.row} column ${entry.col} in the frame, the preset says ${t.row}/${t.col}`);
+    if (entry.maxRank !== t.maxRank) errors.push(`${l.id}: ${t.name} has ${entry.maxRank} ranks in the frame, the preset says ${t.maxRank}`);
     const spell = entry.ranks[t.rank - 1];
-    if (spell !== t.spell) errors.push(`${l.role}: ${t.name} rank ${t.rank} is spell ${spell ?? "(none)"} in the frame, the preset says ${t.spell}`);
+    if (spell !== t.spell) errors.push(`${l.id}: ${t.name} rank ${t.rank} is spell ${spell ?? "(none)"} in the frame, the preset says ${t.spell}`);
   }
   return errors;
 }

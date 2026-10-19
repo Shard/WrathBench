@@ -33,6 +33,10 @@ On the open questions of the first draft, the operator decided the same day
   contract actually binds.
 - **The party is pre-formed at staging.**
 - **Talents are preset per role.**
+- **A paladin, not a hunter, is the third damage dealer** (2026-10-19, a
+  later call the same day): a level-20 Retribution paladin replaces the
+  hunter, so no pet ever has to be staged (pet numbers are seeded at boot
+  like item guids). The loadouts are in `infra/fixtures/loadouts.ts`.
 
 Everything below applies those. Where a step still needs a decision, it is
 listed under "Open questions" and not taken here.
@@ -74,7 +78,7 @@ beyond the account count, and nothing below it has to learn anything at all.
   order); `RosterSpec.party = { id, member, role, size }` on each of the five
   entries the spawn materialises (`fillEntries` in `run-fleet.ts`). The party
   id is the job's run-id stem; member run ids are `<stem>-<member>`
-  (`-tank`, `-healer`, `-mage`, `-rogue`, `-hunter`), so the five directories
+  (`-tank`, `-healer`, `-mage`, `-rogue`, `-paladin`), so the five directories
   sort together and the stem alone names the attempt.
 - **Shared start.** The roster launches the five `attemptSpec`s in one pass
   and awaits them together, instead of in sequence. Each gets its own
@@ -610,7 +614,7 @@ definition's `members[].objective`):
 
 > You are one of a party of five, each played by another agent: `<Tank>`
 > (warrior, the party leader), `<Healer>` (priest), `<Mage>` (mage),
-> `<Rogue>` (rogue) and `<Hunter>` (hunter). You are `<Name>`, the party's
+> `<Rogue>` (rogue) and `<Paladin>` (paladin). You are `<Name>`, the party's
 > `<role>`. The party stands in Moonbrook, Westfall, at the entrance to the
 > Deadmines. The objective for this run is for the party to clear the
 > Deadmines and defeat Edwin VanCleef. You share party chat with the others

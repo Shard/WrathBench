@@ -8,12 +8,12 @@
 import { describe, expect, test } from "bun:test";
 import { buildStatements, renderStatement } from "./apply";
 import {
-  LEADER_ROLE,
   LOADOUTS,
+  LOADOUT_IDS,
   PARTY_LEVEL,
-  PARTY_ROLES,
   PARTY_TALENT_POINTS,
   checkTalentsAgainstFrame,
+  loadoutFor,
   partyCharacterName,
   partyScenario,
   validateLoadout,
@@ -35,21 +35,37 @@ function frameFor(l: Loadout): TalentFrame {
 }
 
 describe("the shipped loadouts", () => {
-  test("are the design's five: Alliance, a warrior tank, a priest healer, a mage, a rogue and a hunter", () => {
-    expect(PARTY_ROLES).toEqual(["tank", "healer", "mage", "rogue", "hunter"]);
-    expect(PARTY_ROLES.map((r) => [r, LOADOUTS[r].class])).toEqual([["tank", 1], ["healer", 5], ["mage", 8], ["rogue", 4], ["hunter", 3]]);
+  test("are the design's five, the paladin in the hunter's place (the operator, 2026-10-19): Alliance, a warrior tank, a priest healer, a mage, a rogue and a paladin", () => {
+    expect(LOADOUT_IDS).toEqual(["tank", "healer", "mage", "rogue", "paladin"]);
+    expect(LOADOUT_IDS.map((r) => [r, LOADOUTS[r].class, LOADOUTS[r].partyRole])).toEqual([
+      ["tank", 1, "tank"],
+      ["healer", 5, "healer"],
+      ["mage", 8, "damage"],
+      ["rogue", 4, "damage"],
+      ["paladin", 2, "damage"],
+    ]);
     // Human 1, Dwarf 3: Alliance, and each pairing exists in playercreateinfo.
-    for (const r of PARTY_ROLES) expect([r, [1, 3].includes(LOADOUTS[r].race)]).toEqual([r, true]);
-    expect(LEADER_ROLE).toBe("tank");
+    for (const r of LOADOUT_IDS) expect([r, [1, 3].includes(LOADOUTS[r].race)]).toEqual([r, true]);
+    // No hunter anywhere: no pet to seed, no ammunition.
+    expect(Object.values(LOADOUTS).some((l) => l.class === 3)).toBe(false);
+    expect(JSON.stringify(LOADOUTS)).not.toMatch(/ammo|Tame Beast|Call Pet/i);
+  });
+
+  test("loadoutFor picks by race and class and holds the role word to the loadout's", () => {
+    expect((loadoutFor({ race: 3, class: 2, role: "damage" }) as { id: string }).id).toBe("paladin");
+    expect((loadoutFor({ race: 1, class: 1, role: "tank" }) as { id: string }).id).toBe("tank");
+    expect(loadoutFor({ race: 1, class: 2, role: "damage" })).toMatch(/Dwarf Paladin \(race 3\); the member is race 1/);
+    expect(loadoutFor({ race: 3, class: 3, role: "damage" })).toMatch(/no loadout for class 3/);
+    expect(loadoutFor({ race: 3, class: 5, role: "damage" })).toMatch(/plays "healer"/);
   });
 
   test("every one is legal", () => {
-    for (const r of PARTY_ROLES) expect([r, validateLoadout(LOADOUTS[r])]).toEqual([r, []]);
+    for (const r of LOADOUT_IDS) expect([r, validateLoadout(LOADOUTS[r])]).toEqual([r, []]);
   });
 
   test("spend exactly the level's talent points, one tree each, with every tier reached", () => {
     expect(PARTY_TALENT_POINTS).toBe(11);
-    for (const r of PARTY_ROLES) {
+    for (const r of LOADOUT_IDS) {
       const l = LOADOUTS[r];
       expect([r, l.talents.reduce((n, t) => n + t.rank, 0)]).toEqual([r, 11]);
       expect([r, new Set(l.talents.map((t) => t.tab)).size]).toEqual([r, 1]);
@@ -57,23 +73,29 @@ describe("the shipped loadouts", () => {
     }
   });
 
-  test("carry gear for every role and two bags each, the hunter's ammunition among the supplies", () => {
-    for (const r of PARTY_ROLES) {
+  test("carry gear for every role and two bags each", () => {
+    for (const r of LOADOUT_IDS) {
       const l = LOADOUTS[r];
       expect([r, l.gear.length >= 7]).toEqual([r, true]);
       expect([r, l.bags.length]).toEqual([r, 2]);
       expect([r, l.gear.some((g) => g.slot === 15)]).toEqual([r, true]);
     }
-    expect(LOADOUTS.hunter.ammoId).toBe(2519);
-    expect(LOADOUTS.hunter.supplies.find((s) => s.item === 2519)?.count).toBe(1000);
-    // The tank wears a shield and so no two-hander; the casters and the hunter swing one.
+    // The tank wears a shield and so no two-hander; the casters and the paladin swing one.
     expect(LOADOUTS.tank.gear.find((g) => g.slot === 16)?.name).toBe("Steelcap Shield");
-    for (const r of ["healer", "mage", "hunter"] as const) expect([r, LOADOUTS[r].gear.find((g) => g.slot === 15)?.twoHand]).toEqual([r, true]);
+    for (const r of ["healer", "mage", "paladin"] as const) expect([r, LOADOUTS[r].gear.find((g) => g.slot === 15)?.twoHand]).toEqual([r, true]);
+    expect(LOADOUTS.paladin.gear.find((g) => g.slot === 15)?.name).toBe("Orc Crusher");
   });
 
-  test("the warrior and hunter get the spells their level-10 quests teach, which no trainer lists", () => {
+  test("the warrior and paladin get the spells their class quests teach by 20, which no trainer lists", () => {
     expect(LOADOUTS.tank.questSpells.map((s) => s.spell)).toEqual([71, 355, 7386]);
-    expect(LOADOUTS.hunter.questSpells.map((s) => s.spell)).toEqual([1515, 883, 2641, 982, 6991]);
+    expect(LOADOUTS.paladin.questSpells.map((s) => s.spell)).toEqual([7328]);
+  });
+
+  test("the paladin trainer's learn-effect entries are resolved, and the warhorse is not staged", () => {
+    const s = partyScenario(LOADOUTS.paladin, [465, 10321, 13820, 19750], SCENARIOS["moonbrook-mine"]);
+    expect(s.spells).toEqual([465, 7328, 19750, 20271, 21084]);
+    // Only the paladin's trainer has learn-effect entries up to 20.
+    for (const r of ["tank", "healer", "mage", "rogue"] as const) expect([r, LOADOUTS[r].trainerLearns]).toEqual([r, undefined]);
   });
 });
 
@@ -90,21 +112,19 @@ describe("validateLoadout catches what would crash or silently reset a character
   test("a tier reached without its points, a rank past the talent's, an unmet prerequisite", () => {
     expect(validateLoadout({ ...tank, talents: [tank.talents[2]!] }).join()).toMatch(/tier 3, which needs 10 points/);
     expect(validateLoadout({ ...tank, talents: [{ ...tank.talents[0]!, rank: 6 }] }).join()).toMatch(/rank 6 outside 1\.\.5/);
-    const hunter = LOADOUTS.hunter;
-    const noDep = { ...hunter, talents: hunter.talents.map((t) => (t.talentId === 1349 ? { ...t, rank: 4, spell: 19489 } : t)) };
-    expect(validateLoadout(noDep).join()).toMatch(/Aimed Shot needs talent 1349 at 5 points/);
+    const tank2 = { ...tank, talents: [...tank.talents.slice(0, 2), { talentId: 9, tab: 163, row: 2, col: 3, rank: 1, maxRank: 1, spell: 1, name: "Needy", dependsOn: { talentId: 138, rank: 6 } }] };
+    expect(validateLoadout(tank2).join()).toMatch(/Needy needs talent 138 at 6 points/);
   });
-  test("a slot filled twice, a two-hander beside an off hand, ammo the bags do not carry", () => {
+  test("a slot filled twice, a two-hander beside an off hand", () => {
     expect(validateLoadout({ ...tank, gear: [...tank.gear, { item: 1, name: "x", slot: 4 }] }).join()).toMatch(/slot 4 filled twice/);
     const healer = LOADOUTS.healer;
     expect(validateLoadout({ ...healer, gear: [...healer.gear, { item: 1, name: "orb", slot: 16 }] }).join()).toMatch(/two-handed weapon and an off hand/);
-    expect(validateLoadout({ ...LOADOUTS.hunter, supplies: [] }).join()).toMatch(/ammoId 2519 is not among the supplies/);
   });
 });
 
 describe("checkTalentsAgainstFrame", () => {
   test("a preset that matches the frame passes", () => {
-    for (const r of PARTY_ROLES) expect([r, checkTalentsAgainstFrame(LOADOUTS[r], frameFor(LOADOUTS[r]))]).toEqual([r, []]);
+    for (const r of LOADOUT_IDS) expect([r, checkTalentsAgainstFrame(LOADOUTS[r], frameFor(LOADOUTS[r]))]).toEqual([r, []]);
   });
   test("refuses a spell the frame does not have at that rank, a talent not in the class's frame, and another class's frame", () => {
     const tank = LOADOUTS.tank;
@@ -120,19 +140,20 @@ describe("checkTalentsAgainstFrame", () => {
 });
 
 describe("the member scenario", () => {
-  test("level 20 in Moonbrook facing the mine, hearth at Sentinel Hill, the trainer's and the quests' spells, talents, skills, ammo", () => {
-    const s = partyScenario(LOADOUTS.hunter, [75, 1130, 1978, 1130]);
+  test("level 20 where the request's scenario stands (Moonbrook, facing the mine, hearth at Sentinel Hill), the trainer's and the quests' spells, talents, skills", () => {
+    const s = partyScenario(LOADOUTS.tank, [100, 772, 6343, 772], SCENARIOS["moonbrook-mine"], 20);
     validateScenario(s);
     expect(s.level).toBe(PARTY_LEVEL);
     expect(s.position).toMatchObject({ map: 0, x: MOONBROOK.x, y: MOONBROOK.y });
     expect(s.position.o).toBeCloseTo(SCENARIOS["moonbrook-mine"].position.o, 6);
     expect(s.homebind).toEqual(SENTINEL_HILL_BIND);
     expect(s.clearQuests).toBe(true);
-    expect(s.spells).toEqual([75, 883, 982, 1130, 1515, 1978, 2641, 6991]);
-    expect(s.talents).toEqual([19431, 19490, 19434]);
+    expect(s.spells).toEqual([71, 100, 355, 772, 6343, 7386]);
+    expect(s.talents).toEqual([12727, 12753, 12975]);
     expect(s.maxSkills).toBe(true);
-    expect(s.ammoId).toBe(2519);
-    expect(partyScenario(LOADOUTS.mage, [116]).ammoId).toBeUndefined();
+    // The base scenario's own level 80 and money are not the member's.
+    expect(SCENARIOS["moonbrook-mine"].level).toBe(80);
+    expect(s.money).toBe(30_000);
   });
 
   test("Moonbrook faces the Deadmines entrance trigger, more than one move's 250y away", () => {
@@ -141,8 +162,8 @@ describe("the member scenario", () => {
     expect(d).toBeLessThan(300);
   });
 
-  test("its statements write one talent row per talent at specMask 1 after clearing the old ones, cap the level-ranged skills, set the ammo, and insert no item", () => {
-    const rendered = buildStatements(4242, partyScenario(LOADOUTS.tank, [100, 772])).map(renderStatement);
+  test("its statements write one talent row per talent at specMask 1 after clearing the old ones, cap the level-ranged skills, and insert no item", () => {
+    const rendered = buildStatements(4242, partyScenario(LOADOUTS.tank, [100, 772], SCENARIOS["moonbrook-mine"])).map(renderStatement);
     const del = rendered.indexOf("DELETE FROM character_talent WHERE guid = 4242");
     expect(del).toBeGreaterThan(0);
     const talentRows = rendered.filter((s) => s.startsWith("INSERT INTO character_talent"));
@@ -155,16 +176,15 @@ describe("the member scenario", () => {
     expect(rendered).toContain("UPDATE character_skills SET value = 100, max = 100 WHERE guid = 4242 AND max > 1 AND max < 300");
     expect(rendered).toContain("INSERT IGNORE INTO character_spell (guid, spell, specMask) VALUES (4242, 71, 255)");
     expect(rendered.join("\n")).not.toMatch(/item_instance|INSERT INTO character_inventory|ammoId/);
-    expect(buildStatements(4242, partyScenario(LOADOUTS.hunter, [75])).map(renderStatement)).toContain("UPDATE characters SET ammoId = 2519 WHERE guid = 4242");
   });
 });
 
 describe("partyCharacterName", () => {
   test("one stable, valid, distinct name per role and account", () => {
-    const names = PARTY_ROLES.map((r, i) => partyCharacterName(r, `PARTY${i + 1}`));
-    expect(names).toEqual(["Tankpartyb", "Healpartyc", "Magepartyd", "Roguepartye", "Huntpartyf"]);
+    const names = LOADOUT_IDS.map((r, i) => partyCharacterName(r, `PARTY${i + 1}`));
+    expect(names).toEqual(["Tankpartyb", "Healpartyc", "Magepartyd", "Roguepartye", "Palapartyf"]);
     for (const n of names) expect([n, isValidCharacterName(n)]).toEqual([n, true]);
     expect(partyCharacterName("tank", "PARTY1")).toBe("Tankpartyb");
-    expect(new Set(PARTY_ROLES.flatMap((r) => ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"].map((a) => partyCharacterName(r, a)))).size).toBe(25);
+    expect(new Set(LOADOUT_IDS.flatMap((r) => ["PARTY1", "PARTY2", "PARTY3", "PARTY4", "PARTY5"].map((a) => partyCharacterName(r, a)))).size).toBe(25);
   });
 });

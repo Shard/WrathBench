@@ -283,10 +283,6 @@ export function buildStatements(guid: number, scenario: Scenario): Statement[] {
     });
   }
 
-  if (scenario.ammoId !== undefined) {
-    statements.push({ sql: `UPDATE characters SET ammoId = ? WHERE guid = ?`, params: [scenario.ammoId, guid] });
-  }
-
   return statements;
 }
 

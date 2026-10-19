@@ -19,14 +19,15 @@ import { DEADMINES_ENTRANCE_TRIGGER } from "../fixtures/scenarios";
 import { stageParty } from "../fixtures/stage-party";
 import { MODULE_SECRET } from "./lib/auth";
 import { moduleBase } from "./lib/module";
-import { defaultParty, deleteMembers, fmt, loginMember, walkTo } from "./lib/party";
+import { deleteMembers, fmt, loginMember, membersOf, smokeRequest, walkTo } from "./lib/party";
 
 const BASE = moduleBase();
 const argv = Bun.argv.slice(2);
 for (const a of argv) if (a !== "--staged" && a !== "--keep") throw new Error(`unknown argument ${a}; usage: party-entry [--staged] [--keep]`);
 const STAGED = argv.includes("--staged");
 const KEEP = argv.includes("--keep");
-const party = defaultParty();
+const request = smokeRequest("party-entry");
+const party = membersOf(request);
 const DEADMINES_MAP = 36;
 const EXIT_TRIGGER = { x: -14.4, y: -393.4, z: 64.6 };
 
@@ -36,8 +37,8 @@ const log = (m: string) => console.log(`[party-entry +${((Date.now() - started) 
 const clients: WrathClient[] = [];
 try {
   if (!STAGED) {
-    const staged = await stageParty({ campaign: "smoke-party-entry", accounts: party.map((m) => m.account), roles: party.map((m) => m.role), log });
-    if (!staged.ok) throw new Error(`staging failed at ${staged.step}${staged.member ? ` (${staged.member.character})` : ""}: ${staged.error}`);
+    const staged = await stageParty(request, { log });
+    if (!staged.ok) throw new Error(`staging failed: ${staged.reason}`);
   }
   for (const m of party) clients.push(await loginMember(BASE, MODULE_SECRET, m, "party-entry"));
   await Bun.sleep(2000);
