@@ -130,7 +130,7 @@ export default function Ladder() {
    * its older attempts would make the newest survivor the chain root and
    * report a thirteen-attempt character as attempt 1, which is the one number
    * this page exists to show. `useSeriesFilter` has the `active` hatch for
-   * exactly this — the map's replay mode uses it for the same reason.
+   * exactly this.
    *
    * "exclude free" *does* apply, and did not at first (an early exemption,
    * since reversed): it is the same control, the same

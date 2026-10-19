@@ -124,7 +124,8 @@ header.top .spacer { flex: 1; }
  * and the series dropdown and status badge pushed to the right of it, and
  * below that the nav. `.spacer` is what used to push
  * the right-hand group over and is now the thing that would force a third
- * line, so it goes; `margin-left: auto` on the series does its job instead.
+ * line, so it goes; `margin-right: auto` on the brand does its job instead,
+ * whichever of the group is drawn (the map has no series dropdown).
  */
 @media (max-width: 720px) {
   header.top { gap: 6px 8px; padding: 8px 10px; }
@@ -137,7 +138,7 @@ header.top .spacer { flex: 1; }
    */
   header.top nav { order: 2; flex: 1 1 auto; gap: 4px 10px; font-size: var(--fs-sm); }
   /* Everything right of the brand travels as one group. */
-  .series { margin-left: auto; }
+  header.top .wordmark { margin-right: auto; }
   /*
    * The word "series" is the accessible name of the `<label>` that wraps the
    * select, so it is clipped rather than `display: none`d — a hidden label is
@@ -189,15 +190,17 @@ header.top .spacer { flex: 1; }
 .status-badge.yellow, .dot.yellow { color: var(--warn); }
 .status-badge.red, .dot.red { color: var(--err); }
 .status-badge.grey, .dot.grey { color: var(--dim); }
-.dot.green { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
+.dot.green, .dot.live { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
 .dot.yellow { background: var(--warn); }
-.dot.red { background: var(--err); }
+.dot.red, .dot.dead { background: var(--err); }
 .dot.grey { background: var(--dim); }
 .status-popout { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 280px; max-width: min(480px, 90vw);
                  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px;
                  font-size: var(--fs-sm); box-shadow: 0 6px 20px rgba(0, 0, 0, .25); }
 .status-popout dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
-.status-popout dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: var(--fs-xs); }
+/* A key's label, wherever a key/value pair is listed: the status popout, a
+   card, the map sidebar, a tuple, a tool's detail, the SDK reference's families. */
+.status-popout dt, .card .k, .side .k, .tuple dt, .tool-detail .k, .sdk-families dt { color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: var(--fs-xs); }
 .status-popout dd { margin: 0; overflow-wrap: anywhere; }
 /* The one action in the popout: the ops page the badge is about. */
 .status-popout-link { display: block; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
@@ -275,7 +278,6 @@ h3.section { font-size: var(--fs-md); }
 
 .cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
-.card .k { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
 .card .v { font-size: var(--fs-lg); font-weight: 600; }
 .card .sub { color: var(--dim); font-size: var(--fs-sm); }
 
@@ -290,8 +292,6 @@ tbody tr.hovered { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
        vertical-align: middle; background: var(--dim); }
-.dot.live { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
-.dot.dead { background: var(--err); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 
@@ -299,11 +299,11 @@ tbody tr.hovered { outline: 1px solid var(--accent); outline-offset: -1px; }
 .badge { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
          border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; color: var(--dim); }
 .badge.running { color: var(--ok); border-color: var(--ok); }
-.badge.draining { color: var(--warn); border-color: var(--warn); }
-.badge.exited { color: var(--err); border-color: var(--err); }
+.badge.draining, .badge.paused-deploy { color: var(--warn); border-color: var(--warn); }
+/* `.combat` is the unit frame's flag (`unitFlags`): the same red as a run that exited. */
+.badge.exited, .badge.combat { color: var(--err); border-color: var(--err); }
 .badge.resuming { color: var(--accent); border-color: var(--accent); }
 .badge.paused { color: var(--warn); }
-.badge.paused-deploy { color: var(--warn); border-color: var(--warn); }
 /* Harness tags: a label, not a verdict. */
 .badge.harness-wrathbench { color: var(--dim); }
 .badge.harness-claude-code { color: var(--claude); border-color: var(--claude); }
@@ -430,24 +430,21 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .notice-tag { flex: none; color: var(--warn); font-size: var(--fs-xs); font-weight: 700;
               text-transform: uppercase; letter-spacing: .05em; }
 .notice-lines { min-width: 0; }
-.notice-line { white-space: pre-wrap; word-break: break-word; }
+.notice-line, .action-line { white-space: pre-wrap; word-break: break-word; }
 .notice-line + .notice-line { margin-top: 3px; }
 .entry .body.notices { padding: 6px 10px 8px; }
 .entry.notice { border-left: 3px solid var(--warn); }
 .entry.notice > .head .notice-kind { color: var(--warn); font-weight: 700; }
-/* Bookkeeping (`resolved_model`, `hygiene`): the whole record is the head line. */
-.entry.harness > .head { border-bottom: none; }
-.entry.harness > .head + .body { padding-top: 0; }
 
-/* The action log: what a snippet put on the wire, one short line per dispatch. */
+/* The action log: what a snippet put on the wire, one short line per dispatch
+   (`.action-line`, with the notices' lines above). */
 .entry .body.actions { padding: 6px 10px 8px; font-size: var(--fs-sm); }
-.action-line { white-space: pre-wrap; word-break: break-word; }
 
-/* A state sample reads as one line; the head IS the row. */
-.entry.state > .head, .entry.harness > .head { flex-wrap: wrap; }
-.entry.state > .head { border-bottom: none; }
+/* A state sample reads as one line; the head IS the row. So does bookkeeping
+   (`resolved_model`, `hygiene`): the whole record is the head line. */
+.entry.state > .head, .entry.harness > .head { flex-wrap: wrap; border-bottom: none; }
 .entry.state > .head .state-line { color: var(--fg); }
-.entry.state .body { padding-top: 0; }
+.entry.state .body, .entry.harness > .head + .body { padding-top: 0; }
 
 /* --- the map --- */
 .map-wrap { display: flex; height: 100%; }
@@ -477,8 +474,8 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .playbar .center { text-align: center; }
 /* `min-width: 0` is what lets the declared ellipsis actually happen: the title
    is the element that gives way when the row is crowded, not the steps. */
-.playbar-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.playbar-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.playbar-text, .playbar-title, .live-name, .live-model { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.playbar-title { font-weight: 700; }
 .playbar-stamp { font-size: var(--fs-xs); }
 /* The row's own gap spaces it; the hint must not give way when the row is crowded. */
 .playbar .info-hint { margin-left: 0; flex: none; }
@@ -541,7 +538,6 @@ pre.block.fold { max-height: 4.5em; overflow: hidden; }
 .side { width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel);
         padding: 12px 14px; overflow-y: auto; }
 .side h3 { font-size: var(--fs-md); margin: 0 0 8px; font-weight: 700; }
-.side .k { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
 .side .v { margin-bottom: 8px; word-break: break-word; }
 
 /* --- results, ladder, replay --- */
@@ -550,7 +546,6 @@ svg text { fill: var(--fg); }
 .tuple { display: grid; gap: 4px 16px; grid-template-columns: max-content 1fr;
          background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
          padding: 10px 12px; margin: 10px 0; }
-.tuple dt { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
 .tuple dd { margin: 0; word-break: break-word; }
 footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0; }
 
@@ -570,14 +565,16 @@ footer.identity { color: var(--dim); font-size: var(--fs-sm); padding: 10px 0 0;
  */
 .collapsible { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; }
 .collapsible-head { margin: 0; font-size: inherit; font-weight: inherit; }
-.collapsible-toggle {
+/* A whole-width row that is a button: a collapsible's head, a row of the map's
+   live list. */
+.collapsible-toggle, .live-row {
   display: flex; width: 100%; gap: 8px; align-items: baseline; text-align: left;
   font: inherit; color: var(--fg); cursor: pointer;
   background: none; border: none; border-radius: 6px; padding: 7px 10px;
 }
 /* Lifts from --panel, so the step has to clear it: --grid is two hex values away. */
-.collapsible-toggle:hover { background: var(--line); }
-.collapsible-toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.collapsible-toggle:hover, .live-row:hover { background: var(--line); }
+.collapsible-toggle:focus-visible, .live-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 /* Drawn rather than typed: the mono stack renders ▸ at a size the eye misses. */
 .collapsible-chev { flex: none; align-self: center; width: 0; height: 0; color: var(--dim);
                     border-left: 6px solid currentColor;
@@ -891,7 +888,6 @@ button.update:hover { background: var(--panel); }
 .bar.cast .bar-fill { background-color: var(--warn); }
 .cast-row .inv-cell { width: 18px; height: 18px; }
 .unit-flags { display: flex; flex-wrap: wrap; gap: 4px; }
-.badge.combat { color: var(--err); border-color: var(--err); }
 .auras { display: flex; flex-wrap: wrap; gap: 4px 3px; margin-top: 2px; }
 .auras > span { display: inline-flex; flex-direction: column; align-items: center; min-width: 26px; }
 .auras .inv-cell { width: 26px; height: 26px; }
@@ -937,7 +933,7 @@ button.update:hover { background: var(--panel); }
 .tool-list button { width: 100%; text-align: left; font-size: var(--fs-md); padding: 3px 10px; }
 .tool-detail { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
                border-radius: 6px; padding: 10px 12px; }
-.tool-detail .k { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; margin-top: 8px; }
+.tool-detail .k { margin-top: 8px; }
 .tool-sig { font-weight: 700; margin-bottom: 6px; }
 .tool-desc { margin: 0; line-height: 1.55; }
 .tool-example { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font-size: var(--fs-sm); }
@@ -948,7 +944,7 @@ button.update:hover { background: var(--panel); }
 }
 
 .sdk-families { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; }
-.sdk-families dt { color: var(--dim); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
+.sdk-families dt { padding-top: 2px; }
 .sdk-families dd { margin: 0; line-height: 1.5; }
 
 
@@ -1070,7 +1066,7 @@ button.update:hover { background: var(--panel); }
  * panel's MutationObserver: before it, the name shows; after it, the icon does.
  */
 .inventory { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.inv-note { color: var(--dim); font-size: var(--fs-xs); }
+.inv-note, .bag-label { color: var(--dim); font-size: var(--fs-xs); }
 
 .inv-cell {
   position: relative; width: 40px; height: 40px; flex: 0 0 auto;
@@ -1133,6 +1129,13 @@ button.update:hover { background: var(--panel); }
 .inv-list-link:hover .inv-list-name { text-decoration: underline; }
 .inv-list-count { color: var(--dim); font-variant-numeric: tabular-nums; margin-left: auto; }
 .inv-grid + .inv-list { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+/* The map sidebar's live list (`LiveList.tsx`): `.inv-list` rows, the whole
+   sidebar wide, a row a line high. The model gives way first when a row is
+   crowded, then the name; the level never does. */
+.live-list { max-width: none; }
+.live-row { padding: 3px 6px; align-items: center; }
+.live-name { flex: 0 1 auto; font-weight: 700; }
+.live-model { flex: 1 1 0; }
 
 /* The bag button, and the popover it opens. Hover on a desktop, tap anywhere. */
 /* The anchor a popover hangs off, and the button that opens one. Shared by the
@@ -1158,7 +1161,6 @@ button.update:hover { background: var(--panel); }
   border: 1px solid currentColor; border-bottom: 0; border-radius: 3px 3px 0 0;
 }
 .bag-count { font-weight: 700; }
-.bag-label { color: var(--dim); font-size: var(--fs-xs); }
 /* Every hover panel on the site. Portalled to the body and placed against the
    viewport (`popoverPlacement`), because as a child of its card the sidebar's
    scroll area clipped it; `.floating` is that placement and the un-suffixed

@@ -702,18 +702,36 @@ export function chooseMap(
 }
 
 /**
- * What the sidebar says when no pip is selected.
+ * What the sidebar says when it has no character to show: live, nobody is
+ * running (with characters, it lists them instead — `liveListOrder`); in a
+ * replay, the cursor is where the run has no reading.
  *
- * The three cases are different facts and used to be two. "No characters on the
- * map" was what an empty feed got, which reads as though the map were the
- * problem; the fact is that nobody is running right now, and naming the
- * continent on screen tells the reader what they are looking at instead — the
- * chips are hidden with fewer than two maps, so otherwise nothing does.
+ * "No characters on the map" was what an empty feed used to get, which reads
+ * as though the map were the problem; the fact is that nobody is running right
+ * now, and naming the continent on screen tells the reader what they are
+ * looking at instead — the chips are hidden with fewer than two maps, so
+ * otherwise nothing does.
  */
-export function emptySideNote(count: number, replaying: boolean, map: number): string {
-  if (count > 0) return "no character selected";
+export function emptySideNote(replaying: boolean, map: number): string {
   if (replaying) return "no character at this point in the replay";
   return `no character is live right now — showing ${mapName(map)}`;
+}
+
+/**
+ * The order of the sidebar's live list: highest level first, a character
+ * whose level is not yet known last, then by name and finally by run id. The
+ * feed's own order is the pips' insertion order, which moves as runs come and
+ * go; this one moves only when a level does, so a row does not change place
+ * under the pointer between two polls.
+ */
+export function liveListOrder<T extends Parameters<typeof pipName>[0] & { level: number | null }>(list: readonly T[]): T[] {
+  const rank = (l: number | null): number => (l === null ? -Infinity : l);
+  return [...list].sort(
+    (a, b) =>
+      rank(b.level) - rank(a.level) ||
+      pipName(a).localeCompare(pipName(b)) ||
+      (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0),
+  );
 }
 
 /**

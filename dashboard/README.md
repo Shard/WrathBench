@@ -78,8 +78,12 @@ bun wb dashboard shots --serve                        # the same stack, no brows
 directories it is given), serves them through the viewer's own `createApi`
 with a private build, runs one publisher pass into a local bucket for a public
 build, and drives a headless Chromium over the DevTools protocol to named
-states: `home`, `run-live`, `map-live`, `map-live-selected`, `map-live-nearby`
-and `map-replay`.
+states: `home`, `run-live`, `map-live` (nothing selected: the sidebar's live
+list), `map-live-selected` (the live character's row clicked: framed, with its
+sheet), `map-live-nearby` (then zoomed in on it) and `map-replay`. The fixture
+has three live characters at different levels, one of them on Kalimdor, so the
+list has an order to show and a pick a continent to cross to; `--run` with only
+ended runs gives the map with nobody live.
 Wowhead's tooltip script is stubbed and every other third party refused, so a
 page renders as it does where the script is blocked; `--real-wowhead` lets it
 through. Nothing reads the operator's ClickHouse, config store or runs. For
@@ -258,6 +262,23 @@ units: the ring is live only and keeps 15 minutes. The public build draws the
 same layer from the windows `live.json` carries (`api/snapshot-client.ts`),
 one per live run, with no request of its own: creatures only, and no target
 ring, since the public window does not say whom the character targets.
+
+## The live list
+
+Live, with nothing selected, the sidebar lists every live character
+(`src/components/LiveList.tsx`): its colour, name, model and level, one row
+each, highest level first, a level not yet known last, ties by name and then
+run id (`liveListOrder`), so a row moves only when a level does and never
+between two polls. Where the character is (the zone of its newest log entry,
+else the continent) and that entry's text are the row's hover; neither fits a
+row at the sidebar's width, and the chips over the map count who is on which
+continent. A row is the pip's click plus a camera move: the character is
+selected and the map frames it where its pip is drawn, pinning its continent
+first when it is on another one (`MapFit.focus`). A click on empty map goes
+back to the list. Nobody live, the sidebar says so and names the continent on
+screen; a replay keeps its one character in the sidebar as before. The map
+shows every live character whatever its harness series: the series selector is
+not drawn on this page (`docs/ARCHITECTURE.md`).
 
 ## The replay's route
 

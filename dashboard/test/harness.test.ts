@@ -6,7 +6,6 @@ import {
   latestSeries,
   pageSeries,
   resolveSeries,
-  seriesFilteredOut,
   seriesOf,
   seriesOptions,
   seriesParam,
@@ -202,10 +201,5 @@ describe("filterBySeries", () => {
 
   test("derives the series when the row carries only a version", () => {
     expect(filterBySeries([{ harnessVersion: "harness-0.2-4-gddd" }], "0.2")).toHaveLength(1);
-  });
-
-  test("what it removed is countable, so a page can say so", () => {
-    expect(seriesFilteredOut(rows.length, filterBySeries(rows, "0.5").length)).toBe(2);
-    expect(seriesFilteredOut(3, 3)).toBe(0);
   });
 });
