@@ -310,15 +310,18 @@ roster      name -> entry. The keys an entry may carry are `ROSTER_ENTRY_KEYS`
               share a chart with the runs that had it. `wikiCoords` alongside it is REFUSED:
               coordinates are a setting of a surface this entry does not have. A probe drops it
               with the other run dimensions — a campaign owns its own task shape.
-            `compactWindow` — claude-code entries ONLY: the CLI's auto-compaction window, `"auto"`
-              or 100k–1M tokens (`"100k"`, `"500k"`, `"1M"`). Absent or `"auto"` is the CLI's own
-              default, which sits near the model's whole context. Normalised on load (`"100K"` →
+            `compactWindow` — claude-code and codex entries ONLY: the CLI's auto-compaction
+              window, `"auto"` or 100k–1M tokens (`"100k"`, `"500k"`, `"1M"`). Absent or `"auto"`
+              is the CLI's own default, which sits near the model's whole context (codex: 90% of
+              the catalogue window). A window at or above what the CLI would apply anyway (the
+              model's context on claude-code, that 90% on codex) ends the run as `harness-error`
+              after its first turn. Normalised on load (`"100K"` →
               `"100k"`, `"1000k"` → `"1M"`, `"auto"` → absent); on any other driver, or out of
               range, it takes the whole file down. A run dimension like `effort` (operator
-              decision 2026-10-09): stamped into the tuple as a KEY, part of the run id, and part
-              of what maps a run back to its entry — so a copy of an entry that differs only in
-              its window owns its own runs and its own tier budget, and pages show it after the
-              effort (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
+              decisions 2026-10-09, and 2026-10-11 for codex): stamped into the tuple as a KEY,
+              part of the run id, and part of what maps a run back to its entry — so a copy of an
+              entry that differs only in its window owns its own runs and its own tier budget, and
+              pages show it after the effort (`max · 100k`). Mechanics: runner/README.md, "The compaction window".
             `apiBase` / `apiKeyEnv` — openai entries: the endpoint, and the NAME of the env var
               holding its key (absent: OpenRouter and `OPENROUTER_KEY`). The pair must be one the
               provider table holds (`KEY_PROVIDERS`, runner/src/providers.ts): each key goes only
