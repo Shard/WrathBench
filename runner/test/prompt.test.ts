@@ -212,16 +212,16 @@ describe("episode sentence", () => {
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:13be29ac8f0d6a60", off: "sha256:4c767e942cfa8b9e" },
-        cli: { on: "sha256:c570815f1370eb0b", off: "sha256:d3d1078771371138" },
+        wrathbench: { on: "sha256:16cb69f381096aeb", off: "sha256:32f9a6ac7bc4a883" },
+        cli: { on: "sha256:03b5ae621579e494", off: "sha256:090f73975746b10d" },
       },
       e90: {
-        wrathbench: { on: "sha256:332aa6190462b116", off: "sha256:33e56f235563c593" },
-        cli: { on: "sha256:4787b379590fc571", off: "sha256:5937f6c94ca10173" },
+        wrathbench: { on: "sha256:0922162fbbc4864f", off: "sha256:e384dc01728bcde4" },
+        cli: { on: "sha256:b559c07909dbf63d", off: "sha256:902117dde3234c27" },
       },
       e360: {
-        wrathbench: { on: "sha256:ddadcb54acc8323d", off: "sha256:39af7f602ea9b26c" },
-        cli: { on: "sha256:20b7e2ba750b41ae", off: "sha256:5c28e77cba0a06a2" },
+        wrathbench: { on: "sha256:1f464e155f5780b9", off: "sha256:72100a4202796a04" },
+        cli: { on: "sha256:a70bc61daa817664", off: "sha256:2ad0d21470a2e32c" },
       },
     };
     const episodes = [

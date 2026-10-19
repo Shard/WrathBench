@@ -1898,7 +1898,7 @@ export type QuestAcceptResult =
  * that cast decides the answer. The cast starting (`SMSG_SPELL_START`, or
  * `SMSG_SPELL_GO` for an instant) is the ack. `cast_failed` is the cast
  * refused before it began (`SMSG_CAST_FAILED`; `not_ready` is the item's
- * cooldown), and `refused` is the item itself refused
+ * cooldown or the global one), and `refused` is the item itself refused
  * (`SMSG_INVENTORY_CHANGE_FAILURE`, e.g. "you are dead"). Silence, or an item
  * whose tooltip has not been observed, is the plain ack. A cast that starts
  * and is interrupted later is told by events, as for `castSpell`.
@@ -1931,7 +1931,7 @@ export type UseItemResult =
 const ITEM_SPELLTRIGGER_ON_USE = 0;
 /** How long `useItem` waits for the server's first word on the cast, in ms. */
 const USE_ITEM_VERDICT_MS = 2000;
-/** `SPELL_FAILED_NOT_READY`: the spell, or the item that casts it, is still cooling down. */
+/** `SPELL_FAILED_NOT_READY`: the spell (or the item that casts it) is cooling down, or the global cooldown is. */
 const SPELL_FAILED_NOT_READY = 67;
 
 /** The on-use spell an item's tooltip names, when the tooltip has been observed and names one. */
@@ -1944,8 +1944,9 @@ function onUseSpellOf(state: StateCache, item: BagSlotItem | undefined): number 
 function useItemCastFailedHint(label: string, spellId: number, result: number, reason: string | undefined): string {
   if (result === SPELL_FAILED_NOT_READY) {
     return (
-      `${label} was not used: the server answered not_ready, so its cooldown is still running. The server ` +
-      `announces no cooldown for an item use, so state.cooldowns() can be empty while it runs`
+      `${label} was not used: the server answered not_ready, so a cooldown is still running: the item's own, ` +
+      `or the global cooldown right after another cast. The server announces no cooldown for an item use, so ` +
+      `state.cooldowns() can be empty while it runs`
     );
   }
   return `${label} was not used: the server refused its spell ${spellId} before the cast began (${reason ?? `code ${result}`})`;
