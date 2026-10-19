@@ -607,7 +607,7 @@ describe("readPositions", () => {
     expect(trackFrom(readStates(runsDir, "resumed")).points.at(-1)?.questsCompleted).toBe(17);
   });
 
-  test("a run whose nearby ring is being written is flagged, privately only", () => {
+  test("a run whose nearby ring is being written is flagged, and the public feed keeps the flag", () => {
     const now = Date.now();
     const runsDir = fixture([
       { id: "ringed", states: [[now - 5_000, 4, 900, 0, 1, 2, 3, 0, 0]] },
@@ -619,7 +619,10 @@ describe("readPositions", () => {
     const byId = new Map(readPositions(runsDir, now).map((p) => [p.runId, p]));
     expect(byId.get("ringed")?.nearby).toBe(true);
     expect("nearby" in byId.get("plain")!).toBe(false);
-    expect(projectPositions({ positions: [...byId.values()] }).positions.every((p) => !("nearby" in p))).toBe(true);
+    // The flag is the public map's cue too; the renderer keeps it only where `live.json` carries the window.
+    const pub = new Map(projectPositions({ positions: [...byId.values()] }).positions.map((p) => [p.runId, p]));
+    expect(pub.get("ringed")?.nearby).toBe(true);
+    expect("nearby" in pub.get("plain")!).toBe(false);
   });
 });
 

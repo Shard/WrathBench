@@ -26,6 +26,10 @@
  * - `v1/snap/<ver>/<name>` and `v1/run/<id>/<ver>/…` are content-addressed and
  *   immutable: a re-render of unchanged input lands on the same keys, so a
  *   client may cache them forever.
+ * - `live.json` also carries, for each run whose units are being recorded,
+ *   its public nearby window (`projectLiveNearby`): the last
+ *   `PUBLIC_NEARBY_SPAN_MS`, rewritten every pass and gone with the run's
+ *   position. Units have no other key and no history in the bucket.
  * - `v1/run/<id>/trace/<t0>.json` is one closed trace window
  *   (`runner/viewer/trace.ts`), immutable because a closed window never
  *   changes. The run's track lists them and `live.json` names the newest; both
@@ -59,7 +63,9 @@ import type {
   ToolsResponse,
   EpisodesResponse,
   FleetResponse,
+  LiveNearby,
   ModelsResponse,
+  NearbyWindow,
   PositionsResponse,
   ResultsResponse,
   ResultRun,
@@ -70,6 +76,7 @@ import type {
   TrackResponse,
 } from "./api-types";
 import { traceSegmentKey, unpackSegs } from "./trace";
+import { PUBLIC_NEARBY_SPAN_MS } from "./nearby";
 import {
   PUBLIC_ATTRIBUTION,
   projectCampaigns,
@@ -78,6 +85,7 @@ import {
   projectEpisodes,
   projectFleet,
   projectInfo,
+  projectLiveNearby,
   projectModels,
   projectPositions,
   projectResults,
@@ -467,6 +475,20 @@ export function createRenderer(
     const tools = projectTools(await get<ToolsResponse>("/api/tools"));
     const fleet = projectFleet(await get<FleetResponse>("/api/fleet"));
     const positions = projectPositions(await get<PositionsResponse>("/api/positions"));
+    /*
+     * The units around each live run, read straight after the feed that
+     * flagged it: the window reaches back from now, and read after the run
+     * wave it would start a pass's length later than the public map's
+     * playhead stands. A run gone mid-pass answers 404 and loses its flag in
+     * `livePositions`.
+     */
+    const windows: Record<string, NearbyWindow> = {};
+    for (const p of positions.positions) {
+      if (p.nearby !== true) continue;
+      const w = await getIfPresent<NearbyWindow>(`/api/run/${encodeURIComponent(p.runId)}/nearby?span=${PUBLIC_NEARBY_SPAN_MS}`);
+      if (w !== null) windows[p.runId] = w;
+    }
+    const nearby = projectLiveNearby(windows, positions);
 
     /** Envelope and serialize one projected payload. */
     const envelope = (payload: object): string =>
@@ -681,7 +703,14 @@ export function createRenderer(
       },
       {
         path: "v1/live.json",
-        body: JSON.stringify({ generatedAt: now, attribution: PUBLIC_ATTRIBUTION, fleet, positions: livePositions(positions, traceListed) }),
+        body: JSON.stringify({
+          generatedAt: now,
+          attribution: PUBLIC_ATTRIBUTION,
+          fleet,
+          positions: livePositions(positions, traceListed, nearby),
+          // Absent rather than empty when no run has units, so an idle feed's bytes are what they were.
+          ...(Object.keys(nearby).length === 0 ? {} : { nearby }),
+        }),
         contentType: "application/json",
         cacheControl: MUTABLE_CACHE,
       },
@@ -704,7 +733,8 @@ export function createRenderer(
 
 /**
  * The projected position feed as `live.json` carries it: each position's
- * `recent` trace windows cut to the ones its run's published track lists.
+ * `recent` trace windows cut to the ones its run's published track lists, and
+ * its `nearby` flag kept only where the file carries the run's window.
  *
  * The feed is read at the top of a pass and the tracks after it, and a window
  * only ever closes, so in practice the cut removes nothing; it is what makes
@@ -713,14 +743,21 @@ export function createRenderer(
  * copy is of an already-projected position, and the trace is rebuilt field by
  * field rather than spread.
  */
-function livePositions(positions: PositionsResponse, listed: ReadonlyMap<string, ReadonlySet<number>>): PositionsResponse {
+function livePositions(
+  positions: PositionsResponse,
+  listed: ReadonlyMap<string, ReadonlySet<number>>,
+  nearby: Readonly<LiveNearby>,
+): PositionsResponse {
   return {
     positions: positions.positions.map((p) => {
-      if (p.trace === undefined) return p;
+      const { nearby: flag, ...rest } = p;
+      const cue = flag === true && Object.hasOwn(nearby, p.runId) ? { nearby: true as const } : {};
+      if (p.trace === undefined) return { ...rest, ...cue };
       const known = listed.get(p.runId);
       return {
-        ...p,
+        ...rest,
         trace: { segMs: p.trace.segMs, recent: p.trace.recent.filter((t0) => known?.has(t0) === true), tail: p.trace.tail },
+        ...cue,
       };
     }),
   };

@@ -47,7 +47,7 @@
 
 import { A, useSearchParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { SNAPSHOT_MODE, api, type AgentPosition, type TrackResponse } from "../api/client";
+import { api, type AgentPosition, type TrackResponse } from "../api/client";
 import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "../components/UnitFrame";
@@ -330,7 +330,8 @@ export default function MapPage() {
   /*
    * The units around each live character (`lib/nearbyplayer.ts`): each run's
    * newest window, sampled at the same playhead the pips are placed at. Live
-   * and private only — a replay has no units, and nothing publishes them yet.
+   * only — a replay has no units; the public build's windows ride in
+   * `live.json`.
    */
   let nearbyChanged = false;
   const nearbyStore = createNearbyStore({
@@ -658,7 +659,7 @@ export default function MapPage() {
   }
 
   /**
-   * Ask for the nearby windows the map can show: live, private, zoomed in to
+   * Ask for the nearby windows the map can show: live, zoomed in to
    * the layer's scale, and only for runs the feed flagged `nearby` whose pip
    * is on (or near) the screen — typically one to three. Once a poll per run
    * (`onPoll`), and from the 1 s pump only for a run whose window cannot
@@ -666,7 +667,7 @@ export default function MapPage() {
    * zooming in fills the layer without waiting for the next poll.
    */
   function pumpNearby(onPoll: boolean): void {
-    if (SNAPSHOT_MODE || track() !== undefined || !nearbyShown(view.scale)) return;
+    if (track() !== undefined || !nearbyShown(view.scale)) return;
     const now = performance.now();
     const t = playheadAt(now);
     for (const pip of onMap()) {
