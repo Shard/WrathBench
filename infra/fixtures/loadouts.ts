@@ -41,6 +41,7 @@
  *   guids, so none is staged; the hunter knows Tame Beast and may tame one.
  */
 
+import { accountFixtureName } from "../smoke/lib/fixture";
 import type { Scenario } from "./scenarios";
 import { DEADMINES_ENTRANCE_TRIGGER, MOONBROOK, SENTINEL_HILL_BIND, WESTFALL_ZONE, facing } from "./scenarios";
 
@@ -294,17 +295,13 @@ export const LEADER_ROLE: PartyRole = "tank";
 
 /**
  * A member's character name: the role's prefix and the account's letters
- * (digits as letters, 1 -> b), so each account holds one stable name per
- * role and the names sort with their accounts: `Tankpartyb` on PARTY1.
- * Character names are realm-global; deriving from the account keeps two
- * accounts from ever asking for the same one.
+ * (digits as letters, 1 -> b; the smokes' `accountFixtureName`), so each
+ * account holds one stable name per role: `Tankpartyb` on PARTY1. Character
+ * names are realm-global; deriving from the account keeps two accounts from
+ * ever asking for the same one.
  */
 export function partyCharacterName(role: PartyRole, account: string): string {
-  const tail = account
-    .toLowerCase()
-    .replace(/[0-9]/g, (d) => "abcdefghij"[Number(d)]!)
-    .replace(/[^a-z]/g, "");
-  return `${LOADOUTS[role].namePrefix}${tail}`.replace(/(.)\1{2,}/gi, "$1$1").slice(0, 12);
+  return accountFixtureName(LOADOUTS[role].namePrefix, account);
 }
 
 /**
