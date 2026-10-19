@@ -258,6 +258,13 @@ describe("unscoredReason", () => {
     expect(unscoredReason(run({ driver: "claude-code", harness: "claude-code", shakeout: null }))).toBeNull();
   });
 
+  test("the scripted reference reads as itself, stamped or not, and never as the stub", () => {
+    expect(unscoredReason(run({ driver: "reference", shakeout: "unscored (scripted reference)" }))).toBe("unscored (scripted reference)");
+    // A record whose stamp went missing is still the reference by its driver.
+    expect(unscoredReason(run({ driver: "reference", shakeout: null }))).toBe("unscored (scripted reference)");
+    expect(unscoredReason(run({ driver: "stub", shakeout: null }))).toBe("unscored (scripted stub)");
+  });
+
   test("a lapsed run is an attempt, never a recorded episode", () => {
     // It is on the runs page with its reason, and out of every chart over
     // episodes — the ladder reads exactly this predicate.

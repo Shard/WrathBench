@@ -1,10 +1,20 @@
 # @wrathbench/runner
 
-The fixed harness: agent loop, snippet sandbox, MCP server,
-watchdogs, trajectory. Everything here is model-agnostic — the only per-run
-variables are the adapter config (base URL, key env var, model id) and the
-character. The context policy is fixed in `src/context.ts` and explained in
-`docs/METHODOLOGY.md` ("Context policy"); changing it re-baselines results.
+The agent loop. The runner sits between a model and the game: it hands the
+model a fixed set of tools (a TypeScript snippet sandbox with the SDK loaded,
+a scratchpad, the event and state views, the reference search), supervises
+the episode with watchdogs, and records everything that happened as a
+trajectory under `data/runs/<run-id>/`. The operator launches it through
+`infra/run-episode.sh` or the fleet supervisor; the viewer (`runner/viewer/`)
+reads what it wrote.
+
+Everything here is model-agnostic. The only per-run variables are the driver
+config (base URL, key env var, model id) and the character. The context policy
+is fixed in `src/context.ts` and explained in `docs/METHODOLOGY.md` ("Context
+policy"); changing it re-baselines results.
+
+This file covers the entry points, the drivers and what each CLI harness
+does, the context and the tools, the sandbox and the watchdogs, in that order.
 
 ## Entry points
 
@@ -27,6 +37,10 @@ bun runner/src/run.ts --driver openai --model <id> --api-base <url> [--api-key-e
 
 # the same loop driven by a scripted stub — harness testing without a model
 bun runner/src/run.ts --driver stub --stub runner/test/fixtures/stub-live-check.json
+
+# the scripted reference run: the route in src/reference/ played through
+# run_snippet, stamped and never scored (docs/EPISODES.md)
+bun runner/src/run.ts --driver reference --episode e90 --account PROBE
 
 # bound a run: --max-turns caps driver turns, --max-tool-calls caps tool calls
 # for the whole episode (default 500; the meaningful bound for an external
@@ -67,8 +81,20 @@ rather than silently translated.
 | --- | --- | --- | --- |
 | `openai` (default) | `wrathbench` | the fixed loop in `src/loop.ts` over an OpenAI-compatible endpoint | yes |
 | `stub` | `wrathbench` | the fixed loop over a scripted response file | no |
+| `reference` | `wrathbench` | the fixed loop over the scripted reference program, `src/reference/`: one `run_snippet` per turn, branching on the world | no, a labelled line |
 | `claude-code` | `claude-code` | the `claude` CLI, driven per turn by `src/adapter-claude.ts` | yes, tagged |
 | `codex` | `codex` | the `codex` CLI (OpenAI, ChatGPT subscription), one `codex exec` / `exec resume` process per turn, `src/adapter-codex.ts` | yes, tagged |
+
+The `reference` driver is a transport like the others, with a program in
+place of a model. `src/reference/adapter.ts` answers each turn with one
+`run_snippet` call and reads back only that call's result. The first snippet
+binds the program (`src/reference/program.ts`, sent as its own source text)
+and the route (`src/reference/route.ts`) on the sandbox's global. Every later
+snippet runs one tick of it inside the snippet timeout, and the tick reports
+on a `[log] REF {…}` console line. A sandbox restart drops the binding, the
+next tick says `unloaded`, and the program is sent again. The program keeps
+its character's name and its step in the scratchpad, so a restart or a resume
+picks up where it was. The adapter never ends a run itself.
 
 The harness is stamped into the comparability tuple and shown on every run,
 results, ladder and models row. It is a tag, not a partition: claude-code and

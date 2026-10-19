@@ -303,6 +303,12 @@ describe("parseFleet", () => {
     expect(() => parseFleet(fleetJson([], { roster: { old: { tier: "t1", model: "sonnet", driver: "claude-subscription" } } }))).toThrow(/unknown driver claude-subscription \(openai \| claude-code \| codex\)/);
   });
 
+  test("the scripted reference is refused as a roster entry by name: the policy can never schedule one", () => {
+    expect(() =>
+      parseFleet(fleetJson([], { roster: { ref: { tier: "t1", model: "reference/elwynn-human-paladin@1", driver: "reference" } } })),
+    ).toThrow(/driver reference is the scripted reference run — launched by hand on PROBE, never a roster entry/);
+  });
+
   test("a roster entry carrying a key the harness does not read is refused BY NAME, not ignored", () => {
     // 2026-08-30. `"enabled": false` was written onto a roster entry to pause a
     // freeplay character; the key is a queue job's, not an entry's, so it was

@@ -1,6 +1,18 @@
 /**
- * The two reference lines the ladder drew behind its level readings until they
- * were withdrawn.
+ * The ladder's reference line, and the two it drew before.
+ *
+ * **Drawn: the scripted reference run** (operator, 2026-10-19;
+ * docs/METHODOLOGY.md, "Scoring"). One TypeScript program per harness series,
+ * played through the SDK under the models' sandbox, session, contracts and
+ * snippet timeout (`runner/src/reference/`), and recorded like any run. It is
+ * stamped and never scored. Its result row reads `unscored (scripted
+ * reference)`, so `scored()` keeps it out of every row and every order, and the
+ * one place it appears is a labelled line on the level rail under the table
+ * (`scriptedReference`, `scriptedReferenceScale`).
+ *
+ * **Withdrawn, kept in the repository: the empirical ceiling and the human
+ * speedrun band.** They were the two lines the ladder drew until they were
+ * withdrawn.
  *
  * **Withdrawn from the page, kept in the repository**:
  * the rail was complicated to read and one human speedrun entry per category
@@ -209,9 +221,84 @@ export const HUMAN_SPEEDRUN_BAND: SpeedrunBand = HUMAN_SPEEDRUN_BANDS.e90!;
 
 /* ------------------------------------------------------------------ drawing */
 
+/* ------------------------------------------------------ scripted reference */
+
+/** The scripted reference run a rail draws: the newest that finished, on the tier and series in view. */
+export interface ScriptedReference {
+  runId: string;
+  /** The route, `reference/<id>@<version>`: its line is the route's, not a model's. */
+  route: string | null;
+  level: number;
+  xp: number | null;
+}
+
+/**
+ * The reference run to draw from the series-filtered runs of the tier in view,
+ * or null when there is none to draw.
+ *
+ * Taken before the reader's own filters, as the withdrawn ceiling was: a line
+ * that moved when "exclude free" was ticked (the reference bills nothing)
+ * would make its own label false. Only a finished run with a level reading is
+ * a line. A live one is still climbing, and a missing reading is not
+ * recorded, never level 1. Among several, the newest started wins, since a
+ * series re-runs it after a fix to its route. A run is the reference by its
+ * driver or by the stamp that driver leaves, either one alone, so a row from
+ * a viewer that does not carry `driver` still draws.
+ */
+export const REFERENCE_STAMP = "unscored (scripted reference)";
+
+export function isScriptedReference(r: Pick<ResultRun, "driver" | "unscored">): boolean {
+  return r.driver === "reference" || (r.unscored ?? "").startsWith(REFERENCE_STAMP);
+}
+
+export function scriptedReference(runs: readonly ResultRun[], episode: string): ScriptedReference | null {
+  let best: ResultRun | null = null;
+  for (const r of runs) {
+    if (!isScriptedReference(r) || r.episode !== episode) continue;
+    if (r.terminationReason === null || r.maxLevel === null) continue;
+    if (best === null || (r.startedAt ?? 0) > (best.startedAt ?? 0)) best = r;
+  }
+  if (best === null) return null;
+  return { runId: best.runId, route: best.model, level: best.maxLevel!, xp: best.xp };
+}
+
+/** The line's label: what it is, the tier and the series, so it cannot be read as a target. */
+export function scriptedReferenceLabel(episode: string, series: string | null): string {
+  return `scripted reference, ${episode}, harness ${series ?? "—"}`;
+}
+
+/** The rail for the scripted reference alone, wide enough for it and the rows on screen. */
+export function scriptedReferenceScale(opts: {
+  episode: string;
+  series: string | null;
+  reference: ScriptedReference | null;
+  /** The highest level any row on screen reached, so the scale never cuts one off. */
+  reached: number | null;
+}): ReferenceScale | null {
+  const ref = opts.reference;
+  if (ref === null) return null;
+  const mark: ReferenceMark = {
+    id: "scripted",
+    low: ref.level,
+    high: ref.level,
+    label: scriptedReferenceLabel(opts.episode, opts.series),
+    provenance:
+      `L${ref.level}${ref.xp !== null ? ` · ${ref.xp} xp` : ""} at the clock's end: ${ref.route ?? "the reference route"}, ` +
+      `a scripted program played through the SDK under the models' rules (run ${ref.runId}). ` +
+      `A ceiling on what this series' surface allows, stamped and never scored; no row is ranked against it.`,
+    runId: ref.runId,
+  };
+  const highest = Math.max(ref.level, opts.reached ?? 1);
+  return { marks: [mark], min: 1, max: Math.max(highest + 1, 2) };
+}
+
+/* ------------------------------------------------------------------ marks */
+
 /** One reference mark on a level scale: a band (`low < high`) or a line (`low === high`). */
 export interface ReferenceMark {
-  id: "ceiling" | "speedrun";
+  id: "ceiling" | "speedrun" | "scripted";
+  /** The run the mark is, when it is one run (the scripted reference). */
+  runId?: string;
   low: number;
   high: number;
   label: string;
