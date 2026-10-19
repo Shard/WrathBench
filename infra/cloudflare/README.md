@@ -1,12 +1,14 @@
 # infra/cloudflare
 
-The Cloudflare-side configuration for the public dashboard, checked in so the
-setup is reviewable and reproducible instead of remembered. Nothing here is
-applied by any script: the operator applies each file once, in the order the
-setup below gives. The design these shapes come from — push-based
-publisher, R2 as the data plane, no Worker in the read path — is
-`docs/PUBLIC-DASHBOARD.md`; the steady-state operational runbook is
-`docs/RUNBOOK.md`, "Public dashboard".
+The Cloudflare side of the public dashboard: the bucket the publisher writes
+to, the two hostnames, the cache rules, the rate limit and the one CORS policy,
+written down so the setup is reviewable and reproducible instead of
+remembered. The operator applies it once, by hand, in the order the setup
+below gives; no script applies any of it, and the only file here that is
+machine-readable is `r2-cors.json`. The design these shapes come from (a
+push-based publisher, R2 as the data plane, no Worker in the read path) is
+`docs/PUBLIC-DASHBOARD.md`; the steady-state runbook is `docs/RUNBOOK.md`,
+"Public dashboard".
 
 The deployed shape is the design's **Open** one, on the account that holds
 the `shard.page` zone:

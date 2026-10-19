@@ -1,10 +1,20 @@
 # @wrathbench/runner
 
-The fixed harness: agent loop, snippet sandbox, MCP server,
-watchdogs, trajectory. Everything here is model-agnostic — the only per-run
-variables are the adapter config (base URL, key env var, model id) and the
-character. The context policy is fixed in `src/context.ts` and explained in
-`docs/METHODOLOGY.md` ("Context policy"); changing it re-baselines results.
+The agent loop. The runner sits between a model and the game: it hands the
+model a fixed set of tools (a TypeScript snippet sandbox with the SDK loaded,
+a scratchpad, the event and state views, the reference search), supervises
+the episode with watchdogs, and records everything that happened as a
+trajectory under `data/runs/<run-id>/`. The operator launches it through
+`infra/run-episode.sh` or the fleet supervisor; the viewer (`runner/viewer/`)
+reads what it wrote.
+
+Everything here is model-agnostic. The only per-run variables are the driver
+config (base URL, key env var, model id) and the character. The context policy
+is fixed in `src/context.ts` and explained in `docs/METHODOLOGY.md` ("Context
+policy"); changing it re-baselines results.
+
+This file covers the entry points, the drivers and what each CLI harness
+does, the context and the tools, the sandbox and the watchdogs, in that order.
 
 ## Entry points
 
