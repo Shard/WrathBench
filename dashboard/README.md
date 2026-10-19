@@ -244,6 +244,9 @@ its `!`/`?` quest mark in `--warn`), another player `--accent`, anything else
 ringed, and its name replaces the entry on the unit frame's target bar.
 Names show on hover at any zoom the layer draws at and, further in, for every
 unit, culled greedily so none overlaps another or a character's puck and name.
+The hovered name is never culled, so it moves instead: right of its dot, else
+left, below or above, whichever first keeps clear of the pucks and their names
+(`placeLabel`).
 
 The layer draws from about a pixel a yard, and the map asks for windows under
 the same gate: on its 5 s poll (and straight away on zooming in), only for runs

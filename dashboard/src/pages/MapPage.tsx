@@ -70,11 +70,13 @@ import {
 import { NO_TILE_BASE, tileSrc } from "../lib/tiles";
 import {
   type NearbyDot,
+  type ScreenBox,
   LABEL_RANK,
   NEARBY_FETCH_SPAN_MS,
   createNearbyStore,
   cullLabels,
   nearbyFrameDue,
+  placeLabel,
 } from "../lib/nearbyplayer";
 import { type LodLayer, ART_LAYER, LOD_MAX, MINIMAP_LAYER } from "@viewer/worldmap";
 import { fmtAge, fmtItems, fmtMoney, modelDisplay, num, shortHarness } from "../lib/format";
@@ -1113,6 +1115,8 @@ export default function MapPage() {
 
   /* The nearby layer as last drawn, in screen pixels, for the hover's hit test; and the unit under the pointer. */
   let nearbyDrawn: { dot: NearbyDot; sx: number; sy: number }[] = [];
+  /** Where the pips draw their pucks and name chips this frame: no unit label goes there. */
+  let pipBoxes: ScreenBox[] = [];
   let hoveredId: string | null = null;
   /** Label widths by text, so a city of names is measured once. */
   const labelWidths = new Map<string, number>();
@@ -1144,6 +1148,14 @@ export default function MapPage() {
     }
     nearbyDrawn = drawn;
     if (drawn.length === 0) return;
+    // What the pips will draw over the layer: each puck and its name chip.
+    ctx.save();
+    ctx.font = "12px ui-monospace, monospace";
+    pipBoxes = list.map((pip) => {
+      const p = project(view, pip.x, pip.y);
+      return { x: p.sx - PUCK_R_SEL, y: p.sy - PUCK_R_SEL, w: PUCK_R_SEL * 2 + 4 + ctx.measureText(pipName(pip.data)).width + 6, h: PUCK_R_SEL * 2 };
+    });
+    ctx.restore();
     const r = NEARBY_DOT_R;
     ctx.save();
     for (const cls of ["other", "service", "player", "engaged"] as const) {
@@ -1191,12 +1203,6 @@ export default function MapPage() {
       ctx.restore();
       return;
     }
-    // What the pips will draw over the layer: each puck and its name chip.
-    ctx.font = "12px ui-monospace, monospace";
-    const taken = list.map((pip) => {
-      const p = project(view, pip.x, pip.y);
-      return { x: p.sx - PUCK_R_SEL, y: p.sy - PUCK_R_SEL, w: PUCK_R_SEL * 2 + 4 + ctx.measureText(pipName(pip.data)).width + 6, h: PUCK_R_SEL * 2 };
-    });
     // Names: every one at close zoom but the hovered one, culled by rank.
     ctx.font = NEARBY_FONT;
     ctx.textBaseline = "middle";
@@ -1207,7 +1213,7 @@ export default function MapPage() {
         const rank = d.dot.id === target ? -1 : LABEL_RANK[d.dot.cls];
         return { x: d.sx + r + 3, y: d.sy - 7, w: labelWidth(ctx, text) + 6, h: 14, rank, text };
       });
-    for (const i of cullLabels(labelled, NEARBY_LABELS_MAX, taken)) {
+    for (const i of cullLabels(labelled, NEARBY_LABELS_MAX, pipBoxes)) {
       const b = labelled[i]!;
       ctx.globalAlpha = 0.75;
       ctx.fillStyle = theme.bg;
@@ -1219,7 +1225,12 @@ export default function MapPage() {
     ctx.restore();
   }
 
-  /** The hovered unit's name, and its subname and level where known, over everything else. */
+  /**
+   * The hovered unit's name, and its subname and level where known, over
+   * everything else: beside its dot on whichever side keeps clear of the pips'
+   * pucks and names (`placeLabel`), since unlike the culled names it is never
+   * left out.
+   */
   function drawNearbyHover(ctx: CanvasRenderingContext2D): void {
     if (hoveredId === null) return;
     const d = nearbyDrawn.find((x) => x.dot.id === hoveredId);
@@ -1228,9 +1239,7 @@ export default function MapPage() {
     ctx.save();
     ctx.font = NEARBY_FONT;
     ctx.textBaseline = "middle";
-    const x = d.sx + NEARBY_DOT_R + 3;
-    const y = d.sy - 7;
-    const w = labelWidth(ctx, text) + 6;
+    const { x, y, w } = placeLabel(d.sx, d.sy, NEARBY_DOT_R, labelWidth(ctx, text) + 6, 14, pipBoxes);
     ctx.globalAlpha = 0.85;
     ctx.fillStyle = theme.bg;
     ctx.fillRect(x, y, w, 14);
