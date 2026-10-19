@@ -205,8 +205,7 @@ export const comparabilitySchema = z.object({
    * are two loops, and the arms of one campaign run on one image, so neither
    * the harness version nor its series can tell them apart. The rendered
    * prompt differs too, so `promptHash` already separates them; this field is
-   * what makes the separation readable. Whether it belongs in the tuple once
-   * a result promotes the change is the operator's call.
+   * what makes the separation readable. A key for now (operator, 2026-10-19).
    *
    * ABSENT, never `{false, false}`, on a run with both options off, which keeps
    * every such tuple byte-for-byte what it was before the field existed.

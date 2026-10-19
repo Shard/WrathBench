@@ -534,9 +534,9 @@ function main(): void {
 }
 
 /**
- * DRAFT model-facing text. The in-snippet `wait` is the runner sandbox's
- * ambient, not an SDK method, so it lives here as prose rather than as a
- * generated row; it goes before the errors section.
+ * Model-facing text (wording approved, operator, 2026-10-19). The in-snippet
+ * `wait` is the runner sandbox's ambient, not an SDK method, so it lives here
+ * as prose rather than as a generated row; it goes before the errors section.
  */
 const WAIT_SECTION = `## Waiting (\`wait\`)
 

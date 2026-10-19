@@ -45,6 +45,7 @@ import {
   wakeCursor,
   wakeEnv,
   wakeOptionsOf,
+  wakeWords,
   wokeNotice,
   type OptionalWake,
   type WakeFact,
@@ -86,6 +87,14 @@ describe("off is master", () => {
     expect(buildSystemPrompt()).toBe(SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "claude-code", true, OFF)).toBe(CLAUDE_CODE_SYSTEM_PROMPT);
     expect(buildSystemPrompt(undefined, undefined, "codex", true, OFF)).toBe(CODEX_SYSTEM_PROMPT);
+  });
+
+  test("the turn-end sentence is the operator's, and names every wake the wait fires on", () => {
+    expect(turnEndSentence()).toBe(
+      "A reply without a tool call ends your turn and you sleep until something wakes you — your character dying, a level gained, a quest's objectives completed, the event stream closing, a sandbox restart or a harness notice — or five minutes pass; the next turn says which and how long you slept.",
+    );
+    for (const k of [...MANDATORY_WAKES, ...TURN_END_OPTIONAL_WAKES]) expect(turnEndSentence()).toContain(wakeWords(k));
+    expect(turnEndSentence()).not.toContain(wakeWords("attacked"));
   });
 
   test("each option is one insertion into master's prompt and nothing else", () => {

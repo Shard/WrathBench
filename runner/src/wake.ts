@@ -52,8 +52,8 @@ export type OptionalWake = (typeof OPTIONAL_WAKES)[number];
 /**
  * The optional wakes a turn-end wait fires on. Fixed by the harness, because at
  * a turn end the model has no call to name keys with, and identical for every
- * model. Whether level-up and quest-complete belong here is an open design
- * choice for the operator; `attacked` does not.
+ * model. Level-up and quest-complete are in it by the operator's decision
+ * (operator, 2026-10-19); `attacked` is not.
  */
 export const TURN_END_OPTIONAL_WAKES: readonly OptionalWake[] = ["levelUp", "questComplete"];
 
@@ -150,25 +150,30 @@ const WAKE_WORDS: Record<MandatoryWake | OptionalWake, string> = {
 };
 
 /**
- * DRAFT — the operator words this sentence. The prompt's statement of what a
- * reply without a tool call now does, appended after the body's last line on
- * a run with `turnEnd`. The wake list is rendered from the constants, so the
- * sentence cannot drift from what the waiter does. Same bytes on every
- * harness: on the CLI drivers a reply without a tool call is what ends a turn.
+ * The prompt's statement of what a reply without a tool call now does,
+ * appended after the body's last line on a run with `turnEnd`. The operator's
+ * words (operator, 2026-10-19), verbatim: it names every wake the turn-end
+ * wait fires on, which `wake.test.ts` holds against `MANDATORY_WAKES` and
+ * `TURN_END_OPTIONAL_WAKES`. Same bytes on every harness: on the CLI drivers a
+ * reply without a tool call is what ends a turn.
  */
+export const TURN_END_SENTENCE =
+  "A reply without a tool call ends your turn and you sleep until something wakes you — your character dying, a level gained, a quest's objectives completed, the event stream closing, a sandbox restart or a harness notice — or five minutes pass; the next turn says which and how long you slept.";
+
+/** `TURN_END_SENTENCE`. */
 export function turnEndSentence(): string {
-  const wakes = [...MANDATORY_WAKES.filter((k) => k !== "notice"), ...TURN_END_OPTIONAL_WAKES, "notice" as const].map((k) => WAKE_WORDS[k]);
-  const list = `${wakes.slice(0, -1).join(", ")} or ${wakes[wakes.length - 1]}`;
-  return (
-    `A reply without a tool call ends your turn, and you then sleep: no new turn starts until something wakes you — ${list} — ` +
-    `or five minutes pass, and the turn that follows says which it was and how long you slept.`
-  );
+  return TURN_END_SENTENCE;
+}
+
+/** What each wake is called in the model-facing text: the `woke` notice, and the names `TURN_END_SENTENCE` lists. */
+export function wakeWords(k: MandatoryWake | OptionalWake): string {
+  return WAKE_WORDS[k];
 }
 
 /**
- * DRAFT, like `turnEndSentence`. The prompt bullet for the in-snippet wait,
- * placed after the `sleep` bullet on a run with `inSnippet`. The full entry is
- * the wake variant of the SDK reference (`sdk/API-wake.md`).
+ * The prompt bullet for the in-snippet wait, placed after the `sleep` bullet
+ * on a run with `inSnippet` (wording approved, operator, 2026-10-19). The full
+ * entry is the wake variant of the SDK reference (`sdk/API-wake.md`).
  */
 export const WAIT_BULLET =
   `- wait({ on, maxMs }) holds a snippet open past its time limit until what you name happens — up to five minutes of waiting per snippet, and maxMs (at most 300000, the default) per call. ` +
@@ -183,8 +188,9 @@ export function formatSlept(ms: number): string {
 }
 
 /**
- * DRAFT. The harness notice the turn after a turn-end wait carries. None for
- * `stopped`: the run is ending and there is no next turn.
+ * The harness notice the turn after a turn-end wait carries (wording
+ * approved, operator, 2026-10-19). None for `stopped`: the run is ending and
+ * there is no next turn.
  */
 export function wokeNotice(w: { fired: WakeFired; sleptMs: number; detail?: string | undefined }, ts: number): HarnessNotice | null {
   if (w.fired === "stopped") return null;
