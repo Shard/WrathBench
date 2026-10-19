@@ -22,7 +22,12 @@
  * `mail_items`, `auctionhouse` and `guild_bank_item`. Externally written items
  * are therefore both racy now and silently reaped later. If a smoke ever needs
  * gear, it has to come through the module (a vendor purchase, a quest reward),
- * not through this tool.
+ * not through this tool. The party stager (`stage-party.ts`) is the one
+ * exception to "through the module", and it still inserts nothing: its gear
+ * comes from the running server's own `.additem` over SOAP, and the only item
+ * write here is the offline equipment move (`buildEquipStatements` in
+ * apply.ts), which changes `bag`/`slot` on rows the server saved and never a
+ * guid.
  */
 
 /** A map position with a facing. */
@@ -77,6 +82,23 @@ export type Scenario = {
    * SMSG_ALL_ACHIEVEMENT_DATA, which is how a smoke proves the decode names.
    */
   achievements?: number[];
+  /**
+   * Talent rank spells to write as `character_talent` rows, ONE PER TALENT and
+   * at its current rank's spell (`Player::addTalent` counts a row as rank + 1
+   * points, so two rows for one talent double-count). DANGEROUS: the loader
+   * (`Player::_LoadTalents`) ASSERTs that every row is a talent rank spell, so
+   * a wrong id aborts the worldserver at that character's login. Only the
+   * party stager writes these, from presets `loadouts.ts` validates and checks
+   * against the module's own Talent.dbc reading before any write.
+   */
+  talents?: number[];
+  /**
+   * Raise every level-ranged skill row the character already has (weapons,
+   * defense, the class's own lines) to the level's maximum, 5 x level. Rows
+   * with max 1 (armor, mono skills) and 300 (languages) are untouched, and no
+   * skill is added: the loader keeps the stored value and recomputes the max.
+   */
+  maxSkills?: boolean;
 };
 
 /** 2010-01-01 00:00 UTC: a fixed, obviously-fixture date, so builds stay pure. */
@@ -213,6 +235,19 @@ const LAKESHIRE_CHEST_FRONT = { x: -9407.6, y: -2788.4, z: 37.8 };
 // slow to kill one with level-1 starter gear, which is why the smoke resumes
 // a timed-out fight.
 const AMMEN_RUNTS = { x: -4412.43, y: -11947.3, z: 21.6033 };
+
+// Moonbrook, Westfall: `game_tele` 635 (-10986.7, 1542.75, 44.79), and the
+// Deadmines entrance trigger it faces, AreaTrigger.dbc 78 on map 0 at
+// (-11208.5, 1685.3, 25.8), radius 7, which `areatrigger_teleport` 78 sends to
+// map 36 (docs/proposals/GROUP-PLAY.md §4). The trigger is ~264y away down
+// the mine's tunnels, so the approach is part of an attempt. The homebind is
+// Sentinel Hill, `game_tele` 824, area 108; a corpse run from a Westfall
+// graveyard and a hearth both stay in the zone.
+export const MOONBROOK = { x: -10986.7, y: 1542.75, z: 44.79 };
+export const DEADMINES_ENTRANCE_TRIGGER = { id: 78, map: 0, x: -11208.5, y: 1685.3, z: 25.8, radius: 7 };
+export const SENTINEL_HILL_BIND = { map: 0, zone: 108, x: -10624.5, y: 1096.66, z: 33.76 };
+/** Westfall (AreaTable); the server recomputes the zone from the position at login. */
+export const WESTFALL_ZONE = 40;
 
 // The steep re-plan smoke's starts: points a freeplay character stood on when
 // the module refused its move as `drop` at a 51-58 degree step, read off the
@@ -456,6 +491,16 @@ export const SCENARIOS = {
     },
     homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
   },
+  "moonbrook-mine": {
+    description:
+      "level 80, 1g, in Moonbrook facing the Deadmines entrance trigger, homebind Sentinel Hill, empty quest log (for the deadmines-entry smoke: level 80 so nothing on the walk interrupts it; the party's members stand on the same spot at level 20, infra/fixtures/loadouts.ts)",
+    level: 80,
+    xp: 0,
+    money: 10000,
+    position: { map: 0, zone: WESTFALL_ZONE, ...MOONBROOK, o: facing(MOONBROOK, DEADMINES_ENTRANCE_TRIGGER) },
+    homebind: SENTINEL_HILL_BIND,
+    clearQuests: true,
+  },
   "vineyard-priest": {
     description:
       "level 10, no money, at the Northshire vineyard edge knowing Resurrection (2006) (for death-recovery's resurrection leg: the priest trainer teaches rank 1 at level 10, trainer_spell 11, so the fixture grants it)",
@@ -570,6 +615,11 @@ export function validateScenario(scenario: Scenario): void {
   );
 
   assert(scenario.achievements === undefined || isIdList(scenario.achievements), "achievements must be positive integer ids");
+  assert(scenario.talents === undefined || isIdList(scenario.talents), "talents must be positive integer spell ids");
+  assert(
+    scenario.talents === undefined || new Set(scenario.talents).size === scenario.talents.length,
+    "talents must not repeat a spell",
+  );
 }
 
 /** `characters.taximask` is 14 u32 words in 3.3.5 (TaxiMaskSize); node n sets bit n-1. */

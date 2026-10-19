@@ -52,6 +52,8 @@ spec:
             {{- include "wrathbench.harnessEnv" . | nindent 12 }}
             {{- include "wrathbench.dbEnv" . | nindent 12 }}
             {{- include "wrathbench.harnessSecretEnv" . | nindent 12 }}
+            {{- /* The party stager and its smokes, run here by hand: staging on only. */}}
+            {{- with include "wrathbench.stagerEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
             {{- if .Values.codex.enabled }}
             # The `codex` driver's subscription lane, mounted below. The CLI
             # writes its token refresh back into this directory, so it is one

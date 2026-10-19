@@ -303,6 +303,16 @@ describe("runPodEnv", () => {
     expect(() => runPodEnv([...tpl, secretRef("ANTHROPIC_AUTH_TOKEN")], opts)).toThrow(/ANTHROPIC_AUTH_TOKEN/);
     expect(() => runPodEnv(tpl, { ...opts, stamps: { ANTHROPIC_BASE_URL: "https://example.invalid" } })).toThrow(/ANTHROPIC_BASE_URL/);
   });
+
+  test("no SOAP or STAGER variable can reach a run pod, from the template or a stamp, whatever the driver", () => {
+    for (const driver of ["claude-code", "openai", "codex"] as const) {
+      const opts = { driver, tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} };
+      expect(() => runPodEnv([...tpl, secretRef("WRATHBENCH_STAGER_PASSWORD")], opts)).toThrow(/WRATHBENCH_STAGER_PASSWORD may never reach a run pod/);
+      expect(() => runPodEnv([...tpl, { name: "WRATHBENCH_SOAP_URL", value: "http://worldserver:7878/" }], opts)).toThrow(/WRATHBENCH_SOAP_URL/);
+      expect(() => runPodEnv(tpl, { ...opts, stamps: { AC_SOAP_ENABLED: "1" } })).toThrow(/AC_SOAP_ENABLED/);
+      expect(runPodEnv(tpl, opts).some((e) => /SOAP|STAGER/.test(e.name))).toBe(false);
+    }
+  });
 });
 
 // --------------------------------------------------------------- pod builder
@@ -798,6 +808,32 @@ describe("the chart's run-pod template", () => {
     expect(Object.keys(env).filter((n) => env[n]!.valueFrom !== undefined).sort()).toEqual(["CLAUDE_CODE_OAUTH_TOKEN", "WRATHBENCH_MODULE_SECRET"]);
     expect(pod.spec.containers[0]!.command).toEqual(["/usr/bin/tini", "--", "bun", "runner/src/run.ts"]);
     expect(pod.spec.volumes!.map((v) => v.name)).toEqual(["data", "tmp"]);
+  }, HELM_TEST_MS);
+
+  test.skipIf(helm === null)("rendered with party staging on, the SOAP URL and STAGER's password reach the fleet and runner pods and never a run pod, for any driver", () => {
+    const r = Bun.spawnSync([helm!, "template", "wrathbench", chart, "--namespace", "wrathbench", "--set", "image.registry=harbor.example/library", "--set", "image.tag=harness-0.5-934-ge0ca125f", "--set", "staging.enabled=true"], { stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(0);
+    type Env = PodEnvVar[];
+    const docs = r.stdout.toString().split(/^---$/m).map((d) => Bun.YAML.parse(d) as { kind?: string; metadata?: { name?: string }; spec?: { template?: { spec?: { containers?: { name: string; env?: Env }[] } } }; data?: Record<string, string> } | null);
+    const envOfDeployment = (name: string): Env => docs.find((d) => d?.kind === "Deployment" && d.metadata?.name === name)!.spec!.template!.spec!.containers![0]!.env ?? [];
+    for (const name of ["wrathbench-fleet", "wrathbench-runner"]) {
+      const env = envOfDeployment(name);
+      expect([name, env.find((e) => e.name === "WRATHBENCH_SOAP_URL")?.value]).toEqual([name, "http://worldserver:7878/"]);
+      expect([name, env.find((e) => e.name === "WRATHBENCH_STAGER_PASSWORD")?.valueFrom?.secretKeyRef]).toEqual([name, { name: "wrathbench-env", key: "WRATHBENCH_STAGER_PASSWORD", optional: true }]);
+    }
+    // Nothing else that pulls the release's harness env gets it.
+    for (const name of ["wrathbench-viewer", "wrathbench-publisher", "wrathbench-worldserver"]) {
+      expect([name, envOfDeployment(name).some((e) => e.name.includes("STAGER") || e.name === "WRATHBENCH_SOAP_URL")]).toEqual([name, false]);
+    }
+    // The run-pod template carries neither, and no pod built from it can, whatever the driver.
+    const cm = docs.find((x) => x?.kind === "ConfigMap" && x.metadata?.name === "wrathbench-run-pod-template");
+    const tpl = JSON.parse(cm!.data!["pod.json"]!) as Pod;
+    expect(tpl.spec.containers[0]!.env!.some((e) => /SOAP|STAGER/.test(e.name))).toBe(false);
+    expect(JSON.stringify(tpl)).not.toMatch(/STAGER|7878/);
+    for (const driver of ["claude-code", "openai", "codex"] as const) {
+      const pod = buildRunPod(tpl, { runId: "r", image: RELEASE, requestedRef: RELEASE, command: null, args: [], env: { driver, tokenEnv: undefined, apiKeyEnv: "OPENROUTER_KEY", stamps: {} }, owner: undefined, rosterPid: 1, graceMs: EPISODE_TERM_GRACE_MS });
+      expect([driver, Object.keys(envOf(pod)).filter((n) => /SOAP|STAGER/.test(n))]).toEqual([driver, []]);
+    }
   }, HELM_TEST_MS);
 
   test.skipIf(helm === null)("rendered, localModelHosts reaches every pod that parses the config and every run pod, which run.ts checks an LM Studio pair against", () => {

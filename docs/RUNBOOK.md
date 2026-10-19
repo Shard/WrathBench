@@ -1941,6 +1941,106 @@ resume, watch three things:
 To roll back, set the switch off again. The policies are deleted and nothing
 else changes.
 
+### Party staging
+
+The Deadmines eval (`docs/proposals/GROUP-PLAY.md`) runs on five staged
+characters, put into their loadouts by `infra/fixtures/stage-party.ts`.
+Gear is the one thing SQL cannot stage guid-safely, so it goes through the
+worldserver's SOAP console as `.additem` on an admin account, STAGER. SOAP is
+off until the chart's `staging` switch turns it on. The switch also does
+these things, and nothing else:
+
+- binds SOAP to the worldserver pod's own address, and adds 7878 to the
+  ClusterIP Service;
+- admits 7878 only from the fleet and runner pods, through an ingress policy on
+  the worldserver, and adds the matching rule to the fleet's egress when the
+  egress policies are on;
+- adds PARTY1 to PARTY5 to the module's allowlist (STAGER is never on it, and
+  the chart refuses to render it there);
+- gives the fleet and runner pods the SOAP URL and STAGER's password. Run
+  pods get neither, and `infra/run-pod.ts` refuses any SOAP or STAGER
+  variable outright.
+
+The compose quickstart keeps SOAP off.
+
+**Turning it on** happens in one deploy window, because SOAP, the allowlist and
+the module are all read when the worldserver is recreated:
+
+1. Before the window, with the server up, run
+   `bun wb accounts ensure PARTY1 PARTY2 PARTY3 PARTY4 PARTY5`. That works with
+   any deployed image.
+2. Pick STAGER's password: at most 16 characters, and there is no default. Put
+   it into the env Secret as `WRATHBENCH_STAGER_PASSWORD`. In the cluster repo
+   that is the SOPS-encrypted Secret, done the same way as every other key
+   there. Never put it in this repository. The key has to be in the Secret
+   before the pods start: env from a Secret is resolved when a container
+   starts, and the reference is optional, so a pod started without the key
+   carries it empty until it restarts.
+3. The values commit: `staging: { enabled: true }`. Then run the window as
+   usual (`bun wb release run`, or `bun wb release deploy`).
+4. Inside the window, once the new images are up and before the fleet
+   resumes, run these in this order:
+   - `read -rs P && printf '%s\n' "$P" | bun wb accounts stager` creates STAGER
+     with gmlevel 3, using the password from step 2. It cannot run before the
+     window, because `infra/stager-account.ts` only exists in the new image.
+   - `bun wb smoke deadmines-entry` checks the mine's mesh and the portal.
+   - `bun wb smoke party-entry` stages a party, walks it into map 36 together,
+     checks that it is one instance, and deletes the characters.
+   - `bun wb smoke party-staging --keep`, last of all, stages the party, checks
+     every member at login, and leaves the party staged. It has to be last:
+     every staging deletes whatever the party accounts hold.
+5. The one-time reaping proof runs at the next ordinary release window (the
+   operator's ruling of 2026-10-19). Staged items carry guids the live server
+   allocated, so the next boot's one-time DELETEs above its watermark must not
+   touch them. That boot cannot be the turn-on window's own recreate, because
+   SOAP exists only after it and nothing can be staged before it. Leave the
+   party accounts alone until then: a staging or a fresh party launch would
+   delete the kept party. In that next window, once the worldserver has been
+   recreated and before the fleet resumes, run
+   `bun wb smoke party-staging --recheck`. It repeats the checks on what
+   survived the boot and then deletes the five characters. From then on, the
+   construction is the proof.
+6. Until the recheck has passed, the first party campaign runs with
+   `resume: false`. A paused party is then never resumed onto characters
+   whose survival across a boot is still unproven; each attempt is staged
+   fresh instead.
+7. `deadmines-entry` joins the deploy smokes while the campaign is enabled.
+
+To turn it off, set `staging.enabled` back to false in another window. The
+policy, the port and the env go away. The PARTY and STAGER accounts stay in
+auth, where they are harmless.
+
+**Restaging** happens before each fresh party launch, never on a resume.
+The roster runs `bun infra/fixtures/stage-party.ts --request -` with one
+request on stdin (`infra/party-stager.ts` holds the contract). The request
+has the party id, campaign, version, scenario and level, and per member the
+member id, role word, race, class, character name, account and run id. The
+first member leads. The definition names the characters and the stager
+creates them under those names. Each member wears the loadout of its race and
+class (`infra/fixtures/loadouts.ts`): a Human Warrior tank, a Dwarf Priest
+healer, and as damage a Human Mage, a Human Rogue and a Dwarf Paladin. The
+paladin is Retribution and replaced the hunter by the operator's call of
+2026-10-19, so no pet is ever staged. A member of any other race and class,
+or a level other than 20, is refused before anything is touched. The script
+exits 0 when the party is staged and formed with no session open. Its last
+stdout line is then `{"ok":true,"detail":…}`. Otherwise the reason is the
+last line on stderr: exit 1 for a staging that failed, 2 for a refused
+request. By hand, in the runner pod:
+
+```
+bun infra/fixtures/stage-party.ts --example | bun infra/fixtures/stage-party.ts --request -
+```
+
+This stages the default party: PARTY1 to PARTY5, one of each loadout, named
+from the account (`Tankpartyb` on PARTY1). The smokes use the same request.
+Every staging deletes every character on the party accounts, so never run one
+while a party run holds those accounts. The five members are staged in
+parallel.
+The duration has not been measured yet; it is a few logins and logout saves
+per member. A failure names the step and the member. If a
+member does not wear its loadout at login, the loader refused an item and
+mailed it, and the stager says so.
+
 ### Harness version stamping
 
 Every episode is stamped with `git describe --tags --always --dirty`, computed

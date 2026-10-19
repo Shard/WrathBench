@@ -7,22 +7,24 @@ import { describe, expect, test } from "bun:test";
 import {
   ACCOUNT_PATTERN,
   assertFixturableAccount,
+  buildEquipStatements,
   buildStatements,
   parseArgs,
   renderStatement,
+  type InventoryRow,
 } from "./apply";
 import { SCENARIOS, facing, isScenarioName, taxiMask, validateScenario, type Scenario } from "./scenarios";
 
 describe("account guard", () => {
-  test("accepts the smoke and probe accounts", () => {
-    for (const account of ["SMOKE", "SMOKE2", "SMOKE3", "SMOKE4", "SMOKE10", "PROBE"]) {
+  test("accepts the smoke, probe and party accounts", () => {
+    for (const account of ["SMOKE", "SMOKE2", "SMOKE3", "SMOKE4", "SMOKE10", "PROBE", "PARTY1", "PARTY5"]) {
       expect(ACCOUNT_PATTERN.test(account)).toBe(true);
       expect(() => assertFixturableAccount(account)).not.toThrow();
     }
   });
 
-  test("refuses runner and shakeout accounts", () => {
-    for (const account of ["RUNNER", "RUNNER2", "SHAKEOUT", "SHAKEOUT2", "SMOKEY", "XSMOKE", "smoke3"]) {
+  test("refuses runner and shakeout accounts, the stager's, and anything shaped like a party account that is not one", () => {
+    for (const account of ["RUNNER", "RUNNER2", "SHAKEOUT", "SHAKEOUT2", "SMOKEY", "XSMOKE", "smoke3", "STAGER", "SPECTATOR", "PARTY", "PARTY10", "PARTYX", "XPARTY1"]) {
       expect(() => assertFixturableAccount(account)).toThrow(/refusing to fixture/);
     }
   });
@@ -179,6 +181,105 @@ describe("buildStatements", () => {
 
   test("rejects an invalid scenario before building anything", () => {
     expect(() => buildStatements(217, { ...scenario, level: 999 })).toThrow(/invalid scenario/);
+  });
+});
+
+describe("buildEquipStatements", () => {
+  type Row = InventoryRow;
+  /** Apply statements to rows the way MySQL would, enforcing the (guid, bag, slot) key after each one. */
+  function run(rows: Row[], stmts: ReturnType<typeof buildEquipStatements>): Row[] {
+    const out = rows.map((r) => ({ ...r }));
+    for (const s of stmts) {
+      expect(s.sql).toMatch(/^UPDATE character_inventory SET bag = (\?|0), slot = \? WHERE guid = \? AND item = \?$/);
+      const [bag, slot, , item] = s.sql.includes("bag = 0,") ? [0, ...s.params] : s.params;
+      const r = out.find((x) => x.item === item)!;
+      r.bag = Number(bag);
+      r.slot = Number(slot);
+      const keys = out.map((x) => `${x.bag}:${x.slot}`);
+      expect(new Set(keys).size).toBe(keys.length);
+    }
+    return out;
+  }
+  const at = (rows: Row[], bag: number, slot: number) => rows.find((r) => r.bag === bag && r.slot === slot)?.entry;
+
+  // A fresh warrior: starter shirt, pants, boots and sword worn, hearthstone and food in
+  // the backpack; then the staged chest, sword, shield and two bags the server stored after them.
+  const fresh: Row[] = [
+    { bag: 0, slot: 3, item: 101, entry: 38 },
+    { bag: 0, slot: 6, item: 102, entry: 39 },
+    { bag: 0, slot: 7, item: 103, entry: 40 },
+    { bag: 0, slot: 15, item: 104, entry: 25 },
+    { bag: 0, slot: 23, item: 105, entry: 6948 },
+    { bag: 0, slot: 24, item: 106, entry: 117 },
+    { bag: 0, slot: 25, item: 201, entry: 6721 },
+    { bag: 0, slot: 26, item: 202, entry: 3400 },
+    { bag: 0, slot: 27, item: 203, entry: 15207 },
+    { bag: 0, slot: 28, item: 204, entry: 4240 },
+    { bag: 0, slot: 29, item: 205, entry: 4240 },
+    { bag: 0, slot: 30, item: 206, entry: 2545 },
+  ];
+
+  test("wears each staged item and puts the starter item it displaced where the new one was, guids untouched", () => {
+    const targets = [
+      { entry: 6721, slot: 4 },
+      { entry: 2545, slot: 6 },
+      { entry: 3400, slot: 15 },
+      { entry: 15207, slot: 16 },
+      { entry: 4240, slot: 19 },
+      { entry: 4240, slot: 20 },
+    ];
+    const after = run(fresh, buildEquipStatements(217, fresh, targets));
+    expect([at(after, 0, 4), at(after, 0, 6), at(after, 0, 15), at(after, 0, 16), at(after, 0, 19), at(after, 0, 20)]).toEqual([6721, 2545, 3400, 15207, 4240, 4240]);
+    // The starter pants and sword went to the backpack slots the new ones left.
+    expect(at(after, 0, 30)).toBe(39);
+    expect(at(after, 0, 26)).toBe(25);
+    // Untouched rows stay; every guid is the one the server allocated.
+    expect(at(after, 0, 3)).toBe(38);
+    expect(at(after, 0, 23)).toBe(6948);
+    expect(after.map((r) => r.item).sort()).toEqual(fresh.map((r) => r.item).sort());
+  });
+
+  test("a two-hander empties the off hand into the first free backpack slot", () => {
+    const rows: Row[] = [
+      { bag: 0, slot: 15, item: 1, entry: 36 },
+      { bag: 0, slot: 16, item: 2, entry: 2362 },
+      { bag: 0, slot: 23, item: 3, entry: 6948 },
+      { bag: 0, slot: 24, item: 4, entry: 5613 },
+    ];
+    const after = run(rows, buildEquipStatements(9, rows, [{ entry: 5613, slot: 15 }], [16]));
+    expect(at(after, 0, 15)).toBe(5613);
+    expect(at(after, 0, 16)).toBeUndefined();
+    expect(at(after, 0, 24)).toBe(36);
+    expect(at(after, 0, 25)).toBe(2362);
+  });
+
+  test("takes a staged item from inside a bag, and leaves alone what is already worn where it belongs", () => {
+    const rows: Row[] = [
+      { bag: 0, slot: 4, item: 1, entry: 6721 },
+      { bag: 0, slot: 19, item: 2, entry: 4240 },
+      { bag: 2, slot: 0, item: 3, entry: 3400 },
+    ];
+    const stmts = buildEquipStatements(9, rows, [{ entry: 6721, slot: 4 }, { entry: 3400, slot: 15 }]);
+    const after = run(rows, stmts);
+    expect(stmts).toHaveLength(2); // one park, one place: the chest was already on
+    expect(at(after, 0, 15)).toBe(3400);
+    expect(at(after, 2, 0)).toBeUndefined();
+  });
+
+  test("says which item is missing rather than guessing, and refuses impossible targets", () => {
+    expect(() => buildEquipStatements(9, fresh, [{ entry: 99999, slot: 4 }])).toThrow(/item 99999 for slot 4 is not in the bags/);
+    expect(() => buildEquipStatements(9, fresh, [{ entry: 6721, slot: 4 }, { entry: 2545, slot: 4 }])).toThrow(/slot 4 twice/);
+    expect(() => buildEquipStatements(9, fresh, [{ entry: 6721, slot: 23 }])).toThrow(/not an equipment or bag slot/);
+    // Two of one item need two in the bags.
+    const one = fresh.filter((r) => r.item !== 205);
+    expect(() => buildEquipStatements(9, one, [{ entry: 4240, slot: 19 }, { entry: 4240, slot: 20 }])).toThrow(/item 4240 for slot 20/);
+    const full: Row[] = [{ bag: 0, slot: 16, item: 1, entry: 2362 }, ...Array.from({ length: 16 }, (_, i) => ({ bag: 0, slot: 23 + i, item: 100 + i, entry: 5000 + i }))];
+    expect(() => buildEquipStatements(9, full, [], [16])).toThrow(/no free backpack slot/);
+  });
+
+  test("writes only bag and slot, never a guid or an item row", () => {
+    const rendered = buildEquipStatements(217, fresh, [{ entry: 6721, slot: 4 }]).map(renderStatement).join("\n");
+    expect(rendered).not.toMatch(/INSERT|DELETE|item_instance|SET item|SET guid/);
   });
 });
 

@@ -307,3 +307,44 @@ password does.
       name: {{ .Values.envSecretName }}
       key: CLICKHOUSE_PASSWORD
 {{- end -}}
+
+{{/*
+The module's account allowlist (AC_WRATH_BENCH_ACCOUNTS): `worldserver.accounts`,
+plus the party's accounts when staging is on. STAGER is the account SOAP
+trusts as an administrator, and a bench session on it would put that account
+on the agent's control surface, so the render refuses it in either list
+(docs/proposals/GROUP-PLAY.md §2-3).
+*/}}
+{{- define "wrathbench.moduleAccounts" -}}
+{{- $accounts := .Values.worldserver.accounts -}}
+{{- if .Values.staging.enabled -}}
+{{- $accounts = uniq (concat .Values.worldserver.accounts .Values.staging.accounts) -}}
+{{- end -}}
+{{- range $accounts -}}
+{{- if eq (upper (toString .)) "STAGER" -}}
+{{- fail "STAGER may never be on the module's account allowlist (worldserver.accounts / staging.accounts): it is SOAP's administrator, and no bench session may be opened on it" -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $accounts -}}
+{{- end -}}
+
+{{/*
+What the party stager needs, on the fleet and runner pods only and only with
+staging on: where SOAP is, and STAGER's password from the env Secret by
+reference (optional, so a missing key fails `stageParty` by name rather than
+wedging the pod in CreateContainerConfigError). The run-pod template never
+includes this, and infra/run-pod.ts refuses any SOAP or STAGER variable a
+template or stamp would carry.
+*/}}
+{{- define "wrathbench.stagerEnv" -}}
+{{- if .Values.staging.enabled }}
+- name: WRATHBENCH_SOAP_URL
+  value: "http://worldserver:{{ .Values.staging.soapPort }}/"
+- name: WRATHBENCH_STAGER_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.envSecretName }}
+      key: {{ .Values.staging.stagerPasswordKey }}
+      optional: true
+{{- end }}
+{{- end -}}
