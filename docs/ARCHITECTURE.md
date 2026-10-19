@@ -193,11 +193,13 @@ the SPA owns everything that is UI.
   in `localStorage` so a tab reopens where it was, URL first. A run whose stamp
   names no series belongs to no group and appears only under `all`. Filtering is client-side over rows the API already carries,
   with `/api/info` (the route the shell already polls) naming the series that
-  have runs, rather than a poller or a route parameter per control. Two pages
+  have runs, rather than a poller or a route parameter per control. Three pages
   are deliberately unfiltered: the fleet page is the deployed series by
-  construction, and the models page is the scheduler's verdict computed
+  construction, the models page is the scheduler's verdict computed
   server-side, where a client-side filter would make the counts and the list
-  disagree. This is a different dimension from the harness filter, which
+  disagree, and the map is a picture of who is playing now rather than a set
+  of results to compare, so it shows every live character whatever its
+  harness and the shell does not draw the selector on it. This is a different dimension from the harness filter, which
   selects which *loop* owned a run; both exist and compose, which is why this
   one is spelled `series` everywhere. The ladder offers no harness control at
   all: there the harness is a tag on each row and a colour on each point, not a

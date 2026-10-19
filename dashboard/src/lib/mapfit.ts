@@ -2,8 +2,9 @@
  * When the map's camera moves on its own: the fit.
  *
  * Fitting is deliberate, not reactive. The view is fitted on a few occasions
- * only: the first map to appear, a track load, a chip click, and a replay's
- * cursor crossing to another continent. It never refits on a mere change of
+ * only: the first map to appear, a track load, a chip click, a replay's
+ * cursor crossing to another continent, and a pick from the sidebar's live
+ * list, which frames that one character. It never refits on a mere change of
  * `activeMap`, because an unrelated agent logging out can flip which map is
  * busiest, and yanking a panned view out from under an operator for that would
  * be hostile. So a fit is asked for and then made once someone stands on the
@@ -41,7 +42,7 @@ export interface MapFitSources<P extends Fittable> {
   /** In replay, the map the cursor stands on; null when live (`createMapState`). */
   cursorMap: Accessor<number | null>;
   /** Frame the camera on these: everyone on the active map, never an empty list. */
-  fit: (here: readonly P[]) => void;
+  fit: (here: readonly Fittable[]) => void;
   /**
    * The cursor has moved to another map, just before the camera follows it.
    * The page lets go of its pinned chip here, since the character is no
@@ -57,6 +58,12 @@ export interface MapFit {
   askNow: () => void;
   /** Whether an ask is still waiting for someone to fit to. */
   pending: () => boolean;
+  /**
+   * Frame one character now, the reader having picked it from the live list,
+   * and drop any ask still waiting, so it cannot take the view back when
+   * someone else arrives. The caller puts the character's map on screen first.
+   */
+  focus: (target: Fittable) => void;
 }
 
 /**
@@ -83,6 +90,10 @@ export function createMapFit<P extends Fittable>(src: MapFitSources<P>): MapFit 
       untrack(() => attempt(src.activeMap(), src.feed()));
     },
     pending: () => pending,
+    focus: (target) => {
+      pending = false;
+      src.fit([target]);
+    },
   };
 
   /*

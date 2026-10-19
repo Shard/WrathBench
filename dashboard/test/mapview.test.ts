@@ -46,6 +46,7 @@ import {
   mapCounts,
   mapParam,
   worldView,
+  liveListOrder,
   mapName,
   pipName,
   positionAgeMs,
@@ -625,14 +626,13 @@ describe("the empty map's default view", () => {
   });
 
   test("the sidebar says nobody is live, and what is on screen instead", () => {
-    const note = emptySideNote(0, false, DEFAULT_MAP);
+    const note = emptySideNote(false, DEFAULT_MAP);
     expect(note).toContain("live");
     expect(note).toContain(mapName(DEFAULT_MAP));
   });
 
-  test("a populated map keeps the selection prompt, and a replay its own", () => {
-    expect(emptySideNote(3, false, 0)).toBe("no character selected");
-    expect(emptySideNote(0, true, 0)).not.toContain("live");
+  test("a replay with no reading at the cursor says so in its own words", () => {
+    expect(emptySideNote(true, 0)).not.toContain("live");
   });
 });
 
@@ -1190,5 +1190,28 @@ describe("pipName", () => {
 
   test("a feed that recorded no model at all still names the pip something", () => {
     expect(pipName(at({}))).toBe("fleet-sub-fable-none-freeplay-claude-fable-5-none-20260829-a2");
+  });
+});
+
+describe("liveListOrder", () => {
+  const at = (runId: string, character: string | null, level: number | null): AgentPosition =>
+    ({ runId, character, model: "test/model", map: 0, x: 0, y: 0, ts: 0, level, xp: null, money: null, questsCompleted: null, harnessVersion: null }) as AgentPosition;
+
+  test("highest level first, an unknown level last", () => {
+    const order = liveListOrder([at("r1", "Low", 3), at("r2", null, null), at("r3", "High", 12), at("r4", "Mid", 7)]);
+    expect(order.map((p) => p.runId)).toEqual(["r3", "r4", "r1", "r2"]);
+  });
+
+  test("a tie goes by name, then run id, whatever order the feed came in", () => {
+    const rows = [at("r9", "Brim", 7), at("r2", "Aldo", 7), at("r5", "Brim", 7)];
+    const once = liveListOrder(rows).map((p) => p.runId);
+    expect(once).toEqual(["r2", "r5", "r9"]);
+    expect(liveListOrder([...rows].reverse()).map((p) => p.runId)).toEqual(once);
+  });
+
+  test("leaves the feed it was given alone", () => {
+    const rows = [at("a", "A", 1), at("b", "B", 2)];
+    liveListOrder(rows);
+    expect(rows.map((p) => p.runId)).toEqual(["a", "b"]);
   });
 });

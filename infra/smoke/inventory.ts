@@ -14,7 +14,7 @@
  *
  * What this cannot prove: the worn-bag branch. A level-1 character owns no
  * bag, a fixture cannot write one (item guids are not safe to write
- * from outside), and `Smoketram` — the gate's persistent fixture character —
+ * from outside), and `Smoketram` — travel.ts's persistent fixture character —
  * was created without one for the same reason. That branch (container
  * `numSlots` + `bagSlot<n>Lo/Hi` folded into `bag()`, addressed by the bag's
  * equip slot 19-22) is covered by the sdk unit test on a fixture update block

@@ -169,16 +169,6 @@ export function pageSeries(
   return resolveSeries(choice, available);
 }
 
-/**
- * What the series filter removed, so a page can say so.
- *
- * A chart that silently drops rows is a lie of omission — the rule the episode
- * filter already follows (`EpisodeFilterNote`), applied to this filter too.
- */
-export function seriesFilteredOut(total: number, kept: number): number {
-  return Math.max(0, total - kept);
-}
-
 const PREF_KEY = "wrathbench.harnessSeries";
 
 /** The remembered choice, or null. Blocked storage reads as "nothing remembered". */

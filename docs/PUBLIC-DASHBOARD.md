@@ -634,6 +634,13 @@ newest reading (`items` on the row in `detail.json`, the run page's
 wrote it; a site on an older build shows "—" for the live inventory until it
 reloads.
 
+**With nothing selected, the map's sidebar lists the live characters** from
+the fields `live.json` already carries (name, model, level; the zone and the
+newest log line on hover), and the map shows every live character whatever
+its harness series, with no series selector on that page. The list publishes
+nothing new; its order and its click are in `dashboard/README.md`, "The live
+list".
+
 ## What the ladder shows
 
 Each row's headline numbers are still maxima over a model's counted runs, and

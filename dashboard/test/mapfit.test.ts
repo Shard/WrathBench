@@ -136,3 +136,93 @@ describe("the map's camera fit", () => {
     p.dispose();
   });
 });
+
+/** A live feed reading, as the poll serves one. */
+const live = (runId: string, map: number, x: number, level: number | null): AgentPosition => ({
+  runId,
+  character: runId,
+  model: "test/model",
+  map,
+  x,
+  y: 0,
+  ts: 0,
+  level,
+  xp: null,
+  money: null,
+  questsCompleted: null,
+  harnessVersion: null,
+});
+
+/** The live page minus its canvas, with the live list's pick done the way `MapPage`'s `focusOn` does it. */
+function livePage(initial: readonly AgentPosition[]) {
+  return createRoot((dispose) => {
+    const [feed, setFeed] = createSignal<readonly AgentPosition[]>(initial);
+    const [pinned, setPinned] = createSignal<number | null>(null);
+    const [selectedId, setSelectedId] = createSignal<string | null>(null);
+    const state = createMapState({ feed, track: () => undefined, pinned, selectedId });
+    const fits: { map: number; x: number }[][] = [];
+    const camera = createMapFit({
+      activeMap: state.activeMap,
+      feed,
+      cursorMap: state.cursorMap,
+      fit: (here) => fits.push(here.map((p) => ({ map: p.map, x: p.x }))),
+    });
+    return {
+      state,
+      camera,
+      fits,
+      dispose,
+      setFeed,
+      pin: (map: number | null): void => {
+        setPinned(map);
+      },
+      pick: (runId: string): void => {
+        setSelectedId(runId);
+        const at = feed().find((p) => p.runId === runId)!;
+        if (at.map !== state.activeMap()) setPinned(at.map);
+        camera.focus(at);
+      },
+    };
+  });
+}
+
+describe("a pick from the live list", () => {
+  const FEED = [live("a", 0, 100, 7), live("b", 0, 900, 12), live("c", 1, -4000, 3)];
+
+  test("selects the character and frames it alone, on its own map", () => {
+    const p = livePage(FEED);
+    // The first map to appear is fitted to everyone on it.
+    expect(p.fits.at(-1)).toEqual([{ map: 0, x: 100 }, { map: 0, x: 900 }]);
+    p.pick("b");
+    expect(p.state.selected()?.runId).toBe("b");
+    expect(p.fits.at(-1)).toEqual([{ map: 0, x: 900 }]);
+    p.dispose();
+  });
+
+  test("a character on another continent pins that continent, keeps the selection and is framed there", () => {
+    const p = livePage(FEED);
+    p.pick("c");
+    expect(p.state.activeMap()).toBe(1);
+    expect(p.state.selected()?.runId).toBe("c");
+    expect(p.fits.at(-1)).toEqual([{ map: 1, x: -4000 }]);
+    // The next poll moves nobody's camera: the pick was the fit.
+    const made = p.fits.length;
+    p.setFeed(FEED.map((q) => ({ ...q, x: q.x + 1 })));
+    expect(p.fits.length).toBe(made);
+    p.dispose();
+  });
+
+  test("a fit still waiting for someone is dropped, so it cannot take the view back", () => {
+    // Pinned to a map nobody is on: the ask waits.
+    const p = livePage(FEED);
+    p.pin(530);
+    p.camera.ask();
+    expect(p.camera.pending()).toBe(true);
+    p.pick("a");
+    expect(p.camera.pending()).toBe(false);
+    expect(p.fits.at(-1)).toEqual([{ map: 0, x: 100 }]);
+    p.setFeed([...FEED, live("d", 0, 500, 1)]);
+    expect(p.fits.at(-1)).toEqual([{ map: 0, x: 100 }]);
+    p.dispose();
+  });
+});

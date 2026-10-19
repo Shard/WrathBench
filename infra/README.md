@@ -180,8 +180,8 @@ values to keep that a non-question.
 `infra/fixtures/` puts a **logged-out smoke character** into a named scenario —
 level, money, position, homebind, spells, quest log — so a smoke can prove a
 late-game claim in seconds instead of playing the minutes it would take to walk
-there. The fast gate otherwise only ever sees what a level-1 character can
-reach from the Northshire spawn.
+there. A smoke otherwise only ever sees what a level-1 character can reach
+from the Northshire spawn.
 
     docker compose -f infra/compose.yml run --rm --no-deps fixtures \
       --account SMOKE3 --character Smoketram --scenario tram-ironforge
@@ -194,10 +194,12 @@ reach from the Northshire spawn.
 scenarios live in `infra/fixtures/scenarios.ts`, and adding one is a data edit
 in that file.
 
-The preflight smokes use fixtures too: `kill-credit.ts` starts from
+The deploy smokes use fixtures too: `kill-credit.ts` starts from
 `vineyard-kill-credit` instead of playing the 783 turn-in that gates the kill
-quest, which is why the `fleet` service carries the same `WRATHBENCH_DB_*` env
-as `fixtures` — and so does `runner`, where the smokes are exec'd by hand, so
+quest. The `fleet` service carries the same `WRATHBENCH_DB_*` env as
+`fixtures`, for a gate smoke that would start from one (the gate runs only
+`preflight.ts` today, which stages nothing) — and so does `runner`, where the
+deploy window and the operator exec the smokes, so
 
     docker compose -f infra/compose.yml exec runner bun infra/smoke/kill-credit.ts
 

@@ -52,6 +52,7 @@ import { ModelIcon, logoImageOf, onLogoLoaded } from "../components/ModelIcon";
 import { PlayBar } from "../components/PlayBar";
 import { UnitFrame } from "../components/UnitFrame";
 import { InventoryPanel } from "../components/Inventory";
+import { LiveList } from "../components/LiveList";
 import { sheetReading } from "../lib/inventory";
 import { questLog } from "../lib/questlog";
 import { cursorMemory } from "../lib/cursormemory";
@@ -152,7 +153,6 @@ import {
   zoomAt,
 } from "../lib/mapview";
 import { poll } from "../lib/poll";
-import { useSeriesFilter } from "../components/SeriesSelect";
 import { useClock } from "../lib/clock";
 import {
   type RouteRun,
@@ -383,18 +383,13 @@ export default function MapPage() {
   const feedPositions = (): readonly AgentPosition[] => feed.latest?.positions ?? [];
 
   /*
-   * The shell's harness series narrows the live feed, so the map
-   * agrees with every other page about which runs exist. Never during a replay:
-   * a replay is one named run the reader asked for by id, and hiding it because
-   * of a header control would look like a broken link.
+   * Every live character, whatever harness it runs: the shell's series
+   * selector is a comparability filter for pages of results, and the map is
+   * a picture of the world right now, so it is not offered here (the shell
+   * hides it on this route).
    */
-  const seriesFilter = useSeriesFilter(feedList, () => replayId() === undefined);
-  const liveSeries = seriesFilter.series;
-  const shownList = seriesFilter.kept;
-  const seriesHidden = seriesFilter.filteredOut;
-
   const { maps, count, cursorMap, activeMap, selected } = createMapState({
-    feed: shownList,
+    feed: feedList,
     track,
     pinned: pinnedMap,
     selectedId,
@@ -1448,7 +1443,7 @@ export default function MapPage() {
     /*
      * The transport's keyboard, on the document so it works with the canvas
      * focused or nothing focused at all. A key that belongs to a focused
-     * control — space on a button, typing in the series select — is left to it.
+     * control — space on a button — is left to it.
      */
     const onKey = (e: KeyboardEvent): void => {
       if (track() === undefined || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -1687,6 +1682,10 @@ export default function MapPage() {
       () => params.map,
       (raw) => {
         const pin = mapParam(raw);
+        // The URL catching up with a pin the page already made (a pick from
+        // the live list, a crossing) asks for nothing: refitting here would
+        // take the camera off the character the pick framed.
+        if (pin === untrack(pinnedMap)) return;
         setPinnedMap(pin);
         mapFit.askNow();
         if (pin !== null && !feedList().some((p) => p.map === pin)) {
@@ -2019,6 +2018,26 @@ export default function MapPage() {
     setSelectedId(null);
     setParams({ map: String(map) }, { replace: true });
   };
+  /**
+   * A row of the live list: its pip's click, and the camera framed on the pip
+   * where it is drawn (on the public build minutes behind the reading). A
+   * character on another continent pins that continent first, the selection
+   * kept, as a chip click would not keep it.
+   */
+  const focusOn = (runId: string): void => {
+    setSelectedId(runId);
+    // The sidebar has just swapped the list for the character's sheet, and on
+    // a phone, where it sits under the map, that moved the stage's foot; frame
+    // against the stage as it is now, not as the observer last reported it.
+    resize();
+    const at = pips.get(runId) ?? feedList().find((p) => p.runId === runId);
+    if (at === undefined) return;
+    if (at.map !== activeMap()) {
+      setPinnedMap(at.map);
+      setParams({ map: String(at.map) }, { replace: true });
+    }
+    mapFit.focus(at);
+  };
 
   return (
     <div class="map-wrap">
@@ -2061,8 +2080,6 @@ export default function MapPage() {
           playing={playing()}
           speed={speed()}
           count={count()}
-          seriesHidden={seriesHidden()}
-          liveSeries={liveSeries()}
           selected={selected()}
           onSeek={(ts) => {
             setPlaying(false);
@@ -2078,9 +2095,12 @@ export default function MapPage() {
         <Show
           when={selected()}
           fallback={
-            <span class="dim">
-              {emptySideNote(count(), replayId() !== undefined, activeMap())}
-            </span>
+            <Show
+              when={replayId() === undefined && count() > 0}
+              fallback={<span class="dim">{emptySideNote(replayId() !== undefined, activeMap())}</span>}
+            >
+              <LiveList rows={feedList()} onPick={focusOn} />
+            </Show>
           }
         >
           {(p) => (

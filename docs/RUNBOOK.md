@@ -1891,8 +1891,10 @@ reach:
   be written as IPv4:port.
 
 Only the fleet may reach the Kubernetes API, for the run-pod launcher. It may
-also reach MySQL, because the preflight gate's fixture staging runs in that
-pod. Neither may reach ClickHouse, the viewer or any other address on the LAN.
+also reach MySQL, for a gate smoke that stages a fixture in that pod (the gate
+runs only `infra/smoke/preflight.ts` today, which stages nothing; the
+fixture-staging smokes, kill-credit among them, are deploy smokes and run in
+the runner pod). Neither may reach ClickHouse, the viewer or any other address on the LAN.
 
 **Turning it on is a release step of its own.** Ship the chart first, with the
 switch off, which changes nothing. Then set the values in a separate GitOps
@@ -1930,7 +1932,8 @@ connection was made, the API's included, whatever it answers a request with no
 token. ClickHouse and the viewer should print `TimeoutError`. After the
 resume, watch three things:
 
-- the next preflight gate pass (its fixture smoke uses MySQL);
+- the next preflight gate pass, and the next release's deploy smokes
+  (kill-credit's fixture staging uses MySQL from the runner pod);
 - each driver's first episode, through its first model call and first module
   call;
 - the first run pod.

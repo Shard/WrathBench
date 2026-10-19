@@ -501,6 +501,21 @@ export const SCENARIOS = {
     homebind: SENTINEL_HILL_BIND,
     clearQuests: true,
   },
+  "vineyard-priest": {
+    description:
+      "level 10, no money, at the Northshire vineyard edge knowing Resurrection (2006) (for death-recovery's resurrection leg: the priest trainer teaches rank 1 at level 10, trainer_spell 11, so the fixture grants it)",
+    level: 10,
+    xp: 0,
+    money: 0,
+    spells: [2006],
+    position: {
+      map: 0,
+      zone: 12,
+      ...VINEYARD_EDGE,
+      o: facing(VINEYARD_EDGE, VINEYARD_NEAREST_VERMIN),
+    },
+    homebind: { map: HUMAN_START.map, zone: HUMAN_START.zone, x: HUMAN_START.x, y: HUMAN_START.y, z: HUMAN_START.z },
+  },
   "steep-ashenvale-lowland": {
     description: "level 80, no money, on the Ashenvale coastal lowland below the Maestra's Post hills (steep-replan smoke: one climb refusal, one off-mesh point)",
     level: 80,
