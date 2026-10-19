@@ -219,8 +219,11 @@ services:
       # stock dist value; do not add tuning here without saying so in the docs.
       AC_RATE_XP_KILL: "1"
       AC_RATE_XP_QUEST: "1"
-      # SOAP stays off. The harness has no privileged control path into the
-      # world by design (docs/CONTRACTS.md); actions go through the module.
+      # SOAP stays off on the quickstart: it has no network policy to contain
+      # it, and no party campaign runs here. The agent has no privileged
+      # control path into the world (docs/CONTRACTS.md binds what it sees and
+      # does); actions go through the module. The cluster enables SOAP for the
+      # operator's party staging only (docs/proposals/GROUP-PLAY.md).
       AC_SOAP_ENABLED: "0"
       # mod-wrathbench control module (module/). Pinned here rather than in the
       # module .conf: the stock docker entrypoint only materialises the main

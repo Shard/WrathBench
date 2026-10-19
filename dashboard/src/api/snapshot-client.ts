@@ -50,6 +50,7 @@ import type {
   SnapshotEnvelope,
   TraceIndexResponse,
   TraceSegment,
+  LiveNearby,
   NearbyWindow,
   TrackResponse,
 } from "@viewer/api-types";
@@ -138,6 +139,8 @@ interface LiveArtifact {
   attribution?: string;
   fleet: PublicFleetResponse;
   positions: PositionsResponse;
+  /** The public window of each run its position flags `nearby`; absent when no run has units. */
+  nearby?: LiveNearby;
 }
 
 /** How fresh the data is, and whose reconstruction it came off. */
@@ -455,11 +458,17 @@ export function createSnapshotClient(base: string, opts: SnapshotClientOptions =
       };
     },
     /*
-     * Nothing publishes nearby units yet, so there is nothing to fetch and no
-     * request is made: an empty window, which the map draws as no units. The
-     * public feed never flags a position `nearby`, so the map does not ask.
+     * The units around a live run ride in the fast lane beside its position:
+     * one window per pass, already projected, reaching back as far as the
+     * public map plays (`PUBLIC_NEARBY_SPAN_MS`), whatever span was asked
+     * for. No request of its own. A run the file carries no window for (not
+     * live, or no units recorded) answers an empty one, which the map draws
+     * as no units.
      */
-    nearby: (id: string): Promise<NearbyWindow> => Promise.resolve(emptyNearbyWindow(id, Date.now())),
+    nearby: async (id: string): Promise<NearbyWindow> => {
+      const l = await live();
+      return l.nearby?.[id] ?? emptyNearbyWindow(id, l.generatedAt);
+    },
     feedCadence: { renderMs: SNAPSHOT_RENDER_MS, cacheMs: ttl + SNAPSHOT_EDGE_TTL_MS },
     /*
      * A character is assembled here rather than published as an artifact of its

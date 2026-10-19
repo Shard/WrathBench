@@ -467,7 +467,7 @@ export interface LadderPoint {
   single: boolean;
   model: string;
   effort: string | null;
-  /** A claude-code entry's compaction window, when it set one: a point of its own. */
+  /** A CLI entry's compaction window, when it set one: a point of its own. */
   compactWindow?: string;
   /** The mean of the x axis's metric, over the `n` runs carrying both axes' readings. */
   x: number;
@@ -1235,7 +1235,7 @@ export interface CharacterRow {
   model: string;
   /** The effort the latest attempt ran at, when it recorded one. */
   effort: string | null;
-  /** The latest attempt's claude-code compaction window, when it set one. */
+  /** The latest attempt's CLI compaction window, when it set one. */
   compactWindow?: string;
   /** The latest attempt — the run whose readings this row shows. */
   latest: ResultRun;

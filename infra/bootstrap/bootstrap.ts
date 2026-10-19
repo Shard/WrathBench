@@ -26,8 +26,11 @@
  * SOAP is unusable for the *first* account: ACSoap.cpp requires the calling
  * account to be SEC_ADMINISTRATOR, and data/sql/base/db_auth/account.sql seeds
  * zero rows, so there is no account to authenticate with. It is a chicken and
- * egg by construction. It also requires SOAP.Enabled, which we deliberately
- * leave off (docs/CONTRACTS.md: no privileged control path into the world).
+ * egg by construction. It also requires SOAP.Enabled, which the quickstart
+ * leaves off. On the cluster SOAP serves one thing: the operator's party
+ * staging, in-cluster only, on an admin account no bench session can open
+ * (docs/proposals/GROUP-PLAY.md). docs/CONTRACTS.md binds the agent's path,
+ * not the operator's, and the agent can reach neither SOAP nor this tool.
  *
  * The console (attaching to the worldserver and typing `account create ...`,
  * which is what AzerothCore's own docker README tells you to do by hand) is

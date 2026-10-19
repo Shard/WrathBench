@@ -14,9 +14,10 @@
  * 1. **Is the generation complete?** The manifest names a key per aggregate and
  *    `runs.json` names four per run; `live.json` names its live runs' newest
  *    trace segments and each track lists its own, of which the walk takes the
- *    newest. Every one of them must be fetchable. The
- *    manifest is written last precisely so this cannot be half true, so a miss
- *    here is a real defect and is reported as one.
+ *    newest. Every one of them must be fetchable. The manifest is written
+ *    last precisely so this cannot be half true, so a miss here is a real
+ *    defect and is reported as one. The units around each live run ride
+ *    inside `live.json` itself and name no key.
  * 2. **Does anything in it cross the content boundary?** Two independent
  *    checks, because one of them alone would be a re-statement of the
  *    publisher's own beliefs:
@@ -70,6 +71,7 @@ import {
   projectEpisodes,
   projectFleet,
   projectInfo,
+  projectLiveNearby,
   projectModels,
   projectPositions,
   projectResults,
@@ -82,6 +84,7 @@ import {
 import { REDACTED_PROSE } from "../runner/viewer/redact-prose";
 import { LOCAL_PATH_ROOTS } from "../runner/viewer/scrub-paths";
 import { unpackSegs } from "../runner/viewer/trace";
+import { PUBLIC_NEARBY_SPAN_MS } from "../runner/viewer/nearby";
 import { describeFindings, SecretScanner } from "../runner/src/secret-scan";
 import { LIVE_PATH, MANIFEST_PATH, classifyPath, traceSegmentPath } from "./publish-core";
 
@@ -179,7 +182,9 @@ export type FindingKind =
   /** The body is not what the layout says it is. */
   | "malformed"
   /** The attribution line every artifact must carry is missing or altered. */
-  | "attribution";
+  | "attribution"
+  /** Units on the public map that are not live: a window reaching back past the live span, or one for a run `live.json` does not flag. */
+  | "live-only";
 
 export interface Finding {
   kind: FindingKind;
@@ -455,6 +460,85 @@ function valueAt(body: unknown, path: string): unknown {
   return cur;
 }
 
+/* ----------------------------------------------------------------- nearby --- */
+
+/**
+ * The unit state a public nearby window may carry, restated rather than
+ * imported so the check stays independent of the projector it audits
+ * (`publish-accept.test.ts` pins the two equal): ids, names and packet-field
+ * classes, the target only as "targets this character". No guid key, no
+ * subname, no unit flags.
+ */
+export const NEARBY_PUBLIC_STATE: ReadonlySet<string> = new Set(["entry", "name", "ctype", "level", "hp", "df", "nf", "qg", "tgs"]);
+/** Unit type codes a public window may hold: 0 creature, 2 vehicle. Never 1 (a pet) or 3 (a player). */
+const NEARBY_PUBLIC_TYPES: ReadonlySet<unknown> = new Set([0, 2]);
+
+/**
+ * The value-level half for `live.json`'s nearby windows, independent of
+ * `projectLiveNearby`: each window is for a run the same file flags as live
+ * and spans no more than `PUBLIC_NEARBY_SPAN_MS`; its unit table holds no
+ * player or pet; and no state, in the keyframe or an event, carries a key
+ * outside `NEARBY_PUBLIC_STATE`. The self says which map and nothing else:
+ * its guid, target and down are blank.
+ */
+export function nearbyFindings(key: string, body: Record<string, unknown>): Finding[] {
+  const nearby = body["nearby"];
+  if (nearby === undefined) return [];
+  const out: Finding[] = [];
+  if (nearby === null || typeof nearby !== "object" || Array.isArray(nearby)) {
+    return [{ kind: "malformed", key, at: "nearby", detail: "not an object of windows by run" }];
+  }
+  const positions = (body["positions"] as { positions?: unknown } | undefined)?.positions;
+  const flagged = new Set(
+    (Array.isArray(positions) ? positions : [])
+      .filter((p): p is { runId: string; nearby: true } => p !== null && typeof p === "object" && (p as { nearby?: unknown }).nearby === true)
+      .map((p) => p.runId),
+  );
+  const stateKeys = (s: unknown, at: string): void => {
+    if (s === null || typeof s !== "object" || Array.isArray(s)) return;
+    for (const k of Object.keys(s)) {
+      if (!NEARBY_PUBLIC_STATE.has(k)) out.push({ kind: "withheld-field", key, at: `${at}.${k}`, detail: `unit state key ${k}` });
+    }
+  };
+  // The keyframe's self is a whole one, its guid, target and down blanked: only a value is a finding.
+  const selfKeys = (s: unknown, at: string): void => {
+    if (s === null || typeof s !== "object" || Array.isArray(s)) return;
+    for (const [sk, v] of Object.entries(s)) {
+      if (sk !== "map" && v !== null && v !== false) out.push({ kind: "withheld-field", key, at: `${at}.${sk}`, detail: `self key ${sk}` });
+    }
+  };
+  for (const [run, w] of Object.entries(nearby as Record<string, unknown>)) {
+    const at = `nearby.${run}`;
+    if (w === null || typeof w !== "object" || Array.isArray(w)) {
+      out.push({ kind: "malformed", key, at, detail: "not a window" });
+      continue;
+    }
+    const win = w as Record<string, unknown>;
+    if (!flagged.has(run)) out.push({ kind: "live-only", key, at, detail: "a window for a run no live position flags" });
+    const t0 = win["t0"];
+    const t1 = win["t1"];
+    if (typeof t0 !== "number" || typeof t1 !== "number" || t1 - t0 > PUBLIC_NEARBY_SPAN_MS) {
+      out.push({ kind: "live-only", key, at: `${at}.t0`, detail: `spans ${String(t0)}..${String(t1)}, more than ${PUBLIC_NEARBY_SPAN_MS} ms` });
+    }
+    const ty = Array.isArray(win["ty"]) ? (win["ty"] as unknown[]) : [];
+    ty.forEach((t, i) => {
+      if (!NEARBY_PUBLIC_TYPES.has(t)) out.push({ kind: "withheld-field", key, at: `${at}.ty[${i}]`, detail: `unit type ${String(t)}: a player or a pet` });
+    });
+    const k = (win["k"] ?? {}) as { self?: unknown; s?: unknown };
+    selfKeys(k.self, `${at}.k.self`);
+    (Array.isArray(k.s) ? k.s : []).forEach((s, i) => stateKeys(s, `${at}.k.s[${i}]`));
+    (Array.isArray(win["ev"]) ? (win["ev"] as unknown[]) : []).forEach((e, i) => {
+      if (!Array.isArray(e)) return;
+      const kind = e[2];
+      const value = e[3];
+      if (kind === "in") stateKeys((value as { s?: unknown } | null)?.s, `${at}.ev[${i}][3].s`);
+      else if (kind === "st") stateKeys(value, `${at}.ev[${i}][3]`);
+      else if (kind === "self") selfKeys(value, `${at}.ev[${i}][3]`);
+    });
+  }
+  return out;
+}
+
 /* ---------------------------------------------------------- re-projection --- */
 
 /** Sort keys recursively, so a compare is about content and never about order. */
@@ -485,10 +569,17 @@ function projectorFor(key: string): ((payload: Record<string, unknown>) => unkno
   const name = key.split("/").at(-1) ?? "";
   if (key === MANIFEST_PATH) return null;
   if (key === LIVE_PATH) {
-    return (p) => ({
-      fleet: projectFleet(p["fleet"] as unknown as Parameters<typeof projectFleet>[0]),
-      positions: projectPositions(p["positions"] as unknown as Parameters<typeof projectPositions>[0]),
-    });
+    return (p) => {
+      const positions = projectPositions(p["positions"] as unknown as Parameters<typeof projectPositions>[0]);
+      return {
+        fleet: projectFleet(p["fleet"] as unknown as Parameters<typeof projectFleet>[0]),
+        positions,
+        // The units around the live runs: only for a position flagged `nearby`,
+        // creatures only, and no further back than the live map plays, so a
+        // player, a guid-bearing key or a window that outlived its run is drift.
+        ...(p["nearby"] === undefined ? {} : { nearby: projectLiveNearby(p["nearby"], positions) }),
+      };
+    };
   }
   if (classifyPath(key).kind === "trace") return (p) => projectTraceSegment(p as unknown as Parameters<typeof projectTraceSegment>[0]);
   if (key.startsWith("v1/run/")) {
@@ -676,6 +767,7 @@ export async function verifyPublication(source: AcceptSource, opts: VerifyOption
     report.findings.push(...scan.findings);
     report.residual.push(...scan.residual);
     report.findings.push(...reprojectionFindings(key, obj));
+    if (key === LIVE_PATH) report.findings.push(...nearbyFindings(key, obj));
     return obj;
   };
 

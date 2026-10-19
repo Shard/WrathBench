@@ -64,13 +64,22 @@ const spawn = (argv: string[]): string =>
 const unquote = (v: string | undefined): string => JSON.parse(v ?? '""') as string;
 
 describe("sandbox network confinement", () => {
-  test("the module's port is reachable: fetch, node:net and Bun.connect all connect", async () => {
+  test("the module's port is reachable by raw TCP (the kernel allows it), but snippet fetch and WebSocket to the module are refused in-process", async () => {
     const host = makeHost();
-    const viaFetch = await host.evalSnippet(`return await (await fetch("http://127.0.0.1:${allowed.port}/")).text()`);
-    expect(viaFetch.ok).toBe(true);
-    expect(viaFetch.value).toBe('"module"');
+    // Raw TCP to the module port still opens: the in-process guard does not
+    // cover node:net / Bun.connect, and the kernel allows the one port. With no
+    // credential to read (struck from the env, #-private on the client) such a
+    // connection authenticates nothing — the point is the ambient sdk, not a
+    // hand-assembled request.
     expect(unquote((await host.evalSnippet(netConnect(allowed.port))).value)).toBe("OPEN");
     expect(unquote((await host.evalSnippet(bunConnect(allowed.port))).value)).toBe("OPEN");
+    // But a snippet's own fetch/WebSocket to the module host is refused, so it
+    // cannot drive the module through either (#74; operator, 2026-10-19).
+    const viaFetch = await host.evalSnippet(`try { await fetch("http://127.0.0.1:${allowed.port}/"); return "OPEN"; } catch (e) { return e.message ?? e.code; }`);
+    expect(unquote(viaFetch.value)).toContain("not available");
+    expect(unquote(viaFetch.value)).not.toBe("OPEN");
+    const viaWs = await host.evalSnippet(`try { new WebSocket("ws://127.0.0.1:${allowed.port}/events"); return "OPEN"; } catch (e) { return e.message ?? String(e); }`);
+    expect(unquote(viaWs.value)).toContain("not available");
   });
 
   test("any other port is EACCES from the kernel, whatever API dials it", async () => {
@@ -82,7 +91,7 @@ describe("sandbox network confinement", () => {
     // fetch: the in-process guard answers first with its own message (the
     // readable layer); the kernel is behind it either way.
     const viaFetch = await host.evalSnippet(`try { await fetch("http://127.0.0.1:${other.port}/"); return "OPEN"; } catch (e) { return e.code ?? e.message; }`);
-    expect(unquote(viaFetch.value)).toMatch(/EACCES|not permitted/);
+    expect(unquote(viaFetch.value)).toMatch(/EACCES|not available/);
     expect(unquote(viaFetch.value)).not.toBe("OPEN");
   });
 

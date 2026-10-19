@@ -297,7 +297,7 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     );
   });
 
-  test("a claude-code compaction window reaches argv canonicalised, and only when set", () => {
+  test("a claude-code or codex compaction window reaches argv canonicalised, and only when set", () => {
     const [s] = resolve([{ model: "claude-haiku-5-5", driver: "claude-code", effort: "max", compactWindow: "100K" }], "20261009");
     expect(s!.compactWindow).toBe("100k");
     // Identity like effort: it names itself in the derived run id.
@@ -312,7 +312,15 @@ describe("run dimensions: objective, watchdogs, maxToolCalls", () => {
     expect(auto!.runId).toBe("roster-claude-haiku-5-5-max-20261009");
     expect(episodeArgv(auto!, false)).not.toContain("--compact-window");
     expect(() => resolve([{ model: "m", compactWindow: "100k" }], "20261009")).toThrow(/the openai driver has none/);
-    expect(() => resolve([{ model: "gpt-6-astra", driver: "codex", compactWindow: "100k" }], "20261009")).toThrow(/the codex driver has none/);
+    // A codex entry's window is its identity exactly as claude-code's is; one without is the id it always was.
+    const [cx] = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high", compactWindow: "200K" }], "20261009");
+    expect(cx!.compactWindow).toBe("200k");
+    expect(cx!.runId).toBe("roster-gpt-6-astra-high-200k-20261009");
+    const cxArgv = episodeArgv(cx!, false);
+    expect(cxArgv[cxArgv.indexOf("--compact-window") + 1]).toBe("200k");
+    const [cxPlain] = resolve([{ model: "gpt-6-astra", driver: "codex", effort: "high" }], "20261009");
+    expect(cxPlain!.runId).toBe("roster-gpt-6-astra-high-20261009");
+    expect(episodeArgv(cxPlain!, false)).not.toContain("--compact-window");
     expect(() => resolve([{ model: "sonnet", driver: "claude-code", compactWindow: "64k" }], "20261009")).toThrow(/100k–1M tokens/);
   });
 

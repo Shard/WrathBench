@@ -268,7 +268,7 @@ export function resolvedLabel(
 
 /**
  * The run dimensions a model's label carries after its name: the effort, and a
- * claude-code entry's compaction window when it set one — `max · 100k`, `max`,
+ * CLI entry's compaction window when it set one — `max · 100k`, `max`,
  * `100k`. Null when neither was set: absent effort is the provider's default
  * and absent window the CLI's own `auto`, and neither is printed.
  */

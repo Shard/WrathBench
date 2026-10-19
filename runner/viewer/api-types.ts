@@ -288,7 +288,7 @@ export interface ComparabilityView {
    */
   wiki?: false;
   /**
-   * The Claude Code CLI's auto-compaction window (`100k`…`1M`), a key like
+   * The CLI harness's auto-compaction window (`100k`…`1M`; claude-code or codex), a key like
    * `effort`. Absent is the CLI's own `auto`, which is also every run stamped
    * before the field existed.
    */
@@ -897,7 +897,7 @@ export interface AgentPosition {
    * recorded" rather than inventing one.
    */
   effort?: string | null;
-  /** The claude-code compaction window off the same stamp; absent is `auto`. */
+  /** The CLI compaction window off the same stamp; absent is `auto`. */
   compactWindow?: string | null;
   map: number;
   x: number;
@@ -967,8 +967,8 @@ export interface AgentPosition {
   /**
    * True when the run's nearby ring (`/api/run/<id>/nearby`) is being written:
    * its newest file was touched within `NEARBY_FRESH_MS`. Absent otherwise, so
-   * the map asks for units only where there are some. Private: the public
-   * projection does not carry it until the public map has something to fetch.
+   * the map asks for units only where there are some. In `live.json` it is
+   * set exactly where the file carries the run's window (`LiveNearby`).
    */
   nearby?: true;
 }
@@ -1187,7 +1187,7 @@ export interface CharacterView {
    */
   model: string | null;
   effort: string | null;
-  /** The claude-code compaction window, off the newest attempt that set one; absent is `auto`. */
+  /** The CLI compaction window, off the newest attempt that set one; absent is `auto`. */
   compactWindow?: string | null;
   driver: string | null;
   harnessVersion: string | null;
@@ -1836,7 +1836,7 @@ export interface ResultRun {
   image?: string | null;
   effort: string | null;
   /**
-   * The claude-code compaction window, off the comparability stamp. A key like
+   * The CLI compaction window, off the comparability stamp. A key like
    * `effort`; absent is the CLI's own `auto`, which every older run is.
    */
   compactWindow?: string | null;
@@ -2480,6 +2480,14 @@ export interface NearbyWindow {
 }
 
 /**
+ * `live.json`'s `nearby`: each live run's public window (`projectLiveNearby`),
+ * by run id, for exactly the positions flagged `nearby`. Overwritten every
+ * pass and gone with the run's position, so the public site holds the last
+ * `PUBLIC_NEARBY_SPAN_MS` of units and never more.
+ */
+export type LiveNearby = Record<string, NearbyWindow>;
+
+/**
  * One state sample on a character's whole climb, told from which attempt.
  *
  * `StatePoint` plus the two fields that make a chain of attempts legible as one
@@ -2617,7 +2625,7 @@ export interface ModelRowView {
   name: string;
   model: string;
   effort: string | null;
-  /** The entry's claude-code compaction window; absent is the CLI's own `auto`. */
+  /** The entry's CLI compaction window (claude-code or codex); absent is the CLI's own `auto`. */
   compactWindow?: string | null;
   platform: string | null;
   /** The harness this roster entry's runs go through, from its driver. */
