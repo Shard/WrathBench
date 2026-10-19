@@ -21,7 +21,9 @@ import {
   claudeAutoCompactLimit,
   claudeCompactSummary,
   claudeModelWindow,
+  claudeWindowCapRefusal,
   codexAutoCompactLimit,
+  codexWindowCapRefusal,
   compactionNotice,
   compactWindowTokens,
   summaryFields,
@@ -150,6 +152,31 @@ describe("auto-compaction thresholds", () => {
   test("codex: 90% of the catalogue window, from the 95% the CLI reports", () => {
     expect(codexAutoCompactLimit(475_000)).toBe(450_000);
     expect(codexAutoCompactLimit(258_400)).toBe(244_800);
+  });
+
+  test("codex: a run's window is the limit when it is the smaller, as the CLI takes it", () => {
+    expect(codexAutoCompactLimit(475_000, "200k")).toBe(200_000);
+    expect(codexAutoCompactLimit(258_400, "200k")).toBe(200_000);
+    // Past the CLI's own 90% the CLI's limit wins (and the run is refused, below).
+    expect(codexAutoCompactLimit(258_400, "300k")).toBe(244_800);
+    expect(codexAutoCompactLimit(475_000, undefined)).toBe(450_000);
+  });
+
+  test("a window the CLI would cap is refused, on both CLIs, at or above the cap", () => {
+    // codex: 258,400 reported is a 272,000 catalogue window and a 244,800 limit.
+    expect(codexWindowCapRefusal("300k", 258_400)).toContain("compactWindow 300k (300000 tokens) is at or above the Codex CLI's own auto-compaction limit");
+    expect(codexWindowCapRefusal("300k", 258_400)).toContain("272000-token catalogue window");
+    expect(codexWindowCapRefusal("200k", 258_400)).toBeNull();
+    expect(codexWindowCapRefusal("450k", 475_000)).not.toBeNull();
+    expect(codexWindowCapRefusal("449k", 475_000)).toBeNull();
+    expect(codexWindowCapRefusal(undefined, 258_400)).toBeNull();
+    expect(codexWindowCapRefusal("300k", 0)).toBeNull();
+    // claude-code: the model's context window; at it is as capped as above it.
+    expect(claudeWindowCapRefusal("1M", 1_000_000)).toContain("is at or above the model's context window");
+    expect(claudeWindowCapRefusal("300k", 200_000)).not.toBeNull();
+    expect(claudeWindowCapRefusal("200k", 200_000)).not.toBeNull();
+    expect(claudeWindowCapRefusal("300k", 1_000_000)).toBeNull();
+    expect(claudeWindowCapRefusal(undefined, 200_000)).toBeNull();
   });
 
   test("claude-code: the window less the summary reserve less 13,000", () => {
