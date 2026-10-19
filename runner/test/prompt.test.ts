@@ -205,23 +205,23 @@ describe("episode sentence", () => {
 
   test("every rendering hashes as pinned, so a prompt edit has to move its pins on purpose", () => {
     // Pinned by value, not by rebuilding from the same parts, so a change to
-    // any rendering fails here. The last edit to move them is the say line
-    // naming party, yell and whisper chat (the operator's call, for the
-    // Deadmines party eval), which is in the shared body, so it moved all
-    // twelve.
+    // any rendering fails here. The last edit to move them is the useItem,
+    // cooldowns and spiritHealerActivate clauses (a refused item use and a
+    // silent spirit healer now come back as values), which are in the shared
+    // body, so it moved all twelve.
     const { promptHash } = require("../src/comparability");
     const pinned: Record<string, Record<string, Record<string, string>>> = {
       none: {
-        wrathbench: { on: "sha256:4e79751f7649f27d", off: "sha256:b7d2df34e07a66e3" },
-        cli: { on: "sha256:4087fc9350f254a8", off: "sha256:187ebaf1b94b26ff" },
+        wrathbench: { on: "sha256:16cb69f381096aeb", off: "sha256:32f9a6ac7bc4a883" },
+        cli: { on: "sha256:03b5ae621579e494", off: "sha256:090f73975746b10d" },
       },
       e90: {
-        wrathbench: { on: "sha256:0741948e98499e4f", off: "sha256:1f4e0243d3e8d040" },
-        cli: { on: "sha256:086e494371dea4e8", off: "sha256:a0053926db9ebfb6" },
+        wrathbench: { on: "sha256:0922162fbbc4864f", off: "sha256:e384dc01728bcde4" },
+        cli: { on: "sha256:b559c07909dbf63d", off: "sha256:902117dde3234c27" },
       },
       e360: {
-        wrathbench: { on: "sha256:2a5b9debb88410e7", off: "sha256:033583bfa54b33d7" },
-        cli: { on: "sha256:a4b7c628a740bfb3", off: "sha256:41c336edbcccde85" },
+        wrathbench: { on: "sha256:1f464e155f5780b9", off: "sha256:72100a4202796a04" },
+        cli: { on: "sha256:a70bc61daa817664", off: "sha256:2ad0d21470a2e32c" },
       },
     };
     const episodes = [
