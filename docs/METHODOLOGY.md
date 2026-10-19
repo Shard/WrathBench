@@ -289,13 +289,23 @@ reading for it, and a derivation treats that as *not recorded*, never zero.
 The ladder orders on three separate numbers — highest rung, the `(level, xp)`
 pair, gold — and no aggregate score.
 
-**The ladder shows its dispersion; its reference lines are withdrawn**
-(2026-09-16, 2026-09-18). A row's maxima are over runs already paid for, so
-the row also says how many reached each rung and the range of levels they
-spanned. An empirical ceiling and a human speedrun band were withdrawn because
-one human entry per category is not enough data to earn the space; the figures
-stay in `docs/PUBLIC-DASHBOARD.md` ("The human reference") and return when
-there are several runs to state a distribution from.
+**The ladder shows its dispersion, and one reference line: a scripted run
+through the SDK** (2026-09-16, 2026-09-18; operator, 2026-10-19). A row's
+maxima are over runs already paid for, so the row also says how many reached
+each rung and the range of levels they spanned. An empirical ceiling and a
+human speedrun band were withdrawn because one human entry per category is not
+enough data to earn the space; the figures stay in `docs/PUBLIC-DASHBOARD.md`
+("The human reference") and return when there are several runs to state a
+distribution from. What is drawn instead is a ceiling on what the surface
+allows (operator, 2026-10-19, reversing the 2026-09-16 line that no scripted
+agent is built and nothing new is run): one scripted reference run per harness
+series, a TypeScript program against the SDK played from a fresh level-1
+character through `run_snippet`, in the models' sandbox, session, contracts
+and snippet timeout. A human speedrun says nothing about what the SDK lets a
+player do; this does, so a model's movement across series can be read against
+the surface's own. It is stamped and never scored — outside every
+comparability group, never in the row order, never counted toward a target —
+and is shown only as a labelled line.
 
 **A ladder belongs to a comparability group.** `probing` has none
 (2026-08-29): a campaign varies its cells on purpose, so ranking its runs ranks
