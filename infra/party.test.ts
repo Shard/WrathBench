@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { campaignSquares, partyAttempt, type ProbeRun } from "../runner/src/campaigns";
-import { DEFAULT_POLICY, type RunFact } from "../runner/src/models";
+import { DEFAULT_POLICY, modelStates, type RunFact } from "../runner/src/models";
 import { defsBlock, joined, PARTY_MEMBERS, partyDefinition, definition } from "../runner/test/fixtures/campaigns";
 import { runParty, type MemberHandle, type MemberVerdict, type PartyFateDeps, type PartyMemberRun } from "./party-fate";
 import { commandStager, type StageRequest } from "./party-stager";
@@ -240,6 +240,42 @@ describe("shared fate", () => {
     expect(out.fate).toBe("stopped");
     expect(d.writes).toEqual([]);
     expect(Object.values(out.verdicts).every((v) => v.kind === "paused" && v.reason === "operator-pause")).toBe(true);
+  });
+
+  test("a shared stop that lands inside the grace after a member ended on its own still ends the party", async () => {
+    const { members, runs } = fakeParty();
+    let stopping = false;
+    const d = deps(members, { stopping: () => stopping });
+    const done = runParty(runs, d);
+    await tick();
+    // The tank's clock runs out first; the machine starts stopping the rest
+    // with the grace, and a deploy window's SIGTERM reaches the roster then.
+    members[0]!.exit({ kind: "terminated", reason: "episode-limit", detail: undefined });
+    await tick();
+    // The roster's SIGTERM path stops every party handle it holds.
+    stopping = true;
+    for (const f of members) void f.handle.stop(90_000);
+    const out = await done;
+    expect(out.fate).toBe("ended");
+    expect(d.writes).toEqual(["healer", "mage", "rogue", "hunter"].map((m) => `${m} end party-ended (tank: episode-limit)`));
+  });
+
+  test("a stop that lands while the stager works launches nobody", async () => {
+    const { members, runs } = fakeParty();
+    let stopping = false;
+    let launched = 0;
+    const d = deps(members, {
+      stopping: () => stopping,
+      stage: async () => {
+        stopping = true;
+        return { ok: true as const };
+      },
+      launch: async (m) => (launched++, members.find((f) => f.m.runId === m.runId)!.handle),
+    });
+    const out = await runParty(runs, d);
+    expect(out.fate).toBe("stopped");
+    expect(launched).toBe(0);
+    expect(d.writes).toEqual([]);
   });
 
   test("a resumed party is never staged, and its members launch as resumes", async () => {
@@ -556,6 +592,18 @@ describe("the stager's command contract", () => {
     expect(r).toEqual({ ok: false, reason: "the party stager infra/fixtures/stage-party.ts is not installed in this image" });
   });
 
+  test("the roster's stop kills a staging in flight", async () => {
+    const dir = tempDir("wb-stager-slow-");
+    const script = join(dir, "slow.ts");
+    writeFileSync(script, "await Bun.stdin.text(); await Bun.sleep(60_000);\n");
+    const abort = new AbortController();
+    const started = Date.now();
+    const pending = commandStager({ cwd: dir, command: ["bun", script] }).stage(req, abort.signal);
+    setTimeout(() => abort.abort(), 200);
+    expect(await pending).toEqual({ ok: false, reason: "staging stopped: the roster was signalled" });
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
   test("the request arrives on stdin; exit 0 is staged, anything else is the stderr's last line", async () => {
     const dir = tempDir("wb-stager-");
     const script = join(dir, "stage.ts");
@@ -572,6 +620,41 @@ describe("the stager's command contract", () => {
     const stager = commandStager({ cwd: dir, command: ["bun", script] });
     expect(await stager.stage(req)).toEqual({ ok: true, detail: "0 staged for p" });
     expect(await stager.stage({ ...req, party: "bad" })).toEqual({ ok: false, reason: "staging failed (exit 3): SOAP: STAGER refused" });
+  });
+});
+
+describe("the defer ladder", () => {
+  test("members another member's verdict ended are no rungs: one early party death does not cool the model's evals", () => {
+    const NOW = 1_800_000_000_000;
+    const base = (i: number, over: Partial<RunFact>): RunFact => ({
+      runId: `fleet-deadmines-party-base-sonnet-max-${STAMP}-${MEMBERS[i]}`,
+      model: "sonnet",
+      effort: "max",
+      episode: "probing",
+      episodeOverride: false,
+      harnessVersion: null,
+      harnessSeries: null,
+      extra: false,
+      startedAt: NOW - 60_000,
+      endedAt: NOW - 30_000,
+      terminationReason: "party-ended",
+      modelResponses: 0,
+      bestLevel: null,
+      live: false,
+      pause: null,
+      account: ACCOUNTS[i]!,
+      character: null,
+      episodeMs: 14_400_000,
+      campaign: "deadmines",
+      cell: "party",
+      subscription: LANE2,
+      ...over,
+    });
+    // The hunter's pod never pulled; the other four were ended with it before a response.
+    const runs = MEMBERS.map((_, i) => base(i, i === 4 ? { terminationReason: "launch-failed" } : {}));
+    const [state] = modelStates({ runsDir: "/nonexistent", roster: [{ name: "son2", model: "sonnet", effort: "max", driver: "claude-code", tier: "t1" } as never], runs, sidecar: { version: 1, cleared: {} }, now: NOW });
+    expect(state!.ladder).toBe(0);
+    expect(state!.cooling).toBeUndefined();
   });
 });
 

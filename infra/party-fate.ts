@@ -10,9 +10,12 @@
  *   staging ──fail──▶ every member a launch-failed stub          (staging-failed)
  *      │ ok (or a resume: never staged)
  *      ▼
+ *      │ a stop landed while staging ──▶ nobody launched           (stopped)
+ *      ▼
  *   all members launched ── the first exit ──┐
  *                                            ▼
- *        the roster was signalled? ──yes──▶ each keeps its own verdict  (stopped)
+ *        the roster was signalled, and every member paused? ──yes──▶
+ *                                  each keeps its own pause      (stopped)
  *                                            │ no
  *                                            ▼
  *        the others are stopped with the episode grace (SIGTERM: each runner
@@ -116,6 +119,13 @@ export async function runParty<Exit>(members: readonly PartyMemberRun[], deps: P
       return { fate: "staging-failed", verdicts, written };
     }
     deps.log(`party: staged ${members.length} members${staged.detail !== undefined ? ` — ${staged.detail}` : ""}`);
+    // A stop that landed while the stager ran launches nobody: five runs
+    // started only to be paused at once would be five attempts with no play,
+    // and the next attempt restages anyway.
+    if (deps.stopping()) {
+      deps.log("party: stopping — staged, but no member is launched");
+      return { fate: "stopped", verdicts: {}, written };
+    }
   }
 
   // Shared start: every member in one pass, awaited together.
@@ -141,18 +151,13 @@ export async function runParty<Exit>(members: readonly PartyMemberRun[], deps: P
     verdicts[m.member] = vs[i]!;
   });
 
-  if (signalled || deps.stopping()) {
+  if ((signalled || deps.stopping()) && vs.every((v) => v.kind === "paused")) {
     // A shared stop (a drain, a fleet stop, a deploy window): every runner
     // paused itself as operator-pause through the signal it already gets, and
-    // that is each one's verdict. Only a fresh member that never became a run
-    // is written, so its square still counts the attempt.
-    for (const [i, m] of members.entries()) {
-      const v = vs[i]!;
-      if (v.kind === "launch-failed" && !m.resume) {
-        deps.launchFailed(m, v.detail);
-        written.push({ member: m.member, wrote: "launch-failed" });
-      }
-    }
+    // that is each one's verdict, from which the party resumes whole. A stop
+    // that lands after a member had already ended on its own — the clocks ran
+    // out and the stop came inside the others' grace — is no such party: it is
+    // ended below like any other, or it would be listed unresumable forever.
     return { fate: "stopped", verdicts, written };
   }
 

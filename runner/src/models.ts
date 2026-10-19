@@ -2052,9 +2052,18 @@ export function projectModel(
   let lastFail: RunFact | undefined;
   // A paused run is neither rung nor reset: it is skipped on the walk. So is a
   // launch that never became a run (`launch-failed`): it says nothing about
-  // the provider, so it neither cools the model nor forgives its streak.
+  // the provider, so it neither cools the model nor forgives its streak. Nor
+  // is a party member another member's verdict ended (`party-ended`): the
+  // party's evidence is that member's own run, which is on the walk, and four
+  // more rungs for one early party death would cool the model's evals too.
   const finished = mine.filter(
-    (f) => !f.live && f.pause === null && f.endedAt !== null && f.terminationReason !== "launch-failed" && (opts.clearedAt === undefined || f.endedAt > opts.clearedAt),
+    (f) =>
+      !f.live &&
+      f.pause === null &&
+      f.endedAt !== null &&
+      f.terminationReason !== "launch-failed" &&
+      f.terminationReason !== "party-ended" &&
+      (opts.clearedAt === undefined || f.endedAt > opts.clearedAt),
   );
   for (let i = finished.length - 1; i >= 0; i--) {
     const f = finished[i]!;

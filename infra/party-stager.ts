@@ -61,9 +61,14 @@ export interface StageRequest {
 /** The stager's answer. A refusal's `reason` is the operator's whole notice, and lands on every member's launch-failed record. */
 export type StageResult = { ok: true; detail?: string } | { ok: false; reason: string };
 
-/** What the roster holds of a stager. */
+/**
+ * What the roster holds of a stager. `signal` is the roster's stop: an
+ * aborted staging ends at once (the script is killed), so a deploy window's
+ * SIGTERM never leaves a stager sending commands to a worldserver being
+ * replaced.
+ */
 export interface PartyStager {
-  stage(req: StageRequest): Promise<StageResult>;
+  stage(req: StageRequest, signal?: AbortSignal): Promise<StageResult>;
 }
 
 /** Where the stager lives, relative to the repository root. */
@@ -87,7 +92,8 @@ function lastLine(text: string): string {
 export function commandStager(opts: { cwd: string; script?: string; timeoutMs?: number; command?: readonly string[] }): PartyStager {
   const script = opts.script ?? STAGER_SCRIPT;
   return {
-    async stage(req: StageRequest): Promise<StageResult> {
+    async stage(req: StageRequest, signal?: AbortSignal): Promise<StageResult> {
+      if (signal?.aborted === true) return { ok: false, reason: "staging stopped before it began" };
       if (opts.command === undefined && !existsSync(join(opts.cwd, script))) {
         return { ok: false, reason: `the party stager ${script} is not installed in this image` };
       }
@@ -100,6 +106,12 @@ export function commandStager(opts: { cwd: string; script?: string; timeoutMs?: 
       }
       const timeoutMs = opts.timeoutMs ?? STAGE_TIMEOUT_MS;
       const timer = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
+      let aborted = false;
+      const abort = (): void => {
+        aborted = true;
+        proc.kill("SIGKILL");
+      };
+      signal?.addEventListener("abort", abort, { once: true });
       try {
         const stdin = proc.stdin as import("bun").FileSink;
         stdin.write(JSON.stringify(req));
@@ -109,6 +121,7 @@ export function commandStager(opts: { cwd: string; script?: string; timeoutMs?: 
           new Response(proc.stderr as ReadableStream).text(),
           proc.exited,
         ]);
+        if (aborted) return { ok: false, reason: "staging stopped: the roster was signalled" };
         if (code !== 0) {
           const why = lastLine(err) || lastLine(out) || `exit ${code}`;
           return { ok: false, reason: `staging failed (exit ${code}${proc.signalCode === "SIGKILL" ? `, killed after ${Math.round(timeoutMs / 60_000)}m` : ""}): ${why.slice(0, 500)}` };
@@ -121,6 +134,7 @@ export function commandStager(opts: { cwd: string; script?: string; timeoutMs?: 
         }
       } finally {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
       }
     },
   };

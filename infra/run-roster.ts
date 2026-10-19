@@ -1527,6 +1527,8 @@ function drainSeen(): boolean {
 let episode: EpisodeHandle | undefined;
 /** A party's episodes in flight, one handle per member: the shared stop stops them all. */
 const partyEpisodes = new Map<string, EpisodeHandle>();
+/** Aborted by the stop: a staging in flight is killed rather than left running past the roster. */
+const stagingAbort = new AbortController();
 let childRunId: string | undefined;
 const wakeups: (() => void)[] = [];
 /** `--run-pods`, as the supervisor read the fleet setting; off for a hand-run roster. */
@@ -1582,6 +1584,7 @@ function requestStop(sig: string): void {
       if (id !== undefined) signalInContainer(id, "KILL");
     }, CHILD_TERM_GRACE_MS).unref();
   }
+  stagingAbort.abort();
   // A party: the same stop for every member, through the same handle each was
   // started on, so a drain, a fleet stop or a deploy window pauses all of
   // them at once as it pauses one.
@@ -2278,7 +2281,7 @@ async function attemptParty(party: readonly Attempt[], opts: { deadline: number 
   const members: PartyMemberRun[] = party.map((a) => ({ member: a.spec.party!.member, runId: a.spec.runId, resume: a.resume }));
   say(`party ${id}: ${resume ? "resuming" : "launching"} ${members.map((m) => `${m.member} as ${m.runId}`).join(", ")}`);
   const outcome = await runParty<EpisodeExit>(members, {
-    ...(resume ? {} : { stage: () => partyStager.stage(stageRequestOf(party.map((a) => a.spec))) }),
+    ...(resume ? {} : { stage: () => partyStager.stage(stageRequestOf(party.map((a) => a.spec)), stagingAbort.signal) }),
     launch: async (m) => {
       const spec = specOf(m);
       await freeSession(spec, m.resume ? "pre-resume hygiene" : "pre-launch hygiene", false);

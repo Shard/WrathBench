@@ -1082,12 +1082,14 @@ async function main(): Promise<void> {
       if (known !== undefined) return withLane(job, known);
       // Room in the lane AND under the overall ceiling: a claude session spends
       // both, so a free subscription with the total spent is not free. A lane
-      // the subscription gate holds is passed over for one it does not.
+      // the subscription gate holds is passed over for one it does not. Room
+      // for the whole job: a party needs a slot per member (`sessionsOf`),
+      // which for one run is the old `count < cap`.
       const open = claudeLanesOf(cfg.policy.subscriptions).filter((l) => claudeLaneOpen(subGate, l, job.episode, model));
       const free = open.find((l) =>
         claudeKeysFor(l).every((k) => {
           const cap = capFor(cfg.maxConcurrent, k);
-          return cap === undefined || (keyCount.get(k) ?? 0) + (laneReserve.get(k) ?? 0) < cap;
+          return cap === undefined || (keyCount.get(k) ?? 0) + (laneReserve.get(k) ?? 0) + sessionsOf(job) <= cap;
         }),
       );
       // Nothing free: the job is pinned or manual, so it is not held for a cap
