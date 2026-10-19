@@ -11,8 +11,9 @@
  * a pod rather than a child of the fleet process, whose environment every run
  * inherits whole: a run pod carries the module secret and the one model key or
  * lane token its driver bills, and nothing else; and no `ANTHROPIC_*` variable
- * can reach it at all (claude-code is subscription-only), which `runPodEnv`
- * enforces by throwing rather than filtering.
+ * can reach it at all (claude-code is subscription-only), nor any SOAP or
+ * STAGER one (the party stager's admin console and credential), which
+ * `runPodEnv` enforces by throwing rather than filtering.
  *
  * Images are refused unless their repository is in the chart's allow-list
  * (`runPods.allowedImages`; the release runner by default, GHCR's copy of it on
@@ -190,6 +191,9 @@ export function runPodEnv(template: readonly PodEnvVar[], opts: RunPodEnvOptions
   // wrong for every driver, and must fail before a single pod is built from it.
   for (const name of [...template.map((e) => e.name), ...Object.keys(opts.stamps)]) {
     if (name.startsWith("ANTHROPIC_")) throw new Error(`run pod env: ${name} may never reach a run pod (claude-code is subscription-only)`);
+    // The party stager's SOAP console and its admin credential are the
+    // fleet's and the runner's, never an episode's (docs/proposals/GROUP-PLAY.md §3).
+    if (/SOAP|STAGER/.test(name)) throw new Error(`run pod env: ${name} may never reach a run pod (SOAP and the STAGER credential are the stager's alone)`);
   }
   const out: PodEnvVar[] = [];
   for (const e of template) {

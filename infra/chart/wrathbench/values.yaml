@@ -145,6 +145,43 @@ networkPolicy:
       - 100.64.0.0/10
       - 169.254.0.0/16
 
+# Party staging for the Deadmines eval (docs/proposals/GROUP-PLAY.md §2-3;
+# docs/RUNBOOK.md, "Party staging"). OFF by default, and off renders exactly
+# what the chart rendered before it existed. On, it turns on everything the
+# stager (infra/fixtures/stage-party.ts) needs and nothing else:
+#
+#   - the worldserver's SOAP console (AC_SOAP_ENABLED, bound to the pod's own
+#     address, on `soapPort`), and that port on the ClusterIP Service;
+#   - a NetworkPolicy on the worldserver that admits `soapPort` only from the
+#     fleet and runner pods and leaves 8085 and 8086 open to every source, as
+#     they are today. It renders whether or not `networkPolicy.enabled` is on,
+#     so SOAP is never reachable from a run pod even before the egress
+#     policies are;
+#   - with `networkPolicy.enabled`, the fleet pod's egress rule to it (the
+#     roster stages a party before a fresh launch). Run pods get no rule;
+#   - `accounts` appended to the module's allowlist (`worldserver.accounts`):
+#     the party's own five. STAGER is never on it, so no bench session can
+#     be opened on the account SOAP trusts;
+#   - on the fleet and runner pods only, the SOAP URL and STAGER's password
+#     (`stagerPasswordKey` in `envSecretName`, optional so a missing key fails
+#     the staging by name instead of wedging the pods). Run pods never carry
+#     either: their template does not include them, and infra/run-pod.ts
+#     refuses any SOAP or STAGER variable outright.
+#
+# SOAP, the allowlist and the module are all read at worldserver recreate, so
+# turning this on is a deploy window (docs/RUNBOOK.md, "Deploy window"). The
+# compose quickstart keeps SOAP off: it has no policies to contain it with.
+staging:
+  enabled: false
+  accounts:
+    - PARTY1
+    - PARTY2
+    - PARTY3
+    - PARTY4
+    - PARTY5
+  soapPort: 7878
+  stagerPasswordKey: WRATHBENCH_STAGER_PASSWORD
+
 # There is no fleet config value and no ConfigMap: the fleet config is the
 # sqlite store on the data PVC (WRATHBENCH_CONFIG_DB, templates/_helpers.tpl),
 # seeded once from infra/fleet.example.json through the runner pod and edited

@@ -22,10 +22,11 @@ type Peer = {
   ipBlock?: { cidr: string; except?: string[] };
 };
 type Rule = { to?: Peer[]; ports?: { protocol?: string; port?: number }[] };
+type IngressRule = { from?: Peer[]; ports?: { protocol?: string; port?: number }[] };
 type Policy = {
   kind: "NetworkPolicy";
   metadata: { name: string };
-  spec: { podSelector: { matchLabels: Record<string, string> }; policyTypes: string[]; egress?: Rule[]; ingress?: unknown[] };
+  spec: { podSelector: { matchLabels: Record<string, string> }; policyTypes: string[]; egress?: Rule[]; ingress?: IngressRule[] };
 };
 type Doc = { kind?: string; metadata?: { name?: string; labels?: Record<string, string> }; spec?: { template?: { metadata?: { labels?: Record<string, string> } } }; data?: Record<string, string> } | null;
 
@@ -77,6 +78,19 @@ function admits(p: Policy, d: Dest): boolean {
     (r) =>
       (r.to === undefined || r.to.some((peer) => peerMatches(peer, d))) &&
       (r.ports === undefined || r.ports.some((x) => (x.protocol ?? "TCP") === (d.protocol ?? "TCP") && (x.port === undefined || x.port === d.port))),
+  );
+}
+
+/**
+ * Whether an ingress policy admits a connection from `src` to `port`: some
+ * rule's source and port both match, a rule with no `from` matching every
+ * source. A port no rule lists is dropped, as a CNI drops it.
+ */
+function admitsIn(p: Policy, src: Omit<Dest, "port">, port: number): boolean {
+  return (p.spec.ingress ?? []).some(
+    (r) =>
+      (r.from === undefined || r.from.some((peer) => peerMatches(peer, { ...src, port }))) &&
+      (r.ports === undefined || r.ports.some((x) => (x.protocol ?? "TCP") === "TCP" && (x.port === undefined || x.port === port))),
   );
 }
 
@@ -180,6 +194,49 @@ describe.skipIf(helm === null)("the chart's NetworkPolicies", () => {
       expect([p.metadata.name, admits(p, { ip: "192.0.2.20", port: 1234 })]).toEqual([p.metadata.name, false]);
     }
     expect([admits(collector, { component: "worldserver", port: 8086 }), admits(collector, { ip: PUBLIC, port: 443 })]).toEqual([false, false]);
+  }, HELM_TEST_MS);
+
+  test("party staging off renders no worldserver policy and no SOAP rule anywhere", () => {
+    for (const extra of [[], ON]) {
+      const { code, docs } = render(extra);
+      expect(code).toBe(0);
+      expect(policies(docs).some((p) => p.metadata.name === "wrathbench-worldserver")).toBe(false);
+      for (const p of policies(docs)) expect([p.metadata.name, admits(p, { component: "worldserver", port: 7878 })]).toEqual([p.metadata.name, false]);
+    }
+  }, HELM_TEST_MS);
+
+  test("party staging puts SOAP behind an ingress rule for the fleet and runner only, and leaves the world and module ports open to every source", () => {
+    const STAGING = ["--set", "staging.enabled=true"];
+    // With or without the egress policies: the worldserver's own rule is what holds alone.
+    for (const extra of [STAGING, [...ON, ...STAGING]]) {
+      const { code, docs } = render(extra);
+      expect(code).toBe(0);
+      const ws = policy(docs, "worldserver");
+      expect(ws.spec.policyTypes).toEqual(["Ingress"]);
+      const dep = docs.find((d) => d?.kind === "Deployment" && d.metadata?.name === "wrathbench-worldserver");
+      for (const [k, v] of Object.entries(ws.spec.podSelector.matchLabels)) expect([k, dep!.spec!.template!.metadata!.labels![k]]).toEqual([k, v]);
+      for (const component of ["fleet", "runner", "run", "viewer", "publisher", "collector", "authserver"]) {
+        // Unchanged: 8085 and 8086 from any pod, as with no policy.
+        expect([component, admitsIn(ws, { component }, 8085), admitsIn(ws, { component }, 8086)]).toEqual([component, true, true]);
+        expect([component, admitsIn(ws, { component }, 7878)]).toEqual([component, component === "fleet" || component === "runner"]);
+      }
+      // And from outside the release: the world and module ports, never SOAP.
+      for (const src of [{ ip: "10.42.0.99" }, { ip: PUBLIC }, { namespace: "other", labels: { "app.kubernetes.io/component": "fleet" } }]) {
+        expect([JSON.stringify(src), admitsIn(ws, src, 8086), admitsIn(ws, src, 7878)]).toEqual([JSON.stringify(src), true, false]);
+      }
+      // A port nobody listed is dropped.
+      expect(admitsIn(ws, { component: "fleet" }, 3306)).toBe(false);
+    }
+    // The egress half: the fleet may dial SOAP, a run pod and the rest may not.
+    const { docs } = render([...ON, ...STAGING]);
+    expect(policies(docs).map((p) => p.metadata.name).sort()).toEqual(["wrathbench-collector", "wrathbench-fleet", "wrathbench-publisher", "wrathbench-run", "wrathbench-viewer", "wrathbench-worldserver"]);
+    expect(admits(policy(docs, "fleet"), { component: "worldserver", port: 7878 })).toBe(true);
+    for (const name of ["run", "viewer", "publisher", "collector"]) {
+      expect([name, admits(policy(docs, name), { component: "worldserver", port: 7878 })]).toEqual([name, false]);
+    }
+    // The fleet's other destinations are what they were.
+    expect(admits(policy(docs, "fleet"), { component: "worldserver", port: 8086 })).toBe(true);
+    expect(admits(policy(docs, "fleet"), { component: "worldserver", port: 8085 })).toBe(false);
   }, HELM_TEST_MS);
 
   test("refuse to render rather than open wider: no API address, or a model host that is not IPv4:port", () => {

@@ -26,6 +26,14 @@ spec:
     - name: module
       port: 8086
       targetPort: 8086
+    {{- if .Values.staging.enabled }}
+    # The SOAP console, for the party stager only (values.yaml `staging`).
+    # The worldserver's NetworkPolicy (templates/networkpolicy.yaml) admits
+    # this port from the fleet and runner pods and nothing else.
+    - name: soap
+      port: {{ .Values.staging.soapPort }}
+      targetPort: {{ .Values.staging.soapPort }}
+    {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -111,15 +119,31 @@ spec:
               value: {{ .Values.worldserver.rateXp.kill | quote }}
             - name: AC_RATE_XP_QUEST
               value: {{ .Values.worldserver.rateXp.quest | quote }}
-            # SOAP is off until the party staging turns it on, in-cluster
-            # only, for the operator's admin STAGER account; a run pod's
-            # NetworkPolicy and the sandbox's port rule keep it out of the
-            # agent's reach (docs/proposals/GROUP-PLAY.md). The agent itself
-            # has no privileged control path into the world (docs/CONTRACTS.md
-            # binds what it sees and does); actions go through the module,
-            # over the same opcode handlers a client would hit.
+            # SOAP is off until the party staging turns it on (`staging` in
+            # values.yaml), in-cluster only, for the operator's admin STAGER
+            # account; the worldserver's ingress rule, the run pods' egress
+            # policy and the sandbox's port rule keep it out of the agent's
+            # reach (docs/proposals/GROUP-PLAY.md §3). The agent itself has no
+            # privileged control path into the world (docs/CONTRACTS.md binds
+            # what it sees and does); actions go through the module, over the
+            # same opcode handlers a client would hit.
+            {{- if .Values.staging.enabled }}
+            - name: AC_SOAP_ENABLED
+              value: "1"
+            # The pod's own address, so SOAP listens no wider than the
+            # Service and the policy can see it; never 0.0.0.0. A bind that
+            # fails stops the world (`World::StopNow` in ACSoap.cpp), and the
+            # downward API always has the address before the container starts.
+            - name: AC_SOAP_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: AC_SOAP_PORT
+              value: {{ .Values.staging.soapPort | quote }}
+            {{- else }}
             - name: AC_SOAP_ENABLED
               value: "0"
+            {{- end }}
             # Server.log to the CONSOLE. The compose value was a File appender
             # with per-boot timestamped backups (flag 16) and that tree reached
             # 22 GB; here `kubectl logs` is the history and the runtime rotates
@@ -160,14 +184,19 @@ spec:
             # Account allowlist: every surface taking an "account" param serves
             # only these (403 account_not_permitted otherwise). Changing it
             # takes effect on the next pod, i.e. the next deploy window, and
-            # each name must exist in auth first.
+            # each name must exist in auth first. With staging on, the party's
+            # accounts are appended; STAGER, SOAP's admin, is never on it.
             - name: AC_WRATH_BENCH_ACCOUNTS
-              value: {{ join "," .Values.worldserver.accounts | quote }}
+              value: {{ include "wrathbench.moduleAccounts" . | quote }}
           ports:
             - name: world
               containerPort: 8085
             - name: module
               containerPort: 8086
+            {{- if .Values.staging.enabled }}
+            - name: soap
+              containerPort: {{ .Values.staging.soapPort }}
+            {{- end }}
           # Started means the module's /health answers 200, which it does only
           # once the world has loaded whole (module/PROTOCOL.md, GET /health):
           # a load that lost rows to a database restart answers 503

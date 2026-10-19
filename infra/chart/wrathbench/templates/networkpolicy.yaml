@@ -28,9 +28,20 @@ Landlock confines its connects to the module port. Run pods have no database
 env and no such rule.
 
 Not covered, deliberately: the runner pod (the operator's shell, which runs
-bootstrap, fixtures and every smoke, and so needs MySQL), the worldserver and
-authserver, and the databases' own ingress — a backup job outside this chart
-connects to MySQL with labels the chart does not know.
+bootstrap, fixtures and every smoke, and so needs MySQL), the authserver, and
+the databases' own ingress — a backup job outside this chart connects to MySQL
+with labels the chart does not know.
+
+The worldserver gets ONE policy, and only with party staging on
+(`staging.enabled`), whether or not the switch above is: an ingress policy
+whose only restriction is the SOAP port. SOAP runs console commands as an
+administrator, so it is admitted from the fleet pod (the roster stages a
+party before a fresh launch) and the runner pod (the staging smokes, by hand)
+and from nothing else — no run pod, viewer, publisher or collector. A policy
+that selects a pod drops every port it does not list, so the same policy
+admits the world port and the module port from every source, exactly as they
+are reached with no policy at all. With the switch above on, the fleet's
+egress gains the matching rule; the run pods' never does.
 */}}
 
 {{- define "wrathbench.np.matchLabels" -}}
@@ -139,6 +150,14 @@ spec:
       ports:
         - protocol: TCP
           port: 3306
+    {{- if .Values.staging.enabled }}
+    # The party stager's SOAP console (see the header): the fleet only.
+    - to:
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "worldserver") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.staging.soapPort }}
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -220,4 +239,31 @@ spec:
     {{- include "wrathbench.np.dns" . | nindent 4 }}
     {{- include "wrathbench.np.clickhouse" . | nindent 4 }}
 {{- end }}
+{{- end }}
+{{- if .Values.staging.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wrathbench.fullname" . }}-worldserver
+  labels:
+    {{- include "wrathbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worldserver
+spec:
+  podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "worldserver") | nindent 4 }}
+  policyTypes: [Ingress]
+  ingress:
+    # The world and module ports from every source, as with no policy.
+    - ports:
+        - protocol: TCP
+          port: 8085
+        - protocol: TCP
+          port: 8086
+    # SOAP from the fleet and runner pods only (see the header).
+    - from:
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "fleet") | nindent 12 }}
+        - podSelector: {{- include "wrathbench.np.matchLabels" (dict "ctx" . "component" "runner") | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.staging.soapPort }}
 {{- end }}
