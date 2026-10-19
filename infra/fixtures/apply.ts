@@ -13,9 +13,12 @@
  *
  * Why direct SQL
  * --------------
- * Same reasoning as infra/bootstrap/bootstrap.ts: the harness has no
- * privileged control path into the running world. SOAP is off by contract
- * (docs/CONTRACTS.md) and the worldserver console is interactive and racy.
+ * Same reasoning as infra/bootstrap/bootstrap.ts: the agent has no
+ * privileged control path into the running world (docs/CONTRACTS.md binds
+ * the agent's path; the operator's party staging uses SOAP in-cluster, on an
+ * admin account, for the one write SQL cannot make guid-safely —
+ * docs/proposals/GROUP-PLAY.md) and the worldserver console is interactive
+ * and racy.
  * Setting up a *character* has the additional constraint that it must not be
  * something the agent could ever reach, so it lives here, in infra/, is never
  * imported by runner/ or sdk/, and only touches accounts matching

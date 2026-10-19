@@ -22,8 +22,20 @@ it lands in, and the smoke that proves it.
   per-model prompts. A per-role goal line is harness text, the same for every
   model.
 
-Everything below applies those four. Where a step needs a further decision,
-it is listed under "Open questions" and not taken here.
+On the open questions of the first draft, the operator decided the same day
+(2026-10-19):
+
+- **SOAP is enabled for staging**, with an admin-level `STAGER` account,
+  bound in-cluster only and used solely by the stager before a party
+  launches. It must never be reachable from a sandbox or a run pod; §3 says
+  how the NetworkPolicy and the sandbox's network guard keep it out of
+  reach, and the places that said "SOAP is off by contract" now say what the
+  contract actually binds.
+- **The party is pre-formed at staging.**
+- **Talents are preset per role.**
+
+Everything below applies those. Where a step still needs a decision, it is
+listed under "Open questions" and not taken here.
 
 ## The shape in one paragraph
 
@@ -237,15 +249,44 @@ the module never uses them "to perform an action on the agent's behalf".
 Staging runs before the run, on the operator's credential, through nothing
 the agent can reach — the same standing `infra/README.md` gives the fixture
 SQL ("a fixture is the operator arranging the world before the run, the same
-way an operator picks which account a smoke logs into"). The agent's path is
-unchanged: the run pods' egress policy admits only the module's 8086
-(`infra/chart/wrathbench/templates/networkpolicy.yaml`), `STAGER` is not on
-the module allowlist, and its password lives only where the fixture tool's
-MySQL password already lives. What *does* change is a sentence the repository
-has repeated — "SOAP is off by contract" (`bootstrap.ts`, the chart, the
-compose file, `infra/README.md`) — which overstates `CONTRACTS.md`; this
-design asks the operator to make that call explicitly (open question 1)
-rather than reading the contract loosely on its own.
+way an operator picks which account a smoke logs into"). The repository had
+repeated a stronger sentence, "SOAP is off by contract" (`bootstrap.ts`, the
+chart's and the compose file's `AC_SOAP_ENABLED` comments, `infra/README.md`,
+`infra/fixtures/apply.ts`), which overstated the contract; those now say what
+it binds, and that the quickstart keeps SOAP off. The operator decided
+(2026-10-19): SOAP on, in-cluster only, an admin-level `STAGER`, used solely
+by the stager before a party launches.
+
+**How it stays out of the agent's reach**, in four layers, each enough on
+its own:
+
+1. **The sandbox's network guard.** The snippet child runs under a Landlock
+   ruleset (`runner/src/sandbox/confine.ts`; `docs/CONTRACTS.md`,
+   "Control-surface authentication") whose TCP rule admits `connect` to one
+   port, the one in the run's module URL (8086). Landlock's rule is per port,
+   so 7878 is refused by the kernel on every address, however the snippet
+   reaches for it. This holds in a run pod and in a child process alike.
+2. **The run pods' NetworkPolicy.** A run pod's egress admits the module on
+   8086, cluster DNS, TCP 443 outside the private ranges, and the listed
+   local model hosts (`infra/chart/wrathbench/templates/networkpolicy.yaml`);
+   7878 on a cluster address is dropped. The fleet pod's egress gains one rule,
+   the worldserver on 7878, because the stager runs in the roster before a
+   fresh party launch; the runner pod, where `bun wb` runs the staging smoke
+   by hand, is inside the namespace already.
+3. **Where SOAP listens.** `SOAP.IP` on the pod address with 7878 on the
+   worldserver's ClusterIP Service — reachable inside the namespace and from
+   an operator's port-forward, nothing else, exactly as the module port is
+   described in `worldserver.yaml` — and an ingress rule on the worldserver
+   admitting 7878 only from the fleet and runner pods' labels, so the pod
+   address is no wider than the Service. The compose quickstart keeps
+   `AC_SOAP_ENABLED: "0"`: it has no policies to contain it with, and no
+   party campaign runs there.
+4. **The credential.** `STAGER`'s password is a Secret mounted into the fleet
+   and runner pods beside the fixture tool's MySQL password; the run-pod env
+   builder's allow-list never carries it, and `infra/run-pod.test.ts` gains
+   the same assertion it makes for `ANTHROPIC_*`. `STAGER` is not on the
+   module's account allowlist, so no bench session can be opened on it, and
+   SOAP itself refuses any account below `SEC_ADMINISTRATOR`.
 
 **(d) Anything else.**
 - A GM-level account logged in *through the module*, typing `.additem` as a
@@ -284,8 +325,9 @@ before a fresh party launch and by hand for the smoke:
    few gold for repairs, position in Moonbrook, homebind Sentinel Hill,
    `clearQuests`, spells, talents, skills. Spells are the class's trainer
    spells with `reqlevel ≤ 20`, read from the world DB's `npc_trainer` at
-   staging time rather than hard-coded; talents are `character_talent` rows
-   (`guid, spell, specMask`), the same shape as `character_spell`, loaded by
+   staging time rather than hard-coded; talents are preset per role (the
+   operator's decision) as `character_talent` rows (`guid, spell,
+   specMask`), the same shape as `character_spell`, loaded by
    `Player::_LoadTalents` → `addTalent`; skills are an UPDATE of the
    character's existing `character_skills` rows to the level's maximum (the
    loader keeps the stored value and recomputes the maximum).
@@ -301,7 +343,9 @@ before a fresh party launch and by hand for the smoke:
    `equipItem` calls are inside the surface.
 5. With all five staged, log all five in under staging tokens, form the
    party through the SDK (`inviteToGroup` × 4, `acceptGroupInvite`, the
-   warrior leading), log out. A party survives its members' logout unless
+   warrior leading), log out: the party is pre-formed at staging, by the
+   operator's decision, so nobody crosses the portal alone and the attempt
+   starts at the dungeon. A party survives its members' logout unless
    `LeaveGroupOnLogout.Enabled` is on (`WorldSession::LogoutPlayer`; the
    core's default is 0 and the chart does not set it), so the members log in
    grouped and `SMSG_GROUP_LIST` arrives with the login burst. Group guids
@@ -418,7 +462,7 @@ one dungeon cannot do without; everything else waits for a trajectory.
 | need | why the eval needs it | change |
 |---|---|---|
 | Accept a resurrection | A dead member either walks back from the graveyard as a ghost or accepts the priest's Resurrection. `CMSG_RESURRECT_RESPONSE` is on the raw allowlist, but `SMSG_RESURRECT_REQUEST` is not tapped, so the dead member cannot see the offer it may answer | module: whitelist `SMSG_RESURRECT_REQUEST` (`Spell::SendResurrectRequest`: `u64 caster, u32 len, cstring name` — empty for a player caster, whose name the client looks up by guid — `u8 sickness`, and a trailing `u32 0` only for spells with no resurrection timer); SDK: `state.pendingResurrect` and `acceptResurrection()` / `declineResurrection()` over the existing raw |
-| Party chat and whispers without a hex body | Chat is the coordination channel of this eval; the raw path works but every member hand-builds `CMSG_MESSAGECHAT` bytes | SDK only: `say(text, { type: "say" \| "party" \| "yell" \| "whisper", to? })` over the same raw opcode; the module changes nothing. A surface change, so the operator's call (open question 3) |
+| Party chat and whispers without a hex body | Chat is the coordination channel of this eval; the raw path works but every member hand-builds `CMSG_MESSAGECHAT` bytes | SDK only: `say(text, { type: "say" \| "party" \| "yell" \| "whisper", to? })` over the same raw opcode; the module changes nothing. Recommended for the first campaign: a hex body on the one channel the eval turns on is friction that measures nothing. A surface change, so still the operator's call (open question 3) |
 | The kill record | §7 | module: whitelist `SMSG_PARTYKILLLOG` (`u64 killer, u64 victim`; `Unit::Kill` broadcasts it to the killer's group, or sends it to the killer alone) |
 | The instance record | §7 | module: load `Map.dbc` beside `AreaTable.dbc` and serve `mapName` and `instanceType` on `WB_AREA` and `WB_SESSION_STATE` — client-cache knowledge over a packet already served, the pattern the zone names follow |
 
@@ -544,21 +588,23 @@ model is the operator's to name, as every roster entry is.
 
 ## 8. The prompt
 
-Three pieces of harness text, identical for every model, each shown here for
-the operator's wording before anything ships. Nothing else about the prompt
+Three pieces of harness text, identical for every model. **Both texts below
+are drafts**: prompt wording is the operator's, and these ship only in the
+words he gives them (open question 2). Nothing else about the prompt
 changes: the standing goal, the body and the tools are the same as every
 run's (`runner/src/prompt.ts`).
 
-**The staged-character launch note**, a sibling of `freshCharacterNote` for a
-run launched with the new `--character <name>` flag (hygiene keeps the named
-character the way `--continue-from` keeps a freeplay one, `runner/src/run.ts`;
-the flag is refused with `--race`/`--class`):
+**The staged-character launch note** (draft), a sibling of
+`freshCharacterNote` for a run launched with the new `--character <name>`
+flag (hygiene keeps the named character the way `--continue-from` keeps a
+freeplay one, `runner/src/run.ts`; the flag is refused with
+`--race`/`--class`):
 
 > Your character already exists: `<Name>`, a level 20 `<race> <class>`. Log in
 > with `await sdk.createSession({ character: "<Name>" })`. Do not create
 > another character.
 
-**The operator objective**, rendered in the delimited block
+**The operator objective** (draft), rendered in the delimited block
 `objectiveSection` already draws for a probe (per member, from the party
 definition's `members[].objective`):
 
@@ -594,9 +640,10 @@ means the change reaches the fleet only through `bun wb release run`;
    asserts the kill log for its kills, `area-and-roles.ts` the map fields,
    `death-recovery.ts` gains a two-account resurrection arc. Release.
 2. **SDK** (`sdk/`): event schemas for the two packets, `state.self.map`,
-   `state.pendingResurrect`, `acceptResurrection`, the chat `type` option on
-   `say`. Verify: the SDK's fixture tests and the smokes of phase 1. Ships
-   with phase 1's release; the `say` option is a decision.
+   `state.pendingResurrect`, `acceptResurrection`, and the chat `type`
+   option on `say` (recommended; still the operator's call). Verify: the
+   SDK's fixture tests and the smokes of phase 1. Ships with phase 1's
+   release.
 3. **Runner records and launch** (`runner/`): the `group`, `instance` and
    `kill` milestones in `loop.ts`; `--character`, the staged launch note,
    `meta.config.party`; `campaign-def.ts` gains `start: "fresh" | { staged:
@@ -608,63 +655,68 @@ means the change reaches the fleet only through `bun wb release run`;
 4. **Fleet** (`infra/run-fleet*.ts`, `run-roster.ts`, `campaigns.ts`, the
    campaigns page): `JobSpawn.accounts`, the roster's party mode, shared
    fate, `planResumes` by party, concurrency times five, `campaignSquares`
-   by party id, `campaigns.<id>.accounts`. Verify: the infra fixture tests
+   by party id, `campaigns.<id>.accounts`, and the stager invoked by the
+   roster before a fresh party launch. Verify: the infra fixture tests
    (`roster.test.ts`, `fleet.test.ts`, `resume-after-kill.test.ts` gain party
    cases), `bun wb fleet dry-run` against a party row. Release.
-5. **Fixtures and staging** (`infra/fixtures/`, `infra/chart/`): the
-   `PARTY\d` accounts, the `moonbrook-mine` scenario, talents and skills and
-   the equipment move in `apply.ts`, `stage-party.ts` with a small SOAP
-   client, `bun wb accounts stager`; chart: `worldserver.accounts`,
-   `AC_SOAP_ENABLED`, `SOAP.IP` on the pod address with 7878 on the Service,
-   the fleet's egress rule for it, the `STAGER` Secret. Verify:
-   `apply.test.ts` on the statements; the live proof is phase 6. Release,
-   and the SOAP decision.
+5. **Fixtures, staging and the chart** (`infra/fixtures/`, `infra/chart/`):
+   the `PARTY\d` accounts in `ACCOUNT_PATTERN`, the `moonbrook-mine`
+   scenario, the per-role talent lists, skills and the equipment move in
+   `apply.ts`, `stage-party.ts` with a small SOAP client (the pre-forming of
+   the party included), `bun wb accounts stager`; chart: `worldserver.accounts`
+   gains `PARTY1`–`PARTY5`, `AC_SOAP_ENABLED` on with `SOAP.IP` on the pod
+   address, 7878 on the worldserver Service, the worldserver ingress rule
+   admitting 7878 from the fleet and runner pods only, the fleet's egress rule
+   to it, the `STAGER` Secret, and the run-pod env test's new assertion.
+   Verify: `apply.test.ts` on the statements, `networkpolicy.test.ts` and
+   `run-pod.test.ts` on the rendered policies and env; the live proof is
+   phase 6. Release.
 6. **Smokes** (`infra/smoke/`): `deadmines-entry.ts` (one character, §4),
    `party-staging.ts` (§3), and `party-entry.ts` (five staged and grouped
    members cross the trigger and see each other inside: the same-instance
-   proof). Verify: `bun wb smoke <name>` in the release window of phase 5;
-   the entry smoke joins `deploySmokes` while the campaign is enabled.
+   proof). Verify: `bun wb smoke <name>` in the release window of phase 5,
+   with the post-recreate re-check of §3 run once there; the entry smoke
+   joins `deploySmokes` while the campaign is enabled.
 7. **Campaign definition** (`runner/campaigns/deadmines@1.json`): one cell
    (the party), one arm on the release image, `start: staged`, the five
-   members with their objectives, `objective` null at the top level, no
-   `stopAtLevel`, the budget of §7, `wiki: true`, `wikiCoords: false`,
-   `resume: true`, `maxAttemptsPerCell: 3`; the store row pinned to
-   `PARTY1`–`PARTY5` with the first assignment. Verify: `bun wb campaign
-   publish --dry-run`, then publish; no release. Enabled only after phase 6
-   passes, with the model the operator names.
+   members with their objectives in the operator's words, `objective` null
+   at the top level, no `stopAtLevel`, the budget of §7, `wiki: true`,
+   `wikiCoords: false`, `resume: true`, `maxAttemptsPerCell: 3`; the store
+   row pinned to `PARTY1`–`PARTY5` with the first assignment. Verify: `bun wb
+   campaign publish --dry-run`, then publish; no release. Enabled only after
+   phase 6 passes, with the model the operator names (decision).
 
-Phases 1–4 are code and tests and can land in any order among themselves;
-phase 5 cannot be exercised without the window; 6 gates 7.
+**What runs in parallel and what is serialised.** Phases 1, 3, 4 and 5 touch
+disjoint trees (`module/`, `runner/`, `infra/run-*` with `campaigns.ts`,
+`infra/fixtures/` with the chart) and can be built and reviewed on separate
+branches at once; phase 2 follows phase 1, whose event names and shapes it
+decodes, and is small enough to ride phase 1's branch. The module work is
+serialised: one module change at a time, each verified by its smokes against
+a deployed build, and nothing in phases 3–5 depends on the module being
+first — the records read packets the SDK already decodes until the new taps
+land, and the kill and resurrect producers simply stay silent before them.
+The release window is the join: phase 1's module build, phase 5's chart
+values and the accounts land in one window, because `worldserver.accounts`,
+`AC_SOAP_ENABLED` and the module image are all read at worldserver recreate,
+and phase 6's smokes run inside that window. Phase 7 is after 6, and nothing
+else waits on it.
 
 ## 10. Open questions for the operator
 
 Only what the decisions above do not answer.
 
-1. **SOAP for staging.** Enabling SOAP (gmlevel-3 `STAGER`, port 7878 reachable
-   from the fleet and runner pods, never from a run pod) is the route this
-   design picks for the gear; the repository has so far described SOAP as
-   off by contract, which is wider than `docs/CONTRACTS.md` says. Yes, no, or
-   the fallback of (b) inside release windows at the cost of restaging only
-   at releases?
-2. **Pre-formed party or form it yourselves.** Staging can leave the five
-   grouped (the core keeps groups across logout) so that nobody crosses the
-   portal alone and the eval starts at the dungeon; or the five can be
-   staged ungrouped and inviting each other becomes the first thing measured.
-   The design assumes pre-formed; the other is one step fewer in staging and
-   one sentence more in the objective.
-3. **The chat helper.** `say` with a `type` is a surface addition made on
-   this eval's need rather than a citable trajectory; leave chat raw and see
-   what the first party does, or add it now?
-4. **Talents.** Preset per role in the fixture (the design's default) or
-   left unspent for the model to place at launch, which is inside the
-   surface and is itself a small test?
-5. **The first model**, and whether the shakedown attempts on a cheap API
+1. **The first model**, and whether the shakedown attempts on a cheap API
    model run under the same campaign version as the Claude attempts or under
    their own.
-6. **Boss-kill credit and the objective's wording** — whether "clear the
-   Deadmines" should also name the other bosses, and whether the per-role
-   word is enough or too little. Wording is the operator's.
-7. **Promotion.** When the mechanics settle, the scored form is a new episode
+2. **The objective and role wording** — the two drafts in §8, whether "clear
+   the Deadmines" should also name the other bosses, and whether the per-role
+   word is enough or too little. The operator words it; the drafts ship only
+   as he gives them.
+3. **The chat helper.** `say` with a `type` is a surface addition made on
+   this eval's need rather than a citable trajectory. The recommendation is
+   to add it for the first campaign (§5); the alternative is to leave chat
+   raw and read what the first party does.
+4. **Promotion.** When the mechanics settle, the scored form is a new episode
    id with its own comparability tuple fields (`party`, the loadout's
    identity, the staging scenario), not a widening of `probing`; the
    derivation that makes it a score is the decision this design defers, as
