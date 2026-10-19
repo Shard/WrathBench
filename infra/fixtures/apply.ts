@@ -22,7 +22,7 @@
  * Setting up a *character* has the additional constraint that it must not be
  * something the agent could ever reach, so it lives here, in infra/, is never
  * imported by runner/ or sdk/, and only touches accounts matching
- * the SMOKE / PROBE pattern. Runner accounts are never fixtured.
+ * the SMOKE / PROBE / PARTY pattern. Runner accounts are never fixtured.
  *
  * The write happens while the character is offline. The core reads the
  * `characters` row on login and writes it back on logout, so a fixture applied
@@ -45,11 +45,13 @@ import {
 
 /**
  * Accounts this tool will touch. Smoke accounts (SMOKE, SMOKE2..SMOKE4) are
- * the preflight gate's, PROBE is the ad-hoc debugging account. RUNNER* and
- * SHAKEOUT* are deliberately absent: a benchmark run must start from a
- * character the agent itself created.
+ * the preflight gate's, PROBE is the ad-hoc debugging account, and PARTY1..
+ * PARTY5 are reserved for the party eval, whose loadouts are staged by the
+ * operator's decision for that lane (docs/proposals/GROUP-PLAY.md §2).
+ * RUNNER* and SHAKEOUT* are deliberately absent: a benchmark run must start
+ * from a character the agent itself created.
  */
-export const ACCOUNT_PATTERN = /^(SMOKE\d*|PROBE)$/;
+export const ACCOUNT_PATTERN = /^(SMOKE\d*|PROBE|PARTY\d)$/;
 
 /**
  * QUEST_STATUS_INCOMPLETE. Note the value: in
@@ -68,6 +70,18 @@ const QUEST_STATUS_INCOMPLETE = 3;
  * a fixture wants.
  */
 const SPELL_SPEC_MASK = 255;
+
+/**
+ * specMask for a talent: the primary spec only, which is what the core writes
+ * when a player learns one (`LearnTalent` passes `GetActiveSpecMask()`, 1 for
+ * spec 0) and the only spec a character without dual spec has. `addTalent`
+ * counts the row's points only when the mask covers the active spec, so 1 is
+ * also what makes the points land.
+ */
+const TALENT_SPEC_MASK = 1;
+
+/** The skill cap for a level, `Player::GetMaxSkillValueForLevel`: 5 x level. */
+export const maxSkillForLevel = (level: number): number => level * 5;
 
 /**
  * Health and each power are written high on purpose. The loader clamps:
@@ -130,7 +144,7 @@ export function parseArgs(argv: string[]): Args {
 export function assertFixturableAccount(account: string): void {
   if (!ACCOUNT_PATTERN.test(account)) {
     throw new Error(
-      `refusing to fixture account '${account}': only smoke accounts (SMOKE, SMOKE2, ...) and PROBE may be ` +
+      `refusing to fixture account '${account}': only smoke accounts (SMOKE, SMOKE2, ...), PROBE and the party accounts (PARTY1..PARTY5) may be ` +
         `fixtured. Benchmark runs must start from a character the agent created.`,
     );
   }
@@ -246,6 +260,154 @@ export function buildStatements(guid: number, scenario: Scenario): Statement[] {
     });
   }
 
+  if (scenario.talents) {
+    // The preset replaces whatever was there: a stale row from an earlier
+    // build would add its points on top, and InitTalentForLevel answers an
+    // over-spent tree by resetting every talent at login.
+    statements.push({ sql: `DELETE FROM character_talent WHERE guid = ?`, params: [guid] });
+    for (const spell of scenario.talents) {
+      statements.push({
+        sql: `INSERT INTO character_talent (guid, spell, specMask) VALUES (?, ?, ?)`,
+        params: [guid, spell, TALENT_SPEC_MASK],
+      });
+    }
+  }
+
+  if (scenario.maxSkills) {
+    // Level-ranged skills only: armor and other mono skills sit at max 1 and
+    // languages at 300, and both are fixed by the loader whatever is stored.
+    const cap = maxSkillForLevel(scenario.level);
+    statements.push({
+      sql: `UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND max > 1 AND max < 300`,
+      params: [cap, cap, guid],
+    });
+  }
+
+  if (scenario.ammoId !== undefined) {
+    statements.push({ sql: `UPDATE characters SET ammoId = ? WHERE guid = ?`, params: [scenario.ammoId, guid] });
+  }
+
+  return statements;
+}
+
+// ------------------------------------------------------------ equipment move
+
+/** One `character_inventory` row joined to its `item_instance.itemEntry`. */
+export type InventoryRow = {
+  /** 0 for the character's own slots (equipment, worn bags, backpack, bank...); else the container item's guid. */
+  bag: number;
+  slot: number;
+  /** The item guid (`character_inventory.item`). */
+  item: number;
+  /** The item template (`item_instance.itemEntry`). */
+  entry: number;
+};
+
+/** Where one staged item is worn: an equipment slot 0..18, or a bag slot 19..22. */
+export type EquipTarget = { entry: number; slot: number };
+
+/** Equipment and worn-bag slots end here (`INVENTORY_SLOT_BAG_END`). */
+const WORN_END = 23;
+/** The backpack (`INVENTORY_SLOT_ITEM_START`..`_END`). */
+const BACKPACK_START = 23;
+const BACKPACK_END = 39;
+/** EQUIPMENT_SLOT_OFFHAND, emptied under a two-handed main hand. */
+export const OFFHAND_SLOT = 16;
+/**
+ * Parking slots for the moves, bag 0. Nothing the core writes is this high in
+ * 3.3.5 (the currency slots end at 149), the column is a tinyint, and every
+ * parked row leaves again inside the same transaction.
+ */
+const PARK_BASE = 200;
+
+const posKey = (bag: number, slot: number) => `${bag}:${slot}`;
+
+/**
+ * The offline equipment move (docs/proposals/GROUP-PLAY.md §3, step 4), as
+ * statements. Pure. Every staged item the server stored in the backpack or a
+ * bag moves to its slot in `targets`; whatever the fresh character already
+ * wears there (starter gear) moves to the place the new item left; and each
+ * `clear` slot (the off hand, under a two-handed main hand) is emptied into
+ * the first backpack slot free after those moves. Only `bag` and `slot`
+ * change, never a guid: the rows are the ones the running server allocated
+ * and saved.
+ *
+ * `(guid, bag, slot)` is unique, so a swap cannot be one UPDATE: every row
+ * that moves is first parked on a free high slot and then placed, which keeps
+ * the key unique after each statement.
+ */
+export function buildEquipStatements(
+  guid: number,
+  rows: readonly InventoryRow[],
+  targets: readonly EquipTarget[],
+  clear: readonly number[] = [],
+): Statement[] {
+  const seenSlots = new Set<number>();
+  for (const t of targets) {
+    if (!Number.isInteger(t.slot) || t.slot < 0 || t.slot >= WORN_END) {
+      throw new Error(`equip target ${t.entry}: slot ${t.slot} is not an equipment or bag slot (0..22)`);
+    }
+    if (seenSlots.has(t.slot)) throw new Error(`equip targets name slot ${t.slot} twice`);
+    seenSlots.add(t.slot);
+  }
+  for (const c of clear) if (seenSlots.has(c)) throw new Error(`slot ${c} is both a target and cleared`);
+  for (const r of rows) if (r.bag === 0 && r.slot >= PARK_BASE) throw new Error(`item ${r.item} already sits on parking slot ${r.slot}`);
+
+  const at = new Map<string, InventoryRow>(rows.map((r) => [posKey(r.bag, r.slot), r]));
+  const worn = (r: InventoryRow) => r.bag === 0 && r.slot < WORN_END;
+  /** item guid -> where it ends up. */
+  const finalPos = new Map<number, { bag: number; slot: number }>();
+  const used = new Set<number>();
+
+  for (const t of targets) {
+    const current = at.get(posKey(0, t.slot));
+    if (current && current.entry === t.entry && !used.has(current.item)) {
+      used.add(current.item); // already worn there: nothing to move
+      continue;
+    }
+    const src = rows.find((r) => r.entry === t.entry && !used.has(r.item) && !worn(r));
+    if (!src) throw new Error(`item ${t.entry} for slot ${t.slot} is not in the bags (the .additem did not land, or its save has not)`);
+    used.add(src.item);
+    finalPos.set(src.item, { bag: 0, slot: t.slot });
+    if (current) finalPos.set(current.item, { bag: src.bag, slot: src.slot });
+  }
+
+  // What is occupied once the moves above have happened.
+  const occupiedAfter = new Set<string>();
+  for (const r of rows) {
+    const p = finalPos.get(r.item) ?? { bag: r.bag, slot: r.slot };
+    occupiedAfter.add(posKey(p.bag, p.slot));
+  }
+  for (const c of clear) {
+    const occupant = at.get(posKey(0, c));
+    if (!occupant || finalPos.has(occupant.item)) continue;
+    let free = -1;
+    for (let s = BACKPACK_START; s < BACKPACK_END; s++) {
+      if (!occupiedAfter.has(posKey(0, s))) {
+        free = s;
+        break;
+      }
+    }
+    if (free < 0) throw new Error(`no free backpack slot to take the item worn in slot ${c}`);
+    occupiedAfter.delete(posKey(0, c));
+    occupiedAfter.add(posKey(0, free));
+    finalPos.set(occupant.item, { bag: 0, slot: free });
+  }
+
+  const byItem = new Map(rows.map((r) => [r.item, r]));
+  const moves = [...finalPos].filter(([item, p]) => {
+    const r = byItem.get(item)!;
+    return r.bag !== p.bag || r.slot !== p.slot;
+  });
+  if (moves.length > 255 - PARK_BASE) throw new Error(`${moves.length} item moves is more than the parking slots hold`);
+
+  const statements: Statement[] = [];
+  moves.forEach(([item], i) => {
+    statements.push({ sql: `UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND item = ?`, params: [PARK_BASE + i, guid, item] });
+  });
+  for (const [item, p] of moves) {
+    statements.push({ sql: `UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?`, params: [p.bag, p.slot, guid, item] });
+  }
   return statements;
 }
 
@@ -270,7 +432,7 @@ function dbPassword(): string {
   return process.env["WRATHBENCH_DB_PASSWORD"] ?? process.env["WRATHBENCH_DB_ROOT_PASSWORD"] ?? "wrathbench";
 }
 
-async function connect(): Promise<SQL> {
+export async function connect(): Promise<SQL> {
   const sql = new SQL({
     adapter: "mysql",
     hostname: env("WRATHBENCH_DB_HOST", "db"),
@@ -288,7 +450,7 @@ async function connect(): Promise<SQL> {
   return sql;
 }
 
-type CharacterRow = {
+export type CharacterRow = {
   guid: number;
   level: number;
   xp: number;
@@ -321,7 +483,7 @@ const SNAPSHOT_COLUMNS = [
 /** `guid, level, ...` optionally qualified; the join needs it, `online` is ambiguous otherwise. */
 const snapshotColumns = (prefix = "") => SNAPSHOT_COLUMNS.map((c) => `${prefix}${c}`).join(", ");
 
-async function readCharacter(sql: SQL, account: string, character: string): Promise<CharacterRow | undefined> {
+export async function readCharacter(sql: SQL, account: string, character: string): Promise<CharacterRow | undefined> {
   // acore_auth is a separate schema on the same server, so the join is
   // qualified rather than relying on the connection's default database.
   const rows = (await sql.unsafe(
@@ -333,7 +495,7 @@ async function readCharacter(sql: SQL, account: string, character: string): Prom
   return rows[0];
 }
 
-async function snapshot(sql: SQL, guid: number): Promise<CharacterRow> {
+export async function snapshot(sql: SQL, guid: number): Promise<CharacterRow> {
   const rows = (await sql.unsafe(`SELECT ${snapshotColumns()} FROM characters WHERE guid = ?`, [guid])) as CharacterRow[];
   const row = rows[0];
   if (!row) throw new Error(`character ${guid} vanished`);
@@ -352,7 +514,7 @@ async function snapshot(sql: SQL, guid: number): Promise<CharacterRow> {
  * writes rows the subsequent save overwrites, and the fixture looks like it
  * silently did nothing.
  */
-async function waitUntilOffline(sql: SQL, row: CharacterRow, waitMs: number): Promise<void> {
+export async function waitUntilOffline(sql: SQL, row: CharacterRow, waitMs: number): Promise<void> {
   // A character that has never been saved out (`logout_time` 0) is one the
   // caller just created and logged straight out of. The login's `online = 1`
   // is an async execute and the logout save an async transaction, so at the
@@ -383,6 +545,48 @@ async function waitUntilOffline(sql: SQL, row: CharacterRow, waitMs: number): Pr
       );
     }
   }
+}
+
+/**
+ * Wait for the save of a session that logged in AFTER `before` was read: the
+ * row is offline and `logout_time` has moved past `before.logout_time`. The
+ * plain `waitUntilOffline` cannot tell a second login's save from the first's
+ * (both leave `online = 0` and a non-zero `logout_time`), so a multi-login
+ * stager reads the row before each login and waits on this. `logout_time` is
+ * in seconds, so a session must outlive one second for the change to show;
+ * every staging session does.
+ */
+export async function waitForNewSave(sql: SQL, before: CharacterRow, waitMs: number): Promise<CharacterRow> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const current = await snapshot(sql, before.guid);
+    if (current.online === 0 && current.logout_time > before.logout_time) return current;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `character ${before.guid}: no new logout save within ${Math.round(waitMs / 1000)}s ` +
+          `(online=${current.online}, logout_time ${current.logout_time} vs ${before.logout_time} before the login)`,
+      );
+    }
+    await Bun.sleep(500);
+  }
+}
+
+/** The character's inventory rows with each item's template, for `buildEquipStatements`. */
+export async function readInventory(sql: SQL, guid: number): Promise<InventoryRow[]> {
+  const rows = (await sql.unsafe(
+    `SELECT ci.bag AS bag, ci.slot AS slot, ci.item AS item, ii.itemEntry AS entry
+     FROM character_inventory ci JOIN item_instance ii ON ii.guid = ci.item
+     WHERE ci.guid = ?`,
+    [guid],
+  )) as InventoryRow[];
+  return rows.map((r) => ({ bag: Number(r.bag), slot: Number(r.slot), item: Number(r.item), entry: Number(r.entry) }));
+}
+
+/** Run statements in one transaction. */
+export async function applyStatements(sql: SQL, statements: readonly Statement[]): Promise<void> {
+  await sql.begin(async (tx) => {
+    for (const stmt of statements) await tx.unsafe(stmt.sql, stmt.params);
+  });
 }
 
 function describe(row: CharacterRow): string {
@@ -436,9 +640,7 @@ async function main(argv: string[]): Promise<number> {
     // proof artifact; it has to be honest.
     const settled = await snapshot(sql, before.guid);
 
-    await sql.begin(async (tx) => {
-      for (const stmt of statements) await tx.unsafe(stmt.sql, stmt.params);
-    });
+    await applyStatements(sql, statements);
 
     const after = await snapshot(sql, before.guid);
     log(`${args.account}/${args.character} (guid ${before.guid}) -> ${args.scenario}: ${scenario.description}`);

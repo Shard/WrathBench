@@ -85,7 +85,7 @@ describe("the table", () => {
 
   test("a row's required flag is in its argv and in this checkout's copy of its file", () => {
     const rows = ENTRIES.filter((e) => e.requires !== undefined);
-    expect(rows.map((e) => `${e.group} ${e.command}`).sort()).toEqual(["accounts ensure", "accounts spectator"]);
+    expect(rows.map((e) => `${e.group} ${e.command}`).sort()).toEqual(["accounts ensure", "accounts spectator", "accounts stager"]);
     for (const e of rows) {
       for (const form of forms(e)) {
         expect(form.argv).toContain(e.requires!);

@@ -80,7 +80,7 @@ export const GROUPS: Readonly<Record<string, string>> = {
   campaign: "probe campaign definitions",
   release: "build the images, release them, and the deploy window",
   server: "the worldserver's module, and the viewer",
-  accounts: "game accounts: the harness's, and the operator's GM spectator",
+  accounts: "game accounts: the harness's, the operator's GM spectator, and the party stager's",
   smoke: "the smoke scripts under infra/smoke",
   site: "the public site",
   data: "prices and logos this checkout carries",
@@ -126,6 +126,7 @@ function smokeEntries(): Entry[] {
 const CONFIG_STORE = "runner/src/config-store.ts";
 const BOOTSTRAP = "infra/bootstrap/bootstrap.ts";
 const SPECTATOR = "infra/spectator-account.ts";
+const STAGER = "infra/stager-account.ts";
 const RUN_FLEET = "infra/run-fleet.ts";
 const FLEET_UPDATE = "infra/fleet-update.sh";
 const INSPECT_RUN = "infra/inspect-run.ts";
@@ -198,8 +199,9 @@ export const ENTRIES: readonly Entry[] = [
   { group: "server", command: "restart-viewer", summary: "rollout restart the viewer, then check it answers", ...clusterOnly("infra/viewer-restart.sh") },
   { group: "server", command: "log-retention", takes: "[--days n | --apply]", summary: "what the audit-log retention pass would prune now, as counts and bytes; --apply runs it", ...clusterOnly("infra/log-retention.sh") },
 
-  // Both write game accounts, so neither has a default: `ensure` creates only
-  // the accounts it is given, and `spectator` only with a password on stdin.
+  // All three write game accounts, so none has a default: `ensure` creates
+  // only the accounts it is given, `spectator` and `stager` only with a
+  // password on stdin.
   {
     group: "accounts",
     command: "ensure",
@@ -215,6 +217,14 @@ export const ENTRIES: readonly Entry[] = [
     summary: "ensure the operator's GM account SPECTATOR; read -rs P && printf '%s\\n' \"$P\" | bun wb accounts spectator",
     requires: "--password-stdin",
     ...inRunner("bun", SPECTATOR, "--password-stdin"),
+  },
+  {
+    group: "accounts",
+    command: "stager",
+    takes: "(password on stdin)",
+    summary: "ensure the party stager's SOAP account STAGER (GM, never on the module allowlist); read -rs P && printf '%s\\n' \"$P\" | bun wb accounts stager",
+    requires: "--password-stdin",
+    ...inRunner("bun", STAGER, "--password-stdin"),
   },
 
   ...smokeEntries(),
